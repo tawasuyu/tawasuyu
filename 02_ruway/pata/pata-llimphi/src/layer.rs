@@ -138,6 +138,10 @@ struct Panel {
 /// salida; la barra crece hacia arriba hasta este alto.
 const DRAWER_H: u32 = 420;
 
+/// Alto de la barra superior cuando despliega el menú de inicio (px): crece hacia
+/// abajo hasta este alto, manteniendo su exclusive zone en el grosor de la barra.
+const MENU_H: u32 = 480;
+
 /// El cliente Wayland del backend layer-shell.
 struct LayerApp {
     registry_state: RegistryState,
@@ -174,6 +178,14 @@ struct LayerApp {
     shuma_panel: Option<usize>,
     /// Grosor original (px) de esa barra — al que vuelve al replegar el drawer.
     shuma_bar_px: u32,
+    /// Registro de apps para el menú de inicio (descubierto del dir canónico).
+    registry: app_bus::AppRegistry,
+    /// `true` cuando el menú de inicio está desplegado.
+    menu_open: bool,
+    /// Índice (en `panels`) de la barra que hospeda el `start_button`, si hay.
+    menu_panel: Option<usize>,
+    /// Grosor original (px) de esa barra — al que vuelve al replegar el menú.
+    menu_bar_px: u32,
     /// Muestreador del sistema en su propio hilo (subprocesos wpctl/wl-paste sin
     /// tocar el bucle de UI). Publica un snapshot ~1Hz; `maybe_sample` lo recoge.
     sampler: SamplerHandle,
@@ -334,6 +346,20 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels[pi].layer.commit();
     }
 
+    // ¿Qué barra hospeda el start_button? Esa crece hacia abajo al desplegar el
+    // menú de inicio (mismo truco que shuma, hacia el otro lado).
+    let menu_panel = panels.iter().position(|p| {
+        let s = &cfg.surfaces[p.idx];
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .any(|w| w.kind == "start_button")
+    });
+    let menu_bar_px = menu_panel
+        .map(|pi| cfg.surfaces[panels[pi].idx].thickness.max(1.0) as u32)
+        .unwrap_or(32);
+
     // El tray sólo arranca (y toma el nombre del watcher) si la config lo pide.
     let tray = crate::config_tiene_widget(&cfg, "tray")
         .then(TrayHandle::spawn)
@@ -360,6 +386,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         shuma,
         shuma_panel,
         shuma_bar_px,
+        registry: app_bus::AppRegistry::discover(),
+        menu_open: false,
+        menu_panel,
+        menu_bar_px,
         sampler: SamplerHandle::spawn(),
         ctx: WidgetCtx::default(),
         exec_rx: None,
@@ -448,6 +478,33 @@ impl LayerApp {
         // re-arma en el próximo frame con la geometría nueva.
         self.panels[pi].cache = None;
         self.panels[pi].dirty = true;
+    }
+
+    /// Despliega/repliega el menú de inicio: agranda/encoge hacia abajo la layer
+    /// surface de la barra del `start_button` (su exclusive zone queda en el
+    /// grosor de la barra, así no recoloca el teselado). No toma teclado (clics).
+    fn set_menu_open(&mut self, open: bool) {
+        let Some(pi) = self.menu_panel else { return };
+        if self.menu_open == open {
+            return;
+        }
+        self.menu_open = open;
+        let h = if open { MENU_H } else { self.menu_bar_px };
+        let layer = &self.panels[pi].layer;
+        layer.set_size(0, h);
+        layer.commit();
+        // Invalida el cache de hit-test (geometría vieja) — igual que shuma.
+        self.panels[pi].cache = None;
+        self.panels[pi].dirty = true;
+    }
+
+    /// Lanza una app del menú por su `id` y cierra el menú. Sólo `Exec` spawnea;
+    /// `Action`/`Wasm` los despacharía un host con chasis (acá no aplica).
+    fn lanzar_app(&mut self, id: String) {
+        if let Some(app) = self.registry.get(&id) {
+            let _ = app.spawn();
+        }
+        self.set_menu_open(false);
     }
 
     /// Enter en el drawer: corre el comando por el **ejecutor real de shuma**
@@ -619,6 +676,16 @@ impl LayerApp {
         // pinta su barra normal.
         let view = if let Some(c) = self.panels[pi].card.as_ref() {
             render::card_view(&c.spec, &c.widgets, &self.theme)
+        } else if self.menu_panel == Some(pi) && self.menu_open {
+            render::start_menu_view(
+                &self.cfg.surfaces[idx],
+                &self.surfaces[idx],
+                &self.shuma,
+                &data,
+                &self.theme,
+                self.menu_bar_px as f32,
+                self.registry.all(),
+            )
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             // Viewport del historial: la surface menos la barra, la línea de
             // input y los paddings. Lo cacheamos para que el clamp del scroll
@@ -721,6 +788,8 @@ impl LayerApp {
                 self.marcar_shuma_dirty();
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
+            Msg::StartToggle => self.set_menu_open(!self.menu_open),
+            Msg::LaunchApp(id) => self.lanzar_app(id),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
             Msg::CloseWindow(id) => self.cerrar_ventana(id),
             Msg::TrayActivate(key) => {

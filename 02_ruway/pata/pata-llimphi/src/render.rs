@@ -19,6 +19,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::View;
 
+use app_bus::AppEntry;
 use pata_core::config::{FloatingCard, Surface};
 use pata_core::layout::Rect;
 use pata_core::widget::{Widget, WidgetView};
@@ -445,6 +446,7 @@ fn slots_de(
                         None => v,
                     }
                 }
+                SlotWidget::Start { label, exec } => start_button_view(label, exec.as_deref(), theme),
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
                 SlotWidget::WindowList => window_list_view(data.windows, surface.gap, dir, theme),
                 SlotWidget::Clipboard { exec } => {
@@ -562,6 +564,191 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
     .on_click(Msg::ActivateWindow(w.id))
     .on_right_click(Msg::CloseWindow(w.id))
     .children(vec![badge, titulo])
+}
+
+/// El **botón de inicio**: un chip con su label/ícono. Clic → despliega el menú
+/// nativo de apps ([`Msg::StartToggle`]), salvo que la config fije `exec` (en
+/// cuyo caso lanza ese comando, override estilo waybar).
+fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) -> View<Msg> {
+    let click = match exec {
+        Some(cmd) => Msg::Spawn(cmd.to_string()),
+        None => Msg::StartToggle,
+    };
+    chip(theme)
+        .fill(theme.bg_panel)
+        .radius(6.0)
+        .hover_fill(theme.bg_button_hover)
+        .on_click(click)
+        .text(label.to_string(), 14.0, theme.accent)
+}
+
+/// Ancho del menú de inicio desplegado, en px.
+const START_MENU_W: f32 = 280.0;
+
+/// El **menú de inicio** desplegado bajo la barra superior: un scrim que cierra
+/// al click + un panel a la izquierda con una fila por app del registro. Pensado
+/// para llenar el área que la barra superior libera al crecer hacia abajo (mismo
+/// truco que el drawer Quake, pero hacia abajo). Cada fila lanza su app
+/// ([`Msg::LaunchApp`]); si el registro está vacío, una pista.
+pub fn start_menu_body(apps: &[AppEntry], theme: &Theme) -> View<Msg> {
+    let filas: Vec<View<Msg>> = if apps.is_empty() {
+        vec![View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(
+            "sin apps en ~/.config/gioser/apps/".to_string(),
+            12.0,
+            theme.fg_muted,
+        )]
+    } else {
+        apps.iter().map(|a| app_row(a, theme)).collect()
+    };
+
+    let panel = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(START_MENU_W),
+            height: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .children(filas);
+
+    // Scrim a ancho completo del área: cierra al click fuera del panel.
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .alpha(0.45)
+    .on_click(Msg::StartToggle)
+    .children(vec![panel])
+}
+
+/// Una fila del menú de inicio: ícono (glyph) + label, clickeable.
+fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
+    let icono = a.icon.clone().unwrap_or_else(|| "▸".to_string());
+    let badge = View::new(Style {
+        size: Size { width: length(22.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(icono, 14.0, theme.accent);
+    let nombre = View::new(Style {
+        size: Size { width: auto(), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(a.label.clone(), 13.0, theme.fg_text);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        padding: TaffyRect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .radius(6.0)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(Msg::LaunchApp(a.id.clone()))
+    .children(vec![badge, nombre])
+}
+
+/// El menú de inicio como **overlay** para el path winit: un contenedor a
+/// pantalla completa desplazado `bar_h` px hacia abajo (para que el panel caiga
+/// bajo la barra superior) que aloja [`start_menu_body`]. El scrim del body
+/// cierra al click.
+pub fn start_menu_overlay(apps: &[AppEntry], bar_h: f32, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(bar_h),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![start_menu_body(apps, theme)])
+}
+
+/// La barra superior con el menú de inicio **desplegado** hacia abajo: la barra
+/// arriba (su grosor original) y el menú llenando lo que queda. Espeja
+/// [`shuma_open_view`] pero hacia abajo (anclaje superior). El compositor ya
+/// creció la layer surface a [`crate::layer`]'s alto de menú.
+pub fn start_menu_view(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    apps: &[AppEntry],
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(bar_px),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
+
+    let mut body_style = Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style).children(vec![start_menu_body(apps, theme)]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar, body])
 }
 
 /// El `clipboard`: un chip con el ícono 📋 y un preview del texto copiado

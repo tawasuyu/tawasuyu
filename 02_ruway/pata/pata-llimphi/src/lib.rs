@@ -69,6 +69,10 @@ pub enum Msg {
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
+    /// Desplegar/replegar el menú del botón de inicio.
+    StartToggle,
+    /// Lanzar una app del menú de inicio por su `id` en el [`app_bus::AppRegistry`].
+    LaunchApp(String),
     /// Activar una ventana del `window_list` (traerla al frente, o minimizarla si
     /// ya está activa — estilo KDE). El `u32` es el [`toplevel::Toplevel::id`];
     /// sólo el backend layer-shell sabe resolverlo.
@@ -90,6 +94,15 @@ pub enum SlotWidget {
     /// clickearlo (de la prop `exec` del spec), o `None` si no es clickeable.
     Core {
         widget: Box<dyn Widget>,
+        exec: Option<String>,
+    },
+    /// El botón de inicio: muestra su `label` y, al clickearlo, despliega el
+    /// menú nativo de apps (o lanza `exec` si la config lo fija, override estilo
+    /// waybar). Es interacción, no view-model de core.
+    Start {
+        /// Texto/ícono del botón (prop `label`, default `⊞`).
+        label: String,
+        /// Comando a lanzar en vez de abrir el menú, si la config lo fija.
         exec: Option<String>,
     },
     /// El cabezal del shell; su estado vive en [`Model::shuma`].
@@ -148,7 +161,8 @@ impl SurfaceWidgets {
             .chain(self.end.iter_mut())
             .filter_map(|sw| match sw {
                 SlotWidget::Core { widget, .. } => Some(widget),
-                SlotWidget::Shuma
+                SlotWidget::Start { .. }
+                | SlotWidget::Shuma
                 | SlotWidget::WindowList
                 | SlotWidget::Clipboard { .. }
                 | SlotWidget::Tray => None,
@@ -172,6 +186,10 @@ pub struct Model {
     pub cards: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
     /// Estado del cabezal del shell y su drawer Quake.
     pub shuma: ShumaState,
+    /// Registro de apps para el menú del botón de inicio.
+    pub registry: app_bus::AppRegistry,
+    /// `true` cuando el menú de inicio está desplegado.
+    pub menu_open: bool,
     /// Muestreador del sistema (con estado para el delta de CPU).
     pub sampler: Sampler,
     /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
@@ -193,7 +211,13 @@ impl Model {
             specs
                 .iter()
                 .map(|spec| {
-                    if spec.kind == "shuma_input" {
+                    if spec.kind == "start_button" {
+                        let exec = spec.str_prop("exec", "");
+                        SlotWidget::Start {
+                            label: spec.str_prop("label", "⊞").to_string(),
+                            exec: (!exec.is_empty()).then(|| exec.to_string()),
+                        }
+                    } else if spec.kind == "shuma_input" {
                         if !shuma.present {
                             shuma = ShumaState::from_spec(spec);
                         }
@@ -310,6 +334,8 @@ impl App for PataApp {
             surfaces,
             cards,
             shuma,
+            registry: app_bus::AppRegistry::discover(),
+            menu_open: false,
             sampler,
             clipboard,
             tray,
@@ -391,6 +417,13 @@ impl App for PataApp {
             Msg::ShumaScroll(delta) => model.shuma.scroll_by(delta),
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
+            Msg::StartToggle => model.menu_open = !model.menu_open,
+            Msg::LaunchApp(id) => {
+                if let Some(app) = model.registry.get(&id) {
+                    let _ = app.spawn();
+                }
+                model.menu_open = false;
+            }
             Msg::TrayActivate(key) => {
                 if let Some(t) = &model.tray {
                     t.activate(key);
@@ -409,7 +442,32 @@ impl App for PataApp {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        shuma::drawer_overlay(&model.shuma, model.screen, &model.theme)
+        // El drawer Quake tiene prioridad; si no, el menú de inicio.
+        if let Some(d) = shuma::drawer_overlay(&model.shuma, model.screen, &model.theme) {
+            return Some(d);
+        }
+        if model.menu_open {
+            // Lo ofrecemos bajo la barra superior que hospeda el start_button.
+            let bar_h = model
+                .cfg
+                .surfaces
+                .iter()
+                .find(|s| {
+                    s.start
+                        .iter()
+                        .chain(&s.center)
+                        .chain(&s.end)
+                        .any(|w| w.kind == "start_button")
+                })
+                .map(|s| s.thickness)
+                .unwrap_or(32.0);
+            return Some(render::start_menu_overlay(
+                model.registry.all(),
+                bar_h,
+                &model.theme,
+            ));
+        }
+        None
     }
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {

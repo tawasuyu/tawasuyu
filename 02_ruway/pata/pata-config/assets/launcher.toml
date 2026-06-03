@@ -19,9 +19,10 @@ padding = 12
 
 [[surfaces.start]]
 kind = "start_button"
-# Cualquier widget con `exec` se vuelve clickeable y lanza ese comando (sh -c).
-# Ej.: abrir un lanzador de apps al clickear el botón de inicio.
-exec = "wofi --show drun"
+label = "⊞"
+# Sin `exec`, el clic abre el menú nativo de apps (descubiertas de
+# ~/.config/gioser/apps/*.toml). Para delegar a un lanzador externo en su lugar,
+# fijá p. ej. `exec = "wofi --show drun"`.
 
 [[surfaces.start]]
 kind = "clock"

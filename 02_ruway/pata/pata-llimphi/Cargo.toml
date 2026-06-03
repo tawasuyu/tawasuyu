@@ -28,6 +28,9 @@ shuma-line = { path = "../../shuma/sandbox/shuma-line" }
 # transparente de pluma; cae a Mock sin credenciales). Paridad con el quake de
 # mirada-launcher, que pata reemplaza (SDD Fase 10).
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+# Registro de apps para el menú del botón de inicio (descubre ~/.config/gioser/
+# apps/*.toml). El menú nativo reemplaza a depender de wofi/rofi externos.
+app-bus = { path = "../../../shared/app-bus" }
 llimphi-ui = { workspace = true }
 # Área de scroll del historial del drawer (clip + offset + barra arrastrable).
 llimphi-widget-scroll = { workspace = true }
