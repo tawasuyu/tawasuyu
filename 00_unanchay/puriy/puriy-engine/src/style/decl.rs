@@ -11,9 +11,63 @@ pub(crate) struct Decl {
     pub(crate) important: bool,
 }
 
+/// Keyword CSS-wide (`inherit`/`initial`/`unset`/`revert`). `revert` se
+/// trata como `unset` (no implementamos rollback por origen de cascada).
+/// Ver Fase 7.225.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WideKw {
+    Inherit,
+    Initial,
+    Unset,
+}
+
+/// Propiedad-destino de un keyword CSS-wide. Subset curado: los usos reales
+/// de `inherit`/`initial` se concentran en estas propiedades (resets tipo
+/// `* { box-sizing: inherit }`, `button { color: inherit }`). Ver Fase 7.225.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WideProp {
+    Color,
+    Background,
+    FontSize,
+    FontWeight,
+    FontStyle,
+    FontFamily,
+    LineHeight,
+    TextAlign,
+    TextDecoration,
+    Visibility,
+    Display,
+    BoxSizing,
+    BorderColor,
+}
+
+impl WideProp {
+    /// `true` si la propiedad hereda por defecto (define qué hace `unset`).
+    pub(crate) fn is_inherited(self) -> bool {
+        matches!(
+            self,
+            WideProp::Color
+                | WideProp::FontSize
+                | WideProp::FontWeight
+                | WideProp::FontStyle
+                | WideProp::FontFamily
+                | WideProp::LineHeight
+                | WideProp::TextAlign
+                | WideProp::TextDecoration
+                | WideProp::Visibility
+        )
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) enum DeclKind {
     Color(Color),
+    /// Keyword CSS-wide (`inherit`/`initial`/`unset`/`revert`). Se resuelve
+    /// en `compute_with_parent` (necesita el estilo del padre + el default).
+    Wide {
+        prop: WideProp,
+        kw: WideKw,
+    },
     Background(Color),
     Display(Display),
     FontSize(f32),
@@ -142,6 +196,9 @@ pub(crate) enum DeclKind {
 impl Decl {
     pub(crate) fn apply(&self, s: &mut ComputedStyle) {
         match &self.kind {
+            // Los keywords CSS-wide se resuelven en `compute_with_parent`
+            // (vía `apply_decl`), donde el padre y el default están a mano.
+            DeclKind::Wide { .. } => {}
             DeclKind::Color(c) => s.color = *c,
             DeclKind::Background(c) => s.background = Some(*c),
             DeclKind::Display(d) => s.display = *d,

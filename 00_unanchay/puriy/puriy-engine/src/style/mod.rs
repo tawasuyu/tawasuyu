@@ -264,6 +264,9 @@ impl StyleEngine {
                 .unwrap_or_default()
         };
 
+        // Default para resolver `initial`/`unset` de keywords CSS-wide.
+        let wide_default = ComputedStyle::default();
+
         // PASADA 1 — normales.
         let mut normal_apps: Vec<(u32, usize, &Decl)> = Vec::new();
         for (spec, src, rule) in &matched {
@@ -275,12 +278,12 @@ impl StyleEngine {
         }
         normal_apps.sort_by_key(|(spec, idx, _)| (*spec, *idx));
         for (_, _, d) in normal_apps {
-            d.apply(&mut style);
+            apply_decl(d, &mut style, parent, &wide_default);
         }
         // Inline normal (especificidad 1000) cierra la pasada normal.
         for d in &inline_decls {
             if !d.important {
-                d.apply(&mut style);
+                apply_decl(d, &mut style, parent, &wide_default);
             }
         }
 
@@ -297,13 +300,13 @@ impl StyleEngine {
         }
         imp_apps.sort_by_key(|(spec, idx, _)| (*spec, *idx));
         for (_, _, d) in imp_apps {
-            d.apply(&mut style);
+            apply_decl(d, &mut style, parent, &wide_default);
         }
         // Inline `!important` (efectiva 10_000 en CSS real, pero acá
         // simplemente cierra la pasada — gana todo lo anterior).
         for d in &inline_decls {
             if d.important {
-                d.apply(&mut style);
+                apply_decl(d, &mut style, parent, &wide_default);
             }
         }
         // `font-size` relativo: resuelto al cierre contra el font-size
@@ -330,6 +333,60 @@ impl StyleEngine {
             }
         }
         style
+    }
+}
+
+/// Aplica una declaración sobre el estilo. Los keywords CSS-wide
+/// (`inherit`/`initial`/`unset`) se resuelven acá porque necesitan el
+/// estilo del padre y el default; el resto delega en `Decl::apply`.
+/// Fase 7.225.
+fn apply_decl(
+    d: &Decl,
+    s: &mut ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    default: &ComputedStyle,
+) {
+    if let DeclKind::Wide { prop, kw } = &d.kind {
+        resolve_wide(*prop, *kw, s, parent, default);
+    } else {
+        d.apply(s);
+    }
+}
+
+/// Resuelve un keyword CSS-wide copiando el valor de la propiedad desde el
+/// padre (`inherit`, o `unset` sobre prop heredable) o el default (`initial`,
+/// o `unset` sobre prop no-heredable). Sin padre, `inherit` cae al default.
+fn resolve_wide(
+    prop: WideProp,
+    kw: WideKw,
+    s: &mut ComputedStyle,
+    parent: Option<&ComputedStyle>,
+    default: &ComputedStyle,
+) {
+    let use_parent = match kw {
+        WideKw::Inherit => true,
+        WideKw::Initial => false,
+        WideKw::Unset => prop.is_inherited(),
+    };
+    let src = if use_parent { parent.unwrap_or(default) } else { default };
+    match prop {
+        WideProp::Color => s.color = src.color,
+        WideProp::Background => s.background = src.background,
+        WideProp::FontSize => {
+            s.font_size = src.font_size;
+            // Un font-size concreto descarta cualquier relativo pendiente.
+            s.font_size_rel = None;
+        }
+        WideProp::FontWeight => s.font_weight = src.font_weight,
+        WideProp::FontStyle => s.font_style = src.font_style,
+        WideProp::FontFamily => s.font_family = src.font_family.clone(),
+        WideProp::LineHeight => s.line_height = src.line_height,
+        WideProp::TextAlign => s.text_align = src.text_align,
+        WideProp::TextDecoration => s.text_decoration = src.text_decoration,
+        WideProp::Visibility => s.visibility = src.visibility,
+        WideProp::Display => s.display = src.display,
+        WideProp::BoxSizing => s.box_sizing = src.box_sizing,
+        WideProp::BorderColor => s.border_colors = src.border_colors,
     }
 }
 
@@ -563,6 +620,48 @@ mod tests {
         assert_eq!(c.font_family.as_deref(), Some("monospace"));
         // .d — fuente de sistema: shorthand ignorado, size queda en default UA.
         assert_eq!(eng.compute(&ps[3]).font_size, 16.0);
+    }
+
+    #[test]
+    fn css_wide_keywords_inherit_initial_unset() {
+        let html = r#"<html><head><style>
+            .bg{background-color:inherit}
+            .initc{color:initial}
+            .unsbg{background-color:unset}
+            .unsc{color:unset}
+            .dispinh{display:inherit}
+        </style></head><body>
+            <div style="color:red; background-color:blue; display:block">
+                <span class="bg">a</span><span class="initc">b</span>
+                <span class="unsbg">c</span><span class="unsc">d</span>
+                <span class="dispinh">e</span>
+            </div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut div = None;
+        let mut spans = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("div") => div = Some(n.clone()),
+                Some("span") => spans.push(n.clone()),
+                _ => {}
+            }
+        });
+        let parent = eng.compute(div.as_ref().unwrap());
+        assert_eq!(parent.color, Color::rgb(255, 0, 0));
+        assert_eq!(parent.background, Some(Color::rgb(0, 0, 255)));
+        let c = |i: usize| eng.compute_with_parent(&spans[i], Some(&parent));
+        // background-color: inherit fuerza herencia de una prop NO heredable.
+        assert_eq!(c(0).background, Some(Color::rgb(0, 0, 255)));
+        // color: initial resetea al default (negro), ignorando la herencia.
+        assert_eq!(c(1).color, Color::BLACK);
+        // background-color: unset = initial (no heredable) → None.
+        assert_eq!(c(2).background, None);
+        // color: unset = inherit (heredable) → rojo del padre.
+        assert_eq!(c(3).color, Color::rgb(255, 0, 0));
+        // display: inherit toma el block del padre (un span sería inline).
+        assert_eq!(c(4).display, Display::Block);
     }
 
     #[test]
