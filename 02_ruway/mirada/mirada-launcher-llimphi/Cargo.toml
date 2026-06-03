@@ -26,3 +26,7 @@ toml = { workspace = true }
 chrono = { workspace = true }
 pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 tokio = { workspace = true }
+# Bandeja del sistema (StatusNotifierItem): watcher+host en un hilo aparte con
+# zbus async sobre tokio current-thread; íconos PNG/pixmap vía `image`.
+zbus = { workspace = true }
+image = { workspace = true }

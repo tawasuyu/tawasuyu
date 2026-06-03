@@ -7,6 +7,7 @@
 pub mod config;
 pub mod keys;
 pub mod panel;
+pub mod tray;
 pub mod widget;
 pub mod widgets;
 

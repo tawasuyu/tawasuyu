@@ -10,6 +10,7 @@ pub mod placeholder;
 pub mod quake;
 pub mod ram;
 pub mod shuma_bar;
+pub mod system_tray;
 pub mod volume;
 
 use crate::config::WidgetSpec;
@@ -36,6 +37,7 @@ pub fn build(spec: &WidgetSpec, ctx: &BuildCtx) -> Box<dyn Widget> {
         "clipboard" => Box::new(clipboard::Clipboard::from_spec(spec)),
         "quake_input" => Box::new(quake::QuakeInput::from_spec(spec)),
         "shuma_bar" => Box::new(shuma_bar::ShumaBar::from_spec(spec)),
+        "system_tray" => Box::new(system_tray::SystemTray::from_spec(spec)),
         other => Box::new(placeholder::Placeholder::new(format!("?{other}"))),
     }
 }

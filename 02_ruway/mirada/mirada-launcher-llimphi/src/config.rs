@@ -142,6 +142,7 @@ impl Default for PanelConfig {
                 WidgetSpec { kind: "brightness".into(), props: HashMap::new() },
                 WidgetSpec { kind: "volume".into(), props: HashMap::new() },
                 WidgetSpec { kind: "clipboard".into(), props: HashMap::new() },
+                WidgetSpec { kind: "system_tray".into(), props: HashMap::new() },
                 WidgetSpec { kind: "ram_meter".into(), props: HashMap::new() },
                 WidgetSpec { kind: "cpu_meter".into(), props: HashMap::new() },
                 WidgetSpec {

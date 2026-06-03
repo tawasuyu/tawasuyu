@@ -19,6 +19,7 @@ use mirada_launcher_llimphi::widgets;
 use mirada_launcher_llimphi::widgets::clock::TzMode;
 use mirada_launcher_llimphi::widgets::quake::{ask_ia_blocking, QuakeInput, SubmitKind};
 use mirada_launcher_llimphi::widgets::shuma_bar::{run_shell_blocking, ShumaBar};
+use mirada_launcher_llimphi::widgets::system_tray::SystemTray;
 
 struct Model {
     theme: Theme,
@@ -326,6 +327,14 @@ impl App for LauncherApp {
             Msg::CloseMenus => {
                 model.menu_open = None;
                 model.menu_active = usize::MAX;
+            }
+            Msg::TrayActivate(key) => {
+                for w in model.each_widget_mut() {
+                    if let Some(t) = w.as_any_mut().downcast_mut::<SystemTray>() {
+                        t.activate(key);
+                        break;
+                    }
+                }
             }
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;

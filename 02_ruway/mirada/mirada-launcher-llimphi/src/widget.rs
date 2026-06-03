@@ -47,6 +47,9 @@ pub enum Msg {
     MenuTick,
     /// Cerrar cualquier menú/dropdown abierto.
     CloseMenus,
+    /// Click en un item de la bandeja del sistema: activa el item por D-Bus.
+    /// El payload es la `key` (`"bus|path"`) del item.
+    TrayActivate(String),
     /// Cerrar la app.
     Quit,
 }
