@@ -870,6 +870,7 @@ impl App for Cosmos {
             expanded_panels: ui.expanded_panels,
             active_left: ui.dock_left.first().copied(),
             active_right: ui.dock_right.first().copied(),
+            dock_expanded: None,
             dock_left: ui.dock_left,
             dock_right: ui.dock_right,
             menu_open: None,
@@ -1137,16 +1138,29 @@ impl App for Cosmos {
             }
             // dock
             Msg::DockActivate(side, item) => {
+                // Clic en el diente activo del lado ya desplegado → colapsa
+                // (toggle, estilo web); cualquier otro → activa + despliega.
+                let toggle_off = m.dock_active(side) == Some(item)
+                    && m.dock_expanded == Some(side);
                 match side {
                     model::DockSide::Left => m.active_left = Some(item),
                     model::DockSide::Right => m.active_right = Some(item),
                 }
+                m.dock_expanded = if toggle_off { None } else { Some(side) };
                 persist = true;
             }
             Msg::DockDrop(side, payload) => {
                 if let Some(item) = model::DockItem::from_u64(payload) {
-                    m.dock_move(item, side);
-                    persist = true;
+                    // Sólo mover si cambia de lado — evita el reordenado
+                    // molesto al soltar (o al hacer clic) en el mismo lado.
+                    let already = match side {
+                        model::DockSide::Left => m.dock_left.contains(&item),
+                        model::DockSide::Right => m.dock_right.contains(&item),
+                    };
+                    if !already {
+                        m.dock_move(item, side);
+                        persist = true;
+                    }
                 }
             }
             // tipo de gráfica
@@ -1190,10 +1204,14 @@ impl App for Cosmos {
         let center = chrome::center_view(model, &theme);
 
         // Dock: sidebars izquierdo/derecho armados desde el reparto de
-        // pestañas. Angosto → colapsados a sólo el rail (sin splitter).
+        // pestañas. Angosto → colapsados a sólo el rail; al hacer clic en
+        // un diente, ese lado se despliega (estilo web).
         let collapsed = chrome::dock_collapsed(model);
-        let left = chrome::sidebar_view(model::DockSide::Left, model, &theme, collapsed);
-        let right = chrome::sidebar_view(model::DockSide::Right, model, &theme, collapsed);
+        let rail_w = model::TOOLS_RAIL_W;
+        let left_show = !collapsed || model.dock_expanded == Some(model::DockSide::Left);
+        let right_show = !collapsed || model.dock_expanded == Some(model::DockSide::Right);
+        let left = chrome::sidebar_view(model::DockSide::Left, model, &theme, left_show);
+        let right = chrome::sidebar_view(model::DockSide::Right, model, &theme, right_show);
 
         // Centro + sidebar derecho.
         let center_and_right = match right {
@@ -1209,7 +1227,10 @@ impl App for Cosmos {
                 },
                 &sp,
             ),
-            Some(r) => fixed_row(center, Some((r, model::TOOLS_RAIL_W)), false),
+            Some(r) => {
+                let w = if right_show { model.tools_w } else { rail_w };
+                fixed_row(center, Some((r, w)), false)
+            }
             None => center,
         };
 
@@ -1227,7 +1248,10 @@ impl App for Cosmos {
                 },
                 &sp,
             ),
-            Some(l) => fixed_row(center_and_right, Some((l, model::TOOLS_RAIL_W)), true),
+            Some(l) => {
+                let w = if left_show { model.nav_w } else { rail_w };
+                fixed_row(center_and_right, Some((l, w)), true)
+            }
             None => center_and_right,
         };
 

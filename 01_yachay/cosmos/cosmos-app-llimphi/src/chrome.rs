@@ -818,13 +818,15 @@ fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme
 }
 
 /// Un sidebar del dock (izq/der). `None` si no tiene items o está oculto.
-/// `collapsed` (ventana angosta) → sólo el rail. Acepta drops de dientes
-/// del otro lado.
+/// `show_content = false` → sólo el rail (modo colapsado). El **rail va
+/// del lado interno** (a la derecha en el sidebar izquierdo, a la
+/// izquierda en el derecho) para quedar pegado a la barra resizable.
+/// Acepta drops de dientes del otro lado.
 pub(crate) fn sidebar_view(
     side: DockSide,
     model: &Model,
     theme: &Theme,
-    collapsed: bool,
+    show_content: bool,
 ) -> Option<View<Msg>> {
     let open = match side {
         DockSide::Left => model.nav_open,
@@ -843,10 +845,26 @@ pub(crate) fn sidebar_view(
     let active = model.dock_active(side);
     let rail = dock_rail(side, items, active, theme);
 
-    let mut kids = vec![rail];
-    if !collapsed {
-        if let Some(item) = active {
-            kids.push(dock_content(item, model, theme));
+    // Rail al borde interno: izquierda → [contenido, rail]; derecha →
+    // [rail, contenido].
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    let content = if show_content {
+        active.map(|item| dock_content(item, model, theme))
+    } else {
+        None
+    };
+    match side {
+        DockSide::Left => {
+            if let Some(c) = content {
+                kids.push(c);
+            }
+            kids.push(rail);
+        }
+        DockSide::Right => {
+            kids.push(rail);
+            if let Some(c) = content {
+                kids.push(c);
+            }
         }
     }
 

@@ -658,6 +658,9 @@ pub(crate) struct Model {
     pub(crate) dock_right: Vec<DockItem>,
     pub(crate) active_left: Option<DockItem>,
     pub(crate) active_right: Option<DockItem>,
+    /// En modo colapsado (ventana angosta), qué sidebar está desplegado
+    /// temporalmente (al hacer clic en un diente). `None` = ambos a rail.
+    pub(crate) dock_expanded: Option<DockSide>,
     // chrome
     pub(crate) menu_open: Option<MenuKind>,
     /// Fila activa (resaltada por teclado) del dropdown del menú principal.
