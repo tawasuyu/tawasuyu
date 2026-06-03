@@ -637,6 +637,27 @@ impl App {
         }
     }
 
+    /// El `order` configurado para la salida `name` — `0` si no hay override
+    /// o si el Cerebro está enlazado (toma decisiones de layout sólo el
+    /// Cuerpo embebido). Las salidas se disponen por `(order, name)`
+    /// ascendente; la de menor `order` queda primaria.
+    fn config_output_order_for(&self, name: &str) -> i32 {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().output_order_for(name),
+            Brain::Linked(_) => 0,
+        }
+    }
+
+    /// La disposición global de los monitores: horizontal (default) o
+    /// vertical. Con Cerebro enlazado cae al default — la geometría del
+    /// escritorio compuesto la decide el Cuerpo embebido.
+    fn config_output_disposition(&self) -> mirada_brain::Disposicion {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().output_disposition(),
+            Brain::Linked(_) => mirada_brain::Disposicion::Horizontal,
+        }
+    }
+
     /// El árbol del menú raíz configurado (con submenús anidados). Vacío con
     /// Cerebro enlazado o sin entradas en la config.
     fn config_menu(&self) -> Vec<crate::menu::MenuNode> {

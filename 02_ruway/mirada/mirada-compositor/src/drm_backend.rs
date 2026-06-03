@@ -1772,9 +1772,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     if chosen.is_empty() {
         return Err("ninguna salida conectada con CRTC disponible".into());
     }
-    // La primera descubierta queda como **primaria** (layer-shell, tiling,
-    // menú, zonas, HUD viven ahí). Las demás renderizan sólo wallpaper.
-    let out_name = chosen[0].3.clone();
+    // El nombre de la primaria se decide tras ordenar por (order, name) más
+    // abajo — no por orden de discovery. Se captura justo después del sort.
 
     // 5 · GBM + EGL + GlesRenderer.
     println!("[5/8] inicializando GBM + EGL + GlesRenderer …");
@@ -1804,12 +1803,35 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // pintan por GPU (GPUI, navegadores acelerados) no pueden conectarse.
     crate::announce_dmabuf(&mut app, &display.handle(), &renderer);
 
-    // Construir un OutputCtx por cada salida. Layout side-by-side
-    // horizontal en orden de descubrimiento: la primera arranca en (0,0),
-    // la siguiente a la derecha, etc.
+    // Ordenar las salidas según la config: `(order, name)` ascendente. La de
+    // menor `order` queda **primaria** (origen `(0,0)` y todas las features
+    // gated por primaria — layer-shell, tiling, HUD — viven ahí). Sin
+    // overrides todas son `order=0` y el desempate por nombre da un orden
+    // alfabético estable y reproducible (no el azar de discovery).
+    chosen.sort_by(|a, b| {
+        let oa = app.config_output_order_for(&a.3);
+        let ob = app.config_output_order_for(&b.3);
+        oa.cmp(&ob).then_with(|| a.3.cmp(&b.3))
+    });
+    // Primaria = la primera tras el sort.
+    let out_name = chosen[0].3.clone();
+
+    // Disponer los rects globales en la dirección que pide la config
+    // (horizontal o vertical). El cálculo lo hace `mirada-layout` —cero
+    // geometría a mano— y es la misma función que el día de mañana usará
+    // wawa cuando enumere scanouts.
+    let tamanos: Vec<(i32, i32)> = chosen
+        .iter()
+        .map(|(_, _, mode, _)| {
+            let (w, h) = mode.size();
+            (w as i32, h as i32)
+        })
+        .collect();
+    let disp = app.config_output_disposition();
+    let rects = mirada_brain::disponer(&tamanos, disp);
+
+    // Construir un OutputCtx por cada salida en el orden ya decidido.
     let mut output_ctxs: Vec<OutputCtx> = Vec::with_capacity(chosen.len());
-    let mut cursor_x: i32 = 0;
-    let mut total_h: i32 = 0;
     for (i, (conn_handle, crtc_h, mode, name)) in chosen.iter().cloned().enumerate() {
         let (w, h) = mode.size();
         let surface = drm
@@ -1838,10 +1860,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         // Brain: cada salida es un id incremental con su tamaño local.
         let ev = app.body.add_output(i as u32, w as i32, h as i32);
         app.brain_feed(ev);
-        // Posición global del rect de esta salida.
-        let rect = Rect::new(cursor_x, 0, w as i32, h as i32);
-        cursor_x += w as i32;
-        total_h = total_h.max(h as i32);
+        let rect = rects[i];
         // Wallpaper resuelto por salida (override por nombre o global).
         let wp_path = app.config_wallpaper_path_for(&name);
         let wp_fit = app.config_wallpaper_fit_for(&name);
@@ -1860,9 +1879,10 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         });
     }
 
-    // Espacio global del escritorio: union de todos los rects.
-    let total_w = cursor_x.max(1);
-    let total_h = total_h.max(1);
+    // Espacio global del escritorio: union de todos los rects ya dispuestos.
+    let env = mirada_brain::envolvente(&rects);
+    let total_w = env.w.max(1);
+    let total_h = env.h.max(1);
     app.output_size = (total_w, total_h);
     // El puntero arranca centrado en la salida primaria (no en el centro
     // del escritorio global) — más predecible cuando hay varios monitores.

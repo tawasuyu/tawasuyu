@@ -36,7 +36,7 @@ pub use rules::{Rule, RuleOutcome, Rules};
 pub use watch::FileWatch;
 
 pub use mirada_layout::{
-    wallpaper_dst_rect, LayoutMode, LayoutParams, Rect, WallpaperFit, WindowId, Workspace,
-    ZoneFrac,
+    disponer, envolvente, wallpaper_dst_rect, Disposicion, LayoutMode, LayoutParams, Rect,
+    WallpaperFit, WindowId, Workspace, ZoneFrac,
 };
 pub use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, WindowPlacement};

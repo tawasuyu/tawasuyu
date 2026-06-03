@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use mirada_layout::{LayoutMode, LayoutParams, WallpaperFit};
+use mirada_layout::{Disposicion, LayoutMode, LayoutParams, WallpaperFit};
 use mirada_protocol::Decorations;
 
 /// `app_id` con el que se marca y reconoce la terminal dropdown (quake).
@@ -134,11 +134,16 @@ pub struct Config {
     /// atajo) cicla `zones → preset 0 → preset 1 → … → zones`. Cada preset es
     /// una lista de zonas como [`Self::zones`].
     pub zone_presets: Vec<Vec<ZoneCfg>>,
+    /// Cómo se reparten los monitores en el escritorio global cuando hay más
+    /// de uno: `"horizontal"` (uno al lado del otro, default) o `"vertical"`
+    /// (uno encima del otro). El orden lo dicta [`OutputOverride::order`].
+    /// Mismo vocabulario que [`mirada_layout::Disposicion`].
+    pub output_direction: String,
     /// Overrides por salida (monitor). Cada entrada se identifica por el
     /// `name` del conector DRM (`HDMI-A-1`, `DP-1`, …) y puede sobreescribir
-    /// el wallpaper y su modo de ajuste para esa salida concreta. Lo que no
-    /// se indique cae al valor global (`wallpaper_path`/`wallpaper_fit`).
-    /// Vacío = todas las salidas usan el wallpaper global.
+    /// el wallpaper, su modo de ajuste y el orden de la salida en el
+    /// escritorio compuesto. Lo que no se indique cae al valor global.
+    /// Vacío = orden de discovery, wallpaper global para todas.
     pub outputs: Vec<OutputOverride>,
 }
 
@@ -163,6 +168,22 @@ pub struct OutputOverride {
     /// `Some("fill")` / `None`, ruido innecesario en la config.
     #[serde(default)]
     pub wallpaper_fit: String,
+    /// Orden de esta salida en el escritorio compuesto: las salidas se
+    /// disponen ordenadas crecientemente por `(order, name)`. La de menor
+    /// `order` queda **primaria** (origen `(0, 0)`). Default `0` — entonces
+    /// el desempate por `name` da un orden estable, predecible y reproducible
+    /// (sin override, todas son `0` y mandan los nombres alfabéticamente).
+    #[serde(default)]
+    pub order: i32,
+}
+
+/// Parsea el slug de [`Config::output_direction`] a [`Disposicion`].
+fn parse_disposition(slug: &str) -> Option<Disposicion> {
+    match slug {
+        "horizontal" => Some(Disposicion::Horizontal),
+        "vertical" => Some(Disposicion::Vertical),
+        _ => None,
+    }
 }
 
 impl OutputOverride {
@@ -235,6 +256,7 @@ impl Default for Config {
             menu: Vec::new(),
             zones: Vec::new(),
             zone_presets: Vec::new(),
+            output_direction: "horizontal".to_string(),
             outputs: Vec::new(),
         }
     }
@@ -265,6 +287,22 @@ impl Config {
             border_normal: self.border_normal,
             titlebar_height: self.titlebar_height.max(0),
         }
+    }
+
+    /// La dirección de disposición de las salidas en el escritorio compuesto.
+    /// Default `Horizontal` si el slug no se reconoce — el chequeo duro se
+    /// hace al cargar la config (ver [`Self::from_ron`]).
+    pub fn output_disposition(&self) -> Disposicion {
+        parse_disposition(&self.output_direction).unwrap_or(Disposicion::Horizontal)
+    }
+
+    /// El `order` configurado para la salida `name` — `0` si no hay override.
+    pub fn output_order_for(&self, name: &str) -> i32 {
+        self.outputs
+            .iter()
+            .find(|o| o.name == name)
+            .map(|o| o.order)
+            .unwrap_or(0)
     }
 
     /// La ruta del wallpaper a usar para la salida `name`. Si hay un override
@@ -308,13 +346,20 @@ impl Config {
     }
 
     /// Parsea la config desde el texto RON de un archivo. Valida también que
-    /// los `wallpaper_fit` de cada [`OutputOverride`] sean slugs conocidos —
-    /// un typo (ej. `"marciano"`) se rechaza acá con un mensaje claro, en
-    /// vez de ignorarse en silencio al pintar el fondo.
+    /// los slugs de overrides sean conocidos —`wallpaper_fit` de cada
+    /// [`OutputOverride`] y el [`Self::output_direction`] global— para que un
+    /// typo (ej. `"marciano"`) se rechace acá con un mensaje claro, en vez
+    /// de ignorarse en silencio al pintar.
     pub fn from_ron(text: &str) -> Result<Config, String> {
         let cfg: Config = ron::from_str(text).map_err(|e| format!("RON inválido: {e}"))?;
         for o in &cfg.outputs {
             o.parsed_wallpaper_fit()?;
+        }
+        if parse_disposition(&cfg.output_direction).is_none() {
+            return Err(format!(
+                "output_direction desconocido «{}» (usa horizontal o vertical)",
+                cfg.output_direction
+            ));
         }
         Ok(cfg)
     }
@@ -445,15 +490,20 @@ const CONFIG_TEMPLATE: &str = "\
     //   ],
     zone_presets: [],
 
+    // Cómo se reparten los monitores en el escritorio global cuando hay más
+    // de uno: \"horizontal\" (uno al lado del otro) o \"vertical\" (encima).
+    output_direction: \"horizontal\",
+
     // Overrides por salida (monitor). Cada entrada identifica el conector
     // DRM por su `name` (ej. \"HDMI-A-1\", \"DP-1\", \"eDP-1\"; sale en los
     // logs de arranque del compositor) y sobreescribe el wallpaper de esa
-    // salida. Lo que se deja vacío cae al global. Vacío = todas usan el
-    // wallpaper global. Ej:
+    // salida + el orden en que se dispone. Lo que se deja vacío cae al
+    // global. La salida con `order` más chico queda primaria (origen 0,0).
+    // Vacío = orden alfabético, wallpaper global para todas. Ej:
     //   outputs: [
-    //       (name: \"HDMI-A-1\", wallpaper_path: \"/home/yo/fondos/sala.png\"),
-    //       (name: \"DP-1\",     wallpaper_path: \"/home/yo/fondos/code.png\",
+    //       (name: \"DP-1\",     order: 0, wallpaper_path: \"/home/yo/fondos/code.png\",
     //                            wallpaper_fit: \"fill\"),
+    //       (name: \"HDMI-A-1\", order: 1, wallpaper_path: \"/home/yo/fondos/sala.png\"),
     //   ],
     outputs: [],
 )
@@ -607,6 +657,47 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("marciano"), "mensaje útil: {err}");
+    }
+
+    #[test]
+    fn output_direction_default_es_horizontal() {
+        let c = Config::default();
+        assert_eq!(c.output_disposition(), Disposicion::Horizontal);
+    }
+
+    #[test]
+    fn output_direction_parsea_vertical_y_horizontal() {
+        let c = Config::from_ron(r#"( output_direction: "vertical" )"#).unwrap();
+        assert_eq!(c.output_disposition(), Disposicion::Vertical);
+        let c = Config::from_ron(r#"( output_direction: "horizontal" )"#).unwrap();
+        assert_eq!(c.output_disposition(), Disposicion::Horizontal);
+    }
+
+    #[test]
+    fn output_direction_desconocido_es_rechazado() {
+        let err = Config::from_ron(r#"( output_direction: "diagonal" )"#).unwrap_err();
+        assert!(err.contains("diagonal"), "mensaje útil: {err}");
+    }
+
+    #[test]
+    fn output_order_for_cae_a_cero_sin_override() {
+        let c = Config::default();
+        assert_eq!(c.output_order_for("HDMI-A-1"), 0);
+    }
+
+    #[test]
+    fn output_order_for_lee_el_override() {
+        let c = Config::from_ron(
+            r#"( outputs: [
+                (name: "DP-1", order: 0),
+                (name: "HDMI-A-1", order: 5),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.output_order_for("HDMI-A-1"), 5);
+        assert_eq!(c.output_order_for("DP-1"), 0);
+        // Sin entrada cae a 0.
+        assert_eq!(c.output_order_for("eDP-1"), 0);
     }
 
     #[test]
