@@ -102,9 +102,43 @@ fn chip(_theme: &Theme) -> View<Msg> {
     })
 }
 
-/// Un medidor: etiqueta opcional + barrita proporcional + leyenda.
+/// Aclara un color hacia el blanco en `amount` (`0.0` = igual, `1.0` = blanco).
+/// Para el extremo claro del gradiente de los medidores.
+fn aclarar(c: llimphi_theme::Color, amount: f32) -> llimphi_theme::Color {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let [r, g, b, a] = c.components;
+    let m = amount.clamp(0.0, 1.0);
+    AlphaColor::new([r + (1.0 - r) * m, g + (1.0 - g) * m, b + (1.0 - b) * m, a])
+}
+
+/// Un medidor: etiqueta opcional + barrita proporcional + leyenda. La barra de
+/// relleno lleva un **gradiente** horizontal del acento (izquierda) a un acento
+/// aclarado (derecha), pintado a mano con `paint_with` (Llimphi no tiene fill de
+/// brush, sólo color sólido).
 fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) -> View<Msg> {
     let frac = fraction.clamp(0.0, 1.0);
+    let c0 = theme.accent;
+    let c1 = aclarar(theme.accent, 0.5);
+    let relleno = View::new(Style {
+        size: Size {
+            width: length(BARRA_W * frac),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, RoundedRect};
+        use llimphi_ui::llimphi_raster::peniko::{Fill, Gradient};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let (x0, y0) = (rect.x as f64, rect.y as f64);
+        let (x1, y1) = ((rect.x + rect.w) as f64, (rect.y + rect.h) as f64);
+        let rr = RoundedRect::new(x0, y0, x1, y1, 2.0);
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x1, y0))
+            .with_stops([c0, c1].as_slice());
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
+    });
     let barra = View::new(Style {
         size: Size {
             width: length(BARRA_W),
@@ -114,15 +148,7 @@ fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) 
     })
     .fill(theme.bg_panel)
     .radius(2.0)
-    .children(vec![View::new(Style {
-        size: Size {
-            width: length(BARRA_W * frac),
-            height: length(6.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(theme.accent)
-    .radius(2.0)]);
+    .children(vec![relleno]);
 
     let mut hijos: Vec<View<Msg>> = Vec::new();
     if let Some(l) = label {
