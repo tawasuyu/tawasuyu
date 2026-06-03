@@ -436,13 +436,13 @@ fn slots_de(
             .iter()
             .map(|sw| match sw {
                 SlotWidget::Core { widget, exec } => {
-                    let v = widget_view(&widget.view(), theme);
+                    // Realce al hover en todos los widgets (feedback de "estoy
+                    // encima"); los que tienen `exec` además lanzan su comando.
+                    let v = widget_view(&widget.view(), theme)
+                        .radius(6.0)
+                        .hover_fill(theme.bg_button_hover);
                     match exec {
-                        // Con `exec`: clickeable (lanza el comando) + realce al hover.
-                        Some(cmd) => v
-                            .radius(6.0)
-                            .hover_fill(theme.bg_button_hover)
-                            .on_click(Msg::Spawn(cmd.clone())),
+                        Some(cmd) => v.on_click(Msg::Spawn(cmd.clone())),
                         None => v,
                     }
                 }

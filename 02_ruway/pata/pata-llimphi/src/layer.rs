@@ -62,7 +62,7 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_compositor::{
-    hit_test_click, hit_test_scroll, measure_text_node, mount, paint, Mounted,
+    hit_test_click, hit_test_hover, hit_test_scroll, measure_text_node, mount, paint, Mounted,
 };
 use llimphi_ui::llimphi_hal::{wgpu, Hal, RawSurface, Surface as _};
 use llimphi_ui::llimphi_layout::{taffy, ComputedLayout, LayoutTree};
@@ -131,6 +131,9 @@ struct Panel {
     height: u32,
     /// `true` cuando hay algo nuevo que pintar (cambió el muestreo o el tamaño).
     dirty: bool,
+    /// Nodo bajo el puntero en este panel (para `hover_fill` y, a futuro,
+    /// tooltips). `None` si el puntero no está sobre ningún nodo hovereable.
+    hover_idx: Option<usize>,
     gpu: Option<PanelGpu>,
 }
 
@@ -280,6 +283,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             width: size.0.max(1),
             height: thickness,
             dirty: true,
+            hover_idx: None,
             gpu: None,
         });
     }
@@ -318,6 +322,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 width: cw,
                 height: ch,
                 dirty: true,
+                hover_idx: None,
                 gpu: None,
             });
         }
@@ -711,6 +716,7 @@ impl LayerApp {
             )
         };
 
+        let hover_idx = self.panels[pi].hover_idx;
         let hal = self.hal.as_ref().expect("hal");
         let gpu = match self.panels[pi].gpu.as_mut() {
             Some(g) => g,
@@ -744,7 +750,7 @@ impl LayerApp {
                 .expect("layout")
         };
         gpu.scene.reset();
-        paint(&mut gpu.scene, &mounted, &computed, &mut gpu.typesetter, None, None);
+        paint(&mut gpu.scene, &mounted, &computed, &mut gpu.typesetter, hover_idx, None);
         if let Err(e) = gpu.renderer.render(hal, &gpu.scene, &frame, palette::css::BLACK) {
             eprintln!("pata layer · render: {e}");
         }
@@ -1059,6 +1065,35 @@ impl PointerHandler for LayerApp {
         events: &[PointerEvent],
     ) {
         for e in events {
+            // Hover: el nodo bajo el puntero da feedback (`hover_fill`). El
+            // layer-shell no lo trackeaba (pasaba `None` a `paint`), así que el
+            // realce al pasar el cursor estaba muerto en todas las barras.
+            match e.kind {
+                PointerEventKind::Motion { .. } => {
+                    if let Some(pi) = self.panel_de(&e.surface) {
+                        let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+                        let nuevo = self.panels[pi]
+                            .cache
+                            .as_ref()
+                            .and_then(|c| hit_test_hover(&c.mounted, &c.computed, px, py));
+                        if self.panels[pi].hover_idx != nuevo {
+                            self.panels[pi].hover_idx = nuevo;
+                            self.panels[pi].dirty = true;
+                        }
+                    }
+                    continue;
+                }
+                PointerEventKind::Leave { .. } => {
+                    if let Some(pi) = self.panel_de(&e.surface) {
+                        if self.panels[pi].hover_idx.is_some() {
+                            self.panels[pi].hover_idx = None;
+                            self.panels[pi].dirty = true;
+                        }
+                    }
+                    continue;
+                }
+                _ => {}
+            }
             // Rueda sobre el historial del drawer: el nodo de scroll bajo el
             // cursor consume el delta y emite `ShumaScroll`. Convención de
             // signo igual que llimphi-ui (wayland y winit traen el eje y con
