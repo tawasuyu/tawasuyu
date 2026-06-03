@@ -22,3 +22,5 @@ smithay = "0.7"
 # Rasterizado de texto sobre CPU (etiquetas: barra de título, menú). Es un
 # rasterizador puro-Rust ligero; smithay sube el búfer RGBA como textura.
 ab_glyph = "0.2"
+# Decodifica y escala el wallpaper (PNG/JPEG/WebP) para componerlo en el fondo.
+image = { workspace = true }

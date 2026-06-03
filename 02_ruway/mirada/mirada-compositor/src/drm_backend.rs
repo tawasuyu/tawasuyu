@@ -125,6 +125,43 @@ fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32, bw: i32) -> [(i32, i32, i32,
     ]
 }
 
+/// Decodifica el wallpaper de `path`, lo escala para cubrir `(w, h)` (stretch)
+/// y lo arma como [`MemoryRenderBuffer`] listo para componer en el fondo.
+/// `None` si la imagen no abre o el tamaño es degenerado. El formato es
+/// `Argb8888` (little-endian → bytes `[B, G, R, A]` en memoria); el wallpaper
+/// es opaco, así que la premultiplicación por alfa es identidad.
+fn load_wallpaper(path: &str, w: i32, h: i32) -> Option<MemoryRenderBuffer> {
+    if w <= 0 || h <= 0 {
+        return None;
+    }
+    let img = match image::open(path) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("mirada-compositor · wallpaper «{path}» no carga ({e}); fondo sólido.");
+            return None;
+        }
+    };
+    let scaled = image::imageops::resize(
+        &img.to_rgba8(),
+        w as u32,
+        h as u32,
+        image::imageops::FilterType::Triangle,
+    );
+    let mut bgra = Vec::with_capacity((w * h * 4) as usize);
+    for px in scaled.chunks_exact(4) {
+        // RGBA (image) → BGRA (Argb8888 little-endian), alfa forzado opaco.
+        bgra.extend_from_slice(&[px[2], px[1], px[0], 255]);
+    }
+    Some(MemoryRenderBuffer::from_slice(
+        &bgra,
+        Fourcc::Argb8888,
+        (w, h),
+        1,
+        Transform::Normal,
+        None,
+    ))
+}
+
 /// Códigos de botón de `<linux/input-event-codes.h>`.
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -166,6 +203,12 @@ struct DrmState {
     /// Caché de etiquetas ya rasterizadas, por (texto, color) → búfer subido.
     /// Evita re-rasterizar y re-subir la textura en cada cuadro.
     text_cache: std::collections::HashMap<(String, [u8; 4]), MemoryRenderBuffer>,
+    /// Ruta del wallpaper configurado (`None` = fondo de color sólido).
+    wallpaper_path: Option<String>,
+    /// Wallpaper ya decodificado y escalado a la salida, con el tamaño para
+    /// el que se construyó. Se (re)arma perezosamente cuando cambia el
+    /// tamaño de salida. `None` si no hay ruta o la imagen no carga.
+    wallpaper: Option<(MemoryRenderBuffer, (i32, i32))>,
 }
 
 impl DrmState {
@@ -335,6 +378,36 @@ impl DrmState {
             // Layer surfaces de fondo (Bottom/Background) — debajo de todo.
             for el in under_layers {
                 out.push(Frame::Window(el));
+            }
+
+            // Wallpaper — al fondo de todo (la lista es front-to-back, así que
+            // va último). Se (re)arma perezosamente al tamaño de la salida.
+            if let Some(path) = self.wallpaper_path.clone() {
+                let size = (
+                    self.app.output_size.0 as i32,
+                    self.app.output_size.1 as i32,
+                );
+                let stale = self
+                    .wallpaper
+                    .as_ref()
+                    .map(|(_, s)| *s != size)
+                    .unwrap_or(true);
+                if stale && size.0 > 0 && size.1 > 0 {
+                    self.wallpaper = load_wallpaper(&path, size.0, size.1).map(|b| (b, size));
+                }
+                if let Some((buf, _)) = &self.wallpaper {
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut self.renderer,
+                        (0.0, 0.0),
+                        buf,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        out.push(Frame::Text(el));
+                    }
+                }
             }
             out
         };
@@ -1064,6 +1137,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     }
 
     let font_path = app.config_font_path();
+    let wallpaper_path = app.config_wallpaper_path();
     let mut state = DrmState {
         app,
         session: session.clone(),
@@ -1091,6 +1165,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             t
         },
         text_cache: std::collections::HashMap::new(),
+        wallpaper_path,
+        wallpaper: None,
     };
 
     let signal = event_loop.get_signal();

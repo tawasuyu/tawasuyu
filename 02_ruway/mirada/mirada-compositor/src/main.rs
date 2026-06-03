@@ -545,6 +545,18 @@ impl App {
         }
     }
 
+    /// La ruta del wallpaper configurado, si el Cerebro es embebido y la
+    /// config la fija. Vacía/None → fondo de color sólido.
+    fn config_wallpaper_path(&self) -> Option<String> {
+        match &self.brain {
+            Brain::Embedded(d) => {
+                let p = d.config().wallpaper_path.clone();
+                (!p.is_empty()).then_some(p)
+            }
+            Brain::Linked(_) => None,
+        }
+    }
+
     /// Traduce los comandos del Cerebro a operaciones y las ejecuta.
     fn apply_commands(&mut self, cmds: Vec<BrainCommand>) {
         for cmd in cmds {

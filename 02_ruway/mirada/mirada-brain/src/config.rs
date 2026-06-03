@@ -85,6 +85,9 @@ pub struct Config {
     /// Ruta a la fuente para las etiquetas del compositor (título, menú).
     /// Vacía = se prueba una lista de fuentes comunes del sistema.
     pub font_path: String,
+    /// Ruta a la imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía =
+    /// color sólido. La imagen se escala para cubrir la salida (stretch).
+    pub wallpaper_path: String,
 }
 
 impl Default for Config {
@@ -105,6 +108,7 @@ impl Default for Config {
             border_focus: dec.border_focus,
             border_normal: dec.border_normal,
             font_path: String::new(),
+            wallpaper_path: String::new(),
         }
     }
 }
@@ -229,6 +233,10 @@ const CONFIG_TEMPLATE: &str = "\
     // Fuente para las etiquetas (título, menú). Vacía = se prueba una lista
     // de fuentes comunes del sistema (Liberation, DejaVu, Noto, Adwaita…).
     font_path: \"\",
+
+    // Imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía = color sólido.
+    // Se escala para cubrir la salida. Ej: \"/home/yo/.config/mirada/fondo.png\".
+    wallpaper_path: \"\",
 )
 ";
 
