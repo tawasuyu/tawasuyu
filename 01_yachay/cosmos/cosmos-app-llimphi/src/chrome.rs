@@ -23,6 +23,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, PaintRect, View};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, context_menu_view_ex, ContextMenuExtras, ContextMenuItem,
     ContextMenuPalette, ContextMenuSpec,
@@ -746,80 +747,31 @@ fn dock_content(item: DockItem, model: &Model, theme: &Theme) -> View<Msg> {
 
 /// Rail de dientes (pestañas) de un sidebar. Cada diente: icono, activa
 /// al click y **arrastrable** (su payload = el item) para moverlo al otro
-/// sidebar. Alto auto (sólo los dientes), pegado arriba.
+/// sidebar. Alto auto (sólo los dientes), pegado arriba. La forma vive en
+/// `llimphi-widget-dock-rail`; acá sólo mapeamos los `DockItem` a ids y
+/// dibujamos su icono.
 fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme: &Theme) -> View<Msg> {
     // Orden canónico: Biblioteca, Principal, Análisis, Astronomía, Sistema.
     let mut ordered: Vec<DockItem> = items.to_vec();
     ordered.sort_by_key(|i| i.to_u64());
-    let mut teeth: Vec<View<Msg>> = Vec::new();
-    for &item in &ordered {
-        let is_active = active == Some(item);
-        let fg = if is_active { theme.accent } else { theme.fg_muted };
-        let accent_bar = {
-            let b = View::new(Style {
-                size: Size {
-                    width: length(3.0_f32),
-                    height: length(40.0_f32),
-                },
-                flex_shrink: 0.0,
-                ..Default::default()
-            });
-            if is_active {
-                b.fill(theme.accent).radius(2.0)
-            } else {
-                b
-            }
-        };
-        let icon_box = View::new(Style {
-            flex_grow: 1.0,
-            size: Size {
-                width: percent(0.0_f32),
-                height: length(42.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
+    let rail_items: Vec<DockRailItem> = ordered
+        .iter()
+        .map(|&item| DockRailItem {
+            id: item.to_u64(),
+            active: active == Some(item),
         })
-        .children(vec![glyphs::icon_view(dock_icon(item), 20.0, fg)]);
-        let mut tooth = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(42.0_f32),
-            },
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .hover_fill(theme.bg_row_hover)
-        // Click (en el press) activa; arrastrar mueve de sidebar.
-        .on_click_at(move |_, _, _, _| Some(Msg::DockActivate(side, item)))
-        .draggable_at(|_, _, _, _, _| None)
-        .drag_payload(item.to_u64())
-        .children(vec![accent_bar, icon_box]);
-        if is_active {
-            tooth = tooth.fill(theme.bg_selected);
-        }
-        teeth.push(tooth);
-    }
-    // Sólo del alto de los dientes (el hueco de abajo lo aprovecha la
-    // rueda, porque el rail flota como overlay sobre el centro). Es además
-    // el **drop target** del lado: soltar un diente del otro sidebar acá
-    // lo mueve a este lado.
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(TOOLS_RAIL_W),
-            height: auto(),
+        .collect();
+    dock_rail_view(
+        &rail_items,
+        TOOLS_RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        |id, size, color| {
+            let item = DockItem::from_u64(id).unwrap_or(DockItem::Arbol);
+            glyphs::icon_view(dock_icon(item), size, color)
         },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .radius(5.0)
-    .on_drop(move |payload| Some(Msg::DockDrop(side, payload)))
-    .drop_hover_fill(theme.bg_row_hover)
-    .children(teeth)
+        move |id| Msg::DockActivate(side, DockItem::from_u64(id).unwrap_or(DockItem::Arbol)),
+        move |payload| Some(Msg::DockDrop(side, payload)),
+    )
 }
 
 /// Envuelve el rail de un lado como **overlay absoluto** pegado al borde

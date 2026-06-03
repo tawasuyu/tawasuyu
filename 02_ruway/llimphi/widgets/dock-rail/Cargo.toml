@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-dock-rail"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-dock-rail — rail vertical de dientes (pestañas con barra de acento + icono) para sidebars acoplables; clic activa, arrastre mueve entre rails."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
