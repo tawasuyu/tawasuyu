@@ -48,7 +48,8 @@ use llimphi_widget_text_editor::Clipboard as _;
 use llimphi_theme::Theme;
 
 use puriy_engine::{
-    AlignItems as CssAlignItems, AlignSelf as CssAlignSelf, BoxNode, BoxShadow,
+    AlignItems as CssAlignItems, AlignSelf as CssAlignSelf,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BoxNode, BoxShadow,
     BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
     AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridTrackSize,
     JustifyContent as CssJustifyContent, LengthVal,
@@ -4243,6 +4244,46 @@ mod tests {
         let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
         paint_canvas_cmds(&mut scene, &mut ts, rect, &frame.cmds, 100.0, 100.0, &images);
         assert!(!scene.encoding().is_empty(), "el patrón debería pintar");
+    }
+
+    #[test]
+    fn background_image_size_position_repeat_pinta_y_tilea() {
+        // Fase 7.204 — paint_background_image resuelve size/position/repeat.
+        let img = PenikoImage::new(
+            llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]),
+            llimphi_raster::peniko::ImageFormat::Rgba8,
+            2,
+            2,
+        );
+        let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let sz = BackgroundSize::Explicit { x: LengthVal::Px(60.0), y: LengthVal::Px(60.0) };
+        let pos = BackgroundPosition { x: LengthVal::Px(0.0), y: LengthVal::Px(0.0) };
+
+        // no-repeat con tile 60×60 sobre 100×100 → un solo draw de imagen.
+        let mut once = llimphi_raster::vello::Scene::new();
+        paint_background_image(&mut once, rect, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::NoRepeat);
+        assert!(!once.encoding().is_empty(), "un background-image debería pintar");
+
+        // repeat con el mismo tile → 2×2 = 4 tiles → más draw_tags.
+        let mut tiled = llimphi_raster::vello::Scene::new();
+        paint_background_image(&mut tiled, rect, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::Repeat);
+        assert!(
+            tiled.encoding().draw_tags.len() > once.encoding().draw_tags.len(),
+            "repeat debería encodar más tiles ({} vs {})",
+            tiled.encoding().draw_tags.len(),
+            once.encoding().draw_tags.len()
+        );
+
+        // rect de ancho 0 → no pinta nada (early-return).
+        let mut empty = llimphi_raster::vello::Scene::new();
+        let zero = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 0.0, h: 50.0 };
+        paint_background_image(
+            &mut empty, zero, 0.0, &img, 2.0, 2.0,
+            BackgroundSize::Auto,
+            BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
+            BackgroundRepeat::Repeat,
+        );
+        assert!(empty.encoding().is_empty(), "rect de ancho 0 no debería pintar");
     }
 
     #[test]

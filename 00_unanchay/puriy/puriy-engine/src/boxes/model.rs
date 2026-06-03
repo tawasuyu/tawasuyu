@@ -193,6 +193,12 @@ pub struct BoxNode {
     /// chrome la pinta como background (detrás del background sólido y
     /// gradient).
     pub background_image: Option<ImageData>,
+    /// `background-size` (cómo escala `background_image`). Default `Auto`.
+    pub background_size: BackgroundSize,
+    /// `background-position` (origen del primer tile). Default `0% 0%`.
+    pub background_position: BackgroundPosition,
+    /// `background-repeat` (tiling). Default `Repeat`.
+    pub background_repeat: BackgroundRepeat,
     /// Si el nodo es un `<input>` de tipo texto o un `<textarea>`, el
     /// chrome lo renderea como widget editable. `None` para todo lo
     /// demás. Multilinea = textarea.

@@ -1333,6 +1333,112 @@ pub(crate) fn render_svg(scene: &puriy_engine::SvgScene, zoom: f32) -> View<Msg>
     })
 }
 
+/// Pinta `background-image` dentro de `rect` resolviendo `background-size`,
+/// `background-position` y `background-repeat` (Fase 7.204). Recorta al rect
+/// (esquinas redondeadas incluidas) con un clip layer y tilea según el repeat.
+/// `iw`/`ih` son las dimensiones naturales de la imagen (> 0, garantizado por
+/// el caller). Asume transform identidad (el `radius` ya viene escalado).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn paint_background_image(
+    scene: &mut llimphi_raster::vello::Scene,
+    rect: llimphi_ui::PaintRect,
+    radius: f64,
+    img: &PenikoImage,
+    iw: f64,
+    ih: f64,
+    size: BackgroundSize,
+    position: BackgroundPosition,
+    repeat: BackgroundRepeat,
+) {
+    let rw = rect.w as f64;
+    let rh = rect.h as f64;
+    if rw <= 0.0 || rh <= 0.0 {
+        return;
+    }
+    // 1) Tamaño del tile (tw, th) en px.
+    let resolve = |lv: LengthVal, basis: f64| -> Option<f64> {
+        match lv {
+            LengthVal::Px(n) => Some(n as f64),
+            LengthVal::Pct(p) => Some(basis * p as f64 / 100.0),
+            LengthVal::Auto => None,
+        }
+    };
+    let (tw, th) = match size {
+        BackgroundSize::Auto => (iw, ih),
+        BackgroundSize::Cover => {
+            let s = (rw / iw).max(rh / ih);
+            (iw * s, ih * s)
+        }
+        BackgroundSize::Contain => {
+            let s = (rw / iw).min(rh / ih);
+            (iw * s, ih * s)
+        }
+        BackgroundSize::Explicit { x, y } => match (resolve(x, rw), resolve(y, rh)) {
+            (Some(w), Some(h)) => (w, h),
+            (Some(w), None) => (w, w * ih / iw), // alto por aspecto
+            (None, Some(h)) => (h * iw / ih, h), // ancho por aspecto
+            (None, None) => (iw, ih),            // ambos auto = natural
+        },
+    };
+    if tw <= 0.5 || th <= 0.5 {
+        return;
+    }
+    // 2) Offset del primer tile (relativo al origen del rect). Para %, el
+    //    punto p% de la imagen se alinea con el p% del box (semántica CSS).
+    let pos_off = |lv: LengthVal, basis: f64, tile: f64| -> f64 {
+        match lv {
+            LengthVal::Px(n) => n as f64,
+            LengthVal::Pct(p) => (basis - tile) * p as f64 / 100.0,
+            LengthVal::Auto => 0.0,
+        }
+    };
+    let ox = pos_off(position.x, rw, tw);
+    let oy = pos_off(position.y, rh, th);
+    // 3) Ejes a tilear + posiciones de inicio cubriendo [0, span].
+    let (rep_x, rep_y) = match repeat {
+        BackgroundRepeat::Repeat => (true, true),
+        BackgroundRepeat::RepeatX => (true, false),
+        BackgroundRepeat::RepeatY => (false, true),
+        BackgroundRepeat::NoRepeat => (false, false),
+    };
+    let axis_positions = |off: f64, tile: f64, span: f64, rep: bool| -> Vec<f64> {
+        if !rep {
+            return vec![off];
+        }
+        let mut start = off;
+        while start > 0.0 {
+            start -= tile;
+        }
+        let mut v = Vec::new();
+        let mut p = start;
+        // Cap defensivo (tiles diminutos no deben colgar el render).
+        while p < span && v.len() < 4096 {
+            v.push(p);
+            p += tile;
+        }
+        v
+    };
+    let xs = axis_positions(ox, tw, rw, rep_x);
+    let ys = axis_positions(oy, th, rh, rep_y);
+    // 4) Clip al rect (borde redondeado) y dibujo de cada tile.
+    let clip = RoundedRect::new(
+        rect.x as f64,
+        rect.y as f64,
+        rect.x as f64 + rw,
+        rect.y as f64 + rh,
+        radius,
+    );
+    scene.push_layer(llimphi_raster::peniko::Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+    let scale = Affine::scale_non_uniform(tw / iw, th / ih);
+    for &x in &xs {
+        for &y in &ys {
+            let tf = Affine::translate((rect.x as f64 + x, rect.y as f64 + y)) * scale;
+            scene.draw_image(img, tf);
+        }
+    }
+    scene.pop_layer();
+}
+
 /// Aplica `border-radius` y dibuja, en una sola pasada de `paint_with`,
 /// la sombra (si la hay) y el contorno del border (si lo hay). Vello
 /// pinta el callback entre el `fill` y la `image`/`text` del view, así
@@ -1419,13 +1525,16 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     let gradient = b.background_gradient.clone();
     // `background-image: url(...)`: si el engine pudo descargarla, la
     // envolvemos en peniko::Image para que el closure de paint_with la
-    // tile/escale dentro del rect. Por ahora un sólo modo: cover sin tile,
-    // anclada arriba-izquierda y escalada a llenar el ancho del box.
+    // escale/posicione/tile dentro del rect según `background-size`,
+    // `background-position` y `background-repeat` (Fase 7.204).
     let bg_image = b.background_image.as_ref().map(|img| {
         let blob = Blob::from(img.rgba.clone());
         let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
         (peniko, img.width as f64, img.height as f64)
     });
+    let bg_size = b.background_size;
+    let bg_position = b.background_position;
+    let bg_repeat = b.background_repeat;
     if shadow.is_none()
         && uniform_border.is_none()
         && per_side_border.is_none()
@@ -1453,18 +1562,13 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
             }
         }
-        // background-image: escala la imagen a "cover" del rect (la
-        // dimensión más chica al lado del rect, el sobrante se clipea).
-        // Anchor: arriba-izquierda. Sin `background-size`/`-position`
-        // CSS por ahora — alcanza para hero images simples.
+        // background-image: resuelve tamaño/posición/repeat (Fase 7.204) y
+        // pinta tileando dentro del rect, recortado al borde redondeado.
         if let Some((img, iw, ih)) = &bg_image {
             if *iw > 0.0 && *ih > 0.0 {
-                let sx = rect.w as f64 / *iw;
-                let sy = rect.h as f64 / *ih;
-                let s = sx.max(sy);
-                let transform = Affine::translate((rect.x as f64, rect.y as f64))
-                    * Affine::scale(s);
-                scene.draw_image(img, transform);
+                paint_background_image(
+                    scene, rect, radius, img, *iw, *ih, bg_size, bg_position, bg_repeat,
+                );
             }
         }
         if let Some(BoxShadow { offset_x, offset_y, blur_px, spread_px, color }) = shadow {

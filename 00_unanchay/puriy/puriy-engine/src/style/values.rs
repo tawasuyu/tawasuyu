@@ -135,6 +135,12 @@ pub struct ComputedStyle {
     /// relativa). El engine la resuelve y descarga en `build_node`; el
     /// chrome consume el resultado vía `BoxNode.background_image`.
     pub background_image_url: Option<String>,
+    /// `background-size`. Default `Auto` (tamaño natural de la imagen).
+    pub background_size: BackgroundSize,
+    /// `background-position`. Default `0% 0%` (esquina superior-izquierda).
+    pub background_position: BackgroundPosition,
+    /// `background-repeat`. Default `Repeat` (tile en ambos ejes).
+    pub background_repeat: BackgroundRepeat,
     /// CSS `position`. Default Static.
     pub position: Position,
     /// Insets (top/right/bottom/left). `Auto` por default.
@@ -427,6 +433,37 @@ pub enum Visibility {
 pub enum PointerEvents {
     Auto,
     None,
+}
+
+/// `background-size`. `Auto` = tamaño natural de la imagen; `Cover`/`Contain`
+/// escalan preservando aspecto (la más grande / la más chica que cubre / cabe);
+/// `Explicit` da ancho/alto, donde cada eje puede ser `Auto` (= derivado del
+/// otro por aspecto). El chrome resuelve % y aspecto contra el rect del box.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BackgroundSize {
+    Auto,
+    Cover,
+    Contain,
+    Explicit { x: LengthVal, y: LengthVal },
+}
+
+/// `background-position`. `x`/`y` son el offset del origen del primer tile.
+/// `Pct(p)` tiene semántica de alineación CSS (el punto `p%` de la imagen se
+/// alinea con el `p%` del box) — la resuelve el chrome; `Px(n)` es un offset
+/// directo desde la esquina superior-izquierda.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPosition {
+    pub x: LengthVal,
+    pub y: LengthVal,
+}
+
+/// `background-repeat`. `space`/`round` se aproximan a `Repeat`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundRepeat {
+    Repeat,
+    RepeatX,
+    RepeatY,
+    NoRepeat,
 }
 
 /// Una sombra de texto. CSS permite varias separadas por coma.
@@ -763,6 +800,12 @@ impl Default for ComputedStyle {
             outline: Outline::default(),
             background_gradient: None,
             background_image_url: None,
+            background_size: BackgroundSize::Auto,
+            background_position: BackgroundPosition {
+                x: LengthVal::Pct(0.0),
+                y: LengthVal::Pct(0.0),
+            },
+            background_repeat: BackgroundRepeat::Repeat,
             position: Position::Static,
             inset_top: LengthVal::Auto,
             inset_right: LengthVal::Auto,

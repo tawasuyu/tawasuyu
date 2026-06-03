@@ -2024,6 +2024,86 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn parsea_background_size_position_repeat() {
+        // Fase 7.204 — keywords y valores de las tres props de background.
+        let compute = |css: &str| {
+            let html = format!(
+                "<html><head><style>div {{ {css} }}</style></head><body><div></div></body></html>"
+            );
+            let dom = DomTree::parse(&html);
+            let eng = StyleEngine::from_dom(&dom);
+            eng.compute(&dom.find("div").unwrap())
+        };
+
+        // background-size
+        assert_eq!(compute("background-size: cover").background_size, BackgroundSize::Cover);
+        assert_eq!(compute("background-size: contain").background_size, BackgroundSize::Contain);
+        assert_eq!(
+            compute("background-size: 50% auto").background_size,
+            BackgroundSize::Explicit { x: LengthVal::Pct(50.0), y: LengthVal::Auto }
+        );
+        assert_eq!(
+            compute("background-size: 100px 40px").background_size,
+            BackgroundSize::Explicit { x: LengthVal::Px(100.0), y: LengthVal::Px(40.0) }
+        );
+
+        // background-repeat (incluye sintaxis de dos valores)
+        assert_eq!(
+            compute("background-repeat: no-repeat").background_repeat,
+            BackgroundRepeat::NoRepeat
+        );
+        assert_eq!(
+            compute("background-repeat: repeat-x").background_repeat,
+            BackgroundRepeat::RepeatX
+        );
+        assert_eq!(
+            compute("background-repeat: repeat no-repeat").background_repeat,
+            BackgroundRepeat::RepeatX
+        );
+        assert_eq!(
+            compute("background-repeat: no-repeat repeat").background_repeat,
+            BackgroundRepeat::RepeatY
+        );
+
+        // background-position: keyword posicional, orden invertido y %.
+        let p = compute("background-position: right bottom").background_position;
+        assert_eq!((p.x, p.y), (LengthVal::Pct(100.0), LengthVal::Pct(100.0)));
+        let p = compute("background-position: top left").background_position; // invertido
+        assert_eq!((p.x, p.y), (LengthVal::Pct(0.0), LengthVal::Pct(0.0)));
+        let p = compute("background-position: 10px 20px").background_position;
+        assert_eq!((p.x, p.y), (LengthVal::Px(10.0), LengthVal::Px(20.0)));
+        let p = compute("background-position: center").background_position; // un solo valor
+        assert_eq!((p.x, p.y), (LengthVal::Pct(50.0), LengthVal::Pct(50.0)));
+    }
+
+    #[test]
+    fn background_props_default_y_se_propagan_al_box() {
+        // Defaults CSS: auto / 0% 0% / repeat. Y un override viaja al BoxNode.
+        let eng = crate::Engine::new();
+        let html = r#"<html><body>
+            <div id="plain" style="background-image: url(x.png)"></div>
+            <div id="cov" style="background-image: url(x.png); background-size: cover;
+                 background-position: 50% 50%; background-repeat: no-repeat"></div>
+        </body></html>"#;
+        let doc = eng.load_html("about:test", html);
+        let mut plain = None;
+        let mut cov = None;
+        doc.box_tree.walk(|b| match b.element_id.as_deref() {
+            Some("plain") => plain = Some((b.background_size, b.background_repeat, b.background_position)),
+            Some("cov") => cov = Some((b.background_size, b.background_repeat, b.background_position)),
+            _ => {}
+        });
+        let (psize, prep, ppos) = plain.expect("plain box");
+        assert_eq!(psize, BackgroundSize::Auto);
+        assert_eq!(prep, BackgroundRepeat::Repeat);
+        assert_eq!((ppos.x, ppos.y), (LengthVal::Pct(0.0), LengthVal::Pct(0.0)));
+        let (csize, crep, cpos) = cov.expect("cov box");
+        assert_eq!(csize, BackgroundSize::Cover);
+        assert_eq!(crep, BackgroundRepeat::NoRepeat);
+        assert_eq!((cpos.x, cpos.y), (LengthVal::Pct(50.0), LengthVal::Pct(50.0)));
+    }
+
+    #[test]
     fn parsea_padding_individual_4_lados() {
         let html = r#"<html><head><style>
             div {

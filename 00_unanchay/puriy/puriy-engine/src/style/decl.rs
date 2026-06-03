@@ -98,6 +98,9 @@ pub(crate) enum DeclKind {
     /// `background-image: url(...)` — URL absoluta o relativa, el engine
     /// la resuelve contra el base del documento en `build_node`.
     BackgroundImageUrl(String),
+    BackgroundSize(BackgroundSize),
+    BackgroundPosition(BackgroundPosition),
+    BackgroundRepeat(BackgroundRepeat),
     Position(Position),
     InsetTop(LengthVal),
     InsetRight(LengthVal),
@@ -213,6 +216,9 @@ impl Decl {
                 s.background_image_url = None;
             }
             DeclKind::BackgroundImageUrl(u) => s.background_image_url = Some(u.clone()),
+            DeclKind::BackgroundSize(sz) => s.background_size = *sz,
+            DeclKind::BackgroundPosition(pos) => s.background_position = *pos,
+            DeclKind::BackgroundRepeat(r) => s.background_repeat = *r,
             DeclKind::Position(p) => s.position = *p,
             DeclKind::InsetTop(v) => s.inset_top = *v,
             DeclKind::InsetRight(v) => s.inset_right = *v,

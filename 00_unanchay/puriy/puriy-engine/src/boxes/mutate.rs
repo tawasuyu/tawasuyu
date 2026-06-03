@@ -657,6 +657,9 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.flex_basis = s.flex_basis;
     b.outline = s.outline;
     b.background_gradient = s.background_gradient.clone();
+    b.background_size = s.background_size;
+    b.background_position = s.background_position;
+    b.background_repeat = s.background_repeat;
     b.position = s.position;
     b.inset_top = s.inset_top;
     b.inset_right = s.inset_right;

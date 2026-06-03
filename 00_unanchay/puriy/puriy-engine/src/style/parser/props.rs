@@ -734,6 +734,107 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
     None
 }
 
+/// `background-size`: `cover` | `contain` | `auto` | `<x> [<y>]`. Cada eje
+/// acepta length/%/auto; un solo valor deja el segundo en `auto` (el chrome
+/// deriva el otro por aspecto). Valores no reconocidos → None (decl ignorada).
+pub(crate) fn parse_background_size(value: &str) -> Option<DeclKind> {
+    let v = value.trim();
+    match v.to_ascii_lowercase().as_str() {
+        "cover" => return Some(DeclKind::BackgroundSize(BackgroundSize::Cover)),
+        "contain" => return Some(DeclKind::BackgroundSize(BackgroundSize::Contain)),
+        "auto" => return Some(DeclKind::BackgroundSize(BackgroundSize::Auto)),
+        _ => {}
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    let sz = match toks.as_slice() {
+        [x] => BackgroundSize::Explicit {
+            x: parse_length_or_pct(x)?,
+            y: LengthVal::Auto,
+        },
+        [x, y] => BackgroundSize::Explicit {
+            x: parse_length_or_pct(x)?,
+            y: parse_length_or_pct(y)?,
+        },
+        _ => return None,
+    };
+    Some(DeclKind::BackgroundSize(sz))
+}
+
+/// `background-repeat`: `repeat` | `no-repeat` | `repeat-x` | `repeat-y`, más
+/// la sintaxis de dos valores (`repeat no-repeat` = sólo X, etc.). `space` y
+/// `round` se aproximan a `repeat` (sin spacing/scaling fino).
+pub(crate) fn parse_background_repeat(value: &str) -> Option<DeclKind> {
+    let v = value.trim().to_ascii_lowercase();
+    let r = match v.as_str() {
+        "repeat" | "space" | "round" => BackgroundRepeat::Repeat,
+        "no-repeat" => BackgroundRepeat::NoRepeat,
+        "repeat-x" => BackgroundRepeat::RepeatX,
+        "repeat-y" => BackgroundRepeat::RepeatY,
+        other => {
+            let axis = |t: &str| match t {
+                "repeat" | "space" | "round" => Some(true),
+                "no-repeat" => Some(false),
+                _ => None,
+            };
+            let toks: Vec<&str> = other.split_whitespace().collect();
+            match toks.as_slice() {
+                [x, y] => match (axis(x)?, axis(y)?) {
+                    (true, true) => BackgroundRepeat::Repeat,
+                    (false, false) => BackgroundRepeat::NoRepeat,
+                    (true, false) => BackgroundRepeat::RepeatX,
+                    (false, true) => BackgroundRepeat::RepeatY,
+                },
+                _ => return None,
+            }
+        }
+    };
+    Some(DeclKind::BackgroundRepeat(r))
+}
+
+/// `background-position`: 1–2 valores. Keywords se mapean a %: `left`/`top`=0%,
+/// `center`=50%, `right`/`bottom`=100%. Soporta el orden invertido por keyword
+/// (`top left` ↔ `left top`); con lengths/% el orden es posicional (x, y). Un
+/// solo valor deja el otro eje en `center` (50%).
+pub(crate) fn parse_background_position(value: &str) -> Option<DeclKind> {
+    // Devuelve (valor, Some(true)=keyword horizontal, Some(false)=vertical,
+    // None=ambiguo: `center`, length o %).
+    fn token(t: &str) -> Option<(LengthVal, Option<bool>)> {
+        match t.to_ascii_lowercase().as_str() {
+            "left" => Some((LengthVal::Pct(0.0), Some(true))),
+            "right" => Some((LengthVal::Pct(100.0), Some(true))),
+            "top" => Some((LengthVal::Pct(0.0), Some(false))),
+            "bottom" => Some((LengthVal::Pct(100.0), Some(false))),
+            "center" => Some((LengthVal::Pct(50.0), None)),
+            other => parse_length_or_pct(other).map(|l| (l, None)),
+        }
+    }
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    let pos = match toks.as_slice() {
+        [a] => {
+            let (la, axis) = token(a)?;
+            // Un keyword vertical solo (`top`/`bottom`) fija Y; el resto fija X.
+            if axis == Some(false) {
+                BackgroundPosition { x: LengthVal::Pct(50.0), y: la }
+            } else {
+                BackgroundPosition { x: la, y: LengthVal::Pct(50.0) }
+            }
+        }
+        [a, b] => {
+            let (la, aa) = token(a)?;
+            let (lb, ab) = token(b)?;
+            // Si los keywords explicitan ejes invertidos (`top left`, `center
+            // right`), reordenar para que x sea siempre el horizontal.
+            if aa == Some(false) || ab == Some(true) {
+                BackgroundPosition { x: lb, y: la }
+            } else {
+                BackgroundPosition { x: la, y: lb }
+            }
+        }
+        _ => return None,
+    };
+    Some(DeclKind::BackgroundPosition(pos))
+}
+
 /// Parsea el contenido de `linear-gradient(...)`. Sintaxis aceptada:
 /// - `linear-gradient(<angle>?, <stop>, <stop>, ...)`
 /// - `linear-gradient(to <side>?, <stop>, <stop>, ...)`
