@@ -83,6 +83,9 @@ fn main() {
                         CtlReply::Ok
                     }
                     CtlRequest::ListWindows => CtlReply::Windows(desktop.window_lines()),
+                    // Las zonas son del Cuerpo (compositor); este ejemplo
+                    // headless del Cerebro no las tiene.
+                    CtlRequest::CycleZones => CtlReply::Ok,
                 };
                 let _ = conn.reply(&reply);
             }

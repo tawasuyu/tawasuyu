@@ -531,6 +531,10 @@ impl App {
                 Brain::Embedded(d) => CtlReply::Windows(d.window_lines()),
                 Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
             },
+            // El ciclo de zonas lo intercepta el bucle de control del backend
+            // DRM (las zonas son estado del Cuerpo). Si llega aquí (p. ej. en
+            // winit, sin zonas), es un no-op.
+            CtlRequest::CycleZones => CtlReply::Ok,
         }
     }
 
@@ -638,6 +642,24 @@ impl App {
                 .zones
                 .iter()
                 .map(|z| mirada_brain::ZoneFrac { x: z.x, y: z.y, w: z.w, h: z.h })
+                .collect(),
+            Brain::Linked(_) => Vec::new(),
+        }
+    }
+
+    /// Los presets de zonas adicionales (cada uno una lista de zonas). Vacío
+    /// con Cerebro enlazado o sin presets en la config.
+    fn config_zone_presets(&self) -> Vec<Vec<mirada_brain::ZoneFrac>> {
+        match &self.brain {
+            Brain::Embedded(d) => d
+                .config()
+                .zone_presets
+                .iter()
+                .map(|set| {
+                    set.iter()
+                        .map(|z| mirada_brain::ZoneFrac { x: z.x, y: z.y, w: z.w, h: z.h })
+                        .collect()
+                })
                 .collect(),
             Brain::Linked(_) => Vec::new(),
         }

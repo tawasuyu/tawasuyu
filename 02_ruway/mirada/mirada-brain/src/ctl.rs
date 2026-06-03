@@ -32,6 +32,9 @@ pub enum CtlRequest {
     Do(DesktopAction),
     /// Pide la lista de ventanas conocidas, en todos los escritorios.
     ListWindows,
+    /// Cicla al siguiente conjunto de zonas de arrastre (presets de
+    /// `config.ron`). Lo atiende el Cuerpo (las zonas son suyas), no el Cerebro.
+    CycleZones,
 }
 
 /// La respuesta del Cerebro a un [`CtlRequest`].

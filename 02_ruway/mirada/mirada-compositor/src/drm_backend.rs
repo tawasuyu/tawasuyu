@@ -61,7 +61,7 @@ use smithay::utils::{
 };
 
 use auth_core::SessionTicket;
-use mirada_brain::{BodyEvent, CtlReply, Rect, ZoneFrac};
+use mirada_brain::{BodyEvent, CtlReply, CtlRequest, Rect, ZoneFrac};
 
 use crate::{
     combo_string, send_frames_surface_tree, App, BodyMode, ClientState, DragGrab, DragMode,
@@ -246,8 +246,13 @@ struct DrmState {
     menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo).
     root_menu: Option<crate::menu::RootMenu>,
-    /// Zonas de arrastre (fracciones de la salida), de la config.
+    /// Zonas de arrastre activas (fracciones del área útil) — el preset actual.
     zones: Vec<ZoneFrac>,
+    /// Todos los presets de zonas (preset 0 = `config.zones`, luego
+    /// `config.zone_presets`). `mirada-ctl cycle-zones` avanza entre ellos.
+    zone_presets: Vec<Vec<ZoneFrac>>,
+    /// Índice del preset activo dentro de [`Self::zone_presets`].
+    active_preset: usize,
     /// Índice de la zona resaltada bajo el puntero durante un arrastre.
     drag_zone: Option<usize>,
 }
@@ -712,7 +717,14 @@ impl DrmState {
         // aplicó teselado/decoración/foco.
         if self.watches.poll(&mut self.app) {
             self.menu_entries = self.app.config_menu();
-            self.zones = self.app.config_zones();
+            // Reconstruye los presets de zonas y reacota el activo.
+            let mut presets = vec![self.app.config_zones()];
+            presets.extend(self.app.config_zone_presets());
+            self.zone_presets = presets;
+            if self.active_preset >= self.zone_presets.len() {
+                self.active_preset = 0;
+            }
+            self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
             let new_wp = self.app.config_wallpaper_path();
             if new_wp != self.wallpaper_path {
@@ -725,6 +737,16 @@ impl DrmState {
         if let Some(ctl) = &self.ctl {
             while let Some(mut conn) = ctl.poll() {
                 let reply = match conn.read_request() {
+                    // El ciclo de zonas es estado del Cuerpo (DRM): lo atendemos
+                    // acá, no en el Cerebro. Avanza al siguiente preset.
+                    Ok(Some(CtlRequest::CycleZones)) => {
+                        if !self.zone_presets.is_empty() {
+                            self.active_preset =
+                                (self.active_preset + 1) % self.zone_presets.len();
+                            self.zones = self.zone_presets[self.active_preset].clone();
+                        }
+                        CtlReply::Ok
+                    }
                     Ok(Some(req)) => self.app.serve_ctl(req),
                     Ok(None) => continue,
                     Err(e) => CtlReply::Error(format!("{e}")),
@@ -1546,6 +1568,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     let wallpaper_path = app.config_wallpaper_path();
     let menu_entries = app.config_menu();
     let zones = app.config_zones();
+    // Lista de presets: el 0 es `config.zones`, luego los de `zone_presets`.
+    let mut zone_presets = vec![zones.clone()];
+    zone_presets.extend(app.config_zone_presets());
     let mut state = DrmState {
         app,
         session: session.clone(),
@@ -1578,6 +1603,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         menu_entries,
         root_menu: None,
         zones,
+        zone_presets,
+        active_preset: 0,
         drag_zone: None,
     };
 

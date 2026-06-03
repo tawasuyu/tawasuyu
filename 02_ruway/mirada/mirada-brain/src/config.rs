@@ -98,8 +98,13 @@ pub struct Config {
     /// Zonas de la pantalla (fracciones `0..=1`): **blancos de arrastre**.
     /// Al arrastrar una ventana sobre una zona, el compositor la resalta; al
     /// soltarla encima, la ancla a ese rect (flotante). Soltarla fuera de toda
-    /// zona la deja flotando donde cae (overflow). Vacío = sin zonas.
+    /// zona la deja flotando donde cae (overflow). Vacío = sin zonas. Es el
+    /// primer preset; `mirada-ctl cycle-zones` cicla a los de [`Self::zone_presets`].
     pub zones: Vec<ZoneCfg>,
+    /// Presets adicionales de zonas. `mirada-ctl cycle-zones` (bindeable a un
+    /// atajo) cicla `zones → preset 0 → preset 1 → … → zones`. Cada preset es
+    /// una lista de zonas como [`Self::zones`].
+    pub zone_presets: Vec<Vec<ZoneCfg>>,
 }
 
 /// Una zona: `(x, y, w, h)` en fracciones `0..=1` de la pantalla. El `name` es
@@ -151,6 +156,7 @@ impl Default for Config {
             wallpaper_path: String::new(),
             menu: Vec::new(),
             zones: Vec::new(),
+            zone_presets: Vec::new(),
         }
     }
 }
@@ -308,6 +314,14 @@ const CONFIG_TEMPLATE: &str = "\
     //       (x: 0.5, y: 0.5, w: 0.5, h: 0.5),
     //   ],
     zones: [],
+
+    // Presets adicionales de zonas. `mirada-ctl cycle-zones` (bindealo a un
+    // atajo) cicla zones → preset 0 → preset 1 → … → zones. Ej:
+    //   zone_presets: [
+    //       [ (x: 0.0, y: 0.0, w: 0.5, h: 1.0), (x: 0.5, y: 0.0, w: 0.5, h: 1.0) ],
+    //       [ (x: 0.0, y: 0.0, w: 1.0, h: 1.0) ],
+    //   ],
+    zone_presets: [],
 )
 ";
 

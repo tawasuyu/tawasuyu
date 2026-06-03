@@ -48,6 +48,13 @@ fn run(args: &[String]) -> Result<(), String> {
             CtlReply::Error(e) => Err(e),
             CtlReply::Ok => Err("respuesta inesperada del Cerebro".into()),
         },
+        // Cicla al siguiente preset de zonas de arrastre (config.ron). Bindealo
+        // a un atajo lanzando `mirada-ctl cycle-zones`.
+        Some("cycle-zones") => match request(CtlRequest::CycleZones)? {
+            CtlReply::Ok => Ok(()),
+            CtlReply::Error(e) => Err(e),
+            CtlReply::Windows(_) => Err("respuesta inesperada del Cerebro".into()),
+        },
         // Todo lo demás es una acción. `focus-window 5` y `workspace 3`
         // se unen con `:` a la forma canónica (`focus-window:5`).
         Some(_) => {
@@ -101,6 +108,7 @@ fn print_help() {
          USO:\n  \
            mirada-ctl <acción>      aplica una acción de escritorio\n  \
            mirada-ctl windows       lista las ventanas\n  \
+           mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
            mirada-ctl actions       lista las acciones disponibles\n\
          \n\
          EJEMPLOS:\n  \
