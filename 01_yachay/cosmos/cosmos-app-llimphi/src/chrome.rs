@@ -975,10 +975,259 @@ fn graphic_for(
 ) -> View<Msg> {
     match model.chart_view {
         ChartView::Estandar => wheel_canvas(model, render, size, theme),
+        ChartView::Uraniano => uranian_dial_canvas(model, render, size, theme),
+        ChartView::Armonica => harmonic_wheel_canvas(model, render, size, theme),
         ChartView::Carto => crate::astrocarto::tile_astrocarto(chart, render, theme),
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme),
         ChartView::Cielo => sky_canvas(model, size, theme),
     }
+}
+
+/// Longitudes eclípticas de los cuerpos natales (símbolo → grados).
+fn natal_body_lons(render: &cosmos_render::RenderModel) -> Vec<(String, f32)> {
+    render
+        .layers
+        .iter()
+        .filter(|l| {
+            l.module_id == "natal" && matches!(l.kind, cosmos_render::LayerKind::Bodies)
+        })
+        .flat_map(|l| l.glyphs.iter())
+        .map(|g| (g.symbol.clone(), g.deg))
+        .collect()
+}
+
+/// Envuelve un lienzo custom (sin hit-test de cuerpos) en la columna con
+/// botonera de zoom + zoom/paneo, igual que la rueda estándar.
+fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme) -> View<Msg> {
+    let t = ViewTransform {
+        zoom: model.wheel_zoom,
+        pan: model.wheel_pan,
+    };
+    const WHEEL_STEP: f32 = 26.0;
+    let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(cmds, size, Some(graphics_bg(model)), t)
+        .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+            DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
+            DragPhase::End => None,
+        })
+        .on_scroll(|dx, dy| Some(Msg::WheelPan(dx * WHEEL_STEP, dy * WHEEL_STEP)));
+    let canvas_box = View::new(Style {
+        size: Size {
+            width: length(size),
+            height: length(size),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![canvas]);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(size),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![zoom_controls(model, theme), canvas_box])
+}
+
+/// Dial uraniano de 90° (Escuela de Hamburgo). Los cuerpos se proyectan
+/// a su longitud módulo 90° sobre un disco graduado; cuerpos que caen
+/// cerca (misma "fórmula") quedan agrupados visualmente. 0° arriba.
+fn uranian_dial_canvas(
+    model: &Model,
+    render: &cosmos_render::RenderModel,
+    size: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    use cosmos_render::glyphs::planet_commands;
+    let cx = size / 2.0;
+    let cy = size / 2.0;
+    let r = size * 0.42;
+    let pal = graphics_palette(model);
+    let grid = rgba_of(theme.fg_muted);
+    let grid_soft = Rgba { a: 0.4, ..grid };
+    let fg = rgba_of(theme.fg_text);
+
+    let mut cmds: Vec<DrawCommand> = Vec::new();
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r,
+        stroke: Some(grid),
+        fill: Some(rgba_of(theme.bg_panel)),
+        stroke_w: 1.5,
+    });
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r: r * 0.78,
+        stroke: Some(grid_soft),
+        fill: None,
+        stroke_w: 0.8,
+    });
+    // Graduación: ticks cada grado del dial (90), mayores cada 15°.
+    for d in 0..90 {
+        let ang = (d as f32 / 90.0 * 360.0 - 90.0).to_radians();
+        let major = d % 15 == 0;
+        let inner = if major { r * 0.86 } else { r * 0.93 };
+        cmds.push(DrawCommand::Line {
+            x1: cx + ang.cos() * inner,
+            y1: cy + ang.sin() * inner,
+            x2: cx + ang.cos() * r,
+            y2: cy + ang.sin() * r,
+            color: if major { grid } else { grid_soft },
+            width: if major { 1.2 } else { 0.5 },
+            dash: None,
+        });
+        if major {
+            cmds.push(DrawCommand::Text {
+                x: cx + ang.cos() * r * 0.7,
+                y: cy + ang.sin() * r * 0.7,
+                content: format!("{d}"),
+                color: grid,
+                size: 11.0,
+                anchor: TextAnchor::Middle,
+            });
+        }
+    }
+    // Cuerpos sobre el dial (longitud mod 90).
+    for (sym, deg) in natal_body_lons(render) {
+        let m90 = deg.rem_euclid(90.0);
+        let ang = (m90 / 90.0 * 360.0 - 90.0).to_radians();
+        let gx = cx + ang.cos() * r * 1.06;
+        let gy = cy + ang.sin() * r * 1.06;
+        cmds.push(DrawCommand::Line {
+            x1: cx + ang.cos() * r,
+            y1: cy + ang.sin() * r,
+            x2: cx + ang.cos() * r * 0.78,
+            y2: cy + ang.sin() * r * 0.78,
+            color: pal.aspect("conjunction"),
+            width: 1.0,
+            dash: None,
+        });
+        cmds.extend(planet_commands(&canon_glyph(&sym), gx, gy, size * 0.04, fg, 1.6));
+    }
+    cmds.push(DrawCommand::Text {
+        x: cx,
+        y: cy,
+        content: "90°".to_string(),
+        color: grid_soft,
+        size: 13.0,
+        anchor: TextAnchor::Middle,
+    });
+
+    custom_canvas(model, cmds, size, theme)
+}
+
+/// Rueda armónica (Cochrane / Addey): cada longitud natal se multiplica
+/// por el armónico activo (mod 360) y se grafica en un zodíaco de 12
+/// signos. H1 = la carta natal. Debajo, el espectro armónico si existe.
+fn harmonic_wheel_canvas(
+    model: &Model,
+    render: &cosmos_render::RenderModel,
+    size: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    use cosmos_render::glyphs::{planet_commands, sign_commands};
+    let h = model.harmonic.max(1) as f32;
+    let cx = size / 2.0;
+    let cy = size / 2.0;
+    let r = size * 0.42;
+    let grid = rgba_of(theme.fg_muted);
+    let grid_soft = Rgba { a: 0.4, ..grid };
+    let fg = rgba_of(theme.fg_text);
+
+    let mut cmds: Vec<DrawCommand> = Vec::new();
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r,
+        stroke: Some(grid),
+        fill: Some(rgba_of(theme.bg_panel)),
+        stroke_w: 1.5,
+    });
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r: r * 0.80,
+        stroke: Some(grid_soft),
+        fill: None,
+        stroke_w: 0.8,
+    });
+    // 12 sectores zodiacales + glyph de cada signo en el anillo exterior.
+    let sign_ids = crate::glyphs::SIGN_IDS;
+    for i in 0..12 {
+        let ang = (i as f32 * 30.0 - 90.0).to_radians();
+        cmds.push(DrawCommand::Line {
+            x1: cx + ang.cos() * r * 0.80,
+            y1: cy + ang.sin() * r * 0.80,
+            x2: cx + ang.cos() * r,
+            y2: cy + ang.sin() * r,
+            color: grid_soft,
+            width: 0.7,
+            dash: None,
+        });
+        let mid = ((i as f32 + 0.5) * 30.0 - 90.0).to_radians();
+        let sx = cx + mid.cos() * r * 0.90;
+        let sy = cy + mid.sin() * r * 0.90;
+        let scol = rgba_of(sign_color_theme(i, model));
+        cmds.extend(sign_commands(sign_ids[i], sx, sy, size * 0.035, scol, 1.4));
+    }
+    // Cuerpos en longitud armónica.
+    for (sym, deg) in natal_body_lons(render) {
+        let hl = (deg * h).rem_euclid(360.0);
+        let ang = (hl - 90.0).to_radians();
+        let gx = cx + ang.cos() * r * 0.66;
+        let gy = cy + ang.sin() * r * 0.66;
+        cmds.push(DrawCommand::Circle {
+            cx: cx + ang.cos() * r * 0.80,
+            cy: cy + ang.sin() * r * 0.80,
+            r: 2.0,
+            stroke: None,
+            fill: Some(grid),
+            stroke_w: 0.0,
+        });
+        cmds.extend(planet_commands(&canon_glyph(&sym), gx, gy, size * 0.045, fg, 1.7));
+    }
+    cmds.push(DrawCommand::Text {
+        x: cx,
+        y: cy,
+        content: format!("H{}", model.harmonic),
+        color: grid,
+        size: 16.0,
+        anchor: TextAnchor::Middle,
+    });
+
+    custom_canvas(model, cmds, size, theme)
+}
+
+/// Normaliza alias de cuerpos a un id que `planet_commands` entienda.
+fn canon_glyph(sym: &str) -> String {
+    match sym {
+        "ascending_node" | "mean_node" => "north_node",
+        "descending_node" => "south_node",
+        other => other,
+    }
+    .to_string()
+}
+
+/// Color elemental de un signo por índice, según el tema.
+fn sign_color_theme(sign_idx: usize, model: &Model) -> Color {
+    let pal = graphics_palette(model);
+    let ids = crate::glyphs::SIGN_IDS;
+    let c = pal.sign(ids[sign_idx % 12]);
+    Color::from_rgba8(
+        (c.r.clamp(0.0, 1.0) * 255.0) as u8,
+        (c.g.clamp(0.0, 1.0) * 255.0) as u8,
+        (c.b.clamp(0.0, 1.0) * 255.0) as u8,
+        (c.a.clamp(0.0, 1.0) * 255.0) as u8,
+    )
 }
 
 /// Cielo del observador: proyección azimutal (cénit al centro, horizonte
@@ -1247,7 +1496,7 @@ fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
     );
     let seg_box = View::new(Style {
         size: Size {
-            width: length(320.0_f32),
+            width: length(520.0_f32),
             height: percent(1.0_f32),
         },
         flex_shrink: 0.0,

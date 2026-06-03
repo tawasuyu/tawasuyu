@@ -49,12 +49,15 @@ pub(crate) enum ChartView {
     /// Rueda natal 2D clásica (zodíaco + casas + aspectos).
     #[default]
     Estandar,
-    /// Mapa equirectangular (AstroCartografía).
+    /// Dial uraniano de 90° (Escuela de Hamburgo / Witte-Ebertin).
+    Uraniano,
+    /// Rueda armónica (Cochrane / Addey): longitudes × N mod 360.
+    Armonica,
+    /// Mapa equirectangular (Astrocartografía, Jim Lewis).
     Carto,
-    /// Esfera celeste 3D (wireframe). Pendiente de cableo del renderer.
+    /// Esfera celeste 3D (wireframe).
     Esfera3d,
-    /// Cielo como lo ve el observador (alt/az). Pendiente de renderer
-    /// gráfico — hoy hay tabla en el panel de herramientas.
+    /// Cielo como lo ve el observador (alt/az).
     Cielo,
 }
 
@@ -62,7 +65,9 @@ impl ChartView {
     pub(crate) fn title(self) -> &'static str {
         match self {
             ChartView::Estandar => "Estándar",
-            ChartView::Carto => "Carto",
+            ChartView::Uraniano => "Dial 90°",
+            ChartView::Armonica => "Armónica",
+            ChartView::Carto => "Astrocarto",
             ChartView::Esfera3d => "3D",
             ChartView::Cielo => "Cielo",
         }
@@ -71,6 +76,8 @@ impl ChartView {
     pub(crate) fn all() -> &'static [ChartView] {
         &[
             ChartView::Estandar,
+            ChartView::Uraniano,
+            ChartView::Armonica,
             ChartView::Carto,
             ChartView::Esfera3d,
             ChartView::Cielo,
