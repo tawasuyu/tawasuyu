@@ -1359,6 +1359,46 @@ pub(crate) fn pipe_stages_row<HostMsg: Clone + 'static>(
     )
 }
 
+/// Paleta de etapa — hues desaturados, en la misma familia que la de
+/// tokens. Cicla a las 6; un pipe con más etapas reusa colores, sigue
+/// siendo legible.
+const STAGE_PALETTE: [(u8, u8, u8); 6] = [
+    (130, 195, 205), // teal
+    (220, 190, 120), // ámbar
+    (160, 205, 150), // verde
+    (195, 160, 215), // violeta
+    (220, 160, 150), // coral
+    (150, 180, 225), // azul
+];
+
+/// Color estable por índice de etapa — para que cada etapa del pipe lea
+/// distinto de un vistazo (chip + sus líneas + su barra-guía).
+pub(crate) fn stage_color(i: usize) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let (r, g, b) = STAGE_PALETTE[i % STAGE_PALETTE.len()];
+    Color::from_rgba8(r, g, b, 255)
+}
+
+/// Misma tinta, atenuada (alfa 80%) — para el texto de las líneas
+/// capturadas: menos peso visual que el chip que las titula.
+fn stage_color_dim(i: usize) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let (r, g, b) = STAGE_PALETTE[i % STAGE_PALETTE.len()];
+    Color::from_rgba8(r, g, b, 204)
+}
+
+/// Bytes a etiqueta compacta: `840`, `1.2K`, `3.4M`. Sin espacio para que
+/// quepa en el chip.
+fn humanize_bytes(n: usize) -> String {
+    if n < 1024 {
+        format!("{n}B")
+    } else if n < 1024 * 1024 {
+        format!("{:.1}K", n as f32 / 1024.0)
+    } else {
+        format!("{:.1}M", n as f32 / (1024.0 * 1024.0))
+    }
+}
+
 /// Fila de etapas con **captura en vivo** (tee): cada chip despliega las
 /// líneas intermedias ya capturadas de su etapa, sin re-ejecutar. Devuelve
 /// `(views, alto)` — la fila de chips más, por cada etapa desplegada, sus
@@ -1391,13 +1431,19 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
 
     for (i, st) in pipe.stages.iter().enumerate() {
         let captured = stage_lines.iter().filter(|l| l.stage == Some(i)).count();
+        let bytes: usize = stage_lines
+            .iter()
+            .filter(|l| l.stage == Some(i))
+            .map(|l| l.text.len())
+            .sum();
         let expanded = state.expanded_stages.contains(&(block, i));
         let base = st
             .command
             .clone()
             .unwrap_or_else(|| format!("etapa {}", i + 1));
+        // Conteo doble (líneas + bytes) sólo cuando hay captura.
         let label = if captured > 0 {
-            format!("{base} ·{captured}")
+            format!("{base}  {captured}L {}", humanize_bytes(bytes))
         } else {
             base
         };
@@ -1409,7 +1455,12 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
         } else {
             theme.bg_input
         };
-        let txt_color = if is_last { theme.fg_muted } else { theme.fg_text };
+        // Color estable por etapa para las que capturan; la última, tenue.
+        let txt_color = if is_last {
+            theme.fg_muted
+        } else {
+            stage_color(i)
+        };
         let mut chip = View::new(Style {
             size: Size {
                 width: Dimension::auto(),
@@ -1452,60 +1503,97 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
     let mut out: Vec<View<HostMsg>> = vec![chips_row];
     let mut height = STAGES_H;
 
-    // Líneas capturadas de cada etapa desplegada, en orden de etapa.
+    // Líneas capturadas de cada etapa desplegada, en orden de etapa. Cada
+    // etapa va como un bloque `Row[barra-guía coloreada | columna de
+    // líneas]`: la barra ata visualmente las líneas a su chip por color.
     for (i, _st) in pipe.stages.iter().enumerate() {
         if !state.expanded_stages.contains(&(block, i)) {
             continue;
         }
         let lines: Vec<&&OutputLine> =
             stage_lines.iter().filter(|l| l.stage == Some(i)).collect();
-        if lines.is_empty() {
-            out.push(
-                View::new(Style {
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(ROW_H),
-                    },
-                    padding: Rect {
-                        left: length(16.0_f32),
-                        right: length(0.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(0.0_f32),
-                    },
-                    ..Default::default()
-                })
-                .text_aligned(
-                    "(sin líneas capturadas)".to_string(),
-                    11.0,
-                    theme.fg_muted,
-                    Alignment::Start,
-                ),
+        let color = stage_color(i);
+        let dim = stage_color_dim(i);
+
+        // Columna de líneas (o el placeholder si la etapa aún no emitió).
+        let mut col_children: Vec<View<HostMsg>> = Vec::new();
+        let block_h = if lines.is_empty() {
+            col_children.push(
+                row_text(ROW_H)
+                    .text_aligned(
+                        "(sin líneas capturadas)".to_string(),
+                        11.0,
+                        theme.fg_muted,
+                        Alignment::Start,
+                    ),
             );
-            height += ROW_H;
-            continue;
-        }
-        for l in lines {
-            out.push(
-                View::new(Style {
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(ROW_H),
-                    },
-                    padding: Rect {
-                        left: length(16.0_f32),
-                        right: length(0.0_f32),
-                        top: length(0.0_f32),
-                        bottom: length(0.0_f32),
-                    },
-                    ..Default::default()
-                })
-                .text_aligned(l.text.clone(), 12.0, theme.fg_muted, Alignment::Start),
-            );
-            height += ROW_H;
-        }
+            ROW_H
+        } else {
+            for l in &lines {
+                col_children.push(
+                    row_text(ROW_H)
+                        .text_aligned(l.text.clone(), 12.0, dim, Alignment::Start),
+                );
+            }
+            lines.len() as f32 * ROW_H
+        };
+
+        let col = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            size: Size {
+                width: Dimension::auto(),
+                height: length(block_h),
+            },
+            ..Default::default()
+        })
+        .children(col_children);
+
+        // Barra-guía: 2px de ancho, estira al alto del bloque (align-items
+        // stretch por defecto en el Row), con sangría a izquierda.
+        let bar = View::new(Style {
+            size: Size {
+                width: length(2.0_f32),
+                height: percent(1.0_f32),
+            },
+            margin: Rect {
+                left: length(8.0_f32),
+                right: length(6.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(color)
+        .radius(1.0);
+
+        out.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(block_h),
+                },
+                ..Default::default()
+            })
+            .children(vec![bar, col]),
+        );
+        height += block_h;
     }
 
     (out, height)
+}
+
+/// Una fila de texto de alto `h`, ancho completo, sin padding lateral —
+/// la sangría la da la barra-guía del bloque de etapa.
+fn row_text<HostMsg: Clone + 'static>(h: f32) -> View<HostMsg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(h),
+        },
+        ..Default::default()
+    })
 }
 
 /// Renderiza un bloque-comando como card desplegable: header (chevron +
