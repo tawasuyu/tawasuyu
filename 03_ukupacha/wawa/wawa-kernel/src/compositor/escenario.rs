@@ -81,6 +81,25 @@ pub fn fundar(ancho: usize, alto: usize, naturales: &[(usize, usize, &str)]) {
     };
     aplicar_teselado(&mut escritorio);
 
+    // FASE 64 :: traza diagnostica del reparto multi-monitor. Cuenta cuantas
+    // ventanas cayeron en cada output — si `n_outputs > 1` y el monitor 2 recibe
+    // cero, algo va mal; si recibe N>0, el escritorio extendido esta poblado.
+    {
+        use core::fmt::Write;
+        let mut por_output = [0usize; 8];
+        for v in &escritorio.ventanas {
+            if v.output < por_output.len() {
+                por_output[v.output] += 1;
+            }
+        }
+        let _ = writeln!(
+            crate::baliza::Serie,
+            "compositor :: {} output(s) :: ventanas por monitor {:?}",
+            n_outputs,
+            &por_output[..n_outputs.min(por_output.len())],
+        );
+    }
+
     ESCRITORIO.call_once(|| Mutex::new(escritorio));
 }
 
