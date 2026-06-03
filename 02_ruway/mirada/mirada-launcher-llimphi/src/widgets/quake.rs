@@ -290,7 +290,7 @@ impl Widget for QuakeInput {
         if event.state != KeyState::Pressed {
             return None;
         }
-        if !self.hotkey.is_empty() && keys::matches(&self.hotkey, &event.key) {
+        if !self.hotkey.is_empty() && keys::matches(&self.hotkey, event) {
             return Some(Msg::QuakeToggle);
         }
         None

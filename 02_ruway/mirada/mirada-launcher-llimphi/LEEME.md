@@ -131,8 +131,11 @@ Kinds desconocidos no rompen la barra — caen a un placeholder `?<kind>`.
 
 Cada widget declara su tecla en el TOML (`hotkey = "F12"`). El parser
 acepta `F1..F12`, `Escape`/`Esc`, `Enter`/`Return`, `Tab`, `Space`,
-`Backspace`, o un único carácter (`/`). Combos con modificadores
-(`Ctrl+Space`) **todavía no** — defer.
+`Backspace`, o un único carácter (`/`), con modificadores opcionales
+antepuestos con `+`: `Ctrl`/`Control`, `Shift`, `Alt`, y
+`Super`/`Meta`/`Logo`/`Win`/`Cmd`. Ejemplos: `hotkey = "Ctrl+Space"`,
+`"Super+d"`, `"Ctrl+Shift+F1"`. El orden de los modificadores no importa;
+el juego debe coincidir exacto (`Ctrl+Space` no dispara con Ctrl+Shift).
 
 **Hotkeys globales** (sistema-wide, que funcionen aunque otra app tenga
 foco): Llimphi sólo recibe input con foco. Esto es responsabilidad del
