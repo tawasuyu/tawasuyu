@@ -191,6 +191,12 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_list_style_shorthand_full(value, important));
             continue;
         }
+        // `text-emphasis` shorthand (Fase 7.312): `<style> || <color>`. `none`
+        // setea style=None y NO toca el color. Orden libre.
+        if prop.eq_ignore_ascii_case("text-emphasis") {
+            out.extend(parse_text_emphasis_shorthand(value, important));
+            continue;
+        }
         // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
         if prop.eq_ignore_ascii_case("column-rule") {
             out.extend(parse_column_rule_shorthand(value, important));
@@ -596,6 +602,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "font-variant-position" => {
             parse_font_variant_position(value).map(DeclKind::FontVariantPosition)
         }
+        "text-emphasis-style" => {
+            parse_text_emphasis_style(value).map(DeclKind::TextEmphasisStyle)
+        }
+        "text-emphasis-color" => {
+            if is_current_color(value) {
+                Some(DeclKind::TextEmphasisColor(None))
+            } else {
+                parse_color(value).map(|c| DeclKind::TextEmphasisColor(Some(c)))
+            }
+        }
+        "text-emphasis-position" => {
+            parse_text_emphasis_position(value).map(DeclKind::TextEmphasisPosition)
+        }
+        // `text-emphasis` shorthand: ver `parse_declarations`.
+        "ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1977,6 +1998,184 @@ pub(crate) fn parse_font_variant_position(value: &str) -> Option<FontVariantPosi
         "normal" => Some(FontVariantPosition::Normal),
         "sub" => Some(FontVariantPosition::Sub),
         "super" => Some(FontVariantPosition::Super),
+        _ => None,
+    }
+}
+
+/// `text-emphasis-style` (CSS Text Decoration 4). Acepta `none`, un
+/// string quoted (`"x"`), o la combinación `[filled|open] && [dot|...]`.
+/// Si sólo se da el fill o sólo la shape, los otros caen al default.
+/// Fase 7.309.
+pub(crate) fn parse_text_emphasis_style(value: &str) -> Option<TextEmphasisStyle> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(TextEmphasisStyle::None);
+    }
+    // String literal.
+    if let Some(rest) = v.strip_prefix('"') {
+        let end = rest.find('"')?;
+        return Some(TextEmphasisStyle::Custom(rest[..end].to_string()));
+    }
+    if let Some(rest) = v.strip_prefix('\'') {
+        let end = rest.find('\'')?;
+        return Some(TextEmphasisStyle::Custom(rest[..end].to_string()));
+    }
+    let lower = v.to_ascii_lowercase();
+    let mut fill: Option<TextEmphasisFill> = None;
+    let mut shape: Option<TextEmphasisShape> = None;
+    for tok in lower.split_whitespace() {
+        match tok {
+            "filled" => {
+                if fill.is_some() {
+                    return None;
+                }
+                fill = Some(TextEmphasisFill::Filled);
+            }
+            "open" => {
+                if fill.is_some() {
+                    return None;
+                }
+                fill = Some(TextEmphasisFill::Open);
+            }
+            "dot" => {
+                if shape.is_some() {
+                    return None;
+                }
+                shape = Some(TextEmphasisShape::Dot);
+            }
+            "circle" => {
+                if shape.is_some() {
+                    return None;
+                }
+                shape = Some(TextEmphasisShape::Circle);
+            }
+            "double-circle" => {
+                if shape.is_some() {
+                    return None;
+                }
+                shape = Some(TextEmphasisShape::DoubleCircle);
+            }
+            "triangle" => {
+                if shape.is_some() {
+                    return None;
+                }
+                shape = Some(TextEmphasisShape::Triangle);
+            }
+            "sesame" => {
+                if shape.is_some() {
+                    return None;
+                }
+                shape = Some(TextEmphasisShape::Sesame);
+            }
+            _ => return None,
+        }
+    }
+    if fill.is_none() && shape.is_none() {
+        return None;
+    }
+    Some(TextEmphasisStyle::Mark {
+        fill: fill.unwrap_or_default(),
+        shape: shape.unwrap_or_default(),
+    })
+}
+
+/// `text-emphasis-position`: `[over|under] && [right|left]`. Si falta
+/// el lado, default `right`; si falta el eje, default `over`. Fase 7.311.
+pub(crate) fn parse_text_emphasis_position(value: &str) -> Option<TextEmphasisPosition> {
+    let v = value.trim().to_ascii_lowercase();
+    let mut over: Option<bool> = None;
+    let mut right: Option<bool> = None;
+    for tok in v.split_whitespace() {
+        match tok {
+            "over" => {
+                if over.is_some() {
+                    return None;
+                }
+                over = Some(true);
+            }
+            "under" => {
+                if over.is_some() {
+                    return None;
+                }
+                over = Some(false);
+            }
+            "right" => {
+                if right.is_some() {
+                    return None;
+                }
+                right = Some(true);
+            }
+            "left" => {
+                if right.is_some() {
+                    return None;
+                }
+                right = Some(false);
+            }
+            _ => return None,
+        }
+    }
+    if over.is_none() && right.is_none() {
+        return None;
+    }
+    Some(TextEmphasisPosition {
+        over: over.unwrap_or(true),
+        right: right.unwrap_or(true),
+    })
+}
+
+/// `text-emphasis` shorthand: `<style> || <color>`. Tokens en orden libre.
+/// Fase 7.312.
+pub(crate) fn parse_text_emphasis_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let v = value.trim();
+    let mut out = Vec::new();
+    if v.eq_ignore_ascii_case("none") {
+        out.push(Decl {
+            kind: DeclKind::TextEmphasisStyle(TextEmphasisStyle::None),
+            important,
+        });
+        return out;
+    }
+    // Separar el primer color (si lo hay) y dejar el resto para style.
+    // `text-emphasis: filled red` o `text-emphasis: "x" blue`. Buscamos
+    // un color al final por simplicidad.
+    let tokens: Vec<&str> = v.split_whitespace().collect();
+    if tokens.is_empty() {
+        return out;
+    }
+    // Probar último token como color.
+    let mut style_str = v.to_string();
+    let mut color_set = false;
+    if let Some(last) = tokens.last() {
+        if is_current_color(last) {
+            out.push(Decl { kind: DeclKind::TextEmphasisColor(None), important });
+            style_str = tokens[..tokens.len() - 1].join(" ");
+            color_set = true;
+        } else if let Some(c) = parse_color(last) {
+            out.push(Decl {
+                kind: DeclKind::TextEmphasisColor(Some(c)),
+                important,
+            });
+            style_str = tokens[..tokens.len() - 1].join(" ");
+            color_set = true;
+        }
+    }
+    let _ = color_set;
+    let style_str = style_str.trim();
+    if !style_str.is_empty() {
+        if let Some(st) = parse_text_emphasis_style(style_str) {
+            out.push(Decl { kind: DeclKind::TextEmphasisStyle(st), important });
+        }
+    }
+    out
+}
+
+/// `ruby-position`: `over | under | inter-character | alternate`. Fase 7.313.
+pub(crate) fn parse_ruby_position(value: &str) -> Option<RubyPosition> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "over" => Some(RubyPosition::Over),
+        "under" => Some(RubyPosition::Under),
+        "inter-character" => Some(RubyPosition::InterCharacter),
+        "alternate" => Some(RubyPosition::Alternate),
         _ => None,
     }
 }

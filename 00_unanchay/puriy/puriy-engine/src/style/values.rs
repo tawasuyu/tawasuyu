@@ -421,6 +421,18 @@ pub struct ComputedStyle {
     /// `font-variant-position` (Fase 7.308). Default `Normal`. **Heredable**.
     /// Plumb.
     pub font_variant_position: FontVariantPosition,
+    /// `text-emphasis-style` (Fase 7.309). Default `None`. **Heredable**.
+    /// Plumb: el shaper no dibuja la marca encima/debajo de cada char.
+    pub text_emphasis_style: TextEmphasisStyle,
+    /// `text-emphasis-color` (Fase 7.310). `None` = `currentColor`.
+    /// **Heredable**. Plumb.
+    pub text_emphasis_color: Option<Color>,
+    /// `text-emphasis-position` (Fase 7.311). Default `Over Right`.
+    /// **Heredable**. Plumb.
+    pub text_emphasis_position: TextEmphasisPosition,
+    /// `ruby-position` (Fase 7.313). Default `Alternate`. **Heredable**.
+    /// Plumb: no hay layout de `<ruby>` propio aún.
+    pub ruby_position: RubyPosition,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1071,6 +1083,64 @@ pub enum FontVariantPosition {
     Normal,
     Sub,
     Super,
+}
+
+/// `text-emphasis-style` (CSS Text Decoration 4). Default `None` (sin
+/// marca). `Mark` modela `[filled|open] && [dot|circle|...]`. `Custom`
+/// guarda el string literal (sólo 1 grapheme válido según spec, pero
+/// no validamos). Fase 7.309.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TextEmphasisStyle {
+    #[default]
+    None,
+    Mark {
+        fill: TextEmphasisFill,
+        shape: TextEmphasisShape,
+    },
+    Custom(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEmphasisFill {
+    #[default]
+    Filled,
+    Open,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEmphasisShape {
+    #[default]
+    Dot,
+    Circle,
+    DoubleCircle,
+    Triangle,
+    Sesame,
+}
+
+/// `text-emphasis-position` (CSS Text Decoration 4). Default `Over Right`.
+/// Combina eje (over/under) + lado (right/left). Fase 7.311.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TextEmphasisPosition {
+    pub over: bool,
+    /// `right` (true) o `left` (false).
+    pub right: bool,
+}
+
+impl Default for TextEmphasisPosition {
+    fn default() -> Self {
+        Self { over: true, right: true }
+    }
+}
+
+/// `ruby-position` (CSS Ruby 1). Default `Alternate` (over normalmente,
+/// under cuando hay dos anotaciones). Heredable. Fase 7.313.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RubyPosition {
+    Over,
+    Under,
+    InterCharacter,
+    #[default]
+    Alternate,
 }
 
 impl ContainFlags {
@@ -2067,6 +2137,10 @@ impl Default for ComputedStyle {
             font_variant_ligatures: FontVariantLigatures::Normal,
             font_variant_east_asian: FontVariantEastAsian::default(),
             font_variant_position: FontVariantPosition::Normal,
+            text_emphasis_style: TextEmphasisStyle::None,
+            text_emphasis_color: None,
+            text_emphasis_position: TextEmphasisPosition::default(),
+            ruby_position: RubyPosition::Alternate,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

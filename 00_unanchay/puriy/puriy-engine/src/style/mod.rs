@@ -269,6 +269,12 @@ impl StyleEngine {
             style.font_variant_ligatures = p.font_variant_ligatures;
             style.font_variant_east_asian = p.font_variant_east_asian;
             style.font_variant_position = p.font_variant_position;
+            // CSS Text Decoration 4 — text-emphasis-* heredan. CSS Ruby 1 —
+            // ruby-position hereda.
+            style.text_emphasis_style = p.text_emphasis_style.clone();
+            style.text_emphasis_color = p.text_emphasis_color;
+            style.text_emphasis_position = p.text_emphasis_position;
+            style.ruby_position = p.ruby_position;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -3546,6 +3552,233 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).font_variant_position,
             FontVariantPosition::Sub
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_fase_7_309() {
+        assert_eq!(parse_text_emphasis_style("none"), Some(TextEmphasisStyle::None));
+        assert_eq!(
+            parse_text_emphasis_style("filled circle"),
+            Some(TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Filled,
+                shape: TextEmphasisShape::Circle,
+            })
+        );
+        // Sólo shape → fill default Filled.
+        assert_eq!(
+            parse_text_emphasis_style("triangle"),
+            Some(TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Filled,
+                shape: TextEmphasisShape::Triangle,
+            })
+        );
+        // Sólo fill → shape default Dot.
+        assert_eq!(
+            parse_text_emphasis_style("open"),
+            Some(TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Open,
+                shape: TextEmphasisShape::Dot,
+            })
+        );
+        // String literal.
+        assert_eq!(
+            parse_text_emphasis_style(r#""★""#),
+            Some(TextEmphasisStyle::Custom("★".to_string()))
+        );
+        // Duplicado y desconocido descartan.
+        assert!(parse_text_emphasis_style("filled open").is_none());
+        assert!(parse_text_emphasis_style("circle dot").is_none());
+        assert!(parse_text_emphasis_style("nope").is_none());
+
+        let html = r##"<html><head><style>
+            body { text-emphasis-style: open circle }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.text_emphasis_style,
+            TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Open,
+                shape: TextEmphasisShape::Circle,
+            }
+        );
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_emphasis_style,
+            body_cs.text_emphasis_style.clone()
+        );
+    }
+
+    #[test]
+    fn text_emphasis_color_fase_7_310() {
+        let html = r##"<html><head><style>
+            body { text-emphasis-color: rgb(0,128,0) }
+            div.cc { text-emphasis-color: currentColor }
+            div.plain {}
+        </style></head><body>
+          <div class="cc"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.text_emphasis_color.map(|c| (c.r, c.g, c.b)),
+            Some((0, 128, 0))
+        );
+        // `currentColor` → None.
+        let cc = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(cc.text_emphasis_color, None);
+        // SÍ se hereda → div.plain hereda el verde del body.
+        let plain = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert_eq!(plain.text_emphasis_color.map(|c| (c.r, c.g, c.b)), Some((0, 128, 0)));
+    }
+
+    #[test]
+    fn text_emphasis_position_fase_7_311() {
+        assert_eq!(
+            parse_text_emphasis_position("over right"),
+            Some(TextEmphasisPosition { over: true, right: true })
+        );
+        // Orden libre.
+        assert_eq!(
+            parse_text_emphasis_position("LEFT under"),
+            Some(TextEmphasisPosition { over: false, right: false })
+        );
+        // Solo un token → el otro queda en default.
+        assert_eq!(
+            parse_text_emphasis_position("under"),
+            Some(TextEmphasisPosition { over: false, right: true })
+        );
+        // Duplicado o desconocido descartan.
+        assert!(parse_text_emphasis_position("over over").is_none());
+        assert!(parse_text_emphasis_position("middle").is_none());
+
+        let html = r##"<html><head><style>
+            body { text-emphasis-position: under left }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.text_emphasis_position,
+            TextEmphasisPosition { over: false, right: false }
+        );
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_emphasis_position,
+            body_cs.text_emphasis_position
+        );
+    }
+
+    #[test]
+    fn text_emphasis_shorthand_fase_7_312() {
+        let html = r##"<html><head><style>
+            body { text-emphasis: filled triangle red }
+            div.none { text-emphasis: none }
+            div.style_only { text-emphasis: open circle }
+            div.color_only { text-emphasis: blue }
+            div.plain {}
+        </style></head><body>
+          <div class="none"></div><div class="style_only"></div>
+          <div class="color_only"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.text_emphasis_style,
+            TextEmphasisStyle::Mark {
+                fill: TextEmphasisFill::Filled,
+                shape: TextEmphasisShape::Triangle,
+            }
+        );
+        assert_eq!(body_cs.text_emphasis_color.map(|c| (c.r, c.g, c.b)), Some((255, 0, 0)));
+        // `text-emphasis: none` apaga style + preserva color heredado del body.
+        let none = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(none.text_emphasis_style, TextEmphasisStyle::None);
+        assert_eq!(none.text_emphasis_color.map(|c| (c.r, c.g, c.b)), Some((255, 0, 0)));
+        // Sólo style: el style override pero el color sigue siendo el del body.
+        let so = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert!(matches!(so.text_emphasis_style, TextEmphasisStyle::Mark { .. }));
+        assert_eq!(so.text_emphasis_color.map(|c| (c.r, c.g, c.b)), Some((255, 0, 0)));
+        // Sólo color: el style hereda (Mark triangle), el color override.
+        let co = eng.compute_with_parent(&divs[2], Some(&body_cs));
+        assert!(matches!(co.text_emphasis_style, TextEmphasisStyle::Mark { .. }));
+        assert_eq!(co.text_emphasis_color.map(|c| (c.r, c.g, c.b)), Some((0, 0, 255)));
+    }
+
+    #[test]
+    fn ruby_position_fase_7_313() {
+        assert_eq!(parse_ruby_position("over"), Some(RubyPosition::Over));
+        assert_eq!(parse_ruby_position("UNDER"), Some(RubyPosition::Under));
+        assert_eq!(
+            parse_ruby_position("inter-character"),
+            Some(RubyPosition::InterCharacter)
+        );
+        assert_eq!(parse_ruby_position("alternate"), Some(RubyPosition::Alternate));
+        assert_eq!(parse_ruby_position("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { ruby-position: under }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.ruby_position, RubyPosition::Under);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).ruby_position,
+            RubyPosition::Under
         );
     }
 
