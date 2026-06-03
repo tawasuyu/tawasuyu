@@ -161,6 +161,20 @@ enum Focus {
     Tags,
     Passphrase,
     PeerAddr,
+    /// Input del nombre de una región emergente (bautizo de un clúster).
+    Region,
+}
+
+/// Una región del mapa: un nombre pinchado en una coordenada de mundo. No
+/// es una carpeta — es un topónimo. Nace cuando el usuario bautiza un
+/// clúster denso que el mapa detectó, y de ahí queda como landmark fijo;
+/// los pensamientos cercanos "pertenecen" a esa zona por vecindad, no por
+/// asignación. Las placas tectónicas emergen del caos, no se imponen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Region {
+    name: String,
+    x: f32,
+    y: f32,
 }
 
 /// Nodo libp2p del cuaderno + su runtime tokio (que lo mantiene vivo). Se
@@ -261,6 +275,13 @@ enum Msg {
     Deselect,
     /// Escape en el mapa: cierra lo de más arriba (editor → cajón → foco).
     EscapeMap,
+    /// Empieza a bautizar una región en la coordenada de mundo `(x, y)`
+    /// (el centroide del clúster denso que se ofreció nombrar).
+    BeginNaming(f32, f32),
+    /// Confirma el bautizo: crea la región con el texto tipeado.
+    CommitNaming,
+    /// Cancela el bautizo sin crear región.
+    CancelNaming,
 }
 
 struct Model {
@@ -348,6 +369,13 @@ struct Model {
     /// que se calcula en `view()` antes de que corra el layout. Se corrige
     /// solo en el siguiente click tras un resize.
     canvas_size: (f32, f32),
+    /// Topónimos del mapa: regiones bautizadas (landmarks persistidos).
+    regions: Vec<Region>,
+    /// Coordenada de mundo de la región que se está bautizando ahora mismo
+    /// (input abierto), o `None`.
+    naming: Option<(f32, f32)>,
+    /// Input del nombre de la región en curso.
+    region_input: TextInputState,
 }
 
 struct KhipuApp;
@@ -670,6 +698,10 @@ impl App for KhipuApp {
                         let _ = model.peer_input.apply_key(&ev);
                         false
                     }
+                    Focus::Region => {
+                        let _ = model.region_input.apply_key(&ev);
+                        false
+                    }
                     Focus::None => false,
                 };
                 if changed {
@@ -785,9 +817,34 @@ impl App for KhipuApp {
                 deselect(&mut model);
                 persist(&model);
             }
+            Msg::BeginNaming(x, y) => {
+                model.naming = Some((x, y));
+                model.region_input.clear();
+                model.focus = Focus::Region;
+            }
+            Msg::CommitNaming => {
+                if let Some((x, y)) = model.naming.take() {
+                    let name = model.region_input.text().trim().to_string();
+                    if !name.is_empty() {
+                        model.regions.push(Region { name, x, y });
+                        persist(&model);
+                    }
+                }
+                model.region_input.clear();
+                model.focus = Focus::None;
+            }
+            Msg::CancelNaming => {
+                model.naming = None;
+                model.region_input.clear();
+                model.focus = Focus::None;
+            }
             Msg::EscapeMap => {
                 // Cierra la capa más cercana al usuario, en orden.
-                if model.selected.is_some() {
+                if model.naming.is_some() {
+                    model.naming = None;
+                    model.region_input.clear();
+                    model.focus = Focus::None;
+                } else if model.selected.is_some() {
                     commit_edits(&mut model, h);
                     deselect(&mut model);
                     persist(&model);
@@ -836,13 +893,41 @@ impl App for KhipuApp {
             .and_then(|id| node_screen_pos(model, id).map(|p| (id, p)));
 
         // El mapa es la interfaz: ocupa todo el cuerpo como capa de fondo.
-        // Si hay tarjeta in-situ, viaja como hija del canvas.
-        let injected: Vec<View<Msg>> = if let Some((_, (nx, ny))) = inplace {
+        // Sobre él viajan, como hijos del canvas: la tarjeta del nodo
+        // abierto (zoom semántico), los chips para bautizar clústeres
+        // densos, y el input del bautizo en curso.
+        let mut injected: Vec<View<Msg>> = Vec::new();
+        if let Some((_, (nx, ny))) = inplace {
             let editor = editor_panel(model, &input_palette, &editor_palette);
-            vec![node_card(editor, nx, ny, model.canvas_size, &model.theme)]
-        } else {
-            Vec::new()
-        };
+            injected.push(node_card(editor, nx, ny, model.canvas_size, &model.theme));
+        }
+        // Sugerencias de bautizo (sólo si no estamos editando in-situ, para
+        // no encimar la tarjeta).
+        if inplace.is_none() {
+            for (wx, wy) in unnamed_cluster_centroids(model) {
+                let (sx, sy) = world_screen(model, wx, wy);
+                injected.push(pinned(
+                    name_region_chip(wx, wy, &model.theme),
+                    sx,
+                    sy,
+                    132.0,
+                    24.0,
+                    model.canvas_size,
+                ));
+            }
+        }
+        // Input del bautizo en curso, anclado al centroide elegido.
+        if let Some((wx, wy)) = model.naming {
+            let (sx, sy) = world_screen(model, wx, wy);
+            injected.push(pinned(
+                naming_input(model, &input_palette),
+                sx,
+                sy,
+                220.0,
+                34.0,
+                model.canvas_size,
+            ));
+        }
         let map = gravity_panel(model, injected);
         let mut layers: Vec<View<Msg>> = vec![map];
 
@@ -983,6 +1068,18 @@ impl App for KhipuApp {
                 }
                 if matches!(&event.key, Key::Named(NamedKey::Escape)) {
                     return Some(Msg::CancelPeers);
+                }
+            }
+            return Some(Msg::Key(event.clone()));
+        }
+        // Bautizando una región: Enter confirma, Esc cancela, resto al input.
+        if model.naming.is_some() && model.focus == Focus::Region {
+            if event.state == KeyState::Pressed && !event.repeat {
+                if matches!(&event.key, Key::Named(NamedKey::Enter)) {
+                    return Some(Msg::CommitNaming);
+                }
+                if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                    return Some(Msg::CancelNaming);
                 }
             }
             return Some(Msg::Key(event.clone()));
@@ -1933,13 +2030,132 @@ fn overlay_right(child: View<Msg>, width: f32, theme: &Theme) -> View<Msg> {
     .children(vec![editor_shell(child, theme)])
 }
 
-/// Posición de pantalla (local al lienzo) del nodo `id`, usando el último
-/// tamaño de lienzo conocido + la cámara. `None` si la nota no tiene
-/// domicilio todavía.
+/// Mundo → pantalla local usando el último tamaño de lienzo conocido + la
+/// cámara. La versión de `view()`, donde el rect real aún no se sabe.
+fn world_screen(model: &Model, wx: f32, wy: f32) -> (f32, f32) {
+    let (w, h) = model.canvas_size;
+    world_to_local(wx, wy, w, h, model.cam_pan, model.cam_zoom)
+}
+
+/// Posición de pantalla (local al lienzo) del nodo `id`. `None` si la nota
+/// no tiene domicilio todavía.
 fn node_screen_pos(model: &Model, id: NoteId) -> Option<(f32, f32)> {
     let (wx, wy) = model.store.get(id).and_then(|n| n.pos)?;
-    let (w, h) = model.canvas_size;
-    Some(world_to_local(wx, wy, w, h, model.cam_pan, model.cam_zoom))
+    Some(world_screen(model, wx, wy))
+}
+
+/// Mínimo de notas para que un clúster cuente como región candidata.
+const REGION_MIN_MEMBERS: usize = 3;
+/// Distancia de mundo dentro de la cual una región ya "posee" un clúster:
+/// si hay un topónimo así de cerca del centroide, no se vuelve a ofrecer.
+const REGION_MATCH_DIST: f32 = 140.0;
+
+/// Centroides (mundo) de los clústeres densos que todavía no tienen una
+/// región cerca — los lugares que el mapa ofrece bautizar. Sólo cuentan
+/// miembros colocados y visibles.
+fn unnamed_cluster_centroids(model: &Model) -> Vec<(f32, f32)> {
+    let now = now_secs();
+    let mut out = Vec::new();
+    for cluster in model.field.clusters(CLUSTER_THRESHOLD) {
+        let pts: Vec<(f32, f32)> = cluster
+            .iter()
+            .filter_map(|id| {
+                let n = model.store.get(*id)?;
+                let p = n.pos?;
+                let m = current_mass(&model.gravity, n, now);
+                (model.show_archive || model.gravity.is_visible(m)).then_some(p)
+            })
+            .collect();
+        if pts.len() < REGION_MIN_MEMBERS {
+            continue;
+        }
+        let (sx, sy) = pts.iter().fold((0.0, 0.0), |(ax, ay), (x, y)| (ax + x, ay + y));
+        let c = (sx / pts.len() as f32, sy / pts.len() as f32);
+        let d2 = REGION_MATCH_DIST * REGION_MATCH_DIST;
+        let near_named = model
+            .regions
+            .iter()
+            .any(|r| (r.x - c.0).powi(2) + (r.y - c.1).powi(2) <= d2);
+        let naming_here = model
+            .naming
+            .map(|(nx, ny)| (nx - c.0).powi(2) + (ny - c.1).powi(2) <= d2)
+            .unwrap_or(false);
+        if !near_named && !naming_here {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Chip clickeable "✛ nombrar zona" que ofrece bautizar el clúster denso
+/// en `(wx, wy)`. Al click abre el input de bautizo en esa coordenada.
+fn name_region_chip(wx: f32, wy: f32, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .radius(12.0)
+    .hover_fill(theme.bg_button_hover)
+    .text_aligned("✛ nombrar zona", 11.0, theme.fg_muted, Alignment::Center)
+    .on_click(Msg::BeginNaming(wx, wy))
+}
+
+/// Mini-input del bautizo en curso: una tarjeta con el campo de texto
+/// enfocado. Enter confirma, Esc cancela (en `on_key`).
+fn naming_input(model: &Model, input_palette: &TextInputPalette) -> View<Msg> {
+    let input = text_input_view(
+        &model.region_input,
+        "nombre de la zona…",
+        model.focus == Focus::Region,
+        input_palette,
+        Msg::Focus(Focus::Region),
+    );
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel)
+    .radius(8.0)
+    .children(vec![input])
+}
+
+/// Posiciona `child` como vista absoluta de tamaño `(w, h)` centrada en la
+/// pantalla `(sx, sy)`, clampeada al lienzo. Para chips y mini-inputs que
+/// viven en el mapa (sugerencia de bautizo, input de nombre).
+fn pinned(child: View<Msg>, sx: f32, sy: f32, w: f32, h: f32, canvas: (f32, f32)) -> View<Msg> {
+    let left = (sx - w * 0.5).clamp(4.0, (canvas.0 - w - 4.0).max(4.0));
+    let top = (sy - h * 0.5).clamp(4.0, (canvas.1 - h - 4.0).max(4.0));
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(left),
+            top: length(top),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(w),
+            height: length(h),
+        },
+        ..Default::default()
+    })
+    .children(vec![child])
 }
 
 /// La tarjeta del nodo abierto, anclada a su coordenada `(nx, ny)` de
@@ -2002,6 +2218,14 @@ fn gravity_panel(model: &Model, injected: Vec<View<Msg>>) -> View<Msg> {
         });
     }
 
+    // Topónimos: las regiones bautizadas, para pintarlas como rótulos de
+    // continente detrás de los nodos.
+    let regions: Vec<(String, f32, f32)> = model
+        .regions
+        .iter()
+        .map(|r| (r.name.clone(), r.x, r.y))
+        .collect();
+
     // Filamentos del nodo seleccionado: sus parientes más afines ya
     // colocados. Elegir un pensamiento enciende sus vecinos (activación
     // por difusión) — el motor de serendipia.
@@ -2028,7 +2252,7 @@ fn gravity_panel(model: &Model, injected: Vec<View<Msg>>) -> View<Msg> {
     })
     .fill(theme.bg_panel_alt)
     .paint_with(move |scene, ts, rect| {
-        paint_map(scene, ts, rect, &nodes, &links, selected, pan, zoom, theme);
+        paint_map(scene, ts, rect, &nodes, &links, &regions, selected, pan, zoom, theme);
     })
     .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
         DragPhase::Move => Some(Msg::MapPan(dx, dy)),
@@ -2071,6 +2295,7 @@ fn paint_map(
     rect: llimphi_ui::PaintRect,
     nodes: &[MapNode],
     links: &[((f32, f32), (f32, f32), f32)],
+    regions: &[(String, f32, f32)],
     selected: Option<NoteId>,
     pan: (f32, f32),
     zoom: f32,
@@ -2084,6 +2309,33 @@ fn paint_map(
         let (lx, ly) = world_to_local(wx, wy, rect.w, rect.h, pan, zoom);
         ((rect.x + lx) as f64, (rect.y + ly) as f64)
     };
+
+    // Topónimos al fondo: el nombre de cada región, grande y tenue, como
+    // rótulo de continente; un halo suave insinúa su territorio.
+    for (name, rx, ry) in regions {
+        let (cx, cy) = to_screen(*rx, *ry);
+        let blob = KurboCircle::new((cx, cy), (96.0 * zoom as f64).max(34.0));
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            with_alpha(theme.accent, 0.05),
+            None,
+            &blob,
+        );
+        let size = (15.0 * zoom).clamp(11.0, 28.0);
+        // Centrado aproximado: `simple` alinea a la izquierda en (x, y).
+        let est_w = name.chars().count() as f64 * size as f64 * 0.52;
+        draw_block(
+            scene,
+            ts,
+            &TextBlock::simple(
+                name,
+                size,
+                with_alpha(theme.fg_text, 0.30),
+                (cx - est_w * 0.5, cy - size as f64 * 0.6),
+            ),
+        );
+    }
 
     // Filamentos primero (debajo de los nodos). Más opacos cuanto más afín.
     for (a, b, aff) in links {
@@ -2252,6 +2504,7 @@ fn focused_editor(model: &Model) -> (Option<&EditorState>, bool) {
         Focus::Tags => (Some(model.tags.editor()), false),
         Focus::Search => (Some(model.search.editor()), false),
         Focus::PeerAddr => (Some(model.peer_input.editor()), false),
+        Focus::Region => (Some(model.region_input.editor()), false),
         Focus::Passphrase => (Some(model.passphrase.editor()), model.passphrase.is_masked()),
         Focus::None => (None, false),
     }
@@ -2406,6 +2659,7 @@ fn apply_edit_menu_action(mut model: Model, action: EditAction, h: &Handle<Msg>)
         Focus::Tags => Some(editmenu::apply(model.tags.editor_mut(), action, clip)),
         Focus::Search => Some(editmenu::apply(model.search.editor_mut(), action, clip)),
         Focus::PeerAddr => Some(editmenu::apply(model.peer_input.editor_mut(), action, clip)),
+        Focus::Region => Some(editmenu::apply(model.region_input.editor_mut(), action, clip)),
         Focus::Passphrase => Some(editmenu::apply(model.passphrase.editor_mut(), action, clip)),
         Focus::None => None,
     };
@@ -2523,11 +2777,24 @@ struct PersistedState {
     /// `embeddings` (ver [`Embedder::label`]). Si al cargar no coincide
     /// con el embebedor activo, los vectores se recalculan.
     model: String,
+    /// Topónimos bautizados. Trailing → archivos previos a las regiones
+    /// no parsean como esta forma y caen al fallback `PersistedStateV2`.
+    #[serde(default)]
+    regions: Vec<Region>,
 }
 
-/// Formato histórico, sin `model`. postcard no es self-describing, así
-/// que lo intentamos como fallback cuando el formato actual no parsea
-/// (archivos escritos antes de enchufar `verbo`).
+/// Formato previo a las regiones (postcard no es self-describing, así que
+/// un campo trailing rompe el parseo y hay que intentar la forma vieja).
+#[derive(Deserialize)]
+struct PersistedStateV2 {
+    store: NoteStore,
+    embeddings: Vec<(NoteId, Vec<f32>)>,
+    order: Vec<NoteId>,
+    model: String,
+}
+
+/// Formato histórico, sin `model`. Fallback cuando ni el actual ni el V2
+/// parsean (archivos escritos antes de enchufar `verbo`).
 #[derive(Deserialize)]
 struct PersistedStateV1 {
     store: NoteStore,
@@ -2926,12 +3193,23 @@ fn load_state(path: &PathBuf) -> Option<PersistedState> {
     if let Ok(state) = postcard::from_bytes::<PersistedState>(&bytes) {
         return Some(state);
     }
+    // Archivo previo a las regiones: misma forma sin el campo trailing.
+    if let Ok(v2) = postcard::from_bytes::<PersistedStateV2>(&bytes) {
+        return Some(PersistedState {
+            store: v2.store,
+            embeddings: v2.embeddings,
+            order: v2.order,
+            model: v2.model,
+            regions: Vec::new(),
+        });
+    }
     let v1: PersistedStateV1 = postcard::from_bytes(&bytes).ok()?;
     Some(PersistedState {
         store: v1.store,
         embeddings: v1.embeddings,
         order: v1.order,
         model: String::new(),
+        regions: Vec::new(),
     })
 }
 
@@ -2948,6 +3226,7 @@ fn persist(model: &Model) {
             .collect(),
         order: model.order.clone(),
         model: model.embedder.label(),
+        regions: model.regions.clone(),
     };
     if let Ok(bytes) = postcard::to_allocvec(&state) {
         let tmp = path.with_extension("bin.tmp");
@@ -2963,6 +3242,7 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
     // daemon, o se cayó y volvimos al trigram local), son incomparables:
     // se descartan y se recalcula todo el cuaderno.
     let same_space = !state.model.is_empty() && state.model == embedder.label();
+    let regions = state.regions;
     let mut model = Model {
         store: state.store,
         field: SemanticField::new(),
@@ -3001,6 +3281,9 @@ fn from_state(state: PersistedState, embedder: Embedder) -> Model {
         cam_zoom: 1.0,
         show_list: true,
         canvas_size: (1280.0, 640.0),
+        regions,
+        naming: None,
+        region_input: TextInputState::new(),
     };
     if same_space {
         let restored: std::collections::HashSet<NoteId> =
@@ -3081,6 +3364,9 @@ fn seeded_model(embedder: Embedder) -> Model {
         cam_zoom: 1.0,
         show_list: true,
         canvas_size: (1280.0, 640.0),
+        regions: Vec::new(),
+        naming: None,
+        region_input: TextInputState::new(),
     };
     let now = now_secs();
     let seed: [(&str, &str, &[&str]); 7] = [
