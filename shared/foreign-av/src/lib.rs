@@ -770,6 +770,113 @@ impl FrameSource for FfmpegVideoSource {
             }
         }
     }
+
+    /// PTS del último frame emitido por `tick`, asumiendo CFR (constant
+    /// frame rate). Es lo que `media-core::sync::AvSync::plan` consume para
+    /// decidir present/hold/drop contra el reloj de audio (M1 de PARIDAD).
+    ///
+    /// Aunque `tick` se llama por wall-clock, el PTS refleja la POSICIÓN
+    /// LÓGICA del frame en el archivo: `start_offset + n/fps` con n =
+    /// índice del frame recién emitido. Esto desacopla la cadencia de
+    /// emisión (wall-clock) del timeline del contenido (PTS): el sync usa
+    /// el segundo para decidir qué presentar.
+    ///
+    /// Devuelve `None` antes del primer frame y mientras el source no haya
+    /// avanzado nada.
+    fn pts(&self) -> Option<Duration> {
+        pts_after_emit(self.start_offset, self.frames_emitted, self.fps)
+    }
+}
+
+/// Cómputo puro del PTS del último frame emitido por un source CFR.
+/// Extraído del trait para que la fórmula sea testeable sin tener que armar
+/// una `MediaSession` con ffmpeg viva.
+///
+/// * `start_offset`: posición del archivo en la que el demuxer arrancó (no
+///   es cero si hubo seek previo).
+/// * `frames_emitted`: total de frames que el source ya entregó (post-tick).
+/// * `fps`: frame rate del video; clampeado a ≥ 1.0 para defenderse del 0.
+fn pts_after_emit(start_offset: Duration, frames_emitted: u64, fps: f32) -> Option<Duration> {
+    if frames_emitted == 0 {
+        return None;
+    }
+    let fps = fps.max(1.0) as f64;
+    let last_idx = (frames_emitted - 1) as f64;
+    Some(start_offset + Duration::from_secs_f64(last_idx / fps))
+}
+
+#[cfg(test)]
+mod pts_tests {
+    use super::pts_after_emit;
+    use std::time::Duration;
+
+    #[test]
+    fn antes_del_primer_frame_no_hay_pts() {
+        assert_eq!(pts_after_emit(Duration::ZERO, 0, 30.0), None);
+        assert_eq!(
+            pts_after_emit(Duration::from_secs(5), 0, 30.0),
+            None,
+            "ni siquiera con start_offset > 0 emitimos PTS si no avanzamos"
+        );
+    }
+
+    #[test]
+    fn primer_frame_emitido_tiene_pts_igual_al_start_offset() {
+        // Un solo frame emitido → es el frame 0 → PTS = start_offset + 0/fps.
+        assert_eq!(
+            pts_after_emit(Duration::ZERO, 1, 30.0),
+            Some(Duration::ZERO),
+        );
+        assert_eq!(
+            pts_after_emit(Duration::from_millis(500), 1, 30.0),
+            Some(Duration::from_millis(500)),
+            "post-seek: el primer frame heredea el start_offset",
+        );
+    }
+
+    #[test]
+    fn pts_avanza_un_frame_por_emisi0n_a_la_cadencia_del_fps() {
+        // A 30 fps: el frame N (0-indexed) cae en N/30 segundos.
+        // Tras 31 emisiones, el último es el #30 → 30/30 = 1.0 s.
+        assert_eq!(
+            pts_after_emit(Duration::ZERO, 31, 30.0),
+            Some(Duration::from_secs(1)),
+        );
+        // A 60 fps, el frame #60 está en 1.0 s tras emitir 61.
+        assert_eq!(
+            pts_after_emit(Duration::ZERO, 61, 60.0),
+            Some(Duration::from_secs(1)),
+        );
+    }
+
+    #[test]
+    fn fps_cero_se_clampea_a_1() {
+        // El source defiende contra fps = 0 con `max(1.0)`: en vez de
+        // dividir por cero, el PTS avanza 1 s por frame. No es semántica
+        // útil para CFR válido, pero garantiza que `pts()` no panique.
+        assert_eq!(
+            pts_after_emit(Duration::ZERO, 4, 0.0),
+            Some(Duration::from_secs(3)),
+        );
+    }
+
+    #[test]
+    fn drift_acumulado_es_subsegundo() {
+        // El PTS es un f64, la conversión a Duration es estable: tras
+        // 1000 frames a 30 fps el último (999) debe caer en 33.3 s con
+        // jitter de microsegundos, no de milisegundos.
+        let pts = pts_after_emit(Duration::ZERO, 1000, 30.0).unwrap();
+        let esperado = Duration::from_secs_f64(999.0 / 30.0);
+        let drift = if pts > esperado {
+            pts - esperado
+        } else {
+            esperado - pts
+        };
+        assert!(
+            drift < Duration::from_micros(10),
+            "drift {drift:?} > 10 µs — la fórmula perdió precisión",
+        );
+    }
 }
 
 impl Seekable for FfmpegVideoSource {
