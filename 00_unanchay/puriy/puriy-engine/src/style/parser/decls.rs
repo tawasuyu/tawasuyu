@@ -393,6 +393,9 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // `accent-color: auto | <color>`. Sin `currentColor` por espec.
         "accent-color" => Some(DeclKind::AccentColor(parse_auto_or_color(value))),
         "cursor" => parse_cursor(value).map(DeclKind::Cursor),
+        "text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
+        "scroll-behavior" => parse_scroll_behavior(value).map(DeclKind::ScrollBehavior),
+        "tab-size" | "-moz-tab-size" => parse_tab_size(value).map(DeclKind::TabSize),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -592,6 +595,46 @@ pub(crate) fn parse_cursor(value: &str) -> Option<Cursor> {
         "col-resize" => Cursor::ColResize,
         _ => Cursor::Auto,
     })
+}
+
+/// `text-overflow`: `clip` (default, recorta a la línea) | `ellipsis`
+/// (muestra `…`). Strings custom de CSS3 (`text-overflow: "—"`) y `fade`
+/// quedan fuera. Case-insensitive.
+pub(crate) fn parse_text_overflow(value: &str) -> Option<TextOverflow> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "clip" => Some(TextOverflow::Clip),
+        "ellipsis" => Some(TextOverflow::Ellipsis),
+        _ => None,
+    }
+}
+
+/// `scroll-behavior`: `auto` (instant) | `smooth` (animado).
+pub(crate) fn parse_scroll_behavior(value: &str) -> Option<ScrollBehavior> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ScrollBehavior::Auto),
+        "smooth" => Some(ScrollBehavior::Smooth),
+        _ => None,
+    }
+}
+
+/// `tab-size`: integer (= ancho en caracteres del space) o length
+/// (con unidad). `0` queda permitido (anula el tab). Valor negativo
+/// dropea la regla. CSS distingue por unidad — un `4` unitless es
+/// integer; un `4px` es length. Probamos integer-puro PRIMERO porque
+/// `parse_length_px` acepta unitless como px y se comería el caso.
+pub(crate) fn parse_tab_size(value: &str) -> Option<TabSize> {
+    let v = value.trim();
+    if let Ok(n) = v.parse::<i32>() {
+        if n < 0 {
+            return None;
+        }
+        return Some(TabSize::Chars(n as u16));
+    }
+    let px = parse_length_px(v)?;
+    if px < 0.0 {
+        return None;
+    }
+    Some(TabSize::Px(px))
 }
 
 /// Parsea el shorthand `border: <width> <style> <color>` (componentes en

@@ -228,6 +228,9 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
     child.caret_color = parent.caret_color;
     child.accent_color = parent.accent_color;
     child.cursor = parent.cursor;
+    // text-overflow NO se hereda (CSS spec); scroll-behavior y tab-size sí.
+    child.scroll_behavior = parent.scroll_behavior;
+    child.tab_size = parent.tab_size;
     // Propagar al text leaf interno (primer hijo si es text node).
     for c in child.children.iter_mut() {
         if c.text.is_some() {
@@ -687,6 +690,9 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.caret_color = s.caret_color;
     b.accent_color = s.accent_color;
     b.cursor = s.cursor;
+    b.text_overflow = s.text_overflow;
+    b.scroll_behavior = s.scroll_behavior;
+    b.tab_size = s.tab_size;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;
@@ -727,6 +733,8 @@ pub(crate) fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.caret_color = p.caret_color;
     leaf.accent_color = p.accent_color;
     leaf.cursor = p.cursor;
+    leaf.scroll_behavior = p.scroll_behavior;
+    leaf.tab_size = p.tab_size;
 }
 
 pub(crate) fn propagate_text_color(node: &mut BoxNode, c: Color) {

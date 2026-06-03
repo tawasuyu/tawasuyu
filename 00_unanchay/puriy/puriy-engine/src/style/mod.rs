@@ -211,6 +211,10 @@ impl StyleEngine {
             style.caret_color = p.caret_color;
             style.accent_color = p.accent_color;
             style.cursor = p.cursor;
+            // scroll-behavior (CSSOM-View) y tab-size (CSS Text 3) heredan.
+            // text-overflow NO hereda (CSS UI 3).
+            style.scroll_behavior = p.scroll_behavior;
+            style.tab_size = p.tab_size;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -846,6 +850,116 @@ mod tests {
         assert_eq!(eng.compute_with_parent(&anchors[0], Some(&body_cs)).cursor, Cursor::Pointer);
         // Heredado de body.
         assert_eq!(eng.compute_with_parent(&anchors[1], Some(&body_cs)).cursor, Cursor::Text);
+    }
+
+    #[test]
+    fn text_overflow_fase_7_241() {
+        assert_eq!(parse_text_overflow("clip"), Some(TextOverflow::Clip));
+        assert_eq!(parse_text_overflow("ELLIPSIS"), Some(TextOverflow::Ellipsis));
+        assert_eq!(parse_text_overflow("fade"), None);
+
+        let html = r##"<html><head><style>
+            body { text-overflow: ellipsis }
+            p.a { text-overflow: clip }
+            p.plain {}
+        </style></head><body>
+          <p class="a"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_overflow, TextOverflow::Ellipsis);
+        // text-overflow NO hereda — el hijo sin declarar mantiene el default (Clip),
+        // no toma el `ellipsis` del body.
+        let p_a = eng.compute_with_parent(&ps[0], Some(&body_cs));
+        assert_eq!(p_a.text_overflow, TextOverflow::Clip);
+        let p_plain = eng.compute_with_parent(&ps[1], Some(&body_cs));
+        assert_eq!(p_plain.text_overflow, TextOverflow::Clip);
+    }
+
+    #[test]
+    fn scroll_behavior_fase_7_242() {
+        assert_eq!(parse_scroll_behavior("auto"), Some(ScrollBehavior::Auto));
+        assert_eq!(parse_scroll_behavior("SMOOTH"), Some(ScrollBehavior::Smooth));
+        assert_eq!(parse_scroll_behavior("instant"), None);
+
+        let html = r##"<html><head><style>
+            body { scroll-behavior: smooth }
+            div.a { scroll-behavior: auto }
+            div.plain {}
+        </style></head><body>
+          <div class="a"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scroll_behavior, ScrollBehavior::Smooth);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scroll_behavior,
+            ScrollBehavior::Auto
+        );
+        // Heredado de body.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).scroll_behavior,
+            ScrollBehavior::Smooth
+        );
+    }
+
+    #[test]
+    fn tab_size_fase_7_243() {
+        assert_eq!(parse_tab_size("4"), Some(TabSize::Chars(4)));
+        assert_eq!(parse_tab_size("0"), Some(TabSize::Chars(0)));
+        assert_eq!(parse_tab_size("32px"), Some(TabSize::Px(32.0)));
+        assert_eq!(parse_tab_size("-1"), None);
+        assert_eq!(parse_tab_size("xx"), None);
+
+        let html = r##"<html><head><style>
+            body { tab-size: 4 }
+            pre.a { tab-size: 16px }
+            pre.plain {}
+        </style></head><body>
+          <pre class="a"></pre><pre class="plain"></pre>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut pres = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("pre") => pres.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.tab_size, TabSize::Chars(4));
+        assert_eq!(
+            eng.compute_with_parent(&pres[0], Some(&body_cs)).tab_size,
+            TabSize::Px(16.0)
+        );
+        // Heredado de body.
+        assert_eq!(
+            eng.compute_with_parent(&pres[1], Some(&body_cs)).tab_size,
+            TabSize::Chars(4)
+        );
     }
 
     #[test]

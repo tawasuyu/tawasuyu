@@ -17,8 +17,9 @@ use crate::style::{
     BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor,
     FlexDirection, FlexWrap,
     GridTrackSize, JustifyContent, LengthVal, LinearGradient, ListStyleType, ObjectFit, Outline,
-    Overflow, PointerEvents, Position, Sides, StyleEngine, TextAlign, TextDecorationLine,
-    TextDecorationStyle, TextShadow,
+    Overflow, PointerEvents, Position, ScrollBehavior, Sides, StyleEngine,
+    TabSize, TextAlign, TextDecorationLine,
+    TextDecorationStyle, TextOverflow, TextShadow,
     TextTransform, Transform, VerticalAlign, Visibility, WhiteSpace,
 };
 

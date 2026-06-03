@@ -210,6 +210,19 @@ pub struct ComputedStyle {
     /// `cursor` (Fase 7.240). Default `Auto`. Heredable. El chrome
     /// todavía no setea el cursor del mouse — sólo se almacena.
     pub cursor: Cursor,
+    /// `text-overflow` (Fase 7.241). Default `Clip`. NO heredable. Sólo
+    /// tiene efecto visual cuando el text node está en una caja con
+    /// `overflow: hidden` + `white-space: nowrap` — el chrome aún no
+    /// trunca con `…`, así que este campo sólo se propaga.
+    pub text_overflow: TextOverflow,
+    /// `scroll-behavior` (Fase 7.242). Default `Auto`. Heredable.
+    /// Plumb: el scroll programático del chrome todavía es instantáneo.
+    pub scroll_behavior: ScrollBehavior,
+    /// `tab-size` (Fase 7.243) — ancho del carácter U+0009 dentro de
+    /// `white-space: pre`. Default 8 chars. Heredable. Plumb: el text
+    /// shaper aún no consume este campo (los `\t` se renderizan según
+    /// el comportamiento default de parley).
+    pub tab_size: TabSize,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -327,6 +340,35 @@ pub enum Cursor {
     NwseResize,
     RowResize,
     ColResize,
+}
+
+/// `text-overflow` — qué hacer con el texto recortado por un padre
+/// con `overflow: hidden` + `white-space: nowrap`. Sólo `Clip` y
+/// `Ellipsis` por ahora (`fade` y string custom de CSS3 aparte).
+/// Fase 7.241.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextOverflow {
+    #[default]
+    Clip,
+    Ellipsis,
+}
+
+/// `scroll-behavior` — animación del scroll programático
+/// (`element.scrollTo`, jump por `#anchor`...). Fase 7.242.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollBehavior {
+    #[default]
+    Auto,
+    Smooth,
+}
+
+/// `tab-size`: ancho del U+0009 expresado en caracteres o longitud px.
+/// CSS permite ambos formatos (`tab-size: 4` o `tab-size: 32px`).
+/// Default = 8 caracteres. Fase 7.243.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TabSize {
+    Chars(u16),
+    Px(f32),
 }
 
 /// CSS `border-style` reducido al subset que el chrome pinta: `solid`
@@ -1109,6 +1151,9 @@ impl Default for ComputedStyle {
             caret_color: None,
             accent_color: None,
             cursor: Cursor::Auto,
+            text_overflow: TextOverflow::Clip,
+            scroll_behavior: ScrollBehavior::Auto,
+            tab_size: TabSize::Chars(8),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

@@ -177,6 +177,12 @@ pub struct BoxNode {
     pub accent_color: Option<Color>,
     /// `cursor`. Heredable. Fase 7.240.
     pub cursor: Cursor,
+    /// `text-overflow`. NO heredable. Fase 7.241.
+    pub text_overflow: TextOverflow,
+    /// `scroll-behavior`. Heredable. Fase 7.242.
+    pub scroll_behavior: ScrollBehavior,
+    /// `tab-size`. Heredable. Fase 7.243.
+    pub tab_size: TabSize,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no
