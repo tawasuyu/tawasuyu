@@ -203,6 +203,7 @@
             apps: Vec::new(),
             configuracion: None,
             overlay_revocacion: None,
+            marco: None,
         };
         let bytes = postcard::to_allocvec(&manifiesto).unwrap();
         assert!(Manifiesto::deserializar(&bytes).is_err());
@@ -220,6 +221,7 @@
             apps: Vec::new(),
             configuracion: Some([0xC5; 32]),
             overlay_revocacion: None,
+            marco: None,
         };
         let bytes = con_enlace.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();
@@ -230,6 +232,7 @@
             apps: Vec::new(),
             configuracion: None,
             overlay_revocacion: None,
+            marco: None,
         };
         let bytes = sin_enlace.serializar().unwrap();
         assert!(Manifiesto::deserializar(&bytes)
@@ -304,12 +307,14 @@
             apps: vec![base.clone()],
             configuracion: None,
             overlay_revocacion: None,
+            marco: None,
         };
         let manifiesto_b = Manifiesto {
             version: VERSION_MANIFIESTO,
             apps: vec![con_red],
             configuracion: None,
             overlay_revocacion: None,
+            marco: None,
         };
         assert_ne!(
             hash(&manifiesto_a.serializar().unwrap()),
@@ -332,6 +337,7 @@
             apps: vec![con_todo],
             configuracion: None,
             overlay_revocacion: None,
+            marco: None,
         };
         let bytes = m.serializar().unwrap();
         let leido = Manifiesto::deserializar(&bytes).unwrap();

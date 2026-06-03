@@ -190,6 +190,26 @@ pub fn enlazar_configuracion(hash: Hash) -> Result<(), &'static str> {
     regrabar_y_reanclar(&manifiesto)
 }
 
+/// El hash del nodo del **marco del escritorio** (`pata`) activo, si el
+/// manifiesto enlaza uno. `None` => el kernel siembra el marco por defecto.
+pub fn marco_activo() -> Option<Hash> {
+    VIVO.get().and_then(|vivo| vivo.lock().marco)
+}
+
+/// Reancla el manifiesto vivo a un `hash` de marco que ya existe en el grafo
+/// local — gemelo de [`enlazar_configuracion`]. NO copia del exterior: sólo mueve
+/// el puntero del manifiesto a un objeto local y lo re-graba. La validación del
+/// contenido (que sea un `WireConfig` bien formado) la hace `pata_marco` antes de
+/// llamar; aquí sólo exigimos que el objeto esté en el grafo. Con esto el marco
+/// propuesto en caliente sobrevive al reinicio.
+pub fn enlazar_marco(hash: Hash) -> Result<(), &'static str> {
+    almacen::recuperar(&hash)?.ok_or("marco :: el objeto no esta en el grafo local")?;
+    let vivo = VIVO.get().ok_or("manifiesto :: no hay manifiesto vivo")?;
+    let mut manifiesto = vivo.lock();
+    manifiesto.marco = Some(hash);
+    regrabar_y_reanclar(&manifiesto)
+}
+
 /// Re-serializa el manifiesto vivo, lo graba como un objeto NUEVO del grafo y
 /// lo re-ancla en el superbloque. Sus `hijos` son los bytecodes de las apps
 /// deduplicados —el grafo lo sigue leyendo como el nodo padre del userspace—.

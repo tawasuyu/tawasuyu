@@ -27,6 +27,8 @@ use pata_core::widget::{build_all, WidgetCtx, WidgetView};
 use pata_core::wire::WireConfig;
 use pata_core::{resolve, Anchor, Config, Surface, SurfaceKind, WidgetSpec};
 
+use format::Hash;
+
 use crate::almacen;
 use crate::grafico::{Color, Lienzo, RegionPantalla};
 use crate::texto;
@@ -64,29 +66,52 @@ fn marco_por_defecto() -> Config {
     cfg
 }
 
-/// El `Config` del marco, **cargado desde akasha**, cacheado tras el primer uso.
-///
-/// La primera vez: serializa el [`marco_por_defecto`] a su espejo postcard-safe
-/// ([`WireConfig`]), lo **graba en el grafo** direccionado por contenido
-/// (`almacen::almacenar`, BLAKE3 + postcard) y lo **lee de vuelta** —el config
-/// hace el round-trip completo por akasha, como cualquier otro objeto—. Si algo
-/// del round-trip falla (grafo no listo, etc.), cae al default en memoria; el
-/// marco nunca se queda sin config. El resultado se cachea (`Once`): los frames
-/// siguientes no re-tocan el grafo.
-///
-/// Un proceso de userspace puede **proponer** un config nuevo vía el syscall
-/// `sys_marco_proponer` (ver [`proponer`]), que reemplaza el contenido de esta
-/// celda — de ahí que sea un `Mutex` y no un `Once` inmutable.
+/// La celda del config del marco activo, cacheada tras el primer uso. Un proceso
+/// de userspace puede **proponer** un config nuevo vía `sys_marco_proponer` (ver
+/// [`proponer`]), que reemplaza su contenido — de ahí que sea un `Mutex` y no un
+/// `Once` inmutable.
 static MARCO: Once<Mutex<Config>> = Once::new();
 
-/// La celda del config del marco, inicializada perezosamente con el round-trip
-/// por akasha del [`marco_por_defecto`]. La comparten el render (lectura) y el
-/// syscall de propuesta (escritura).
+/// La celda del config del marco. La inicializa [`cargar_inicial`] perezosamente;
+/// la comparten el render (lectura) y el syscall de propuesta (escritura).
 fn marco_cell() -> &'static Mutex<Config> {
-    MARCO.call_once(|| {
-        let def = marco_por_defecto();
-        Mutex::new(cargar_de_akasha(&def).unwrap_or(def))
-    })
+    MARCO.call_once(|| Mutex::new(cargar_inicial()))
+}
+
+/// Carga el marco al arranque, **desde akasha**:
+/// - si el manifiesto enlaza un marco (propuesto en un boot anterior y
+///   persistido), lo lee del grafo y lo usa;
+/// - si no, siembra el [`marco_por_defecto`] como nodo del grafo y **reancla el
+///   manifiesto** a él (para que el próximo boot lo encuentre).
+///
+/// Cualquier fallo cae al default en memoria: el marco nunca se queda sin config.
+fn cargar_inicial() -> Config {
+    if let Some(hash) = crate::manifiesto::marco_activo() {
+        if let Some(cfg) = leer_del_grafo(hash) {
+            return cfg;
+        }
+    }
+    let def = marco_por_defecto();
+    if let Some(hash) = grabar_en_grafo(&def) {
+        let _ = crate::manifiesto::enlazar_marco(hash);
+    }
+    def
+}
+
+/// Graba `cfg` en el grafo (postcard sobre su espejo [`WireConfig`]) y devuelve su
+/// hash. `None` si el grafo no está listo o el codec falla.
+fn grabar_en_grafo(cfg: &Config) -> Option<Hash> {
+    let wire = WireConfig::from(cfg);
+    let bytes = postcard::to_allocvec(&wire).ok()?;
+    almacen::almacenar(bytes, Vec::new()).ok()
+}
+
+/// Lee el nodo `hash` del grafo y lo deserializa como marco. `None` si no está o
+/// no es un [`WireConfig`] válido.
+fn leer_del_grafo(hash: Hash) -> Option<Config> {
+    let objeto = almacen::recuperar(&hash).ok()??;
+    let wire: WireConfig = postcard::from_bytes(&objeto.datos).ok()?;
+    Some(Config::from(wire))
 }
 
 /// El alto (px) que el marco **reserva** en la cima del área de apps: la suma de
@@ -115,20 +140,12 @@ pub(crate) fn proponer(bytes: &[u8]) -> Result<(), &'static str> {
         postcard::from_bytes(bytes).map_err(|_| "marco :: config propuesto invalido")?;
     // Re-serializar desde el wire ya parseado garantiza un nodo canónico.
     let canon = postcard::to_allocvec(&wire).map_err(|_| "marco :: serializacion fallida")?;
-    let _hash = almacen::almacenar(canon, Vec::new())?;
+    let hash = almacen::almacenar(canon, Vec::new())?;
+    // Persistir: reanclar el manifiesto al nodo nuevo, así el marco propuesto
+    // sobrevive al reinicio (no sólo a la sesión).
+    crate::manifiesto::enlazar_marco(hash)?;
     *marco_cell().lock() = Config::from(wire);
     Ok(())
-}
-
-/// Graba `cfg` en el grafo (postcard sobre su espejo `wire`) y lo lee de vuelta,
-/// deserializado. `None` si el grafo no está listo o el codec falla.
-fn cargar_de_akasha(cfg: &Config) -> Option<Config> {
-    let wire = WireConfig::from(cfg);
-    let bytes = postcard::to_allocvec(&wire).ok()?;
-    let hash = almacen::almacenar(bytes, Vec::new()).ok()?;
-    let objeto = almacen::recuperar(&hash).ok()??;
-    let leido: WireConfig = postcard::from_bytes(&objeto.datos).ok()?;
-    Some(Config::from(leido))
 }
 
 /// El snapshot del sistema que el kernel le entrega a los widgets de `pata-core`.

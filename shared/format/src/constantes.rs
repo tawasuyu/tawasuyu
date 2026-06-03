@@ -38,7 +38,9 @@ pub const VERSION_SUPERBLOQUE: u32 = 3;
 /// la imagen en cada `cargo run -p boot`, asi que la genesis nace limpia.
 /// v5→v6 (2026-05-30): agrega `overlay_revocacion: Option<Hash>` para el plano de
 /// control del SDD-rotacion-revocacion §4.
-pub const VERSION_MANIFIESTO: u32 = 6;
+/// v6→v7 (2026-06-03): agrega `marco: Option<Hash>` para persistir el marco del
+/// escritorio (`pata`) activo entre reinicios — Fase 9 del SDD de pata.
+pub const VERSION_MANIFIESTO: u32 = 7;
 
 /// Version del format de la `Configuracion` serializada. La configuracion es
 /// otro objeto del grafo (idioma + paleta); el manifiesto la enlaza por hash.

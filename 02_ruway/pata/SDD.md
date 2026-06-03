@@ -344,14 +344,16 @@ borde; shuma provee el contenido.
     las barras `Bar` superiores no-`autohide` del config **resuelto**. Si una app
     propone (vía `sys_marco_proponer`) una barra de otro alto, la reserva, el
     render y el hit-test la siguen sin drift.
-  - **Refino pendiente: persistir el marco activo entre reinicios** — hoy el nodo
-    del config vive en el grafo (content-addressed), pero el **puntero activo**
-    vive en memoria (`Mutex<Config>`); al reiniciar se re-siembra el default.
-    Persistirlo es un cambio **breaking del trust-root**: la firma del manifiesto
-    es sobre el hash del `Manifiesto`, y `deserializar` exige `VERSION_MANIFIESTO`,
-    así que agregar un puntero `marco: Option<Hash>` obliga a bumpear la versión +
-    actualizar el constructor de génesis + re-firmar + validar en QEMU. No es un
-    cambio seguro a ciegas; queda para coordinar con el pipeline de imagen/firma.
+  - **Refino: persistir el marco entre reinicios ✅** — el marco activo ahora se
+    ancla en el manifiesto, como `configuracion`/`overlay_revocacion`.
+    `format::Manifiesto` ganó `marco: Option<Hash>` (VERSION_MANIFIESTO 6→7); el
+    génesis (`wawa-boot`) nace con `marco: None`. Al arrancar, `pata_marco::
+    cargar_inicial` lee el marco del manifiesto si está anclado, o siembra el
+    default en el grafo y lo reancla (`manifiesto::enlazar_marco`). `proponer`
+    reancla al nodo nuevo, así un marco propuesto sobrevive al reinicio. Seguro
+    porque el génesis local **no se verifica por firma al boot** (confirmado por
+    el autor) y el operador re-forja la imagen en cada `cargo run -p boot`, así
+    que el bump de versión nace limpio.
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

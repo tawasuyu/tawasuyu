@@ -65,6 +65,15 @@ pub struct Manifiesto {
     /// `configuracion`/`estado`: reanclar engendra un overlay nuevo y mueve el
     /// puntero del manifiesto, jamás muta en sitio.
     pub overlay_revocacion: Option<Hash>,
+    /// Hash del nodo del **marco del escritorio** (`pata`) activo: un
+    /// `pata_core::wire::WireConfig` serializado con postcard. `None` => el
+    /// kernel emplea el marco por defecto. Gemelo de `configuracion`/
+    /// `overlay_revocacion`: proponer un marco nuevo (capacidad WASM
+    /// `sys_marco_proponer`) engendra un nodo nuevo, calcula su hash y reancla el
+    /// manifiesto al objeto nuevo —jamás muta en sitio—, así el marco sobrevive
+    /// al reinicio. `format` sólo transporta el `Hash`; el (de)serializado del
+    /// `WireConfig` lo hace `pata-core`, no este crate.
+    pub marco: Option<Hash>,
 }
 
 /// Un idioma codificado como un par de letras ASCII ISO 639-1 empaquetado en
