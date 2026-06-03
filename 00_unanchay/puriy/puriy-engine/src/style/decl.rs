@@ -327,6 +327,8 @@ pub(crate) enum DeclKind {
     FontSynthesisSmallCaps(bool),
     /// `font-synthesis` shorthand emite los 3 axes a la vez.
     FontSynthesisAll(FontSynthesis),
+    FontSizeAdjust(FontSizeAdjust),
+    ImageOrientation(ImageOrientation),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -597,6 +599,8 @@ impl Decl {
             DeclKind::FontSynthesisStyle(b) => s.font_synthesis.style = *b,
             DeclKind::FontSynthesisSmallCaps(b) => s.font_synthesis.small_caps = *b,
             DeclKind::FontSynthesisAll(fs) => s.font_synthesis = *fs,
+            DeclKind::FontSizeAdjust(a) => s.font_size_adjust = *a,
+            DeclKind::ImageOrientation(o) => s.image_orientation = *o,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

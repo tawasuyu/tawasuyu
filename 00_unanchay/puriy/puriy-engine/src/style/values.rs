@@ -492,6 +492,15 @@ pub struct ComputedStyle {
     /// Plumb: el shaper hace synthesis siempre si la fuente no provee
     /// la variante.
     pub font_synthesis: FontSynthesis,
+    /// `font-size-adjust` (Fase 7.334). Default `None` (sin ajuste).
+    /// **Heredable**. Plumb: el shaper no escala glifos contra la
+    /// métrica del fallback.
+    pub font_size_adjust: FontSizeAdjust,
+    /// `image-orientation` (Fase 7.335). Default `FromImage` (rota
+    /// según EXIF). NO hereda en el grafo de imágenes pero el property
+    /// `image-orientation` SÍ hereda al estilo (los `<img>` lo leen).
+    /// Plumb: el chrome no aplica rotación a `<img>`/`background-image`.
+    pub image_orientation: ImageOrientation,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1413,6 +1422,51 @@ impl Default for FontSynthesis {
 impl FontSynthesis {
     /// `font-synthesis: none` apaga los tres.
     pub const NONE: Self = Self { weight: false, style: false, small_caps: false };
+}
+
+/// `font-size-adjust` (CSS Fonts 5). `None` = sin ajuste; `Value(metric,
+/// number)` = ajustar la métrica del fallback al `number * font-size`
+/// del referente; `FromFont(metric)` = usar el valor que provee la
+/// fuente para esa métrica. Heredable. Fase 7.334.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FontSizeAdjust {
+    None,
+    Value(FontMetric, f32),
+    FromFont(FontMetric),
+}
+
+impl Default for FontSizeAdjust {
+    fn default() -> Self {
+        FontSizeAdjust::None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontMetric {
+    /// Métrica default cuando no se da una explícitamente.
+    #[default]
+    ExHeight,
+    CapHeight,
+    ChWidth,
+    IcWidth,
+    IcHeight,
+}
+
+/// `image-orientation` (CSS Images 3). `FromImage` rota según EXIF;
+/// `None` ignora EXIF; `Angle(deg, flip)` aplica un ángulo + flip
+/// horizontal opcional. Heredable. Fase 7.335.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageOrientation {
+    FromImage,
+    None,
+    /// `<angle> [flip]?` — el flip se aplica antes de la rotación.
+    Angle { degrees: f32, flip: bool },
+}
+
+impl Default for ImageOrientation {
+    fn default() -> Self {
+        ImageOrientation::FromImage
+    }
 }
 
 impl ContainFlags {
@@ -2430,6 +2484,8 @@ impl Default for ComputedStyle {
             text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             font_optical_sizing: FontOpticalSizing::Auto,
             font_synthesis: FontSynthesis::default(),
+            font_size_adjust: FontSizeAdjust::None,
+            image_orientation: ImageOrientation::FromImage,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

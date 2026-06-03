@@ -207,6 +207,34 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `place-items` shorthand (Fase 7.336): `<align-items>
+        // [<justify-items>]?`. Si falta el 2º, vale para ambos ejes
+        // (regla CSS-Align 3). Emite los 2 longhands.
+        if prop.eq_ignore_ascii_case("place-items") {
+            if let Some((al, ji)) = parse_place_items(value) {
+                out.push(Decl { kind: DeclKind::AlignItems(al), important });
+                out.push(Decl { kind: DeclKind::JustifyItems(ji), important });
+            }
+            continue;
+        }
+        // `place-content` shorthand (Fase 7.337): `<align-content>
+        // [<justify-content>]?`.
+        if prop.eq_ignore_ascii_case("place-content") {
+            if let Some((ac, jc)) = parse_place_content(value) {
+                out.push(Decl { kind: DeclKind::AlignContent(ac), important });
+                out.push(Decl { kind: DeclKind::JustifyContent(jc), important });
+            }
+            continue;
+        }
+        // `place-self` shorthand (Fase 7.338): `<align-self>
+        // [<justify-self>]?`.
+        if prop.eq_ignore_ascii_case("place-self") {
+            if let Some((al, jl)) = parse_place_self(value) {
+                out.push(Decl { kind: DeclKind::AlignSelf(al), important });
+                out.push(Decl { kind: DeclKind::JustifySelf(jl), important });
+            }
+            continue;
+        }
         // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
         if prop.eq_ignore_ascii_case("column-rule") {
             out.extend(parse_column_rule_shorthand(value, important));
@@ -680,6 +708,13 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_auto_or_none(value).map(DeclKind::FontSynthesisSmallCaps)
         }
         // `font-synthesis` shorthand: ver `parse_declarations`.
+        "font-size-adjust" => {
+            parse_font_size_adjust(value).map(DeclKind::FontSizeAdjust)
+        }
+        "image-orientation" => {
+            parse_image_orientation(value).map(DeclKind::ImageOrientation)
+        }
+        // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -2606,6 +2641,152 @@ pub(crate) fn parse_auto_or_none(value: &str) -> Option<bool> {
     match value.trim().to_ascii_lowercase().as_str() {
         "auto" => Some(true),
         "none" => Some(false),
+        _ => None,
+    }
+}
+
+/// `font-size-adjust` (CSS Fonts 5):
+/// `none | <number> | from-font | <metric> [<number>|from-font]`.
+/// Si viene `<metric> <num>`, se modela como `Value(metric, num)`;
+/// `<metric> from-font` ⇒ `FromFont(metric)`. `<num>` solo ⇒
+/// `Value(ExHeight, num)`. Fase 7.334.
+pub(crate) fn parse_font_size_adjust(value: &str) -> Option<FontSizeAdjust> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(FontSizeAdjust::None);
+    }
+    if v.eq_ignore_ascii_case("from-font") {
+        return Some(FontSizeAdjust::FromFont(FontMetric::default()));
+    }
+    if let Ok(n) = v.parse::<f32>() {
+        if n < 0.0 || !n.is_finite() {
+            return None;
+        }
+        return Some(FontSizeAdjust::Value(FontMetric::default(), n));
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    if toks.len() != 2 {
+        return None;
+    }
+    let metric = match toks[0].to_ascii_lowercase().as_str() {
+        "ex-height" => FontMetric::ExHeight,
+        "cap-height" => FontMetric::CapHeight,
+        "ch-width" => FontMetric::ChWidth,
+        "ic-width" => FontMetric::IcWidth,
+        "ic-height" => FontMetric::IcHeight,
+        _ => return None,
+    };
+    if toks[1].eq_ignore_ascii_case("from-font") {
+        return Some(FontSizeAdjust::FromFont(metric));
+    }
+    let n = toks[1].parse::<f32>().ok()?;
+    if n < 0.0 || !n.is_finite() {
+        return None;
+    }
+    Some(FontSizeAdjust::Value(metric, n))
+}
+
+/// `image-orientation` (CSS Images 3):
+/// `from-image | none | flip | <angle> [flip]?`. Acepta deg, rad,
+/// grad, turn (la unidad se convierte a grados). Fase 7.335.
+pub(crate) fn parse_image_orientation(value: &str) -> Option<ImageOrientation> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("from-image") {
+        return Some(ImageOrientation::FromImage);
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(ImageOrientation::None);
+    }
+    if v.eq_ignore_ascii_case("flip") {
+        return Some(ImageOrientation::Angle { degrees: 0.0, flip: true });
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    let (angle_str, flip) = match toks.as_slice() {
+        [a] => (*a, false),
+        [a, b] if b.eq_ignore_ascii_case("flip") => (*a, true),
+        // `flip <angle>` orden invertido también es válido.
+        [a, b] if a.eq_ignore_ascii_case("flip") => (*b, true),
+        _ => return None,
+    };
+    let degrees = parse_angle_degrees(angle_str)?;
+    Some(ImageOrientation::Angle { degrees, flip })
+}
+
+/// `<angle>` → grados. Soporta `deg`, `rad`, `grad`, `turn`. Sin
+/// unidad descarta (CSS exige unidad excepto cuando el valor es 0).
+fn parse_angle_degrees(s: &str) -> Option<f32> {
+    let t = s.trim();
+    if t == "0" {
+        return Some(0.0);
+    }
+    let (num, unit) = if let Some(rest) = t.strip_suffix("deg") {
+        (rest, "deg")
+    } else if let Some(rest) = t.strip_suffix("rad") {
+        (rest, "rad")
+    } else if let Some(rest) = t.strip_suffix("grad") {
+        (rest, "grad")
+    } else if let Some(rest) = t.strip_suffix("turn") {
+        (rest, "turn")
+    } else {
+        return None;
+    };
+    let n: f32 = num.parse().ok()?;
+    if !n.is_finite() {
+        return None;
+    }
+    Some(match unit {
+        "deg" => n,
+        "rad" => n.to_degrees(),
+        "grad" => n * 360.0 / 400.0,
+        "turn" => n * 360.0,
+        _ => unreachable!(),
+    })
+}
+
+/// `place-items` shorthand. 1 token ⇒ aplica a los dos ejes; 2 tokens
+/// ⇒ align luego justify. Fase 7.336.
+pub(crate) fn parse_place_items(
+    value: &str,
+) -> Option<(AlignItems, AlignItems)> {
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    match toks.as_slice() {
+        [a] => {
+            let v = parse_align_items(a)?;
+            Some((v, v))
+        }
+        [a, b] => Some((parse_align_items(a)?, parse_justify_items(b)?)),
+        _ => None,
+    }
+}
+
+/// `place-content` shorthand. Fase 7.337.
+pub(crate) fn parse_place_content(
+    value: &str,
+) -> Option<(AlignContent, JustifyContent)> {
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    match toks.as_slice() {
+        [a] => {
+            // El 1er valor sirve para los dos ejes — pero AlignContent y
+            // JustifyContent son enums distintos. Reusamos los parsers
+            // de cada eje sobre el mismo token.
+            Some((parse_align_content(a)?, parse_justify_content(a)?))
+        }
+        [a, b] => Some((parse_align_content(a)?, parse_justify_content(b)?)),
+        _ => None,
+    }
+}
+
+/// `place-self` shorthand. Fase 7.338.
+pub(crate) fn parse_place_self(
+    value: &str,
+) -> Option<(AlignSelf, AlignSelf)> {
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    match toks.as_slice() {
+        [a] => {
+            let v = parse_align_self(a)?;
+            Some((v, v))
+        }
+        [a, b] => Some((parse_align_self(a)?, parse_justify_self(b)?)),
         _ => None,
     }
 }

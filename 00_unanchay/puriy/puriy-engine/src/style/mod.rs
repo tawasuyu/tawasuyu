@@ -290,6 +290,12 @@ impl StyleEngine {
             // CSS Fonts 4 — font-optical-sizing y font-synthesis-* heredan.
             style.font_optical_sizing = p.font_optical_sizing;
             style.font_synthesis = p.font_synthesis;
+            // CSS Fonts 5 — font-size-adjust hereda. CSS Images 3 —
+            // image-orientation hereda. NOTA: place-items/place-content
+            // son shorthands de longhands no-heredables, no se enchufan
+            // acá (la cascada de cada longhand ya pegó arriba).
+            style.font_size_adjust = p.font_size_adjust;
+            style.image_orientation = p.image_orientation;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -4620,6 +4626,219 @@ mod tests {
         let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
         assert!(!div_cs.font_synthesis.weight);
         assert!(div_cs.font_synthesis.style);
+    }
+
+    #[test]
+    fn font_size_adjust_fase_7_334() {
+        // `none`.
+        assert_eq!(parse_font_size_adjust("none"), Some(FontSizeAdjust::None));
+        // `<num>` solo → métrica default `ex-height`.
+        assert_eq!(
+            parse_font_size_adjust("0.5"),
+            Some(FontSizeAdjust::Value(FontMetric::ExHeight, 0.5))
+        );
+        // `from-font` solo → métrica default.
+        assert_eq!(
+            parse_font_size_adjust("from-font"),
+            Some(FontSizeAdjust::FromFont(FontMetric::ExHeight))
+        );
+        // `<metric> <num>`.
+        assert_eq!(
+            parse_font_size_adjust("cap-height 0.7"),
+            Some(FontSizeAdjust::Value(FontMetric::CapHeight, 0.7))
+        );
+        // `<metric> from-font`.
+        assert_eq!(
+            parse_font_size_adjust("ic-width from-font"),
+            Some(FontSizeAdjust::FromFont(FontMetric::IcWidth))
+        );
+        // Negativo descarta.
+        assert_eq!(parse_font_size_adjust("-0.5"), None);
+        // Métrica desconocida descarta.
+        assert_eq!(parse_font_size_adjust("foo 0.5"), None);
+
+        let html = r##"<html><head><style>
+            body { font-size-adjust: cap-height 0.7 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.font_size_adjust,
+            FontSizeAdjust::Value(FontMetric::CapHeight, 0.7)
+        );
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).font_size_adjust,
+            FontSizeAdjust::Value(FontMetric::CapHeight, 0.7)
+        );
+    }
+
+    #[test]
+    fn image_orientation_fase_7_335() {
+        // Keywords.
+        assert_eq!(
+            parse_image_orientation("from-image"),
+            Some(ImageOrientation::FromImage)
+        );
+        assert_eq!(parse_image_orientation("NONE"), Some(ImageOrientation::None));
+        assert_eq!(
+            parse_image_orientation("flip"),
+            Some(ImageOrientation::Angle { degrees: 0.0, flip: true })
+        );
+        // `<angle>` solo.
+        assert_eq!(
+            parse_image_orientation("90deg"),
+            Some(ImageOrientation::Angle { degrees: 90.0, flip: false })
+        );
+        // `<angle> flip` y `flip <angle>` (orden libre).
+        assert_eq!(
+            parse_image_orientation("180deg flip"),
+            Some(ImageOrientation::Angle { degrees: 180.0, flip: true })
+        );
+        assert_eq!(
+            parse_image_orientation("flip 270deg"),
+            Some(ImageOrientation::Angle { degrees: 270.0, flip: true })
+        );
+        // Unidades alternativas.
+        let half_turn = parse_image_orientation("0.5turn").unwrap();
+        match half_turn {
+            ImageOrientation::Angle { degrees, flip } => {
+                assert!((degrees - 180.0).abs() < 1e-3);
+                assert!(!flip);
+            }
+            _ => panic!("expected Angle"),
+        }
+        // Sin unidad y distinto de 0 descarta.
+        assert_eq!(parse_image_orientation("90"), None);
+        // 0 sin unidad sí.
+        assert_eq!(
+            parse_image_orientation("0"),
+            Some(ImageOrientation::Angle { degrees: 0.0, flip: false })
+        );
+        // Token desconocido descarta.
+        assert_eq!(parse_image_orientation("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { image-orientation: none }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.image_orientation, ImageOrientation::None);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).image_orientation,
+            ImageOrientation::None
+        );
+    }
+
+    #[test]
+    fn place_items_fase_7_336() {
+        // 1 token aplica a los 2 ejes.
+        let (a, j) = parse_place_items("center").unwrap();
+        assert_eq!(a, AlignItems::Center);
+        assert_eq!(j, AlignItems::Center);
+        // 2 tokens distintos.
+        let (a, j) = parse_place_items("start end").unwrap();
+        assert_eq!(a, AlignItems::Start);
+        assert_eq!(j, AlignItems::End);
+        // 3 tokens descarta.
+        assert!(parse_place_items("a b c").is_none());
+        assert!(parse_place_items("nope").is_none());
+
+        // E2E: `place-items: center stretch` setea align-items=center,
+        // justify-items=stretch (uno solo) en un grid.
+        let html = r##"<html><head><style>
+            .grid { display: grid; place-items: center stretch }
+        </style></head><body><div class="grid"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(cs.align_items, AlignItems::Center);
+        assert_eq!(cs.justify_items, Some(AlignItems::Stretch));
+    }
+
+    #[test]
+    fn place_content_fase_7_337() {
+        // 1 token comparte.
+        let (a, j) = parse_place_content("center").unwrap();
+        assert_eq!(a, AlignContent::Center);
+        assert_eq!(j, JustifyContent::Center);
+        // 2 tokens.
+        let (a, j) = parse_place_content("start end").unwrap();
+        assert_eq!(a, AlignContent::Start);
+        assert_eq!(j, JustifyContent::End);
+        assert!(parse_place_content("nope").is_none());
+
+        let html = r##"<html><head><style>
+            .grid { display: grid; place-content: start end }
+        </style></head><body><div class="grid"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(cs.align_content, AlignContent::Start);
+        assert_eq!(cs.justify_content, JustifyContent::End);
+    }
+
+    #[test]
+    fn place_self_fase_7_338() {
+        // 1 token comparte.
+        let (a, j) = parse_place_self("center").unwrap();
+        assert_eq!(a, AlignSelf::Center);
+        assert_eq!(j, AlignSelf::Center);
+        // 2 tokens.
+        let (a, j) = parse_place_self("start end").unwrap();
+        assert_eq!(a, AlignSelf::Start);
+        assert_eq!(j, AlignSelf::End);
+        assert!(parse_place_self("nope").is_none());
+
+        let html = r##"<html><head><style>
+            .item { place-self: center end }
+        </style></head><body><div class="item"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(cs.align_self, AlignSelf::Center);
+        assert_eq!(cs.justify_self, AlignSelf::End);
     }
 
     #[test]
