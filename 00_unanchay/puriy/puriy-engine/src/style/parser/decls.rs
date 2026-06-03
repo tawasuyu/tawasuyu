@@ -540,6 +540,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "break-inside" | "page-break-inside" => {
             parse_break_inside(value).map(DeclKind::BreakInside)
         }
+        "table-layout" => parse_table_layout(value).map(DeclKind::TableLayout),
+        "border-collapse" => parse_border_collapse(value).map(DeclKind::BorderCollapse),
+        "border-spacing" => parse_border_spacing(value).map(|(h, v)| DeclKind::BorderSpacing { h, v }),
+        "caption-side" => parse_caption_side(value).map(DeclKind::CaptionSide),
+        "empty-cells" => parse_empty_cells(value).map(DeclKind::EmptyCells),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1475,6 +1480,59 @@ pub(crate) fn parse_column_span(value: &str) -> Option<ColumnSpan> {
     match value.trim().to_ascii_lowercase().as_str() {
         "none" => Some(ColumnSpan::None),
         "all" => Some(ColumnSpan::All),
+        _ => None,
+    }
+}
+
+/// `table-layout`: `auto | fixed`. Fase 7.284.
+pub(crate) fn parse_table_layout(value: &str) -> Option<TableLayout> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TableLayout::Auto),
+        "fixed" => Some(TableLayout::Fixed),
+        _ => None,
+    }
+}
+
+/// `border-collapse`: `separate | collapse`. Fase 7.285.
+pub(crate) fn parse_border_collapse(value: &str) -> Option<BorderCollapse> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "separate" => Some(BorderCollapse::Separate),
+        "collapse" => Some(BorderCollapse::Collapse),
+        _ => None,
+    }
+}
+
+/// `border-spacing`: `<h-length> [<v-length>]`. Sin v explícito, v=h.
+/// Fase 7.286.
+pub(crate) fn parse_border_spacing(value: &str) -> Option<(f32, f32)> {
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let parsed: Vec<f32> = parts
+        .iter()
+        .map(|t| parse_length_px(t))
+        .collect::<Option<Vec<_>>>()?;
+    match parsed.as_slice() {
+        [h] => Some((*h, *h)),
+        [h, v] => Some((*h, *v)),
+        _ => None,
+    }
+}
+
+/// `caption-side`: `top | bottom | inline-start | inline-end`. Logicals
+/// se aplastan a Top/Bottom (LTR/RTL no diferencia para captions en
+/// tablas horizontales). Fase 7.287.
+pub(crate) fn parse_caption_side(value: &str) -> Option<CaptionSide> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "top" | "block-start" | "inline-start" => Some(CaptionSide::Top),
+        "bottom" | "block-end" | "inline-end" => Some(CaptionSide::Bottom),
+        _ => None,
+    }
+}
+
+/// `empty-cells`: `show | hide`. Fase 7.288.
+pub(crate) fn parse_empty_cells(value: &str) -> Option<EmptyCells> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "show" => Some(EmptyCells::Show),
+        "hide" => Some(EmptyCells::Hide),
         _ => None,
     }
 }

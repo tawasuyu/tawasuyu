@@ -269,6 +269,12 @@ pub(crate) enum DeclKind {
     ColumnFill(ColumnFill),
     ColumnSpan(ColumnSpan),
     BreakInside(BreakInside),
+    TableLayout(TableLayout),
+    BorderCollapse(BorderCollapse),
+    /// `border-spacing` shorthand: emite tupla horizontal+vertical.
+    BorderSpacing { h: f32, v: f32 },
+    CaptionSide(CaptionSide),
+    EmptyCells(EmptyCells),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -488,6 +494,14 @@ impl Decl {
             DeclKind::ColumnFill(f) => s.column_fill = *f,
             DeclKind::ColumnSpan(sp) => s.column_span = *sp,
             DeclKind::BreakInside(b) => s.break_inside = *b,
+            DeclKind::TableLayout(t) => s.table_layout = *t,
+            DeclKind::BorderCollapse(c) => s.border_collapse = *c,
+            DeclKind::BorderSpacing { h, v } => {
+                s.border_spacing_h = *h;
+                s.border_spacing_v = *v;
+            }
+            DeclKind::CaptionSide(c) => s.caption_side = *c,
+            DeclKind::EmptyCells(e) => s.empty_cells = *e,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

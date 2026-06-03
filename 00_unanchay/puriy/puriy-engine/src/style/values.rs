@@ -352,6 +352,21 @@ pub struct ComputedStyle {
     pub column_span: ColumnSpan,
     /// `break-inside` (Fase 7.283). Default `Auto`. NO heredable. Plumb.
     pub break_inside: BreakInside,
+    /// `table-layout` (Fase 7.284). Default `Auto`. NO heredable. Plumb:
+    /// el chrome aún no diferencia layout fixed vs auto en `display: table`.
+    pub table_layout: TableLayout,
+    /// `border-collapse` (Fase 7.285). Default `Separate`. **Heredable**.
+    /// Plumb.
+    pub border_collapse: BorderCollapse,
+    /// `border-spacing` (Fase 7.286). Tupla h/v en px (sólo aplica si
+    /// `border-collapse: separate`). Default 0/0. **Heredable**. Plumb.
+    pub border_spacing_h: f32,
+    pub border_spacing_v: f32,
+    /// `caption-side` (Fase 7.287). Default `Top`. **Heredable** (sólo
+    /// hereda en `<caption>`). Plumb.
+    pub caption_side: CaptionSide,
+    /// `empty-cells` (Fase 7.288). Default `Show`. **Heredable**. Plumb.
+    pub empty_cells: EmptyCells,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -782,6 +797,42 @@ pub enum BreakInside {
     AvoidPage,
     AvoidColumn,
     AvoidRegion,
+}
+
+/// `table-layout` (CSS Tables 3). Default `Auto`. Fase 7.284.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TableLayout {
+    #[default]
+    Auto,
+    Fixed,
+}
+
+/// `border-collapse` (CSS Tables 3). Default `Separate`. Heredable.
+/// Fase 7.285.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderCollapse {
+    #[default]
+    Separate,
+    Collapse,
+}
+
+/// `caption-side` (CSS Tables 3). Default `Top`. Heredable.
+/// Las variantes `inline-start`/`inline-end` (logical) caen a Top/Bottom
+/// según `direction`; por simplicidad las aceptamos pero las aplastamos
+/// a Top/Bottom. Fase 7.287.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptionSide {
+    #[default]
+    Top,
+    Bottom,
+}
+
+/// `empty-cells` (CSS Tables 3). Default `Show`. Heredable. Fase 7.288.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EmptyCells {
+    #[default]
+    Show,
+    Hide,
 }
 
 impl ContainFlags {
@@ -1753,6 +1804,12 @@ impl Default for ComputedStyle {
             column_fill: ColumnFill::Balance,
             column_span: ColumnSpan::None,
             break_inside: BreakInside::Auto,
+            table_layout: TableLayout::Auto,
+            border_collapse: BorderCollapse::Separate,
+            border_spacing_h: 0.0,
+            border_spacing_v: 0.0,
+            caption_side: CaptionSide::Top,
+            empty_cells: EmptyCells::Show,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

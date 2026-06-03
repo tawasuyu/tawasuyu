@@ -239,6 +239,13 @@ impl StyleEngine {
             // text-orientation hereda. filter, backdrop-filter,
             // overscroll-behavior y scroll-snap-type NO heredan.
             style.text_orientation = p.text_orientation;
+            // CSS Tables 3 — border-collapse, border-spacing, caption-side y
+            // empty-cells heredan; table-layout NO.
+            style.border_collapse = p.border_collapse;
+            style.border_spacing_h = p.border_spacing_h;
+            style.border_spacing_v = p.border_spacing_v;
+            style.caption_side = p.caption_side;
+            style.empty_cells = p.empty_cells;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -2643,6 +2650,159 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[1], Some(&body_cs)).break_inside,
             BreakInside::Auto
+        );
+    }
+
+    #[test]
+    fn table_layout_fase_7_284() {
+        assert_eq!(parse_table_layout("auto"), Some(TableLayout::Auto));
+        assert_eq!(parse_table_layout("FIXED"), Some(TableLayout::Fixed));
+        assert_eq!(parse_table_layout("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { table-layout: fixed }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.table_layout, TableLayout::Fixed);
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).table_layout,
+            TableLayout::Auto
+        );
+    }
+
+    #[test]
+    fn border_collapse_fase_7_285() {
+        assert_eq!(parse_border_collapse("separate"), Some(BorderCollapse::Separate));
+        assert_eq!(parse_border_collapse("COLLAPSE"), Some(BorderCollapse::Collapse));
+        assert_eq!(parse_border_collapse("merge"), None);
+
+        let html = r##"<html><head><style>
+            body { border-collapse: collapse }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.border_collapse, BorderCollapse::Collapse);
+        // SÍ se hereda → div sin propio gana el del padre.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).border_collapse,
+            BorderCollapse::Collapse
+        );
+    }
+
+    #[test]
+    fn border_spacing_fase_7_286() {
+        assert_eq!(parse_border_spacing("5px"), Some((5.0, 5.0)));
+        assert_eq!(parse_border_spacing("5px 10px"), Some((5.0, 10.0)));
+        assert!(parse_border_spacing("5px 10px 15px").is_none());
+
+        let html = r##"<html><head><style>
+            body { border-spacing: 3px 7px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.border_spacing_h, 3.0);
+        assert_eq!(body_cs.border_spacing_v, 7.0);
+        // SÍ se hereda.
+        let plain = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(plain.border_spacing_h, 3.0);
+        assert_eq!(plain.border_spacing_v, 7.0);
+    }
+
+    #[test]
+    fn caption_side_fase_7_287() {
+        assert_eq!(parse_caption_side("top"), Some(CaptionSide::Top));
+        assert_eq!(parse_caption_side("BOTTOM"), Some(CaptionSide::Bottom));
+        // Logicals se aplastan.
+        assert_eq!(parse_caption_side("block-start"), Some(CaptionSide::Top));
+        assert_eq!(parse_caption_side("inline-end"), Some(CaptionSide::Bottom));
+        assert_eq!(parse_caption_side("middle"), None);
+
+        let html = r##"<html><head><style>
+            body { caption-side: bottom }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.caption_side, CaptionSide::Bottom);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).caption_side,
+            CaptionSide::Bottom
+        );
+    }
+
+    #[test]
+    fn empty_cells_fase_7_288() {
+        assert_eq!(parse_empty_cells("show"), Some(EmptyCells::Show));
+        assert_eq!(parse_empty_cells("HIDE"), Some(EmptyCells::Hide));
+        assert_eq!(parse_empty_cells("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { empty-cells: hide }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.empty_cells, EmptyCells::Hide);
+        // SÍ se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).empty_cells,
+            EmptyCells::Hide
         );
     }
 
