@@ -117,6 +117,15 @@ impl Selector {
                     Pseudo::Not(list) | Pseudo::Is(list) => {
                         extra += list.iter().map(compound_specificity).max().unwrap_or(0);
                     }
+                    // `:has(...)` aporta la especificidad de su argumento más
+                    // específico (CSS spec, igual que `:is`).
+                    Pseudo::Has(rels) => {
+                        extra += rels
+                            .iter()
+                            .map(|r| compound_specificity(&r.compound))
+                            .max()
+                            .unwrap_or(0);
+                    }
                     // `:where(...)` no aporta especificidad.
                     Pseudo::Where(_) => {}
                     _ => classes_etc += 1,
@@ -261,6 +270,25 @@ pub(crate) enum Pseudo {
     Is(Vec<Compound>),
     /// `:where(a, b, ...)` — como `:is` pero aporta especificidad CERO.
     Where(Vec<Compound>),
+    /// `:empty` — elemento sin hijos elemento ni texto no-whitespace
+    /// (comentarios ignorados, CSS Selectors 4).
+    Empty,
+    /// `:root` — el elemento raíz del documento (`<html>` en HTML).
+    Root,
+    /// `:link` / `:any-link` — `<a>`/`<area>`/`<link>` con atributo `href`.
+    /// (No distinguimos visitado/no-visitado: no rastreamos historial.)
+    AnyLink,
+    /// `:has(<rel-sel-list>)` — relacional. Matchea si ALGUNA relative
+    /// selector matchea contra el subárbol/hermanos del elemento.
+    Has(Vec<RelativeSelector>),
+}
+
+/// Una relative selector de `:has(...)`: un combinador (descendiente por
+/// defecto) + un compound. `:has(> .a)` → `{Child, .a}`.
+#[derive(Debug, Clone)]
+pub(crate) struct RelativeSelector {
+    pub(crate) combinator: Combinator,
+    pub(crate) compound: Compound,
 }
 
 impl Compound {
@@ -359,6 +387,19 @@ pub(crate) fn pseudo_matches(
                 .iter()
                 .any(|c| c.matches_in_state(node, hover_active, focus_active))
         }
+        Pseudo::Empty => return is_empty_element(node),
+        Pseudo::Root => return dom::element_name(node).as_deref() == Some("html"),
+        Pseudo::AnyLink => {
+            return matches!(
+                dom::element_name(node).as_deref(),
+                Some("a") | Some("area") | Some("link")
+            ) && dom::attr(node, "href").is_some()
+        }
+        Pseudo::Has(rels) => {
+            return rels
+                .iter()
+                .any(|r| has_relative_match(node, r, hover_active, focus_active))
+        }
         _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
@@ -393,7 +434,11 @@ pub(crate) fn pseudo_matches(
         | Pseudo::ReadOnly
         | Pseudo::ReadWrite
         | Pseudo::Is(_)
-        | Pseudo::Where(_) => unreachable!("ya resueltos arriba"),
+        | Pseudo::Where(_)
+        | Pseudo::Empty
+        | Pseudo::Root
+        | Pseudo::AnyLink
+        | Pseudo::Has(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,
@@ -407,6 +452,87 @@ pub(crate) fn pseudo_matches(
             nth_matches((same_type.len() - type_pos) as i32, *a, *b)
         }
     }
+}
+
+/// `:empty` — sin hijos elemento ni texto no-whitespace. Los comentarios
+/// y processing-instructions se ignoran (CSS Selectors 4).
+pub(crate) fn is_empty_element(node: &markup5ever_rcdom::Handle) -> bool {
+    for c in node.children.borrow().iter() {
+        if dom::element_name(c).is_some() {
+            return false;
+        }
+        if let markup5ever_rcdom::NodeData::Text { contents } = &c.data {
+            if !contents.borrow().trim().is_empty() {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// `:has(...)` — evalúa una relative selector contra el subárbol/hermanos.
+pub(crate) fn has_relative_match(
+    node: &markup5ever_rcdom::Handle,
+    rel: &RelativeSelector,
+    hover_active: bool,
+    focus_active: bool,
+) -> bool {
+    match rel.combinator {
+        Combinator::Descendant => {
+            any_descendant_matches(node, &rel.compound, hover_active, focus_active)
+        }
+        Combinator::Child => dom::children(node)
+            .iter()
+            .any(|c| rel.compound.matches_in_state(c, hover_active, focus_active)),
+        Combinator::AdjacentSibling => following_element_siblings(node)
+            .first()
+            .is_some_and(|s| rel.compound.matches_in_state(s, hover_active, focus_active)),
+        Combinator::GeneralSibling => following_element_siblings(node)
+            .iter()
+            .any(|s| rel.compound.matches_in_state(s, hover_active, focus_active)),
+    }
+}
+
+/// `true` si algún descendiente (cualquier nivel, excluye el propio nodo)
+/// matchea el compound.
+fn any_descendant_matches(
+    node: &markup5ever_rcdom::Handle,
+    compound: &Compound,
+    hover_active: bool,
+    focus_active: bool,
+) -> bool {
+    for c in node.children.borrow().iter() {
+        if dom::element_name(c).is_none() {
+            continue;
+        }
+        if compound.matches_in_state(c, hover_active, focus_active)
+            || any_descendant_matches(c, compound, hover_active, focus_active)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Hermanos-elemento que siguen a `node` bajo el mismo padre, en orden.
+fn following_element_siblings(
+    node: &markup5ever_rcdom::Handle,
+) -> Vec<markup5ever_rcdom::Handle> {
+    let Some(parent) = parent_of(node) else {
+        return Vec::new();
+    };
+    let kids = parent.children.borrow();
+    let mut out = Vec::new();
+    let mut after = false;
+    for c in kids.iter() {
+        if after && dom::element_name(c).is_some() {
+            out.push(c.clone());
+        }
+        if std::rc::Rc::ptr_eq(c, node) {
+            after = true;
+        }
+    }
+    out
 }
 
 /// `true` si la posición CSS 1-indexed `p_css` satisface `a*k + b` para algún

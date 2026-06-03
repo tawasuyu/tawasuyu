@@ -618,6 +618,99 @@ mod tests {
     }
 
     #[test]
+    fn pseudo_empty_matchea() {
+        let html = r#"<html><head><style>div:empty{color:red}</style></head><body>
+            <div class="vacio"></div>
+            <div class="ws">   </div>
+            <div class="texto">hola</div>
+            <div class="hijo"><span></span></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let red = Color::rgb(255, 0, 0);
+        assert_eq!(eng.compute(&divs[0]).color, red); // vacío
+        assert_eq!(eng.compute(&divs[1]).color, red); // sólo whitespace → :empty
+        assert_eq!(eng.compute(&divs[2]).color, Color::BLACK); // tiene texto
+        assert_eq!(eng.compute(&divs[3]).color, Color::BLACK); // tiene hijo elemento
+    }
+
+    #[test]
+    fn pseudo_root_matchea_html() {
+        let html = r#"<html><head><style>:root{color:#008000}</style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut html_el = None;
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("html") {
+                html_el = Some(n.clone());
+            }
+        });
+        assert_eq!(eng.compute(&html_el.unwrap()).color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn pseudo_any_link_matchea() {
+        let html = r#"<html><head><style>:any-link{color:#0000ff}</style></head><body>
+            <a href="/x">con</a><a>sin</a>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut anchors = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("a") {
+                anchors.push(n.clone());
+            }
+        });
+        assert_eq!(anchors.len(), 2);
+        // <a href> matchea :any-link (especificidad 10 > UA `a`).
+        assert_eq!(eng.compute(&anchors[0]).color, Color::rgb(0, 0, 255));
+        // <a> sin href NO matchea :any-link.
+        assert_ne!(eng.compute(&anchors[1]).color, Color::rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn pseudo_has_relacional() {
+        let html = r#"<html><head><style>
+            .has-span:has(span){color:red}
+            .has-child:has(> .active){color:rgb(0,128,0)}
+            .has-adj:has(+ p){color:rgb(0,0,255)}
+        </style></head><body>
+            <div id="d1" class="has-span"><span>x</span></div>
+            <div id="d2" class="has-span"><b>y</b></div>
+            <div id="d3" class="has-child"><em class="active"></em></div>
+            <div id="d4" class="has-child"><p><em class="active"></em></p></div>
+            <div id="d5" class="has-adj">t</div><p>z</p>
+            <div id="d6" class="has-adj">t</div><span>z</span>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by_id = |id: &str| -> Handle {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // Descendiente: matchea con span, no sin él.
+        assert_eq!(eng.compute(&by_id("d1")).color, Color::rgb(255, 0, 0));
+        assert_eq!(eng.compute(&by_id("d2")).color, Color::BLACK);
+        // Hijo directo (`> .active`): matchea sólo si es hijo DIRECTO.
+        assert_eq!(eng.compute(&by_id("d3")).color, Color::rgb(0, 128, 0));
+        assert_eq!(eng.compute(&by_id("d4")).color, Color::BLACK); // .active es nieto
+        // Hermano adyacente (`+ p`): matchea sólo si el siguiente es <p>.
+        assert_eq!(eng.compute(&by_id("d5")).color, Color::rgb(0, 0, 255));
+        assert_eq!(eng.compute(&by_id("d6")).color, Color::BLACK); // siguiente es <span>
+    }
+
+    #[test]
     fn selector_hijo_directo_matchea() {
         // `ul > li` matchea `<li>` que es hijo *directo* de `<ul>`. Un
         // `<li>` dentro de `<ol>` adentro de `<ul>` no debe matchear.

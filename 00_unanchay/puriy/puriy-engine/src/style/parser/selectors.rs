@@ -226,6 +226,34 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                             }
                             Pseudo::Not(inner)
                         }
+                        "has" => {
+                            // `:has(<rel-sel-list>)` — cada relative selector
+                            // es un combinador opcional (descendiente por
+                            // defecto) + un compound. Lista separada por coma.
+                            let mut rels = Vec::new();
+                            for part in arg.split(',') {
+                                let part = part.trim();
+                                if part.is_empty() {
+                                    return None;
+                                }
+                                let (combinator, rest) = match part.as_bytes()[0] {
+                                    b'>' => (Combinator::Child, part[1..].trim()),
+                                    b'+' => (Combinator::AdjacentSibling, part[1..].trim()),
+                                    b'~' => (Combinator::GeneralSibling, part[1..].trim()),
+                                    _ => (Combinator::Descendant, part),
+                                };
+                                let compound = parse_compound(rest)?;
+                                // Anti-recursión: no soportamos `:has` anidado.
+                                if compound.pseudos.iter().any(|p| matches!(p, Pseudo::Has(_))) {
+                                    return None;
+                                }
+                                rels.push(RelativeSelector { combinator, compound });
+                            }
+                            if rels.is_empty() {
+                                return None;
+                            }
+                            Pseudo::Has(rels)
+                        }
                         "is" | "where" => {
                             // Lista de compounds separados por coma (sin
                             // combinadores adentro — `parse_compound` parsea
@@ -266,6 +294,9 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                     "optional" => Pseudo::Optional,
                     "read-only" => Pseudo::ReadOnly,
                     "read-write" => Pseudo::ReadWrite,
+                    "empty" => Pseudo::Empty,
+                    "root" => Pseudo::Root,
+                    "link" | "any-link" => Pseudo::AnyLink,
                     _ => return None,
                 };
                 pseudos.push(p);
