@@ -467,6 +467,21 @@ pub struct ComputedStyle {
     /// `overflow-clip-margin` (Fase 7.323). `None` = sin extensión.
     /// NO hereda. Plumb: el chrome usa el rect normal de clipping.
     pub overflow_clip_margin: Option<OverflowClipMargin>,
+    /// `text-align-last` (Fase 7.324). Default `Auto`. **Heredable**.
+    /// Plumb: no se distingue la última línea de un párrafo justificado.
+    pub text_align_last: TextAlignLast,
+    /// `text-wrap` (Fase 7.325). Default `Wrap`. **Heredable**.
+    /// Plumb: el line-breaker no implementa balance/pretty/stable.
+    pub text_wrap: TextWrap,
+    /// `line-break` (Fase 7.326). Default `Auto`. **Heredable**.
+    /// Plumb: el line-breaker usa siempre Unicode default.
+    pub line_break: LineBreak,
+    /// `hanging-punctuation` (Fase 7.327). Default `None`. **Heredable**.
+    /// Plumb: no se cuelga puntuación fuera del box.
+    pub hanging_punctuation: HangingPunctuation,
+    /// `text-decoration-skip-ink` (Fase 7.328). Default `Auto`.
+    /// **Heredable**. Plumb: no se saltean descendientes en underline.
+    pub text_decoration_skip_ink: TextDecorationSkipInk,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1290,6 +1305,73 @@ pub enum VisualBox {
     #[default]
     PaddingBox,
     BorderBox,
+}
+
+/// `text-align-last` (CSS Text 4). Alineación de la última línea de un
+/// bloque (la única para `text-align: justify`). Heredable. Default
+/// `Auto`. Fase 7.324.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAlignLast {
+    #[default]
+    Auto,
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
+/// `text-wrap` (CSS Text 4). Heredable. Default `Wrap`. Fase 7.325.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextWrap {
+    #[default]
+    Wrap,
+    Nowrap,
+    Balance,
+    Pretty,
+    Stable,
+}
+
+/// `line-break` (CSS Text 3). Estrictez del breaker para CJK y
+/// puntuación pegada. Heredable. Default `Auto`. Fase 7.326.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineBreak {
+    #[default]
+    Auto,
+    Loose,
+    Normal,
+    Strict,
+    Anywhere,
+}
+
+/// `hanging-punctuation` (CSS Text 4). Combinación de flags. La spec
+/// permite `none | [first || force-end | allow-end || last]`. `force_end`
+/// y `allow_end` son mutuamente excluyentes (modelado: bool `force_end`
+/// + bool `allow_end`; sólo uno puede ser true a la vez). Heredable.
+/// Fase 7.327.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HangingPunctuation {
+    pub first: bool,
+    pub force_end: bool,
+    pub allow_end: bool,
+    pub last: bool,
+}
+
+impl HangingPunctuation {
+    pub const fn is_none(self) -> bool {
+        !self.first && !self.force_end && !self.allow_end && !self.last
+    }
+}
+
+/// `text-decoration-skip-ink` (CSS Text Decoration 4). Heredable.
+/// Default `Auto`. Fase 7.328.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecorationSkipInk {
+    #[default]
+    Auto,
+    None,
+    All,
 }
 
 impl ContainFlags {
@@ -2300,6 +2382,11 @@ impl Default for ComputedStyle {
             scrollbar_gutter: ScrollbarGutter::AUTO,
             overflow_anchor: OverflowAnchor::Auto,
             overflow_clip_margin: None,
+            text_align_last: TextAlignLast::Auto,
+            text_wrap: TextWrap::Wrap,
+            line_break: LineBreak::Auto,
+            hanging_punctuation: HangingPunctuation::default(),
+            text_decoration_skip_ink: TextDecorationSkipInk::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

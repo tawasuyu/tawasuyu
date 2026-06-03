@@ -645,6 +645,18 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "overflow-clip-margin" => {
             parse_overflow_clip_margin(value).map(DeclKind::OverflowClipMargin)
         }
+        "text-align-last" => {
+            parse_text_align_last(value).map(DeclKind::TextAlignLast)
+        }
+        "text-wrap" => parse_text_wrap(value).map(DeclKind::TextWrap),
+        "line-break" => parse_line_break(value).map(DeclKind::LineBreak),
+        "hanging-punctuation" => {
+            parse_hanging_punctuation(value).map(DeclKind::HangingPunctuation)
+        }
+        "text-decoration-skip-ink" => {
+            parse_text_decoration_skip_ink(value)
+                .map(DeclKind::TextDecorationSkipInk)
+        }
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -2451,6 +2463,106 @@ pub(crate) fn parse_overflow_clip_margin(
         return Some(None);
     }
     Some(Some(OverflowClipMargin { visual_box: vb, length: len }))
+}
+
+/// `text-align-last` (CSS Text 4):
+/// `auto | start | end | left | right | center | justify`. Fase 7.324.
+pub(crate) fn parse_text_align_last(value: &str) -> Option<TextAlignLast> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TextAlignLast::Auto),
+        "start" => Some(TextAlignLast::Start),
+        "end" => Some(TextAlignLast::End),
+        "left" => Some(TextAlignLast::Left),
+        "right" => Some(TextAlignLast::Right),
+        "center" => Some(TextAlignLast::Center),
+        "justify" => Some(TextAlignLast::Justify),
+        _ => None,
+    }
+}
+
+/// `text-wrap` (CSS Text 4):
+/// `wrap | nowrap | balance | pretty | stable`. Fase 7.325.
+pub(crate) fn parse_text_wrap(value: &str) -> Option<TextWrap> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "wrap" => Some(TextWrap::Wrap),
+        "nowrap" => Some(TextWrap::Nowrap),
+        "balance" => Some(TextWrap::Balance),
+        "pretty" => Some(TextWrap::Pretty),
+        "stable" => Some(TextWrap::Stable),
+        _ => None,
+    }
+}
+
+/// `line-break` (CSS Text 3):
+/// `auto | loose | normal | strict | anywhere`. Fase 7.326.
+pub(crate) fn parse_line_break(value: &str) -> Option<LineBreak> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(LineBreak::Auto),
+        "loose" => Some(LineBreak::Loose),
+        "normal" => Some(LineBreak::Normal),
+        "strict" => Some(LineBreak::Strict),
+        "anywhere" => Some(LineBreak::Anywhere),
+        _ => None,
+    }
+}
+
+/// `hanging-punctuation` (CSS Text 4):
+/// `none | [first || [force-end | allow-end] || last]`. Fase 7.327.
+pub(crate) fn parse_hanging_punctuation(
+    value: &str,
+) -> Option<HangingPunctuation> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(HangingPunctuation::default());
+    }
+    let mut out = HangingPunctuation::default();
+    for tok in v.split_whitespace() {
+        match tok.to_ascii_lowercase().as_str() {
+            "first" => {
+                if out.first {
+                    return None;
+                }
+                out.first = true;
+            }
+            "force-end" => {
+                // `force-end` y `allow-end` se excluyen mutuamente.
+                if out.force_end || out.allow_end {
+                    return None;
+                }
+                out.force_end = true;
+            }
+            "allow-end" => {
+                if out.force_end || out.allow_end {
+                    return None;
+                }
+                out.allow_end = true;
+            }
+            "last" => {
+                if out.last {
+                    return None;
+                }
+                out.last = true;
+            }
+            _ => return None,
+        }
+    }
+    if out.is_none() {
+        return None;
+    }
+    Some(out)
+}
+
+/// `text-decoration-skip-ink` (CSS Text Decoration 4):
+/// `auto | none | all`. Fase 7.328.
+pub(crate) fn parse_text_decoration_skip_ink(
+    value: &str,
+) -> Option<TextDecorationSkipInk> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TextDecorationSkipInk::Auto),
+        "none" => Some(TextDecorationSkipInk::None),
+        "all" => Some(TextDecorationSkipInk::All),
+        _ => None,
+    }
 }
 
 /// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.

@@ -280,6 +280,13 @@ impl StyleEngine {
             // Anchoring 1) y overflow-clip-margin (CSS Overflow 4) NO heredan.
             style.scrollbar_width = p.scrollbar_width;
             style.scrollbar_color = p.scrollbar_color;
+            // CSS Text 3/4 — text-align-last, text-wrap, line-break,
+            // hanging-punctuation y text-decoration-skip-ink heredan.
+            style.text_align_last = p.text_align_last;
+            style.text_wrap = p.text_wrap;
+            style.line_break = p.line_break;
+            style.hanging_punctuation = p.hanging_punctuation;
+            style.text_decoration_skip_ink = p.text_decoration_skip_ink;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -4249,6 +4256,204 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).overflow_clip_margin,
             None
+        );
+    }
+
+    #[test]
+    fn text_align_last_fase_7_324() {
+        assert_eq!(parse_text_align_last("auto"), Some(TextAlignLast::Auto));
+        assert_eq!(parse_text_align_last("START"), Some(TextAlignLast::Start));
+        assert_eq!(parse_text_align_last("justify"), Some(TextAlignLast::Justify));
+        assert_eq!(parse_text_align_last("center"), Some(TextAlignLast::Center));
+        assert_eq!(parse_text_align_last("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-align-last: justify }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_align_last, TextAlignLast::Justify);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_align_last,
+            TextAlignLast::Justify
+        );
+    }
+
+    #[test]
+    fn text_wrap_fase_7_325() {
+        assert_eq!(parse_text_wrap("wrap"), Some(TextWrap::Wrap));
+        assert_eq!(parse_text_wrap("NOWRAP"), Some(TextWrap::Nowrap));
+        assert_eq!(parse_text_wrap("balance"), Some(TextWrap::Balance));
+        assert_eq!(parse_text_wrap("pretty"), Some(TextWrap::Pretty));
+        assert_eq!(parse_text_wrap("stable"), Some(TextWrap::Stable));
+        assert_eq!(parse_text_wrap("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-wrap: balance }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_wrap, TextWrap::Balance);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_wrap,
+            TextWrap::Balance
+        );
+    }
+
+    #[test]
+    fn line_break_fase_7_326() {
+        assert_eq!(parse_line_break("auto"), Some(LineBreak::Auto));
+        assert_eq!(parse_line_break("LOOSE"), Some(LineBreak::Loose));
+        assert_eq!(parse_line_break("normal"), Some(LineBreak::Normal));
+        assert_eq!(parse_line_break("strict"), Some(LineBreak::Strict));
+        assert_eq!(parse_line_break("anywhere"), Some(LineBreak::Anywhere));
+        assert_eq!(parse_line_break("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { line-break: strict }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.line_break, LineBreak::Strict);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).line_break,
+            LineBreak::Strict
+        );
+    }
+
+    #[test]
+    fn hanging_punctuation_fase_7_327() {
+        assert_eq!(
+            parse_hanging_punctuation("none"),
+            Some(HangingPunctuation::default())
+        );
+        // first solo.
+        assert_eq!(
+            parse_hanging_punctuation("first"),
+            Some(HangingPunctuation { first: true, ..Default::default() })
+        );
+        // first + force-end + last (orden libre).
+        assert_eq!(
+            parse_hanging_punctuation("last force-end first"),
+            Some(HangingPunctuation {
+                first: true,
+                force_end: true,
+                allow_end: false,
+                last: true
+            })
+        );
+        // allow-end solo.
+        assert_eq!(
+            parse_hanging_punctuation("allow-end"),
+            Some(HangingPunctuation { allow_end: true, ..Default::default() })
+        );
+        // force-end + allow-end → excluyentes, descarta.
+        assert_eq!(parse_hanging_punctuation("force-end allow-end"), None);
+        // Duplicado descarta.
+        assert_eq!(parse_hanging_punctuation("first first"), None);
+        // Token desconocido descarta.
+        assert_eq!(parse_hanging_punctuation("first foo"), None);
+        // Vacío descarta.
+        assert_eq!(parse_hanging_punctuation(""), None);
+
+        let html = r##"<html><head><style>
+            body { hanging-punctuation: first last }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.hanging_punctuation.first);
+        assert!(body_cs.hanging_punctuation.last);
+        // SÍ hereda.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(div_cs.hanging_punctuation.first);
+        assert!(div_cs.hanging_punctuation.last);
+    }
+
+    #[test]
+    fn text_decoration_skip_ink_fase_7_328() {
+        assert_eq!(
+            parse_text_decoration_skip_ink("auto"),
+            Some(TextDecorationSkipInk::Auto)
+        );
+        assert_eq!(
+            parse_text_decoration_skip_ink("NONE"),
+            Some(TextDecorationSkipInk::None)
+        );
+        assert_eq!(
+            parse_text_decoration_skip_ink("all"),
+            Some(TextDecorationSkipInk::All)
+        );
+        assert_eq!(parse_text_decoration_skip_ink("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-decoration-skip-ink: none }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_decoration_skip_ink, TextDecorationSkipInk::None);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs))
+                .text_decoration_skip_ink,
+            TextDecorationSkipInk::None
         );
     }
 
