@@ -2041,18 +2041,52 @@ mod tests {
                 divs.push(n.clone());
             }
         });
-        let a = eng.compute(&divs[0]).box_shadow.unwrap();
+        let a_list = eng.compute(&divs[0]).box_shadows.clone();
+        assert_eq!(a_list.len(), 1);
+        let a = a_list[0];
         assert!((a.offset_x - 2.0).abs() < 1e-6);
         assert!((a.offset_y - 4.0).abs() < 1e-6);
         assert!((a.blur_px - 8.0).abs() < 1e-6);
         assert!((a.spread_px - 1.0).abs() < 1e-6);
         assert_eq!(a.color, Color::BLACK);
-        let b = eng.compute(&divs[1]).box_shadow.unwrap();
+        assert!(!a.inset);
+        let b = eng.compute(&divs[1]).box_shadows[0];
         assert_eq!(b.color, Color::rgb(255, 0, 0));
         assert!((b.blur_px - 0.0).abs() < 1e-6);
         assert!((b.spread_px - 0.0).abs() < 1e-6);
-        let c = eng.compute(&divs[2]).box_shadow;
-        assert!(c.is_none());
+        assert!(eng.compute(&divs[2]).box_shadows.is_empty());
+    }
+
+    #[test]
+    fn box_shadow_multi_e_inset_fase_7_236() {
+        let html = r#"<html><head><style>
+            .multi { box-shadow: 2px 2px #000, 4px 4px red, inset 1px 1px blue }
+            .ins   { box-shadow: inset 3px 4px 5px 6px #00ff00 }
+            .noop  { box-shadow: garbage }
+        </style></head><body>
+          <div class="multi"></div><div class="ins"></div><div class="noop"></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let list = eng.compute(&divs[0]).box_shadows.clone();
+        assert_eq!(list.len(), 3, "tres sombras en la lista");
+        assert!(!list[0].inset && list[0].color == Color::BLACK);
+        assert!(!list[1].inset && list[1].color == Color::rgb(255, 0, 0));
+        assert!(list[2].inset && list[2].color == Color::rgb(0, 0, 255));
+        let ins = eng.compute(&divs[1]).box_shadows[0];
+        assert!(ins.inset);
+        assert!((ins.offset_x - 3.0).abs() < 1e-6);
+        assert!((ins.offset_y - 4.0).abs() < 1e-6);
+        assert!((ins.blur_px - 5.0).abs() < 1e-6);
+        assert!((ins.spread_px - 6.0).abs() < 1e-6);
+        assert_eq!(ins.color, Color::rgb(0, 255, 0));
+        assert!(eng.compute(&divs[2]).box_shadows.is_empty());
     }
 
     #[test]

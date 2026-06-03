@@ -285,7 +285,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "content" => Some(DeclKind::Content(parse_content_value(value))),
         "counter-reset" => Some(DeclKind::CounterReset(parse_counter_list(value, 0))),
         "counter-increment" => Some(DeclKind::CounterIncrement(parse_counter_list(value, 1))),
-        "box-shadow" => Some(DeclKind::BoxShadow(parse_box_shadow(value))),
+        "box-shadow" => Some(DeclKind::BoxShadows(parse_box_shadows(value))),
         // `text-decoration` (shorthand) se expande en `parse_declarations`.
         "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
@@ -455,27 +455,32 @@ pub(crate) fn parse_nth_arg(arg: &str) -> Option<(i32, i32)> {
     Some((a, b))
 }
 
-/// Parsea `box-shadow: <offset-x> <offset-y> [blur] [spread] <color>`
-/// o `box-shadow: none`. Devuelve `None` (= no-shadow) si:
-/// - value es exactamente `none`, o
-/// - falta el offset-x/offset-y, o
-/// - no se reconoce el color.
-///
-/// `inset` y múltiples sombras separadas por coma no soportadas — el
-/// resto del declaration se ignora silenciosamente.
-pub(crate) fn parse_box_shadow(value: &str) -> Option<BoxShadow> {
+/// Parsea `box-shadow: <s1>[, <s2>...]` o `box-shadow: none`. Cada
+/// sombra: `[inset] <offset-x> <offset-y> [blur] [spread] <color>`,
+/// tokens en cualquier orden. Sombras inválidas se descartan en
+/// silencio; si la lista queda vacía devuelve un vec vacío (= `none`).
+pub(crate) fn parse_box_shadows(value: &str) -> Vec<BoxShadow> {
     let v = value.trim();
     if v.eq_ignore_ascii_case("none") || v.is_empty() {
-        return None;
+        return Vec::new();
     }
-    // Toma sólo la primera sombra (si hay coma).
-    let first = v.split(',').next().unwrap_or(v).trim();
+    let mut out = Vec::new();
+    for sh in v.split(',') {
+        if let Some(s) = parse_one_box_shadow(sh) {
+            out.push(s);
+        }
+    }
+    out
+}
+
+fn parse_one_box_shadow(s: &str) -> Option<BoxShadow> {
     let mut lengths: Vec<f32> = Vec::with_capacity(4);
     let mut color: Option<Color> = None;
-    for tok in first.split_whitespace() {
+    let mut inset = false;
+    for tok in s.split_whitespace() {
         if tok.eq_ignore_ascii_case("inset") {
-            // No soportado todavía — abortamos.
-            return None;
+            inset = true;
+            continue;
         }
         if let Some(l) = parse_length_px(tok) {
             lengths.push(l);
@@ -495,6 +500,7 @@ pub(crate) fn parse_box_shadow(value: &str) -> Option<BoxShadow> {
         blur_px: lengths.get(2).copied().unwrap_or(0.0),
         spread_px: lengths.get(3).copied().unwrap_or(0.0),
         color: color.unwrap_or(Color::rgb(0, 0, 0)),
+        inset,
     })
 }
 

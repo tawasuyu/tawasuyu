@@ -1724,13 +1724,18 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         view = view.radius((radius_max * z) as f64);
     }
     let radius = (radius_max * z) as f64;
-    let shadow = b.box_shadow.map(|s| BoxShadow {
-        offset_x: s.offset_x * z,
-        offset_y: s.offset_y * z,
-        blur_px: s.blur_px * z,
-        spread_px: s.spread_px * z,
-        color: s.color,
-    });
+    let shadows: Vec<BoxShadow> = b
+        .box_shadows
+        .iter()
+        .map(|s| BoxShadow {
+            offset_x: s.offset_x * z,
+            offset_y: s.offset_y * z,
+            blur_px: s.blur_px * z,
+            spread_px: s.spread_px * z,
+            color: s.color,
+            inset: s.inset,
+        })
+        .collect();
     let alpha_mul = b.opacity.clamp(0.0, 1.0);
     // Border uniforme = los 4 lados con mismo width y color. Lo
     // dibujamos como RoundedRect stroke para que las corners radius
@@ -1862,7 +1867,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             }
         })
         .collect();
-    if shadow.is_none()
+    if shadows.is_empty()
         && uniform_border.is_none()
         && per_side_border.is_none()
         && deco.is_none()
@@ -1915,9 +1920,20 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 );
             }
         }
-        if let Some(BoxShadow { offset_x, offset_y, blur_px, spread_px, color }) = shadow {
+        // Sombras: CSS pinta back-to-front (la PRIMERA listada queda
+        // ENCIMA). Iteramos en reversa para que el orden visual
+        // coincida. Las `outset` se pintan detrás del fondo; las
+        // `inset` se pintan ENCIMA del fondo (recortadas al box) más
+        // arriba — acá sólo despachamos las outset; las inset las
+        // tomamos en otra pasada.
+        for BoxShadow { offset_x, offset_y, blur_px, spread_px, color, inset } in
+            shadows.iter().rev()
+        {
+            if *inset {
+                continue;
+            }
             let extra = (blur_px + spread_px) as f64;
-            let half_alpha = if blur_px > 0.0 { 0.55 } else { 0.85 };
+            let half_alpha = if *blur_px > 0.0 { 0.55 } else { 0.85 };
             let sc = Color::from_rgba8(
                 color.r,
                 color.g,
@@ -1932,6 +1948,38 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 (radius + extra).max(0.0),
             );
             scene.fill(Fill::NonZero, Affine::IDENTITY, sc, None, &r);
+        }
+        // Sombras `inset`: aproximación. Cada sombra inset se pinta
+        // como un stroke por dentro del box rect, con grosor = blur +
+        // spread + max(|offset|). El offset desplaza el rect del
+        // stroke en su misma dirección, dando el sesgo lateral del
+        // espec (lado contrario al offset queda más oscuro). Blur
+        // real (gaussiano) sigue pendiente — alfa rebajada cuando hay
+        // blur, igual que outset.
+        for BoxShadow { offset_x, offset_y, blur_px, spread_px, color, inset } in
+            shadows.iter().rev()
+        {
+            if !*inset {
+                continue;
+            }
+            let off_max = offset_x.abs().max(offset_y.abs());
+            let sw = ((*blur_px + *spread_px + off_max) as f64).max(1.0);
+            let half_alpha = if *blur_px > 0.0 { 0.55 } else { 0.85 };
+            let sc = Color::from_rgba8(
+                color.r,
+                color.g,
+                color.b,
+                (color.a as f64 * half_alpha) as u8,
+            );
+            let half = sw * 0.5;
+            let r = RoundedRect::new(
+                rect.x as f64 + half + *offset_x as f64,
+                rect.y as f64 + half + *offset_y as f64,
+                (rect.x + rect.w) as f64 - half + *offset_x as f64,
+                (rect.y + rect.h) as f64 - half + *offset_y as f64,
+                (radius - half).max(0.0),
+            );
+            scene.stroke(&Stroke::new(sw), Affine::IDENTITY, sc, None, &r);
         }
         if let Some((bc, w)) = uniform_border {
             let a = (bc.a as f32 * alpha_mul) as u8;

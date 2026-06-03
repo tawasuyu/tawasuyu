@@ -121,8 +121,9 @@ pub(crate) enum DeclKind {
     CounterReset(Vec<(String, i32)>),
     /// `counter-increment: name [delta] name2 [delta2]...`.
     CounterIncrement(Vec<(String, i32)>),
-    /// `None` = `box-shadow: none` (limpia la sombra).
-    BoxShadow(Option<BoxShadow>),
+    /// Lista de sombras (vacía = `box-shadow: none`). Se aplica con
+    /// asignación total — sustituye la lista previa, no acumula.
+    BoxShadows(Vec<BoxShadow>),
     TextDecoration(TextDecorationLine),
     /// `text-decoration-color`. `None` = `currentColor`.
     TextDecorationColor(Option<Color>),
@@ -281,7 +282,7 @@ impl Decl {
             DeclKind::Content(c) => s.content = c.clone(),
             DeclKind::CounterReset(v) => s.counter_reset = v.clone(),
             DeclKind::CounterIncrement(v) => s.counter_increment = v.clone(),
-            DeclKind::BoxShadow(v) => s.box_shadow = *v,
+            DeclKind::BoxShadows(v) => s.box_shadows = v.clone(),
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::TextDecorationColor(c) => s.text_decoration_color = *c,
             DeclKind::TextDecorationStyle(st) => s.text_decoration_style = *st,

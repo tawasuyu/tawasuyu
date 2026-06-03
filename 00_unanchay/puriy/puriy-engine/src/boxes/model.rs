@@ -100,8 +100,9 @@ pub struct BoxNode {
     /// `hover_background`: sólo el delta de bg, no se propaga a
     /// ancestros (`:focus` aplica al sujeto del selector).
     pub focus_background: Option<Color>,
-    /// Box-shadow propagado a `paint_with` en el chrome.
-    pub box_shadow: Option<BoxShadow>,
+    /// Box-shadows propagados a `paint_with` en el chrome. Lista
+    /// (puede traer capas outset + inset mezcladas en orden CSS).
+    pub box_shadows: Vec<BoxShadow>,
     /// `z-index` aplicado al stacking order entre hermanos positioned.
     /// El chrome lo usa para reordenar children out-of-flow ascending —
     /// el mayor pinta encima. Para `position: static` se ignora.

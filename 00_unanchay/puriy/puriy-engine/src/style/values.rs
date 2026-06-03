@@ -54,8 +54,9 @@ pub struct ComputedStyle {
     /// aplica a todos los lados que tengan border visible — el modelo
     /// per-lado del estilo no se distingue (sólo el ancho/color lo es).
     pub border_style: BorderLineStyle,
-    /// `box-shadow` simplificado. `None` = sin sombra.
-    pub box_shadow: Option<BoxShadow>,
+    /// `box-shadow`. Lista de sombras (cero o más) en orden de fuente:
+    /// la PRIMERA capa pinta encima. `inset` se distingue por sombra.
+    pub box_shadows: Vec<BoxShadow>,
     /// `z-index` aplicado al stacking order entre siblings positioned
     /// (absolute/fixed). Para nodos en flow normal (static), CSS spec
     /// dice que z-index no aplica y se ignora. `0` = default.
@@ -308,7 +309,10 @@ pub enum FontStyle {
 
 /// Sombra rectangular detrás del box. `blur_px` y `spread_px` se
 /// combinan en una expansión efectiva del rect — gaussian blur real
-/// queda para cuando el render-pipeline soporte multi-pass.
+/// queda para cuando el render-pipeline soporte multi-pass. `inset`
+/// invierte el lado: en vez de pintar afuera, recorta una sombra
+/// dentro del box (aproximada con un fill traslúcido del color sobre
+/// el área interior).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BoxShadow {
     pub offset_x: f32,
@@ -316,6 +320,7 @@ pub struct BoxShadow {
     pub blur_px: f32,
     pub spread_px: f32,
     pub color: Color,
+    pub inset: bool,
 }
 
 /// Valor longitud de CSS reducido al subset que soportamos: `auto`,
@@ -994,7 +999,7 @@ impl Default for ComputedStyle {
             border_colors: Sides::all(None),
             border_radii: Corners::all(0.0),
             border_style: BorderLineStyle::Solid,
-            box_shadow: None,
+            box_shadows: Vec::new(),
             z_index: 0,
             content: None,
             counter_reset: Vec::new(),

@@ -640,7 +640,7 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.border_style = s.border_style;
     b.hover_background = hover_bg;
     b.focus_background = focus_bg;
-    b.box_shadow = s.box_shadow;
+    b.box_shadows = s.box_shadows.clone();
     b.z_index = s.z_index;
     b.flex_direction = s.flex_direction;
     b.justify_content = s.justify_content;
