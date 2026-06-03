@@ -15,7 +15,7 @@
 //  en recepción, en `MezclaRemota`, para no resamplear de más en captura.
 // =============================================================================
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -58,6 +58,10 @@ struct ColaRemota {
 #[derive(Default)]
 pub struct MezclaRemota {
     remotas: HashMap<ParticipanteId, ColaRemota>,
+    /// Pares silenciados *localmente*: se siguen recibiendo y encolando (la red
+    /// no cambia), pero su voz no se suma al mezclar. Decisión sólo de este
+    /// extremo —el par no se entera—.
+    silenciados: HashSet<ParticipanteId>,
     /// Total de muestras de audio recibidas (diagnóstico).
     recibidas: u64,
 }
@@ -97,6 +101,21 @@ impl MezclaRemota {
     /// Saca a un par (colgó o se desconectó): su cola deja de sonar.
     pub fn quitar(&mut self, id: &ParticipanteId) {
         self.remotas.remove(id);
+        self.silenciados.remove(id);
+    }
+
+    /// Silencia (o reactiva) a un par localmente. No afecta la red.
+    pub fn silenciar(&mut self, id: ParticipanteId, on: bool) {
+        if on {
+            self.silenciados.insert(id);
+        } else {
+            self.silenciados.remove(&id);
+        }
+    }
+
+    /// ¿Está este par silenciado localmente?
+    pub fn esta_silenciado(&self, id: &ParticipanteId) -> bool {
+        self.silenciados.contains(id)
     }
 
     /// Total de muestras recibidas hasta ahora (para diagnóstico/CLI).
@@ -114,7 +133,15 @@ impl AudioSource for MezclaRemota {
         let frames = buf.len() / out_ch;
         let out_sr = out_sr.max(1) as f64;
 
-        for cola in self.remotas.values_mut() {
+        for (id, cola) in self.remotas.iter_mut() {
+            // Silenciado localmente: drenamos su cola para que no se acumule
+            // (la red sigue mandando), pero no sumamos su voz.
+            if self.silenciados.contains(id) {
+                cola.muestras.clear();
+                cola.frac = 0.0;
+                cola.iniciado = false;
+                continue;
+            }
             // Prebuffer: mientras no juntemos el mínimo, esta voz queda en
             // silencio (no arrancamos con la cola casi vacía → sin chasquido).
             let prebuffer = (cola.sr as usize * PREBUFFER_MS / 1000).max(2);
@@ -435,6 +462,26 @@ mod tests {
         let mut buf2 = vec![0.0f32; 8];
         m.fill(&mut buf2, 48_000, 1);
         assert!((buf2[0] - 0.5).abs() < 1e-6, "buf2[0]={}", buf2[0]);
+    }
+
+    #[test]
+    fn silenciar_par_lo_saca_de_la_mezcla() {
+        let mut m = MezclaRemota::default();
+        m.empujar(id(1), 48_000, 1, &vec![0.3; N]);
+        m.empujar(id(2), 48_000, 1, &vec![0.4; N]);
+        // Silenciar al par 1: sólo debe sonar 0.4 (el par 2).
+        m.silenciar(id(1), true);
+        assert!(m.esta_silenciado(&id(1)));
+        let mut buf = vec![0.0f32; 2];
+        m.fill(&mut buf, 48_000, 1);
+        assert!((buf[0] - 0.4).abs() < 1e-6, "buf[0]={}", buf[0]);
+        // Reactivarlo: vuelve a sumar (tras rellenar su cola, que se vació).
+        m.silenciar(id(1), false);
+        assert!(!m.esta_silenciado(&id(1)));
+        m.empujar(id(1), 48_000, 1, &vec![0.3; N]);
+        let mut buf2 = vec![0.0f32; 2];
+        m.fill(&mut buf2, 48_000, 1);
+        assert!((buf2[0] - 0.7).abs() < 1e-6, "buf2[0]={}", buf2[0]);
     }
 
     #[test]

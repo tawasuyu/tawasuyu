@@ -78,6 +78,8 @@ struct Modelo {
     cuadros: HashMap<ParticipanteId, CuadroUI>,
     /// Quiénes están hablando ahora mismo (detección de voz), para resaltarlos.
     hablando: HashSet<ParticipanteId>,
+    /// Pares que silencié localmente (espejo del set en la `MezclaRemota`).
+    silenciados: HashSet<ParticipanteId>,
     cam_on: bool,
     mic_on: bool,
     /// Mi propia dirección dialable (con `/p2p/`), para mostrarla y compartirla.
@@ -118,6 +120,8 @@ enum Msg {
     ScrollCharla(i32),
     ToggleCamara,
     ToggleMicrofono,
+    /// Silenciar / reactivar a un par localmente (clic en su tile).
+    ToggleSilencio(ParticipanteId),
     Colgar,
 }
 
@@ -184,6 +188,7 @@ impl App for Uya {
             enlace,
             cuadros: HashMap::new(),
             hablando: HashSet::new(),
+            silenciados: HashSet::new(),
             cam_on: true,
             mic_on: true,
             mi_dir,
@@ -241,6 +246,7 @@ impl App for Uya {
                 model.sala.salir(&id);
                 model.cuadros.remove(&id);
                 model.hablando.remove(&id);
+                model.silenciados.remove(&id);
             }
             Msg::Red(EventoUya::Voz { id, hablando }) => {
                 if hablando {
@@ -282,6 +288,15 @@ impl App for Uya {
             Msg::ToggleMicrofono => {
                 model.mic_on = !model.mic_on;
                 model.enlace.set_microfono(model.mic_on);
+            }
+            Msg::ToggleSilencio(id) => {
+                let nuevo = !model.silenciados.contains(&id);
+                model.enlace.silenciar_par(id, nuevo);
+                if nuevo {
+                    model.silenciados.insert(id);
+                } else {
+                    model.silenciados.remove(&id);
+                }
             }
             Msg::Tecla(e) => {
                 // El tecleo va al campo enfocado; Ctrl/Cmd+V pega del clipboard.
@@ -338,7 +353,8 @@ impl App for Uya {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let mut tiles: Vec<View<Msg>> = Vec::new();
 
-        // Mi propia cara primero (yo siempre soy de confianza para mí mismo).
+        // Mi propia cara primero (yo siempre soy de confianza para mí mismo; mi
+        // propio audio no se silencia ni hace clic).
         tiles.push(tile(
             &format!("{} (yo)", model.sala.mi_nombre),
             model.cuadros.get(&model.sala.yo),
@@ -347,8 +363,10 @@ impl App for Uya {
             true,
             model.hablando.contains(&model.sala.yo),
             true,
+            false,
+            None,
         ));
-        // Los demás, en orden estable por id (BTreeMap).
+        // Los demás, en orden estable por id (BTreeMap). Clic = silenciarlos.
         for p in model.sala.participantes.values() {
             tiles.push(tile(
                 &p.nombre,
@@ -358,6 +376,8 @@ impl App for Uya {
                 false,
                 model.hablando.contains(&p.id),
                 p.verificado,
+                model.silenciados.contains(&p.id),
+                Some(Msg::ToggleSilencio(p.id)),
             ));
         }
 
@@ -542,7 +562,9 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
 
 /// Un tile de participante: video (o placeholder) arriba + etiqueta abajo. Si
 /// `hablando`, el marco se tiñe de acento (detección de voz); si NO está
-/// `verificado`, la etiqueta avisa en rojo.
+/// `verificado`, la etiqueta avisa en rojo; si `silenciado`, no suena de este
+/// lado. `click` (si lo hay) se dispara al hacer clic en el tile.
+#[allow(clippy::too_many_arguments)]
 fn tile(
     nombre: &str,
     cuadro: Option<&CuadroUI>,
@@ -551,6 +573,8 @@ fn tile(
     yo: bool,
     hablando: bool,
     verificado: bool,
+    silenciado: bool,
+    click: Option<Msg>,
 ) -> View<Msg> {
     let estilo_video = Style {
         size: Size {
@@ -577,9 +601,12 @@ fn tile(
             .text("camara apagada", 15.0, TENUE),
     };
 
-    // Sin verificar manda en la etiqueta: es una advertencia de seguridad.
+    // Prioridad en la etiqueta: sin verificar (seguridad) > silenciado por mí
+    // (no lo oigo, así que "hablando" sería engañoso) > mic off > hablando.
     let etiqueta = if !verificado {
         format!("{nombre}  ·  ⚠ sin verificar")
+    } else if silenciado {
+        format!("{nombre}  ·  silenciado")
     } else if !mic {
         format!("{nombre}  ·  mic off")
     } else if hablando {
@@ -589,6 +616,8 @@ fn tile(
     };
     let color_label = if !verificado {
         ROJO
+    } else if silenciado {
+        TENUE
     } else if hablando || yo {
         ACENTO
     } else {
@@ -603,10 +632,15 @@ fn tile(
     })
     .text(etiqueta, 14.0, color_label);
 
-    // El marco se tiñe de acento cuando este participante está hablando.
-    let marco = if hablando { ACENTO_BG } else { TILE_BG };
+    // El marco se tiñe de acento cuando este participante está hablando (salvo
+    // que lo tenga silenciado: ahí no lo oigo, no corresponde resaltarlo).
+    let marco = if hablando && !silenciado {
+        ACENTO_BG
+    } else {
+        TILE_BG
+    };
 
-    View::new(Style {
+    let mut vista = View::new(Style {
         size: Size {
             width: length(300.0),
             height: length(232.0),
@@ -621,7 +655,13 @@ fn tile(
     })
     .fill(marco)
     .radius(10.0)
-    .children(vec![video, label])
+    .children(vec![video, label]);
+
+    // Clic en el tile de un par → silenciarlo / reactivarlo localmente.
+    if let Some(msg) = click {
+        vista = vista.on_click(msg);
+    }
+    vista
 }
 
 /// La barra inferior: cámara / micrófono / colgar.

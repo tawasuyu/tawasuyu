@@ -223,6 +223,17 @@ impl Enlace {
         self.mezcla.clone()
     }
 
+    /// Silencia (o reactiva) a un par **localmente**: deja de oírse de este
+    /// lado, sin avisar a nadie ni cortar la red.
+    pub fn silenciar_par(&self, id: ParticipanteId, on: bool) {
+        self.mezcla.lock().silenciar(id, on);
+    }
+
+    /// ¿Tengo silenciado a este par localmente?
+    pub fn par_silenciado(&self, id: &ParticipanteId) -> bool {
+        self.mezcla.lock().esta_silenciado(id)
+    }
+
     /// Conecta a un par dada su multiaddr COMPLETA (con `/p2p/<peerid>`), tal
     /// como la imprime `direccion_local` del otro lado.
     pub fn conectar(&self, addr: &str) {
