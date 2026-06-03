@@ -111,6 +111,17 @@ pub enum DrawCommand {
         #[serde(default = "default_stroke_width")]
         stroke_w: f32,
     },
+    /// Disco con relleno de **gradiente radial** — `inner` en el centro,
+    /// `outer` en el borde (`r`). Pensado para profundidad / vignette: un
+    /// `outer` con alpha 0 funde el lienzo con el fondo. El SVG exporter
+    /// lo aproxima con un `radialGradient`.
+    RadialGradient {
+        cx: f32,
+        cy: f32,
+        r: f32,
+        inner: Rgba,
+        outer: Rgba,
+    },
 }
 
 fn default_stroke_width() -> f32 {
@@ -285,14 +296,34 @@ pub fn compose_wheel_with_hits(
     let rot = opts.rot_offset_deg;
     let pal = &opts.palette;
 
-    // === Background panel ===
-    out.push(DrawCommand::Circle {
+    // === Fondo del lienzo: profundidad + fundido con el fondo ===
+    // 1) Halo exterior que se desvanece más allá del aro — funde la rueda
+    //    con el fondo del canvas y le da "espacialidad".
+    let bg = pal.bg_panel;
+    let depth_inner = {
+        let d = if pal.is_dark { 0.06 } else { -0.045 };
+        Rgba {
+            r: (bg.r + d).clamp(0.0, 1.0),
+            g: (bg.g + d).clamp(0.0, 1.0),
+            b: (bg.b + d).clamp(0.0, 1.0),
+            a: 1.0,
+        }
+    };
+    out.push(DrawCommand::RadialGradient {
+        cx,
+        cy,
+        r: (radii.sign_outer + opts.size * 0.02) * 1.22,
+        inner: bg.with_alpha(0.85),
+        outer: bg.with_alpha(0.0),
+    });
+    // 2) Disco del panel con gradiente radial (centro algo más claro →
+    //    borde = base): da relieve/profundidad a la rueda.
+    out.push(DrawCommand::RadialGradient {
         cx,
         cy,
         r: radii.sign_outer + opts.size * 0.02,
-        stroke: None,
-        fill: Some(pal.bg_panel),
-        stroke_w: 0.0,
+        inner: depth_inner,
+        outer: bg,
     });
 
     // === Dial 3D — relieve via strokes concéntricos cerca de aro A ===
@@ -420,6 +451,38 @@ pub fn compose_wheel_with_hits(
         stroke_w: 1.0,
     });
 
+    // === Tinte translúcido de las casas geocéntricas ===
+    // Cada sector se colorea por el elemento del signo en su cusp, con
+    // opacidad baja — da color a las casas sin tapar lo que va encima.
+    for layer in &model.layers {
+        if !matches!(layer.kind, crate::LayerKind::Houses) || layer.module_id == "topocentric" {
+            continue;
+        }
+        if let crate::Geometry::Ring { cusps_deg } = &layer.geometry {
+            let n = cusps_deg.len();
+            for i in 0..n {
+                let from = cusps_deg[i];
+                let to = cusps_deg[(i + 1) % n];
+                let sign_idx = ((from.rem_euclid(360.0)) / 30.0) as usize % 12;
+                let elem = match sign_idx % 4 {
+                    0 => pal.fire,
+                    1 => pal.earth,
+                    2 => pal.air,
+                    _ => pal.water,
+                };
+                let pts = house_sector_points(
+                    cx, cy, from, to, asc, rot, house_inner_r, house_outer_r,
+                );
+                out.push(DrawCommand::Polygon {
+                    points: pts,
+                    fill: Some(elem.with_alpha(0.11)),
+                    stroke: None,
+                    stroke_w: 0.0,
+                });
+            }
+        }
+    }
+
     // Draws cusps + numbers for both house systems (topo + geo) in their respective rings.
     // Para el sistema geocéntrico además emitimos la coordenada DD°MM'<Sg>
     // de cada cusp justo afuera del aro de casas — así el usuario lee la
@@ -511,9 +574,11 @@ pub fn compose_wheel_with_hits(
                     cluster_size[i] = c.len();
                 }
             }
-            // Disco base y escala por cluster size
-            let base_disk = opts.size * 0.022;
-            let base_font = opts.size * 0.028;
+            // Disco base y escala por cluster size. Proporción reducida
+            // respecto a versiones previas: con cuerpos más chicos el zoom
+            // desenmaraña mejor las conjunciones apretadas.
+            let base_disk = opts.size * 0.0175;
+            let base_font = opts.size * 0.023;
             for (i, g) in layer.glyphs.iter().enumerate() {
                 let disp_deg = display_degs[i];
                 if is_natal {
@@ -739,8 +804,21 @@ pub fn draw_commands_to_svg(commands: &[DrawCommand], size: f32) -> String {
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{0}\" height=\"{0}\" viewBox=\"0 0 {0} {0}\">",
         size as i32
     ));
+    let mut grad_id = 0usize;
     for cmd in commands {
         match cmd {
+            DrawCommand::RadialGradient { cx, cy, r, inner, outer } => {
+                let id = format!("rg{grad_id}");
+                grad_id += 1;
+                s.push_str(&format!(
+                    "<defs><radialGradient id=\"{id}\" cx=\"{cx:.2}\" cy=\"{cy:.2}\" r=\"{r:.2}\" gradientUnits=\"userSpaceOnUse\"><stop offset=\"0%\" stop-color=\"{}\"/><stop offset=\"100%\" stop-color=\"{}\"/></radialGradient></defs>",
+                    inner.to_css(),
+                    outer.to_css(),
+                ));
+                s.push_str(&format!(
+                    "<circle cx=\"{cx:.2}\" cy=\"{cy:.2}\" r=\"{r:.2}\" fill=\"url(#{id})\"/>"
+                ));
+            }
             DrawCommand::Circle { cx, cy, r, stroke, fill, stroke_w } => {
                 let stroke_attr = stroke
                     .map(|c| format!(" stroke=\"{}\" stroke-width=\"{}\"", c.to_css(), stroke_w))
@@ -817,6 +895,37 @@ pub fn draw_commands_to_svg(commands: &[DrawCommand], size: f32) -> String {
     }
     s.push_str("</svg>");
     s
+}
+
+/// Vértices del polígono de un sector de casa (anillo entre `r_in` y
+/// `r_out`, del cusp `from_deg` al `to_deg` en sentido zodiacal). Aproxima
+/// los arcos con segmentos cada ~4°.
+#[allow(clippy::too_many_arguments)]
+fn house_sector_points(
+    cx: f32,
+    cy: f32,
+    from_deg: f32,
+    to_deg: f32,
+    asc: f32,
+    rot: f32,
+    r_in: f32,
+    r_out: f32,
+) -> Vec<(f32, f32)> {
+    use crate::math::polar_to_screen;
+    let span = (to_deg - from_deg).rem_euclid(360.0);
+    let steps = ((span / 4.0).ceil() as usize).max(2);
+    let mut pts = Vec::with_capacity(steps * 2 + 2);
+    for k in 0..=steps {
+        let d = from_deg + span * (k as f32 / steps as f32);
+        let (x, y) = polar_to_screen(d, asc, rot, r_out);
+        pts.push((cx + x, cy + y));
+    }
+    for k in 0..=steps {
+        let d = from_deg + span * (1.0 - k as f32 / steps as f32);
+        let (x, y) = polar_to_screen(d, asc, rot, r_in);
+        pts.push((cx + x, cy + y));
+    }
+    pts
 }
 
 fn svg_escape(s: &str) -> String {

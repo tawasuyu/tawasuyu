@@ -866,17 +866,8 @@ pub(crate) fn center_view(model: &Model, theme: &Theme) -> View<Msg> {
         })
         .children(tiles)
     } else {
-        let g = graphic_for(model, &model.chart, &model.render, WHEEL_SIZE, theme);
-        View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .children(vec![g])
+        // Vista única: el gráfico ocupa toda el área (fondo a sangre).
+        graphic_for(model, &model.chart, &model.render, WHEEL_SIZE, theme, true)
     };
 
     let graphic_area = View::new(Style {
@@ -932,7 +923,7 @@ fn tile_cell(model: &Model, i: usize, tab: &crate::model::OpenTab, theme: &Theme
     .text_aligned(tab.label().to_string(), 11.0, theme.fg_text, Alignment::Center)
     .on_click(Msg::ActivateChartTab(i));
 
-    let g = graphic_for(model, &tab.chart, &tab.render, TILE_SIZE, theme);
+    let g = graphic_for(model, &tab.chart, &tab.render, TILE_SIZE, theme, false);
 
     // Firma del kit: cada carta del mosaico queda enmarcada como card
     // tallada (gradiente vertical ~4% + hairline accent) en vez de un
@@ -967,21 +958,103 @@ fn tile_cell(model: &Model, i: usize, tab: &crate::model::OpenTab, theme: &Theme
 
 /// La gráfica elegida (según `chart_view`) para una carta/render dados, al
 /// tamaño `size`. Reusada por la vista única y por cada celda del mosaico.
+/// `fill = true` (vista única): el lienzo ocupa toda el área central (el
+/// fondo sangra a pantalla completa y la rueda se ajusta centrada).
+/// `fill = false` (mosaico): lienzo de lado fijo `size`.
 fn graphic_for(
     model: &Model,
     chart: &cosmos_model::Chart,
     render: &cosmos_render::RenderModel,
     size: f32,
     theme: &Theme,
+    fill: bool,
 ) -> View<Msg> {
     match model.chart_view {
-        ChartView::Estandar => wheel_canvas(model, render, size, theme),
-        ChartView::Uraniano => uranian_dial_canvas(model, render, size, theme),
-        ChartView::Armonica => harmonic_wheel_canvas(model, render, size, theme),
+        ChartView::Estandar => wheel_canvas(model, render, size, theme, fill),
+        ChartView::Uraniano => uranian_dial_canvas(model, render, size, theme, fill),
+        ChartView::Armonica => harmonic_wheel_canvas(model, render, size, theme, fill),
         ChartView::Carto => crate::astrocarto::tile_astrocarto(chart, render, theme),
-        ChartView::Esfera3d => sphere_canvas(model, render, size, theme),
-        ChartView::Cielo => sky_canvas(model, size, theme),
+        ChartView::Esfera3d => sphere_canvas(model, render, size, theme, fill),
+        ChartView::Cielo => sky_canvas(model, size, theme, fill),
     }
+}
+
+/// Arma la columna `[controles?, lienzo]`. Con `fill` el lienzo crece para
+/// ocupar todo el espacio (fondo a sangre, recortado para no pisar los
+/// paneles vecinos); sin `fill` queda en una caja de lado `size`.
+fn canvas_column(
+    controls: Option<View<Msg>>,
+    canvas: View<Msg>,
+    size: f32,
+    fill: bool,
+) -> View<Msg> {
+    let canvas_box = if fill {
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(0.0_f32),
+            },
+            min_size: Size {
+                width: length(0.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .clip(true)
+        .children(vec![canvas])
+    } else {
+        View::new(Style {
+            size: Size {
+                width: length(size),
+                height: length(size),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![canvas])
+    };
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    if let Some(c) = controls {
+        kids.push(c);
+    }
+    kids.push(canvas_box);
+    let style = if fill {
+        Style {
+            flex_direction: FlexDirection::Column,
+            flex_grow: 1.0,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            min_size: Size {
+                width: length(0.0_f32),
+                height: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(4.0_f32),
+            },
+            ..Default::default()
+        }
+    } else {
+        Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: length(size),
+                height: auto(),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(4.0_f32),
+            },
+            ..Default::default()
+        }
+    };
+    View::new(style).children(kids)
 }
 
 /// Longitudes eclípticas de los cuerpos natales (símbolo → grados).
@@ -999,7 +1072,7 @@ fn natal_body_lons(render: &cosmos_render::RenderModel) -> Vec<(String, f32)> {
 
 /// Envuelve un lienzo custom (sin hit-test de cuerpos) en la columna con
 /// botonera de zoom + zoom/paneo, igual que la rueda estándar.
-fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme) -> View<Msg> {
+fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
     let t = ViewTransform {
         zoom: model.wheel_zoom,
         pan: model.wheel_pan,
@@ -1009,30 +1082,7 @@ fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme
             DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
             DragPhase::End => None,
         });
-    let canvas_box = View::new(Style {
-        size: Size {
-            width: length(size),
-            height: length(size),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .children(vec![canvas]);
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(size),
-            height: auto(),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![zoom_controls(model, theme), canvas_box])
+    canvas_column(Some(zoom_controls(model, theme)), canvas, size, fill)
 }
 
 /// Dial uraniano de 90° (Escuela de Hamburgo). Los cuerpos se proyectan
@@ -1043,6 +1093,7 @@ fn uranian_dial_canvas(
     render: &cosmos_render::RenderModel,
     size: f32,
     theme: &Theme,
+    fill: bool,
 ) -> View<Msg> {
     use cosmos_render::glyphs::planet_commands;
     let cx = size / 2.0;
@@ -1121,7 +1172,7 @@ fn uranian_dial_canvas(
         anchor: TextAnchor::Middle,
     });
 
-    custom_canvas(model, cmds, size, theme)
+    custom_canvas(model, cmds, size, theme, fill)
 }
 
 /// Rueda armónica (Cochrane / Addey): cada longitud natal se multiplica
@@ -1132,6 +1183,7 @@ fn harmonic_wheel_canvas(
     render: &cosmos_render::RenderModel,
     size: f32,
     theme: &Theme,
+    fill: bool,
 ) -> View<Msg> {
     use cosmos_render::glyphs::{planet_commands, sign_commands};
     let h = model.harmonic.max(1) as f32;
@@ -1203,7 +1255,7 @@ fn harmonic_wheel_canvas(
         anchor: TextAnchor::Middle,
     });
 
-    custom_canvas(model, cmds, size, theme)
+    custom_canvas(model, cmds, size, theme, fill)
 }
 
 /// Normaliza alias de cuerpos a un id que `planet_commands` entienda.
@@ -1233,7 +1285,7 @@ fn sign_color_theme(sign_idx: usize, model: &Model) -> Color {
 /// al borde) de los cuerpos en alt/az. Compone `DrawCommand`s y los pinta
 /// en el mismo canvas que la rueda. Usa `model.astro` (la lectura
 /// astronómica cacheada); si todavía no está, muestra "calculando…".
-fn sky_canvas(model: &Model, size: f32, theme: &Theme) -> View<Msg> {
+fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
     let Some(astro) = &model.astro else {
         return pending_view("Cielo del observador — calculando…", theme);
     };
@@ -1335,15 +1387,7 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme) -> View<Msg> {
 
     let bg = graphics_bg(model);
     let canvas = canvas_view::<Msg>(cmds, size, Some(bg));
-    View::new(Style {
-        size: Size {
-            width: length(size),
-            height: length(size),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .children(vec![canvas])
+    canvas_column(None, canvas, size, fill)
 }
 
 /// Tira de pestañas de cartas abiertas (multi-carta). Cada pestaña: label
@@ -1528,7 +1572,7 @@ fn chart_switcher(model: &Model, theme: &Theme) -> View<Msg> {
 /// Esfera celeste 3D (wireframe) — compone con `cosmos-render::sphere3d`
 /// y pinta los `DrawCommand` en el mismo canvas que la rueda. La botonera
 /// ◀▶▲▼⟳ rota yaw/pitch (el canvas committeado no expone drag todavía).
-fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme) -> View<Msg> {
+fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
     let opts = SphereOpts {
         size,
         palette: graphics_palette(model),
@@ -1550,31 +1594,7 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
             DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
             DragPhase::End => None,
         });
-    let canvas_box = View::new(Style {
-        size: Size {
-            width: length(size),
-            height: length(size),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .children(vec![canvas]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(size),
-            height: auto(),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![sphere_controls(theme), canvas_box])
+    canvas_column(Some(sphere_controls(theme)), canvas, size, fill)
 }
 
 /// Botonera de rotación de la esfera 3D.
@@ -1629,7 +1649,7 @@ fn pending_view(msg: &str, theme: &Theme) -> View<Msg> {
 
 /// La rueda natal 2D como canvas clickeable (sólo el gráfico), de la carta
 /// cuyo `render` se pasa, al tamaño `size`.
-fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme) -> View<Msg> {
+fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
     let opts = CompositionOpts {
         size,
         rot_offset_deg: model.cfg.rot_offset_deg,
@@ -1665,31 +1685,7 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
         Some(Msg::OpenCanvasCtx(nav_off + lx, MENU_BAR_H + TAB_BAR_H + ly))
     });
 
-    let canvas_box = View::new(Style {
-        size: Size {
-            width: length(size),
-            height: length(size),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .children(vec![canvas]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(size),
-            height: auto(),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![zoom_controls(model, theme), canvas_box])
+    canvas_column(Some(zoom_controls(model, theme)), canvas, size, fill)
 }
 
 /// Botonera de zoom/encuadre del lienzo de la rueda.

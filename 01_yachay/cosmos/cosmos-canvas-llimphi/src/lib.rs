@@ -245,6 +245,14 @@ fn paint_command(
         DrawCommand::Text { x, y, content, color, size, anchor } => {
             paint_text(scene, ts, x, y, content, color, size, anchor, off_x, off_y, scale);
         }
+        DrawCommand::RadialGradient { cx, cy, r, inner, outer } => {
+            use llimphi_ui::llimphi_raster::peniko::Gradient;
+            let center = llimphi_ui::llimphi_raster::kurbo::Point::new(*cx as f64, *cy as f64);
+            let grad = Gradient::new_radial(center, *r)
+                .with_stops([rgba_to_color(*inner), rgba_to_color(*outer)].as_slice());
+            let circle = KurboCircle::new((*cx as f64, *cy as f64), *r as f64);
+            scene.fill(Fill::NonZero, xform, &grad, None, &circle);
+        }
     }
 }
 
