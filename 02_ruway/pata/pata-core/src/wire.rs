@@ -145,6 +145,7 @@ pub struct WireSurface {
     pub center: Vec<WireWidget>,
     pub end: Vec<WireWidget>,
     pub cards: Vec<WireCard>,
+    pub output: String,
 }
 
 impl From<&Surface> for WireSurface {
@@ -160,6 +161,7 @@ impl From<&Surface> for WireSurface {
             center: a_wire(&s.center),
             end: a_wire(&s.end),
             cards: s.cards.iter().map(WireCard::from).collect(),
+            output: s.output.clone(),
         }
     }
 }
@@ -177,6 +179,7 @@ impl From<WireSurface> for Surface {
             center: de_wire(s.center),
             end: de_wire(s.end),
             cards: s.cards.into_iter().map(FloatingCard::from).collect(),
+            output: s.output,
         }
     }
 }

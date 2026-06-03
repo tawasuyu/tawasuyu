@@ -211,6 +211,13 @@ pub struct Surface {
     /// Para `kind = panel`: las tarjetas flotantes que contiene.
     #[cfg_attr(feature = "serde", serde(default))]
     pub cards: Vec<FloatingCard>,
+    /// Monitor al que anclar la superficie (nombre del conector, ej.
+    /// `"HDMI-A-1"` o `"DP-1"`). Vacío = el compositor elige el primario.
+    /// El backend `wlr-layer-shell` pasa este `wl_output` a
+    /// `create_layer_surface`; si el nombre no matchea ninguno conectado,
+    /// también cae al primario y se loguea un aviso.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub output: String,
 }
 
 impl Default for Surface {
@@ -226,6 +233,7 @@ impl Default for Surface {
             center: Vec::new(),
             end: Vec::new(),
             cards: Vec::new(),
+            output: String::new(),
         }
     }
 }

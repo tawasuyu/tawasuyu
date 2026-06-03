@@ -262,152 +262,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         eprintln!("pata layer · el compositor no expone wlr-foreign-toplevel; window_list vacío");
     }
 
-    // Una layer surface por barra: anclada a su borde, con su exclusive zone.
-    let mut panels = Vec::new();
-    for &idx in &bars {
-        let s = &cfg.surfaces[idx];
-        let thickness = s.thickness.max(1.0) as u32;
-        let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
-        let wl_surface = compositor.create_surface(&qh);
-        let layer = layer_shell.create_layer_surface(
-            &qh,
-            wl_surface,
-            Layer::Top,
-            Some("pata".to_string()),
-            None,
-        );
-        layer.set_anchor(sctk_anchor);
-        layer.set_size(size.0, size.1);
-        layer.set_exclusive_zone(thickness as i32);
-        layer.commit();
-        panels.push(Panel {
-            idx,
-            card: None,
-            layer,
-            cache: None,
-            width: size.0.max(1),
-            height: thickness,
-            dirty: true,
-            hover_idx: None,
-            gpu: None,
-        });
-    }
-
-    // Tarjetas flotantes (estilo conky): cada `card` de una superficie `Panel` es
-    // su propia layer surface en `Layer::Bottom` (sobre el escritorio, debajo de
-    // las ventanas), anclada a la esquina superior-izquierda con margen (x, y) y
-    // del tamaño (w, h) de la tarjeta. No reserva franja ni toma teclado.
-    for (idx, s) in cfg.surfaces.iter().enumerate() {
-        if s.kind != SurfaceKind::Panel {
-            continue;
-        }
-        for card in &s.cards {
-            let (cw, ch) = (card.w.max(1.0) as u32, card.h.max(1.0) as u32);
-            let wl_surface = compositor.create_surface(&qh);
-            let layer = layer_shell.create_layer_surface(
-                &qh,
-                wl_surface,
-                Layer::Bottom,
-                Some("pata-card".to_string()),
-                None,
-            );
-            layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
-            layer.set_size(cw, ch);
-            // Margen: (top, right, bottom, left). (x, y) desde la esquina sup-izq.
-            layer.set_margin(card.y as i32, 0, 0, card.x as i32);
-            layer.set_exclusive_zone(0);
-            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-            layer.commit();
-            let widgets = card.widgets.iter().map(pata_core::widget::build).collect();
-            panels.push(Panel {
-                idx,
-                card: Some(CardState { spec: card.clone(), widgets }),
-                layer,
-                cache: None,
-                width: cw,
-                height: ch,
-                dirty: true,
-                hover_idx: None,
-                gpu: None,
-            });
-        }
-    }
-
-    // ¿Qué barra hospeda el shuma_input? Esa recibe foco de teclado al clickearla
-    // (OnDemand) para poder desplegar el Quake y escribir.
-    let shuma_panel = panels.iter().position(|p| {
-        let s = &cfg.surfaces[p.idx];
-        s.start
-            .iter()
-            .chain(&s.center)
-            .chain(&s.end)
-            .any(|w| w.kind == "shuma_input")
-    });
-    let shuma_bar_px = shuma_panel
-        .map(|pi| cfg.surfaces[panels[pi].idx].thickness.max(1.0) as u32)
-        .unwrap_or(40);
-    if let Some(pi) = shuma_panel {
-        // Barra cerrada: NO pide teclado. Con `OnDemand` el compositor
-        // consumía el primer click para darle foco (de ahí «dos clicks para
-        // desplegar»); con `None` el click va directo a togglear.
-        panels[pi]
-            .layer
-            .set_keyboard_interactivity(KeyboardInteractivity::None);
-        panels[pi].layer.commit();
-    }
-
-    // La surface del tooltip flotante: una layer surface en Overlay (sobre todo),
-    // anclada arriba-izquierda, sin teclado ni zona exclusiva y con **región de
-    // input vacía** (no roba clicks ni hover). Arranca 1×1 fuera de vista; al
-    // hover se redimensiona y reubica con `set_margin`. Sin buffer hasta el primer
-    // tooltip → no se mapea (invisible).
-    let tooltip_pi = {
-        let wl_surface = compositor.create_surface(&qh);
-        if let Ok(region) = Region::new(&compositor) {
-            // Región vacía (sin add): el tooltip nunca intercepta el puntero.
-            wl_surface.set_input_region(Some(region.wl_region()));
-        }
-        let layer = layer_shell.create_layer_surface(
-            &qh,
-            wl_surface,
-            Layer::Overlay,
-            Some("pata-tooltip".to_string()),
-            None,
-        );
-        layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
-        layer.set_size(1, 1);
-        layer.set_margin(100_000, 0, 0, 0); // fuera de vista
-        layer.set_exclusive_zone(0);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        layer.commit();
-        panels.push(Panel {
-            idx: 0,
-            card: None,
-            layer,
-            cache: None,
-            width: 1,
-            height: 1,
-            dirty: false,
-            hover_idx: None,
-            gpu: None,
-        });
-        Some(panels.len() - 1)
-    };
-
-    // ¿Qué barra hospeda el start_button? Esa crece hacia abajo al desplegar el
-    // menú de inicio (mismo truco que shuma, hacia el otro lado).
-    let menu_panel = panels.iter().position(|p| {
-        let s = &cfg.surfaces[p.idx];
-        s.start
-            .iter()
-            .chain(&s.center)
-            .chain(&s.end)
-            .any(|w| w.kind == "start_button")
-    });
-    let menu_bar_px = menu_panel
-        .map(|pi| cfg.surfaces[panels[pi].idx].thickness.max(1.0) as u32)
-        .unwrap_or(32);
-
     // El tray sólo arranca (y toma el nombre del watcher) si la config lo pide.
     let tray = crate::config_tiene_widget(&cfg, "tray")
         .then(TrayHandle::spawn)
@@ -434,20 +288,208 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         cfg,
         surfaces,
         shuma,
-        shuma_panel,
-        shuma_bar_px,
+        // Se calculan después, una vez creados los panels.
+        shuma_panel: None,
+        shuma_bar_px: 40,
         registry: app_bus::AppRegistry::discover(),
         menu_open: false,
-        menu_panel,
-        menu_bar_px,
+        menu_panel: None,
+        menu_bar_px: 32,
         sampler: SamplerHandle::spawn(utc),
         ctx: WidgetCtx::default(),
         exec_rx: None,
-        panels,
-        tooltip_pi,
+        panels: Vec::new(),
+        tooltip_pi: None,
         tooltip_text: None,
         exit: false,
     };
+
+    // Roundtrip para que `OutputState` reciba `wl_output.geometry` + el
+    // `xdg_output.name` de cada monitor: lo necesitamos para resolver
+    // `Surface::output` (nombre del conector) a un `wl_output` real antes
+    // de pedir cada layer surface. SCTK publica el nombre en el segundo
+    // roundtrip (xdg-output llega después del wl_output base).
+    event_queue.roundtrip(&mut app)?;
+    event_queue.roundtrip(&mut app)?;
+
+    // Mapa `nombre del conector → wl_output` (ej. `"HDMI-A-1" → WlOutput`).
+    // Sin nombre (compositor sin xdg-output) la entrada se omite — esa
+    // salida sólo es alcanzable con `output: ""` (= primario, sin hint).
+    let mut outputs_by_name: std::collections::HashMap<String, wl_output::WlOutput> =
+        std::collections::HashMap::new();
+    for out in app.output_state.outputs() {
+        if let Some(info) = app.output_state.info(&out) {
+            if let Some(name) = info.name {
+                outputs_by_name.insert(name, out);
+            }
+        }
+    }
+    diag!("pata diag · outputs descubiertos: {:?}", outputs_by_name.keys().collect::<Vec<_>>());
+
+    // Resuelve `output: String` de la config a `Option<&wl_output>`. Vacío =
+    // None (el compositor decide). Nombre desconocido = None + aviso (la
+    // surface cae al primario en vez de fallar el arranque).
+    let resolve_output =
+        |name: &str| -> Option<wl_output::WlOutput> {
+            if name.is_empty() {
+                return None;
+            }
+            if let Some(o) = outputs_by_name.get(name) {
+                return Some(o.clone());
+            }
+            eprintln!("pata layer · output «{name}» no conectado; cae al primario");
+            None
+        };
+
+    // Una layer surface por barra: anclada a su borde, con su exclusive zone.
+    for &idx in &bars {
+        let s = &app.cfg.surfaces[idx];
+        let thickness = s.thickness.max(1.0) as u32;
+        let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
+        let wl_surface = compositor.create_surface(&qh);
+        let layer = layer_shell.create_layer_surface(
+            &qh,
+            wl_surface,
+            Layer::Top,
+            Some("pata".to_string()),
+            resolve_output(&s.output).as_ref(),
+        );
+        layer.set_anchor(sctk_anchor);
+        layer.set_size(size.0, size.1);
+        layer.set_exclusive_zone(thickness as i32);
+        layer.commit();
+        app.panels.push(Panel {
+            idx,
+            card: None,
+            layer,
+            cache: None,
+            width: size.0.max(1),
+            height: thickness,
+            dirty: true,
+            hover_idx: None,
+            gpu: None,
+        });
+    }
+
+    // Tarjetas flotantes (estilo conky): cada `card` de una superficie `Panel`
+    // es su propia layer surface en `Layer::Bottom` (sobre el escritorio,
+    // debajo de las ventanas), anclada a la esquina superior-izquierda con
+    // margen (x, y) y del tamaño (w, h) de la tarjeta. No reserva franja ni
+    // toma teclado. Heredan el `output` del Panel padre.
+    for (idx, s) in app.cfg.surfaces.iter().enumerate() {
+        if s.kind != SurfaceKind::Panel {
+            continue;
+        }
+        let panel_output = resolve_output(&s.output);
+        for card in &s.cards {
+            let (cw, ch) = (card.w.max(1.0) as u32, card.h.max(1.0) as u32);
+            let wl_surface = compositor.create_surface(&qh);
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Bottom,
+                Some("pata-card".to_string()),
+                panel_output.as_ref(),
+            );
+            layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
+            layer.set_size(cw, ch);
+            // Margen: (top, right, bottom, left). (x, y) desde la esquina sup-izq.
+            layer.set_margin(card.y as i32, 0, 0, card.x as i32);
+            layer.set_exclusive_zone(0);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.commit();
+            let widgets = card.widgets.iter().map(pata_core::widget::build).collect();
+            app.panels.push(Panel {
+                idx,
+                card: Some(CardState { spec: card.clone(), widgets }),
+                layer,
+                cache: None,
+                width: cw,
+                height: ch,
+                dirty: true,
+                hover_idx: None,
+                gpu: None,
+            });
+        }
+    }
+
+    // ¿Qué barra hospeda el shuma_input? Esa recibe foco de teclado al clickearla
+    // (OnDemand) para poder desplegar el Quake y escribir.
+    app.shuma_panel = app.panels.iter().position(|p| {
+        let s = &app.cfg.surfaces[p.idx];
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .any(|w| w.kind == "shuma_input")
+    });
+    app.shuma_bar_px = app
+        .shuma_panel
+        .map(|pi| app.cfg.surfaces[app.panels[pi].idx].thickness.max(1.0) as u32)
+        .unwrap_or(40);
+    if let Some(pi) = app.shuma_panel {
+        // Barra cerrada: NO pide teclado. Con `OnDemand` el compositor
+        // consumía el primer click para darle foco (de ahí «dos clicks para
+        // desplegar»); con `None` el click va directo a togglear.
+        app.panels[pi]
+            .layer
+            .set_keyboard_interactivity(KeyboardInteractivity::None);
+        app.panels[pi].layer.commit();
+    }
+
+    // La surface del tooltip flotante: una layer surface en Overlay (sobre todo),
+    // anclada arriba-izquierda, sin teclado ni zona exclusiva y con **región de
+    // input vacía** (no roba clicks ni hover). Arranca 1×1 fuera de vista; al
+    // hover se redimensiona y reubica con `set_margin`. Sin buffer hasta el primer
+    // tooltip → no se mapea (invisible). Sin output específico: la pone el
+    // compositor donde caiga el puntero.
+    app.tooltip_pi = {
+        let wl_surface = compositor.create_surface(&qh);
+        if let Ok(region) = Region::new(&compositor) {
+            // Región vacía (sin add): el tooltip nunca intercepta el puntero.
+            wl_surface.set_input_region(Some(region.wl_region()));
+        }
+        let layer = layer_shell.create_layer_surface(
+            &qh,
+            wl_surface,
+            Layer::Overlay,
+            Some("pata-tooltip".to_string()),
+            None,
+        );
+        layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
+        layer.set_size(1, 1);
+        layer.set_margin(100_000, 0, 0, 0); // fuera de vista
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+        app.panels.push(Panel {
+            idx: 0,
+            card: None,
+            layer,
+            cache: None,
+            width: 1,
+            height: 1,
+            dirty: false,
+            hover_idx: None,
+            gpu: None,
+        });
+        Some(app.panels.len() - 1)
+    };
+
+    // ¿Qué barra hospeda el start_button? Esa crece hacia abajo al desplegar el
+    // menú de inicio (mismo truco que shuma, hacia el otro lado).
+    app.menu_panel = app.panels.iter().position(|p| {
+        let s = &app.cfg.surfaces[p.idx];
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .any(|w| w.kind == "start_button")
+    });
+    app.menu_bar_px = app
+        .menu_panel
+        .map(|pi| app.cfg.surfaces[app.panels[pi].idx].thickness.max(1.0) as u32)
+        .unwrap_or(32);
 
     while !app.exit {
         if let Err(e) = event_queue.blocking_dispatch(&mut app) {
