@@ -1465,6 +1465,78 @@ mod tests {
     }
 
     #[test]
+    fn parsea_hue_unidades_y_none() {
+        // 0.5turn = 180deg = cyan; 200grad = 180deg; π rad = 180deg.
+        let cyan = Color::rgb(0, 255, 255);
+        assert_eq!(parse_color("hsl(0.5turn 100% 50%)").unwrap(), cyan);
+        assert_eq!(parse_color("hsl(200grad 100% 50%)").unwrap(), cyan);
+        assert_eq!(parse_color("hsl(3.14159265rad 100% 50%)").unwrap(), cyan);
+        // `none` en hue ⇒ 0deg = rojo.
+        assert_eq!(parse_color("hwb(none 0% 0%)").unwrap(), Color::rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn parsea_hwb() {
+        // hwb sin blancura ni negrura = hue puro.
+        assert_eq!(parse_color("hwb(0 0% 0%)").unwrap(), Color::rgb(255, 0, 0));
+        assert_eq!(parse_color("hwb(120 0% 0%)").unwrap(), Color::rgb(0, 255, 0));
+        // 50% blancura clarea el rojo.
+        assert_eq!(parse_color("hwb(0 50% 0%)").unwrap(), Color::rgb(255, 128, 128));
+        // 50% negrura lo oscurece.
+        assert_eq!(parse_color("hwb(0 0% 50%)").unwrap(), Color::rgb(128, 0, 0));
+        // W+B ≥ 100% ⇒ gris W/(W+B).
+        assert_eq!(parse_color("hwb(0 100% 100%)").unwrap(), Color::rgb(128, 128, 128));
+        // Alpha por slash.
+        assert_eq!(parse_color("hwb(0 0% 0% / 0.5)").unwrap(), Color { r: 255, g: 0, b: 0, a: 128 });
+    }
+
+    #[test]
+    fn parsea_oklab_y_oklch() {
+        // Blanco y negro son deterministas.
+        assert_eq!(parse_color("oklab(1 0 0)").unwrap(), Color::rgb(255, 255, 255));
+        assert_eq!(parse_color("oklab(0 0 0)").unwrap(), Color::rgb(0, 0, 0));
+        assert_eq!(parse_color("oklch(1 0 0)").unwrap(), Color::rgb(255, 255, 255));
+        // Alpha + `none` en lightness.
+        assert_eq!(parse_color("oklch(none 0 0 / 0.5)").unwrap(), Color { r: 0, g: 0, b: 0, a: 128 });
+        // Rojo sRGB ≈ oklch(0.628 0.2577 29.23) — tolerancia.
+        let red = parse_color("oklch(0.628 0.2577 29.23)").unwrap();
+        assert!(red.r > 245 && red.g < 25 && red.b < 25, "oklch rojo: {red:?}");
+        // Porcentajes: L 100% = 1.0.
+        assert_eq!(parse_color("oklch(100% 0 0)").unwrap(), Color::rgb(255, 255, 255));
+    }
+
+    #[test]
+    fn parsea_lab_y_lch() {
+        // Blanco D50 y negro.
+        let white = parse_color("lab(100 0 0)").unwrap();
+        assert!(white.r >= 253 && white.g >= 253 && white.b >= 253, "lab blanco: {white:?}");
+        assert_eq!(parse_color("lab(0 0 0)").unwrap(), Color::rgb(0, 0, 0));
+        let white_lch = parse_color("lch(100 0 0)").unwrap();
+        assert!(white_lch.r >= 253 && white_lch.g >= 253 && white_lch.b >= 253);
+        // Rojo sRGB ≈ lab(54.29 80.81 69.89) — tolerancia.
+        let red = parse_color("lab(54.29 80.81 69.89)").unwrap();
+        assert!(red.r > 245 && red.g < 25 && red.b < 25, "lab rojo: {red:?}");
+    }
+
+    #[test]
+    fn parsea_color_func() {
+        // srgb directo.
+        assert_eq!(parse_color("color(srgb 1 0 0)").unwrap(), Color::rgb(255, 0, 0));
+        assert_eq!(parse_color("color(srgb 0 1 0)").unwrap(), Color::rgb(0, 255, 0));
+        // srgb-linear pasa por la gamma sRGB al codificar.
+        assert_eq!(parse_color("color(srgb-linear 1 1 1)").unwrap(), Color::rgb(255, 255, 255));
+        let mid = parse_color("color(srgb-linear 0.5 0.5 0.5)").unwrap();
+        assert!((mid.r as i32 - 188).abs() <= 1, "srgb-linear 0.5: {mid:?}");
+        // display-p3: blanco = blanco; verde P3 puro recorta al gamut sRGB.
+        assert_eq!(parse_color("color(display-p3 1 1 1)").unwrap(), Color::rgb(255, 255, 255));
+        assert_eq!(parse_color("color(display-p3 0 1 0)").unwrap(), Color::rgb(0, 255, 0));
+        // Alpha.
+        assert_eq!(parse_color("color(srgb 1 0 0 / 0.5)").unwrap(), Color { r: 255, g: 0, b: 0, a: 128 });
+        // Espacio no soportado ⇒ None (degrada, no rompe el parseo).
+        assert!(parse_color("color(rec2020 1 0 0)").is_none());
+    }
+
+    #[test]
     fn parsea_hex_8_y_4_chars() {
         // #RRGGBBAA.
         assert_eq!(parse_color("#ff000080"), Some(Color { r: 255, g: 0, b: 0, a: 128 }));

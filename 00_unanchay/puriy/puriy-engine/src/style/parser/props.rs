@@ -47,6 +47,27 @@ pub fn parse_color(s: &str) -> Option<Color> {
     if let Some(args) = strip_fn(s, "hsla").or_else(|| strip_fn(s, "hsl")) {
         return parse_hsl_func(args);
     }
+    if let Some(args) = strip_fn(s, "hwb") {
+        return parse_hwb_func(args);
+    }
+    // CSS Color 4 — espacios perceptuales y polar. `oklch`/`oklab` antes
+    // que `lch`/`lab` no es necesario (`strip_fn` matchea prefijo exacto)
+    // pero se ordena por familia.
+    if let Some(args) = strip_fn(s, "oklch") {
+        return parse_oklch_func(args);
+    }
+    if let Some(args) = strip_fn(s, "oklab") {
+        return parse_oklab_func(args);
+    }
+    if let Some(args) = strip_fn(s, "lch") {
+        return parse_lch_func(args);
+    }
+    if let Some(args) = strip_fn(s, "lab") {
+        return parse_lab_func(args);
+    }
+    if let Some(args) = strip_fn(s, "color") {
+        return parse_color_func(args);
+    }
     // Nombres comunes.
     NAMED_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(s)).map(|(_, c)| *c)
 }
@@ -139,9 +160,12 @@ pub(crate) fn parse_color_chan(s: &str) -> Option<u8> {
     s.parse::<i32>().ok().map(|n| n.clamp(0, 255) as u8)
 }
 
-/// Alpha: fracción 0.0-1.0 o porcentaje 0%-100%.
+/// Alpha: fracción 0.0-1.0 o porcentaje 0%-100%. `none` (CSS Color 4) ⇒ 0.
 pub(crate) fn parse_alpha(s: &str) -> Option<u8> {
     let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(0);
+    }
     if let Some(num) = s.strip_suffix('%') {
         let pct: f32 = num.trim().parse().ok()?;
         return Some((pct.clamp(0.0, 100.0) * 2.55).round() as u8);
@@ -150,12 +174,31 @@ pub(crate) fn parse_alpha(s: &str) -> Option<u8> {
     Some((f.clamp(0.0, 1.0) * 255.0).round() as u8)
 }
 
-/// Hue: `Ndeg` o número crudo (grados implícitos). `Nrad`/`Nturn` no
-/// soportados — caen a `None` y la función devuelve `None`.
+/// Hue (CSS `<angle>`): número crudo (grados implícitos) o con unidad
+/// `deg`/`grad`/`rad`/`turn`. `none` (CSS Color 4) ⇒ 0. El resultado son
+/// grados; el caller lo wrappea con `rem_euclid(360)` según convenga.
 pub(crate) fn parse_hue(s: &str) -> Option<f32> {
     let s = s.trim();
-    let s = s.strip_suffix("deg").unwrap_or(s);
-    s.trim().parse().ok()
+    if s.eq_ignore_ascii_case("none") {
+        return Some(0.0);
+    }
+    // `grad` antes que `rad` (sufijo solapado) y `turn`/`rad`/`deg`.
+    if let Some(n) = s.strip_suffix("grad") {
+        let g: f32 = n.trim().parse().ok()?;
+        return Some(g * 0.9); // 400grad = 360deg
+    }
+    if let Some(n) = s.strip_suffix("turn") {
+        let t: f32 = n.trim().parse().ok()?;
+        return Some(t * 360.0);
+    }
+    if let Some(n) = s.strip_suffix("rad") {
+        let r: f32 = n.trim().parse().ok()?;
+        return Some(r.to_degrees());
+    }
+    if let Some(n) = s.strip_suffix("deg") {
+        return n.trim().parse().ok();
+    }
+    s.parse().ok()
 }
 
 /// Porcentaje 0%-100% → fracción 0.0-1.0.
@@ -181,6 +224,250 @@ pub(crate) fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
     let m = l - c / 2.0;
     let to_u8 = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
     (to_u8(r1), to_u8(g1), to_u8(b1))
+}
+
+/// Número crudo o porcentaje, donde `100%` equivale a `pct_full`. `none`
+/// (CSS Color 4) ⇒ 0. Sin clamp (el caller acota el espacio de color).
+/// Usado por los color functions modernos (`oklch`/`lab`/`color()`…),
+/// cada uno con su escala (`pct_full` = 1.0 para L de oklch, 100 para L de
+/// lab, 0.4 para C de oklch, etc.).
+pub(crate) fn parse_num_or_pct(s: &str, pct_full: f32) -> Option<f32> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(0.0);
+    }
+    if let Some(p) = s.strip_suffix('%') {
+        let v: f32 = p.trim().parse().ok()?;
+        return Some(v / 100.0 * pct_full);
+    }
+    s.parse().ok()
+}
+
+/// RGB de hue puro (saturación 100%, lightness 50%) como floats 0..1.
+/// Base para `hwb()` (CSS Color 4 §7).
+fn hue_to_rgb_pure(h: f32) -> (f32, f32, f32) {
+    let hp = h.rem_euclid(360.0) / 60.0;
+    let x = 1.0 - (hp.rem_euclid(2.0) - 1.0).abs();
+    match hp as u32 {
+        0 => (1.0, x, 0.0),
+        1 => (x, 1.0, 0.0),
+        2 => (0.0, 1.0, x),
+        3 => (0.0, x, 1.0),
+        4 => (x, 0.0, 1.0),
+        _ => (1.0, 0.0, x),
+    }
+}
+
+/// Componente lineal → sRGB con gamma (transferencia sRGB estándar).
+fn linear_to_srgb(c: f32) -> f32 {
+    let c = c.clamp(0.0, 1.0);
+    if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// sRGB con gamma → componente lineal (inversa de `linear_to_srgb`).
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Empaqueta tres componentes lineales sRGB (0..1, fuera de gamut se
+/// recorta) + alpha en un `Color` sRGB con gamma.
+fn linear_srgb_to_color(r: f32, g: f32, b: f32, a: u8) -> Color {
+    let to_u8 = |v: f32| (linear_to_srgb(v) * 255.0).round().clamp(0.0, 255.0) as u8;
+    Color { r: to_u8(r), g: to_u8(g), b: to_u8(b), a }
+}
+
+/// `hwb(H W B [/ A])` (CSS Color 4). H = `<angle>`, W/B = porcentaje de
+/// blancura/negrura. Si W+B ≥ 100% el resultado es el gris W/(W+B).
+pub(crate) fn parse_hwb_func(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let h = parse_hue(parts[0])?;
+    let w = parse_pct_or_none(parts[1])?;
+    let bl = parse_pct_or_none(parts[2])?;
+    let a = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let to_u8 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    if w + bl >= 1.0 {
+        let gray = if w + bl > 0.0 { w / (w + bl) } else { 0.0 };
+        let g = to_u8(gray);
+        return Some(Color { r: g, g, b: g, a });
+    }
+    let (hr, hg, hb) = hue_to_rgb_pure(h);
+    let mix = |c: f32| c * (1.0 - w - bl) + w;
+    Some(Color { r: to_u8(mix(hr)), g: to_u8(mix(hg)), b: to_u8(mix(hb)), a })
+}
+
+/// Porcentaje 0%-100% → 0..1, o `none` ⇒ 0. (Variante de `parse_pct` que
+/// tolera `none`, para los color functions de CSS Color 4.)
+fn parse_pct_or_none(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("none") {
+        return Some(0.0);
+    }
+    parse_pct(s)
+}
+
+/// OKLab → sRGB lineal (Björn Ottosson). L 0..1, a/b ~-0.4..0.4.
+fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+    let l_ = l + 0.396_337_78 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_346 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    (
+        4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3,
+        -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3,
+        -0.004_196_086_3 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3,
+    )
+}
+
+/// `oklab(L a b [/ A])` (CSS Color 4). L 0..1 (o %), a/b número (o % de 0.4).
+pub(crate) fn parse_oklab_func(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let l = parse_num_or_pct(parts[0], 1.0)?;
+    let a = parse_num_or_pct(parts[1], 0.4)?;
+    let b = parse_num_or_pct(parts[2], 0.4)?;
+    let al = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let (r, g, bb) = oklab_to_linear_srgb(l, a, b);
+    Some(linear_srgb_to_color(r, g, bb, al))
+}
+
+/// `oklch(L C H [/ A])` (CSS Color 4). C → a/b polar; resto como `oklab`.
+pub(crate) fn parse_oklch_func(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let l = parse_num_or_pct(parts[0], 1.0)?;
+    let c = parse_num_or_pct(parts[1], 0.4)?;
+    let h = parse_hue(parts[2])?.to_radians();
+    let al = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let (r, g, bb) = oklab_to_linear_srgb(l, c * h.cos(), c * h.sin());
+    Some(linear_srgb_to_color(r, g, bb, al))
+}
+
+/// CIE Lab (D50) → sRGB lineal, vía XYZ(D50), adaptación Bradford a D65 y
+/// la matriz XYZ(D65)→sRGB-lineal (CSS Color 4, código de muestra).
+fn lab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
+    const KAPPA: f32 = 24389.0 / 27.0;
+    const EPS: f32 = 216.0 / 24389.0;
+    // Blanco de referencia D50.
+    const XN: f32 = 0.964_295_7;
+    const YN: f32 = 1.0;
+    const ZN: f32 = 0.825_104_6;
+    let fy = (l + 16.0) / 116.0;
+    let fx = fy + a / 500.0;
+    let fz = fy - b / 200.0;
+    let f_inv = |t: f32| {
+        let t3 = t * t * t;
+        if t3 > EPS { t3 } else { (116.0 * t - 16.0) / KAPPA }
+    };
+    let xr = f_inv(fx);
+    let yr = if l > KAPPA * EPS { fy * fy * fy } else { l / KAPPA };
+    let zr = f_inv(fz);
+    let (x50, y50, z50) = (xr * XN, yr * YN, zr * ZN);
+    // Bradford D50 → D65.
+    let x = 0.955_473_45 * x50 - 0.023_098_537 * y50 + 0.063_259_31 * z50;
+    let y = -0.028_369_707 * x50 + 1.009_995_46 * y50 + 0.021_041_399 * z50;
+    let z = 0.012_314_002 * x50 - 0.020_507_697 * y50 + 1.330_366 * z50;
+    // XYZ(D65) → sRGB lineal.
+    (
+        3.240_97 * x - 1.537_383_2 * y - 0.498_610_76 * z,
+        -0.969_243_64 * x + 1.875_967_5 * y + 0.041_555_06 * z,
+        0.055_630_08 * x - 0.203_976_96 * y + 1.056_971_5 * z,
+    )
+}
+
+/// `lab(L a b [/ A])` (CSS Color 4). L 0..100 (o %), a/b número (o % de 125).
+pub(crate) fn parse_lab_func(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let l = parse_num_or_pct(parts[0], 100.0)?;
+    let a = parse_num_or_pct(parts[1], 125.0)?;
+    let b = parse_num_or_pct(parts[2], 125.0)?;
+    let al = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let (r, g, bb) = lab_to_linear_srgb(l, a, b);
+    Some(linear_srgb_to_color(r, g, bb, al))
+}
+
+/// `lch(L C H [/ A])` (CSS Color 4). C → a/b polar; resto como `lab`.
+pub(crate) fn parse_lch_func(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let l = parse_num_or_pct(parts[0], 100.0)?;
+    let c = parse_num_or_pct(parts[1], 150.0)?;
+    let h = parse_hue(parts[2])?.to_radians();
+    let al = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let (r, g, bb) = lab_to_linear_srgb(l, c * h.cos(), c * h.sin());
+    Some(linear_srgb_to_color(r, g, bb, al))
+}
+
+/// `color(<space> c1 c2 c3 [/ A])` (CSS Color 4). Soporta `srgb`,
+/// `srgb-linear` y `display-p3`; otros espacios ⇒ `None` (degrada). Los
+/// componentes son número 0..1 o porcentaje.
+pub(crate) fn parse_color_func(args: &str) -> Option<Color> {
+    let args = args.trim();
+    // El primer token es el espacio; el resto, componentes (+ `/ alpha`).
+    let (space, rest) = args.split_once(char::is_whitespace)?;
+    let (parts, alpha) = split_color_args(rest.trim())?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let comp = |s: &str| parse_num_or_pct(s, 1.0);
+    let c0 = comp(parts[0])?;
+    let c1 = comp(parts[1])?;
+    let c2 = comp(parts[2])?;
+    let al = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let (r, g, b) = match space.trim().to_ascii_lowercase().as_str() {
+        "srgb" => (srgb_to_linear(c0), srgb_to_linear(c1), srgb_to_linear(c2)),
+        "srgb-linear" => (c0, c1, c2),
+        "display-p3" => {
+            // P3 con gamma sRGB → P3 lineal → matriz P3→sRGB lineal.
+            let (lr, lg, lb) = (srgb_to_linear(c0), srgb_to_linear(c1), srgb_to_linear(c2));
+            (
+                1.224_940_2 * lr - 0.224_940_18 * lg,
+                -0.042_056_974 * lr + 1.042_057 * lg,
+                -0.019_636_242 * lr - 0.078_637_2 * lg + 1.098_273_4 * lb,
+            )
+        }
+        _ => return None,
+    };
+    Some(linear_srgb_to_color(r, g, b, al))
 }
 
 /// Parsea un value tipo `margin: <1..4 longitudes>`. Devuelve `None` si
