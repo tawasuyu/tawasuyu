@@ -29,6 +29,12 @@ default = []
 # Captura desde una webcam real (v4l2, Linux) en vez de la TestCard sintética.
 # Off por defecto para que `cargo check --workspace` no arrastre v4l2/libclang.
 camara = ["media-source-capture/camera"]
+# Compartir pantalla: habilita los backends de captura de display (Wayland
+# wlr-screencopy + X11), ambos puro-Rust (sin libclang). Off por defecto para
+# no sumar deps de sistema al build mínimo; el botón "compartir pantalla" de la
+# UI sólo hace efecto si se compiló con esta feature. Correr necesita un
+# compositor wlroots o un servidor X.
+pantalla = ["media-source-capture/wayland", "media-source-capture/screen"]
 
 [dependencies]
 uya-core = { path = "../uya-core" }

@@ -23,5 +23,12 @@ description = "uya — nodo headless: transporte + captura + log de eventos de l
 name = "uya-cli"
 path = "src/main.rs"
 
+[features]
+default = []
+# Pasarela a los backends de hardware/sistema de `uya-app` (compartir pantalla,
+# webcam). P. ej. `cargo run -p uya-cli --features pantalla` con UYA_PANTALLA=1.
+pantalla = ["uya-app/pantalla"]
+camara = ["uya-app/camara"]
+
 [dependencies]
 uya-app = { path = "../uya-app" }

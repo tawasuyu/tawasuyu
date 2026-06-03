@@ -82,6 +82,8 @@ struct Modelo {
     silenciados: HashSet<ParticipanteId>,
     cam_on: bool,
     mic_on: bool,
+    /// ¿Estoy compartiendo pantalla en vez de la cámara?
+    pantalla_on: bool,
     /// Mi propia dirección dialable (con `/p2p/`), para mostrarla y compartirla.
     mi_dir: String,
     /// Huella corta de mi identidad (BLAKE3 de mi clave), para verificación
@@ -120,6 +122,8 @@ enum Msg {
     ScrollCharla(i32),
     ToggleCamara,
     ToggleMicrofono,
+    /// Empezar / dejar de compartir pantalla.
+    TogglePantalla,
     /// Silenciar / reactivar a un par localmente (clic en su tile).
     ToggleSilencio(ParticipanteId),
     Colgar,
@@ -166,6 +170,11 @@ impl App for Uya {
             enlace.unir_sala(sala, bootstrap);
         }
 
+        // Compartir pantalla desde el arranque: UYA_PANTALLA=1 (necesita feature
+        // `pantalla` + display). Se fija antes de la captura para que el hilo
+        // arranque en ese modo.
+        let pantalla_on = env::var("UYA_PANTALLA").is_ok();
+        enlace.set_compartir_pantalla(pantalla_on);
         // Cámara sintética (256×192 @ 12 fps): preview local + difusión a pares.
         iniciar_camara(enlace.clone(), 256, 192, 12.0);
         // Audio: reproducción de la mezcla remota + captura de micrófono.
@@ -191,6 +200,7 @@ impl App for Uya {
             silenciados: HashSet::new(),
             cam_on: true,
             mic_on: true,
+            pantalla_on,
             mi_dir,
             mi_huella,
             conectar_input: TextInputState::new(),
@@ -288,6 +298,19 @@ impl App for Uya {
             Msg::ToggleMicrofono => {
                 model.mic_on = !model.mic_on;
                 model.enlace.set_microfono(model.mic_on);
+            }
+            Msg::TogglePantalla => {
+                model.pantalla_on = !model.pantalla_on;
+                model.enlace.set_compartir_pantalla(model.pantalla_on);
+                // Al compartir pantalla la cámara queda implícita en "on" (la
+                // fuente cambia, no el flag de cámara); si la tenía apagada, la
+                // reactivo para que el cambio de fuente surta efecto.
+                if model.pantalla_on && !model.cam_on {
+                    model.cam_on = true;
+                    model.enlace.set_camara(true);
+                }
+                // El preview viejo (cámara) deja de ser válido; que repinte solo.
+                model.cuadros.remove(&model.sala.yo);
             }
             Msg::ToggleSilencio(id) => {
                 let nuevo = !model.silenciados.contains(&id);
@@ -676,6 +699,11 @@ fn barra_controles(model: &Modelo) -> View<Msg> {
     } else {
         "microfono: off"
     };
+    let pantalla_label = if model.pantalla_on {
+        "compartiendo pantalla"
+    } else {
+        "compartir pantalla"
+    };
 
     View::new(Style {
         size: Size {
@@ -696,6 +724,7 @@ fn barra_controles(model: &Modelo) -> View<Msg> {
     .children(vec![
         boton(cam_label, Msg::ToggleCamara, model.cam_on, false),
         boton(mic_label, Msg::ToggleMicrofono, model.mic_on, false),
+        boton(pantalla_label, Msg::TogglePantalla, model.pantalla_on, false),
         boton("colgar", Msg::Colgar, false, true),
     ])
 }

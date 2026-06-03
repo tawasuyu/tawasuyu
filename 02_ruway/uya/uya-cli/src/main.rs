@@ -53,6 +53,12 @@ fn main() {
         enlace.unir_sala(sala, bootstrap);
     }
 
+    // Compartir pantalla desde el arranque (headless): UYA_PANTALLA=1. Requiere
+    // compilar con `--features pantalla` y un compositor wlroots / servidor X.
+    if std::env::var("UYA_PANTALLA").is_ok() {
+        println!("uya-cli: compartiendo pantalla");
+        enlace.set_compartir_pantalla(true);
+    }
     iniciar_camara(enlace.clone(), 192, 144, 12.0);
     // Audio: reproducción sobre la mezcla remota + captura de micrófono.
     let mezcla = enlace.mezcla();

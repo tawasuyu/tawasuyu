@@ -25,6 +25,14 @@ description = "uya — UI Llimphi de la videollamada soberana: rejilla de caras 
 name = "uya-llimphi"
 path = "src/main.rs"
 
+[features]
+default = []
+# Pasarela a los backends de hardware/sistema de `uya-app`: se activan al correr
+# la UI, p. ej. `cargo run -p uya-llimphi --features pantalla` (compartir
+# pantalla) o `--features camara` (webcam v4l2).
+pantalla = ["uya-app/pantalla"]
+camara = ["uya-app/camara"]
+
 [dependencies]
 uya-app = { path = "../uya-app" }
 # La UI saca View, App, el runtime y, vía re-export, peniko (Image/Blob/Color)

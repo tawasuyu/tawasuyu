@@ -104,6 +104,8 @@ pub struct Enlace {
     eventos: Sender<EventoUya>,
     camara: Arc<AtomicBool>,
     microfono: Arc<AtomicBool>,
+    /// Si está en alto, el hilo de captura sustituye la cámara por la pantalla.
+    pantalla: Arc<AtomicBool>,
     direccion_local: String,
     /// Mezcla del audio entrante de todos los pares; la alimenta el lector y la
     /// drena el `AudioSink` de reproducción (ver `audio`).
@@ -131,6 +133,7 @@ impl Enlace {
         let (listo_tx, listo_rx) = std_channel::<Result<String, String>>();
         let camara = Arc::new(AtomicBool::new(true));
         let microfono = Arc::new(AtomicBool::new(true));
+        let pantalla = Arc::new(AtomicBool::new(false));
         let mezcla = Arc::new(Mutex::new(MezclaRemota::default()));
 
         let yo_compartido = Arc::new(Yo {
@@ -189,13 +192,14 @@ impl Enlace {
             eventos: ev_tx,
             camara,
             microfono,
+            pantalla,
             direccion_local,
             mezcla,
         };
         Ok((enlace, ev_rx))
     }
 
-    /// Mi identidad determinista (BLAKE3 del nombre).
+    /// Mi identidad (huella BLAKE3 de mi clave pública, ver `identidad`).
     pub fn yo(&self) -> ParticipanteId {
         self.yo
     }
@@ -277,6 +281,19 @@ impl Enlace {
     pub fn set_microfono(&self, on: bool) {
         self.microfono.store(on, Ordering::Relaxed);
         self.anunciar_estado();
+    }
+
+    /// ¿Estoy compartiendo pantalla? (lo lee el hilo de captura para elegir la
+    /// fuente de video).
+    pub fn compartiendo_pantalla(&self) -> bool {
+        self.pantalla.load(Ordering::Relaxed)
+    }
+
+    /// Empieza/termina de compartir la pantalla. El hilo de captura sustituye
+    /// la cámara por el display (o vuelve a ella). Requiere compilar con la
+    /// feature `pantalla`; sin ella, no tiene efecto.
+    pub fn set_compartir_pantalla(&self, on: bool) {
+        self.pantalla.store(on, Ordering::Relaxed);
     }
 
     /// Cuelga: avisa a los pares que me voy.
