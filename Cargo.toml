@@ -471,7 +471,6 @@ members = [
     "web/gioser-physics",
     "web/gioser-shaders",
     "web/gioser-web",
-    "web/wawa-web",
 ]
 
 # `wawa/` se excluye del workspace global porque corre en target
