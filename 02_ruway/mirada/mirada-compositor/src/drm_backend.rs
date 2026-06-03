@@ -591,7 +591,19 @@ impl DrmState {
         }
 
         // Recarga en caliente de keymap/config/reglas si cambiaron en disco.
-        self.watches.poll(&mut self.app);
+        // Si la config general cambió, refresca las cachés que el Cuerpo deriva
+        // de ella (menú raíz, wallpaper, fuente de etiquetas) — el Cerebro ya
+        // aplicó teselado/decoración/foco.
+        if self.watches.poll(&mut self.app) {
+            self.menu_entries = self.app.config_menu();
+            self.root_menu = None; // un menú abierto puede quedar obsoleto
+            let new_wp = self.app.config_wallpaper_path();
+            if new_wp != self.wallpaper_path {
+                self.wallpaper_path = new_wp;
+                self.wallpaper = None; // se rearma en el próximo render
+            }
+            self.text = crate::text::TextRenderer::system(self.app.config_font_path().as_deref());
+        }
 
         if let Some(ctl) = &self.ctl {
             while let Some(mut conn) = ctl.poll() {

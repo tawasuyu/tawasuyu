@@ -1758,16 +1758,20 @@ struct ConfigWatches {
 
 impl ConfigWatches {
     /// Recarga lo que haya cambiado en disco. Llamar una vez por iteración
-    /// del bucle de eventos de cada backend.
-    fn poll(&self, app: &mut App) {
+    /// del bucle de eventos de cada backend. Devuelve `true` si la **config**
+    /// general (`config.ron`) cambió — el backend DRM lo usa para refrescar sus
+    /// cachés derivadas de config (menú, wallpaper, fuente).
+    fn poll(&self, app: &mut App) -> bool {
         if let Some((p, w)) = &self.keymap {
             if w.changed() {
                 app.reload_keymap_from(p);
             }
         }
+        let mut config_changed = false;
         if let Some((p, w)) = &self.config {
             if w.changed() {
                 app.reload_config_from(p);
+                config_changed = true;
             }
         }
         if let Some((p, w)) = &self.rules {
@@ -1775,6 +1779,7 @@ impl ConfigWatches {
                 app.reload_rules_from(p);
             }
         }
+        config_changed
     }
 }
 
@@ -2059,7 +2064,9 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
         }
 
         // 2 ter · Recarga en caliente de keymap/config/reglas si cambiaron.
-        watches.poll(&mut state);
+        // (El backend winit anidado no cachea menú/wallpaper/fuente, así que
+        // ignora si la config cambió — sólo importa en el backend DRM.)
+        let _ = watches.poll(&mut state);
 
         // 2 quater · Peticiones del API de control (mirada-ctl).
         if let Some(ctl) = &ctl {
