@@ -25,12 +25,14 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use card_core::{
-    Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef,
+    Card, CardKind, Flow, Flows, Lifecycle, Payload, Priority, Supervision, TypeRef, WitInterface,
 };
 use card_net::{BrahmanNet, PeerId};
 use card_handshake::client::{Client, ClientError};
 use card_handshake::messages::MatchEventKind;
+use card_handshake::network::{connect_libp2p, LibP2pHandshakeStream, NetworkError};
 use card_handshake::transport;
+use tracing::warn;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ConsumerError {
@@ -52,6 +54,19 @@ pub enum ConsumerError {
     Runtime(String),
     #[error("la Card consumer no declara ningún input flow para resolver")]
     NoInputFlow,
+    #[error(
+        "el DHT no anuncia proveedores para flow '{flow}' (type '{type_ref}')"
+    )]
+    NoRemoteProviders { flow: String, type_ref: String },
+    #[error(
+        "todos los {} peers remotos fallaron al conectar; último error: {source}",
+        peers.len()
+    )]
+    AllPeersFailed {
+        peers: Vec<PeerId>,
+        #[source]
+        source: NetworkError,
+    },
 }
 
 /// Construye una Card mínima de consumer que declara un input flow
@@ -208,6 +223,69 @@ pub async fn resolve_provider(
     // 2) Fallback remoto por DHT.
     let peers = find_remote_providers(net, &flow_name, &ty).await;
     Ok(ProviderLocation::Remote(peers))
+}
+
+/// Consume una `Card` a través de un proveedor remoto descubierto por DHT.
+///
+/// Recorre `peers` en orden, intentando `connect_libp2p` con cada uno hasta
+/// que uno establezca handshake. La sesión devuelta es un `Client` idéntico
+/// al del path Unix: `ping`, `await_event`, `farewell` funcionan igual; el
+/// stream subyacente es libp2p convertido vía `tokio_util::compat`.
+///
+/// La keypair que se usa para firmar el handshake es la del propio `net`
+/// (`BrahmanNet::keypair`) — la misma que autentica la conexión Noise, así
+/// que el `peer_id` del Hello coincide con el del transporte y el server
+/// no rechaza por `Unauthorized`.
+///
+/// Errores:
+/// * [`ConsumerError::NoRemoteProviders`] si `peers` está vacío.
+/// * [`ConsumerError::AllPeersFailed`] si ningún peer aceptó el handshake;
+///   el `source` es el último `NetworkError` observado.
+///
+/// Atajo de uso típico tras `resolve_provider`:
+/// ```ignore
+/// match resolve_provider(card.clone(), &net, timeout).await? {
+///     ProviderLocation::Local(socket) => {
+///         Client::connect_with(&socket, card, wit).await?
+///     }
+///     ProviderLocation::Remote(peers) => {
+///         consume_remote(&net, card, wit, peers).await?
+///     }
+/// };
+/// ```
+pub async fn consume_remote(
+    net: &BrahmanNet,
+    consumer_card: Card,
+    wit: Option<WitInterface>,
+    peers: Vec<PeerId>,
+) -> Result<Client<LibP2pHandshakeStream>, ConsumerError> {
+    if peers.is_empty() {
+        let (flow, type_ref) = describe_first_input(&consumer_card);
+        return Err(ConsumerError::NoRemoteProviders { flow, type_ref });
+    }
+
+    let keypair = net.keypair();
+    let mut last_error: Option<NetworkError> = None;
+
+    for peer in &peers {
+        match connect_libp2p(net, *peer, consumer_card.clone(), wit.clone(), &keypair).await {
+            Ok(client) => return Ok(client),
+            Err(e) => {
+                warn!(
+                    target: "card_sidecar",
+                    peer = %peer,
+                    error = %e,
+                    "dial al peer remoto falló, intento siguiente",
+                );
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(ConsumerError::AllPeersFailed {
+        peers,
+        source: last_error.expect("el loop garantiza al menos un error si peers no era vacío"),
+    })
 }
 
 /// Conecta al brahman-init con una Card observer (sin inputs ni

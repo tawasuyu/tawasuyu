@@ -18,8 +18,9 @@
 
 pub mod discovery;
 pub use discovery::{
-    await_provider, await_provider_blocking, build_consumer_card, list_matches,
-    list_matches_blocking, list_sessions, list_sessions_blocking, ConsumerError,
+    await_provider, await_provider_blocking, build_consumer_card, consume_remote, list_matches,
+    list_matches_blocking, list_sessions, list_sessions_blocking, resolve_provider, ConsumerError,
+    ProviderLocation,
 };
 
 use std::collections::HashMap;
