@@ -37,6 +37,7 @@ pub mod gr;
 pub mod harmonic;
 pub mod math;
 pub mod palette;
+pub mod sky_data;
 pub mod sphere3d;
 
 pub use draw::{

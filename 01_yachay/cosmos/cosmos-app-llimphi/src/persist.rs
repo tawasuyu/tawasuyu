@@ -62,6 +62,10 @@ pub(crate) struct UiState {
     pub(crate) sphere_yaw: f32,
     #[serde(default = "default_pitch")]
     pub(crate) sphere_pitch: f32,
+    /// Cielo: `false` = mira al cénit (cielo visible), `true` = mira al
+    /// nadir (el hemisferio bajo el horizonte).
+    #[serde(default)]
+    pub(crate) sky_nadir: bool,
 }
 
 fn default_harmonic() -> u32 {
@@ -112,6 +116,7 @@ impl Default for UiState {
             dock_right: crate::model::default_dock_right(),
             sphere_yaw: default_yaw(),
             sphere_pitch: default_pitch(),
+            sky_nadir: false,
         }
     }
 }

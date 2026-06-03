@@ -802,6 +802,7 @@ fn save_ui(m: &Model) {
         dock_right: m.dock_right.clone(),
         sphere_yaw: m.sphere_yaw,
         sphere_pitch: m.sphere_pitch,
+        sky_nadir: m.sky_nadir,
     });
 }
 
@@ -897,6 +898,8 @@ impl App for Cosmos {
             nav_cut: None,
             sphere_yaw: ui.sphere_yaw,
             sphere_pitch: ui.sphere_pitch,
+            sky_nadir: ui.sky_nadir,
+            sky_probe: None,
             wheel_zoom: 1.0,
             wheel_pan: (0.0, 0.0),
             viewport: model::VIEWPORT,
@@ -978,6 +981,20 @@ impl App for Cosmos {
             Msg::WheelResetView => {
                 m.wheel_zoom = 1.0;
                 m.wheel_pan = (0.0, 0.0);
+            }
+            Msg::SkyProbe(dx, dy, lx0, ly0) => {
+                // El drag entrega lx0/ly0 del press (constante) + deltas
+                // por move; acumulamos para seguir el cursor en vivo.
+                let cur = match m.sky_probe {
+                    Some((x, y)) => (x + dx, y + dy),
+                    None => (lx0 + dx, ly0 + dy),
+                };
+                m.sky_probe = Some(cur);
+            }
+            Msg::ToggleSkyNadir => {
+                m.sky_nadir = !m.sky_nadir;
+                m.sky_probe = None;
+                persist = true;
             }
             Msg::Resized(w, h) => m.viewport = (w, h),
             Msg::ToolsScroll(delta) => {

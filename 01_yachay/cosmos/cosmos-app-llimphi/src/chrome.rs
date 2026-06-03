@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use cosmos_canvas_llimphi::{canvas_view, canvas_view_clickable_ex, ViewTransform};
+use cosmos_canvas_llimphi::{canvas_view_clickable_ex, ViewTransform};
 use cosmos_render::{
     compose_sphere, compose_wheel_with_hits, CompositionOpts, DrawCommand, Palette, Rgba,
     SphereOpts, SphereView, TextAnchor,
@@ -1350,32 +1350,6 @@ fn sign_color_theme(sign_idx: usize, model: &Model) -> Color {
     )
 }
 
-/// Proyecta un punto ecuatorial (AR, Dec en grados, J2000) al cielo del
-/// observador (proyección azimutal: cénit al centro, horizonte al borde).
-/// Devuelve `(x, y, sobre_horizonte)`. Azimut compás (N arriba, E derecha)
-/// para coincidir con la proyección de los cuerpos.
-fn radec_to_sky(
-    ra_deg: f32,
-    dec_deg: f32,
-    lst_deg: f64,
-    lat_deg: f64,
-    cx: f32,
-    cy: f32,
-    r: f32,
-) -> (f32, f32, bool) {
-    let h = ((lst_deg - ra_deg as f64).rem_euclid(360.0)).to_radians();
-    let dec = (dec_deg as f64).to_radians();
-    let lat = lat_deg.to_radians();
-    let sin_alt = dec.sin() * lat.sin() + dec.cos() * lat.cos() * h.cos();
-    let alt = sin_alt.clamp(-1.0, 1.0).asin();
-    // Azimut medido desde el Sur hacia el Oeste (Meeus) → a compás
-    // (Norte=0, Este=90) sumando 180°.
-    let a_south = h.sin().atan2(h.cos() * lat.sin() - dec.tan() * lat.cos());
-    let az = (a_south.to_degrees() + 180.0).rem_euclid(360.0).to_radians() as f32;
-    let alt_deg = alt.to_degrees() as f32;
-    let rr = r * (90.0 - alt_deg.clamp(-90.0, 90.0)) / 90.0;
-    (cx + rr * az.sin(), cy - rr * az.cos(), alt_deg > 0.0)
-}
 
 /// Cielo del observador: proyección azimutal (cénit al centro, horizonte
 /// al borde) de los cuerpos en alt/az. Compone `DrawCommand`s y los pinta
@@ -1385,132 +1359,331 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
     let Some(astro) = &model.astro else {
         return pending_view("Cielo del observador — calculando…", theme);
     };
-    let cx = size / 2.0;
-    let cy = size / 2.0;
-    let r = size * 0.42;
-    let grid = rgba_of(theme.border);
-    let card = rgba_of(theme.fg_muted);
-    let body_col = if model.cfg.theme_dark {
-        Rgba { r: 0.95, g: 0.85, b: 0.45, a: 1.0 }
-    } else {
-        Rgba { r: 0.85, g: 0.60, b: 0.10, a: 1.0 }
-    };
-    let label_col = rgba_of(theme.fg_text);
+    let dark = model.cfg.theme_dark;
+    let nadir = model.sky_nadir;
+    let probe = model.sky_probe;
+    let lst = astro.lst_deg;
+    let lat = astro.lat_deg;
+    let pal = graphics_palette(model);
+    // Cuerpos: (nombre canónico, altitud°, azimut°).
+    let bodies: Vec<(String, f64, f64)> = astro
+        .sky
+        .iter()
+        .map(|(b, p)| (b.canonical().to_string(), p.altitude_deg, p.azimuth_deg))
+        .collect();
+    // La línea media de la Vía Láctea (ecuador galáctico) y las estrellas
+    // reales — datos del catálogo agnóstico de cosmos-render.
+    let galaxy = cosmos_render::sky_data::galactic_equator(420);
+    let fg_text = rgba_of(theme.fg_text);
+    let fg_muted = rgba_of(theme.fg_muted);
+    let border = rgba_of(theme.border);
+    let bg = graphics_bg(model);
 
-    let mut cmds: Vec<DrawCommand> = Vec::new();
-    // Horizonte + anillos de altitud (30°, 60°).
-    cmds.push(DrawCommand::Circle {
-        cx,
-        cy,
-        r,
-        stroke: Some(grid),
-        fill: None,
-        stroke_w: 1.5,
-    });
-    for alt in [30.0_f32, 60.0_f32] {
-        cmds.push(DrawCommand::Circle {
-            cx,
-            cy,
-            r: r * (90.0 - alt) / 90.0,
-            stroke: Some(grid),
-            fill: None,
-            stroke_w: 0.7,
-        });
-    }
-    // Figuras de constelaciones proyectadas al cielo del observador
-    // (alt/az), sólo los segmentos por encima del horizonte.
-    let cons_col = Rgba {
-        a: 0.45,
-        ..rgba_of(theme.fg_muted)
-    };
-    for fig in cosmos_render::constellations_data::FIGURAS {
-        for path in fig.paths {
-            for seg in path.windows(2) {
-                let (ax, ay, a_up) =
-                    radec_to_sky(seg[0].0, seg[0].1, astro.lst_deg, astro.lat_deg, cx, cy, r);
-                let (bx, by, b_up) =
-                    radec_to_sky(seg[1].0, seg[1].1, astro.lst_deg, astro.lat_deg, cx, cy, r);
-                if a_up && b_up {
-                    cmds.push(DrawCommand::Line {
-                        x1: ax,
-                        y1: ay,
-                        x2: bx,
-                        y2: by,
-                        color: cons_col,
-                        width: 0.6,
-                        dash: None,
-                    });
+    let canvas = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(0.0_f32),
+        },
+        flex_grow: 1.0,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
+    .radius(3.0)
+    .clip(true)
+    // Arrastrar sondea la cúpula: muestra alt/az bajo el cursor.
+    .draggable_at(|phase, dx, dy, lx, ly| match phase {
+        DragPhase::Move => Some(Msg::SkyProbe(dx, dy, lx, ly)),
+        DragPhase::End => None,
+    })
+    .paint_with(move |scene, ts, rect: PaintRect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle as KCircle, Line as KLine, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::{Color as PColor, Fill};
+        use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
+
+        let cx = rect.x as f64 + rect.w as f64 * 0.5;
+        let cy = rect.y as f64 + rect.h as f64 * 0.5;
+        let r = (rect.w.min(rect.h) as f64) * 0.42;
+        let id = Affine::IDENTITY;
+        let col = |c: Rgba| {
+            PColor::from_rgba8(
+                (c.r * 255.0) as u8,
+                (c.g * 255.0) as u8,
+                (c.b * 255.0) as u8,
+                (c.a.clamp(0.0, 1.0) * 255.0) as u8,
+            )
+        };
+        let disc = |scene: &mut llimphi_ui::llimphi_raster::vello::Scene, x: f64, y: f64, rad: f64, c: PColor| {
+            scene.fill(Fill::NonZero, id, c, None, &KCircle::new((x, y), rad));
+        };
+        let ring = |scene: &mut llimphi_ui::llimphi_raster::vello::Scene, x: f64, y: f64, rad: f64, w: f64, c: PColor| {
+            scene.stroke(&Stroke::new(w), id, c, None, &KCircle::new((x, y), rad));
+        };
+        let seg = |scene: &mut llimphi_ui::llimphi_raster::vello::Scene, a: (f64, f64), b: (f64, f64), w: f64, c: PColor| {
+            scene.stroke(&Stroke::new(w), id, c, None, &KLine::new(a, b));
+        };
+        let text = |scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+                    ts: &mut llimphi_ui::llimphi_text::Typesetter,
+                    x: f64,
+                    y: f64,
+                    s: &str,
+                    size_px: f32,
+                    c: PColor,
+                    center: bool| {
+            let approx = size_px as f64 * s.chars().count() as f64 * 0.5;
+            let block = TextBlock {
+                text: s,
+                size_px,
+                color: c,
+                origin: (if center { x - approx } else { x }, y - size_px as f64 * 0.5),
+                max_width: if center { Some(approx as f32 * 2.0) } else { None },
+                alignment: if center { Alignment::Center } else { Alignment::Start },
+                line_height: 1.0,
+                italic: false,
+                font_family: None,
+            };
+            let layout = layout_block(ts, &block);
+            draw_layout(scene, &layout, c, block.origin);
+        };
+
+        // alt/az del observador para una posición ecuatorial.
+        let radec_altaz = move |ra: f64, dec: f64| -> (f64, f64) {
+            let h = ((lst - ra).rem_euclid(360.0)).to_radians();
+            let decr = dec.to_radians();
+            let latr = lat.to_radians();
+            let sin_alt = decr.sin() * latr.sin() + decr.cos() * latr.cos() * h.cos();
+            let alt = sin_alt.clamp(-1.0, 1.0).asin().to_degrees();
+            let a_south = h.sin().atan2(h.cos() * latr.sin() - decr.tan() * latr.cos());
+            let az = (a_south.to_degrees() + 180.0).rem_euclid(360.0);
+            (alt, az)
+        };
+        // Cúpula azimutal: (alt°, az°) → (x, y, visible). En modo cénit el
+        // centro es el cénit y se ve el hemisferio sobre el horizonte; en
+        // nadir el centro es el nadir, el este-oeste se espeja (como mirar
+        // hacia abajo) y se ve el hemisferio bajo el horizonte.
+        let dome = move |alt: f64, az: f64| -> (f64, f64, bool) {
+            let azr = az.to_radians();
+            if !nadir {
+                let rr = r * (90.0 - alt) / 90.0;
+                (cx + rr * azr.sin(), cy - rr * azr.cos(), alt > 0.0)
+            } else {
+                let rr = r * (90.0 + alt) / 90.0;
+                (cx - rr * azr.sin(), cy - rr * azr.cos(), alt < 0.0)
+            }
+        };
+
+        // --- Disco del cielo ---
+        let dome_fill = if dark {
+            PColor::from_rgba8(7, 9, 16, 255)
+        } else {
+            PColor::from_rgba8(232, 238, 246, 255)
+        };
+        disc(scene, cx, cy, r, dome_fill);
+
+        // --- Vía Láctea: banda difusa a lo largo del plano galáctico ---
+        let band = if dark {
+            Rgba { r: 0.80, g: 0.84, b: 0.98, a: 1.0 }
+        } else {
+            Rgba { r: 0.42, g: 0.48, b: 0.62, a: 1.0 }
+        };
+        for gs in &galaxy {
+            let (alt, az) = radec_altaz(gs.ra_deg as f64, gs.dec_deg as f64);
+            let (x, y, vis) = dome(alt, az);
+            if !vis {
+                continue;
+            }
+            let bright = 0.30 + 0.70 * (gs.toward_center * gs.toward_center) as f64;
+            disc(scene, x, y, r * 0.055, col(band.with_alpha((0.07 * bright) as f32)));
+        }
+
+        // --- Figuras de constelaciones (tenues) ---
+        let cons_col = col(fg_muted.with_alpha(0.34));
+        for fig in cosmos_render::constellations_data::FIGURAS {
+            for path in fig.paths {
+                for s in path.windows(2) {
+                    let (a_alt, a_az) = radec_altaz(s[0].0 as f64, s[0].1 as f64);
+                    let (b_alt, b_az) = radec_altaz(s[1].0 as f64, s[1].1 as f64);
+                    let (ax, ay, au) = dome(a_alt, a_az);
+                    let (bx, by, bu) = dome(b_alt, b_az);
+                    if au && bu {
+                        seg(scene, (ax, ay), (bx, by), 0.6, cons_col);
+                    }
                 }
             }
         }
-    }
-    // Cruz de cardinales.
-    cmds.push(DrawCommand::Line {
-        x1: cx - r,
-        y1: cy,
-        x2: cx + r,
-        y2: cy,
-        color: grid,
-        width: 0.7,
-        dash: None,
-    });
-    cmds.push(DrawCommand::Line {
-        x1: cx,
-        y1: cy - r,
-        x2: cx,
-        y2: cy + r,
-        color: grid,
-        width: 0.7,
-        dash: None,
-    });
-    for (txt, dx, dy) in [
-        ("N", 0.0, -1.0),
-        ("S", 0.0, 1.0),
-        ("E", 1.0, 0.0),
-        ("O", -1.0, 0.0),
-    ] {
-        cmds.push(DrawCommand::Text {
-            x: cx + dx * (r + 12.0),
-            y: cy + dy * (r + 12.0),
-            content: txt.to_string(),
-            color: card,
-            size: 13.0,
-            anchor: TextAnchor::Middle,
-        });
-    }
-    // Cuerpos sobre el horizonte: azimut → ángulo (N arriba, E derecha),
-    // altitud → radio (cénit al centro).
-    for (body, pos) in &astro.sky {
-        if !pos.above_horizon {
-            continue;
-        }
-        let alt = pos.altitude_deg as f32;
-        let az = (pos.azimuth_deg as f32).to_radians();
-        let rr = r * (90.0 - alt.clamp(0.0, 90.0)) / 90.0;
-        let x = cx + rr * az.sin();
-        let y = cy - rr * az.cos();
-        cmds.push(DrawCommand::Circle {
-            cx: x,
-            cy: y,
-            r: 4.0,
-            stroke: None,
-            fill: Some(body_col),
-            stroke_w: 1.0,
-        });
-        let abbr: String = format!("{body:?}").chars().take(2).collect();
-        cmds.push(DrawCommand::Text {
-            x,
-            y: y - 9.0,
-            content: abbr,
-            color: label_col,
-            size: 10.0,
-            anchor: TextAnchor::Middle,
-        });
-    }
 
-    let bg = graphics_bg(model);
-    let canvas = canvas_view::<Msg>(cmds, size, Some(bg));
-    canvas_column(None, canvas, size, fill)
+        // --- Estrellas brillantes reales: tamaño/brillo por magnitud ---
+        for st in cosmos_render::sky_data::BRIGHT_STARS {
+            let (alt, az) = radec_altaz(st.ra_deg as f64, st.dec_deg as f64);
+            let (x, y, vis) = dome(alt, az);
+            if !vis {
+                continue;
+            }
+            // mag −1.5 (Sirio) → brillante; mag 1.65 → tenue.
+            let b = (((1.8 - st.mag as f64) / 3.4).clamp(0.12, 1.0)).powf(0.8);
+            let rad = r * (0.006 + 0.013 * b);
+            let star_c = if dark {
+                Rgba { r: 0.86, g: 0.90, b: 1.0, a: (0.55 + 0.45 * b) as f32 }
+            } else {
+                Rgba { r: 0.10, g: 0.13, b: 0.22, a: (0.55 + 0.45 * b) as f32 }
+            };
+            disc(scene, x, y, rad, col(star_c));
+            // Destello en cruz para las muy brillantes.
+            if st.mag < 0.6 {
+                let ray = rad * 2.6;
+                let rc = col(star_c.with_alpha(star_c.a * 0.6));
+                seg(scene, (x - ray, y), (x + ray, y), 0.8, rc);
+                seg(scene, (x, y - ray), (x, y + ray), 0.8, rc);
+            }
+            // Nombre de las más brillantes.
+            if st.mag < 1.0 {
+                text(scene, ts, x, y - rad - 6.0, st.name, 9.0, col(fg_muted.with_alpha(0.85)), true);
+            }
+        }
+
+        // --- Anillos de altitud + cruz de cardinales ---
+        let grid_c = col(border.with_alpha(0.9));
+        ring(scene, cx, cy, r, 1.4, grid_c);
+        for alt in [30.0_f64, 60.0] {
+            let rr = r * (90.0 - alt) / 90.0;
+            ring(scene, cx, cy, rr, 0.6, col(border.with_alpha(0.5)));
+            // Etiqueta de altitud sobre el meridiano norte.
+            let (lx, ly, _) = dome(alt, 0.0);
+            text(scene, ts, lx + 3.0, ly, &format!("{}°", alt as i32), 8.5, col(fg_muted.with_alpha(0.7)), false);
+        }
+        seg(scene, (cx - r, cy), (cx + r, cy), 0.6, col(border.with_alpha(0.5)));
+        seg(scene, (cx, cy - r), (cx, cy + r), 0.6, col(border.with_alpha(0.5)));
+        // Cardinales — posición vía la proyección (espeja sola en nadir).
+        for (txt, az) in [("N", 0.0_f64), ("E", 90.0), ("S", 180.0), ("O", 270.0)] {
+            let (x, y, _) = dome(0.0, az);
+            let ux = (x - cx) * 1.06 + cx;
+            let uy = (y - cy) * 1.06 + cy;
+            text(scene, ts, ux, uy, txt, 13.0, col(fg_muted), true);
+        }
+
+        // --- Planetas con personalidad: color propio, tamaño por brillo,
+        //     adornos (rayos del Sol, anillo de Saturno) ---
+        for (name, alt, az) in &bodies {
+            let (x, y, vis) = dome(*alt, *az);
+            if !vis {
+                continue;
+            }
+            let pc = pal.planet(name);
+            // Presencia aparente de cada cuerpo (no a escala — legibilidad).
+            let k = match name.as_str() {
+                "sun" => 2.7,
+                "moon" => 2.4,
+                "jupiter" => 1.9,
+                "venus" => 1.8,
+                "saturn" => 1.6,
+                "mars" => 1.4,
+                "mercury" => 1.05,
+                "uranus" => 1.1,
+                "neptune" => 1.1,
+                "pluto" => 0.85,
+                _ => 1.2,
+            };
+            let rad = r * 0.011 * k;
+            // Halo suave del color del cuerpo.
+            disc(scene, x, y, rad * 1.9, col(pc.with_alpha(0.18)));
+            disc(scene, x, y, rad, col(pc));
+            ring(scene, x, y, rad, 1.0, col(pc.with_alpha(0.9)));
+            match name.as_str() {
+                "sun" => {
+                    let rc = col(pc.with_alpha(0.85));
+                    for k8 in 0..8 {
+                        let a = std::f64::consts::PI * k8 as f64 / 4.0;
+                        let (s, c) = a.sin_cos();
+                        seg(scene, (x + c * rad * 1.4, y + s * rad * 1.4), (x + c * rad * 2.2, y + s * rad * 2.2), 1.0, rc);
+                    }
+                }
+                "saturn" => {
+                    // Anillo inclinado.
+                    let rc = col(pc.with_alpha(0.9));
+                    scene.stroke(
+                        &Stroke::new(1.0),
+                        Affine::translate((x, y)) * Affine::rotate(-0.5) * Affine::scale_non_uniform(1.0, 0.42),
+                        rc,
+                        None,
+                        &KCircle::new((0.0, 0.0), rad * 1.7),
+                    );
+                }
+                _ => {}
+            }
+            text(scene, ts, x, y - rad - 7.0, crate::format::simbolo_cuerpo(name), 10.0, col(fg_text), true);
+        }
+
+        // --- Readout del mouse: alt/az bajo el cursor ---
+        if let Some((lx, ly)) = probe {
+            let ox = lx as f64 - rect.w as f64 * 0.5;
+            let oy = ly as f64 - rect.h as f64 * 0.5;
+            let rr = (ox * ox + oy * oy).sqrt().min(r);
+            let f = if r > 0.0 { rr / r } else { 0.0 };
+            let (alt, az) = if !nadir {
+                (90.0 * (1.0 - f), ox.atan2(-oy).to_degrees().rem_euclid(360.0))
+            } else {
+                (-90.0 * (1.0 - f), (-ox).atan2(-oy).to_degrees().rem_euclid(360.0))
+            };
+            let px = cx + ox;
+            let py = cy + oy;
+            let cross = col(fg_text.with_alpha(0.8));
+            seg(scene, (px - 6.0, py), (px + 6.0, py), 1.0, cross);
+            seg(scene, (px, py - 6.0), (px, py + 6.0), 1.0, cross);
+            ring(scene, px, py, 5.0, 1.0, cross);
+            let rd = format!("alt {:+.1}°   az {:.1}°", alt, az);
+            text(scene, ts, rect.x as f64 + 8.0, rect.y as f64 + 14.0, &rd, 11.0, col(fg_text), false);
+        }
+
+        // --- Encabezado: modo + lugar ---
+        let modo = if nadir { "Nadir (hemisferio bajo el horizonte)" } else { "Cénit (cielo visible)" };
+        text(scene, ts, rect.x as f64 + 8.0, rect.y as f64 + rect.h as f64 - 10.0, modo, 9.5, col(fg_muted.with_alpha(0.85)), false);
+    });
+
+    canvas_column(Some(sky_controls(nadir, theme)), canvas, size, fill)
+}
+
+/// Controles del Cielo: alterna cénit/nadir.
+fn sky_controls(nadir: bool, theme: &Theme) -> View<Msg> {
+    let label = if nadir { "Ver cénit ↑" } else { "Ver nadir ↓" };
+    let btn = View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(24.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .radius(4.0)
+    .fill(theme.bg_panel)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::ToggleSkyNadir)
+    .text_aligned(label.to_string(), 11.0, theme.fg_text, Alignment::Center);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: auto(),
+            height: length(26.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![btn])
 }
 
 /// Tira de pestañas de cartas abiertas (multi-carta). Cada pestaña: label
