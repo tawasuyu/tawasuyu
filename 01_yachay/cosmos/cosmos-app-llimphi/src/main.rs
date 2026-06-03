@@ -20,6 +20,7 @@ mod astroview;
 mod chrome;
 mod engine;
 mod format;
+mod glyphs;
 mod library;
 mod model;
 mod persist;

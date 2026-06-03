@@ -134,7 +134,6 @@ impl ToolCat {
             ToolCat::Principal => &[
                 ToolPanel::Carta,
                 ToolPanel::Aspectos,
-                ToolPanel::AspectosTopo,
                 ToolPanel::Cuerpos,
             ],
             ToolCat::Analisis => &[
@@ -192,8 +191,8 @@ impl ToolPanel {
     pub(crate) fn title(self) -> &'static str {
         match self {
             ToolPanel::Carta => "Datos de la carta",
-            ToolPanel::Aspectos => "Aspectos",
-            ToolPanel::AspectosTopo => "Aspectos · topocéntrico",
+            ToolPanel::Aspectos => "Aspectos (geo · topo)",
+            ToolPanel::AspectosTopo => "Aspectos (geo · topo)",
             ToolPanel::Cuerpos => "Cuerpos",
             ToolPanel::Cualidades => "Cualidades",
             ToolPanel::Uraniano => "Uraniano",

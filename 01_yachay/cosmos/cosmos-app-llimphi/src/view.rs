@@ -1,13 +1,18 @@
 //! Renderers de contenido de los paneles astrológicos. Cada función
-//! devuelve el `View` que se monta en el área central cuando su pestaña
-//! está activa (carta, cuerpos, aspectos, aspectario, cualidades,
-//! uraniano, lotes/estrellas/puntos como layers genéricas, corpus). El
-//! chrome (menú, árbol, pestañas, barra de estado, menús contextuales)
-//! vive en [`crate::chrome`]; las gráficas astronómicas en
-//! [`crate::astroview`].
+//! devuelve el `View` que se monta en el panel de herramientas cuando su
+//! sección está expandida (carta, cuerpos, aspectos, cualidades,
+//! uraniano, lotes/estrellas/puntos como layers genéricas, corpus).
+//!
+//! **Sin tofus**: cuerpos, signos y aspectos se pintan como glyphs
+//! vectoriales (mini-canvas) vía [`crate::glyphs`] — nunca unicode
+//! astrológico ni abreviaturas tipo "Sag". El chrome (menú, árbol,
+//! pestañas, barra de estado, menús contextuales) vive en
+//! [`crate::chrome`]; las gráficas astronómicas en [`crate::astroview`].
+
+use std::collections::HashMap;
 
 use cosmos_engine::{combinaciones_de_carta, corpus_inputs, Corpus};
-use cosmos_render::{AspectSummary, LayerKind, RenderModel, UranianGroup};
+use cosmos_render::{LayerKind, Palette, RenderModel, Rgba, UranianGroup};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
@@ -17,8 +22,16 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
-use crate::format::{fmt_deg_sign, fmt_dms, signo_de_longitud, simbolo_aspecto, simbolo_cuerpo};
+use crate::format::fmt_dms;
+use crate::glyphs::{self, sign_id};
 use crate::model::{Model, Msg};
+
+/// Alto de fila estándar de las tablas.
+const ROW_H: f32 = 20.0;
+/// Lado del glyph de cuerpo/aspecto en las filas.
+const GLYPH: f32 = 16.0;
+/// Lado del glyph de signo (un poco menor para diferenciar).
+const SGN: f32 = 14.0;
 
 // =====================================================================
 // Helpers compartidos
@@ -89,6 +102,86 @@ pub(crate) fn section_label(text: String, theme: &Theme) -> View<Msg> {
     .text_aligned(text, 11.0, theme.accent, Alignment::Start)
 }
 
+/// Una fila horizontal de celdas, alto [`ROW_H`].
+fn cells_row(cells: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(ROW_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(3.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(cells)
+}
+
+/// Celda de texto de ancho fijo.
+fn txt_cell(text: String, w: f32, size: f32, color: Color, align: Alignment) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(w),
+            height: length(ROW_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(text, size, color, align)
+}
+
+fn rgba_to_color(c: Rgba) -> Color {
+    let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    Color::from_rgba8(to_byte(c.r), to_byte(c.g), to_byte(c.b), to_byte(c.a))
+}
+
+/// Color elemental del signo en la longitud dada.
+fn sign_color(deg: f32) -> Color {
+    rgba_to_color(Palette::dark().sign(sign_id(deg)))
+}
+
+/// Grupo compacto cuerpo+signo (glyph del cuerpo seguido del glyph del
+/// signo donde cae, coloreado por elemento). `lon = None` → sólo cuerpo.
+fn body_sign(name: &str, lon: Option<f32>, theme: &Theme) -> View<Msg> {
+    let mut kids = vec![glyphs::body_view(name, GLYPH, theme.fg_text)];
+    if let Some(d) = lon {
+        kids.push(glyphs::sign_view(sign_id(d), SGN, sign_color(d)));
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: length(GLYPH + SGN + 4.0),
+            height: length(ROW_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(kids)
+}
+
+/// Mapa cuerpo→longitud eclíptica desde la capa natal de cuerpos. Se usa
+/// para resolver el signo de cada extremo de un aspecto.
+fn body_lons(render: &RenderModel) -> HashMap<String, f32> {
+    let mut m = HashMap::new();
+    for l in &render.layers {
+        if l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies) {
+            for g in &l.glyphs {
+                m.insert(g.symbol.clone(), g.deg);
+            }
+        }
+    }
+    // Ángulos del chart, por si un aspecto los referencia.
+    m.entry("asc".into()).or_insert(render.ascendant_deg);
+    m.entry("mc".into()).or_insert(render.midheaven_deg);
+    m
+}
+
 // =====================================================================
 // Carta (datos del nacimiento)
 // =====================================================================
@@ -115,25 +208,35 @@ pub(crate) fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
         bd.longitude_deg.abs(),
         if bd.longitude_deg >= 0.0 { "E" } else { "W" }
     );
-    let angles = format!(
-        "Asc {} · MC {} · Desc {} · IC {}",
-        fmt_deg_sign(model.render.ascendant_deg),
-        fmt_deg_sign(model.render.midheaven_deg),
-        fmt_deg_sign(model.render.descendant_deg),
-        fmt_deg_sign(model.render.imum_coeli_deg),
-    );
 
-    tile_container(
-        vec![
-            line(model.chart.label.clone(), 14.0, theme.fg_text),
-            line(lugar, 11.0, theme.fg_muted),
-            line(fecha, 11.0, theme.fg_muted),
-            line(lat_long, 11.0, theme.fg_muted),
-            section_label("Ángulos".to_string(), theme),
-            line(angles, 11.0, theme.fg_text),
-        ],
-        theme,
-    )
+    let r = &model.render;
+    let angles = [
+        ("Asc", r.ascendant_deg),
+        ("MC", r.midheaven_deg),
+        ("Dc", r.descendant_deg),
+        ("IC", r.imum_coeli_deg),
+    ];
+    let mut rows: Vec<View<Msg>> = vec![
+        line(model.chart.label.clone(), 14.0, theme.fg_text),
+        line(lugar, 11.0, theme.fg_muted),
+        line(fecha, 11.0, theme.fg_muted),
+        line(lat_long, 11.0, theme.fg_muted),
+        section_label("Ángulos".to_string(), theme),
+    ];
+    for (name, deg) in angles {
+        rows.push(cells_row(vec![
+            txt_cell(name.to_string(), 32.0, 12.0, theme.fg_text, Alignment::Start),
+            txt_cell(
+                fmt_dms((deg.rem_euclid(30.0)) as f64),
+                56.0,
+                12.0,
+                theme.fg_muted,
+                Alignment::Start,
+            ),
+            glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
+        ]));
+    }
+    tile_container(rows, theme)
 }
 
 // =====================================================================
@@ -147,22 +250,28 @@ pub(crate) fn tile_cuerpos(render: &RenderModel, theme: &Theme) -> View<Msg> {
         .filter(|l| l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies))
         .flat_map(|l| l.glyphs.iter())
         .map(|g| {
-            let sign = signo_de_longitud(g.deg);
             let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
-            let body = simbolo_cuerpo(&g.symbol);
-            let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
-            // "℞" no está en LiberationSans — usamos "(R)".
-            let retro = if g.retrograde { " (R)" } else { "" };
+            let house = g
+                .house
+                .map(|h| format!("h{h}"))
+                .unwrap_or_default();
+            let retro = if g.retrograde { "R" } else { "" };
             let dignity = g.dignity_marker.clone().unwrap_or_default();
-            let line_str = format!("{body} {dms} {sign}{casa}{retro}{dignity}");
-            line(line_str, 12.0, theme.fg_text)
+            cells_row(vec![
+                glyphs::body_view(&g.symbol, GLYPH, theme.fg_text),
+                txt_cell(dms, 56.0, 12.0, theme.fg_text, Alignment::Start),
+                glyphs::sign_view(sign_id(g.deg), SGN, sign_color(g.deg)),
+                txt_cell(house, 30.0, 11.0, theme.fg_muted, Alignment::Start),
+                txt_cell(retro.to_string(), 14.0, 11.0, theme.fg_destructive, Alignment::Center),
+                txt_cell(dignity, 16.0, 11.0, theme.accent, Alignment::Center),
+            ])
         })
         .collect();
     tile_container(rows, theme)
 }
 
 // =====================================================================
-// Aspectos (filtrado por module_id) + aspectario triangular
+// Aspectos — tabla unificada geocéntrico + topocéntrico
 // =====================================================================
 
 fn aspecto_importancia(kind: &str) -> u8 {
@@ -172,98 +281,129 @@ fn aspecto_importancia(kind: &str) -> u8 {
     }
 }
 
-fn aspecto_color(kind: &str) -> Color {
-    let pal = cosmos_render::Palette::dark();
-    let c = pal.aspect(kind);
-    let to_byte = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
-    Color::from_rgba8(to_byte(c.r), to_byte(c.g), to_byte(c.b), to_byte(c.a))
+/// Una fila de la tabla unificada: un par (de cuerpos, aspecto) con su
+/// orbe geocéntrico y/o topocéntrico.
+struct AspRow {
+    kind: String,
+    from: String,
+    to: String,
+    geo: Option<f64>,
+    topo: Option<f64>,
+    applying: Option<bool>,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn aspect_row(
-    kind_code: &str,
-    from: &str,
-    to: &str,
-    orb_dms: &str,
-    dir: &str,
-    kind_id: &str,
-    theme: &Theme,
-) -> View<Msg> {
-    let size = 12.0_f32;
-    let kind_color = aspecto_color(kind_id);
-    let cell = |text: String, color: Color, w: f32| -> View<Msg> {
-        View::new(Style {
-            size: Size {
-                width: length(w),
-                height: length(size + 4.0_f32),
-            },
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(text, size, color, Alignment::Start)
-    };
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(size + 4.0_f32),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(vec![
-        cell(kind_code.to_string(), kind_color, 34.0),
-        cell(from.to_string(), theme.fg_text, 44.0),
-        cell(to.to_string(), theme.fg_text, 44.0),
-        cell(orb_dms.to_string(), theme.fg_muted, 60.0),
-        cell(dir.to_string(), theme.fg_muted, 24.0),
-    ])
+fn sorted_pair(a: &str, b: &str) -> (String, String) {
+    if a <= b {
+        (a.into(), b.into())
+    } else {
+        (b.into(), a.into())
+    }
 }
 
-pub(crate) fn tile_aspectos(render: &RenderModel, module_id: &str, theme: &Theme) -> View<Msg> {
-    let mut asps: Vec<&AspectSummary> = render
-        .aspect_summary
-        .iter()
-        .filter(|a| a.module_id == module_id)
-        .collect();
-    asps.sort_by(|a, b| {
+/// Tabla unificada de aspectos: geocéntrico (módulo `natal`) y
+/// topocéntrico (módulo `topocentric`) en la misma grilla, con la
+/// diferencia de orbe entre ambos y los glyphs del aspecto, los cuerpos
+/// y sus signos.
+pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
+    let lons = body_lons(render);
+    let mut map: HashMap<(String, String, String), AspRow> = HashMap::new();
+
+    for a in &render.aspect_summary {
+        let topo = a.module_id == "topocentric";
+        if !topo && a.module_id != "natal" {
+            continue;
+        }
+        let (from, to) = sorted_pair(&a.from_body, &a.to_body);
+        let key = (from.clone(), to.clone(), a.kind.clone());
+        let row = map.entry(key).or_insert_with(|| AspRow {
+            kind: a.kind.clone(),
+            from,
+            to,
+            geo: None,
+            topo: None,
+            applying: None,
+        });
+        if topo {
+            row.topo = Some(a.orb_deg);
+        } else {
+            row.geo = Some(a.orb_deg);
+            row.applying = a.applying;
+        }
+    }
+
+    let mut rows: Vec<AspRow> = map.into_values().collect();
+    rows.sort_by(|a, b| {
         aspecto_importancia(&a.kind)
             .cmp(&aspecto_importancia(&b.kind))
             .then_with(|| {
-                a.orb_deg
-                    .partial_cmp(&b.orb_deg)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+                let oa = a.geo.or(a.topo).unwrap_or(99.0);
+                let ob = b.geo.or(b.topo).unwrap_or(99.0);
+                oa.partial_cmp(&ob).unwrap_or(std::cmp::Ordering::Equal)
             })
     });
-    let rows: Vec<View<Msg>> = asps
-        .into_iter()
-        .take(40)
-        .map(|a| {
-            let from = simbolo_cuerpo(&a.from_body);
-            let to = simbolo_cuerpo(&a.to_body);
-            let kind = simbolo_aspecto(&a.kind);
-            let dms = fmt_dms(a.orb_deg);
-            let dir = match a.applying {
-                Some(true) => " ◄",
-                Some(false) => " ►",
-                None => "",
-            };
-            aspect_row(kind, from, to, &dms, dir, a.kind.as_str(), theme)
-        })
-        .collect();
+
     if rows.is_empty() {
         return tile_container(
-            vec![line(
-                rimay_localize::t("cosmos-empty"),
-                12.0,
-                theme.fg_muted,
-            )],
+            vec![line(rimay_localize::t("cosmos-empty"), 12.0, theme.fg_muted)],
             theme,
         );
     }
-    tile_container(rows, theme)
+
+    // Cabecera de columnas.
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(3.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        txt_cell(String::new(), GLYPH, 10.0, theme.fg_muted, Alignment::Start),
+        txt_cell(String::new(), GLYPH + SGN + 4.0, 10.0, theme.fg_muted, Alignment::Start),
+        txt_cell(String::new(), GLYPH + SGN + 4.0, 10.0, theme.fg_muted, Alignment::Start),
+        txt_cell("geo".to_string(), 46.0, 10.0, theme.fg_muted, Alignment::Start),
+        txt_cell("topo".to_string(), 46.0, 10.0, theme.fg_muted, Alignment::Start),
+        txt_cell("Δ".to_string(), 40.0, 10.0, theme.fg_muted, Alignment::Start),
+    ]);
+
+    let mut out: Vec<View<Msg>> = Vec::with_capacity(rows.len() + 1);
+    out.push(header);
+    for row in rows.into_iter().take(60) {
+        let geo = row
+            .geo
+            .map(fmt_dms)
+            .unwrap_or_else(|| "—".to_string());
+        let topo = row
+            .topo
+            .map(fmt_dms)
+            .unwrap_or_else(|| "—".to_string());
+        let diff = match (row.geo, row.topo) {
+            (Some(g), Some(t)) => format!("{:+.0}'", (t - g) * 60.0),
+            _ => "—".to_string(),
+        };
+        let dir = match row.applying {
+            Some(true) => glyphs::icon_view(glyphs::Icon::Applying, 12.0, theme.fg_muted),
+            Some(false) => glyphs::icon_view(glyphs::Icon::Separating, 12.0, theme.fg_muted),
+            None => txt_cell(String::new(), 12.0, 10.0, theme.fg_muted, Alignment::Center),
+        };
+        out.push(cells_row(vec![
+            glyphs::aspect_view(&row.kind, GLYPH),
+            body_sign(&row.from, lons.get(&row.from).copied(), theme),
+            body_sign(&row.to, lons.get(&row.to).copied(), theme),
+            txt_cell(geo, 46.0, 11.0, theme.fg_text, Alignment::Start),
+            txt_cell(topo, 46.0, 11.0, theme.fg_text, Alignment::Start),
+            txt_cell(diff, 40.0, 11.0, theme.fg_muted, Alignment::Start),
+            dir,
+        ]));
+    }
+    tile_container(out, theme)
 }
 
 // =====================================================================
@@ -286,12 +426,17 @@ pub(crate) fn tile_uraniano(groups: &[UranianGroup], theme: &Theme) -> View<Msg>
         .iter()
         .take(40)
         .map(|g| {
-            let bodies: Vec<String> = g.bodies.iter().map(|b| simbolo_cuerpo(b).into()).collect();
-            line(
-                format!("{:.1}°  {}", g.mod90_deg, bodies.join(" ")),
+            let mut cells: Vec<View<Msg>> = vec![txt_cell(
+                format!("{:.1}°", g.mod90_deg),
+                52.0,
                 12.0,
                 theme.fg_text,
-            )
+                Alignment::Start,
+            )];
+            for b in &g.bodies {
+                cells.push(glyphs::body_view(b, GLYPH, theme.fg_text));
+            }
+            cells_row(cells)
         })
         .collect();
     tile_container(rows, theme)
@@ -310,16 +455,15 @@ pub(crate) fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> 
         .map(|g| (g.symbol.as_str(), g.deg))
         .collect();
 
-    let mut elementos: [Vec<&'static str>; 4] = Default::default();
-    let mut modalidades: [Vec<&'static str>; 3] = Default::default();
-    let mut polaridad: [Vec<&'static str>; 2] = Default::default();
+    let mut elementos: [Vec<&str>; 4] = Default::default();
+    let mut modalidades: [Vec<&str>; 3] = Default::default();
+    let mut polaridad: [Vec<&str>; 2] = Default::default();
 
     for (name, deg) in &bodies {
         let sign_idx = ((deg.rem_euclid(360.0) / 30.0) as usize) % 12;
-        let glyph = simbolo_cuerpo(name);
-        elementos[sign_idx % 4].push(glyph);
-        modalidades[sign_idx % 3].push(glyph);
-        polaridad[sign_idx % 2].push(glyph);
+        elementos[sign_idx % 4].push(name);
+        modalidades[sign_idx % 3].push(name);
+        polaridad[sign_idx % 2].push(name);
     }
 
     let elem_labels = ["Fuego", "Tierra", "Aire", "Agua"];
@@ -342,13 +486,52 @@ pub(crate) fn tile_cualidades(render: &RenderModel, theme: &Theme) -> View<Msg> 
     tile_container(rows, theme)
 }
 
-fn fila_cualidad(label: &str, glyphs: &[&str], theme: &Theme) -> View<Msg> {
-    let count = glyphs.len();
-    let bar_len = count.min(10);
-    let bar: String = "█".repeat(bar_len) + &"░".repeat(10_usize.saturating_sub(bar_len));
-    let glyph_str = glyphs.join(" ");
-    let txt = format!("{label:>9}  {bar}  {count}  {glyph_str}");
-    line(txt, 12.0, theme.fg_text)
+/// Una fila de cualidad: etiqueta + barra (rect rellena sobre track) +
+/// los glyphs de los cuerpos que caen ahí.
+fn fila_cualidad(label: &str, bodies: &[&str], theme: &Theme) -> View<Msg> {
+    let count = bodies.len();
+    let frac = (count as f32 / 10.0).clamp(0.0, 1.0);
+
+    let lbl = txt_cell(label.to_string(), 56.0, 11.0, theme.fg_text, Alignment::Start);
+
+    // Barra: track + relleno proporcional.
+    let bar = View::new(Style {
+        size: Size {
+            width: length(64.0_f32),
+            height: length(8.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(3.0)
+    .children(vec![View::new(Style {
+        size: Size {
+            width: percent(frac),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .radius(3.0)]);
+    let bar_box = View::new(Style {
+        size: Size {
+            width: length(64.0_f32),
+            height: length(ROW_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![bar]);
+
+    let cnt = txt_cell(count.to_string(), 16.0, 11.0, theme.fg_muted, Alignment::Center);
+
+    let mut cells = vec![lbl, bar_box, cnt];
+    for b in bodies.iter().take(8) {
+        cells.push(glyphs::body_view(b, GLYPH, theme.fg_text));
+    }
+    cells_row(cells)
 }
 
 // =====================================================================
@@ -365,16 +548,11 @@ pub(crate) fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
         .collect();
     if bodies.len() < 2 {
         return tile_container(
-            vec![line(
-                rimay_localize::t("cosmos-empty"),
-                12.0,
-                theme.fg_muted,
-            )],
+            vec![line(rimay_localize::t("cosmos-empty"), 12.0, theme.fg_muted)],
             theme,
         );
     }
-    let mut aspects: std::collections::HashMap<(String, String), String> =
-        std::collections::HashMap::new();
+    let mut aspects: HashMap<(String, String), String> = HashMap::new();
     for a in &render.aspect_summary {
         if a.module_id != "natal" {
             continue;
@@ -383,28 +561,21 @@ pub(crate) fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
         aspects.insert(key, a.kind.clone());
     }
     const CELL: f32 = 24.0;
-    const LBL: f32 = 26.0;
     let rows: Vec<View<Msg>> = bodies
         .iter()
         .enumerate()
         .map(|(i, body_i)| {
-            let mut cells: Vec<View<Msg>> = Vec::with_capacity(i + 1);
-            cells.push(box_cell(
-                simbolo_cuerpo(body_i),
-                theme.fg_text,
-                None,
-                LBL,
-                CELL,
-                theme,
-            ));
+            let mut cells: Vec<View<Msg>> =
+                vec![box_cell(Some(glyphs::body_view(body_i, GLYPH, theme.fg_text)), None)];
             for body_j in bodies.iter().take(i) {
                 let pair = sorted_pair(body_i, body_j);
-                let asp = aspects.get(&pair);
-                let (text, bg) = match asp {
-                    Some(k) => (simbolo_aspecto(k), Some(theme.bg_panel_alt)),
-                    None => ("·", None),
-                };
-                cells.push(box_cell(text, theme.fg_text, bg, CELL, CELL, theme));
+                match aspects.get(&pair) {
+                    Some(k) => cells.push(box_cell(
+                        Some(glyphs::aspect_view(k, GLYPH)),
+                        Some(theme.bg_panel_alt),
+                    )),
+                    None => cells.push(box_cell(None, None)),
+                }
             }
             View::new(Style {
                 flex_direction: FlexDirection::Row,
@@ -421,37 +592,25 @@ pub(crate) fn tile_box_graph(render: &RenderModel, theme: &Theme) -> View<Msg> {
     tile_container(rows, theme)
 }
 
-fn box_cell(
-    text: &'static str,
-    fg: Color,
-    bg: Option<Color>,
-    w: f32,
-    h: f32,
-    _theme: &Theme,
-) -> View<Msg> {
+fn box_cell(content: Option<View<Msg>>, bg: Option<Color>) -> View<Msg> {
+    const CELL: f32 = 24.0;
     let mut v = View::new(Style {
         size: Size {
-            width: length(w),
-            height: length(h),
+            width: length(CELL),
+            height: length(CELL),
         },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
-    })
-    .text_aligned(text.to_string(), 12.0, fg, Alignment::Center);
+    });
     if let Some(c) = bg {
         v = v.fill(c).radius(2.0);
     }
-    v
-}
-
-fn sorted_pair(a: &str, b: &str) -> (String, String) {
-    if a <= b {
-        (a.into(), b.into())
-    } else {
-        (b.into(), a.into())
+    if let Some(child) = content {
+        v = v.children(vec![child]);
     }
+    v
 }
 
 // =====================================================================
@@ -465,7 +624,7 @@ pub(crate) fn tile_layer_glyphs(
     hint: &str,
     theme: &Theme,
 ) -> View<Msg> {
-    let glyphs: Vec<&cosmos_render::Glyph> = render
+    let glyphs_v: Vec<&cosmos_render::Glyph> = render
         .layers
         .iter()
         .filter(|l| {
@@ -474,24 +633,29 @@ pub(crate) fn tile_layer_glyphs(
         })
         .flat_map(|l| l.glyphs.iter())
         .collect();
-    if glyphs.is_empty() {
+    if glyphs_v.is_empty() {
         return tile_container(vec![line(hint.to_string(), 12.0, theme.fg_muted)], theme);
     }
-    let rows: Vec<View<Msg>> = glyphs
+    let rows: Vec<View<Msg>> = glyphs_v
         .into_iter()
         .take(40)
         .map(|g| {
-            let label = if g.symbol.starts_with("lot:") {
-                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
-            } else if g.symbol.starts_with('✦') {
-                g.annotation.clone().unwrap_or_else(|| g.symbol.clone())
-            } else {
-                simbolo_cuerpo(&g.symbol).to_string()
-            };
-            let casa = g.house.map(|h| format!(" h{h}")).unwrap_or_default();
+            let casa = g.house.map(|h| format!("h{h}")).unwrap_or_default();
             let dms = fmt_dms(g.deg.rem_euclid(30.0) as f64);
-            let sign = signo_de_longitud(g.deg);
-            line(format!("{label}  {dms} {sign}{casa}"), 12.0, theme.fg_text)
+            // Lotes y estrellas traen una anotación textual; los puntos
+            // medios y demás son cuerpos con glyph.
+            let lead: View<Msg> = if g.symbol.starts_with("lot:") || g.symbol.starts_with('✦') {
+                let label = g.annotation.clone().unwrap_or_else(|| g.symbol.clone());
+                txt_cell(label, 96.0, 11.0, theme.fg_text, Alignment::Start)
+            } else {
+                glyphs::body_view(&g.symbol, GLYPH, theme.fg_text)
+            };
+            cells_row(vec![
+                lead,
+                txt_cell(dms, 56.0, 12.0, theme.fg_text, Alignment::Start),
+                glyphs::sign_view(sign_id(g.deg), SGN, sign_color(g.deg)),
+                txt_cell(casa, 30.0, 11.0, theme.fg_muted, Alignment::Start),
+            ])
         })
         .collect();
     tile_container(rows, theme)

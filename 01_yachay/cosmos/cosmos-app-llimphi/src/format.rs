@@ -6,23 +6,6 @@
 //! como path (`cosmos_render::glyphs`); acá son texto plano en filas, así que
 //! usamos códigos cortos.
 
-// Códigos alfabéticos de 3 letras (español) para los signos. Mismo motivo
-// que `simbolo_cuerpo`/`simbolo_aspecto`: los unicode `♈..♓` son ilegibles
-// como texto en una fila (y caían como `.notdef` en fuentes sin el bloque
-// astrológico). En el wheel sí van como path (`cosmos_render::glyphs`).
-const SIGNOS: [&str; 12] = [
-    "Ari", "Tau", "Gem", "Can", "Leo", "Vir", "Lib", "Esc", "Sag", "Cap", "Acu", "Pis",
-];
-
-pub(crate) fn signo_de_longitud(deg: f32) -> &'static str {
-    SIGNOS[((deg.rem_euclid(360.0) / 30.0) as usize) % 12]
-}
-
-pub(crate) fn fmt_deg_sign(deg: f32) -> String {
-    let dms = fmt_dms((deg.rem_euclid(30.0)) as f64);
-    format!("{dms} {}", signo_de_longitud(deg))
-}
-
 pub(crate) fn fmt_dms(deg: f64) -> String {
     let total_min = (deg.abs() * 60.0).round() as i64;
     let d = total_min / 60;
@@ -57,19 +40,3 @@ pub(crate) fn simbolo_cuerpo(s: &str) -> &'static str {
     }
 }
 
-/// Códigos alfabéticos para tipos de aspecto. Mismo motivo que
-/// [`simbolo_cuerpo`] — los unicode ☌☍△□⚹ no rendean.
-pub(crate) fn simbolo_aspecto(s: &str) -> &'static str {
-    match s {
-        "conjunction" => "con",
-        "opposition" => "opp",
-        "trine" => "tri",
-        "square" => "cua",
-        "sextile" => "sex",
-        "quincunx" => "qui",
-        "semi_sextile" => "ssx",
-        "semi_square" => "scu",
-        "sesquiquadrate" => "scq",
-        _ => "·",
-    }
-}
