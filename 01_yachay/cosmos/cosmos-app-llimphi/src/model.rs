@@ -734,16 +734,20 @@ impl Model {
     }
 
     /// Mueve `item` al `side` indicado (lo saca del otro), y lo activa.
+    /// Mantiene cada lado en orden canónico (Biblioteca, Principal,
+    /// Análisis, Astronomía, Sistema) — Principal primero, Sistema último.
     pub(crate) fn dock_move(&mut self, item: DockItem, side: DockSide) {
         self.dock_left.retain(|x| *x != item);
         self.dock_right.retain(|x| *x != item);
         match side {
             DockSide::Left => {
                 self.dock_left.push(item);
+                self.dock_left.sort_by_key(|i| i.to_u64());
                 self.active_left = Some(item);
             }
             DockSide::Right => {
                 self.dock_right.push(item);
+                self.dock_right.sort_by_key(|i| i.to_u64());
                 self.active_right = Some(item);
             }
         }

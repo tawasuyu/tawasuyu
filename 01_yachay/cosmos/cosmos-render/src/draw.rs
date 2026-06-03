@@ -161,6 +161,12 @@ pub struct CompositionOpts {
     /// atenúan (alpha = `0.18`) — el ojo del usuario va al cuerpo y
     /// sus relaciones.
     pub selected_body: Option<String>,
+    /// Factor de "detalle" del zoom: escala los **radios** (el aro crece
+    /// con el zoom, separando los cuerpos), pero los glyphs/textos crecen
+    /// mucho menos (≈ `detail^0.35`) y el grosor de las líneas casi nada.
+    /// Así el zoom *redibuja con más detalle* en vez de magnificar la
+    /// imagen estática. `1.0` = sin zoom.
+    pub detail: f32,
 }
 
 impl Default for CompositionOpts {
@@ -175,6 +181,7 @@ impl Default for CompositionOpts {
             show_minor_aspects: false,
             dial_3d: true,
             selected_body: None,
+            detail: 1.0,
         }
     }
 }
@@ -288,8 +295,13 @@ pub fn compose_wheel_with_hits(
 
     let cx = opts.size / 2.0;
     let cy = opts.size / 2.0;
+    // Zoom = más detalle: el aro crece con `detail` (separa los cuerpos),
+    // pero los glyphs/textos crecen con `body_k` (mucho menos) y el grosor
+    // de las líneas no escala (queda fino a cualquier zoom).
+    let detail = opts.detail.max(0.1);
+    let body_k = detail.powf(0.35);
     let margin = opts.size * 0.05;
-    let r_outer = (opts.size / 2.0) - margin;
+    let r_outer = ((opts.size / 2.0) - margin) * detail;
     let radii = Radii::from_outer(r_outer);
 
     let asc = model.ascendant_deg;
@@ -393,7 +405,7 @@ pub fn compose_wheel_with_hits(
     // path SVG vía `glyphs::sign_commands`. Cada signo aporta
     // múltiples DrawCommand (Line / Path / Circle) — los apilamos.
     let sign_ring_mid = (radii.sign_outer + radii.sign_inner) / 2.0;
-    let sign_glyph_size = opts.size * 0.045;
+    let sign_glyph_size = opts.size * 0.045 * body_k;
     let sign_stroke_w = (opts.size * 0.0030).max(1.2);
     for layer in &model.layers {
         if !matches!(layer.kind, crate::LayerKind::SignDial) {
@@ -544,7 +556,7 @@ pub fn compose_wheel_with_hits(
                     y: cy + gy,
                     content: format!("{}", h),
                     color: label_color,
-                    size: opts.size * 0.018,
+                    size: opts.size * 0.018 * body_k,
                     anchor: TextAnchor::Middle,
                 });
             }
@@ -576,9 +588,10 @@ pub fn compose_wheel_with_hits(
             }
             // Disco base y escala por cluster size. Proporción reducida
             // respecto a versiones previas: con cuerpos más chicos el zoom
-            // desenmaraña mejor las conjunciones apretadas.
-            let base_disk = opts.size * 0.0175;
-            let base_font = opts.size * 0.023;
+            // desenmaraña mejor las conjunciones apretadas. `body_k` los
+            // hace crecer poco con el zoom (el aro crece mucho más).
+            let base_disk = opts.size * 0.0175 * body_k;
+            let base_font = opts.size * 0.023 * body_k;
             for (i, g) in layer.glyphs.iter().enumerate() {
                 let disp_deg = display_degs[i];
                 if is_natal {
@@ -787,7 +800,7 @@ pub fn compose_wheel_with_hits(
                 y: cy + gy,
                 content: label.into(),
                 color: pal.angle_highlight,
-                size: opts.size * 0.022,
+                size: opts.size * 0.022 * body_k,
                 anchor: TextAnchor::Middle,
             });
         }
@@ -1061,7 +1074,7 @@ fn emit_coord_labels(
         // píldora de fondo semitransparente para que se lea sobre cualquier
         // anillo o línea de aspecto que pase por detrás.
         let color = if has_planet { pal.fg_text } else { pal.house_cusp };
-        let fsize = opts.size * 0.018;
+        let fsize = opts.size * 0.018 * opts.detail.max(0.1).powf(0.35);
         let lcx = cx + lx;
         let lcy = cy + ly;
         let half_w = coord_str.chars().count() as f32 * fsize * 0.32 + fsize * 0.3;

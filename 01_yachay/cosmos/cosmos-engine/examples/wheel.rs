@@ -54,6 +54,7 @@ fn main() {
         show_minor_aspects: false,
         dial_3d: true,
         selected_body: None,
+        detail: 1.0,
     };
     // Render base (sin selección).
     let cmds = compose_wheel(&model, &copts);

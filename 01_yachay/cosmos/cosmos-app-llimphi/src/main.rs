@@ -1203,57 +1203,68 @@ impl App for Cosmos {
 
         let center = chrome::center_view(model, &theme);
 
-        // Dock: sidebars izquierdo/derecho armados desde el reparto de
-        // pestañas. Angosto → colapsados a sólo el rail; al hacer clic en
-        // un diente, ese lado se despliega (estilo web).
+        // Dock: el **rail** de cada lado va pegado al centro (sobresale del
+        // panel), y el **contenido** vive en un pane resizable por fuera
+        // del rail, así la barra azul queda pegada al panel. Angosto →
+        // sólo rails; clic en un diente despliega ese lado (estilo web).
         let collapsed = chrome::dock_collapsed(model);
-        let rail_w = model::TOOLS_RAIL_W;
         let left_show = !collapsed || model.dock_expanded == Some(model::DockSide::Left);
         let right_show = !collapsed || model.dock_expanded == Some(model::DockSide::Right);
-        let left = chrome::sidebar_view(model::DockSide::Left, model, &theme, left_show);
-        let right = chrome::sidebar_view(model::DockSide::Right, model, &theme, right_show);
+        let left_rail = chrome::dock_rail_for(model::DockSide::Left, model, &theme);
+        let right_rail = chrome::dock_rail_for(model::DockSide::Right, model, &theme);
+        let left_panel = if left_show {
+            chrome::dock_panel_for(model::DockSide::Left, model, &theme)
+        } else {
+            None
+        };
+        let right_panel = if right_show {
+            chrome::dock_panel_for(model::DockSide::Right, model, &theme)
+        } else {
+            None
+        };
 
-        // Centro + sidebar derecho.
-        let center_and_right = match right {
-            Some(r) if !collapsed => splitter_two(
+        // Construcción de adentro hacia afuera: centro → rails (pegados) →
+        // paneles resizables (con la barra azul pegada al panel).
+        let mut core = center;
+        // Rail derecho pegado al centro.
+        if let Some(r) = right_rail {
+            core = fixed_row(core, Some((r, model::TOOLS_RAIL_W)), false);
+        }
+        // Panel derecho resizable, por fuera del rail.
+        if let Some(rp) = right_panel {
+            core = splitter_two(
                 Direction::Row,
-                center,
+                core,
                 PaneSize::Flex,
-                r,
+                rp,
                 PaneSize::Fixed(model.tools_w),
                 |phase, dx| match phase {
                     DragPhase::Move => Some(Msg::SetToolsWidth(dx)),
                     DragPhase::End => Some(Msg::PersistLayout),
                 },
                 &sp,
-            ),
-            Some(r) => {
-                let w = if right_show { model.tools_w } else { rail_w };
-                fixed_row(center, Some((r, w)), false)
-            }
-            None => center,
-        };
-
-        // Sidebar izquierdo + lo anterior.
-        let body = match left {
-            Some(l) if !collapsed => splitter_two(
+            );
+        }
+        // Rail izquierdo pegado al centro.
+        if let Some(l) = left_rail {
+            core = fixed_row(core, Some((l, model::TOOLS_RAIL_W)), true);
+        }
+        // Panel izquierdo resizable, por fuera del rail.
+        if let Some(lp) = left_panel {
+            core = splitter_two(
                 Direction::Row,
-                l,
+                lp,
                 PaneSize::Fixed(model.nav_w),
-                center_and_right,
+                core,
                 PaneSize::Flex,
                 |phase, dx| match phase {
                     DragPhase::Move => Some(Msg::SetNavWidth(dx)),
                     DragPhase::End => Some(Msg::PersistLayout),
                 },
                 &sp,
-            ),
-            Some(l) => {
-                let w = if left_show { model.nav_w } else { rail_w };
-                fixed_row(center_and_right, Some((l, w)), true)
-            }
-            None => center_and_right,
-        };
+            );
+        }
+        let body = core;
 
         let body_box = View::new(Style {
             flex_direction: FlexDirection::Row,

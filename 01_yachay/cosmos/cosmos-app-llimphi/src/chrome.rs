@@ -753,8 +753,11 @@ fn dock_content(item: DockItem, model: &Model, theme: &Theme) -> View<Msg> {
 /// al click y **arrastrable** (su payload = el item) para moverlo al otro
 /// sidebar. Alto auto (sólo los dientes), pegado arriba.
 fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme: &Theme) -> View<Msg> {
+    // Orden canónico: Biblioteca, Principal, Análisis, Astronomía, Sistema.
+    let mut ordered: Vec<DockItem> = items.to_vec();
+    ordered.sort_by_key(|i| i.to_u64());
     let mut teeth: Vec<View<Msg>> = Vec::new();
-    for &item in items {
+    for &item in &ordered {
         let is_active = active == Some(item);
         let fg = if is_active { theme.accent } else { theme.fg_muted };
         let accent_bar = {
@@ -804,30 +807,45 @@ fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme
         }
         teeth.push(tooth);
     }
+    // Tira de rail a alto completo (los dientes arriba) — es además el
+    // **drop target** del lado, así que soltar un diente del otro sidebar
+    // sobre el rail lo mueve a este lado.
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: length(TOOLS_RAIL_W),
-            height: auto(),
+            height: percent(1.0_f32),
         },
         flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
+    .on_drop(move |payload| Some(Msg::DockDrop(side, payload)))
+    .drop_hover_fill(theme.bg_row_hover)
     .children(teeth)
 }
 
-/// Un sidebar del dock (izq/der). `None` si no tiene items o está oculto.
-/// `show_content = false` → sólo el rail (modo colapsado). El **rail va
-/// del lado interno** (a la derecha en el sidebar izquierdo, a la
-/// izquierda en el derecho) para quedar pegado a la barra resizable.
-/// Acepta drops de dientes del otro lado.
-pub(crate) fn sidebar_view(
-    side: DockSide,
-    model: &Model,
-    theme: &Theme,
-    show_content: bool,
-) -> Option<View<Msg>> {
+/// El rail (tira de dientes) de un sidebar, o `None` si está oculto o sin
+/// items. Va **pegado al centro** (fuera del área resizable) para que los
+/// dientes "sobresalgan" del panel.
+pub(crate) fn dock_rail_for(side: DockSide, model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    let open = match side {
+        DockSide::Left => model.nav_open,
+        DockSide::Right => model.tools_open,
+    };
+    let items: &[DockItem] = match side {
+        DockSide::Left => &model.dock_left,
+        DockSide::Right => &model.dock_right,
+    };
+    if !open || items.is_empty() {
+        return None;
+    }
+    Some(dock_rail(side, items, model.dock_active(side), theme))
+}
+
+/// El contenido (panel) del item activo de un sidebar — sin el rail. Va en
+/// el área resizable. `None` si está oculto o sin item activo.
+pub(crate) fn dock_panel_for(side: DockSide, model: &Model, theme: &Theme) -> Option<View<Msg>> {
     let open = match side {
         DockSide::Left => model.nav_open,
         DockSide::Right => model.tools_open,
@@ -835,58 +853,8 @@ pub(crate) fn sidebar_view(
     if !open {
         return None;
     }
-    let items: &[DockItem] = match side {
-        DockSide::Left => &model.dock_left,
-        DockSide::Right => &model.dock_right,
-    };
-    if items.is_empty() {
-        return None;
-    }
-    let active = model.dock_active(side);
-    let rail = dock_rail(side, items, active, theme);
-
-    // Rail al borde interno: izquierda → [contenido, rail]; derecha →
-    // [rail, contenido].
-    let mut kids: Vec<View<Msg>> = Vec::new();
-    let content = if show_content {
-        active.map(|item| dock_content(item, model, theme))
-    } else {
-        None
-    };
-    match side {
-        DockSide::Left => {
-            if let Some(c) = content {
-                kids.push(c);
-            }
-            kids.push(rail);
-        }
-        DockSide::Right => {
-            kids.push(rail);
-            if let Some(c) = content {
-                kids.push(c);
-            }
-        }
-    }
-
-    Some(
-        View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
-            },
-            min_size: Size {
-                width: length(0.0_f32),
-                height: length(0.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(theme.bg_panel)
-        // Drop target: soltar un diente acá lo mueve a este lado.
-        .on_drop(move |payload| Some(Msg::DockDrop(side, payload)))
-        .drop_hover_fill(theme.bg_row_hover)
-        .children(kids),
-    )
+    let active = model.dock_active(side)?;
+    Some(dock_content(active, model, theme))
 }
 
 /// `true` si la ventana es angosta y los sidebars deben colapsar a rail.
@@ -1719,14 +1687,19 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
         show_minor_aspects: model.cfg.minor_aspects,
         dial_3d: model.cfg.dial_3d,
         selected_body: model.selected_body.clone(),
+        // El zoom de la rueda re-dibuja con más detalle (no magnifica el
+        // bitmap): se mete como `detail`, no como escala uniforme.
+        detail: model.wheel_zoom,
     };
     let (commands, hits) = compose_wheel_with_hits(render, &opts);
     let canvas_bg = graphics_bg(model);
     // Offset del menú contextual: origen del centro ≈ nav (resizable) +
     // barra de menú + cabecera del switcher. (Aprox. en mosaico.)
     let nav_off = model.nav_w + if model.nav_open { 6.0 } else { 0.0 };
+    // Sin escala uniforme: el detalle ya lo aplicó `compose_wheel`. Sólo
+    // paneo.
     let t = ViewTransform {
-        zoom: model.wheel_zoom,
+        zoom: 1.0,
         pan: model.wheel_pan,
     };
     let canvas = canvas_view_clickable_ex::<Msg, _>(commands, size, Some(canvas_bg), t, move |wx, wy| {
