@@ -19,12 +19,71 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 
 use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
+use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 
 use crate::astroview;
 use crate::chrome;
 use crate::glyphs::{self, Icon};
-use crate::model::{Model, Msg, ToolCat, ToolPanel, TOOLS_RAIL_W};
+use crate::model::{Model, Msg, ToolCat, ToolPanel, MENU_BAR_H, STATUS_H, TOOLS_RAIL_W};
 use crate::view;
+
+/// Alto visible del contenedor de paneles (de bajo la barra de menú a
+/// sobre la barra de estado).
+pub(crate) fn tools_viewport_h(model: &Model) -> f32 {
+    (model.viewport.1 - MENU_BAR_H - STATUS_H).max(60.0)
+}
+
+/// Alto total estimado del acordeón (cabecera de categoría + paneles).
+/// Aproximado a partir del nº de filas de cada tabla — suficiente para
+/// dimensionar la barra de scroll y acotar el offset.
+pub(crate) fn tools_content_h(model: &Model) -> f32 {
+    let mut h = 24.0 + 8.0; // cabecera de categoría + padding del acordeón
+    for panel in model.tool_cat.panels() {
+        h += HEAD_H + 6.0; // cabecera de la card + gap
+        if model.panel_expanded(*panel) {
+            h += panel_rows(*panel, model) as f32 * 20.0 + 22.0; // filas + padding
+        }
+    }
+    h
+}
+
+/// Estimación del nº de filas (~20 px) del cuerpo de cada panel.
+fn panel_rows(panel: ToolPanel, model: &Model) -> usize {
+    let r = &model.render;
+    let bodies = || {
+        r.layers
+            .iter()
+            .filter(|l| l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies))
+            .flat_map(|l| l.glyphs.iter())
+            .count()
+    };
+    let layer = |k: LayerKind| {
+        r.layers
+            .iter()
+            .filter(|l| std::mem::discriminant(&l.kind) == std::mem::discriminant(&k))
+            .flat_map(|l| l.glyphs.iter())
+            .count()
+    };
+    match panel {
+        ToolPanel::Carta => 10,
+        ToolPanel::Aspectos | ToolPanel::AspectosTopo => 1 + r.aspect_summary.len().min(60),
+        ToolPanel::Cuerpos => bodies().max(1),
+        ToolPanel::Cualidades => 12,
+        ToolPanel::Uraniano => r.uranian_groups.len().max(1),
+        ToolPanel::BoxGraph => bodies().max(1),
+        ToolPanel::Lotes => layer(LayerKind::Lots).max(1),
+        ToolPanel::EstrellasFijas => layer(LayerKind::FixedStars).max(1),
+        ToolPanel::PuntosMedios => layer(LayerKind::Midpoints).max(1),
+        ToolPanel::Corpus => 14,
+        ToolPanel::Cielo => 12,
+        ToolPanel::OrtoOcaso => 12,
+        ToolPanel::Sundial => 8,
+        ToolPanel::Mareas => 10,
+        ToolPanel::Eclipses => 10,
+        ToolPanel::Efemerides => 14,
+        ToolPanel::Configuracion => 22,
+    }
+}
 
 /// Icono del rail vertical para cada categoría.
 fn cat_icon(cat: ToolCat) -> Icon {
@@ -43,6 +102,33 @@ pub(crate) fn tools_panel(model: &Model, theme: &Theme) -> View<Msg> {
     let accordion = accordion_view(model, theme);
     let rail = category_rail(model, theme);
 
+    // Scroll vertical del acordeón: el contenido no se limita en alto; si
+    // excede, el contenedor (no cada panel) hace scroll.
+    let viewport = tools_viewport_h(model);
+    let content = tools_content_h(model);
+    let offset = clamp_offset(model.tools_scroll, content, viewport);
+    let scroll = scroll_y(
+        offset,
+        content,
+        viewport,
+        accordion,
+        Msg::ToolsScroll,
+        &ScrollPalette::from_theme(theme),
+    );
+    let scroll_box = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(0.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![scroll]);
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -56,7 +142,7 @@ pub(crate) fn tools_panel(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![accordion, rail])
+    .children(vec![scroll_box, rail])
 }
 
 // =====================================================================
@@ -143,12 +229,14 @@ fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
         kids.push(collapsible(*panel, model, theme));
     }
 
+    // Alto natural (lo guía el contenido) — el scroll del contenedor lo
+    // recorta. No `flex_grow` ni `clip` aquí.
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
+        flex_shrink: 0.0,
         size: Size {
-            width: percent(0.0_f32),
-            height: percent(1.0_f32),
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
         },
         min_size: Size {
             width: length(0.0_f32),
@@ -166,7 +254,6 @@ fn accordion_view(model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .clip(true)
     .children(kids)
 }
 

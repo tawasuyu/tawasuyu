@@ -731,7 +731,13 @@ impl App for Cosmos {
             }
             Msg::Resized(w, h) => m.viewport = (w, h),
             Msg::ToolsScroll(delta) => {
-                m.tools_scroll = (m.tools_scroll + delta).max(0.0);
+                let content = tools::tools_content_h(&m);
+                let viewport = tools::tools_viewport_h(&m);
+                m.tools_scroll = llimphi_widget_scroll::clamp_offset(
+                    m.tools_scroll + delta,
+                    content,
+                    viewport,
+                );
             }
             // navegación
             Msg::ToggleNavNode(key) => m.toggle_nav(key),
