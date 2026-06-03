@@ -109,11 +109,13 @@ mirada-layout = { path = "../../../02_ruway/mirada/mirada-layout" }
 # --- Fase 9 (pata) :: el marco del escritorio sobre el framebuffer ---
 # `pata-core` es el modelo agnóstico del marco (barras/paneles/dock + widgets +
 # layout). El MISMO crate que el frontend Llimphi usa en Linux: acá el kernel lo
-# consume para pintar sus indicadores (medidor de RAM, reloj) sobre el
-# framebuffer. `no_std + alloc`, cruzando la frontera por `path` como
-# mirada-layout. La feature `serde` queda APAGADA: el config se arma en memoria
-# (en el futuro llegará por akasha, no por TOML).
-pata-core = { path = "../../../02_ruway/pata/pata-core", default-features = false }
+# consume para pintar el marco sobre el framebuffer. `no_std + alloc`, cruzando
+# la frontera por `path` como mirada-layout. La feature `serde` queda ENCENDIDA:
+# el config del marco viaja por akasha (su espejo `wire`, postcard-safe).
+pata-core = { path = "../../../02_ruway/pata/pata-core", default-features = false, features = ["serde"] }
+# postcard :: el codec de akasha (mismo que `format`). El kernel serializa el
+# espejo `wire` del config del marco con postcard y lo guarda en el grafo.
+postcard = { version = "1", default-features = false, features = ["alloc"] }
 
 # --- Fase 25 :: criptografia del manifiesto (sello Ed25519) ---
 # El kernel SOLO verifica firmas; el firmador vive fuera (wawactl, peers).

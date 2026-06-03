@@ -32,6 +32,10 @@ extern crate alloc;
 pub mod config;
 pub mod layout;
 pub mod widget;
+/// Espejo postcard-safe del modelo, para el cruce a wawa por akasha. Sólo con la
+/// feature `serde` (el kernel la activa; el camino TOML de Linux no lo necesita).
+#[cfg(feature = "serde")]
+pub mod wire;
 
 pub use config::{Anchor, Config, FloatingCard, General, Prop, Surface, SurfaceKind, WidgetSpec};
 pub use layout::{resolve, Frame, Placed, Rect};

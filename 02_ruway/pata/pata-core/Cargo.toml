@@ -23,3 +23,6 @@ serde = ["dep:serde"]
 # Sólo para los tests: fija el contrato del config en disco (Linux usa TOML).
 # No entra en la build `no_std` —dev-deps no cruzan a wawa—.
 toml = "0.8"
+# Verifica el round-trip del espejo `wire` por postcard (el codec de akasha en
+# wawa): postcard no soporta flatten/untagged, de ahí el espejo. Sólo en tests.
+postcard = { version = "1", features = ["alloc"] }

@@ -20,10 +20,14 @@
 use alloc::vec;
 use alloc::vec::Vec;
 
+use spin::Once;
+
 use pata_core::layout::Rect as MarcoRect;
 use pata_core::widget::{build_all, WidgetCtx, WidgetView};
+use pata_core::wire::WireConfig;
 use pata_core::{resolve, Anchor, Config, Surface, SurfaceKind, WidgetSpec};
 
+use crate::almacen;
 use crate::grafico::{Color, Lienzo, RegionPantalla};
 use crate::texto;
 
@@ -40,11 +44,11 @@ const TAM: f32 = 16.0;
 /// Grosor de la barra de menú del kernel, en px.
 const BARRA_ALTO: f32 = 32.0;
 
-/// El `Config` del marco del kernel — declarado como en Linux (mismos `kind`s).
-/// Una barra superior con el botón de inicio a la izquierda y el medidor de RAM
-/// a la derecha. Cuando akasha entregue el config real, esto se reemplaza por lo
-/// que venga del grafo, sin tocar el resto.
-fn marco_config() -> Config {
+/// El `Config` del marco **por defecto** — declarado como en Linux (mismos
+/// `kind`s). Una barra superior con el botón de inicio a la izquierda y el
+/// medidor de RAM a la derecha. Es la semilla que se graba en akasha la primera
+/// vez; el fallback si el grafo no la tiene o no deserializa.
+fn marco_por_defecto() -> Config {
     let mut top = Surface::bar(Anchor::Top);
     top.thickness = BARRA_ALTO;
     top.start = vec![WidgetSpec::new("start_button")];
@@ -52,6 +56,38 @@ fn marco_config() -> Config {
     let mut cfg = Config::default();
     cfg.surfaces.push(top);
     cfg
+}
+
+/// El `Config` del marco, **cargado desde akasha**, cacheado tras el primer uso.
+///
+/// La primera vez: serializa el [`marco_por_defecto`] a su espejo postcard-safe
+/// ([`WireConfig`]), lo **graba en el grafo** direccionado por contenido
+/// (`almacen::almacenar`, BLAKE3 + postcard) y lo **lee de vuelta** —el config
+/// hace el round-trip completo por akasha, como cualquier otro objeto—. Si algo
+/// del round-trip falla (grafo no listo, etc.), cae al default en memoria; el
+/// marco nunca se queda sin config. El resultado se cachea (`Once`): los frames
+/// siguientes no re-tocan el grafo.
+///
+/// Pendiente: que un proceso de userspace **proponga** un config nuevo (vía un
+/// syscall que engendra el nodo y reancla el manifiesto, como
+/// `sys_config_proponer`), e invalidar este cache al reanclar.
+fn marco() -> &'static Config {
+    static MARCO: Once<Config> = Once::new();
+    MARCO.call_once(|| {
+        let def = marco_por_defecto();
+        cargar_de_akasha(&def).unwrap_or(def)
+    })
+}
+
+/// Graba `cfg` en el grafo (postcard sobre su espejo `wire`) y lo lee de vuelta,
+/// deserializado. `None` si el grafo no está listo o el codec falla.
+fn cargar_de_akasha(cfg: &Config) -> Option<Config> {
+    let wire = WireConfig::from(cfg);
+    let bytes = postcard::to_allocvec(&wire).ok()?;
+    let hash = almacen::almacenar(bytes, Vec::new()).ok()?;
+    let objeto = almacen::recuperar(&hash).ok()??;
+    let leido: WireConfig = postcard::from_bytes(&objeto.datos).ok()?;
+    Some(Config::from(leido))
 }
 
 /// El snapshot del sistema que el kernel le entrega a los widgets de `pata-core`.
@@ -218,14 +254,14 @@ fn pintar_barra(lienzo: &mut Lienzo, rect: MarcoRect, s: &Surface, ctx: &WidgetC
 /// wawa) y pinta cada barra resuelta en su rect, con sus tres slots. La llama el
 /// compositor (`consola::recomponer`) tras componer el escritorio.
 pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
-    let cfg = marco_config();
+    let cfg = marco();
     let pantalla = MarcoRect::new(
         area.x as i32,
         area.y as i32,
         area.ancho as i32,
         area.alto as i32,
     );
-    let frame = resolve(&cfg, pantalla);
+    let frame = resolve(cfg, pantalla);
     let ctx = ctx_kernel();
     for placed in &frame.surfaces {
         let s = &cfg.surfaces[placed.index];
@@ -243,14 +279,14 @@ pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
 /// target generoso (el padding + el glifo). Espeja la posición que pinta
 /// [`pintar_barra`] (start pegado al borde izquierdo, en `bar.x + PAD`).
 pub(crate) fn start_button_rect(area: RegionPantalla) -> Option<RegionPantalla> {
-    let cfg = marco_config();
+    let cfg = marco();
     let pantalla = MarcoRect::new(
         area.x as i32,
         area.y as i32,
         area.ancho as i32,
         area.alto as i32,
     );
-    let frame = resolve(&cfg, pantalla);
+    let frame = resolve(cfg, pantalla);
     let ctx = ctx_kernel();
     for placed in &frame.surfaces {
         let s = &cfg.surfaces[placed.index];

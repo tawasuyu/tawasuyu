@@ -313,9 +313,21 @@ borde; shuma provee el contenido.
     dónde lo pinta `pintar_barra`); el ratón del compositor (`raton::atender_raton`)
     detecta el clic ahí y **abre el launcher** (el mismo gesto que `Alt+P`), antes
     de tocar foco/arrastre. El picker Spotlight ya existente se reusa tal cual.
-  - Pendiente: el config por akasha (en vez de armado en memoria); que el
-    compositor reserve la franja de la barra usando `Frame::work_area` de resolve
-    (hoy la barra se pinta sobre el borde superior de las apps).
+  - **Config por akasha** — el config del marco viaja por el grafo
+    direccionado por contenido, no armado en memoria. Como el modelo está afinado
+    para TOML (`WidgetSpec.props` con `flatten`, `Prop` `untagged`) y eso rompe
+    postcard (el codec de akasha, no auto-descriptivo), `pata-core` ganó un espejo
+    **postcard-safe**: `pata_core::wire::WireConfig` (props como lista ordenada,
+    `WireProp` etiquetado), con conversiones sin pérdida `Config ↔ WireConfig`
+    (round-trip por postcard fijado en un test del host). El kernel
+    (`pata_marco::marco`) serializa el default a `WireConfig`, lo **graba en el
+    grafo** (`almacen::almacenar`, BLAKE3 + postcard) y lo **lee de vuelta** —el
+    config hace el round-trip completo por akasha—, con fallback al default y
+    cacheado tras el primer uso.
+  - Pendiente: que un proceso de userspace **proponga** un config nuevo (syscall
+    que engendra el nodo y reancla el manifiesto, como `sys_config_proponer`) +
+    invalidar el cache; que el compositor reserve la franja de la barra usando
+    `Frame::work_area` de resolve (hoy se pinta sobre el borde superior de apps).
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se
