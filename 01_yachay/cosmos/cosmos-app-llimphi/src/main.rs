@@ -444,15 +444,13 @@ fn set_theme_mode(m: &mut Model, idx: usize) {
     m.theme = m.cfg.active_theme();
 }
 
-/// Arma la hoja imprimible (cabecera de la carta + tabla de aspectos) en
-/// HTML B/N y la abre en el navegador del sistema, donde el usuario usa
-/// el diálogo nativo de impresión (Ctrl+P → impresora o «Guardar como
-/// PDF»). Sin dependencias de GPU: es texto puro, así que imprime igual
-/// en Linux, macOS y Windows.
+/// Rasteriza la hoja imprimible (rueda + cabecera + aspectos) a un PNG de
+/// alta resolución con el mismo motor que pinta la pantalla — fidelidad
+/// gráfica — y la abre en el visor de imágenes del SO para imprimir.
 fn do_imprimir(m: &mut Model) {
-    match crate::print::imprimir_carta(&m.chart, &m.render) {
+    match crate::print::imprimir_carta(m) {
         Ok(path) => {
-            m.status_note = Some(format!("Hoja enviada al navegador para imprimir ({})", path.display()));
+            m.status_note = Some(format!("Hoja rasterizada y abierta para imprimir ({})", path.display()));
         }
         Err(e) => m.error = Some(format!("imprimir: {e}")),
     }

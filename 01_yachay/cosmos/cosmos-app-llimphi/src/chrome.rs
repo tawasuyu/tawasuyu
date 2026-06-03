@@ -1012,8 +1012,162 @@ fn graphic_for(
         ),
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme, fill),
         ChartView::Cielo => sky_canvas(model, size, theme, fill),
-        ChartView::Impresion => view::print_sheet(model, theme),
+        ChartView::Impresion => print_view(model, theme),
     }
+}
+
+// =====================================================================
+// Hoja imprimible
+// =====================================================================
+
+/// Lado del lienzo de la rueda en la hoja imprimible (px lógicos).
+const PRINT_WHEEL: f32 = 460.0;
+/// Ancho de la hoja imprimible (px lógicos).
+const PRINT_SHEET_W: f32 = 600.0;
+
+/// La rueda natal estándar para la hoja: paleta clara sobre papel blanco,
+/// sin zoom/paneo ni interactividad (es para imprimir). Caja fija de lado
+/// `size`, centrada horizontalmente.
+fn print_wheel(model: &Model, render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
+    let opts = CompositionOpts {
+        size,
+        rot_offset_deg: model.cfg.rot_offset_deg,
+        include_bodies: true,
+        palette: Palette::light(),
+        draw_ascensional_cross: model.cfg.asc_cross,
+        show_coord_labels: model.cfg.coord_labels,
+        show_minor_aspects: model.cfg.minor_aspects,
+        dial_3d: false,
+        selected_body: None,
+        detail: 1.0,
+    };
+    let (commands, _hits) = compose_wheel_with_hits(render, &opts);
+    let canvas = cosmos_canvas_llimphi::canvas_view::<Msg>(
+        commands,
+        size,
+        Some(Color::from_rgba8(255, 255, 255, 255)),
+    );
+    // Caja fija: el canvas mide percent(100%), necesita un rect definido.
+    let boxed = View::new(Style {
+        size: Size {
+            width: length(size),
+            height: length(size),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![canvas]);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(size),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![boxed])
+}
+
+/// Contenido de la hoja imprimible (sin botón): cabecera de la carta +
+/// rueda natal + tabla de aspectos, sobre papel blanco. Es EXACTAMENTE lo
+/// que se rasteriza a PNG — el mismo árbol de `View`, la misma pintura —
+/// así que la impresión tiene la fidelidad de la pantalla. Usa siempre el
+/// tema «Print» (B/N) sin importar el tema de la app: el papel es blanco.
+pub(crate) fn print_page_content(model: &Model) -> View<Msg> {
+    let theme = Theme::print();
+    let titulo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(26.0),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        if model.chart.label.is_empty() {
+            "Carta natal".to_string()
+        } else {
+            model.chart.label.clone()
+        },
+        20.0,
+        theme.fg_text,
+        Alignment::Start,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(PRINT_SHEET_W),
+            height: auto(),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(28.0),
+            right: length(28.0),
+            top: length(24.0),
+            bottom: length(24.0),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(10.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![
+        titulo,
+        view::tile_carta(model, &theme),
+        print_wheel(model, &model.render, PRINT_WHEEL),
+        view::section_label("Aspectos".to_string(), &theme),
+        view::tile_aspectos(&model.render, &theme),
+    ])
+}
+
+/// La vista en pantalla del modo «Hoja»: botón Imprimir arriba + la hoja
+/// (previsualización en papel) debajo, alineada arriba para que el botón
+/// quede siempre visible aunque la tabla sea larga.
+fn print_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let btn = View::new(Style {
+        size: Size {
+            width: length(190.0),
+            height: length(30.0),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        margin: Rect {
+            left: length(0.0),
+            right: length(0.0),
+            top: length(0.0),
+            bottom: length(10.0),
+        },
+        ..Default::default()
+    })
+    .radius(4.0)
+    .fill(theme.bg_button)
+    .hover_fill(theme.bg_button_hover)
+    .text_aligned("Imprimir hoja…".to_string(), 13.0, theme.fg_text, Alignment::Center)
+    .on_click(Msg::PrintSheet);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Start),
+        padding: Rect {
+            left: length(8.0),
+            right: length(8.0),
+            top: length(12.0),
+            bottom: length(8.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![btn, print_page_content(model)])
 }
 
 /// Arma la columna `[controles?, lienzo]`. Con `fill` el lienzo crece para

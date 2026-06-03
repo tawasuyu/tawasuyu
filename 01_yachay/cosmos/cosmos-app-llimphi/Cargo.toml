@@ -42,6 +42,8 @@ llimphi-widget-slider = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
 llimphi-motion = { workspace = true }
 notify = { workspace = true }
+pollster = { workspace = true }
+png = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }

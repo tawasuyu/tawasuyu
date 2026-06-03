@@ -1,241 +1,193 @@
-//! Hoja imprimible: genera un HTML B/N (cabecera de la carta + tabla de
-//! aspectos) y lo abre en el navegador del sistema para usar su diálogo
-//! de impresión nativo (Ctrl+P → impresora o «Guardar como PDF»).
+//! Hoja imprimible con **fidelidad gráfica**: rasteriza el MISMO árbol de
+//! `View` que se ve en pantalla (rueda + cabecera + aspectos) a un PNG de
+//! alta resolución, reutilizando la tubería vello+wgpu de Llimphi, y lo
+//! abre en el visor de imágenes del sistema para imprimir.
 //!
-//! **Por qué HTML y no render a PNG/PDF propio.** La app pinta por GPU
-//! (wgpu); un render headless a imagen sería otra tubería entera. El
-//! navegador ya sabe paginar, escalar y mandar a la impresora en los tres
-//! sistemas — y el contenido de la hoja es texto + glyphs unicode, que se
-//! imprime nítido a cualquier DPI. El HTML lleva `@media print` para que
-//! salga en blanco y negro sin los adornos de pantalla.
+//! **Por qué render real y no HTML.** El HTML reconstruía la carta con
+//! tipografía del navegador — perdía la fidelidad del motor (glyphs
+//! vectoriales propios, layout exacto, la rueda). Acá montamos el `View`,
+//! lo pintamos a una `vello::Scene` y lo escalamos ×N sobre una textura
+//! offscreen: lo impreso es pixel-fiel a lo que pinta la app, a cualquier
+//! DPI (los vectores no pixelan al ampliar).
+//!
+//! El render abre una segunda instancia headless de wgpu (`Hal::new(None)`)
+//! para no tocar el device de la ventana — cuesta ~1 s de cold-start de
+//! shaders, aceptable para una acción manual de "imprimir".
 
-use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
-use cosmos_model::Chart;
-use cosmos_render::{LayerKind, RenderModel};
+use llimphi_ui::llimphi_hal::{wgpu, Hal};
+use llimphi_ui::llimphi_layout::{taffy, LayoutTree};
+use llimphi_ui::llimphi_raster::kurbo::Affine;
+use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::{vello, Renderer};
+use llimphi_ui::llimphi_text::Typesetter;
+use llimphi_ui::{measure_text_node, mount, paint};
 
-use crate::format::{fmt_dms, simbolo_cuerpo};
-use crate::glyphs::sign_id;
+use crate::model::Model;
 
-/// Arma la hoja, la escribe a un archivo temporal y la abre en el
-/// navegador del sistema. Devuelve la ruta escrita (para la nota de
-/// estado) o un mensaje de error.
-pub(crate) fn imprimir_carta(chart: &Chart, render: &RenderModel) -> Result<PathBuf, String> {
-    let html = build_html(chart, render);
-    let path = std::env::temp_dir().join("cosmos-hoja.html");
-    std::fs::write(&path, html.as_bytes()).map_err(|e| format!("no se pudo escribir {path:?}: {e}"))?;
-    abrir_en_navegador(&path)?;
+/// Ancho lógico de la hoja (debe coincidir con `chrome::PRINT_SHEET_W` +
+/// padding del contenedor). Damos un poco de aire a los lados.
+const SHEET_LOGICAL_W: f32 = 616.0;
+/// Factor de escala del render — vectores, así que sube el DPI sin pixelar.
+const SCALE: f32 = 2.5;
+/// Límite de lado de textura (los GPUs suelen topar en 8192/16384).
+const MAX_PX: u32 = 8192;
+
+/// Arma la hoja, la rasteriza a PNG de alta resolución y la abre en el
+/// visor del sistema. Devuelve la ruta escrita o un mensaje de error.
+pub(crate) fn imprimir_carta(model: &Model) -> Result<PathBuf, String> {
+    let view = crate::chrome::print_page_content(model);
+    let png = render_view_to_png(view, SHEET_LOGICAL_W, SCALE)?;
+    let path = std::env::temp_dir().join("cosmos-hoja.png");
+    std::fs::write(&path, &png).map_err(|e| format!("no se pudo escribir {path:?}: {e}"))?;
+    abrir(&path)?;
     Ok(path)
 }
 
-/// Una fila de la tabla de aspectos, agregando geo (natal) + topo
-/// (topocéntrico) por par de cuerpos como hace la tabla en pantalla.
-struct AspRow {
-    kind: String,
-    from: String,
-    to: String,
-    geo: Option<f64>,
-    topo: Option<f64>,
-    applying: Option<bool>,
-}
+/// Monta un `View`, lo pinta a una escena vello y la rasteriza a un PNG
+/// (RGBA8) ampliada ×`scale` sobre una textura offscreen.
+fn render_view_to_png(
+    view: llimphi_ui::View<crate::model::Msg>,
+    logical_w: f32,
+    scale: f32,
+) -> Result<Vec<u8>, String> {
+    // GPU headless (sin surface) + rasterizador + tipografía.
+    let hal = pollster::block_on(Hal::new(None)).map_err(|e| format!("gpu init: {e}"))?;
+    let mut renderer = Renderer::new(&hal).map_err(|e| e.to_string())?;
+    let mut ts = Typesetter::new();
 
-fn sorted_pair(a: &str, b: &str) -> (String, String) {
-    if a <= b {
-        (a.into(), b.into())
-    } else {
-        (b.into(), a.into())
-    }
-}
+    // Mount + layout. Alto disponible enorme → el alto real lo fija el
+    // contenido (la hoja es `height: auto`).
+    let mut layout = LayoutTree::new();
+    let mounted = mount(&mut layout, view);
+    let computed = {
+        let tmap = &mounted.text_measures;
+        layout
+            .compute_with_measure(mounted.root, (logical_w, 100_000.0), |nid, known, avail| {
+                match tmap.get(&nid) {
+                    Some(tm) => measure_text_node(&mut ts, tm, known, avail),
+                    None => taffy::Size::ZERO,
+                }
+            })
+            .map_err(|e| format!("layout: {e}"))?
+    };
+    // Tamaño real de la hoja según el layout (ancho fijo, alto por
+    // contenido) — el PNG queda justo, sin márgenes muertos.
+    let root = computed.get(mounted.root).ok_or("sin layout de raíz")?;
+    let logical_w_real = root.w.max(1.0);
+    let logical_h = root.h.max(1.0);
 
-/// Agrega `aspect_summary` (geo natal + topo) en filas ordenadas por orbe
-/// más cerrado primero — misma lógica que `view::tile_aspectos`.
-fn aspect_rows(render: &RenderModel) -> Vec<AspRow> {
-    let mut map: HashMap<(String, String, String), AspRow> = HashMap::new();
-    for a in &render.aspect_summary {
-        let topo = a.module_id == "topocentric";
-        if !topo && a.module_id != "natal" {
-            continue;
-        }
-        let (from, to) = sorted_pair(&a.from_body, &a.to_body);
-        let key = (from.clone(), to.clone(), a.kind.clone());
-        let row = map.entry(key).or_insert_with(|| AspRow {
-            kind: a.kind.clone(),
-            from,
-            to,
-            geo: None,
-            topo: None,
-            applying: None,
-        });
-        if topo {
-            row.topo = Some(a.orb_deg);
-        } else {
-            row.geo = Some(a.orb_deg);
-            row.applying = a.applying;
-        }
-    }
-    let mut rows: Vec<AspRow> = map.into_values().collect();
-    rows.sort_by(|a, b| {
-        let oa = a.geo.or(a.topo).unwrap_or(99.0);
-        let ob = b.geo.or(b.topo).unwrap_or(99.0);
-        oa.partial_cmp(&ob).unwrap_or(std::cmp::Ordering::Equal)
+    // Pintar a coords lógicas, luego escalar la escena entera ×scale.
+    let mut inner = vello::Scene::new();
+    paint(&mut inner, &mounted, &computed, &mut ts, None, None);
+    let mut scene = vello::Scene::new();
+    scene.append(&inner, Some(Affine::scale(scale as f64)));
+
+    let w_px = ((logical_w_real * scale).ceil() as u32).clamp(1, MAX_PX);
+    let h_px = ((logical_h * scale).ceil() as u32).clamp(1, MAX_PX);
+
+    // Textura offscreen (mismas usages que el gpu-bench: vello escribe por
+    // STORAGE_BINDING, leemos por COPY_SRC).
+    let tex = hal.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("cosmos-print-target"),
+        size: wgpu::Extent3d {
+            width: w_px,
+            height: h_px,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
     });
-    rows
+    let tview = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    renderer
+        .render_to_view(&hal, &scene, &tview, w_px, h_px, Color::from_rgba8(255, 255, 255, 255))
+        .map_err(|e| e.to_string())?;
+
+    leer_textura_png(&hal, &tex, w_px, h_px)
 }
 
-/// Mapa cuerpo→longitud eclíptica desde la capa natal de cuerpos, para
-/// resolver el signo de cada extremo del aspecto.
-fn body_lons(render: &RenderModel) -> HashMap<String, f32> {
-    let mut m = HashMap::new();
-    for l in &render.layers {
-        if l.module_id == "natal" && matches!(l.kind, LayerKind::Bodies) {
-            for g in &l.glyphs {
-                m.insert(g.symbol.clone(), g.deg);
-            }
-        }
-    }
-    m.entry("asc".into()).or_insert(render.ascendant_deg);
-    m.entry("mc".into()).or_insert(render.midheaven_deg);
-    m
-}
+/// Copia la textura a un buffer mapeable (stride alineado a 256 B como pide
+/// wgpu), desempaqueta las filas y codifica un PNG RGBA8 en memoria.
+fn leer_textura_png(hal: &Hal, target: &wgpu::Texture, w: u32, h: u32) -> Result<Vec<u8>, String> {
+    let unpadded = (w * 4) as usize;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let padded = unpadded.div_ceil(align) * align;
+    let buf_size = (padded * h as usize) as u64;
 
-/// Cuerpo como `☉ Sol`. Si no hay símbolo unicode conocido, cae al código.
-fn cuerpo_txt(name: &str, lons: &HashMap<String, f32>) -> String {
-    let sym = planet_unicode(name);
-    let code = simbolo_cuerpo(name);
-    match lons.get(name) {
-        Some(&deg) => format!("{sym} {code} {} {}", fmt_dms(deg.rem_euclid(30.0) as f64), sign_unicode(sign_id(deg))),
-        None => format!("{sym} {code}"),
-    }
-}
-
-fn build_html(chart: &Chart, render: &RenderModel) -> String {
-    let bd = &chart.birth_data;
-    let lons = body_lons(render);
-    let rows = aspect_rows(render);
-
-    let lugar = bd
-        .birthplace_label
-        .clone()
-        .unwrap_or_else(|| "(sin lugar)".into());
-    let fecha = format!(
-        "{:04}-{:02}-{:02} {:02}:{:02} UTC{:+}",
-        bd.year,
-        bd.month,
-        bd.day,
-        bd.hour,
-        bd.minute,
-        bd.tz_offset_minutes as f32 / 60.0
+    let buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("cosmos-print-readback"),
+        size: buf_size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = hal
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("cosmos-print-copy"),
+        });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
     );
-    let coords = format!(
-        "{:.4}°{} · {:.4}°{}",
-        bd.latitude_deg.abs(),
-        if bd.latitude_deg >= 0.0 { "N" } else { "S" },
-        bd.longitude_deg.abs(),
-        if bd.longitude_deg >= 0.0 { "E" } else { "W" },
-    );
+    hal.queue.submit(std::iter::once(encoder.finish()));
 
-    let mut out = String::with_capacity(8192);
-    out.push_str(
-        r#"<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8">
-<title>Cosmos — Hoja de carta</title>
-<style>
-  @page { margin: 18mm; }
-  * { box-sizing: border-box; }
-  body { font-family: "DejaVu Sans", "Noto Sans", system-ui, sans-serif;
-         color: #000; background: #fff; max-width: 760px; margin: 24px auto;
-         padding: 0 16px; line-height: 1.4; }
-  h1 { font-size: 22px; margin: 0 0 2px; }
-  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em;
-       border-bottom: 1.5px solid #000; padding-bottom: 4px; margin: 22px 0 10px; }
-  .meta { font-size: 13px; color: #222; margin: 1px 0; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { text-align: left; padding: 5px 8px; border-bottom: 1px solid #bbb; }
-  th { border-bottom: 1.5px solid #000; font-size: 11px; text-transform: uppercase;
-       letter-spacing: .04em; }
-  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
-  .angles td { border: none; padding: 2px 14px 2px 0; }
-  .print-btn { display: inline-block; margin: 16px 0; padding: 8px 16px;
-       border: 1.5px solid #000; background: #fff; color: #000; font-size: 14px;
-       cursor: pointer; border-radius: 4px; }
-  footer { margin-top: 28px; font-size: 11px; color: #555;
-       border-top: 1px solid #000; padding-top: 6px; }
-  @media print { .print-btn { display: none; } body { margin: 0; } }
-</style></head><body>
-<button class="print-btn" onclick="window.print()">Imprimir / Guardar PDF</button>
-"#,
-    );
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    hal.device.poll(wgpu::Maintain::Wait);
+    rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
+    let data = slice.get_mapped_range();
 
-    // Cabecera de la carta.
-    let _ = writeln!(out, "<h1>{}</h1>", esc(&chart.label));
-    let _ = writeln!(out, r#"<div class="meta">{}</div>"#, esc(&lugar));
-    let _ = writeln!(out, r#"<div class="meta">{}</div>"#, esc(&fecha));
-    let _ = writeln!(out, r#"<div class="meta">{}</div>"#, esc(&coords));
-
-    // Ángulos.
-    out.push_str("<h2>Ángulos</h2>\n<table class=\"angles\"><tr>");
-    for (name, deg) in [
-        ("Asc", render.ascendant_deg),
-        ("MC", render.midheaven_deg),
-        ("Dc", render.descendant_deg),
-        ("IC", render.imum_coeli_deg),
-    ] {
-        let _ = write!(
-            out,
-            "<td><b>{name}</b> {} {}</td>",
-            fmt_dms(deg.rem_euclid(30.0) as f64),
-            sign_unicode(sign_id(deg))
-        );
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for row in 0..h as usize {
+        let start = row * padded;
+        pixels.extend_from_slice(&data[start..start + unpadded]);
     }
-    out.push_str("</tr></table>\n");
+    drop(data);
+    buf.unmap();
 
-    // Tabla de aspectos.
-    out.push_str("<h2>Aspectos</h2>\n");
-    if rows.is_empty() {
-        out.push_str("<p class=\"meta\">Sin aspectos calculados.</p>\n");
-    } else {
-        out.push_str(
-            "<table><thead><tr><th>Aspecto</th><th>Cuerpo</th><th>Cuerpo</th>\
-             <th class=\"num\">Geo</th><th class=\"num\">Topo</th>\
-             <th class=\"num\">Δ</th><th>Fase</th></tr></thead><tbody>\n",
-        );
-        for r in rows {
-            let geo = r.geo.map(fmt_dms).unwrap_or_else(|| "—".into());
-            let topo = r.topo.map(fmt_dms).unwrap_or_else(|| "—".into());
-            let diff = match (r.geo, r.topo) {
-                (Some(g), Some(t)) => format!("{:+.0}′", (t - g) * 60.0),
-                _ => "—".into(),
-            };
-            let fase = match r.applying {
-                Some(true) => "aplicando",
-                Some(false) => "separando",
-                None => "",
-            };
-            let (sym, nombre) = aspecto_es(&r.kind);
-            // Aspecto desconocido: mostrar el id crudo en vez de perderlo.
-            let nombre = if nombre == "—" { r.kind.as_str() } else { nombre };
-            let _ = writeln!(
-                out,
-                "<tr><td>{sym} {nombre}</td><td>{}</td><td>{}</td>\
-                 <td class=\"num\">{geo}</td><td class=\"num\">{topo}</td>\
-                 <td class=\"num\">{diff}</td><td>{fase}</td></tr>",
-                esc(&cuerpo_txt(&r.from, &lons)),
-                esc(&cuerpo_txt(&r.to, &lons)),
-            );
-        }
-        out.push_str("</tbody></table>\n");
+    let mut out = Vec::new();
+    {
+        let mut enc = png::Encoder::new(&mut out, w, h);
+        enc.set_color(png::ColorType::Rgba);
+        enc.set_depth(png::BitDepth::Eight);
+        let mut writer = enc.write_header().map_err(|e| e.to_string())?;
+        writer.write_image_data(&pixels).map_err(|e| e.to_string())?;
     }
-
-    out.push_str("<footer>cosmos · astronomía + astrología — hoja imprimible</footer>\n</body></html>");
-    out
+    Ok(out)
 }
 
-/// Abre `path` con el navegador/visor por defecto del SO. Cross-platform:
-/// Linux usa `xdg-open`, macOS `open`, Windows `cmd /C start`.
-fn abrir_en_navegador(path: &PathBuf) -> Result<(), String> {
+/// Abre `path` con el visor/imagen por defecto del SO. Linux `xdg-open`,
+/// macOS `open`, Windows `cmd /C start`.
+fn abrir(path: &PathBuf) -> Result<(), String> {
     let p = path.to_string_lossy().to_string();
     let res = if cfg!(target_os = "macos") {
         Command::new("open").arg(&p).spawn()
@@ -245,73 +197,52 @@ fn abrir_en_navegador(path: &PathBuf) -> Result<(), String> {
         Command::new("xdg-open").arg(&p).spawn()
     };
     res.map(|_| ())
-        .map_err(|e| format!("no se pudo abrir el navegador: {e} (la hoja quedó en {p})"))
+        .map_err(|e| format!("no se pudo abrir el visor: {e} (la hoja quedó en {p})"))
 }
 
-fn esc(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llimphi_ui::llimphi_layout::taffy::prelude::{length, Size, Style};
+    use llimphi_ui::View;
 
-fn sign_unicode(name: &str) -> &'static str {
-    match name {
-        "aries" => "♈",
-        "taurus" => "♉",
-        "gemini" => "♊",
-        "cancer" => "♋",
-        "leo" => "♌",
-        "virgo" => "♍",
-        "libra" => "♎",
-        "scorpio" => "♏",
-        "sagittarius" => "♐",
-        "capricorn" => "♑",
-        "aquarius" => "♒",
-        "pisces" => "♓",
-        _ => "",
-    }
-}
+    /// Smoke del pipeline headless: monta un `View` con texto + relleno,
+    /// lo rasteriza y verifica que sale un PNG válido del tamaño esperado
+    /// y con contenido (no todo blanco). Requiere GPU — se ignora por
+    /// defecto para no romper CI sin display; correr con `--ignored`.
+    #[test]
+    #[ignore = "necesita GPU/headless wgpu"]
+    fn rasteriza_view_a_png_valido() {
+        let view: View<crate::model::Msg> = View::new(Style {
+            size: Size {
+                width: length(200.0),
+                height: length(80.0),
+            },
+            ..Default::default()
+        })
+        .fill(Color::from_rgba8(255, 255, 255, 255))
+        .text_aligned(
+            "Cosmos ☉♈ test".to_string(),
+            24.0,
+            Color::from_rgba8(0, 0, 0, 255),
+            llimphi_ui::llimphi_text::Alignment::Start,
+        );
 
-fn planet_unicode(name: &str) -> &'static str {
-    match name {
-        "sun" => "☉",
-        "moon" => "☽",
-        "mercury" => "☿",
-        "venus" => "♀",
-        "mars" => "♂",
-        "jupiter" => "♃",
-        "saturn" => "♄",
-        "uranus" => "♅",
-        "neptune" => "♆",
-        "pluto" => "♇",
-        "north_node" | "mean_node" | "ascending_node" => "☊",
-        "south_node" | "descending_node" => "☋",
-        "chiron" => "⚷",
-        "lilith" => "⚸",
-        "ceres" => "⚳",
-        "pallas" => "⚴",
-        "juno" => "⚵",
-        "vesta" => "⚶",
-        _ => "•",
-    }
-}
+        let scale = 2.0;
+        let png = render_view_to_png(view, 200.0, scale).expect("render");
+        // Firma PNG.
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', b'\r', b'\n', 0x1a, b'\n']);
 
-/// (símbolo, nombre en español) de un tipo de aspecto.
-fn aspecto_es(kind: &str) -> (&'static str, &'static str) {
-    match kind {
-        "conjunction" => ("☌", "Conjunción"),
-        "opposition" => ("☍", "Oposición"),
-        "trine" => ("△", "Trígono"),
-        "square" => ("□", "Cuadratura"),
-        "sextile" => ("⚹", "Sextil"),
-        "quincunx" | "inconjunct" => ("⚻", "Quincuncio"),
-        "semisextile" => ("⚺", "Semisextil"),
-        "semisquare" => ("∠", "Semicuadratura"),
-        "sesquisquare" | "sesquiquadrate" => ("⚼", "Sesquicuadratura"),
-        "quintile" => ("Q", "Quintil"),
-        "biquintile" => ("bQ", "Biquintil"),
-        _ => ("•", "—"),
+        // Decodificar y comprobar dimensiones + que hay píxeles no-blancos
+        // (el texto negro dejó marca).
+        let decoder = png::Decoder::new(std::io::Cursor::new(&png));
+        let mut reader = decoder.read_info().expect("png info");
+        assert_eq!(reader.info().width, (200.0 * scale) as u32);
+        let mut buf = vec![0u8; reader.output_buffer_size().expect("buffer size")];
+        let info = reader.next_frame(&mut buf).expect("frame");
+        let any_dark = buf[..info.buffer_size() as usize]
+            .chunks_exact(4)
+            .any(|px| px[0] < 200 && px[1] < 200 && px[2] < 200);
+        assert!(any_dark, "la imagen salió toda blanca — el texto no pintó");
     }
 }
