@@ -68,9 +68,38 @@ use crate::{
     Setup,
 };
 
-/// El `DrmCompositor` concreto para la salida (un solo GPU).
+/// El `DrmCompositor` concreto para una salida (un solo GPU). Hay uno por
+/// cada conector activo en multi-monitor.
 type Compositor =
     DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
+
+/// Una salida física activa: su conector + CRTC + `DrmCompositor` propio +
+/// el [`smithay::output::Output`] anunciado en Wayland + su posición en el
+/// escritorio global (multi-monitor). La primera de la lista es la
+/// **primaria**: ahí van layer-shell, tiling, menú, zonas y HUD; las
+/// secundarias renderizan sólo wallpaper hasta tener distribución global.
+struct OutputCtx {
+    /// Nombre legible (`DP-1`, `HDMI-A-1`, …) — sale del conector DRM.
+    name: String,
+    /// El `Output` smithay (vive mientras el compositor corre).
+    output: smithay::output::Output,
+    /// El CRTC al que está atada esta salida — clave de routing del VBlank.
+    crtc: smithay::reexports::drm::control::crtc::Handle,
+    /// El `DrmCompositor` que pinta esta salida.
+    compositor: Compositor,
+    /// Rect en coordenadas del escritorio global. `(rect.x, rect.y)` es la
+    /// esquina superior-izquierda en el espacio común; `(rect.w, rect.h)`
+    /// es el tamaño nativo del modo.
+    rect: Rect,
+    /// Refresco en mHz (lo guardamos para futura reconfiguración / hotplug).
+    #[allow(dead_code)]
+    refresh_mhz: i32,
+    /// Wallpaper ya compuesto al tamaño de **esta** salida; `None` se rearma
+    /// perezosamente en el próximo render.
+    wallpaper: Option<(MemoryRenderBuffer, (i32, i32))>,
+    /// `true` entre que esta salida encola un page-flip y llega su VBlank.
+    pending_flip: bool,
+}
 
 render_elements! {
     /// Lo que el backend DRM compone en un cuadro: superficies de cliente,
@@ -323,14 +352,16 @@ struct DrmState {
     /// El dispositivo DRM — se conserva para pausarlo y reactivarlo al
     /// conmutar de VT.
     drm: DrmDevice,
-    compositor: Compositor,
+    /// Salidas físicas activas: una por conector. `outputs[0]` es la
+    /// primaria — soporta layer-shell, tiling, menú, zonas, HUD. Las
+    /// secundarias renderizan sólo wallpaper hasta tener distribución
+    /// global de ventanas.
+    outputs: Vec<OutputCtx>,
     renderer: GlesRenderer,
     /// Contexto `libinput` — se suspende y reanuda al conmutar de VT.
     libinput: Libinput,
     /// `false` mientras la sesión está cedida a otra VT — no se compone.
     active: bool,
-    /// `true` entre que se encola un page-flip y llega su VBlank.
-    pending_flip: bool,
     /// Vigías de los archivos de config recargables en caliente.
     watches: crate::ConfigWatches,
     ctl: Option<crate::CtlServer>,
@@ -351,15 +382,12 @@ struct DrmState {
     /// Caché de etiquetas ya rasterizadas, por (texto, color) → búfer subido.
     /// Evita re-rasterizar y re-subir la textura en cada cuadro.
     text_cache: std::collections::HashMap<(String, [u8; 4]), MemoryRenderBuffer>,
-    /// Ruta del wallpaper configurado (`None` = fondo de color sólido).
+    /// Ruta del wallpaper configurado (`None` = fondo de color sólido). Es
+    /// global: las salidas comparten ruta y modo; cada `OutputCtx` cachea
+    /// su propio búfer escalado a su tamaño nativo.
     wallpaper_path: Option<String>,
     /// Modo de ajuste de la imagen (stretch/fit/fill/center/tile).
     wallpaper_fit: mirada_brain::WallpaperFit,
-    /// Wallpaper ya decodificado y compuesto al tamaño de la salida, con el
-    /// tamaño para el que se construyó. Se (re)arma perezosamente cuando
-    /// cambia el tamaño, la ruta o el modo. `None` si no hay ruta o la
-    /// imagen no carga.
-    wallpaper: Option<(MemoryRenderBuffer, (i32, i32))>,
     /// Árbol del menú raíz (de la config), con submenús anidados.
     menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo).
@@ -384,12 +412,36 @@ struct DrmState {
 }
 
 impl DrmState {
-    /// Compone el cursor y las ventanas y, si hubo cambios, encola el cuadro.
+    /// Índice de la salida primaria en [`Self::outputs`]. Hoy hard-coded a 0
+    /// (la primera descubierta); a futuro será configurable.
+    const PRIMARY: usize = 0;
+
+    /// Encuentra el índice de la salida cuyo CRTC es `crtc`, si existe.
+    fn output_index_by_crtc(
+        &self,
+        crtc: smithay::reexports::drm::control::crtc::Handle,
+    ) -> Option<usize> {
+        self.outputs.iter().position(|o| o.crtc == crtc)
+    }
+
+    /// Compone el cursor y las ventanas en la salida primaria, y wallpapers
+    /// en las secundarias. Si hubo cambios, encola el cuadro de cada salida.
     fn render(&mut self) {
         if !self.active {
             return; // la sesión está en otra VT — no tocamos la GPU
         }
-        if self.pending_flip {
+        // Primario: pipeline completo (windows, layers, menú, zonas, HUD).
+        self.render_primary();
+        // Secundarias: sólo wallpaper. Las ventanas/layer-shell se quedan en
+        // primario hasta tener distribución global.
+        for i in 1..self.outputs.len() {
+            self.render_secondary(i);
+        }
+    }
+
+    /// Render del pipeline completo en la salida primaria.
+    fn render_primary(&mut self) {
+        if self.outputs[Self::PRIMARY].pending_flip {
             return; // aún esperamos el VBlank del cuadro anterior
         }
         let output_h = self.app.output_size.1;
@@ -792,20 +844,18 @@ impl DrmState {
             // Wallpaper — al fondo de todo (la lista es front-to-back, así que
             // va último). Se (re)arma perezosamente al tamaño de la salida.
             if let Some(path) = self.wallpaper_path.clone() {
-                let size = (
-                    self.app.output_size.0 as i32,
-                    self.app.output_size.1 as i32,
-                );
-                let stale = self
+                let primary = &mut self.outputs[Self::PRIMARY];
+                let size = (primary.rect.w, primary.rect.h);
+                let stale = primary
                     .wallpaper
                     .as_ref()
                     .map(|(_, s)| *s != size)
                     .unwrap_or(true);
                 if stale && size.0 > 0 && size.1 > 0 {
-                    self.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
+                    primary.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
                         .map(|b| (b, size));
                 }
-                if let Some((buf, _)) = &self.wallpaper {
+                if let Some((buf, _)) = &primary.wallpaper {
                     if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
                         &mut self.renderer,
                         (0.0, 0.0),
@@ -821,7 +871,8 @@ impl DrmState {
             }
             out
         };
-        match self.compositor.render_frame::<_, _>(
+        let primary = &mut self.outputs[Self::PRIMARY];
+        match primary.compositor.render_frame::<_, _>(
             &mut self.renderer,
             &elements,
             CLEAR_COLOR,
@@ -829,8 +880,8 @@ impl DrmState {
         ) {
             Ok(result) => {
                 if !result.is_empty {
-                    match self.compositor.queue_frame(()) {
-                        Ok(()) => self.pending_flip = true,
+                    match primary.compositor.queue_frame(()) {
+                        Ok(()) => primary.pending_flip = true,
                         Err(e) => eprintln!("mirada-compositor · queue_frame: {e}"),
                     }
                 }
@@ -855,6 +906,69 @@ impl DrmState {
         }
     }
 
+    /// Render de una salida **secundaria**: sólo wallpaper (al tamaño nativo
+    /// de esa salida) sobre el [`CLEAR_COLOR`]. No lleva ventanas, layers,
+    /// menú, zonas ni HUD — eso vive en la primaria hasta tener
+    /// distribución global del escritorio.
+    fn render_secondary(&mut self, idx: usize) {
+        if self.outputs[idx].pending_flip {
+            return;
+        }
+        let elements: Vec<Frame<GlesRenderer>> = {
+            let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
+            if let Some(path) = self.wallpaper_path.clone() {
+                let ctx = &mut self.outputs[idx];
+                let size = (ctx.rect.w, ctx.rect.h);
+                let stale = ctx
+                    .wallpaper
+                    .as_ref()
+                    .map(|(_, s)| *s != size)
+                    .unwrap_or(true);
+                if stale && size.0 > 0 && size.1 > 0 {
+                    ctx.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
+                        .map(|b| (b, size));
+                }
+                if let Some((buf, _)) = &ctx.wallpaper {
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut self.renderer,
+                        (0.0, 0.0),
+                        buf,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        out.push(Frame::Text(el));
+                    }
+                }
+            }
+            out
+        };
+        let ctx = &mut self.outputs[idx];
+        match ctx.compositor.render_frame::<_, _>(
+            &mut self.renderer,
+            &elements,
+            CLEAR_COLOR,
+            FrameFlags::DEFAULT,
+        ) {
+            Ok(result) => {
+                if !result.is_empty {
+                    match ctx.compositor.queue_frame(()) {
+                        Ok(()) => ctx.pending_flip = true,
+                        Err(e) => eprintln!(
+                            "mirada-compositor · queue_frame[{}]: {e}",
+                            ctx.name
+                        ),
+                    }
+                }
+            }
+            Err(e) => eprintln!(
+                "mirada-compositor · render_frame[{}]: {e}",
+                ctx.name
+            ),
+        }
+    }
+
     /// La sesión se cede a otra VT (`Ctrl+Alt+Fn`): suelta la GPU y deja
     /// de leer el ratón y el teclado, para no chocar con quien ahora
     /// manda en la pantalla.
@@ -866,7 +980,7 @@ impl DrmState {
     }
 
     /// La sesión vuelve a esta VT: recupera la GPU y la entrada, reinicia
-    /// el estado del compositor y repinta.
+    /// el estado de cada compositor y repinta.
     fn resume_session(&mut self) {
         if self.libinput.resume().is_err() {
             eprintln!("mirada-compositor · libinput.resume falló.");
@@ -874,11 +988,16 @@ impl DrmState {
         if let Err(e) = self.drm.activate(false) {
             eprintln!("mirada-compositor · drm.activate falló: {e}");
         }
-        if let Err(e) = self.compositor.reset_state() {
-            eprintln!("mirada-compositor · compositor.reset_state falló: {e}");
+        for ctx in &mut self.outputs {
+            if let Err(e) = ctx.compositor.reset_state() {
+                eprintln!(
+                    "mirada-compositor · compositor.reset_state[{}]: {e}",
+                    ctx.name
+                );
+            }
+            ctx.pending_flip = false;
         }
         self.active = true;
-        self.pending_flip = false;
         self.render();
         println!("mirada-compositor · sesión recuperada.");
     }
@@ -914,7 +1033,10 @@ impl DrmState {
             if new_wp != self.wallpaper_path || new_fit != self.wallpaper_fit {
                 self.wallpaper_path = new_wp;
                 self.wallpaper_fit = new_fit;
-                self.wallpaper = None; // se rearma en el próximo render
+                // Se rearma en el próximo render — en cada salida.
+                for ctx in &mut self.outputs {
+                    ctx.wallpaper = None;
+                }
             }
             self.text = crate::text::TextRenderer::system(self.app.config_font_path().as_deref());
         }
@@ -1497,12 +1619,20 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         DrmDevice::new(drm_fd.clone(), true).map_err(|e| format!("DrmDevice::new falló: {e}"))?;
     println!("      dispositivo DRM listo.");
 
-    // 4 · Elegir la salida conectada: conector + CRTC + modo.
-    println!("[4/8] eligiendo salida …");
+    // 4 · Enumerar TODAS las salidas conectadas: conector + CRTC + modo.
+    println!("[4/8] enumerando salidas …");
     let resources = drm
         .resource_handles()
         .map_err(|e| format!("no pude leer los recursos DRM: {e}"))?;
-    let mut chosen = None;
+    use smithay::reexports::drm::control::{crtc, Mode as DrmMode};
+    let mut chosen: Vec<(
+        smithay::reexports::drm::control::connector::Handle,
+        crtc::Handle,
+        DrmMode,
+        String,
+    )> = Vec::new();
+    // Pool de CRTCs ya tomados — un CRTC no se reparte entre dos salidas.
+    let mut used_crtcs: Vec<crtc::Handle> = Vec::new();
     for &conn_handle in resources.connectors() {
         let conn = match drm.get_connector(conn_handle, false) {
             Ok(c) => c,
@@ -1512,7 +1642,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             continue;
         }
         let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
-        // Registra todos los modos del panel — diagnóstico.
         for m in conn.modes() {
             let (mw, mh) = m.size();
             let pref = if m.mode_type().contains(ModeTypeFlags::PREFERRED) {
@@ -1523,8 +1652,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             eprintln!("      modo de «{name}»: {mw}×{mh} @ {} Hz{pref}", m.vrefresh());
         }
         // Elige el modo de mayor área (a igualdad, mayor refresco) — el
-        // nativo del panel. La marca PREFERRED no es fiable: a veces
-        // señala un modo menor.
+        // nativo del panel.
         let mode = conn
             .modes()
             .iter()
@@ -1536,21 +1664,32 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         let Some(mode) = mode else {
             continue;
         };
-        let crtc = conn
+        // El primer CRTC compatible que no esté ya tomado.
+        let crtc_choice = conn
             .encoders()
             .iter()
             .filter_map(|enc| drm.get_encoder(*enc).ok())
-            .find_map(|enc| resources.filter_crtcs(enc.possible_crtcs()).into_iter().next());
-        if let Some(crtc) = crtc {
+            .find_map(|enc| {
+                resources
+                    .filter_crtcs(enc.possible_crtcs())
+                    .into_iter()
+                    .find(|c| !used_crtcs.contains(c))
+            });
+        if let Some(crtc_h) = crtc_choice {
             let (w, h) = mode.size();
-            println!("      salida «{name}» · {w}×{h} · CRTC {crtc:?}");
-            chosen = Some((conn_handle, crtc, mode, name));
-            break;
+            println!("      salida «{name}» · {w}×{h} · CRTC {crtc_h:?}");
+            used_crtcs.push(crtc_h);
+            chosen.push((conn_handle, crtc_h, mode, name));
+        } else {
+            eprintln!("      salida «{name}» sin CRTC libre — se ignora");
         }
     }
-    let (conn_handle, crtc, mode, out_name) =
-        chosen.ok_or("ninguna salida conectada con CRTC disponible")?;
-    let (mode_w, mode_h) = mode.size();
+    if chosen.is_empty() {
+        return Err("ninguna salida conectada con CRTC disponible".into());
+    }
+    // La primera descubierta queda como **primaria** (layer-shell, tiling,
+    // menú, zonas, HUD viven ahí). Las demás renderizan sólo wallpaper.
+    let out_name = chosen[0].3.clone();
 
     // 5 · GBM + EGL + GlesRenderer.
     println!("[5/8] inicializando GBM + EGL + GlesRenderer …");
@@ -1563,33 +1702,14 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         unsafe { GlesRenderer::new(egl_context) }.map_err(|e| format!("GlesRenderer falló: {e}"))?;
     println!("      renderer GLES listo.");
 
-    // 6 · Superficie DRM + DrmCompositor de la salida.
-    println!("[6/8] creando la superficie DRM y el compositor …");
-    let surface = drm
-        .create_surface(crtc, mode, &[conn_handle])
-        .map_err(|e| format!("create_surface falló: {e}"))?;
+    // 6 · Superficie DRM + DrmCompositor por cada salida descubierta.
+    // El renderer GLES se comparte (un solo EGLContext sobre la GPU); cada
+    // salida tiene su propio DrmSurface + DrmCompositor.
+    println!("[6/8] creando la superficie DRM y compositors ({}) …", chosen.len());
     let allocator =
         GbmAllocator::new(gbm.clone(), GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT);
     let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
     let renderer_formats = renderer.dmabuf_formats();
-    let mode_source = OutputModeSource::Static {
-        size: Size::from((mode_w as i32, mode_h as i32)),
-        scale: Scale::from(1.0),
-        transform: Transform::Normal,
-    };
-    let compositor: Compositor = DrmCompositor::new(
-        mode_source,
-        surface,
-        None,
-        allocator,
-        exporter,
-        [Fourcc::Argb8888, Fourcc::Xrgb8888],
-        renderer_formats,
-        drm.cursor_size(),
-        Some(gbm.clone()),
-    )
-    .map_err(|e| format!("DrmCompositor::new falló: {e}"))?;
-    println!("      compositor de «{out_name}» listo.");
 
     // 7 · El estado Wayland (Cerebro, teclado, keymap, control).
     println!("[7/8] armando el estado Wayland …");
@@ -1598,20 +1718,71 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     // Con el renderer ya creado, anuncia dmabuf — sin esto las apps que
     // pintan por GPU (GPUI, navegadores acelerados) no pueden conectarse.
     crate::announce_dmabuf(&mut app, &display.handle(), &renderer);
-    // La salida del Cerebro = el modo del monitor.
-    let ev = app.body.add_output(0, mode_w as i32, mode_h as i32);
-    app.brain_feed(ev);
-    app.output_size = (mode_w as i32, mode_h as i32);
-    // El puntero arranca en el centro de la pantalla.
-    app.pointer_loc = (mode_w as f64 / 2.0, mode_h as f64 / 2.0);
-    // Anuncia el monitor en el protocolo Wayland — los clientes lo exigen.
-    app.output = Some(crate::announce_output(
-        &display.handle(),
-        &out_name,
-        mode_w as i32,
-        mode_h as i32,
-        mode.vrefresh() as i32 * 1000,
-    ));
+
+    // Construir un OutputCtx por cada salida. Layout side-by-side
+    // horizontal en orden de descubrimiento: la primera arranca en (0,0),
+    // la siguiente a la derecha, etc.
+    let mut output_ctxs: Vec<OutputCtx> = Vec::with_capacity(chosen.len());
+    let mut cursor_x: i32 = 0;
+    let mut total_h: i32 = 0;
+    for (i, (conn_handle, crtc_h, mode, name)) in chosen.iter().cloned().enumerate() {
+        let (w, h) = mode.size();
+        let surface = drm
+            .create_surface(crtc_h, mode, &[conn_handle])
+            .map_err(|e| format!("create_surface[{name}] falló: {e}"))?;
+        let mode_source = OutputModeSource::Static {
+            size: Size::from((w as i32, h as i32)),
+            scale: Scale::from(1.0),
+            transform: Transform::Normal,
+        };
+        let comp: Compositor = DrmCompositor::new(
+            mode_source,
+            surface,
+            None,
+            allocator.clone(),
+            exporter.clone(),
+            [Fourcc::Argb8888, Fourcc::Xrgb8888],
+            renderer_formats.clone(),
+            drm.cursor_size(),
+            Some(gbm.clone()),
+        )
+        .map_err(|e| format!("DrmCompositor::new[{name}] falló: {e}"))?;
+        let refresh_mhz = mode.vrefresh() as i32 * 1000;
+        let smithay_out =
+            crate::announce_output(&display.handle(), &name, w as i32, h as i32, refresh_mhz);
+        // Brain: cada salida es un id incremental con su tamaño local.
+        let ev = app.body.add_output(i as u32, w as i32, h as i32);
+        app.brain_feed(ev);
+        // Posición global del rect de esta salida.
+        let rect = Rect::new(cursor_x, 0, w as i32, h as i32);
+        cursor_x += w as i32;
+        total_h = total_h.max(h as i32);
+        println!("      compositor de «{name}» listo · rect global {rect:?}");
+        output_ctxs.push(OutputCtx {
+            name,
+            output: smithay_out,
+            crtc: crtc_h,
+            compositor: comp,
+            rect,
+            refresh_mhz,
+            wallpaper: None,
+            pending_flip: false,
+        });
+    }
+
+    // Espacio global del escritorio: union de todos los rects.
+    let total_w = cursor_x.max(1);
+    let total_h = total_h.max(1);
+    app.output_size = (total_w, total_h);
+    // El puntero arranca centrado en la salida primaria (no en el centro
+    // del escritorio global) — más predecible cuando hay varios monitores.
+    let primary_rect = output_ctxs[0].rect;
+    app.pointer_loc = (
+        (primary_rect.x + primary_rect.w / 2) as f64,
+        (primary_rect.y + primary_rect.h / 2) as f64,
+    );
+    // Primary `smithay::Output` para layer-shell, xdg-output handlers, etc.
+    app.output = Some(output_ctxs[0].output.clone());
 
     // El socket Wayland por el que se conectan los clientes.
     let listener = ListeningSocket::bind_auto("wayland", 1..32)?;
@@ -1659,14 +1830,22 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         })
         .map_err(|e| format!("insert session: {e}"))?;
 
-    // VBlank: el page-flip terminó.
+    // VBlank: el page-flip de un CRTC terminó. Rutearlo a la salida que lo
+    // posee. Si llega para un CRTC desconocido (no debería en estado estable)
+    // se ignora silenciosamente.
     handle
         .insert_source(drm_notifier, |event, _meta, state| match event {
-            DrmEvent::VBlank(_crtc) => {
-                if let Err(e) = state.compositor.frame_submitted() {
-                    eprintln!("mirada-compositor · frame_submitted: {e}");
+            DrmEvent::VBlank(crtc) => {
+                if let Some(idx) = state.output_index_by_crtc(crtc) {
+                    let ctx = &mut state.outputs[idx];
+                    if let Err(e) = ctx.compositor.frame_submitted() {
+                        eprintln!(
+                            "mirada-compositor · frame_submitted[{}]: {e}",
+                            ctx.name
+                        );
+                    }
+                    ctx.pending_flip = false;
                 }
-                state.pending_flip = false;
             }
             DrmEvent::Error(e) => eprintln!("mirada-compositor · DRM: {e}"),
         })
@@ -1768,18 +1947,17 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         session: session.clone(),
         display,
         drm,
-        compositor,
+        outputs: output_ctxs,
         renderer,
         libinput: libinput_handle,
         active: true,
-        pending_flip: false,
         watches,
         ctl,
         start: Instant::now(),
         last_windows: 0,
         cursor_id: Id::new(),
         last_pointer_window: None,
-        output_size: (mode_w as f64, mode_h as f64),
+        output_size: (total_w as f64, total_h as f64),
         text: {
             let t = crate::text::TextRenderer::system(font_path.as_deref());
             if t.is_some() {
@@ -1792,7 +1970,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         text_cache: std::collections::HashMap::new(),
         wallpaper_path,
         wallpaper_fit,
-        wallpaper: None,
         menu_entries,
         root_menu: None,
         zones,
