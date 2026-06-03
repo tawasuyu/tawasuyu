@@ -899,7 +899,6 @@ impl App for Cosmos {
             sphere_yaw: ui.sphere_yaw,
             sphere_pitch: ui.sphere_pitch,
             sky_nadir: ui.sky_nadir,
-            sky_probe: None,
             wheel_zoom: 1.0,
             wheel_pan: (0.0, 0.0),
             carto_rect: Arc::new(std::sync::Mutex::new(None)),
@@ -987,18 +986,8 @@ impl App for Cosmos {
                 m.wheel_zoom = z;
                 m.wheel_pan = (px, py);
             }
-            Msg::SkyProbe(dx, dy, lx0, ly0) => {
-                // El drag entrega lx0/ly0 del press (constante) + deltas
-                // por move; acumulamos para seguir el cursor en vivo.
-                let cur = match m.sky_probe {
-                    Some((x, y)) => (x + dx, y + dy),
-                    None => (lx0 + dx, ly0 + dy),
-                };
-                m.sky_probe = Some(cur);
-            }
             Msg::ToggleSkyNadir => {
                 m.sky_nadir = !m.sky_nadir;
-                m.sky_probe = None;
                 persist = true;
             }
             Msg::Resized(w, h) => m.viewport = (w, h),
@@ -1487,6 +1476,25 @@ impl App for Cosmos {
             // En astrocarto, el zoom va HACIA el cursor: ajusta el paneo
             // para que el punto del mapa bajo el puntero quede fijo. Sólo
             // ahí conocemos el rect del lienzo (lo dejó el `paint_with`).
+            // En el Cielo el lienzo es una cúpula radial centrada: basta
+            // ajustar el paneo para que el punto bajo el cursor quede fijo
+            // (no hace falta la escala base, sólo el centro del rect).
+            if matches!(model.chart_view, crate::model::ChartView::Cielo) {
+                if let Ok(guard) = model.carto_rect.lock() {
+                    if let Some((rx, ry, rw, rh)) = *guard {
+                        let z = model.wheel_zoom;
+                        let z2 = (z * factor).clamp(0.25, 8.0);
+                        let f = if z > 0.0 { z2 / z } else { 1.0 };
+                        let rcx = rx + rw * 0.5;
+                        let rcy = ry + rh * 0.5;
+                        let (cx, cy) = cursor;
+                        let pan_x = (cx - rcx) * (1.0 - f) + model.wheel_pan.0 * f;
+                        let pan_y = (cy - rcy) * (1.0 - f) + model.wheel_pan.1 * f;
+                        return Some(Msg::WheelSetView(z2, pan_x, pan_y));
+                    }
+                }
+                return Some(Msg::WheelZoom(factor));
+            }
             if matches!(model.chart_view, crate::model::ChartView::Carto) {
                 if let Ok(guard) = model.carto_rect.lock() {
                     if let Some((rx, ry, rw, rh)) = *guard {

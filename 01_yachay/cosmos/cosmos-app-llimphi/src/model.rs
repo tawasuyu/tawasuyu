@@ -519,10 +519,6 @@ pub(crate) enum Msg {
     /// Fija zoom y paneo del lienzo de una (para zoom hacia el cursor):
     /// (zoom, pan_x, pan_y).
     WheelSetView(f32, f32, f32),
-    /// Sonda del mouse sobre la cúpula del Cielo: (Δx, Δy del move, lx0,
-    /// ly0 del press en coords del nodo). Acumula la posición para el
-    /// readout alt/az.
-    SkyProbe(f32, f32, f32, f32),
     /// Alterna la cúpula del Cielo entre cénit y nadir.
     ToggleSkyNadir,
     /// Cambió el tamaño de la ventana (ancho, alto en px lógicos).
@@ -672,9 +668,6 @@ pub(crate) struct Model {
     /// `false` = cénit al centro (cielo visible); `true` = nadir al
     /// centro (el hemisferio bajo el horizonte).
     pub(crate) sky_nadir: bool,
-    /// Último punto sondeado con el mouse sobre la cúpula, en coords
-    /// locales del lienzo (px). `None` = sin sondeo. Transitorio.
-    pub(crate) sky_probe: Option<(f32, f32)>,
     // rueda 2D: zoom + paneo del lienzo (transitorio, no se persiste)
     pub(crate) wheel_zoom: f32,
     pub(crate) wheel_pan: (f32, f32),

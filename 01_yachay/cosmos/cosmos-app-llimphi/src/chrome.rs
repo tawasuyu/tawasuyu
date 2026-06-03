@@ -1318,7 +1318,12 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
     };
     let dark = model.cfg.theme_dark;
     let nadir = model.sky_nadir;
-    let probe = model.sky_probe;
+    // Zoom + paneo del lienzo (rueda y arrastre) — compartidos con el resto
+    // de vistas. `rect_cell` deja el rect pintado para el zoom hacia el
+    // cursor en `on_wheel` (igual que astrocarto).
+    let zoom = model.wheel_zoom as f64;
+    let pan = model.wheel_pan;
+    let rect_cell = model.carto_rect.clone();
     let lst = astro.lst_deg;
     let lat = astro.lat_deg;
     let pal = graphics_palette(model);
@@ -1328,9 +1333,6 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
         .iter()
         .map(|(b, p)| (b.canonical().to_string(), p.altitude_deg, p.azimuth_deg))
         .collect();
-    // La línea media de la Vía Láctea (ecuador galáctico) y las estrellas
-    // reales — datos del catálogo agnóstico de cosmos-render.
-    let galaxy = cosmos_render::sky_data::galactic_equator(420);
     let fg_text = rgba_of(theme.fg_text);
     let fg_muted = rgba_of(theme.fg_muted);
     let border = rgba_of(theme.border);
@@ -1351,9 +1353,9 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
     .fill(bg)
     .radius(3.0)
     .clip(true)
-    // Arrastrar sondea la cúpula: muestra alt/az bajo el cursor.
-    .draggable_at(|phase, dx, dy, lx, ly| match phase {
-        DragPhase::Move => Some(Msg::SkyProbe(dx, dy, lx, ly)),
+    // Arrastrar panea la cúpula (con zoom hace falta para recorrerla).
+    .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+        DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
         DragPhase::End => None,
     })
     .paint_with(move |scene, ts, rect: PaintRect| {
@@ -1361,9 +1363,14 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
         use llimphi_ui::llimphi_raster::peniko::{Color as PColor, Fill};
         use llimphi_ui::llimphi_text::{draw_layout, layout_block, Alignment, TextBlock};
 
-        let cx = rect.x as f64 + rect.w as f64 * 0.5;
-        let cy = rect.y as f64 + rect.h as f64 * 0.5;
-        let r = (rect.w.min(rect.h) as f64) * 0.42;
+        // Deja el rect para que `on_wheel` haga zoom hacia el cursor.
+        if let Ok(mut g) = rect_cell.lock() {
+            *g = Some((rect.x, rect.y, rect.w, rect.h));
+        }
+        // Centro desplazado por el paneo, radio escalado por el zoom.
+        let cx = rect.x as f64 + rect.w as f64 * 0.5 + pan.0 as f64;
+        let cy = rect.y as f64 + rect.h as f64 * 0.5 + pan.1 as f64;
+        let r = (rect.w.min(rect.h) as f64) * 0.42 * zoom;
         let id = Affine::IDENTITY;
         let col = |c: Rgba| {
             PColor::from_rgba8(
@@ -1440,24 +1447,61 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
         };
         disc(scene, cx, cy, r, dome_fill);
 
-        // --- Vía Láctea: banda difusa a lo largo del plano galáctico ---
-        let band = if dark {
-            Rgba { r: 0.80, g: 0.84, b: 0.98, a: 1.0 }
-        } else {
-            Rgba { r: 0.42, g: 0.48, b: 0.62, a: 1.0 }
-        };
-        for gs in &galaxy {
-            let (alt, az) = radec_altaz(gs.ra_deg as f64, gs.dec_deg as f64);
-            let (x, y, vis) = dome(alt, az);
-            if !vis {
-                continue;
+        // --- Malla ecuatorial: meridianos de AR y paralelos de declinación ---
+        // Las "coordenadas meridianas": una rejilla celeste tenue que ubica
+        // los objetos en ascensión recta / declinación. Se dibuja segmento a
+        // segmento, sólo donde ambos extremos están sobre el horizonte.
+        let polyline = |scene: &mut llimphi_ui::llimphi_raster::vello::Scene,
+                        pts: &[(f64, f64)],
+                        w: f64,
+                        c: PColor| {
+            let mut prev: Option<(f64, f64, bool)> = None;
+            for &(ra, dec) in pts {
+                let (alt, az) = radec_altaz(ra, dec);
+                let (x, y, vis) = dome(alt, az);
+                if let Some((px, py, pv)) = prev {
+                    if vis && pv {
+                        seg(scene, (px, py), (x, y), w, c);
+                    }
+                }
+                prev = Some((x, y, vis));
             }
-            let bright = 0.30 + 0.70 * (gs.toward_center * gs.toward_center) as f64;
-            disc(scene, x, y, r * 0.055, col(band.with_alpha((0.07 * bright) as f32)));
+        };
+        let grid_eq = col(fg_muted.with_alpha(0.14));
+        // Meridianos de AR cada 30° (2 h), de declinación −80° a +80°.
+        for h in 0..12 {
+            let ra = h as f64 * 30.0;
+            let pts: Vec<(f64, f64)> = (-8..=8).map(|j| (ra, j as f64 * 10.0)).collect();
+            polyline(scene, &pts, 0.5, grid_eq);
+        }
+        // Paralelos de declinación; el ecuador celeste (0°) algo más marcado.
+        for &d in &[-60.0_f64, -30.0, 0.0, 30.0, 60.0] {
+            let pts: Vec<(f64, f64)> = (0..=72).map(|i| (i as f64 * 5.0, d)).collect();
+            let w = if d == 0.0 { 0.7 } else { 0.5 };
+            let c = if d == 0.0 { col(fg_muted.with_alpha(0.22)) } else { grid_eq };
+            polyline(scene, &pts, w, c);
         }
 
-        // --- Figuras de constelaciones (tenues) ---
+        // --- Eclíptica: el camino del Sol, círculo máximo (tono cálido) ---
+        let eps = 23.4393_f64.to_radians();
+        let ecl_pts: Vec<(f64, f64)> = (0..=180)
+            .map(|i| {
+                let lam = (i as f64 * 2.0).to_radians();
+                let ra = (lam.sin() * eps.cos()).atan2(lam.cos()).to_degrees().rem_euclid(360.0);
+                let dec = (lam.sin() * eps.sin()).asin().to_degrees();
+                (ra, dec)
+            })
+            .collect();
+        let ecl_col = col(Rgba { r: 0.93, g: 0.74, b: 0.36, a: 1.0 }.with_alpha(0.55));
+        polyline(scene, &ecl_pts, 1.1, ecl_col);
+
+        // --- Figuras de constelaciones (tenues) + sus estrellas como puntos ---
         let cons_col = col(fg_muted.with_alpha(0.34));
+        let cstar = if dark {
+            Rgba { r: 0.78, g: 0.82, b: 0.95, a: 0.5 }
+        } else {
+            Rgba { r: 0.20, g: 0.24, b: 0.34, a: 0.5 }
+        };
         for fig in cosmos_render::constellations_data::FIGURAS {
             for path in fig.paths {
                 for s in path.windows(2) {
@@ -1467,6 +1511,14 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
                     let (bx, by, bu) = dome(b_alt, b_az);
                     if au && bu {
                         seg(scene, (ax, ay), (bx, by), 0.6, cons_col);
+                    }
+                }
+                // Los vértices del trazo son estrellas: puntitos discretos.
+                for &(ra, dec) in path.iter() {
+                    let (alt, az) = radec_altaz(ra as f64, dec as f64);
+                    let (x, y, vis) = dome(alt, az);
+                    if vis {
+                        disc(scene, x, y, (r * 0.0035).max(0.7), col(cstar));
                     }
                 }
             }
@@ -1571,27 +1623,6 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
                 _ => {}
             }
             text(scene, ts, x, y - rad - 7.0, crate::format::simbolo_cuerpo(name), 10.0, col(fg_text), true);
-        }
-
-        // --- Readout del mouse: alt/az bajo el cursor ---
-        if let Some((lx, ly)) = probe {
-            let ox = lx as f64 - rect.w as f64 * 0.5;
-            let oy = ly as f64 - rect.h as f64 * 0.5;
-            let rr = (ox * ox + oy * oy).sqrt().min(r);
-            let f = if r > 0.0 { rr / r } else { 0.0 };
-            let (alt, az) = if !nadir {
-                (90.0 * (1.0 - f), ox.atan2(-oy).to_degrees().rem_euclid(360.0))
-            } else {
-                (-90.0 * (1.0 - f), (-ox).atan2(-oy).to_degrees().rem_euclid(360.0))
-            };
-            let px = cx + ox;
-            let py = cy + oy;
-            let cross = col(fg_text.with_alpha(0.8));
-            seg(scene, (px - 6.0, py), (px + 6.0, py), 1.0, cross);
-            seg(scene, (px, py - 6.0), (px, py + 6.0), 1.0, cross);
-            ring(scene, px, py, 5.0, 1.0, cross);
-            let rd = format!("alt {:+.1}°   az {:.1}°", alt, az);
-            text(scene, ts, rect.x as f64 + 8.0, rect.y as f64 + 14.0, &rd, 11.0, col(fg_text), false);
         }
 
         // --- Encabezado: modo + lugar ---
