@@ -456,6 +456,39 @@ mod tests {
     }
 
     #[test]
+    fn parsea_repeating_gradients_y_stops_px() {
+        let grad = |v: &str| match parse_background_image(v) {
+            Some(DeclKind::BackgroundGradient(g)) => g,
+            other => panic!("esperaba gradiente, {other:?}"),
+        };
+
+        // `repeating-*` activa el flag; el no-repetido lo deja en false.
+        assert!(grad("repeating-linear-gradient(red, blue 20px)").repeating);
+        assert!(grad("repeating-radial-gradient(circle, red, blue 30px)").repeating);
+        assert!(grad("repeating-conic-gradient(red, blue 25%)").repeating);
+        assert!(!grad("linear-gradient(red, blue)").repeating);
+        assert!(matches!(
+            grad("repeating-linear-gradient(45deg, red, blue 10px)").geometry,
+            GradientGeometry::Linear { .. }
+        ));
+
+        // Posiciones de stop: % → Pct, px → Px reales (no la vieja heurística
+        // /100), `auto`/sin posición → None.
+        let g = grad("linear-gradient(red 40%, blue 30px)");
+        assert_eq!(g.stops[0].pos, Some(LengthVal::Pct(40.0)));
+        assert_eq!(g.stops[1].pos, Some(LengthVal::Px(30.0)));
+
+        // Doble posición `#ccc 0 10px` ⇒ dos stops del mismo color (franjas).
+        let g = grad("repeating-linear-gradient(#ccc 0 10px, #fff 10px 20px)");
+        assert_eq!(g.stops.len(), 4);
+        assert_eq!(g.stops[0].color, g.stops[1].color);
+        assert_eq!(g.stops[0].pos, Some(LengthVal::Px(0.0)));
+        assert_eq!(g.stops[1].pos, Some(LengthVal::Px(10.0)));
+        assert_eq!(g.stops[2].color, g.stops[3].color);
+        assert_eq!(g.stops[3].pos, Some(LengthVal::Px(20.0)));
+    }
+
+    #[test]
     fn parsea_named_colors_extendidos() {
         // Tabla CSS3 completa: colores que antes dropeaban la declaración.
         assert_eq!(parse_color("coral"), Some(Color::rgb(255, 127, 80)));
@@ -2674,8 +2707,8 @@ line2</pre></body></html>"#;
 
         let g = parse_linear_gradient("45deg, red 0%, blue 100%").unwrap();
         assert!((g.angle_deg() - 45.0).abs() < 1e-6);
-        assert_eq!(g.stops[0].pos, Some(0.0));
-        assert_eq!(g.stops[1].pos, Some(1.0));
+        assert_eq!(g.stops[0].pos, Some(LengthVal::Pct(0.0)));
+        assert_eq!(g.stops[1].pos, Some(LengthVal::Pct(100.0)));
 
         // Default 180 (top→bottom) cuando no se da dirección.
         let g = parse_linear_gradient("red, blue").unwrap();

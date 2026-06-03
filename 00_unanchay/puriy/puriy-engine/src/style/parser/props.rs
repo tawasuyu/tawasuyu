@@ -1408,6 +1408,16 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
     if let Some(args) = strip_fn(v, "conic-gradient") {
         return parse_conic_gradient(args).map(DeclKind::BackgroundGradient);
     }
+    // `repeating-*-gradient(...)`: mismo parser, con el flag `repeating`.
+    if let Some(args) = strip_fn(v, "repeating-linear-gradient") {
+        return parse_linear_gradient(args).map(mark_repeating).map(DeclKind::BackgroundGradient);
+    }
+    if let Some(args) = strip_fn(v, "repeating-radial-gradient") {
+        return parse_radial_gradient(args).map(mark_repeating).map(DeclKind::BackgroundGradient);
+    }
+    if let Some(args) = strip_fn(v, "repeating-conic-gradient") {
+        return parse_conic_gradient(args).map(mark_repeating).map(DeclKind::BackgroundGradient);
+    }
     if let Some(args) = strip_fn(v, "url") {
         // url('foo') / url("foo") / url(foo) — trimea comillas.
         let raw = args.trim();
@@ -1421,8 +1431,14 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
         }
         return Some(DeclKind::BackgroundImageUrl(url.to_string()));
     }
-    // Gradientes `repeating-*` o `cross-fade` no soportados — silencio.
+    // `cross-fade`/`image-set`/`paint()` no soportados — silencio.
     None
+}
+
+/// Marca un gradiente como `repeating-*` (Fase 7.228).
+fn mark_repeating(mut g: LinearGradient) -> LinearGradient {
+    g.repeating = true;
+    g
 }
 
 /// `background-size`: `cover` | `contain` | `auto` | `<x> [<y>]`. Cada eje
@@ -1805,15 +1821,13 @@ pub(crate) fn parse_linear_gradient(args: &str) -> Option<LinearGradient> {
     let angle_deg = angle_deg.unwrap_or(180.0);
     let mut stops: Vec<GradientStop> = Vec::new();
     for raw in &parts[stops_start_idx..] {
-        if let Some(s) = parse_gradient_stop(raw) {
-            stops.push(s);
-        }
+        push_gradient_stops(raw, &mut stops);
     }
     if stops.len() < 2 {
         return None;
     }
     let _ = stops_start;
-    Some(LinearGradient { geometry: GradientGeometry::Linear { angle_deg }, stops })
+    Some(LinearGradient { geometry: GradientGeometry::Linear { angle_deg }, stops, repeating: false })
 }
 
 /// Parsea el contenido de `radial-gradient(...)`. Sintaxis aceptada (MVP):
@@ -1834,14 +1848,12 @@ pub(crate) fn parse_radial_gradient(args: &str) -> Option<LinearGradient> {
     };
     let mut stops: Vec<GradientStop> = Vec::new();
     for raw in &parts[stops_start..] {
-        if let Some(s) = parse_gradient_stop(raw) {
-            stops.push(s);
-        }
+        push_gradient_stops(raw, &mut stops);
     }
     if stops.len() < 2 {
         return None;
     }
-    Some(LinearGradient { geometry: GradientGeometry::Radial(spec), stops })
+    Some(LinearGradient { geometry: GradientGeometry::Radial(spec), stops, repeating: false })
 }
 
 /// Parsea el contenido de `conic-gradient(...)`. Sintaxis aceptada (MVP):
@@ -1865,14 +1877,12 @@ pub(crate) fn parse_conic_gradient(args: &str) -> Option<LinearGradient> {
     };
     let mut stops: Vec<GradientStop> = Vec::new();
     for raw in &parts[stops_start..] {
-        if let Some(s) = parse_gradient_stop(raw) {
-            stops.push(s);
-        }
+        push_gradient_stops(raw, &mut stops);
     }
     if stops.len() < 2 {
         return None;
     }
-    Some(LinearGradient { geometry: geom, stops })
+    Some(LinearGradient { geometry: geom, stops, repeating: false })
 }
 
 /// Interpreta el primer segmento de un `conic-gradient` como prelude
@@ -2016,26 +2026,59 @@ pub(crate) fn parse_gradient_direction(s: &str) -> (Option<f32>, bool) {
     (None, false)
 }
 
-pub(crate) fn parse_gradient_stop(s: &str) -> Option<GradientStop> {
-    let s = s.trim();
-    let parts: Vec<&str> = s.split_whitespace().collect();
+/// Parsea una posición de stop: `40%` → `Pct(40)`, `10px`/`1rem`/`0` →
+/// `Px(...)` (px reales, no la vieja heurística `/100`). Devuelve `None` si
+/// el token no es una posición válida.
+fn parse_stop_pos(p: &str) -> Option<LengthVal> {
+    if let Some(pct) = p.strip_suffix('%') {
+        pct.trim().parse::<f32>().ok().map(LengthVal::Pct)
+    } else {
+        parse_length_px(p).map(LengthVal::Px)
+    }
+}
+
+/// Parsea un stop de gradiente y empuja 1 o 2 stops a `out`. Acepta:
+/// `<color>` (sin posición), `<color> <pos>` (una posición) y
+/// `<color> <pos> <pos>` (doble posición CSS — atajo `#ccc 0 10px` que
+/// equivale a dos stops del mismo color; omnipresente en franjas
+/// `repeating-*`). Devuelve `false` si el token no es un stop válido.
+fn push_gradient_stops(raw: &str, out: &mut Vec<GradientStop>) -> bool {
+    let parts: Vec<&str> = raw.split_whitespace().collect();
     match parts.as_slice() {
-        [c] => Some(GradientStop { color: parse_color(c)?, pos: None }),
-        [c, p] => {
-            let color = parse_color(c)?;
-            let pos = if let Some(pct) = p.strip_suffix('%') {
-                pct.trim().parse::<f32>().ok().map(|v| (v / 100.0).clamp(0.0, 1.0))
-            } else if let Some(px) = parse_length_px(p) {
-                // Aproximación: tratamos px como 0..1 dividiendo por 100.
-                // En el wild la mayoría usa %, así que esta heurística
-                // raramente importa.
-                Some((px / 100.0).clamp(0.0, 1.0))
-            } else {
-                None
-            };
-            Some(GradientStop { color, pos })
-        }
-        _ => None,
+        [c] => match parse_color(c) {
+            Some(color) => {
+                out.push(GradientStop { color, pos: None });
+                true
+            }
+            None => false,
+        },
+        [c, p] => match parse_color(c) {
+            Some(color) => {
+                out.push(GradientStop { color, pos: parse_stop_pos(p) });
+                true
+            }
+            None => false,
+        },
+        [c, p1, p2] => match parse_color(c) {
+            Some(color) => {
+                out.push(GradientStop { color, pos: parse_stop_pos(p1) });
+                out.push(GradientStop { color, pos: parse_stop_pos(p2) });
+                true
+            }
+            None => false,
+        },
+        _ => false,
+    }
+}
+
+/// Compat: parsea un único stop (sin doble posición). Usado por tests.
+#[cfg(test)]
+pub(crate) fn parse_gradient_stop(s: &str) -> Option<GradientStop> {
+    let mut v = Vec::new();
+    if push_gradient_stops(s, &mut v) {
+        v.into_iter().next()
+    } else {
+        None
     }
 }
 

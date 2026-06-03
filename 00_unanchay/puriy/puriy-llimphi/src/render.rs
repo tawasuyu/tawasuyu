@@ -2150,6 +2150,7 @@ pub(crate) fn build_linear_gradient_brush(
     rect: llimphi_ui::PaintRect,
     alpha_mul: f32,
 ) -> Option<Gradient> {
+    use llimphi_raster::peniko::Extend;
     use puriy_engine::style::{GradientGeometry, LengthVal, RadialSize};
     if g.stops.len() < 2 {
         return None;
@@ -2166,23 +2167,17 @@ pub(crate) fn build_linear_gradient_brush(
         }
     };
 
-    // Stops: si pos es None, distribuir uniformemente.
-    let n = g.stops.len();
-    let mut peniko_stops: Vec<ColorStop> = Vec::with_capacity(n);
-    for (i, s) in g.stops.iter().enumerate() {
-        let pos = s.pos.unwrap_or_else(|| {
-            if n == 1 { 0.0 } else { i as f32 / (n - 1) as f32 }
-        });
-        let a = ((s.color.a as f32) * alpha_mul) as u8;
-        let c = Color::from_rgba8(s.color.r, s.color.g, s.color.b, a);
-        peniko_stops.push(ColorStop::from((pos, c)));
+    // Geometría base: dirección/longitud del eje del gradiente, contra el cual
+    // se resuelven las posiciones de los stops a fracción 0..1.
+    enum Base {
+        Linear { start: Point, dir: (f64, f64), len: f64 },
+        Radial { center: Point, radius: f64 },
+        Conic { center: Point, base_start: f64 },
     }
-
-    let kind = match &g.geometry {
+    let base = match &g.geometry {
         GradientGeometry::Radial(spec) => {
             let cxp = resolve_pos(spec.cx, w, rect.x as f64);
             let cyp = resolve_pos(spec.cy, h, rect.y as f64);
-            // Distancias a lados y esquinas.
             let (dl, dr) = ((cxp - rect.x as f64).abs(), (rect.x as f64 + w - cxp).abs());
             let (dt, db) = ((cyp - rect.y as f64).abs(), (rect.y as f64 + h - cyp).abs());
             let corner = |x: f64, y: f64| ((cxp - x).powi(2) + (cyp - y).powi(2)).sqrt();
@@ -2201,46 +2196,133 @@ pub(crate) fn build_linear_gradient_brush(
                 RadialSize::FarthestCorner => corners.iter().copied().fold(0.0, fmax),
             }
             .max(1.0);
-            let center = Point::new(cxp, cyp);
-            GradientKind::Radial {
-                start_center: center,
-                start_radius: 0.0,
-                end_center: center,
-                end_radius: radius as f32,
-            }
+            Base::Radial { center: Point::new(cxp, cyp), radius }
         }
         GradientGeometry::Conic { from_deg, cx, cy } => {
-            // peniko Sweep: ángulos en radianes, 0 = +x (derecha), crece CW
-            // en pantalla. CSS `from`: 0 = up, crece CW. Diferencia = -90°.
             let center = Point::new(
                 resolve_pos(*cx, w, rect.x as f64),
                 resolve_pos(*cy, h, rect.y as f64),
             );
-            let start = (*from_deg - 90.0).to_radians();
-            GradientKind::Sweep {
-                center,
-                start_angle: start,
-                end_angle: start + std::f32::consts::TAU,
-            }
+            // peniko Sweep: 0 rad = +x (derecha). CSS `from`: 0 = up → -90°.
+            Base::Conic { center, base_start: (*from_deg - 90.0).to_radians() as f64 }
         }
         GradientGeometry::Linear { angle_deg } => {
-            // CSS: 0deg = up (negative y), 90 = right (+x), 180 = down (+y),
-            // 270 = left (-x). Convertimos a radianes y dirección en espacio
-            // de pantalla (y crece hacia abajo).
-            let theta = angle_deg.to_radians();
-            let dx = theta.sin() as f64;
-            let dy = -theta.cos() as f64;
+            let theta = (*angle_deg as f64).to_radians();
+            let dx = theta.sin();
+            let dy = -theta.cos();
             let cx = rect.x as f64 + w * 0.5;
             let cy = rect.y as f64 + h * 0.5;
-            let half_len = (dx.abs() * w + dy.abs() * h) * 0.5;
-            let start = Point::new(cx - dx * half_len, cy - dy * half_len);
-            let end = Point::new(cx + dx * half_len, cy + dy * half_len);
-            GradientKind::Linear { start, end }
+            let len = dx.abs() * w + dy.abs() * h;
+            let start = Point::new(cx - dx * len * 0.5, cy - dy * len * 0.5);
+            Base::Linear { start, dir: (dx, dy), len }
+        }
+    };
+
+    // Longitud del eje contra la cual un stop en px se vuelve fracción.
+    // Para cónico el eje es angular: 360° (un giro), así que un stop en px se
+    // interpreta como grados.
+    let axis_len = match &base {
+        Base::Linear { len, .. } => *len,
+        Base::Radial { radius, .. } => *radius,
+        Base::Conic { .. } => 360.0,
+    };
+    let frac = |v: LengthVal| -> f64 {
+        match v {
+            LengthVal::Pct(p) => (p as f64) / 100.0,
+            LengthVal::Px(px) => {
+                if axis_len > 0.0 { (px as f64) / axis_len } else { 0.0 }
+            }
+            LengthVal::Auto => 0.0,
+        }
+    };
+
+    // Posiciones de los stops como fracción del eje, aplicando la
+    // interpolación CSS: primero/último sin posición → 0/1, runs intermedios
+    // sin posición se reparten linealmente, y la secuencia se fuerza no
+    // decreciente (hard stops como `red 50%, blue 50%`).
+    let n = g.stops.len();
+    let mut fr: Vec<Option<f64>> = g.stops.iter().map(|s| s.pos.map(frac)).collect();
+    if fr[0].is_none() {
+        fr[0] = Some(0.0);
+    }
+    if fr[n - 1].is_none() {
+        fr[n - 1] = Some(1.0);
+    }
+    let mut last_def = 0usize;
+    for j in 1..n {
+        if fr[j].is_some() {
+            let gap = j - last_def;
+            if gap > 1 {
+                let a = fr[last_def].unwrap();
+                let b = fr[j].unwrap();
+                for k in 1..gap {
+                    fr[last_def + k] = Some(a + (b - a) * (k as f64 / gap as f64));
+                }
+            }
+            last_def = j;
+        }
+    }
+    let mut pos: Vec<f64> = fr.iter().map(|x| x.unwrap()).collect();
+    let mut run = pos[0];
+    for v in pos.iter_mut() {
+        if *v < run {
+            *v = run;
+        } else {
+            run = *v;
+        }
+    }
+
+    // Periodo del patrón. `repeating-*` tilea [first..last]; si el patrón ya
+    // cubre todo el eje (o es degenerado) cae a no-repetido.
+    let period = pos[n - 1] - pos[0];
+    let repeating = g.repeating && period > 1e-4 && period < 1.0 - 1e-4;
+
+    // Remapea cada posición a [0,1] de una unidad del patrón (si repite) o
+    // simplemente clampa a [0,1] (si no).
+    let (offset, span) = if repeating { (pos[0], period) } else { (0.0, 1.0) };
+    let mut peniko_stops: Vec<ColorStop> = Vec::with_capacity(n);
+    for (i, s) in g.stops.iter().enumerate() {
+        let p = if repeating {
+            ((pos[i] - offset) / span) as f32
+        } else {
+            pos[i].clamp(0.0, 1.0) as f32
+        };
+        let a = ((s.color.a as f32) * alpha_mul) as u8;
+        let c = Color::from_rgba8(s.color.r, s.color.g, s.color.b, a);
+        peniko_stops.push(ColorStop::from((p, c)));
+    }
+
+    // La geometría final abarca exactamente una unidad del patrón cuando
+    // repite (peniko `Extend::Repeat` tilea ese [0,1] a lo largo del eje).
+    let kind = match base {
+        Base::Linear { start, dir, len } => {
+            let (dx, dy) = dir;
+            let s = Point::new(start.x + dx * len * offset, start.y + dy * len * offset);
+            let e = Point::new(
+                start.x + dx * len * (offset + span),
+                start.y + dy * len * (offset + span),
+            );
+            GradientKind::Linear { start: s, end: e }
+        }
+        Base::Radial { center, radius } => GradientKind::Radial {
+            start_center: center,
+            start_radius: (radius * offset) as f32,
+            end_center: center,
+            end_radius: (radius * (offset + span)) as f32,
+        },
+        Base::Conic { center, base_start } => {
+            let s = base_start + offset * std::f64::consts::TAU;
+            GradientKind::Sweep {
+                center,
+                start_angle: s as f32,
+                end_angle: (s + span * std::f64::consts::TAU) as f32,
+            }
         }
     };
 
     Some(Gradient {
         kind,
+        extend: if repeating { Extend::Repeat } else { Extend::Pad },
         stops: ColorStops(peniko_stops.into()),
         ..Default::default()
     })

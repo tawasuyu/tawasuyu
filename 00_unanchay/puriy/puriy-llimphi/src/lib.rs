@@ -4352,6 +4352,7 @@ mod tests {
                 GradientStop { color: puriy_engine::Color::rgb(255, 0, 0), pos: None },
                 GradientStop { color: puriy_engine::Color::rgb(0, 0, 255), pos: None },
             ],
+            repeating: false,
         };
         let brush = llimphi_raster::peniko::Brush::Gradient(
             build_linear_gradient_brush(&grad, local, 1.0).expect("gradiente de 2 stops"),
@@ -4390,6 +4391,7 @@ mod tests {
                 GradientStop { color: puriy_engine::Color::rgb(255, 0, 0), pos: None },
                 GradientStop { color: puriy_engine::Color::rgb(0, 0, 255), pos: None },
             ],
+            repeating: false,
         };
         let mut g = llimphi_raster::vello::Scene::new();
         paint_extra_bg_layers(&mut g, rect, 0.0, &[PreparedBgLayer::Gradient(grad.clone())], 1.0);

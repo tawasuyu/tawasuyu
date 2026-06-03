@@ -418,12 +418,16 @@ impl Default for Outline {
     }
 }
 
-/// Un stop de `linear-gradient`. `pos` es la fracción (0..1) del eje;
-/// si `None`, se distribuye automáticamente entre stops adyacentes.
+/// Un stop de gradiente. `pos` es la posición a lo largo del eje:
+/// `Pct(n)` = fracción del eje (`n` en 0..100), `Px(n)` = distancia absoluta
+/// (px en lineal/radial, grados en cónico). Si `None`, se distribuye
+/// automáticamente entre los stops fijos adyacentes (interpolación CSS).
+/// Fase 7.228 (antes era `Option<f32>` ya normalizado a 0..1, lo que perdía
+/// los px reales que los `repeating-*` necesitan).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GradientStop {
     pub color: Color,
-    pub pos: Option<f32>,
+    pub pos: Option<LengthVal>,
 }
 
 /// Tamaño de un `radial-gradient` — qué borde/esquina toca el círculo en su
@@ -478,6 +482,10 @@ pub enum GradientGeometry {
 pub struct LinearGradient {
     pub geometry: GradientGeometry,
     pub stops: Vec<GradientStop>,
+    /// `repeating-{linear,radial,conic}-gradient`: el patrón de stops se
+    /// tilea a lo largo del eje en vez de extender el color de los extremos
+    /// (peniko `Extend::Repeat`). Fase 7.228.
+    pub repeating: bool,
 }
 
 impl LinearGradient {
