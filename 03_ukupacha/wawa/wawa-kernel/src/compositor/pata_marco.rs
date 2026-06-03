@@ -235,3 +235,46 @@ pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
         pintar_barra(lienzo, placed.rect, s, &ctx, Color::PANEL);
     }
 }
+
+/// El rectángulo **clickeable** del `start_button` del marco sobre `area`, o
+/// `None` si el config no lo tiene. Lo usa el ratón del compositor para abrir el
+/// launcher al clickear el ⊞. Resuelve el mismo `Config` que [`pintar_marco`] y
+/// ubica el primer widget del slot `start` de la barra (que es el botón), con un
+/// target generoso (el padding + el glifo). Espeja la posición que pinta
+/// [`pintar_barra`] (start pegado al borde izquierdo, en `bar.x + PAD`).
+pub(crate) fn start_button_rect(area: RegionPantalla) -> Option<RegionPantalla> {
+    let cfg = marco_config();
+    let pantalla = MarcoRect::new(
+        area.x as i32,
+        area.y as i32,
+        area.ancho as i32,
+        area.alto as i32,
+    );
+    let frame = resolve(&cfg, pantalla);
+    let ctx = ctx_kernel();
+    for placed in &frame.surfaces {
+        let s = &cfg.surfaces[placed.index];
+        if s.kind != SurfaceKind::Bar || !placed.rect.es_visible() {
+            continue;
+        }
+        match s.start.first() {
+            Some(spec) if spec.kind == "start_button" => {}
+            _ => continue,
+        }
+        let ancho_glifo = vistas(&s.start, &ctx)
+            .first()
+            .map(medir_vista)
+            .unwrap_or(0);
+        let bx = placed.rect.x.max(0) as usize;
+        let by = placed.rect.y.max(0) as usize;
+        let bh = placed.rect.h.max(0) as usize;
+        // Desde el borde izquierdo (incluye el padding) hasta pasado el glifo.
+        return Some(RegionPantalla {
+            x: bx,
+            y: by,
+            ancho: PAD + ancho_glifo + GAP,
+            alto: bh,
+        });
+    }
+    None
+}

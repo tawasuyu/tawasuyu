@@ -308,9 +308,14 @@ borde; shuma provee el contenido.
     derecha) en su rect. Se llama desde `consola::recomponer` sobre el área de
     apps, tras componer el escritorio. El cluster suelto del taskbar se reemplazó
     por esta barra completa.
-  - Pendiente: el config por akasha (en vez de armado en memoria) y el ruteo de
-    input al `start_button` (abrir/lanzar apps WASM); que el compositor reserve la
-    franja de la barra usando `Frame::work_area` de resolve.
+  - **Input al `start_button` cableado** — `pata_marco::start_button_rect(area)`
+    resuelve el mismo `Config` y devuelve el rect clickeable del ⊞ (espejando
+    dónde lo pinta `pintar_barra`); el ratón del compositor (`raton::atender_raton`)
+    detecta el clic ahí y **abre el launcher** (el mismo gesto que `Alt+P`), antes
+    de tocar foco/arrastre. El picker Spotlight ya existente se reusa tal cual.
+  - Pendiente: el config por akasha (en vez de armado en memoria); que el
+    compositor reserve la franja de la barra usando `Frame::work_area` de resolve
+    (hoy la barra se pinta sobre el borde superior de las apps).
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

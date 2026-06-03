@@ -76,11 +76,21 @@ pub fn atender_raton() {
         }
 
         if izq && !izq_antes {
+            // Boton bajó: un CLIC. FASE 9 :: ¿cayó en el `start_button` del marco
+            // (pata)? Entonces abre el launcher —el mismo gesto que Alt+P—, sin
+            // tocar foco ni arrastre. El rect lo resuelve `pata_marco` con la
+            // misma geometría con que lo pinta (start pegado al borde izquierdo).
+            let area_apps_r = area_apps(escritorio.ancho, escritorio.alto);
+            let en_start = pata_marco::start_button_rect(area_apps_r)
+                .is_some_and(|sb| contiene(sb, x, y));
             // Boton bajó: un CLIC. Si cae en la barra de tareas, enfocar la
             // pestaña pulsada SIN iniciar arrastre. Si no, comportamiento
             // habitual: enfocar la ventana topmost bajo el puntero.
             let area_bar = area_taskbar(escritorio.ancho, escritorio.alto);
-            if y >= area_bar.y && y < area_bar.y + area_bar.alto {
+            if en_start {
+                abrir_launcher(&mut escritorio);
+                cambio = true;
+            } else if y >= area_bar.y && y < area_bar.y + area_bar.alto {
                 if clic_en_launcher(&escritorio, x) {
                     // El boton «+» equivale a `Alt+N`: solicita un parto. La
                     // tarea del compositor lo recogera en su proxima vuelta.
