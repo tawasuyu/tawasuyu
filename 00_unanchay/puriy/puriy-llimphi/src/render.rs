@@ -1683,6 +1683,20 @@ pub(crate) fn paint_background_image(
 /// pinta el callback entre el `fill` y la `image`/`text` del view, así
 /// que la sombra cae detrás del contenido pero encima del fondo del
 /// parent. Aproximación: sin gaussian blur — el `blur_px` se mapea
+/// Datos de `text-decoration` capturados para el closure de paint (evita
+/// referenciar el `BoxNode` dentro de él). Todo ya escalado por zoom.
+#[derive(Clone, Copy)]
+struct DecoSpec {
+    line: TextDecorationLine,
+    color: puriy_engine::Color,
+    font_size: f32,
+    style: TextDecorationStyle,
+    /// `text-decoration-thickness` en px (ya × zoom). `None` = auto.
+    thickness: Option<f64>,
+    /// `text-underline-offset` en px (ya × zoom). `None` = auto.
+    underline_offset: Option<f64>,
+}
+
 /// como expansión adicional del rect con alpha proporcional, lo cual
 /// da una sombra "dura" pero proporcionada.
 pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> View<Msg> {
@@ -1759,7 +1773,14 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     let deco = if b.text.is_some() && b.text_decoration != TextDecorationLine::None {
         // `text-decoration-color` default = currentColor (sigue al texto).
         let dc = b.text_decoration_color.unwrap_or(b.color);
-        Some((b.text_decoration, dc, b.font_size * z, b.text_decoration_style))
+        Some(DecoSpec {
+            line: b.text_decoration,
+            color: dc,
+            font_size: b.font_size * z,
+            style: b.text_decoration_style,
+            thickness: b.text_decoration_thickness.map(|t| (t * z) as f64),
+            underline_offset: b.text_underline_offset.map(|o| (o * z) as f64),
+        })
     } else {
         None
     };
@@ -1970,7 +1991,9 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             let color = Color::from_rgba8(oc.r, oc.g, oc.b, a);
             scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
         }
-        if let Some((line_kind, c, font_size, deco_style)) = deco {
+        if let Some(d) = deco {
+            let line_kind = d.line;
+            let deco_style = d.style;
             // Posición vertical relativa al rect (sin baseline real). El
             // rect del leaf de texto tiene height = font_size * line_height
             // (≈1.4 default), así que el texto vive arriba-centro:
@@ -1983,8 +2006,17 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 TextDecorationLine::Underline => 0.88,
                 TextDecorationLine::None => return,
             };
-            let y = rect.y as f64 + rect.h as f64 * y_frac;
-            let thickness = ((font_size * 0.07) as f64).max(1.0);
+            // `text-underline-offset` empuja la underline hacia abajo (lejos
+            // del texto); sólo aplica a underline.
+            let off_y = if matches!(line_kind, TextDecorationLine::Underline) {
+                d.underline_offset.unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            let y = rect.y as f64 + rect.h as f64 * y_frac + off_y;
+            // `text-decoration-thickness` explícito gana; auto ≈ 7% del font.
+            let thickness = d.thickness.unwrap_or(((d.font_size * 0.07) as f64).max(1.0)).max(0.5);
+            let c = d.color;
             let dec_color = Color::from_rgba8(c.r, c.g, c.b, (c.a as f32 * alpha_mul) as u8);
             let x0 = rect.x as f64;
             let x1 = (rect.x + rect.w) as f64;

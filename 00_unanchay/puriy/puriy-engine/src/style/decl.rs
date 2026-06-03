@@ -124,6 +124,10 @@ pub(crate) enum DeclKind {
     /// `text-decoration-color`. `None` = `currentColor`.
     TextDecorationColor(Option<Color>),
     TextDecorationStyle(TextDecorationStyle),
+    /// `None` = `auto`/`from-font` (grosor derivado del font-size).
+    TextDecorationThickness(Option<f32>),
+    /// `None` = `auto` (offset default).
+    TextUnderlineOffset(Option<f32>),
     ListStyleType(ListStyleType),
     FlexDirection(FlexDirection),
     JustifyContent(JustifyContent),
@@ -275,6 +279,8 @@ impl Decl {
             DeclKind::TextDecoration(t) => s.text_decoration = *t,
             DeclKind::TextDecorationColor(c) => s.text_decoration_color = *c,
             DeclKind::TextDecorationStyle(st) => s.text_decoration_style = *st,
+            DeclKind::TextDecorationThickness(t) => s.text_decoration_thickness = *t,
+            DeclKind::TextUnderlineOffset(o) => s.text_underline_offset = *o,
             DeclKind::ListStyleType(t) => s.list_style_type = *t,
             DeclKind::FlexDirection(d) => s.flex_direction = *d,
             DeclKind::JustifyContent(j) => s.justify_content = *j,

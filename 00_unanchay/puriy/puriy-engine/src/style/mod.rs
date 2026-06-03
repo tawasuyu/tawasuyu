@@ -774,6 +774,42 @@ mod tests {
     }
 
     #[test]
+    fn text_decoration_thickness_y_underline_offset() {
+        let html = r##"<html><head><style>
+            p.t { text-decoration: underline; text-decoration-thickness: 3px }
+            p.o { text-decoration: underline; text-underline-offset: 2px }
+            p.auto { text-decoration: underline; text-decoration-thickness: auto;
+                     text-underline-offset: auto }
+            p.ff { text-decoration-thickness: from-font }
+            p.plain { text-decoration: underline }
+        </style></head><body>
+            <p class="t">a</p><p class="o">b</p><p class="auto">c</p>
+            <p class="ff">d</p><p class="plain">e</p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(ps.len(), 5);
+        assert_eq!(eng.compute(&ps[0]).text_decoration_thickness, Some(3.0));
+        assert_eq!(eng.compute(&ps[1]).text_underline_offset, Some(2.0));
+        // `auto` explícito → None (default derivado).
+        let a = eng.compute(&ps[2]);
+        assert_eq!(a.text_decoration_thickness, None);
+        assert_eq!(a.text_underline_offset, None);
+        // `from-font` → None (igual que auto en nuestro modelo).
+        assert_eq!(eng.compute(&ps[3]).text_decoration_thickness, None);
+        // Sin declarar → None ambos.
+        let plain = eng.compute(&ps[4]);
+        assert_eq!(plain.text_decoration_thickness, None);
+        assert_eq!(plain.text_underline_offset, None);
+    }
+
+    #[test]
     fn font_size_acepta_calc_y_clamp() {
         // Tipografía fluida: font-size con funciones matemáticas de
         // unidades absolutas resuelve en parse-time.

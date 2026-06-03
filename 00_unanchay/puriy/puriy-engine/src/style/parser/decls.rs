@@ -277,6 +277,15 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-decoration-style" => {
             parse_text_decoration_style(value).map(DeclKind::TextDecorationStyle)
         }
+        // `auto`/`from-font` → None (grosor derivado); longitud → px.
+        "text-decoration-thickness" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" | "from-font" => Some(DeclKind::TextDecorationThickness(None)),
+            _ => parse_length_px(value).map(|p| DeclKind::TextDecorationThickness(Some(p))),
+        },
+        "text-underline-offset" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::TextUnderlineOffset(None)),
+            _ => parse_length_px(value).map(|p| DeclKind::TextUnderlineOffset(Some(p))),
+        },
         "list-style-type" => parse_list_style_type(value).map(DeclKind::ListStyleType),
         // `list-style` shorthand reducido: sólo capturamos el `-type`.
         // Image y position los ignoramos — `none` desactiva el marker

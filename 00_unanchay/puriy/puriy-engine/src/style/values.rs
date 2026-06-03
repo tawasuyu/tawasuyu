@@ -80,6 +80,11 @@ pub struct ComputedStyle {
     pub text_decoration_color: Option<Color>,
     /// `text-decoration-style` (`solid`/`double`/`dotted`/`dashed`/`wavy`).
     pub text_decoration_style: TextDecorationStyle,
+    /// `text-decoration-thickness` en px. `None` = `auto`/`from-font` (el
+    /// chrome deriva el grosor del font-size).
+    pub text_decoration_thickness: Option<f32>,
+    /// `text-underline-offset` en px. `None` = `auto` (posición default).
+    pub text_underline_offset: Option<f32>,
     /// Marker que `<li>` pinta delante del contenido. Hereda (CSS spec).
     /// Default `Disc` (CSS default); UA stylesheet override en `<ol>` y
     /// `<ul>` por consistencia.
@@ -972,6 +977,8 @@ impl Default for ComputedStyle {
             text_decoration: TextDecorationLine::None,
             text_decoration_color: None,
             text_decoration_style: TextDecorationStyle::Solid,
+            text_decoration_thickness: None,
+            text_underline_offset: None,
             list_style_type: ListStyleType::Disc,
             flex_direction: FlexDirection::Row,
             justify_content: JustifyContent::Start,

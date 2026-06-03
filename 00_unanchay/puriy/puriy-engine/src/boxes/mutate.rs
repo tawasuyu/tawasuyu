@@ -221,6 +221,8 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
     child.text_decoration = parent.text_decoration;
     child.text_decoration_color = parent.text_decoration_color;
     child.text_decoration_style = parent.text_decoration_style;
+    child.text_decoration_thickness = parent.text_decoration_thickness;
+    child.text_underline_offset = parent.text_underline_offset;
     child.white_space = parent.white_space;
     child.text_transform = parent.text_transform;
     // Propagar al text leaf interno (primer hijo si es text node).
@@ -235,6 +237,8 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
             c.text_decoration = child.text_decoration;
             c.text_decoration_color = child.text_decoration_color;
             c.text_decoration_style = child.text_decoration_style;
+            c.text_decoration_thickness = child.text_decoration_thickness;
+            c.text_underline_offset = child.text_underline_offset;
         }
     }
 }
@@ -686,6 +690,8 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.text_decoration = s.text_decoration;
     b.text_decoration_color = s.text_decoration_color;
     b.text_decoration_style = s.text_decoration_style;
+    b.text_decoration_thickness = s.text_decoration_thickness;
+    b.text_underline_offset = s.text_underline_offset;
 }
 
 /// Propaga las propiedades CSS heredables del estilo del padre a una hoja
@@ -701,6 +707,8 @@ pub(crate) fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.text_decoration = p.text_decoration;
     leaf.text_decoration_color = p.text_decoration_color;
     leaf.text_decoration_style = p.text_decoration_style;
+    leaf.text_decoration_thickness = p.text_decoration_thickness;
+    leaf.text_underline_offset = p.text_underline_offset;
     leaf.white_space = p.white_space;
     leaf.text_transform = p.text_transform;
     leaf.text_shadows = p.text_shadows.clone();

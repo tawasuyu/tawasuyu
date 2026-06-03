@@ -112,6 +112,10 @@ pub struct BoxNode {
     pub text_decoration_color: Option<Color>,
     /// `text-decoration-style` (solid/double/dotted/dashed/wavy).
     pub text_decoration_style: TextDecorationStyle,
+    /// `text-decoration-thickness` en px (`None` = auto, derivado del font).
+    pub text_decoration_thickness: Option<f32>,
+    /// `text-underline-offset` en px (`None` = auto).
+    pub text_underline_offset: Option<f32>,
     /// Propiedades de flex container — sólo relevantes si `display` es
     /// `Flex`/`InlineFlex`. El chrome las mapea 1:1 a taffy.
     pub flex_direction: FlexDirection,
