@@ -103,10 +103,6 @@ const MENU_BG: [f32; 4] = [0.11, 0.11, 0.14, 0.97];
 /// Color del texto de las filas del menú raíz (RGBA `0..=255`).
 const MENU_TEXT_COLOR: [u8; 4] = [228, 228, 234, 255];
 
-/// Datos ya materializados para pintar el menú raíz un cuadro, sin retener
-/// préstamos de `self`: `(x, y, ancho, alto, filas)` donde cada fila es
-/// `(x, y, etiqueta, resaltada)`.
-type MenuRender = (i32, i32, i32, i32, Vec<(i32, i32, String, bool)>);
 
 /// Color RGBA de las etiquetas de título — casi blanco.
 const TITLE_COLOR: [u8; 4] = [230, 230, 235, 255];
@@ -223,8 +219,8 @@ struct DrmState {
     /// el que se construyó. Se (re)arma perezosamente cuando cambia el
     /// tamaño de salida. `None` si no hay ruta o la imagen no carga.
     wallpaper: Option<(MemoryRenderBuffer, (i32, i32))>,
-    /// Entradas `(etiqueta, comando)` del menú raíz (de la config).
-    menu_entries: Vec<(String, String)>,
+    /// Árbol del menú raíz (de la config), con submenús anidados.
+    menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo).
     root_menu: Option<crate::menu::RootMenu>,
 }
@@ -262,21 +258,11 @@ impl DrmState {
         }
 
         // Snapshot del menú raíz (sin retener préstamos de `self` dentro del
-        // bloque de elementos, donde se toma `&mut self.renderer`). Resuelve
-        // qué fila está bajo el puntero para resaltarla.
-        let menu_render: Option<MenuRender> = self.root_menu.as_ref().map(|m| {
+        // bloque de elementos, donde se toma `&mut self.renderer`): las
+        // columnas abiertas en cascada, ya colocadas y con resaltado resuelto.
+        let menu_render: Option<Vec<crate::menu::MenuColView>> = self.root_menu.as_ref().map(|m| {
             let (px, py) = self.app.pointer_loc;
-            let hover = m.hit(px.round() as i32, py.round() as i32);
-            let rows = m
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, (label, _))| {
-                    let (rx, ry, _, _) = m.item_rect(i);
-                    (rx, ry, label.clone(), Some(i) == hover)
-                })
-                .collect();
-            (m.x, m.y, crate::menu::MENU_W, m.height(), rows)
+            m.render(px.round() as i32, py.round() as i32)
         });
         let menu_hl_color = rgba_f32(self.app.decorations.border_focus);
 
@@ -321,75 +307,87 @@ impl DrmState {
                 }
             }
 
-            // Menú raíz (openbox) — bajo el cursor, sobre todo lo demás. Se
-            // pinta de arriba hacia abajo: texto de cada fila, luego el
-            // resaltado de la fila bajo el puntero, luego el fondo del menú.
-            if let Some((mx, my, mw, mh, rows)) = &menu_render {
-                // Texto de cada fila (rasterizado, con la caché de etiquetas).
-                if let Some(tr) = &self.text {
-                    if self.text_cache.len() > 256 {
-                        self.text_cache.clear();
-                    }
-                    for (rx, ry, label, _) in rows {
-                        let buf = self
-                            .text_cache
-                            .entry((label.clone(), MENU_TEXT_COLOR))
-                            .or_insert_with(|| match tr.rasterize(label, MENU_TEXT_PX, MENU_TEXT_COLOR) {
-                                Some(r) => MemoryRenderBuffer::from_slice(
-                                    &r.rgba,
-                                    Fourcc::Argb8888,
-                                    (r.width, r.height),
-                                    1,
-                                    Transform::Normal,
-                                    None,
-                                ),
-                                None => MemoryRenderBuffer::from_slice(
-                                    &[0u8; 4],
-                                    Fourcc::Argb8888,
-                                    (1, 1),
-                                    1,
-                                    Transform::Normal,
-                                    None,
-                                ),
-                            });
-                        let ty = ry + (crate::menu::ITEM_H - MENU_TEXT_PX as i32) / 2;
-                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                            &mut self.renderer,
-                            ((rx + 10) as f64, ty as f64),
-                            buf,
-                            None,
-                            None,
-                            None,
-                            Kind::Unspecified,
-                        ) {
-                            out.push(Frame::Text(el));
+            // Menú raíz (openbox) — bajo el cursor, sobre todo lo demás. Una
+            // columna por nivel de submenú abierto. Se recorren de la más
+            // profunda a la raíz (la lista es front-to-back: lo primero queda
+            // arriba), así una columna hija solapada queda sobre su padre.
+            // Dentro de cada columna: texto, luego resaltado, luego fondo.
+            if let Some(cols) = &menu_render {
+                if self.text_cache.len() > 256 {
+                    self.text_cache.clear();
+                }
+                for col in cols.iter().rev() {
+                    // Texto de cada fila (rasterizado, con la caché). A los
+                    // submenús se les agrega un indicador `›`.
+                    if let Some(tr) = &self.text {
+                        for row in &col.rows {
+                            let label = if row.submenu {
+                                format!("{}   ›", row.label)
+                            } else {
+                                row.label.clone()
+                            };
+                            let buf = self
+                                .text_cache
+                                .entry((label.clone(), MENU_TEXT_COLOR))
+                                .or_insert_with(|| {
+                                    match tr.rasterize(&label, MENU_TEXT_PX, MENU_TEXT_COLOR) {
+                                        Some(r) => MemoryRenderBuffer::from_slice(
+                                            &r.rgba,
+                                            Fourcc::Argb8888,
+                                            (r.width, r.height),
+                                            1,
+                                            Transform::Normal,
+                                            None,
+                                        ),
+                                        None => MemoryRenderBuffer::from_slice(
+                                            &[0u8; 4],
+                                            Fourcc::Argb8888,
+                                            (1, 1),
+                                            1,
+                                            Transform::Normal,
+                                            None,
+                                        ),
+                                    }
+                                });
+                            let ty = row.y + (crate::menu::ITEM_H - MENU_TEXT_PX as i32) / 2;
+                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                &mut self.renderer,
+                                ((row.x + 10) as f64, ty as f64),
+                                buf,
+                                None,
+                                None,
+                                None,
+                                Kind::Unspecified,
+                            ) {
+                                out.push(Frame::Text(el));
+                            }
                         }
                     }
-                }
-                // Resaltado de la fila bajo el puntero.
-                for (rx, ry, _, hot) in rows {
-                    if *hot {
-                        let mut hl = SolidColorBuffer::default();
-                        hl.update((*mw, crate::menu::ITEM_H), menu_hl_color);
-                        out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                            &hl,
-                            (*rx, *ry),
-                            1.0,
-                            1.0,
-                            Kind::Unspecified,
-                        )));
+                    // Resaltado de las filas activas (hover / submenú abierto).
+                    for row in &col.rows {
+                        if row.highlighted {
+                            let mut hl = SolidColorBuffer::default();
+                            hl.update((col.w, crate::menu::ITEM_H), menu_hl_color);
+                            out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                                &hl,
+                                (row.x, row.y),
+                                1.0,
+                                1.0,
+                                Kind::Unspecified,
+                            )));
+                        }
                     }
+                    // Fondo de la columna.
+                    let mut bg = SolidColorBuffer::default();
+                    bg.update((col.w, col.h), MENU_BG);
+                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        &bg,
+                        (col.x, col.y),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
                 }
-                // Fondo del menú.
-                let mut bg = SolidColorBuffer::default();
-                bg.update((*mw, *mh), MENU_BG);
-                out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                    &bg,
-                    (*mx, *my),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                )));
             }
 
             // Layer surfaces (waybar, swaybg…): los Overlay/Top van encima
@@ -674,6 +672,10 @@ impl DrmState {
                 x = (x + event.delta_x()).clamp(0.0, self.output_size.0);
                 y = (y + event.delta_y()).clamp(0.0, self.output_size.1);
                 self.app.pointer_loc = (x, y);
+                if let Some(m) = self.root_menu.as_mut() {
+                    m.update_hover(x.round() as i32, y.round() as i32);
+                    return; // con el menú abierto, el puntero lo navega
+                }
                 if !self.drag_update() {
                     self.pointer_motion(time);
                 }
@@ -690,6 +692,11 @@ impl DrmState {
                     pos.x.clamp(0.0, self.output_size.0),
                     pos.y.clamp(0.0, self.output_size.1),
                 );
+                if let Some(m) = self.root_menu.as_mut() {
+                    let (x, y) = self.app.pointer_loc;
+                    m.update_hover(x.round() as i32, y.round() as i32);
+                    return; // con el menú abierto, el puntero lo navega
+                }
                 if !self.drag_update() {
                     self.pointer_motion(time);
                 }
@@ -701,19 +708,27 @@ impl DrmState {
                 let button = event.button_code();
 
                 // Menú raíz abierto: el botón se lo come el menú. Click
-                // izquierdo sobre una fila la lanza; cualquier otro click lo
-                // cierra. (Sólo al apretar; soltar no hace nada.)
+                // izquierdo sobre una hoja la lanza y cierra; sobre una
+                // fila-submenú la abre y sigue; click derecho o fuera cierra.
+                // (Sólo al apretar; soltar no hace nada.)
                 if pressed && self.root_menu.is_some() {
+                    use crate::menu::ClickResult;
                     let (x, y) = self.app.pointer_loc;
-                    let pick = self
-                        .root_menu
-                        .as_ref()
-                        .filter(|_| button == BTN_LEFT)
-                        .and_then(|m| m.hit(x.round() as i32, y.round() as i32))
-                        .and_then(|i| self.root_menu.as_ref().unwrap().entries.get(i).cloned());
-                    self.root_menu = None;
-                    if let Some((_, cmd)) = pick {
-                        self.app.spawn_user(&cmd);
+                    let res = if button == BTN_LEFT {
+                        self.root_menu
+                            .as_mut()
+                            .unwrap()
+                            .click(x.round() as i32, y.round() as i32)
+                    } else {
+                        ClickResult::Close
+                    };
+                    match res {
+                        ClickResult::Launch(cmd) => {
+                            self.root_menu = None;
+                            self.app.spawn_user(&cmd);
+                        }
+                        ClickResult::Stay => {}
+                        ClickResult::Close => self.root_menu = None,
                     }
                     return; // el menú captura el botón
                 }

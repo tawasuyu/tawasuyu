@@ -558,16 +558,11 @@ impl App {
         }
     }
 
-    /// Las entradas `(etiqueta, comando)` del menú raíz configurado. Vacío con
+    /// El árbol del menú raíz configurado (con submenús anidados). Vacío con
     /// Cerebro enlazado o sin entradas en la config.
-    fn config_menu(&self) -> Vec<(String, String)> {
+    fn config_menu(&self) -> Vec<crate::menu::MenuNode> {
         match &self.brain {
-            Brain::Embedded(d) => d
-                .config()
-                .menu
-                .iter()
-                .map(|e| (e.label.clone(), e.command.clone()))
-                .collect(),
+            Brain::Embedded(d) => d.config().menu.iter().map(menu_node_from_entry).collect(),
             Brain::Linked(_) => Vec::new(),
         }
     }
@@ -1484,6 +1479,19 @@ const THEME_ENV: &[(&str, &str)] = &[
 /// (modo DM, tras el traspaso), el hijo baja a ese usuario — ver
 /// [`apply_user`]. Con `None`, o sin ser root, lanza con la identidad
 /// actual del compositor.
+/// Convierte una entrada de config del menú en un nodo del árbol del menú
+/// raíz: hoja si no tiene `submenu`, submenú (recursivo) si lo tiene.
+fn menu_node_from_entry(e: &mirada_brain::MenuEntry) -> crate::menu::MenuNode {
+    if e.submenu.is_empty() {
+        crate::menu::MenuNode::leaf(e.label.clone(), e.command.clone())
+    } else {
+        crate::menu::MenuNode::submenu(
+            e.label.clone(),
+            e.submenu.iter().map(menu_node_from_entry).collect(),
+        )
+    }
+}
+
 fn spawn_command(cmd: &str, as_user: Option<&UserInfo>, session_env: &[(String, String)]) {
     let cmd = cmd.trim();
     if cmd.is_empty() {

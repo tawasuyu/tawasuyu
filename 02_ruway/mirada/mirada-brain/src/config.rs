@@ -94,11 +94,19 @@ pub struct Config {
     pub menu: Vec<MenuEntry>,
 }
 
-/// Una entrada del menú raíz: la etiqueta que se pinta y el comando que lanza.
+/// Una entrada del menú raíz. Es una **hoja** que lanza `command`, o un
+/// **submenú** si trae `submenu` no vacío (en ese caso `command` se ignora).
+/// La forma plana `(label, command)` sigue siendo válida: `submenu` default
+/// vacío. Anidan a cualquier profundidad.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MenuEntry {
     pub label: String,
+    /// Comando a lanzar (`sh -c`) si es hoja. Ignorado si hay `submenu`.
+    #[serde(default)]
     pub command: String,
+    /// Entradas hijas; no vacío = esta entrada es un submenú.
+    #[serde(default)]
+    pub submenu: Vec<MenuEntry>,
 }
 
 impl Default for Config {
@@ -251,11 +259,16 @@ const CONFIG_TEMPLATE: &str = "\
     wallpaper_path: \"\",
 
     // Menú raíz (estilo openbox): aparece al click DERECHO sobre el fondo.
-    // Vacío = sin menú. Cada entrada lanza su comando con `sh -c`. Ej:
+    // Vacío = sin menú. Una entrada es hoja (lanza command con `sh -c`) o
+    // submenú (si trae `submenu`, anidable a cualquier profundidad). Ej:
     //   menu: [
     //       (label: \"Terminal\",  command: \"kitty\"),
-    //       (label: \"Navegador\", command: \"firefox\"),
-    //       (label: \"Archivos\",  command: \"nada\"),
+    //       (label: \"Apps\", submenu: [
+    //           (label: \"Navegador\", command: \"firefox\"),
+    //           (label: \"Editores\", submenu: [
+    //               (label: \"nada\", command: \"nada\"),
+    //           ]),
+    //       ]),
     //   ],
     menu: [],
 )
@@ -322,5 +335,38 @@ mod tests {
     #[test]
     fn an_unknown_layout_slug_is_rejected() {
         assert!(Config::from_ron(r#"( layout: "tetris" )"#).is_err());
+    }
+
+    #[test]
+    fn menu_flat_entries_parse_without_submenu() {
+        let c = Config::from_ron(
+            r#"( menu: [(label: "Terminal", command: "kitty")] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.menu.len(), 1);
+        assert_eq!(c.menu[0].label, "Terminal");
+        assert_eq!(c.menu[0].command, "kitty");
+        assert!(c.menu[0].submenu.is_empty());
+    }
+
+    #[test]
+    fn menu_nested_submenus_parse() {
+        let c = Config::from_ron(
+            r#"( menu: [
+                (label: "Apps", submenu: [
+                    (label: "Navegador", command: "firefox"),
+                    (label: "Más", submenu: [
+                        (label: "nada", command: "nada"),
+                    ]),
+                ]),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.menu.len(), 1);
+        let apps = &c.menu[0];
+        assert_eq!(apps.label, "Apps");
+        assert_eq!(apps.submenu.len(), 2);
+        assert_eq!(apps.submenu[0].command, "firefox");
+        assert_eq!(apps.submenu[1].submenu[0].label, "nada");
     }
 }
