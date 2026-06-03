@@ -205,6 +205,10 @@ pub struct BoxNode {
     /// descartaron en build); los gradientes van tal cual. El chrome las
     /// pinta de la última a la primera, todas debajo de la capa 0.
     pub background_extra_layers: Vec<BoxBackgroundLayer>,
+    /// `background-origin` (área de posicionamiento). Default `PaddingBox`.
+    pub background_origin: BackgroundOrigin,
+    /// `background-clip` (caja de recorte del pintado). Default `BorderBox`.
+    pub background_clip: BackgroundClip,
     /// Si el nodo es un `<input>` de tipo texto o un `<textarea>`, el
     /// chrome lo renderea como widget editable. `None` para todo lo
     /// demás. Multilinea = textarea.

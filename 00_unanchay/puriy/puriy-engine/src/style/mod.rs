@@ -2156,6 +2156,60 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn background_origin_clip_longhand_shorthand_y_box() {
+        // Fase 7.207 — `background-origin` / `background-clip`.
+        let compute = |css: &str| {
+            let html = format!(
+                "<html><head><style>div {{ {css} }}</style></head><body><div></div></body></html>"
+            );
+            let dom = DomTree::parse(&html);
+            let eng = StyleEngine::from_dom(&dom);
+            eng.compute(&dom.find("div").unwrap())
+        };
+
+        // Defaults CSS: origin = padding-box, clip = border-box.
+        let s = compute("color: red");
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+
+        // Longhands.
+        let s = compute("background-origin: content-box; background-clip: padding-box");
+        assert_eq!(s.background_origin, BackgroundOrigin::ContentBox);
+        assert_eq!(s.background_clip, BackgroundClip::PaddingBox);
+
+        // `text` no se modela → descartado, queda el default.
+        let s = compute("background-clip: text");
+        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+
+        // Shorthand con UNA caja → fija origin Y clip.
+        let s = compute("background: url(b.png) content-box");
+        assert_eq!(s.background_origin, BackgroundOrigin::ContentBox);
+        assert_eq!(s.background_clip, BackgroundClip::ContentBox);
+
+        // Shorthand con DOS cajas → 1ª = origin, 2ª = clip.
+        let s = compute("background: url(b.png) padding-box content-box");
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert_eq!(s.background_clip, BackgroundClip::ContentBox);
+
+        // Propagación al BoxNode (vía build).
+        let eng = crate::Engine::new();
+        let doc = eng.load_html(
+            "about:test",
+            r#"<html><body><div id="d" style="background-image: url(x.png);
+               background-origin: content-box; background-clip: padding-box"></div></body></html>"#,
+        );
+        let mut got = None;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("d") {
+                got = Some((b.background_origin, b.background_clip));
+            }
+        });
+        let (o, c) = got.expect("box d");
+        assert_eq!(o, BackgroundOrigin::ContentBox);
+        assert_eq!(c, BackgroundClip::PaddingBox);
+    }
+
+    #[test]
     fn background_capas_multiples_shorthand_y_longhand() {
         // Fase 7.206 — la lista `background: a, b` reparte la capa 0 en los
         // campos sueltos y las capas 2..N en background_extra_layers.

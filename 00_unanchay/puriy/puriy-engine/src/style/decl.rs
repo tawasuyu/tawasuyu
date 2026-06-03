@@ -105,6 +105,8 @@ pub(crate) enum DeclKind {
     /// o `background-image:` con varias capas separadas por coma. La
     /// shorthand siempre la emite (posiblemente vacía) para resetear.
     BackgroundExtraLayers(Vec<BackgroundLayer>),
+    BackgroundOrigin(BackgroundOrigin),
+    BackgroundClip(BackgroundClip),
     Position(Position),
     InsetTop(LengthVal),
     InsetRight(LengthVal),
@@ -227,6 +229,8 @@ impl Decl {
             DeclKind::BackgroundPosition(pos) => s.background_position = *pos,
             DeclKind::BackgroundRepeat(r) => s.background_repeat = *r,
             DeclKind::BackgroundExtraLayers(ls) => s.background_extra_layers = ls.clone(),
+            DeclKind::BackgroundOrigin(o) => s.background_origin = *o,
+            DeclKind::BackgroundClip(c) => s.background_clip = *c,
             DeclKind::Position(p) => s.position = *p,
             DeclKind::InsetTop(v) => s.inset_top = *v,
             DeclKind::InsetRight(v) => s.inset_right = *v,

@@ -791,6 +791,29 @@ pub(crate) fn parse_background_repeat(value: &str) -> Option<DeclKind> {
     Some(DeclKind::BackgroundRepeat(r))
 }
 
+/// `background-origin`: `border-box` | `padding-box` | `content-box`.
+pub(crate) fn parse_background_origin(value: &str) -> Option<DeclKind> {
+    let o = match value.trim().to_ascii_lowercase().as_str() {
+        "border-box" => BackgroundOrigin::BorderBox,
+        "padding-box" => BackgroundOrigin::PaddingBox,
+        "content-box" => BackgroundOrigin::ContentBox,
+        _ => return None,
+    };
+    Some(DeclKind::BackgroundOrigin(o))
+}
+
+/// `background-clip`: `border-box` | `padding-box` | `content-box`. El valor
+/// `text` se descarta (recorte a glifos no modelado todavía).
+pub(crate) fn parse_background_clip(value: &str) -> Option<DeclKind> {
+    let c = match value.trim().to_ascii_lowercase().as_str() {
+        "border-box" => BackgroundClip::BorderBox,
+        "padding-box" => BackgroundClip::PaddingBox,
+        "content-box" => BackgroundClip::ContentBox,
+        _ => return None,
+    };
+    Some(DeclKind::BackgroundClip(c))
+}
+
 /// `background-position`: 1–2 valores. Keywords se mapean a %: `left`/`top`=0%,
 /// `center`=50%, `right`/`bottom`=100%. Soporta el orden invertido por keyword
 /// (`top left` ↔ `left top`); con lengths/% el orden es posicional (x, y). Un
@@ -845,6 +868,10 @@ struct BgLayerParts {
     size: Option<BackgroundSize>,
     position: Option<BackgroundPosition>,
     repeat: Option<BackgroundRepeat>,
+    /// `background-origin` (1ª caja del shorthand). `None` = no apareció.
+    origin: Option<BackgroundOrigin>,
+    /// `background-clip` (2ª caja del shorthand, o la 1ª si es la única).
+    clip: Option<BackgroundClip>,
 }
 
 /// Clasifica los tokens de UNA capa de `background` (un segmento sin comas).
@@ -881,9 +908,13 @@ fn classify_background_layer(layer: &str) -> BgLayerParts {
         size: None,
         position: None,
         repeat: None,
+        origin: None,
+        clip: None,
     };
     let mut pos_tokens: Vec<String> = Vec::new();
     let mut size_tokens: Vec<String> = Vec::new();
+    // Cajas (`*-box`) en orden de aparición: la 1ª es origin, la 2ª clip.
+    let mut box_tokens: Vec<String> = Vec::new();
     let mut after_slash = false;
 
     for t in &tokens {
@@ -911,10 +942,13 @@ fn classify_background_layer(layer: &str) -> BgLayerParts {
             }
             continue;
         }
-        if matches!(
-            lt.as_str(),
-            "scroll" | "fixed" | "local" | "border-box" | "padding-box" | "content-box"
-        ) {
+        // attachment (`scroll`/`fixed`/`local`) se acepta y descarta.
+        if matches!(lt.as_str(), "scroll" | "fixed" | "local") {
+            continue;
+        }
+        // `*-box` → origin (1ª) / clip (2ª). Se resuelven tras el loop.
+        if matches!(lt.as_str(), "border-box" | "padding-box" | "content-box") {
+            box_tokens.push(lt);
             continue;
         }
         if matches!(lt.as_str(), "left" | "right" | "top" | "bottom" | "center")
@@ -937,6 +971,18 @@ fn classify_background_layer(layer: &str) -> BgLayerParts {
     if !size_tokens.is_empty() {
         if let Some(DeclKind::BackgroundSize(s)) = parse_background_size(&size_tokens.join(" ")) {
             parts.size = Some(s);
+        }
+    }
+    // Cajas: 1ª = origin, 2ª = clip. Con una sola, fija ambas (spec). El
+    // origin y el clip son enums distintos pero con los mismos 3 valores.
+    if let Some(o) = box_tokens.first() {
+        if let Some(DeclKind::BackgroundOrigin(v)) = parse_background_origin(o) {
+            parts.origin = Some(v);
+        }
+        // La 2ª caja da el clip; si no hay 2ª, la 1ª también es el clip.
+        let clip_tok = box_tokens.get(1).unwrap_or(o);
+        if let Some(DeclKind::BackgroundClip(v)) = parse_background_clip(clip_tok) {
+            parts.clip = Some(v);
         }
     }
     parts
@@ -997,6 +1043,12 @@ pub(crate) fn parse_background_shorthand(value: &str, important: bool) -> Vec<De
             }
             if let Some(r) = parts.repeat {
                 out.push(Decl { kind: DeclKind::BackgroundRepeat(r), important });
+            }
+            if let Some(o) = parts.origin {
+                out.push(Decl { kind: DeclKind::BackgroundOrigin(o), important });
+            }
+            if let Some(c) = parts.clip {
+                out.push(Decl { kind: DeclKind::BackgroundClip(c), important });
             }
         } else if let Some(l) = extra_layer_from_parts(&parts) {
             extra.push(l);

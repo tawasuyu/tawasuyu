@@ -236,6 +236,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "background-size" => parse_background_size(value),
         "background-position" => parse_background_position(value),
         "background-repeat" => parse_background_repeat(value),
+        "background-origin" => parse_background_origin(value),
+        "background-clip" => parse_background_clip(value),
         "position" => parse_position(value).map(DeclKind::Position),
         "top" => parse_length_or_pct_or_auto(value).map(DeclKind::InsetTop),
         "right" => parse_length_or_pct_or_auto(value).map(DeclKind::InsetRight),

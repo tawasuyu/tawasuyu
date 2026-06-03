@@ -1375,8 +1375,10 @@ pub(crate) fn paint_extra_bg_layers(
             }
             PreparedBgLayer::Image { img, iw, ih, size, position, repeat } => {
                 if *iw > 0.0 && *ih > 0.0 {
+                    // Las capas extra usan border-box para origin y clip (los
+                    // box-values del shorthand sólo viajan a la capa 0).
                     paint_background_image(
-                        scene, rect, radius, img, *iw, *ih, *size, *position, *repeat,
+                        scene, rect, rect, radius, img, *iw, *ih, *size, *position, *repeat,
                     );
                 }
             }
@@ -1384,16 +1386,19 @@ pub(crate) fn paint_extra_bg_layers(
     }
 }
 
-/// Pinta `background-image` dentro de `rect` resolviendo `background-size`,
-/// `background-position` y `background-repeat` (Fase 7.204). Recorta al rect
-/// (esquinas redondeadas incluidas) con un clip layer y tilea según el repeat.
-/// `iw`/`ih` son las dimensiones naturales de la imagen (> 0, garantizado por
-/// el caller). Asume transform identidad (el `radius` ya viene escalado).
+/// Pinta `background-image` dentro de `area` resolviendo `background-size`,
+/// `background-position` y `background-repeat` (Fase 7.204). `area` es el área
+/// de posicionamiento (`background-origin`, Fase 7.207): contra ella se calculan
+/// `cover`/`contain`, los `%` y el origen del tiling. El pintado se recorta a
+/// `clip_rect`/`clip_radius` (`background-clip`) con un clip layer. `iw`/`ih`
+/// son las dimensiones naturales de la imagen (> 0, garantizado por el caller).
+/// Asume transform identidad (los radios ya vienen escalados).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn paint_background_image(
     scene: &mut llimphi_raster::vello::Scene,
-    rect: llimphi_ui::PaintRect,
-    radius: f64,
+    area: llimphi_ui::PaintRect,
+    clip_rect: llimphi_ui::PaintRect,
+    clip_radius: f64,
     img: &PenikoImage,
     iw: f64,
     ih: f64,
@@ -1401,6 +1406,7 @@ pub(crate) fn paint_background_image(
     position: BackgroundPosition,
     repeat: BackgroundRepeat,
 ) {
+    let rect = area;
     let rw = rect.w as f64;
     let rh = rect.h as f64;
     if rw <= 0.0 || rh <= 0.0 {
@@ -1471,13 +1477,14 @@ pub(crate) fn paint_background_image(
     };
     let xs = axis_positions(ox, tw, rw, rep_x);
     let ys = axis_positions(oy, th, rh, rep_y);
-    // 4) Clip al rect (borde redondeado) y dibujo de cada tile.
+    // 4) Clip a la caja de `background-clip` (borde redondeado) y dibujo de
+    //    cada tile. El tiling se ancla a `area` (origin); el recorte a clip_rect.
     let clip = RoundedRect::new(
-        rect.x as f64,
-        rect.y as f64,
-        rect.x as f64 + rw,
-        rect.y as f64 + rh,
-        radius,
+        clip_rect.x as f64,
+        clip_rect.y as f64,
+        (clip_rect.x + clip_rect.w) as f64,
+        (clip_rect.y + clip_rect.h) as f64,
+        clip_radius,
     );
     scene.push_layer(llimphi_raster::peniko::Mix::Clip, 1.0, Affine::IDENTITY, &clip);
     let scale = Affine::scale_non_uniform(tw / iw, th / ih);
@@ -1586,6 +1593,28 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     let bg_size = b.background_size;
     let bg_position = b.background_position;
     let bg_repeat = b.background_repeat;
+    // `background-origin` / `background-clip` (Fase 7.207). Insets (escalados)
+    // del border-box hacia adentro: padding-box descuenta el border; content-box
+    // border + padding. Aplican a imagen y gradiente de la capa 0; el color
+    // sólido sigue al border-box (lo pinta el `View::fill`, fuera del closure).
+    let pad = b.padding;
+    let pb_ins = (bw.left * z, bw.top * z, bw.right * z, bw.bottom * z);
+    let cb_ins = (
+        (bw.left + pad.left) * z,
+        (bw.top + pad.top) * z,
+        (bw.right + pad.right) * z,
+        (bw.bottom + pad.bottom) * z,
+    );
+    let origin_ins = match b.background_origin {
+        puriy_engine::style::BackgroundOrigin::BorderBox => (0.0, 0.0, 0.0, 0.0),
+        puriy_engine::style::BackgroundOrigin::PaddingBox => pb_ins,
+        puriy_engine::style::BackgroundOrigin::ContentBox => cb_ins,
+    };
+    let clip_ins = match b.background_clip {
+        puriy_engine::style::BackgroundClip::BorderBox => (0.0, 0.0, 0.0, 0.0),
+        puriy_engine::style::BackgroundClip::PaddingBox => pb_ins,
+        puriy_engine::style::BackgroundClip::ContentBox => cb_ins,
+    };
     // Capas de background EXTRA (debajo de la capa 0). Cada una es imagen
     // (raster ya decodificado) o gradiente. Se preparan acá para no capturar
     // el BoxNode dentro del closure.
@@ -1623,28 +1652,40 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     view.paint_with(move |scene, _typesetter, rect| {
         // Capas de background EXTRA, debajo de la capa 0.
         paint_extra_bg_layers(scene, rect, radius, &extra_layers, alpha_mul);
-        // linear-gradient: se pinta como fill rectangular alineado al
-        // ángulo CSS. peniko interpreta `Linear { start, end }` como
-        // las dos puntas — calculamos el segmento atravesando el rect
-        // en la dirección dada.
+        // Cajas de `background-origin` (área de posicionamiento) y
+        // `background-clip` (recorte) de la capa 0. Insetean el border-box.
+        let inset = |ins: (f32, f32, f32, f32)| llimphi_ui::PaintRect {
+            x: rect.x + ins.0,
+            y: rect.y + ins.1,
+            w: (rect.w - ins.0 - ins.2).max(0.0),
+            h: (rect.h - ins.1 - ins.3).max(0.0),
+        };
+        let origin_rect = inset(origin_ins);
+        let clip_rect = inset(clip_ins);
+        // El radio interno se encoge con el inset (esquina top-left como repr.).
+        let clip_radius = (radius - clip_ins.0.max(clip_ins.1) as f64).max(0.0);
+        // linear-gradient: se dimensiona contra el origin box y se recorta al
+        // clip box. peniko interpreta `Linear { start, end }` como las dos
+        // puntas — `build_linear_gradient_brush` cruza el rect dado.
         if let Some(g) = &gradient {
-            if let Some(brush) = build_linear_gradient_brush(g, rect, alpha_mul) {
+            if let Some(brush) = build_linear_gradient_brush(g, origin_rect, alpha_mul) {
                 let r = RoundedRect::new(
-                    rect.x as f64,
-                    rect.y as f64,
-                    (rect.x + rect.w) as f64,
-                    (rect.y + rect.h) as f64,
-                    radius,
+                    clip_rect.x as f64,
+                    clip_rect.y as f64,
+                    (clip_rect.x + clip_rect.w) as f64,
+                    (clip_rect.y + clip_rect.h) as f64,
+                    clip_radius,
                 );
                 scene.fill(Fill::NonZero, Affine::IDENTITY, &brush, None, &r);
             }
         }
-        // background-image: resuelve tamaño/posición/repeat (Fase 7.204) y
-        // pinta tileando dentro del rect, recortado al borde redondeado.
+        // background-image: resuelve tamaño/posición/repeat (Fase 7.204) contra
+        // el origin box y tilea, recortado al clip box (Fase 7.207).
         if let Some((img, iw, ih)) = &bg_image {
             if *iw > 0.0 && *ih > 0.0 {
                 paint_background_image(
-                    scene, rect, radius, img, *iw, *ih, bg_size, bg_position, bg_repeat,
+                    scene, origin_rect, clip_rect, clip_radius, img, *iw, *ih, bg_size,
+                    bg_position, bg_repeat,
                 );
             }
         }

@@ -146,6 +146,12 @@ pub struct ComputedStyle {
     /// `background: a, b, c`. Default vacío. La shorthand siempre las setea
     /// (posiblemente vacías) para resetear las de una regla previa.
     pub background_extra_layers: Vec<BackgroundLayer>,
+    /// `background-origin`. Default `PaddingBox`. Aplica a la capa 0 (las
+    /// capas extra usan el default).
+    pub background_origin: BackgroundOrigin,
+    /// `background-clip`. Default `BorderBox`. Aplica a imágenes y gradientes
+    /// (el color sólido sigue recortado al border-box, ver chrome).
+    pub background_clip: BackgroundClip,
     /// CSS `position`. Default Static.
     pub position: Position,
     /// Insets (top/right/bottom/left). `Auto` por default.
@@ -469,6 +475,26 @@ pub enum BackgroundRepeat {
     RepeatX,
     RepeatY,
     NoRepeat,
+}
+
+/// `background-origin`: el área de posicionamiento del background — contra qué
+/// caja se anclan `background-position`, los `%` y `cover`/`contain`. Default
+/// CSS `PaddingBox`. El chrome insetea el rect del border-box según el valor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundOrigin {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+}
+
+/// `background-clip`: hasta qué caja se recorta el pintado del background.
+/// Default CSS `BorderBox`. El valor `text` (recortar a las glifos) no se
+/// modela todavía — el parser lo descarta y queda el default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackgroundClip {
+    BorderBox,
+    PaddingBox,
+    ContentBox,
 }
 
 /// La imagen de una capa de background: o un gradiente, o una URL sin
@@ -833,6 +859,8 @@ impl Default for ComputedStyle {
             },
             background_repeat: BackgroundRepeat::Repeat,
             background_extra_layers: Vec::new(),
+            background_origin: BackgroundOrigin::PaddingBox,
+            background_clip: BackgroundClip::BorderBox,
             position: Position::Static,
             inset_top: LengthVal::Auto,
             inset_right: LengthVal::Auto,

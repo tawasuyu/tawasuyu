@@ -4261,12 +4261,12 @@ mod tests {
 
         // no-repeat con tile 60×60 sobre 100×100 → un solo draw de imagen.
         let mut once = llimphi_raster::vello::Scene::new();
-        paint_background_image(&mut once, rect, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::NoRepeat);
+        paint_background_image(&mut once, rect, rect, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::NoRepeat);
         assert!(!once.encoding().is_empty(), "un background-image debería pintar");
 
         // repeat con el mismo tile → 2×2 = 4 tiles → más draw_tags.
         let mut tiled = llimphi_raster::vello::Scene::new();
-        paint_background_image(&mut tiled, rect, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::Repeat);
+        paint_background_image(&mut tiled, rect, rect, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::Repeat);
         assert!(
             tiled.encoding().draw_tags.len() > once.encoding().draw_tags.len(),
             "repeat debería encodar más tiles ({} vs {})",
@@ -4278,12 +4278,46 @@ mod tests {
         let mut empty = llimphi_raster::vello::Scene::new();
         let zero = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 0.0, h: 50.0 };
         paint_background_image(
-            &mut empty, zero, 0.0, &img, 2.0, 2.0,
+            &mut empty, zero, zero, 0.0, &img, 2.0, 2.0,
             BackgroundSize::Auto,
             BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
             BackgroundRepeat::Repeat,
         );
         assert!(empty.encoding().is_empty(), "rect de ancho 0 no debería pintar");
+    }
+
+    #[test]
+    fn background_clip_recorta_a_caja_mas_chica() {
+        // Fase 7.207 — `background-clip`: con un clip box más chico que el
+        // origin box, el tiling cubre el área de posicionamiento pero el
+        // recorte limita el pintado. Verificamos que ambas rutas pintan y que
+        // un clip box degenerado (ancho 0) no deja salir nada.
+        let img = PenikoImage::new(
+            llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]),
+            llimphi_raster::peniko::ImageFormat::Rgba8,
+            2,
+            2,
+        );
+        let area = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
+        let sz = BackgroundSize::Explicit { x: LengthVal::Px(20.0), y: LengthVal::Px(20.0) };
+        let pos = BackgroundPosition { x: LengthVal::Px(0.0), y: LengthVal::Px(0.0) };
+
+        // clip box = padding-box (inset 10px) → sigue pintando los tiles.
+        let clip = llimphi_ui::PaintRect { x: 10.0, y: 10.0, w: 80.0, h: 80.0 };
+        let mut s = llimphi_raster::vello::Scene::new();
+        paint_background_image(&mut s, area, clip, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::Repeat);
+        assert!(!s.encoding().is_empty(), "clip padding-box debería pintar tiles");
+
+        // El origen del tiling es `area` (no `clip`): con un área mayor hay más
+        // tiles que recortando el área misma al clip chico.
+        let mut s_small_area = llimphi_raster::vello::Scene::new();
+        paint_background_image(
+            &mut s_small_area, clip, clip, 0.0, &img, 2.0, 2.0, sz, pos, BackgroundRepeat::Repeat,
+        );
+        assert!(
+            s.encoding().draw_tags.len() >= s_small_area.encoding().draw_tags.len(),
+            "tilear sobre el origin box (100×100) no debería dar menos tiles que sobre 80×80"
+        );
     }
 
     #[test]

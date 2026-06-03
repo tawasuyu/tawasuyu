@@ -12,7 +12,8 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    AlignContent, AlignItems, AlignSelf, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    AlignContent, AlignItems, AlignSelf, BackgroundClip, BackgroundOrigin, BackgroundPosition,
+    BackgroundRepeat, BackgroundSize,
     BoxShadow, BoxSizing, ComputedStyle, Corners,
     FlexDirection, FlexWrap,
     GridTrackSize, JustifyContent, LengthVal, LinearGradient, ListStyleType, Outline, Overflow,
