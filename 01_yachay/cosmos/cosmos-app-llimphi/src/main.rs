@@ -664,6 +664,8 @@ impl App for Cosmos {
             sphere_pitch: ui.sphere_pitch,
             wheel_zoom: 1.0,
             wheel_pan: (0.0, 0.0),
+            viewport: model::VIEWPORT,
+            tools_scroll: 0.0,
             nav_w: ui.nav_w,
             tools_w: ui.tools_w,
             nav_open: ui.nav_open,
@@ -706,9 +708,10 @@ impl App for Cosmos {
                 persist = true;
             }
             Msg::SphereRotate(dyaw, dpitch) => {
+                // Sin persistir: el drag dispara muchos por segundo; evita
+                // escribir el UI-state a disco en cada movimiento.
                 m.sphere_yaw = (m.sphere_yaw + dyaw).rem_euclid(360.0);
                 m.sphere_pitch = (m.sphere_pitch + dpitch).clamp(-89.0, 89.0);
-                persist = true;
             }
             Msg::SphereReset => {
                 m.sphere_yaw = 26.0;
@@ -725,6 +728,10 @@ impl App for Cosmos {
             Msg::WheelResetView => {
                 m.wheel_zoom = 1.0;
                 m.wheel_pan = (0.0, 0.0);
+            }
+            Msg::Resized(w, h) => m.viewport = (w, h),
+            Msg::ToolsScroll(delta) => {
+                m.tools_scroll = (m.tools_scroll + delta).max(0.0);
             }
             // navegación
             Msg::ToggleNavNode(key) => m.toggle_nav(key),
@@ -1062,6 +1069,43 @@ impl App for Cosmos {
                     .map(|i| Msg::MenuPick(MenuKind::Archivo, i))
             }
             _ => None,
+        }
+    }
+
+    fn on_resize(_model: &Model, width: u32, height: u32) -> Option<Msg> {
+        Some(Msg::Resized(width as f32, height as f32))
+    }
+
+    /// Rueda del ratón sobre el lienzo central: zoom (rueda sola), paneo
+    /// vertical (Ctrl) y paneo horizontal (Alt). Sólo actúa cuando el
+    /// cursor está sobre el área gráfica (ni el árbol ni el panel de
+    /// herramientas) — fuera de ahí deja pasar el evento.
+    fn on_wheel(
+        model: &Model,
+        delta: llimphi_ui::WheelDelta,
+        cursor: (f32, f32),
+        modifiers: llimphi_ui::Modifiers,
+    ) -> Option<Msg> {
+        let (vw, vh) = model.viewport;
+        let left = if model.nav_open { model.nav_w + 6.0 } else { 0.0 };
+        let right = vw - if model.tools_open { model.tools_w } else { 0.0 };
+        let top = model::MENU_BAR_H + model::TAB_BAR_H;
+        let bottom = vh - model::STATUS_H;
+        let (cx, cy) = cursor;
+        if cx < left || cx > right || cy < top || cy > bottom {
+            return None;
+        }
+        const STEP: f32 = 40.0;
+        if modifiers.ctrl {
+            // Paneo vertical.
+            Some(Msg::WheelPan(0.0, -delta.y * STEP))
+        } else if modifiers.alt {
+            // Paneo horizontal.
+            Some(Msg::WheelPan(-delta.y * STEP, 0.0))
+        } else {
+            // Zoom: rueda hacia arriba (delta.y < 0) acerca.
+            let factor = if delta.y < 0.0 { 1.12 } else { 0.892 };
+            Some(Msg::WheelZoom(factor))
         }
     }
 }

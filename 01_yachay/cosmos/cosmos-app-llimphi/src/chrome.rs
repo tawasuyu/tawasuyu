@@ -1004,13 +1004,11 @@ fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme
         zoom: model.wheel_zoom,
         pan: model.wheel_pan,
     };
-    const WHEEL_STEP: f32 = 26.0;
     let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(cmds, size, Some(graphics_bg(model)), t)
         .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
             DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
             DragPhase::End => None,
-        })
-        .on_scroll(|dx, dy| Some(Msg::WheelPan(dx * WHEEL_STEP, dy * WHEEL_STEP)));
+        });
     let canvas_box = View::new(Style {
         size: Size {
             width: length(size),
@@ -1542,7 +1540,16 @@ fn sphere_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, 
     };
     let commands = compose_sphere(render, &view, &opts);
     let canvas_bg = graphics_bg(model);
-    let canvas = canvas_view::<Msg>(commands, size, Some(canvas_bg));
+    let t = ViewTransform {
+        zoom: model.wheel_zoom,
+        pan: model.wheel_pan,
+    };
+    // Drag para rotar (yaw/pitch); la rueda hace zoom vía el transform.
+    let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(commands, size, Some(canvas_bg), t)
+        .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+            DragPhase::Move => Some(Msg::SphereRotate(dx * 0.4, dy * 0.4)),
+            DragPhase::End => None,
+        });
     let canvas_box = View::new(Style {
         size: Size {
             width: length(size),
@@ -1643,20 +1650,17 @@ fn wheel_canvas(model: &Model, render: &cosmos_render::RenderModel, size: f32, t
         zoom: model.wheel_zoom,
         pan: model.wheel_pan,
     };
-    // Paso de paneo por "línea" de rueda.
-    const WHEEL_STEP: f32 = 26.0;
     let canvas = canvas_view_clickable_ex::<Msg, _>(commands, size, Some(canvas_bg), t, move |wx, wy| {
         let picked: Option<String> = hits.pick(wx, wy).map(str::to_string);
         Some(Msg::SelectBody(picked))
     })
     // Drag: paneo del lienzo. Coexiste con el on_click_at (el press
-    // selecciona el cuerpo; el movimiento panea).
+    // selecciona el cuerpo; el movimiento panea). La rueda (zoom/paneo
+    // con Ctrl/Alt) la maneja App::on_wheel.
     .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
         DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
         DragPhase::End => None,
     })
-    // Rueda del ratón: paneo horizontal/vertical.
-    .on_scroll(|dx, dy| Some(Msg::WheelPan(dx * WHEEL_STEP, dy * WHEEL_STEP)))
     .on_right_click_at(move |lx, ly, _w, _h| {
         Some(Msg::OpenCanvasCtx(nav_off + lx, MENU_BAR_H + TAB_BAR_H + ly))
     });

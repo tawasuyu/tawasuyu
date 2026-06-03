@@ -208,9 +208,14 @@ impl ToolPanel {
         }
     }
 
-    /// Paneles abiertos por defecto en una instalación nueva.
+    /// Paneles abiertos por defecto en una instalación nueva: los dos
+    /// primeros de cada categoría. El estado luego se recuerda por panel
+    /// (se persiste en cada toggle).
     pub(crate) fn defaults_expanded() -> Vec<ToolPanel> {
-        vec![ToolPanel::Aspectos, ToolPanel::AspectosTopo]
+        ToolCat::all()
+            .iter()
+            .flat_map(|c| c.panels().iter().take(2).copied())
+            .collect()
     }
 }
 
@@ -423,6 +428,10 @@ pub(crate) enum Msg {
     WheelZoom(f32),
     /// Restaura zoom 1× y paneo 0 (encuadre).
     WheelResetView,
+    /// Cambió el tamaño de la ventana (ancho, alto en px lógicos).
+    Resized(f32, f32),
+    /// Desplaza el contenedor de paneles (derecha) en `delta` px.
+    ToolsScroll(f32),
     /// Expande/colapsa un nodo (grupo o contacto) del árbol de datos.
     ToggleNavNode(String),
     /// Selecciona un nodo del árbol; carta→carga, contenedor→toggle.
@@ -534,6 +543,11 @@ pub(crate) struct Model {
     // rueda 2D: zoom + paneo del lienzo (transitorio, no se persiste)
     pub(crate) wheel_zoom: f32,
     pub(crate) wheel_pan: (f32, f32),
+    /// Tamaño actual de la ventana (px lógicos). Para gating de la rueda
+    /// y el alto del scroll de paneles. Arranca en [`VIEWPORT`].
+    pub(crate) viewport: (f32, f32),
+    /// Desplazamiento vertical del contenedor de paneles (derecha).
+    pub(crate) tools_scroll: f32,
     // layout guardable (3 zonas resizables)
     pub(crate) nav_w: f32,
     pub(crate) tools_w: f32,
