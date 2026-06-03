@@ -887,6 +887,12 @@ pub(crate) fn image_fit_view(
     let w_dim = length_to_taffy(b.width, zoom).unwrap_or_else(|| length(iw as f32 * zoom));
     let h_dim = length_to_taffy(b.height, zoom).unwrap_or_else(|| length(ih as f32 * zoom));
     let z = zoom as f64;
+    // `object-position` (default centro). `Px` = offset desde el borde;
+    // `Pct` = alinea ese % de la imagen con ese % de la caja.
+    let obj_pos = b.object_position.unwrap_or(puriy_engine::style::BackgroundPosition {
+        x: puriy_engine::style::LengthVal::Pct(50.0),
+        y: puriy_engine::style::LengthVal::Pct(50.0),
+    });
     View::new(Style {
         size: Size { width: w_dim, height: h_dim },
         // Igual que image_view: clamp responsivo al contenedor.
@@ -908,8 +914,16 @@ pub(crate) fn image_fit_view(
         let (sx, sy) = object_fit_scale(fit, rw, rh, iw, ih, z);
         let dw = iw * sx;
         let dh = ih * sy;
-        let tx = rect.x as f64 + (rw - dw) * 0.5;
-        let ty = rect.y as f64 + (rh - dh) * 0.5;
+        // Coloca la imagen escalada dentro de la caja según object-position.
+        let off = |lv: puriy_engine::style::LengthVal, free: f64| -> f64 {
+            match lv {
+                puriy_engine::style::LengthVal::Px(n) => n as f64 * z,
+                puriy_engine::style::LengthVal::Pct(p) => free * p as f64 / 100.0,
+                puriy_engine::style::LengthVal::Auto => free * 0.5,
+            }
+        };
+        let tx = rect.x as f64 + off(obj_pos.x, rw - dw);
+        let ty = rect.y as f64 + off(obj_pos.y, rh - dh);
         let clip = RoundedRect::new(
             rect.x as f64,
             rect.y as f64,

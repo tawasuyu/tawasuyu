@@ -157,6 +157,8 @@ pub struct BoxNode {
     pub pointer_events: PointerEvents,
     /// `object-fit` de un `<img>` (`None` = no especificado). Fase 7.230.
     pub object_fit: Option<ObjectFit>,
+    /// `object-position` de un `<img>` (`None` = centro). Fase 7.231.
+    pub object_position: Option<BackgroundPosition>,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

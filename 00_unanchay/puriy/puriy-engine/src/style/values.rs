@@ -173,6 +173,9 @@ pub struct ComputedStyle {
     /// `object-fit` de un `<img>`. `None` = no especificado (el chrome
     /// mantiene su encaje por defecto, contain responsivo). Fase 7.230.
     pub object_fit: Option<ObjectFit>,
+    /// `object-position` de un `<img>`. `None` = default (centro 50% 50%).
+    /// Fase 7.231.
+    pub object_position: Option<BackgroundPosition>,
     /// Sangrado de primera línea de un bloque (en px).
     pub text_indent: f32,
     /// Espacio extra entre palabras (en px). Heredable.
@@ -993,6 +996,7 @@ impl Default for ComputedStyle {
             visibility: Visibility::Visible,
             pointer_events: PointerEvents::Auto,
             object_fit: None,
+            object_position: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

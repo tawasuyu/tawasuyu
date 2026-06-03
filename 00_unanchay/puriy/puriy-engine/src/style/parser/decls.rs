@@ -341,6 +341,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "visibility" => parse_visibility(value).map(DeclKind::Visibility),
         "pointer-events" => parse_pointer_events(value).map(DeclKind::PointerEvents),
         "object-fit" => parse_object_fit(value).map(DeclKind::ObjectFit),
+        "object-position" => match parse_background_position(value) {
+            // Reusa el parser de background-position; sólo cambia el destino.
+            Some(DeclKind::BackgroundPosition(p)) => Some(DeclKind::ObjectPosition(p)),
+            _ => None,
+        },
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
