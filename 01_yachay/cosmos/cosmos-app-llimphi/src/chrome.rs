@@ -715,8 +715,8 @@ fn nav_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_panel_alt)
     .children(vec![
         new_btn("grupo", Msg::NewGroup, true),
-        new_btn("contacto", Msg::NewContact, true),
-        new_btn("carta", Msg::NewChart, has_sel),
+        new_btn("contacto", Msg::OpenNewContactDialog, true),
+        new_btn("carta", Msg::OpenNewChartDialog, has_sel),
         icon_btn(Icon::Pencil, Msg::RenameStart, has_sel, false),
         icon_btn(Icon::Scissors, Msg::CutNode, has_sel, false),
         icon_btn(Icon::Clipboard, Msg::PasteNode, has_cut, false),

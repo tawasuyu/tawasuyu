@@ -438,8 +438,6 @@ pub(crate) enum Msg {
     NavClick(String),
     // CRUD del árbol de datos (cosmos-store)
     NewGroup,
-    NewContact,
-    NewChart,
     DeleteSelected,
     /// Marca el nodo seleccionado para mover (cortar).
     CutNode,
@@ -479,6 +477,14 @@ pub(crate) enum Msg {
     NavCtxPick(usize),
     /// Desplaza el árbol de datos (izquierda) en `delta` px.
     NavScroll(f32),
+    // diálogos modales (crear contacto / crear carta)
+    OpenNewContactDialog,
+    OpenNewChartDialog,
+    DialogFocus(crate::dialog::DialogField),
+    DialogKey(llimphi_ui::KeyEvent),
+    DialogPickCity(usize),
+    DialogConfirm,
+    DialogCancel,
     // layout guardable (paneles laterales tipo móvil)
     SetNavWidth(f32),
     SetToolsWidth(f32),
@@ -571,6 +577,12 @@ pub(crate) struct Model {
     pub(crate) nav_ctx: Option<String>,
     /// Desplazamiento vertical del árbol de datos (izquierda).
     pub(crate) nav_scroll: f32,
+    /// Diálogo modal abierto (crear contacto / crear carta), si lo hay.
+    pub(crate) dialog: Option<crate::dialog::Dialog>,
+    /// Campo del diálogo que tiene el foco de teclado.
+    pub(crate) dialog_field: crate::dialog::DialogField,
+    /// Buffer de edición del campo enfocado del diálogo.
+    pub(crate) dialog_input: TextInputState,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     pub(crate) _chart_watcher: Option<notify::RecommendedWatcher>,

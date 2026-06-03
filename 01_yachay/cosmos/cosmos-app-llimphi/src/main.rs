@@ -18,6 +18,7 @@
 mod astrocarto;
 mod astroview;
 mod chrome;
+mod dialog;
 mod engine;
 mod format;
 mod glyphs;
@@ -326,57 +327,6 @@ fn new_group(m: &mut Model) {
     }
 }
 
-fn new_contact(m: &mut Model) {
-    let Some(store) = &m.store else { return };
-    // Grupo destino: el seleccionado, o el grupo del contacto/carta
-    // seleccionados; si nada, raíz.
-    let group = m.selected_node().and_then(|n| match n.kind {
-        library::NavKind::Group => library::parse_group_key(&n.key),
-        _ => n.parent.as_deref().and_then(library::parse_group_key),
-    });
-    match store.create_contact(group, "Contacto nuevo", None) {
-        Ok(c) => {
-            if let Some(g) = group {
-                m.nav_expanded.insert(format!("g:{g}"));
-            }
-            refresh_nav(m);
-            start_rename(m, format!("c:{}", c.id));
-        }
-        Err(e) => m.error = Some(format!("crear contacto: {e}")),
-    }
-}
-
-fn new_chart(m: &mut Model) {
-    let Some(store) = &m.store else { return };
-    // Contacto destino: el seleccionado, o el contacto padre de la carta
-    // seleccionada.
-    let contact = m.selected_node().and_then(|n| match n.kind {
-        library::NavKind::Contact => library::parse_contact_key(&n.key),
-        library::NavKind::Chart => n.parent.as_deref().and_then(library::parse_contact_key),
-        library::NavKind::Group => None,
-    });
-    let Some(contact) = contact else {
-        m.error = Some("seleccioná un contacto para crear la carta".into());
-        return;
-    };
-    // Clona los datos de nacimiento/config de la carta actual.
-    let res = store.create_chart(
-        contact,
-        cosmos_model::ChartKind::Natal,
-        "Carta nueva",
-        &m.chart.birth_data,
-        &m.chart.config,
-        None,
-    );
-    match res {
-        Ok(ch) => {
-            m.nav_expanded.insert(format!("c:{contact}"));
-            refresh_nav(m);
-            start_rename(m, format!("h:{}", ch.id));
-        }
-        Err(e) => m.error = Some(format!("crear carta: {e}")),
-    }
-}
 
 fn delete_selected(m: &mut Model) {
     let Some(store) = &m.store else { return };
@@ -533,8 +483,8 @@ fn apply_nav_act(m: &mut Model, act: chrome::NavAct) {
     use chrome::NavAct;
     match act {
         NavAct::NewGroup => new_group(m),
-        NavAct::NewContact => new_contact(m),
-        NavAct::NewChart => new_chart(m),
+        NavAct::NewContact => open_contact_dialog(m),
+        NavAct::NewChart => open_chart_dialog(m),
         NavAct::Rename => {
             if let Some(key) = m.nav_selected.clone() {
                 start_rename(m, key);
@@ -549,6 +499,190 @@ fn apply_nav_act(m: &mut Model, act: chrome::NavAct) {
         NavAct::Paste => paste_node(m),
         NavAct::Duplicate => do_duplicar(m),
         NavAct::Delete => delete_selected(m),
+    }
+}
+
+// =====================================================================
+// Diálogos modales (crear contacto / crear carta)
+// =====================================================================
+
+/// Abre el diálogo de nuevo contacto bajo el grupo seleccionado (o su
+/// grupo padre, o la raíz).
+fn open_contact_dialog(m: &mut Model) {
+    let group = m.selected_node().and_then(|n| match n.kind {
+        library::NavKind::Group => library::parse_group_key(&n.key),
+        _ => n.parent.as_deref().and_then(library::parse_group_key),
+    });
+    m.dialog = Some(dialog::Dialog::NewContact(dialog::NewContactForm {
+        group,
+        name: String::new(),
+    }));
+    m.dialog_field = dialog::DialogField::Name;
+    m.dialog_input.set_text(String::new());
+    m.menu_open = None;
+    m.nav_ctx = None;
+}
+
+/// Abre el diálogo de nueva carta bajo el contacto seleccionado (o el
+/// contacto padre de la carta seleccionada). Prefill desde la carta de
+/// trabajo. Sin contacto destino → error.
+fn open_chart_dialog(m: &mut Model) {
+    let contact = m.selected_node().and_then(|n| match n.kind {
+        library::NavKind::Contact => library::parse_contact_key(&n.key),
+        library::NavKind::Chart => n.parent.as_deref().and_then(library::parse_contact_key),
+        library::NavKind::Group => None,
+    });
+    let Some(contact) = contact else {
+        m.error = Some("Nueva carta: seleccioná un contacto".into());
+        return;
+    };
+    let bd = &m.chart.birth_data;
+    m.dialog = Some(dialog::Dialog::NewChart(dialog::NewChartForm {
+        contact,
+        label: "Carta nueva".into(),
+        date: format!("{:04}-{:02}-{:02}", bd.year, bd.month, bd.day),
+        time: format!("{:02}:{:02}", bd.hour, bd.minute),
+        city_query: String::new(),
+        place: bd.birthplace_label.clone().unwrap_or_default(),
+        lat: bd.latitude_deg,
+        lon: bd.longitude_deg,
+        tz: bd.tz_offset_minutes,
+    }));
+    m.dialog_field = dialog::DialogField::Label;
+    m.dialog_input.set_text("Carta nueva".to_string());
+    m.menu_open = None;
+    m.nav_ctx = None;
+}
+
+/// Carga el valor del campo `f` en el buffer de edición y le da el foco.
+fn dialog_focus(m: &mut Model, f: dialog::DialogField) {
+    let v = m.dialog.as_ref().map(|d| d.field(f)).unwrap_or_default();
+    m.dialog_field = f;
+    m.dialog_input.set_text(v);
+}
+
+/// Aplica una ciudad del atlas al form de carta (autocompleta lat/lon/tz).
+fn dialog_pick_city(m: &mut Model, idx: usize) {
+    let Some(city) = dialog::CITY_PRESETS.get(idx) else { return };
+    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
+        c.place = city.name.to_string();
+        c.lat = city.lat;
+        c.lon = city.lon;
+        c.tz = city.tz;
+        c.city_query = city.name.to_string();
+    }
+    if m.dialog_field == dialog::DialogField::City {
+        m.dialog_input.set_text(city.name.to_string());
+    }
+}
+
+/// Confirma el diálogo abierto: valida y crea en el store.
+fn dialog_confirm(m: &mut Model) {
+    match m.dialog.take() {
+        Some(dialog::Dialog::NewContact(f)) => {
+            let name = f.name.trim().to_string();
+            if name.is_empty() {
+                m.error = Some("El contacto necesita un nombre".into());
+                m.dialog = Some(dialog::Dialog::NewContact(f));
+                return;
+            }
+            match m.store.as_ref().map(|s| s.create_contact(f.group, &name, None)) {
+                Some(Ok(c)) => {
+                    if let Some(g) = f.group {
+                        m.nav_expanded.insert(format!("g:{g}"));
+                    }
+                    refresh_nav(m);
+                    m.nav_selected = Some(format!("c:{}", c.id));
+                    m.status_note = Some(format!("Contacto creado: {name}"));
+                }
+                Some(Err(e)) => m.error = Some(format!("crear contacto: {e}")),
+                None => {}
+            }
+        }
+        Some(dialog::Dialog::NewChart(f)) => {
+            let Some((y, mo, d)) = parse_date(&f.date) else {
+                m.error = Some("Fecha inválida (usá AAAA-MM-DD)".into());
+                m.dialog = Some(dialog::Dialog::NewChart(f));
+                return;
+            };
+            let Some((h, mi)) = parse_time(&f.time) else {
+                m.error = Some("Hora inválida (usá HH:MM)".into());
+                m.dialog = Some(dialog::Dialog::NewChart(f));
+                return;
+            };
+            let mut bd = m.chart.birth_data.clone();
+            bd.year = y;
+            bd.month = mo;
+            bd.day = d;
+            bd.hour = h;
+            bd.minute = mi;
+            bd.second = 0.0;
+            bd.tz_offset_minutes = f.tz;
+            bd.latitude_deg = f.lat;
+            bd.longitude_deg = f.lon;
+            bd.birthplace_label = if f.place.is_empty() {
+                None
+            } else {
+                Some(f.place.clone())
+            };
+            let label = if f.label.trim().is_empty() {
+                "Carta nueva"
+            } else {
+                f.label.trim()
+            };
+            let res = m.store.as_ref().map(|s| {
+                s.create_chart(
+                    f.contact,
+                    cosmos_model::ChartKind::Natal,
+                    label,
+                    &bd,
+                    &m.chart.config,
+                    None,
+                )
+            });
+            match res {
+                Some(Ok(ch)) => {
+                    m.nav_expanded.insert(format!("c:{}", f.contact));
+                    refresh_nav(m);
+                    m.status_note = Some(format!("Carta creada: {label}"));
+                    do_cargar(m, ch.id.to_string());
+                }
+                Some(Err(e)) => m.error = Some(format!("crear carta: {e}")),
+                None => {}
+            }
+        }
+        None => {}
+    }
+}
+
+/// Parsea `AAAA-MM-DD`.
+fn parse_date(s: &str) -> Option<(i32, u32, u32)> {
+    let p: Vec<&str> = s.trim().split('-').collect();
+    if p.len() != 3 {
+        return None;
+    }
+    let y = p[0].trim().parse().ok()?;
+    let mo: u32 = p[1].trim().parse().ok()?;
+    let d: u32 = p[2].trim().parse().ok()?;
+    if (1..=12).contains(&mo) && (1..=31).contains(&d) {
+        Some((y, mo, d))
+    } else {
+        None
+    }
+}
+
+/// Parsea `HH:MM`.
+fn parse_time(s: &str) -> Option<(u32, u32)> {
+    let p: Vec<&str> = s.trim().split(':').collect();
+    if p.len() != 2 {
+        return None;
+    }
+    let h: u32 = p[0].trim().parse().ok()?;
+    let mi: u32 = p[1].trim().parse().ok()?;
+    if h < 24 && mi < 60 {
+        Some((h, mi))
+    } else {
+        None
     }
 }
 
@@ -679,6 +813,9 @@ impl App for Cosmos {
             ctx_open: None,
             nav_ctx: None,
             nav_scroll: 0.0,
+            dialog: None,
+            dialog_field: dialog::DialogField::Name,
+            dialog_input: llimphi_widget_text_input::TextInputState::new(),
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }
@@ -744,8 +881,6 @@ impl App for Cosmos {
             Msg::ToggleNavNode(key) => m.toggle_nav(key),
             Msg::NavClick(key) => nav_click(&mut m, key),
             Msg::NewGroup => new_group(&mut m),
-            Msg::NewContact => new_contact(&mut m),
-            Msg::NewChart => new_chart(&mut m),
             Msg::DeleteSelected => delete_selected(&mut m),
             Msg::CutNode => {
                 m.nav_cut = m.nav_selected.clone();
@@ -902,6 +1037,24 @@ impl App for Cosmos {
                 m.nav_scroll =
                     llimphi_widget_scroll::clamp_offset(m.nav_scroll + delta, content, viewport);
             }
+            // diálogos modales
+            Msg::OpenNewContactDialog => open_contact_dialog(&mut m),
+            Msg::OpenNewChartDialog => open_chart_dialog(&mut m),
+            Msg::DialogFocus(f) => dialog_focus(&mut m, f),
+            Msg::DialogKey(ev) => {
+                m.dialog_input.apply_key(&ev);
+                let txt = m.dialog_input.text();
+                let f = m.dialog_field;
+                if let Some(d) = m.dialog.as_mut() {
+                    d.set_field(f, txt);
+                }
+            }
+            Msg::DialogPickCity(idx) => dialog_pick_city(&mut m, idx),
+            Msg::DialogConfirm => {
+                dialog_confirm(&mut m);
+                persist = true;
+            }
+            Msg::DialogCancel => m.dialog = None,
             // layout guardable
             Msg::SetNavWidth(dx) => m.nudge_nav(dx),
             Msg::SetToolsWidth(dx) => m.nudge_tools(dx),
@@ -1021,10 +1174,23 @@ impl App for Cosmos {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        chrome::overlay_view(model, &model.theme)
+        // El diálogo modal tiene prioridad sobre los menús.
+        dialog::dialog_overlay(model, &model.theme).or_else(|| chrome::overlay_view(model, &model.theme))
     }
 
     fn on_key(model: &Model, ev: &llimphi_ui::KeyEvent) -> Option<Msg> {
+        // Un diálogo modal captura el teclado: Enter confirma, Escape
+        // cancela, el resto alimenta el campo enfocado.
+        if model.dialog.is_some() {
+            if ev.state == KeyState::Pressed {
+                match &ev.key {
+                    Key::Named(NamedKey::Enter) => return Some(Msg::DialogConfirm),
+                    Key::Named(NamedKey::Escape) => return Some(Msg::DialogCancel),
+                    _ => {}
+                }
+            }
+            return Some(Msg::DialogKey(ev.clone()));
+        }
         // Renombrar un nodo del árbol captura el teclado: Enter confirma,
         // Escape cancela, el resto alimenta el buffer de texto.
         if model.nav_rename.is_some() {
