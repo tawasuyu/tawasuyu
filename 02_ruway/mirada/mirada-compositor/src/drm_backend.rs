@@ -107,6 +107,24 @@ const MENU_TEXT_COLOR: [u8; 4] = [228, 228, 234, 255];
 /// Color RGBA de las etiquetas de título — casi blanco.
 const TITLE_COLOR: [u8; 4] = [230, 230, 235, 255];
 
+/// Alto del texto del HUD de presets de zonas, en píxeles.
+const HUD_TEXT_PX: f32 = 18.0;
+
+/// Color RGBA (`0..=255`) del texto del HUD de presets.
+const HUD_TEXT_COLOR: [u8; 4] = [240, 240, 246, 255];
+
+/// Color del fondo del HUD de presets (RGBA `0..=1`, casi opaco).
+const HUD_BG: [f32; 4] = [0.10, 0.10, 0.14, 0.85];
+
+/// Margen interno del HUD entre el texto y el borde de su panel, en píxeles.
+const HUD_PAD: i32 = 12;
+
+/// Distancia del HUD al borde superior de la salida, en píxeles.
+const HUD_TOP: i32 = 40;
+
+/// Duración del HUD del preset activo al ciclar zonas.
+const HUD_DURATION: Duration = Duration::from_millis(1500);
+
 /// Lado mínimo de una ventana al redimensionarla con el ratón.
 const MIN_WINDOW: i32 = 120;
 
@@ -355,6 +373,14 @@ struct DrmState {
     active_preset: usize,
     /// Índice de la zona resaltada bajo el puntero durante un arrastre.
     drag_zone: Option<usize>,
+    /// Instante hasta el que pintar el HUD del preset activo (al ciclar
+    /// zonas). `None` = sin HUD. Se setea en cada ciclo y se respeta hasta
+    /// que el reloj de `start` lo supera; el siguiente tick (~60 Hz) lo
+    /// borra y damasca su área para el siguiente flip.
+    preset_hud_until: Option<Instant>,
+    /// Etiqueta cacheada del HUD (la última que se rasterizó). Permite
+    /// reusar `text_cache` sin recomputar el texto en cada cuadro.
+    preset_hud_label: String,
 }
 
 impl DrmState {
@@ -452,6 +478,62 @@ impl DrmState {
                         CURSOR_COLOR,
                         Kind::Cursor,
                     )));
+                }
+            }
+
+            // HUD del preset activo: panel discreto arriba al centro mientras
+            // dura la ventana de feedback (HUD_DURATION). Después del deadline
+            // el siguiente cuadro lo borra (damasca el área). Va bajo el
+            // cursor pero sobre el resto. Se rasteriza fresco en cada cuadro
+            // — son ~90 rasterizaciones durante la vida del HUD; los búferes
+            // son del tamaño del texto, sin caché.
+            if let Some(deadline) = self.preset_hud_until {
+                if Instant::now() >= deadline {
+                    self.preset_hud_until = None;
+                } else if let Some(tr) = &self.text {
+                    if !self.preset_hud_label.is_empty() {
+                        if let Some(r) =
+                            tr.rasterize(&self.preset_hud_label, HUD_TEXT_PX, HUD_TEXT_COLOR)
+                        {
+                            let tw = r.width;
+                            let th = r.height;
+                            let panel_w = tw + 2 * HUD_PAD;
+                            let panel_h = th.max(HUD_TEXT_PX as i32) + 2 * HUD_PAD;
+                            let (ow, _oh) = self.app.output_size;
+                            let panel_x = ((ow as i32 - panel_w) / 2).max(0);
+                            let panel_y = HUD_TOP;
+                            let tx = panel_x + (panel_w - tw) / 2;
+                            let ty = panel_y + (panel_h - th) / 2;
+                            let buf = MemoryRenderBuffer::from_slice(
+                                &r.rgba,
+                                Fourcc::Argb8888,
+                                (tw, th),
+                                1,
+                                Transform::Normal,
+                                None,
+                            );
+                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                &mut self.renderer,
+                                (tx as f64, ty as f64),
+                                &buf,
+                                None,
+                                None,
+                                None,
+                                Kind::Unspecified,
+                            ) {
+                                out.push(Frame::Text(el));
+                            }
+                            let mut bg = SolidColorBuffer::default();
+                            bg.update((panel_w, panel_h), HUD_BG);
+                            out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                                &bg,
+                                (panel_x, panel_y),
+                                1.0,
+                                1.0,
+                                Kind::Unspecified,
+                            )));
+                        }
+                    }
                 }
             }
 
@@ -847,6 +929,12 @@ impl DrmState {
                             self.active_preset =
                                 (self.active_preset + 1) % self.zone_presets.len();
                             self.zones = self.zone_presets[self.active_preset].clone();
+                            self.preset_hud_label = format!(
+                                "Zonas · {}/{}",
+                                self.active_preset + 1,
+                                self.zone_presets.len()
+                            );
+                            self.preset_hud_until = Some(Instant::now() + HUD_DURATION);
                         }
                         CtlReply::Ok
                     }
@@ -1711,6 +1799,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         zone_presets,
         active_preset: 0,
         drag_zone: None,
+        preset_hud_until: None,
+        preset_hud_label: String::new(),
     };
 
     let signal = event_loop.get_signal();
