@@ -1380,6 +1380,208 @@ mod tests {
     }
 
     #[test]
+    fn mix_blend_mode_fase_7_254() {
+        assert_eq!(parse_blend_mode("normal"), Some(BlendMode::Normal));
+        assert_eq!(parse_blend_mode("MULTIPLY"), Some(BlendMode::Multiply));
+        assert_eq!(parse_blend_mode("color-dodge"), Some(BlendMode::ColorDodge));
+        assert_eq!(parse_blend_mode("plus-lighter"), Some(BlendMode::PlusLighter));
+        assert_eq!(parse_blend_mode("nope"), None);
+
+        // NO se hereda.
+        let html = r##"<html><head><style>
+            body { mix-blend-mode: multiply }
+            div.s { mix-blend-mode: screen }
+            div.plain {}
+        </style></head><body>
+          <div class="s"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mix_blend_mode, BlendMode::Multiply);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).mix_blend_mode,
+            BlendMode::Screen
+        );
+        // NO se hereda → default `Normal`.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).mix_blend_mode,
+            BlendMode::Normal
+        );
+    }
+
+    #[test]
+    fn background_blend_mode_fase_7_255() {
+        // Lista de varios modos.
+        let list = parse_blend_mode_list("multiply, screen, OVERLAY");
+        assert_eq!(
+            list,
+            vec![BlendMode::Multiply, BlendMode::Screen, BlendMode::Overlay]
+        );
+        // Inválidos individuales caen a Normal (no rompen la lista).
+        let list2 = parse_blend_mode_list("multiply, BANANA, color");
+        assert_eq!(
+            list2,
+            vec![BlendMode::Multiply, BlendMode::Normal, BlendMode::Color]
+        );
+
+        let html = r##"<html><head><style>
+            div.bg { background-blend-mode: multiply, screen }
+        </style></head><body><div class="bg"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(
+            cs.background_blend_mode,
+            vec![BlendMode::Multiply, BlendMode::Screen]
+        );
+    }
+
+    #[test]
+    fn isolation_fase_7_256() {
+        assert_eq!(parse_isolation("auto"), Some(Isolation::Auto));
+        assert_eq!(parse_isolation("ISOLATE"), Some(Isolation::Isolate));
+        assert_eq!(parse_isolation("nope"), None);
+
+        // NO se hereda.
+        let html = r##"<html><head><style>
+            body { isolation: isolate }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.isolation, Isolation::Isolate);
+        // Default Auto en el hijo.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).isolation,
+            Isolation::Auto
+        );
+    }
+
+    #[test]
+    fn will_change_fase_7_257() {
+        // `auto` y `auto, x` se aplanan: `auto` se descarta.
+        assert!(parse_will_change("auto").is_empty());
+        assert_eq!(
+            parse_will_change("scroll-position, contents"),
+            vec![WillChangeHint::ScrollPosition, WillChangeHint::Contents]
+        );
+        // Property arbitraria conservada lowercase.
+        assert_eq!(
+            parse_will_change("Transform, OPACITY"),
+            vec![
+                WillChangeHint::Property("transform".to_string()),
+                WillChangeHint::Property("opacity".to_string()),
+            ]
+        );
+
+        // NO se hereda.
+        let html = r##"<html><head><style>
+            body { will-change: transform }
+            div.over { will-change: scroll-position }
+            div.plain {}
+        </style></head><body>
+          <div class="over"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.will_change,
+            vec![WillChangeHint::Property("transform".to_string())]
+        );
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).will_change,
+            vec![WillChangeHint::ScrollPosition]
+        );
+        // NO se hereda → vacío.
+        assert!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs))
+                .will_change
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn appearance_fase_7_258() {
+        assert_eq!(parse_appearance("none"), Some(Appearance::None));
+        assert_eq!(parse_appearance("AUTO"), Some(Appearance::Auto));
+        assert_eq!(parse_appearance("textfield"), Some(Appearance::Textfield));
+        assert_eq!(
+            parse_appearance("menulist-button"),
+            Some(Appearance::MenulistButton)
+        );
+        // Compat legacy → Auto.
+        assert_eq!(parse_appearance("searchfield"), Some(Appearance::Auto));
+        assert_eq!(parse_appearance("nope"), None);
+
+        // NO se hereda.
+        let html = r##"<html><head><style>
+            body { appearance: none }
+            input.btn { -webkit-appearance: button }
+            input.plain {}
+        </style></head><body>
+          <input class="btn"/><input class="plain"/>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut inputs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("input") => inputs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.appearance, Appearance::None);
+        assert_eq!(
+            eng.compute_with_parent(&inputs[0], Some(&body_cs)).appearance,
+            Appearance::Button
+        );
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&inputs[1], Some(&body_cs)).appearance,
+            Appearance::Auto
+        );
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(

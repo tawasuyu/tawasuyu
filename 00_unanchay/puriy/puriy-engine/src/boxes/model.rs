@@ -203,6 +203,17 @@ pub struct BoxNode {
     pub font_stretch: f32,
     /// `image-rendering`. Heredable. Fase 7.253.
     pub image_rendering: ImageRendering,
+    /// `mix-blend-mode`. NO heredable. Fase 7.254.
+    pub mix_blend_mode: BlendMode,
+    /// `background-blend-mode`. Lista paralela a las capas de background.
+    /// NO heredable. Fase 7.255.
+    pub background_blend_mode: Vec<BlendMode>,
+    /// `isolation`. NO heredable. Fase 7.256.
+    pub isolation: Isolation,
+    /// `will-change`. Lista de hints (vacía = auto). NO heredable. Fase 7.257.
+    pub will_change: Vec<WillChangeHint>,
+    /// `appearance`. NO heredable. Fase 7.258.
+    pub appearance: Appearance,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

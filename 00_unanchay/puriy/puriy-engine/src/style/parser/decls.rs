@@ -414,6 +414,16 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "unicode-bidi" => parse_unicode_bidi(value).map(DeclKind::UnicodeBidi),
         "font-stretch" => parse_font_stretch(value).map(DeclKind::FontStretch),
         "image-rendering" => parse_image_rendering(value).map(DeclKind::ImageRendering),
+        "mix-blend-mode" => parse_blend_mode(value).map(DeclKind::MixBlendMode),
+        "background-blend-mode" => {
+            Some(DeclKind::BackgroundBlendMode(parse_blend_mode_list(value)))
+        }
+        "isolation" => parse_isolation(value).map(DeclKind::Isolation),
+        "will-change" => Some(DeclKind::WillChange(parse_will_change(value))),
+        // Aliases legacy: `-webkit-appearance` y `-moz-appearance`.
+        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+            parse_appearance(value).map(DeclKind::Appearance)
+        }
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -780,6 +790,96 @@ pub(crate) fn parse_image_rendering(value: &str) -> Option<ImageRendering> {
         "crisp-edges" => Some(ImageRendering::CrispEdges),
         "pixelated" => Some(ImageRendering::Pixelated),
         "optimizespeed" | "optimizequality" => Some(ImageRendering::Auto),
+        _ => None,
+    }
+}
+
+/// `mix-blend-mode` / cada item de `background-blend-mode`. Subset
+/// W3C Compositing 1. `plus-lighter` aceptado por compat.
+pub(crate) fn parse_blend_mode(value: &str) -> Option<BlendMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(BlendMode::Normal),
+        "multiply" => Some(BlendMode::Multiply),
+        "screen" => Some(BlendMode::Screen),
+        "overlay" => Some(BlendMode::Overlay),
+        "darken" => Some(BlendMode::Darken),
+        "lighten" => Some(BlendMode::Lighten),
+        "color-dodge" => Some(BlendMode::ColorDodge),
+        "color-burn" => Some(BlendMode::ColorBurn),
+        "hard-light" => Some(BlendMode::HardLight),
+        "soft-light" => Some(BlendMode::SoftLight),
+        "difference" => Some(BlendMode::Difference),
+        "exclusion" => Some(BlendMode::Exclusion),
+        "hue" => Some(BlendMode::Hue),
+        "saturation" => Some(BlendMode::Saturation),
+        "color" => Some(BlendMode::Color),
+        "luminosity" => Some(BlendMode::Luminosity),
+        "plus-lighter" => Some(BlendMode::PlusLighter),
+        _ => None,
+    }
+}
+
+/// `background-blend-mode: m1, m2, ...`. Tokens inválidos caen a
+/// `Normal` para no desalinear la lista con las capas de background.
+pub(crate) fn parse_blend_mode_list(value: &str) -> Vec<BlendMode> {
+    value
+        .split(',')
+        .map(|item| parse_blend_mode(item.trim()).unwrap_or(BlendMode::Normal))
+        .collect()
+}
+
+/// `isolation`: 2 valores.
+pub(crate) fn parse_isolation(value: &str) -> Option<Isolation> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(Isolation::Auto),
+        "isolate" => Some(Isolation::Isolate),
+        _ => None,
+    }
+}
+
+/// `will-change: auto | <feature>[, <feature>...]`. CSS spec exige que
+/// `auto` aparezca solo; aceptamos cualquier tokenizado y filtramos
+/// `auto`/strings vacíos. Las features no reconocidas se guardan como
+/// `Property(token)` (en lowercase). Devuelve `Vec` vacío para `auto`
+/// o lista vacía.
+pub(crate) fn parse_will_change(value: &str) -> Vec<WillChangeHint> {
+    let mut out = Vec::new();
+    for item in value.split(',') {
+        let token = item.trim().to_ascii_lowercase();
+        if token.is_empty() || token == "auto" {
+            continue;
+        }
+        out.push(match token.as_str() {
+            "scroll-position" => WillChangeHint::ScrollPosition,
+            "contents" => WillChangeHint::Contents,
+            _ => WillChangeHint::Property(token),
+        });
+    }
+    out
+}
+
+/// `appearance` (CSS UI 4): subset de keywords. Cualquier otro
+/// keyword conocido legacy (`searchfield`, `slider-horizontal`, etc.)
+/// cae a `Auto` para no dropear la regla. Inválido total = `None`.
+pub(crate) fn parse_appearance(value: &str) -> Option<Appearance> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(Appearance::None),
+        "auto" => Some(Appearance::Auto),
+        "textfield" => Some(Appearance::Textfield),
+        "menulist-button" => Some(Appearance::MenulistButton),
+        "button" => Some(Appearance::Button),
+        "checkbox" => Some(Appearance::Checkbox),
+        "radio" => Some(Appearance::Radio),
+        // Compats legacy → `Auto` (no rechazo).
+        "searchfield"
+        | "slider-horizontal"
+        | "menulist"
+        | "listbox"
+        | "meter"
+        | "progress-bar"
+        | "push-button"
+        | "square-button"
+        | "textarea" => Some(Appearance::Auto),
         _ => None,
     }
 }

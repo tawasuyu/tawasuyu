@@ -12,16 +12,16 @@ use markup5ever_rcdom::{Handle, NodeData};
 
 use crate::dom::{self, DomTree};
 use crate::style::{
-    AlignContent, AlignItems, AlignSelf, BackgroundClip, BackgroundOrigin, BackgroundPosition,
-    BackgroundRepeat, BackgroundSize, BorderLineStyle,
+    AlignContent, AlignItems, AlignSelf, Appearance, BackgroundClip, BackgroundOrigin,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderLineStyle,
     BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor, Direction,
     FlexDirection, FlexWrap,
-    GridTrackSize, Hyphens, ImageRendering, JustifyContent, LengthVal, LinearGradient,
+    GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, LengthVal, LinearGradient,
     ListStyleType, ObjectFit, Outline, Overflow, OverflowWrap, PointerEvents, Position, Resize,
     ScrollBehavior, Sides, StyleEngine, TabSize, TextAlign, TextDecorationLine,
     TextDecorationStyle, TextOverflow, TextShadow,
     TextTransform, Transform, UnicodeBidi, UserSelect, VerticalAlign, Visibility, WhiteSpace,
-    WordBreak, WritingMode,
+    WillChangeHint, WordBreak, WritingMode,
 };
 
 /// Modelo de datos (`Color`/`Display`/`BoxNode`/`BoxTree` + tipos auxiliares).

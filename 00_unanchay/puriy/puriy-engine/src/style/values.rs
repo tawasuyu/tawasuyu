@@ -257,6 +257,22 @@ pub struct ComputedStyle {
     /// `image-rendering` (Fase 7.253). Heredable. Plumb: el chrome no
     /// elige el sampler GPU a partir de este flag aún.
     pub image_rendering: ImageRendering,
+    /// `mix-blend-mode` (Fase 7.254). Default `Normal`. NO heredable.
+    /// Plumb: vello no expone el blend mode todavía como composite del nodo.
+    pub mix_blend_mode: BlendMode,
+    /// `background-blend-mode` (Fase 7.255). Lista paralela a las capas
+    /// de background (de la 0 hacia arriba). Vacío = todas `Normal`. NO
+    /// heredable. Plumb: pendiente integrar al pintor de capas.
+    pub background_blend_mode: Vec<BlendMode>,
+    /// `isolation` (Fase 7.256). NO heredable. `Isolate` crea un nuevo
+    /// stacking context que aísla el subárbol del blending del padre.
+    pub isolation: Isolation,
+    /// `will-change` (Fase 7.257). Lista de hints. NO heredable. Plumb:
+    /// el chrome aún no promueve a capa GPU separada por este hint.
+    pub will_change: Vec<WillChangeHint>,
+    /// `appearance` (Fase 7.258). NO heredable. CSS UI 4. El chrome aún
+    /// no remueve el render UA al ver `appearance: none`.
+    pub appearance: Appearance,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -497,6 +513,67 @@ pub enum UnicodeBidi {
     BidiOverride,
     IsolateOverride,
     Plaintext,
+}
+
+/// `mix-blend-mode` / `background-blend-mode`. Subset Compositing &
+/// Blending 1. Default `Normal`. Plumb. Fase 7.254/7.255.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+    PlusLighter,
+}
+
+/// `isolation`. NO heredable. `Isolate` fuerza un nuevo stacking context.
+/// Fase 7.256.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Isolation {
+    #[default]
+    Auto,
+    Isolate,
+}
+
+/// `will-change`: hint individual. `Auto` cuando la lista es vacía.
+/// Subset: `scroll-position`, `contents`, o nombre arbitrario de
+/// propiedad (almacenado como `Property(String)`). Fase 7.257.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WillChangeHint {
+    ScrollPosition,
+    Contents,
+    /// Nombre de propiedad CSS (ej. `transform`, `opacity`). Se almacena
+    /// tal cual lo escribió el autor, en lowercase.
+    Property(String),
+}
+
+/// `appearance` (CSS UI 4). Default `Auto`. NO heredable. Fase 7.258.
+/// El subset cubre los valores de compat más usados; cualquier otro
+/// keyword cae a `Auto`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Appearance {
+    #[default]
+    Auto,
+    None,
+    /// Hints de compat conservados.
+    Textfield,
+    MenulistButton,
+    Button,
+    Checkbox,
+    Radio,
 }
 
 /// `image-rendering`: hint del sampler al pintar `<img>` y backgrounds.
@@ -1307,6 +1384,11 @@ impl Default for ComputedStyle {
             unicode_bidi: UnicodeBidi::Normal,
             font_stretch: 1.0,
             image_rendering: ImageRendering::Auto,
+            mix_blend_mode: BlendMode::Normal,
+            background_blend_mode: Vec::new(),
+            isolation: Isolation::Auto,
+            will_change: Vec::new(),
+            appearance: Appearance::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

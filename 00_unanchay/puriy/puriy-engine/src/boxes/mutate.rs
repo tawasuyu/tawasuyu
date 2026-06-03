@@ -714,6 +714,11 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.unicode_bidi = s.unicode_bidi;
     b.font_stretch = s.font_stretch;
     b.image_rendering = s.image_rendering;
+    b.mix_blend_mode = s.mix_blend_mode;
+    b.background_blend_mode = s.background_blend_mode.clone();
+    b.isolation = s.isolation;
+    b.will_change = s.will_change.clone();
+    b.appearance = s.appearance;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;

@@ -209,6 +209,13 @@ pub(crate) enum DeclKind {
     /// `font-stretch` ya normalizado a multiplicador (0.5..=2.0).
     FontStretch(f32),
     ImageRendering(ImageRendering),
+    MixBlendMode(BlendMode),
+    /// Lista paralela a las capas de background. Vacío = resetear.
+    BackgroundBlendMode(Vec<BlendMode>),
+    Isolation(Isolation),
+    /// `will-change: auto` = lista vacía.
+    WillChange(Vec<WillChangeHint>),
+    Appearance(Appearance),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -385,6 +392,11 @@ impl Decl {
             DeclKind::UnicodeBidi(b) => s.unicode_bidi = *b,
             DeclKind::FontStretch(m) => s.font_stretch = *m,
             DeclKind::ImageRendering(r) => s.image_rendering = *r,
+            DeclKind::MixBlendMode(b) => s.mix_blend_mode = *b,
+            DeclKind::BackgroundBlendMode(v) => s.background_blend_mode = v.clone(),
+            DeclKind::Isolation(i) => s.isolation = *i,
+            DeclKind::WillChange(v) => s.will_change = v.clone(),
+            DeclKind::Appearance(a) => s.appearance = *a,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
