@@ -2996,6 +2996,31 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn media_query_sintaxis_de_rango() {
+        // DEFAULT_VIEWPORT = 1280 × 800, dpr 1.
+        let vp = DEFAULT_VIEWPORT;
+        // `feature op value`.
+        assert!(evaluate_media_query("(width >= 600px)", vp));
+        assert!(!evaluate_media_query("(width <= 600px)", vp));
+        assert!(evaluate_media_query("(width >= 1280px)", vp));
+        assert!(!evaluate_media_query("(width > 1280px)", vp));
+        assert!(evaluate_media_query("(width < 2000px)", vp));
+        // `value op feature` (orden invertido).
+        assert!(evaluate_media_query("(600px < width)", vp));
+        assert!(!evaluate_media_query("(2000px < width)", vp));
+        // Rango de dos lados.
+        assert!(evaluate_media_query("(400px <= width <= 1500px)", vp));
+        assert!(!evaluate_media_query("(400px <= width <= 800px)", vp));
+        // Sin espacios.
+        assert!(evaluate_media_query("(width>=600px)", vp));
+        // height + combinación con `and`.
+        assert!(evaluate_media_query("(height < 1000px) and (width > 1000px)", vp));
+        // El path `feature: value` clásico sigue funcionando (regresión).
+        assert!(evaluate_media_query("(min-width: 600px)", vp));
+        assert!(!evaluate_media_query("(max-width: 600px)", vp));
+    }
+
+    #[test]
     fn ua_body_lleva_margin_8() {
         // Cualquier página sin CSS de autor debe arrancar con el body
         // margin: 8px (default del browser real).

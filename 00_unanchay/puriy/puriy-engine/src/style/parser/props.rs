@@ -1983,8 +1983,140 @@ pub(crate) fn evaluate_media_query_terms(cond: &str, vp: Viewport) -> bool {
     true
 }
 
+/// Comparador de la sintaxis de rango de Media Queries 4.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum RangeCmp {
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Eq,
+}
+
+impl RangeCmp {
+    fn apply(self, lhs: f32, rhs: f32) -> bool {
+        match self {
+            RangeCmp::Lt => lhs < rhs,
+            RangeCmp::Le => lhs <= rhs,
+            RangeCmp::Gt => lhs > rhs,
+            RangeCmp::Ge => lhs >= rhs,
+            RangeCmp::Eq => (lhs - rhs).abs() < 0.5,
+        }
+    }
+    /// Invierte el sentido (para `value op feature` → `feature flip(op) value`).
+    fn flip(self) -> RangeCmp {
+        match self {
+            RangeCmp::Lt => RangeCmp::Gt,
+            RangeCmp::Le => RangeCmp::Ge,
+            RangeCmp::Gt => RangeCmp::Lt,
+            RangeCmp::Ge => RangeCmp::Le,
+            RangeCmp::Eq => RangeCmp::Eq,
+        }
+    }
+}
+
+/// Valor actual de una media feature de rango contra el viewport.
+fn range_feature_current(name: &str, vp: Viewport) -> Option<f32> {
+    match name {
+        "width" | "inline-size" => Some(vp.width),
+        "height" | "block-size" => Some(vp.height),
+        "aspect-ratio" => Some(vp.width / vp.height),
+        "resolution" => Some(vp.dpr),
+        _ => None,
+    }
+}
+
+/// Parsea el valor de comparación según la feature de rango.
+fn range_feature_value(name: &str, val: &str) -> Option<f32> {
+    match name {
+        "width" | "inline-size" | "height" | "block-size" => parse_length_px(val),
+        "aspect-ratio" => parse_aspect_ratio(val),
+        "resolution" => parse_resolution_dppx(val),
+        _ => None,
+    }
+}
+
+/// Intenta evaluar la sintaxis de rango de MQ4: `(width >= 600px)`,
+/// `(600px < width)`, `(400px <= width <= 800px)`. `None` si el `inner` no
+/// es una expresión de rango (lo maneja el path `feature: value`).
+pub(crate) fn try_eval_media_range(inner: &str, vp: Viewport) -> Option<bool> {
+    // Sólo es rango si hay un comparador `<`/`>`/`=` (el path normal usa `:`).
+    if !inner.contains(['<', '>', '=']) {
+        return None;
+    }
+    // Tokeniza en palabras y comparadores (con o sin espacios).
+    let mut words: Vec<String> = Vec::new();
+    let mut ops: Vec<RangeCmp> = Vec::new();
+    let mut order: Vec<bool> = Vec::new(); // true = word, false = op
+    let bytes = inner.as_bytes();
+    let mut i = 0;
+    let mut cur = String::new();
+    let flush = |cur: &mut String, words: &mut Vec<String>, order: &mut Vec<bool>| {
+        let t = cur.trim();
+        if !t.is_empty() {
+            words.push(t.to_string());
+            order.push(true);
+        }
+        cur.clear();
+    };
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'<' || c == b'>' || c == b'=' {
+            flush(&mut cur, &mut words, &mut order);
+            let op = if (c == b'<' || c == b'>') && bytes.get(i + 1) == Some(&b'=') {
+                i += 2;
+                if c == b'<' { RangeCmp::Le } else { RangeCmp::Ge }
+            } else {
+                i += 1;
+                match c {
+                    b'<' => RangeCmp::Lt,
+                    b'>' => RangeCmp::Gt,
+                    _ => RangeCmp::Eq,
+                }
+            };
+            ops.push(op);
+            order.push(false);
+            continue;
+        }
+        cur.push(c as char);
+        i += 1;
+    }
+    flush(&mut cur, &mut words, &mut order);
+    // Patrón válido: alterna word/op empezando y terminando en word.
+    let alternating_ok = order.iter().enumerate().all(|(idx, is_word)| *is_word == (idx % 2 == 0));
+    if !alternating_ok {
+        return None;
+    }
+    match (words.as_slice(), ops.as_slice()) {
+        // `feature op value` o `value op feature`.
+        ([a, b], [op]) => {
+            if let Some(cur) = range_feature_current(a, vp) {
+                let v = range_feature_value(a, b)?;
+                Some(op.apply(cur, v))
+            } else if let Some(cur) = range_feature_current(b, vp) {
+                let v = range_feature_value(b, a)?;
+                Some(op.flip().apply(cur, v))
+            } else {
+                None
+            }
+        }
+        // `v1 op1 feature op2 v2` (la feature está en el medio).
+        ([v1, f, v2], [op1, op2]) => {
+            let cur = range_feature_current(f, vp)?;
+            let lo = range_feature_value(f, v1)?;
+            let hi = range_feature_value(f, v2)?;
+            Some(op1.flip().apply(cur, lo) && op2.apply(cur, hi))
+        }
+        _ => None,
+    }
+}
+
 /// Evalúa UNA feature `(feature)` o `(feature: value)` contra el viewport.
 pub(crate) fn evaluate_media_feature(inner: &str, vp: Viewport) -> bool {
+    // Sintaxis de rango MQ4 (`width >= 600px`, `400px <= width <= 800px`).
+    if let Some(r) = try_eval_media_range(inner, vp) {
+        return r;
+    }
     let Some((feature, val)) = inner.split_once(':').map(|(a, b)| (a.trim(), b.trim())) else {
         // Feature booleana (sin valor): matchea si la capacidad "existe".
         return matches!(inner, "color" | "grid" | "hover" | "pointer");
