@@ -98,10 +98,23 @@ impl MicSource {
         let (sink, source) = audio_channel(sample_rate, channels);
 
         let err_fn = |e| eprintln!("media-capture-mic: error de stream: {e}");
+        // `build_input::<T>` es genérico sobre cualquier `T: Sample` con
+        // `f32: FromSample<T>` — cpal convierte cada muestra a f32 sola—, así
+        // que cubrimos TODOS los formatos de cpal 0.15. Antes solo F32/I16/U16,
+        // y un micro que ofrecía U8 (común en webcams/cámaras USB y algunos
+        // capturadores) caía a "audio mudo". El `other` queda como red de
+        // seguridad ante un formato futuro.
         let stream = match sample_format {
             SampleFormat::F32 => build_input::<f32>(&device, &config, sink, err_fn),
+            SampleFormat::F64 => build_input::<f64>(&device, &config, sink, err_fn),
+            SampleFormat::I8 => build_input::<i8>(&device, &config, sink, err_fn),
             SampleFormat::I16 => build_input::<i16>(&device, &config, sink, err_fn),
+            SampleFormat::I32 => build_input::<i32>(&device, &config, sink, err_fn),
+            SampleFormat::I64 => build_input::<i64>(&device, &config, sink, err_fn),
+            SampleFormat::U8 => build_input::<u8>(&device, &config, sink, err_fn),
             SampleFormat::U16 => build_input::<u16>(&device, &config, sink, err_fn),
+            SampleFormat::U32 => build_input::<u32>(&device, &config, sink, err_fn),
+            SampleFormat::U64 => build_input::<u64>(&device, &config, sink, err_fn),
             other => return Err(MicError::UnsupportedFormat(other)),
         }?;
         stream.play().map_err(|e| MicError::Play(e.to_string()))?;
