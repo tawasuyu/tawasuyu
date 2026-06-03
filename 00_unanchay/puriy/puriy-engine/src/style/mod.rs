@@ -303,6 +303,22 @@ impl StyleEngine {
                 d.apply(&mut style);
             }
         }
+        // `currentColor`: resuelto al cierre contra el `color` ya computado
+        // (used value). Se vacía el buffer para que NO se herede ni viaje
+        // al BoxNode.
+        if !style.current_color.is_empty() {
+            let cc = style.color;
+            for target in std::mem::take(&mut style.current_color) {
+                match target {
+                    ColorTarget::Background => style.background = Some(cc),
+                    ColorTarget::BorderAll => style.border_colors = Sides::all(Some(cc)),
+                    ColorTarget::BorderSide(edge) => {
+                        set_side(&mut style.border_colors, edge, Some(cc))
+                    }
+                    ColorTarget::Outline => style.outline.color = Some(cc),
+                }
+            }
+        }
         style
     }
 }
@@ -530,6 +546,75 @@ mod tests {
         assert_eq!(eng.compute(&anchors[1]).color, Color::rgb(0, 0, 238));
         // span.btn no es <a> — no aplica el UA de link.
         assert_eq!(eng.compute(&spans[0]).color, Color::BLACK);
+    }
+
+    #[test]
+    fn current_color_se_resuelve_al_color() {
+        let html = r#"<html><head><style>
+            .a { color: red; border-color: currentColor; }
+            .b { border: 2px solid currentColor; color: rgb(0,128,0); }
+            .c { background-color: currentColor; color: blue; }
+            .d { outline: 2px solid currentColor; color: #ff8800; }
+        </style></head><body>
+            <div class="a"></div>
+            <div class="b"></div>
+            <div class="c"></div>
+            <div class="d"></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        assert_eq!(divs.len(), 4);
+        // .a — border-color: currentColor = rojo en los 4 lados.
+        let a = eng.compute(&divs[0]);
+        assert_eq!(a.border_colors.top, Some(Color::rgb(255, 0, 0)));
+        assert_eq!(a.border_colors.left, Some(Color::rgb(255, 0, 0)));
+        // El buffer transitorio queda vacío (no se hereda ni viaja al box).
+        assert!(a.current_color.is_empty());
+        // .b — el `color` se declara DESPUÉS del border en la regla; la
+        // resolución post-pass igual lo toma (verde), no el negro previo.
+        let b = eng.compute(&divs[1]);
+        assert_eq!(b.border_colors.top, Some(Color::rgb(0, 128, 0)));
+        assert_eq!(b.border_widths.top, 2.0);
+        // .c — background = el color del elemento (azul).
+        let c = eng.compute(&divs[2]);
+        assert_eq!(c.background, Some(Color::rgb(0, 0, 255)));
+        // .d — outline color = el color (#ff8800).
+        let d = eng.compute(&divs[3]);
+        assert_eq!(d.outline.color, Some(Color::rgb(255, 136, 0)));
+        assert_eq!(d.outline.width, 2.0);
+    }
+
+    #[test]
+    fn current_color_hereda_el_color_del_ancestro() {
+        let html = r#"<html><head><style>
+            .parent { color: rgb(10,20,30); }
+            .child { border-color: currentColor; }
+        </style></head><body>
+            <div class="parent"><span class="child"></span></div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let (mut parent, mut child) = (None, None);
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("div") => parent = Some(n.clone()),
+                Some("span") => child = Some(n.clone()),
+                _ => {}
+            }
+        });
+        let parent = parent.unwrap();
+        let child = child.unwrap();
+        let ps = eng.compute(&parent);
+        // El hijo no declara `color`: `currentColor` toma el heredado.
+        let cs = eng.compute_with_parent(&child, Some(&ps));
+        assert_eq!(cs.color, Color::rgb(10, 20, 30)); // heredado
+        assert_eq!(cs.border_colors.top, Some(Color::rgb(10, 20, 30)));
     }
 
     #[test]

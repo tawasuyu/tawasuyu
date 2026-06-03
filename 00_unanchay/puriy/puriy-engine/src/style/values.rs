@@ -191,6 +191,22 @@ pub struct ComputedStyle {
     /// varios bindings. Vacío = sin transición. **Sólo parseado** — sin
     /// runtime de tween no dispara nada (ver Fase B4).
     pub transitions: Vec<TransitionBinding>,
+    /// Targets de `currentColor` pendientes de resolver. Transitorio: lo
+    /// llena `Decl::apply` y lo vacía `compute_internal` resolviéndolo
+    /// contra el `color` final del elemento (CSS: `currentColor` = used
+    /// value de `color`). NUNCA se hereda ni viaja al `BoxNode` (se limpia
+    /// antes de devolver el estilo). Ver Fase 7.210.
+    pub current_color: Vec<ColorTarget>,
+}
+
+/// Propiedad-destino de una declaración `currentColor`. Se resuelve al
+/// `color` computado del elemento en una pasada final de la cascada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorTarget {
+    Background,
+    BorderAll,
+    BorderSide(BorderEdge),
+    Outline,
 }
 
 /// Estilo del marker de `<li>`. Reducido al subset que el chrome puede
@@ -880,6 +896,7 @@ impl Default for ComputedStyle {
             grid_template_rows: Vec::new(),
             animation: None,
             transitions: Vec::new(),
+            current_color: Vec::new(),
         }
     }
 }

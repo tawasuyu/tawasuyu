@@ -127,6 +127,10 @@ pub(crate) enum DeclKind {
     Animation(Option<AnimationBinding>),
     /// `transition: ...`. Vec vacío = `transition: none`.
     Transitions(Vec<TransitionBinding>),
+    /// `<prop>: currentColor` — se difiere y resuelve contra el `color`
+    /// final del elemento en `compute_internal` (la cascada empuja el
+    /// target acá vía `apply`). Ver Fase 7.210.
+    CurrentColor(ColorTarget),
 }
 
 impl Decl {
@@ -248,6 +252,10 @@ impl Decl {
             DeclKind::GridTemplateRows(t) => s.grid_template_rows = t.clone(),
             DeclKind::Animation(a) => s.animation = a.clone(),
             DeclKind::Transitions(t) => s.transitions = t.clone(),
+            // No resolvemos acá: el `color` final del elemento puede no
+            // estar aplicado todavía (otra regla de la cascada). Acumulamos
+            // el target y `compute_internal` lo resuelve al cierre.
+            DeclKind::CurrentColor(target) => s.current_color.push(*target),
         }
     }
 }

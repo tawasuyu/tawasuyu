@@ -3,6 +3,13 @@
 //! counters, calc, list-style, line-height). Sub-módulo de `parser` (regla #1).
 use super::*;
 
+/// `true` si el value es el keyword `currentColor` (case-insensitive).
+/// Se resuelve al `color` computado del elemento en la cascada (Fase 7.210),
+/// no acá — el parser no conoce el color final todavía.
+pub(crate) fn is_current_color(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("currentcolor")
+}
+
 pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> Vec<Decl> {
     // Cada decl separada por `;`. Detectamos `!important` recortando
     // el sufijo del value antes de pasarlo al parser de tipo. La
@@ -47,7 +54,12 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             continue;
         }
         if let Some(edge) = match_border_side_prop(prop, "-color") {
-            if let Some(c) = parse_color(value) {
+            if is_current_color(value) {
+                out.push(Decl {
+                    kind: DeclKind::CurrentColor(ColorTarget::BorderSide(edge)),
+                    important,
+                });
+            } else if let Some(c) = parse_color(value) {
                 out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
             }
             continue;
@@ -132,9 +144,15 @@ pub(crate) fn strip_important(value: &str) -> Option<&str> {
 
 pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
     match prop.to_ascii_lowercase().as_str() {
+        // `color: currentColor` = heredar el color (default), así que lo
+        // dropeamos (None → el color heredado queda en pie).
+        "color" if is_current_color(value) => None,
         "color" => parse_color(value).map(DeclKind::Color),
         // `background` (shorthand) se expande en `parse_declarations` antes
         // de llegar acá; sólo el longhand `background-color` toma color suelto.
+        "background-color" if is_current_color(value) => {
+            Some(DeclKind::CurrentColor(ColorTarget::Background))
+        }
         "background-color" => parse_color(value).map(DeclKind::Background),
         "display" => parse_display(value).map(DeclKind::Display),
         "font-size" => parse_length_px(value).map(DeclKind::FontSize),
@@ -157,6 +175,9 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
         "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
         "border-width" => parse_length_px(value).map(DeclKind::BorderWidth),
+        "border-color" if is_current_color(value) => {
+            Some(DeclKind::CurrentColor(ColorTarget::BorderAll))
+        }
         "border-color" => parse_color(value).map(DeclKind::BorderColor),
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
         "border-radius" => parse_length_px(value).map(DeclKind::BorderRadius),
@@ -229,6 +250,9 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // `parse_declarations` antes de llegar acá.
         "flex" | "outline" => None,
         "outline-width" => parse_length_px(value).map(DeclKind::OutlineWidth),
+        "outline-color" if is_current_color(value) => {
+            Some(DeclKind::CurrentColor(ColorTarget::Outline))
+        }
         "outline-color" => parse_color(value).map(DeclKind::OutlineColor),
         "outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
         "outline-offset" => parse_length_px(value).map(DeclKind::OutlineOffset),
@@ -373,10 +397,15 @@ pub(crate) fn parse_border_style(s: &str) -> Option<bool> {
 pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> {
     let mut width: Option<f32> = None;
     let mut color: Option<Color> = None;
+    let mut current: bool = false;
     let mut style_on: Option<bool> = None;
     for tok in value.split_whitespace() {
         if let Some(w) = parse_length_px(tok) {
             width = Some(w);
+            continue;
+        }
+        if is_current_color(tok) {
+            current = true;
             continue;
         }
         if let Some(c) = parse_color(tok) {
@@ -389,7 +418,7 @@ pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> 
         }
     }
     // Defaults razonables: si hay width+color sin style, asumimos solid.
-    if style_on.is_none() && (width.is_some() || color.is_some()) {
+    if style_on.is_none() && (width.is_some() || color.is_some() || current) {
         style_on = Some(true);
     }
     let mut out = Vec::new();
@@ -399,7 +428,9 @@ pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> 
     if let Some(w) = width {
         out.push(Decl { kind: DeclKind::BorderWidth(w), important });
     }
-    if let Some(c) = color {
+    if current {
+        out.push(Decl { kind: DeclKind::CurrentColor(ColorTarget::BorderAll), important });
+    } else if let Some(c) = color {
         out.push(Decl { kind: DeclKind::BorderColor(c), important });
     }
     out
@@ -443,10 +474,15 @@ pub(crate) fn match_border_corner_prop(prop: &str) -> Option<BorderCorner> {
 pub(crate) fn parse_border_side_shorthand(edge: BorderEdge, value: &str, important: bool) -> Vec<Decl> {
     let mut width: Option<f32> = None;
     let mut color: Option<Color> = None;
+    let mut current: bool = false;
     let mut style_on: Option<bool> = None;
     for tok in value.split_whitespace() {
         if let Some(w) = parse_length_px(tok) {
             width = Some(w);
+            continue;
+        }
+        if is_current_color(tok) {
+            current = true;
             continue;
         }
         if let Some(c) = parse_color(tok) {
@@ -458,7 +494,7 @@ pub(crate) fn parse_border_side_shorthand(edge: BorderEdge, value: &str, importa
             continue;
         }
     }
-    if style_on.is_none() && (width.is_some() || color.is_some()) {
+    if style_on.is_none() && (width.is_some() || color.is_some() || current) {
         style_on = Some(true);
     }
     let mut out = Vec::new();
@@ -468,7 +504,9 @@ pub(crate) fn parse_border_side_shorthand(edge: BorderEdge, value: &str, importa
     if let Some(w) = width {
         out.push(Decl { kind: DeclKind::BorderSideWidth(edge, w), important });
     }
-    if let Some(c) = color {
+    if current {
+        out.push(Decl { kind: DeclKind::CurrentColor(ColorTarget::BorderSide(edge)), important });
+    } else if let Some(c) = color {
         out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
     }
     out

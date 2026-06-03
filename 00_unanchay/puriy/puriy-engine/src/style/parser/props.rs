@@ -953,8 +953,13 @@ pub(crate) fn parse_flex_shorthand(value: &str, important: bool) -> Vec<Decl> {
 pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl> {
     let mut width: Option<f32> = None;
     let mut color: Option<Color> = None;
+    let mut current: bool = false;
     let mut style_active: Option<bool> = None;
     for tok in value.split_whitespace() {
+        if !current && color.is_none() && is_current_color(tok) {
+            current = true;
+            continue;
+        }
         if width.is_none() {
             if let Some(w) = parse_length_px(tok) {
                 width = Some(w);
@@ -984,7 +989,9 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
     if let Some(w) = width {
         out.push(Decl { kind: DeclKind::OutlineWidth(w), important });
     }
-    if let Some(c) = color {
+    if current {
+        out.push(Decl { kind: DeclKind::CurrentColor(ColorTarget::Outline), important });
+    } else if let Some(c) = color {
         out.push(Decl { kind: DeclKind::OutlineColor(c), important });
     }
     if style_active.is_some() {
