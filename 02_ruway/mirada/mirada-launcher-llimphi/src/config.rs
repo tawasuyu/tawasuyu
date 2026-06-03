@@ -77,8 +77,9 @@ pub struct PanelConfig {
 pub struct BottomBar {
     #[serde(default = "default_bottom_height")]
     pub height: f32,
-    /// Si `true`, la barra se autoesconde y aparece al hover/hotkey.
-    /// Defer — por ahora el campo se acepta pero no afecta render.
+    /// Si `true`, la barra se autoesconde: en reposo sólo se ve una franja
+    /// fina en el borde inferior que la revela al pasar el puntero; al subir
+    /// el puntero al área libre se vuelve a esconder.
     #[serde(default)]
     pub autohide: bool,
     #[serde(default)]

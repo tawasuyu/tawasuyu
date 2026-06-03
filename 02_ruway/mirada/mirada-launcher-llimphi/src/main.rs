@@ -37,6 +37,9 @@ struct Model {
     menu_active: usize,
     /// Animación de aparición/swap del dropdown del menú principal.
     menu_anim: Tween<f32>,
+    /// Si la barra inferior `autohide` está revelada (puntero en su franja).
+    /// Sin `autohide` se ignora.
+    bottom_revealed: bool,
 }
 
 impl Model {
@@ -205,6 +208,7 @@ impl App for LauncherApp {
             menu_open: None,
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
+            bottom_revealed: false,
         }
     }
 
@@ -336,6 +340,7 @@ impl App for LauncherApp {
                     }
                 }
             }
+            Msg::BottomSetRevealed(v) => model.bottom_revealed = *v,
             Msg::MenuCommand(cmd) => {
                 model.menu_open = None;
                 if let Some(real) = handle_menu_command(cmd) {
@@ -365,6 +370,7 @@ impl App for LauncherApp {
             &model.floating,
             bottom,
             Some(menubar),
+            model.bottom_revealed,
         )
     }
 

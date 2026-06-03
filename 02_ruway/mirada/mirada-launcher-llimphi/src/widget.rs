@@ -50,6 +50,10 @@ pub enum Msg {
     /// Click en un item de la bandeja del sistema: activa el item por D-Bus.
     /// El payload es la `key` (`"bus|path"`) del item.
     TrayActivate(String),
+    /// Mostrar/ocultar la barra inferior autoescondible. `true` la revela
+    /// (puntero en la franja del borde), `false` la esconde (puntero subió
+    /// al área libre). No-op si la barra inferior no tiene `autohide`.
+    BottomSetRevealed(bool),
     /// Cerrar la app.
     Quit,
 }

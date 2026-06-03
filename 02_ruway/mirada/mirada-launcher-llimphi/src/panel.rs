@@ -27,6 +27,9 @@ pub fn flex_dir(pos: &str) -> FlexDirection {
 
 /// Construye el `View<Msg>` raíz: barra superior → área libre → barra
 /// inferior (si hay). El área libre puede hospedar tarjetas flotantes.
+/// Alto de la franja de revelado de una barra inferior autoescondida (px).
+const REVEAL_STRIP_H: f32 = 5.0;
+
 pub fn build(
     cfg: &PanelConfig,
     theme: &Theme,
@@ -36,8 +39,15 @@ pub fn build(
     floating: &[(FloatingCard, Vec<Box<dyn Widget>>)],
     bottom: Option<(&BottomBar, &[Box<dyn Widget>])>,
     menubar: Option<View<Msg>>,
+    // Si la barra inferior es `autohide`, indica si está revelada ahora.
+    // Sin `autohide` se ignora (la barra se pinta siempre).
+    bottom_revealed: bool,
 ) -> View<Msg> {
     let dir = flex_dir(&cfg.position);
+    // Estado de la barra inferior autoescondible.
+    let autohide = bottom.map(|(bc, _)| bc.autohide).unwrap_or(false);
+    let show_full_bottom = bottom.is_some() && (!autohide || bottom_revealed);
+    let show_strip = bottom.is_some() && autohide && !bottom_revealed;
 
     let slot = |ws: &[Box<dyn Widget>], justify: JustifyContent, flex_grow: f32| -> View<Msg> {
         let items: Vec<View<Msg>> = ws.iter().map(|w| w.view(theme)).collect();
@@ -101,7 +111,14 @@ pub fn build(
             ..Default::default()
         };
         style.flex_grow = 1.0;
-        View::new(style).fill(theme.bg_app).children(cards)
+        let mut v = View::new(style).fill(theme.bg_app).children(cards);
+        // Con autohide, entrar al área libre (subir desde la barra) la
+        // esconde. No hay evento de "salida" en Llimphi, así que el
+        // "leave" se modela como "enter" en la región de al lado.
+        if autohide {
+            v = v.on_pointer_enter(Msg::BottomSetRevealed(false));
+        }
+        v
     };
 
     let bar = View::new(bar_style)
@@ -118,9 +135,10 @@ pub fn build(
         ..Default::default()
     };
 
-    // Barra inferior (opcional). Si autohide está activado, defer:
-    // por ahora la pintamos siempre.
-    let bottom_bar: Option<View<Msg>> = bottom.map(|(bc, ws)| {
+    // Barra inferior (opcional). Con autohide se pinta sólo si está revelada;
+    // si no, se reemplaza por una franja fina en el borde que la revela al
+    // entrar el puntero (ver `show_strip` más abajo).
+    let bottom_bar: Option<View<Msg>> = bottom.filter(|_| show_full_bottom).map(|(bc, ws)| {
         let items: Vec<View<Msg>> = ws
             .iter()
             .map(|w| {
@@ -158,6 +176,16 @@ pub fn build(
     let mut children = if main_at_top { vec![bar, free_area] } else { vec![free_area, bar] };
     if let Some(b) = bottom_bar {
         children.push(b);
+    } else if show_strip {
+        // Franja fina en el borde inferior: revela la barra al pasar el mouse.
+        children.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(REVEAL_STRIP_H) },
+                ..Default::default()
+            })
+            .fill(theme.accent)
+            .on_pointer_enter(Msg::BottomSetRevealed(true)),
+        );
     }
     // La barra de menú principal, si está, va como PRIMER hijo del column raíz.
     if let Some(mb) = menubar {
