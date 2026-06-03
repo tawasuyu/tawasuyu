@@ -97,6 +97,13 @@ struct OutputCtx {
     /// Wallpaper ya compuesto al tamaño de **esta** salida; `None` se rearma
     /// perezosamente en el próximo render.
     wallpaper: Option<(MemoryRenderBuffer, (i32, i32))>,
+    /// Ruta del wallpaper a usar en esta salida (`None` = fondo de color
+    /// sólido). Resuelta de la config: el override por nombre de
+    /// [`mirada_brain::OutputOverride`] gana; si no hay, cae al global.
+    wallpaper_path: Option<String>,
+    /// Modo de ajuste del wallpaper en esta salida — análogo a
+    /// [`Self::wallpaper_path`]: por-salida si hay override, global si no.
+    wallpaper_fit: mirada_brain::WallpaperFit,
     /// `true` entre que esta salida encola un page-flip y llega su VBlank.
     pending_flip: bool,
 }
@@ -382,12 +389,6 @@ struct DrmState {
     /// Caché de etiquetas ya rasterizadas, por (texto, color) → búfer subido.
     /// Evita re-rasterizar y re-subir la textura en cada cuadro.
     text_cache: std::collections::HashMap<(String, [u8; 4]), MemoryRenderBuffer>,
-    /// Ruta del wallpaper configurado (`None` = fondo de color sólido). Es
-    /// global: las salidas comparten ruta y modo; cada `OutputCtx` cachea
-    /// su propio búfer escalado a su tamaño nativo.
-    wallpaper_path: Option<String>,
-    /// Modo de ajuste de la imagen (stretch/fit/fill/center/tile).
-    wallpaper_fit: mirada_brain::WallpaperFit,
     /// Árbol del menú raíz (de la config), con submenús anidados.
     menu_entries: Vec<crate::menu::MenuNode>,
     /// Menú raíz abierto, si lo hay (click derecho sobre el fondo). Sus
@@ -859,12 +860,15 @@ impl DrmState {
     }
 
     /// Emite el wallpaper de la salida `idx` al fondo (rearmándolo si quedó
-    /// stale). Cada salida tiene su propio búfer escalado.
+    /// stale). Cada salida tiene su propio búfer escalado, su propia ruta y
+    /// su propio modo de ajuste — un override por nombre puede pintarle un
+    /// fondo distinto a cada monitor.
     fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
-        let Some(path) = self.wallpaper_path.clone() else {
+        let ctx = &mut self.outputs[idx];
+        let Some(path) = ctx.wallpaper_path.clone() else {
             return;
         };
-        let ctx = &mut self.outputs[idx];
+        let fit = ctx.wallpaper_fit;
         let size = (ctx.rect.w, ctx.rect.h);
         let stale = ctx
             .wallpaper
@@ -872,8 +876,7 @@ impl DrmState {
             .map(|(_, s)| *s != size)
             .unwrap_or(true);
         if stale && size.0 > 0 && size.1 > 0 {
-            ctx.wallpaper = load_wallpaper(&path, self.wallpaper_fit, size.0, size.1)
-                .map(|b| (b, size));
+            ctx.wallpaper = load_wallpaper(&path, fit, size.0, size.1).map(|b| (b, size));
         }
         let Some((buf, _)) = &ctx.wallpaper else {
             return;
@@ -1084,14 +1087,15 @@ impl DrmState {
             self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
             self.menu_output_idx = None;
-            let new_wp = self.app.config_wallpaper_path();
-            let new_fit = self.app.config_wallpaper_fit();
-            if new_wp != self.wallpaper_path || new_fit != self.wallpaper_fit {
-                self.wallpaper_path = new_wp;
-                self.wallpaper_fit = new_fit;
-                // Se rearma en el próximo render — en cada salida.
-                for ctx in &mut self.outputs {
-                    ctx.wallpaper = None;
+            // Refresca el wallpaper por salida: cada `OutputCtx` resuelve su
+            // ruta y su `fit` por nombre del conector (override o global).
+            for ctx in &mut self.outputs {
+                let new_wp = self.app.config_wallpaper_path_for(&ctx.name);
+                let new_fit = self.app.config_wallpaper_fit_for(&ctx.name);
+                if new_wp != ctx.wallpaper_path || new_fit != ctx.wallpaper_fit {
+                    ctx.wallpaper_path = new_wp;
+                    ctx.wallpaper_fit = new_fit;
+                    ctx.wallpaper = None; // se rearma en el próximo render
                 }
             }
             self.text = crate::text::TextRenderer::system(self.app.config_font_path().as_deref());
@@ -1838,6 +1842,9 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         let rect = Rect::new(cursor_x, 0, w as i32, h as i32);
         cursor_x += w as i32;
         total_h = total_h.max(h as i32);
+        // Wallpaper resuelto por salida (override por nombre o global).
+        let wp_path = app.config_wallpaper_path_for(&name);
+        let wp_fit = app.config_wallpaper_fit_for(&name);
         println!("      compositor de «{name}» listo · rect global {rect:?}");
         output_ctxs.push(OutputCtx {
             name,
@@ -1847,6 +1854,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             rect,
             refresh_mhz,
             wallpaper: None,
+            wallpaper_path: wp_path,
+            wallpaper_fit: wp_fit,
             pending_flip: false,
         });
     }
@@ -2016,8 +2025,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
     }
 
     let font_path = app.config_font_path();
-    let wallpaper_path = app.config_wallpaper_path();
-    let wallpaper_fit = app.config_wallpaper_fit();
     let menu_entries = app.config_menu();
     let zones = app.config_zones();
     // Lista de presets: el 0 es `config.zones`, luego los de `zone_presets`.
@@ -2049,8 +2056,6 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             t
         },
         text_cache: std::collections::HashMap::new(),
-        wallpaper_path,
-        wallpaper_fit,
         menu_entries,
         root_menu: None,
         menu_output_idx: None,

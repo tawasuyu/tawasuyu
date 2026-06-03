@@ -612,24 +612,27 @@ impl App {
         }
     }
 
-    /// La ruta del wallpaper configurado, si el Cerebro es embebido y la
-    /// config la fija. Vacía/None → fondo de color sólido.
-    fn config_wallpaper_path(&self) -> Option<String> {
+    /// La ruta del wallpaper configurado para la salida `name` (conector DRM:
+    /// `HDMI-A-1`, `DP-1`, …) — el override de [`mirada_brain::OutputOverride`]
+    /// si existe, o el global. `None` con Cerebro enlazado o si todo queda
+    /// vacío (fondo de color sólido).
+    fn config_wallpaper_path_for(&self, name: &str) -> Option<String> {
         match &self.brain {
             Brain::Embedded(d) => {
-                let p = d.config().wallpaper_path.clone();
+                let p = d.config().wallpaper_path_for(name).to_string();
                 (!p.is_empty()).then_some(p)
             }
             Brain::Linked(_) => None,
         }
     }
 
-    /// Cómo se ajusta el wallpaper a la salida (stretch/fit/fill/center/tile).
+    /// Cómo se ajusta el wallpaper a la salida `name` (stretch/fit/fill/…) —
+    /// el override de [`mirada_brain::OutputOverride`] si existe, o el global.
     /// Con Cerebro enlazado cae al default (stretch) — es sólo cosmético, el
     /// Cerebro no toma decisiones sobre el fondo.
-    fn config_wallpaper_fit(&self) -> mirada_brain::WallpaperFit {
+    fn config_wallpaper_fit_for(&self, name: &str) -> mirada_brain::WallpaperFit {
         match &self.brain {
-            Brain::Embedded(d) => d.config().wallpaper_fit,
+            Brain::Embedded(d) => d.config().wallpaper_fit_for(name),
             Brain::Linked(_) => mirada_brain::WallpaperFit::default(),
         }
     }

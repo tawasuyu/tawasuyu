@@ -28,7 +28,7 @@ pub mod rules;
 pub mod watch;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
-pub use config::{Config, MenuEntry, ZoneCfg, DROPTERM_APP_ID};
+pub use config::{Config, MenuEntry, OutputOverride, ZoneCfg, DROPTERM_APP_ID};
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine};
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};

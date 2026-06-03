@@ -134,6 +134,54 @@ pub struct Config {
     /// atajo) cicla `zones → preset 0 → preset 1 → … → zones`. Cada preset es
     /// una lista de zonas como [`Self::zones`].
     pub zone_presets: Vec<Vec<ZoneCfg>>,
+    /// Overrides por salida (monitor). Cada entrada se identifica por el
+    /// `name` del conector DRM (`HDMI-A-1`, `DP-1`, …) y puede sobreescribir
+    /// el wallpaper y su modo de ajuste para esa salida concreta. Lo que no
+    /// se indique cae al valor global (`wallpaper_path`/`wallpaper_fit`).
+    /// Vacío = todas las salidas usan el wallpaper global.
+    pub outputs: Vec<OutputOverride>,
+}
+
+/// Ajustes específicos de una salida (monitor) — se aplican sólo a la salida
+/// cuyo nombre coincide. Hoy alcanzan el fondo del escritorio: imagen y modo
+/// de ajuste. Lo que se deja vacío (`""`) cae al valor global.
+///
+/// El `name` es el nombre del conector como lo reporta el backend DRM en sus
+/// logs de arranque: `HDMI-A-1`, `DP-1`, `eDP-1`, … (mayúsculas y guiones).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutputOverride {
+    /// Nombre del conector DRM al que se aplica este override.
+    pub name: String,
+    /// Wallpaper específico de esta salida. Vacío = usa el global.
+    #[serde(default)]
+    pub wallpaper_path: String,
+    /// Ajuste del wallpaper específico para esta salida. Vacío = usa el
+    /// global. Mismo vocabulario que [`Config::wallpaper_fit`] (`"stretch"`,
+    /// `"fit"`, `"fill"`, `"center"`, `"tile"`). Se guarda como slug en vez
+    /// de [`WallpaperFit`] para que en RON quepa una cadena desnuda y
+    /// `""` sirva como ausente — el `Option<WallpaperFit>` exigiría
+    /// `Some("fill")` / `None`, ruido innecesario en la config.
+    #[serde(default)]
+    pub wallpaper_fit: String,
+}
+
+impl OutputOverride {
+    /// El `wallpaper_fit` parseado, si la cadena no está vacía. `None` =
+    /// no se setea (el llamante debe caer al global). `Err` si la cadena
+    /// trae un slug desconocido — se propaga al cargar la config.
+    fn parsed_wallpaper_fit(&self) -> Result<Option<WallpaperFit>, String> {
+        if self.wallpaper_fit.is_empty() {
+            return Ok(None);
+        }
+        WallpaperFit::from_slug(&self.wallpaper_fit)
+            .map(Some)
+            .ok_or_else(|| {
+                format!(
+                    "modo de wallpaper desconocido «{}» en outputs[name=\"{}\"] (usa stretch, fit, fill, center o tile)",
+                    self.wallpaper_fit, self.name
+                )
+            })
+    }
 }
 
 /// Una zona: `(x, y, w, h)` en fracciones `0..=1` de la pantalla. El `name` es
@@ -187,6 +235,7 @@ impl Default for Config {
             menu: Vec::new(),
             zones: Vec::new(),
             zone_presets: Vec::new(),
+            outputs: Vec::new(),
         }
     }
 }
@@ -218,6 +267,35 @@ impl Config {
         }
     }
 
+    /// La ruta del wallpaper a usar para la salida `name`. Si hay un override
+    /// en [`Self::outputs`] con `wallpaper_path` no vacío para esa salida, se
+    /// usa esa; si no, cae al global [`Self::wallpaper_path`]. Vacía = fondo
+    /// de color sólido.
+    pub fn wallpaper_path_for(&self, name: &str) -> &str {
+        for o in &self.outputs {
+            if o.name == name && !o.wallpaper_path.is_empty() {
+                return &o.wallpaper_path;
+            }
+        }
+        &self.wallpaper_path
+    }
+
+    /// El modo de ajuste del wallpaper para la salida `name`. Si hay un
+    /// override en [`Self::outputs`] con `wallpaper_fit` no vacío para esa
+    /// salida, se usa ese; si no, cae al global [`Self::wallpaper_fit`].
+    /// Un slug inválido en el override se ignora silenciosamente — el chequeo
+    /// duro se hace al cargar la config (ver [`Self::from_ron`]).
+    pub fn wallpaper_fit_for(&self, name: &str) -> WallpaperFit {
+        for o in &self.outputs {
+            if o.name == name {
+                if let Ok(Some(f)) = o.parsed_wallpaper_fit() {
+                    return f;
+                }
+            }
+        }
+        self.wallpaper_fit
+    }
+
     /// Los parámetros de teselado iniciales que derivan de la config, ya
     /// acotados — lo que se le da a cada escritorio al arrancar.
     pub fn layout_params(&self) -> LayoutParams {
@@ -229,9 +307,16 @@ impl Config {
         }
     }
 
-    /// Parsea la config desde el texto RON de un archivo.
+    /// Parsea la config desde el texto RON de un archivo. Valida también que
+    /// los `wallpaper_fit` de cada [`OutputOverride`] sean slugs conocidos —
+    /// un typo (ej. `"marciano"`) se rechaza acá con un mensaje claro, en
+    /// vez de ignorarse en silencio al pintar el fondo.
     pub fn from_ron(text: &str) -> Result<Config, String> {
-        ron::from_str(text).map_err(|e| format!("RON inválido: {e}"))
+        let cfg: Config = ron::from_str(text).map_err(|e| format!("RON inválido: {e}"))?;
+        for o in &cfg.outputs {
+            o.parsed_wallpaper_fit()?;
+        }
+        Ok(cfg)
     }
 
     /// La ruta canónica de la config: `~/.config/mirada/config.ron`.
@@ -359,6 +444,18 @@ const CONFIG_TEMPLATE: &str = "\
     //       [ (x: 0.0, y: 0.0, w: 1.0, h: 1.0) ],
     //   ],
     zone_presets: [],
+
+    // Overrides por salida (monitor). Cada entrada identifica el conector
+    // DRM por su `name` (ej. \"HDMI-A-1\", \"DP-1\", \"eDP-1\"; sale en los
+    // logs de arranque del compositor) y sobreescribe el wallpaper de esa
+    // salida. Lo que se deja vacío cae al global. Vacío = todas usan el
+    // wallpaper global. Ej:
+    //   outputs: [
+    //       (name: \"HDMI-A-1\", wallpaper_path: \"/home/yo/fondos/sala.png\"),
+    //       (name: \"DP-1\",     wallpaper_path: \"/home/yo/fondos/code.png\",
+    //                            wallpaper_fit: \"fill\"),
+    //   ],
+    outputs: [],
 )
 ";
 
@@ -469,6 +566,47 @@ mod tests {
     #[test]
     fn wallpaper_fit_default_es_stretch() {
         assert_eq!(Config::default().wallpaper_fit, WallpaperFit::Stretch);
+    }
+
+    #[test]
+    fn output_override_aplica_su_wallpaper_solo_al_monitor_nombrado() {
+        let c = Config::from_ron(
+            r#"( wallpaper_path: "global.png", outputs: [
+                (name: "HDMI-A-1", wallpaper_path: "sala.png"),
+                (name: "DP-1",     wallpaper_path: "code.png", wallpaper_fit: "fill"),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.wallpaper_path_for("HDMI-A-1"), "sala.png");
+        assert_eq!(c.wallpaper_fit_for("HDMI-A-1"), WallpaperFit::Stretch);
+        assert_eq!(c.wallpaper_path_for("DP-1"), "code.png");
+        assert_eq!(c.wallpaper_fit_for("DP-1"), WallpaperFit::Fill);
+        // Salida sin override cae al global.
+        assert_eq!(c.wallpaper_path_for("eDP-1"), "global.png");
+        assert_eq!(c.wallpaper_fit_for("eDP-1"), WallpaperFit::Stretch);
+    }
+
+    #[test]
+    fn output_override_con_path_vacio_no_pisa_al_global() {
+        // Un override con sólo `name` (path vacío) deja el wallpaper en el
+        // global — útil si sólo se quiere cambiar el `fit` del monitor.
+        let c = Config::from_ron(
+            r#"( wallpaper_path: "global.png", outputs: [
+                (name: "HDMI-A-1", wallpaper_fit: "fit"),
+            ] )"#,
+        )
+        .unwrap();
+        assert_eq!(c.wallpaper_path_for("HDMI-A-1"), "global.png");
+        assert_eq!(c.wallpaper_fit_for("HDMI-A-1"), WallpaperFit::Fit);
+    }
+
+    #[test]
+    fn output_override_rechaza_fit_desconocido() {
+        let err = Config::from_ron(
+            r#"( outputs: [ (name: "DP-1", wallpaper_fit: "marciano") ] )"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("marciano"), "mensaje útil: {err}");
     }
 
     #[test]
