@@ -249,6 +249,14 @@ pub(crate) enum DeclKind {
     ScrollMarginBottom(f32),
     ScrollMarginLeft(f32),
     TouchAction(TouchAction),
+    /// `None` = `clip-path: none`.
+    ClipPath(Option<ClipPath>),
+    /// `None` = `mask-image: none`.
+    MaskImage(Option<MaskImage>),
+    ContentVisibility(ContentVisibility),
+    Contain(ContainFlags),
+    /// `None` = `column-count: auto`.
+    ColumnCount(Option<u32>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -455,6 +463,11 @@ impl Decl {
             DeclKind::ScrollMarginBottom(v) => s.scroll_margin.bottom = *v,
             DeclKind::ScrollMarginLeft(v) => s.scroll_margin.left = *v,
             DeclKind::TouchAction(t) => s.touch_action = *t,
+            DeclKind::ClipPath(c) => s.clip_path = *c,
+            DeclKind::MaskImage(m) => s.mask_image = m.clone(),
+            DeclKind::ContentVisibility(v) => s.content_visibility = *v,
+            DeclKind::Contain(c) => s.contain = *c,
+            DeclKind::ColumnCount(n) => s.column_count = *n,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

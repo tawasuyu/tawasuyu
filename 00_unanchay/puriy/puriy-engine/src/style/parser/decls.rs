@@ -498,6 +498,17 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "scroll-margin-bottom" => parse_length_px(value).map(DeclKind::ScrollMarginBottom),
         "scroll-margin-left" => parse_length_px(value).map(DeclKind::ScrollMarginLeft),
         "touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
+        "clip-path" | "-webkit-clip-path" => Some(DeclKind::ClipPath(parse_clip_path(value))),
+        "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),
+        // `mask` shorthand: hoy sólo el subset image (igual que mask-image).
+        "mask" | "-webkit-mask" | "-webkit-mask-image" => {
+            Some(DeclKind::MaskImage(parse_mask_image(value)))
+        }
+        "content-visibility" => {
+            parse_content_visibility(value).map(DeclKind::ContentVisibility)
+        }
+        "contain" => parse_contain(value).map(DeclKind::Contain),
+        "column-count" => Some(DeclKind::ColumnCount(parse_column_count(value))),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1188,6 +1199,177 @@ pub(crate) fn parse_touch_action(value: &str) -> Option<TouchAction> {
         return None;
     }
     Some(TouchAction::Pan { pan_x, pan_y, pinch_zoom })
+}
+
+/// `clip-path` (subset). Acepta `none` (→ `None`), `inset(...)`,
+/// `circle(...)`, `ellipse(...)`. Otras shapes (polygon/path) y URLs a
+/// SVG quedan fuera por ahora. Fase 7.274.
+pub(crate) fn parse_clip_path(value: &str) -> Option<ClipPath> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    // `fn(args)` — extraer nombre + args separadamente.
+    let (name, args) = split_fn_call(v)?;
+    let name = name.to_ascii_lowercase();
+    match name.as_str() {
+        "inset" => parse_inset_shape(args),
+        "circle" => parse_circle_shape(args),
+        "ellipse" => parse_ellipse_shape(args),
+        _ => None,
+    }
+}
+
+/// Recorta `name(args)` → `(name, args)`. Devuelve `None` si no hay `(`
+/// o no cierra.
+fn split_fn_call(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    Some((s[..open].trim(), s[open + 1..close].trim()))
+}
+
+/// `inset(<top> [<right> [<bottom> [<left>]]] [round <r>])`.
+fn parse_inset_shape(args: &str) -> Option<ClipPath> {
+    // Separar `round <r>` si existe.
+    let (offsets_str, radius) = match args.find(" round ") {
+        Some(idx) => (
+            args[..idx].trim(),
+            parse_length_px(args[idx + " round ".len()..].trim())?,
+        ),
+        None => (args, 0.0),
+    };
+    let parts: Vec<f32> = offsets_str
+        .split_whitespace()
+        .map(parse_length_px)
+        .collect::<Option<Vec<_>>>()?;
+    let (top, right, bottom, left) = match parts.as_slice() {
+        [a] => (*a, *a, *a, *a),
+        [v, h] => (*v, *h, *v, *h),
+        [t, h, b] => (*t, *h, *b, *h),
+        [t, r, b, l] => (*t, *r, *b, *l),
+        _ => return None,
+    };
+    Some(ClipPath::Inset { top, right, bottom, left, radius })
+}
+
+/// `circle(<radius> [at <x> <y>])`. Radio en px; centro default 50%/50%.
+fn parse_circle_shape(args: &str) -> Option<ClipPath> {
+    let (radius_str, center) = match args.find(" at ") {
+        Some(idx) => (args[..idx].trim(), args[idx + " at ".len()..].trim()),
+        None => (args, ""),
+    };
+    let radius = if radius_str.is_empty() {
+        0.0
+    } else {
+        parse_length_px(radius_str)?
+    };
+    let (cx, cy) = parse_center(center);
+    Some(ClipPath::Circle { radius, cx, cy })
+}
+
+/// `ellipse(<rx> <ry> [at <x> <y>])`.
+fn parse_ellipse_shape(args: &str) -> Option<ClipPath> {
+    let (radii_str, center) = match args.find(" at ") {
+        Some(idx) => (args[..idx].trim(), args[idx + " at ".len()..].trim()),
+        None => (args, ""),
+    };
+    let mut tokens = radii_str.split_whitespace();
+    let rx = parse_length_px(tokens.next()?)?;
+    let ry = parse_length_px(tokens.next()?)?;
+    let (cx, cy) = parse_center(center);
+    Some(ClipPath::Ellipse { rx, ry, cx, cy })
+}
+
+/// `<x> <y>` para el centro de `circle()`/`ellipse()`. Default
+/// `50% 50%` (sólo `LengthVal`; sin keywords por ahora).
+fn parse_center(s: &str) -> (LengthVal, LengthVal) {
+    let mut tokens = s.split_whitespace();
+    let cx = tokens
+        .next()
+        .and_then(parse_length_or_pct)
+        .unwrap_or(LengthVal::Pct(50.0));
+    let cy = tokens
+        .next()
+        .and_then(parse_length_or_pct)
+        .unwrap_or(LengthVal::Pct(50.0));
+    (cx, cy)
+}
+
+/// `mask-image` (subset). Sólo `url(...)`. Fase 7.275.
+pub(crate) fn parse_mask_image(value: &str) -> Option<MaskImage> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    let lower = v.to_ascii_lowercase();
+    if let Some(rest) = lower.strip_prefix("url(") {
+        // Recorta el `)` final del value ORIGINAL para preservar case
+        // del URL (puede ser case-sensitive).
+        let close = v.rfind(')')?;
+        let inner = v[lower.len() - rest.len()..close].trim();
+        // Quitar comillas (simples o dobles) si las hay.
+        let inner = inner
+            .trim_start_matches(['"', '\''])
+            .trim_end_matches(['"', '\'']);
+        if inner.is_empty() {
+            return None;
+        }
+        return Some(MaskImage::Url(inner.to_string()));
+    }
+    None
+}
+
+/// `content-visibility`: `visible | auto | hidden`. Fase 7.276.
+pub(crate) fn parse_content_visibility(value: &str) -> Option<ContentVisibility> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "visible" => Some(ContentVisibility::Visible),
+        "auto" => Some(ContentVisibility::Auto),
+        "hidden" => Some(ContentVisibility::Hidden),
+        _ => None,
+    }
+}
+
+/// `contain`: `none | strict | content | [size||layout||style||paint||inline-size]`.
+/// Fase 7.277.
+pub(crate) fn parse_contain(value: &str) -> Option<ContainFlags> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "none" {
+        return Some(ContainFlags::default());
+    }
+    if v == "strict" {
+        return Some(ContainFlags::STRICT);
+    }
+    if v == "content" {
+        return Some(ContainFlags::CONTENT);
+    }
+    let mut flags = ContainFlags::default();
+    for tok in v.split_whitespace() {
+        match tok {
+            "size" => flags.size = true,
+            "inline-size" => flags.inline_size = true,
+            "layout" => flags.layout = true,
+            "style" => flags.style = true,
+            "paint" => flags.paint = true,
+            _ => return None,
+        }
+    }
+    if flags.is_none() {
+        return None;
+    }
+    Some(flags)
+}
+
+/// `column-count`: `auto` → `None`; entero positivo → `Some(n)`. Fase 7.278.
+pub(crate) fn parse_column_count(value: &str) -> Option<u32> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    v.parse::<u32>().ok().filter(|n| *n > 0)
 }
 
 /// `font-kerning`: `auto | normal | none`.

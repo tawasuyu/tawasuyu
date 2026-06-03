@@ -321,6 +321,21 @@ pub struct ComputedStyle {
     /// `touch-action` (Fase 7.273). NO heredable. CSS Pointer Events 2.
     /// Plumb: el chrome no rutea pointer events según este hint.
     pub touch_action: TouchAction,
+    /// `clip-path` (Fase 7.274). `None` = sin recorte. NO heredable.
+    /// Plumb: vello no aplica el recorte a la sub-scene del nodo aún.
+    pub clip_path: Option<ClipPath>,
+    /// `mask-image` (Fase 7.275). `None` = sin máscara. NO heredable.
+    /// Plumb: subset url(...) — no se baja ni se aplica todavía.
+    pub mask_image: Option<MaskImage>,
+    /// `content-visibility` (Fase 7.276). NO heredable. Plumb: el chrome
+    /// no skipea el render de subtrees con `auto`/`hidden`.
+    pub content_visibility: ContentVisibility,
+    /// `contain` (Fase 7.277). CSS Containment 2. Bitset de tipos.
+    /// `None` (todos los bits a 0) = sin containment. NO heredable. Plumb.
+    pub contain: ContainFlags,
+    /// `column-count` (Fase 7.278). `None` = `auto`. NO heredable. Plumb:
+    /// no hay layout multicol todavía.
+    pub column_count: Option<u32>,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -672,6 +687,77 @@ pub enum TouchAction {
         pan_y: bool,
         pinch_zoom: bool,
     },
+}
+
+/// `clip-path` (CSS Masking 1). Subset: `inset()`, `circle()`, `ellipse()`.
+/// `polygon()` y `path()` quedan fuera por ahora — la mayoría del wild
+/// usa formas básicas. `None` (afuera del enum) = `clip-path: none`.
+/// Fase 7.274.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipPath {
+    /// `inset(<top> [<right> [<bottom> [<left>]]] [round <r>])`. Los
+    /// offsets en px desde cada borde; `radius` (opcional) curva las
+    /// esquinas. La spec acepta `<length-percentage>`; acá guardamos px.
+    Inset { top: f32, right: f32, bottom: f32, left: f32, radius: f32 },
+    /// `circle(<radius> [at <x> <y>])`. Radio en px; centro en px desde
+    /// el origen del box (default centro = 50% del box, no resuelto acá).
+    Circle { radius: f32, cx: LengthVal, cy: LengthVal },
+    /// `ellipse(<rx> <ry> [at <x> <y>])`.
+    Ellipse { rx: f32, ry: f32, cx: LengthVal, cy: LengthVal },
+}
+
+/// `mask-image` (CSS Masking 1). Subset: `url(...)`. `image()`,
+/// `linear-gradient()` y demás quedan fuera. `None` = `mask-image: none`.
+/// Fase 7.275.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MaskImage {
+    Url(String),
+}
+
+/// `content-visibility` (CSS Containment 2). Default `Visible`. `Auto`
+/// permite al UA skipear el render fuera de viewport (no implementado);
+/// `Hidden` lo skipea siempre. NO heredable. Fase 7.276.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContentVisibility {
+    #[default]
+    Visible,
+    Auto,
+    Hidden,
+}
+
+/// `contain` (CSS Containment 2). Bitset — el shorthand `strict` y
+/// `content` se expanden a combinaciones de bits. `none` = todos los
+/// bits a 0. Fase 7.277.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ContainFlags {
+    pub size: bool,
+    pub inline_size: bool,
+    pub layout: bool,
+    pub style: bool,
+    pub paint: bool,
+}
+
+impl ContainFlags {
+    /// `strict` = `size layout style paint`.
+    pub const STRICT: Self = Self {
+        size: true,
+        inline_size: false,
+        layout: true,
+        style: true,
+        paint: true,
+    };
+    /// `content` = `layout style paint` (sin `size`).
+    pub const CONTENT: Self = Self {
+        size: false,
+        inline_size: false,
+        layout: true,
+        style: true,
+        paint: true,
+    };
+    /// `true` si NINGÚN bit está activo (equiv. `contain: none`).
+    pub const fn is_none(self) -> bool {
+        !self.size && !self.inline_size && !self.layout && !self.style && !self.paint
+    }
 }
 
 /// `font-kerning`. Heredable. Default `Auto`. Fase 7.259.
@@ -1607,6 +1693,11 @@ impl Default for ComputedStyle {
             },
             scroll_margin: Sides::all(0.0),
             touch_action: TouchAction::Auto,
+            clip_path: None,
+            mask_image: None,
+            content_visibility: ContentVisibility::Visible,
+            contain: ContainFlags::default(),
+            column_count: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

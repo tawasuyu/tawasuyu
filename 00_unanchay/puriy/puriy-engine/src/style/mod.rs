@@ -2246,6 +2246,222 @@ mod tests {
     }
 
     #[test]
+    fn clip_path_fase_7_274() {
+        assert!(parse_clip_path("none").is_none());
+        assert!(parse_clip_path("").is_none());
+        // inset 1-valor.
+        let r = parse_clip_path("inset(10px)").unwrap();
+        assert_eq!(
+            r,
+            ClipPath::Inset { top: 10.0, right: 10.0, bottom: 10.0, left: 10.0, radius: 0.0 }
+        );
+        // inset 4-valor con `round`.
+        let r = parse_clip_path("inset(1px 2px 3px 4px round 5px)").unwrap();
+        assert_eq!(
+            r,
+            ClipPath::Inset { top: 1.0, right: 2.0, bottom: 3.0, left: 4.0, radius: 5.0 }
+        );
+        // circle con radio + centro.
+        let r = parse_clip_path("circle(30px at 50% 50%)").unwrap();
+        assert!(matches!(
+            r,
+            ClipPath::Circle { radius, cx: LengthVal::Pct(50.0), cy: LengthVal::Pct(50.0) }
+                if (radius - 30.0).abs() < 1e-3
+        ));
+        // ellipse default centro.
+        let r = parse_clip_path("ellipse(20px 10px)").unwrap();
+        assert!(matches!(
+            r,
+            ClipPath::Ellipse { rx, ry, cx: LengthVal::Pct(50.0), cy: LengthVal::Pct(50.0) }
+                if (rx - 20.0).abs() < 1e-3 && (ry - 10.0).abs() < 1e-3
+        ));
+        // Función desconocida → None.
+        assert!(parse_clip_path("polygon(0 0, 100% 0, 50% 100%)").is_none());
+
+        // e2e: body con clip-path, div sin → NO se hereda.
+        let html = r##"<html><head><style>
+            body { clip-path: circle(50px) }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(matches!(body_cs.clip_path, Some(ClipPath::Circle { .. })));
+        assert!(eng.compute_with_parent(&divs[0], Some(&body_cs)).clip_path.is_none());
+    }
+
+    #[test]
+    fn mask_image_fase_7_275() {
+        assert!(parse_mask_image("none").is_none());
+        assert!(parse_mask_image("").is_none());
+        assert_eq!(
+            parse_mask_image("url(mask.png)"),
+            Some(MaskImage::Url("mask.png".to_string()))
+        );
+        assert_eq!(
+            parse_mask_image("url(\"m.svg\")"),
+            Some(MaskImage::Url("m.svg".to_string()))
+        );
+        // Lo que no es `url(...)` cae a None (subset).
+        assert!(parse_mask_image("linear-gradient(red, blue)").is_none());
+
+        // Alias `-webkit-mask` y shorthand `mask` redirigen al subset url-only.
+        let html = r##"<html><head><style>
+            body { mask: url(body.png) }
+            div.legacy { -webkit-mask-image: url('legacy.png') }
+            div.plain {}
+        </style></head><body>
+          <div class="legacy"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_image, Some(MaskImage::Url("body.png".to_string())));
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).mask_image,
+            Some(MaskImage::Url("legacy.png".to_string()))
+        );
+        // NO se hereda.
+        assert!(eng.compute_with_parent(&divs[1], Some(&body_cs)).mask_image.is_none());
+    }
+
+    #[test]
+    fn content_visibility_fase_7_276() {
+        assert_eq!(parse_content_visibility("visible"), Some(ContentVisibility::Visible));
+        assert_eq!(parse_content_visibility("AUTO"), Some(ContentVisibility::Auto));
+        assert_eq!(parse_content_visibility("hidden"), Some(ContentVisibility::Hidden));
+        assert_eq!(parse_content_visibility("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { content-visibility: auto }
+            div.h { content-visibility: hidden }
+            div.plain {}
+        </style></head><body>
+          <div class="h"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.content_visibility, ContentVisibility::Auto);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).content_visibility,
+            ContentVisibility::Hidden
+        );
+        // NO se hereda → default Visible.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).content_visibility,
+            ContentVisibility::Visible
+        );
+    }
+
+    #[test]
+    fn contain_fase_7_277() {
+        // Keywords compuestos.
+        assert_eq!(parse_contain("none"), Some(ContainFlags::default()));
+        assert_eq!(parse_contain("STRICT"), Some(ContainFlags::STRICT));
+        assert_eq!(parse_contain("content"), Some(ContainFlags::CONTENT));
+        // Bitset libre.
+        let mixed = parse_contain("layout paint").unwrap();
+        assert!(mixed.layout && mixed.paint);
+        assert!(!mixed.size && !mixed.style);
+        // `inline-size` también.
+        assert!(parse_contain("inline-size").unwrap().inline_size);
+        // Token inválido descarta.
+        assert!(parse_contain("bogus").is_none());
+
+        let html = r##"<html><head><style>
+            body { contain: strict }
+            div.lp { contain: layout paint }
+            div.plain {}
+        </style></head><body>
+          <div class="lp"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.contain, ContainFlags::STRICT);
+        let lp = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(lp.contain.layout && lp.contain.paint && !lp.contain.size);
+        // NO se hereda → all-false.
+        assert!(eng.compute_with_parent(&divs[1], Some(&body_cs)).contain.is_none());
+    }
+
+    #[test]
+    fn column_count_fase_7_278() {
+        assert_eq!(parse_column_count("auto"), None);
+        assert_eq!(parse_column_count("3"), Some(3));
+        assert_eq!(parse_column_count("0"), None);
+        assert_eq!(parse_column_count("-2"), None);
+        assert_eq!(parse_column_count("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { column-count: 4 }
+            div.auto { column-count: auto }
+            div.plain {}
+        </style></head><body>
+          <div class="auto"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.column_count, Some(4));
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).column_count,
+            None
+        );
+        // NO se hereda → default None.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).column_count,
+            None
+        );
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(
