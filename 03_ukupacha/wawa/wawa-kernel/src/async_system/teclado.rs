@@ -62,6 +62,8 @@ const TECLA_N: u8 = 0x31;
 const TECLA_G: u8 = 0x22;
 /// Tecla P — `Alt + P` abre/cierra el launcher grafico (Fase 58).
 const TECLA_P: u8 = 0x19;
+/// Tecla O — `Alt + O` mueve la ventana enfocada al siguiente monitor (Fase 64).
+const TECLA_O: u8 = 0x18;
 
 /// Un canal de teclado: la cola lock-free de scancodes de UNA aplicacion.
 pub type CanalTeclado = Arc<ArrayQueue<u8>>;
@@ -160,6 +162,7 @@ pub fn recibir_scancode(scancode: u8) {
             TECLA_L => compositor::solicitar(Mando::MoverAdelante),
             TECLA_H => compositor::solicitar(Mando::MoverAtras),
             TECLA_F => compositor::solicitar(Mando::Flotar),
+            TECLA_O => compositor::solicitar(Mando::MoverVentanaOutput),
             TECLA_Q => compositor::solicitar(Mando::Cerrar),
             TECLA_N => compositor::solicitar(Mando::Lanzar),
             TECLA_G => compositor::solicitar(Mando::CompactarGrafo),

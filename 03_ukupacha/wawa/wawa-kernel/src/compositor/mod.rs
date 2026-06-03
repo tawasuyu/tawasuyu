@@ -120,6 +120,11 @@ pub enum Mando {
     MoverAtras,
     /// Alternar la ventana enfocada entre teselada y flotante (Fase 9).
     Flotar,
+    /// FASE 64 :: mover la ventana enfocada al SIGUIENTE output/monitor, en
+    /// rotacion (`Alt+O`). Cambia su `Ventana::output` y retesela: el teselado
+    /// por-output la reagrupa en la region del monitor destino. No-op con un
+    /// solo monitor.
+    MoverVentanaOutput,
     /// Cerrar la aplicacion enfocada — una baja limpia, en vivo (Fase 10).
     Cerrar,
     /// Lanzar una aplicacion nueva — un alta en vivo (Fase 10).

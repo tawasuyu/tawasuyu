@@ -103,6 +103,35 @@ pub(crate) fn mover_ventana(adelante: bool) {
     }
 }
 
+/// FASE 64 :: mueve la ventana enfocada al SIGUIENTE output (monitor), en
+/// rotacion. Cambia su `Ventana::output` y retesela — `aplicar_teselado`
+/// reagrupa las ventanas por output, asi que la enfocada salta a la region del
+/// monitor destino y las demas se reacomodan en el suyo. No-op con un solo
+/// monitor (`pantallas::count() < 2`). Solo mueve ventanas TESELADAS: una
+/// flotante conserva su marco libre y no pertenece a ningun grupo de teselado.
+pub(crate) fn mover_ventana_output() {
+    let n_outputs = crate::pantallas::count();
+    if n_outputs < 2 {
+        return;
+    }
+    let Some(escritorio) = ESCRITORIO.get() else {
+        return;
+    };
+    let mut escritorio = escritorio.lock();
+    let foco = FOCO.load(Ordering::Relaxed);
+    if escritorio.orden.iter().any(|&v| v == foco) {
+        let destino = (escritorio.ventanas[foco].output + 1) % n_outputs;
+        escritorio.ventanas[foco].output = destino;
+        aplicar_teselado(&mut escritorio);
+        recomponer(&mut escritorio);
+        use core::fmt::Write;
+        let _ = writeln!(
+            crate::baliza::Serie,
+            "output :: ventana {foco} -> monitor {destino} (Alt+O)",
+        );
+    }
+}
+
 // =============================================================================
 //  FASE 9 — orden-Z y ventanas flotantes
 // =============================================================================

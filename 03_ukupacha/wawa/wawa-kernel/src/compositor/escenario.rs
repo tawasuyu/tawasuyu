@@ -268,6 +268,7 @@ pub fn atender_mandos() {
             Mando::MoverAdelante => mover_ventana(true),
             Mando::MoverAtras => mover_ventana(false),
             Mando::Flotar => flotar(),
+            Mando::MoverVentanaOutput => mover_ventana_output(),
             Mando::Cerrar => cerrar(),
             // El alta de una app necesita instanciar un WASM — algo que el
             // compositor no sabe hacer—. Solo se cuenta la peticion; el
