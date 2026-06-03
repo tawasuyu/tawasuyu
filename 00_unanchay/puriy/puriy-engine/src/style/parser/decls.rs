@@ -155,7 +155,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "background-color" => parse_color(value).map(DeclKind::Background),
         "display" => parse_display(value).map(DeclKind::Display),
-        "font-size" => parse_length_px(value).map(DeclKind::FontSize),
+        "font-size" => parse_px_or_math(value).map(DeclKind::FontSize),
         "font-weight" => parse_weight(value).map(DeclKind::FontWeight),
         "font-style" => parse_font_style(value).map(DeclKind::FontStyle),
         "font-family" => Some(DeclKind::FontFamily(value.trim().to_string())),
@@ -174,7 +174,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "max-width" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
         "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
-        "border-width" => parse_length_px(value).map(DeclKind::BorderWidth),
+        "border-width" => parse_px_or_math(value).map(DeclKind::BorderWidth),
         "border-color" if is_current_color(value) => {
             Some(DeclKind::CurrentColor(ColorTarget::BorderAll))
         }
@@ -272,14 +272,14 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "vertical-align" => parse_vertical_align(value).map(DeclKind::VerticalAlign),
         "visibility" => parse_visibility(value).map(DeclKind::Visibility),
         "pointer-events" => parse_pointer_events(value).map(DeclKind::PointerEvents),
-        "text-indent" => parse_length_px(value).map(DeclKind::TextIndent),
-        "word-spacing" => parse_length_px(value).map(DeclKind::WordSpacing),
+        "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
+        "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
             // `normal` = sin tracking extra (0px).
             if value.trim().eq_ignore_ascii_case("normal") {
                 Some(DeclKind::LetterSpacing(0.0))
             } else {
-                parse_length_px(value).map(DeclKind::LetterSpacing)
+                parse_px_or_math(value).map(DeclKind::LetterSpacing)
             }
         }
         "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
@@ -994,6 +994,21 @@ fn classify_calc_num(t: &str) -> Option<CalcVal> {
         return Some(CalcVal::Number(n));
     }
     parse_length_px(t).map(|px| CalcVal::Length { px, pct: 0.0 })
+}
+
+/// Longitud px de un solo valor, aceptando funciones matemáticas que
+/// resuelvan a **px puro** (`calc`/`min`/`max`/`clamp`). El caso estrella es
+/// la tipografía fluida `font-size: clamp(1rem, 2.5vw, 3rem)`. Un resultado
+/// `%` o número crudo (no resoluble sin contexto) → `None`. Ver Fase 7.216.
+pub(crate) fn parse_px_or_math(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Length { px, pct } if pct == 0.0 => Some(px),
+            _ => None,
+        };
+    }
+    parse_length_px(s)
 }
 
 fn calc_add(a: CalcVal, b: CalcVal, sign: f32) -> Option<CalcVal> {

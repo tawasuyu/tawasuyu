@@ -476,6 +476,30 @@ mod tests {
     }
 
     #[test]
+    fn font_size_acepta_calc_y_clamp() {
+        // Tipografía fluida: font-size con funciones matemáticas de
+        // unidades absolutas resuelve en parse-time.
+        let html = r#"<html><head><style>
+            .a{font-size:calc(10px + 6px)}
+            .b{font-size:clamp(1rem, 2rem, 3rem)}
+            .c{font-size:min(30px, 20px)}
+        </style></head><body>
+            <p class="a">a</p><p class="b">b</p><p class="c">c</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("p") {
+                ps.push(n.clone());
+            }
+        });
+        assert_eq!(eng.compute(&ps[0]).font_size, 16.0); // 10+6
+        assert_eq!(eng.compute(&ps[1]).font_size, 32.0); // 2rem = 32px
+        assert_eq!(eng.compute(&ps[2]).font_size, 20.0); // min
+    }
+
+    #[test]
     fn parsea_calc_solo_px() {
         // calc(10px + 5px) resuelve a Px(15) en parse time.
         assert_eq!(parse_length_or_pct("calc(10px + 5px)"), Some(LengthVal::Px(15.0)));
