@@ -68,9 +68,13 @@ pub enum Msg {
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
-    /// Activar una ventana del `window_list` (traerla al frente). El `u32` es el
-    /// [`toplevel::Toplevel::id`]; sólo el backend layer-shell sabe resolverlo.
+    /// Activar una ventana del `window_list` (traerla al frente, o minimizarla si
+    /// ya está activa — estilo KDE). El `u32` es el [`toplevel::Toplevel::id`];
+    /// sólo el backend layer-shell sabe resolverlo.
     ActivateWindow(u32),
+    /// Cerrar una ventana del task manager (clic derecho). El `u32` es el
+    /// [`toplevel::Toplevel::id`]; sólo el backend layer-shell sabe resolverlo.
+    CloseWindow(u32),
     /// Activar un item del `tray` (click). El `String` es la `key` del
     /// [`tray::TrayItem`]; sólo el backend layer-shell sabe resolverlo.
     TrayActivate(String),
@@ -368,6 +372,7 @@ impl App for PataApp {
             // El window_list necesita el cliente foreign-toplevel del backend
             // layer-shell; bajo el compositor mirada llegará por su IPC. No-op acá.
             Msg::ActivateWindow(_) => {}
+            Msg::CloseWindow(_) => {}
         }
         model
     }

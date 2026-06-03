@@ -19,6 +19,8 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_h
 
 /// El bit `activated` del array de estados que manda el evento `state`.
 const ESTADO_ACTIVADO: u32 = State::Activated as u32;
+/// El bit `minimized` del array de estados.
+const ESTADO_MINIMIZADO: u32 = State::Minimized as u32;
 
 /// Una ventana reportada por el compositor. Los campos `p_*` acumulan lo que
 /// llega entre `done`s; [`Toplevel::confirmar`] los vuelca a los definitivos.
@@ -34,9 +36,12 @@ pub struct Toplevel {
     pub app_id: String,
     /// `true` si es la ventana activa.
     pub activated: bool,
+    /// `true` si la ventana está minimizada (para atenuarla en la barra).
+    pub minimized: bool,
     p_title: Option<String>,
     p_app_id: Option<String>,
     p_activated: Option<bool>,
+    p_minimized: Option<bool>,
 }
 
 impl Toplevel {
@@ -48,9 +53,11 @@ impl Toplevel {
             title: String::new(),
             app_id: String::new(),
             activated: false,
+            minimized: false,
             p_title: None,
             p_app_id: None,
             p_activated: None,
+            p_minimized: None,
         }
     }
 
@@ -67,10 +74,13 @@ impl Toplevel {
     /// Decodifica el array de estados (`u32` little-endian empaquetados en bytes)
     /// y registra si la ventana quedó activa (evento `state`).
     pub fn set_state(&mut self, bytes: &[u8]) {
-        let activado = bytes
-            .chunks_exact(4)
-            .any(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) == ESTADO_ACTIVADO);
-        self.p_activated = Some(activado);
+        let tiene = |bit: u32| {
+            bytes
+                .chunks_exact(4)
+                .any(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]]) == bit)
+        };
+        self.p_activated = Some(tiene(ESTADO_ACTIVADO));
+        self.p_minimized = Some(tiene(ESTADO_MINIMIZADO));
     }
 
     /// Aplica lo acumulado (evento `done`). Devuelve `true` si algo cambió, para
@@ -95,6 +105,12 @@ impl Toplevel {
                 cambio = true;
             }
         }
+        if let Some(m) = self.p_minimized.take() {
+            if m != self.minimized {
+                self.minimized = m;
+                cambio = true;
+            }
+        }
         cambio
     }
 
@@ -111,6 +127,32 @@ impl Toplevel {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::WindowEntry;
+
+    fn entry(app_id: &str, label: &str) -> WindowEntry {
+        WindowEntry {
+            id: 0,
+            label: label.into(),
+            app_id: app_id.into(),
+            active: false,
+            minimized: false,
+        }
+    }
+
+    #[test]
+    fn inicial_toma_la_primera_alfanumerica_del_app_id() {
+        assert_eq!(entry("firefox", "Mozilla").inicial(), "F");
+        assert_eq!(entry("org.kde.konsole", "Konsole").inicial(), "O");
+        // Sin app_id cae al título.
+        assert_eq!(entry("", "Documento").inicial(), "D");
+        // Sin nada alfanumérico, un punto medio.
+        assert_eq!(entry("", "").inicial(), "·");
+        assert_eq!(entry("  ", "—").inicial(), "·");
+    }
+}
+
 /// Lo que el render necesita de cada ventana: el `id` para el click, la etiqueta
 /// y si está activa (para resaltarla). Desacopla el pincel del protocolo Wayland.
 #[derive(Clone, Debug)]
@@ -119,6 +161,27 @@ pub struct WindowEntry {
     pub id: u32,
     /// Texto a pintar en el chip.
     pub label: String,
+    /// `app_id` de la ventana — para el ícono-badge del task manager.
+    pub app_id: String,
     /// `true` si es la ventana activa (chip resaltado).
     pub active: bool,
+    /// `true` si está minimizada (chip atenuado).
+    pub minimized: bool,
+}
+
+impl WindowEntry {
+    /// La inicial para el ícono-badge: primera letra del `app_id` (o del título
+    /// si no hay `app_id`), en mayúscula. `"·"` si no hay nada.
+    pub fn inicial(&self) -> String {
+        let fuente = if !self.app_id.is_empty() {
+            &self.app_id
+        } else {
+            &self.label
+        };
+        fuente
+            .chars()
+            .find(|c| c.is_alphanumeric())
+            .map(|c| c.to_uppercase().to_string())
+            .unwrap_or_else(|| "·".to_string())
+    }
 }

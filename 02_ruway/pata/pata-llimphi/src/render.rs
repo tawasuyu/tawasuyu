@@ -399,34 +399,21 @@ fn slots_de(
     ]
 }
 
-/// El `window_list`: un chip clickeable por ventana abierta, resaltando la
-/// activa. Clickear envía [`Msg::ActivateWindow`] con su `id`; el backend
-/// layer-shell la trae al frente. Los chips siguen el eje de la barra (fila u
-/// columna) con el mismo `gap` que el resto de los slots.
+/// Lado del ícono-badge (cuadrado) de una ventana en el task manager, en px.
+const WIN_BADGE_PX: f32 = 18.0;
+
+/// El **task manager** (estilo KDE): un botón por ventana abierta con un
+/// ícono-badge (la inicial del `app_id`) + el título. La activa va resaltada con
+/// fondo de panel y badge en acento; las minimizadas, atenuadas. Clic izquierdo
+/// → [`Msg::ActivateWindow`] (activa, o minimiza si ya estaba activa); clic
+/// derecho → [`Msg::CloseWindow`]. Los botones siguen el eje de la barra.
 fn window_list_view(
     windows: &[WindowEntry],
     gap: f32,
     dir: FlexDirection,
     theme: &Theme,
 ) -> View<Msg> {
-    let chips: Vec<View<Msg>> = windows
-        .iter()
-        .map(|w| {
-            let texto = recortar(&w.label, WINDOW_LABEL_MAX);
-            // La activa va con texto pleno + fondo de panel; el resto, tenue.
-            let (fg, fill) = if w.active {
-                (theme.fg_text, theme.bg_panel)
-            } else {
-                (theme.fg_muted, theme.bg_panel_alt)
-            };
-            chip(theme)
-                .fill(fill)
-                .radius(6.0)
-                .hover_fill(theme.bg_button_hover)
-                .on_click(Msg::ActivateWindow(w.id))
-                .text(texto, 12.0, fg)
-        })
-        .collect();
+    let chips: Vec<View<Msg>> = windows.iter().map(|w| window_button(w, theme)).collect();
 
     View::new(Style {
         flex_direction: dir,
@@ -438,6 +425,69 @@ fn window_list_view(
         ..Default::default()
     })
     .children(chips)
+}
+
+/// Un botón de ventana del task manager: badge (inicial) + título recortado.
+fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
+    // Activa: fondo de panel, texto pleno, badge en acento. Inactiva: tenue.
+    // Minimizada: aún más atenuada (texto y badge en muted).
+    let (fg, fill, badge_bg, badge_fg) = if w.active {
+        (theme.fg_text, theme.bg_panel, theme.accent, theme.bg_panel)
+    } else if w.minimized {
+        (theme.fg_muted, theme.bg_panel_alt, theme.bg_panel, theme.fg_muted)
+    } else {
+        (theme.fg_text, theme.bg_panel_alt, theme.bg_panel, theme.fg_muted)
+    };
+
+    let badge = View::new(Style {
+        size: Size {
+            width: length(WIN_BADGE_PX),
+            height: length(WIN_BADGE_PX),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(badge_bg)
+    .radius(4.0)
+    .text(w.inicial(), 11.0, badge_fg);
+
+    let titulo = View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(recortar(&w.label, WINDOW_LABEL_MAX), 12.0, fg);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: auto(),
+            height: length(24.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(6.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(fill)
+    .radius(6.0)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(Msg::ActivateWindow(w.id))
+    .on_right_click(Msg::CloseWindow(w.id))
+    .children(vec![badge, titulo])
 }
 
 /// El `clipboard`: un chip con el ícono 📋 y un preview del texto copiado

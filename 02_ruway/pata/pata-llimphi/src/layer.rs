@@ -38,7 +38,7 @@ use smithay_client_toolkit::{
     registry_handlers,
     seat::{
         keyboard::{KeyEvent as KbEvent, KeyboardHandler, Keysym, Modifiers},
-        pointer::{PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT},
+        pointer::{PointerEvent, PointerEventKind, PointerHandler, BTN_LEFT, BTN_RIGHT},
         Capability, SeatHandler, SeatState,
     },
     shell::{
@@ -356,7 +356,9 @@ impl LayerApp {
             .map(|t| WindowEntry {
                 id: t.id,
                 label: t.etiqueta(),
+                app_id: t.app_id.clone(),
                 active: t.activated,
+                minimized: t.minimized,
             })
             .collect()
     }
@@ -656,6 +658,7 @@ impl LayerApp {
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
+            Msg::CloseWindow(id) => self.cerrar_ventana(id),
             Msg::TrayActivate(key) => {
                 if let Some(t) = &self.tray {
                     t.activate(key);
@@ -666,13 +669,27 @@ impl LayerApp {
         }
     }
 
-    /// Trae al frente la ventana `id` vía `activate(seat)`. Sin seat (raro) no
-    /// hace nada. El compositor manda luego un `state`/`done` que actualiza el
-    /// resaltado de la activa.
+    /// Click en una ventana del task manager (estilo KDE): si ya está activa, la
+    /// **minimiza**; si no, la trae al frente (y la desminimiza). Sin seat (raro)
+    /// no hace nada. El compositor responde con `state`/`done` que actualiza el
+    /// resaltado y el atenuado.
     fn activar_ventana(&mut self, id: u32) {
         let Some(seat) = self.seat.clone() else { return };
         if let Some(t) = self.toplevel_por_id(id) {
-            t.handle.activate(&seat);
+            if t.activated {
+                t.handle.set_minimized();
+            } else {
+                t.handle.unset_minimized();
+                t.handle.activate(&seat);
+            }
+        }
+    }
+
+    /// Cierra la ventana `id` (clic derecho en su chip del task manager). El
+    /// compositor manda `closed` que la retira de la lista.
+    fn cerrar_ventana(&mut self, id: u32) {
+        if let Some(t) = self.toplevel_por_id(id) {
+            t.handle.close();
         }
     }
 }
@@ -935,20 +952,28 @@ impl PointerHandler for LayerApp {
                 continue;
             }
             if let PointerEventKind::Press { button, .. } = e.kind {
-                if button != BTN_LEFT {
+                if button != BTN_LEFT && button != BTN_RIGHT {
                     continue;
                 }
-                // Hit-test: qué nodo está bajo el puntero y qué `on_click` dispara.
-                // Así el cabezal `› shuma` togglea con precisión (clickear el reloj
-                // o un medidor no hace nada). El click ya dio foco de teclado.
+                // Hit-test: qué nodo está bajo el puntero y qué handler dispara.
+                // El izquierdo usa `on_click` (cabezal de shuma, activar ventana,
+                // lanzar exec); el derecho `on_right_click` (cerrar ventana del
+                // task manager). El click ya dio foco de teclado.
                 let Some(pi) = self.panel_de(&e.surface) else {
                     continue;
                 };
                 let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+                let derecho = button == BTN_RIGHT;
                 let msg = self.panels[pi].cache.as_ref().and_then(|c| {
                     hit_test_click(&c.mounted, &c.computed, px, py)
                         .and_then(|i| c.mounted.nodes.get(i))
-                        .and_then(|n| n.on_click.clone())
+                        .and_then(|n| {
+                            if derecho {
+                                n.on_right_click.clone()
+                            } else {
+                                n.on_click.clone()
+                            }
+                        })
                 });
                 if let Some(msg) = msg {
                     self.handle_msg(msg);
