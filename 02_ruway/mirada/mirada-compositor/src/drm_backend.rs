@@ -439,12 +439,177 @@ impl DrmState {
         }
     }
 
+    /// Si el puntero global cae sobre `rect`, emite el cursor en coordenadas
+    /// **locales** a `rect`. Si el cliente publicó una superficie de cursor,
+    /// usa esa; si no, el cuadrado por defecto. `Hidden` o puntero fuera del
+    /// rect no emiten nada.
+    fn emit_cursor(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        let (cx, cy) = self.app.pointer_loc;
+        let (cxi, cyi) = (cx.round() as i32, cy.round() as i32);
+        if cxi < rect.x || cyi < rect.y || cxi >= rect.x + rect.w || cyi >= rect.y + rect.h {
+            return;
+        }
+        match &self.app.cursor_status {
+            CursorImageStatus::Hidden => {}
+            CursorImageStatus::Surface(surface) if surface.alive() => {
+                let (hx, hy) = crate::cursor_hotspot(surface);
+                let loc = (cxi - rect.x - hx, cyi - rect.y - hy);
+                for el in render_elements_from_surface_tree(
+                    &mut self.renderer,
+                    surface,
+                    loc,
+                    1.0,
+                    1.0,
+                    Kind::Cursor,
+                ) {
+                    into.push(Frame::Window(el));
+                }
+            }
+            _ => {
+                let cursor_rect = Rectangle::new(
+                    Point::<i32, Physical>::from((cxi - rect.x, cyi - rect.y)),
+                    Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
+                );
+                into.push(Frame::Solid(SolidColorRenderElement::new(
+                    self.cursor_id.clone(),
+                    cursor_rect,
+                    CommitCounter::default(),
+                    CURSOR_COLOR,
+                    Kind::Cursor,
+                )));
+            }
+        }
+    }
+
+    /// Emite todas las ventanas visibles cuya posición global intersecta `rect`,
+    /// traducidas a coordenadas locales a `rect`. Incluye marcos, barras de
+    /// título y el árbol de superficie del cliente, en orden front-to-back
+    /// (`shell` arriba > flotantes > teseladas). Se saltea ventanas que no
+    /// caen sobre `rect` para no malgastar trabajo del compositor.
+    fn emit_windows(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
+        shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
+        let tbh = self.app.decorations.titlebar_height;
+        // `render_loc` necesita el alto de la "salida lógica" sólo para anclar
+        // el shell al borde inferior. En multi-monitor esa salida es la
+        // primaria (output 0); el shell vive ahí.
+        let primary_h = self.outputs[Self::PRIMARY].rect.h;
+        for w in &shown {
+            let tb = crate::titlebar_for(w, tbh);
+            let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+            let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
+            // Rect decorado en coords globales (incluye barra + superficie).
+            let gxd = gx;
+            let gyd = gy - tb;
+            let gwd = sw;
+            let ghd = sh + tb;
+            // Filtrar por intersección con `rect`.
+            if gxd + gwd <= rect.x
+                || gyd + ghd <= rect.y
+                || gxd >= rect.x + rect.w
+                || gyd >= rect.y + rect.h
+            {
+                continue;
+            }
+            // Posición local de la superficie y de la decoración.
+            let x = gx - rect.x;
+            let y = gy - rect.y;
+            let dec_y = y - tb;
+            let dec_h = sh + tb;
+
+            if tb > 0 {
+                if let Some(tr) = &self.text {
+                    if !w.title.is_empty() {
+                        if self.text_cache.len() > 256 {
+                            self.text_cache.clear();
+                        }
+                        let buf = self
+                            .text_cache
+                            .entry((w.title.clone(), TITLE_COLOR))
+                            .or_insert_with(|| title_buffer(tr, &w.title));
+                        let ty = dec_y + (tb - TITLE_PX as i32) / 2;
+                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                            &mut self.renderer,
+                            ((x + 8) as f64, ty as f64),
+                            buf,
+                            None,
+                            None,
+                            None,
+                            Kind::Unspecified,
+                        ) {
+                            into.push(Frame::Text(el));
+                        }
+                    }
+                }
+                let color = rgba_f32(if w.focused {
+                    self.app.decorations.border_focus
+                } else {
+                    self.app.decorations.border_normal
+                });
+                let mut bar = SolidColorBuffer::default();
+                bar.update((sw, tb), color);
+                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &bar,
+                    (x, dec_y),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )));
+            } else if w.focused && !w.is_shell && !w.title.is_empty() {
+                if let Some(tr) = &self.text {
+                    if self.text_cache.len() > 256 {
+                        self.text_cache.clear();
+                    }
+                    let buf = self
+                        .text_cache
+                        .entry((w.title.clone(), TITLE_COLOR))
+                        .or_insert_with(|| title_buffer(tr, &w.title));
+                    if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                        &mut self.renderer,
+                        ((x + 6) as f64, (y + 4) as f64),
+                        buf,
+                        None,
+                        None,
+                        None,
+                        Kind::Unspecified,
+                    ) {
+                        into.push(Frame::Text(el));
+                    }
+                }
+            }
+            if !w.is_shell && self.app.decorations.border_width > 0 {
+                let rects = border_rects(x, dec_y, sw, dec_h, self.app.decorations.border_width);
+                for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
+                    into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                        buf,
+                        (bx, by),
+                        1.0,
+                        1.0,
+                        Kind::Unspecified,
+                    )));
+                }
+            }
+            for el in render_elements_from_surface_tree(
+                &mut self.renderer,
+                &w.surface,
+                (x, y),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Window(el));
+            }
+        }
+    }
+
     /// Render del pipeline completo en la salida primaria.
     fn render_primary(&mut self) {
         if self.outputs[Self::PRIMARY].pending_flip {
             return; // aún esperamos el VBlank del cuadro anterior
         }
-        let output_h = self.app.output_size.1;
+        // `output_h` se usa para anclar el shell al borde inferior; el shell
+        // vive en la primaria, así que usamos su altura, no la total.
+        let output_h = self.outputs[Self::PRIMARY].rect.h;
 
         // Paso 1 · refresca los búferes del marco de cada ventana — su
         // tamaño (sigue al contenido) y su color (según el foco). Cada
@@ -497,41 +662,11 @@ impl DrmState {
         // superficie. Las flotantes van antes que las teseladas.
         let elements: Vec<Frame<GlesRenderer>> = {
             let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
+            let primary_rect = self.outputs[Self::PRIMARY].rect;
 
-            // El cursor — la superficie que pidió el cliente (la «I» del
-            // texto, una mano…), o el cuadrado por defecto si pidió un
-            // cursor con nombre y no hay tema. `Hidden` no pinta nada.
-            let (cx, cy) = self.app.pointer_loc;
-            match &self.app.cursor_status {
-                CursorImageStatus::Hidden => {}
-                CursorImageStatus::Surface(surface) if surface.alive() => {
-                    let (hx, hy) = crate::cursor_hotspot(surface);
-                    let loc = (cx.round() as i32 - hx, cy.round() as i32 - hy);
-                    for el in render_elements_from_surface_tree(
-                        &mut self.renderer,
-                        surface,
-                        loc,
-                        1.0,
-                        1.0,
-                        Kind::Cursor,
-                    ) {
-                        out.push(Frame::Window(el));
-                    }
-                }
-                _ => {
-                    let cursor_rect = Rectangle::new(
-                        Point::<i32, Physical>::from((cx.round() as i32, cy.round() as i32)),
-                        Size::<i32, Physical>::from((CURSOR_SIZE, CURSOR_SIZE)),
-                    );
-                    out.push(Frame::Solid(SolidColorRenderElement::new(
-                        self.cursor_id.clone(),
-                        cursor_rect,
-                        CommitCounter::default(),
-                        CURSOR_COLOR,
-                        Kind::Cursor,
-                    )));
-                }
-            }
+            // El cursor sólo se pinta si el puntero global cae sobre la
+            // salida primaria; las secundarias lo emiten por su cuenta.
+            self.emit_cursor(primary_rect, &mut out);
 
             // HUD del preset activo: panel discreto arriba al centro mientras
             // dura la ventana de feedback (HUD_DURATION). Después del deadline
@@ -730,111 +865,10 @@ impl DrmState {
                 out.push(Frame::Window(el));
             }
 
-            // El shell va sobre todo; luego las flotantes; luego las
-            // teseladas. Dentro de cada grupo, la enfocada se pinta encima
-            // (raise-on-focus). `sort_by_key` es estable: respeta el orden de
-            // apertura entre las no enfocadas.
-            let mut shown: Vec<_> = self.app.windows.iter().filter(|w| w.visible).collect();
-            shown.sort_by_key(|w| (!w.is_shell, !w.floating, !w.focused));
-            let tbh = self.app.decorations.titlebar_height;
-            for w in &shown {
-                let tb = crate::titlebar_for(w, tbh);
-                let (x, y) = crate::render_loc(w, output_h, tbh); // pos de la superficie
-                let (sw, sh) =
-                    crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
-                // El rect decorado envuelve barra de título + superficie.
-                let dec_y = y - tb;
-                let dec_h = sh + tb;
-
-                if tb > 0 {
-                    // Barra de título real: una franja arriba de la superficie,
-                    // coloreada por el foco, con el título a la izquierda.
-                    if let Some(tr) = &self.text {
-                        if !w.title.is_empty() {
-                            if self.text_cache.len() > 256 {
-                                self.text_cache.clear();
-                            }
-                            let buf = self
-                                .text_cache
-                                .entry((w.title.clone(), TITLE_COLOR))
-                                .or_insert_with(|| title_buffer(tr, &w.title));
-                            let ty = dec_y + (tb - TITLE_PX as i32) / 2;
-                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                                &mut self.renderer,
-                                ((x + 8) as f64, ty as f64),
-                                buf,
-                                None,
-                                None,
-                                None,
-                                Kind::Unspecified,
-                            ) {
-                                out.push(Frame::Text(el));
-                            }
-                        }
-                    }
-                    let color = rgba_f32(if w.focused {
-                        self.app.decorations.border_focus
-                    } else {
-                        self.app.decorations.border_normal
-                    });
-                    let mut bar = SolidColorBuffer::default();
-                    bar.update((sw, tb), color);
-                    out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                        &bar,
-                        (x, dec_y),
-                        1.0,
-                        1.0,
-                        Kind::Unspecified,
-                    )));
-                } else if w.focused && !w.is_shell && !w.title.is_empty() {
-                    // Sin barra (titlebar_height = 0): el viejo comportamiento,
-                    // el título de la enfocada superpuesto sobre su superficie.
-                    if let Some(tr) = &self.text {
-                        if self.text_cache.len() > 256 {
-                            self.text_cache.clear();
-                        }
-                        let buf = self
-                            .text_cache
-                            .entry((w.title.clone(), TITLE_COLOR))
-                            .or_insert_with(|| title_buffer(tr, &w.title));
-                        if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                            &mut self.renderer,
-                            ((x + 6) as f64, (y + 4) as f64),
-                            buf,
-                            None,
-                            None,
-                            None,
-                            Kind::Unspecified,
-                        ) {
-                            out.push(Frame::Text(el));
-                        }
-                    }
-                }
-                // El marco, alrededor de la decoración completa (barra +
-                // superficie) — el shell no lleva, y se omite si el grosor es 0.
-                if !w.is_shell && self.app.decorations.border_width > 0 {
-                    let rects = border_rects(x, dec_y, sw, dec_h, self.app.decorations.border_width);
-                    for (buf, (bx, by, _, _)) in w.borders.iter().zip(rects) {
-                        out.push(Frame::Solid(SolidColorRenderElement::from_buffer(
-                            buf,
-                            (bx, by),
-                            1.0,
-                            1.0,
-                            Kind::Unspecified,
-                        )));
-                    }
-                }
-                for el in render_elements_from_surface_tree(
-                    &mut self.renderer,
-                    &w.surface,
-                    (x, y),
-                    1.0,
-                    1.0,
-                    Kind::Unspecified,
-                ) {
-                    out.push(Frame::Window(el));
-                }
-            }
+            // Ventanas: el helper filtra por intersección con la primaria y
+            // emite cada una traducida (primary.rect arranca en 0,0, así que
+            // la traducción es identidad para la mayoría).
+            self.emit_windows(primary_rect, &mut out);
 
             // Layer surfaces de fondo (Bottom/Background) — debajo de todo.
             for el in under_layers {
@@ -906,16 +940,23 @@ impl DrmState {
         }
     }
 
-    /// Render de una salida **secundaria**: sólo wallpaper (al tamaño nativo
-    /// de esa salida) sobre el [`CLEAR_COLOR`]. No lleva ventanas, layers,
-    /// menú, zonas ni HUD — eso vive en la primaria hasta tener
-    /// distribución global del escritorio.
+    /// Render de una salida **secundaria**: cursor (si el puntero cae sobre
+    /// ella) + ventanas visibles cuyo rect intersecta esta salida (traducidas
+    /// a coords locales) + wallpaper al tamaño nativo de la salida. No
+    /// lleva layer-shell, menú raíz, zonas ni HUD: eso sigue en primaria
+    /// hasta tener pipeline replicado por monitor.
     fn render_secondary(&mut self, idx: usize) {
         if self.outputs[idx].pending_flip {
             return;
         }
+        let rect = self.outputs[idx].rect;
         let elements: Vec<Frame<GlesRenderer>> = {
             let mut out: Vec<Frame<GlesRenderer>> = Vec::new();
+            // Cursor: sólo si el puntero está sobre esta salida.
+            self.emit_cursor(rect, &mut out);
+            // Ventanas: las que caen sobre esta salida, traducidas.
+            self.emit_windows(rect, &mut out);
+            // Wallpaper al fondo.
             if let Some(path) = self.wallpaper_path.clone() {
                 let ctx = &mut self.outputs[idx];
                 let size = (ctx.rect.w, ctx.rect.h);
@@ -1514,7 +1555,9 @@ impl DrmState {
             let w = &self.app.windows[i];
             (!w.is_shell, !w.floating, !w.focused)
         });
-        let output_h = self.app.output_size.1;
+        // `output_h` se usa para anclar el shell al borde inferior; el shell
+        // vive en la primaria, así que usamos su altura, no la total.
+        let output_h = self.outputs[Self::PRIMARY].rect.h;
         let tbh = self.app.decorations.titlebar_height;
         idx.into_iter().find(|&i| {
             let w = &self.app.windows[i];
@@ -1535,7 +1578,9 @@ impl DrmState {
         if tbh <= 0 {
             return None;
         }
-        let output_h = self.app.output_size.1;
+        // `output_h` se usa para anclar el shell al borde inferior; el shell
+        // vive en la primaria, así que usamos su altura, no la total.
+        let output_h = self.outputs[Self::PRIMARY].rect.h;
         let mut idx: Vec<usize> = (0..self.app.windows.len())
             .filter(|&i| self.app.windows[i].visible)
             .collect();
