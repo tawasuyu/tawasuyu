@@ -60,6 +60,50 @@ const BARRA_W: f32 = 48.0;
 /// más ancha; evita que el cambio de dígitos reacomode la barra.
 const CAPTION_W: f32 = 72.0;
 
+/// El texto de tooltip de un widget de core, derivado de su view-model: la
+/// lectura completa (medidor con su etiqueta + leyenda, texto tal cual). `None`
+/// para los vacíos. Lo muestra el tooltip flotante al posar el cursor.
+pub fn widget_tooltip(v: &WidgetView) -> Option<String> {
+    match v {
+        WidgetView::Empty => None,
+        WidgetView::Text(t) if t.trim().is_empty() => None,
+        WidgetView::Text(t) => Some(t.clone()),
+        WidgetView::Meter { label, caption, .. } => {
+            let l = label.as_deref().unwrap_or("").trim();
+            let c = caption.trim();
+            let s = format!("{l} {c}");
+            let s = s.trim().to_string();
+            (!s.is_empty()).then_some(s)
+        }
+        WidgetView::Placeholder(kind) => Some(kind.clone()),
+    }
+}
+
+/// El cuerpo del **tooltip flotante**: una cajita opaca con el texto, rellenando
+/// su contenedor (en layer-shell, la propia surface popup). Opaca a propósito —
+/// así no depende de transparencia de la surface (que en algún compositor podría
+/// fallar y ennegrecer todo).
+pub fn tooltip_view(text: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(6.0)
+    .text(text.to_string(), 12.0, theme.fg_text)
+}
+
 /// Traduce el view-model de un widget al `View<Msg>` que lo pinta.
 pub fn widget_view(v: &WidgetView, theme: &Theme) -> View<Msg> {
     match v {
@@ -437,10 +481,15 @@ fn slots_de(
             .map(|sw| match sw {
                 SlotWidget::Core { widget, exec } => {
                     // Realce al hover en todos los widgets (feedback de "estoy
-                    // encima"); los que tienen `exec` además lanzan su comando.
-                    let v = widget_view(&widget.view(), theme)
+                    // encima") + tooltip con su lectura completa; los que tienen
+                    // `exec` además lanzan su comando.
+                    let wv = widget.view();
+                    let mut v = widget_view(&wv, theme)
                         .radius(6.0)
                         .hover_fill(theme.bg_button_hover);
+                    if let Some(tip) = widget_tooltip(&wv) {
+                        v = v.tooltip(tip);
+                    }
                     match exec {
                         Some(cmd) => v.on_click(Msg::Spawn(cmd.clone())),
                         None => v,
@@ -561,6 +610,7 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
     .fill(fill)
     .radius(6.0)
     .hover_fill(theme.bg_button_hover)
+    .tooltip(w.label.clone())
     .on_click(Msg::ActivateWindow(w.id))
     .on_right_click(Msg::CloseWindow(w.id))
     .children(vec![badge, titulo])
@@ -578,6 +628,7 @@ fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) -> View<Msg
         .fill(theme.bg_panel)
         .radius(6.0)
         .hover_fill(theme.bg_button_hover)
+        .tooltip(if exec.is_some() { "Lanzar" } else { "Menú de inicio" })
         .on_click(click)
         .text(label.to_string(), 14.0, theme.accent)
 }
@@ -760,12 +811,18 @@ fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &Theme) -> View
         Some(t) if !t.is_empty() => (format!("📋 {}", recortar(t, CLIPBOARD_PREVIEW_MAX)), theme.fg_text),
         _ => ("📋".to_string(), theme.fg_muted),
     };
-    let v = chip(theme).text(etiqueta, 12.0, fg);
+    // Tooltip: el texto copiado completo (sin recortar), útil cuando el preview
+    // de la barra lo trunca.
+    let v = chip(theme)
+        .hover_fill(theme.bg_button_hover)
+        .radius(6.0)
+        .text(etiqueta, 12.0, fg);
+    let v = match text {
+        Some(t) if !t.is_empty() => v.tooltip(t.to_string()),
+        _ => v,
+    };
     match exec {
-        Some(cmd) => v
-            .radius(6.0)
-            .hover_fill(theme.bg_button_hover)
-            .on_click(Msg::Spawn(cmd.to_string())),
+        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
         None => v,
     }
 }
@@ -781,10 +838,16 @@ fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) ->
     let chips: Vec<View<Msg>> = items
         .iter()
         .map(|it| {
+            let tip = if it.label.trim().is_empty() {
+                it.key.clone()
+            } else {
+                it.label.clone()
+            };
             let base = chip(theme)
                 .fill(theme.bg_panel_alt)
                 .radius(6.0)
                 .hover_fill(theme.bg_button_hover)
+                .tooltip(tip)
                 .on_click(Msg::TrayActivate(it.key.clone()));
             match &it.icon {
                 Some(icon) => base.children(vec![tray_icon_node(icon)]),
@@ -872,4 +935,27 @@ pub fn bar_view(
     })
     .fill(theme.bg_panel_alt)
     .children(slots_de(surface, widgets, shuma_state, data, theme, dir))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::widget_tooltip;
+    use pata_core::widget::WidgetView;
+
+    #[test]
+    fn tooltip_de_un_medidor_junta_etiqueta_y_leyenda() {
+        let v = WidgetView::Meter {
+            label: Some("CPU".into()),
+            fraction: 0.42,
+            caption: "42%".into(),
+        };
+        assert_eq!(widget_tooltip(&v).as_deref(), Some("CPU 42%"));
+    }
+
+    #[test]
+    fn tooltip_de_texto_y_vacio() {
+        assert_eq!(widget_tooltip(&WidgetView::Text("14:05".into())).as_deref(), Some("14:05"));
+        assert_eq!(widget_tooltip(&WidgetView::Text("  ".into())), None);
+        assert_eq!(widget_tooltip(&WidgetView::Empty), None);
+    }
 }

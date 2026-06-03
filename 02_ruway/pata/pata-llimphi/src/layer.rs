@@ -30,7 +30,7 @@ use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState},
+    compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat,
     output::{OutputHandler, OutputState},
@@ -199,6 +199,11 @@ struct LayerApp {
     exec_rx: Option<std::sync::mpsc::Receiver<crate::shuma::RunResult>>,
     /// Una layer surface por cada barra de la config.
     panels: Vec<Panel>,
+    /// Índice (en `panels`) de la surface del **tooltip flotante**: una layer
+    /// surface en `Overlay`, reubicada al hover. `None` si no se creó.
+    tooltip_pi: Option<usize>,
+    /// Texto del tooltip actualmente visible (`None` = oculto).
+    tooltip_text: Option<String>,
     exit: bool,
 }
 
@@ -351,6 +356,44 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels[pi].layer.commit();
     }
 
+    // La surface del tooltip flotante: una layer surface en Overlay (sobre todo),
+    // anclada arriba-izquierda, sin teclado ni zona exclusiva y con **región de
+    // input vacía** (no roba clicks ni hover). Arranca 1×1 fuera de vista; al
+    // hover se redimensiona y reubica con `set_margin`. Sin buffer hasta el primer
+    // tooltip → no se mapea (invisible).
+    let tooltip_pi = {
+        let wl_surface = compositor.create_surface(&qh);
+        if let Ok(region) = Region::new(&compositor) {
+            // Región vacía (sin add): el tooltip nunca intercepta el puntero.
+            wl_surface.set_input_region(Some(region.wl_region()));
+        }
+        let layer = layer_shell.create_layer_surface(
+            &qh,
+            wl_surface,
+            Layer::Overlay,
+            Some("pata-tooltip".to_string()),
+            None,
+        );
+        layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
+        layer.set_size(1, 1);
+        layer.set_margin(100_000, 0, 0, 0); // fuera de vista
+        layer.set_exclusive_zone(0);
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+        panels.push(Panel {
+            idx: 0,
+            card: None,
+            layer,
+            cache: None,
+            width: 1,
+            height: 1,
+            dirty: false,
+            hover_idx: None,
+            gpu: None,
+        });
+        Some(panels.len() - 1)
+    };
+
     // ¿Qué barra hospeda el start_button? Esa crece hacia abajo al desplegar el
     // menú de inicio (mismo truco que shuma, hacia el otro lado).
     let menu_panel = panels.iter().position(|p| {
@@ -399,6 +442,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         ctx: WidgetCtx::default(),
         exec_rx: None,
         panels,
+        tooltip_pi,
+        tooltip_text: None,
         exit: false,
     };
 
@@ -501,6 +546,69 @@ impl LayerApp {
         // Invalida el cache de hit-test (geometría vieja) — igual que shuma.
         self.panels[pi].cache = None;
         self.panels[pi].dirty = true;
+    }
+
+    /// Actualiza el tooltip flotante para el nodo `node_idx` bajo el cursor en el
+    /// panel `pi`: si ese nodo tiene texto de tooltip, redimensiona y reubica la
+    /// surface del tooltip bajo el widget y la marca para pintar; si no, la
+    /// oculta. Reposiciona sólo al cambiar de nodo (no sigue al cursor). Pinta de
+    /// inmediato (`draw`) porque los eventos llegan por OTRA surface.
+    fn update_tooltip(&mut self, pi: usize, node_idx: Option<usize>, qh: &QueueHandle<Self>) {
+        let Some(tpi) = self.tooltip_pi else { return };
+        if pi == tpi {
+            return;
+        }
+        // Texto + rect del nodo hovereado, desde el cache de hit-test del panel.
+        let info = node_idx.and_then(|i| {
+            let c = self.panels[pi].cache.as_ref()?;
+            let node = c.mounted.nodes.get(i)?;
+            let text = node.tooltip.clone()?;
+            let rect = c.computed.get(node.id)?;
+            Some((text, rect))
+        });
+        match info {
+            Some((text, rect)) => {
+                // Posición: bajo el widget. La barra superior (la única con
+                // widgets hovereables) está en y=0, así que su alto da el offset.
+                let x = rect.x.max(0.0) as i32;
+                let y = self.panels[pi].height as i32 + 4;
+                // Tamaño estimado (no medimos texto acá): ~8px/glifo + padding.
+                let w = (text.chars().count() as u32 * 8 + 16).clamp(24, 600);
+                let h = 24u32;
+                self.tooltip_text = Some(text);
+                {
+                    let layer = &self.panels[tpi].layer;
+                    layer.set_size(w, h);
+                    layer.set_margin(y, 0, 0, x);
+                    layer.commit();
+                }
+                self.panels[tpi].width = w;
+                self.panels[tpi].height = h;
+                self.panels[tpi].dirty = true;
+                self.draw(tpi, qh);
+            }
+            None => self.hide_tooltip(qh),
+        }
+    }
+
+    /// Oculta el tooltip: lo empuja fuera de vista (1×1 con margen enorme) y lo
+    /// re-pinta una vez ahí. No hace nada si ya está oculto.
+    fn hide_tooltip(&mut self, qh: &QueueHandle<Self>) {
+        let Some(tpi) = self.tooltip_pi else { return };
+        if self.tooltip_text.is_none() {
+            return;
+        }
+        self.tooltip_text = None;
+        {
+            let layer = &self.panels[tpi].layer;
+            layer.set_size(1, 1);
+            layer.set_margin(100_000, 0, 0, 0);
+            layer.commit();
+        }
+        self.panels[tpi].width = 1;
+        self.panels[tpi].height = 1;
+        self.panels[tpi].dirty = true;
+        self.draw(tpi, qh);
     }
 
     /// Lanza una app del menú por su `id` y cierra el menú. Sólo `Exec` spawnea;
@@ -679,7 +787,11 @@ impl LayerApp {
         // Una tarjeta flotante pinta su contenido (relleno de su surface); la
         // barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el resto
         // pinta su barra normal.
-        let view = if let Some(c) = self.panels[pi].card.as_ref() {
+        let view = if self.tooltip_pi == Some(pi) {
+            // La surface del tooltip: pinta la cajita con el texto actual (o vacía
+            // cuando está oculta fuera de vista).
+            render::tooltip_view(self.tooltip_text.as_deref().unwrap_or(""), &self.theme)
+        } else if let Some(c) = self.panels[pi].card.as_ref() {
             render::card_view(&c.spec, &c.widgets, &self.theme)
         } else if self.menu_panel == Some(pi) && self.menu_open {
             render::start_menu_view(
@@ -1060,14 +1172,15 @@ impl PointerHandler for LayerApp {
     fn pointer_frame(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_pointer::WlPointer,
         events: &[PointerEvent],
     ) {
         for e in events {
-            // Hover: el nodo bajo el puntero da feedback (`hover_fill`). El
-            // layer-shell no lo trackeaba (pasaba `None` a `paint`), así que el
-            // realce al pasar el cursor estaba muerto en todas las barras.
+            // Hover: el nodo bajo el puntero da feedback (`hover_fill`) y, si
+            // tiene texto de tooltip, lo muestra en la surface flotante. El
+            // layer-shell no trackeaba hover (pasaba `None` a `paint`), así que el
+            // realce estaba muerto en todas las barras.
             match e.kind {
                 PointerEventKind::Motion { .. } => {
                     if let Some(pi) = self.panel_de(&e.surface) {
@@ -1079,6 +1192,7 @@ impl PointerHandler for LayerApp {
                         if self.panels[pi].hover_idx != nuevo {
                             self.panels[pi].hover_idx = nuevo;
                             self.panels[pi].dirty = true;
+                            self.update_tooltip(pi, nuevo, qh);
                         }
                     }
                     continue;
@@ -1090,6 +1204,7 @@ impl PointerHandler for LayerApp {
                             self.panels[pi].dirty = true;
                         }
                     }
+                    self.hide_tooltip(qh);
                     continue;
                 }
                 _ => {}
