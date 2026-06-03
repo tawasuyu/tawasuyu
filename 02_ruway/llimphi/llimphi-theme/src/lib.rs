@@ -251,9 +251,38 @@ impl Theme {
         }
     }
 
+    /// Tema "Print" — blanco y negro de alto contraste para impresión.
+    /// Fondo blanco papel, tinta negra, sin grises decorativos: todo lo
+    /// que se imprime tiene que leerse en una fotocopiadora. `fg_muted`
+    /// es un gris medio (3.5:1) reservado a metadatos; el cuerpo va en
+    /// negro puro. Acento y bordes negros — la tinta es una sola.
+    pub const fn print() -> Self {
+        Self {
+            name: "Print",
+            bg_app: Color::from_rgba8(255, 255, 255, 255),
+            bg_panel: Color::from_rgba8(255, 255, 255, 255),
+            bg_panel_alt: Color::from_rgba8(246, 246, 246, 255),
+            bg_input: Color::from_rgba8(255, 255, 255, 255),
+            bg_input_focus: Color::from_rgba8(248, 248, 248, 255),
+            bg_button: Color::from_rgba8(238, 238, 238, 255),
+            bg_button_hover: Color::from_rgba8(224, 224, 224, 255),
+            bg_selected: Color::from_rgba8(220, 220, 220, 255),
+            bg_row_hover: Color::from_rgba8(240, 240, 240, 255),
+            fg_text: Color::from_rgba8(0, 0, 0, 255),
+            fg_muted: Color::from_rgba8(90, 90, 90, 255),
+            fg_placeholder: Color::from_rgba8(140, 140, 140, 255),
+            fg_destructive: Color::from_rgba8(0, 0, 0, 255),
+            border: Color::from_rgba8(0, 0, 0, 255),
+            border_focus: Color::from_rgba8(0, 0, 0, 255),
+            accent: Color::from_rgba8(0, 0, 0, 255),
+        }
+    }
+
     /// Todos los presets del repo, en el orden canónico de rotación
     /// (Dark → Light → Aurora → Sunset → Dark…). El theme-switcher
-    /// los consume vía [`Theme::next_after`].
+    /// los consume vía [`Theme::next_after`]. `print()` queda fuera de la
+    /// rotación a propósito — es un modo deliberado (imprimir), no un
+    /// gusto estético que se cicle por accidente.
     pub fn all() -> Vec<Self> {
         vec![Self::dark(), Self::light(), Self::aurora(), Self::sunset()]
     }

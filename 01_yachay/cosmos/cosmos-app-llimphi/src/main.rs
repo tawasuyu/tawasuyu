@@ -25,6 +25,7 @@ mod glyphs;
 mod library;
 mod model;
 mod persist;
+mod print;
 mod tools;
 mod view;
 
@@ -434,9 +435,27 @@ fn commit_rename(m: &mut Model) {
     refresh_nav(m);
 }
 
-fn set_theme_dark(m: &mut Model, dark: bool) {
-    m.cfg.theme_dark = dark;
-    m.theme = if dark { Theme::dark() } else { Theme::light() };
+/// Aplica una selección del segmented de tema (0 = Oscuro, 1 = Claro,
+/// 2 = Impresión) y refleja el `Theme` activo en el modelo. La selección
+/// manual gana sobre el tinte de wawa-config (mismo criterio que antes:
+/// elegir tema a mano fija el preset puro).
+fn set_theme_mode(m: &mut Model, idx: usize) {
+    m.cfg.set_theme_idx(idx);
+    m.theme = m.cfg.active_theme();
+}
+
+/// Arma la hoja imprimible (cabecera de la carta + tabla de aspectos) en
+/// HTML B/N y la abre en el navegador del sistema, donde el usuario usa
+/// el diálogo nativo de impresión (Ctrl+P → impresora o «Guardar como
+/// PDF»). Sin dependencias de GPU: es texto puro, así que imprime igual
+/// en Linux, macOS y Windows.
+fn do_imprimir(m: &mut Model) {
+    match crate::print::imprimir_carta(&m.chart, &m.render) {
+        Ok(path) => {
+            m.status_note = Some(format!("Hoja enviada al navegador para imprimir ({})", path.display()));
+        }
+        Err(e) => m.error = Some(format!("imprimir: {e}")),
+    }
 }
 
 fn do_recargar(m: &mut Model) {
@@ -459,7 +478,8 @@ fn apply_cmd(m: &mut Model, cmd: MenuCmd) {
         MenuCmd::Sep => {}
         MenuCmd::Nueva => do_nueva(m),
         MenuCmd::Guardar => do_guardar(m),
-        MenuCmd::Theme(dark) => set_theme_dark(m, dark),
+        MenuCmd::Theme(idx) => set_theme_mode(m, idx),
+        MenuCmd::Imprimir => do_imprimir(m),
         MenuCmd::Duplicar => do_duplicar(m),
         MenuCmd::Recargar => do_recargar(m),
         MenuCmd::Eliminar => do_eliminar(m),
@@ -835,12 +855,19 @@ impl App for Cosmos {
             c
         });
         let ui = load_ui_state();
-        let base = if ui.cfg.theme_dark {
-            Theme::dark()
+        // En modo impresión el tema B/N gana y no acepta el tinte de
+        // wawa-config (la hoja tiene que ser blanca sí o sí). En claro/
+        // oscuro, el tinte del SO se aplica como siempre.
+        let theme = if ui.cfg.print_mode {
+            ui.cfg.active_theme()
         } else {
-            Theme::light()
+            let base = if ui.cfg.theme_dark {
+                Theme::dark()
+            } else {
+                Theme::light()
+            };
+            theme_from_wawa(&cfg_wawa, &base)
         };
-        let theme = theme_from_wawa(&cfg_wawa, &base);
         // El render de la carta es barato → síncrono. El astro (orto/ocaso/
         // efemérides) es el caro: arranca en `None` ("calculando…") y se
         // computa en un worker que reentra con `AstroComputed`. `init` corre
@@ -948,7 +975,10 @@ impl App for Cosmos {
         }
         match msg {
             Msg::WawaConfigChanged(cfg) => {
-                m.theme = theme_from_wawa(&cfg, &m.theme);
+                // El modo impresión ignora el tinte del SO: la hoja es B/N.
+                if !m.cfg.print_mode {
+                    m.theme = theme_from_wawa(&cfg, &m.theme);
+                }
                 if cfg.lang != rimay_localize::current_locale() {
                     let _ = rimay_localize::set_locale(&cfg.lang);
                 }
@@ -1056,10 +1086,11 @@ impl App for Cosmos {
                 set_harmonic(&mut m, n);
                 persist = true;
             }
-            Msg::SetThemeDark(dark) => {
-                set_theme_dark(&mut m, dark);
+            Msg::SetThemeMode(idx) => {
+                set_theme_mode(&mut m, idx);
                 persist = true;
             }
+            Msg::PrintSheet => do_imprimir(&mut m),
             Msg::ToggleWheelOpt(opt) => {
                 toggle_wheel(&mut m, opt);
                 persist = true;

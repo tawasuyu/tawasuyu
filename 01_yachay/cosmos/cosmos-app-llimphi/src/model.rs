@@ -59,6 +59,9 @@ pub(crate) enum ChartView {
     Esfera3d,
     /// Cielo como lo ve el observador (alt/az).
     Cielo,
+    /// Hoja imprimible: cabecera de la carta + tabla de aspectos en B/N,
+    /// con un botón para mandarla a imprimir (vía el navegador del SO).
+    Impresion,
 }
 
 impl ChartView {
@@ -70,6 +73,7 @@ impl ChartView {
             ChartView::Carto => "Astrocarto",
             ChartView::Esfera3d => "3D",
             ChartView::Cielo => "Cielo",
+            ChartView::Impresion => "Hoja",
         }
     }
 
@@ -81,6 +85,7 @@ impl ChartView {
             ChartView::Carto,
             ChartView::Esfera3d,
             ChartView::Cielo,
+            ChartView::Impresion,
         ]
     }
 }
@@ -469,6 +474,12 @@ pub(crate) enum WheelOpt {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CosmosConfig {
     pub(crate) theme_dark: bool,
+    /// Modo impresión: tema blanco y negro de alto contraste. Cuando está
+    /// activo prevalece sobre `theme_dark` (que sólo recuerda la base
+    /// claro/oscuro a la que volver). `#[serde(default)]` para no romper
+    /// configs viejas que no lo traían.
+    #[serde(default)]
+    pub(crate) print_mode: bool,
     pub(crate) minor_aspects: bool,
     pub(crate) coord_labels: bool,
     pub(crate) dial_3d: bool,
@@ -483,12 +494,53 @@ impl Default for CosmosConfig {
     fn default() -> Self {
         Self {
             theme_dark: true,
+            print_mode: false,
             minor_aspects: false,
             coord_labels: true,
             dial_3d: true,
             asc_cross: true,
             rot_offset_deg: 0.0,
             use_now: false,
+        }
+    }
+}
+
+impl CosmosConfig {
+    /// Índice del segmented de tema: 0 = Oscuro, 1 = Claro, 2 = Impresión.
+    pub(crate) fn theme_idx(&self) -> usize {
+        if self.print_mode {
+            2
+        } else if self.theme_dark {
+            0
+        } else {
+            1
+        }
+    }
+
+    /// Aplica una selección del segmented de tema (0/1/2). Impresión
+    /// preserva la base claro/oscuro para poder volver a ella.
+    pub(crate) fn set_theme_idx(&mut self, idx: usize) {
+        match idx {
+            2 => self.print_mode = true,
+            1 => {
+                self.print_mode = false;
+                self.theme_dark = false;
+            }
+            _ => {
+                self.print_mode = false;
+                self.theme_dark = true;
+            }
+        }
+    }
+
+    /// El `Theme` activo según el modo. Impresión gana sobre claro/oscuro.
+    pub(crate) fn active_theme(&self) -> llimphi_theme::Theme {
+        if self.print_mode {
+            llimphi_theme::Theme::print()
+        } else if self.theme_dark {
+            llimphi_theme::Theme::dark()
+        } else {
+            llimphi_theme::Theme::light()
         }
     }
 }
@@ -546,7 +598,11 @@ pub(crate) enum Msg {
     // capas / armónico / configuración
     ToggleOverlay(OverlayKind),
     SetHarmonic(u32),
-    SetThemeDark(bool),
+    /// Elige el modo de tema: 0 = Oscuro, 1 = Claro, 2 = Impresión.
+    SetThemeMode(usize),
+    /// Genera la hoja imprimible (cabecera + aspectos) y la abre en el
+    /// navegador del sistema para usar su diálogo de impresión.
+    PrintSheet,
     ToggleWheelOpt(WheelOpt),
     SetRotOffset(f32),
     SetUseNow(bool),

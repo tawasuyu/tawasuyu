@@ -69,7 +69,10 @@ pub(crate) enum MenuCmd {
     ToggleTools,
     Overlay(OverlayKind),
     Harmonic(u32),
-    Theme(bool),
+    /// Modo de tema: 0 = Oscuro, 1 = Claro, 2 = Impresión.
+    Theme(usize),
+    /// Manda la hoja imprimible al navegador del SO.
+    Imprimir,
     AcercaDe,
     Wheel(WheelOpt),
     Deselect,
@@ -148,9 +151,10 @@ impl MenuEntry {
 /// Lado del lienzo de cada carta en modo mosaico.
 const TILE_SIZE: f32 = 360.0;
 
-/// Paleta del lienzo según el tema activo (claro/oscuro).
+/// Paleta del lienzo según el tema activo. En modo impresión usa la
+/// paleta clara sobre papel blanco (alto contraste para fotocopia).
 fn graphics_palette(model: &Model) -> Palette {
-    if model.cfg.theme_dark {
+    if model.cfg.theme_dark && !model.cfg.print_mode {
         Palette::dark()
     } else {
         Palette::light()
@@ -159,7 +163,9 @@ fn graphics_palette(model: &Model) -> Palette {
 
 /// Fondo del lienzo según el tema activo.
 fn graphics_bg(model: &Model) -> Color {
-    if model.cfg.theme_dark {
+    if model.cfg.print_mode {
+        Color::from_rgba8(255, 255, 255, 255)
+    } else if model.cfg.theme_dark {
         Color::from_rgba8(8, 10, 16, 255)
     } else {
         Color::from_rgba8(246, 247, 250, 255)
@@ -191,6 +197,8 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
             MenuEntry::act("Guardar carta en biblioteca", MenuCmd::Guardar).shortcut("Ctrl+S"),
             MenuEntry::act("Duplicar carta actual", MenuCmd::Duplicar),
             MenuEntry::act("Recargar desde disco", MenuCmd::Recargar),
+            MenuEntry::sep(),
+            MenuEntry::act("Imprimir hoja…", MenuCmd::Imprimir).shortcut("Ctrl+P"),
             MenuEntry::sep(),
             MenuEntry::act("Eliminar selección", MenuCmd::Eliminar)
                 .destructive()
@@ -234,9 +242,11 @@ pub(crate) fn menu_entries(kind: MenuKind, m: &Model) -> Vec<MenuEntry> {
             v.push(MenuEntry::act_string(check("Árbol de datos", m.nav_open), MenuCmd::ToggleNav));
             v.push(MenuEntry::act_string(check("Panel de herramientas", m.tools_open), MenuCmd::ToggleTools));
             v.push(MenuEntry::sep());
-            // Tema (espeja el toggle de Configuración).
-            v.push(MenuEntry::act_string(check("Tema oscuro", m.cfg.theme_dark), MenuCmd::Theme(true)));
-            v.push(MenuEntry::act_string(check("Tema claro", !m.cfg.theme_dark), MenuCmd::Theme(false)));
+            // Tema (espeja el segmented de Configuración).
+            let ti = m.cfg.theme_idx();
+            v.push(MenuEntry::act_string(check("Tema oscuro", ti == 0), MenuCmd::Theme(0)));
+            v.push(MenuEntry::act_string(check("Tema claro", ti == 1), MenuCmd::Theme(1)));
+            v.push(MenuEntry::act_string(check("Modo impresión (B/N)", ti == 2), MenuCmd::Theme(2)));
             v
         }
         MenuKind::Capas => OverlayKind::all()
@@ -1002,6 +1012,7 @@ fn graphic_for(
         ),
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme, fill),
         ChartView::Cielo => sky_canvas(model, size, theme, fill),
+        ChartView::Impresion => view::print_sheet(model, theme),
     }
 }
 
@@ -2082,9 +2093,9 @@ pub(crate) fn config_view(model: &Model, theme: &Theme) -> View<Msg> {
 
     rows.push(view::section_label("Tema".to_string(), theme));
     rows.push(segmented_view(
-        &["Oscuro", "Claro"],
-        if model.cfg.theme_dark { 0 } else { 1 },
-        |i| Msg::SetThemeDark(i == 0),
+        &["Oscuro", "Claro", "Impresión"],
+        model.cfg.theme_idx(),
+        |i| Msg::SetThemeMode(i),
         &seg_pal,
     ));
 
