@@ -18,14 +18,37 @@ use std::fmt::Write as _;
 
 use serde::{Deserialize, Serialize};
 
-/// Identidad de un participante = BLAKE3 de su nombre. Estable y determinista:
-/// el mismo nombre produce el mismo id en cualquier máquina, igual que la
-/// semilla de identidad de `ayni`/`agora`.
+/// Identidad de un participante = BLAKE3 de su **clave pública** Ed25519. Es
+/// inforjable: para presentarse con un id hay que poseer la clave secreta que lo
+/// engendra (ver `uya-app::identidad`). El nombre es sólo una etiqueta —dos
+/// personas pueden llamarse igual y tendrán ids distintos—; la identidad real es
+/// esta huella, que se verifica una vez fuera de banda (TOFU).
 pub type ParticipanteId = [u8; 32];
 
-/// Deriva la identidad determinista de un participante a partir de su nombre.
+/// Deriva el id de un participante a partir de su clave pública Ed25519. Espeja
+/// a `agora_core::IdentityId::from_public_key` (BLAKE3 de la pubkey).
+pub fn id_desde_clave(clave: &[u8; 32]) -> ParticipanteId {
+    *blake3::hash(clave).as_bytes()
+}
+
+/// Deriva un id determinista a partir de un nombre. **No** es la identidad de un
+/// participante (ésa sale de su clave, ver [`id_desde_clave`]); se reserva para
+/// claves de espacio de nombres públicas: la clave DHT de una sala
+/// (`uya/sala/<n>`), por ejemplo.
 pub fn id_desde_nombre(nombre: &str) -> ParticipanteId {
     *blake3::hash(nombre.as_bytes()).as_bytes()
+}
+
+/// Bytes canónicos que firma una identidad en su `Hola` para atestiguar el par
+/// `(id, nombre)`. El receptor verifica la firma contra la clave pública
+/// declarada y comprueba además que `id == id_desde_clave(clave)`; así el
+/// nombre queda ligado a una clave que el emisor probó poseer.
+pub fn mensaje_identidad(id: &ParticipanteId, nombre: &str) -> Vec<u8> {
+    let mut m = Vec::with_capacity(16 + 32 + nombre.len());
+    m.extend_from_slice(b"uya/identidad/v1");
+    m.extend_from_slice(id);
+    m.extend_from_slice(nombre.as_bytes());
+    m
 }
 
 /// Forma corta legible de un id (8 hex), para etiquetas y logs.
@@ -52,10 +75,17 @@ pub enum FormatoCuadro {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Paquete {
     /// Presentación: lo primero que envía cada extremo al conectar. Lleva la
-    /// identidad y el nombre para que el otro lado pueble su roster.
+    /// identidad, el nombre y la **prueba de identidad**: la clave pública
+    /// Ed25519 y una firma sobre [`mensaje_identidad`]`(id, nombre)`. El receptor
+    /// comprueba `id == id_desde_clave(clave)` y que la firma valide contra
+    /// `clave` — recién entonces puebla el roster como verificado.
     Hola {
         id: ParticipanteId,
         nombre: String,
+        /// Clave pública Ed25519 de quien se presenta (32 bytes).
+        clave: [u8; 32],
+        /// Firma Ed25519 (64 bytes) sobre `mensaje_identidad(id, nombre)`.
+        firma: Vec<u8>,
     },
     /// Estado de medios del emisor (cámara / micrófono encendidos). Se envía
     /// al conectar y cada vez que el humano togglea.
@@ -107,6 +137,9 @@ pub struct Participante {
     pub nombre: String,
     pub camara: bool,
     pub microfono: bool,
+    /// `true` si su `Hola` traía una firma válida ligando su clave a `(id,
+    /// nombre)`. Un par sin verificar igual se muestra, pero la UI lo señala.
+    pub verificado: bool,
 }
 
 /// El roster de la llamada: yo + los demás. No guarda cuadros de video (eso es
@@ -119,21 +152,22 @@ pub struct Sala {
 }
 
 impl Sala {
-    /// Crea una sala vacía cuya identidad propia deriva del nombre.
-    pub fn nueva(mi_nombre: impl Into<String>) -> Self {
-        let mi_nombre = mi_nombre.into();
+    /// Crea una sala vacía con la identidad propia ya resuelta (la huella de la
+    /// clave local, ver `uya-app::identidad`).
+    pub fn nueva(yo: ParticipanteId, mi_nombre: impl Into<String>) -> Self {
         Self {
-            yo: id_desde_nombre(&mi_nombre),
-            mi_nombre,
+            yo,
+            mi_nombre: mi_nombre.into(),
             participantes: BTreeMap::new(),
         }
     }
 
     /// Registra (o re-nombra) a un participante. Devuelve `true` si era nuevo.
-    pub fn entrar(&mut self, id: ParticipanteId, nombre: String) -> bool {
+    pub fn entrar(&mut self, id: ParticipanteId, nombre: String, verificado: bool) -> bool {
         match self.participantes.get_mut(&id) {
             Some(p) => {
                 p.nombre = nombre;
+                p.verificado = verificado;
                 false
             }
             None => {
@@ -144,6 +178,7 @@ impl Sala {
                         nombre,
                         camara: true,
                         microfono: true,
+                        verificado,
                     },
                 );
                 true
@@ -181,11 +216,34 @@ mod tests {
     }
 
     #[test]
+    fn id_desde_clave_es_blake3_de_la_clave() {
+        let clave = [9u8; 32];
+        assert_eq!(id_desde_clave(&clave), *blake3::hash(&clave).as_bytes());
+        assert_ne!(id_desde_clave(&[1u8; 32]), id_desde_clave(&[2u8; 32]));
+    }
+
+    #[test]
+    fn mensaje_identidad_liga_id_y_nombre() {
+        let id = id_desde_clave(&[5u8; 32]);
+        // Cambiar el nombre o el id cambia el mensaje firmado.
+        assert_ne!(
+            mensaje_identidad(&id, "Alicia"),
+            mensaje_identidad(&id, "Beto")
+        );
+        assert_ne!(
+            mensaje_identidad(&id, "Alicia"),
+            mensaje_identidad(&id_desde_clave(&[6u8; 32]), "Alicia")
+        );
+    }
+
+    #[test]
     fn paquete_roundtrip() {
         let casos = [
             Paquete::Hola {
-                id: id_desde_nombre("Alicia"),
+                id: id_desde_clave(&[1u8; 32]),
                 nombre: "Alicia".into(),
+                clave: [1u8; 32],
+                firma: vec![7u8; 64],
             },
             Paquete::Estado {
                 camara: true,
@@ -219,11 +277,11 @@ mod tests {
 
     #[test]
     fn roster_entrar_salir_estado() {
-        let mut sala = Sala::nueva("Alicia");
+        let mut sala = Sala::nueva(id_desde_clave(&[0u8; 32]), "Alicia");
         assert_eq!(sala.cuenta(), 1);
-        let beto = id_desde_nombre("Beto");
-        assert!(sala.entrar(beto, "Beto".into()));
-        assert!(!sala.entrar(beto, "Beto".into()));
+        let beto = id_desde_clave(&[2u8; 32]);
+        assert!(sala.entrar(beto, "Beto".into(), true));
+        assert!(!sala.entrar(beto, "Beto".into(), true));
         assert_eq!(sala.cuenta(), 2);
         sala.set_estado(&beto, false, true);
         assert!(!sala.participantes[&beto].camara);

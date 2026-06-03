@@ -32,6 +32,13 @@ camara = ["media-source-capture/camera"]
 
 [dependencies]
 uya-core = { path = "../uya-core" }
+# Identidad soberana: el par Ed25519 que firma el `Hola` (misma cripto que
+# agora/ayni). La clave secreta nace de una semilla persistida en disco; el id
+# del participante es la huella BLAKE3 de la pública. `verify_signature` cierra
+# el lazo en recepción.
+agora-core = { path = "../../../03_ukupacha/agora/agora-core" }
+# Semilla aleatoria (CSPRNG del sistema) para una identidad nueva.
+rand = { workspace = true }
 # TestCard (gradiente animado): la "cámara" por defecto, sin tocar hardware ni
 # sumar dependencias de sistema — el pipeline anda en cualquier máquina. Aporta
 # además el trait `AudioSource` y `ToneSource` (tono sintético del micrófono).

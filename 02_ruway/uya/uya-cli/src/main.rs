@@ -64,8 +64,13 @@ fn main() {
     let mut ultimo_reporte = std::time::Instant::now();
     loop {
         match rx.recv_timeout(Duration::from_millis(500)) {
-            Ok(EventoUya::Entra { id, nombre }) => {
-                println!("  + entra {nombre} [{}]", hex_corto(&id))
+            Ok(EventoUya::Entra {
+                id,
+                nombre,
+                verificado,
+            }) => {
+                let sello = if verificado { "✔ verificado" } else { "⚠ SIN VERIFICAR" };
+                println!("  + entra {nombre} [{}] {sello}", hex_corto(&id))
             }
             Ok(EventoUya::Sale { id }) => println!("  - sale [{}]", hex_corto(&id)),
             Ok(EventoUya::Estado {

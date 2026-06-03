@@ -13,16 +13,19 @@
 mod audio;
 mod captura;
 mod enlace;
+mod identidad;
 mod lan;
 mod video;
 
 pub use audio::{iniciar_microfono, iniciar_reproduccion, MezclaRemota};
 pub use captura::iniciar_camara;
 pub use enlace::Enlace;
+pub use identidad::{verificar_presentacion, Identidad};
 pub use lan::iniciar_baliza_lan;
 pub use media_audio_cpal::AudioSink;
 pub use uya_core::{
-    hex_corto, id_desde_nombre, FormatoCuadro, Paquete, Participante, ParticipanteId, Sala,
+    hex_corto, id_desde_clave, id_desde_nombre, mensaje_identidad, FormatoCuadro, Paquete,
+    Participante, ParticipanteId, Sala,
 };
 
 use std::sync::Arc;
@@ -31,10 +34,12 @@ use std::sync::Arc;
 /// captura empujan estos eventos al canal que la UI drena en su bucle Elm.
 #[derive(Clone, Debug)]
 pub enum EventoUya {
-    /// Un participante (yo o remoto) entró / se presentó.
+    /// Un participante (yo o remoto) entró / se presentó. `verificado` es `true`
+    /// si su `Hola` traía una firma válida ligando su clave a `(id, nombre)`.
     Entra {
         id: ParticipanteId,
         nombre: String,
+        verificado: bool,
     },
     /// Un participante se fue (cuelgue o desconexión).
     Sale { id: ParticipanteId },

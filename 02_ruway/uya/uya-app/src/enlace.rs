@@ -37,6 +37,7 @@ use tokio_util::compat::{Compat, FuturesAsyncReadCompatExt};
 use uya_core::{id_desde_nombre, FormatoCuadro, Paquete, ParticipanteId};
 
 use crate::audio::{DetectorVoz, MezclaRemota};
+use crate::identidad::{verificar_presentacion, Identidad};
 use crate::EventoUya;
 
 /// El protocolo libp2p del transporte de uya. Coexiste multiplexado con los
@@ -84,10 +85,13 @@ enum Cmd {
 }
 
 /// Identidad y estado de medios locales, compartidos con cada conexión para el
-/// handshake `Hola`+`Estado`.
+/// handshake `Hola`+`Estado`. La clave pública y la firma de presentación se
+/// precalculan una vez (son constantes de la sesión).
 struct Yo {
     id: ParticipanteId,
     nombre: String,
+    clave: [u8; 32],
+    firma: Vec<u8>,
     camara: Arc<AtomicBool>,
     microfono: Arc<AtomicBool>,
 }
@@ -115,7 +119,12 @@ impl Enlace {
         bind: &str,
     ) -> Result<(Self, Receiver<EventoUya>), String> {
         let nombre = nombre.into();
-        let yo = id_desde_nombre(&nombre);
+        // Identidad soberana persistida: la semilla secreta engendra el par
+        // Ed25519 (firma del Hola) y, abajo, el keypair libp2p del transporte.
+        let identidad = Identidad::cargar();
+        let yo = identidad.id();
+        let semilla = identidad.semilla();
+        let firma = identidad.firmar_presentacion(&nombre);
 
         let (cmd_tx, cmd_rx) = tmpsc::unbounded_channel::<Cmd>();
         let (ev_tx, ev_rx) = std_channel::<EventoUya>();
@@ -127,6 +136,8 @@ impl Enlace {
         let yo_compartido = Arc::new(Yo {
             id: yo,
             nombre: nombre.clone(),
+            clave: identidad.clave(),
+            firma,
             camara: camara.clone(),
             microfono: microfono.clone(),
         });
@@ -150,7 +161,7 @@ impl Enlace {
                         }
                     };
                     rt.block_on(async move {
-                        match arrancar(&bind, yo_compartido.id).await {
+                        match arrancar(&bind, semilla).await {
                             Ok((node, dial_addr)) => {
                                 let _ = listo_tx.send(Ok(dial_addr.clone()));
                                 conducir(node, dial_addr, cmd_tx, yo_compartido, cmd_rx, ev_tx, mezcla)
@@ -462,10 +473,13 @@ async fn registrar(
     let compat = stream.compat();
     let (mut rd, mut wr) = tokio::io::split(compat);
 
-    // Handshake: presentarse y declarar el estado de medios actual.
+    // Handshake: presentarse (con prueba de identidad firmada) y declarar el
+    // estado de medios actual.
     let hola = Paquete::Hola {
         id: yo.id,
         nombre: yo.nombre.clone(),
+        clave: yo.clave,
+        firma: yo.firma.clone(),
     }
     .codificar();
     if escribir_frame(&mut wr, &hola).await.is_err() {
@@ -510,10 +524,20 @@ async fn registrar(
                 Err(_) => continue,
             };
             match paquete {
-                Paquete::Hola { id, nombre } => {
+                Paquete::Hola {
+                    id,
+                    nombre,
+                    clave,
+                    firma,
+                } => {
                     remoto = Some(id);
                     remoto_nombre = Some(nombre.clone());
-                    let _ = ev_tx.send(EventoUya::Entra { id, nombre });
+                    let verificado = verificar_presentacion(&id, &nombre, &clave, &firma);
+                    let _ = ev_tx.send(EventoUya::Entra {
+                        id,
+                        nombre,
+                        verificado,
+                    });
                 }
                 Paquete::Estado { camara, microfono } => {
                     if let Some(id) = remoto {

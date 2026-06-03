@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 use std::env;
 use std::sync::Arc;
 
-use uya_app::{iniciar_camara, Enlace, EventoUya, ParticipanteId, Sala};
+use uya_app::{hex_corto, iniciar_camara, Enlace, EventoUya, ParticipanteId, Sala};
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{auto, length, percent, Size, Style};
 use llimphi_ui::llimphi_layout::taffy::{
@@ -43,6 +43,7 @@ const ROJO_BG: Color = Color::from_rgba8(150, 56, 56, 255);
 const TEXTO: Color = Color::from_rgba8(222, 226, 233, 255);
 const TENUE: Color = Color::from_rgba8(128, 134, 146, 255);
 const ACENTO: Color = Color::from_rgba8(120, 210, 184, 255);
+const ROJO: Color = Color::from_rgba8(230, 132, 132, 255);
 
 /// Cuántos renglones de charla pinta la ventana visible (con scroll por rueda).
 const VENTANA_CHARLA: usize = 14;
@@ -81,6 +82,9 @@ struct Modelo {
     mic_on: bool,
     /// Mi propia dirección dialable (con `/p2p/`), para mostrarla y compartirla.
     mi_dir: String,
+    /// Huella corta de mi identidad (BLAKE3 de mi clave), para verificación
+    /// fuera de banda: el par contrasta que coincida con la que ve.
+    mi_huella: String,
     /// Campo donde se pega/teclea la dirección de un par a conectar.
     conectar_input: TextInputState,
     /// Campo donde se escribe un mensaje de la charla.
@@ -173,14 +177,17 @@ impl App for Uya {
         });
 
         let mi_dir = enlace.direccion_local().to_string();
+        let yo = enlace.yo();
+        let mi_huella = hex_corto(&yo);
         Modelo {
-            sala: Sala::nueva(nombre),
+            sala: Sala::nueva(yo, nombre),
             enlace,
             cuadros: HashMap::new(),
             hablando: HashSet::new(),
             cam_on: true,
             mic_on: true,
             mi_dir,
+            mi_huella,
             conectar_input: TextInputState::new(),
             charla_input: TextInputState::new(),
             charla: Vec::new(),
@@ -221,9 +228,13 @@ impl App for Uya {
 
     fn update(mut model: Self::Model, msg: Self::Msg, _handle: &Handle<Self::Msg>) -> Self::Model {
         match msg {
-            Msg::Red(EventoUya::Entra { id, nombre }) => {
+            Msg::Red(EventoUya::Entra {
+                id,
+                nombre,
+                verificado,
+            }) => {
                 if id != model.sala.yo {
-                    model.sala.entrar(id, nombre);
+                    model.sala.entrar(id, nombre, verificado);
                 }
             }
             Msg::Red(EventoUya::Sale { id }) => {
@@ -327,7 +338,7 @@ impl App for Uya {
     fn view(model: &Self::Model) -> View<Self::Msg> {
         let mut tiles: Vec<View<Msg>> = Vec::new();
 
-        // Mi propia cara primero.
+        // Mi propia cara primero (yo siempre soy de confianza para mí mismo).
         tiles.push(tile(
             &format!("{} (yo)", model.sala.mi_nombre),
             model.cuadros.get(&model.sala.yo),
@@ -335,6 +346,7 @@ impl App for Uya {
             model.mic_on,
             true,
             model.hablando.contains(&model.sala.yo),
+            true,
         ));
         // Los demás, en orden estable por id (BTreeMap).
         for p in model.sala.participantes.values() {
@@ -345,6 +357,7 @@ impl App for Uya {
                 p.microfono,
                 false,
                 model.hablando.contains(&p.id),
+                p.verificado,
             ));
         }
 
@@ -487,7 +500,11 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text(format!("tu dirección:  {}", model.mi_dir), 12.0, TENUE);
+    .text(
+        format!("huella {}  ·  {}", model.mi_huella, model.mi_dir),
+        12.0,
+        TENUE,
+    );
 
     let campo = View::new(Style {
         flex_grow: 1.0,
@@ -524,7 +541,8 @@ fn barra_conectar(model: &Modelo) -> View<Msg> {
 }
 
 /// Un tile de participante: video (o placeholder) arriba + etiqueta abajo. Si
-/// `hablando`, el marco se tiñe de acento (detección de voz).
+/// `hablando`, el marco se tiñe de acento (detección de voz); si NO está
+/// `verificado`, la etiqueta avisa en rojo.
 fn tile(
     nombre: &str,
     cuadro: Option<&CuadroUI>,
@@ -532,6 +550,7 @@ fn tile(
     mic: bool,
     yo: bool,
     hablando: bool,
+    verificado: bool,
 ) -> View<Msg> {
     let estilo_video = Style {
         size: Size {
@@ -558,14 +577,23 @@ fn tile(
             .text("camara apagada", 15.0, TENUE),
     };
 
-    let etiqueta = if !mic {
+    // Sin verificar manda en la etiqueta: es una advertencia de seguridad.
+    let etiqueta = if !verificado {
+        format!("{nombre}  ·  ⚠ sin verificar")
+    } else if !mic {
         format!("{nombre}  ·  mic off")
     } else if hablando {
         format!("{nombre}  ·  hablando")
     } else {
         nombre.to_string()
     };
-    let color_label = if hablando || yo { ACENTO } else { TEXTO };
+    let color_label = if !verificado {
+        ROJO
+    } else if hablando || yo {
+        ACENTO
+    } else {
+        TEXTO
+    };
     let label = View::new(Style {
         size: Size {
             width: percent(1.0),
