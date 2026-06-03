@@ -58,8 +58,9 @@ struct Cosmos;
 /// consistente al cambiar capas/armónico) y refresca `m.render` con el de
 /// la pestaña activa. Las cartas abiertas son pocas; el costo es marginal.
 fn recompute_chart(m: &mut Model) {
+    let off = m.rectify_offset_min;
     if m.open.is_empty() {
-        let (render, error) = compute(&m.chart, &m.overlays, m.harmonic, m.cfg.minor_aspects);
+        let (render, error) = compute(&m.chart, &m.overlays, m.harmonic, m.cfg.minor_aspects, off);
         m.render = render;
         m.error = error;
         return;
@@ -68,7 +69,7 @@ fn recompute_chart(m: &mut Model) {
     let (h, minor) = (m.harmonic, m.cfg.minor_aspects);
     let active = m.active_tab.min(m.open.len() - 1);
     for i in 0..m.open.len() {
-        let (render, error) = compute(&m.open[i].chart, &overlays, h, minor);
+        let (render, error) = compute(&m.open[i].chart, &overlays, h, minor, off);
         m.open[i].render = render;
         if i == active {
             m.render = m.open[i].render.clone();
@@ -79,7 +80,7 @@ fn recompute_chart(m: &mut Model) {
 
 /// Render puntual de una carta con las opciones globales actuales.
 fn compute_render(m: &Model, chart: &cosmos_model::Chart) -> cosmos_render::RenderModel {
-    compute(chart, &m.overlays, m.harmonic, m.cfg.minor_aspects).0
+    compute(chart, &m.overlays, m.harmonic, m.cfg.minor_aspects, m.rectify_offset_min).0
 }
 
 // El cómputo astronómico es el pesado (144 muestras × 10 cuerpos): NO corre
@@ -513,6 +514,66 @@ fn apply_nav_act(m: &mut Model, act: chrome::NavAct) {
 }
 
 // =====================================================================
+// Rectificador de hora (direcciones primarias)
+// =====================================================================
+
+/// Corre el barrido de rectificación con los eventos cargados (±2 h).
+fn run_rectify(m: &mut Model) {
+    if m.rectify_events.is_empty() {
+        m.error = Some("Rectificador: cargá al menos un evento (edad)".into());
+        return;
+    }
+    let eventos: Vec<cosmos_engine::EventoConocido> = m
+        .rectify_events
+        .iter()
+        .map(|&edad_years| cosmos_engine::EventoConocido { edad_years })
+        .collect();
+    match cosmos_engine::rectificar(&m.chart, &eventos, 120, "naibod") {
+        Ok(res) => {
+            let secs = res.mejor_offset_segundos;
+            m.status_note = Some(format!(
+                "Rectificación: {:+} s ({:+} min) · error {:.2}",
+                secs,
+                secs / 60,
+                res.mejor_puntaje
+            ));
+            m.rectify_result = Some(res);
+        }
+        Err(e) => m.error = Some(format!("rectificar: {e}")),
+    }
+}
+
+/// Aplica el mejor offset hallado a la hora de nacimiento de la carta.
+fn apply_rectify(m: &mut Model) {
+    let Some(res) = &m.rectify_result else {
+        m.error = Some("Rectificador: corré primero el barrido".into());
+        return;
+    };
+    let secs = res.mejor_offset_segundos;
+    let bd = &mut m.chart.birth_data;
+    // Total de segundos del día + offset, normalizado a [0, 86400).
+    let total = ((bd.hour as i64 * 60 + bd.minute as i64) * 60) + bd.second as i64 + secs;
+    let total = total.rem_euclid(86_400);
+    bd.hour = (total / 3600) as u32;
+    bd.minute = ((total % 3600) / 60) as u32;
+    bd.second = (total % 60) as f64;
+    bd.time_certainty = cosmos_model::TimeCertainty::Exact;
+    // Refleja en la pestaña activa, persiste y recomputa con offset 0.
+    if let Some(t) = m.open.get_mut(m.active_tab) {
+        t.chart = m.chart.clone();
+    }
+    m.rectify_offset_min = 0;
+    m.rectify_result = None;
+    save_chart_to_disk(&m.chart);
+    recompute_chart(m);
+    recompute_astro(m);
+    m.status_note = Some(format!(
+        "Hora rectificada: {:02}:{:02}:{:02}",
+        m.chart.birth_data.hour, m.chart.birth_data.minute, m.chart.birth_data.second as u32
+    ));
+}
+
+// =====================================================================
 // Diálogos modales (crear contacto / crear carta)
 // =====================================================================
 
@@ -756,7 +817,7 @@ impl App for Cosmos {
         // computa en un worker que reentra con `AstroComputed`. `init` corre
         // en winit DESPUÉS de crear la ventana, así que un cómputo pesado aquí
         // congelaría la ventana recién abierta. Generación 1 = la del arranque.
-        let (render, error) = compute(&chart, &ui.overlays, ui.harmonic, ui.cfg.minor_aspects);
+        let (render, error) = compute(&chart, &ui.overlays, ui.harmonic, ui.cfg.minor_aspects, 0);
         let astro = None;
         {
             let (c, use_now) = (chart.clone(), ui.cfg.use_now);
@@ -830,6 +891,9 @@ impl App for Cosmos {
             ctx_open: None,
             nav_ctx: None,
             nav_scroll: 0.0,
+            rectify_offset_min: 0,
+            rectify_events: Vec::new(),
+            rectify_result: None,
             dialog: None,
             dialog_field: dialog::DialogField::Name,
             dialog_input: llimphi_widget_text_input::TextInputState::new(),
@@ -1060,6 +1124,30 @@ impl App for Cosmos {
                 m.nav_scroll =
                     llimphi_widget_scroll::clamp_offset(m.nav_scroll + delta, content, viewport);
             }
+            // rectificador de hora
+            Msg::RectifyNudge(d) => {
+                m.rectify_offset_min += d;
+                recompute_chart(&mut m);
+                recompute_astro(&mut m);
+            }
+            Msg::RectifyResetOffset => {
+                m.rectify_offset_min = 0;
+                recompute_chart(&mut m);
+                recompute_astro(&mut m);
+            }
+            Msg::RectifyAddEvent => m.rectify_events.push(25.0),
+            Msg::RectifyEventDelta(i, d) => {
+                if let Some(e) = m.rectify_events.get_mut(i) {
+                    *e = (*e + d).clamp(0.0, 120.0);
+                }
+            }
+            Msg::RectifyRemoveEvent(i) => {
+                if i < m.rectify_events.len() {
+                    m.rectify_events.remove(i);
+                }
+            }
+            Msg::RectifyRun => run_rectify(&mut m),
+            Msg::RectifyApply => apply_rectify(&mut m),
             // diálogos modales
             Msg::OpenNewContactDialog => open_contact_dialog(&mut m),
             Msg::OpenNewChartDialog => open_chart_dialog(&mut m),

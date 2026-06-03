@@ -81,6 +81,7 @@ fn panel_rows(panel: ToolPanel, model: &Model) -> usize {
         ToolPanel::Mareas => 10,
         ToolPanel::Eclipses => 10,
         ToolPanel::Efemerides => 14,
+        ToolPanel::Rectificador => 8 + model.rectify_events.len() + 4,
         ToolPanel::Configuracion => 22,
     }
 }
@@ -359,6 +360,7 @@ fn body_for(panel: ToolPanel, model: &Model, theme: &Theme) -> View<Msg> {
             Some(a) => astroview::view_efemerides(a, theme),
             None => astroview::calculando(theme),
         },
+        ToolPanel::Rectificador => chrome::rectify_view(model, theme),
         ToolPanel::Configuracion => chrome::config_view(model, theme),
     }
 }

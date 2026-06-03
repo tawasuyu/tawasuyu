@@ -41,6 +41,7 @@ pub(crate) fn compute(
     overlays: &[OverlayKind],
     harmonic: u32,
     show_minors: bool,
+    offset_min: i64,
 ) -> (RenderModel, Option<String>) {
     let target_age = 35.0;
     let requests: Vec<PipelineRequest> = overlays
@@ -54,12 +55,15 @@ pub(crate) fn compute(
         show_dignities: true,
         harmonic,
     };
-    match cosmos_engine::compose_with_options(chart, 0, &requests, &opts) {
+    // `offset_min` = jog de rectificación: corre la hora de nacimiento sin
+    // tocar la carta guardada, para ver moverse ángulos/casas en vivo.
+    match cosmos_engine::compose_with_options(chart, offset_min, &requests, &opts) {
         Ok(r) => (r, None),
         Err(e) => {
             let msg = format!("{e}");
             (
-                compose(chart, 0, &[]).unwrap_or_else(|_| cosmos_engine::compute_mock(chart)),
+                compose(chart, offset_min, &[])
+                    .unwrap_or_else(|_| cosmos_engine::compute_mock(chart)),
                 Some(msg),
             )
         }

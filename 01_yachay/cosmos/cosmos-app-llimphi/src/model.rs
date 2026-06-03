@@ -236,7 +236,7 @@ impl ToolCat {
                 ToolPanel::Eclipses,
                 ToolPanel::Efemerides,
             ],
-            ToolCat::Sistema => &[ToolPanel::Configuracion],
+            ToolCat::Sistema => &[ToolPanel::Rectificador, ToolPanel::Configuracion],
         }
     }
 }
@@ -267,6 +267,7 @@ pub(crate) enum ToolPanel {
     Mareas,
     Eclipses,
     Efemerides,
+    Rectificador,
     Configuracion,
 }
 
@@ -290,6 +291,7 @@ impl ToolPanel {
             ToolPanel::Mareas => "Mareas",
             ToolPanel::Eclipses => "Eclipses",
             ToolPanel::Efemerides => "Efemérides",
+            ToolPanel::Rectificador => "Rectificador de hora",
             ToolPanel::Configuracion => "Configuración",
         }
     }
@@ -563,6 +565,21 @@ pub(crate) enum Msg {
     NavCtxPick(usize),
     /// Desplaza el árbol de datos (izquierda) en `delta` px.
     NavScroll(f32),
+    // rectificador de hora
+    /// Corre el jog de la hora en `delta` minutos (puede ser negativo).
+    RectifyNudge(i64),
+    /// Restaura el jog a 0.
+    RectifyResetOffset,
+    /// Agrega un evento conocido (edad por defecto).
+    RectifyAddEvent,
+    /// Cambia la edad del evento `idx` en `delta` años.
+    RectifyEventDelta(usize, f64),
+    /// Quita el evento `idx`.
+    RectifyRemoveEvent(usize),
+    /// Corre el barrido de rectificación con los eventos cargados.
+    RectifyRun,
+    /// Aplica el mejor offset hallado a la hora de nacimiento de la carta.
+    RectifyApply,
     // diálogos modales (crear contacto / crear carta)
     OpenNewContactDialog,
     OpenNewChartDialog,
@@ -673,6 +690,14 @@ pub(crate) struct Model {
     pub(crate) nav_ctx: Option<String>,
     /// Desplazamiento vertical del árbol de datos (izquierda).
     pub(crate) nav_scroll: f32,
+    // rectificador de hora (direcciones primarias)
+    /// Jog de la hora de nacimiento en minutos (no toca la carta guardada
+    /// hasta «Aplicar»). Mueve ángulos/casas en vivo.
+    pub(crate) rectify_offset_min: i64,
+    /// Eventos conocidos (edades en años) que anclan la rectificación.
+    pub(crate) rectify_events: Vec<f64>,
+    /// Resultado del último barrido de rectificación.
+    pub(crate) rectify_result: Option<cosmos_engine::Rectificacion>,
     /// Diálogo modal abierto (crear contacto / crear carta), si lo hay.
     pub(crate) dialog: Option<crate::dialog::Dialog>,
     /// Campo del diálogo que tiene el foco de teclado.
