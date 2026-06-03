@@ -1683,6 +1683,17 @@ pub(crate) fn paint_background_image(
 /// pinta el callback entre el `fill` y la `image`/`text` del view, así
 /// que la sombra cae detrás del contenido pero encima del fondo del
 /// parent. Aproximación: sin gaussian blur — el `blur_px` se mapea
+/// Patrón de dashes (en px) para un `border-style` dado y grosor `w`.
+/// `Solid`/`Double` → `None` (se pintan distinto). `Dotted` = cuadros del
+/// tamaño del grosor; `Dashed` = trazos de 3× separados por 2×.
+fn border_dash_pattern(style: BorderLineStyle, w: f64) -> Option<[f64; 2]> {
+    match style {
+        BorderLineStyle::Dotted => Some([w.max(0.5), w.max(0.5) * 1.5]),
+        BorderLineStyle::Dashed => Some([w.max(0.5) * 3.0, w.max(0.5) * 2.0]),
+        BorderLineStyle::Solid | BorderLineStyle::Double => None,
+    }
+}
+
 /// Datos de `text-decoration` capturados para el closure de paint (evita
 /// referenciar el `BoxNode` dentro de él). Todo ya escalado por zoom.
 #[derive(Clone, Copy)]
@@ -1729,6 +1740,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     // cuando se mezclan widths/colors por lado.
     let bw = b.border_widths;
     let bc = b.border_colors;
+    let border_style = b.border_style;
     let uniform_border = if bw.top == bw.right
         && bw.right == bw.bottom
         && bw.bottom == bw.left
@@ -1921,18 +1933,33 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             scene.fill(Fill::NonZero, Affine::IDENTITY, sc, None, &r);
         }
         if let Some((bc, w)) = uniform_border {
-            let stroke = Stroke::new(w as f64);
-            let half = stroke.width * 0.5;
-            let r = RoundedRect::new(
-                rect.x as f64 + half,
-                rect.y as f64 + half,
-                (rect.x + rect.w) as f64 - half,
-                (rect.y + rect.h) as f64 - half,
-                (radius - half).max(0.0),
-            );
             let a = (bc.a as f32 * alpha_mul) as u8;
             let color = Color::from_rgba8(bc.r, bc.g, bc.b, a);
-            scene.stroke(&stroke, Affine::IDENTITY, color, None, &r);
+            let mk_rect = |inset: f64, sw: f64| {
+                let half = sw * 0.5 + inset;
+                RoundedRect::new(
+                    rect.x as f64 + half,
+                    rect.y as f64 + half,
+                    (rect.x + rect.w) as f64 - half,
+                    (rect.y + rect.h) as f64 - half,
+                    (radius - half).max(0.0),
+                )
+            };
+            if let BorderLineStyle::Double = border_style {
+                // Dos líneas de ~1/3 del grosor, separadas por otro 1/3.
+                let sw = (w as f64 / 3.0).max(1.0);
+                scene.stroke(&Stroke::new(sw), Affine::IDENTITY, color, None, &mk_rect(0.0, sw));
+                scene.stroke(
+                    &Stroke::new(sw), Affine::IDENTITY, color, None,
+                    &mk_rect(w as f64 - sw, sw),
+                );
+            } else {
+                let mut stroke = Stroke::new(w as f64);
+                if let Some(p) = border_dash_pattern(border_style, w as f64) {
+                    stroke = stroke.with_dashes(0.0, p);
+                }
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &mk_rect(0.0, w as f64));
+            }
         }
         if let Some((s_top, s_right, s_bottom, s_left)) = per_side_border {
             // Per-side: pintamos cada lado como una línea recta del color
@@ -1943,6 +1970,15 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
             let y0 = rect.y as f64;
             let x1 = x0 + rect.w as f64;
             let y1 = y0 + rect.h as f64;
+            // Stroke por lado con el patrón de `border-style`. `double` cae
+            // a sólido en el modo per-lado (combo raro, no vale el coste).
+            let side_stroke = |w: f64| {
+                let mut s = Stroke::new(w);
+                if let Some(p) = border_dash_pattern(border_style, w) {
+                    s = s.with_dashes(0.0, p);
+                }
+                s
+            };
             // Cada lado se inseta por w/2 para que el trazo caiga dentro
             // del rect del nodo (vello pinta centrado al path). Pintamos
             // inline (sin closure) para evitar capturas raras del scene.
@@ -1951,28 +1987,28 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
                 let line = Line::new((x0, y0 + h), (x1, y0 + h));
-                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+                scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
             if let Some((c, w)) = s_bottom {
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
                 let line = Line::new((x0, y1 - h), (x1, y1 - h));
-                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+                scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
             if let Some((c, w)) = s_left {
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
                 let line = Line::new((x0 + h, y0), (x0 + h, y1));
-                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+                scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
             if let Some((c, w)) = s_right {
                 let h = (w as f64) * 0.5;
                 let a = (c.a as f32 * alpha_mul) as u8;
                 let color = Color::from_rgba8(c.r, c.g, c.b, a);
                 let line = Line::new((x1 - h, y0), (x1 - h, y1));
-                scene.stroke(&Stroke::new(w as f64), Affine::IDENTITY, color, None, &line);
+                scene.stroke(&side_stroke(w as f64), Affine::IDENTITY, color, None, &line);
             }
         }
         if let Some((oc, ow, off)) = outline {

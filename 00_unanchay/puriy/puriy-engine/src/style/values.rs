@@ -50,6 +50,10 @@ pub struct ComputedStyle {
     /// El shorthand `border-radius: 8px` setea las 4; las propiedades
     /// `border-top-left-radius` etc. las setean individualmente.
     pub border_radii: Corners<f32>,
+    /// `border-style` uniforme (`solid`/`dashed`/`dotted`/`double`). Se
+    /// aplica a todos los lados que tengan border visible — el modelo
+    /// per-lado del estilo no se distingue (sólo el ancho/color lo es).
+    pub border_style: BorderLineStyle,
     /// `box-shadow` simplificado. `None` = sin sombra.
     pub box_shadow: Option<BoxShadow>,
     /// `z-index` aplicado al stacking order entre siblings positioned
@@ -279,6 +283,18 @@ pub enum TextDecorationStyle {
     Dotted,
     Dashed,
     Wavy,
+}
+
+/// CSS `border-style` reducido al subset que el chrome pinta: `solid`
+/// (línea continua), `dashed`/`dotted` (patrón de stroke) y `double` (dos
+/// líneas). `none`/`hidden` se modelan aparte (color del lado = `None`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderLineStyle {
+    #[default]
+    Solid,
+    Dashed,
+    Dotted,
+    Double,
 }
 
 /// CSS `font-style`. Heredable. `Oblique` lo tratamos igual que
@@ -969,6 +985,7 @@ impl Default for ComputedStyle {
             border_widths: Sides::all(0.0),
             border_colors: Sides::all(None),
             border_radii: Corners::all(0.0),
+            border_style: BorderLineStyle::Solid,
             box_shadow: None,
             z_index: 0,
             content: None,

@@ -88,6 +88,8 @@ pub struct BoxNode {
     pub border_colors: Sides<Option<Color>>,
     /// Radio corner-radius en px por esquina.
     pub border_radii: Corners<f32>,
+    /// Patrón visual del border (solid/dashed/dotted/double), uniforme.
+    pub border_style: BorderLineStyle,
     /// Background a aplicar cuando el nodo está bajo el mouse. `None` =
     /// no hay regla `:hover` que cambie el background del nodo. El
     /// chrome lo plug-ea vía `View::hover_fill`. Restyle completo en

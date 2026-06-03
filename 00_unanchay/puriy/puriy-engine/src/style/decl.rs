@@ -100,6 +100,9 @@ pub(crate) enum DeclKind {
     /// `border-style: solid` activa el dibujo del border; `none`/`hidden`
     /// lo desactiva (color → None).
     BorderEnabled(bool),
+    /// `border-style` uniforme con el patrón visual (`dashed`/`dotted`/
+    /// `double`/`solid`). Complementa a `BorderEnabled` (que sólo togglea).
+    BorderStyleKind(BorderLineStyle),
     /// Variantes per-side: `border-top-width: 2px` setea sólo el top.
     BorderSideWidth(BorderEdge, f32),
     BorderSideColor(BorderEdge, Color),
@@ -259,6 +262,7 @@ impl Decl {
                     s.border_widths = Sides::all(0.0);
                 }
             }
+            DeclKind::BorderStyleKind(st) => s.border_style = *st,
             DeclKind::BorderSideWidth(side, v) => set_side_f32(&mut s.border_widths, *side, *v),
             DeclKind::BorderSideColor(side, c) => set_side(&mut s.border_colors, *side, Some(*c)),
             DeclKind::BorderSideStyle(side, on) => {

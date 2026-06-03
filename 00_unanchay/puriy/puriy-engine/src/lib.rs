@@ -40,7 +40,7 @@ pub use dom::{DomTree, MetaRefresh, ScriptInfo};
 pub use fetch::{decode_base64, encode_base64, fetch, fetch_full, FetchError, FetchResponse};
 pub use style::{
     AlignContent, AlignItems, AlignSelf, AnimationBinding, AnimationDirection, AnimationFillMode,
-    AnimationIterations, BackgroundPosition, BackgroundRepeat, BackgroundSize,
+    AnimationIterations, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderLineStyle,
     BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
     FlexDirection, FlexWrap, FontStyle, GradientStop, GridTrackSize, JustifyContent, KeyframeStep,
     Keyframes, LengthVal, LinearGradient, ObjectFit, Outline, Overflow, PointerEvents, Position,

@@ -39,6 +39,16 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_border_shorthand(value, important));
             continue;
         }
+        // `border-style` (todos los lados): togglea enabled + fija el patrón.
+        if prop.eq_ignore_ascii_case("border-style") {
+            if let Some(on) = parse_border_style(value) {
+                out.push(Decl { kind: DeclKind::BorderEnabled(on), important });
+                if let Some(ls) = parse_border_line_style(value) {
+                    out.push(Decl { kind: DeclKind::BorderStyleKind(ls), important });
+                }
+            }
+            continue;
+        }
         if let Some(decls) = parse_logical_border(prop, value, important) {
             out.extend(decls);
             continue;
@@ -486,6 +496,20 @@ pub(crate) fn parse_border_style(s: &str) -> Option<bool> {
     }
 }
 
+/// Mapea un keyword de `border-style` al patrón visual. `none`/`hidden` →
+/// `None` (no togglea estilo, sólo el enabled). Otros estilos CSS sin
+/// soporte (`groove`/`ridge`/`inset`/`outset`) caen a `Solid`.
+pub(crate) fn parse_border_line_style(s: &str) -> Option<BorderLineStyle> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "solid" => Some(BorderLineStyle::Solid),
+        "dashed" => Some(BorderLineStyle::Dashed),
+        "dotted" => Some(BorderLineStyle::Dotted),
+        "double" => Some(BorderLineStyle::Double),
+        "groove" | "ridge" | "inset" | "outset" => Some(BorderLineStyle::Solid),
+        _ => None,
+    }
+}
+
 /// Parsea el shorthand `border: <width> <style> <color>` (componentes en
 /// cualquier orden). Devuelve hasta 3 decls. Si falta el style, se asume
 /// `solid`. Cualquier "none" en la posición de style desactiva el border.
@@ -494,6 +518,7 @@ pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> 
     let mut color: Option<Color> = None;
     let mut current: bool = false;
     let mut style_on: Option<bool> = None;
+    let mut line_style: Option<BorderLineStyle> = None;
     for tok in value.split_whitespace() {
         if let Some(w) = parse_length_px(tok) {
             width = Some(w);
@@ -503,12 +528,14 @@ pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> 
             current = true;
             continue;
         }
-        if let Some(c) = parse_color(tok) {
-            color = Some(c);
-            continue;
-        }
         if let Some(s) = parse_border_style(tok) {
             style_on = Some(s);
+            // El patrón visual sólo aplica si el border queda activo.
+            line_style = parse_border_line_style(tok);
+            continue;
+        }
+        if let Some(c) = parse_color(tok) {
+            color = Some(c);
             continue;
         }
     }
@@ -519,6 +546,9 @@ pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> 
     let mut out = Vec::new();
     if let Some(on) = style_on {
         out.push(Decl { kind: DeclKind::BorderEnabled(on), important });
+    }
+    if let Some(ls) = line_style {
+        out.push(Decl { kind: DeclKind::BorderStyleKind(ls), important });
     }
     if let Some(w) = width {
         out.push(Decl { kind: DeclKind::BorderWidth(w), important });

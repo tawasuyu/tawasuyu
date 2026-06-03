@@ -774,6 +774,51 @@ mod tests {
     }
 
     #[test]
+    fn border_style_dashed_dotted_double() {
+        // Parser del keyword → patrón visual.
+        assert_eq!(parse_border_line_style("dashed"), Some(BorderLineStyle::Dashed));
+        assert_eq!(parse_border_line_style("DOTTED"), Some(BorderLineStyle::Dotted));
+        assert_eq!(parse_border_line_style("double"), Some(BorderLineStyle::Double));
+        // Estilos 3D sin soporte → Solid (no se dropea la regla).
+        assert_eq!(parse_border_line_style("groove"), Some(BorderLineStyle::Solid));
+        assert_eq!(parse_border_line_style("zigzag"), None);
+
+        let html = r##"<html><head><style>
+            div.sh { border: 2px dashed red }
+            div.ls { border-width: 3px; border-color: blue; border-style: dotted }
+            div.db { border: 4px double green }
+            div.none { border: 1px solid black; border-style: none }
+            div.plain { border: 1px solid black }
+        </style></head><body>
+            <div class="sh"></div><div class="ls"></div><div class="db"></div>
+            <div class="none"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        assert_eq!(divs.len(), 5);
+        // Shorthand `border: 2px dashed red`.
+        let sh = eng.compute(&divs[0]);
+        assert_eq!(sh.border_style, BorderLineStyle::Dashed);
+        assert_eq!(sh.border_widths.top, 2.0);
+        // Longhand `border-style: dotted` (sobre width/color sueltos).
+        assert_eq!(eng.compute(&divs[1]).border_style, BorderLineStyle::Dotted);
+        // `double`.
+        assert_eq!(eng.compute(&divs[2]).border_style, BorderLineStyle::Double);
+        // `border-style: none` desactiva el border (width→0) — el patrón
+        // queda como estaba (Solid) pero no se pinta.
+        let nb = eng.compute(&divs[3]);
+        assert_eq!(nb.border_widths.top, 0.0);
+        // Sin estilo explícito → Solid default.
+        assert_eq!(eng.compute(&divs[4]).border_style, BorderLineStyle::Solid);
+    }
+
+    #[test]
     fn text_decoration_thickness_y_underline_offset() {
         let html = r##"<html><head><style>
             p.t { text-decoration: underline; text-decoration-thickness: 3px }

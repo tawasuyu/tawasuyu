@@ -637,6 +637,7 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.border_widths = s.border_widths;
     b.border_colors = s.border_colors;
     b.border_radii = s.border_radii;
+    b.border_style = s.border_style;
     b.hover_background = hover_bg;
     b.focus_background = focus_bg;
     b.box_shadow = s.box_shadow;

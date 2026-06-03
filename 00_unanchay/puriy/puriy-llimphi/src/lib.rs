@@ -49,7 +49,7 @@ use llimphi_theme::Theme;
 
 use puriy_engine::{
     AlignItems as CssAlignItems, AlignSelf as CssAlignSelf,
-    BackgroundPosition, BackgroundRepeat, BackgroundSize, BoxNode, BoxShadow,
+    BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderLineStyle, BoxNode, BoxShadow,
     BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
     AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridTrackSize,
     JustifyContent as CssJustifyContent, LengthVal,
