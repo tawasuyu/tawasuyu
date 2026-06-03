@@ -414,6 +414,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .flatten();
 
     let (surfaces, shuma) = Model::construir(&cfg);
+    // El sampler en UTC si la config lo pide (se lee antes de mover `cfg` al app).
+    let utc = crate::usa_utc(&cfg);
     let mut app = LayerApp {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -438,7 +440,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         menu_open: false,
         menu_panel,
         menu_bar_px,
-        sampler: SamplerHandle::spawn(),
+        sampler: SamplerHandle::spawn(utc),
         ctx: WidgetCtx::default(),
         exec_rx: None,
         panels,

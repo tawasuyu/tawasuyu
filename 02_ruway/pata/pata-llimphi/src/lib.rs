@@ -123,6 +123,14 @@ pub enum SlotWidget {
     Tray,
 }
 
+/// `true` si la config pide el reloj en **UTC** (`general.timezone = "UTC"`).
+/// Cualquier otro valor (incluido `"auto"`) usa la hora local. Paridad con el
+/// `TzMode` de mirada-launcher (que sólo distinguía auto/UTC). Compartido por
+/// ambos backends para construir el sampler.
+pub fn usa_utc(cfg: &Config) -> bool {
+    cfg.general.timezone.trim().eq_ignore_ascii_case("utc")
+}
+
 /// Lanza `cmd` por `sh -c` como proceso hijo, sin esperarlo (no bloquea). Lo
 /// usan ambos backends al recibir [`Msg::Spawn`].
 pub fn spawn_cmd(cmd: &str) {
@@ -320,7 +328,7 @@ impl App for PataApp {
         let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1));
         let (surfaces, shuma) = Model::construir(&cfg);
         let cards = Model::construir_cards(&cfg);
-        let mut sampler = Sampler::new();
+        let mut sampler = Sampler::with_utc(usa_utc(&cfg));
         let ctx = sampler.sample();
         let clipboard = crate::sampler::leer_clipboard();
         let tray = config_tiene_widget(&cfg, "tray")

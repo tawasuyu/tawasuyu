@@ -25,12 +25,20 @@ const LUNA_NUEVA_REF_JD: f64 = 2451550.1;
 pub struct Sampler {
     /// `(total, idle)` de la lectura anterior de `/proc/stat`, o `None` al inicio.
     cpu_prev: Option<(u64, u64)>,
+    /// Si `true`, el reloj se arma en UTC en vez de la hora local (de
+    /// `general.timezone = "UTC"`). Paridad con el `TzMode` de mirada-launcher.
+    utc: bool,
 }
 
 impl Sampler {
-    /// Un sampler nuevo, sin lecturas previas.
+    /// Un sampler nuevo, sin lecturas previas (hora local).
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Un sampler que arma el reloj en UTC si `utc`, o local si no.
+    pub fn with_utc(utc: bool) -> Self {
+        Self { utc, ..Self::default() }
     }
 
     /// Toma un snapshot completo del sistema.
@@ -39,7 +47,7 @@ impl Sampler {
         let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
         let (volume, muted) = sample_volume().unwrap_or((0.0, false));
         WidgetCtx {
-            clock: sample_clock(),
+            clock: sample_clock(self.utc),
             cpu: self.sample_cpu(),
             ram,
             ram_used_mb,
@@ -75,9 +83,17 @@ impl Sampler {
     }
 }
 
-/// Descompone la hora local actual en [`ClockReading`].
-fn sample_clock() -> ClockReading {
-    let now = Local::now();
+/// Descompone la hora actual (local, o UTC si `utc`) en [`ClockReading`].
+fn sample_clock(utc: bool) -> ClockReading {
+    if utc {
+        clock_de(Utc::now())
+    } else {
+        clock_de(Local::now())
+    }
+}
+
+/// Arma el [`ClockReading`] desde cualquier `DateTime` con timezone.
+fn clock_de<Tz: chrono::TimeZone>(now: chrono::DateTime<Tz>) -> ClockReading {
     ClockReading {
         year: now.year() as u16,
         month: now.month() as u8,
@@ -381,10 +397,11 @@ pub type Snapshot = (WidgetCtx, Option<String>);
 
 impl SamplerHandle {
     /// Arranca el hilo de muestreo. Toma una muestra al toque y luego cada ~1 s.
-    pub fn spawn() -> Self {
+    /// `utc` arma el reloj en UTC (de `general.timezone = "UTC"`).
+    pub fn spawn(utc: bool) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let mut sampler = Sampler::new();
+            let mut sampler = Sampler::with_utc(utc);
             loop {
                 let snapshot = (sampler.sample(), leer_clipboard());
                 if tx.send(snapshot).is_err() {
