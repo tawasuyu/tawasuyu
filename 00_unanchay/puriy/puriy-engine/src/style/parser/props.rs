@@ -65,6 +65,11 @@ pub fn parse_color(s: &str) -> Option<Color> {
     if let Some(args) = strip_fn(s, "lab") {
         return parse_lab_func(args);
     }
+    // `color-mix(...)` antes que `color(...)` (no colisionan en `strip_fn`
+    // —`color(` no matchea `color-mix(`— pero se ordena por claridad).
+    if let Some(args) = strip_fn(s, "color-mix") {
+        return parse_color_mix(args);
+    }
     if let Some(args) = strip_fn(s, "color") {
         return parse_color_func(args);
     }
@@ -468,6 +473,145 @@ pub(crate) fn parse_color_func(args: &str) -> Option<Color> {
         _ => return None,
     };
     Some(linear_srgb_to_color(r, g, b, al))
+}
+
+/// sRGB lineal → OKLab (inversa de `oklab_to_linear_srgb`). Para mezclar
+/// `color-mix(in oklab/oklch, ...)`.
+fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let l = 0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b;
+    let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
+    let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
+    let (l_, m_, s_) = (l.cbrt(), m.cbrt(), s.cbrt());
+    (
+        0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_,
+        1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_,
+        0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_,
+    )
+}
+
+/// `color-mix(in <space>, C1 [p1], C2 [p2])` (CSS Color 5). Soporta los
+/// espacios de mezcla más usados en la web moderna: `srgb`, `srgb-linear`,
+/// `oklab`, `oklch` (los demás degradan a `srgb`). El método de hue de
+/// `oklch` es el default (arco más corto).
+pub(crate) fn parse_color_mix(args: &str) -> Option<Color> {
+    let segments = split_top_level_comma(args);
+    if segments.len() != 3 {
+        return None;
+    }
+    // Cabecera: `in <space>[ <hue-method>]` (el método de hue se ignora).
+    let head = segments[0].trim();
+    if head.len() < 3 || !head[..2].eq_ignore_ascii_case("in") {
+        return None;
+    }
+    let after_in = head[2..].trim_start();
+    let space = after_in.split_whitespace().next()?.to_ascii_lowercase();
+    let (c1, p1) = parse_color_with_pct(segments[1].trim())?;
+    let (c2, p2) = parse_color_with_pct(segments[2].trim())?;
+    let (w1, w2) = mix_weights(p1, p2)?;
+    Some(mix_colors(&space, c1, c2, w1, w2))
+}
+
+/// Un color de `color-mix` con su porcentaje opcional (antes o después del
+/// color). `red`, `red 40%`, `40% red` → `(Color, Option<pct>)`.
+fn parse_color_with_pct(s: &str) -> Option<(Color, Option<f32>)> {
+    let s = s.trim();
+    if let Some(c) = parse_color(s) {
+        return Some((c, None));
+    }
+    // Porcentaje al final: `<color> 40%`.
+    if let Some((rest, last)) = s.rsplit_once(char::is_whitespace) {
+        if let Some(p) = last.trim().strip_suffix('%') {
+            if let (Ok(v), Some(c)) = (p.trim().parse::<f32>(), parse_color(rest.trim())) {
+                return Some((c, Some(v)));
+            }
+        }
+    }
+    // Porcentaje al principio: `40% <color>`.
+    if let Some((first, rest)) = s.split_once(char::is_whitespace) {
+        if let Some(p) = first.trim().strip_suffix('%') {
+            if let (Ok(v), Some(c)) = (p.trim().parse::<f32>(), parse_color(rest.trim())) {
+                return Some((c, Some(v)));
+            }
+        }
+    }
+    None
+}
+
+/// Pesos normalizados (suman 1) a partir de los porcentajes opcionales.
+/// Ninguno ⇒ 50/50; uno ⇒ el otro completa a 100; ambos ⇒ se normalizan.
+fn mix_weights(p1: Option<f32>, p2: Option<f32>) -> Option<(f32, f32)> {
+    match (p1, p2) {
+        (None, None) => Some((0.5, 0.5)),
+        (Some(a), None) => Some((a / 100.0, 1.0 - a / 100.0)),
+        (None, Some(b)) => Some((1.0 - b / 100.0, b / 100.0)),
+        (Some(a), Some(b)) => {
+            let sum = a + b;
+            if sum <= 0.0 {
+                return None;
+            }
+            Some((a / sum, b / sum))
+        }
+    }
+}
+
+/// Mezcla `c1`·w1 + `c2`·w2 en el espacio dado. El alpha se interpola
+/// directo (no premultiplicado — aproximación para alphas distintos).
+fn mix_colors(space: &str, c1: Color, c2: Color, w1: f32, w2: f32) -> Color {
+    let a = (c1.a as f32 * w1 + c2.a as f32 * w2).round().clamp(0.0, 255.0) as u8;
+    let to_u8 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    let lin = |c: Color| {
+        (
+            srgb_to_linear(c.r as f32 / 255.0),
+            srgb_to_linear(c.g as f32 / 255.0),
+            srgb_to_linear(c.b as f32 / 255.0),
+        )
+    };
+    match space {
+        "srgb-linear" => {
+            let (r1, g1, b1) = lin(c1);
+            let (r2, g2, b2) = lin(c2);
+            Color {
+                r: to_u8(linear_to_srgb(r1 * w1 + r2 * w2)),
+                g: to_u8(linear_to_srgb(g1 * w1 + g2 * w2)),
+                b: to_u8(linear_to_srgb(b1 * w1 + b2 * w2)),
+                a,
+            }
+        }
+        "oklab" | "oklch" => {
+            let (r1, g1, b1) = lin(c1);
+            let (r2, g2, b2) = lin(c2);
+            let (l1, a1, bb1) = linear_srgb_to_oklab(r1, g1, b1);
+            let (l2, a2, bb2) = linear_srgb_to_oklab(r2, g2, b2);
+            let (ml, ma, mb) = if space == "oklch" {
+                // Polar: interpola L, C y H (arco más corto).
+                let (cc1, h1) = (a1.hypot(bb1), bb1.atan2(a1).to_degrees());
+                let (cc2, h2) = (a2.hypot(bb2), bb2.atan2(a2).to_degrees());
+                let l = l1 * w1 + l2 * w2;
+                let c = cc1 * w1 + cc2 * w2;
+                let mut dh = h2 - h1;
+                if dh > 180.0 {
+                    dh -= 360.0;
+                } else if dh < -180.0 {
+                    dh += 360.0;
+                }
+                let h = (h1 + w2 * dh).to_radians();
+                (l, c * h.cos(), c * h.sin())
+            } else {
+                (l1 * w1 + l2 * w2, a1 * w1 + a2 * w2, bb1 * w1 + bb2 * w2)
+            };
+            let (r, g, b) = oklab_to_linear_srgb(ml, ma, mb);
+            let mut col = linear_srgb_to_color(r, g, b, a);
+            col.a = a;
+            col
+        }
+        // `srgb` y cualquier espacio no soportado → mezcla en sRGB con gamma.
+        _ => Color {
+            r: (c1.r as f32 * w1 + c2.r as f32 * w2).round().clamp(0.0, 255.0) as u8,
+            g: (c1.g as f32 * w1 + c2.g as f32 * w2).round().clamp(0.0, 255.0) as u8,
+            b: (c1.b as f32 * w1 + c2.b as f32 * w2).round().clamp(0.0, 255.0) as u8,
+            a,
+        },
+    }
 }
 
 /// Parsea un value tipo `margin: <1..4 longitudes>`. Devuelve `None` si

@@ -1622,6 +1622,37 @@ mod tests {
     }
 
     #[test]
+    fn parsea_color_mix() {
+        // 50/50 en sRGB.
+        assert_eq!(parse_color("color-mix(in srgb, red, blue)").unwrap(), Color::rgb(128, 0, 128));
+        assert_eq!(parse_color("color-mix(in srgb, white, black)").unwrap(), Color::rgb(128, 128, 128));
+        // Porcentaje en el primer color.
+        assert_eq!(parse_color("color-mix(in srgb, red 25%, blue)").unwrap(), Color::rgb(64, 0, 191));
+        // Porcentaje en el segundo color (equivalente).
+        assert_eq!(parse_color("color-mix(in srgb, red, blue 75%)").unwrap(), Color::rgb(64, 0, 191));
+        // Ambos porcentajes se normalizan (20+20 → 50/50).
+        assert_eq!(parse_color("color-mix(in srgb, red 20%, blue 20%)").unwrap(), Color::rgb(128, 0, 128));
+        // Alpha se interpola.
+        let alpha = parse_color("color-mix(in srgb, #ff000000, #ff0000ff)").unwrap();
+        assert_eq!(alpha, Color { r: 255, g: 0, b: 0, a: 128 });
+        // Espacio no soportado degrada a sRGB (no rompe el parseo).
+        assert_eq!(parse_color("color-mix(in jzazbz, red, blue)").unwrap(), Color::rgb(128, 0, 128));
+    }
+
+    #[test]
+    fn parsea_color_mix_perceptual() {
+        // En oklab/oklch el mix de rojo y azul da un púrpura perceptual
+        // (ambos canales presentes, verde bajo). Tolerancia.
+        let ok = parse_color("color-mix(in oklab, red, blue)").unwrap();
+        assert!(ok.r > 40 && ok.b > 40 && ok.g < 90, "oklab mix: {ok:?}");
+        // oklch parsea y produce un color válido distinto del negro.
+        let oklch = parse_color("color-mix(in oklch, red, blue)").unwrap();
+        assert!(oklch.r as u32 + oklch.g as u32 + oklch.b as u32 > 0, "oklch mix: {oklch:?}");
+        // Mezclar un color consigo mismo lo deja igual (sanity).
+        assert_eq!(parse_color("color-mix(in oklab, red, red)").unwrap().r, 255);
+    }
+
+    #[test]
     fn parsea_hex_8_y_4_chars() {
         // #RRGGBBAA.
         assert_eq!(parse_color("#ff000080"), Some(Color { r: 255, g: 0, b: 0, a: 128 }));
