@@ -336,6 +336,22 @@ pub struct ComputedStyle {
     /// `column-count` (Fase 7.278). `None` = `auto`. NO heredable. Plumb:
     /// no hay layout multicol todavía.
     pub column_count: Option<u32>,
+    /// `column-width` (Fase 7.279). `LengthVal::Auto` = `auto`. NO heredable.
+    /// Plumb.
+    pub column_width: LengthVal,
+    /// `column-rule` (Fase 7.280). Subset: width + style + color, igual
+    /// shape que `border`. `style_active` togglea el dibujo. NO heredable.
+    /// Plumb.
+    pub column_rule_width: f32,
+    pub column_rule_color: Option<Color>,
+    pub column_rule_style: BorderLineStyle,
+    pub column_rule_style_active: bool,
+    /// `column-fill` (Fase 7.281). Default `Balance`. NO heredable. Plumb.
+    pub column_fill: ColumnFill,
+    /// `column-span` (Fase 7.282). Default `None`. NO heredable. Plumb.
+    pub column_span: ColumnSpan,
+    /// `break-inside` (Fase 7.283). Default `Auto`. NO heredable. Plumb.
+    pub break_inside: BreakInside,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -735,6 +751,37 @@ pub struct ContainFlags {
     pub layout: bool,
     pub style: bool,
     pub paint: bool,
+}
+
+/// `column-fill` (CSS Multi-column 1). Default `Balance`. Fase 7.281.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColumnFill {
+    Auto,
+    #[default]
+    Balance,
+    BalanceAll,
+}
+
+/// `column-span` (CSS Multi-column 1). Default `None`. `All` saca el
+/// elemento del flujo multicol. Fase 7.282.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColumnSpan {
+    #[default]
+    None,
+    All,
+}
+
+/// `break-inside` (CSS Fragmentation 3). Default `Auto`. Las variantes
+/// `AvoidPage`/`AvoidColumn`/`AvoidRegion` son hints más finos que `Avoid`.
+/// Fase 7.283.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BreakInside {
+    #[default]
+    Auto,
+    Avoid,
+    AvoidPage,
+    AvoidColumn,
+    AvoidRegion,
 }
 
 impl ContainFlags {
@@ -1698,6 +1745,14 @@ impl Default for ComputedStyle {
             content_visibility: ContentVisibility::Visible,
             contain: ContainFlags::default(),
             column_count: None,
+            column_width: LengthVal::Auto,
+            column_rule_width: 0.0,
+            column_rule_color: None,
+            column_rule_style: BorderLineStyle::Solid,
+            column_rule_style_active: false,
+            column_fill: ColumnFill::Balance,
+            column_span: ColumnSpan::None,
+            break_inside: BreakInside::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

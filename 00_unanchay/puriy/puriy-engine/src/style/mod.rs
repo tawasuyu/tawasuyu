@@ -2462,6 +2462,191 @@ mod tests {
     }
 
     #[test]
+    fn column_width_fase_7_279() {
+        let html = r##"<html><head><style>
+            body { column-width: 200px }
+            div.auto { column-width: auto }
+            div.pct { column-width: 30% }
+            div.plain {}
+        </style></head><body>
+          <div class="auto"></div><div class="pct"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.column_width, LengthVal::Px(200.0));
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).column_width,
+            LengthVal::Auto
+        );
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).column_width,
+            LengthVal::Pct(30.0)
+        );
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[2], Some(&body_cs)).column_width,
+            LengthVal::Auto
+        );
+    }
+
+    #[test]
+    fn column_rule_fase_7_280() {
+        // Longhands sueltos + shorthand. `currentColor` → None (defer al render).
+        let html = r##"<html><head><style>
+            body { column-rule: 2px dashed red }
+            div.lh { column-rule-color: blue; column-rule-width: 3px; column-rule-style: dotted }
+            div.cc { column-rule: 1px solid currentColor }
+            div.none { column-rule: 4px solid black; column-rule-style: none }
+            div.plain {}
+        </style></head><body>
+          <div class="lh"></div><div class="cc"></div><div class="none"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.column_rule_width, 2.0);
+        assert_eq!(body_cs.column_rule_style, BorderLineStyle::Dashed);
+        assert!(body_cs.column_rule_style_active);
+        assert_eq!(body_cs.column_rule_color.map(|c| (c.r, c.g, c.b)), Some((255, 0, 0)));
+        // Longhands.
+        let lh = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(lh.column_rule_width, 3.0);
+        assert_eq!(lh.column_rule_style, BorderLineStyle::Dotted);
+        assert_eq!(lh.column_rule_color.map(|c| (c.r, c.g, c.b)), Some((0, 0, 255)));
+        // currentColor → None.
+        let cc = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert_eq!(cc.column_rule_color, None);
+        // `column-rule-style: none` apaga.
+        let none = eng.compute_with_parent(&divs[2], Some(&body_cs));
+        assert!(!none.column_rule_style_active);
+        // NO se hereda → defaults (width 0, color None, style_active false).
+        let plain = eng.compute_with_parent(&divs[3], Some(&body_cs));
+        assert_eq!(plain.column_rule_width, 0.0);
+        assert!(!plain.column_rule_style_active);
+        assert_eq!(plain.column_rule_color, None);
+    }
+
+    #[test]
+    fn column_fill_fase_7_281() {
+        assert_eq!(parse_column_fill("auto"), Some(ColumnFill::Auto));
+        assert_eq!(parse_column_fill("BALANCE"), Some(ColumnFill::Balance));
+        assert_eq!(parse_column_fill("balance-all"), Some(ColumnFill::BalanceAll));
+        assert_eq!(parse_column_fill("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { column-fill: auto }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.column_fill, ColumnFill::Auto);
+        // NO se hereda → default Balance.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).column_fill,
+            ColumnFill::Balance
+        );
+    }
+
+    #[test]
+    fn column_span_fase_7_282() {
+        assert_eq!(parse_column_span("none"), Some(ColumnSpan::None));
+        assert_eq!(parse_column_span("ALL"), Some(ColumnSpan::All));
+        assert_eq!(parse_column_span("partial"), None);
+
+        let html = r##"<html><head><style>
+            body { column-span: all }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.column_span, ColumnSpan::All);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).column_span,
+            ColumnSpan::None
+        );
+    }
+
+    #[test]
+    fn break_inside_fase_7_283() {
+        assert_eq!(parse_break_inside("auto"), Some(BreakInside::Auto));
+        assert_eq!(parse_break_inside("avoid"), Some(BreakInside::Avoid));
+        assert_eq!(parse_break_inside("AVOID-PAGE"), Some(BreakInside::AvoidPage));
+        assert_eq!(parse_break_inside("avoid-column"), Some(BreakInside::AvoidColumn));
+        assert_eq!(parse_break_inside("avoid-region"), Some(BreakInside::AvoidRegion));
+        assert_eq!(parse_break_inside("nope"), None);
+
+        // Alias legacy `page-break-inside`.
+        let html = r##"<html><head><style>
+            body { break-inside: avoid }
+            div.legacy { page-break-inside: avoid }
+            div.plain {}
+        </style></head><body>
+          <div class="legacy"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.break_inside, BreakInside::Avoid);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).break_inside,
+            BreakInside::Avoid
+        );
+        // NO se hereda → default Auto.
+        assert_eq!(
+            eng.compute_with_parent(&divs[1], Some(&body_cs)).break_inside,
+            BreakInside::Auto
+        );
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(

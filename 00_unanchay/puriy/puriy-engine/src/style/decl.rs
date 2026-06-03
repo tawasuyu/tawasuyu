@@ -257,6 +257,18 @@ pub(crate) enum DeclKind {
     Contain(ContainFlags),
     /// `None` = `column-count: auto`.
     ColumnCount(Option<u32>),
+    /// `LengthVal::Auto` = `column-width: auto`.
+    ColumnWidth(LengthVal),
+    ColumnRuleWidth(f32),
+    /// `None` = `column-rule-color: currentColor`.
+    ColumnRuleColor(Option<Color>),
+    /// `style: none/hidden` → flag `style_active=false` (apaga el dibujo).
+    ColumnRuleStyleActive(bool),
+    /// Patrón visual del column-rule (`dashed`/`dotted`/`double`/`solid`).
+    ColumnRuleStylePattern(BorderLineStyle),
+    ColumnFill(ColumnFill),
+    ColumnSpan(ColumnSpan),
+    BreakInside(BreakInside),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -468,6 +480,14 @@ impl Decl {
             DeclKind::ContentVisibility(v) => s.content_visibility = *v,
             DeclKind::Contain(c) => s.contain = *c,
             DeclKind::ColumnCount(n) => s.column_count = *n,
+            DeclKind::ColumnWidth(v) => s.column_width = *v,
+            DeclKind::ColumnRuleWidth(v) => s.column_rule_width = *v,
+            DeclKind::ColumnRuleColor(c) => s.column_rule_color = *c,
+            DeclKind::ColumnRuleStyleActive(on) => s.column_rule_style_active = *on,
+            DeclKind::ColumnRuleStylePattern(p) => s.column_rule_style = *p,
+            DeclKind::ColumnFill(f) => s.column_fill = *f,
+            DeclKind::ColumnSpan(sp) => s.column_span = *sp,
+            DeclKind::BreakInside(b) => s.break_inside = *b,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

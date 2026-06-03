@@ -185,6 +185,21 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }
+        // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
+        if prop.eq_ignore_ascii_case("column-rule") {
+            out.extend(parse_column_rule_shorthand(value, important));
+            continue;
+        }
+        // `column-rule-style: dotted` → activa + fija el patrón.
+        if prop.eq_ignore_ascii_case("column-rule-style") {
+            if let Some(on) = parse_border_style(value) {
+                out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(on), important });
+                if let Some(ls) = parse_border_line_style(value) {
+                    out.push(Decl { kind: DeclKind::ColumnRuleStylePattern(ls), important });
+                }
+            }
+            continue;
+        }
         if prop.eq_ignore_ascii_case("text-decoration") {
             out.extend(parse_text_decoration_shorthand(value, important));
             continue;
@@ -509,6 +524,22 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "contain" => parse_contain(value).map(DeclKind::Contain),
         "column-count" => Some(DeclKind::ColumnCount(parse_column_count(value))),
+        "column-width" => parse_length_or_pct(value).map(DeclKind::ColumnWidth),
+        "column-rule-width" => parse_length_px(value).map(DeclKind::ColumnRuleWidth),
+        "column-rule-color" => {
+            if is_current_color(value) {
+                Some(DeclKind::ColumnRuleColor(None))
+            } else {
+                parse_color(value).map(|c| DeclKind::ColumnRuleColor(Some(c)))
+            }
+        }
+        // `column-rule-style` y `column-rule` van por `parse_declarations`.
+        "column-fill" => parse_column_fill(value).map(DeclKind::ColumnFill),
+        "column-span" => parse_column_span(value).map(DeclKind::ColumnSpan),
+        // `page-break-inside` (legacy CSS 2.1) = `break-inside` (subset).
+        "break-inside" | "page-break-inside" => {
+            parse_break_inside(value).map(DeclKind::BreakInside)
+        }
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -1370,6 +1401,97 @@ pub(crate) fn parse_column_count(value: &str) -> Option<u32> {
         return None;
     }
     v.parse::<u32>().ok().filter(|n| *n > 0)
+}
+
+/// `column-rule` shorthand: `<width> <style> <color>` (orden libre,
+/// igual que `outline`). Tokens en cualquier orden — `currentColor`
+/// emite `ColumnRuleColor(None)`. Fase 7.280.
+pub(crate) fn parse_column_rule_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut width: Option<f32> = None;
+    let mut color: Option<Color> = None;
+    let mut current: bool = false;
+    let mut style_active: Option<bool> = None;
+    let mut line_style: Option<BorderLineStyle> = None;
+    for tok in value.split_whitespace() {
+        if !current && color.is_none() && is_current_color(tok) {
+            current = true;
+            continue;
+        }
+        if width.is_none() {
+            if let Some(w) = parse_length_px(tok) {
+                width = Some(w);
+                continue;
+            }
+        }
+        if style_active.is_none() {
+            if let Some(active) = parse_border_style(tok) {
+                style_active = Some(active);
+                line_style = parse_border_line_style(tok);
+                continue;
+            }
+        }
+        if color.is_none() {
+            if let Some(c) = parse_color(tok) {
+                color = Some(c);
+                continue;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let active = style_active.unwrap_or(true);
+    if !active {
+        out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(false), important });
+        return out;
+    }
+    if let Some(w) = width {
+        out.push(Decl { kind: DeclKind::ColumnRuleWidth(w), important });
+    }
+    if current {
+        out.push(Decl { kind: DeclKind::ColumnRuleColor(None), important });
+    } else if let Some(c) = color {
+        out.push(Decl { kind: DeclKind::ColumnRuleColor(Some(c)), important });
+    }
+    if style_active.is_some() {
+        out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(true), important });
+    }
+    if let Some(ls) = line_style {
+        out.push(Decl { kind: DeclKind::ColumnRuleStylePattern(ls), important });
+    }
+    out
+}
+
+/// `column-fill`: `auto | balance | balance-all`. Fase 7.281.
+pub(crate) fn parse_column_fill(value: &str) -> Option<ColumnFill> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ColumnFill::Auto),
+        "balance" => Some(ColumnFill::Balance),
+        "balance-all" => Some(ColumnFill::BalanceAll),
+        _ => None,
+    }
+}
+
+/// `column-span`: `none | all`. Fase 7.282.
+pub(crate) fn parse_column_span(value: &str) -> Option<ColumnSpan> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(ColumnSpan::None),
+        "all" => Some(ColumnSpan::All),
+        _ => None,
+    }
+}
+
+/// `break-inside`: `auto | avoid | avoid-page | avoid-column | avoid-region`.
+/// Acepta también el legacy `page-break-inside` (CSS 2.1) que sólo conoce
+/// `auto | avoid` — los valores avoid-* se aceptan en el callsite legacy,
+/// el engine los preserva si vienen escritos. Fase 7.283.
+pub(crate) fn parse_break_inside(value: &str) -> Option<BreakInside> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(BreakInside::Auto),
+        "avoid" => Some(BreakInside::Avoid),
+        "avoid-page" => Some(BreakInside::AvoidPage),
+        "avoid-column" => Some(BreakInside::AvoidColumn),
+        "avoid-region" => Some(BreakInside::AvoidRegion),
+        _ => None,
+    }
 }
 
 /// `font-kerning`: `auto | normal | none`.
