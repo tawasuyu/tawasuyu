@@ -88,6 +88,17 @@ pub struct Config {
     /// Ruta a la imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía =
     /// color sólido. La imagen se escala para cubrir la salida (stretch).
     pub wallpaper_path: String,
+    /// Entradas del menú raíz (estilo openbox) que aparece al click derecho
+    /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
+    /// nada). Cada entrada lanza su `command` con `sh -c`.
+    pub menu: Vec<MenuEntry>,
+}
+
+/// Una entrada del menú raíz: la etiqueta que se pinta y el comando que lanza.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MenuEntry {
+    pub label: String,
+    pub command: String,
 }
 
 impl Default for Config {
@@ -109,6 +120,7 @@ impl Default for Config {
             border_normal: dec.border_normal,
             font_path: String::new(),
             wallpaper_path: String::new(),
+            menu: Vec::new(),
         }
     }
 }
@@ -237,6 +249,15 @@ const CONFIG_TEMPLATE: &str = "\
     // Imagen de fondo del escritorio (PNG/JPEG/WebP). Vacía = color sólido.
     // Se escala para cubrir la salida. Ej: \"/home/yo/.config/mirada/fondo.png\".
     wallpaper_path: \"\",
+
+    // Menú raíz (estilo openbox): aparece al click DERECHO sobre el fondo.
+    // Vacío = sin menú. Cada entrada lanza su comando con `sh -c`. Ej:
+    //   menu: [
+    //       (label: \"Terminal\",  command: \"kitty\"),
+    //       (label: \"Navegador\", command: \"firefox\"),
+    //       (label: \"Archivos\",  command: \"nada\"),
+    //   ],
+    menu: [],
 )
 ";
 

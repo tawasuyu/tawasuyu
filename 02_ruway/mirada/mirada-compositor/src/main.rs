@@ -88,6 +88,7 @@ use mirada_brain::{
 use mirada_link::BodyLink;
 
 mod drm_backend;
+mod menu;
 mod text;
 
 // ---------------------------------------------------------------------
@@ -555,6 +556,30 @@ impl App {
             }
             Brain::Linked(_) => None,
         }
+    }
+
+    /// Las entradas `(etiqueta, comando)` del menú raíz configurado. Vacío con
+    /// Cerebro enlazado o sin entradas en la config.
+    fn config_menu(&self) -> Vec<(String, String)> {
+        match &self.brain {
+            Brain::Embedded(d) => d
+                .config()
+                .menu
+                .iter()
+                .map(|e| (e.label.clone(), e.command.clone()))
+                .collect(),
+            Brain::Linked(_) => Vec::new(),
+        }
+    }
+
+    /// Lanza `cmd` como el usuario de la sesión (igual que [`BodyOp::Spawn`]),
+    /// salvo en modo greeter, donde no se lanza nada. Lo usa el menú raíz.
+    fn spawn_user(&self, cmd: &str) {
+        if self.mode == BodyMode::Greeter {
+            eprintln!("mirada-compositor · «{cmd}» rechazado — modo greeter.");
+            return;
+        }
+        spawn_command(cmd, self.session_user.as_ref(), &self.session_env);
     }
 
     /// Traduce los comandos del Cerebro a operaciones y las ejecuta.
