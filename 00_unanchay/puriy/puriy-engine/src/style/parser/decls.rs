@@ -96,6 +96,19 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `overscroll-behavior: <x> [<y>]` — desagrega en x e y.
+        if prop.eq_ignore_ascii_case("overscroll-behavior") {
+            let mut tokens = value.split_whitespace();
+            let x = tokens.next().and_then(parse_overscroll_behavior);
+            let y = tokens.next().and_then(parse_overscroll_behavior).or(x);
+            if let Some(xv) = x {
+                out.push(Decl { kind: DeclKind::OverscrollBehaviorX(xv), important });
+            }
+            if let Some(yv) = y {
+                out.push(Decl { kind: DeclKind::OverscrollBehaviorY(yv), important });
+            }
+            continue;
+        }
         if prop.eq_ignore_ascii_case("flex") {
             out.extend(parse_flex_shorthand(value, important));
             continue;
@@ -435,6 +448,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             Some(DeclKind::FontLanguageOverride(parse_font_language_override(value)))
         }
         "text-rendering" => parse_text_rendering(value).map(DeclKind::TextRendering),
+        "filter" => Some(DeclKind::Filter(parse_filter_list(value))),
+        "backdrop-filter" | "-webkit-backdrop-filter" => {
+            Some(DeclKind::BackdropFilter(parse_filter_list(value)))
+        }
+        "text-orientation" => parse_text_orientation(value).map(DeclKind::TextOrientation),
+        "overscroll-behavior-x" => {
+            parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorX)
+        }
+        "overscroll-behavior-y" => {
+            parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorY)
+        }
+        // `overscroll-behavior` shorthand: ver `parse_declarations`.
+        "scroll-snap-type" => parse_scroll_snap_type(value).map(DeclKind::ScrollSnapType),
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -893,6 +919,168 @@ pub(crate) fn parse_appearance(value: &str) -> Option<Appearance> {
         | "textarea" => Some(Appearance::Auto),
         _ => None,
     }
+}
+
+/// `filter` / `backdrop-filter`: lista de funciones. `none` = lista
+/// vacía. Funciones desconocidas se descartan; las conocidas con
+/// argumento malformado también. Reusa `parse_box_shadows` para el caso
+/// `drop-shadow(...)`.
+pub(crate) fn parse_filter_list(value: &str) -> Vec<FilterFn> {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    // Tokenizar respetando paréntesis: `blur(2px) drop-shadow(1px 1px red)`.
+    let mut out = Vec::new();
+    let mut chars = v.char_indices().peekable();
+    while let Some(&(start, _)) = chars.peek() {
+        // Skip whitespace.
+        while let Some(&(_, c)) = chars.peek() {
+            if c.is_whitespace() {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        let Some(&(name_start, _)) = chars.peek() else {
+            break;
+        };
+        // Avanzar hasta `(`.
+        let mut name_end = name_start;
+        let mut found_paren = false;
+        while let Some(&(idx, c)) = chars.peek() {
+            if c == '(' {
+                name_end = idx;
+                found_paren = true;
+                chars.next();
+                break;
+            }
+            chars.next();
+            name_end = idx + c.len_utf8();
+        }
+        let _ = start;
+        if !found_paren {
+            break;
+        }
+        // Buscar el `)` que cierra (sin nesting — drop-shadow no anida).
+        let mut depth: i32 = 1;
+        let mut arg_end = name_end + 1;
+        while let Some((idx, c)) = chars.next() {
+            arg_end = idx + c.len_utf8();
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+                if depth == 0 {
+                    arg_end = idx;
+                    break;
+                }
+            }
+        }
+        let name = v[name_start..name_end].trim().to_ascii_lowercase();
+        let arg = v[name_end + 1..arg_end].trim();
+        if let Some(f) = parse_filter_fn(&name, arg) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+fn parse_filter_fn(name: &str, arg: &str) -> Option<FilterFn> {
+    match name {
+        "blur" => parse_length_px(arg).map(FilterFn::Blur),
+        "brightness" => parse_number_or_pct(arg).map(FilterFn::Brightness),
+        "contrast" => parse_number_or_pct(arg).map(FilterFn::Contrast),
+        "grayscale" => parse_number_or_pct(arg).map(FilterFn::Grayscale),
+        "hue-rotate" => parse_angle_deg(arg).map(FilterFn::HueRotate),
+        "invert" => parse_number_or_pct(arg).map(FilterFn::Invert),
+        "opacity" => parse_number_or_pct(arg).map(FilterFn::Opacity),
+        "saturate" => parse_number_or_pct(arg).map(FilterFn::Saturate),
+        "sepia" => parse_number_or_pct(arg).map(FilterFn::Sepia),
+        "drop-shadow" => {
+            // Reusa el shape de box-shadow pero sólo 1.
+            parse_box_shadows(arg).into_iter().next().map(FilterFn::DropShadow)
+        }
+        _ => None,
+    }
+}
+
+/// Parsea `<number>` o `<percentage>` devolviendo un f32 (50% → 0.5).
+/// Negativo se conserva (algunos filtros lo aceptan).
+fn parse_number_or_pct(s: &str) -> Option<f32> {
+    let v = s.trim();
+    if let Some(pct) = v.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|n| n / 100.0);
+    }
+    v.parse::<f32>().ok()
+}
+
+/// Parsea `<angle>` (deg | rad | turn | grad) → grados.
+fn parse_angle_deg(s: &str) -> Option<f32> {
+    let v = s.trim();
+    if let Some(n) = v.strip_suffix("deg") {
+        return n.trim().parse::<f32>().ok();
+    }
+    if let Some(n) = v.strip_suffix("rad") {
+        return n.trim().parse::<f32>().ok().map(|r| r.to_degrees());
+    }
+    if let Some(n) = v.strip_suffix("turn") {
+        return n.trim().parse::<f32>().ok().map(|t| t * 360.0);
+    }
+    if let Some(n) = v.strip_suffix("grad") {
+        return n.trim().parse::<f32>().ok().map(|g| g * 0.9);
+    }
+    // Unitless = 0deg sólo para `0`.
+    if v == "0" {
+        return Some(0.0);
+    }
+    None
+}
+
+/// `text-orientation` (CSS Writing Modes 3).
+pub(crate) fn parse_text_orientation(value: &str) -> Option<TextOrientation> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "mixed" => Some(TextOrientation::Mixed),
+        "upright" => Some(TextOrientation::Upright),
+        "sideways" => Some(TextOrientation::Sideways),
+        "sideways-right" => Some(TextOrientation::SidewaysRight),
+        _ => None,
+    }
+}
+
+/// `overscroll-behavior-x/y` (un solo valor).
+pub(crate) fn parse_overscroll_behavior(value: &str) -> Option<OverscrollBehavior> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(OverscrollBehavior::Auto),
+        "contain" => Some(OverscrollBehavior::Contain),
+        "none" => Some(OverscrollBehavior::None),
+        _ => None,
+    }
+}
+
+/// `scroll-snap-type: none | <axis> <strictness>?`. Strictness default
+/// `proximity`. Acepta sólo lo que matchea — `xy` no es válido en CSS.
+pub(crate) fn parse_scroll_snap_type(value: &str) -> Option<ScrollSnapType> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "none" {
+        return Some(ScrollSnapType(None));
+    }
+    let mut tokens = v.split_whitespace();
+    let axis = match tokens.next()? {
+        "x" => ScrollSnapAxis::X,
+        "y" => ScrollSnapAxis::Y,
+        "block" => ScrollSnapAxis::Block,
+        "inline" => ScrollSnapAxis::Inline,
+        "both" => ScrollSnapAxis::Both,
+        _ => return None,
+    };
+    let strict = match tokens.next() {
+        Some("mandatory") => ScrollSnapStrictness::Mandatory,
+        Some("proximity") => ScrollSnapStrictness::Proximity,
+        Some(_) => return None,
+        None => ScrollSnapStrictness::Proximity,
+    };
+    Some(ScrollSnapType(Some((axis, strict))))
 }
 
 /// `font-kerning`: `auto | normal | none`.

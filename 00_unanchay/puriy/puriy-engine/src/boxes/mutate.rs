@@ -249,6 +249,8 @@ pub(crate) fn inherit_style_to_child(parent: &BoxNode, child: &mut BoxNode) {
     child.font_variation_settings = parent.font_variation_settings.clone();
     child.font_language_override = parent.font_language_override.clone();
     child.text_rendering = parent.text_rendering;
+    // text-orientation hereda.
+    child.text_orientation = parent.text_orientation;
     // Propagar al text leaf interno (primer hijo si es text node).
     for c in child.children.iter_mut() {
         if c.text.is_some() {
@@ -731,6 +733,12 @@ pub(crate) fn set_box_visual(b: &mut BoxNode, s: &ComputedStyle, hover_bg: Optio
     b.font_variation_settings = s.font_variation_settings.clone();
     b.font_language_override = s.font_language_override.clone();
     b.text_rendering = s.text_rendering;
+    b.filter = s.filter.clone();
+    b.backdrop_filter = s.backdrop_filter.clone();
+    b.text_orientation = s.text_orientation;
+    b.overscroll_behavior_x = s.overscroll_behavior_x;
+    b.overscroll_behavior_y = s.overscroll_behavior_y;
+    b.scroll_snap_type = s.scroll_snap_type;
     b.text_indent = s.text_indent;
     b.word_spacing = s.word_spacing;
     b.letter_spacing = s.letter_spacing;
@@ -786,6 +794,7 @@ pub(crate) fn set_leaf_inherited(leaf: &mut BoxNode, p: &ComputedStyle) {
     leaf.font_variation_settings = p.font_variation_settings.clone();
     leaf.font_language_override = p.font_language_override.clone();
     leaf.text_rendering = p.text_rendering;
+    leaf.text_orientation = p.text_orientation;
 }
 
 pub(crate) fn propagate_text_color(node: &mut BoxNode, c: Color) {

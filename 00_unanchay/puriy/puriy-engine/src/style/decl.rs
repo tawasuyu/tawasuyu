@@ -224,6 +224,14 @@ pub(crate) enum DeclKind {
     /// `None` = `font-language-override: normal`.
     FontLanguageOverride(Option<String>),
     TextRendering(TextRendering),
+    /// Vacío = `filter: none`.
+    Filter(Vec<FilterFn>),
+    /// Vacío = `backdrop-filter: none`.
+    BackdropFilter(Vec<FilterFn>),
+    TextOrientation(TextOrientation),
+    OverscrollBehaviorX(OverscrollBehavior),
+    OverscrollBehaviorY(OverscrollBehavior),
+    ScrollSnapType(ScrollSnapType),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -410,6 +418,12 @@ impl Decl {
             DeclKind::FontVariationSettings(v) => s.font_variation_settings = v.clone(),
             DeclKind::FontLanguageOverride(o) => s.font_language_override = o.clone(),
             DeclKind::TextRendering(r) => s.text_rendering = *r,
+            DeclKind::Filter(v) => s.filter = v.clone(),
+            DeclKind::BackdropFilter(v) => s.backdrop_filter = v.clone(),
+            DeclKind::TextOrientation(t) => s.text_orientation = *t,
+            DeclKind::OverscrollBehaviorX(b) => s.overscroll_behavior_x = *b,
+            DeclKind::OverscrollBehaviorY(b) => s.overscroll_behavior_y = *b,
+            DeclKind::ScrollSnapType(t) => s.scroll_snap_type = *t,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -224,6 +224,17 @@ pub struct BoxNode {
     pub font_language_override: Option<String>,
     /// `text-rendering`. Heredable. Fase 7.263.
     pub text_rendering: TextRendering,
+    /// `filter`. NO heredable. Fase 7.264.
+    pub filter: Vec<FilterFn>,
+    /// `backdrop-filter`. NO heredable. Fase 7.265.
+    pub backdrop_filter: Vec<FilterFn>,
+    /// `text-orientation`. Heredable. Fase 7.266.
+    pub text_orientation: TextOrientation,
+    /// `overscroll-behavior-x`/`y`. NO heredables. Fase 7.267.
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
+    /// `scroll-snap-type`. NO heredable. Fase 7.268.
+    pub scroll_snap_type: ScrollSnapType,
     pub text_indent: f32,
     pub word_spacing: f32,
     /// Espacio extra entre letras (px). Heredable. Almacenado pero aún no

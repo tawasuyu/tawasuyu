@@ -289,6 +289,23 @@ pub struct ComputedStyle {
     /// `text-rendering` (Fase 7.263). Heredable. Plumb: el shaper no
     /// elige entre legibility/speed/precision aún.
     pub text_rendering: TextRendering,
+    /// `filter` (Fase 7.264). Cadena de funciones de filtro aplicadas
+    /// al nodo. Vacío = `none`. NO heredable. Plumb: vello no expone
+    /// los filter ops como composite todavía.
+    pub filter: Vec<FilterFn>,
+    /// `backdrop-filter` (Fase 7.265). Mismo modelo que `filter`,
+    /// aplicado al fondo detrás del nodo. NO heredable. Plumb.
+    pub backdrop_filter: Vec<FilterFn>,
+    /// `text-orientation` (Fase 7.266). Heredable. Sólo aplica si
+    /// `writing-mode` es vertical-*; el chrome sólo soporta horizontal
+    /// todavía, así que es plumb.
+    pub text_orientation: TextOrientation,
+    /// `overscroll-behavior` (Fase 7.267). Tupla X/Y. NO heredable.
+    /// Plumb: el chrome todavía no captura el overflow rebote.
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
+    /// `scroll-snap-type` (Fase 7.268). NO heredable. Plumb.
+    pub scroll_snap_type: ScrollSnapType,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -530,6 +547,80 @@ pub enum UnicodeBidi {
     IsolateOverride,
     Plaintext,
 }
+
+/// CSS `filter` / `backdrop-filter` function-list item. CSS Filter
+/// Effects 1, subset. Cada variante guarda el argumento ya parseado.
+/// `none` = lista vacía (no se modela acá). Fase 7.264.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterFn {
+    /// `blur(<length>)` en px.
+    Blur(f32),
+    /// `brightness(<number>|<percentage>)`. 1.0 = sin cambio.
+    Brightness(f32),
+    /// `contrast(<number>|<percentage>)`. 1.0 = sin cambio.
+    Contrast(f32),
+    /// `grayscale(<number>|<percentage>)`. 0 = sin cambio, 1 = full.
+    Grayscale(f32),
+    /// `hue-rotate(<angle>)` en grados.
+    HueRotate(f32),
+    /// `invert(<number>|<percentage>)`.
+    Invert(f32),
+    /// `opacity(<number>|<percentage>)`. 1 = sin cambio.
+    Opacity(f32),
+    /// `saturate(<number>|<percentage>)`. 1 = sin cambio.
+    Saturate(f32),
+    /// `sepia(<number>|<percentage>)`.
+    Sepia(f32),
+    /// `drop-shadow(offset-x offset-y [blur] [color])`. Reusa el
+    /// `BoxShadow` (inset=false).
+    DropShadow(BoxShadow),
+}
+
+/// `text-orientation` (CSS Writing Modes 3). Heredable. Default `Mixed`.
+/// Fase 7.266.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextOrientation {
+    #[default]
+    Mixed,
+    Upright,
+    Sideways,
+    /// Legacy `sideways-right` (deprecado, alias de `Sideways`).
+    SidewaysRight,
+}
+
+/// `overscroll-behavior-x` / `-y`. Default `Auto`. NO heredable.
+/// Fase 7.267.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverscrollBehavior {
+    #[default]
+    Auto,
+    Contain,
+    None,
+}
+
+/// `scroll-snap-type`. Default `None`. NO heredable. Fase 7.268.
+/// El axis + strictness se modela como struct (None = sin snap).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollSnapAxis {
+    X,
+    Y,
+    Block,
+    Inline,
+    #[default]
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollSnapStrictness {
+    #[default]
+    Proximity,
+    Mandatory,
+}
+
+/// `scroll-snap-type`. `None` = sin snap. Some((axis, strictness)) si
+/// se declaró. Fase 7.268.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ScrollSnapType(pub Option<(ScrollSnapAxis, ScrollSnapStrictness)>);
 
 /// `font-kerning`. Heredable. Default `Auto`. Fase 7.259.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1447,6 +1538,12 @@ impl Default for ComputedStyle {
             font_variation_settings: Vec::new(),
             font_language_override: None,
             text_rendering: TextRendering::Auto,
+            filter: Vec::new(),
+            backdrop_filter: Vec::new(),
+            text_orientation: TextOrientation::Mixed,
+            overscroll_behavior_x: OverscrollBehavior::Auto,
+            overscroll_behavior_y: OverscrollBehavior::Auto,
+            scroll_snap_type: ScrollSnapType(None),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

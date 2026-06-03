@@ -236,6 +236,9 @@ impl StyleEngine {
             style.font_variation_settings = p.font_variation_settings.clone();
             style.font_language_override = p.font_language_override.clone();
             style.text_rendering = p.text_rendering;
+            // text-orientation hereda. filter, backdrop-filter,
+            // overscroll-behavior y scroll-snap-type NO heredan.
+            style.text_orientation = p.text_orientation;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -1798,6 +1801,217 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&ps[0], Some(&body_cs)).text_rendering,
             TextRendering::OptimizeLegibility
+        );
+    }
+
+    #[test]
+    fn filter_fase_7_264() {
+        // `none` y vacío → vacío.
+        assert!(parse_filter_list("none").is_empty());
+        assert!(parse_filter_list("").is_empty());
+
+        // Funciones simples.
+        let r = parse_filter_list("blur(4px) brightness(120%) hue-rotate(45deg)");
+        assert_eq!(r.len(), 3);
+        assert!(matches!(r[0], FilterFn::Blur(v) if (v - 4.0).abs() < 1e-3));
+        assert!(matches!(r[1], FilterFn::Brightness(v) if (v - 1.2).abs() < 1e-3));
+        assert!(matches!(r[2], FilterFn::HueRotate(v) if (v - 45.0).abs() < 1e-3));
+
+        // Número unitless + porcentaje.
+        let r2 = parse_filter_list("opacity(0.5) saturate(50%) grayscale(1)");
+        assert!(matches!(r2[0], FilterFn::Opacity(v) if (v - 0.5).abs() < 1e-3));
+        assert!(matches!(r2[1], FilterFn::Saturate(v) if (v - 0.5).abs() < 1e-3));
+        assert!(matches!(r2[2], FilterFn::Grayscale(v) if (v - 1.0).abs() < 1e-3));
+
+        // hue-rotate con rad/turn.
+        let r3 = parse_filter_list("hue-rotate(0.5turn) hue-rotate(3.14159rad)");
+        assert!(matches!(r3[0], FilterFn::HueRotate(v) if (v - 180.0).abs() < 1e-1));
+        assert!(matches!(r3[1], FilterFn::HueRotate(v) if (v - 180.0).abs() < 1.0));
+
+        // drop-shadow reusa box-shadow.
+        let r4 = parse_filter_list("drop-shadow(2px 3px red)");
+        assert!(matches!(&r4[0], FilterFn::DropShadow(s) if (s.offset_x - 2.0).abs() < 1e-3));
+
+        // Función desconocida descartada (sólo se queda la conocida).
+        let r5 = parse_filter_list("nope(1) blur(2px) bogus(x)");
+        assert_eq!(r5.len(), 1);
+
+        // NO se hereda.
+        let html = r##"<html><head><style>
+            body { filter: blur(2px) }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.filter.len(), 1);
+        // NO se hereda → vacío.
+        assert!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs))
+                .filter
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn backdrop_filter_fase_7_265() {
+        let r = parse_filter_list("blur(8px) saturate(180%)");
+        assert_eq!(r.len(), 2);
+
+        let html = r##"<html><head><style>
+            div.glass { -webkit-backdrop-filter: blur(10px) }
+        </style></head><body><div class="glass"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(cs.backdrop_filter.len(), 1);
+        assert!(matches!(cs.backdrop_filter[0], FilterFn::Blur(v) if (v - 10.0).abs() < 1e-3));
+    }
+
+    #[test]
+    fn text_orientation_fase_7_266() {
+        assert_eq!(parse_text_orientation("mixed"), Some(TextOrientation::Mixed));
+        assert_eq!(parse_text_orientation("UPRIGHT"), Some(TextOrientation::Upright));
+        assert_eq!(parse_text_orientation("sideways"), Some(TextOrientation::Sideways));
+        assert_eq!(
+            parse_text_orientation("sideways-right"),
+            Some(TextOrientation::SidewaysRight)
+        );
+        assert_eq!(parse_text_orientation("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-orientation: upright }
+            p.over { text-orientation: sideways }
+            p.plain {}
+        </style></head><body>
+          <p class="over"></p><p class="plain"></p>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut ps = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("p") => ps.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_orientation, TextOrientation::Upright);
+        assert_eq!(
+            eng.compute_with_parent(&ps[0], Some(&body_cs)).text_orientation,
+            TextOrientation::Sideways
+        );
+        // Heredado.
+        assert_eq!(
+            eng.compute_with_parent(&ps[1], Some(&body_cs)).text_orientation,
+            TextOrientation::Upright
+        );
+    }
+
+    #[test]
+    fn overscroll_behavior_fase_7_267() {
+        assert_eq!(parse_overscroll_behavior("auto"), Some(OverscrollBehavior::Auto));
+        assert_eq!(parse_overscroll_behavior("CONTAIN"), Some(OverscrollBehavior::Contain));
+        assert_eq!(parse_overscroll_behavior("none"), Some(OverscrollBehavior::None));
+        assert_eq!(parse_overscroll_behavior("nope"), None);
+
+        // Shorthand: `contain none` → x=contain, y=none. `auto` solo → x=y=auto.
+        let html = r##"<html><head><style>
+            body { overscroll-behavior: contain none }
+            div.solo { overscroll-behavior: contain }
+            div.split { overscroll-behavior-x: none; overscroll-behavior-y: auto }
+            div.plain {}
+        </style></head><body>
+          <div class="solo"></div><div class="split"></div><div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        // 2-valor: x=contain, y=none.
+        assert_eq!(body_cs.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(body_cs.overscroll_behavior_y, OverscrollBehavior::None);
+        // 1-valor: x=y=contain.
+        let solo_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(solo_cs.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(solo_cs.overscroll_behavior_y, OverscrollBehavior::Contain);
+        // Longhands separadas.
+        let split_cs = eng.compute_with_parent(&divs[1], Some(&body_cs));
+        assert_eq!(split_cs.overscroll_behavior_x, OverscrollBehavior::None);
+        assert_eq!(split_cs.overscroll_behavior_y, OverscrollBehavior::Auto);
+        // NO se hereda → default Auto.
+        let plain_cs = eng.compute_with_parent(&divs[2], Some(&body_cs));
+        assert_eq!(plain_cs.overscroll_behavior_x, OverscrollBehavior::Auto);
+        assert_eq!(plain_cs.overscroll_behavior_y, OverscrollBehavior::Auto);
+    }
+
+    #[test]
+    fn scroll_snap_type_fase_7_268() {
+        assert_eq!(parse_scroll_snap_type("none"), Some(ScrollSnapType(None)));
+        assert_eq!(
+            parse_scroll_snap_type("x"),
+            Some(ScrollSnapType(Some((ScrollSnapAxis::X, ScrollSnapStrictness::Proximity))))
+        );
+        assert_eq!(
+            parse_scroll_snap_type("y mandatory"),
+            Some(ScrollSnapType(Some((ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory))))
+        );
+        assert_eq!(
+            parse_scroll_snap_type("BOTH proximity"),
+            Some(ScrollSnapType(Some((ScrollSnapAxis::Both, ScrollSnapStrictness::Proximity))))
+        );
+        assert_eq!(parse_scroll_snap_type("xy"), None);
+
+        // NO se hereda.
+        let html = r##"<html><head><style>
+            body { scroll-snap-type: y mandatory }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.scroll_snap_type,
+            ScrollSnapType(Some((ScrollSnapAxis::Y, ScrollSnapStrictness::Mandatory)))
+        );
+        // NO se hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scroll_snap_type,
+            ScrollSnapType(None)
         );
     }
 
