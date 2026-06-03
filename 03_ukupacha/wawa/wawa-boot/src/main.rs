@@ -725,6 +725,24 @@ fn localizar_ovmf() -> Result<String, String> {
 fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
     println!("[renaser/boot] arrancando QEMU :: la superficie indigo nace ahora\n");
 
+    // FASE 64 :: cuantos SCANOUTS anuncia la virtio-gpu. `RENASER_MONITORES=2`
+    // hace que el dispositivo exponga 2 cabezas y el kernel monte multi-monitor
+    // (lienzo global = envolvente, una Pantalla por scanout). Default 1 = el
+    // comportamiento de siempre. Para VER las 2 cabezas hace falta un backend de
+    // display multi-head (gtk/sdl en una maquina grafica, o spice); en headless
+    // con `-display none` la traza serial igual confirma `gpu :: N scanouts`.
+    let monitores: u32 = std::env::var("RENASER_MONITORES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(1);
+    let dispositivo_gpu = if monitores > 1 {
+        println!("[renaser/boot] gpu :: virtio-vga con {monitores} scanouts (multi-monitor)");
+        format!("virtio-vga,max_outputs={monitores}")
+    } else {
+        "virtio-vga".to_string()
+    };
+
     let mut qemu = Command::new("qemu-system-x86_64");
     // `accel=kvm:tcg` intenta KVM y, si no esta disponible, recae en TCG puro.
     qemu.arg("-machine").arg("q35,accel=kvm:tcg")
@@ -734,7 +752,7 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         // FASE 60 :: virtio-gpu con compatibilidad VGA. OVMF expone su GOP para
         // el arranque; el kernel reclama el mismo dispositivo y toma el scanout.
         .arg("-vga").arg("none")
-        .arg("-device").arg("virtio-vga")
+        .arg("-device").arg(&dispositivo_gpu)
         .arg("-serial").arg("stdio")
         .arg("--no-reboot")
         // El disco de objetos, como dispositivo virtio-blk sobre el bus PCI.
