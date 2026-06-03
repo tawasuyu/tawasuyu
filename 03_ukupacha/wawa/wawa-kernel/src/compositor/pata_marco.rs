@@ -41,8 +41,14 @@ const GAP: usize = 8;
 const PAD: usize = 12;
 /// Tamaño de fuente de las leyendas, en px.
 const TAM: f32 = 16.0;
-/// Grosor de la barra de menú del kernel, en px.
-const BARRA_ALTO: f32 = 32.0;
+/// Grosor de la barra de menú del kernel, en px. El compositor **reserva** esta
+/// franja (la resta de `area_apps`) para que las ventanas no queden bajo la
+/// barra; debe coincidir con el `thickness` del Top bar del config (de ahí que
+/// el config lo tome de acá). Cuando el config sea dinámico, la reserva deberá
+/// leer el grosor resuelto en vez de esta constante.
+pub(crate) const ALTO_BARRA: usize = 32;
+/// El mismo grosor como `f32`, para el `thickness` del config.
+const BARRA_ALTO: f32 = ALTO_BARRA as f32;
 
 /// El `Config` del marco **por defecto** — declarado como en Linux (mismos
 /// `kind`s). Una barra superior con el botón de inicio a la izquierda y el

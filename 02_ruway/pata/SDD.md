@@ -324,10 +324,16 @@ borde; shuma provee el contenido.
     grafo** (`almacen::almacenar`, BLAKE3 + postcard) y lo **lee de vuelta** —el
     config hace el round-trip completo por akasha—, con fallback al default y
     cacheado tras el primer uso.
+  - **Franja reservada** — el compositor ya **reserva** la franja de la barra de
+    menú: `area_apps` (la región que se tesela) descuenta `pata_marco::ALTO_BARRA`
+    además de las franjas de consola/taskbar, así las ventanas tilean **debajo**
+    de la barra (el equivalente al `Frame::work_area` de resolve). `region_barra_
+    marco` deriva la franja una sola vez; el render la pinta ahí y el ratón
+    hit-testea el `start_button` ahí — sin drift entre reservar, pintar y clickear.
   - Pendiente: que un proceso de userspace **proponga** un config nuevo (syscall
     que engendra el nodo y reancla el manifiesto, como `sys_config_proponer`) +
-    invalidar el cache; que el compositor reserve la franja de la barra usando
-    `Frame::work_area` de resolve (hoy se pinta sobre el borde superior de apps).
+    invalidar el cache; cuando el config sea dinámico, la reserva deberá leer el
+    grosor resuelto en vez de la constante `ALTO_BARRA`.
 - **Fase 10 ✅** (2026-06-03) — `mirada-launcher-llimphi` **retirado**: pata cubre y
   excede su rol (shell+tee+IA, task manager KDE, tarjetas conky, menú de inicio
   nativo, tooltips, reloj UTC). Se borró el crate, se sacó del workspace y se

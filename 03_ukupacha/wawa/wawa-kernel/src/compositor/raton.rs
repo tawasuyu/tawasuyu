@@ -80,8 +80,8 @@ pub fn atender_raton() {
             // (pata)? Entonces abre el launcher —el mismo gesto que Alt+P—, sin
             // tocar foco ni arrastre. El rect lo resuelve `pata_marco` con la
             // misma geometría con que lo pinta (start pegado al borde izquierdo).
-            let area_apps_r = area_apps(escritorio.ancho, escritorio.alto);
-            let en_start = pata_marco::start_button_rect(area_apps_r)
+            let barra_r = region_barra_marco(escritorio.ancho, escritorio.alto);
+            let en_start = pata_marco::start_button_rect(barra_r)
                 .is_some_and(|sb| contiene(sb, x, y));
             // Boton bajó: un CLIC. Si cae en la barra de tareas, enfocar la
             // pestaña pulsada SIN iniciar arrastre. Si no, comportamiento
@@ -345,14 +345,31 @@ pub fn refrescar_puntero() {
 // =============================================================================
 
 /// El area de pantalla que el compositor tesela: toda la pantalla menos la
-/// franja de la consola en la cima y la barra de tareas al pie.
+/// franja de la consola en la cima, la **barra de menú del marco (pata)** justo
+/// debajo, y la barra de tareas al pie. Reservar la franja de la barra (FASE 9)
+/// es lo que evita que las ventanas queden tapadas por ella — el equivalente al
+/// `Frame::work_area` que `pata_core::resolve` computa.
 pub fn area_apps(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
-    let cabeza = FRANJA_CONSOLA.min(alto_pantalla);
+    let cabeza = (FRANJA_CONSOLA + pata_marco::ALTO_BARRA).min(alto_pantalla);
     let pie = FRANJA_TASKBAR.min(alto_pantalla.saturating_sub(cabeza));
     RegionPantalla {
         x: 0,
         y: cabeza,
         ancho: ancho_pantalla,
         alto: alto_pantalla.saturating_sub(cabeza).saturating_sub(pie),
+    }
+}
+
+/// La franja reservada para la barra de menú del marco: justo encima del área de
+/// apps, de grosor [`pata_marco::ALTO_BARRA`]. La derivan tanto el render (la
+/// pinta) como el ratón (hit-test del `start_button`) desde `area_apps`, así no
+/// hay drift entre dónde se reserva, dónde se pinta y dónde se clickea.
+pub fn region_barra_marco(ancho_pantalla: usize, alto_pantalla: usize) -> RegionPantalla {
+    let apps = area_apps(ancho_pantalla, alto_pantalla);
+    RegionPantalla {
+        x: apps.x,
+        y: apps.y.saturating_sub(pata_marco::ALTO_BARRA),
+        ancho: apps.ancho,
+        alto: pata_marco::ALTO_BARRA,
     }
 }
