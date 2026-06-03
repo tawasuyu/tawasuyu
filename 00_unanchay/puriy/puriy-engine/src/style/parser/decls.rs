@@ -617,6 +617,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // `text-emphasis` shorthand: ver `parse_declarations`.
         "ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
+        "transform-origin" => {
+            parse_transform_origin(value).map(DeclKind::TransformOrigin)
+        }
+        "transform-style" => {
+            parse_transform_style(value).map(DeclKind::TransformStyle)
+        }
+        "perspective" => parse_perspective(value).map(DeclKind::Perspective),
+        "perspective-origin" => {
+            parse_perspective_origin(value).map(DeclKind::PerspectiveOrigin)
+        }
+        "backface-visibility" => {
+            parse_backface_visibility(value).map(DeclKind::BackfaceVisibility)
+        }
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
         "letter-spacing" => {
@@ -2176,6 +2189,133 @@ pub(crate) fn parse_ruby_position(value: &str) -> Option<RubyPosition> {
         "under" => Some(RubyPosition::Under),
         "inter-character" => Some(RubyPosition::InterCharacter),
         "alternate" => Some(RubyPosition::Alternate),
+        _ => None,
+    }
+}
+
+/// `transform-origin` (CSS Transforms 1). Acepta 1, 2 ó 3 tokens; el
+/// 3º es siempre Z en px (sin `%`). Para el eje X/Y reusamos la misma
+/// lógica de keywords/lengths que `background-position`:
+///   - 1 token: si es vertical (`top`/`bottom`) fija Y; si es horizontal
+///     o ambiguo (length/%/`center`) fija X. El otro eje queda en 50%.
+///   - 2 tokens: si los keywords explicitan ejes invertidos
+///     (`top left`, `center right`), se reordenan.
+/// Fase 7.314.
+pub(crate) fn parse_transform_origin(value: &str) -> Option<TransformOrigin> {
+    fn axis_token(t: &str) -> Option<(LengthVal, Option<bool>)> {
+        match t.to_ascii_lowercase().as_str() {
+            "left" => Some((LengthVal::Pct(0.0), Some(true))),
+            "right" => Some((LengthVal::Pct(100.0), Some(true))),
+            "top" => Some((LengthVal::Pct(0.0), Some(false))),
+            "bottom" => Some((LengthVal::Pct(100.0), Some(false))),
+            "center" => Some((LengthVal::Pct(50.0), None)),
+            other => parse_length_or_pct(other).map(|l| (l, None)),
+        }
+    }
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    let (x, y, z_tok) = match toks.as_slice() {
+        [a] => {
+            let (la, axis) = axis_token(a)?;
+            if axis == Some(false) {
+                (LengthVal::Pct(50.0), la, None)
+            } else {
+                (la, LengthVal::Pct(50.0), None)
+            }
+        }
+        [a, b] => {
+            let (la, aa) = axis_token(a)?;
+            let (lb, ab) = axis_token(b)?;
+            if aa == Some(false) || ab == Some(true) {
+                (lb, la, None)
+            } else {
+                (la, lb, None)
+            }
+        }
+        [a, b, c] => {
+            let (la, aa) = axis_token(a)?;
+            let (lb, ab) = axis_token(b)?;
+            let (x, y) = if aa == Some(false) || ab == Some(true) {
+                (lb, la)
+            } else {
+                (la, lb)
+            };
+            (x, y, Some(*c))
+        }
+        _ => return None,
+    };
+    let z = if let Some(t) = z_tok {
+        // El eje Z no admite `%`. Aceptamos sólo length-en-px.
+        parse_length_px(t)?
+    } else {
+        0.0
+    };
+    Some(TransformOrigin { x, y, z })
+}
+
+/// `transform-style`: `flat | preserve-3d`. Fase 7.315.
+pub(crate) fn parse_transform_style(value: &str) -> Option<TransformStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "flat" => Some(TransformStyle::Flat),
+        "preserve-3d" => Some(TransformStyle::Preserve3d),
+        _ => None,
+    }
+}
+
+/// `perspective`: `none | <length>` (no negativo). Fase 7.316.
+pub(crate) fn parse_perspective(value: &str) -> Option<Option<f32>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    let px = parse_length_px(v)?;
+    if px < 0.0 {
+        return None;
+    }
+    Some(Some(px))
+}
+
+/// `perspective-origin` (CSS Transforms 2). 1 ó 2 tokens, sólo
+/// dimensión 2D — mismo set de keywords/lengths que `transform-origin`
+/// (sin eje Z). Fase 7.317.
+pub(crate) fn parse_perspective_origin(value: &str) -> Option<PerspectiveOrigin> {
+    fn axis_token(t: &str) -> Option<(LengthVal, Option<bool>)> {
+        match t.to_ascii_lowercase().as_str() {
+            "left" => Some((LengthVal::Pct(0.0), Some(true))),
+            "right" => Some((LengthVal::Pct(100.0), Some(true))),
+            "top" => Some((LengthVal::Pct(0.0), Some(false))),
+            "bottom" => Some((LengthVal::Pct(100.0), Some(false))),
+            "center" => Some((LengthVal::Pct(50.0), None)),
+            other => parse_length_or_pct(other).map(|l| (l, None)),
+        }
+    }
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    match toks.as_slice() {
+        [a] => {
+            let (la, axis) = axis_token(a)?;
+            Some(if axis == Some(false) {
+                PerspectiveOrigin { x: LengthVal::Pct(50.0), y: la }
+            } else {
+                PerspectiveOrigin { x: la, y: LengthVal::Pct(50.0) }
+            })
+        }
+        [a, b] => {
+            let (la, aa) = axis_token(a)?;
+            let (lb, ab) = axis_token(b)?;
+            Some(if aa == Some(false) || ab == Some(true) {
+                PerspectiveOrigin { x: lb, y: la }
+            } else {
+                PerspectiveOrigin { x: la, y: lb }
+            })
+        }
+        _ => None,
+    }
+}
+
+/// `backface-visibility`: `visible | hidden`. Fase 7.318.
+pub(crate) fn parse_backface_visibility(value: &str) -> Option<BackfaceVisibility> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "visible" => Some(BackfaceVisibility::Visible),
+        "hidden" => Some(BackfaceVisibility::Hidden),
         _ => None,
     }
 }

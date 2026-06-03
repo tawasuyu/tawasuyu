@@ -433,6 +433,23 @@ pub struct ComputedStyle {
     /// `ruby-position` (Fase 7.313). Default `Alternate`. **Heredable**.
     /// Plumb: no hay layout de `<ruby>` propio aún.
     pub ruby_position: RubyPosition,
+    /// `transform-origin` (Fase 7.314). Default `50% 50% 0`. NO hereda.
+    /// Plumb: el chrome no ancla las transforms a este punto todavía
+    /// (rota/escala alrededor del centro fijo).
+    pub transform_origin: TransformOrigin,
+    /// `transform-style` (Fase 7.315). Default `Flat`. NO hereda. Plumb:
+    /// no hay composición 3D entre hijos.
+    pub transform_style: TransformStyle,
+    /// `perspective` (Fase 7.316). `None` = sin proyección. NO hereda.
+    /// Plumb: el chrome no proyecta a partir de los hijos.
+    pub perspective: Option<f32>,
+    /// `perspective-origin` (Fase 7.317). Default `50% 50%`. NO hereda.
+    /// Plumb.
+    pub perspective_origin: PerspectiveOrigin,
+    /// `backface-visibility` (Fase 7.318). Default `Visible`. NO hereda.
+    /// Plumb: el chrome siempre pinta la cara, incluso cuando una
+    /// `rotateY(180deg)` la voltearía.
+    pub backface_visibility: BackfaceVisibility,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1141,6 +1158,58 @@ pub enum RubyPosition {
     InterCharacter,
     #[default]
     Alternate,
+}
+
+/// `transform-origin` (CSS Transforms 1). Punto pivote para `transform`.
+/// `x`/`y` en `LengthVal` (`Px(n)` u `Pct(p)`) — el chrome resolvería el
+/// % contra el border-box del elemento. `z` en px (`Pct` no se permite
+/// en el eje Z). Default CSS: `50% 50% 0`. Fase 7.314.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TransformOrigin {
+    pub x: LengthVal,
+    pub y: LengthVal,
+    pub z: f32,
+}
+
+impl Default for TransformOrigin {
+    fn default() -> Self {
+        Self { x: LengthVal::Pct(50.0), y: LengthVal::Pct(50.0), z: 0.0 }
+    }
+}
+
+/// `transform-style` (CSS Transforms 2). Define si los hijos viven en su
+/// propio plano (Flat) o componen en 3D con sus padres (Preserve3d).
+/// Default `Flat`. Fase 7.315.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformStyle {
+    #[default]
+    Flat,
+    Preserve3d,
+}
+
+/// `perspective-origin` (CSS Transforms 2). Punto desde el que se mira
+/// a los hijos cuando hay `perspective: <length>`. Default `50% 50%`.
+/// Fase 7.317.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PerspectiveOrigin {
+    pub x: LengthVal,
+    pub y: LengthVal,
+}
+
+impl Default for PerspectiveOrigin {
+    fn default() -> Self {
+        Self { x: LengthVal::Pct(50.0), y: LengthVal::Pct(50.0) }
+    }
+}
+
+/// `backface-visibility` (CSS Transforms 2). `Hidden` esconde el elemento
+/// cuando una rotación 3D lo voltea (cara mirando para atrás). Default
+/// `Visible`. Fase 7.318.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackfaceVisibility {
+    #[default]
+    Visible,
+    Hidden,
 }
 
 impl ContainFlags {
@@ -2141,6 +2210,11 @@ impl Default for ComputedStyle {
             text_emphasis_color: None,
             text_emphasis_position: TextEmphasisPosition::default(),
             ruby_position: RubyPosition::Alternate,
+            transform_origin: TransformOrigin::default(),
+            transform_style: TransformStyle::Flat,
+            perspective: None,
+            perspective_origin: PerspectiveOrigin::default(),
+            backface_visibility: BackfaceVisibility::Visible,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

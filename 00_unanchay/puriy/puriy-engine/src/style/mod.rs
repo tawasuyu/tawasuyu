@@ -3783,6 +3783,253 @@ mod tests {
     }
 
     #[test]
+    fn transform_origin_fase_7_314() {
+        // Default = 50% 50% 0.
+        assert_eq!(
+            parse_transform_origin("center"),
+            Some(TransformOrigin {
+                x: LengthVal::Pct(50.0),
+                y: LengthVal::Pct(50.0),
+                z: 0.0
+            })
+        );
+        // 1 keyword vertical → fija Y, X queda en 50%.
+        assert_eq!(
+            parse_transform_origin("top"),
+            Some(TransformOrigin {
+                x: LengthVal::Pct(50.0),
+                y: LengthVal::Pct(0.0),
+                z: 0.0
+            })
+        );
+        // 1 length → fija X.
+        assert_eq!(
+            parse_transform_origin("10px"),
+            Some(TransformOrigin {
+                x: LengthVal::Px(10.0),
+                y: LengthVal::Pct(50.0),
+                z: 0.0
+            })
+        );
+        // 2 tokens, orden invertido (`top left` → x=left, y=top).
+        assert_eq!(
+            parse_transform_origin("top left"),
+            Some(TransformOrigin {
+                x: LengthVal::Pct(0.0),
+                y: LengthVal::Pct(0.0),
+                z: 0.0
+            })
+        );
+        // 3 tokens: el 3º es Z en px.
+        assert_eq!(
+            parse_transform_origin("right bottom 5px"),
+            Some(TransformOrigin {
+                x: LengthVal::Pct(100.0),
+                y: LengthVal::Pct(100.0),
+                z: 5.0
+            })
+        );
+        // Eje Z en `%` → inválido.
+        assert_eq!(parse_transform_origin("center center 5%"), None);
+        // Más de 3 tokens → inválido.
+        assert_eq!(parse_transform_origin("1px 2px 3px 4px"), None);
+
+        // E2E: NO se hereda (transforms y su origen son por-elemento).
+        let html = r##"<html><head><style>
+            body { transform-origin: 10px 20px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.transform_origin,
+            TransformOrigin {
+                x: LengthVal::Px(10.0),
+                y: LengthVal::Px(20.0),
+                z: 0.0
+            }
+        );
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        // NO hereda — vuelve al default 50% 50% 0.
+        assert_eq!(div_cs.transform_origin, TransformOrigin::default());
+    }
+
+    #[test]
+    fn transform_style_fase_7_315() {
+        assert_eq!(parse_transform_style("flat"), Some(TransformStyle::Flat));
+        assert_eq!(
+            parse_transform_style("PRESERVE-3D"),
+            Some(TransformStyle::Preserve3d)
+        );
+        assert_eq!(parse_transform_style("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { transform-style: preserve-3d }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.transform_style, TransformStyle::Preserve3d);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).transform_style,
+            TransformStyle::Flat
+        );
+    }
+
+    #[test]
+    fn perspective_fase_7_316() {
+        assert_eq!(parse_perspective("none"), Some(None));
+        assert_eq!(parse_perspective("NONE"), Some(None));
+        assert_eq!(parse_perspective("500px"), Some(Some(500.0)));
+        // No negativo.
+        assert_eq!(parse_perspective("-10px"), None);
+        // `%` no es length-en-px.
+        assert_eq!(parse_perspective("50%"), None);
+        assert_eq!(parse_perspective("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { perspective: 800px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.perspective, Some(800.0));
+        // NO hereda — vuelve a None.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).perspective,
+            None
+        );
+    }
+
+    #[test]
+    fn perspective_origin_fase_7_317() {
+        assert_eq!(
+            parse_perspective_origin("center"),
+            Some(PerspectiveOrigin {
+                x: LengthVal::Pct(50.0),
+                y: LengthVal::Pct(50.0)
+            })
+        );
+        assert_eq!(
+            parse_perspective_origin("top"),
+            Some(PerspectiveOrigin {
+                x: LengthVal::Pct(50.0),
+                y: LengthVal::Pct(0.0)
+            })
+        );
+        // Orden invertido: `top left` → x=left, y=top.
+        assert_eq!(
+            parse_perspective_origin("top left"),
+            Some(PerspectiveOrigin {
+                x: LengthVal::Pct(0.0),
+                y: LengthVal::Pct(0.0)
+            })
+        );
+        assert_eq!(
+            parse_perspective_origin("25% 75%"),
+            Some(PerspectiveOrigin {
+                x: LengthVal::Pct(25.0),
+                y: LengthVal::Pct(75.0)
+            })
+        );
+        // 3 tokens → inválido (no hay eje Z).
+        assert_eq!(parse_perspective_origin("center center 5px"), None);
+
+        let html = r##"<html><head><style>
+            body { perspective-origin: 20px 40px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.perspective_origin,
+            PerspectiveOrigin { x: LengthVal::Px(20.0), y: LengthVal::Px(40.0) }
+        );
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).perspective_origin,
+            PerspectiveOrigin::default()
+        );
+    }
+
+    #[test]
+    fn backface_visibility_fase_7_318() {
+        assert_eq!(
+            parse_backface_visibility("visible"),
+            Some(BackfaceVisibility::Visible)
+        );
+        assert_eq!(
+            parse_backface_visibility("HIDDEN"),
+            Some(BackfaceVisibility::Hidden)
+        );
+        assert_eq!(parse_backface_visibility("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { backface-visibility: hidden }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.backface_visibility, BackfaceVisibility::Hidden);
+        // NO hereda — vuelve a Visible.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).backface_visibility,
+            BackfaceVisibility::Visible
+        );
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(
