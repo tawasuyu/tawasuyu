@@ -84,6 +84,32 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_font_shorthand(value, important));
             continue;
         }
+        // `margin` shorthand: ruteado acá (no por decl_kind_from_pair) para
+        // soportar `auto` por lado (`margin: 0 auto` = centrado horizontal).
+        if prop.eq_ignore_ascii_case("margin") {
+            out.extend(parse_margin_shorthand(value, important));
+            continue;
+        }
+        // Longhands de margen con `auto`. Horizontal → flag de centrado;
+        // vertical → 0 (no centra en block flow).
+        if prop.eq_ignore_ascii_case("margin-left") && value.eq_ignore_ascii_case("auto") {
+            out.push(Decl { kind: DeclKind::MarginLeft(0.0), important });
+            out.push(Decl { kind: DeclKind::MarginLeftAuto(true), important });
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("margin-right") && value.eq_ignore_ascii_case("auto") {
+            out.push(Decl { kind: DeclKind::MarginRight(0.0), important });
+            out.push(Decl { kind: DeclKind::MarginRightAuto(true), important });
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("margin-top") && value.eq_ignore_ascii_case("auto") {
+            out.push(Decl { kind: DeclKind::MarginTop(0.0), important });
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("margin-bottom") && value.eq_ignore_ascii_case("auto") {
+            out.push(Decl { kind: DeclKind::MarginBottom(0.0), important });
+            continue;
+        }
         if prop.eq_ignore_ascii_case("inset") {
             out.extend(parse_inset_shorthand(value, important));
             continue;

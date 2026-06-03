@@ -1144,6 +1144,46 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
     out
 }
 
+/// Shorthand `margin:` con soporte de `auto` por lado (centrado). Emite
+/// longhands px (auto→0) más los flags `MarginLeftAuto`/`MarginRightAuto`.
+/// El `auto` vertical no centra en block flow: se trata como 0. Vacío si
+/// algún token no parsea como px ni `auto`.
+pub(crate) fn parse_margin_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let toks: Vec<&str> = value.split_whitespace().collect();
+    if toks.is_empty() || toks.len() > 4 {
+        return Vec::new();
+    }
+    // Cada token → (px, es_auto).
+    let mut sides: Vec<(f32, bool)> = Vec::with_capacity(toks.len());
+    for t in &toks {
+        if t.eq_ignore_ascii_case("auto") {
+            sides.push((0.0, true));
+        } else if let Some(px) = parse_length_px(t) {
+            sides.push((px, false));
+        } else {
+            return Vec::new();
+        }
+    }
+    // Expande 1/2/3/4 valores a (top, right, bottom, left).
+    let (t, r, b, l) = match sides.as_slice() {
+        [a] => (*a, *a, *a, *a),
+        [v, h] => (*v, *h, *v, *h),
+        [t, h, bo] => (*t, *h, *bo, *h),
+        [t, r, bo, le] => (*t, *r, *bo, *le),
+        _ => return Vec::new(),
+    };
+    // Los longhands px limpian el flag auto; los flags van DESPUÉS para
+    // que el orden de aplicación deje el auto en pie cuando corresponde.
+    vec![
+        Decl { kind: DeclKind::MarginTop(t.0), important },
+        Decl { kind: DeclKind::MarginRight(r.0), important },
+        Decl { kind: DeclKind::MarginBottom(b.0), important },
+        Decl { kind: DeclKind::MarginLeft(l.0), important },
+        Decl { kind: DeclKind::MarginLeftAuto(l.1), important },
+        Decl { kind: DeclKind::MarginRightAuto(r.1), important },
+    ]
+}
+
 /// Shorthand `font:` — expande a font-style / font-weight / font-size /
 /// line-height / font-family. Sintaxis CSS:
 ///   font: [ <style> || <variant> || <weight> || <stretch> ]?

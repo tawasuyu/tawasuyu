@@ -21,6 +21,11 @@ pub struct ComputedStyle {
     /// `None` = sin override; usa la fuente default del runtime.
     pub font_family: Option<String>,
     pub margin: Sides<f32>,
+    /// `margin-left/right: auto` — centrado horizontal en block flow. No
+    /// hereda; default `false`. (El auto vertical no centra en block flow,
+    /// se trata como 0 y por eso no se rastrea.)
+    pub margin_left_auto: bool,
+    pub margin_right_auto: bool,
     pub padding: Sides<f32>,
     /// Ancho explícito. `Auto` = el default block-fills-parent.
     pub width: LengthVal,
@@ -834,6 +839,8 @@ impl Default for ComputedStyle {
             font_style: FontStyle::Normal,
             font_family: None,
             margin: Sides::all(0.0),
+            margin_left_auto: false,
+            margin_right_auto: false,
             padding: Sides::all(0.0),
             width: LengthVal::Auto,
             height: LengthVal::Auto,

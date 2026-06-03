@@ -541,6 +541,53 @@ mod tests {
     }
 
     #[test]
+    fn margin_auto_centra_horizontal() {
+        // `margin: 0 auto` y longhands con `auto` marcan el flag de centrado
+        // sin perder los px verticales.
+        let html = r#"<html><head><style>
+            .a{margin:0 auto}
+            .b{margin:10px 20px 30px auto}
+            .c{margin-left:auto; margin-right:auto}
+            .d{margin:8px}
+            .e{margin-left:auto}
+            .e{margin-left:12px}
+        </style></head><body>
+            <div class="a">a</div><div class="b">b</div>
+            <div class="c">c</div><div class="d">d</div>
+            <div class="e">e</div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut ds = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                ds.push(n.clone());
+            }
+        });
+        // .a — `0 auto`: top/bottom 0, left/right auto.
+        let a = eng.compute(&ds[0]);
+        assert!(a.margin_left_auto && a.margin_right_auto);
+        assert_eq!(a.margin.top, 0.0);
+        // .b — `10 20 30 auto`: sólo left es auto; right=20px no.
+        let b = eng.compute(&ds[1]);
+        assert!(b.margin_left_auto && !b.margin_right_auto);
+        assert_eq!(b.margin.top, 10.0);
+        assert_eq!(b.margin.right, 20.0);
+        assert_eq!(b.margin.bottom, 30.0);
+        // .c — longhands auto en ambos lados.
+        let c = eng.compute(&ds[2]);
+        assert!(c.margin_left_auto && c.margin_right_auto);
+        // .d — sin auto.
+        let d = eng.compute(&ds[3]);
+        assert!(!d.margin_left_auto && !d.margin_right_auto);
+        assert_eq!(d.margin.left, 8.0);
+        // .e — un px posterior pisa el auto previo (mismo selector/orden).
+        let e = eng.compute(&ds[4]);
+        assert!(!e.margin_left_auto);
+        assert_eq!(e.margin.left, 12.0);
+    }
+
+    #[test]
     fn parsea_calc_solo_px() {
         // calc(10px + 5px) resuelve a Px(15) en parse time.
         assert_eq!(parse_length_or_pct("calc(10px + 5px)"), Some(LengthVal::Px(15.0)));

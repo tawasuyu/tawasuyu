@@ -999,8 +999,8 @@ pub(crate) fn render_input(
             bottom: length(4.0_f32 * zoom),
         },
         margin: Rect {
-            left: length(b.margin.left * zoom),
-            right: length(b.margin.right * zoom),
+            left: margin_left_lpa(b, zoom),
+            right: margin_right_lpa(b, zoom, 0.0),
             top: length(b.margin.top * zoom),
             bottom: length(b.margin.bottom * zoom),
         },
@@ -1061,8 +1061,8 @@ pub(crate) fn render_checkbox_radio(
             height: length(size_px + 4.0),
         },
         margin: Rect {
-            left: length(b.margin.left * zoom),
-            right: length(b.margin.right * zoom + 4.0),
+            left: margin_left_lpa(b, zoom),
+            right: margin_right_lpa(b, zoom, 4.0),
             top: length(b.margin.top * zoom),
             bottom: length(b.margin.bottom * zoom),
         },
@@ -1100,8 +1100,8 @@ pub(crate) fn render_submit_button(b: &BoxNode, idx: usize, ctx: &mut RenderCtx<
             bottom: length(6.0 * zoom),
         },
         margin: Rect {
-            left: length(b.margin.left * zoom),
-            right: length(b.margin.right * zoom),
+            left: margin_left_lpa(b, zoom),
+            right: margin_right_lpa(b, zoom, 0.0),
             top: length(b.margin.top * zoom),
             bottom: length(b.margin.bottom * zoom),
         },
@@ -1197,8 +1197,8 @@ pub(crate) fn render_select(
             height: auto(),
         },
         margin: Rect {
-            left: length(b.margin.left * zoom),
-            right: length(b.margin.right * zoom),
+            left: margin_left_lpa(b, zoom),
+            right: margin_right_lpa(b, zoom, 0.0),
             top: length(b.margin.top * zoom),
             bottom: length(b.margin.bottom * zoom),
         },
@@ -2071,8 +2071,8 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         // usando esta relación. `None` = sin relación.
         aspect_ratio: b.aspect_ratio,
         margin: Rect {
-            left: length(b.margin.left * zoom),
-            right: length(b.margin.right * zoom),
+            left: margin_left_lpa(b, zoom),
+            right: margin_right_lpa(b, zoom, 0.0),
             top: length(b.margin.top * zoom),
             bottom: length(b.margin.bottom * zoom),
         },
@@ -2101,6 +2101,26 @@ pub(crate) fn map_grid_track(t: &GridTrackSize, zoom: f32) -> GridTemplateCompon
 /// `length-percentage-auto`: para insets (top/right/bottom/left) que
 /// aceptan `auto` además de px/%. `zoom` escala sólo el valor Px;
 /// los porcentajes se resuelven contra el contenedor (que también escala).
+/// Margen izquierdo del box como `LengthPercentageAuto`, respetando
+/// `margin-left: auto` (centrado horizontal → taffy `auto()`).
+pub(crate) fn margin_left_lpa(b: &BoxNode, zoom: f32) -> LengthPercentageAuto {
+    if b.margin_left_auto {
+        auto()
+    } else {
+        length(b.margin.left * zoom)
+    }
+}
+
+/// Margen derecho del box; `extra` suma px fijos (algunos sitios lo
+/// necesitan) sólo cuando el lado NO es `auto`.
+pub(crate) fn margin_right_lpa(b: &BoxNode, zoom: f32, extra: f32) -> LengthPercentageAuto {
+    if b.margin_right_auto {
+        auto()
+    } else {
+        length(b.margin.right * zoom + extra)
+    }
+}
+
 pub(crate) fn length_to_inset(v: LengthVal, zoom: f32) -> LengthPercentageAuto {
     match v {
         LengthVal::Auto => auto(),

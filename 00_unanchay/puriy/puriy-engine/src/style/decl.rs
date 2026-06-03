@@ -25,6 +25,9 @@ pub(crate) enum DeclKind {
     MarginRight(f32),
     MarginBottom(f32),
     MarginLeft(f32),
+    /// `margin-left/right: auto` — flag de centrado horizontal.
+    MarginLeftAuto(bool),
+    MarginRightAuto(bool),
     Padding(Sides<f32>),
     PaddingTop(f32),
     PaddingRight(f32),
@@ -143,11 +146,25 @@ impl Decl {
             DeclKind::FontWeight(w) => s.font_weight = *w,
             DeclKind::FontStyle(fs) => s.font_style = *fs,
             DeclKind::FontFamily(ff) => s.font_family = Some(ff.clone()),
-            DeclKind::Margin(v) => s.margin = *v,
+            // Un valor px explícito limpia el flag `auto` del mismo lado
+            // (una regla posterior `margin-left: 10px` pisa a `auto`).
+            DeclKind::Margin(v) => {
+                s.margin = *v;
+                s.margin_left_auto = false;
+                s.margin_right_auto = false;
+            }
             DeclKind::MarginTop(v) => s.margin.top = *v,
-            DeclKind::MarginRight(v) => s.margin.right = *v,
+            DeclKind::MarginRight(v) => {
+                s.margin.right = *v;
+                s.margin_right_auto = false;
+            }
             DeclKind::MarginBottom(v) => s.margin.bottom = *v,
-            DeclKind::MarginLeft(v) => s.margin.left = *v,
+            DeclKind::MarginLeft(v) => {
+                s.margin.left = *v;
+                s.margin_left_auto = false;
+            }
+            DeclKind::MarginLeftAuto(v) => s.margin_left_auto = *v,
+            DeclKind::MarginRightAuto(v) => s.margin_right_auto = *v,
             DeclKind::Padding(v) => s.padding = *v,
             DeclKind::PaddingTop(v) => s.padding.top = *v,
             DeclKind::PaddingRight(v) => s.padding.right = *v,

@@ -65,6 +65,9 @@ pub struct BoxNode {
     /// `None` = default del runtime. Heredable.
     pub font_family: Option<String>,
     pub margin: Sides<f32>,
+    /// `margin-left/right: auto` — centrado horizontal en block flow.
+    pub margin_left_auto: bool,
+    pub margin_right_auto: bool,
     pub padding: Sides<f32>,
     /// Ancho explícito CSS (`auto` por defecto).
     pub width: LengthVal,
