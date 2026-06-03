@@ -17,7 +17,7 @@
 //  Patrón calcado de `ayni-minga::EnlaceMinga`.
 // =============================================================================
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel as std_channel, Receiver, Sender};
 use std::sync::Arc;
@@ -52,6 +52,24 @@ const MAX_OPUS_FRAME: usize = 5_760;
 type CompatStream = Compat<LpStream>;
 type Escritor = WriteHalf<CompatStream>;
 type MapaEscritores = Arc<TMutex<HashMap<LpPeerId, Escritor>>>;
+
+/// Estado compartido de la malla N-a-N, pasado a cada conexión. Permite que un
+/// nodo, al enterarse por gossip de un par nuevo, lo disque por su cuenta —
+/// hasta converger en malla completa con sólo unirse a un anfitrión.
+#[derive(Clone)]
+struct Malla {
+    /// Mi propio `PeerId`, para el desempate de quién disca (el menor) y para no
+    /// discarme a mí mismo.
+    mi_peer: LpPeerId,
+    /// Escritores por par conectado (también el blanco de las difusiones).
+    escritores: MapaEscritores,
+    /// Direcciones dialables conocidas (incluida la propia). Sólo crece.
+    conocidas: Arc<TMutex<HashSet<String>>>,
+    /// Pares con un dial en vuelo, para no abrir dos conexiones al mismo.
+    pendientes: Arc<TMutex<HashSet<LpPeerId>>>,
+    /// Para que el lector pida discar un par recién descubierto.
+    cmd_tx: tmpsc::UnboundedSender<Cmd>,
+}
 
 /// Comandos del API sync hacia el runtime tokio interno.
 enum Cmd {
@@ -111,6 +129,7 @@ impl Enlace {
         {
             let ev_tx = ev_tx.clone();
             let mezcla = mezcla.clone();
+            let cmd_tx = cmd_tx.clone();
             std::thread::Builder::new()
                 .name("uya-net".into())
                 .spawn(move || {
@@ -127,8 +146,9 @@ impl Enlace {
                     rt.block_on(async move {
                         match arrancar(&bind, yo_compartido.id).await {
                             Ok((node, dial_addr)) => {
-                                let _ = listo_tx.send(Ok(dial_addr));
-                                conducir(node, yo_compartido, cmd_rx, ev_tx, mezcla).await;
+                                let _ = listo_tx.send(Ok(dial_addr.clone()));
+                                conducir(node, dial_addr, cmd_tx, yo_compartido, cmd_rx, ev_tx, mezcla)
+                                    .await;
                             }
                             Err(e) => {
                                 let _ = listo_tx.send(Err(e));
@@ -253,17 +273,29 @@ async fn arrancar(bind: &str, semilla: [u8; 32]) -> Result<(BrahmanNet, String),
 /// El bucle del runtime: acepta entrantes y atiende comandos de la app.
 async fn conducir(
     node: BrahmanNet,
+    mi_dir: String,
+    cmd_tx: tmpsc::UnboundedSender<Cmd>,
     yo: Arc<Yo>,
     mut cmd_rx: tmpsc::UnboundedReceiver<Cmd>,
     ev_tx: Sender<EventoUya>,
     mezcla: Arc<Mutex<MezclaRemota>>,
 ) {
-    let escritores: MapaEscritores = Arc::new(TMutex::new(HashMap::new()));
+    // Mi propia dirección dialable arranca el set de conocidas: es lo que
+    // gossipeo para que los demás puedan discarme.
+    let mut conocidas = HashSet::new();
+    conocidas.insert(mi_dir);
+    let malla = Malla {
+        mi_peer: node.peer_id,
+        escritores: Arc::new(TMutex::new(HashMap::new())),
+        conocidas: Arc::new(TMutex::new(conocidas)),
+        pendientes: Arc::new(TMutex::new(HashSet::new())),
+        cmd_tx,
+    };
 
     // Tarea aceptadora: streams entrantes del protocolo de uya.
     {
         let mut control = node.control.clone();
-        let escritores = escritores.clone();
+        let malla = malla.clone();
         let ev_tx = ev_tx.clone();
         let mezcla = mezcla.clone();
         let yo = yo.clone();
@@ -274,15 +306,8 @@ async fn conducir(
             };
             let mut entrantes = Box::pin(entrantes);
             while let Some((peer, stream)) = entrantes.next().await {
-                registrar(
-                    peer,
-                    stream,
-                    escritores.clone(),
-                    ev_tx.clone(),
-                    mezcla.clone(),
-                    yo.clone(),
-                )
-                .await;
+                registrar(peer, stream, malla.clone(), ev_tx.clone(), mezcla.clone(), yo.clone())
+                    .await;
             }
         });
     }
@@ -299,9 +324,16 @@ async fn conducir(
                     eprintln!("uya: la multiaddr '{addr_str}' no lleva /p2p/<peerid>");
                     continue;
                 };
+                // Nunca me disco a mí mismo ni a un par ya conectado / en vuelo.
+                if peer == malla.mi_peer || malla.escritores.lock().await.contains_key(&peer) {
+                    continue;
+                }
+                if !malla.pendientes.lock().await.insert(peer) {
+                    continue;
+                }
                 node.dial(addr);
                 let mut control = node.control.clone();
-                let escritores = escritores.clone();
+                let malla = malla.clone();
                 let ev_tx = ev_tx.clone();
                 let mezcla = mezcla.clone();
                 let yo = yo.clone();
@@ -311,7 +343,7 @@ async fn conducir(
                     loop {
                         match control.open_stream(peer, PROTO).await {
                             Ok(stream) => {
-                                registrar(peer, stream, escritores, ev_tx, mezcla, yo).await;
+                                registrar(peer, stream, malla.clone(), ev_tx, mezcla, yo).await;
                                 break;
                             }
                             Err(_) if Instant::now() < limite => {
@@ -323,24 +355,31 @@ async fn conducir(
                             }
                         }
                     }
+                    malla.pendientes.lock().await.remove(&peer);
                 });
             }
             Cmd::Difundir(bytes) => {
-                let mut g = escritores.lock().await;
-                let peers: Vec<LpPeerId> = g.keys().cloned().collect();
-                let mut muertos = Vec::new();
-                for p in peers {
-                    if let Some(wr) = g.get_mut(&p) {
-                        if escribir_frame(wr, &bytes).await.is_err() {
-                            muertos.push(p);
-                        }
-                    }
-                }
-                for p in muertos {
-                    g.remove(&p);
-                }
+                difundir_a_todos(&malla.escritores, &bytes).await;
             }
         }
+    }
+}
+
+/// Escribe `bytes` (un paquete ya enmarcable) a todas las conexiones vivas,
+/// soltando las que fallan.
+async fn difundir_a_todos(escritores: &MapaEscritores, bytes: &[u8]) {
+    let mut g = escritores.lock().await;
+    let peers: Vec<LpPeerId> = g.keys().cloned().collect();
+    let mut muertos = Vec::new();
+    for p in peers {
+        if let Some(wr) = g.get_mut(&p) {
+            if escribir_frame(wr, bytes).await.is_err() {
+                muertos.push(p);
+            }
+        }
+    }
+    for p in muertos {
+        g.remove(&p);
     }
 }
 
@@ -349,7 +388,7 @@ async fn conducir(
 async fn registrar(
     peer: LpPeerId,
     stream: LpStream,
-    escritores: MapaEscritores,
+    malla: Malla,
     ev_tx: Sender<EventoUya>,
     mezcla: Arc<Mutex<MezclaRemota>>,
     yo: Arc<Yo>,
@@ -374,10 +413,19 @@ async fn registrar(
     if escribir_frame(&mut wr, &estado).await.is_err() {
         return;
     }
+    // Gossip de malla: comparto todas las direcciones dialables que conozco
+    // (incluida la mía) para que este par alcance al resto.
+    let snapshot: Vec<String> = malla.conocidas.lock().await.iter().cloned().collect();
+    if escribir_frame(&mut wr, &Paquete::Pares { direcciones: snapshot }.codificar())
+        .await
+        .is_err()
+    {
+        return;
+    }
 
-    escritores.lock().await.insert(peer, wr);
+    malla.escritores.lock().await.insert(peer, wr);
 
-    let escritores_lector = escritores.clone();
+    let malla = malla.clone();
     tokio::spawn(async move {
         let mut remoto: Option<ParticipanteId> = None;
         // Decoder Opus con estado, propio de esta conexión (lazy).
@@ -445,10 +493,41 @@ async fn registrar(
                         }
                     }
                 }
+                Paquete::Pares { direcciones } => {
+                    // Aprender las direcciones nuevas (conocidas sólo crece).
+                    let mut nuevas = Vec::new();
+                    {
+                        let mut con = malla.conocidas.lock().await;
+                        for d in direcciones {
+                            if con.insert(d.clone()) {
+                                nuevas.push(d);
+                            }
+                        }
+                    }
+                    if !nuevas.is_empty() {
+                        // Discar cada par nuevo, pero con desempate por PeerId:
+                        // sólo el de PeerId menor inicia, para no abrir dos
+                        // conexiones cruzadas al mismo par.
+                        for d in &nuevas {
+                            if let Ok(a) = d.parse::<Multiaddr>() {
+                                if let Some(p) = peer_de(&a) {
+                                    if p != malla.mi_peer && malla.mi_peer < p {
+                                        let _ = malla.cmd_tx.send(Cmd::Conectar(d.clone()));
+                                    }
+                                }
+                            }
+                        }
+                        // Re-difundir la lista actualizada para propagar la malla.
+                        let snap: Vec<String> =
+                            malla.conocidas.lock().await.iter().cloned().collect();
+                        let pares = Paquete::Pares { direcciones: snap }.codificar();
+                        difundir_a_todos(&malla.escritores, &pares).await;
+                    }
+                }
                 Paquete::Adios => break,
             }
         }
-        escritores_lector.lock().await.remove(&peer);
+        malla.escritores.lock().await.remove(&peer);
         if let Some(id) = remoto {
             mezcla.lock().quitar(&id);
             let _ = ev_tx.send(EventoUya::Sale { id });

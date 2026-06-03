@@ -74,6 +74,11 @@ pub enum Paquete {
     /// del cable). El receptor lo decodifica a PCM y lo mezcla/resamplea al
     /// formato de su dispositivo de salida (ver `uya-app`).
     Audio { opus: Vec<u8> },
+    /// Difusión de direcciones dialables conocidas, para armar la malla N-a-N:
+    /// cada nodo comparte las multiaddrs (`/ip4/.../p2p/<peerid>`) que conoce y
+    /// el receptor disca las que le falten. Así, uniéndose a un solo anfitrión,
+    /// todos terminan conectados con todos (ver `uya-app::enlace`).
+    Pares { direcciones: Vec<String> },
     /// Me voy de la llamada (cuelgue ordenado).
     Adios,
 }
@@ -191,6 +196,9 @@ mod tests {
             },
             Paquete::Audio {
                 opus: vec![0xfc, 0x01, 0x02, 0x03],
+            },
+            Paquete::Pares {
+                direcciones: vec!["/ip4/127.0.0.1/tcp/7800/p2p/12D3Koo".into()],
             },
             Paquete::Adios,
         ];

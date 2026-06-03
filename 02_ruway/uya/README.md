@@ -62,6 +62,11 @@ Anda hoy, end-to-end y feo a propósito:
   `UYA_TONO=1`), downmix + resampleo a 48 kHz mono, encode Opus por frame de 20 ms;
   en recepción un `OpusDecoder` por par decodifica a PCM y una `MezclaRemota`
   resamplea al dispositivo + suma a los N pares, reproducida por `AudioSink` (cpal).
+- ✅ **Llamadas grupales (malla N-a-N automática)**: uniéndote a un solo nodo
+  anfitrión, todos se descubren y auto-conectan. Cada nodo gossipea las
+  multiaddrs dialables que conoce (`Paquete::Pares`); el receptor disca las que
+  le faltan, con desempate por PeerId (sólo el menor inicia) para no duplicar
+  conexiones. Verificado con 3 nodos: cada uno ve y recibe video de los otros dos.
 - ✅ Cámara sintética por defecto (TestCard); webcam real v4l2 con `--features camara` en `uya-app`.
 - ✅ Toggle de cámara / micrófono y cuelgue.
 
@@ -71,7 +76,8 @@ Anda hoy, end-to-end y feo a propósito:
    pero el nombre es auto-declarado. Atar la identidad a `agora`: firmar el `Hola`
    con la clave agora y verificarla, para que nadie suplante un nombre.
 2. **Descubrimiento por DHT**: `BrahmanNet` ya trae Kademlia — anunciar/encontrar
-   pares por una clave de sala en vez de pasar la multiaddr a mano.
-3. **Malla N-a-N** automática (hoy cada par se conecta) y/o un SFU mínimo.
-4. **Marcar/conectar desde la UI** (hoy la dirección se pasa por `UYA_CONECTAR`).
-5. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
+   pares por una clave de sala en vez de pasar la multiaddr del anfitrión a mano
+   (la malla ya converge sola una vez que entrás; falta el "entrar por nombre").
+3. **Marcar/conectar desde la UI** (hoy la dirección se pasa por `UYA_CONECTAR`).
+4. **Eco/jitter**: cancelación de eco acústico y jitter buffer adaptativo (hoy fijo ~1 s).
+5. **SFU / selective forwarding** para grupos grandes (hoy malla completa: N² streams).
