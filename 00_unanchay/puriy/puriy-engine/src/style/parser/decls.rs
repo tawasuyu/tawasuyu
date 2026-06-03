@@ -96,6 +96,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }
+        if prop.eq_ignore_ascii_case("background") {
+            out.extend(parse_background_shorthand(value, important));
+            continue;
+        }
         if let Some(kind) = decl_kind_from_pair(prop, value) {
             out.push(Decl { kind, important });
         }
@@ -121,7 +125,9 @@ pub(crate) fn strip_important(value: &str) -> Option<&str> {
 pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
     match prop.to_ascii_lowercase().as_str() {
         "color" => parse_color(value).map(DeclKind::Color),
-        "background-color" | "background" => parse_color(value).map(DeclKind::Background),
+        // `background` (shorthand) se expande en `parse_declarations` antes
+        // de llegar acá; sólo el longhand `background-color` toma color suelto.
+        "background-color" => parse_color(value).map(DeclKind::Background),
         "display" => parse_display(value).map(DeclKind::Display),
         "font-size" => parse_length_px(value).map(DeclKind::FontSize),
         "font-weight" => parse_weight(value).map(DeclKind::FontWeight),

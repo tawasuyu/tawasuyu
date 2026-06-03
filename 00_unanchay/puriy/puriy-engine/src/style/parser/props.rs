@@ -835,6 +835,125 @@ pub(crate) fn parse_background_position(value: &str) -> Option<DeclKind> {
     Some(DeclKind::BackgroundPosition(pos))
 }
 
+/// Shorthand `background:` — expande a los longhands presentes (color, image,
+/// position, size, repeat) reusando los value-parsers de cada sub-propiedad.
+/// Sólo la PRIMERA capa (antes de la primera coma de nivel superior); las
+/// capas múltiples no se modelan todavía (igual que el render — una sola capa).
+/// Sintaxis: `<color> || <image> || <position> [ / <size> ] || <repeat> ||
+/// <attachment> || <box>`. `scroll`/`fixed`/`local` (attachment) y
+/// `border-box`/`padding-box`/`content-box` (origin/clip) se aceptan y se
+/// descartan (no se modelan). Sólo emite los longhands presentes (igual que el
+/// shorthand `border`); los omitidos no se resetean.
+pub(crate) fn parse_background_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    // Una sola capa: cortar en la primera coma de nivel superior.
+    let layer = split_top_level_comma(value)
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let layer = layer.trim();
+    // Tokeniza respetando paréntesis (`url(...)`/gradiente quedan enteros) y
+    // luego separa el `/` (position / size) que pudo venir pegado a un token
+    // (`center/cover`). Los `/` dentro de paréntesis no se tocan.
+    let mut tokens: Vec<String> = Vec::new();
+    for t in split_top_level_ws(layer) {
+        if t.contains('/') && !t.contains('(') {
+            let mut buf = String::new();
+            for ch in t.chars() {
+                if ch == '/' {
+                    if !buf.is_empty() {
+                        tokens.push(std::mem::take(&mut buf));
+                    }
+                    tokens.push("/".to_string());
+                } else {
+                    buf.push(ch);
+                }
+            }
+            if !buf.is_empty() {
+                tokens.push(buf);
+            }
+        } else {
+            tokens.push(t);
+        }
+    }
+
+    let mut color: Option<DeclKind> = None;
+    let mut image: Option<DeclKind> = None;
+    let mut repeat: Option<DeclKind> = None;
+    let mut pos_tokens: Vec<String> = Vec::new();
+    let mut size_tokens: Vec<String> = Vec::new();
+    let mut after_slash = false;
+
+    for t in &tokens {
+        if t == "/" {
+            after_slash = true;
+            continue;
+        }
+        if after_slash {
+            size_tokens.push(t.clone());
+            continue;
+        }
+        let lt = t.to_ascii_lowercase();
+        // Imagen: url(...) / linear-gradient(...) / none.
+        if lt.starts_with("url(") || lt.starts_with("linear-gradient(") || lt == "none" {
+            if let Some(k) = parse_background_image(t) {
+                image = Some(k);
+            }
+            continue;
+        }
+        // Repeat.
+        if matches!(
+            lt.as_str(),
+            "repeat" | "no-repeat" | "repeat-x" | "repeat-y" | "space" | "round"
+        ) {
+            if let Some(k) = parse_background_repeat(t) {
+                repeat = Some(k);
+            }
+            continue;
+        }
+        // Attachment (scroll/fixed/local) y origin/clip (border/padding/content-box):
+        // aceptados y descartados — no se modelan.
+        if matches!(
+            lt.as_str(),
+            "scroll" | "fixed" | "local" | "border-box" | "padding-box" | "content-box"
+        ) {
+            continue;
+        }
+        // Position: keyword o length/%.
+        if matches!(lt.as_str(), "left" | "right" | "top" | "bottom" | "center")
+            || parse_length_or_pct(t).is_some()
+        {
+            pos_tokens.push(t.clone());
+            continue;
+        }
+        // Lo que sobra: color (conviene último por convención del shorthand).
+        if let Some(c) = parse_color(t) {
+            color = Some(DeclKind::Background(c));
+        }
+    }
+
+    let mut out = Vec::new();
+    if let Some(k) = color {
+        out.push(Decl { kind: k, important });
+    }
+    if let Some(k) = image {
+        out.push(Decl { kind: k, important });
+    }
+    if !pos_tokens.is_empty() {
+        if let Some(k) = parse_background_position(&pos_tokens.join(" ")) {
+            out.push(Decl { kind: k, important });
+        }
+    }
+    if !size_tokens.is_empty() {
+        if let Some(k) = parse_background_size(&size_tokens.join(" ")) {
+            out.push(Decl { kind: k, important });
+        }
+    }
+    if let Some(k) = repeat {
+        out.push(Decl { kind: k, important });
+    }
+    out
+}
+
 /// Parsea el contenido de `linear-gradient(...)`. Sintaxis aceptada:
 /// - `linear-gradient(<angle>?, <stop>, <stop>, ...)`
 /// - `linear-gradient(to <side>?, <stop>, <stop>, ...)`

@@ -2077,6 +2077,58 @@ line2</pre></body></html>"#;
     }
 
     #[test]
+    fn shorthand_background_expande_color_imagen_posicion_size_repeat() {
+        // Fase 7.205 — el shorthand `background:` reparte sus piezas en los
+        // longhands. Reusa los value-parsers de cada sub-propiedad.
+        let compute = |css: &str| {
+            let html = format!(
+                "<html><head><style>div {{ {css} }}</style></head><body><div></div></body></html>"
+            );
+            let dom = DomTree::parse(&html);
+            let eng = StyleEngine::from_dom(&dom);
+            eng.compute(&dom.find("div").unwrap())
+        };
+
+        // Color suelto.
+        let s = compute("background: #ff0000");
+        assert_eq!(s.background, Some(Color::rgb(255, 0, 0)));
+
+        // Imagen + repeat + position / size (con `/` pegado o suelto).
+        let s = compute("background: url(bg.png) no-repeat center / cover");
+        assert_eq!(s.background_image_url.as_deref(), Some("bg.png"));
+        assert_eq!(s.background_repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(
+            (s.background_position.x, s.background_position.y),
+            (LengthVal::Pct(50.0), LengthVal::Pct(50.0))
+        );
+        assert_eq!(s.background_size, BackgroundSize::Cover);
+
+        // `/` pegado a los tokens (`center/contain`) y orden invertido de
+        // keywords de position, color al final.
+        let s = compute("background: url(p.png) repeat-x top left, url(otra.png)");
+        assert_eq!(s.background_image_url.as_deref(), Some("p.png")); // sólo la 1ª capa
+        assert_eq!(s.background_repeat, BackgroundRepeat::RepeatX);
+        assert_eq!(
+            (s.background_position.x, s.background_position.y),
+            (LengthVal::Pct(0.0), LengthVal::Pct(0.0)) // top left → x=0%, y=0%
+        );
+
+        // attachment/box se aceptan y descartan; el color sigue tomándose.
+        let s = compute("background: green url(g.png) fixed border-box no-repeat 10px 20px / 50px");
+        assert_eq!(s.background, Some(Color::rgb(0, 128, 0)));
+        assert_eq!(s.background_image_url.as_deref(), Some("g.png"));
+        assert_eq!(s.background_repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(
+            (s.background_position.x, s.background_position.y),
+            (LengthVal::Px(10.0), LengthVal::Px(20.0))
+        );
+        assert_eq!(
+            s.background_size,
+            BackgroundSize::Explicit { x: LengthVal::Px(50.0), y: LengthVal::Auto }
+        );
+    }
+
+    #[test]
     fn background_props_default_y_se_propagan_al_box() {
         // Defaults CSS: auto / 0% 0% / repeat. Y un override viaja al BoxNode.
         let eng = crate::Engine::new();
