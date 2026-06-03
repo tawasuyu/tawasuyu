@@ -1405,6 +1405,9 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
     if let Some(args) = strip_fn(v, "radial-gradient") {
         return parse_radial_gradient(args).map(DeclKind::BackgroundGradient);
     }
+    if let Some(args) = strip_fn(v, "conic-gradient") {
+        return parse_conic_gradient(args).map(DeclKind::BackgroundGradient);
+    }
     if let Some(args) = strip_fn(v, "url") {
         // url('foo') / url("foo") / url(foo) — trimea comillas.
         let raw = args.trim();
@@ -1418,8 +1421,7 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
         }
         return Some(DeclKind::BackgroundImageUrl(url.to_string()));
     }
-    // Otros gradientes (`conic-gradient`, `repeating-*`) o `cross-fade`
-    // no soportados — silencio.
+    // Gradientes `repeating-*` o `cross-fade` no soportados — silencio.
     None
 }
 
@@ -1811,7 +1813,7 @@ pub(crate) fn parse_linear_gradient(args: &str) -> Option<LinearGradient> {
         return None;
     }
     let _ = stops_start;
-    Some(LinearGradient { angle_deg, stops, radial: None })
+    Some(LinearGradient { geometry: GradientGeometry::Linear { angle_deg }, stops })
 }
 
 /// Parsea el contenido de `radial-gradient(...)`. Sintaxis aceptada (MVP):
@@ -1839,7 +1841,93 @@ pub(crate) fn parse_radial_gradient(args: &str) -> Option<LinearGradient> {
     if stops.len() < 2 {
         return None;
     }
-    Some(LinearGradient { angle_deg: 0.0, stops, radial: Some(spec) })
+    Some(LinearGradient { geometry: GradientGeometry::Radial(spec), stops })
+}
+
+/// Parsea el contenido de `conic-gradient(...)`. Sintaxis aceptada (MVP):
+/// `conic-gradient([from <angle>]? [at <position>]?, <stop>, <stop>…)`.
+/// `<angle>` en `deg`/`turn`/`rad`/`grad` (default 0 = up). `<position>`
+/// reutiliza el parser de `background-position` (default center). Los stops
+/// se reparten 0..1 sobre el barrido (no parseamos posiciones angulares por
+/// stop todavía). Fase 7.227.
+pub(crate) fn parse_conic_gradient(args: &str) -> Option<LinearGradient> {
+    let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    if parts.len() < 2 {
+        return None;
+    }
+    let (geom, stops_start) = match parse_conic_prelude(parts[0]) {
+        Some(g) => (g, 1),
+        None => (GradientGeometry::Conic {
+            from_deg: 0.0,
+            cx: LengthVal::Pct(50.0),
+            cy: LengthVal::Pct(50.0),
+        }, 0),
+    };
+    let mut stops: Vec<GradientStop> = Vec::new();
+    for raw in &parts[stops_start..] {
+        if let Some(s) = parse_gradient_stop(raw) {
+            stops.push(s);
+        }
+    }
+    if stops.len() < 2 {
+        return None;
+    }
+    Some(LinearGradient { geometry: geom, stops })
+}
+
+/// Interpreta el primer segmento de un `conic-gradient` como prelude
+/// (`from <angle>` y/o `at <position>`). `None` si parece un color stop.
+fn parse_conic_prelude(s: &str) -> Option<GradientGeometry> {
+    let lc = s.to_ascii_lowercase();
+    let mut from_deg = 0.0_f32;
+    let mut cx = LengthVal::Pct(50.0);
+    let mut cy = LengthVal::Pct(50.0);
+    let mut matched = false;
+    // Separa el `at <position>` del head (`from <angle>`).
+    let (head, pos_part) = match lc.split_once(" at ") {
+        Some((h, p)) => (h.trim().to_string(), Some(p.trim().to_string())),
+        None => {
+            if let Some(p) = lc.strip_prefix("at ") {
+                (String::new(), Some(p.trim().to_string()))
+            } else {
+                (lc.clone(), None)
+            }
+        }
+    };
+    if let Some(rest) = head.strip_prefix("from ") {
+        from_deg = parse_angle_deg(rest.trim())?;
+        matched = true;
+    } else if !head.is_empty() {
+        // Head no vacío que no es `from …` → no es prelude (es un stop).
+        return None;
+    }
+    if let Some(p) = pos_part {
+        if let Some(DeclKind::BackgroundPosition(bp)) = parse_background_position(&p) {
+            cx = bp.x;
+            cy = bp.y;
+            matched = true;
+        } else {
+            return None;
+        }
+    }
+    matched.then_some(GradientGeometry::Conic { from_deg, cx, cy })
+}
+
+/// Parsea un `<angle>` CSS a grados: `deg`/`turn`/`rad`/`grad` o número crudo
+/// (= grados). Fase 7.227.
+fn parse_angle_deg(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix("deg") {
+        n.trim().parse().ok()
+    } else if let Some(n) = s.strip_suffix("turn") {
+        n.trim().parse::<f32>().ok().map(|t| t * 360.0)
+    } else if let Some(n) = s.strip_suffix("grad") {
+        n.trim().parse::<f32>().ok().map(|g| g * 0.9)
+    } else if let Some(n) = s.strip_suffix("rad") {
+        n.trim().parse::<f32>().ok().map(|r| r.to_degrees())
+    } else {
+        s.parse().ok()
+    }
 }
 
 /// Interpreta el primer segmento de un `radial-gradient` como prelude

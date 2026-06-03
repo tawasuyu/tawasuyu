@@ -4326,7 +4326,7 @@ mod tests {
         // texto + draw_layout_brush_xf con un Brush::Gradient. Verifica que
         // pinta (encoding no vacío) y que el gradiente añade más draws que el
         // mismo texto en color sólido.
-        use puriy_engine::style::{GradientStop, LinearGradient};
+        use puriy_engine::style::{GradientGeometry, GradientStop, LinearGradient};
         let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
         // Forzamos la DejaVu embebida (registrada en `Typesetter::new`) para
         // que el texto Latin shapee también en el sandbox sin fuentes de
@@ -4347,12 +4347,11 @@ mod tests {
             h: 60.0,
         };
         let grad = LinearGradient {
-            angle_deg: 90.0,
+            geometry: GradientGeometry::Linear { angle_deg: 90.0 },
             stops: vec![
                 GradientStop { color: puriy_engine::Color::rgb(255, 0, 0), pos: None },
                 GradientStop { color: puriy_engine::Color::rgb(0, 0, 255), pos: None },
             ],
-            radial: None,
         };
         let brush = llimphi_raster::peniko::Brush::Gradient(
             build_linear_gradient_brush(&grad, local, 1.0).expect("gradiente de 2 stops"),
@@ -4376,7 +4375,7 @@ mod tests {
     fn paint_extra_bg_layers_pinta_imagen_y_gradiente() {
         // Fase 7.206 — las capas extra (debajo de la capa 0) se pintan: una
         // imagen vía paint_background_image y un gradiente lineal vía fill.
-        use puriy_engine::style::{GradientStop, LinearGradient};
+        use puriy_engine::style::{GradientGeometry, GradientStop, LinearGradient};
         let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
 
         // Sin capas → no pinta nada.
@@ -4386,12 +4385,11 @@ mod tests {
 
         // Una capa de gradiente → un fill.
         let grad = LinearGradient {
-            angle_deg: 180.0,
+            geometry: GradientGeometry::Linear { angle_deg: 180.0 },
             stops: vec![
                 GradientStop { color: puriy_engine::Color::rgb(255, 0, 0), pos: None },
                 GradientStop { color: puriy_engine::Color::rgb(0, 0, 255), pos: None },
             ],
-            radial: None,
         };
         let mut g = llimphi_raster::vello::Scene::new();
         paint_extra_bg_layers(&mut g, rect, 0.0, &[PreparedBgLayer::Gradient(grad.clone())], 1.0);

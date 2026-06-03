@@ -456,16 +456,46 @@ impl Default for RadialSpec {
     }
 }
 
-/// `background-image: linear-gradient(...)` / `radial-gradient(...)`. Para el
-/// lineal: `angle_deg` (0 = bottom→top, 90 = left→right). Si `radial` es
-/// `Some`, el gradiente es radial y `angle_deg` se ignora. 2+ stops.
+/// Geometría de un gradiente CSS. Fase 7.227 (antes eran campos sueltos
+/// `angle_deg` + `radial: Option`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GradientGeometry {
+    /// `linear-gradient` — ángulo CSS en grados (0 = up, 90 = right, 180 =
+    /// down, 270 = left).
+    Linear { angle_deg: f32 },
+    /// `radial-gradient` — forma/tamaño/centro.
+    Radial(RadialSpec),
+    /// `conic-gradient` — ángulo inicial `from <angle>` (grados, 0 = up) y
+    /// centro (`at <position>`, default 50% 50%).
+    Conic { from_deg: f32, cx: LengthVal, cy: LengthVal },
+}
+
+/// `background-image: {linear,radial,conic}-gradient(...)`. La `geometry`
+/// discrimina el tipo; los `stops` (2+) son comunes a los tres. El nombre
+/// histórico `LinearGradient` se conserva (deuda) para no propagar el rename
+/// a ~9 archivos.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LinearGradient {
-    /// Ángulo CSS en grados — 0 = up, 90 = right, 180 = down, 270 = left.
-    pub angle_deg: f32,
+    pub geometry: GradientGeometry,
     pub stops: Vec<GradientStop>,
-    /// Si `Some`, el gradiente es radial (Fase 7.226).
-    pub radial: Option<RadialSpec>,
+}
+
+impl LinearGradient {
+    /// Ángulo del gradiente lineal en grados (0 si no es lineal).
+    pub fn angle_deg(&self) -> f32 {
+        match self.geometry {
+            GradientGeometry::Linear { angle_deg } => angle_deg,
+            _ => 0.0,
+        }
+    }
+
+    /// La geometría radial si el gradiente es `radial-gradient`.
+    pub fn radial(&self) -> Option<RadialSpec> {
+        match self.geometry {
+            GradientGeometry::Radial(spec) => Some(spec),
+            _ => None,
+        }
+    }
 }
 
 /// CSS `position`. `Static` = el default (no position; los insets

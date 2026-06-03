@@ -409,24 +409,50 @@ mod tests {
         };
         // Sin prelude: default farthest-corner at center, 2 stops.
         let g = grad("radial-gradient(red, blue)");
-        let spec = g.radial.expect("debe ser radial");
+        let spec = g.radial().expect("debe ser radial");
         assert_eq!(spec.size, RadialSize::FarthestCorner);
         assert_eq!(spec.cx, LengthVal::Pct(50.0));
         assert_eq!(spec.cy, LengthVal::Pct(50.0));
         assert_eq!(g.stops.len(), 2);
         // shape + size + posición.
         let g = grad("radial-gradient(circle closest-side at 30% 70%, red 0%, blue 100%)");
-        let spec = g.radial.unwrap();
+        let spec = g.radial().unwrap();
         assert_eq!(spec.size, RadialSize::ClosestSide);
         assert_eq!(spec.cx, LengthVal::Pct(30.0));
         assert_eq!(spec.cy, LengthVal::Pct(70.0));
         // Sólo `at <pos>` con keywords.
         let g = grad("radial-gradient(at top left, red, blue)");
-        let spec = g.radial.unwrap();
+        let spec = g.radial().unwrap();
         assert_eq!(spec.cx, LengthVal::Pct(0.0));
         assert_eq!(spec.cy, LengthVal::Pct(0.0));
         // El lineal sigue sin radial.
-        assert!(grad("linear-gradient(to right, red, blue)").radial.is_none());
+        assert!(grad("linear-gradient(to right, red, blue)").radial().is_none());
+    }
+
+    #[test]
+    fn parsea_conic_gradient() {
+        let grad = |v: &str| match parse_background_image(v) {
+            Some(DeclKind::BackgroundGradient(g)) => g,
+            other => panic!("esperaba gradiente, {other:?}"),
+        };
+        let conic = |g: &LinearGradient| match g.geometry {
+            GradientGeometry::Conic { from_deg, cx, cy } => (from_deg, cx, cy),
+            other => panic!("esperaba conic, {other:?}"),
+        };
+        // Sin prelude: from 0 at center.
+        let (from, cx, cy) = conic(&grad("conic-gradient(red, blue)"));
+        assert_eq!(from, 0.0);
+        assert_eq!(cx, LengthVal::Pct(50.0));
+        assert_eq!(cy, LengthVal::Pct(50.0));
+        // from <angle> + at <pos>; turn → grados.
+        let (from, cx, cy) = conic(&grad("conic-gradient(from 0.25turn at 20% 80%, red, blue)"));
+        assert!((from - 90.0).abs() < 1e-3);
+        assert_eq!(cx, LengthVal::Pct(20.0));
+        assert_eq!(cy, LengthVal::Pct(80.0));
+        // Sólo `from <deg>`.
+        let (from, _, _) = conic(&grad("conic-gradient(from 45deg, red, blue)"));
+        assert!((from - 45.0).abs() < 1e-3);
+        assert_eq!(grad("conic-gradient(red, blue)").stops.len(), 2);
     }
 
     #[test]
@@ -2641,19 +2667,19 @@ line2</pre></body></html>"#;
     #[test]
     fn parsea_linear_gradient_basico() {
         let g = parse_linear_gradient("to right, #f00, #00f").unwrap();
-        assert!((g.angle_deg - 90.0).abs() < 1e-6);
+        assert!((g.angle_deg() - 90.0).abs() < 1e-6);
         assert_eq!(g.stops.len(), 2);
         assert_eq!(g.stops[0].color, Color::rgb(255, 0, 0));
         assert_eq!(g.stops[1].color, Color::rgb(0, 0, 255));
 
         let g = parse_linear_gradient("45deg, red 0%, blue 100%").unwrap();
-        assert!((g.angle_deg - 45.0).abs() < 1e-6);
+        assert!((g.angle_deg() - 45.0).abs() < 1e-6);
         assert_eq!(g.stops[0].pos, Some(0.0));
         assert_eq!(g.stops[1].pos, Some(1.0));
 
         // Default 180 (top→bottom) cuando no se da dirección.
         let g = parse_linear_gradient("red, blue").unwrap();
-        assert!((g.angle_deg - 180.0).abs() < 1e-6);
+        assert!((g.angle_deg() - 180.0).abs() < 1e-6);
     }
 
     #[test]
