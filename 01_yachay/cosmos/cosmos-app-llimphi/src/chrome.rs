@@ -1040,7 +1040,9 @@ fn graphic_for(
         ChartView::Estandar => wheel_canvas(model, render, size, theme, fill),
         ChartView::Uraniano => uranian_dial_canvas(model, render, size, theme, fill),
         ChartView::Armonica => harmonic_wheel_canvas(model, render, size, theme, fill),
-        ChartView::Carto => crate::astrocarto::tile_astrocarto(chart, render, theme),
+        ChartView::Carto => {
+            crate::astrocarto::tile_astrocarto(chart, render, theme, model.wheel_zoom, model.wheel_pan)
+        }
         ChartView::Esfera3d => sphere_canvas(model, render, size, theme, fill),
         ChartView::Cielo => sky_canvas(model, size, theme, fill),
     }
@@ -1348,6 +1350,33 @@ fn sign_color_theme(sign_idx: usize, model: &Model) -> Color {
     )
 }
 
+/// Proyecta un punto ecuatorial (AR, Dec en grados, J2000) al cielo del
+/// observador (proyección azimutal: cénit al centro, horizonte al borde).
+/// Devuelve `(x, y, sobre_horizonte)`. Azimut compás (N arriba, E derecha)
+/// para coincidir con la proyección de los cuerpos.
+fn radec_to_sky(
+    ra_deg: f32,
+    dec_deg: f32,
+    lst_deg: f64,
+    lat_deg: f64,
+    cx: f32,
+    cy: f32,
+    r: f32,
+) -> (f32, f32, bool) {
+    let h = ((lst_deg - ra_deg as f64).rem_euclid(360.0)).to_radians();
+    let dec = (dec_deg as f64).to_radians();
+    let lat = lat_deg.to_radians();
+    let sin_alt = dec.sin() * lat.sin() + dec.cos() * lat.cos() * h.cos();
+    let alt = sin_alt.clamp(-1.0, 1.0).asin();
+    // Azimut medido desde el Sur hacia el Oeste (Meeus) → a compás
+    // (Norte=0, Este=90) sumando 180°.
+    let a_south = h.sin().atan2(h.cos() * lat.sin() - dec.tan() * lat.cos());
+    let az = (a_south.to_degrees() + 180.0).rem_euclid(360.0).to_radians() as f32;
+    let alt_deg = alt.to_degrees() as f32;
+    let rr = r * (90.0 - alt_deg.clamp(-90.0, 90.0)) / 90.0;
+    (cx + rr * az.sin(), cy - rr * az.cos(), alt_deg > 0.0)
+}
+
 /// Cielo del observador: proyección azimutal (cénit al centro, horizonte
 /// al borde) de los cuerpos en alt/az. Compone `DrawCommand`s y los pinta
 /// en el mismo canvas que la rueda. Usa `model.astro` (la lectura
@@ -1387,6 +1416,33 @@ fn sky_canvas(model: &Model, size: f32, theme: &Theme, fill: bool) -> View<Msg> 
             fill: None,
             stroke_w: 0.7,
         });
+    }
+    // Figuras de constelaciones proyectadas al cielo del observador
+    // (alt/az), sólo los segmentos por encima del horizonte.
+    let cons_col = Rgba {
+        a: 0.45,
+        ..rgba_of(theme.fg_muted)
+    };
+    for fig in cosmos_render::constellations_data::FIGURAS {
+        for path in fig.paths {
+            for seg in path.windows(2) {
+                let (ax, ay, a_up) =
+                    radec_to_sky(seg[0].0, seg[0].1, astro.lst_deg, astro.lat_deg, cx, cy, r);
+                let (bx, by, b_up) =
+                    radec_to_sky(seg[1].0, seg[1].1, astro.lst_deg, astro.lat_deg, cx, cy, r);
+                if a_up && b_up {
+                    cmds.push(DrawCommand::Line {
+                        x1: ax,
+                        y1: ay,
+                        x2: bx,
+                        y2: by,
+                        color: cons_col,
+                        width: 0.6,
+                        dash: None,
+                    });
+                }
+            }
+        }
     }
     // Cruz de cardinales.
     cmds.push(DrawCommand::Line {

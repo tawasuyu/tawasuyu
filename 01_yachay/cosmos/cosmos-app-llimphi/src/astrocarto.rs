@@ -81,7 +81,13 @@ fn project_lon_lat(lon_deg: f64, lat_deg: f64) -> (f32, f32) {
     (x.clamp(0.0, ASTROCARTO_W), y.clamp(0.0, ASTROCARTO_H))
 }
 
-pub(crate) fn tile_astrocarto(chart: &Chart, render: &RenderModel, theme: &Theme) -> View<Msg> {
+pub(crate) fn tile_astrocarto(
+    chart: &Chart,
+    render: &RenderModel,
+    theme: &Theme,
+    zoom: f32,
+    pan: (f32, f32),
+) -> View<Msg> {
     let bd = &chart.birth_data;
     // Local → UTC.
     let total_minutes_local = bd.hour as i64 * 60 + bd.minute as i64;
@@ -104,6 +110,8 @@ pub(crate) fn tile_astrocarto(chart: &Chart, render: &RenderModel, theme: &Theme
 
     let bg = theme.bg_panel_alt;
     let grid = theme.fg_muted;
+    let zoom = zoom.max(0.1) as f64;
+    let pan = (pan.0 as f64, pan.1 as f64);
     let canvas = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -114,40 +122,50 @@ pub(crate) fn tile_astrocarto(chart: &Chart, render: &RenderModel, theme: &Theme
     })
     .fill(bg)
     .radius(3.0)
+    .clip(true)
+    // Arrastrar panea el mapa (la rueda hace zoom vía App::on_wheel).
+    .draggable_at(|phase, dx, dy, _lx, _ly| match phase {
+        llimphi_ui::DragPhase::Move => Some(Msg::WheelPan(dx, dy)),
+        llimphi_ui::DragPhase::End => None,
+    })
     .paint_with(move |scene, _ts, rect: llimphi_ui::PaintRect| {
         use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
         use llimphi_ui::llimphi_raster::peniko::Color as PColor;
-        // Aspect-fit centrado del canvas lógico ASTROCARTO_WxH al rect.
+        // Aspect-fit centrado + zoom/paneo del usuario.
         let scale_x = rect.w as f64 / ASTROCARTO_W as f64;
         let scale_y = rect.h as f64 / ASTROCARTO_H as f64;
-        let scale = scale_x.min(scale_y);
+        let scale = scale_x.min(scale_y) * zoom;
         let disp_w = ASTROCARTO_W as f64 * scale;
         let disp_h = ASTROCARTO_H as f64 * scale;
-        let off_x = rect.x as f64 + (rect.w as f64 - disp_w) * 0.5;
-        let off_y = rect.y as f64 + (rect.h as f64 - disp_h) * 0.5;
+        let off_x = rect.x as f64 + (rect.w as f64 - disp_w) * 0.5 + pan.0;
+        let off_y = rect.y as f64 + (rect.h as f64 - disp_h) * 0.5 + pan.1;
         let xform = Affine::translate((off_x, off_y)) * Affine::scale(scale);
 
-        // Grilla: ecuador, ±30°, ±60°.
+        // Grilla (graticule) más densa para dar sensación de mapa.
         let grid_color = PColor::from_rgba8(
             (grid.components[0] * 255.0) as u8,
             (grid.components[1] * 255.0) as u8,
             (grid.components[2] * 255.0) as u8,
             80,
         );
-        for lat in [-60.0_f64, -30.0, 0.0, 30.0, 60.0] {
+        for lat in [-75.0_f64, -60.0, -45.0, -30.0, -15.0, 0.0, 15.0, 30.0, 45.0, 60.0, 75.0] {
             let (_, y) = project_lon_lat(0.0, lat);
             let mut p = BezPath::new();
             p.move_to((0.0, y as f64));
             p.line_to((ASTROCARTO_W as f64, y as f64));
             scene.stroke(&Stroke::new(0.5), xform, grid_color, None, &p);
         }
-        // Líneas verticales cada 60° de longitud.
-        for lon in [-120.0_f64, -60.0, 0.0, 60.0, 120.0] {
+        // Meridianos cada 30° de longitud.
+        let mut lon = -150.0_f64;
+        while lon <= 150.0 {
             let (x, _) = project_lon_lat(lon, 0.0);
             let mut p = BezPath::new();
             p.move_to((x as f64, 0.0));
             p.line_to((x as f64, ASTROCARTO_H as f64));
-            scene.stroke(&Stroke::new(0.5), xform, grid_color, None, &p);
+            // Meridiano de Greenwich un poco más marcado.
+            let w = if lon.abs() < 0.5 { 0.9 } else { 0.5 };
+            scene.stroke(&Stroke::new(w), xform, grid_color, None, &p);
+            lon += 30.0;
         }
 
         for (name, ecl_lon) in &bodies {

@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 
 pub use cosmos_model::{Chart, ChartId, ChartKind};
 
-mod constellations_data;
+pub mod constellations_data;
 pub mod draw;
 pub mod glyphs;
 pub mod gr;

@@ -31,6 +31,10 @@ use crate::view::{line, section_label, tile_container};
 pub(crate) struct AstroState {
     pub(crate) instant_iso: String,
     pub(crate) place_label: String,
+    /// Tiempo sidéreo local (grados) y latitud del observador — para
+    /// proyectar las constelaciones al cielo del observador (alt/az).
+    pub(crate) lst_deg: f64,
+    pub(crate) lat_deg: f64,
     pub(crate) sky: Vec<(Body, SkyPosition)>,
     pub(crate) sundial: SundialReading,
     pub(crate) tide: TideReading,
@@ -40,7 +44,7 @@ pub(crate) struct AstroState {
     pub(crate) lunar: LunarEclipseReading,
 }
 
-fn build_instant(chart: &Chart, use_now: bool) -> (TDB, String) {
+fn build_instant(chart: &Chart, use_now: bool) -> (TDB, String, f64) {
     let utc = if use_now {
         UTC::now()
     } else {
@@ -57,8 +61,18 @@ fn build_instant(chart: &Chart, use_now: bool) -> (TDB, String) {
         )
         .add_seconds(-(bd.tz_offset_minutes as f64) * 60.0)
     };
+    let jd_ut = utc.to_julian_date().to_f64();
     let tdb = TDB::from(utc.to_julian_date());
-    (tdb, utc.to_iso8601())
+    (tdb, utc.to_iso8601(), jd_ut)
+}
+
+/// GMST en grados (fórmula IAU 1982, suficiente para ubicar figuras).
+fn gmst_deg(jd_ut: f64) -> f64 {
+    let t = (jd_ut - 2451545.0) / 36525.0;
+    let g = 280.46061837 + 360.98564736629 * (jd_ut - 2451545.0)
+        + 0.000387933 * t * t
+        - t * t * t / 38710000.0;
+    g.rem_euclid(360.0)
 }
 
 fn build_location(chart: &Chart) -> Location {
@@ -77,8 +91,10 @@ fn horizon_for(body: Body) -> Horizon {
 }
 
 pub(crate) fn compute_astro(chart: &Chart, use_now: bool) -> AstroState {
-    let (tdb, instant_iso) = build_instant(chart, use_now);
+    let (tdb, instant_iso, jd_ut) = build_instant(chart, use_now);
     let loc = build_location(chart);
+    let lst_deg = (gmst_deg(jd_ut) + chart.birth_data.longitude_deg).rem_euclid(360.0);
+    let lat_deg = chart.birth_data.latitude_deg;
 
     let sky: Vec<(Body, SkyPosition)> = sky_positions_all(&tdb, &loc).to_vec();
     let sundial = sundial_reading(&tdb, &loc);
@@ -104,6 +120,8 @@ pub(crate) fn compute_astro(chart: &Chart, use_now: bool) -> AstroState {
     AstroState {
         instant_iso,
         place_label,
+        lst_deg,
+        lat_deg,
         sky,
         sundial,
         tide,
