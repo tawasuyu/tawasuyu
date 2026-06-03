@@ -59,6 +59,10 @@ pub struct DrawerBlock {
     pub exit: Option<i32>,
     /// `true` si la card está plegada (sólo se ve el encabezado).
     pub collapsed: bool,
+    /// `true` si la card es una consulta a la **IA** (no un comando shell): el
+    /// encabezado muestra `✦ <prompt>` sin chips de etapa y el cuerpo es la
+    /// respuesta del modelo. Lo setea [`ShumaState::push_pending_ia`].
+    pub is_ia: bool,
 }
 
 /// El resultado estructurado de una corrida — lo que un hilo de fondo manda de
@@ -229,7 +233,32 @@ impl ShumaState {
             expanded_stage: None,
             exit: None,
             collapsed: false,
+            is_ia: false,
         });
+        self.trim_and_pin();
+    }
+
+    /// Empuja una card de consulta a la **IA** para `prompt` y marca el drawer
+    /// como pendiente. Sin chips de etapa (un prompt no es un pipe). El
+    /// resultado llega por [`finish_last`], igual que un comando shell.
+    pub fn push_pending_ia(&mut self, prompt: String) {
+        self.blocks.push(DrawerBlock {
+            cmd: prompt,
+            stages: Vec::new(),
+            lines: Vec::new(),
+            stage_lines: Vec::new(),
+            expanded_stage: None,
+            exit: None,
+            collapsed: false,
+            is_ia: true,
+        });
+        self.trim_and_pin();
+    }
+
+    /// Acota el historial a [`MAX_BLOCKS`] (descarta las cards más viejas),
+    /// marca pendiente y pega el scroll al fondo. Compartido por los dos
+    /// `push_pending*`.
+    fn trim_and_pin(&mut self) {
         if self.blocks.len() > Self::MAX_BLOCKS {
             let drop = self.blocks.len() - Self::MAX_BLOCKS;
             self.blocks.drain(0..drop);
@@ -487,7 +516,7 @@ fn blocks_view(state: &ShumaState, theme: &Theme, viewport_h: f32) -> View<Msg> 
     };
     let content = if state.blocks.is_empty() {
         View::new(col).text(
-            "shuma se despliega aquí — escribí un comando y Enter (Esc cierra)".to_string(),
+            "Enter pregunta a la IA · prefijo ! o $ corre shell · Esc cierra".to_string(),
             13.0,
             theme.fg_muted,
         )
@@ -522,6 +551,37 @@ fn card_view(idx: usize, b: &DrawerBlock, theme: &Theme) -> View<Msg> {
     // Encabezado: el `$` pliega/despliega; las chips de etapa **intermedia**
     // revelan su salida capturada en vivo (tee). La última etapa no se captura
     // aparte —su stdout es el cuerpo de la card— así que su chip es pasiva.
+    // Card de IA: marca `✦` + el prompt, sin chips de etapa.
+    if b.is_ia {
+        let header = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+            align_items: Some(AlignItems::Center),
+            gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![
+            chip_text("✦", 14.0, theme.accent).on_click(Msg::ShumaCollapse(idx)),
+            chip_text(&b.cmd, 14.0, theme.fg_text).on_click(Msg::ShumaCollapse(idx)),
+        ]);
+        let mut col: Vec<View<Msg>> = vec![header];
+        if !b.collapsed {
+            if b.exit.is_none() {
+                col.push(out_line("…pensando", theme.fg_muted));
+            }
+            for l in &b.lines {
+                let c = if l.err { theme.fg_destructive } else { theme.fg_text };
+                col.push(out_line(&l.text, c));
+            }
+        }
+        return View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: auto() },
+            gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+            ..Default::default()
+        })
+        .children(col);
+    }
     let mut head: Vec<View<Msg>> = vec![chip_text("$", 14.0, theme.accent)
         .on_click(Msg::ShumaCollapse(idx))];
     if b.stages.is_empty() {
@@ -680,6 +740,72 @@ pub fn ejecutar(cmd: &str) -> RunResult {
 /// Tope de captura del drawer, en bytes — un comando charlatán no infla la RAM.
 const CAPTURE_CAP: usize = 256 * 1024;
 
+/// Cómo se clasifica el buffer al hacer submit en el drawer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SubmitKind<'a> {
+    /// Buffer vacío (o sólo espacios): no se hace nada.
+    Empty,
+    /// Comando shell — el prefijo explícito `!`/`$` lo fuerza.
+    Shell(&'a str),
+    /// Prompt para la IA — el default cuando no hay prefijo.
+    Ia(&'a str),
+}
+
+/// Clasifica el buffer al submit (paridad con el quake de mirada-launcher):
+/// `!cmd` o `$cmd` van al shell; vacío no hace nada; **todo lo demás es un
+/// prompt para la IA**. Así el drawer es a la vez terminal y asistente.
+pub fn classify(buffer: &str) -> SubmitKind<'_> {
+    let trimmed = buffer.trim();
+    if let Some(rest) = trimmed.strip_prefix('!').or_else(|| trimmed.strip_prefix('$')) {
+        SubmitKind::Shell(rest.trim())
+    } else if trimmed.is_empty() {
+        SubmitKind::Empty
+    } else {
+        SubmitKind::Ia(trimmed)
+    }
+}
+
+/// Consulta a la IA bloqueando — pensado para un hilo de fondo (`Handle::spawn`).
+/// `pluma_llm::from_env` autodetecta el backend y cae a Mock sin credenciales
+/// (eco determinista, útil para iterar sin red). Devuelve un [`RunResult`] para
+/// rellenar la card pendiente igual que un comando: la respuesta va a `lines`
+/// (una por renglón), un error va como línea de stderr + `exit 1`.
+pub fn preguntar_ia(prompt: &str) -> RunResult {
+    use pluma_llm::pluma_llm_core::ChatRequest;
+
+    let resultado = (|| -> Result<String, String> {
+        let cli = pluma_llm::from_env().map_err(|e| format!("{e}"))?;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("{e}"))?;
+        rt.block_on(async {
+            let req = ChatRequest::una_vuelta(prompt, 256)
+                .con_sistema("Sos un asistente conciso del escritorio. Responde corto.");
+            cli.complete(&req)
+                .await
+                .map(|r| r.content)
+                .map_err(|e| format!("{e}"))
+        })
+    })();
+
+    match resultado {
+        Ok(texto) => RunResult {
+            lines: texto
+                .lines()
+                .map(|l| OutLine { err: false, text: l.to_string() })
+                .collect(),
+            exit: Some(0),
+            stages: Vec::new(),
+        },
+        Err(e) => RunResult {
+            lines: vec![OutLine { err: true, text: e }],
+            exit: Some(1),
+            stages: Vec::new(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -696,6 +822,26 @@ mod tests {
             stage_labels("ls -la | grep foo | sort"),
             vec!["ls".to_string(), "grep".to_string(), "sort".to_string()]
         );
+    }
+
+    #[test]
+    fn classify_rutea_prefijo_a_shell_y_resto_a_ia() {
+        assert_eq!(classify(""), SubmitKind::Empty);
+        assert_eq!(classify("   "), SubmitKind::Empty);
+        assert_eq!(classify("!firefox"), SubmitKind::Shell("firefox"));
+        assert_eq!(classify("$ ls -la"), SubmitKind::Shell("ls -la"));
+        assert_eq!(classify("qué hora es?"), SubmitKind::Ia("qué hora es?"));
+        assert_eq!(classify("  hola  "), SubmitKind::Ia("hola"));
+    }
+
+    #[test]
+    fn push_pending_ia_marca_la_card_sin_etapas() {
+        let mut s = ShumaState::default();
+        s.push_pending_ia("explicá el kernel".into());
+        let last = s.blocks.last().unwrap();
+        assert!(last.is_ia);
+        assert!(last.stages.is_empty());
+        assert!(last.exit.is_none() && s.pending);
     }
 
     #[test]

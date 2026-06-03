@@ -141,6 +141,13 @@ borde; shuma provee el contenido.
     aparte (su stdout es el cuerpo de la card). Cualquier otra sintaxis cae a
     `sh -c` (sin tee). Detección en `shuma::simple_pipe_stages` (espeja
     `shuma-module-shell`), testeada.
+  - **Submit a IA (✅, paridad con el quake de mirada-launcher)** — el buffer sin
+    prefijo va al **LLM** (`pluma-llm::from_env`, cae a Mock sin credenciales); el
+    prefijo `!`/`$` lo fuerza a shell. `shuma::classify` decide (`Empty`/`Shell`/
+    `Ia`, testeada); las consultas IA abren una card `✦ <prompt>` sin chips de
+    etapa que muestra `…pensando` y luego la respuesta. El resultado llega por el
+    mismo `ShumaResult`/`finish_last` que un comando. Es el último gap que tenía
+    `mirada-launcher-llimphi` sobre pata de cara a la Fase 10.
 - **Fase 8 ✅** — `mirada-compositor` reconoce el marco `pata`:
   - Identidad: el viejo `SHELL_APP_ID = "carmen.shell"` → `is_shell_app_id`, que
     matchea `gioser.pata` (la identidad que anuncia `pata-llimphi`) o el alias

@@ -317,10 +317,23 @@ impl App for PataApp {
                 }
             }
             Msg::ShumaSubmit => {
-                if model.shuma.open && !model.shuma.buffer.trim().is_empty() {
-                    let cmd = std::mem::take(&mut model.shuma.buffer);
-                    model.shuma.push_pending(cmd.clone());
-                    handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&cmd)));
+                if model.shuma.open {
+                    // El buffer sin prefijo `!`/`$` va a la IA; con prefijo, al
+                    // shell (paridad con el quake de mirada-launcher).
+                    let buffer = std::mem::take(&mut model.shuma.buffer);
+                    match shuma::classify(&buffer) {
+                        shuma::SubmitKind::Empty => {}
+                        shuma::SubmitKind::Shell(cmd) => {
+                            let cmd = cmd.to_string();
+                            model.shuma.push_pending(cmd.clone());
+                            handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&cmd)));
+                        }
+                        shuma::SubmitKind::Ia(prompt) => {
+                            let prompt = prompt.to_string();
+                            model.shuma.push_pending_ia(prompt.clone());
+                            handle.spawn(move || Msg::ShumaResult(shuma::preguntar_ia(&prompt)));
+                        }
+                    }
                 }
             }
             Msg::ShumaResult(res) => model.shuma.finish_last(res),
