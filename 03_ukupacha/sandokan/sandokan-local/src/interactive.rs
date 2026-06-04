@@ -335,6 +335,7 @@ impl InteractiveEngine for LocalEngine {
                 handle: handle.clone(),
                 pid,
                 state: LifecycleState::Running,
+                tracker: crate::default_tracker(),
             },
         );
         self.sessions

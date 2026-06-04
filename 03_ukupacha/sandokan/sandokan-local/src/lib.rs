@@ -20,7 +20,7 @@ use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
 use nix::unistd::Pid;
 use sandokan_core::{Engine, EngineError, ExecHandle, Intent, TelemetryFrame};
-use sandokan_lifecycle::LifecycleState;
+use sandokan_lifecycle::{Backoff, LifecycleState, RestartPolicy, RestartTracker};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -32,6 +32,36 @@ struct Entity {
     handle: ExecHandle,
     pid: i32,
     state: LifecycleState,
+    /// Conteo + política de restart. El tracker se incrementa en cada
+    /// transición a un estado terminal de fallo (`Exited{code != 0}`,
+    /// `Killed`, `Failed{..}`). v1 NO auto-restartea — sólo cuenta;
+    /// `telemetry()` expone el contador para que un orquestador externo
+    /// (sandokan-monitor, supervisor) decida actuar.
+    tracker: RestartTracker,
+}
+
+/// Política y backoff por defecto del tracker en `LocalEngine`. Cuenta
+/// fallos sin tope (`max_restarts = 0` = infinito) y mantiene un backoff
+/// que el orquestador puede consultar si decide hacer respawn manual.
+fn default_tracker() -> RestartTracker {
+    RestartTracker::new(
+        RestartPolicy {
+            on_failure: true,
+            max_restarts: 0,
+        },
+        Backoff::new(Duration::from_millis(100), Duration::from_secs(30)),
+    )
+}
+
+/// `true` si el estado terminal indica una salida anómala — eso es lo
+/// que cuenta para el tracker. Exit code 0 (limpio) o estados no
+/// terminales devuelven `false`.
+fn es_fallo(state: &LifecycleState) -> bool {
+    match state {
+        LifecycleState::Exited { code } => *code != 0,
+        LifecycleState::Killed | LifecycleState::Failed { .. } => true,
+        _ => false,
+    }
 }
 
 /// Orquestador in-process. Encarna Cards localmente y trackea su lifecycle.
@@ -171,6 +201,7 @@ impl Engine for LocalEngine {
                 handle: handle.clone(),
                 pid: outcome.pid.as_raw(),
                 state: LifecycleState::Running,
+                tracker: default_tracker(),
             },
         );
         Ok(handle)
@@ -216,6 +247,9 @@ impl Engine for LocalEngine {
         for ent in reg.values_mut() {
             if !ent.state.is_terminal() {
                 if let Some(new_state) = reap(ent.pid) {
+                    if es_fallo(&new_state) {
+                        ent.tracker.on_failure();
+                    }
                     ent.state = new_state;
                 }
             }
@@ -233,6 +267,9 @@ impl Engine for LocalEngine {
             .ok_or(EngineError::NotFound(card_id))?;
         if !ent.state.is_terminal() {
             if let Some(new_state) = reap(ent.pid) {
+                if es_fallo(&new_state) {
+                    ent.tracker.on_failure();
+                }
                 ent.state = new_state;
             }
         }
@@ -240,11 +277,23 @@ impl Engine for LocalEngine {
     }
 
     async fn telemetry(&self, card_id: Ulid) -> Result<TelemetryFrame, EngineError> {
-        let pid = {
-            let reg = self.registry.lock().expect("registry lock");
-            reg.get(&card_id)
-                .map(|e| e.pid)
-                .ok_or(EngineError::NotFound(card_id))?
+        // Lock una sola vez: necesitamos el pid Y el conteo del tracker.
+        // Cualquier reap pendiente se ejecuta acá también para que el
+        // restarts reportado refleje el último estado conocido.
+        let (pid, restarts) = {
+            let mut reg = self.registry.lock().expect("registry lock");
+            let ent = reg
+                .get_mut(&card_id)
+                .ok_or(EngineError::NotFound(card_id))?;
+            if !ent.state.is_terminal() {
+                if let Some(new_state) = reap(ent.pid) {
+                    if es_fallo(&new_state) {
+                        ent.tracker.on_failure();
+                    }
+                    ent.state = new_state;
+                }
+            }
+            (ent.pid, ent.tracker.count())
         };
         Ok(TelemetryFrame {
             card_id,
@@ -253,9 +302,7 @@ impl Engine for LocalEngine {
             nproc: proc::read_thread_count(pid),
             // v1: CPU% requiere dos samples espaciados — pendiente.
             cpu_pct: 0.0,
-            // LocalEngine aún no trackea restarts (lo haría vía
-            // sandokan-lifecycle::RestartTracker) — pendiente.
-            restarts: 0,
+            restarts,
         })
     }
 }
@@ -383,5 +430,62 @@ mod tests {
         let st = e.status(id).await.unwrap();
         assert!(st.is_terminal(), "esperaba terminal, fue {st:?}");
         assert!(e.list().await.unwrap().is_empty());
+    }
+
+    /// Una salida anómala (exit code != 0 por su cuenta) hace que la
+    /// transición a estado terminal incremente el tracker exactamente
+    /// una vez. El TelemetryFrame deja de mentir `restarts: 0`.
+    #[tokio::test]
+    async fn telemetry_cuenta_restarts_en_salida_anomala() {
+        let e = LocalEngine::new();
+        let card = sh_card("sandbox-fallo", "exit 1");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run");
+
+        // Polling hasta que telemetry vea la transición y suba el contador.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let restarts = loop {
+            let frame = e.telemetry(id).await.expect("telemetry");
+            if frame.restarts > 0 {
+                break frame.restarts;
+            }
+            if Instant::now() >= deadline {
+                panic!(
+                    "el contador de restarts no se incrementó dentro del timeout: {frame:?}"
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        assert_eq!(restarts, 1, "una sola salida anómala = 1 restart");
+
+        // Una consulta más NO debe re-incrementar: ya estamos en terminal,
+        // el reap no vuelve a ejecutarse para esa entidad.
+        let frame = e.telemetry(id).await.expect("telemetry segunda");
+        assert_eq!(
+            frame.restarts, 1,
+            "tras llegar a terminal el contador no debe re-incrementar",
+        );
+    }
+
+    /// Una salida limpia (exit 0) NO es un fallo: el contador queda en 0.
+    #[tokio::test]
+    async fn telemetry_no_cuenta_restart_en_exit_limpio() {
+        let e = LocalEngine::new();
+        let card = sh_card("sandbox-ok", "exit 0");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if e.status(id).await.unwrap().is_terminal() {
+                break;
+            }
+            if Instant::now() >= deadline {
+                panic!("el proceso no terminó a tiempo");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let frame = e.telemetry(id).await.expect("telemetry");
+        assert_eq!(frame.restarts, 0, "exit 0 no es fallo");
     }
 }
