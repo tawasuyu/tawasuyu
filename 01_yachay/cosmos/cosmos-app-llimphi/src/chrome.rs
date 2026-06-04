@@ -1712,9 +1712,54 @@ fn uranian_dial_canvas(
     canvas_column(Some(zoom_controls(model, theme)), canvas, size, fill)
 }
 
+/// Flor armónica central: un pétalo translúcido por cuerpo, apuntando a su
+/// longitud armónica (`deg·h`) y coloreado por su planeta. Al superponerse,
+/// los pétalos forman la mandala de arcoíris típica de la carta armónica.
+/// Función pura (sin `Model`) para poder rasterizarla en un test.
+pub(crate) fn harmonic_flower_cmds(
+    render: &cosmos_render::RenderModel,
+    h: f32,
+    cx: f32,
+    cy: f32,
+    rp: f32,
+    pal: &Palette,
+) -> Vec<DrawCommand> {
+    let mut cmds: Vec<DrawCommand> = Vec::new();
+    for (sym, deg) in natal_body_lons(render) {
+        let hl = (deg * h).rem_euclid(360.0);
+        let th = (hl - 90.0).to_radians();
+        let (dx, dy) = (th.cos(), th.sin());
+        let (px, py) = (-th.sin(), th.cos()); // perpendicular
+        let (tx, ty) = (cx + dx * rp, cy + dy * rp); // punta
+        let m = rp * 0.55; // radio del ancho máximo
+        let w = rp * 0.26; // medio ancho del pétalo
+        let (s1x, s1y) = (cx + dx * m + px * w, cy + dy * m + py * w);
+        let (s2x, s2y) = (cx + dx * m - px * w, cy + dy * m - py * w);
+        let d = format!("M {cx} {cy} Q {s1x} {s1y} {tx} {ty} Q {s2x} {s2y} {cx} {cy} Z");
+        let c = pal.planet(&canon_glyph(&sym));
+        cmds.push(DrawCommand::Path {
+            d,
+            fill: Some(Rgba { a: 0.30, ..c }),
+            stroke: Some(Rgba { a: 0.55, ..c }),
+            stroke_w: 1.0,
+        });
+    }
+    // Centro luminoso.
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r: rp * 0.10,
+        stroke: None,
+        fill: Some(Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.9 }),
+        stroke_w: 0.0,
+    });
+    cmds
+}
+
 /// Rueda armónica (Cochrane / Addey): cada longitud natal se multiplica
 /// por el armónico activo (mod 360) y se grafica en un zodíaco de 12
-/// signos. H1 = la carta natal. Debajo, el espectro armónico si existe.
+/// signos, con una **flor armónica** (roseta de pétalos por cuerpo) en el
+/// centro. H1 = la carta natal.
 fn harmonic_wheel_canvas(
     model: &Model,
     render: &cosmos_render::RenderModel,
@@ -1748,6 +1793,15 @@ fn harmonic_wheel_canvas(
         fill: None,
         stroke_w: 0.8,
     });
+    // Flor armónica central (roseta de pétalos por cuerpo).
+    cmds.extend(harmonic_flower_cmds(
+        render,
+        h,
+        cx,
+        cy,
+        r * 0.58,
+        &graphics_palette(model),
+    ));
     // 12 sectores zodiacales + glyph de cada signo en el anillo exterior.
     let sign_ids = crate::glyphs::SIGN_IDS;
     for i in 0..12 {
@@ -1784,12 +1838,12 @@ fn harmonic_wheel_canvas(
         cmds.extend(planet_commands(&canon_glyph(&sym), gx, gy, size * 0.045, fg, 1.7));
     }
     cmds.push(DrawCommand::Text {
-        x: cx,
-        y: cy,
+        x: size * 0.07,
+        y: size * 0.07,
         content: format!("H{}", model.harmonic),
         color: grid,
-        size: 16.0,
-        anchor: TextAnchor::Middle,
+        size: 15.0,
+        anchor: TextAnchor::Start,
     });
 
     custom_canvas(model, cmds, size, theme, fill)

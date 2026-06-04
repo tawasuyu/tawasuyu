@@ -389,4 +389,40 @@ mod tests {
         std::fs::write(&path, &png).expect("escribir png");
         eprintln!("glyphs en {path:?} ({} bytes)", png.len());
     }
+
+    /// Rasteriza la flor armónica (H5) para inspección.
+    /// `cargo test -p cosmos-app-llimphi flor_armonica -- --ignored --nocapture`
+    #[test]
+    #[ignore = "necesita GPU; genera PNG de inspección"]
+    fn flor_armonica_a_png() {
+        use llimphi_ui::llimphi_layout::taffy::prelude::{length, Size, Style};
+        let chart = crate::engine::sample_chart();
+        let (render, _e) = crate::engine::compute(&chart, &[], 1, false, 0);
+        let size = 420.0_f32;
+        let cmds = crate::chrome::harmonic_flower_cmds(
+            &render,
+            5.0,
+            size / 2.0,
+            size / 2.0,
+            size * 0.42,
+            &cosmos_render::Palette::dark(),
+        );
+        let canvas = cosmos_canvas_llimphi::canvas_view::<crate::model::Msg>(
+            cmds,
+            size,
+            Some(Color::from_rgba8(12, 14, 22, 255)),
+        );
+        let view = View::new(Style {
+            size: Size {
+                width: length(size),
+                height: length(size),
+            },
+            ..Default::default()
+        })
+        .children(vec![canvas]);
+        let png = render_view_to_png(view, size, 2.0).expect("render flor");
+        let path = std::env::temp_dir().join("cosmos-flor.png");
+        std::fs::write(&path, &png).expect("escribir png");
+        eprintln!("flor en {path:?} ({} bytes)", png.len());
+    }
 }
