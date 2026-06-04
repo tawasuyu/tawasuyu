@@ -359,6 +359,7 @@ pub fn root(model: &Model) -> View<Msg> {
                 placed.index,
                 placed.rect,
                 &model.nav,
+                &model.shuma,
                 &model.theme,
             ));
             continue;

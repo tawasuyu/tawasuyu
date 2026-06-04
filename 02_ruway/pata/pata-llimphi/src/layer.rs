@@ -1125,6 +1125,7 @@ impl LayerApp {
                 &self.nav,
                 hosted_teeth,
                 hosted_app,
+                &self.shuma,
                 &self.theme,
             )
         } else {

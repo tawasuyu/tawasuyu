@@ -39,6 +39,7 @@ use pata_core::config::{Anchor, Surface};
 use pata_core::layout::Rect;
 
 use crate::nouser::NavState;
+use crate::shuma::ShumaState;
 use crate::Msg;
 
 /// Alto del cabezal del panel (título + toggle de modo), en px.
@@ -109,11 +110,49 @@ fn hosted_rail(app_id: &str, teeth: &[HostedTooth], width: f32, theme: &Theme) -
     )
 }
 
+/// El diente **in-process** de shuma: cuando el marco hospeda un `shuma_input`
+/// ([`ShumaState::present`]), el rail muestra un diente que despliega/repliega el
+/// drawer Quake. A diferencia de los dientes hospedados (estado en la app remota,
+/// vía socket), shuma vive en el **propio proceso** de pata, así que el diente
+/// refleja su estado real (`active = open`) y el clic va directo a
+/// [`Msg::ShumaToggle`]. Por eso no depende del foco: aparece igual en winit y en
+/// layer-shell mientras la config declare un `shuma_input`.
+fn shuma_rail(open: bool, width: f32, theme: &Theme) -> View<Msg> {
+    let items = vec![DockRailItem { id: 0, active: open }];
+    dock_rail_view(
+        &items,
+        width,
+        &DockRailPalette::from_theme(theme),
+        |_id, size, color| tooth_icon("shell", size, color),
+        |_id| Msg::ShumaToggle,
+        |_| None,
+    )
+}
+
+/// Un separador tenue horizontal entre grupos de dientes del rail.
+fn rail_separator(thickness: f32, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(thickness * 0.5),
+            height: length(1.0_f32),
+        },
+        margin: TaffyRect {
+            left: length(thickness * 0.25),
+            right: length(thickness * 0.25),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.fg_muted)
+}
+
 /// Una franja de rail que **llena su alto**: fondo de panel + el rail de dientes
-/// de la config arriba y, debajo, los dientes **hospedados** de la app enfocada
-/// (si los hay). La usan ambos backends (en winit dentro del rect absoluto —sin
-/// dientes hospedados, que dependen del foco—, en layer-shell como columna de
-/// ancho `thickness` dentro de la surface).
+/// de la config arriba, debajo los dientes **hospedados** de la app enfocada (si
+/// los hay) y, al fondo, el diente **in-process** de shuma (si el marco hospeda un
+/// `shuma_input`). La usan ambos backends (en winit dentro del rect absoluto —sin
+/// dientes hospedados, que dependen del foco, pero sí con el de shuma—, en
+/// layer-shell como columna de ancho `thickness` dentro de la surface).
 fn rail_strip(
     surface: &Surface,
     si: usize,
@@ -121,28 +160,17 @@ fn rail_strip(
     nav: &NavState,
     hosted: &[HostedTooth],
     hosted_app: &str,
+    shuma: &ShumaState,
     theme: &Theme,
 ) -> View<Msg> {
     let mut hijos = vec![rail_widget(surface, si, thickness, nav, theme)];
     if !hosted.is_empty() {
-        // Un separador tenue entre los dientes propios y los hospedados.
-        hijos.push(
-            View::new(Style {
-                size: Size {
-                    width: length(thickness * 0.5),
-                    height: length(1.0_f32),
-                },
-                margin: TaffyRect {
-                    left: length(thickness * 0.25),
-                    right: length(thickness * 0.25),
-                    top: length(6.0_f32),
-                    bottom: length(6.0_f32),
-                },
-                ..Default::default()
-            })
-            .fill(theme.fg_muted),
-        );
+        hijos.push(rail_separator(thickness, theme));
         hijos.push(hosted_rail(hosted_app, hosted, thickness, theme));
+    }
+    if shuma.present {
+        hijos.push(rail_separator(thickness, theme));
+        hijos.push(shuma_rail(shuma.open, thickness, theme));
     }
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -284,6 +312,7 @@ pub fn sidebar_rail_view(
     si: usize,
     rect: Rect,
     nav: &NavState,
+    shuma: &ShumaState,
     theme: &Theme,
 ) -> View<Msg> {
     View::new(Style {
@@ -300,8 +329,9 @@ pub fn sidebar_rail_view(
         },
         ..Default::default()
     })
-    // El path winit no conoce el foco (no hay toplevels) → sin dientes hospedados.
-    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", theme)])
+    // El path winit no conoce el foco (no hay toplevels) → sin dientes hospedados,
+    // pero el diente de shuma es in-process y sí aparece.
+    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", shuma, theme)])
 }
 
 /// El panel flotante del diente `ti` desplegado (path winit): flota junto al
@@ -358,10 +388,11 @@ pub fn sidebar_surface_view(
     nav: &NavState,
     hosted: &[HostedTooth],
     hosted_app: &str,
+    shuma: &ShumaState,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
-    let rail = rail_strip(surface, si, thickness, nav, hosted, hosted_app, theme);
+    let rail = rail_strip(surface, si, thickness, nav, hosted, hosted_app, shuma, theme);
 
     let open_ti = match nav.open {
         Some((s, ti)) if s == si => Some(ti),
@@ -512,7 +543,7 @@ fn tooth_icon(name: &str, size: f32, color: Color) -> View<Msg> {
     let kind = match name {
         "monads" | "monadas" | "monad" | "astro" => NavKind::Monad,
         "files" | "archivos" | "file" | "dir" | "folder" | "tree" => NavKind::Dir,
-        "tools" | "group" | "settings" | "system" => NavKind::Group,
+        "tools" | "group" | "settings" | "system" | "shell" | "terminal" => NavKind::Group,
         _ => NavKind::Other,
     };
     View::new(Style {

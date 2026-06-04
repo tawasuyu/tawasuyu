@@ -517,6 +517,19 @@ borde; shuma provee el contenido.
       despliega. Sin delegar, el panel de monitores siempre se ve (`monitors_visible`
       arranca según `host.is_none()`). La tira de tabs local sigue visible (el rail
       es un switcher paralelo).
+  - **shuma embebida (in-process, NO socket)**: cuando el marco hospeda un
+    `shuma_input` (el drawer Quake; `ShumaState::present`), el rail del sidebar
+    suma un **tercer grupo** de dientes (bajo config-teeth y hosted-teeth, con
+    separador): un diente que despliega/repliega el drawer (`Msg::ShumaToggle`).
+    Al vivir en el propio proceso de pata —no detrás del socket `pata-host`—, el
+    diente **refleja el estado real** (`active = shuma.open`, a diferencia de los
+    hospedados, siempre inactivos) y **no depende del foco**: aparece igual en
+    winit y layer-shell mientras la config declare el `shuma_input`. Implementado
+    en `render::sidebar::{shuma_rail, rail_strip}` (firma de `sidebar_rail_view`/
+    `sidebar_surface_view` enhebra `&ShumaState`); icono `shell`/`terminal` =
+    glifo Group. Esto es la contraparte in-process de la delegación por socket:
+    cruzar la frontera de proceso (app aparte) usa `pata-host`; embebido se cablea
+    directo leyendo el `Model`.
   - **Pendiente opcional**: re-registro de dientes al reordenar el dock (hoy se
     registran una vez al init; el lado de activación se computa en vivo, así que el
     drop entre lados sigue funcionando); estado "activo" del diente hospedado (hoy
