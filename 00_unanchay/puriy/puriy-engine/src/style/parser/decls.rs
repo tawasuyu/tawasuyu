@@ -729,6 +729,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "view-timeline-axis" => {
             parse_timeline_axis(value).map(DeclKind::ViewTimelineAxis)
         }
+        "white-space-collapse" => {
+            parse_white_space_collapse(value).map(DeclKind::WhiteSpaceCollapse)
+        }
+        "text-wrap-mode" => {
+            parse_text_wrap_mode(value).map(DeclKind::TextWrapMode)
+        }
+        "text-wrap-style" => {
+            parse_text_wrap_style(value).map(DeclKind::TextWrapStyle)
+        }
+        "text-spacing-trim" => {
+            parse_text_spacing_trim(value).map(DeclKind::TextSpacingTrim)
+        }
+        "text-box-trim" => {
+            parse_text_box_trim(value).map(DeclKind::TextBoxTrim)
+        }
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
@@ -2846,6 +2861,64 @@ pub(crate) fn parse_timeline_axis(value: &str) -> Option<TimelineAxis> {
         "inline" => Some(TimelineAxis::Inline),
         "x" => Some(TimelineAxis::X),
         "y" => Some(TimelineAxis::Y),
+        _ => None,
+    }
+}
+
+/// `white-space-collapse`: `collapse | preserve | preserve-breaks |
+/// break-spaces`. Fase 7.344.
+pub(crate) fn parse_white_space_collapse(
+    value: &str,
+) -> Option<WhiteSpaceCollapse> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "collapse" => Some(WhiteSpaceCollapse::Collapse),
+        "preserve" => Some(WhiteSpaceCollapse::Preserve),
+        "preserve-breaks" => Some(WhiteSpaceCollapse::PreserveBreaks),
+        "break-spaces" => Some(WhiteSpaceCollapse::BreakSpaces),
+        _ => None,
+    }
+}
+
+/// `text-wrap-mode`: `wrap | nowrap`. Fase 7.345.
+pub(crate) fn parse_text_wrap_mode(value: &str) -> Option<TextWrapMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "wrap" => Some(TextWrapMode::Wrap),
+        "nowrap" => Some(TextWrapMode::Nowrap),
+        _ => None,
+    }
+}
+
+/// `text-wrap-style`: `auto | balance | pretty | stable`. Fase 7.346.
+pub(crate) fn parse_text_wrap_style(value: &str) -> Option<TextWrapStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(TextWrapStyle::Auto),
+        "balance" => Some(TextWrapStyle::Balance),
+        "pretty" => Some(TextWrapStyle::Pretty),
+        "stable" => Some(TextWrapStyle::Stable),
+        _ => None,
+    }
+}
+
+/// `text-spacing-trim`: `normal | space-all | space-first | trim-start`.
+/// Fase 7.347.
+pub(crate) fn parse_text_spacing_trim(value: &str) -> Option<TextSpacingTrim> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(TextSpacingTrim::Normal),
+        "space-all" => Some(TextSpacingTrim::SpaceAll),
+        "space-first" => Some(TextSpacingTrim::SpaceFirst),
+        "trim-start" => Some(TextSpacingTrim::TrimStart),
+        _ => None,
+    }
+}
+
+/// `text-box-trim`: `none | trim-start | trim-end | trim-both`.
+/// Fase 7.348.
+pub(crate) fn parse_text_box_trim(value: &str) -> Option<TextBoxTrim> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(TextBoxTrim::None),
+        "trim-start" => Some(TextBoxTrim::TrimStart),
+        "trim-end" => Some(TextBoxTrim::TrimEnd),
+        "trim-both" => Some(TextBoxTrim::TrimBoth),
         _ => None,
     }
 }

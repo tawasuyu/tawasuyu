@@ -296,6 +296,13 @@ impl StyleEngine {
             // acá (la cascada de cada longhand ya pegó arriba).
             style.font_size_adjust = p.font_size_adjust;
             style.image_orientation = p.image_orientation;
+            // CSS Text 4 — white-space-collapse, text-wrap-mode,
+            // text-wrap-style, text-spacing-trim, text-box-trim heredan.
+            style.white_space_collapse = p.white_space_collapse;
+            style.text_wrap_mode = p.text_wrap_mode;
+            style.text_wrap_style = p.text_wrap_style;
+            style.text_spacing_trim = p.text_spacing_trim;
+            style.text_box_trim = p.text_box_trim;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -4983,6 +4990,184 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).view_timeline_axis,
             TimelineAxis::Block
+        );
+    }
+
+    #[test]
+    fn white_space_collapse_fase_7_344() {
+        assert_eq!(
+            parse_white_space_collapse("collapse"),
+            Some(WhiteSpaceCollapse::Collapse)
+        );
+        assert_eq!(
+            parse_white_space_collapse("PRESERVE"),
+            Some(WhiteSpaceCollapse::Preserve)
+        );
+        assert_eq!(
+            parse_white_space_collapse("preserve-breaks"),
+            Some(WhiteSpaceCollapse::PreserveBreaks)
+        );
+        assert_eq!(
+            parse_white_space_collapse("break-spaces"),
+            Some(WhiteSpaceCollapse::BreakSpaces)
+        );
+        assert_eq!(parse_white_space_collapse("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { white-space-collapse: preserve }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.white_space_collapse, WhiteSpaceCollapse::Preserve);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).white_space_collapse,
+            WhiteSpaceCollapse::Preserve
+        );
+    }
+
+    #[test]
+    fn text_wrap_mode_fase_7_345() {
+        assert_eq!(parse_text_wrap_mode("wrap"), Some(TextWrapMode::Wrap));
+        assert_eq!(parse_text_wrap_mode("NOWRAP"), Some(TextWrapMode::Nowrap));
+        assert_eq!(parse_text_wrap_mode("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-wrap-mode: nowrap }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_wrap_mode, TextWrapMode::Nowrap);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_wrap_mode,
+            TextWrapMode::Nowrap
+        );
+    }
+
+    #[test]
+    fn text_wrap_style_fase_7_346() {
+        assert_eq!(parse_text_wrap_style("auto"), Some(TextWrapStyle::Auto));
+        assert_eq!(parse_text_wrap_style("BALANCE"), Some(TextWrapStyle::Balance));
+        assert_eq!(parse_text_wrap_style("pretty"), Some(TextWrapStyle::Pretty));
+        assert_eq!(parse_text_wrap_style("stable"), Some(TextWrapStyle::Stable));
+        assert_eq!(parse_text_wrap_style("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-wrap-style: pretty }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_wrap_style, TextWrapStyle::Pretty);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_wrap_style,
+            TextWrapStyle::Pretty
+        );
+    }
+
+    #[test]
+    fn text_spacing_trim_fase_7_347() {
+        assert_eq!(
+            parse_text_spacing_trim("normal"),
+            Some(TextSpacingTrim::Normal)
+        );
+        assert_eq!(
+            parse_text_spacing_trim("SPACE-ALL"),
+            Some(TextSpacingTrim::SpaceAll)
+        );
+        assert_eq!(
+            parse_text_spacing_trim("space-first"),
+            Some(TextSpacingTrim::SpaceFirst)
+        );
+        assert_eq!(
+            parse_text_spacing_trim("trim-start"),
+            Some(TextSpacingTrim::TrimStart)
+        );
+        assert_eq!(parse_text_spacing_trim("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-spacing-trim: trim-start }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_spacing_trim, TextSpacingTrim::TrimStart);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_spacing_trim,
+            TextSpacingTrim::TrimStart
+        );
+    }
+
+    #[test]
+    fn text_box_trim_fase_7_348() {
+        assert_eq!(parse_text_box_trim("none"), Some(TextBoxTrim::None));
+        assert_eq!(parse_text_box_trim("TRIM-START"), Some(TextBoxTrim::TrimStart));
+        assert_eq!(parse_text_box_trim("trim-end"), Some(TextBoxTrim::TrimEnd));
+        assert_eq!(parse_text_box_trim("trim-both"), Some(TextBoxTrim::TrimBoth));
+        assert_eq!(parse_text_box_trim("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-box-trim: trim-both }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_box_trim, TextBoxTrim::TrimBoth);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_box_trim,
+            TextBoxTrim::TrimBoth
         );
     }
 

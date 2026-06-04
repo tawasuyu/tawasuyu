@@ -517,6 +517,22 @@ pub struct ComputedStyle {
     /// `view-timeline-axis` (Fase 7.343). Default `Block`. NO hereda.
     /// Plumb.
     pub view_timeline_axis: TimelineAxis,
+    /// `white-space-collapse` (Fase 7.344). Default `Collapse`.
+    /// **Heredable**. Plumb: `white-space` clásico sigue mandando en
+    /// el layout; este axis no se consume.
+    pub white_space_collapse: WhiteSpaceCollapse,
+    /// `text-wrap-mode` (Fase 7.345). Default `Wrap`. **Heredable**.
+    /// Plumb.
+    pub text_wrap_mode: TextWrapMode,
+    /// `text-wrap-style` (Fase 7.346). Default `Auto`. **Heredable**.
+    /// Plumb.
+    pub text_wrap_style: TextWrapStyle,
+    /// `text-spacing-trim` (Fase 7.347). Default `Normal`.
+    /// **Heredable**. Plumb: el shaper no recorta puntuación CJK.
+    pub text_spacing_trim: TextSpacingTrim,
+    /// `text-box-trim` (Fase 7.348). Default `None`. **Heredable**.
+    /// Plumb: el chrome no recorta el leading/trailing del text-box.
+    pub text_box_trim: TextBoxTrim,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1508,6 +1524,59 @@ pub enum TimelineAxis {
     Inline,
     X,
     Y,
+}
+
+/// `white-space-collapse` (CSS Text 4). Heredable. Default `Collapse`.
+/// Fase 7.344.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WhiteSpaceCollapse {
+    #[default]
+    Collapse,
+    Preserve,
+    PreserveBreaks,
+    BreakSpaces,
+}
+
+/// `text-wrap-mode` (CSS Text 4). Heredable. Default `Wrap`.
+/// Fase 7.345.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextWrapMode {
+    #[default]
+    Wrap,
+    Nowrap,
+}
+
+/// `text-wrap-style` (CSS Text 4). Heredable. Default `Auto`.
+/// Fase 7.346.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextWrapStyle {
+    #[default]
+    Auto,
+    Balance,
+    Pretty,
+    Stable,
+}
+
+/// `text-spacing-trim` (CSS Text 4). Heredable. Default `Normal`.
+/// Fase 7.347.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextSpacingTrim {
+    #[default]
+    Normal,
+    SpaceAll,
+    SpaceFirst,
+    TrimStart,
+}
+
+/// `text-box-trim` (CSS Inline Layout 3). Heredable. Default `None`.
+/// Fase 7.348.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextBoxTrim {
+    #[default]
+    None,
+    TrimStart,
+    TrimEnd,
+    TrimBoth,
 }
 
 impl ContainFlags {
@@ -2532,6 +2601,11 @@ impl Default for ComputedStyle {
             scroll_timeline_axis: TimelineAxis::Block,
             view_timeline_name: None,
             view_timeline_axis: TimelineAxis::Block,
+            white_space_collapse: WhiteSpaceCollapse::Collapse,
+            text_wrap_mode: TextWrapMode::Wrap,
+            text_wrap_style: TextWrapStyle::Auto,
+            text_spacing_trim: TextSpacingTrim::Normal,
+            text_box_trim: TextBoxTrim::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
