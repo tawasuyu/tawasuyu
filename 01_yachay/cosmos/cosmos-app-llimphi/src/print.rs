@@ -277,4 +277,41 @@ mod tests {
         std::fs::write(&path, &png).expect("escribir png");
         eprintln!("hoja Hoy en {path:?} ({} bytes)", png.len());
     }
+
+    /// Rasteriza el dial de 90° (vista Uraniana) a un PNG para inspección.
+    /// `cargo test -p cosmos-app-llimphi dial_90 -- --ignored --nocapture`
+    #[test]
+    #[ignore = "necesita GPU; genera PNG de inspección"]
+    fn dial_90_a_png() {
+        use llimphi_ui::llimphi_layout::taffy::prelude::{length, Size, Style};
+        let chart = crate::engine::sample_chart();
+        let (render, _e) = crate::engine::compute(&chart, &[], 1, false, 0);
+        let size = 540.0_f32;
+        let rgba = |r, g, b, a| cosmos_render::Rgba { r, g, b, a };
+        let cmds = crate::chrome::uranian_dial_cmds(
+            &render,
+            size,
+            rgba(0.10, 0.10, 0.12, 1.0), // tinta
+            rgba(0.35, 0.35, 0.40, 1.0), // grilla
+            rgba(0.82, 0.12, 0.12, 1.0), // rojo
+            rgba(1.0, 0.99, 0.96, 1.0),  // papel
+        );
+        let canvas = cosmos_canvas_llimphi::canvas_view::<crate::model::Msg>(
+            cmds,
+            size,
+            Some(Color::from_rgba8(255, 252, 245, 255)),
+        );
+        let view = View::new(Style {
+            size: Size {
+                width: length(size),
+                height: length(size),
+            },
+            ..Default::default()
+        })
+        .children(vec![canvas]);
+        let png = render_view_to_png(view, size, 2.0).expect("render dial");
+        let path = std::env::temp_dir().join("cosmos-dial90.png");
+        std::fs::write(&path, &png).expect("escribir png");
+        eprintln!("dial 90 en {path:?} ({} bytes)", png.len());
+    }
 }

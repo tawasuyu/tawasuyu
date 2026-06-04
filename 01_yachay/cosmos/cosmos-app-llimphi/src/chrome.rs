@@ -1447,6 +1447,197 @@ fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme
     canvas_column(Some(zoom_controls(model, theme)), canvas, size, fill)
 }
 
+/// Mapea una posición del dial (`m90` ∈ [0,90)) al ángulo visual en
+/// radianes con 0° arriba y sentido horario.
+fn dial_ang(m90: f32) -> f32 {
+    (m90 / 90.0 * 360.0 - 90.0).to_radians()
+}
+
+/// Path SVG de un arco entre dos ángulos (rad) a un radio dado.
+fn arc_path(cx: f32, cy: f32, radius: f32, a0: f32, a1: f32) -> String {
+    let (x0, y0) = (cx + a0.cos() * radius, cy + a0.sin() * radius);
+    let (x1, y1) = (cx + a1.cos() * radius, cy + a1.sin() * radius);
+    let large = if (a1 - a0).abs() > std::f32::consts::PI { 1 } else { 0 };
+    let sweep = if a1 > a0 { 1 } else { 0 };
+    format!("M {x0} {y0} A {radius} {radius} 0 {large} {sweep} {x1} {y1}")
+}
+
+/// Comandos de dibujo del dial de 90° — función pura (sin `Model`) para
+/// poder rasterizarla en un test. Replica la lámina clásica del dial:
+/// anillo graduado con arcos negros, tres cuñas de modalidad con sus
+/// glyphs grandes (cardinal ♈ / fijo ♉ / mutable ♊), eje-puntero rojo y
+/// los cuerpos proyectados (mod 90) por fuera con líneas-guía.
+pub(crate) fn uranian_dial_cmds(
+    render: &cosmos_render::RenderModel,
+    size: f32,
+    fg: Rgba,
+    grid: Rgba,
+    accent: Rgba,
+    bg: Rgba,
+) -> Vec<DrawCommand> {
+    use cosmos_render::glyphs::{planet_commands, sign_commands};
+    let cx = size / 2.0;
+    let cy = size / 2.0;
+    let r = size * 0.40;
+    let r_in = r * 0.90; // borde interno de la banda graduada
+    let grid_soft = Rgba { a: 0.35, ..grid };
+    let ink_soft = Rgba { a: 0.6, ..fg };
+    let pt = |radius: f32, ang: f32| (cx + ang.cos() * radius, cy + ang.sin() * radius);
+
+    let mut cmds: Vec<DrawCommand> = Vec::new();
+    // Disco + aro exterior.
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r,
+        stroke: Some(grid),
+        fill: Some(bg),
+        stroke_w: 1.5,
+    });
+
+    // Tres cuñas de modalidad: divisores en los bordes 0/30/60 (mod 90) y
+    // un glyph grande en el centro de cada tramo (cardinal/fijo/mutable).
+    for b in [0.0_f32, 30.0, 60.0] {
+        let a = dial_ang(b);
+        let (ix, iy) = pt(r * 0.12, a);
+        let (ox, oy) = pt(r_in, a);
+        cmds.push(DrawCommand::Line {
+            x1: ix,
+            y1: iy,
+            x2: ox,
+            y2: oy,
+            color: grid_soft,
+            width: 0.8,
+            dash: None,
+        });
+    }
+    for (center, sign) in [(15.0_f32, "aries"), (45.0, "taurus"), (75.0, "gemini")] {
+        let (gx, gy) = pt(r * 0.50, dial_ang(center));
+        cmds.extend(sign_commands(sign, gx, gy, size * 0.14, ink_soft, 2.4));
+    }
+
+    // Aro interno de la banda graduada.
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r: r_in,
+        stroke: Some(grid_soft),
+        fill: None,
+        stroke_w: 0.8,
+    });
+    // Arcos negros: 8 segmentos gruesos en la banda, cada 45° visual.
+    let rb = (r + r_in) / 2.0;
+    for k in 0..8 {
+        let c = k as f32 * std::f32::consts::FRAC_PI_4 - std::f32::consts::FRAC_PI_2;
+        let half = 4.0_f32.to_radians();
+        cmds.push(DrawCommand::Path {
+            d: arc_path(cx, cy, rb, c - half, c + half),
+            stroke: Some(fg),
+            fill: None,
+            stroke_w: (r - r_in) * 0.95,
+        });
+    }
+    // Graduación: ticks cada grado (90), medianos cada 5°, mayores cada 15°.
+    for d in 0..90 {
+        let ang = dial_ang(d as f32);
+        let (major, medium) = (d % 15 == 0, d % 5 == 0);
+        let inner = if major {
+            r * 0.84
+        } else if medium {
+            r * 0.88
+        } else {
+            r_in
+        };
+        let (x1, y1) = pt(inner, ang);
+        let (x2, y2) = pt(r, ang);
+        cmds.push(DrawCommand::Line {
+            x1,
+            y1,
+            x2,
+            y2,
+            color: if major { fg } else { grid },
+            width: if major {
+                1.3
+            } else if medium {
+                0.9
+            } else {
+                0.5
+            },
+            dash: None,
+        });
+        if major {
+            let (tx, ty) = pt(r * 0.78, ang);
+            cmds.push(DrawCommand::Text {
+                x: tx,
+                y: ty,
+                content: format!("{d}"),
+                color: grid,
+                size: 9.0,
+                anchor: TextAnchor::Middle,
+            });
+        }
+    }
+
+    // Eje-puntero rojo: diámetro vertical (0° arriba) con cabezas de flecha
+    // arriba y abajo.
+    let top = dial_ang(0.0);
+    let bot = dial_ang(45.0); // 45 mod 90 → abajo
+    let (tx, ty) = pt(r, top);
+    let (bx, by) = pt(r, bot);
+    cmds.push(DrawCommand::Line {
+        x1: tx,
+        y1: ty,
+        x2: bx,
+        y2: by,
+        color: Rgba { a: 0.7, ..accent },
+        width: 1.0,
+        dash: Some((4.0, 4.0)),
+    });
+    for (ax, ay, dir) in [(tx, ty, 1.0_f32), (bx, by, -1.0_f32)] {
+        // Cabeza de flecha apuntando hacia el centro.
+        let h = size * 0.022;
+        cmds.push(DrawCommand::Polygon {
+            points: vec![
+                (ax, ay + dir * h * 1.6),
+                (ax - h, ay - dir * h * 0.2),
+                (ax + h, ay - dir * h * 0.2),
+            ],
+            fill: Some(accent),
+            stroke: None,
+            stroke_w: 0.0,
+        });
+    }
+
+    // Origen.
+    cmds.push(DrawCommand::Circle {
+        cx,
+        cy,
+        r: size * 0.006,
+        stroke: Some(grid),
+        fill: None,
+        stroke_w: 1.0,
+    });
+
+    // Cuerpos proyectados (longitud mod 90) por fuera del aro, con guía.
+    for (sym, deg) in natal_body_lons(render) {
+        let ang = dial_ang(deg.rem_euclid(90.0));
+        let (lx1, ly1) = pt(r, ang);
+        let (lx2, ly2) = pt(r * 1.10, ang);
+        cmds.push(DrawCommand::Line {
+            x1: lx1,
+            y1: ly1,
+            x2: lx2,
+            y2: ly2,
+            color: grid,
+            width: 0.8,
+            dash: None,
+        });
+        let (gx, gy) = pt(r * 1.17, ang);
+        cmds.extend(planet_commands(&canon_glyph(&sym), gx, gy, size * 0.042, fg, 1.6));
+    }
+    cmds
+}
+
 /// Dial uraniano de 90° (Escuela de Hamburgo). Los cuerpos se proyectan
 /// a su longitud módulo 90° sobre un disco graduado; cuerpos que caen
 /// cerca (misma "fórmula") quedan agrupados visualmente. 0° arriba.
@@ -1457,83 +1648,14 @@ fn uranian_dial_canvas(
     theme: &Theme,
     fill: bool,
 ) -> View<Msg> {
-    use cosmos_render::glyphs::planet_commands;
-    let cx = size / 2.0;
-    let cy = size / 2.0;
-    let r = size * 0.42;
-    let pal = graphics_palette(model);
-    let grid = rgba_of(theme.fg_muted);
-    let grid_soft = Rgba { a: 0.4, ..grid };
-    let fg = rgba_of(theme.fg_text);
-
-    let mut cmds: Vec<DrawCommand> = Vec::new();
-    cmds.push(DrawCommand::Circle {
-        cx,
-        cy,
-        r,
-        stroke: Some(grid),
-        fill: Some(rgba_of(theme.bg_panel)),
-        stroke_w: 1.5,
-    });
-    cmds.push(DrawCommand::Circle {
-        cx,
-        cy,
-        r: r * 0.78,
-        stroke: Some(grid_soft),
-        fill: None,
-        stroke_w: 0.8,
-    });
-    // Graduación: ticks cada grado del dial (90), mayores cada 15°.
-    for d in 0..90 {
-        let ang = (d as f32 / 90.0 * 360.0 - 90.0).to_radians();
-        let major = d % 15 == 0;
-        let inner = if major { r * 0.86 } else { r * 0.93 };
-        cmds.push(DrawCommand::Line {
-            x1: cx + ang.cos() * inner,
-            y1: cy + ang.sin() * inner,
-            x2: cx + ang.cos() * r,
-            y2: cy + ang.sin() * r,
-            color: if major { grid } else { grid_soft },
-            width: if major { 1.2 } else { 0.5 },
-            dash: None,
-        });
-        if major {
-            cmds.push(DrawCommand::Text {
-                x: cx + ang.cos() * r * 0.7,
-                y: cy + ang.sin() * r * 0.7,
-                content: format!("{d}"),
-                color: grid,
-                size: 11.0,
-                anchor: TextAnchor::Middle,
-            });
-        }
-    }
-    // Cuerpos sobre el dial (longitud mod 90).
-    for (sym, deg) in natal_body_lons(render) {
-        let m90 = deg.rem_euclid(90.0);
-        let ang = (m90 / 90.0 * 360.0 - 90.0).to_radians();
-        let gx = cx + ang.cos() * r * 1.06;
-        let gy = cy + ang.sin() * r * 1.06;
-        cmds.push(DrawCommand::Line {
-            x1: cx + ang.cos() * r,
-            y1: cy + ang.sin() * r,
-            x2: cx + ang.cos() * r * 0.78,
-            y2: cy + ang.sin() * r * 0.78,
-            color: pal.aspect("conjunction"),
-            width: 1.0,
-            dash: None,
-        });
-        cmds.extend(planet_commands(&canon_glyph(&sym), gx, gy, size * 0.04, fg, 1.6));
-    }
-    cmds.push(DrawCommand::Text {
-        x: cx,
-        y: cy,
-        content: "90°".to_string(),
-        color: grid_soft,
-        size: 13.0,
-        anchor: TextAnchor::Middle,
-    });
-
+    let cmds = uranian_dial_cmds(
+        render,
+        size,
+        rgba_of(theme.fg_text),
+        rgba_of(theme.fg_muted),
+        rgba_of(theme.fg_destructive),
+        rgba_of(theme.bg_panel),
+    );
     custom_canvas(model, cmds, size, theme, fill)
 }
 
