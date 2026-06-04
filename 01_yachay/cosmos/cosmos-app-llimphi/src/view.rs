@@ -190,13 +190,6 @@ fn body_lons(render: &RenderModel) -> HashMap<String, f32> {
 // =====================================================================
 
 pub(crate) fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
-    tile_carta_opts(model, theme, true)
-}
-
-/// Igual que `tile_carta` pero permite omitir la sección «Ángulos»
-/// (Asc/MC/Dc/IC). La hoja imprimible la oculta para ganar altura y que la
-/// rueda + tabla de aspectos quepan en una hoja estándar.
-pub(crate) fn tile_carta_opts(model: &Model, theme: &Theme, with_angles: bool) -> View<Msg> {
     let bd = &model.chart.birth_data;
     let lugar = bd
         .birthplace_label
@@ -220,33 +213,31 @@ pub(crate) fn tile_carta_opts(model: &Model, theme: &Theme, with_angles: bool) -
     );
 
     let r = &model.render;
+    let angles = [
+        ("Asc", r.ascendant_deg),
+        ("MC", r.midheaven_deg),
+        ("Dc", r.descendant_deg),
+        ("IC", r.imum_coeli_deg),
+    ];
     let mut rows: Vec<View<Msg>> = vec![
         line(model.chart.label.clone(), 14.0, theme.fg_text),
         line(lugar, 11.0, theme.fg_muted),
         line(fecha, 11.0, theme.fg_muted),
         line(lat_long, 11.0, theme.fg_muted),
+        section_label("Ángulos".to_string(), theme),
     ];
-    if with_angles {
-        let angles = [
-            ("Asc", r.ascendant_deg),
-            ("MC", r.midheaven_deg),
-            ("Dc", r.descendant_deg),
-            ("IC", r.imum_coeli_deg),
-        ];
-        rows.push(section_label("Ángulos".to_string(), theme));
-        for (name, deg) in angles {
-            rows.push(cells_row(vec![
-                txt_cell(name.to_string(), 32.0, 12.0, theme.fg_text, Alignment::Start),
-                txt_cell(
-                    fmt_dms((deg.rem_euclid(30.0)) as f64),
-                    56.0,
-                    12.0,
-                    theme.fg_muted,
-                    Alignment::Start,
-                ),
-                glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
-            ]));
-        }
+    for (name, deg) in angles {
+        rows.push(cells_row(vec![
+            txt_cell(name.to_string(), 32.0, 12.0, theme.fg_text, Alignment::Start),
+            txt_cell(
+                fmt_dms((deg.rem_euclid(30.0)) as f64),
+                56.0,
+                12.0,
+                theme.fg_muted,
+                Alignment::Start,
+            ),
+            glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
+        ]));
     }
     tile_container(rows, theme)
 }
@@ -305,14 +296,11 @@ fn sorted_pair(a: &str, b: &str) -> (String, String) {
     }
 }
 
-/// Tabla unificada de aspectos: geocéntrico (módulo `natal`) y
-/// topocéntrico (módulo `topocentric`) en la misma grilla, con la
-/// diferencia de orbe entre ambos y los glyphs del aspecto, los cuerpos
-/// y sus signos.
-pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
-    let lons = body_lons(render);
+/// Pares (cuerpos, aspecto) unificados geo+topo y ordenados por intensidad
+/// (el orbe más cerrado primero). Base común de la tabla en pantalla y de
+/// la versión a dos columnas de la hoja imprimible.
+fn asp_rows_sorted(render: &RenderModel) -> Vec<AspRow> {
     let mut map: HashMap<(String, String, String), AspRow> = HashMap::new();
-
     for a in &render.aspect_summary {
         let topo = a.module_id == "topocentric";
         if !topo && a.module_id != "natal" {
@@ -335,25 +323,18 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
             row.applying = a.applying;
         }
     }
-
     let mut rows: Vec<AspRow> = map.into_values().collect();
-    // Orden por intensidad: el orbe más cerrado (aspecto más exacto y
-    // fuerte) primero, sin importar mayor/menor.
     rows.sort_by(|a, b| {
         let oa = a.geo.or(a.topo).unwrap_or(99.0);
         let ob = b.geo.or(b.topo).unwrap_or(99.0);
         oa.partial_cmp(&ob).unwrap_or(std::cmp::Ordering::Equal)
     });
+    rows
+}
 
-    if rows.is_empty() {
-        return tile_container(
-            vec![line(rimay_localize::t("cosmos-empty"), 12.0, theme.fg_muted)],
-            theme,
-        );
-    }
-
-    // Cabecera de columnas.
-    let header = View::new(Style {
+/// Cabecera de columnas de la tabla de aspectos en pantalla.
+fn asp_header(theme: &Theme) -> View<Msg> {
+    View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
@@ -375,44 +356,249 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
         txt_cell("geo".to_string(), 46.0, 10.0, theme.fg_muted, Alignment::Start),
         txt_cell("topo".to_string(), 46.0, 10.0, theme.fg_muted, Alignment::Start),
         txt_cell("Δ".to_string(), 40.0, 10.0, theme.fg_muted, Alignment::Start),
-    ]);
+    ])
+}
 
+/// Una fila completa de la tabla de aspectos en pantalla (alto `ROW_H`).
+fn asp_row_view(row: &AspRow, lons: &HashMap<String, f32>, theme: &Theme) -> View<Msg> {
+    let orb = row.geo.or(row.topo).unwrap_or(8.0);
+    let intensity = (1.0 - orb / 8.0).clamp(0.15, 1.0) as f32;
+    let geo = row.geo.map(fmt_dms).unwrap_or_else(|| "—".to_string());
+    let topo = row.topo.map(fmt_dms).unwrap_or_else(|| "—".to_string());
+    let diff = match (row.geo, row.topo) {
+        (Some(g), Some(t)) => format!("{:+.0}'", (t - g) * 60.0),
+        _ => "—".to_string(),
+    };
+    let dir = match row.applying {
+        Some(true) => glyphs::icon_view(glyphs::Icon::Applying, 12.0, theme.fg_muted),
+        Some(false) => glyphs::icon_view(glyphs::Icon::Separating, 12.0, theme.fg_muted),
+        None => txt_cell(String::new(), 12.0, 10.0, theme.fg_muted, Alignment::Center),
+    };
+    let orb_col = if intensity > 0.55 { theme.fg_text } else { theme.fg_muted };
+    cells_row(vec![
+        intensity_bar(&row.kind, intensity),
+        glyphs::aspect_view(&row.kind, GLYPH),
+        body_sign(&row.from, lons.get(&row.from).copied(), theme),
+        body_sign(&row.to, lons.get(&row.to).copied(), theme),
+        txt_cell(geo, 46.0, 11.0, orb_col, Alignment::Start),
+        txt_cell(topo, 46.0, 11.0, orb_col, Alignment::Start),
+        txt_cell(diff, 40.0, 11.0, theme.fg_muted, Alignment::Start),
+        dir,
+    ])
+}
+
+/// Tabla unificada de aspectos: geocéntrico (módulo `natal`) y
+/// topocéntrico (módulo `topocentric`) en la misma grilla, con la
+/// diferencia de orbe entre ambos y los glyphs del aspecto, los cuerpos
+/// y sus signos.
+pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
+    let lons = body_lons(render);
+    let rows = asp_rows_sorted(render);
+    if rows.is_empty() {
+        return tile_container(
+            vec![line(rimay_localize::t("cosmos-empty"), 12.0, theme.fg_muted)],
+            theme,
+        );
+    }
     let mut out: Vec<View<Msg>> = Vec::with_capacity(rows.len() + 1);
-    out.push(header);
+    out.push(asp_header(theme));
     for row in rows.into_iter().take(60) {
-        let orb = row.geo.or(row.topo).unwrap_or(8.0);
-        let intensity = (1.0 - orb / 8.0).clamp(0.15, 1.0) as f32;
-        let geo = row
-            .geo
-            .map(fmt_dms)
-            .unwrap_or_else(|| "—".to_string());
-        let topo = row
-            .topo
-            .map(fmt_dms)
-            .unwrap_or_else(|| "—".to_string());
-        let diff = match (row.geo, row.topo) {
-            (Some(g), Some(t)) => format!("{:+.0}'", (t - g) * 60.0),
-            _ => "—".to_string(),
-        };
-        let dir = match row.applying {
-            Some(true) => glyphs::icon_view(glyphs::Icon::Applying, 12.0, theme.fg_muted),
-            Some(false) => glyphs::icon_view(glyphs::Icon::Separating, 12.0, theme.fg_muted),
-            None => txt_cell(String::new(), 12.0, 10.0, theme.fg_muted, Alignment::Center),
-        };
-        // Texto del orbe a más contraste cuanto más fuerte el aspecto.
-        let orb_col = if intensity > 0.55 { theme.fg_text } else { theme.fg_muted };
-        out.push(cells_row(vec![
+        out.push(asp_row_view(&row, &lons, theme));
+    }
+    tile_container(out, theme)
+}
+
+// =====================================================================
+// Variantes compactas para la hoja imprimible
+// =====================================================================
+
+/// Alto de fila compacto de la hoja (aspectos y ángulos), apretado para
+/// que rueda + aspectos quepan en una hoja tamaño carta.
+const PRINT_ROW_H: f32 = 14.0;
+
+/// Una fila horizontal de celdas con alto arbitrario (para las tablas
+/// compactas de la hoja imprimible).
+fn cells_row_h(cells: Vec<View<Msg>>, h: f32) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(h),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(3.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(cells)
+}
+
+/// Columna vertical de ancho fijo y fondo transparente, para los bloques
+/// que van en las esquinas de la hoja (datos, ángulos).
+fn vstack_fixed(children: Vec<View<Msg>>, w: f32) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(w),
+            height: Dimension::auto(),
+        },
+        flex_shrink: 0.0,
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(children)
+}
+
+/// Bloque compacto de datos de nacimiento (nombre + lugar + fecha +
+/// coordenadas) para la esquina superior izquierda de la hoja.
+pub(crate) fn print_birth_block(chart: &cosmos_model::Chart, theme: &Theme) -> View<Msg> {
+    let bd = &chart.birth_data;
+    let lugar = bd
+        .birthplace_label
+        .clone()
+        .unwrap_or_else(|| "(sin lugar)".into());
+    let fecha = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC{:+}",
+        bd.year,
+        bd.month,
+        bd.day,
+        bd.hour,
+        bd.minute,
+        bd.tz_offset_minutes as f32 / 60.0
+    );
+    let lat_long = format!(
+        "{:.4}°{} · {:.4}°{}",
+        bd.latitude_deg.abs(),
+        if bd.latitude_deg >= 0.0 { "N" } else { "S" },
+        bd.longitude_deg.abs(),
+        if bd.longitude_deg >= 0.0 { "E" } else { "W" }
+    );
+    let label = if chart.label.is_empty() {
+        "Carta natal".to_string()
+    } else {
+        chart.label.clone()
+    };
+    vstack_fixed(
+        vec![
+            line(label, 13.0, theme.fg_text),
+            line(lugar, 10.0, theme.fg_muted),
+            line(fecha, 10.0, theme.fg_muted),
+            line(lat_long, 10.0, theme.fg_muted),
+        ],
+        170.0,
+    )
+}
+
+/// Bloque compacto de ángulos (Asc/MC/Dc/IC) para la esquina superior
+/// derecha de la hoja.
+pub(crate) fn print_angles_block(render: &RenderModel, theme: &Theme) -> View<Msg> {
+    let r = render;
+    let angles = [
+        ("Asc", r.ascendant_deg),
+        ("MC", r.midheaven_deg),
+        ("Dc", r.descendant_deg),
+        ("IC", r.imum_coeli_deg),
+    ];
+    let mut rows: Vec<View<Msg>> = vec![line("Ángulos".to_string(), 11.0, theme.accent)];
+    for (name, deg) in angles {
+        rows.push(cells_row_h(
+            vec![
+                txt_cell(name.to_string(), 26.0, 11.0, theme.fg_text, Alignment::Start),
+                txt_cell(
+                    fmt_dms((deg.rem_euclid(30.0)) as f64),
+                    52.0,
+                    11.0,
+                    theme.fg_muted,
+                    Alignment::Start,
+                ),
+                glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
+            ],
+            PRINT_ROW_H,
+        ));
+    }
+    vstack_fixed(rows, 120.0)
+}
+
+/// Una fila compacta de aspecto para la hoja: barra de intensidad, glyph
+/// del aspecto, ambos cuerpos+signos y los orbes geo/topo. Sin Δ ni
+/// dirección — la hoja prioriza encajar más filas.
+fn asp_row_view_compact(row: &AspRow, lons: &HashMap<String, f32>, theme: &Theme) -> View<Msg> {
+    let orb = row.geo.or(row.topo).unwrap_or(8.0);
+    let intensity = (1.0 - orb / 8.0).clamp(0.15, 1.0) as f32;
+    let geo = row.geo.map(fmt_dms).unwrap_or_else(|| "—".to_string());
+    let topo = row.topo.map(fmt_dms).unwrap_or_else(|| "—".to_string());
+    let orb_col = if intensity > 0.55 { theme.fg_text } else { theme.fg_muted };
+    cells_row_h(
+        vec![
             intensity_bar(&row.kind, intensity),
             glyphs::aspect_view(&row.kind, GLYPH),
             body_sign(&row.from, lons.get(&row.from).copied(), theme),
             body_sign(&row.to, lons.get(&row.to).copied(), theme),
-            txt_cell(geo, 46.0, 11.0, orb_col, Alignment::Start),
-            txt_cell(topo, 46.0, 11.0, orb_col, Alignment::Start),
-            txt_cell(diff, 40.0, 11.0, theme.fg_muted, Alignment::Start),
-            dir,
-        ]));
+            txt_cell(geo, 40.0, 10.0, orb_col, Alignment::Start),
+            txt_cell(topo, 40.0, 10.0, orb_col, Alignment::Start),
+        ],
+        PRINT_ROW_H,
+    )
+}
+
+/// Tabla de aspectos de la hoja imprimible repartida en dos columnas: los
+/// aspectos más fuertes a la izquierda, el resto a la derecha. Filas
+/// compactas para apretar el máximo en una hoja tamaño carta.
+pub(crate) fn tile_aspectos_print(render: &RenderModel, theme: &Theme) -> View<Msg> {
+    let lons = body_lons(render);
+    let rows = asp_rows_sorted(render);
+    if rows.is_empty() {
+        return line(rimay_localize::t("cosmos-empty"), 11.0, theme.fg_muted);
     }
-    tile_container(out, theme)
+    // Tope para no desbordar la hoja: ~17 por columna.
+    let rows: Vec<AspRow> = rows.into_iter().take(34).collect();
+    let mid = rows.len().div_ceil(2);
+    let mut left: Vec<View<Msg>> = Vec::new();
+    let mut right: Vec<View<Msg>> = Vec::new();
+    for (i, row) in rows.iter().enumerate() {
+        let v = asp_row_view_compact(row, &lons, theme);
+        if i < mid {
+            left.push(v);
+        } else {
+            right.push(v);
+        }
+    }
+    let col = |children: Vec<View<Msg>>| {
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size {
+                width: percent(0.5_f32),
+                height: Dimension::auto(),
+            },
+            flex_shrink: 1.0,
+            gap: Size {
+                width: length(0.0_f32),
+                height: length(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(children)
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_shrink: 0.0,
+        gap: Size {
+            width: length(14.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![col(left), col(right)])
 }
 
 /// Color del aspecto (paleta oscura) con la opacidad dada.

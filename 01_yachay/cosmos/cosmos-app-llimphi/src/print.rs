@@ -245,4 +245,20 @@ mod tests {
             .any(|px| px[0] < 200 && px[1] < 200 && px[2] < 200);
         assert!(any_dark, "la imagen salió toda blanca — el texto no pintó");
     }
+
+    /// Rasteriza la HOJA real (carta de ejemplo) a `/tmp/cosmos-hoja-test.png`
+    /// para inspeccionar la maqueta a ojo. Requiere GPU; correr con:
+    /// `cargo test -p cosmos-app-llimphi hoja_de_ejemplo -- --ignored --nocapture`
+    #[test]
+    #[ignore = "necesita GPU/headless wgpu; genera PNG para inspección"]
+    fn hoja_de_ejemplo_a_png() {
+        let chart = crate::engine::sample_chart();
+        let (render, _err) = crate::engine::compute(&chart, &[], 1, false, 0);
+        let cfg = crate::model::CosmosConfig::default();
+        let view = crate::chrome::print_page(&chart, &render, &cfg);
+        let png = render_view_to_png(view, SHEET_LOGICAL_W, SCALE).expect("render hoja");
+        let path = std::env::temp_dir().join("cosmos-hoja-test.png");
+        std::fs::write(&path, &png).expect("escribir png");
+        eprintln!("hoja escrita en {path:?} ({} bytes)", png.len());
+    }
 }

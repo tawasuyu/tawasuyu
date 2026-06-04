@@ -42,7 +42,8 @@ use crate::glyphs::{self, Icon};
 use crate::library::{ChartKind, NavKind, NavNode};
 use crate::model::MenuKind;
 use crate::model::{
-    ChartView, DockItem, DockSide, Model, Msg, OverlayKind, ToolCat, WheelOpt, DOCK_COLLAPSE_W,
+    ChartView, CosmosConfig, DockItem, DockSide, Model, Msg, OverlayKind, ToolCat, WheelOpt,
+    DOCK_COLLAPSE_W,
     HARMONICS, MENU_BAR_H, MENU_BTN_W, STATUS_H, TAB_BAR_H, TOOLS_RAIL_W, VIEWPORT, WHEEL_SIZE,
 };
 use crate::view;
@@ -1026,22 +1027,26 @@ fn graphic_for(
 // =====================================================================
 
 /// Lado del lienzo de la rueda en la hoja imprimible (px lógicos).
-const PRINT_WHEEL: f32 = 460.0;
+const PRINT_WHEEL: f32 = 430.0;
 /// Ancho de la hoja imprimible (px lógicos).
 const PRINT_SHEET_W: f32 = 600.0;
+/// Alto de la hoja imprimible: proporción tamaño carta (8.5 × 11"), o sea
+/// 11/8.5 ≈ 1.294 del ancho → 600 × 1.294 ≈ 776 px. Se usa como mínimo: la
+/// hoja siempre llena un papel carta, y crece sólo si los aspectos no caben.
+const PRINT_SHEET_H: f32 = 776.0;
 
 /// La rueda natal estándar para la hoja: paleta clara sobre papel blanco,
 /// sin zoom/paneo ni interactividad (es para imprimir). Caja fija de lado
 /// `size`, centrada horizontalmente.
-fn print_wheel(model: &Model, render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
+fn print_wheel(cfg: &CosmosConfig, render: &cosmos_render::RenderModel, size: f32) -> View<Msg> {
     let opts = CompositionOpts {
         size,
-        rot_offset_deg: model.cfg.rot_offset_deg,
+        rot_offset_deg: cfg.rot_offset_deg,
         include_bodies: true,
         palette: Palette::light(),
-        draw_ascensional_cross: model.cfg.asc_cross,
-        show_coord_labels: model.cfg.coord_labels,
-        show_minor_aspects: model.cfg.minor_aspects,
+        draw_ascensional_cross: cfg.asc_cross,
+        show_coord_labels: cfg.coord_labels,
+        show_minor_aspects: cfg.minor_aspects,
         dial_3d: false,
         selected_body: None,
         detail: 1.0,
@@ -1081,35 +1086,80 @@ fn print_wheel(model: &Model, render: &cosmos_render::RenderModel, size: f32) ->
 /// así que la impresión tiene la fidelidad de la pantalla. Usa siempre el
 /// tema «Print» (B/N) sin importar el tema de la app: el papel es blanco.
 pub(crate) fn print_page_content(model: &Model) -> View<Msg> {
+    print_page(&model.chart, &model.render, &model.cfg)
+}
+
+/// Arma el árbol de la hoja imprimible a partir de sus datos crudos (carta,
+/// render, config). Separado de `print_page_content` para poder rasterizarlo
+/// en un test sin un `Model` completo.
+pub(crate) fn print_page(
+    chart: &cosmos_model::Chart,
+    render: &cosmos_render::RenderModel,
+    cfg: &CosmosConfig,
+) -> View<Msg> {
     let theme = Theme::print();
-    // Sin título grande ni sección de ángulos: la etiqueta de la carta ya
-    // aparece como primera línea de `tile_carta`, y omitir ambos sube la
-    // rueda para que rueda + aspectos quepan en una hoja estándar.
+    // Maqueta apretada en proporción tamaño carta: la rueda arriba (ocupa
+    // casi todo el ancho), los datos de nacimiento y los ángulos flotando
+    // sobre sus esquinas superiores vacías (el círculo deja triángulos
+    // libres), y la tabla de aspectos repartida en dos columnas abajo.
+    let pad = 22.0_f32;
+    // Datos de nacimiento: esquina superior izquierda, absoluto.
+    let birth = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![view::print_birth_block(chart, &theme)]);
+    // Ángulos: esquina superior derecha, absoluto.
+    let angles = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            left: auto(),
+            bottom: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![view::print_angles_block(render, &theme)]);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: length(PRINT_SHEET_W),
             height: auto(),
         },
+        // Mínimo = hoja carta completa; crece sólo si los aspectos rebasan.
+        min_size: Size {
+            width: length(PRINT_SHEET_W),
+            height: length(PRINT_SHEET_H),
+        },
         flex_shrink: 0.0,
         padding: Rect {
-            left: length(28.0),
-            right: length(28.0),
-            top: length(24.0),
-            bottom: length(24.0),
+            left: length(pad),
+            right: length(pad),
+            top: length(pad),
+            bottom: length(pad),
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(10.0_f32),
+            height: length(6.0_f32),
         },
         ..Default::default()
     })
     .fill(theme.bg_app)
     .children(vec![
-        view::tile_carta_opts(model, &theme, false),
-        print_wheel(model, &model.render, PRINT_WHEEL),
+        // Rueda pegada arriba; los bloques de esquina la solapan.
+        print_wheel(cfg, render, PRINT_WHEEL),
         view::section_label("Aspectos".to_string(), &theme),
-        view::tile_aspectos(&model.render, &theme),
+        view::tile_aspectos_print(render, &theme),
+        birth,
+        angles,
     ])
 }
 
