@@ -818,6 +818,37 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "grid-auto-columns" => parse_grid_template(value).map(DeclKind::GridAutoColumns),
         // Fase 7.443 — `grid-auto-rows` (CSS Grid 1). NO hereda.
         "grid-auto-rows" => parse_grid_template(value).map(DeclKind::GridAutoRows),
+        // Fase 7.444 — `shape-outside` (CSS Shapes 1). Parse opaco (igual que
+        // offset-path) — guardamos el valor crudo. NO hereda.
+        "shape-outside" => {
+            let raw = value.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+                Some(DeclKind::ShapeOutside(None))
+            } else {
+                Some(DeclKind::ShapeOutside(Some(raw.to_string())))
+            }
+        }
+        // Fase 7.445 — `shape-margin` (CSS Shapes 1). `<length-or-pct>`
+        // no-negativo. NO hereda.
+        "shape-margin" => {
+            let v = parse_length_or_pct(value)?;
+            match v {
+                LengthVal::Px(n) if n < 0.0 => None,
+                LengthVal::Pct(n) if n < 0.0 => None,
+                _ => Some(DeclKind::ShapeMargin(v)),
+            }
+        }
+        // Fase 7.446 — `shape-image-threshold` (CSS Shapes 1). Alpha [0..1].
+        // Acepta también porcentaje (50% → 0.5). NO hereda.
+        "shape-image-threshold" => {
+            parse_alpha_value(value).map(DeclKind::ShapeImageThreshold)
+        }
+        // Fase 7.447 — `text-combine-upright` (CSS Writing Modes 3). NO hereda.
+        "text-combine-upright" => {
+            parse_text_combine_upright(value).map(DeclKind::TextCombineUpright)
+        }
+        // Fase 7.448 — `ruby-align` (CSS Ruby 1). HEREDA.
+        "ruby-align" => parse_ruby_align(value).map(DeclKind::RubyAlign),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -3916,6 +3947,48 @@ pub(crate) fn parse_text_size_adjust(value: &str) -> Option<TextSizeAdjust> {
         return num.trim().parse::<f32>().ok().map(TextSizeAdjust::Pct);
     }
     None
+}
+
+/// `<alpha-value>`: `<number>` clamp [0..1] o `<pct>` (50% → 0.5). CSS Color 4.
+/// Fase 7.446.
+pub(crate) fn parse_alpha_value(value: &str) -> Option<f32> {
+    let v = value.trim();
+    if let Some(num) = v.strip_suffix('%') {
+        let n: f32 = num.trim().parse().ok()?;
+        return Some((n / 100.0).clamp(0.0, 1.0));
+    }
+    let n: f32 = v.parse().ok()?;
+    Some(n.clamp(0.0, 1.0))
+}
+
+/// `text-combine-upright: none | all | digits <integer>?`. CSS Writing Modes 3.
+/// `digits` sin entero usa 2 (default del spec). Fase 7.447.
+pub(crate) fn parse_text_combine_upright(value: &str) -> Option<TextCombineUpright> {
+    let toks: Vec<String> = value
+        .trim()
+        .split_whitespace()
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let refs: Vec<&str> = toks.iter().map(|s| s.as_str()).collect();
+    match refs.as_slice() {
+        ["none"] => Some(TextCombineUpright::None),
+        ["all"] => Some(TextCombineUpright::All),
+        ["digits"] => Some(TextCombineUpright::Digits(2)),
+        ["digits", n] => n.parse().ok().map(TextCombineUpright::Digits),
+        _ => None,
+    }
+}
+
+/// `ruby-align: start | center | space-between | space-around`. CSS Ruby 1.
+/// Fase 7.448.
+pub(crate) fn parse_ruby_align(value: &str) -> Option<RubyAlign> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "start" => Some(RubyAlign::Start),
+        "center" => Some(RubyAlign::Center),
+        "space-between" => Some(RubyAlign::SpaceBetween),
+        "space-around" => Some(RubyAlign::SpaceAround),
+        _ => None,
+    }
 }
 
 /// `background-position-x: left | center | right | <length-or-pct>`. Sólo

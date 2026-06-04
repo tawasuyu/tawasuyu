@@ -719,6 +719,19 @@ pub struct ComputedStyle {
     /// `grid-auto-rows` (Fase 7.443). Lista de tracks implícitos
     /// (CSS Grid 1). Vacío = `auto`. NO hereda. Plumb.
     pub grid_auto_rows: Vec<GridTrackSize>,
+    /// `shape-outside` (Fase 7.444). `None` = `none`; `Some(s)` guarda
+    /// el valor crudo (parse opaco, igual que `offset-path`). NO hereda. Plumb.
+    pub shape_outside: Option<String>,
+    /// `shape-margin` (Fase 7.445). `<length-or-pct>` no-negativo. Default
+    /// `Px(0)`. NO hereda. Plumb.
+    pub shape_margin: LengthVal,
+    /// `shape-image-threshold` (Fase 7.446). `<alpha-value>` clamp [0..1].
+    /// Default `0.0`. NO hereda. Plumb.
+    pub shape_image_threshold: f32,
+    /// `text-combine-upright` (Fase 7.447). Default `None`. NO hereda. Plumb.
+    pub text_combine_upright: TextCombineUpright,
+    /// `ruby-align` (Fase 7.448). Default `SpaceAround`. HEREDA. Plumb.
+    pub ruby_align: RubyAlign,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2228,6 +2241,29 @@ pub enum FontVariantEmoji {
     Unicode,
 }
 
+/// `text-combine-upright` (CSS Writing Modes 3). Combina caracteres
+/// horizontales en un cuadrado en escritura vertical. Default `None`.
+/// NO hereda. Fase 7.447.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextCombineUpright {
+    #[default]
+    None,
+    All,
+    /// `digits <integer>?` (default 2). `0` = sin combinar dígitos.
+    Digits(u32),
+}
+
+/// `ruby-align` (CSS Ruby 1). Distribución del texto de ruby contra la
+/// base. Default `SpaceAround`. HEREDA. Fase 7.448.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RubyAlign {
+    Start,
+    Center,
+    SpaceBetween,
+    #[default]
+    SpaceAround,
+}
+
 /// `grid-auto-flow` (CSS Grid 1). Cómo se colocan los ítems implícitos.
 /// Default `Row`. NO hereda. Fase 7.441.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -3355,6 +3391,11 @@ impl Default for ComputedStyle {
             grid_auto_flow: GridAutoFlow::Row,
             grid_auto_columns: Vec::new(),
             grid_auto_rows: Vec::new(),
+            shape_outside: None,
+            shape_margin: LengthVal::Px(0.0),
+            shape_image_threshold: 0.0,
+            text_combine_upright: TextCombineUpright::None,
+            ruby_align: RubyAlign::SpaceAround,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

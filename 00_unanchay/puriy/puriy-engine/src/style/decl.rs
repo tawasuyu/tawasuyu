@@ -444,6 +444,16 @@ pub(crate) enum DeclKind {
     GridAutoColumns(Vec<GridTrackSize>),
     /// `grid-auto-rows` (Fase 7.443). NO hereda. Plumb.
     GridAutoRows(Vec<GridTrackSize>),
+    /// `shape-outside` (Fase 7.444). `None` = `none`. NO hereda. Plumb.
+    ShapeOutside(Option<String>),
+    /// `shape-margin` (Fase 7.445). NO hereda. Plumb.
+    ShapeMargin(LengthVal),
+    /// `shape-image-threshold` (Fase 7.446). Clamp [0..1]. NO hereda. Plumb.
+    ShapeImageThreshold(f32),
+    /// `text-combine-upright` (Fase 7.447). NO hereda. Plumb.
+    TextCombineUpright(TextCombineUpright),
+    /// `ruby-align` (Fase 7.448). HEREDA. Plumb.
+    RubyAlign(RubyAlign),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -806,6 +816,11 @@ impl Decl {
             DeclKind::GridAutoFlow(f) => s.grid_auto_flow = *f,
             DeclKind::GridAutoColumns(t) => s.grid_auto_columns = t.clone(),
             DeclKind::GridAutoRows(t) => s.grid_auto_rows = t.clone(),
+            DeclKind::ShapeOutside(o) => s.shape_outside = o.clone(),
+            DeclKind::ShapeMargin(m) => s.shape_margin = *m,
+            DeclKind::ShapeImageThreshold(t) => s.shape_image_threshold = *t,
+            DeclKind::TextCombineUpright(t) => s.text_combine_upright = *t,
+            DeclKind::RubyAlign(r) => s.ruby_align = *r,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

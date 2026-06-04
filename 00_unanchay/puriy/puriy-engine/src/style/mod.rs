@@ -283,6 +283,7 @@ impl StyleEngine {
             style.text_emphasis_color = p.text_emphasis_color;
             style.text_emphasis_position = p.text_emphasis_position;
             style.ruby_position = p.ruby_position;
+            style.ruby_align = p.ruby_align;
             // CSS Scrollbars 1 — scrollbar-width y scrollbar-color heredan.
             // scrollbar-gutter (CSS Overflow 3), overflow-anchor (CSS Scroll
             // Anchoring 1) y overflow-clip-margin (CSS Overflow 4) NO heredan.
@@ -7370,6 +7371,94 @@ mod tests {
         assert_eq!(cs_d.scroll_margin.left, 15.0);
         // Lados no tocados quedan en default (0).
         assert_eq!(cs_d.scroll_margin.right, 0.0);
+    }
+
+    #[test]
+    fn shapes_text_combine_ruby_align_fase_7_444_448() {
+        // Cinco props: shape-outside (opaco), shape-margin, shape-image-threshold,
+        // text-combine-upright (NO heredan), ruby-align (HEREDA).
+
+        // 1) Parsers de cabecera.
+        assert_eq!(parse_alpha_value("0.5"), Some(0.5));
+        assert_eq!(parse_alpha_value("75%"), Some(0.75));
+        assert_eq!(parse_alpha_value("1.5"), Some(1.0)); // clamp
+        assert_eq!(parse_alpha_value("-0.3"), Some(0.0)); // clamp
+        assert_eq!(parse_alpha_value("nope"), None);
+        assert_eq!(
+            parse_text_combine_upright("none"),
+            Some(TextCombineUpright::None)
+        );
+        assert_eq!(
+            parse_text_combine_upright("ALL"),
+            Some(TextCombineUpright::All)
+        );
+        assert_eq!(
+            parse_text_combine_upright("digits"),
+            Some(TextCombineUpright::Digits(2))
+        );
+        assert_eq!(
+            parse_text_combine_upright("digits 4"),
+            Some(TextCombineUpright::Digits(4))
+        );
+        assert_eq!(parse_text_combine_upright("digits nope"), None);
+        assert_eq!(parse_ruby_align("start"), Some(RubyAlign::Start));
+        assert_eq!(
+            parse_ruby_align("SPACE-BETWEEN"),
+            Some(RubyAlign::SpaceBetween)
+        );
+        assert_eq!(parse_ruby_align("nope"), None);
+
+        // 2) E2E.
+        let html = r##"<html><head><style>
+            body {
+                shape-outside: circle(50%);
+                shape-margin: 12px;
+                shape-image-threshold: 0.4;
+                text-combine-upright: digits 3;
+                ruby-align: center
+            }
+            #hijo {}
+            #override { shape-margin: 50%; ruby-align: start }
+        </style></head><body>
+            <div id="hijo"></div>
+            <div id="override"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut hijos = Vec::new();
+        let mut overrides = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+            if crate::dom::attr(n, "id").as_deref() == Some("hijo") {
+                hijos.push(n.clone());
+            }
+            if crate::dom::attr(n, "id").as_deref() == Some("override") {
+                overrides.push(n.clone());
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.shape_outside.as_deref(), Some("circle(50%)"));
+        assert_eq!(body_cs.shape_margin, LengthVal::Px(12.0));
+        assert!((body_cs.shape_image_threshold - 0.4).abs() < 1e-5);
+        assert_eq!(
+            body_cs.text_combine_upright,
+            TextCombineUpright::Digits(3)
+        );
+        assert_eq!(body_cs.ruby_align, RubyAlign::Center);
+        // Hijo: shape-* y text-combine-upright NO heredan; ruby-align SÍ.
+        let hijo_cs = eng.compute_with_parent(&hijos[0], Some(&body_cs));
+        assert_eq!(hijo_cs.shape_outside, None);
+        assert_eq!(hijo_cs.shape_margin, LengthVal::Px(0.0));
+        assert_eq!(hijo_cs.shape_image_threshold, 0.0);
+        assert_eq!(hijo_cs.text_combine_upright, TextCombineUpright::None);
+        assert_eq!(hijo_cs.ruby_align, RubyAlign::Center);
+        // Override: cambia shape-margin (pct) y ruby-align.
+        let ov_cs = eng.compute_with_parent(&overrides[0], Some(&body_cs));
+        assert_eq!(ov_cs.shape_margin, LengthVal::Pct(50.0));
+        assert_eq!(ov_cs.ruby_align, RubyAlign::Start);
     }
 
     #[test]
