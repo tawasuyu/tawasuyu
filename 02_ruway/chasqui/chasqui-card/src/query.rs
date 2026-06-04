@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use ulid::Ulid;
 
-use crate::{Lens, MonadId, MonadManifest};
+use crate::{FileEntry, FileId, Lens, MonadId, MonadManifest};
 
 // =====================================================================
 // Constants compartidos para el broker brahman
@@ -50,6 +50,15 @@ pub enum QueryRequest {
     /// Lista todas las Mónadas vivas del daemon, junto con metadata
     /// del engine. Pensado para que la UI haga snapshot polling.
     ListMonads,
+    /// Resuelve los **archivos miembros** de una Mónada concreta. La vista
+    /// de `ListMonads` es slim (sin member set) para que el poll sea liviano;
+    /// cuando la UI despliega una Mónada en el navegador pide sus archivos
+    /// con esto, bajo demanda. nouser sigue siendo la fuente autoritativa de
+    /// qué archivos componen la Mónada (no el filesystem por su cuenta).
+    ResolveMonad {
+        /// La Mónada cuyos miembros se quieren.
+        id: MonadId,
+    },
 }
 
 // =====================================================================
@@ -116,6 +125,47 @@ impl MonadView {
     }
 }
 
+/// Vista slim de un archivo miembro de una Mónada — lo que la UI necesita
+/// para pintar una fila en el navegador. Omite el `content_hash` (32 bytes
+/// que no se muestran) para que el wire sea liviano.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileView {
+    pub id: FileId,
+    /// Ruta del archivo, como string (el wire es JSON; `PathBuf` viajaría
+    /// igual pero string es explícito y portable).
+    pub path: String,
+    #[serde(default)]
+    pub size: u64,
+    #[serde(default)]
+    pub extension: Option<String>,
+    #[serde(default)]
+    pub mtime_ms: u64,
+}
+
+impl FileView {
+    /// Proyecta un [`FileEntry`] a su vista slim para wire.
+    pub fn from_entry(f: &FileEntry) -> Self {
+        Self {
+            id: f.id,
+            path: f.path.display().to_string(),
+            size: f.size,
+            extension: f.extension.clone(),
+            mtime_ms: f.mtime_ms,
+        }
+    }
+}
+
+/// Response a [`QueryRequest::ResolveMonad`]: los archivos miembros de la
+/// Mónada pedida. `members` vacío si la Mónada no existe (o no tiene
+/// miembros resolubles) — el daemon no distingue, igual que `resolve_members`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveMonadResponse {
+    /// La Mónada consultada (eco del request, para que la UI confirme).
+    pub monad: MonadId,
+    /// Sus archivos miembros, en el orden que el daemon los entrega.
+    pub members: Vec<FileView>,
+}
+
 /// Error de protocolo retornado en lugar de la response normal.
 #[derive(Debug, Clone, Serialize, Deserialize, Error)]
 #[error("chasqui-engine: {error}")]
@@ -166,7 +216,9 @@ pub mod client {
     use std::path::Path;
     use std::time::Duration;
 
-    use super::{ErrorResponse, ListMonadsResponse, QueryRequest};
+    use serde::de::DeserializeOwned;
+
+    use super::{ErrorResponse, ListMonadsResponse, MonadId, QueryRequest, ResolveMonadResponse};
 
     #[derive(Debug, thiserror::Error)]
     pub enum QueryError {
@@ -186,12 +238,14 @@ pub mod client {
         Empty,
     }
 
-    /// Envía `ListMonads` al daemon en `socket` y devuelve la response.
-    /// `timeout` se aplica tanto al read como al write del stream.
-    pub fn list_monads(
+    /// Envía un `QueryRequest` al daemon en `socket` y deserializa la
+    /// response al tipo `R`. `timeout` se aplica al read y al write. Si el
+    /// daemon responde un `ErrorResponse`, se devuelve `QueryError::Daemon`.
+    fn request<R: DeserializeOwned>(
         socket: &Path,
+        req: &QueryRequest,
         timeout: Duration,
-    ) -> Result<ListMonadsResponse, QueryError> {
+    ) -> Result<R, QueryError> {
         let mut stream = UnixStream::connect(socket).map_err(|e| QueryError::Connect {
             path: socket.to_path_buf(),
             source: e,
@@ -199,8 +253,7 @@ pub mod client {
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
 
-        let req = QueryRequest::ListMonads;
-        let line = serde_json::to_string(&req)?;
+        let line = serde_json::to_string(req)?;
         stream.write_all(line.as_bytes())?;
         stream.write_all(b"\n")?;
         stream.flush()?;
@@ -212,11 +265,31 @@ pub mod client {
             return Err(QueryError::Empty);
         }
 
-        if let Ok(resp) = serde_json::from_str::<ListMonadsResponse>(response.trim()) {
+        if let Ok(resp) = serde_json::from_str::<R>(response.trim()) {
             return Ok(resp);
         }
         let err: ErrorResponse = serde_json::from_str(response.trim())?;
         Err(QueryError::Daemon(err.error))
+    }
+
+    /// Envía `ListMonads` al daemon en `socket` y devuelve la response.
+    /// `timeout` se aplica tanto al read como al write del stream.
+    pub fn list_monads(
+        socket: &Path,
+        timeout: Duration,
+    ) -> Result<ListMonadsResponse, QueryError> {
+        request(socket, &QueryRequest::ListMonads, timeout)
+    }
+
+    /// Pide los archivos miembros de la Mónada `id` al daemon en `socket`.
+    /// Para el nivel de archivos del navegador: la lista slim de `list_monads`
+    /// no los trae, se resuelven bajo demanda al desplegar una Mónada.
+    pub fn resolve_monad(
+        socket: &Path,
+        id: MonadId,
+        timeout: Duration,
+    ) -> Result<ResolveMonadResponse, QueryError> {
+        request(socket, &QueryRequest::ResolveMonad { id }, timeout)
     }
 }
 
@@ -231,6 +304,40 @@ mod tests {
         assert_eq!(s, r#"{"kind":"list_monads"}"#);
         let back: QueryRequest = serde_json::from_str(&s).unwrap();
         assert_eq!(back, req);
+    }
+
+    #[test]
+    fn resolve_monad_request_roundtrips_with_id() {
+        let id = Ulid::new();
+        let req = QueryRequest::ResolveMonad { id };
+        let s = serde_json::to_string(&req).unwrap();
+        assert!(s.contains(r#""kind":"resolve_monad""#), "{s}");
+        let back: QueryRequest = serde_json::from_str(&s).unwrap();
+        assert_eq!(back, req);
+    }
+
+    #[test]
+    fn resolve_monad_response_roundtrip() {
+        use crate::FileEntry;
+        use std::path::PathBuf;
+        let entry = FileEntry {
+            id: Ulid::new(),
+            path: PathBuf::from("/proj/src/lib.rs"),
+            content_hash: None,
+            size: 1234,
+            mtime_ms: 42,
+            extension: Some("rs".into()),
+        };
+        let resp = ResolveMonadResponse {
+            monad: Ulid::new(),
+            members: vec![FileView::from_entry(&entry)],
+        };
+        let s = serde_json::to_string(&resp).unwrap();
+        let back: ResolveMonadResponse = serde_json::from_str(&s).unwrap();
+        assert_eq!(back.members.len(), 1);
+        assert_eq!(back.members[0].path, "/proj/src/lib.rs");
+        assert_eq!(back.members[0].extension.as_deref(), Some("rs"));
+        assert_eq!(back.members[0].size, 1234);
     }
 
     #[test]

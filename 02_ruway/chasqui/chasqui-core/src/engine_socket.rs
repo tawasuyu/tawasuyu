@@ -19,8 +19,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use chasqui_card::query::{
-    EngineInfo, ErrorResponse, ListMonadsResponse, MonadView, QueryRequest,
+    EngineInfo, ErrorResponse, FileView, ListMonadsResponse, MonadView, QueryRequest,
+    ResolveMonadResponse,
 };
+use chasqui_card::MonadId;
 use chasqui_card::ulid::Ulid;
 
 use crate::db::MonadDb;
@@ -94,6 +96,10 @@ fn handle_conn(
             Ok(json) => json,
             Err(e) => encode_error(format!("list_monads falló: {e}")),
         },
+        Ok(QueryRequest::ResolveMonad { id }) => match handle_resolve_monad(db, id) {
+            Ok(json) => json,
+            Err(e) => encode_error(format!("resolve_monad falló: {e}")),
+        },
         Err(e) => encode_error(format!("JSON inválido: {e}")),
     };
 
@@ -118,6 +124,17 @@ fn handle_list_monads(
         },
         monads,
     };
+    serde_json::to_string(&resp).map_err(|e| format!("encode: {e}"))
+}
+
+fn handle_resolve_monad(db: &Arc<Mutex<MonadDb>>, id: MonadId) -> Result<String, String> {
+    let db_lock = db.lock().map_err(|_| "mutex envenenado".to_string())?;
+    let members: Vec<FileView> = db_lock
+        .resolve_members(id)
+        .into_iter()
+        .map(FileView::from_entry)
+        .collect();
+    let resp = ResolveMonadResponse { monad: id, members };
     serde_json::to_string(&resp).map_err(|e| format!("encode: {e}"))
 }
 
@@ -203,6 +220,65 @@ mod tests {
         let labels: Vec<_> = resp.monads.iter().map(|m| m.label.as_str()).collect();
         assert!(labels.contains(&"alpha"));
         assert!(labels.contains(&"beta"));
+
+        let _ = std::fs::remove_file(&socket);
+    }
+
+    #[test]
+    fn resolve_monad_returns_member_files() {
+        use chasqui_card::FileEntry;
+        use std::path::PathBuf;
+
+        let socket = fresh_socket_path("chasqui-engine-test-resolve");
+        let db = Arc::new(Mutex::new(MonadDb::new()));
+
+        // Dos archivos y una Mónada que los tiene de miembros.
+        let f1 = FileEntry {
+            id: Ulid::new(),
+            path: PathBuf::from("/proj/a.rs"),
+            content_hash: None,
+            size: 10,
+            mtime_ms: 1,
+            extension: Some("rs".into()),
+        };
+        let f2 = FileEntry {
+            id: Ulid::new(),
+            path: PathBuf::from("/proj/b.rs"),
+            content_hash: None,
+            size: 20,
+            mtime_ms: 2,
+            extension: Some("rs".into()),
+        };
+        let mut m = MonadManifest::new("proj");
+        m.members.insert(f1.id);
+        m.members.insert(f2.id);
+        m.cardinality = 2;
+        let monad_id = m.id;
+        {
+            let mut g = db.lock().unwrap();
+            g.ingest_files(vec![f1, f2]);
+            g.replace_monads(vec![m]);
+        }
+
+        let _h = spawn_listener(
+            ListenerConfig {
+                socket_path: socket.clone(),
+                engine_id: Ulid::new(),
+                engine_label: "test".into(),
+                watching: None,
+            },
+            db.clone(),
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(50));
+
+        let resp =
+            query_client::resolve_monad(&socket, monad_id, Duration::from_secs(2)).unwrap();
+        assert_eq!(resp.monad, monad_id);
+        assert_eq!(resp.members.len(), 2);
+        let paths: Vec<_> = resp.members.iter().map(|f| f.path.as_str()).collect();
+        assert!(paths.contains(&"/proj/a.rs"));
+        assert!(paths.contains(&"/proj/b.rs"));
 
         let _ = std::fs::remove_file(&socket);
     }
