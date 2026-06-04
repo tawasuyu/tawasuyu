@@ -804,6 +804,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "stroke-width" => {
             parse_length_or_pct(value).map(DeclKind::StrokeWidth)
         }
+        "stroke-linecap" => {
+            parse_stroke_linecap(value).map(DeclKind::StrokeLinecap)
+        }
+        "stroke-linejoin" => {
+            parse_stroke_linejoin(value).map(DeclKind::StrokeLinejoin)
+        }
+        "stroke-miterlimit" => {
+            parse_stroke_miterlimit(value).map(DeclKind::StrokeMiterlimit)
+        }
+        "stroke-dasharray" => {
+            parse_stroke_dasharray(value).map(DeclKind::StrokeDasharray)
+        }
+        "stroke-dashoffset" => {
+            parse_length_or_pct(value).map(DeclKind::StrokeDashoffset)
+        }
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
@@ -3297,6 +3312,59 @@ pub(crate) fn parse_svg_paint(value: &str) -> Option<SvgPaint> {
         return None;
     }
     parse_color(v).map(SvgPaint::Color)
+}
+
+/// `stroke-linecap`: `butt | round | square`. Fase 7.374.
+pub(crate) fn parse_stroke_linecap(value: &str) -> Option<StrokeLinecap> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "butt" => Some(StrokeLinecap::Butt),
+        "round" => Some(StrokeLinecap::Round),
+        "square" => Some(StrokeLinecap::Square),
+        _ => None,
+    }
+}
+
+/// `stroke-linejoin`: `miter | round | bevel | arcs | miter-clip`.
+/// Fase 7.375.
+pub(crate) fn parse_stroke_linejoin(value: &str) -> Option<StrokeLinejoin> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "miter" => Some(StrokeLinejoin::Miter),
+        "round" => Some(StrokeLinejoin::Round),
+        "bevel" => Some(StrokeLinejoin::Bevel),
+        "arcs" => Some(StrokeLinejoin::Arcs),
+        "miter-clip" => Some(StrokeLinejoin::MiterClip),
+        _ => None,
+    }
+}
+
+/// `stroke-miterlimit`: número >= 1. Fase 7.376.
+pub(crate) fn parse_stroke_miterlimit(value: &str) -> Option<f32> {
+    let n: f32 = value.trim().parse().ok()?;
+    if !n.is_finite() || n < 1.0 {
+        return None;
+    }
+    Some(n)
+}
+
+/// `stroke-dasharray`: `none | <length-percentage>+` separados por
+/// espacios o comas. Fase 7.377.
+pub(crate) fn parse_stroke_dasharray(value: &str) -> Option<Vec<LengthVal>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for tok in v.split(|c: char| c == ',' || c.is_whitespace()) {
+        if tok.is_empty() {
+            continue;
+        }
+        let l = parse_length_or_pct(tok)?;
+        out.push(l);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
 }
 
 /// SVG `<opacity-value>`: número `0..=1` o porcentaje `0%..=100%`.

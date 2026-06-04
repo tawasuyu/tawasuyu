@@ -604,6 +604,21 @@ pub struct ComputedStyle {
     /// `stroke-width` (Fase 7.373). Default `Px(1.0)`. **Heredable**.
     /// Plumb.
     pub stroke_width: LengthVal,
+    /// `stroke-linecap` (Fase 7.374). Default `Butt`. **Heredable**.
+    /// Plumb.
+    pub stroke_linecap: StrokeLinecap,
+    /// `stroke-linejoin` (Fase 7.375). Default `Miter`. **Heredable**.
+    /// Plumb.
+    pub stroke_linejoin: StrokeLinejoin,
+    /// `stroke-miterlimit` (Fase 7.376). Default `4.0`. **Heredable**.
+    /// Plumb.
+    pub stroke_miterlimit: f32,
+    /// `stroke-dasharray` (Fase 7.377). Vec vacío = `none`. **Heredable**.
+    /// Plumb.
+    pub stroke_dasharray: Vec<LengthVal>,
+    /// `stroke-dashoffset` (Fase 7.378). Default `Px(0.0)`. **Heredable**.
+    /// Plumb.
+    pub stroke_dashoffset: LengthVal,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1891,6 +1906,26 @@ impl Default for SvgPaint {
     }
 }
 
+/// `stroke-linecap` (SVG 2). Heredable. Default `Butt`. Fase 7.374.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinecap {
+    #[default]
+    Butt,
+    Round,
+    Square,
+}
+
+/// `stroke-linejoin` (SVG 2). Heredable. Default `Miter`. Fase 7.375.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeLinejoin {
+    #[default]
+    Miter,
+    Round,
+    Bevel,
+    Arcs,
+    MiterClip,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2942,6 +2977,11 @@ impl Default for ComputedStyle {
             fill_opacity: 1.0,
             stroke_opacity: 1.0,
             stroke_width: LengthVal::Px(1.0),
+            stroke_linecap: StrokeLinecap::Butt,
+            stroke_linejoin: StrokeLinejoin::Miter,
+            stroke_miterlimit: 4.0,
+            stroke_dasharray: Vec::new(),
+            stroke_dashoffset: LengthVal::Px(0.0),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

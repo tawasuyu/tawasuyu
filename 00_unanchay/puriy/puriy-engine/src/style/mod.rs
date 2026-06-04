@@ -333,6 +333,12 @@ impl StyleEngine {
             style.fill_opacity = p.fill_opacity;
             style.stroke_opacity = p.stroke_opacity;
             style.stroke_width = p.stroke_width;
+            // SVG 2 — el resto del set de stroke también hereda.
+            style.stroke_linecap = p.stroke_linecap;
+            style.stroke_linejoin = p.stroke_linejoin;
+            style.stroke_miterlimit = p.stroke_miterlimit;
+            style.stroke_dasharray = p.stroke_dasharray.clone();
+            style.stroke_dashoffset = p.stroke_dashoffset;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -6078,6 +6084,174 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_width,
             LengthVal::Px(3.0)
+        );
+    }
+
+    #[test]
+    fn stroke_linecap_fase_7_374() {
+        assert_eq!(parse_stroke_linecap("butt"), Some(StrokeLinecap::Butt));
+        assert_eq!(parse_stroke_linecap("ROUND"), Some(StrokeLinecap::Round));
+        assert_eq!(parse_stroke_linecap("square"), Some(StrokeLinecap::Square));
+        assert_eq!(parse_stroke_linecap("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { stroke-linecap: round }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.stroke_linecap, StrokeLinecap::Round);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_linecap,
+            StrokeLinecap::Round
+        );
+    }
+
+    #[test]
+    fn stroke_linejoin_fase_7_375() {
+        assert_eq!(parse_stroke_linejoin("miter"), Some(StrokeLinejoin::Miter));
+        assert_eq!(parse_stroke_linejoin("BEVEL"), Some(StrokeLinejoin::Bevel));
+        assert_eq!(parse_stroke_linejoin("arcs"), Some(StrokeLinejoin::Arcs));
+        assert_eq!(
+            parse_stroke_linejoin("miter-clip"),
+            Some(StrokeLinejoin::MiterClip)
+        );
+        assert_eq!(parse_stroke_linejoin("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { stroke-linejoin: bevel }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.stroke_linejoin, StrokeLinejoin::Bevel);
+    }
+
+    #[test]
+    fn stroke_miterlimit_fase_7_376() {
+        assert_eq!(parse_stroke_miterlimit("10"), Some(10.0));
+        assert_eq!(parse_stroke_miterlimit("1"), Some(1.0));
+        // <1 descarta.
+        assert_eq!(parse_stroke_miterlimit("0.5"), None);
+        assert_eq!(parse_stroke_miterlimit("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { stroke-miterlimit: 8 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.stroke_miterlimit, 8.0);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_miterlimit,
+            8.0
+        );
+    }
+
+    #[test]
+    fn stroke_dasharray_fase_7_377() {
+        assert_eq!(parse_stroke_dasharray("none"), Some(Vec::new()));
+        // Separado por espacios.
+        assert_eq!(
+            parse_stroke_dasharray("5 10"),
+            Some(vec![LengthVal::Px(5.0), LengthVal::Px(10.0)])
+        );
+        // Separado por comas.
+        assert_eq!(
+            parse_stroke_dasharray("5, 10, 15"),
+            Some(vec![
+                LengthVal::Px(5.0),
+                LengthVal::Px(10.0),
+                LengthVal::Px(15.0)
+            ])
+        );
+        // Mezcla espacios y comas.
+        assert_eq!(
+            parse_stroke_dasharray("5 10, 15"),
+            Some(vec![
+                LengthVal::Px(5.0),
+                LengthVal::Px(10.0),
+                LengthVal::Px(15.0)
+            ])
+        );
+        assert_eq!(parse_stroke_dasharray("foo"), None);
+
+        let html = r##"<html><head><style>
+            body { stroke-dasharray: 4 6 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.stroke_dasharray,
+            vec![LengthVal::Px(4.0), LengthVal::Px(6.0)]
+        );
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_dasharray,
+            vec![LengthVal::Px(4.0), LengthVal::Px(6.0)]
+        );
+    }
+
+    #[test]
+    fn stroke_dashoffset_fase_7_378() {
+        let html = r##"<html><head><style>
+            body { stroke-dashoffset: 12px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.stroke_dashoffset, LengthVal::Px(12.0));
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_dashoffset,
+            LengthVal::Px(12.0)
         );
     }
 
