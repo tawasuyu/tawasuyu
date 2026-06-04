@@ -226,6 +226,7 @@ shuma-label-command = Kamachiq
 shuma-label-shell = Shell
 shuma-label-matilda = Matilda
 shuma-label-canvas = Rikukuy
+shuma-label-monitors = Qhawaqkuna
 shuma-empty-main-incompat = Main yanapakuq mana atinmanchu
 shuma-empty-no-tabs = Mana tabs churaqa.
 shuma-empty-no-tabs-compat = Kay yanapakuq mana tab kayta atinmanchu.

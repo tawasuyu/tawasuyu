@@ -61,6 +61,57 @@ const TICK: Duration = Duration::from_secs(1);
 const SHELL_TICK: Duration = Duration::from_millis(100);
 const MONITORS_INITIAL_WIDTH: f32 = 280.0;
 
+/// Id del diente "Monitores" en el rail hospedado de pata. Los dientes de
+/// las tabs usan su índice (`0..tabs.len()`); este sentinela alto no choca
+/// con ningún índice real y togglea el panel de monitores.
+const MONITORS_TOOTH: u32 = u32::MAX;
+
+/// Construye el cliente del rail hospedado si `SHUMA_DELEGATE_SIDEBAR` está
+/// set. shuma publica sus tabs como dientes (cambian de tab al activarse) +
+/// un diente "Monitores" que togglea el panel derecho. Cuando shuma tiene
+/// foco, esos dientes aparecen en el rail global de pata; el área central
+/// queda como puro lienzo (monitores ocultos por default). `app_id` debe ser
+/// el mismo que reporta el compositor (`Shell::app_id`).
+fn shuma_host(handle: &Handle<Msg>, tabs: &[Instance]) -> Option<pata_host::HostClient> {
+    if std::env::var_os("SHUMA_DELEGATE_SIDEBAR").is_none() {
+        return None;
+    }
+    let teeth = host_teeth(tabs);
+    let h = handle.clone();
+    pata_host::HostClient::connect("shuma.shell", "shuma", teeth, move |id| {
+        h.dispatch(Msg::HostActivate(id))
+    })
+}
+
+/// Dientes que shuma presta al rail de pata: uno por tab (id = índice) más el
+/// toggle de monitores.
+fn host_teeth(tabs: &[Instance]) -> Vec<pata_host::HostedTooth> {
+    let mut teeth: Vec<pata_host::HostedTooth> = tabs
+        .iter()
+        .enumerate()
+        .map(|(i, inst)| pata_host::HostedTooth::new(i as u32, tooth_icon(inst.kind), inst.label.clone()))
+        .collect();
+    teeth.push(pata_host::HostedTooth::new(
+        MONITORS_TOOTH,
+        "system",
+        rimay_localize::t("shuma-label-monitors"),
+    ));
+    teeth
+}
+
+/// Icono (vocabulario abierto de `pata`) para el diente de una tab según su
+/// `Kind`. pata mapea estos nombres a sus formas (`files`→carpeta,
+/// `tools`/`settings`→grupo, `monads`→mónada).
+fn tooth_icon(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Shell => "tools",
+        Kind::Matilda => "settings",
+        Kind::Minga => "monads",
+        Kind::Canvas => "files",
+        Kind::Launcher | Kind::CommandBar => "tools",
+    }
+}
+
 /// `Source` por defecto de la tab shell según las env vars del proceso —
 /// para que `SHUMA_REMOTE*` enrute los comandos al daemon sin shumarc.
 /// (rescate del `detect_remote_transport` del shell GPUI):
@@ -289,6 +340,16 @@ struct Model {
     /// Menú contextual de terminal: ancla `(x, y)` en ventana (`None` =
     /// cerrado). Se abre con right-click sobre el área de trabajo.
     ctx_menu: Option<(f32, f32)>,
+
+    /// Cliente del rail hospedado: con `SHUMA_DELEGATE_SIDEBAR`, shuma presta
+    /// sus tabs + el toggle de monitores al rail de pata. Kept-alive (las
+    /// activaciones llegan por callback → `Msg::HostActivate`); el `_` evita
+    /// el lint de campo sin leer, como `_wawa_watcher`.
+    _host: Option<pata_host::HostClient>,
+    /// Visibilidad del panel de monitores. Sin delegar arranca `true` (siempre
+    /// visible); en modo delegado arranca oculto y lo controla el diente
+    /// "Monitores" del rail de pata.
+    monitors_visible: bool,
 }
 
 #[derive(Clone)]
@@ -327,6 +388,10 @@ enum Msg {
     ContextMenuOpen(f32, f32),
     /// Cierra cualquier menú abierto (click-fuera / Esc).
     CloseMenus,
+
+    /// Rail hospedado de pata: el usuario activó un diente. `id < tabs.len()`
+    /// selecciona esa tab; `MONITORS_TOOTH` togglea el panel de monitores.
+    HostActivate(u32),
 }
 
 struct Shell;
@@ -394,6 +459,14 @@ impl App for Shell {
             cfg.tabs.iter().filter_map(resolve_tab).collect()
         };
 
+        // Rail hospedado: si `SHUMA_DELEGATE_SIDEBAR` está set, prestamos las
+        // tabs + el toggle de monitores al rail de pata. Se conecta acá, una
+        // vez armadas las tabs, para publicar sus etiquetas como dientes.
+        let host = shuma_host(handle, &tabs);
+        // Sin delegar el panel siempre se ve; delegado arranca oculto (puro
+        // lienzo) y el rail de pata lo despliega.
+        let monitors_visible = host.is_none();
+
         Model {
             theme,
             topbar,
@@ -411,6 +484,8 @@ impl App for Shell {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             ctx_menu: None,
+            _host: host,
+            monitors_visible,
         }
     }
 
@@ -546,6 +621,15 @@ impl App for Shell {
             }
             Msg::MenuCommand(cmd) => {
                 m = menu::handle_command(m, &cmd);
+            }
+            Msg::HostActivate(id) => {
+                // Rail hospedado: un diente de tab selecciona esa tab; el
+                // diente sentinela togglea el panel de monitores.
+                if id == MONITORS_TOOTH {
+                    m.monitors_visible = !m.monitors_visible;
+                } else if (id as usize) < m.tabs.len() {
+                    m.active_tab = id as usize;
+                }
             }
         }
         m

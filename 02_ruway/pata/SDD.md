@@ -509,6 +509,14 @@ borde; shuma provee el contenido.
       laterales se vuelven colapsables (`side_izq_visible`/`side_der_visible`; cada
       lado oculto sale del árbol con su splitter) → editor a pantalla completa;
       Buscar/Diff reusan su lógica. Sin delegar, el layout de 3 columnas es idéntico.
+    - **shuma** (`SHUMA_DELEGATE_SIDEBAR`, `app_id="shuma.shell"`): un diente por
+      tab (id = índice → `Msg::HostActivate` selecciona esa tab) + un diente
+      "Monitores" (id sentinela `u32::MAX` → togglea el panel derecho). Cambio
+      **aditivo**: en modo delegado el panel de monitores arranca oculto (puro
+      lienzo) y el contenido toma todo el ancho sin splitter; el rail de pata lo
+      despliega. Sin delegar, el panel de monitores siempre se ve (`monitors_visible`
+      arranca según `host.is_none()`). La tira de tabs local sigue visible (el rail
+      es un switcher paralelo).
   - **Pendiente opcional**: re-registro de dientes al reordenar el dock (hoy se
     registran una vez al init; el lado de activación se computa en vivo, así que el
     drop entre lados sigue funcionando); estado "activo" del diente hospedado (hoy

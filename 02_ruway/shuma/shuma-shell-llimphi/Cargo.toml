@@ -24,6 +24,7 @@ shuma-module-shell = { path = "../sandbox/shuma-module-shell" }
 shuma-module-canvas = { path = "../sandbox/shuma-module-canvas" }
 shuma-intent = { path = "../sandbox/shuma-intent" }
 shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
+pata-host = { path = "../../pata/pata-host" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-tabs = { workspace = true }

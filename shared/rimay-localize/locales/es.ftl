@@ -223,6 +223,7 @@ shuma-label-command = Command
 shuma-label-shell = Shell
 shuma-label-matilda = Matilda
 shuma-label-canvas = Lienzo
+shuma-label-monitors = Monitores
 shuma-empty-main-incompat = Módulo Main no compatible
 shuma-empty-no-tabs = Sin tabs configuradas.
 shuma-empty-no-tabs-compat = Este módulo no puede ser tab.

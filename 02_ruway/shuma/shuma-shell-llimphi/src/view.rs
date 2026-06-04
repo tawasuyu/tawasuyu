@@ -99,26 +99,34 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
 
     let toolbar = tabs_toolbar(model, theme);
     let content = tab_content(model, theme);
-    let monitors = monitor_stack(model, theme);
 
     let labels: Vec<String> = model.tabs.iter().map(|inst| inst.label.clone()).collect();
 
-    let tabs = tabs_view(TabsSpec {
-        labels,
-        active: model.active_tab,
-        on_select: Msg::SelectTab,
-        content: splitter_two(
+    // El panel de monitores se oculta en modo delegado hasta que el rail de
+    // pata lo despliega (`monitors_visible`). Oculto → el contenido toma todo
+    // el ancho, sin splitter (puro lienzo).
+    let tab_body = if model.monitors_visible {
+        splitter_two(
             Direction::Row,
             content,
             PaneSize::Flex,
-            monitors,
+            monitor_stack(model, theme),
             PaneSize::Fixed(model.monitors_width),
             |phase, dx| match phase {
                 DragPhase::Move => Some(Msg::ResizeMonitors(dx)),
                 DragPhase::End => None,
             },
             &splitter_palette,
-        ),
+        )
+    } else {
+        content
+    };
+
+    let tabs = tabs_view(TabsSpec {
+        labels,
+        active: model.active_tab,
+        on_select: Msg::SelectTab,
+        content: tab_body,
         tab_height: 32.0,
         palette: tabs_palette,
         tab_width: None,
