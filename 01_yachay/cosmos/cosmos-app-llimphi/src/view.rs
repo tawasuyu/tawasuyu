@@ -190,6 +190,13 @@ fn body_lons(render: &RenderModel) -> HashMap<String, f32> {
 // =====================================================================
 
 pub(crate) fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
+    tile_carta_opts(model, theme, true)
+}
+
+/// Igual que `tile_carta` pero permite omitir la sección «Ángulos»
+/// (Asc/MC/Dc/IC). La hoja imprimible la oculta para ganar altura y que la
+/// rueda + tabla de aspectos quepan en una hoja estándar.
+pub(crate) fn tile_carta_opts(model: &Model, theme: &Theme, with_angles: bool) -> View<Msg> {
     let bd = &model.chart.birth_data;
     let lugar = bd
         .birthplace_label
@@ -213,31 +220,33 @@ pub(crate) fn tile_carta(model: &Model, theme: &Theme) -> View<Msg> {
     );
 
     let r = &model.render;
-    let angles = [
-        ("Asc", r.ascendant_deg),
-        ("MC", r.midheaven_deg),
-        ("Dc", r.descendant_deg),
-        ("IC", r.imum_coeli_deg),
-    ];
     let mut rows: Vec<View<Msg>> = vec![
         line(model.chart.label.clone(), 14.0, theme.fg_text),
         line(lugar, 11.0, theme.fg_muted),
         line(fecha, 11.0, theme.fg_muted),
         line(lat_long, 11.0, theme.fg_muted),
-        section_label("Ángulos".to_string(), theme),
     ];
-    for (name, deg) in angles {
-        rows.push(cells_row(vec![
-            txt_cell(name.to_string(), 32.0, 12.0, theme.fg_text, Alignment::Start),
-            txt_cell(
-                fmt_dms((deg.rem_euclid(30.0)) as f64),
-                56.0,
-                12.0,
-                theme.fg_muted,
-                Alignment::Start,
-            ),
-            glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
-        ]));
+    if with_angles {
+        let angles = [
+            ("Asc", r.ascendant_deg),
+            ("MC", r.midheaven_deg),
+            ("Dc", r.descendant_deg),
+            ("IC", r.imum_coeli_deg),
+        ];
+        rows.push(section_label("Ángulos".to_string(), theme));
+        for (name, deg) in angles {
+            rows.push(cells_row(vec![
+                txt_cell(name.to_string(), 32.0, 12.0, theme.fg_text, Alignment::Start),
+                txt_cell(
+                    fmt_dms((deg.rem_euclid(30.0)) as f64),
+                    56.0,
+                    12.0,
+                    theme.fg_muted,
+                    Alignment::Start,
+                ),
+                glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
+            ]));
+        }
     }
     tile_container(rows, theme)
 }

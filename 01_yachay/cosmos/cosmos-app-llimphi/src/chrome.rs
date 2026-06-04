@@ -1082,25 +1082,9 @@ fn print_wheel(model: &Model, render: &cosmos_render::RenderModel, size: f32) ->
 /// tema «Print» (B/N) sin importar el tema de la app: el papel es blanco.
 pub(crate) fn print_page_content(model: &Model) -> View<Msg> {
     let theme = Theme::print();
-    let titulo = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(26.0),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(
-        if model.chart.label.is_empty() {
-            "Carta natal".to_string()
-        } else {
-            model.chart.label.clone()
-        },
-        20.0,
-        theme.fg_text,
-        Alignment::Start,
-    );
+    // Sin título grande ni sección de ángulos: la etiqueta de la carta ya
+    // aparece como primera línea de `tile_carta`, y omitir ambos sube la
+    // rueda para que rueda + aspectos quepan en una hoja estándar.
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -1122,8 +1106,7 @@ pub(crate) fn print_page_content(model: &Model) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .children(vec![
-        titulo,
-        view::tile_carta(model, &theme),
+        view::tile_carta_opts(model, &theme, false),
         print_wheel(model, &model.render, PRINT_WHEEL),
         view::section_label("Aspectos".to_string(), &theme),
         view::tile_aspectos(&model.render, &theme),
