@@ -1712,43 +1712,70 @@ fn uranian_dial_canvas(
     canvas_column(Some(zoom_controls(model, theme)), canvas, size, fill)
 }
 
-/// Flor armónica central: un pétalo translúcido por cuerpo, apuntando a su
-/// longitud armónica (`deg·h`) y coloreado por su planeta. Al superponerse,
-/// los pétalos forman la mandala de arcoíris típica de la carta armónica.
+/// Flor armónica central: la **trama de aspectos** que el motor recomputa
+/// sobre las posiciones armónicas (capa `Aspects`, módulo `natal`). Cada
+/// aspecto se dibuja como un pétalo-lente que conecta los dos cuerpos
+/// pasando cerca del centro; al cruzarse forman la roseta. El color es el
+/// del tipo de aspecto y la opacidad/grosor crecen con la exactitud (orbe).
 /// Función pura (sin `Model`) para poder rasterizarla en un test.
 pub(crate) fn harmonic_flower_cmds(
     render: &cosmos_render::RenderModel,
-    h: f32,
     cx: f32,
     cy: f32,
     rp: f32,
     pal: &Palette,
+    show_minor: bool,
 ) -> Vec<DrawCommand> {
+    use cosmos_render::{Geometry, LayerKind};
     let mut cmds: Vec<DrawCommand> = Vec::new();
-    for (sym, deg) in natal_body_lons(render) {
-        let hl = (deg * h).rem_euclid(360.0);
-        let th = (hl - 90.0).to_radians();
-        let (dx, dy) = (th.cos(), th.sin());
-        let (px, py) = (-th.sin(), th.cos()); // perpendicular
-        let (tx, ty) = (cx + dx * rp, cy + dy * rp); // punta
-        let m = rp * 0.55; // radio del ancho máximo
-        let w = rp * 0.26; // medio ancho del pétalo
-        let (s1x, s1y) = (cx + dx * m + px * w, cy + dy * m + py * w);
-        let (s2x, s2y) = (cx + dx * m - px * w, cy + dy * m - py * w);
-        let d = format!("M {cx} {cy} Q {s1x} {s1y} {tx} {ty} Q {s2x} {s2y} {cx} {cy} Z");
-        let c = pal.planet(&canon_glyph(&sym));
-        cmds.push(DrawCommand::Path {
-            d,
-            fill: Some(Rgba { a: 0.30, ..c }),
-            stroke: Some(Rgba { a: 0.55, ..c }),
-            stroke_w: 1.0,
-        });
+    for layer in &render.layers {
+        if !matches!(layer.kind, LayerKind::Aspects) || layer.module_id != "natal" {
+            continue;
+        }
+        let Geometry::Lines(segs) = &layer.geometry else {
+            continue;
+        };
+        for seg in segs {
+            let is_minor = !matches!(
+                seg.kind.as_str(),
+                "conjunction" | "sextile" | "square" | "trine" | "opposition"
+            );
+            if is_minor && !show_minor {
+                continue;
+            }
+            let a = (seg.from_deg - 90.0).to_radians();
+            let b = (seg.to_deg - 90.0).to_radians();
+            let (ax, ay) = (cx + a.cos() * rp, cy + a.sin() * rp);
+            let (bx, by) = (cx + b.cos() * rp, cy + b.sin() * rp);
+            // Lente entre A y B que pasa por ambos lados del centro.
+            let (mut dx, mut dy) = (bx - ax, by - ay);
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            dx /= len;
+            dy /= len;
+            let (pxn, pyn) = (-dy, dx); // perpendicular unitaria
+            let half = rp * 0.12; // ancho del pétalo
+            let c1 = (cx + pxn * half, cy + pyn * half);
+            let c2 = (cx - pxn * half, cy - pyn * half);
+            let d = format!(
+                "M {ax} {ay} Q {} {} {bx} {by} Q {} {} {ax} {ay} Z",
+                c1.0, c1.1, c2.0, c2.1
+            );
+            let col = pal.aspect(&seg.kind);
+            let intensity = (1.0 - seg.orb_deg.abs() / 8.0).clamp(0.15, 1.0);
+            let alpha = seg.opacity * (0.18 + 0.30 * intensity);
+            cmds.push(DrawCommand::Path {
+                d,
+                fill: Some(Rgba { a: alpha, ..col }),
+                stroke: Some(Rgba { a: (alpha + 0.25).min(0.8), ..col }),
+                stroke_w: 0.8,
+            });
+        }
     }
     // Centro luminoso.
     cmds.push(DrawCommand::Circle {
         cx,
         cy,
-        r: rp * 0.10,
+        r: rp * 0.07,
         stroke: None,
         fill: Some(Rgba { r: 1.0, g: 1.0, b: 1.0, a: 0.9 }),
         stroke_w: 0.0,
@@ -1768,7 +1795,6 @@ fn harmonic_wheel_canvas(
     fill: bool,
 ) -> View<Msg> {
     use cosmos_render::glyphs::{planet_commands, sign_commands};
-    let h = model.harmonic.max(1) as f32;
     let cx = size / 2.0;
     let cy = size / 2.0;
     let r = size * 0.42;
@@ -1793,14 +1819,15 @@ fn harmonic_wheel_canvas(
         fill: None,
         stroke_w: 0.8,
     });
-    // Flor armónica central (roseta de pétalos por cuerpo).
+    // Flor armónica central: la trama de aspectos recomputada por el motor
+    // sobre las posiciones armónicas (los pétalos cruzan por el centro).
     cmds.extend(harmonic_flower_cmds(
         render,
-        h,
         cx,
         cy,
-        r * 0.58,
+        r * 0.64,
         &graphics_palette(model),
+        model.cfg.minor_aspects,
     ));
     // 12 sectores zodiacales + glyph de cada signo en el anillo exterior.
     let sign_ids = crate::glyphs::SIGN_IDS;
@@ -1821,9 +1848,11 @@ fn harmonic_wheel_canvas(
         let scol = rgba_of(sign_color_theme(i, model));
         cmds.extend(sign_commands(sign_ids[i], sx, sy, size * 0.035, scol, 1.4));
     }
-    // Cuerpos en longitud armónica.
+    // Cuerpos: el render YA viene con el armónico aplicado por el motor
+    // (`apply_harmonic`), así que se usan sus longitudes tal cual — sin
+    // volver a multiplicar por H (eso duplicaba el armónico).
     for (sym, deg) in natal_body_lons(render) {
-        let hl = (deg * h).rem_euclid(360.0);
+        let hl = deg.rem_euclid(360.0);
         let ang = (hl - 90.0).to_radians();
         let gx = cx + ang.cos() * r * 0.66;
         let gy = cy + ang.sin() * r * 0.66;
