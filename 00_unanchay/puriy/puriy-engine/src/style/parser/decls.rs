@@ -171,6 +171,44 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `position-try: [<order>]? <fallbacks>` shorthand (Fase 7.462).
+        // `<order>` puede aparecer 0 o 1 vez al inicio; el resto se interpreta
+        // como `position-try-fallbacks` (lista separada por coma). Si el
+        // primer token es un `<order>` keyword conocido, lo consumimos y el
+        // resto va al fallbacks; si no, todo el valor va al fallbacks.
+        // Faltantes se emiten con default explícito (reset).
+        if prop.eq_ignore_ascii_case("position-try") {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let (order, rest) = match trimmed.split_once(char::is_whitespace) {
+                Some((head, tail)) => match parse_position_try_order(head) {
+                    Some(o) => (o, tail.trim()),
+                    None => (PositionTryOrder::Normal, trimmed),
+                },
+                None => match parse_position_try_order(trimmed) {
+                    Some(o) => (o, ""),
+                    None => (PositionTryOrder::Normal, trimmed),
+                },
+            };
+            let fallbacks = if rest.is_empty() {
+                Some(Vec::new())
+            } else {
+                parse_position_try_fallbacks(rest)
+            };
+            if let Some(fb) = fallbacks {
+                out.push(Decl {
+                    kind: DeclKind::PositionTryOrder(order),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::PositionTryFallbacks(fb),
+                    important,
+                });
+            }
+            continue;
+        }
         // `block-step: <size>? <insert>? <align>? <round>?` shorthand
         // (Fase 7.458). Hasta 4 tokens, en cualquier orden. Cada longhand
         // se emite a lo sumo una vez (token redundante → rechazo). Faltantes
@@ -992,6 +1030,39 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             _ => None,
         },
         // Fase 7.458 — `block-step` shorthand: ver `parse_declarations`.
+        // Fase 7.459 — `position-visibility` (CSS Anchor Positioning 1).
+        "position-visibility" => match value.trim().to_ascii_lowercase().as_str() {
+            "always" => {
+                Some(DeclKind::PositionVisibility(PositionVisibility::Always))
+            }
+            "anchors-visible" => Some(DeclKind::PositionVisibility(
+                PositionVisibility::AnchorsVisible,
+            )),
+            "no-overflow" => Some(DeclKind::PositionVisibility(
+                PositionVisibility::NoOverflow,
+            )),
+            _ => None,
+        },
+        // Fase 7.460 — `position-try-order` (CSS Anchor Positioning 1).
+        "position-try-order" => parse_position_try_order(value)
+            .map(DeclKind::PositionTryOrder),
+        // Fase 7.461 — `position-try-fallbacks` (CSS Anchor Positioning 1).
+        // `none` o lista de `<dashed-ident>` separados por coma. Tokens
+        // distintos a un dashed-ident (ej. `flip-block`) los aceptamos como
+        // string opaco — el chrome no implementa try yet.
+        "position-try-fallbacks" => {
+            parse_position_try_fallbacks(value).map(DeclKind::PositionTryFallbacks)
+        }
+        // Fase 7.462 — `position-try` shorthand: ver `parse_declarations`.
+        // Fase 7.463 — `position-area` (CSS Anchor Positioning 1). Parse opaco.
+        "position-area" => {
+            let raw = value.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+                Some(DeclKind::PositionArea(None))
+            } else {
+                Some(DeclKind::PositionArea(Some(raw.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -4099,6 +4170,41 @@ pub(crate) fn parse_block_step_size(value: &str) -> Option<BlockStepSize> {
         return Some(BlockStepSize::None);
     }
     parse_length_px(v).map(BlockStepSize::Length)
+}
+
+/// `position-try-order` keyword. Fase 7.460.
+pub(crate) fn parse_position_try_order(value: &str) -> Option<PositionTryOrder> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(PositionTryOrder::Normal),
+        "most-width" => Some(PositionTryOrder::MostWidth),
+        "most-height" => Some(PositionTryOrder::MostHeight),
+        "most-block-size" => Some(PositionTryOrder::MostBlockSize),
+        "most-inline-size" => Some(PositionTryOrder::MostInlineSize),
+        _ => None,
+    }
+}
+
+/// `position-try-fallbacks: none | <try-tactic-list>`. CSS Anchor Positioning
+/// 1. Lista separada por COMA — cada entrada se guarda como string crudo
+/// (`<dashed-ident>` o try-tactic compuesta `flip-block flip-inline`). `none`
+/// → Vec vacío. Vacío rechaza (no se emite). Fase 7.461.
+pub(crate) fn parse_position_try_fallbacks(value: &str) -> Option<Vec<String>> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    let mut out: Vec<String> = Vec::new();
+    for part in v.split(',') {
+        let p = part.trim();
+        if p.is_empty() {
+            return None;
+        }
+        out.push(p.to_string());
+    }
+    Some(out)
 }
 
 /// Pieza individual del shorthand `block-step`. Devuelve un `DeclKind` con

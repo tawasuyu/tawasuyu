@@ -7445,6 +7445,90 @@ mod tests {
     }
 
     #[test]
+    fn anchor_position_try_fase_7_459_463() {
+        // Cinco props: position-visibility (Fase 7.459), position-try-order
+        // (Fase 7.460), position-try-fallbacks (Fase 7.461), position-try
+        // shorthand (Fase 7.462), position-area (Fase 7.463). NO heredan.
+
+        // 1) Parser de cabecera para fallbacks.
+        assert_eq!(parse_position_try_fallbacks("none"), Some(Vec::new()));
+        assert_eq!(
+            parse_position_try_fallbacks("--top, --bottom"),
+            Some(vec!["--top".to_string(), "--bottom".to_string()])
+        );
+        assert_eq!(
+            parse_position_try_fallbacks("flip-block flip-inline, --side"),
+            Some(vec![
+                "flip-block flip-inline".to_string(),
+                "--side".to_string(),
+            ])
+        );
+        assert_eq!(parse_position_try_fallbacks(""), None);
+        assert_eq!(parse_position_try_fallbacks("--a, , --b"), None);
+
+        // 2) E2E — longhands + shorthand + position-area opaco.
+        let html = r##"<html><head><style>
+            #a { position-visibility: anchors-visible;
+                 position-try-order: most-height;
+                 position-try-fallbacks: --top, --bottom;
+                 position-area: top span-all }
+            #b { position-try: --right }
+            #c { position-try: most-width --r1, --r2 }
+            #d { position-area: none }
+            #e {}
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+            <div id="e"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // #a — longhands.
+        let cs_a = eng.compute(&by("a"));
+        assert_eq!(
+            cs_a.position_visibility,
+            PositionVisibility::AnchorsVisible
+        );
+        assert_eq!(cs_a.position_try_order, PositionTryOrder::MostHeight);
+        assert_eq!(
+            cs_a.position_try_fallbacks,
+            vec!["--top".to_string(), "--bottom".to_string()]
+        );
+        assert_eq!(cs_a.position_area.as_deref(), Some("top span-all"));
+        // #b — shorthand sin order explícito → Normal + fallbacks.
+        let cs_b = eng.compute(&by("b"));
+        assert_eq!(cs_b.position_try_order, PositionTryOrder::Normal);
+        assert_eq!(cs_b.position_try_fallbacks, vec!["--right".to_string()]);
+        // #c — shorthand con order + dos fallbacks.
+        let cs_c = eng.compute(&by("c"));
+        assert_eq!(cs_c.position_try_order, PositionTryOrder::MostWidth);
+        assert_eq!(
+            cs_c.position_try_fallbacks,
+            vec!["--r1".to_string(), "--r2".to_string()]
+        );
+        // #d — position-area: none → None.
+        let cs_d = eng.compute(&by("d"));
+        assert_eq!(cs_d.position_area, None);
+        // #e — defaults puros.
+        let cs_e = eng.compute(&by("e"));
+        assert_eq!(cs_e.position_visibility, PositionVisibility::Always);
+        assert_eq!(cs_e.position_try_order, PositionTryOrder::Normal);
+        assert!(cs_e.position_try_fallbacks.is_empty());
+        assert_eq!(cs_e.position_area, None);
+    }
+
+    #[test]
     fn offset_extras_ruby_overhang_fase_7_449_453() {
         // Cinco props: offset-rotate, offset-anchor, offset-position,
         // object-view-box (NO heredan), ruby-overhang (HEREDA).

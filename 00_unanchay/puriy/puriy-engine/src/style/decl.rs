@@ -472,6 +472,14 @@ pub(crate) enum DeclKind {
     BlockStepAlign(BlockStepAlign),
     /// `block-step-round` (Fase 7.457). NO hereda. Plumb.
     BlockStepRound(BlockStepRound),
+    /// `position-visibility` (Fase 7.459). NO hereda. Plumb.
+    PositionVisibility(PositionVisibility),
+    /// `position-try-order` (Fase 7.460). NO hereda. Plumb.
+    PositionTryOrder(PositionTryOrder),
+    /// `position-try-fallbacks` (Fase 7.461). Vec vacío = `none`. NO hereda. Plumb.
+    PositionTryFallbacks(Vec<String>),
+    /// `position-area` (Fase 7.463). `None` = `none`. NO hereda. Plumb.
+    PositionArea(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -848,6 +856,10 @@ impl Decl {
             DeclKind::BlockStepInsert(b) => s.block_step_insert = *b,
             DeclKind::BlockStepAlign(b) => s.block_step_align = *b,
             DeclKind::BlockStepRound(b) => s.block_step_round = *b,
+            DeclKind::PositionVisibility(p) => s.position_visibility = *p,
+            DeclKind::PositionTryOrder(o) => s.position_try_order = *o,
+            DeclKind::PositionTryFallbacks(v) => s.position_try_fallbacks = v.clone(),
+            DeclKind::PositionArea(a) => s.position_area = a.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

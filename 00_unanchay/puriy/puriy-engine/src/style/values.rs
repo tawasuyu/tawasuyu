@@ -753,6 +753,15 @@ pub struct ComputedStyle {
     pub block_step_align: BlockStepAlign,
     /// `block-step-round` (Fase 7.457). Default `Up`. NO hereda. Plumb.
     pub block_step_round: BlockStepRound,
+    /// `position-visibility` (Fase 7.459). Default `Always`. NO hereda. Plumb.
+    pub position_visibility: PositionVisibility,
+    /// `position-try-order` (Fase 7.460). Default `Normal`. NO hereda. Plumb.
+    pub position_try_order: PositionTryOrder,
+    /// `position-try-fallbacks` (Fase 7.461). Vec vacío = `none`. NO hereda. Plumb.
+    pub position_try_fallbacks: Vec<String>,
+    /// `position-area` (Fase 7.463). `None` = `none`; `Some(s)` guarda el
+    /// valor crudo (parse opaco). NO hereda. Plumb.
+    pub position_area: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2303,6 +2312,30 @@ pub enum BlockStepRound {
     Nearest,
 }
 
+/// `position-visibility` (CSS Anchor Positioning 1). Política de visibilidad
+/// de un elemento posicionado contra su anchor cuando éste queda fuera del
+/// viewport o de su containing block. Default `Always`. NO hereda. Fase 7.459.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PositionVisibility {
+    #[default]
+    Always,
+    AnchorsVisible,
+    NoOverflow,
+}
+
+/// `position-try-order` (CSS Anchor Positioning 1). Orden de prueba de las
+/// posiciones fallback. Default `Normal` (= en orden declarado). NO hereda.
+/// Fase 7.460.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PositionTryOrder {
+    #[default]
+    Normal,
+    MostWidth,
+    MostHeight,
+    MostBlockSize,
+    MostInlineSize,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3496,6 +3529,10 @@ impl Default for ComputedStyle {
             block_step_insert: BlockStepInsert::MarginBox,
             block_step_align: BlockStepAlign::Auto,
             block_step_round: BlockStepRound::Up,
+            position_visibility: PositionVisibility::Always,
+            position_try_order: PositionTryOrder::Normal,
+            position_try_fallbacks: Vec::new(),
+            position_area: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
