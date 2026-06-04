@@ -417,11 +417,28 @@ borde; shuma provee el contenido.
       deserialización fijada en `toml_contract.rs`.
     - Sólo arranca el poll si la config declara un navegador
       (`config_tiene_navigator`).
-  - **11c-layer ⏳** — wiring del rail/panel en el backend `wlr-layer-shell`
-    (`layer.rs`), el path de producción en Hyprland: hoy filtra superficies a
-    `Bar`/`Panel`, así que el Sidebar no aparece bajo layer-shell todavía (mismo
-    estado que tuvo `window_list` al nacer en un solo path). Falta: layer surface
-    del rail (anclada left/right, exclusive zone = thickness) + panel desplegable.
+  - **11c-layer ✅ (runtime sin verificar, `layer.rs`)** — el rail/panel bajo
+    `wlr-layer-shell`, el path de producción en Hyprland:
+    - Una layer surface por Sidebar, anclada al borde vertical con exclusive zone
+      = `thickness`. Al activar un diente la surface **crece en ancho** (a
+      `thickness + panel_width`) manteniendo la exclusive zone, así el panel flota
+      sobre el área de trabajo sin recolocar el teselado — el truco del drawer de
+      shuma, pero en el eje horizontal. `set_sidebar_open` redimensiona +
+      invalida el cache de hit-test; `sidebar_surface_view` (render-fill, en
+      `render/sidebar.rs`) ordena rail+panel según el anclaje.
+    - **Plano de datos**: un hilo poolea `list_monads` cada 2 s y entrega por
+      canal (patrón sampler/exec); `resolve_monad` en hilos one-shot por otro
+      canal; `poll_nav` los drena cada frame sin bloquear. Sólo arranca si la
+      config declara un navegador.
+    - **Clics**: el hit-test del pointer handler ahora cae a `on_click_at`/
+      `on_right_click_at` (con coords locales al nodo) además de `on_click` —
+      necesario para los dientes del rail (que usan `on_click_at` para coexistir
+      con drag); paridad con el bucle winit. Navegación 100% por clic (sin
+      teclado): el panel se cierra re-clickeando el diente.
+    - **Limitación**: el modo **grafo** selecciona por arrastre (el nodegraph usa
+      `draggable`), que el backend layer-shell no rastrea aún → en layer-shell el
+      grafo es de sólo lectura; el modo **árbol** (default) funciona completo.
+      Compila; runtime se itera en el Hyprland del usuario (headless no verifica).
   - **11d ⏳ (stub)** — abrir Mónada/archivo con la app que corresponda. Hoy el
     right-click sobre un archivo cae a `xdg-open` como stand-in; falta el registro
     de apps de mirada (enrutar por Lens/tipo).

@@ -30,7 +30,7 @@ use crate::tray::{TrayIcon, TrayItem};
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 mod sidebar;
-pub use sidebar::{nav_panel_view, sidebar_rail_view};
+pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 
 /// Largo máximo de la etiqueta de una ventana en el `window_list` antes de
 /// recortar con `…`. Evita que un título largo empuje el resto de la barra.

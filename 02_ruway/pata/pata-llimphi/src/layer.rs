@@ -73,10 +73,13 @@ use pata_core::config::FloatingCard;
 use pata_core::widget::{Widget, WidgetCtx};
 use pata_core::{Anchor, Config, SurfaceKind};
 
+use crate::nouser::{self, MembersOutcome, NavState, NavTarget, PollOutcome};
 use crate::sampler::SamplerHandle;
 use crate::toplevel::{Toplevel, WindowEntry};
 use crate::tray::TrayHandle;
 use crate::{render, Model, Msg};
+
+use std::sync::mpsc::{Receiver, Sender};
 
 /// Traza de diagnóstico gateada por `PATA_DIAG` (cualquier valor la enciende).
 /// Para depurar el camino layer-shell en hardware sin recompilar A/B:
@@ -197,6 +200,15 @@ struct LayerApp {
     /// Comando del Quake corriendo en un hilo: su resultado llega por aquí. El
     /// latido del frame-callback lo sondea (`try_recv`) sin bloquear el loop.
     exec_rx: Option<std::sync::mpsc::Receiver<crate::shuma::RunResult>>,
+    /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
+    /// declara un navegador.
+    nav: NavState,
+    /// Canal por donde el hilo de poll de `list_monads` entrega resultados (~2s).
+    /// `None` si la config no tiene navegador (no se arranca el hilo).
+    nav_rx: Option<Receiver<PollOutcome>>,
+    /// Canal para que los hilos one-shot de `resolve_monad` entreguen miembros.
+    members_tx: Sender<MembersOutcome>,
+    members_rx: Receiver<MembersOutcome>,
     /// Una layer surface por cada barra de la config.
     panels: Vec<Panel>,
     /// Índice (en `panels`) de la surface del **tooltip flotante**: una layer
@@ -241,10 +253,22 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .filter(|(_, s)| s.kind == SurfaceKind::Bar)
         .map(|(i, _)| i)
         .collect();
-    if bars.is_empty() {
-        return Err("pata · la config no tiene ninguna superficie 'bar' para anclar".into());
+    // Los sidebars (Fase 11) también se anclan como layer surfaces propias.
+    let sidebars: Vec<usize> = cfg
+        .surfaces
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.kind == SurfaceKind::Sidebar)
+        .map(|(i, _)| i)
+        .collect();
+    if bars.is_empty() && sidebars.is_empty() {
+        return Err("pata · la config no tiene ninguna superficie anclable (bar/sidebar)".into());
     }
-    diag!("pata diag · backend LAYER-SHELL arranca · {} barra(s) en la config", bars.len());
+    diag!(
+        "pata diag · backend LAYER-SHELL arranca · {} barra(s) + {} sidebar(s)",
+        bars.len(),
+        sidebars.len()
+    );
 
     let conn = Connection::connect_to_env()?;
     let (globals, mut event_queue) = registry_queue_init(&conn)?;
@@ -266,6 +290,29 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let tray = crate::config_tiene_widget(&cfg, "tray")
         .then(TrayHandle::spawn)
         .flatten();
+
+    // Plano de datos del sidebar: un hilo que poolea `list_monads` cada ~2s y
+    // entrega por canal (mismo patrón que el sampler/exec — el bucle Wayland lo
+    // sondea sin bloquear). Sólo arranca si la config declara un navegador.
+    let nav_rx = crate::config_tiene_navigator(&cfg).then(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<PollOutcome>();
+        std::thread::spawn(move || {
+            let mut socket = None;
+            loop {
+                let outcome = nouser::poll(socket.clone());
+                socket = match &outcome {
+                    PollOutcome::Ok { socket: s, .. } => Some(s.clone()),
+                    PollOutcome::Failed(_) => None,
+                };
+                if tx.send(outcome).is_err() {
+                    break; // el bucle de UI terminó
+                }
+                std::thread::sleep(nouser::REFRESH_INTERVAL);
+            }
+        });
+        rx
+    });
+    let (members_tx, members_rx) = std::sync::mpsc::channel::<MembersOutcome>();
 
     let (surfaces, shuma) = Model::construir(&cfg);
     // El sampler en UTC si la config lo pide (se lee antes de mover `cfg` al app).
@@ -298,6 +345,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         sampler: SamplerHandle::spawn(utc),
         ctx: WidgetCtx::default(),
         exec_rx: None,
+        nav: NavState::default(),
+        nav_rx,
+        members_tx,
+        members_rx,
         panels: Vec::new(),
         tooltip_pi: None,
         tooltip_text: None,
@@ -365,6 +416,43 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             cache: None,
             width: size.0.max(1),
             height: thickness,
+            dirty: true,
+            hover_idx: None,
+            gpu: None,
+        });
+    }
+
+    // Una layer surface por sidebar (Fase 11): rail anclado al borde vertical con
+    // exclusive zone = su grosor. Colapsado mide `thickness`; al abrir un diente
+    // la surface CRECE en ancho (a `thickness + panel_width`) manteniendo la
+    // exclusive zone, así el panel flota sobre el área de trabajo sin recolocar el
+    // teselado — el mismo truco del drawer de shuma, pero en el eje horizontal.
+    for &idx in &sidebars {
+        let s = &app.cfg.surfaces[idx];
+        let thickness = s.thickness.max(1.0) as u32;
+        let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
+        let wl_surface = compositor.create_surface(&qh);
+        let layer = layer_shell.create_layer_surface(
+            &qh,
+            wl_surface,
+            Layer::Top,
+            Some("pata-sidebar".to_string()),
+            resolve_output(&s.output).as_ref(),
+        );
+        layer.set_anchor(sctk_anchor);
+        layer.set_size(size.0, size.1);
+        layer.set_exclusive_zone(thickness as i32);
+        // Sin teclado: la navegación es por clic (como las barras). Se cierra el
+        // panel volviendo a clickear el diente.
+        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.commit();
+        app.panels.push(Panel {
+            idx,
+            card: None,
+            layer,
+            cache: None,
+            width: thickness,
+            height: size.1.max(1),
             dirty: true,
             hover_idx: None,
             gpu: None,
@@ -698,6 +786,111 @@ impl LayerApp {
         }
     }
 
+    /// Sondea (sin bloquear) el plano de datos del sidebar: aplica el último poll
+    /// de `list_monads` y cualquier `resolve_monad` que haya terminado. Si cambió
+    /// algo, marca las superficies sidebar para re-pintar. Se llama en cada frame.
+    fn poll_nav(&mut self) {
+        let mut cambios = false;
+        // Drena el poll de Mónadas (nos quedamos con el último si hay varios).
+        if let Some(rx) = self.nav_rx.as_ref() {
+            let mut ultimo = None;
+            while let Ok(o) = rx.try_recv() {
+                ultimo = Some(o);
+            }
+            if let Some(outcome) = ultimo {
+                match outcome {
+                    PollOutcome::Ok { socket, resp } => {
+                        self.nav.socket = Some(socket);
+                        self.nav.apply_monads(*resp);
+                    }
+                    PollOutcome::Failed(e) => {
+                        self.nav.socket = None;
+                        self.nav.error = Some(e);
+                    }
+                }
+                cambios = true;
+            }
+        }
+        // Drena los miembros resueltos.
+        while let Ok(outcome) = self.members_rx.try_recv() {
+            match outcome {
+                MembersOutcome::Ok { monad, members } => self.nav.apply_members(monad, members),
+                MembersOutcome::Failed(e) => self.nav.error = Some(e),
+            }
+            cambios = true;
+        }
+        if cambios {
+            self.marcar_sidebars_dirty();
+        }
+    }
+
+    /// Marca todas las superficies sidebar para re-pintar.
+    fn marcar_sidebars_dirty(&mut self) {
+        for p in &mut self.panels {
+            if p.card.is_none() && self.cfg.surfaces[p.idx].kind == SurfaceKind::Sidebar {
+                p.dirty = true;
+            }
+        }
+    }
+
+    /// Índice (en `panels`) de la layer surface del sidebar `si`.
+    fn sidebar_panel_de(&self, si: usize) -> Option<usize> {
+        self.panels.iter().position(|p| p.idx == si && p.card.is_none())
+    }
+
+    /// Activa/repliega el diente `(si, ti)`: actualiza el estado y **redimensiona**
+    /// la layer surface del sidebar (crece a `thickness + panel_width` al abrir,
+    /// vuelve a `thickness` al cerrar). La exclusive zone no cambia, así el panel
+    /// flota sobre el área de trabajo (drawer horizontal).
+    fn set_sidebar_open(&mut self, si: usize, ti: usize) {
+        self.nav.toggle_tab(si, ti);
+        let Some(pi) = self.sidebar_panel_de(si) else {
+            return;
+        };
+        let s = &self.cfg.surfaces[si];
+        let thickness = s.thickness.max(1.0) as u32;
+        let abierto = matches!(self.nav.open, Some((s2, _)) if s2 == si);
+        let w = if abierto {
+            thickness + s.panel_width.max(1.0) as u32
+        } else {
+            thickness
+        };
+        {
+            let layer = &self.panels[pi].layer;
+            layer.set_size(w, 0);
+            layer.commit();
+        }
+        // El cache de hit-test es del layout viejo; invalidarlo (igual que shuma).
+        self.panels[pi].cache = None;
+        self.panels[pi].dirty = true;
+    }
+
+    /// Cierra el panel del sidebar (si alguno está abierto) y encoge su surface.
+    fn cerrar_sidebar(&mut self) {
+        if let Some((si, ti)) = self.nav.open {
+            self.set_sidebar_open(si, ti); // toggle del abierto = cerrar
+        }
+    }
+
+    /// Expande/colapsa un nodo del navegador; al abrir una Mónada sin miembros
+    /// resueltos lanza su `resolve_monad` en un hilo one-shot (entrega por canal).
+    fn nav_toggle(&mut self, id: u64) {
+        if self.nav.expanded.contains(&id) {
+            self.nav.expanded.remove(&id);
+        } else {
+            self.nav.expanded.insert(id);
+            if let (Some(mid), Some(sock)) =
+                (self.nav.needs_resolve(id), self.nav.socket.clone())
+            {
+                let tx = self.members_tx.clone();
+                std::thread::spawn(move || {
+                    let _ = tx.send(nouser::resolve(sock, mid));
+                });
+            }
+        }
+        self.marcar_sidebars_dirty();
+    }
+
     /// Recoge el último snapshot del hilo de muestreo (no bloquea). Si llegó uno
     /// nuevo, `tick`ea los widgets y marca todas las barras para re-pintar. El
     /// muestreo en sí (subprocesos que pueden colgarse) vive en `SamplerHandle`,
@@ -812,6 +1005,7 @@ impl LayerApp {
     fn draw(&mut self, pi: usize, qh: &QueueHandle<Self>) {
         self.maybe_sample();
         self.poll_exec();
+        self.poll_nav();
         self.ensure_gpu(pi);
 
         if !self.panels[pi].dirty {
@@ -861,6 +1055,15 @@ impl LayerApp {
                 &self.theme,
                 self.shuma_bar_px as f32,
                 vh,
+            )
+        } else if self.cfg.surfaces[idx].kind == SurfaceKind::Sidebar {
+            render::sidebar_surface_view(
+                &self.cfg.surfaces[idx],
+                idx,
+                w as f32,
+                h as f32,
+                &self.nav,
+                &self.theme,
             )
         } else {
             render::bar_view(
@@ -958,6 +1161,27 @@ impl LayerApp {
                 if let Some(t) = &self.tray {
                     t.activate(key);
                 }
+            }
+            // --- Sidebar navegador (Fase 11c-layer) ---
+            Msg::NavTabActivate(si, ti) => self.set_sidebar_open(si, ti),
+            Msg::NavClosePanel => self.cerrar_sidebar(),
+            Msg::NavSetMode(m) => {
+                self.nav.mode = m;
+                self.marcar_sidebars_dirty();
+            }
+            Msg::NavSelect(id) => {
+                self.nav.selected = Some(id);
+                self.marcar_sidebars_dirty();
+            }
+            Msg::NavToggle(id) => self.nav_toggle(id),
+            Msg::NavOpen(id) => {
+                if let Some(NavTarget::File(path)) = self.nav.targets.get(&id) {
+                    crate::spawn_cmd(&format!("xdg-open {}", crate::shell_quote(path)));
+                }
+            }
+            Msg::NavScroll(delta) => {
+                self.nav.scroll = (self.nav.scroll + delta).max(0.0);
+                self.marcar_sidebars_dirty();
             }
             Msg::Quit => self.exit = true,
             _ => {}
@@ -1292,15 +1516,27 @@ impl PointerHandler for LayerApp {
                 let (px, py) = (e.position.0 as f32, e.position.1 as f32);
                 let derecho = button == BTN_RIGHT;
                 let msg = self.panels[pi].cache.as_ref().and_then(|c| {
-                    hit_test_click(&c.mounted, &c.computed, px, py)
-                        .and_then(|i| c.mounted.nodes.get(i))
-                        .and_then(|n| {
-                            if derecho {
-                                n.on_right_click.clone()
-                            } else {
-                                n.on_click.clone()
-                            }
-                        })
+                    let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
+                    let n = c.mounted.nodes.get(i)?;
+                    // Primero el handler simple (`on_click`/`on_right_click`); si no
+                    // hay, el `*_at` (coords locales al nodo) — lo usan widgets que
+                    // coexisten con drag, como los dientes del rail. Paridad con el
+                    // bucle winit, que también prioriza así.
+                    if derecho {
+                        if let Some(m) = n.on_right_click.clone() {
+                            return Some(m);
+                        }
+                        let at = n.on_right_click_at.as_ref()?;
+                        let r = c.computed.get(n.id)?;
+                        at(px - r.x, py - r.y, r.w, r.h)
+                    } else {
+                        if let Some(m) = n.on_click.clone() {
+                            return Some(m);
+                        }
+                        let at = n.on_click_at.as_ref()?;
+                        let r = c.computed.get(n.id)?;
+                        at(px - r.x, py - r.y, r.w, r.h)
+                    }
                 });
                 if let Some(msg) = msg {
                     self.handle_msg(msg);
