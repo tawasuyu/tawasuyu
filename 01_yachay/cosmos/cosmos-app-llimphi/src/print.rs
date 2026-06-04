@@ -316,4 +316,77 @@ mod tests {
         std::fs::write(&path, &png).expect("escribir png");
         eprintln!("dial 90 en {path:?} ({} bytes)", png.len());
     }
+
+    /// Lámina con todos los glyphs de signos y planetas para inspección.
+    /// `cargo test -p cosmos-app-llimphi glyph_sheet -- --ignored --nocapture`
+    #[test]
+    #[ignore = "necesita GPU; genera PNG de inspección"]
+    fn glyph_sheet_a_png() {
+        use cosmos_render::glyphs::{planet_commands, sign_commands};
+        use cosmos_render::{DrawCommand, Rgba, TextAnchor};
+        use llimphi_ui::llimphi_layout::taffy::prelude::{length, Size, Style};
+        let ink = Rgba { r: 0.08, g: 0.08, b: 0.10, a: 1.0 };
+        let lab = Rgba { r: 0.45, g: 0.45, b: 0.5, a: 1.0 };
+        let signs = [
+            "aries", "taurus", "gemini", "cancer", "leo", "virgo", "libra",
+            "scorpio", "sagittarius", "capricorn", "aquarius", "pisces",
+        ];
+        let planets = [
+            "sun", "moon", "mercury", "venus", "mars", "jupiter", "saturn",
+            "uranus", "neptune", "pluto", "chiron", "north_node", "south_node",
+            "lilith",
+        ];
+        let cols = 7;
+        let cell = 96.0_f32;
+        let glyph = 46.0_f32;
+        let mut cmds: Vec<DrawCommand> = Vec::new();
+        let mut place = |i: usize, label: &str, gcmds: Vec<DrawCommand>, cmds: &mut Vec<DrawCommand>| {
+            let cx = (i % cols) as f32 * cell + cell / 2.0;
+            let cy = (i / cols) as f32 * cell + cell / 2.0;
+            // recoloca el glyph (vienen centrados en su propio cx/cy)
+            cmds.extend(gcmds);
+            cmds.push(DrawCommand::Text {
+                x: cx,
+                y: cy + glyph * 0.6,
+                content: label.to_string(),
+                color: lab,
+                size: 10.0,
+                anchor: TextAnchor::Middle,
+            });
+        };
+        let mut idx = 0usize;
+        for s in signs {
+            let cx = (idx % cols) as f32 * cell + cell / 2.0;
+            let cy = (idx / cols) as f32 * cell + cell / 2.0;
+            place(idx, s, sign_commands(s, cx, cy, glyph, ink, 2.2), &mut cmds);
+            idx += 1;
+        }
+        // siguiente fila redonda
+        idx = ((idx + cols - 1) / cols) * cols;
+        for p in planets {
+            let cx = (idx % cols) as f32 * cell + cell / 2.0;
+            let cy = (idx / cols) as f32 * cell + cell / 2.0;
+            place(idx, p, planet_commands(p, cx, cy, glyph, ink, 2.0), &mut cmds);
+            idx += 1;
+        }
+        let rows = (idx + cols - 1) / cols;
+        let side = (cols.max(rows)) as f32 * cell;
+        let canvas = cosmos_canvas_llimphi::canvas_view::<crate::model::Msg>(
+            cmds,
+            side,
+            Some(Color::from_rgba8(255, 253, 248, 255)),
+        );
+        let view = View::new(Style {
+            size: Size {
+                width: length(side),
+                height: length(side),
+            },
+            ..Default::default()
+        })
+        .children(vec![canvas]);
+        let png = render_view_to_png(view, side, 2.0).expect("render glyphs");
+        let path = std::env::temp_dir().join("cosmos-glyphs.png");
+        std::fs::write(&path, &png).expect("escribir png");
+        eprintln!("glyphs en {path:?} ({} bytes)", png.len());
+    }
 }

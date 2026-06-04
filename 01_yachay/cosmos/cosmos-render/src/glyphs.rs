@@ -1033,46 +1033,51 @@ pub fn sign_commands(
 }
 
 fn aries_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♈ Aries: dos cuernos de carnero que parten de un ápice central
-    // arriba, bajan diagonal hacia los lados, y se enroscan hacia
-    // adentro al final. Estilo Y con curls.
+    // ♈ Aries (cuernos de carnero): los dos trazos se unen abajo en el
+    // centro, suben abriéndose hacia los lados y rematan arriba en una
+    // punta que se enrosca hacia AFUERA — la forma clásica del glyph.
     //
-    //         /\          ← ápice
-    //        /  \
-    //       /    \        ← flancos
-    //      (      )       ← curls cerrando hacia adentro
-    //       \____/
-    let apex_x = cx;
-    let apex_y = cy - r * 0.85;
-    // Punto donde el flanco se convierte en curl (extremo exterior).
-    let curl_outer_y = cy + r * 0.20;
-    let curl_outer_dx = r * 0.65;
-    // Punto final del curl (hacia adentro, ligeramente arriba del
-    // máximo de la curva para dar sensación de enroscar).
-    let curl_inner_y = cy + r * 0.15;
-    let curl_inner_dx = r * 0.10;
-    // Profundidad del curl (cuánto baja antes de subir).
-    let curl_bottom_y = cy + r * 0.75;
-    // Trazo izquierdo: línea diagonal desde apex hasta el extremo
-    // exterior, después una curva Bezier que baja, redondea y vuelve
-    // hacia el centro-arriba.
+    //      ↶    ↷     ← puntas curvándose hacia afuera
+    //     (      )
+    //      \    /
+    //       \  /
+    //        \/        ← unión abajo
+    let j = (cx, cy + r * 0.70); // unión inferior
+    // Trazo izquierdo: sube desde la unión, se abre a la izquierda hasta la
+    // punta superior, y la punta se enrosca hacia afuera-abajo.
     let left = format!(
-        "M {apex_x} {apex_y} L {} {curl_outer_y} C {} {}, {} {}, {} {curl_inner_y}",
-        cx - curl_outer_dx,
-        cx - curl_outer_dx - r * 0.05,
-        curl_bottom_y,
-        cx - curl_inner_dx - r * 0.05,
-        curl_bottom_y - r * 0.05,
-        cx - curl_inner_dx,
+        "M {} {} C {} {}, {} {}, {} {} C {} {}, {} {}, {} {}",
+        j.0,
+        j.1,
+        cx - r * 0.10,
+        cy + r * 0.05,
+        cx - r * 0.48,
+        cy - r * 0.16,
+        cx - r * 0.50,
+        cy - r * 0.66, // punta superior-izq
+        cx - r * 0.52,
+        cy - r * 0.92,
+        cx - r * 0.80,
+        cy - r * 0.84,
+        cx - r * 0.82,
+        cy - r * 0.52, // enrosque hacia afuera
     );
     let right = format!(
-        "M {apex_x} {apex_y} L {} {curl_outer_y} C {} {}, {} {}, {} {curl_inner_y}",
-        cx + curl_outer_dx,
-        cx + curl_outer_dx + r * 0.05,
-        curl_bottom_y,
-        cx + curl_inner_dx + r * 0.05,
-        curl_bottom_y - r * 0.05,
-        cx + curl_inner_dx,
+        "M {} {} C {} {}, {} {}, {} {} C {} {}, {} {}, {} {}",
+        j.0,
+        j.1,
+        cx + r * 0.10,
+        cy + r * 0.05,
+        cx + r * 0.48,
+        cy - r * 0.16,
+        cx + r * 0.50,
+        cy - r * 0.66,
+        cx + r * 0.52,
+        cy - r * 0.92,
+        cx + r * 0.80,
+        cy - r * 0.84,
+        cx + r * 0.82,
+        cy - r * 0.52,
     );
     vec![
         DrawCommand::Path {
@@ -1131,16 +1136,18 @@ fn taurus_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCo
 }
 
 fn gemini_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCommand> {
-    // ♊ Géminis (gemelos): dos verticales paralelos como las
-    // columnas, con techo y piso rectos que las cierran. Forma de
-    // "Π" sobre su espejo. El usuario pidió la versión rectángulo
-    // limpio (no las barras curvas).
-    let top = cy - r * 0.75;
-    let bot = cy + r * 0.75;
-    let arm = r * 0.40;
-    let overhang = r * 0.10;
+    // ♊ Géminis (gemelos): dos columnas verticales unidas por un techo y
+    // un piso CURVOS (el techo abomba hacia arriba, el piso hacia abajo) —
+    // el "II" romano con remates curvos del glyph clásico.
+    let top = cy - r * 0.72;
+    let bot = cy + r * 0.72;
+    let arm = r * 0.42;
+    let overhang = r * 0.12;
+    let bow = r * 0.20;
+    let lx = cx - arm - overhang;
+    let rx = cx + arm + overhang;
     vec![
-        // Vertical izquierda
+        // Columna izquierda
         DrawCommand::Line {
             x1: cx - arm,
             y1: top,
@@ -1150,7 +1157,7 @@ fn gemini_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCo
             width: sw,
             dash: None,
         },
-        // Vertical derecha
+        // Columna derecha
         DrawCommand::Line {
             x1: cx + arm,
             y1: top,
@@ -1160,25 +1167,19 @@ fn gemini_commands(cx: f32, cy: f32, r: f32, color: Rgba, sw: f32) -> Vec<DrawCo
             width: sw,
             dash: None,
         },
-        // Techo
-        DrawCommand::Line {
-            x1: cx - arm - overhang,
-            y1: top,
-            x2: cx + arm + overhang,
-            y2: top,
-            color,
-            width: sw,
-            dash: None,
+        // Techo curvo (abomba hacia arriba).
+        DrawCommand::Path {
+            d: format!("M {lx} {top} Q {cx} {} {rx} {top}", top - bow),
+            stroke: Some(color),
+            fill: None,
+            stroke_w: sw,
         },
-        // Piso
-        DrawCommand::Line {
-            x1: cx - arm - overhang,
-            y1: bot,
-            x2: cx + arm + overhang,
-            y2: bot,
-            color,
-            width: sw,
-            dash: None,
+        // Piso curvo (abomba hacia abajo).
+        DrawCommand::Path {
+            d: format!("M {lx} {bot} Q {cx} {} {rx} {bot}", bot + bow),
+            stroke: Some(color),
+            fill: None,
+            stroke_w: sw,
         },
     ]
 }
