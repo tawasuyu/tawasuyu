@@ -15,9 +15,9 @@ description = "pata — el marco declarativo del escritorio: barras, paneles y d
 # evita arrastrar `std` aun con serde activo.
 serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
 # El vocabulario de config declarativa: pata describe su modelo como un Schema
-# editable (impl Configurable). allichay es no_std; sin su serde (el schema se
-# construye en vivo, no se serializa desde acá).
-allichay = { workspace = true, default-features = false }
+# editable (impl Configurable). allichay es no_std (su serde también lo es), así
+# que cruza la frontera a wawa sin arrastrar std.
+allichay = { workspace = true }
 
 [features]
 default = ["serde"]
