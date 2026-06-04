@@ -290,11 +290,14 @@ fn do_guardar(m: &mut Model) {
     }
 }
 
-/// Reconstruye el snapshot del árbol desde el store (tras una mutación).
+/// Reconstruye el snapshot del árbol: la rama fija «Efemérides → Hoy»
+/// (sintética, desde la config) al tope, luego el store.
 fn refresh_nav(m: &mut Model) {
+    let mut nodes = library::hoy_nodes(&m.cfg.user_location, &m.cfg.hoy_locations);
     if let Some(s) = &m.store {
-        m.nav_nodes = library::snapshot(s);
+        nodes.extend(library::snapshot(s));
     }
+    m.nav_nodes = nodes;
 }
 
 /// El nodo seleccionado interpretado como ids del store (según su tipo).
@@ -302,13 +305,89 @@ fn nav_click(m: &mut Model, key: String) {
     m.nav_selected = Some(key.clone());
     match m.node(&key).map(|n| n.kind) {
         Some(library::NavKind::Chart) => {
-            if let Some(id) = m.node(&key).and_then(|n| n.chart_id.clone()) {
+            if library::is_hoy_chart_key(&key) {
+                hoy_select(m, &key);
+            } else if let Some(id) = m.node(&key).and_then(|n| n.chart_id.clone()) {
+                m.hoy_active = None;
                 do_cargar(m, id);
             }
         }
         Some(_) => m.toggle_nav(key),
         None => {}
     }
+}
+
+/// Click en una carta de la rama «Hoy»: abre la carta del instante actual
+/// en esa ubicación. La carta fija del usuario, si no tiene ubicación,
+/// abre el diálogo «¿Dónde estoy?».
+fn hoy_select(m: &mut Model, key: &str) {
+    if key == library::HOY_USER_KEY {
+        match m.cfg.user_location.clone() {
+            Some(loc) => open_hoy_chart(m, key, &loc),
+            None => open_where_am_i(m),
+        }
+    } else if let Some(i) = library::parse_hoy_loc_key(key) {
+        if let Some(loc) = m.cfg.hoy_locations.get(i).cloned() {
+            open_hoy_chart(m, key, &loc);
+        }
+    }
+}
+
+/// Abre (o refresca) la carta «ahora» de una ubicación de «Hoy» como
+/// pestaña, reusando la pestaña por su clave sintética.
+fn open_hoy_chart(m: &mut Model, key: &str, loc: &model::GeoLoc) {
+    let chart = engine::now_chart(&loc.label, loc.lat, loc.lon);
+    let render = compute_render(m, &chart);
+    if let Some(i) = m.open.iter().position(|t| t.id.as_deref() == Some(key)) {
+        m.open[i].chart = chart.clone();
+        m.open[i].render = render.clone();
+        m.active_tab = i;
+    } else {
+        m.open.push(OpenTab {
+            id: Some(key.to_string()),
+            chart: chart.clone(),
+            render: render.clone(),
+        });
+        m.active_tab = m.open.len() - 1;
+    }
+    m.chart = chart;
+    m.render = render;
+    m.selected_card = Some(key.to_string());
+    m.nav_selected = Some(key.to_string());
+    m.hoy_active = Some(key.to_string());
+    recompute_astro(m);
+}
+
+/// Abre el diálogo «¿Dónde estoy?» para configurar la ubicación del usuario.
+fn open_where_am_i(m: &mut Model) {
+    m.dialog = Some(dialog::Dialog::HoyLoc(dialog::HoyLocForm {
+        target: dialog::HoyTarget::User,
+        label: "Mi ubicación".into(),
+        city_query: String::new(),
+        place: String::new(),
+        lat: String::new(),
+        lon: String::new(),
+    }));
+    m.dialog_field = dialog::DialogField::City;
+    m.dialog_input.set_text(String::new());
+    m.menu_open = None;
+    m.nav_ctx = None;
+}
+
+/// Abre el diálogo «carta de hoy por coordenadas» (se agrega bajo «Hoy»).
+fn open_add_hoy(m: &mut Model) {
+    m.dialog = Some(dialog::Dialog::HoyLoc(dialog::HoyLocForm {
+        target: dialog::HoyTarget::Extra,
+        label: String::new(),
+        city_query: String::new(),
+        place: String::new(),
+        lat: String::new(),
+        lon: String::new(),
+    }));
+    m.dialog_field = dialog::DialogField::City;
+    m.dialog_input.set_text(String::new());
+    m.menu_open = None;
+    m.nav_ctx = None;
 }
 
 fn new_group(m: &mut Model) {
@@ -740,12 +819,24 @@ fn dialog_focus(m: &mut Model, f: dialog::DialogField) {
 /// Aplica una ciudad del atlas al form de carta (autocompleta lat/lon/tz).
 fn dialog_pick_city(m: &mut Model, idx: usize) {
     let Some(city) = dialog::CITY_PRESETS.get(idx) else { return };
-    if let Some(dialog::Dialog::NewChart(c)) = m.dialog.as_mut() {
-        c.place = city.name.to_string();
-        c.lat = city.lat;
-        c.lon = city.lon;
-        c.tz = city.tz;
-        c.city_query = city.name.to_string();
+    match m.dialog.as_mut() {
+        Some(dialog::Dialog::NewChart(c)) => {
+            c.place = city.name.to_string();
+            c.lat = city.lat;
+            c.lon = city.lon;
+            c.tz = city.tz;
+            c.city_query = city.name.to_string();
+        }
+        Some(dialog::Dialog::HoyLoc(c)) => {
+            c.place = city.name.to_string();
+            c.lat = format!("{:.4}", city.lat);
+            c.lon = format!("{:.4}", city.lon);
+            c.city_query = city.name.to_string();
+            if c.label.trim().is_empty() {
+                c.label = city.name.to_string();
+            }
+        }
+        _ => {}
     }
     if m.dialog_field == dialog::DialogField::City {
         m.dialog_input.set_text(city.name.to_string());
@@ -825,6 +916,40 @@ fn dialog_confirm(m: &mut Model) {
                 }
                 Some(Err(e)) => m.error = Some(format!("crear carta: {e}")),
                 None => {}
+            }
+        }
+        Some(dialog::Dialog::HoyLoc(f)) => {
+            let lat: Option<f64> = f.lat.trim().parse().ok();
+            let lon: Option<f64> = f.lon.trim().parse().ok();
+            let (Some(lat), Some(lon)) = (lat, lon) else {
+                m.error = Some("Elegí una ciudad o tecleá lat/lon válidas".into());
+                m.dialog = Some(dialog::Dialog::HoyLoc(f));
+                return;
+            };
+            let label = match (f.label.trim(), f.place.trim()) {
+                (l, _) if !l.is_empty() => l.to_string(),
+                (_, p) if !p.is_empty() => p.to_string(),
+                _ => format!("{lat:.2}°, {lon:.2}°"),
+            };
+            let loc = model::GeoLoc { label, lat, lon };
+            match f.target {
+                dialog::HoyTarget::User => {
+                    m.cfg.user_location = Some(loc.clone());
+                    save_ui(m);
+                    refresh_nav(m);
+                    open_hoy_chart(m, library::HOY_USER_KEY, &loc);
+                    m.status_note = Some(format!("Ubicación fijada: {}", loc.label));
+                }
+                dialog::HoyTarget::Extra => {
+                    m.cfg.hoy_locations.push(loc.clone());
+                    let i = m.cfg.hoy_locations.len() - 1;
+                    save_ui(m);
+                    refresh_nav(m);
+                    let key = library::hoy_loc_key(i);
+                    m.nav_expanded.insert(library::HOY_CONTACT_KEY.to_string());
+                    open_hoy_chart(m, &key, &loc);
+                    m.status_note = Some(format!("Carta de hoy: {}", loc.label));
+                }
             }
         }
         None => {}
@@ -951,8 +1076,15 @@ impl App for Cosmos {
         if let Some(s) = &store {
             library::ensure_seed(s, &chart);
         }
-        let nav_nodes = store.as_ref().map(library::snapshot).unwrap_or_default();
+        // La rama fija «Efemérides → Hoy» (sintética) va al tope; luego el store.
+        let mut nav_nodes = library::hoy_nodes(&ui.cfg.user_location, &ui.cfg.hoy_locations);
+        if let Some(s) = &store {
+            nav_nodes.extend(library::snapshot(s));
+        }
         let nav_expanded = library::container_keys(&nav_nodes).into_iter().collect();
+
+        // Refresco horario de las cartas «Hoy» al instante actual.
+        handle.spawn_periodic(std::time::Duration::from_secs(3600), || Msg::HoyTick);
 
         // Una pestaña inicial con la carta de trabajo (scratch, sin id).
         let open = vec![OpenTab {
@@ -1032,6 +1164,7 @@ impl App for Cosmos {
             nav_ctx: None,
             nav_scroll: 0.0,
             print_scroll: 0.0,
+            hoy_active: None,
             rectify_offset_min: 0,
             rectify_events: Vec::new(),
             rectify_result: None,
@@ -1290,6 +1423,21 @@ impl App for Cosmos {
             }
             Msg::ImportGroup => do_import_group(&mut m),
             Msg::ExportGroup => do_export_group(&mut m),
+            Msg::AddHoyChart => open_add_hoy(&mut m),
+            Msg::HoyTick => {
+                // Refresca la carta «Hoy» mostrada al instante actual.
+                if let Some(key) = m.hoy_active.clone() {
+                    let loc = if key == library::HOY_USER_KEY {
+                        m.cfg.user_location.clone()
+                    } else {
+                        library::parse_hoy_loc_key(&key)
+                            .and_then(|i| m.cfg.hoy_locations.get(i).cloned())
+                    };
+                    if let Some(loc) = loc {
+                        open_hoy_chart(&mut m, &key, &loc);
+                    }
+                }
+            }
             // rectificador de hora
             Msg::RectifyNudge(d) => {
                 m.rectify_offset_min += d;
@@ -1326,7 +1474,20 @@ impl App for Cosmos {
             Msg::RectifyTriggers => compute_triggers(&mut m),
             // diálogos modales
             Msg::OpenNewContactDialog => open_contact_dialog(&mut m),
-            Msg::OpenNewChartDialog => open_chart_dialog(&mut m),
+            Msg::OpenNewChartDialog => {
+                // Sobre la rama «Hoy», «carta» agrega una carta del día por
+                // coordenadas; en cualquier otro lado, el diálogo normal.
+                let on_hoy = m
+                    .nav_selected
+                    .as_deref()
+                    .map(|k| k == library::HOY_CONTACT_KEY || library::is_hoy_chart_key(k))
+                    .unwrap_or(false);
+                if on_hoy {
+                    open_add_hoy(&mut m);
+                } else {
+                    open_chart_dialog(&mut m);
+                }
+            }
             Msg::DialogFocus(f) => dialog_focus(&mut m, f),
             Msg::DialogKey(ev) => {
                 m.dialog_input.apply_key(&ev);

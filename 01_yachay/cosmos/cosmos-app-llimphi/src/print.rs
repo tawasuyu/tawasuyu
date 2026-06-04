@@ -261,4 +261,20 @@ mod tests {
         std::fs::write(&path, &png).expect("escribir png");
         eprintln!("hoja escrita en {path:?} ({} bytes)", png.len());
     }
+
+    /// Rasteriza una carta «Hoy» (instante actual, Mundane) en una ubicación
+    /// para confirmar que computa una rueda real (no el mock vacío).
+    /// `cargo test -p cosmos-app-llimphi hoy_sheet -- --ignored --nocapture`
+    #[test]
+    #[ignore = "necesita GPU; genera PNG de inspección"]
+    fn hoy_sheet_a_png() {
+        let chart = crate::engine::now_chart("Lima (ahora)", -12.0464, -77.0428);
+        let (render, _e) = crate::engine::compute(&chart, &[], 1, false, 0);
+        let cfg = crate::model::CosmosConfig::default();
+        let view = crate::chrome::print_page(&chart, &render, &cfg);
+        let png = render_view_to_png(view, SHEET_LOGICAL_W, SCALE).expect("render hoy");
+        let path = std::env::temp_dir().join("cosmos-hoy.png");
+        std::fs::write(&path, &png).expect("escribir png");
+        eprintln!("hoja Hoy en {path:?} ({} bytes)", png.len());
+    }
 }

@@ -44,12 +44,36 @@ pub(crate) enum DialogField {
     Date,
     Time,
     City,
+    Lat,
+    Lon,
+}
+
+/// A quién aplica un formulario de ubicación «Hoy»: la ubicación fija del
+/// usuario, o una carta extra del día por coordenadas.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HoyTarget {
+    User,
+    Extra,
 }
 
 /// Estado de un diálogo abierto.
 pub(crate) enum Dialog {
     NewContact(NewContactForm),
     NewChart(NewChartForm),
+    HoyLoc(HoyLocForm),
+}
+
+/// Formulario de ubicación de la rama «Hoy» (sin fecha — la carta es del
+/// instante actual). El usuario elige una ciudad del atlas (autocompleta
+/// lat/lon) o teclea las coordenadas a mano.
+pub(crate) struct HoyLocForm {
+    pub target: HoyTarget,
+    pub label: String,
+    pub city_query: String,
+    pub place: String,
+    /// Coordenadas como texto editable (`""` hasta elegir ciudad o teclear).
+    pub lat: String,
+    pub lon: String,
 }
 
 pub(crate) struct NewContactForm {
@@ -80,6 +104,10 @@ impl Dialog {
             (Dialog::NewChart(c), DialogField::Date) => c.date.clone(),
             (Dialog::NewChart(c), DialogField::Time) => c.time.clone(),
             (Dialog::NewChart(c), DialogField::City) => c.city_query.clone(),
+            (Dialog::HoyLoc(c), DialogField::Label) => c.label.clone(),
+            (Dialog::HoyLoc(c), DialogField::City) => c.city_query.clone(),
+            (Dialog::HoyLoc(c), DialogField::Lat) => c.lat.clone(),
+            (Dialog::HoyLoc(c), DialogField::Lon) => c.lon.clone(),
             _ => String::new(),
         }
     }
@@ -91,6 +119,10 @@ impl Dialog {
             (Dialog::NewChart(c), DialogField::Date) => c.date = v,
             (Dialog::NewChart(c), DialogField::Time) => c.time = v,
             (Dialog::NewChart(c), DialogField::City) => c.city_query = v,
+            (Dialog::HoyLoc(c), DialogField::Label) => c.label = v,
+            (Dialog::HoyLoc(c), DialogField::City) => c.city_query = v,
+            (Dialog::HoyLoc(c), DialogField::Lat) => c.lat = v,
+            (Dialog::HoyLoc(c), DialogField::Lon) => c.lon = v,
             _ => {}
         }
     }
@@ -116,6 +148,13 @@ pub(crate) fn dialog_overlay(model: &Model, theme: &Theme) -> Option<View<Msg>> 
     let (title, body): (&str, Vec<View<Msg>>) = match dialog {
         Dialog::NewContact(_) => ("Nuevo contacto", contact_body(model, theme)),
         Dialog::NewChart(_) => ("Nueva carta", chart_body(model, theme)),
+        Dialog::HoyLoc(f) => (
+            match f.target {
+                HoyTarget::User => "¿Dónde estoy?",
+                HoyTarget::Extra => "Carta de hoy",
+            },
+            hoy_body(model, theme),
+        ),
     };
 
     // Card centrada.
@@ -269,6 +308,52 @@ fn chart_body(model: &Model, theme: &Theme) -> Vec<View<Msg>> {
             );
         }
     }
+    rows
+}
+
+fn hoy_body(model: &Model, theme: &Theme) -> Vec<View<Msg>> {
+    let mut rows = vec![
+        field_row(model, theme, "Etiqueta", DialogField::Label),
+        field_row(model, theme, "Ciudad", DialogField::City),
+    ];
+    // Lista de ciudades que matchean (al editar el campo Ciudad).
+    if model.dialog_field == DialogField::City {
+        if let Some(Dialog::HoyLoc(c)) = &model.dialog {
+            for (idx, city) in city_matches(&c.city_query) {
+                rows.push(
+                    View::new(Style {
+                        size: Size {
+                            width: percent(1.0_f32),
+                            height: length(22.0_f32),
+                        },
+                        flex_shrink: 0.0,
+                        padding: Rect {
+                            left: length(10.0_f32),
+                            right: length(8.0_f32),
+                            top: length(0.0_f32),
+                            bottom: length(0.0_f32),
+                        },
+                        align_items: Some(AlignItems::Center),
+                        ..Default::default()
+                    })
+                    .hover_fill(theme.bg_row_hover)
+                    .radius(3.0)
+                    .on_click(Msg::DialogPickCity(idx))
+                    .children(vec![View::new(Style {
+                        size: Size {
+                            width: percent(1.0_f32),
+                            height: Dimension::auto(),
+                        },
+                        ..Default::default()
+                    })
+                    .text_aligned(city.name.to_string(), 11.0, theme.fg_muted, Alignment::Start)]),
+                );
+            }
+        }
+    }
+    // Coordenadas (editables a mano o autocompletadas por la ciudad).
+    rows.push(field_row(model, theme, "Latitud", DialogField::Lat));
+    rows.push(field_row(model, theme, "Longitud", DialogField::Lon));
     rows
 }
 

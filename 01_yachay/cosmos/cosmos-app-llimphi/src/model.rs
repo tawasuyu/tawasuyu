@@ -471,6 +471,16 @@ pub(crate) enum WheelOpt {
 
 /// Configuración persistente del visor: tema, opciones del wheel,
 /// instante de cómputo astronómico.
+/// Una ubicación terrestre nombrada (para la rama «Hoy»: la ubicación del
+/// usuario y las cartas del día por coordenadas). La fecha/hora no se
+/// guarda — esas cartas son siempre del instante actual.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GeoLoc {
+    pub(crate) label: String,
+    pub(crate) lat: f64,
+    pub(crate) lon: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct CosmosConfig {
     pub(crate) theme_dark: bool,
@@ -488,6 +498,14 @@ pub(crate) struct CosmosConfig {
     /// `true` = las gráficas astronómicas usan el instante actual;
     /// `false` = usan el instante de la carta cargada.
     pub(crate) use_now: bool,
+    /// Ubicación del usuario para la carta fija «Hoy → Mi ubicación».
+    /// `None` hasta que el usuario la configure («¿Dónde estoy?»).
+    #[serde(default)]
+    pub(crate) user_location: Option<GeoLoc>,
+    /// Ubicaciones extra de la rama «Hoy» (cartas del día por coordenadas).
+    /// Persisten el lugar; la fecha es siempre hoy.
+    #[serde(default)]
+    pub(crate) hoy_locations: Vec<GeoLoc>,
 }
 
 impl Default for CosmosConfig {
@@ -501,6 +519,8 @@ impl Default for CosmosConfig {
             asc_cross: true,
             rot_offset_deg: 0.0,
             use_now: false,
+            user_location: None,
+            hoy_locations: Vec::new(),
         }
     }
 }
@@ -632,6 +652,10 @@ pub(crate) enum Msg {
     ImportGroup,
     /// Exporta el grupo seleccionado a un archivo JSON (diálogo Guardar).
     ExportGroup,
+    /// Tick horario: refresca la carta «Hoy» activa al instante actual.
+    HoyTick,
+    /// Abre el diálogo «agregar carta de hoy por coordenadas» bajo «Hoy».
+    AddHoyChart,
     // rectificador de hora
     /// Corre el jog de la hora en `delta` minutos (puede ser negativo).
     RectifyNudge(i64),
@@ -777,6 +801,9 @@ pub(crate) struct Model {
     pub(crate) nav_scroll: f32,
     /// Desplazamiento vertical de la previsualización de la hoja imprimible.
     pub(crate) print_scroll: f32,
+    /// Clave del nodo «Hoy» actualmente mostrado (para refrescarlo cada
+    /// hora). `None` si la carta activa no es de la rama «Hoy».
+    pub(crate) hoy_active: Option<String>,
     // rectificador de hora (direcciones primarias)
     /// Jog de la hora de nacimiento en minutos (no toca la carta guardada
     /// hasta «Aplicar»). Mueve ángulos/casas en vivo.
