@@ -361,6 +361,11 @@ pub(crate) enum DeclKind {
     /// resetear a `[Scroll]`.
     BackgroundAttachment(Vec<BackgroundAttachment>),
     CaretShape(CaretShape),
+    BaselineSource(BaselineSource),
+    AlignmentBaseline(AlignmentBaseline),
+    DominantBaseline(DominantBaseline),
+    PaintOrder(PaintOrder),
+    MarkerSide(MarkerSide),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -662,6 +667,11 @@ impl Decl {
                     if att.is_empty() { vec![BackgroundAttachment::Scroll] } else { att.clone() };
             }
             DeclKind::CaretShape(c) => s.caret_shape = *c,
+            DeclKind::BaselineSource(b) => s.baseline_source = *b,
+            DeclKind::AlignmentBaseline(a) => s.alignment_baseline = *a,
+            DeclKind::DominantBaseline(d) => s.dominant_baseline = *d,
+            DeclKind::PaintOrder(p) => s.paint_order = *p,
+            DeclKind::MarkerSide(m) => s.marker_side = *m,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

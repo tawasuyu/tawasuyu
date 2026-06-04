@@ -321,6 +321,12 @@ impl StyleEngine {
             style.font_palette = p.font_palette.clone();
             style.font_variant_alternates = p.font_variant_alternates.clone();
             style.caret_shape = p.caret_shape;
+            // SVG 2 — dominant-baseline, paint-order heredan;
+            // alignment-baseline y baseline-source NO heredan.
+            // CSS Lists 3 — marker-side hereda.
+            style.dominant_baseline = p.dominant_baseline;
+            style.paint_order = p.paint_order;
+            style.marker_side = p.marker_side;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -5727,6 +5733,216 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).caret_shape,
             CaretShape::Block
+        );
+    }
+
+    #[test]
+    fn baseline_source_fase_7_364() {
+        assert_eq!(parse_baseline_source("auto"), Some(BaselineSource::Auto));
+        assert_eq!(parse_baseline_source("FIRST"), Some(BaselineSource::First));
+        assert_eq!(parse_baseline_source("last"), Some(BaselineSource::Last));
+        assert_eq!(parse_baseline_source("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { baseline-source: last }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.baseline_source, BaselineSource::Last);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).baseline_source,
+            BaselineSource::Auto
+        );
+    }
+
+    #[test]
+    fn alignment_baseline_fase_7_365() {
+        assert_eq!(
+            parse_alignment_baseline("baseline"),
+            Some(AlignmentBaseline::Baseline)
+        );
+        assert_eq!(
+            parse_alignment_baseline("TEXT-BOTTOM"),
+            Some(AlignmentBaseline::TextBottom)
+        );
+        assert_eq!(
+            parse_alignment_baseline("central"),
+            Some(AlignmentBaseline::Central)
+        );
+        assert_eq!(
+            parse_alignment_baseline("mathematical"),
+            Some(AlignmentBaseline::Mathematical)
+        );
+        assert_eq!(parse_alignment_baseline("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { alignment-baseline: central }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.alignment_baseline, AlignmentBaseline::Central);
+        // NO hereda — vuelve a Baseline.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).alignment_baseline,
+            AlignmentBaseline::Baseline
+        );
+    }
+
+    #[test]
+    fn dominant_baseline_fase_7_366() {
+        assert_eq!(
+            parse_dominant_baseline("auto"),
+            Some(DominantBaseline::Auto)
+        );
+        assert_eq!(
+            parse_dominant_baseline("HANGING"),
+            Some(DominantBaseline::Hanging)
+        );
+        assert_eq!(
+            parse_dominant_baseline("mathematical"),
+            Some(DominantBaseline::Mathematical)
+        );
+        assert_eq!(parse_dominant_baseline("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { dominant-baseline: hanging }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.dominant_baseline, DominantBaseline::Hanging);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).dominant_baseline,
+            DominantBaseline::Hanging
+        );
+    }
+
+    #[test]
+    fn paint_order_fase_7_367() {
+        // `normal` = fill, stroke, markers.
+        assert_eq!(parse_paint_order("normal"), Some(PaintOrder::default()));
+        // 1 keyword completa con el orden canónico.
+        assert_eq!(
+            parse_paint_order("stroke"),
+            Some(PaintOrder {
+                one: PaintFragment::Stroke,
+                two: PaintFragment::Fill,
+                three: PaintFragment::Markers,
+            })
+        );
+        // 2 keywords.
+        assert_eq!(
+            parse_paint_order("markers stroke"),
+            Some(PaintOrder {
+                one: PaintFragment::Markers,
+                two: PaintFragment::Stroke,
+                three: PaintFragment::Fill,
+            })
+        );
+        // 3 keywords explícitos.
+        assert_eq!(
+            parse_paint_order("stroke markers fill"),
+            Some(PaintOrder {
+                one: PaintFragment::Stroke,
+                two: PaintFragment::Markers,
+                three: PaintFragment::Fill,
+            })
+        );
+        // Duplicado descarta.
+        assert_eq!(parse_paint_order("fill fill"), None);
+        // Token desconocido descarta.
+        assert_eq!(parse_paint_order("foo"), None);
+        // Más de 3 descarta.
+        assert_eq!(parse_paint_order("fill stroke markers fill"), None);
+
+        let html = r##"<html><head><style>
+            body { paint-order: stroke }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.paint_order.one, PaintFragment::Stroke);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).paint_order.one,
+            PaintFragment::Stroke
+        );
+    }
+
+    #[test]
+    fn marker_side_fase_7_368() {
+        assert_eq!(parse_marker_side("match-self"), Some(MarkerSide::MatchSelf));
+        assert_eq!(
+            parse_marker_side("MATCH-PARENT"),
+            Some(MarkerSide::MatchParent)
+        );
+        assert_eq!(parse_marker_side("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { marker-side: match-parent }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.marker_side, MarkerSide::MatchParent);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).marker_side,
+            MarkerSide::MatchParent
         );
     }
 

@@ -784,6 +784,17 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_background_attachment(value).map(DeclKind::BackgroundAttachment)
         }
         "caret-shape" => parse_caret_shape(value).map(DeclKind::CaretShape),
+        "baseline-source" => {
+            parse_baseline_source(value).map(DeclKind::BaselineSource)
+        }
+        "alignment-baseline" => {
+            parse_alignment_baseline(value).map(DeclKind::AlignmentBaseline)
+        }
+        "dominant-baseline" => {
+            parse_dominant_baseline(value).map(DeclKind::DominantBaseline)
+        }
+        "paint-order" => parse_paint_order(value).map(DeclKind::PaintOrder),
+        "marker-side" => parse_marker_side(value).map(DeclKind::MarkerSide),
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
@@ -3150,6 +3161,105 @@ pub(crate) fn parse_caret_shape(value: &str) -> Option<CaretShape> {
         "bar" => Some(CaretShape::Bar),
         "block" => Some(CaretShape::Block),
         "underscore" => Some(CaretShape::Underscore),
+        _ => None,
+    }
+}
+
+/// `baseline-source`: `auto | first | last`. Fase 7.364.
+pub(crate) fn parse_baseline_source(value: &str) -> Option<BaselineSource> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(BaselineSource::Auto),
+        "first" => Some(BaselineSource::First),
+        "last" => Some(BaselineSource::Last),
+        _ => None,
+    }
+}
+
+/// `alignment-baseline` (SVG 2):
+/// `baseline | text-bottom | alphabetic | ideographic | middle |
+/// central | mathematical | text-top | bottom | center | top`.
+/// Fase 7.365.
+pub(crate) fn parse_alignment_baseline(value: &str) -> Option<AlignmentBaseline> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "baseline" => Some(AlignmentBaseline::Baseline),
+        "text-bottom" => Some(AlignmentBaseline::TextBottom),
+        "alphabetic" => Some(AlignmentBaseline::Alphabetic),
+        "ideographic" => Some(AlignmentBaseline::Ideographic),
+        "middle" => Some(AlignmentBaseline::Middle),
+        "central" => Some(AlignmentBaseline::Central),
+        "mathematical" => Some(AlignmentBaseline::Mathematical),
+        "text-top" => Some(AlignmentBaseline::TextTop),
+        "bottom" => Some(AlignmentBaseline::Bottom),
+        "center" => Some(AlignmentBaseline::Center),
+        "top" => Some(AlignmentBaseline::Top),
+        _ => None,
+    }
+}
+
+/// `dominant-baseline` (SVG 2):
+/// `auto | text-bottom | alphabetic | ideographic | middle | central |
+/// mathematical | hanging | text-top`. Fase 7.366.
+pub(crate) fn parse_dominant_baseline(value: &str) -> Option<DominantBaseline> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(DominantBaseline::Auto),
+        "text-bottom" => Some(DominantBaseline::TextBottom),
+        "alphabetic" => Some(DominantBaseline::Alphabetic),
+        "ideographic" => Some(DominantBaseline::Ideographic),
+        "middle" => Some(DominantBaseline::Middle),
+        "central" => Some(DominantBaseline::Central),
+        "mathematical" => Some(DominantBaseline::Mathematical),
+        "hanging" => Some(DominantBaseline::Hanging),
+        "text-top" => Some(DominantBaseline::TextTop),
+        _ => None,
+    }
+}
+
+/// `paint-order` (SVG 2): `normal | [fill | stroke | markers]+`.
+/// Si se especifican < 3 fragments, los faltantes se completan en el
+/// orden canónico `fill stroke markers` (descartando duplicados).
+/// Fase 7.367.
+pub(crate) fn parse_paint_order(value: &str) -> Option<PaintOrder> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("normal") {
+        return Some(PaintOrder::default());
+    }
+    fn frag(t: &str) -> Option<PaintFragment> {
+        match t.to_ascii_lowercase().as_str() {
+            "fill" => Some(PaintFragment::Fill),
+            "stroke" => Some(PaintFragment::Stroke),
+            "markers" => Some(PaintFragment::Markers),
+            _ => None,
+        }
+    }
+    let mut given: Vec<PaintFragment> = Vec::new();
+    for tok in v.split_whitespace() {
+        let f = frag(tok)?;
+        if given.contains(&f) {
+            return None;
+        }
+        given.push(f);
+    }
+    if given.is_empty() || given.len() > 3 {
+        return None;
+    }
+    // Completar con los faltantes en orden canónico.
+    for f in [PaintFragment::Fill, PaintFragment::Stroke, PaintFragment::Markers] {
+        if !given.contains(&f) {
+            given.push(f);
+        }
+    }
+    Some(PaintOrder {
+        one: given[0],
+        two: given[1],
+        three: given[2],
+    })
+}
+
+/// `marker-side`: `match-self | match-parent`. Fase 7.368.
+pub(crate) fn parse_marker_side(value: &str) -> Option<MarkerSide> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "match-self" => Some(MarkerSide::MatchSelf),
+        "match-parent" => Some(MarkerSide::MatchParent),
         _ => None,
     }
 }

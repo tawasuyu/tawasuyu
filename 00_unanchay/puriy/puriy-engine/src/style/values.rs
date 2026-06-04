@@ -577,6 +577,21 @@ pub struct ComputedStyle {
     /// `caret-shape` (Fase 7.363). Default `Auto`. **Heredable**.
     /// Plumb: el caret se pinta siempre como bar.
     pub caret_shape: CaretShape,
+    /// `baseline-source` (Fase 7.364). Default `Auto`. NO hereda.
+    /// Plumb: el inline-flow usa siempre la baseline del primer hijo.
+    pub baseline_source: BaselineSource,
+    /// `alignment-baseline` (Fase 7.365). Default `Baseline`. NO hereda.
+    /// Plumb: SVG no implementado, el text-anchor lo ignora.
+    pub alignment_baseline: AlignmentBaseline,
+    /// `dominant-baseline` (Fase 7.366). Default `Auto`. **Heredable**.
+    /// Plumb.
+    pub dominant_baseline: DominantBaseline,
+    /// `paint-order` (Fase 7.367). Default `Normal` (= `fill stroke
+    /// markers`). **Heredable**. Plumb.
+    pub paint_order: PaintOrder,
+    /// `marker-side` (Fase 7.368). Default `MatchSelf`. **Heredable**.
+    /// Plumb.
+    pub marker_side: MarkerSide,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1760,6 +1775,91 @@ pub enum CaretShape {
     Underscore,
 }
 
+/// `baseline-source` (CSS Inline Layout 3). NO hereda. Default `Auto`.
+/// Fase 7.364.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BaselineSource {
+    #[default]
+    Auto,
+    First,
+    Last,
+}
+
+/// `alignment-baseline` (SVG 2). NO hereda. Default `Baseline`.
+/// Fase 7.365.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AlignmentBaseline {
+    #[default]
+    Baseline,
+    TextBottom,
+    Alphabetic,
+    Ideographic,
+    Middle,
+    Central,
+    Mathematical,
+    TextTop,
+    Bottom,
+    Center,
+    Top,
+}
+
+/// `dominant-baseline` (SVG 2). Heredable. Default `Auto`. Fase 7.366.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DominantBaseline {
+    #[default]
+    Auto,
+    TextBottom,
+    Alphabetic,
+    Ideographic,
+    Middle,
+    Central,
+    Mathematical,
+    Hanging,
+    TextTop,
+}
+
+/// `paint-order` (SVG 2). Heredable. Default `Normal` (= `fill stroke
+/// markers`). Cuando se especifican `<paint-fragment>+` los faltantes
+/// se completan en orden canónico. Fase 7.367.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PaintOrder {
+    pub one: PaintFragment,
+    pub two: PaintFragment,
+    pub three: PaintFragment,
+}
+
+impl Default for PaintOrder {
+    fn default() -> Self {
+        Self {
+            one: PaintFragment::Fill,
+            two: PaintFragment::Stroke,
+            three: PaintFragment::Markers,
+        }
+    }
+}
+
+impl PaintOrder {
+    pub fn is_normal(self) -> bool {
+        self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaintFragment {
+    Fill,
+    Stroke,
+    Markers,
+}
+
+/// `marker-side` (CSS Lists 3). Heredable. Default `MatchSelf`.
+/// Fase 7.368.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkerSide {
+    #[default]
+    MatchSelf,
+    MatchParent,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2801,6 +2901,11 @@ impl Default for ComputedStyle {
             font_variant_alternates: FontVariantAlternates::default(),
             background_attachment: vec![BackgroundAttachment::Scroll],
             caret_shape: CaretShape::Auto,
+            baseline_source: BaselineSource::Auto,
+            alignment_baseline: AlignmentBaseline::Baseline,
+            dominant_baseline: DominantBaseline::Auto,
+            paint_order: PaintOrder::default(),
+            marker_side: MarkerSide::MatchSelf,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
