@@ -29,3 +29,6 @@ tracing-subscriber = { workspace = true }
 ulid = { workspace = true }
 nix = { workspace = true }
 libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

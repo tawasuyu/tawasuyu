@@ -29,16 +29,41 @@ use tracing::{error, info, warn};
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let sock = default_socket_path();
+    let pid_path = pid_path_for(&sock);
+
+    // 1) Lock exclusivo no-bloqueante sobre el `.pid` — singleton garantizado
+    //    al nivel del kernel. Si falla, OTRO shuma-daemon vivo lo tiene y
+    //    abortamos con un mensaje claro (incluye el PID dueño). El handle
+    //    se retiene hasta el final de `main`: cuando se drop, el OS libera
+    //    el lock automáticamente (incluso si crasheamos sin Drop ordenado).
+    let _lockfile = acquire_lockfile(&pid_path).with_context(|| {
+        format!(
+            "no se pudo adquirir el lockfile {} — ¿hay otro shuma-daemon corriendo?",
+            pid_path.display()
+        )
+    })?;
+
+    // 2) Defensa adicional contra socket vivo (el lockfile protege contra
+    //    dos instancias del mismo usuario; este chequeo cubre el caso de
+    //    socket dejado por otro usuario o por un proceso que escapó del
+    //    lock por compartir directorio).
+    if socket_in_use(&sock) {
+        anyhow::bail!(
+            "el socket {} ya está atendido por otro proceso — abortando para no pisarlo",
+            sock.display()
+        );
+    }
+
     if sock.exists() {
-        // Si ya existe, asumimos restart limpio. Si hubiera otro daemon vivo,
-        // bind fallaría con EADDRINUSE — más adelante: lockfile + check de PID.
+        // Socket stale (post-crash): el lockfile ya garantizó que no hay
+        // otro daemon vivo, así que es seguro barrerlo.
         let _ = std::fs::remove_file(&sock);
     }
     if let Some(parent) = sock.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     let listener = UnixListener::bind(&sock).with_context(|| format!("bind {}", sock.display()))?;
-    info!(socket = %sock.display(), "shuma-daemon listening");
+    info!(socket = %sock.display(), pid_lock = %pid_path.display(), "shuma-daemon listening");
     let daemon_started = std::time::Instant::now();
 
     // Sidecar pool: una sesión global del daemon + N sesiones efímeras
@@ -1409,6 +1434,65 @@ fn init_tracing() {
     fmt().with_env_filter(filter).init();
 }
 
+/// Path del lockfile asociado al socket admin: mismo dir, extensión `.pid`.
+fn pid_path_for(sock: &std::path::Path) -> std::path::PathBuf {
+    sock.with_extension("pid")
+}
+
+/// ¿Hay un peer atendiendo el socket admin? Distingue stale (post-crash)
+/// de vivo (otro daemon). Mismo patrón que arje-zero y sandokan-local.
+fn socket_in_use(path: &std::path::Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    std::os::unix::net::UnixStream::connect(path).is_ok()
+}
+
+/// Adquiere un lock exclusivo no-bloqueante sobre `pid_path`, escribe el
+/// PID actual y devuelve el `File` que sostiene el lock. Mientras el
+/// `File` viva, el kernel garantiza que ningún otro proceso adquiera el
+/// mismo lock (advisory, pero todos los daemones cooperan al llamar esto
+/// antes de bindear). Cuando el `File` se drop —Drop ordenado o crash—,
+/// el OS libera el lock; el `.pid` queda en disco pero ya no protege.
+fn acquire_lockfile(pid_path: &std::path::Path) -> anyhow::Result<std::fs::File> {
+    use std::io::{Seek, SeekFrom, Write};
+    use std::os::fd::AsRawFd;
+
+    if let Some(parent) = pid_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    // No truncamos al abrir: si flock falla, queremos preservar el PID
+    // viejo para que el mensaje de error sea informativo.
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .open(pid_path)
+        .with_context(|| format!("abrir {}", pid_path.display()))?;
+
+    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if r != 0 {
+        let err = std::io::Error::last_os_error();
+        let other_pid = std::fs::read_to_string(pid_path)
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "?".to_string());
+        anyhow::bail!(
+            "lockfile {} ya tomado por PID {} ({err})",
+            pid_path.display(),
+            other_pid,
+        );
+    }
+
+    // Tenemos el lock: actualizamos el contenido al PID actual.
+    f.set_len(0)?;
+    f.seek(SeekFrom::Start(0))?;
+    writeln!(f, "{}", std::process::id())?;
+    f.flush()?;
+    Ok(f)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1580,5 +1664,60 @@ mod tests {
             "no llegó el stdout final: {frames:?}"
         );
         assert!(matches!(frames.last(), Some(Response::ExecExited(0))));
+    }
+
+    // -----------------------------------------------------------------
+    //  Singleton del daemon: socket_in_use + flock(LOCK_EX | LOCK_NB)
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn pid_path_es_sock_con_extension_pid() {
+        let p = pid_path_for(std::path::Path::new("/run/foo.sock"));
+        assert_eq!(p, std::path::PathBuf::from("/run/foo.pid"));
+    }
+
+    #[test]
+    fn socket_in_use_false_para_path_inexistente() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let p = tmp.path().join("ausente.sock");
+        assert!(!socket_in_use(&p));
+    }
+
+    #[test]
+    fn lockfile_se_adquiere_y_escribe_el_pid_actual() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let p = tmp.path().join("shuma.pid");
+        let _guard = acquire_lockfile(&p).expect("primer lock");
+        let leido = std::fs::read_to_string(&p).expect("read pid");
+        assert_eq!(leido.trim(), std::process::id().to_string());
+    }
+
+    #[test]
+    fn lockfile_segundo_lock_en_el_mismo_archivo_falla() {
+        // Dos handles distintos al MISMO path: el segundo flock debe
+        // fallar con EWOULDBLOCK. Equivale al escenario "dos daemones
+        // arrancan a la vez".
+        let tmp = tempfile::TempDir::new().unwrap();
+        let p = tmp.path().join("compit.pid");
+        let _primer = acquire_lockfile(&p).expect("primer lock");
+        let err = acquire_lockfile(&p)
+            .expect_err("el segundo debe ser rechazado por el kernel");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("ya tomado") || msg.contains("PID"),
+            "mensaje no enuncia conflicto: {msg}"
+        );
+    }
+
+    #[test]
+    fn lockfile_drop_del_primer_handle_libera_el_lock() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let p = tmp.path().join("relevo.pid");
+        // Sacamos el lock + lo droppeamos.
+        let primer = acquire_lockfile(&p).expect("primer lock");
+        drop(primer);
+        // El segundo debe tomar el lock sin error.
+        let _segundo =
+            acquire_lockfile(&p).expect("tras drop del primero, el segundo debe poder lockear");
     }
 }
