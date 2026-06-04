@@ -20,6 +20,33 @@ use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 use rimay_verbo_core::{EmbedError, EmbeddingVector, ModelId, Provider};
 use tokio::sync::Mutex;
 
+/// Env var canónica que autoriza al provider a descargar el modelo de
+/// Hugging Face si no estuviera en cache. Acepta `1`, `true`, `yes` (case
+/// insensitive). Cualquier otro valor o ausencia → no autorizado.
+///
+/// Es un opt-in EXPLÍCITO porque la primera llamada a `TextEmbedding::try_new`
+/// puede bajar >100 MB sin más aviso que el log de `fastembed`. La política
+/// de la suite es que ningún binario consuma red por su cuenta sin que el
+/// operador lo haya autorizado de forma legible — esta var es el seam.
+pub const ENV_ALLOW_DOWNLOAD: &str = "RIMAY_VERBO_ALLOW_DOWNLOAD";
+
+/// ¿La env var [`ENV_ALLOW_DOWNLOAD`] autoriza la descarga del modelo?
+/// Función parametrizada para que los tests puedan ejercitar la matriz de
+/// valores sin tocar el entorno del proceso (que no es seguro entre tests
+/// en paralelo).
+fn download_allowed_from(value: Option<&str>) -> bool {
+    match value.map(str::trim) {
+        Some(v) => matches!(v.to_ascii_lowercase().as_str(), "1" | "true" | "yes"),
+        None => false,
+    }
+}
+
+/// Lectura live de [`ENV_ALLOW_DOWNLOAD`]. Útil desde el daemon o desde un
+/// caller que quiera decidir antes de instanciar el provider.
+pub fn download_allowed() -> bool {
+    download_allowed_from(std::env::var(ENV_ALLOW_DOWNLOAD).ok().as_deref())
+}
+
 /// Provider de embeddings vía fastembed/ONNX, ejecutado en CPU.
 ///
 /// `try_new` descarga el modelo al primer uso si no está en cache. Esa
@@ -43,7 +70,21 @@ impl FastembedProvider {
     /// descarga del modelo no estaba en cache: lo correcto es llamarlo
     /// antes de spawnear el runtime async (lo que hace el bin de
     /// `verbo-daemon`).
+    ///
+    /// Antes de tocar `fastembed`, esta función chequea
+    /// [`ENV_ALLOW_DOWNLOAD`]: si no está autorizada, devuelve un error
+    /// con la receta de la autorización en lugar de descargar a ciegas.
+    /// El gate aplica incluso si el modelo está cacheado — la convención
+    /// de la suite es que el opt-in sea explícito en cada arranque (un
+    /// `export` en el shell rc es la forma esperada de saltearlo).
     pub fn try_new(modelo: EmbeddingModel) -> anyhow::Result<Self> {
+        if !download_allowed() {
+            anyhow::bail!(
+                "fastembed no autorizado a descargar/cargar el modelo: setear \
+                 {ENV_ALLOW_DOWNLOAD}=1 (o pasar --allow-download al daemon) \
+                 para habilitarlo",
+            );
+        }
         let nombre = nombre_canonico(&modelo).to_string();
         let dimension = dimension(&modelo);
         let inner = TextEmbedding::try_new(InitOptions::new(modelo))?;
@@ -160,6 +201,26 @@ mod pruebas {
         );
         assert_eq!(dimension(&EmbeddingModel::MultilingualE5Small), 384);
         assert_eq!(dimension(&EmbeddingModel::MultilingualE5Base), 768);
+    }
+
+    #[test]
+    fn gate_de_descarga_solo_acepta_opt_in_explicito() {
+        // Ausencia y vacío: no autorizado.
+        assert!(!download_allowed_from(None));
+        assert!(!download_allowed_from(Some("")));
+        // Negativos comunes: no autorizado.
+        assert!(!download_allowed_from(Some("0")));
+        assert!(!download_allowed_from(Some("false")));
+        assert!(!download_allowed_from(Some("no")));
+        // Variantes positivas, case insensitive, con espacios.
+        assert!(download_allowed_from(Some("1")));
+        assert!(download_allowed_from(Some("true")));
+        assert!(download_allowed_from(Some("TRUE")));
+        assert!(download_allowed_from(Some("yes")));
+        assert!(download_allowed_from(Some("  1  ")));
+        // Cualquier otra cosa no es opt-in.
+        assert!(!download_allowed_from(Some("maybe")));
+        assert!(!download_allowed_from(Some("on")));
     }
 
     /// Test de integración: descarga el modelo en el primer arranque

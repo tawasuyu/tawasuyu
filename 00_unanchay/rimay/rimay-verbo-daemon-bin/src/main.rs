@@ -26,7 +26,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use rimay_verbo_core::Provider;
 use rimay_verbo_daemon::Daemon;
-use rimay_verbo_fastembed::FastembedProvider;
+use rimay_verbo_fastembed::{FastembedProvider, ENV_ALLOW_DOWNLOAD};
 use rimay_verbo_mock::MockProvider;
 
 /// Provider concreto que el daemon expondrá. `mock` para desarrollo
@@ -66,6 +66,13 @@ struct Cli {
     /// cargado.
     #[arg(long, default_value_t = 384)]
     dim: usize,
+
+    /// Autoriza al provider `fastembed` a descargar el modelo desde
+    /// Hugging Face si no estuviera en cache. Equivalente a setear la
+    /// env var `RIMAY_VERBO_ALLOW_DOWNLOAD=1`. Sin esto, el provider
+    /// `fastembed` aborta con un mensaje explicando cómo habilitarlo.
+    #[arg(long)]
+    allow_download: bool,
 }
 
 fn socket_por_defecto() -> PathBuf {
@@ -117,6 +124,15 @@ async fn main() -> Result<()> {
                 .context("loop del daemon")?;
         }
         ProviderKind::Fastembed => {
+            // El flag CLI funde con la env var: si el operador pasó
+            // `--allow-download`, lo equiparamos a setear la env var
+            // antes de tocar el provider, así el gate de fastembed la
+            // ve y permite la descarga. Si NO se pasó y la var tampoco
+            // está, fastembed falla con un mensaje explicativo.
+            if cli.allow_download {
+                std::env::set_var(ENV_ALLOW_DOWNLOAD, "1");
+                eprintln!("verbo-daemon :: descarga del modelo autorizada por --allow-download");
+            }
             // La descarga del modelo se hace ANTES de spawn del runtime
             // tokio (estamos dentro de main pero antes del `await` del
             // serve, así que no bloqueamos un workers pool ya activo).
