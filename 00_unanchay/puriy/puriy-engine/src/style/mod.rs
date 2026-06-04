@@ -303,6 +303,13 @@ impl StyleEngine {
             style.text_wrap_style = p.text_wrap_style;
             style.text_spacing_trim = p.text_spacing_trim;
             style.text_box_trim = p.text_box_trim;
+            // CSS MathML 3 Core — math-style, math-depth, math-shift heredan.
+            // CSS Inline Layout 3 — text-box-edge hereda. CSS Basic UI 4 —
+            // field-sizing NO hereda.
+            style.math_style = p.math_style;
+            style.math_depth = p.math_depth;
+            style.math_shift = p.math_shift;
+            style.text_box_edge = p.text_box_edge;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -5168,6 +5175,177 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).text_box_trim,
             TextBoxTrim::TrimBoth
+        );
+    }
+
+    #[test]
+    fn math_style_fase_7_349() {
+        assert_eq!(parse_math_style("normal"), Some(MathStyle::Normal));
+        assert_eq!(parse_math_style("COMPACT"), Some(MathStyle::Compact));
+        assert_eq!(parse_math_style("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { math-style: compact }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.math_style, MathStyle::Compact);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).math_style,
+            MathStyle::Compact
+        );
+    }
+
+    #[test]
+    fn math_depth_fase_7_350() {
+        assert_eq!(parse_math_depth("auto-add"), Some(MathDepth::Auto));
+        assert_eq!(parse_math_depth("3"), Some(MathDepth::Value(3)));
+        assert_eq!(parse_math_depth("-1"), Some(MathDepth::Value(-1)));
+        assert_eq!(parse_math_depth("add(2)"), Some(MathDepth::Add(2)));
+        assert_eq!(parse_math_depth("ADD(-3)"), Some(MathDepth::Add(-3)));
+        assert_eq!(parse_math_depth("nope"), None);
+        assert_eq!(parse_math_depth("add(foo)"), None);
+
+        let html = r##"<html><head><style>
+            body { math-depth: 2 }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.math_depth, MathDepth::Value(2));
+    }
+
+    #[test]
+    fn math_shift_fase_7_351() {
+        assert_eq!(parse_math_shift("normal"), Some(MathShift::Normal));
+        assert_eq!(parse_math_shift("COMPACT"), Some(MathShift::Compact));
+        assert_eq!(parse_math_shift("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { math-shift: compact }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.math_shift, MathShift::Compact);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).math_shift,
+            MathShift::Compact
+        );
+    }
+
+    #[test]
+    fn field_sizing_fase_7_352() {
+        assert_eq!(parse_field_sizing("fixed"), Some(FieldSizing::Fixed));
+        assert_eq!(parse_field_sizing("CONTENT"), Some(FieldSizing::Content));
+        assert_eq!(parse_field_sizing("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { field-sizing: content }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.field_sizing, FieldSizing::Content);
+        // NO hereda — vuelve a Fixed.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).field_sizing,
+            FieldSizing::Fixed
+        );
+    }
+
+    #[test]
+    fn text_box_edge_fase_7_353() {
+        assert_eq!(parse_text_box_edge("auto"), Some(TextBoxEdge::Auto));
+        // 1 token → over=under=text.
+        assert_eq!(
+            parse_text_box_edge("text"),
+            Some(TextBoxEdge::Edge {
+                over: TextEdge::Text,
+                under: TextEdge::Text
+            })
+        );
+        // 2 tokens distintos.
+        assert_eq!(
+            parse_text_box_edge("cap alphabetic"),
+            Some(TextBoxEdge::Edge {
+                over: TextEdge::Cap,
+                under: TextEdge::Alphabetic
+            })
+        );
+        // 3 tokens descarta.
+        assert_eq!(parse_text_box_edge("text ex cap"), None);
+        // Token desconocido descarta.
+        assert_eq!(parse_text_box_edge("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { text-box-edge: cap alphabetic }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.text_box_edge,
+            TextBoxEdge::Edge {
+                over: TextEdge::Cap,
+                under: TextEdge::Alphabetic
+            }
+        );
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_box_edge,
+            TextBoxEdge::Edge {
+                over: TextEdge::Cap,
+                under: TextEdge::Alphabetic
+            }
         );
     }
 

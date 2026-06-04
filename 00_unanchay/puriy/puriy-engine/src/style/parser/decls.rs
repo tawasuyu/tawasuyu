@@ -744,6 +744,15 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-box-trim" => {
             parse_text_box_trim(value).map(DeclKind::TextBoxTrim)
         }
+        "math-style" => parse_math_style(value).map(DeclKind::MathStyle),
+        "math-depth" => parse_math_depth(value).map(DeclKind::MathDepth),
+        "math-shift" => parse_math_shift(value).map(DeclKind::MathShift),
+        "field-sizing" => {
+            parse_field_sizing(value).map(DeclKind::FieldSizing)
+        }
+        "text-box-edge" => {
+            parse_text_box_edge(value).map(DeclKind::TextBoxEdge)
+        }
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
@@ -2919,6 +2928,83 @@ pub(crate) fn parse_text_box_trim(value: &str) -> Option<TextBoxTrim> {
         "trim-start" => Some(TextBoxTrim::TrimStart),
         "trim-end" => Some(TextBoxTrim::TrimEnd),
         "trim-both" => Some(TextBoxTrim::TrimBoth),
+        _ => None,
+    }
+}
+
+/// `math-style`: `normal | compact`. Fase 7.349.
+pub(crate) fn parse_math_style(value: &str) -> Option<MathStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(MathStyle::Normal),
+        "compact" => Some(MathStyle::Compact),
+        _ => None,
+    }
+}
+
+/// `math-depth`: `auto-add | add(<integer>) | <integer>`. Fase 7.350.
+/// NOTA: `Add(n)` se preserva en el ComputedStyle sin resolverse contra
+/// el heredado (la spec lo pide al cierre — TODO cuando haya layout
+/// MathML real).
+pub(crate) fn parse_math_depth(value: &str) -> Option<MathDepth> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto-add") {
+        return Some(MathDepth::Auto);
+    }
+    if let Ok(n) = v.parse::<i32>() {
+        return Some(MathDepth::Value(n));
+    }
+    let lower = v.to_ascii_lowercase();
+    if let Some(inner) = lower.strip_prefix("add(").and_then(|s| s.strip_suffix(')')) {
+        let n: i32 = inner.trim().parse().ok()?;
+        return Some(MathDepth::Add(n));
+    }
+    None
+}
+
+/// `math-shift`: `normal | compact`. Fase 7.351.
+pub(crate) fn parse_math_shift(value: &str) -> Option<MathShift> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(MathShift::Normal),
+        "compact" => Some(MathShift::Compact),
+        _ => None,
+    }
+}
+
+/// `field-sizing`: `fixed | content`. Fase 7.352.
+pub(crate) fn parse_field_sizing(value: &str) -> Option<FieldSizing> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "fixed" => Some(FieldSizing::Fixed),
+        "content" => Some(FieldSizing::Content),
+        _ => None,
+    }
+}
+
+/// `text-box-edge`: `auto | <text-edge> [<text-edge>]?`.
+/// `<text-edge>` ∈ `text | cap | ex | ideographic | ideographic-ink |
+/// alphabetic`. Si hay 1 keyword, aplica a ambos lados. Fase 7.353.
+pub(crate) fn parse_text_box_edge(value: &str) -> Option<TextBoxEdge> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(TextBoxEdge::Auto);
+    }
+    fn edge(t: &str) -> Option<TextEdge> {
+        match t.to_ascii_lowercase().as_str() {
+            "text" => Some(TextEdge::Text),
+            "cap" => Some(TextEdge::Cap),
+            "ex" => Some(TextEdge::Ex),
+            "ideographic" => Some(TextEdge::Ideographic),
+            "ideographic-ink" => Some(TextEdge::IdeographicInk),
+            "alphabetic" => Some(TextEdge::Alphabetic),
+            _ => None,
+        }
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    match toks.as_slice() {
+        [a] => {
+            let e = edge(a)?;
+            Some(TextBoxEdge::Edge { over: e, under: e })
+        }
+        [a, b] => Some(TextBoxEdge::Edge { over: edge(a)?, under: edge(b)? }),
         _ => None,
     }
 }

@@ -533,6 +533,21 @@ pub struct ComputedStyle {
     /// `text-box-trim` (Fase 7.348). Default `None`. **Heredable**.
     /// Plumb: el chrome no recorta el leading/trailing del text-box.
     pub text_box_trim: TextBoxTrim,
+    /// `math-style` (Fase 7.349). Default `Normal`. **Heredable**.
+    /// Plumb: no hay rendering MathML propio.
+    pub math_style: MathStyle,
+    /// `math-depth` (Fase 7.350). Default `Auto`. **Heredable**.
+    /// Plumb.
+    pub math_depth: MathDepth,
+    /// `math-shift` (Fase 7.351). Default `Normal`. **Heredable**.
+    /// Plumb.
+    pub math_shift: MathShift,
+    /// `field-sizing` (Fase 7.352). Default `Fixed`. NO hereda.
+    /// Plumb: `<input>`/`<textarea>` siempre fixed-size.
+    pub field_sizing: FieldSizing,
+    /// `text-box-edge` (Fase 7.353). Default `Auto`. **Heredable**.
+    /// Plumb.
+    pub text_box_edge: TextBoxEdge,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1579,6 +1594,79 @@ pub enum TextBoxTrim {
     TrimBoth,
 }
 
+/// `math-style` (CSS MathML 3 Core). Heredable. Default `Normal`.
+/// Fase 7.349.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MathStyle {
+    #[default]
+    Normal,
+    Compact,
+}
+
+/// `math-depth` (CSS MathML 3 Core). `Auto` = el browser ajusta; `Add(n)`
+/// suma `n` al heredado; `Value(n)` lo fija absoluto. Heredable.
+/// Default `Auto`. Fase 7.350. NOTA: el `add` con signo se modela con
+/// `i32` (negativo permitido).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathDepth {
+    Auto,
+    Add(i32),
+    Value(i32),
+}
+
+impl Default for MathDepth {
+    fn default() -> Self {
+        MathDepth::Auto
+    }
+}
+
+/// `math-shift` (CSS MathML 3 Core). Heredable. Default `Normal`.
+/// Fase 7.351.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MathShift {
+    #[default]
+    Normal,
+    Compact,
+}
+
+/// `field-sizing` (CSS Basic UI 4). NO hereda. Default `Fixed`.
+/// `Content` permite que `<input>`/`<textarea>` se autoencojan al
+/// contenido (caso de uso: `textarea` sin scroll horizontal). Fase 7.352.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FieldSizing {
+    #[default]
+    Fixed,
+    Content,
+}
+
+/// `text-box-edge` (CSS Inline Layout 3). `Auto` deja al browser elegir
+/// según script/fuente. Caso con 1 o 2 keywords (`<text-edge> [<text-edge>]?`).
+/// `Edge { over, under }` cubre el caso de 1 keyword (over==under) o 2
+/// keywords explícitos. Heredable. Default `Auto`. Fase 7.353.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextBoxEdge {
+    Auto,
+    Edge { over: TextEdge, under: TextEdge },
+}
+
+impl Default for TextBoxEdge {
+    fn default() -> Self {
+        TextBoxEdge::Auto
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEdge {
+    #[default]
+    Text,
+    Cap,
+    Ex,
+    Ideographic,
+    IdeographicInk,
+    /// Sólo válido en el lado bajo (`under`); sintetizado por el parser.
+    Alphabetic,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2606,6 +2694,11 @@ impl Default for ComputedStyle {
             text_wrap_style: TextWrapStyle::Auto,
             text_spacing_trim: TextSpacingTrim::Normal,
             text_box_trim: TextBoxTrim::None,
+            math_style: MathStyle::Normal,
+            math_depth: MathDepth::Auto,
+            math_shift: MathShift::Normal,
+            field_sizing: FieldSizing::Fixed,
+            text_box_edge: TextBoxEdge::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
