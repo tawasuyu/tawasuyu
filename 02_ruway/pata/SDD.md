@@ -374,10 +374,22 @@ borde; shuma provee el contenido.
     como un drawer de launcher, lo maneja el frontend—. Espejo postcard-safe
     (`WireTab` + `tabs`/`panel_width` en `WireSurface`) para que viaje por akasha
     en wawa; round-trip fijado en test. `no_std` (wasm32) verde, 36 tests.
-  - **11b ⏳ (widget navegador Llimphi)** — tree/grafo conmutable de nodos
-    agnósticos (Mónada/Dir/Archivo).
-  - **11c ⏳ (`pata-llimphi`)** — pinta el rail en el borde, despliega el panel
-    animado al activar un diente, autohide del rail; alimenta el navegador desde
-    el query de nouser (`chasqui-card::query`) + filesystem.
+  - **11b-1 ✅ (protocolo nouser, `chasqui`)** — el navegador necesita el nivel
+    de archivos, y nouser es la **fuente autoritativa** de qué archivos componen
+    una Mónada (no el filesystem por su cuenta — decisión del autor). `chasqui-
+    card::query` gana `QueryRequest::ResolveMonad{id}` + `ResolveMonadResponse{
+    monad, members}` + `FileView` slim; `client::resolve_monad` (round-trip
+    extraído a un `request<R>()` genérico compartido con `list_monads`); el
+    `engine_socket` lo sirve mapeando `db.resolve_members(id) → FileView`. Tests
+    de roundtrip + servidor.
+  - **11b-2 ⏳ (widget navegador Llimphi)** — `llimphi-widget-navigator`
+    **reutilizable y data-agnóstico** (decisión del autor): nodos `id/label/kind/
+    children` (kind = Mónada/Dir/Archivo) + toggle **tree ↔ grafo** (el grafo
+    reusa `llimphi-widget-nodegraph`). Lo alimenta pata; el widget no sabe de
+    nouser.
+  - **11c ⏳ (`pata-llimphi`)** — pinta el rail en el borde (`llimphi-widget-dock-
+    rail`), despliega el panel animado al activar un diente, autohide del rail;
+    alimenta el navegador desde el query de nouser (`list_monads` +
+    `resolve_monad`).
   - **11d ⏳** — abrir Mónada/archivo con la app que corresponda (registro de
     apps / mirada).
