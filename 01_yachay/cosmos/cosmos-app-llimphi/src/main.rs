@@ -1142,6 +1142,7 @@ impl App for Cosmos {
             sky_nadir: ui.sky_nadir,
             wheel_zoom: 1.0,
             wheel_pan: (0.0, 0.0),
+            dial_rot: 0.0,
             carto_rect: Arc::new(std::sync::Mutex::new(None)),
             viewport: model::VIEWPORT,
             tools_scroll: 0.0,
@@ -1229,6 +1230,11 @@ impl App for Cosmos {
             Msg::WheelResetView => {
                 m.wheel_zoom = 1.0;
                 m.wheel_pan = (0.0, 0.0);
+                m.dial_rot = 0.0;
+            }
+            Msg::DialRotate(dx) => {
+                // 1 px de arrastre ≈ 0.2° del dial; envuelve en [0,90).
+                m.dial_rot = (m.dial_rot + dx * 0.2).rem_euclid(90.0);
             }
             Msg::WheelSetView(z, px, py) => {
                 m.wheel_zoom = z;

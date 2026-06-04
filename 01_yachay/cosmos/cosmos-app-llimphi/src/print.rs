@@ -291,10 +291,12 @@ mod tests {
         let cmds = crate::chrome::uranian_dial_cmds(
             &render,
             size,
+            &cosmos_render::Palette::light(),
             rgba(0.10, 0.10, 0.12, 1.0), // tinta
             rgba(0.35, 0.35, 0.40, 1.0), // grilla
             rgba(0.82, 0.12, 0.12, 1.0), // rojo
             rgba(1.0, 0.99, 0.96, 1.0),  // papel
+            12.0,                        // rotación de prueba
         );
         let canvas = cosmos_canvas_llimphi::canvas_view::<crate::model::Msg>(
             cmds,

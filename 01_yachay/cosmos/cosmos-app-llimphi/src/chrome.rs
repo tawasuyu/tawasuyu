@@ -1470,10 +1470,12 @@ fn arc_path(cx: f32, cy: f32, radius: f32, a0: f32, a1: f32) -> String {
 pub(crate) fn uranian_dial_cmds(
     render: &cosmos_render::RenderModel,
     size: f32,
+    pal: &Palette,
     fg: Rgba,
     grid: Rgba,
     accent: Rgba,
     bg: Rgba,
+    rot: f32,
 ) -> Vec<DrawCommand> {
     use cosmos_render::glyphs::{planet_commands, sign_commands};
     let cx = size / 2.0;
@@ -1481,8 +1483,10 @@ pub(crate) fn uranian_dial_cmds(
     let r = size * 0.40;
     let r_in = r * 0.90; // borde interno de la banda graduada
     let grid_soft = Rgba { a: 0.35, ..grid };
-    let ink_soft = Rgba { a: 0.6, ..fg };
     let pt = |radius: f32, ang: f32| (cx + ang.cos() * radius, cy + ang.sin() * radius);
+    // Posición del dial girada: el valor `rot` queda bajo el puntero (arriba).
+    let da = |m90: f32| dial_ang((m90 - rot).rem_euclid(90.0));
+    let tint = |c: Rgba, a: f32| Rgba { a, ..c };
 
     let mut cmds: Vec<DrawCommand> = Vec::new();
     // Disco + aro exterior.
@@ -1495,12 +1499,27 @@ pub(crate) fn uranian_dial_cmds(
         stroke_w: 1.5,
     });
 
-    // Tres cuñas de modalidad: divisores en los bordes 0/30/60 (mod 90) y
-    // un glyph grande en el centro de cada tramo (cardinal/fijo/mutable).
+    // Tres cuñas de modalidad tintadas por su elemento (cardinal=fuego/Aries,
+    // fijo=tierra/Tauro, mutable=aire/Géminis), rellenas a baja opacidad.
+    for (c0, sign) in [(0.0_f32, "aries"), (30.0, "taurus"), (60.0, "gemini")] {
+        let col = pal.sign(sign);
+        let mut poly = vec![(cx, cy)];
+        for s in 0..=12 {
+            let m = c0 + 30.0 * (s as f32 / 12.0);
+            poly.push(pt(r_in, da(m)));
+        }
+        cmds.push(DrawCommand::Polygon {
+            points: poly,
+            fill: Some(tint(col, 0.10)),
+            stroke: None,
+            stroke_w: 0.0,
+        });
+    }
+    // Divisores de modalidad (bordes 0/30/60) + glyph grande coloreado en el
+    // centro de cada cuña.
     for b in [0.0_f32, 30.0, 60.0] {
-        let a = dial_ang(b);
-        let (ix, iy) = pt(r * 0.12, a);
-        let (ox, oy) = pt(r_in, a);
+        let (ix, iy) = pt(r * 0.12, da(b));
+        let (ox, oy) = pt(r_in, da(b));
         cmds.push(DrawCommand::Line {
             x1: ix,
             y1: iy,
@@ -1512,8 +1531,8 @@ pub(crate) fn uranian_dial_cmds(
         });
     }
     for (center, sign) in [(15.0_f32, "aries"), (45.0, "taurus"), (75.0, "gemini")] {
-        let (gx, gy) = pt(r * 0.50, dial_ang(center));
-        cmds.extend(sign_commands(sign, gx, gy, size * 0.14, ink_soft, 2.4));
+        let (gx, gy) = pt(r * 0.50, da(center));
+        cmds.extend(sign_commands(sign, gx, gy, size * 0.14, tint(pal.sign(sign), 0.85), 2.4));
     }
 
     // Aro interno de la banda graduada.
@@ -1525,10 +1544,10 @@ pub(crate) fn uranian_dial_cmds(
         fill: None,
         stroke_w: 0.8,
     });
-    // Arcos negros: 8 segmentos gruesos en la banda, cada 45° visual.
+    // Arcos negros: 8 segmentos gruesos en la banda, cada 45° visual (giran).
     let rb = (r + r_in) / 2.0;
     for k in 0..8 {
-        let c = k as f32 * std::f32::consts::FRAC_PI_4 - std::f32::consts::FRAC_PI_2;
+        let c = da(k as f32 * 11.25);
         let half = 4.0_f32.to_radians();
         cmds.push(DrawCommand::Path {
             d: arc_path(cx, cy, rb, c - half, c + half),
@@ -1539,7 +1558,7 @@ pub(crate) fn uranian_dial_cmds(
     }
     // Graduación: ticks cada grado (90), medianos cada 5°, mayores cada 15°.
     for d in 0..90 {
-        let ang = dial_ang(d as f32);
+        let ang = da(d as f32);
         let (major, medium) = (d % 15 == 0, d % 5 == 0);
         let inner = if major {
             r * 0.84
@@ -1578,23 +1597,20 @@ pub(crate) fn uranian_dial_cmds(
         }
     }
 
-    // Eje-puntero rojo: diámetro vertical (0° arriba) con cabezas de flecha
-    // arriba y abajo.
-    let top = dial_ang(0.0);
-    let bot = dial_ang(45.0); // 45 mod 90 → abajo
-    let (tx, ty) = pt(r, top);
-    let (bx, by) = pt(r, bot);
+    // Eje-puntero rojo: diámetro vertical FIJO (no gira) con cabezas de
+    // flecha arriba y abajo — es el índice; la rueda gira bajo él.
+    let (tx, ty) = pt(r, dial_ang(0.0));
+    let (bx, by) = pt(r, dial_ang(45.0));
     cmds.push(DrawCommand::Line {
         x1: tx,
         y1: ty,
         x2: bx,
         y2: by,
-        color: Rgba { a: 0.7, ..accent },
+        color: tint(accent, 0.7),
         width: 1.0,
         dash: Some((4.0, 4.0)),
     });
     for (ax, ay, dir) in [(tx, ty, 1.0_f32), (bx, by, -1.0_f32)] {
-        // Cabeza de flecha apuntando hacia el centro.
         let h = size * 0.022;
         cmds.push(DrawCommand::Polygon {
             points: vec![
@@ -1618,10 +1634,32 @@ pub(crate) fn uranian_dial_cmds(
         stroke_w: 1.0,
     });
 
-    // Cuerpos proyectados (longitud mod 90) por fuera del aro, con guía.
+    // Cuerpos proyectados (longitud mod 90) por fuera del aro, con guía y
+    // glyph coloreado por planeta. Los que caen en orbe del puntero (la
+    // posición `rot`) se conectan al centro en rojo: la "imagen planetaria".
+    const ORB: f32 = 1.5;
     for (sym, deg) in natal_body_lons(render) {
-        let ang = dial_ang(deg.rem_euclid(90.0));
+        let m90 = deg.rem_euclid(90.0);
+        let ang = da(m90);
+        // Distancia circular (mod 90) al valor bajo el puntero.
+        let mut dist = (m90 - rot).rem_euclid(90.0);
+        if dist > 45.0 {
+            dist = 90.0 - dist;
+        }
+        let on_pointer = dist <= ORB;
         let (lx1, ly1) = pt(r, ang);
+        if on_pointer {
+            // Línea al centro (radio) en rojo — parte de la imagen planetaria.
+            cmds.push(DrawCommand::Line {
+                x1: cx,
+                y1: cy,
+                x2: lx1,
+                y2: ly1,
+                color: tint(accent, 0.8),
+                width: 1.4,
+                dash: None,
+            });
+        }
         let (lx2, ly2) = pt(r * 1.10, ang);
         cmds.push(DrawCommand::Line {
             x1: lx1,
@@ -1633,14 +1671,17 @@ pub(crate) fn uranian_dial_cmds(
             dash: None,
         });
         let (gx, gy) = pt(r * 1.17, ang);
-        cmds.extend(planet_commands(&canon_glyph(&sym), gx, gy, size * 0.042, fg, 1.6));
+        let canon = canon_glyph(&sym);
+        let col = if on_pointer { accent } else { pal.planet(&canon) };
+        cmds.extend(planet_commands(&canon, gx, gy, size * 0.042, col, 1.7));
     }
     cmds
 }
 
 /// Dial uraniano de 90° (Escuela de Hamburgo). Los cuerpos se proyectan
-/// a su longitud módulo 90° sobre un disco graduado; cuerpos que caen
-/// cerca (misma "fórmula") quedan agrupados visualmente. 0° arriba.
+/// a su longitud módulo 90° sobre un disco graduado y coloreado; se
+/// **arrastra para girar** el dial bajo el puntero rojo, y los cuerpos en
+/// orbe con el puntero se conectan al centro (imagen planetaria). 0° arriba.
 fn uranian_dial_canvas(
     model: &Model,
     render: &cosmos_render::RenderModel,
@@ -1648,15 +1689,27 @@ fn uranian_dial_canvas(
     theme: &Theme,
     fill: bool,
 ) -> View<Msg> {
+    let pal = graphics_palette(model);
     let cmds = uranian_dial_cmds(
         render,
         size,
+        &pal,
         rgba_of(theme.fg_text),
         rgba_of(theme.fg_muted),
         rgba_of(theme.fg_destructive),
         rgba_of(theme.bg_panel),
+        model.dial_rot,
     );
-    custom_canvas(model, cmds, size, theme, fill)
+    let t = ViewTransform {
+        zoom: model.wheel_zoom,
+        pan: model.wheel_pan,
+    };
+    let canvas = cosmos_canvas_llimphi::canvas_view_ex::<Msg>(cmds, size, Some(graphics_bg(model)), t)
+        .draggable_at(|phase, dx, _dy, _lx, _ly| match phase {
+            DragPhase::Move => Some(Msg::DialRotate(dx)),
+            DragPhase::End => None,
+        });
+    canvas_column(Some(zoom_controls(model, theme)), canvas, size, fill)
 }
 
 /// Rueda armónica (Cochrane / Addey): cada longitud natal se multiplica

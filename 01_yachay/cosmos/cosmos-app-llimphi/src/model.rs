@@ -588,6 +588,8 @@ pub(crate) enum Msg {
     WheelZoom(f32),
     /// Restaura zoom 1× y paneo 0 (encuadre).
     WheelResetView,
+    /// Rota el dial de 90° (Δ en píxeles de arrastre → grados del dial).
+    DialRotate(f32),
     /// Fija zoom y paneo del lienzo de una (para zoom hacia el cursor):
     /// (zoom, pan_x, pan_y).
     WheelSetView(f32, f32, f32),
@@ -760,6 +762,9 @@ pub(crate) struct Model {
     // rueda 2D: zoom + paneo del lienzo (transitorio, no se persiste)
     pub(crate) wheel_zoom: f32,
     pub(crate) wheel_pan: (f32, f32),
+    /// Posición del dial de 90° bajo el puntero (grados, 0..90). El drag
+    /// horizontal lo gira; los cuerpos en orbe con este valor se conectan.
+    pub(crate) dial_rot: f32,
     /// Rect (x, y, w, h en px de ventana) del último lienzo de
     /// astrocarto pintado. Lo escribe el `paint_with` y lo lee
     /// `on_wheel` para hacer zoom hacia la posición del cursor (el
