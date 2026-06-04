@@ -25,6 +25,8 @@ pub mod ctl;
 pub mod desktop;
 pub mod keymap;
 pub mod rules;
+/// `impl allichay::Configurable for Config` — vuelve la config editable por UI.
+pub mod settings;
 pub mod watch;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};

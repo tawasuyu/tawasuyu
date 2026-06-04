@@ -429,6 +429,29 @@ impl Config {
         Ok(cfg)
     }
 
+    /// Serializa la config a RON (con los slugs de layout/wallpaper como
+    /// cadenas, gracias a los `with` serdes). Es el inverso de [`Self::from_ron`].
+    pub fn to_ron(&self) -> Result<String, ron::Error> {
+        ron::ser::to_string_pretty(self, ron::ser::PrettyConfig::default())
+    }
+
+    /// Persiste la config al archivo RON del usuario. Escribe atómicamente
+    /// (tmp + rename) y crea el directorio si falta. Lo usa el panel de
+    /// configuración para guardar lo que el usuario edita en la UI; el
+    /// `FileWatch` del compositor recarga el cambio en caliente.
+    pub fn save(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        let text = self
+            .to_ron()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        let tmp = path.with_extension("ron.tmp");
+        std::fs::write(&tmp, text)?;
+        std::fs::rename(&tmp, path)?;
+        Ok(())
+    }
+
     /// La ruta canónica de la config: `~/.config/mirada/config.ron`.
     pub fn default_path() -> Option<PathBuf> {
         directories::ProjectDirs::from("", "", "mirada")
@@ -585,6 +608,24 @@ mod tests {
     #[test]
     fn the_template_parses_to_the_defaults() {
         assert_eq!(Config::from_ron(CONFIG_TEMPLATE).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn to_ron_round_trips_a_config_no_trivial() {
+        // Una config con campos no-default en cada familia: layout, colores,
+        // wallpaper, menú, zonas y override de salida. Round-trip por RON.
+        let c = Config::from_ron(
+            r#"( layout: "grid", gap: 12, master_ratio: 0.7, border_focus: (1, 2, 3, 255),
+                 wallpaper_path: "/w.png", wallpaper_fit: "fill",
+                 menu: [(label: "T", command: "kitty")],
+                 zones: [(x: 0.0, y: 0.0, w: 0.5, h: 1.0)],
+                 output_direction: "vertical",
+                 outputs: [(name: "DP-1", scale_120: 240, transform: "90")] )"#,
+        )
+        .unwrap();
+        let text = c.to_ron().expect("debe serializar a RON");
+        let back = Config::from_ron(&text).expect("el RON serializado debe reparsear");
+        assert_eq!(c, back);
     }
 
     #[test]
