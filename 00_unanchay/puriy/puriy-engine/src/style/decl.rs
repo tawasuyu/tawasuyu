@@ -635,6 +635,16 @@ pub(crate) enum DeclKind {
     NavigationUp(Option<String>),
     /// `glyph-orientation-horizontal` (Fase 7.543). Grados. HEREDA. Plumb.
     GlyphOrientationHorizontal(f32),
+    /// `navigation-down` (Fase 7.544). `None` = `auto`. NO hereda. Plumb.
+    NavigationDown(Option<String>),
+    /// `navigation-left` (Fase 7.545). `None` = `auto`. NO hereda. Plumb.
+    NavigationLeft(Option<String>),
+    /// `navigation-right` (Fase 7.546). `None` = `auto`. NO hereda. Plumb.
+    NavigationRight(Option<String>),
+    /// `counter-increment-style` (Fase 7.547). `None` = `decimal`. NO hereda. Plumb.
+    CounterIncrementStyle(Option<String>),
+    /// `overflow-clip-box` (Fase 7.548). NO hereda. Plumb.
+    OverflowClipBox(OverflowClipBox),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1116,6 +1126,11 @@ impl Decl {
             DeclKind::Cue(v) => s.cue = v.clone(),
             DeclKind::NavigationUp(v) => s.navigation_up = v.clone(),
             DeclKind::GlyphOrientationHorizontal(v) => s.glyph_orientation_horizontal = *v,
+            DeclKind::NavigationDown(v) => s.navigation_down = v.clone(),
+            DeclKind::NavigationLeft(v) => s.navigation_left = v.clone(),
+            DeclKind::NavigationRight(v) => s.navigation_right = v.clone(),
+            DeclKind::CounterIncrementStyle(v) => s.counter_increment_style = v.clone(),
+            DeclKind::OverflowClipBox(v) => s.overflow_clip_box = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

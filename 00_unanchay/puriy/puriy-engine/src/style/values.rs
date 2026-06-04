@@ -994,6 +994,23 @@ pub struct ComputedStyle {
     /// (0/90/180/270) que rota glyphs en bloques horizontales. Default
     /// `0.0`. **HEREDA**. Plumb.
     pub glyph_orientation_horizontal: f32,
+    /// `navigation-down` (Fase 7.544). Análogo a `navigation-up`. NO
+    /// hereda. Plumb.
+    pub navigation_down: Option<String>,
+    /// `navigation-left` (Fase 7.545). Análogo a `navigation-up`. NO
+    /// hereda. Plumb.
+    pub navigation_left: Option<String>,
+    /// `navigation-right` (Fase 7.546). Análogo a `navigation-up`. NO
+    /// hereda. Plumb.
+    pub navigation_right: Option<String>,
+    /// `counter-increment-style` (Fase 7.547). CSS Lists 4: estilo de
+    /// numeración usado al incrementar el counter. Parse opaco — `None` =
+    /// `decimal`. NO hereda. Plumb.
+    pub counter_increment_style: Option<String>,
+    /// `overflow-clip-box` (Fase 7.548). CSS Overflow legacy: en qué caja
+    /// se recorta el contenido cuando hay overflow. Default `PaddingBox`.
+    /// NO hereda. Plumb.
+    pub overflow_clip_box: OverflowClipBox,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2830,6 +2847,15 @@ pub enum SpeakAs {
     NoPunctuation,
 }
 
+/// `overflow-clip-box` (CSS Overflow legacy). Default `PaddingBox`.
+/// Fase 7.548.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OverflowClipBox {
+    #[default]
+    PaddingBox,
+    ContentBox,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -4115,6 +4141,11 @@ impl Default for ComputedStyle {
             cue: None,
             navigation_up: None,
             glyph_orientation_horizontal: 0.0,
+            navigation_down: None,
+            navigation_left: None,
+            navigation_right: None,
+            counter_increment_style: None,
+            overflow_clip_box: OverflowClipBox::PaddingBox,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

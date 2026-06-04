@@ -1808,6 +1808,52 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             let num = v.strip_suffix("deg").unwrap_or(&v);
             num.parse::<f32>().ok().map(DeclKind::GlyphOrientationHorizontal)
         }
+        // Fase 7.544-7.546 — `navigation-{down,left,right}` (CSS UI 3 legacy).
+        // Parse opaco — `auto` reservado a None.
+        "navigation-down" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavigationDown(None))
+            } else {
+                Some(DeclKind::NavigationDown(Some(v.to_string())))
+            }
+        }
+        "navigation-left" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavigationLeft(None))
+            } else {
+                Some(DeclKind::NavigationLeft(Some(v.to_string())))
+            }
+        }
+        "navigation-right" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavigationRight(None))
+            } else {
+                Some(DeclKind::NavigationRight(Some(v.to_string())))
+            }
+        }
+        // Fase 7.547 — `counter-increment-style` (CSS Lists 4). Parse opaco
+        // — `decimal` reservado a None.
+        "counter-increment-style" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("decimal") {
+                Some(DeclKind::CounterIncrementStyle(None))
+            } else {
+                Some(DeclKind::CounterIncrementStyle(Some(v.to_string())))
+            }
+        }
+        // Fase 7.548 — `overflow-clip-box` (CSS Overflow legacy).
+        "overflow-clip-box" => match value.trim().to_ascii_lowercase().as_str() {
+            "padding-box" => Some(DeclKind::OverflowClipBox(OverflowClipBox::PaddingBox)),
+            "content-box" => Some(DeclKind::OverflowClipBox(OverflowClipBox::ContentBox)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
