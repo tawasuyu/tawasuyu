@@ -182,23 +182,33 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         ));
     }
 
-    // Sección Aislamiento (qué aislar): chips Local / Contenedor / Remoto.
+    // Sección Aislamiento (qué aislar): filas de opción con descripción.
     children.push(panel_label("Aislamiento", theme));
-    children.push(chip_row(
-        Isolation::ALL
-            .iter()
-            .map(|iso| chip(iso.label(), session.isolation == *iso, Msg::SetIsolation(*iso), theme))
-            .collect(),
-    ));
+    let iso_desc = |iso: Isolation| match iso {
+        Isolation::Local => "Directo en esta máquina, sin aislar.",
+        Isolation::Container => "Aislado en un contenedor (elegí la distro).",
+        Isolation::Remote => "En otra máquina por SSH.",
+    };
+    for iso in Isolation::ALL {
+        children.push(option_row(
+            iso.label(),
+            iso_desc(iso),
+            session.isolation == iso,
+            Msg::SetIsolation(iso),
+            theme,
+        ));
+    }
 
-    // Sección Distro (con qué distro): chips. Aplica a contenedor/remoto.
-    children.push(panel_label("Distro", theme));
-    children.push(chip_row(
-        Distro::ALL
-            .iter()
-            .map(|d| chip(d.label(), session.distro == *d, Msg::SetDistro(*d), theme))
-            .collect(),
-    ));
+    // La distro sólo importa para contenedor → se muestra sólo entonces.
+    if session.isolation == Isolation::Container {
+        children.push(panel_label("Distro", theme));
+        children.push(chip_row(
+            Distro::ALL
+                .iter()
+                .map(|d| chip(d.label(), session.distro == *d, Msg::SetDistro(*d), theme))
+                .collect(),
+        ));
+    }
 
     // Estado actual + cerrar (sólo sesiones reales).
     if !es_draft {
@@ -231,24 +241,16 @@ fn session_cwd(session: &Session) -> String {
     }
 }
 
-/// El **canvas principal**: la vista del shell de la sesión activa, con su
-/// toolbar de shortcuts arriba.
+/// El **canvas principal**: SÓLO el shell de la sesión activa. Sin barra de
+/// tabs/shortcuts encima (los atajos viven en el menú/command-bar).
 fn canvas_view(model: &Model, theme: &Theme) -> View<Msg> {
-    let toolbar = tabs_toolbar(model, theme);
-    let content = tab_content(model, theme);
-    let body = View::new(Style {
-        flex_grow: 1.0,
-        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
-        ..Default::default()
-    })
-    .children(vec![content]);
     View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![toolbar, body])
+    .children(vec![tab_content(model, theme)])
 }
 
 /// El rail IZQUIERDO de **sesiones**: la draft primero, luego las creadas (se
@@ -624,6 +626,43 @@ fn chip(label: &str, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
     .on_click(msg)
 }
 
+/// Fila de opción (vertical): título + descripción, seleccionable. Mejor UX que
+/// un chip para elegir entre alternativas con matices (aislamiento).
+fn option_row(title: &str, desc: &str, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
+    use llimphi_ui::llimphi_text::Alignment;
+    let (fill, fg) = if selected {
+        (theme.bg_selected, theme.fg_text)
+    } else {
+        (theme.bg_panel, theme.fg_muted)
+    };
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(title.to_string(), 12.5, fg, Alignment::Start);
+    let descr = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(desc.to_string(), 10.0, theme.fg_muted, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(6.0_f32), bottom: length(6.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(0.0_f32), bottom: length(4.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(fill)
+    .hover_fill(theme.bg_row_hover)
+    .radius(5.0)
+    .on_click(msg)
+    .children(vec![titulo, descr])
+}
+
 /// Fila de chips, con wrap si no caben en el ancho del panel.
 fn chip_row(chips: Vec<View<Msg>>) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, FlexWrap};
@@ -735,105 +774,6 @@ fn tool_header(titulo: &str, theme: &Theme) -> View<Msg> {
     .text_aligned(titulo.to_string(), 11.0, theme.fg_muted, Alignment::Start)
 }
 
-/// Toolbar de la tira de tabs: pinta los `ShortcutSpec` del tab activo
-/// como botones que disparan `Msg::ShortcutClicked`. Si el tab activo
-/// no aporta shortcuts, la barra queda vacía (alto 0 — colapsa).
-pub(crate) fn tabs_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::prelude::Dimension;
-    use llimphi_ui::llimphi_text::Alignment;
-
-    let Some(session) = model.active() else {
-        return empty_bar(theme, 0.0);
-    };
-    // El canvas es el shell de la sesión; su toolbar son los shortcuts del shell.
-    let slot = model.shell_slot();
-    let contribs = match &session.shell.state {
-        ModuleState::Shell(s) => shuma_module_shell::contributions(s),
-        _ => return empty_bar(theme, 0.0),
-    };
-
-    if contribs.shortcuts.is_empty() {
-        return empty_bar(theme, 0.0);
-    }
-
-    let mut buttons: Vec<View<Msg>> = contribs
-        .shortcuts
-        .into_iter()
-        .map(|spec| shortcut_button(slot.clone(), spec, theme))
-        .collect();
-
-    // Label izquierdo: el nombre de la sesión activa.
-    let titulo = session.name.clone();
-    let label = View::new(Style {
-        size: Size {
-            width: Dimension::auto(),
-            height: percent(1.0_f32),
-        },
-        flex_grow: 1.0,
-        padding: Rect {
-            left: length(14.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(titulo, 12.0, theme.fg_text, Alignment::Start);
-
-    let mut row = vec![label];
-    row.append(&mut buttons);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(34.0_f32),
-        },
-        padding: Rect {
-            left: length(4.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(row)
-}
-
-pub(crate) fn shortcut_button(slot: Slot, spec: ShortcutSpec, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
-    use llimphi_ui::llimphi_text::Alignment;
-
-    View::new(Style {
-        size: Size {
-            width: Dimension::auto(),
-            height: length(26.0_f32),
-        },
-        padding: Rect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        margin: Rect {
-            left: length(4.0_f32),
-            right: length(0.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .fill(theme.bg_button)
-    .hover_fill(theme.bg_button_hover)
-    .radius(4.0)
-    .text_aligned(spec.label.clone(), 12.0, theme.fg_text, Alignment::Center)
-    .on_click(Msg::ShortcutClicked(slot, spec.action))
-}
 
 /// El canvas principal de la sesión activa: su **shell** (terminal). Las demás
 /// cosas (historial, monitor, explorer, matilda) viven en los paneles de

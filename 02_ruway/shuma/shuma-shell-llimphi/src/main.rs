@@ -47,7 +47,7 @@ use llimphi_ui::{
 };
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
-use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source};
+use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
 use std::collections::HashMap;
 
@@ -544,10 +544,6 @@ impl Model {
         self.sessions.get_mut(idx).map(|s| s.instance_mut(w))
     }
 
-    /// El slot del shell de la sesión activa (el canvas principal lo muestra).
-    fn shell_slot(&self) -> Slot {
-        Slot::Session(self.active_session, Which::Shell)
-    }
 }
 
 #[derive(Clone)]
@@ -577,8 +573,10 @@ enum Msg {
     RunFromHistory(String),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
     Module(Slot, ModuleMsg),
-    /// Click en un shortcut de la toolbar. `slot` es el módulo emisor
-    /// (a quien se le enruta la `ModuleAction`).
+    /// Click en un shortcut. `slot` es el módulo emisor. Hoy sin emisor (la
+    /// toolbar de tabs se retiró); se conserva para los botones de acción de
+    /// matilda en su panel (discover/dry-run/apply) — fase próxima.
+    #[allow(dead_code)]
     ShortcutClicked(Slot, ShortcutAction),
     /// La config de wawa (`$XDG_CONFIG_HOME/wawa/config.json`) cambió;
     /// rearmamos el theme, accent y locale sin reiniciar. Boxed por
