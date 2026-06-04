@@ -619,6 +619,17 @@ pub struct ComputedStyle {
     /// `stroke-dashoffset` (Fase 7.378). Default `Px(0.0)`. **Heredable**.
     /// Plumb.
     pub stroke_dashoffset: LengthVal,
+    /// `fill-rule` (Fase 7.379). Default `Nonzero`. **Heredable**. Plumb.
+    pub fill_rule: FillRule,
+    /// `clip-rule` (Fase 7.380). Default `Nonzero`. **Heredable**. Plumb.
+    pub clip_rule: FillRule,
+    /// `color-interpolation` (Fase 7.381). Default `SRgb`. **Heredable**.
+    /// Plumb.
+    pub color_interpolation: ColorInterpolation,
+    /// `shape-rendering` (Fase 7.382). Default `Auto`. **Heredable**. Plumb.
+    pub shape_rendering: ShapeRendering,
+    /// `vector-effect` (Fase 7.383). Default `None`. NO hereda. Plumb.
+    pub vector_effect: VectorEffect,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1926,6 +1937,46 @@ pub enum StrokeLinejoin {
     MiterClip,
 }
 
+/// `fill-rule` / `clip-rule` (SVG 2). Heredable. Default `Nonzero`.
+/// Fases 7.379–7.380.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FillRule {
+    #[default]
+    Nonzero,
+    Evenodd,
+}
+
+/// `color-interpolation` (SVG 2). Heredable. Default `SRgb`.
+/// Fase 7.381.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorInterpolation {
+    Auto,
+    #[default]
+    SRgb,
+    LinearRgb,
+}
+
+/// `shape-rendering` (SVG 2). Heredable. Default `Auto`. Fase 7.382.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShapeRendering {
+    #[default]
+    Auto,
+    OptimizeSpeed,
+    CrispEdges,
+    GeometricPrecision,
+}
+
+/// `vector-effect` (SVG 2). NO hereda. Default `None`. Fase 7.383.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VectorEffect {
+    #[default]
+    None,
+    NonScalingStroke,
+    NonScalingSize,
+    NonRotation,
+    FixedPosition,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2982,6 +3033,11 @@ impl Default for ComputedStyle {
             stroke_miterlimit: 4.0,
             stroke_dasharray: Vec::new(),
             stroke_dashoffset: LengthVal::Px(0.0),
+            fill_rule: FillRule::Nonzero,
+            clip_rule: FillRule::Nonzero,
+            color_interpolation: ColorInterpolation::SRgb,
+            shape_rendering: ShapeRendering::Auto,
+            vector_effect: VectorEffect::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

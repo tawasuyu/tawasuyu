@@ -819,6 +819,17 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "stroke-dashoffset" => {
             parse_length_or_pct(value).map(DeclKind::StrokeDashoffset)
         }
+        "fill-rule" => parse_fill_rule(value).map(DeclKind::FillRule),
+        "clip-rule" => parse_fill_rule(value).map(DeclKind::ClipRule),
+        "color-interpolation" => {
+            parse_color_interpolation(value).map(DeclKind::ColorInterpolation)
+        }
+        "shape-rendering" => {
+            parse_shape_rendering(value).map(DeclKind::ShapeRendering)
+        }
+        "vector-effect" => {
+            parse_vector_effect(value).map(DeclKind::VectorEffect)
+        }
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
@@ -3344,6 +3355,52 @@ pub(crate) fn parse_stroke_miterlimit(value: &str) -> Option<f32> {
         return None;
     }
     Some(n)
+}
+
+/// `fill-rule` / `clip-rule`: `nonzero | evenodd`. Fases 7.379, 7.380.
+pub(crate) fn parse_fill_rule(value: &str) -> Option<FillRule> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "nonzero" => Some(FillRule::Nonzero),
+        "evenodd" => Some(FillRule::Evenodd),
+        _ => None,
+    }
+}
+
+/// `color-interpolation`: `auto | sRGB | linearRGB`. Fase 7.381.
+pub(crate) fn parse_color_interpolation(
+    value: &str,
+) -> Option<ColorInterpolation> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ColorInterpolation::Auto),
+        "srgb" => Some(ColorInterpolation::SRgb),
+        "linearrgb" => Some(ColorInterpolation::LinearRgb),
+        _ => None,
+    }
+}
+
+/// `shape-rendering`: `auto | optimizeSpeed | crispEdges |
+/// geometricPrecision`. Fase 7.382.
+pub(crate) fn parse_shape_rendering(value: &str) -> Option<ShapeRendering> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ShapeRendering::Auto),
+        "optimizespeed" => Some(ShapeRendering::OptimizeSpeed),
+        "crispedges" => Some(ShapeRendering::CrispEdges),
+        "geometricprecision" => Some(ShapeRendering::GeometricPrecision),
+        _ => None,
+    }
+}
+
+/// `vector-effect`: `none | non-scaling-stroke | non-scaling-size |
+/// non-rotation | fixed-position`. Fase 7.383.
+pub(crate) fn parse_vector_effect(value: &str) -> Option<VectorEffect> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(VectorEffect::None),
+        "non-scaling-stroke" => Some(VectorEffect::NonScalingStroke),
+        "non-scaling-size" => Some(VectorEffect::NonScalingSize),
+        "non-rotation" => Some(VectorEffect::NonRotation),
+        "fixed-position" => Some(VectorEffect::FixedPosition),
+        _ => None,
+    }
 }
 
 /// `stroke-dasharray`: `none | <length-percentage>+` separados por

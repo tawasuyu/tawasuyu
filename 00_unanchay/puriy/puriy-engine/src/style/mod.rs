@@ -339,6 +339,12 @@ impl StyleEngine {
             style.stroke_miterlimit = p.stroke_miterlimit;
             style.stroke_dasharray = p.stroke_dasharray.clone();
             style.stroke_dashoffset = p.stroke_dashoffset;
+            // SVG 2 — fill-rule, clip-rule, color-interpolation,
+            // shape-rendering heredan; vector-effect NO hereda.
+            style.fill_rule = p.fill_rule;
+            style.clip_rule = p.clip_rule;
+            style.color_interpolation = p.color_interpolation;
+            style.shape_rendering = p.shape_rendering;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -6252,6 +6258,176 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_dashoffset,
             LengthVal::Px(12.0)
+        );
+    }
+
+    #[test]
+    fn fill_rule_fase_7_379() {
+        assert_eq!(parse_fill_rule("nonzero"), Some(FillRule::Nonzero));
+        assert_eq!(parse_fill_rule("EVENODD"), Some(FillRule::Evenodd));
+        assert_eq!(parse_fill_rule("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { fill-rule: evenodd }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.fill_rule, FillRule::Evenodd);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).fill_rule,
+            FillRule::Evenodd
+        );
+    }
+
+    #[test]
+    fn clip_rule_fase_7_380() {
+        let html = r##"<html><head><style>
+            body { clip-rule: evenodd }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.clip_rule, FillRule::Evenodd);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).clip_rule,
+            FillRule::Evenodd
+        );
+    }
+
+    #[test]
+    fn color_interpolation_fase_7_381() {
+        assert_eq!(
+            parse_color_interpolation("auto"),
+            Some(ColorInterpolation::Auto)
+        );
+        assert_eq!(
+            parse_color_interpolation("SRGB"),
+            Some(ColorInterpolation::SRgb)
+        );
+        assert_eq!(
+            parse_color_interpolation("linearRGB"),
+            Some(ColorInterpolation::LinearRgb)
+        );
+        assert_eq!(parse_color_interpolation("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { color-interpolation: linearRGB }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.color_interpolation, ColorInterpolation::LinearRgb);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).color_interpolation,
+            ColorInterpolation::LinearRgb
+        );
+    }
+
+    #[test]
+    fn shape_rendering_fase_7_382() {
+        assert_eq!(parse_shape_rendering("auto"), Some(ShapeRendering::Auto));
+        assert_eq!(
+            parse_shape_rendering("optimizeSpeed"),
+            Some(ShapeRendering::OptimizeSpeed)
+        );
+        assert_eq!(
+            parse_shape_rendering("CRISPEDGES"),
+            Some(ShapeRendering::CrispEdges)
+        );
+        assert_eq!(
+            parse_shape_rendering("geometricPrecision"),
+            Some(ShapeRendering::GeometricPrecision)
+        );
+        assert_eq!(parse_shape_rendering("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { shape-rendering: crispEdges }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.shape_rendering, ShapeRendering::CrispEdges);
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).shape_rendering,
+            ShapeRendering::CrispEdges
+        );
+    }
+
+    #[test]
+    fn vector_effect_fase_7_383() {
+        assert_eq!(parse_vector_effect("none"), Some(VectorEffect::None));
+        assert_eq!(
+            parse_vector_effect("non-scaling-stroke"),
+            Some(VectorEffect::NonScalingStroke)
+        );
+        assert_eq!(
+            parse_vector_effect("FIXED-POSITION"),
+            Some(VectorEffect::FixedPosition)
+        );
+        assert_eq!(parse_vector_effect("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { vector-effect: non-scaling-stroke }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.vector_effect, VectorEffect::NonScalingStroke);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).vector_effect,
+            VectorEffect::None
         );
     }
 
