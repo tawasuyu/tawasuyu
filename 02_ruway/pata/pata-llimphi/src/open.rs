@@ -87,16 +87,23 @@ pub enum Opened {
     SystemDefault,
 }
 
+/// La app nativa que abriría `path`: la primera del registro (orden por label)
+/// que declare manejar el mime de su extensión. `None` si no se conoce el mime o
+/// ninguna app lo maneja (→ el caller cae a `xdg-open`). Función **pura**: decide
+/// el handler sin spawnear nada — testeable sin tocar el sistema.
+pub fn handler_for<'a>(registry: &'a AppRegistry, path: &str) -> Option<&'a app_bus::AppEntry> {
+    let mime = mime_for_path(path)?;
+    registry.handlers_for(mime).into_iter().next()
+}
+
 /// Abre `path` con la app del registro que declare su mime; si ninguna, cae a
 /// `xdg-open`. No bloquea (spawnea y olvida). Devuelve qué ruta tomó.
 pub fn open_file(registry: &AppRegistry, path: &str) -> Opened {
-    if let Some(mime) = mime_for_path(path) {
-        if let Some(app) = registry.handlers_for(mime).into_iter().next() {
-            match app.open(path) {
-                Ok(_) => return Opened::NativeApp(app.label.clone()),
-                Err(e) => {
-                    eprintln!("pata · {} no pudo abrir {path}: {e}; uso xdg-open", app.label);
-                }
+    if let Some(app) = handler_for(registry, path) {
+        match app.open(path) {
+            Ok(_) => return Opened::NativeApp(app.label.clone()),
+            Err(e) => {
+                eprintln!("pata · {} no pudo abrir {path}: {e}; uso xdg-open", app.label);
             }
         }
     }
@@ -130,5 +137,37 @@ mod tests {
         assert_eq!(mime_for_path("/home/.config/Makefile"), None);
         // Pero un dotfile con extensión real sí.
         assert_eq!(mime_for_path("/home/.bashrc.md"), Some("text/markdown"));
+    }
+
+    /// Un registro con las apps de ejemplo (media + nada), construido en memoria
+    /// desde el mismo formato TOML de `~/.config/gioser/apps/`.
+    fn registro_ejemplo() -> AppRegistry {
+        let media = app_bus::parse_entry(
+            "id='media'\nlabel='Media'\nhandles=['video/mp4','audio/mpeg']\n[launch]\nexec='media-app'\nargs=['%f']",
+        )
+        .unwrap();
+        let nada = app_bus::parse_entry(
+            "id='nada'\nlabel='Nada'\nhandles=['text/x-rust','text/markdown','text/plain']\n[launch]\nexec='nada'\nargs=['%f']",
+        )
+        .unwrap();
+        AppRegistry::new(vec![media, nada])
+    }
+
+    #[test]
+    fn rutea_a_la_app_nativa_por_mime() {
+        let reg = registro_ejemplo();
+        // Un .mp4 va a media; un .rs y un .md a nada.
+        assert_eq!(handler_for(&reg, "/v/clip.mp4").map(|a| a.id.as_str()), Some("media"));
+        assert_eq!(handler_for(&reg, "/s/lib.rs").map(|a| a.id.as_str()), Some("nada"));
+        assert_eq!(handler_for(&reg, "/d/README.md").map(|a| a.id.as_str()), Some("nada"));
+    }
+
+    #[test]
+    fn sin_handler_nativo_cae_al_sistema() {
+        let reg = registro_ejemplo();
+        // .pdf tiene mime conocido pero ninguna app de ejemplo lo declara.
+        assert!(handler_for(&reg, "/d/manual.pdf").is_none());
+        // Sin extensión, ni siquiera hay mime.
+        assert!(handler_for(&reg, "/etc/hosts").is_none());
     }
 }

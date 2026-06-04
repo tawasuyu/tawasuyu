@@ -649,6 +649,28 @@ mod tests {
     }
 
     #[test]
+    fn manifiestos_de_ejemplo_parsean_y_resuelven_handlers() {
+        // Los manifiestos de `assets/apps/` (las apps reales de la suite que se
+        // copian a ~/.config/gioser/apps/) deben parsear y declarar sus mimes.
+        // Canario del formato: si cambia el esquema, esto avisa.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/apps");
+        let reg = AppRegistry::from_dir(&dir);
+        assert_eq!(reg.len(), 2, "media + nada");
+        // media abre video/audio; nada, texto/código.
+        assert_eq!(reg.handlers_for("video/mp4")[0].id, "media");
+        assert_eq!(reg.handlers_for("text/x-rust")[0].id, "nada");
+        // El exec lleva el placeholder freedesktop.
+        let media = reg.get("media").unwrap();
+        assert_eq!(
+            media.launch,
+            Launch::Exec {
+                program: "media-app".into(),
+                args: vec!["%f".into()],
+            }
+        );
+    }
+
+    #[test]
     fn menu_estandar_y_builder() {
         let m = AppMenu::standard();
         assert_eq!(m.menus.len(), 3);

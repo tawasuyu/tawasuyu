@@ -1,0 +1,40 @@
+# Editor de texto/código de la suite (02_ruway/nada): file tree + text-editor
+# Llimphi sobre archivos reales. Acepta una ruta (archivo o directorio) como
+# argumento.
+#
+# Copiá este archivo a ~/.config/gioser/apps/nada.toml. El binario `nada` debe
+# estar en el PATH (cargo install -p nada) o poné su ruta absoluta en `exec`.
+
+id = "nada"
+label = "Nada"
+icon = "✎"
+category = "ruway"
+
+# Texto y código: lo que el text-editor de Llimphi sabe editar. Coincide con la
+# tabla de mimes de pata (open.rs::mime_for_path).
+handles = [
+    "text/plain",
+    "text/markdown",
+    "text/x-rst",
+    "text/csv",
+    "text/x-rust",
+    "text/x-python",
+    "text/javascript",
+    "text/typescript",
+    "text/x-c",
+    "text/x-c++",
+    "text/x-go",
+    "text/x-java",
+    "text/x-ruby",
+    "application/x-shellscript",
+    "application/toml",
+    "application/json",
+    "application/yaml",
+    "application/xml",
+    "text/html",
+    "text/css",
+]
+
+[launch]
+exec = "nada"
+args = ["%f"]

@@ -1,0 +1,32 @@
+# Reproductor multimedia de la suite (02_ruway/media).
+#
+# Copiá este archivo a ~/.config/gioser/apps/media.toml para que los launchers
+# (el menú de inicio de pata, el spotlight) y el "abrir con" del navegador lo
+# descubran. El binario `media-app` debe estar en el PATH (cargo install) o poné
+# su ruta absoluta en `exec`.
+
+id = "media"
+label = "Media"
+icon = "▶"
+category = "ruway"
+
+# Los mimes que sabe abrir (open-with). Deben coincidir con los que pata deriva
+# de la extensión (02_ruway/pata/pata-llimphi/src/open.rs::mime_for_path).
+handles = [
+    "video/mp4",
+    "video/x-matroska",
+    "video/webm",
+    "video/quicktime",
+    "video/x-msvideo",
+    "audio/mpeg",
+    "audio/flac",
+    "audio/wav",
+    "audio/ogg",
+    "audio/opus",
+]
+
+[launch]
+exec = "media-app"
+# `%f` = la ruta del archivo a abrir (convención freedesktop). Sin placeholder,
+# la ruta se agrega igual como último argumento.
+args = ["%f"]

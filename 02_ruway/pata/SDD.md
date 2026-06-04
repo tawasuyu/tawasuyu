@@ -448,7 +448,11 @@ borde; shuma provee el contenido.
     asociaciones del escritorio). Las apps de la suite tienen prioridad sobre el
     handler del sistema. 3 tests del resolutor de mime. (mirada no expone API de
     apertura —es WM puro—; spawnear el proceso es la vía, como en
-    `chasqui-explorer`.)
+    `chasqui-explorer`.) Manifiestos de ejemplo de apps reales de la suite en
+    `shared/app-bus/assets/apps/` (`media.toml` para video/audio, `nada.toml` para
+    texto/código); se copian a `~/.config/gioser/apps/`. La decisión de ruteo
+    (`open::handler_for`) es pura y testeada; el formato de manifiesto tiene
+    canario en `app-bus`.
   - **11d-extra ⏳ (opcional)** — un menú contextual "Abrir con…" para elegir entre
     varios handlers (hoy toma el primero por orden de label). Requiere que el
     navegador propague las coords del right-click (`on_right_click_at`) para anclar
