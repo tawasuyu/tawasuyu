@@ -75,6 +75,17 @@ pub fn to_smf(score: &Score) -> Vec<u8> {
     let header = Header::new(Format::Parallel, Timing::Metrical(u15::new(PPQ)));
     let mut tracks: Vec<MidiTrack> = Vec::with_capacity(score.tracks().len() + 1);
 
+    // Pre-allocamos los nombres en un buffer paralelo: midly's
+    // `MetaMessage::TrackName` toma `&'a [u8]` y los TrackEvent/Smf
+    // viven hasta el `smf.write()` de más abajo. Sin esto la única
+    // alternativa era `Box::leak` (deuda histórica de este crate);
+    // así no leakeamos nada — el Vec entero se libera al return.
+    let name_buffers: Vec<Vec<u8>> = score
+        .tracks()
+        .iter()
+        .map(|t| t.name.as_bytes().to_vec())
+        .collect();
+
     // Pista 0: sólo tempo + end-of-track. midly requiere u24 (3 bytes
     // microsegundos por quarter-note).
     let microseconds_per_quarter = ((60_000_000.0 / score.tempo_bpm.max(1e-6)) as u32).min(0xFFFFFF);
@@ -94,18 +105,13 @@ pub fn to_smf(score: &Score) -> Vec<u8> {
         let channel = midi_channel_for_track(idx);
         let mut events: Vec<TrackEvent> = Vec::with_capacity(track.notes().len() * 2 + 4);
 
-        // Track name (meta 0x03). midly espera &[u8].
-        let name_bytes = track.name.as_bytes().to_vec();
-        // El nombre se filtra al pasar por midly; el `Box::leak` es
-        // problemático así que usamos un buffer estático... no — midly
-        // toma `&'a [u8]` y devolveremos al string entero con write_std
-        // arriba. Para simplificar, omitimos el name event si la pista
-        // anónima (string vacío); igual lo metemos en una variable que
-        // vive hasta el final del to_smf via la cadena de eventos.
+        // Track name (meta 0x03). El slice apunta al buffer pre-allocado
+        // de arriba (vive hasta el `smf.write()` final).
+        let name_bytes: &[u8] = &name_buffers[idx];
         if !name_bytes.is_empty() {
             events.push(TrackEvent {
                 delta: u28::new(0),
-                kind: TrackEventKind::Meta(MetaMessage::TrackName(unsafe_static_slice(track.name.as_bytes()))),
+                kind: TrackEventKind::Meta(MetaMessage::TrackName(name_bytes)),
             });
         }
 
@@ -186,16 +192,6 @@ pub fn to_smf(score: &Score) -> Vec<u8> {
     let mut buf = Vec::with_capacity(256);
     smf.write(&mut buf).expect("midly::write a Vec no falla");
     buf
-}
-
-/// Helper: midly's MetaMessage::TrackName requires `&'a [u8]` but Vec
-/// alocs go out of scope. Usamos un truco común: filtramos antes de
-/// serializar copiando el byte slice a un buffer auxiliar via leak. En
-/// `to_smf` el SMF se serializa y descarta inmediatamente, así que el
-/// leak está acotado por llamada (vol del orden de bytes del nombre).
-fn unsafe_static_slice(bytes: &[u8]) -> &'static [u8] {
-    let leaked: &'static mut [u8] = Box::leak(bytes.to_vec().into_boxed_slice());
-    &*leaked
 }
 
 /// Mapea índice de pista a canal MIDI saltando el canal 9 (drums GM).
