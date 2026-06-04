@@ -425,6 +425,20 @@ impl Session {
         matches!(&self.shell.state, ModuleState::Shell(s) if s.is_running())
     }
 
+    /// Reconstruye el shell + matilda con el `source` que dicta el aislamiento
+    /// elegido. Pierde el shell anterior a propósito: reconfigurar el aislamiento
+    /// = ambiente nuevo. (Container aún corre local — el exec en contenedor es
+    /// deuda; Remote usa el daemon de `default_shell_source`.)
+    fn apply_isolation(&mut self) {
+        let source = match self.isolation {
+            Isolation::Local | Isolation::Container => Source::Local,
+            Isolation::Remote => default_shell_source(),
+        };
+        self.shell = Instance::shell(self.name.clone(), source.clone());
+        self.matilda = Instance::matilda(self.name.clone(), source.clone());
+        self.source = source;
+    }
+
     fn instance(&self, w: Which) -> &Instance {
         match w {
             Which::Shell => &self.shell,
@@ -774,6 +788,10 @@ impl App for Shell {
                     s.isolation = iso;
                 }
                 promote_if_draft(&mut m);
+                // El cambio de aislamiento reconstruye el shell con su source.
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.apply_isolation();
+                }
             }
             Msg::SetDistro(d) => {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
