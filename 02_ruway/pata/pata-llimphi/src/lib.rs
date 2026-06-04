@@ -22,6 +22,7 @@
 pub mod keys;
 pub mod layer;
 pub mod nouser;
+pub mod open;
 pub mod render;
 pub mod sampler;
 pub mod shuma;
@@ -514,11 +515,10 @@ impl App for PataApp {
                 }
             }
             Msg::NavOpen(id) => {
-                // Stub de Fase 11d: abrir un archivo con el handler del sistema.
-                // Cuando exista el registro de apps de mirada, esto enrutará por
-                // Lens/tipo en vez de delegar en xdg-open.
+                // Fase 11d: abrir el archivo con la app nativa que declare su mime
+                // (registro app-bus), o `xdg-open` como fallback. Ver [`open`].
                 if let Some(nouser::NavTarget::File(path)) = model.nav.targets.get(&id) {
-                    spawn_cmd(&format!("xdg-open {}", shell_quote(path)));
+                    let _ = open::open_file(&model.registry, path);
                 }
             }
             Msg::NavScroll(delta) => {

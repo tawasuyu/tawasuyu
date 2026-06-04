@@ -1175,8 +1175,9 @@ impl LayerApp {
             }
             Msg::NavToggle(id) => self.nav_toggle(id),
             Msg::NavOpen(id) => {
+                // Fase 11d: abrir con la app nativa que declare el mime, o xdg-open.
                 if let Some(NavTarget::File(path)) = self.nav.targets.get(&id) {
-                    crate::spawn_cmd(&format!("xdg-open {}", crate::shell_quote(path)));
+                    let _ = crate::open::open_file(&self.registry, path);
                 }
             }
             Msg::NavScroll(delta) => {

@@ -439,6 +439,19 @@ borde; shuma provee el contenido.
       `draggable`), que el backend layer-shell no rastrea aún → en layer-shell el
       grafo es de sólo lectura; el modo **árbol** (default) funciona completo.
       Compila; runtime se itera en el Hyprland del usuario (headless no verifica).
-  - **11d ⏳ (stub)** — abrir Mónada/archivo con la app que corresponda. Hoy el
-    right-click sobre un archivo cae a `xdg-open` como stand-in; falta el registro
-    de apps de mirada (enrutar por Lens/tipo).
+  - **11d ✅** — abrir un archivo con la app que corresponda. El right-click sobre
+    un archivo (`Msg::NavOpen`) enruta por `open::open_file` (módulo `open.rs`) en
+    ambos backends: deriva el mime de la extensión (tabla acotada `mime_for_path`, sin
+    leer disco), busca una app nativa que lo declare (`app_bus::AppRegistry::
+    handlers_for(mime)` → `AppEntry::open(path)` con sustitución freedesktop
+    `%f`/`%u`), y si ninguna lo maneja cae a `xdg-open` (que respeta las
+    asociaciones del escritorio). Las apps de la suite tienen prioridad sobre el
+    handler del sistema. 3 tests del resolutor de mime. (mirada no expone API de
+    apertura —es WM puro—; spawnear el proceso es la vía, como en
+    `chasqui-explorer`.)
+  - **11d-extra ⏳ (opcional)** — un menú contextual "Abrir con…" para elegir entre
+    varios handlers (hoy toma el primero por orden de label). Requiere que el
+    navegador propague las coords del right-click (`on_right_click_at`) para anclar
+    el menú al cursor; hoy el árbol usa `on_right_click` (Msg sin coords).
+    Discernimiento por contenido (`shuma-discern`) como upgrade del mime por
+    extensión.
