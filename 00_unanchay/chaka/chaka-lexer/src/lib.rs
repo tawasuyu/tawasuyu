@@ -99,6 +99,10 @@ pub enum LexError {
     BadCopybook { line: u32, path: String },
     #[error("anidación de COPY excesiva (límite {limit})")]
     CopyTooDeep { limit: u32 },
+    #[error("línea {line}: directiva REPLACE sin END-REPLACE")]
+    ReplaceUnterminated { line: u32 },
+    #[error("línea {line}: sintaxis inválida en REPLACE — {hint}")]
+    BadReplaceSyntax { line: u32, hint: String },
 }
 
 /// Profundidad máxima de anidación para `COPY` recursivos.
@@ -106,8 +110,14 @@ const COPY_DEPTH_LIMIT: u32 = 16;
 
 /// Expande las directivas `COPY '<path>'.` reemplazándolas por el
 /// contenido del fichero referenciado. Acepta paths absolutos o, si se
-/// indica `base_dir`, rutas relativas a ese directorio. Las directivas
-/// `REPLACE ...` se descartan con un comentario — la v1 no las honra.
+/// indica `base_dir`, rutas relativas a ese directorio.
+///
+/// Honra la directiva `REPLACE`: bloque `REPLACE ==FROM== BY ==TO==
+/// [...] END-REPLACE` instala reglas activas para el RESTO del archivo
+/// (sustitución case-insensitive sobre tokens completos), y `REPLACE
+/// OFF` las apaga. El siguiente `REPLACE` reemplaza el set activo (no
+/// se acumula), siguiendo el modelo del estándar COBOL'85. Las reglas
+/// son de scope del archivo: NO atraviesan a los copybooks expandidos.
 pub fn preprocess(
     source: &str,
     base_dir: Option<&std::path::Path>,
@@ -126,37 +136,197 @@ fn expand(
         });
     }
     let mut out = String::with_capacity(source.len());
-    for (idx, raw) in source.lines().enumerate() {
-        let line_num = (idx + 1) as u32;
+    // Reglas REPLACE activas en este archivo. `Vec<(from, to)>` porque
+    // el orden importa (una regla puede generar texto que matchea otra).
+    let mut active_rules: Vec<(String, String)> = Vec::new();
+    let lines: Vec<&str> = source.lines().collect();
+    let mut i = 0;
+    while i < lines.len() {
+        let raw = lines[i];
+        let line_num = (i + 1) as u32;
         let trimmed = raw.trim_start();
         let upper = trimmed.to_uppercase();
-        if upper.starts_with("REPLACE ") || upper.starts_with("REPLACE.") || upper == "REPLACE" {
-            // La v1 no expande `REPLACE`: lo registra como comentario.
-            out.push_str("*> chaka: REPLACE ignorado en la v1\n");
+
+        // `REPLACE OFF` — apaga las reglas. Aceptamos punto opcional al
+        // final y cualquier cola (ej. comentarios) para no atragantarnos.
+        if upper == "REPLACE OFF"
+            || upper.starts_with("REPLACE OFF.")
+            || upper.starts_with("REPLACE OFF ")
+        {
+            active_rules.clear();
+            out.push_str("*> chaka: REPLACE OFF\n");
+            i += 1;
             continue;
         }
+
+        // `REPLACE ... END-REPLACE` — bloque. Acumulamos líneas hasta
+        // encontrar `END-REPLACE` para soportar bloques multi-línea (lo
+        // habitual en COBOL real).
+        if upper.starts_with("REPLACE ") || upper == "REPLACE" || upper.starts_with("REPLACE.") {
+            let mut block = String::from(trimmed);
+            let start_line = line_num;
+            while !contains_end_replace(&block) {
+                i += 1;
+                if i >= lines.len() {
+                    return Err(LexError::ReplaceUnterminated { line: start_line });
+                }
+                block.push(' ');
+                block.push_str(lines[i].trim());
+            }
+            // Estándar COBOL: el nuevo REPLACE reemplaza el set activo.
+            active_rules = parse_replace_block(&block, start_line)?;
+            out.push_str("*> chaka: REPLACE aplicado\n");
+            i += 1;
+            continue;
+        }
+
+        // COPY: expandir; las reglas activas NO atraviesan al copybook
+        // (la directiva `COPY ... REPLACING` es OTRO mecanismo, fuera de
+        // esta iteración).
         if let Some(rest) = strip_copy_prefix(&upper, trimmed) {
             let path = parse_copy_path(rest).ok_or_else(|| LexError::BadCopybook {
                 line: line_num,
                 path: rest.to_string(),
             })?;
             let resolved = resolve_copy_path(&path, base_dir);
-            let content = std::fs::read_to_string(&resolved)
-                .map_err(|_| LexError::BadCopybook {
-                    line: line_num,
-                    path: resolved.display().to_string(),
-                })?;
+            let content = std::fs::read_to_string(&resolved).map_err(|_| LexError::BadCopybook {
+                line: line_num,
+                path: resolved.display().to_string(),
+            })?;
             let nested = expand(&content, resolved.parent(), depth + 1)?;
             out.push_str(&nested);
             if !nested.ends_with('\n') {
                 out.push('\n');
             }
+            i += 1;
             continue;
         }
-        out.push_str(raw);
+
+        // Línea normal: aplicar reglas activas y emitir.
+        let processed = apply_replace_rules(raw, &active_rules);
+        out.push_str(&processed);
         out.push('\n');
+        i += 1;
     }
     Ok(out)
+}
+
+/// `true` si el buffer ya vio el delimitador `END-REPLACE` (case
+/// insensitive, robusto a sangría y al punto opcional).
+fn contains_end_replace(block: &str) -> bool {
+    block.to_uppercase().contains("END-REPLACE")
+}
+
+/// Parsea un bloque `REPLACE ==A== BY ==B== [==C== BY ==D==] END-REPLACE`
+/// y devuelve la lista de pares `(from, to)`. El parser es deliberadamente
+/// estrecho: pseudo-texts delimitadas por `==`, separador `BY` entre el
+/// par, y `END-REPLACE` como terminador. Una sintaxis fuera de eso se
+/// rechaza con [`LexError::BadReplaceSyntax`] en vez de adivinar.
+fn parse_replace_block(block: &str, line: u32) -> Result<Vec<(String, String)>, LexError> {
+    let upper = block.to_uppercase();
+
+    // Strip "REPLACE" del inicio y "END-REPLACE..." del final.
+    let after_kw = upper
+        .find("REPLACE")
+        .map(|p| p + "REPLACE".len())
+        .unwrap_or(0);
+    let end_at = upper
+        .find("END-REPLACE")
+        .ok_or_else(|| LexError::ReplaceUnterminated { line })?;
+    if end_at < after_kw {
+        return Err(LexError::BadReplaceSyntax {
+            line,
+            hint: "END-REPLACE aparece antes que REPLACE".into(),
+        });
+    }
+    let body = &block[after_kw..end_at];
+
+    // Split por `==`: el patrón esperado para N reglas es
+    // `["", "FROM_1", " BY ", "TO_1", " ", "FROM_2", " BY ", "TO_2", ""]`
+    // o sea 4*N + 1 fragmentos.
+    let parts: Vec<&str> = body.split("==").collect();
+    if parts.len() < 5 || parts.len() % 4 != 1 {
+        return Err(LexError::BadReplaceSyntax {
+            line,
+            hint: format!(
+                "esperaba pares `==FROM== BY ==TO==`, conté {} fragmentos `==`",
+                parts.len()
+            ),
+        });
+    }
+
+    let mut rules = Vec::with_capacity(parts.len() / 4);
+    let mut k = 1;
+    while k + 2 < parts.len() {
+        let from = parts[k].trim();
+        let by = parts[k + 1].trim().to_uppercase();
+        let to = parts[k + 2].trim();
+        if by != "BY" {
+            return Err(LexError::BadReplaceSyntax {
+                line,
+                hint: format!("esperaba separador `BY` entre pseudo-texts, encontré {by:?}"),
+            });
+        }
+        if from.is_empty() {
+            return Err(LexError::BadReplaceSyntax {
+                line,
+                hint: "pseudo-text FROM vacío".into(),
+            });
+        }
+        rules.push((from.to_string(), to.to_string()));
+        k += 4;
+    }
+    Ok(rules)
+}
+
+/// Aplica todas las reglas a la línea, en orden de declaración. La
+/// sustitución es case-insensitive y se ata a límites de palabra
+/// (alfa-numérico), así `REPLACE ==FOO== BY ==BAR==` no toca
+/// `FOOBAR` ni `MYFOO` pero sí `FOO` y `Foo`.
+fn apply_replace_rules(line: &str, rules: &[(String, String)]) -> String {
+    if rules.is_empty() {
+        return line.to_string();
+    }
+    let mut current = line.to_string();
+    for (from, to) in rules {
+        current = case_insensitive_word_replace(&current, from, to);
+    }
+    current
+}
+
+/// Sustitución case-insensitive de `needle` por `replacement` en
+/// `haystack`, sólo cuando la ocurrencia está delimitada por caracteres
+/// no alfanuméricos (o por inicio/fin de cadena). Idempotente para
+/// needles vacíos (devuelve haystack tal cual).
+fn case_insensitive_word_replace(haystack: &str, needle: &str, replacement: &str) -> String {
+    if needle.is_empty() {
+        return haystack.to_string();
+    }
+    let hay_up = haystack.to_ascii_uppercase();
+    let nee_up = needle.to_ascii_uppercase();
+    let bytes = haystack.as_bytes();
+    let mut result = String::with_capacity(haystack.len());
+    let mut last = 0;
+    let mut search = 0;
+    while let Some(rel) = hay_up[search..].find(&nee_up) {
+        let abs = search + rel;
+        let end = abs + nee_up.len();
+        let before_ok = abs == 0 || !bytes[abs - 1].is_ascii_alphanumeric();
+        let after_ok = end == bytes.len() || !bytes[end].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            result.push_str(&haystack[last..abs]);
+            result.push_str(replacement);
+            last = end;
+            search = end;
+        } else {
+            // Avance mínimo seguro: 1 byte (todos los caracteres ASCII en
+            // contexto COBOL caben en este avance; UTF-8 multibyte no
+            // entra en identifiers, así que es seguro).
+            search = abs + 1;
+        }
+    }
+    result.push_str(&haystack[last..]);
+    result
 }
 
 /// Si la línea (en mayúsculas, sin sangría) empieza por `COPY ` devuelve
@@ -675,5 +845,138 @@ ADD-TOTALS.
             .iter()
             .any(|t| t.kind == TokenKind::Symbol && t.text == "="));
         assert!(toks.iter().any(|t| t.text == "END-IF"));
+    }
+
+    // -----------------------------------------------------------------
+    //  REPLACE — preprocesador
+    // -----------------------------------------------------------------
+
+    fn pp(src: &str) -> String {
+        preprocess(src, None).expect("preprocess OK")
+    }
+
+    #[test]
+    fn replace_simple_aplica_una_regla() {
+        let src = "\
+REPLACE ==FOO== BY ==BAR== END-REPLACE.
+DISPLAY FOO.
+DISPLAY foo.";
+        let out = pp(src);
+        assert!(out.contains("DISPLAY BAR."));
+        assert!(out.contains("DISPLAY BAR."), "case insensitive: {out:?}");
+    }
+
+    #[test]
+    fn replace_respeta_limites_de_palabra() {
+        let src = "\
+REPLACE ==FOO== BY ==BAR== END-REPLACE.
+DISPLAY FOOBAR.
+DISPLAY MYFOO.
+DISPLAY FOO-BAZ.";
+        let out = pp(src);
+        // No tocar substrings dentro de palabras.
+        assert!(out.contains("DISPLAY FOOBAR."), "got: {out}");
+        assert!(out.contains("DISPLAY MYFOO."), "got: {out}");
+        // El guión separa identifiers en COBOL, así que sí se reemplaza.
+        assert!(out.contains("DISPLAY BAR-BAZ."), "got: {out}");
+    }
+
+    #[test]
+    fn replace_off_apaga_las_reglas() {
+        let src = "\
+REPLACE ==FOO== BY ==BAR== END-REPLACE.
+DISPLAY FOO.
+REPLACE OFF.
+DISPLAY FOO.";
+        let out = pp(src);
+        // Antes del OFF se reemplaza; después, no.
+        let mut lines = out.lines().filter(|l| l.starts_with("DISPLAY"));
+        assert_eq!(lines.next(), Some("DISPLAY BAR."));
+        assert_eq!(lines.next(), Some("DISPLAY FOO."));
+    }
+
+    #[test]
+    fn replace_multiples_reglas_en_un_bloque() {
+        let src = "\
+REPLACE ==FOO== BY ==BAR== ==BAZ== BY ==QUX== END-REPLACE.
+DISPLAY FOO BAZ.";
+        let out = pp(src);
+        assert!(out.contains("DISPLAY BAR QUX."), "got: {out}");
+    }
+
+    #[test]
+    fn replace_multilinea_se_acumula_hasta_end_replace() {
+        let src = "\
+REPLACE
+  ==FOO== BY ==BAR==
+  ==BAZ== BY ==QUX==
+END-REPLACE.
+DISPLAY FOO BAZ.";
+        let out = pp(src);
+        assert!(out.contains("DISPLAY BAR QUX."), "got: {out}");
+    }
+
+    #[test]
+    fn replace_sucesivo_reemplaza_el_set_activo() {
+        // Segundo REPLACE pisa las reglas del primero (no se acumula).
+        let src = "\
+REPLACE ==FOO== BY ==BAR== END-REPLACE.
+DISPLAY FOO.
+REPLACE ==BAZ== BY ==QUX== END-REPLACE.
+DISPLAY FOO.
+DISPLAY BAZ.";
+        let out = pp(src);
+        let mut lines = out.lines().filter(|l| l.starts_with("DISPLAY"));
+        assert_eq!(lines.next(), Some("DISPLAY BAR."));
+        assert_eq!(
+            lines.next(),
+            Some("DISPLAY FOO."),
+            "tras el 2do REPLACE, FOO no debería reemplazarse"
+        );
+        assert_eq!(lines.next(), Some("DISPLAY QUX."));
+    }
+
+    #[test]
+    fn replace_no_atraviesa_copy_expandido() {
+        use std::io::Write;
+        // Copybook con un identifier que el padre intenta reescribir;
+        // por scope, NO debe tocarse.
+        let dir = tempfile::tempdir().unwrap();
+        let cpy = dir.path().join("aux.cpy");
+        std::fs::File::create(&cpy)
+            .unwrap()
+            .write_all(b"DISPLAY FOO.")
+            .unwrap();
+        let src = format!(
+            "REPLACE ==FOO== BY ==BAR== END-REPLACE.\nDISPLAY FOO.\nCOPY '{}'.\n",
+            cpy.display()
+        );
+        let out = preprocess(&src, Some(dir.path())).unwrap();
+        let mut lines = out.lines().filter(|l| l.starts_with("DISPLAY"));
+        assert_eq!(lines.next(), Some("DISPLAY BAR."));
+        assert_eq!(
+            lines.next(),
+            Some("DISPLAY FOO."),
+            "dentro del copybook FOO no debe reescribirse: {out}",
+        );
+    }
+
+    #[test]
+    fn replace_sin_end_replace_da_error() {
+        let src = "\
+REPLACE ==FOO== BY ==BAR==
+DISPLAY FOO.";
+        let err = preprocess(src, None).unwrap_err();
+        match err {
+            LexError::ReplaceUnterminated { line } => assert_eq!(line, 1),
+            other => panic!("esperaba ReplaceUnterminated, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn replace_sintaxis_mala_da_error() {
+        let src = "REPLACE ==FOO== INTO ==BAR== END-REPLACE.";
+        let err = preprocess(src, None).unwrap_err();
+        assert!(matches!(err, LexError::BadReplaceSyntax { .. }));
     }
 }
