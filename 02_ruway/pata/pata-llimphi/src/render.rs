@@ -18,6 +18,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::View;
+use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 
 use app_bus::AppEntry;
 use pata_core::config::{FloatingCard, Surface, SurfaceKind};
@@ -708,21 +709,123 @@ const START_MENU_W: f32 = 280.0;
 /// para llenar el área que la barra superior libera al crecer hacia abajo (mismo
 /// truco que el drawer Quake, pero hacia abajo). Cada fila lanza su app
 /// ([`Msg::LaunchApp`]); si el registro está vacío, una pista.
-pub fn start_menu_body(apps: &[AppEntry], theme: &Theme) -> View<Msg> {
-    let filas: Vec<View<Msg>> = if apps.is_empty() {
-        vec![View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+/// Alto de cada fila del menú (px) — debe seguir a [`app_row`].
+const MENU_ROW_H: f32 = 28.0;
+/// Gap vertical entre filas (px) — debe seguir al `gap` del panel.
+const MENU_ROW_GAP: f32 = 2.0;
+/// Alto del campo de búsqueda (px).
+const MENU_SEARCH_H: f32 = 34.0;
+
+/// Filtra el registro por `query` (substring, sin distinguir mayúsculas) sobre
+/// el label. El registro ya viene ordenado alfabéticamente por label.
+pub fn menu_filtered<'a>(apps: &'a [AppEntry], query: &str) -> Vec<&'a AppEntry> {
+    let needle = query.to_lowercase();
+    apps.iter()
+        .filter(|a| needle.is_empty() || a.label.to_lowercase().contains(&needle))
+        .collect()
+}
+
+pub fn start_menu_body(
+    apps: &[AppEntry],
+    query: &str,
+    offset: f32,
+    viewport_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    let matches = menu_filtered(apps, query);
+
+    // Campo de búsqueda: glyph de lupa + lo tecleado (o placeholder) + conteo.
+    let texto_busqueda = if query.is_empty() {
+        "Buscar aplicaciones…".to_string()
+    } else {
+        query.to_string()
+    };
+    let conteo = format!("{}", matches.len());
+    let search = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(MENU_SEARCH_H) },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(6.0)
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(16.0_f32), height: length(MENU_SEARCH_H) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text("⌕".to_string(), 14.0, theme.accent),
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
         .text(
-            "sin apps en ~/.config/gioser/apps/".to_string(),
+            texto_busqueda,
+            13.0,
+            if query.is_empty() { theme.fg_muted } else { theme.fg_text },
+        ),
+        View::new(Style {
+            size: Size { width: auto(), height: length(MENU_SEARCH_H) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(conteo, 11.0, theme.fg_muted),
+    ]);
+
+    // Filas filtradas, dentro de un área scrolleable (las apps del sistema son
+    // muchas; el buscador estrecha y la rueda recorre el resto).
+    let filas: Vec<View<Msg>> = if matches.is_empty() {
+        vec![View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(MENU_ROW_H) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(
+            if query.is_empty() {
+                "sin apps (¿XDG_DATA_DIRS? ¿~/.config/gioser/apps/?)".to_string()
+            } else {
+                format!("sin resultados para «{query}»")
+            },
             12.0,
             theme.fg_muted,
         )]
     } else {
-        apps.iter().map(|a| app_row(a, theme)).collect()
+        matches.iter().map(|a| app_row(a, theme)).collect()
     };
+
+    let content_len = matches.len() as f32 * (MENU_ROW_H + MENU_ROW_GAP);
+    let lista_inner = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(MENU_ROW_GAP) },
+        ..Default::default()
+    })
+    .children(filas);
+    let lista = scroll_y(
+        clamp_offset(offset, content_len, viewport_h),
+        content_len,
+        viewport_h,
+        lista_inner,
+        Msg::StartScroll,
+        &ScrollPalette::from_theme(theme),
+    );
+    let lista_wrap = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(viewport_h.max(MENU_ROW_H)) },
+        ..Default::default()
+    })
+    .children(vec![lista]);
 
     let panel = View::new(Style {
         position: Position::Absolute,
@@ -743,12 +846,12 @@ pub fn start_menu_body(apps: &[AppEntry], theme: &Theme) -> View<Msg> {
             top: length(8.0_f32),
             bottom: length(8.0_f32),
         },
-        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel)
     .radius(10.0)
-    .children(filas);
+    .children(vec![search, lista_wrap]);
 
     // Scrim a ancho completo del área: cierra al click fuera del panel.
     View::new(Style {
@@ -770,7 +873,15 @@ pub fn start_menu_body(apps: &[AppEntry], theme: &Theme) -> View<Msg> {
 
 /// Una fila del menú de inicio: ícono (glyph) + label, clickeable.
 fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
-    let icono = a.icon.clone().unwrap_or_else(|| "▸".to_string());
+    // El ícono de una app gioser es un glyph (1 char); el de un `.desktop` es un
+    // nombre freedesktop (palabra) que no sabemos resolver a imagen acá → cae a
+    // un glyph genérico para que la fila quede prolija.
+    let icono = a
+        .icon
+        .as_deref()
+        .filter(|s| s.chars().count() <= 2)
+        .unwrap_or("▸")
+        .to_string();
     let badge = View::new(Style {
         size: Size { width: length(22.0_f32), height: length(22.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -808,7 +919,15 @@ fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
 /// pantalla completa desplazado `bar_h` px hacia abajo (para que el panel caiga
 /// bajo la barra superior) que aloja [`start_menu_body`]. El scrim del body
 /// cierra al click.
-pub fn start_menu_overlay(apps: &[AppEntry], bar_h: f32, theme: &Theme) -> View<Msg> {
+pub fn start_menu_overlay(
+    apps: &[AppEntry],
+    query: &str,
+    offset: f32,
+    bar_h: f32,
+    screen_h: f32,
+    theme: &Theme,
+) -> View<Msg> {
+    let viewport = (screen_h - bar_h - MENU_SEARCH_H - 28.0).max(MENU_ROW_H);
     View::new(Style {
         position: Position::Absolute,
         inset: TaffyRect {
@@ -823,7 +942,7 @@ pub fn start_menu_overlay(apps: &[AppEntry], bar_h: f32, theme: &Theme) -> View<
         },
         ..Default::default()
     })
-    .children(vec![start_menu_body(apps, theme)])
+    .children(vec![start_menu_body(apps, query, offset, viewport, theme)])
 }
 
 /// La barra superior con el menú de inicio **desplegado** hacia abajo: la barra
@@ -838,6 +957,9 @@ pub fn start_menu_view(
     theme: &Theme,
     bar_px: f32,
     apps: &[AppEntry],
+    query: &str,
+    offset: f32,
+    menu_h: f32,
 ) -> View<Msg> {
     let bar = View::new(Style {
         size: Size {
@@ -848,6 +970,9 @@ pub fn start_menu_view(
     })
     .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
 
+    // El cuerpo (menú desplegado) mide el alto de surface menos la barra; el
+    // área scrolleable de la lista descuenta el campo de búsqueda y los paddings.
+    let viewport = (menu_h - bar_px - MENU_SEARCH_H - 28.0).max(MENU_ROW_H);
     let mut body_style = Style {
         size: Size {
             width: percent(1.0_f32),
@@ -856,7 +981,8 @@ pub fn start_menu_view(
         ..Default::default()
     };
     body_style.flex_grow = 1.0;
-    let body = View::new(body_style).children(vec![start_menu_body(apps, theme)]);
+    let body = View::new(body_style)
+        .children(vec![start_menu_body(apps, query, offset, viewport, theme)]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,

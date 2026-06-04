@@ -263,6 +263,25 @@ impl AppRegistry {
         apps_dir().map(Self::from_dir).unwrap_or_default()
     }
 
+    /// Como [`discover`](Self::discover) pero **fusionando** las apps de la suite
+    /// gioser (`~/.config/gioser/apps/*.toml`) con las `.desktop` del sistema
+    /// (XDG). Dedup por label en minúsculas: la entrada gioser gana sobre la del
+    /// sistema con el mismo nombre (así «Media» de gioser tapa un `media.desktop`
+    /// del sistema). Orden alfabético por label. Es lo que un launcher "normal"
+    /// (rofi/wofi) descubre, más la suite propia.
+    pub fn discover_merged() -> Self {
+        use std::collections::HashSet;
+        let mut entries = Self::discover().entries;
+        let mut labels: HashSet<String> =
+            entries.iter().map(|e| e.label.to_lowercase()).collect();
+        for e in discover_desktop_entries() {
+            if labels.insert(e.label.to_lowercase()) {
+                entries.push(e);
+            }
+        }
+        Self::new(entries)
+    }
+
     /// **Open-with universal**: elige el primer handler de `mime` (orden de
     /// label) y le abre `target` out-of-process vía [`AppEntry::open`].
     /// Devuelve el `AppEntry` elegido y su `Child` (o `None` en el child si
@@ -302,6 +321,167 @@ impl AppRegistry {
         }
         Self::new(entries)
     }
+}
+
+// ----- descubrimiento de .desktop del sistema (XDG) -----
+
+/// Los directorios `applications/` del estándar XDG, en orden de prioridad
+/// (usuario primero, sistema después). Un `.desktop` de mayor prioridad tapa a
+/// otro con el mismo nombre de archivo.
+#[cfg(feature = "std")]
+fn xdg_application_dirs() -> Vec<std::path::PathBuf> {
+    use std::path::PathBuf;
+    let mut dirs = Vec::new();
+    let data_home = std::env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_absolute())
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    if let Some(home) = data_home {
+        dirs.push(home.join("applications"));
+    }
+    let data_dirs = std::env::var("XDG_DATA_DIRS")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    for d in data_dirs.split(':').filter(|s| !s.is_empty()) {
+        dirs.push(PathBuf::from(d).join("applications"));
+    }
+    dirs
+}
+
+/// Descubre las aplicaciones `.desktop` instaladas en el sistema (XDG) como
+/// [`AppEntry`] con [`Launch::Exec`]. Dedup por id XDG (ruta relativa con
+/// `/`→`-`): un dir de más prioridad tapa al de menos. Ignora las marcadas
+/// `NoDisplay`/`Hidden` y las que no son `Type=Application`. `MimeType` alimenta
+/// `handles` (open-with universal).
+#[cfg(feature = "std")]
+pub fn discover_desktop_entries() -> Vec<AppEntry> {
+    use std::collections::HashSet;
+    let mut entries = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for root in xdg_application_dirs() {
+        collect_desktop_dir(&root, &root, &mut seen, &mut entries);
+    }
+    entries
+}
+
+#[cfg(feature = "std")]
+fn collect_desktop_dir(
+    root: &std::path::Path,
+    dir: &std::path::Path,
+    seen: &mut std::collections::HashSet<String>,
+    out: &mut Vec<AppEntry>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let path = e.path();
+        if path.is_dir() {
+            collect_desktop_dir(root, &path, seen, out);
+            continue;
+        }
+        if path.extension().and_then(|s| s.to_str()) != Some("desktop") {
+            continue;
+        }
+        let id = path
+            .strip_prefix(root)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .replace('/', "-");
+        if !seen.insert(id.clone()) {
+            continue; // ya lo tapó un directorio de más prioridad
+        }
+        if let Ok(text) = std::fs::read_to_string(&path) {
+            if let Some(entry) = parse_desktop_entry(&text, &id) {
+                out.push(entry);
+            }
+        }
+    }
+}
+
+/// Extrae un [`AppEntry`] del texto de un `.desktop`. `None` si no es lanzable
+/// o está oculta. El `Exec` se parte en programa + args quitando los códigos de
+/// campo (`%f`/`%U`/…).
+#[cfg(feature = "std")]
+fn parse_desktop_entry(text: &str, id: &str) -> Option<AppEntry> {
+    let mut in_entry = false;
+    let mut name = None::<String>;
+    let mut exec = None::<String>;
+    let mut kind = None::<String>;
+    let mut icon = None::<String>;
+    let mut mimes: Vec<String> = Vec::new();
+    let mut no_display = false;
+    let mut hidden = false;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            in_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_entry || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        let value = value.trim();
+        match key.trim() {
+            // El `Name` plano (no las variantes `Name[es]`, que traen `[`).
+            "Name" if name.is_none() => name = Some(value.into()),
+            "Exec" => exec = Some(value.into()),
+            "Type" => kind = Some(value.into()),
+            "Icon" => icon = Some(value.into()),
+            "MimeType" => {
+                mimes = value
+                    .split(';')
+                    .filter(|s| !s.is_empty())
+                    .map(String::from)
+                    .collect()
+            }
+            "NoDisplay" => no_display = value == "true",
+            "Hidden" => hidden = value == "true",
+            _ => {}
+        }
+    }
+    if no_display || hidden || kind.as_deref() != Some("Application") {
+        return None;
+    }
+    let label = name?;
+    let (program, args) = split_exec(&exec?)?;
+    if label.is_empty() || program.is_empty() {
+        return None;
+    }
+    Some(AppEntry {
+        id: String::from(id),
+        label,
+        // Nombre de ícono freedesktop (no ruta); el launcher decide cómo
+        // pintarlo. pata cae a un glyph genérico si no sabe resolverlo.
+        icon,
+        category: Some(String::from("sistema")),
+        launch: Launch::Exec { program, args },
+        handles: mimes,
+    })
+}
+
+/// Parte el `Exec` de un `.desktop` en (programa, args), quitando los códigos de
+/// campo (`%f`, `%U`, `%i`, …; `%%`→`%`). División por espacios (sin honrar
+/// comillas: alcanza para lanzar — los args entrecomillados con espacios en
+/// `Exec` son raros y se lanzan igual por el shell del usuario si hiciera falta).
+#[cfg(feature = "std")]
+fn split_exec(exec: &str) -> Option<(String, Vec<String>)> {
+    let mut tokens: Vec<String> = Vec::new();
+    for raw in exec.split_whitespace() {
+        // Un token que es exactamente un código de campo (`%f`, `%U`, …) se
+        // descarta entero; `%%` es un `%` literal.
+        if raw.len() == 2 && raw.starts_with('%') && raw != "%%" {
+            continue;
+        }
+        tokens.push(raw.replace("%%", "%"));
+    }
+    let mut it = tokens.into_iter();
+    let program = it.next()?;
+    Some((program, it.collect()))
 }
 
 /// Siembra manifests por defecto en [`apps_dir`] si todavía no hay

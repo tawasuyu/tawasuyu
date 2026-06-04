@@ -204,6 +204,11 @@ struct LayerApp {
     registry: app_bus::AppRegistry,
     /// `true` cuando el menú de inicio está desplegado.
     menu_open: bool,
+    /// Texto del buscador del menú de inicio (filtra apps por label). Se limpia
+    /// al cerrar el menú.
+    menu_query: String,
+    /// Desplazamiento de la lista del menú (px), para recorrer muchas apps.
+    menu_scroll: f32,
     /// Índice (en `panels`) de la barra que hospeda el `start_button`, si hay.
     menu_panel: Option<usize>,
     /// Grosor original (px) de esa barra — al que vuelve al replegar el menú.
@@ -390,8 +395,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         // Se calculan después, una vez creados los panels.
         shuma_panel: None,
         shuma_bar_px: 40,
-        registry: app_bus::AppRegistry::discover(),
+        registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
+        menu_query: String::new(),
+        menu_scroll: 0.0,
         menu_panel: None,
         menu_bar_px: 32,
         sampler: SamplerHandle::spawn(utc),
@@ -815,9 +822,22 @@ impl LayerApp {
             return;
         }
         self.menu_open = open;
+        // Al cerrar, reseteamos el buscador y el scroll (la próxima apertura
+        // arranca limpia).
+        if !open {
+            self.menu_query.clear();
+            self.menu_scroll = 0.0;
+        }
         let h = if open { MENU_H } else { self.menu_bar_px };
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
+        // El menú toma el teclado mientras está abierto (para teclear en el
+        // buscador); al cerrar lo suelta.
+        layer.set_keyboard_interactivity(if open {
+            KeyboardInteractivity::Exclusive
+        } else {
+            KeyboardInteractivity::None
+        });
         layer.commit();
         // Invalida el cache de hit-test (geometría vieja) — igual que shuma.
         self.panels[pi].cache = None;
@@ -894,6 +914,26 @@ impl LayerApp {
             let _ = app.spawn();
         }
         self.set_menu_open(false);
+    }
+
+    /// Marca para re-pintar la barra que hospeda el menú de inicio (tras teclear
+    /// en el buscador). Invalida su cache de hit-test (el árbol cambió).
+    fn marcar_menu_dirty(&mut self) {
+        if let Some(pi) = self.menu_panel {
+            self.panels[pi].cache = None;
+            self.panels[pi].dirty = true;
+        }
+    }
+
+    /// Enter en el menú de inicio: lanza el primer resultado del filtro actual
+    /// (la lista ya viene ordenada por label). No-op si no hay coincidencias.
+    fn lanzar_primero_menu(&mut self) {
+        let id = render::menu_filtered(self.registry.all(), &self.menu_query)
+            .first()
+            .map(|a| a.id.clone());
+        if let Some(id) = id {
+            self.lanzar_app(id);
+        }
     }
 
     /// Enter en el drawer: corre el comando por el **ejecutor real de shuma**
@@ -1222,6 +1262,9 @@ impl LayerApp {
                 &self.theme,
                 self.menu_bar_px as f32,
                 self.registry.all(),
+                &self.menu_query,
+                self.menu_scroll,
+                h as f32,
             )
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             // El cuerpo del drawer es el terminal PTY real; abajo queda la barra
@@ -1370,6 +1413,21 @@ impl LayerApp {
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
             Msg::StartToggle => self.set_menu_open(!self.menu_open),
+            Msg::StartScroll(delta) => {
+                // Recorre la lista del menú. content/viewport aproximados (el
+                // render reclampa para pintar); evita la deriva del offset.
+                let count =
+                    render::menu_filtered(self.registry.all(), &self.menu_query).len();
+                let content = count as f32 * 30.0;
+                let viewport =
+                    (MENU_H as f32 - self.menu_bar_px as f32 - 62.0).max(28.0);
+                self.menu_scroll = llimphi_widget_scroll::clamp_offset(
+                    self.menu_scroll + delta,
+                    content,
+                    viewport,
+                );
+                self.marcar_menu_dirty();
+            }
             Msg::LaunchApp(id) => self.lanzar_app(id),
             Msg::ActivateWindow(id) => self.activar_ventana(id),
             Msg::CloseWindow(id) => self.cerrar_ventana(id),
@@ -1644,6 +1702,28 @@ impl KeyboardHandler for LayerApp {
         _: u32,
         event: KbEvent,
     ) {
+        // Menú de inicio abierto: el teclado va al buscador (filtra apps).
+        if self.menu_open {
+            match event.keysym {
+                Keysym::Escape => self.set_menu_open(false),
+                Keysym::BackSpace => {
+                    self.menu_query.pop();
+                    self.menu_scroll = 0.0;
+                    self.marcar_menu_dirty();
+                }
+                Keysym::Return | Keysym::KP_Enter => self.lanzar_primero_menu(),
+                _ => {
+                    if let Some(txt) = event.utf8 {
+                        if !txt.is_empty() && !txt.chars().any(|c| c.is_control()) {
+                            self.menu_query.push_str(&txt);
+                            self.menu_scroll = 0.0;
+                            self.marcar_menu_dirty();
+                        }
+                    }
+                }
+            }
+            return;
+        }
         // El teclado sólo nos importa con el drawer abierto (foco Exclusive).
         if !self.shuma.open {
             return;

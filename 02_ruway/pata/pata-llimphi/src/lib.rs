@@ -76,6 +76,14 @@ pub enum Msg {
     Spawn(String),
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
+    /// Carácter al buscador del menú de inicio.
+    StartChar(char),
+    /// Backspace en el buscador del menú de inicio.
+    StartBackspace,
+    /// Enter en el menú: lanza el primer resultado del filtro.
+    StartLaunchFirst,
+    /// Desplazar la lista del menú de inicio `delta` px (rueda).
+    StartScroll(f32),
     /// Lanzar una app del menú de inicio por su `id` en el [`app_bus::AppRegistry`].
     LaunchApp(String),
     /// Activar una ventana del `window_list` (traerla al frente, o minimizarla si
@@ -253,6 +261,10 @@ pub struct Model {
     pub registry: app_bus::AppRegistry,
     /// `true` cuando el menú de inicio está desplegado.
     pub menu_open: bool,
+    /// Texto del buscador del menú de inicio (filtra apps por label).
+    pub menu_query: String,
+    /// Desplazamiento de la lista del menú (px).
+    pub menu_scroll: f32,
     /// Muestreador del sistema (con estado para el delta de CPU).
     pub sampler: Sampler,
     /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
@@ -400,8 +412,10 @@ impl App for PataApp {
             surfaces,
             cards,
             shuma,
-            registry: app_bus::AppRegistry::discover(),
+            registry: app_bus::AppRegistry::discover_merged(),
             menu_open: false,
+            menu_query: String::new(),
+            menu_scroll: 0.0,
             sampler,
             clipboard,
             tray,
@@ -490,12 +504,44 @@ impl App for PataApp {
             Msg::ShumaScroll(delta) => model.shuma.scroll_by(delta),
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
-            Msg::StartToggle => model.menu_open = !model.menu_open,
+            Msg::StartToggle => {
+                model.menu_open = !model.menu_open;
+                if !model.menu_open {
+                    model.menu_query.clear();
+                    model.menu_scroll = 0.0;
+                }
+            }
+            Msg::StartChar(c) => {
+                if !c.is_control() {
+                    model.menu_query.push(c);
+                    model.menu_scroll = 0.0;
+                }
+            }
+            Msg::StartBackspace => {
+                model.menu_query.pop();
+                model.menu_scroll = 0.0;
+            }
+            Msg::StartScroll(delta) => model.menu_scroll += delta,
+            Msg::StartLaunchFirst => {
+                let id = render::menu_filtered(model.registry.all(), &model.menu_query)
+                    .first()
+                    .map(|a| a.id.clone());
+                if let Some(id) = id {
+                    if let Some(app) = model.registry.get(&id) {
+                        let _ = app.spawn();
+                    }
+                    model.menu_open = false;
+                    model.menu_query.clear();
+                    model.menu_scroll = 0.0;
+                }
+            }
             Msg::LaunchApp(id) => {
                 if let Some(app) = model.registry.get(&id) {
                     let _ = app.spawn();
                 }
                 model.menu_open = false;
+                model.menu_query.clear();
+                model.menu_scroll = 0.0;
             }
             Msg::TrayActivate(key) => {
                 if let Some(t) = &model.tray {
@@ -602,7 +648,10 @@ impl App for PataApp {
                 .unwrap_or(32.0);
             return Some(render::start_menu_overlay(
                 model.registry.all(),
+                &model.menu_query,
+                model.menu_scroll,
                 bar_h,
+                model.screen.1 as f32,
                 &model.theme,
             ));
         }
@@ -628,6 +677,16 @@ impl App for PataApp {
                 Key::Named(NamedKey::Backspace) => Some(Msg::ShumaBackspace),
                 Key::Named(NamedKey::Enter) => Some(Msg::ShumaSubmit),
                 Key::Character(s) => s.chars().next().map(Msg::ShumaChar),
+                _ => None,
+            };
+        }
+        // 2.5) Con el menú de inicio abierto, el teclado va al buscador.
+        if model.menu_open {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::StartToggle),
+                Key::Named(NamedKey::Backspace) => Some(Msg::StartBackspace),
+                Key::Named(NamedKey::Enter) => Some(Msg::StartLaunchFirst),
+                Key::Character(s) => s.chars().next().map(Msg::StartChar),
                 _ => None,
             };
         }
