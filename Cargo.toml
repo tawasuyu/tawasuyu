@@ -446,6 +446,7 @@ members = [
     "03_ukupacha/wawa-explorer/wawa-explorer-aoe",
     "03_ukupacha/wawa-explorer/wawa-explorer-core",
     "03_ukupacha/wawa-explorer/wawa-explorer-llimphi",
+    "shared/allichay",
     "shared/app-bus",
     "shared/auth/auth-core",
     "shared/card/card-core",
@@ -491,6 +492,8 @@ publish = false
 repository = "https://gitea.gioser.net/sergio/gioser"
 
 [workspace.dependencies]
+# === Configuración declarativa (vocabulario de esquemas) ===
+allichay = { path = "shared/allichay" }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
 # === Serialización ===

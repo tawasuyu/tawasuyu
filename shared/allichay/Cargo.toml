@@ -1,0 +1,23 @@
+[package]
+name = "allichay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "allichay (quechua: arreglar/poner en orden) — el vocabulario declarativo de configuración. Un esquema de datos (Schema → Section → Field → Control) que cualquier app describe y un renderizador único pinta. Núcleo agnóstico (no_std + alloc): la lógica de dominio describe QUÉ es configurable; no sabe quién lo pinta ni dónde se guarda."
+
+[dependencies]
+# serde es opcional, igual que en pata-core: el esquema se construye y consulta
+# sin (de)serializar. `default-features = false` evita arrastrar `std` aun con
+# serde activo, para que allichay pueda cruzar a wawa (x86_64-unknown-none).
+serde = { version = "1", optional = true, default-features = false, features = ["derive", "alloc"] }
+
+[features]
+default = ["serde"]
+serde = ["dep:serde"]
+
+[dev-dependencies]
+# Sólo el test del round-trip del esquema necesita un formato concreto; allichay
+# no fija ninguno en su API (cada app usa el suyo: TOML, RON, JSON…).
+serde_json = "1"
