@@ -109,7 +109,10 @@ pub fn to_smf(score: &Score) -> Vec<u8> {
             });
         }
 
-        // CC#7 Volume si != 1.0 (default).
+        // CC#7 Volume si != 1.0 (default). El rango SMF de CC#7 es 0..=127
+        // (i.e. 0% a 127%), así que volúmenes lógicos > 1.27 se truncan
+        // a 127 — el roundtrip a Score los lee de vuelta como 1.27. Es
+        // pérdida silenciosa por límite del formato, no un bug del bridge.
         if (track.volume - 1.0).abs() > 1e-3 {
             let vol = ((track.volume * 100.0).round() as i32).clamp(0, 127) as u8;
             events.push(TrackEvent {
@@ -313,10 +316,20 @@ pub fn from_smf(bytes: &[u8]) -> Result<Score, ParseError> {
 /// absoluto) a `ScoreNote`s en `track`. Pairs note_on con note_off por
 /// (canal, key); note_on con vel=0 cuenta como off (convención común en
 /// SMF para chordable note-off).
+///
+/// **Notas solapadas en el mismo pitch**: cuando dos `NoteOn` del mismo
+/// `(canal, key)` se acumulan antes del primer `NoteOff` (clusters,
+/// re-disparos rápidos, secuenciadores que repiquetean), la cola se
+/// despacha **FIFO**: el siguiente `NoteOff` cierra la nota MÁS VIEJA.
+/// Lo contrario (LIFO) cortaba la nota original a la duración de la más
+/// reciente; FIFO preserva ambas duraciones y es lo que hacen los DAWs
+/// mainstream.
 fn collect_notes_into_track(track: &mut Track, events: &[(u32, MidiMessage, u8)], ppq: u32) {
-    // Map (channel, key) → última posición de note_on pendiente.
-    let mut open: std::collections::HashMap<(u8, u8), (u32, u8)> =
-        std::collections::HashMap::new();
+    use std::collections::{HashMap, VecDeque};
+    // Cola FIFO de note_ons abiertos por (canal, key). Si nunca hay
+    // overlap, cada Deque tiene a lo sumo 1 entrada y el costo es el
+    // mismo que el del HashMap viejo.
+    let mut open: HashMap<(u8, u8), VecDeque<(u32, u8)>> = HashMap::new();
     let inv_ppq = 1.0 / ppq as f32;
     for (tick, msg, ch) in events {
         match *msg {
@@ -324,18 +337,22 @@ fn collect_notes_into_track(track: &mut Track, events: &[(u32, MidiMessage, u8)]
                 let k = key.as_int();
                 let v = vel.as_int();
                 if v == 0 {
-                    // note on con vel 0 = note off.
-                    if let Some((on_tick, on_vel)) = open.remove(&(*ch, k)) {
-                        push_note(track, on_tick, *tick, k, on_vel, inv_ppq);
+                    // note_on con vel 0 = note_off implícito.
+                    if let Some(q) = open.get_mut(&(*ch, k)) {
+                        if let Some((on_tick, on_vel)) = q.pop_front() {
+                            push_note(track, on_tick, *tick, k, on_vel, inv_ppq);
+                        }
                     }
                 } else {
-                    open.insert((*ch, k), (*tick, v));
+                    open.entry((*ch, k)).or_default().push_back((*tick, v));
                 }
             }
             MidiMessage::NoteOff { key, vel: _ } => {
                 let k = key.as_int();
-                if let Some((on_tick, on_vel)) = open.remove(&(*ch, k)) {
-                    push_note(track, on_tick, *tick, k, on_vel, inv_ppq);
+                if let Some(q) = open.get_mut(&(*ch, k)) {
+                    if let Some((on_tick, on_vel)) = q.pop_front() {
+                        push_note(track, on_tick, *tick, k, on_vel, inv_ppq);
+                    }
                 }
             }
             _ => {}
@@ -491,5 +508,67 @@ mod tests {
         let back = from_smf(&bytes).unwrap();
         assert!((back.tempo_bpm - 140.0).abs() < 0.5);
         assert_eq!(back.tracks().len(), 0);
+    }
+
+    /// El bug pre-fix: dos NoteOns del mismo pitch antes del primer
+    /// NoteOff se acumulaban en un `HashMap` que sólo guardaba el
+    /// último → la primera nota se "perdía" al cerrar con el primer
+    /// NoteOff (cerraba la segunda en su lugar). Con la cola FIFO
+    /// ambas notas roundtripean con sus duraciones intactas.
+    #[test]
+    fn roundtrip_notas_solapadas_del_mismo_pitch_no_se_pisan() {
+        // Dos C4 solapados en el mismo canal: la A va de 0 a 2 s,
+        // la B de 1 a 3 s. Sin el fix, la primera salía con duración
+        // 1 s (cortada al primer NoteOff de la segunda).
+        let mut score = Score::new(120.0);
+        let mut t = Track::new("solapado");
+        let c4 = Pitch::from_class_octave(PitchClass::C, 4).unwrap();
+        t.add(ScoreNote::new(c4, 0.0, 2.0, 100));
+        t.add(ScoreNote::new(c4, 1.0, 2.0, 80));
+        score.add_track(t);
+
+        let bytes = to_smf(&score);
+        let back = from_smf(&bytes).unwrap();
+        assert_eq!(back.tracks().len(), 1);
+        let recovered = back.tracks()[0].notes();
+        assert_eq!(recovered.len(), 2, "ambas notas deben sobrevivir");
+
+        // FIFO: la nota más vieja cierra primero → la primera NoteOff
+        // pertenece a la nota A (start 0). Después de ordenar por
+        // tiempo de inicio, las duraciones esperadas son 2.0 y 2.0.
+        let mut por_inicio: Vec<_> = recovered.iter().collect();
+        por_inicio.sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap());
+        let dur_a = por_inicio[0].duration;
+        let dur_b = por_inicio[1].duration;
+        assert!(
+            (dur_a - 2.0).abs() < 0.05,
+            "nota A: dur esperada 2.0, fue {dur_a}",
+        );
+        assert!(
+            (dur_b - 2.0).abs() < 0.05,
+            "nota B: dur esperada 2.0, fue {dur_b}",
+        );
+    }
+
+    /// El rango SMF de CC#7 limita el volumen a 1.27. Más allá, el
+    /// bridge clampea sin perder la pista cualitativamente — esta
+    /// prueba documenta el comportamiento para que un cambio futuro
+    /// (warning explícito, rango extendido, etc.) lo note.
+    #[test]
+    fn volume_mayor_a_1_27_se_clampea_a_1_27_en_smf() {
+        let mut score = Score::new(120.0);
+        let mut t = Track::new("loud");
+        t.volume = 1.5; // pedido del caller
+        let c4 = Pitch::from_class_octave(PitchClass::C, 4).unwrap();
+        t.add(ScoreNote::new(c4, 0.0, 1.0, 100));
+        score.add_track(t);
+
+        let bytes = to_smf(&score);
+        let back = from_smf(&bytes).unwrap();
+        let vol_back = back.tracks()[0].volume;
+        assert!(
+            (vol_back - 1.27).abs() < 0.01,
+            "esperaba 1.27 (clamp del CC#7), fue {vol_back}",
+        );
     }
 }
