@@ -534,6 +534,16 @@ pub(crate) enum DeclKind {
     MarkerKnockoutLeft(MarkerKnockout),
     /// `marker-knockout-right` (Fase 7.493). NO hereda. Plumb.
     MarkerKnockoutRight(MarkerKnockout),
+    /// `leading-trim` (Fase 7.494). HEREDA. Plumb.
+    LeadingTrim(LeadingTrim),
+    /// `initial-letter-align` (Fase 7.495). HEREDA. Plumb.
+    InitialLetterAlign(InitialLetterAlign),
+    /// `text-autospace` (Fase 7.496). `None` = `normal`. HEREDA. Plumb.
+    TextAutospace(Option<String>),
+    /// `white-space-trim` (Fase 7.497). `None` = `none`. HEREDA. Plumb.
+    WhiteSpaceTrim(Option<String>),
+    /// `view-transition-group` (Fase 7.498). `None` = `normal`. NO hereda. Plumb.
+    ViewTransitionGroup(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -944,6 +954,11 @@ impl Decl {
             DeclKind::FootnotePolicy(v) => s.footnote_policy = *v,
             DeclKind::MarkerKnockoutLeft(v) => s.marker_knockout_left = *v,
             DeclKind::MarkerKnockoutRight(v) => s.marker_knockout_right = *v,
+            DeclKind::LeadingTrim(v) => s.leading_trim = *v,
+            DeclKind::InitialLetterAlign(v) => s.initial_letter_align = *v,
+            DeclKind::TextAutospace(v) => s.text_autospace = v.clone(),
+            DeclKind::WhiteSpaceTrim(v) => s.white_space_trim = v.clone(),
+            DeclKind::ViewTransitionGroup(v) => s.view_transition_group = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

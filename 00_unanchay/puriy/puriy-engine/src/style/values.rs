@@ -842,6 +842,25 @@ pub struct ComputedStyle {
     /// `marker-knockout-right` (Fase 7.493). Espejo del anterior para el
     /// margen derecho. Default `Auto`. NO hereda. Plumb.
     pub marker_knockout_right: MarkerKnockout,
+    /// `leading-trim` (Fase 7.494). CSS Inline 3: recorta la half-leading
+    /// del bloque. Default `Normal`. **HEREDA**. Plumb.
+    pub leading_trim: LeadingTrim,
+    /// `initial-letter-align` (Fase 7.495). CSS Inline 3: cómo alinear
+    /// el drop-cap respecto al texto adyacente. Default `Auto`. **HEREDA**.
+    /// Plumb.
+    pub initial_letter_align: InitialLetterAlign,
+    /// `text-autospace` (Fase 7.496). CSS Text 4: espaciado automático
+    /// entre scripts (CJK ↔ latin/digit). Parse opaco — `None` = `normal`.
+    /// **HEREDA**. Plumb.
+    pub text_autospace: Option<String>,
+    /// `white-space-trim` (Fase 7.497). CSS Text 4: recorta whitespace en
+    /// los bordes del bloque. Parse opaco — `None` = `none`. **HEREDA**.
+    /// Plumb.
+    pub white_space_trim: Option<String>,
+    /// `view-transition-group` (Fase 7.498). CSS View Transitions 2:
+    /// nombre del grupo donde el elemento participa. `None` = `normal`.
+    /// NO hereda. Plumb.
+    pub view_transition_group: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2568,6 +2587,27 @@ pub enum MarkerKnockout {
     None,
 }
 
+/// `leading-trim` (CSS Inline 3). Default `Normal`. Fase 7.494.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LeadingTrim {
+    #[default]
+    Normal,
+    Start,
+    End,
+    Both,
+}
+
+/// `initial-letter-align` (CSS Inline 3). Default `Auto`. Fase 7.495.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InitialLetterAlign {
+    #[default]
+    Auto,
+    Alphabetic,
+    Hanging,
+    Ideographic,
+    BorderBox,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3792,6 +3832,11 @@ impl Default for ComputedStyle {
             footnote_policy: FootnotePolicy::Auto,
             marker_knockout_left: MarkerKnockout::Auto,
             marker_knockout_right: MarkerKnockout::Auto,
+            leading_trim: LeadingTrim::Normal,
+            initial_letter_align: InitialLetterAlign::Auto,
+            text_autospace: None,
+            white_space_trim: None,
+            view_transition_group: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

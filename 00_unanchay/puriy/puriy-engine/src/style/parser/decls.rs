@@ -1354,6 +1354,60 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "none" => Some(DeclKind::MarkerKnockoutRight(MarkerKnockout::None)),
             _ => None,
         },
+        // Fase 7.494 — `leading-trim` (CSS Inline 3). HEREDA.
+        "leading-trim" => match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(DeclKind::LeadingTrim(LeadingTrim::Normal)),
+            "start" => Some(DeclKind::LeadingTrim(LeadingTrim::Start)),
+            "end" => Some(DeclKind::LeadingTrim(LeadingTrim::End)),
+            "both" => Some(DeclKind::LeadingTrim(LeadingTrim::Both)),
+            _ => None,
+        },
+        // Fase 7.495 — `initial-letter-align` (CSS Inline 3). HEREDA.
+        "initial-letter-align" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::InitialLetterAlign(InitialLetterAlign::Auto)),
+            "alphabetic" => Some(DeclKind::InitialLetterAlign(InitialLetterAlign::Alphabetic)),
+            "hanging" => Some(DeclKind::InitialLetterAlign(InitialLetterAlign::Hanging)),
+            "ideographic" => Some(DeclKind::InitialLetterAlign(InitialLetterAlign::Ideographic)),
+            "border-box" => Some(DeclKind::InitialLetterAlign(InitialLetterAlign::BorderBox)),
+            _ => None,
+        },
+        // Fase 7.496 — `text-autospace` (CSS Text 4). Parse opaco.
+        // `normal` reservado → None.
+        "text-autospace" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::TextAutospace(None))
+            } else {
+                Some(DeclKind::TextAutospace(Some(v.to_string())))
+            }
+        }
+        // Fase 7.497 — `white-space-trim` (CSS Text 4). Parse opaco.
+        // `none` reservado → None.
+        "white-space-trim" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WhiteSpaceTrim(None))
+            } else {
+                Some(DeclKind::WhiteSpaceTrim(Some(v.to_string())))
+            }
+        }
+        // Fase 7.498 — `view-transition-group` (CSS View Transitions 2).
+        // `normal | contain | nearest | <custom-ident>`. Parse opaco
+        // — `normal` reservado a None.
+        "view-transition-group" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::ViewTransitionGroup(None))
+            } else {
+                Some(DeclKind::ViewTransitionGroup(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
