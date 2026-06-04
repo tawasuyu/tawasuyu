@@ -37,8 +37,22 @@ use llimphi_widget_menubar::{
 };
 use llimphi_motion::{animate, motion, Tween};
 use app_bus::{AppMenu, Menu, MenuItem};
+use std::path::PathBuf;
 use std::sync::Arc;
 use wawa_config::{ConfigWatcher, WawaConfig};
+
+use allichay::{Configurable, FieldPath, FieldValue};
+use llimphi_module_allichay::{section_view, AllichayMsg, AllichayState};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+
+/// Apps suscribibles que exponen su config como schema. El `key` casa con el
+/// id de módulo en `WawaConfig.modules` (un módulo apagado oculta su diente);
+/// pata no es un módulo del SO, así que `module_enabled` lo deja siempre visible.
+const CONFIGURABLE_APPS: &[(&str, &str)] = &[("mirada", "mirada"), ("pata", "pata")];
+
+/// Base del id de diente de las secciones de app (para no chocar con las
+/// categorías builtin 0..N).
+const APP_DIENTE_BASE: u64 = 1000;
 
 // =====================================================================
 // Constantes y catálogos
@@ -47,7 +61,7 @@ use wawa_config::{ConfigWatcher, WawaConfig};
 /// Refresco del monitor.
 const TICK_MS: u64 = 1_000;
 /// Ancho del sidebar de navegación.
-const NAV_WIDTH: f32 = 200.0;
+const NAV_WIDTH: f32 = 60.0;
 /// Alto de cada fila de control.
 const ROW_HEIGHT: f32 = 36.0;
 
@@ -322,7 +336,17 @@ fn fmt_clock(hms: (u32, u32, u32), is_24h: bool) -> String {
 
 struct Model {
     category: Category,
+    /// Diente de app activo: índice en [`app_sections`]. `None` = hay una
+    /// categoría builtin activa (la del campo `category`).
+    app_sel: Option<usize>,
     cfg: WawaConfig,
+    /// Config viva del compositor (mirada) y su ruta en disco.
+    mirada: mirada_brain::Config,
+    mirada_path: Option<PathBuf>,
+    /// Config viva del marco (pata).
+    pata: pata_core::Config,
+    /// Estado del renderizador de config (buffers de texto + foco).
+    allichay: AllichayState,
     host: HostInfo,
     status: String,
     /// Subscripción al bus: mantiene vivo el watcher que reentra al
@@ -346,6 +370,13 @@ struct Model {
 #[derive(Clone)]
 enum Msg {
     Tick,
+    /// Click en un diente del rail: id < APP_DIENTE_BASE = categoría builtin;
+    /// id >= APP_DIENTE_BASE = sección de app (índice = id - base).
+    NavSelect(u64),
+    /// Mensaje del renderizador de config (foco/cambio de un campo de app).
+    Allichay(AllichayMsg),
+    /// Tecla a enrutar al campo de texto en edición del renderizador.
+    AllichayKey(KeyEvent),
     SelectCategory(Category),
     SetThemeVariant(String),
     SetAccent(String),
@@ -418,9 +449,24 @@ impl App for Panel {
         let mut host = HostInfo::default();
         refresh_host(&mut host);
 
+        // Configs vivas de las apps suscritas: se cargan de su archivo (mirada
+        // RON, pata TOML) y se editan en memoria; cada cambio se persiste y la
+        // app lo recarga (mirada vía su FileWatch).
+        let mirada_path = mirada_brain::Config::default_path();
+        let mirada = mirada_path
+            .as_deref()
+            .map(mirada_brain::Config::load_or_default)
+            .unwrap_or_default();
+        let pata = pata_config::load();
+
         Model {
             category: Category::Appearance,
+            app_sel: None,
             cfg,
+            mirada,
+            mirada_path,
+            pata,
+            allichay: AllichayState::new(),
             host,
             status: String::new(),
             _config_watcher: watcher,
@@ -439,7 +485,38 @@ impl App for Panel {
             }
             Msg::SelectCategory(c) => {
                 m.category = c;
+                m.app_sel = None;
+                m.allichay.blur();
                 m.status.clear();
+            }
+            Msg::NavSelect(id) => {
+                if id >= APP_DIENTE_BASE {
+                    let idx = (id - APP_DIENTE_BASE) as usize;
+                    m.app_sel = Some(idx);
+                    m.allichay.select(idx);
+                    m.status.clear();
+                } else if let Some(cat) = Category::all().get(id as usize) {
+                    m.category = *cat;
+                    m.app_sel = None;
+                    m.allichay.blur();
+                    m.status.clear();
+                }
+            }
+            Msg::Allichay(AllichayMsg::SelectSection(_)) => {
+                // El rail lo maneja el panel (NavSelect); el renderizador de
+                // sección no emite selección. Sin efecto.
+            }
+            Msg::Allichay(AllichayMsg::Focus(path)) => {
+                let seed = current_text_value(&m, &path);
+                m.allichay.focus(&path, &seed);
+            }
+            Msg::Allichay(AllichayMsg::Change(path, value)) => {
+                route_change(&mut m, &path, value);
+            }
+            Msg::AllichayKey(event) => {
+                if let Some((path, value)) = m.allichay.apply_key(&event) {
+                    route_change(&mut m, &path, value);
+                }
             }
             Msg::SetThemeVariant(v) => {
                 m.cfg.theme_variant = v;
@@ -547,6 +624,11 @@ impl App for Panel {
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Si hay un campo de texto de app en edición, todas las teclas van al
+        // renderizador (clickear otro diente o categoría lo desenfoca).
+        if model.allichay.is_editing() {
+            return Some(Msg::AllichayKey(event.clone()));
         }
         // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
         // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc cierra.
@@ -824,6 +906,111 @@ fn autosave(m: &mut Model) {
 }
 
 // =====================================================================
+// Apps suscritas: schemas montados como dientes
+// =====================================================================
+
+/// Una sección de config de una app, lista para pintar como diente.
+struct AppSec {
+    /// Id completo de la sección (`"mirada::teselado"`) — prefijo del FieldPath.
+    full_id: String,
+    /// Glifo del diente.
+    icon: String,
+    /// La sección con el título ya prefijado por la app.
+    section: allichay::Section,
+}
+
+/// Las secciones de config de las apps suscritas (módulo activo), en orden
+/// estable. El índice en esta lista es el id de diente menos [`APP_DIENTE_BASE`].
+fn app_sections(m: &Model) -> Vec<AppSec> {
+    let mut out = Vec::new();
+    for (key, label) in CONFIGURABLE_APPS {
+        if !m.cfg.module_enabled(key) {
+            continue;
+        }
+        let schema = match *key {
+            "mirada" => m.mirada.schema(),
+            "pata" => m.pata.schema(),
+            _ => continue,
+        };
+        for mut sec in schema.sections {
+            let full_id = format!("{key}::{}", sec.id);
+            let icon = if sec.icon.is_empty() {
+                "•".to_string()
+            } else {
+                sec.icon.clone()
+            };
+            sec.title = format!("{label} · {}", sec.title);
+            out.push(AppSec {
+                full_id,
+                icon,
+                section: sec,
+            });
+        }
+    }
+    out
+}
+
+/// Parte un FieldPath combinado (`["mirada::teselado", "gap"]`) en la clave de
+/// app y la ruta relativa a esa app (`("mirada", ["teselado", "gap"])`).
+fn split_app(path: &FieldPath) -> Option<(String, FieldPath)> {
+    let segs = path.segments();
+    let (key, sect) = segs.first()?.split_once("::")?;
+    let mut rel = vec![sect.to_string()];
+    rel.extend(segs[1..].iter().cloned());
+    Some((key.to_string(), FieldPath(rel)))
+}
+
+/// Aplica un cambio a la config de la app destino y la persiste en su formato
+/// nativo (mirada RON, pata TOML). El status refleja el resultado.
+fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
+    let Some((key, rel)) = split_app(path) else {
+        m.status = format!("· ruta inválida: {path}");
+        return;
+    };
+    match key.as_str() {
+        "mirada" => {
+            if let Err(e) = m.mirada.apply(&rel, value) {
+                m.status = format!("· mirada: {e}");
+                return;
+            }
+            match m.mirada_path.as_deref().map(|p| m.mirada.save(p)) {
+                Some(Ok(())) => m.status = rimay_localize::t("wawa-panel-autosave-ok"),
+                Some(Err(e)) => m.status = format!("· mirada save: {e}"),
+                None => m.status = "· mirada: sin ruta de config".to_string(),
+            }
+        }
+        "pata" => {
+            if let Err(e) = m.pata.apply(&rel, value) {
+                m.status = format!("· pata: {e}");
+                return;
+            }
+            match pata_config::save(&m.pata) {
+                Ok(_) => m.status = rimay_localize::t("wawa-panel-autosave-ok"),
+                Err(e) => m.status = format!("· pata save: {e}"),
+            }
+        }
+        _ => {}
+    }
+}
+
+/// El valor de texto actual de un campo de app (para sembrar el buffer al
+/// enfocarlo). Vacío si la ruta no resuelve o el campo no es texto.
+fn current_text_value(m: &Model, path: &FieldPath) -> String {
+    let Some((key, rel)) = split_app(path) else {
+        return String::new();
+    };
+    let schema = match key.as_str() {
+        "mirada" => m.mirada.schema(),
+        "pata" => m.pata.schema(),
+        _ => return String::new(),
+    };
+    schema
+        .find_field(&rel)
+        .and_then(|f| f.value.as_str().map(str::to_string))
+        .unwrap_or_default()
+}
+
+// =====================================================================
 // Resolución del theme + acento
 // =====================================================================
 
@@ -850,11 +1037,42 @@ fn build_header(theme: &Theme) -> View<Msg> {
     app_header(rimay_localize::t("wawa-panel-title"), vec![], &palette)
 }
 
-fn build_nav(model: &Model, theme: &Theme, accent: llimphi_ui::llimphi_raster::peniko::Color) -> View<Msg> {
-    let items: Vec<View<Msg>> = Category::all()
+fn build_nav(model: &Model, theme: &Theme, _accent: llimphi_ui::llimphi_raster::peniko::Color) -> View<Msg> {
+    // Las categorías builtin (0..N) + las secciones de las apps suscritas
+    // (APP_DIENTE_BASE+i) como un único rail de dientes.
+    let apps = app_sections(model);
+    let mut items: Vec<DockRailItem> = Category::all()
         .iter()
-        .map(|cat| nav_item(*cat, model.category == *cat, theme, accent))
+        .enumerate()
+        .map(|(i, cat)| DockRailItem {
+            id: i as u64,
+            active: model.app_sel.is_none() && model.category == *cat,
+        })
         .collect();
+    for i in 0..apps.len() {
+        items.push(DockRailItem {
+            id: APP_DIENTE_BASE + i as u64,
+            active: model.app_sel == Some(i),
+        });
+    }
+    let cat_glyphs: Vec<String> = Category::all().iter().map(|c| c.glyph().to_string()).collect();
+    let app_glyphs: Vec<String> = apps.iter().map(|a| a.icon.clone()).collect();
+
+    let rail = dock_rail_view(
+        &items,
+        44.0,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| {
+            let g = if id >= APP_DIENTE_BASE {
+                app_glyphs.get((id - APP_DIENTE_BASE) as usize).cloned()
+            } else {
+                cat_glyphs.get(id as usize).cloned()
+            };
+            glyph_icon(g, size, color)
+        },
+        Msg::NavSelect,
+        |_| None,
+    );
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -863,74 +1081,38 @@ fn build_nav(model: &Model, theme: &Theme, accent: llimphi_ui::llimphi_raster::p
             height: percent(1.0_f32),
         },
         padding: Rect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(10.0_f32),
-            bottom: length(10.0_f32),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(2.0_f32),
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
         },
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(items)
+    .children(vec![rail])
 }
 
-fn nav_item(
-    cat: Category,
-    active: bool,
-    theme: &Theme,
-    accent: llimphi_ui::llimphi_raster::peniko::Color,
+/// Pinta el glifo de un diente centrado, con el color ya resuelto por el rail.
+fn glyph_icon(
+    glyph: Option<String>,
+    size: f32,
+    color: llimphi_ui::llimphi_raster::peniko::Color,
 ) -> View<Msg> {
-    let (bg, fg) = if active {
-        (theme.bg_button, theme.fg_text)
-    } else {
-        (theme.bg_panel, theme.fg_muted)
-    };
-    let label = format!("{}  {}", cat.glyph(), rimay_localize::t(cat.i18n_key()));
-    let mut v = View::new(Style {
+    View::new(Style {
         size: Size {
-            width: percent(1.0_f32),
-            height: length(32.0_f32),
-        },
-        padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
+            width: length(size),
+            height: length(size),
         },
         align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .fill(bg)
-    .hover_fill(theme.bg_row_hover)
-    .radius(3.0)
-    .text_aligned(label, 12.5, fg, Alignment::Start)
-    .on_click(Msg::SelectCategory(cat));
-    if active {
-        // Marcador de selección a la izquierda — barra delgada del color
-        // del acento. Lo implementamos como child porque taffy no tiene
-        // border directo; el rectángulo se posiciona absoluto a la izq.
-        let bar = View::new(Style {
-            position: Position::Absolute,
-            inset: Rect {
-                left: length(0.0_f32),
-                right: auto(),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            size: Size {
-                width: length(2.0_f32),
-                height: percent(1.0_f32),
-            },
-            ..Default::default()
-        })
-        .fill(accent);
-        v = v.children(vec![bar]);
-    }
-    v
+    .text_aligned(
+        glyph.unwrap_or_else(|| "•".to_string()),
+        size * 0.85,
+        color,
+        Alignment::Center,
+    )
 }
 
 fn build_content(
@@ -938,6 +1120,14 @@ fn build_content(
     theme: &Theme,
     accent: llimphi_ui::llimphi_raster::peniko::Color,
 ) -> View<Msg> {
+    // Diente de app activo: pinto su sección de schema con el renderizador.
+    if let Some(i) = model.app_sel {
+        let apps = app_sections(model);
+        if let Some(app) = apps.get(i) {
+            let base = FieldPath::empty().push(app.full_id.clone());
+            return section_view(&app.section, &base, &model.allichay, theme, Msg::Allichay);
+        }
+    }
     let head = section_head(model.category, theme);
     let body = match model.category {
         Category::Appearance => section_appearance(model, theme, accent),

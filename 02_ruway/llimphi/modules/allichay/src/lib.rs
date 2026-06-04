@@ -245,21 +245,38 @@ where
     }
     let sel = state.selected.min(schema.sections.len() - 1);
     let section = &schema.sections[sel];
+    // La ruta base = id de la sección; los campos cuelgan de ahí.
+    let base = FieldPath::empty().push(section.id.clone());
+    section_view(section, &base, state, theme, on_msg)
+}
 
+/// Pinta el panel de **una** sección: su encabezado, sus campos y sus
+/// subsecciones (un nivel), construyendo cada `FieldPath` a partir de `base`
+/// (la ruta que ya incluye el id de la sección — p. ej. `["mirada::teselado"]`
+/// cuando el host compone varias apps en un solo rail).
+///
+/// Lo expone aparte de [`allichay_view`] para que un host con su propio rail
+/// (el panel de control central, que mezcla dientes de varias apps) reutilice
+/// el renderizado de campos sin el rail interno del módulo.
+pub fn section_view<Msg, F>(
+    section: &allichay::Section,
+    base: &FieldPath,
+    state: &AllichayState,
+    theme: &Theme,
+    on_msg: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
     let mut children: Vec<View<Msg>> = Vec::new();
-    // Encabezado de la sección.
     children.push(section_head(&section.title, &section.help, theme));
 
-    // Ruta base = id de la sección.
-    let base = FieldPath::empty().push(section.id.clone());
-
-    // Campos directos.
     for field in &section.fields {
         let path = base.clone().push(field.id.clone());
         children.push(field_row(field, path, state, theme, on_msg.clone()));
     }
 
-    // Subsecciones (un nivel): encabezado + sus campos.
     for sub in &section.subsections {
         children.push(subsection_head(&sub.title, theme));
         let sub_base = base.clone().push(sub.id.clone());
