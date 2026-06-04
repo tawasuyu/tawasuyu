@@ -470,3 +470,37 @@ borde; shuma provee el contenido.
     guarda el handler + última posición.
   - **Pendiente opcional**: discernimiento por contenido (`shuma-discern`) como
     upgrade del mime por extensión (a costa de leer una muestra del archivo).
+
+- **Fase 12 — rail hospedado (sidebars de apps en el rail global)**:
+  una app puede **delegar su sidebar** al marco: cuando tiene foco, sus "dientes"
+  aparecen en el rail de pata (debajo de los propios) y su ventana queda como puro
+  lienzo; al clickear un diente, el comando vuelve a la app, que muestra ese panel
+  sobre su canvas. pata sólo hospeda el **rail** —no los paneles ricos de la app—.
+  - **Protocolo `pata-host`** (`02_ruway/pata/pata-host`): socket Unix dedicado
+    (`$XDG_RUNTIME_DIR/pata-sidebar.sock`, override `PATA_SIDEBAR_SOCKET`), marco
+    postcard con prefijo de longitud. `AppMsg::{Register{app_id,title,teeth},
+    Update,Bye}` (app→shell) + `ShellMsg::Activate{tooth}` (shell→app);
+    `HostedTooth{id,icon,label}`. `HostServer` (lado pata: acumula registros por
+    `app_id` en hilos lectores; `snapshot`/`activate`/`revision`) + `HostClient`
+    (lado app: registra, hilo lector entrega activaciones por callback, Drop manda
+    Bye). 5 tests.
+  - **Host en `pata-llimphi`** (sólo layer-shell, que conoce el foco): arranca el
+    `HostServer` si hay algún sidebar; `focused_app_id()` = toplevel activo; el
+    rail del sidebar muestra `host.snapshot(app_id)` de la app enfocada (segundo
+    `dock-rail` bajo los dientes de la config, con separador); clic →
+    `HostToothActivate(app_id,tooth)` → `host.activate`. `poll_host` re-pinta al
+    cambiar la revisión del host. El diente hospedado no abre panel ni redimensiona
+    pata: es control remoto del canvas de la app. El hit-test del pointer ya cae a
+    `on_click_at`, que estos dientes usan.
+  - **Integración cosmos** (opt-in `COSMOS_DELEGATE_SIDEBAR`): `app_id()=
+    "gioser.cosmos"`; publica sus `DockItem`s como dientes; `Msg::HostActivate`
+    togglea el panel correspondiente sobre su canvas; en modo delegado no pinta sus
+    rails (`dock_rail_overlay`→None) y un panel aparece sólo si su lado está
+    expandido → sin nada activo, puro canvas.
+  - **Requisitos runtime**: pata corriendo en layer-shell con un sidebar en la
+    config; cosmos lanzado con `COSMOS_DELEGATE_SIDEBAR=1`. Sin verificar headless.
+  - **Pendiente opcional**: re-registro de dientes al reordenar el dock (hoy se
+    registran una vez al init; el lado de activación se computa en vivo, así que el
+    drop entre lados sigue funcionando); estado "activo" del diente hospedado (hoy
+    siempre inactivo en pata, lo lleva la app); que otras apps (media, pluma)
+    deleguen su sidebar reusando el mismo `pata-host`.
