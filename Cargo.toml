@@ -269,6 +269,7 @@ members = [
     "02_ruway/llimphi/widgets/nodegraph",
     "02_ruway/llimphi/widgets/tree",
     "02_ruway/llimphi/widgets/navigator",
+    "02_ruway/llimphi/modules/allichay",
     "02_ruway/llimphi/modules/command-palette",
     "02_ruway/llimphi/modules/diff-viewer",
     "02_ruway/llimphi/modules/fif",
@@ -658,6 +659,7 @@ llimphi-widget-scroll = { path = "02_ruway/llimphi/widgets/scroll" }
 llimphi-widget-splitter = { path = "02_ruway/llimphi/widgets/splitter" }
 llimphi-widget-stat-card = { path = "02_ruway/llimphi/widgets/stat-card" }
 llimphi-widget-tabs = { path = "02_ruway/llimphi/widgets/tabs" }
+llimphi-module-allichay = { path = "02_ruway/llimphi/modules/allichay" }
 llimphi-module-command-palette = { path = "02_ruway/llimphi/modules/command-palette" }
 llimphi-module-diff-viewer = { path = "02_ruway/llimphi/modules/diff-viewer" }
 llimphi-module-fif = { path = "02_ruway/llimphi/modules/fif" }
