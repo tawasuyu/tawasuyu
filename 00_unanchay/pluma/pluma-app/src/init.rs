@@ -105,6 +105,13 @@ pub(crate) fn init_modelo() -> Model {
         edit_menu: None,
         edit_active: usize::MAX,
         edit_anim: llimphi_motion::Tween::idle(1.0),
+        // Rail hospedado: leemos el opt-in acá; el HostClient se conecta en `init`
+        // (necesita el Handle). Las columnas arrancan visibles aunque se delegue —
+        // el usuario las colapsa desde el rail de pata.
+        delegated: std::env::var_os("PLUMA_DELEGATE_SIDEBAR").is_some(),
+        side_izq_visible: true,
+        side_der_visible: true,
+        _host: None,
     }
 }
 

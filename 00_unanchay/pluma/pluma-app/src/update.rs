@@ -111,6 +111,23 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         Msg::DiffToggle => {
             model.diff_visible = !model.diff_visible;
         }
+        // Rail hospedado: pata reenvió un diente. 0/1 colapsan las columnas
+        // (editor a pantalla completa), 2/3 togglean Buscar/Diff (su misma lógica).
+        Msg::HostActivate(id) => match id {
+            0 => model.side_izq_visible = !model.side_izq_visible,
+            1 => model.side_der_visible = !model.side_der_visible,
+            2 => {
+                model.find_visible = !model.find_visible;
+                if model.find_visible {
+                    recomputar_matches(&mut model);
+                    if !model.find_matches.is_empty() {
+                        saltar_a_match(&mut model);
+                    }
+                }
+            }
+            3 => model.diff_visible = !model.diff_visible,
+            _ => {}
+        },
         Msg::MoverAtomArriba => {
             mover_atom_caret(&mut model, -1);
         }

@@ -48,6 +48,9 @@ pub(crate) enum Msg {
     FindAnterior,
     FindClose,
     DiffToggle,
+    /// Rail hospedado: pata reenvió un clic en un diente prestado (0=Documentos,
+    /// 1=LLM, 2=Buscar, 3=Diff). Togglea esa sección.
+    HostActivate(u32),
     MoverAtomArriba,
     MoverAtomAbajo,
     TocarMadre,
@@ -149,4 +152,17 @@ pub(crate) struct Model {
     pub(crate) edit_active: usize,
     /// Animación de aparición del menú de edición (0→1).
     pub(crate) edit_anim: llimphi_motion::Tween<f32>,
+
+    // --- Rail hospedado (sidebar delegado a pata) ---
+    /// `true` si pluma delega su sidebar a pata (`PLUMA_DELEGATE_SIDEBAR`): sus
+    /// secciones aparecen como dientes en el rail de pata cuando tiene foco, y las
+    /// columnas laterales se pueden colapsar (editor a pantalla completa).
+    pub(crate) delegated: bool,
+    /// Visibilidad de la columna de Documentos (sólo aplica en modo delegado).
+    pub(crate) side_izq_visible: bool,
+    /// Visibilidad de la columna LLM (sólo aplica en modo delegado).
+    pub(crate) side_der_visible: bool,
+    /// Cliente del rail hospedado; sólo se retiene (las activaciones llegan por
+    /// callback). `_` evita el lint de campo sin leer.
+    pub(crate) _host: Option<pata_host::HostClient>,
 }

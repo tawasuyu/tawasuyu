@@ -61,12 +61,31 @@ impl App for Pluma {
         "pluma · editor multilienzo"
     }
 
+    /// `app_id` Wayland: pata lo usa para correlacionar foco ↔ dientes hospedados.
+    fn app_id() -> Option<&'static str> {
+        Some("gioser.pluma")
+    }
+
     fn initial_size() -> (u32, u32) {
         (1600, 900)
     }
 
-    fn init(_: &Handle<Msg>) -> Model {
-        init_modelo()
+    fn init(handle: &Handle<Msg>) -> Model {
+        let mut m = init_modelo();
+        // Rail hospedado: si delega, publica sus secciones como dientes en pata.
+        if m.delegated {
+            let teeth = vec![
+                pata_host::HostedTooth::new(0, "folder", "Documentos"),
+                pata_host::HostedTooth::new(1, "tools", "LLM"),
+                pata_host::HostedTooth::new(2, "files", "Buscar"),
+                pata_host::HostedTooth::new(3, "tools", "Diff"),
+            ];
+            let h = handle.clone();
+            m._host = pata_host::HostClient::connect("gioser.pluma", "Pluma", teeth, move |id| {
+                h.dispatch(Msg::HostActivate(id))
+            });
+        }
+        m
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {

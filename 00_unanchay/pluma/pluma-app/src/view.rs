@@ -64,35 +64,48 @@ pub(crate) fn vista(model: &Model) -> View<Msg> {
     let menu = menu_principal(model);
     let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
     let status = barra_status(model, &theme);
-    let panel_izq = panel_documentos(model, &theme);
     let panel_centro = panel_editor(model, &editor_palette);
-    let panel_der = panel_llm(model, &theme);
 
-    // Splitter anidado: izq | (centro | der).
-    let centro_der = splitter_two(
-        Direction::Row,
-        panel_centro,
-        PaneSize::Flex,
-        panel_der,
-        PaneSize::Fixed(model.side_der_w),
-        |phase, dx| match phase {
-            DragPhase::Move => Some(Msg::ResizeDer(dx)),
-            DragPhase::End => None,
-        },
-        &splitter_palette,
-    );
-    let body = splitter_two(
-        Direction::Row,
-        panel_izq,
-        PaneSize::Fixed(model.side_izq_w),
-        centro_der,
-        PaneSize::Flex,
-        |phase, dx| match phase {
-            DragPhase::Move => Some(Msg::ResizeIzq(dx)),
-            DragPhase::End => None,
-        },
-        &splitter_palette,
-    );
+    // En modo delegado (sidebar prestado a pata) las columnas laterales se pueden
+    // colapsar desde el rail de pata → editor a pantalla completa ("puro canvas").
+    // Sin delegar, ambas van siempre (comportamiento original).
+    let show_izq = !model.delegated || model.side_izq_visible;
+    let show_der = !model.delegated || model.side_der_visible;
+
+    // Splitter anidado: izq | (centro | der). Cada lado oculto se saca del árbol
+    // (y con él su splitter), no sólo se esconde.
+    let centro_der = if show_der {
+        splitter_two(
+            Direction::Row,
+            panel_centro,
+            PaneSize::Flex,
+            panel_llm(model, &theme),
+            PaneSize::Fixed(model.side_der_w),
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::ResizeDer(dx)),
+                DragPhase::End => None,
+            },
+            &splitter_palette,
+        )
+    } else {
+        panel_centro
+    };
+    let body = if show_izq {
+        splitter_two(
+            Direction::Row,
+            panel_documentos(model, &theme),
+            PaneSize::Fixed(model.side_izq_w),
+            centro_der,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::ResizeIzq(dx)),
+                DragPhase::End => None,
+            },
+            &splitter_palette,
+        )
+    } else {
+        centro_der
+    };
 
     // El right-click se engancha en la raíz (origen 0,0 → las coords
     // locales que llegan al handler ya son de ventana) y abre el menú de
