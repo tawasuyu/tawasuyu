@@ -152,21 +152,107 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
     .children(vec![main_col, rail])
 }
 
-/// Glyph del diente según el tipo de módulo de la tab.
-fn rail_glyph(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Shell => "❯",
-        Kind::Matilda => "⚙",
-        Kind::Minga => "❖",
-        Kind::Canvas => "▦",
-        Kind::Launcher => "⊞",
-        Kind::CommandBar => "⌘",
-    }
+/// Dibuja el icono **vectorial** de un diente (no texto: la fuente no trae los
+/// glyphs y salían cuadritos «tofu»). `kind = None` → el diente de medidores.
+/// Mismo enfoque que el rail de pata (`paint_with` + kurbo).
+fn rail_icon(kind: Option<Kind>, size: f32, color: Color) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    View::new(Style {
+        size: Size { width: length(size), height: length(size) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{
+            Affine, BezPath, Circle, Line, Point, RoundedRect, Stroke,
+        };
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = (rect.w.min(rect.h) as f64 * 0.34).max(2.0);
+        let stroke = Stroke::new((r * 0.22).max(1.2));
+        match kind {
+            // Medidores: tres barras verticales (estilo bar-chart).
+            None => {
+                let heights = [0.55_f64, 0.95, 0.7];
+                let bw = r * 0.45;
+                let gap = r * 0.32;
+                let total = 3.0 * bw + 2.0 * gap;
+                let x0 = cx - total / 2.0;
+                for (i, h) in heights.iter().enumerate() {
+                    let x = x0 + i as f64 * (bw + gap);
+                    let top = (cy + r) - 2.0 * r * h;
+                    let bar = RoundedRect::new(x, top, x + bw, cy + r, 1.0);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &bar);
+                }
+            }
+            // Terminal: marco + chevron «>».
+            Some(Kind::Shell) | Some(Kind::CommandBar) => {
+                let frame = RoundedRect::new(cx - r, cy - r * 0.78, cx + r, cy + r * 0.78, 2.0);
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &frame);
+                let mut p = BezPath::new();
+                p.move_to(Point::new(cx - r * 0.42, cy - r * 0.28));
+                p.line_to(Point::new(cx - r * 0.02, cy));
+                p.line_to(Point::new(cx - r * 0.42, cy + r * 0.28));
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &p);
+            }
+            // Lienzo/grafo: tres nodos conectados.
+            Some(Kind::Canvas) => {
+                let a = Point::new(cx - r * 0.6, cy - r * 0.4);
+                let b = Point::new(cx + r * 0.55, cy - r * 0.5);
+                let c = Point::new(cx + r * 0.05, cy + r * 0.65);
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Line::new(a, b));
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Line::new(a, c));
+                for pt in [a, b, c] {
+                    scene.fill(
+                        Fill::NonZero,
+                        Affine::IDENTITY,
+                        color,
+                        None,
+                        &Circle::new((pt.x, pt.y), r * 0.3),
+                    );
+                }
+            }
+            // Hosts/inventario (matilda): tres racks apilados.
+            Some(Kind::Matilda) => {
+                for i in 0..3 {
+                    let y = cy - r + i as f64 * (r * 0.78);
+                    let rack = RoundedRect::new(cx - r, y, cx + r, y + r * 0.5, 1.5);
+                    scene.stroke(&stroke, Affine::IDENTITY, color, None, &rack);
+                }
+            }
+            // Minga: rombo lleno.
+            Some(Kind::Minga) => {
+                let mut p = BezPath::new();
+                p.move_to(Point::new(cx, cy - r));
+                p.line_to(Point::new(cx + r, cy));
+                p.line_to(Point::new(cx, cy + r));
+                p.line_to(Point::new(cx - r, cy));
+                p.close_path();
+                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &p);
+            }
+            // Launcher: grilla 2×2.
+            Some(Kind::Launcher) => {
+                let s = r * 0.42;
+                let off = r * 0.55;
+                for (dx, dy) in [(-1.0, -1.0), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0)] {
+                    let bx = cx + dx * off;
+                    let by = cy + dy * off;
+                    let cell = RoundedRect::new(bx - s, by - s, bx + s, by + s, 1.0);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &cell);
+                }
+            }
+        }
+    })
 }
 
-/// El rail de dientes a la derecha: uno por tab (activo = la tab seleccionada)
-/// más un diente sentinela que togglea el panel de monitores. Reusa los mismos
-/// `Msg` que el rail hospedado de pata (`SelectTab` / `HostActivate`).
+/// El rail de dientes a la derecha: uno por vista (la tab seleccionada va
+/// activa) más un diente sentinela que togglea el panel de medidores. Reusa los
+/// mismos `Msg` que el rail hospedado de pata (`SelectTab` / `HostActivate`).
 fn tab_dock_rail(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 
@@ -188,20 +274,12 @@ fn tab_dock_rail(model: &Model, theme: &Theme) -> View<Msg> {
         RAIL_W,
         &DockRailPalette::from_theme(theme),
         move |id, size, color| {
-            let glyph = if id == MONITORS_TOOTH as u64 {
-                "▤" // panel de monitores
+            let kind = if id == MONITORS_TOOTH as u64 {
+                None
             } else {
-                kinds.get(id as usize).copied().map(rail_glyph).unwrap_or("▸")
+                kinds.get(id as usize).copied()
             };
-            View::new(Style {
-                size: Size { width: length(size), height: length(size) },
-                align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
-                justify_content: Some(
-                    llimphi_ui::llimphi_layout::taffy::JustifyContent::Center,
-                ),
-                ..Default::default()
-            })
-            .text(glyph.to_string(), size, color)
+            rail_icon(kind, size, color)
         },
         move |id| {
             if id == MONITORS_TOOTH as u64 {
