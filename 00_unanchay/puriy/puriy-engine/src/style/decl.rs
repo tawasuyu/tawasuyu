@@ -390,6 +390,11 @@ pub(crate) enum DeclKind {
     /// `None` = `stop-color: currentColor`.
     StopColor(Option<Color>),
     StopOpacity(f32),
+    TextAnchor(TextAnchor),
+    ColorRendering(ColorRendering),
+    ColorInterpolationFilters(ColorInterpolationFilters),
+    GlyphOrientationVertical(GlyphOrientationVertical),
+    TransformBox(TransformBox),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -716,6 +721,15 @@ impl Decl {
             DeclKind::LightingColor(c) => s.lighting_color = *c,
             DeclKind::StopColor(c) => s.stop_color = *c,
             DeclKind::StopOpacity(v) => s.stop_opacity = *v,
+            DeclKind::TextAnchor(a) => s.text_anchor = *a,
+            DeclKind::ColorRendering(r) => s.color_rendering = *r,
+            DeclKind::ColorInterpolationFilters(c) => {
+                s.color_interpolation_filters = *c
+            }
+            DeclKind::GlyphOrientationVertical(g) => {
+                s.glyph_orientation_vertical = *g
+            }
+            DeclKind::TransformBox(b) => s.transform_box = *b,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

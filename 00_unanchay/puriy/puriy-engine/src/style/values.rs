@@ -643,6 +643,18 @@ pub struct ComputedStyle {
     pub stop_color: Option<Color>,
     /// `stop-opacity` (Fase 7.388). Default `1.0`. NO hereda. Plumb.
     pub stop_opacity: f32,
+    /// `text-anchor` (Fase 7.389). Default `Start`. **Heredable**. Plumb.
+    pub text_anchor: TextAnchor,
+    /// `color-rendering` (Fase 7.390). Default `Auto`. **Heredable**. Plumb.
+    pub color_rendering: ColorRendering,
+    /// `color-interpolation-filters` (Fase 7.391). Default `LinearRgb`
+    /// (la spec lo separa de `color-interpolation`). **Heredable**. Plumb.
+    pub color_interpolation_filters: ColorInterpolationFilters,
+    /// `glyph-orientation-vertical` (Fase 7.392). Default `Auto`.
+    /// **Heredable**. Plumb (SVG 1.1 deprecated, sólo parseo).
+    pub glyph_orientation_vertical: GlyphOrientationVertical,
+    /// `transform-box` (Fase 7.393). Default `ViewBox`. NO hereda. Plumb.
+    pub transform_box: TransformBox,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1990,6 +2002,61 @@ pub enum VectorEffect {
     FixedPosition,
 }
 
+/// `text-anchor` (SVG 2). Heredable. Default `Start`. Fase 7.389.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextAnchor {
+    #[default]
+    Start,
+    Middle,
+    End,
+}
+
+/// `color-rendering` (SVG 2). Heredable. Default `Auto`. Fase 7.390.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorRendering {
+    #[default]
+    Auto,
+    OptimizeSpeed,
+    OptimizeQuality,
+}
+
+/// `color-interpolation-filters` (SVG 2). Heredable. Default
+/// `LinearRgb` (la spec difiere de `color-interpolation`, que default
+/// a `sRGB`). Fase 7.391.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorInterpolationFilters {
+    Auto,
+    SRgb,
+    #[default]
+    LinearRgb,
+}
+
+/// `glyph-orientation-vertical` (SVG 1.1 deprecated, parseado por
+/// compatibilidad). Heredable. Default `Auto`. Sólo se aceptan los
+/// 4 ángulos rectos. Fase 7.392.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GlyphOrientationVertical {
+    #[default]
+    Auto,
+    Deg0,
+    Deg90,
+    Deg180,
+    Deg270,
+}
+
+/// `transform-box` (CSS Transforms 2). NO hereda. Default `ViewBox`
+/// para coincidir con el reset SVG (el resto del web la trata como
+/// `border-box` por compat — todavía no diferenciamos). Fase 7.393.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransformBox {
+    ContentBox,
+    BorderBox,
+    FillBox,
+    StrokeBox,
+    #[default]
+    ViewBox,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -3056,6 +3123,11 @@ impl Default for ComputedStyle {
             lighting_color: None,
             stop_color: None,
             stop_opacity: 1.0,
+            text_anchor: TextAnchor::Start,
+            color_rendering: ColorRendering::Auto,
+            color_interpolation_filters: ColorInterpolationFilters::LinearRgb,
+            glyph_orientation_vertical: GlyphOrientationVertical::Auto,
+            transform_box: TransformBox::ViewBox,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

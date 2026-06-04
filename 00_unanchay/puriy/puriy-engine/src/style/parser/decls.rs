@@ -830,6 +830,15 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "vector-effect" => {
             parse_vector_effect(value).map(DeclKind::VectorEffect)
         }
+        "text-anchor" => parse_text_anchor(value).map(DeclKind::TextAnchor),
+        "color-rendering" => {
+            parse_color_rendering(value).map(DeclKind::ColorRendering)
+        }
+        "color-interpolation-filters" => parse_color_interpolation_filters(value)
+            .map(DeclKind::ColorInterpolationFilters),
+        "glyph-orientation-vertical" => parse_glyph_orientation_vertical(value)
+            .map(DeclKind::GlyphOrientationVertical),
+        "transform-box" => parse_transform_box(value).map(DeclKind::TransformBox),
         "flood-color" => {
             parse_color_or_current(value).map(DeclKind::FloodColor)
         }
@@ -3421,6 +3430,70 @@ pub(crate) fn parse_vector_effect(value: &str) -> Option<VectorEffect> {
         "non-scaling-size" => Some(VectorEffect::NonScalingSize),
         "non-rotation" => Some(VectorEffect::NonRotation),
         "fixed-position" => Some(VectorEffect::FixedPosition),
+        _ => None,
+    }
+}
+
+/// `text-anchor`: `start | middle | end`. Fase 7.389.
+pub(crate) fn parse_text_anchor(value: &str) -> Option<TextAnchor> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "start" => Some(TextAnchor::Start),
+        "middle" => Some(TextAnchor::Middle),
+        "end" => Some(TextAnchor::End),
+        _ => None,
+    }
+}
+
+/// `color-rendering`: `auto | optimizeSpeed | optimizeQuality`. Fase 7.390.
+pub(crate) fn parse_color_rendering(value: &str) -> Option<ColorRendering> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ColorRendering::Auto),
+        "optimizespeed" => Some(ColorRendering::OptimizeSpeed),
+        "optimizequality" => Some(ColorRendering::OptimizeQuality),
+        _ => None,
+    }
+}
+
+/// `color-interpolation-filters`: `auto | sRGB | linearRGB`. Fase 7.391.
+pub(crate) fn parse_color_interpolation_filters(
+    value: &str,
+) -> Option<ColorInterpolationFilters> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(ColorInterpolationFilters::Auto),
+        "srgb" => Some(ColorInterpolationFilters::SRgb),
+        "linearrgb" => Some(ColorInterpolationFilters::LinearRgb),
+        _ => None,
+    }
+}
+
+/// `glyph-orientation-vertical`: `auto | 0 | 90 | 180 | 270` (con o sin
+/// `deg`). Fase 7.392 (SVG 1.1 deprecated, parseo defensivo).
+pub(crate) fn parse_glyph_orientation_vertical(
+    value: &str,
+) -> Option<GlyphOrientationVertical> {
+    let v = value.trim().to_ascii_lowercase();
+    if v == "auto" {
+        return Some(GlyphOrientationVertical::Auto);
+    }
+    let num = v.strip_suffix("deg").unwrap_or(&v).trim();
+    match num {
+        "0" => Some(GlyphOrientationVertical::Deg0),
+        "90" => Some(GlyphOrientationVertical::Deg90),
+        "180" => Some(GlyphOrientationVertical::Deg180),
+        "270" => Some(GlyphOrientationVertical::Deg270),
+        _ => None,
+    }
+}
+
+/// `transform-box`: `content-box | border-box | fill-box | stroke-box |
+/// view-box`. Fase 7.393.
+pub(crate) fn parse_transform_box(value: &str) -> Option<TransformBox> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "content-box" => Some(TransformBox::ContentBox),
+        "border-box" => Some(TransformBox::BorderBox),
+        "fill-box" => Some(TransformBox::FillBox),
+        "stroke-box" => Some(TransformBox::StrokeBox),
+        "view-box" => Some(TransformBox::ViewBox),
         _ => None,
     }
 }

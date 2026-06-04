@@ -345,6 +345,13 @@ impl StyleEngine {
             style.clip_rule = p.clip_rule;
             style.color_interpolation = p.color_interpolation;
             style.shape_rendering = p.shape_rendering;
+            // SVG 2 — text-anchor, color-rendering,
+            // color-interpolation-filters, glyph-orientation-vertical
+            // heredan; transform-box NO hereda.
+            style.text_anchor = p.text_anchor;
+            style.color_rendering = p.color_rendering;
+            style.color_interpolation_filters = p.color_interpolation_filters;
+            style.glyph_orientation_vertical = p.glyph_orientation_vertical;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -6539,6 +6546,237 @@ mod tests {
         });
         let cs = eng.compute(&bodies[0]);
         assert_eq!(cs.stop_opacity, 0.7);
+    }
+
+    #[test]
+    fn text_anchor_fase_7_389() {
+        assert_eq!(parse_text_anchor("start"), Some(TextAnchor::Start));
+        assert_eq!(parse_text_anchor("MIDDLE"), Some(TextAnchor::Middle));
+        assert_eq!(parse_text_anchor("end"), Some(TextAnchor::End));
+        assert_eq!(parse_text_anchor("foo"), None);
+
+        let html = r##"<html><head><style>
+            body { text-anchor: middle }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.text_anchor, TextAnchor::Middle);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).text_anchor,
+            TextAnchor::Middle
+        );
+    }
+
+    #[test]
+    fn color_rendering_fase_7_390() {
+        assert_eq!(
+            parse_color_rendering("auto"),
+            Some(ColorRendering::Auto)
+        );
+        assert_eq!(
+            parse_color_rendering("optimizeSpeed"),
+            Some(ColorRendering::OptimizeSpeed)
+        );
+        assert_eq!(
+            parse_color_rendering("OPTIMIZEQUALITY"),
+            Some(ColorRendering::OptimizeQuality)
+        );
+        assert_eq!(parse_color_rendering("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { color-rendering: optimizeQuality }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.color_rendering, ColorRendering::OptimizeQuality);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).color_rendering,
+            ColorRendering::OptimizeQuality
+        );
+    }
+
+    #[test]
+    fn color_interpolation_filters_fase_7_391() {
+        assert_eq!(
+            parse_color_interpolation_filters("auto"),
+            Some(ColorInterpolationFilters::Auto)
+        );
+        assert_eq!(
+            parse_color_interpolation_filters("sRGB"),
+            Some(ColorInterpolationFilters::SRgb)
+        );
+        assert_eq!(
+            parse_color_interpolation_filters("linearRGB"),
+            Some(ColorInterpolationFilters::LinearRgb)
+        );
+        assert_eq!(parse_color_interpolation_filters("rgb"), None);
+
+        // Default es linearRGB (spec) — diferente de color-interpolation.
+        let dom = DomTree::parse("<html><body></body></html>");
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        assert_eq!(
+            eng.compute(&bodies[0]).color_interpolation_filters,
+            ColorInterpolationFilters::LinearRgb
+        );
+
+        let html = r##"<html><head><style>
+            body { color-interpolation-filters: sRGB }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.color_interpolation_filters,
+            ColorInterpolationFilters::SRgb
+        );
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs))
+                .color_interpolation_filters,
+            ColorInterpolationFilters::SRgb
+        );
+    }
+
+    #[test]
+    fn glyph_orientation_vertical_fase_7_392() {
+        assert_eq!(
+            parse_glyph_orientation_vertical("auto"),
+            Some(GlyphOrientationVertical::Auto)
+        );
+        assert_eq!(
+            parse_glyph_orientation_vertical("0"),
+            Some(GlyphOrientationVertical::Deg0)
+        );
+        assert_eq!(
+            parse_glyph_orientation_vertical("90deg"),
+            Some(GlyphOrientationVertical::Deg90)
+        );
+        assert_eq!(
+            parse_glyph_orientation_vertical("180DEG"),
+            Some(GlyphOrientationVertical::Deg180)
+        );
+        assert_eq!(
+            parse_glyph_orientation_vertical("270"),
+            Some(GlyphOrientationVertical::Deg270)
+        );
+        // Sólo los 4 ángulos rectos.
+        assert_eq!(parse_glyph_orientation_vertical("45"), None);
+        assert_eq!(parse_glyph_orientation_vertical("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { glyph-orientation-vertical: 90deg }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.glyph_orientation_vertical,
+            GlyphOrientationVertical::Deg90
+        );
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs))
+                .glyph_orientation_vertical,
+            GlyphOrientationVertical::Deg90
+        );
+    }
+
+    #[test]
+    fn transform_box_fase_7_393() {
+        assert_eq!(
+            parse_transform_box("content-box"),
+            Some(TransformBox::ContentBox)
+        );
+        assert_eq!(
+            parse_transform_box("border-box"),
+            Some(TransformBox::BorderBox)
+        );
+        assert_eq!(
+            parse_transform_box("fill-box"),
+            Some(TransformBox::FillBox)
+        );
+        assert_eq!(
+            parse_transform_box("stroke-box"),
+            Some(TransformBox::StrokeBox)
+        );
+        assert_eq!(
+            parse_transform_box("VIEW-BOX"),
+            Some(TransformBox::ViewBox)
+        );
+        assert_eq!(parse_transform_box("none"), None);
+
+        let html = r##"<html><head><style>
+            body { transform-box: fill-box }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.transform_box, TransformBox::FillBox);
+        // NO hereda — vuelve al default ViewBox.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).transform_box,
+            TransformBox::ViewBox
+        );
     }
 
     #[test]
