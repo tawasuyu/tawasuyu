@@ -499,8 +499,17 @@ borde; shuma provee el contenido.
     expandido → sin nada activo, puro canvas.
   - **Requisitos runtime**: pata corriendo en layer-shell con un sidebar en la
     config; cosmos lanzado con `COSMOS_DELEGATE_SIDEBAR=1`. Sin verificar headless.
+  - **media y pluma también delegan** (reusan el mismo `pata-host`):
+    - **media** (`MEDIA_DELEGATE_SIDEBAR`, `app_id="gioser.media"`): dientes
+      Config/Cola/Visualizadores/Ayuda; `Msg::HostActivate` despacha los Msgs de
+      toggle existentes (Config/Cola/Ayuda son ventanas/overlay) o togglea el flag
+      de visualizadores. media ya es canvas (no tiene rail propio que ocultar).
+    - **pluma** (`PLUMA_DELEGATE_SIDEBAR`, `app_id="gioser.pluma"`): dientes
+      Documentos/LLM/Buscar/Diff. Cambio **aditivo**: en modo delegado las columnas
+      laterales se vuelven colapsables (`side_izq_visible`/`side_der_visible`; cada
+      lado oculto sale del árbol con su splitter) → editor a pantalla completa;
+      Buscar/Diff reusan su lógica. Sin delegar, el layout de 3 columnas es idéntico.
   - **Pendiente opcional**: re-registro de dientes al reordenar el dock (hoy se
     registran una vez al init; el lado de activación se computa en vivo, así que el
     drop entre lados sigue funcionando); estado "activo" del diente hospedado (hoy
-    siempre inactivo en pata, lo lleva la app); que otras apps (media, pluma)
-    deleguen su sidebar reusando el mismo `pata-host`.
+    siempre inactivo en pata, lo lleva la app).
