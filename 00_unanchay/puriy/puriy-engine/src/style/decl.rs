@@ -418,6 +418,16 @@ pub(crate) enum DeclKind {
     /// `offset-distance` (Fase 7.428). `length | <pct>`. Default `Px(0)`.
     /// NO hereda. Plumb.
     OffsetDistance(LengthVal),
+    /// `hyphenate-character` (Fase 7.429). `None` = `auto`. HEREDA. Plumb.
+    HyphenateCharacter(Option<String>),
+    /// `hyphenate-limit-chars` (Fase 7.430). HEREDA. Plumb.
+    HyphenateLimitChars(HyphenateLimitChars),
+    /// `text-size-adjust` (Fase 7.431). HEREDA. Plumb.
+    TextSizeAdjust(TextSizeAdjust),
+    /// `line-height-step` (Fase 7.432). HEREDA. Plumb.
+    LineHeightStep(f32),
+    /// `font-variant-emoji` (Fase 7.433). HEREDA. Plumb.
+    FontVariantEmoji(FontVariantEmoji),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -768,6 +778,11 @@ impl Decl {
             DeclKind::ContainerType(t) => s.container_type = *t,
             DeclKind::OffsetPath(p) => s.offset_path = p.clone(),
             DeclKind::OffsetDistance(d) => s.offset_distance = *d,
+            DeclKind::HyphenateCharacter(c) => s.hyphenate_character = c.clone(),
+            DeclKind::HyphenateLimitChars(h) => s.hyphenate_limit_chars = *h,
+            DeclKind::TextSizeAdjust(t) => s.text_size_adjust = *t,
+            DeclKind::LineHeightStep(v) => s.line_height_step = *v,
+            DeclKind::FontVariantEmoji(e) => s.font_variant_emoji = *e,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

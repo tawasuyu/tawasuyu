@@ -693,6 +693,20 @@ pub struct ComputedStyle {
     /// `offset-distance` (Fase 7.428). Distancia recorrida a lo largo del
     /// `offset-path`. Default `Px(0)`. NO hereda. Plumb.
     pub offset_distance: LengthVal,
+    /// `hyphenate-character` (Fase 7.429). `None` = `auto` (motor elige el
+    /// carácter del idioma — típicamente U+2010); `Some(s)` = string literal.
+    /// HEREDA. Plumb.
+    pub hyphenate_character: Option<String>,
+    /// `hyphenate-limit-chars` (Fase 7.430). Triple `<total> <start> <end>`
+    /// con `auto` por cada uno (`None`). HEREDA. Plumb.
+    pub hyphenate_limit_chars: HyphenateLimitChars,
+    /// `text-size-adjust` (Fase 7.431). Default `Auto`. HEREDA. Plumb.
+    pub text_size_adjust: TextSizeAdjust,
+    /// `line-height-step` (Fase 7.432). Tamaño de la cuadrícula vertical
+    /// (px). `0` = sin cuadrícula. HEREDA. Plumb.
+    pub line_height_step: f32,
+    /// `font-variant-emoji` (Fase 7.433). Default `Normal`. HEREDA. Plumb.
+    pub font_variant_emoji: FontVariantEmoji,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2167,6 +2181,41 @@ pub enum ContainerType {
     InlineSize,
 }
 
+/// `hyphenate-limit-chars` (CSS Text 4). Triple `<total> <start> <end>`
+/// donde cada campo puede ser `auto` (`None`) o un entero ≥1. Default
+/// `(None, None, None)`. HEREDA. Fase 7.430.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct HyphenateLimitChars {
+    /// Largo mínimo de la palabra completa para permitir hifenado.
+    pub total: Option<u32>,
+    /// Mínimo de caracteres antes del hyphen.
+    pub start: Option<u32>,
+    /// Mínimo de caracteres después del hyphen.
+    pub end: Option<u32>,
+}
+
+/// `text-size-adjust` (CSS Text Inline 3). Default `Auto`. HEREDA. Fase 7.431.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum TextSizeAdjust {
+    #[default]
+    Auto,
+    None,
+    /// `<pct>` — porcentaje (100% = sin ajuste). Plumb: no aplicamos.
+    Pct(f32),
+}
+
+/// `font-variant-emoji` (CSS Fonts 4). Selecciona la presentación cuando
+/// un codepoint tiene tanto glifo emoji a color como texto monocromo.
+/// Default `Normal`. HEREDA. Fase 7.433.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FontVariantEmoji {
+    #[default]
+    Normal,
+    Text,
+    Emoji,
+    Unicode,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -3256,6 +3305,11 @@ impl Default for ComputedStyle {
             container_type: ContainerType::Normal,
             offset_path: None,
             offset_distance: LengthVal::Px(0.0),
+            hyphenate_character: None,
+            hyphenate_limit_chars: HyphenateLimitChars::default(),
+            text_size_adjust: TextSizeAdjust::Auto,
+            line_height_step: 0.0,
+            font_variant_emoji: FontVariantEmoji::Normal,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

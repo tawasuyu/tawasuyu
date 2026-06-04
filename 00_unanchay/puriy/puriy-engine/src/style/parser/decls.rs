@@ -738,6 +738,27 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "offset-distance" => {
             parse_length_or_pct(value).map(DeclKind::OffsetDistance)
         }
+        // Fase 7.429 — `hyphenate-character` (CSS Text 4). `auto` o un
+        // string entre comillas. HEREDA. Plumb (no rompemos palabras).
+        "hyphenate-character" => Some(DeclKind::HyphenateCharacter(
+            parse_hyphenate_character(value),
+        )),
+        // Fase 7.430 — `hyphenate-limit-chars`. `auto | <int>{1,3}`. HEREDA.
+        "hyphenate-limit-chars" => {
+            parse_hyphenate_limit_chars(value).map(DeclKind::HyphenateLimitChars)
+        }
+        // Fase 7.431 — `text-size-adjust` (CSS Text Inline 3). HEREDA. Plumb.
+        "text-size-adjust" | "-webkit-text-size-adjust" => {
+            parse_text_size_adjust(value).map(DeclKind::TextSizeAdjust)
+        }
+        // Fase 7.432 — `line-height-step` (CSS Text 4 draft). HEREDA. Plumb.
+        "line-height-step" => {
+            parse_length_px(value).map(DeclKind::LineHeightStep)
+        }
+        // Fase 7.433 — `font-variant-emoji` (CSS Fonts 4). HEREDA. Plumb.
+        "font-variant-emoji" => {
+            parse_font_variant_emoji(value).map(DeclKind::FontVariantEmoji)
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -3767,6 +3788,85 @@ pub(crate) fn parse_container_type(value: &str) -> Option<ContainerType> {
         "normal" => Some(ContainerType::Normal),
         "size" => Some(ContainerType::Size),
         "inline-size" => Some(ContainerType::InlineSize),
+        _ => None,
+    }
+}
+
+/// `hyphenate-character`: `auto | <string>`. Devuelve `None` para `auto`
+/// (motor elige el carácter del idioma); para un string entre comillas,
+/// desempareja las comillas y devuelve el contenido. Fase 7.429.
+pub(crate) fn parse_hyphenate_character(value: &str) -> Option<String> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return None;
+    }
+    let bytes = v.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let last = bytes[bytes.len() - 1];
+        if (first == b'"' || first == b'\'') && first == last {
+            return Some(v[1..v.len() - 1].to_string());
+        }
+    }
+    // Sin comillas (no-spec, pero generoso) — tomamos el primer token.
+    Some(v.to_string())
+}
+
+/// `hyphenate-limit-chars: auto | <integer>{1,3}`. Cada entero puede ser
+/// `auto` por separado. Spec CSS Text 4. Fase 7.430.
+pub(crate) fn parse_hyphenate_limit_chars(value: &str) -> Option<HyphenateLimitChars> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(HyphenateLimitChars::default());
+    }
+    let mut tokens = v.split_whitespace();
+    let total = parse_int_or_auto(tokens.next()?)?;
+    let start = match tokens.next() {
+        Some(t) => parse_int_or_auto(t)?,
+        None => None,
+    };
+    let end = match tokens.next() {
+        Some(t) => parse_int_or_auto(t)?,
+        None => None,
+    };
+    if tokens.next().is_some() {
+        return None;
+    }
+    Some(HyphenateLimitChars { total, start, end })
+}
+
+/// `auto` → `Some(None)`; un entero positivo → `Some(Some(n))`; cualquier
+/// otra cosa rechaza el shorthand entero (`None`).
+fn parse_int_or_auto(tok: &str) -> Option<Option<u32>> {
+    if tok.eq_ignore_ascii_case("auto") {
+        return Some(None);
+    }
+    tok.parse::<u32>().ok().map(Some)
+}
+
+/// `text-size-adjust: auto | none | <pct>`. CSS Text Inline 3. Fase 7.431.
+pub(crate) fn parse_text_size_adjust(value: &str) -> Option<TextSizeAdjust> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(TextSizeAdjust::Auto);
+    }
+    if v.eq_ignore_ascii_case("none") {
+        return Some(TextSizeAdjust::None);
+    }
+    if let Some(num) = v.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(TextSizeAdjust::Pct);
+    }
+    None
+}
+
+/// `font-variant-emoji: normal | text | emoji | unicode`. CSS Fonts 4.
+/// Fase 7.433.
+pub(crate) fn parse_font_variant_emoji(value: &str) -> Option<FontVariantEmoji> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(FontVariantEmoji::Normal),
+        "text" => Some(FontVariantEmoji::Text),
+        "emoji" => Some(FontVariantEmoji::Emoji),
+        "unicode" => Some(FontVariantEmoji::Unicode),
         _ => None,
     }
 }

@@ -263,6 +263,14 @@ impl StyleEngine {
             style.text_justify = p.text_justify;
             style.print_color_adjust = p.print_color_adjust;
             style.forced_color_adjust = p.forced_color_adjust;
+            // CSS Text 4 — hyphenate-character, hyphenate-limit-chars y
+            // line-height-step heredan. CSS Text Inline 3 — text-size-adjust
+            // hereda. CSS Fonts 4 — font-variant-emoji hereda.
+            style.hyphenate_character = p.hyphenate_character.clone();
+            style.hyphenate_limit_chars = p.hyphenate_limit_chars;
+            style.line_height_step = p.line_height_step;
+            style.text_size_adjust = p.text_size_adjust;
+            style.font_variant_emoji = p.font_variant_emoji;
             // CSS Fonts 4 — todos los font-variant-* heredan.
             style.font_variant_caps = p.font_variant_caps;
             style.font_variant_numeric = p.font_variant_numeric;
@@ -7362,6 +7370,114 @@ mod tests {
         assert_eq!(cs_d.scroll_margin.left, 15.0);
         // Lados no tocados quedan en default (0).
         assert_eq!(cs_d.scroll_margin.right, 0.0);
+    }
+
+    #[test]
+    fn hyphenate_text_size_emoji_fase_7_429_433() {
+        // Parsers de cabecera + cascada heredable. Cinco props nuevas en
+        // bloque: hyphenate-character, hyphenate-limit-chars,
+        // text-size-adjust, line-height-step, font-variant-emoji.
+
+        // 1) Parsers aislados.
+        assert_eq!(parse_hyphenate_character("auto"), None);
+        assert_eq!(
+            parse_hyphenate_character("\"\u{2010}\""),
+            Some("\u{2010}".to_string())
+        );
+        assert_eq!(
+            parse_hyphenate_limit_chars("auto"),
+            Some(HyphenateLimitChars::default())
+        );
+        assert_eq!(
+            parse_hyphenate_limit_chars("6 3 2"),
+            Some(HyphenateLimitChars {
+                total: Some(6),
+                start: Some(3),
+                end: Some(2),
+            })
+        );
+        // Sólo total — el resto queda en `None` (= auto).
+        assert_eq!(
+            parse_hyphenate_limit_chars("6"),
+            Some(HyphenateLimitChars { total: Some(6), start: None, end: None })
+        );
+        // `auto` por columna (CSS Text 4).
+        assert_eq!(
+            parse_hyphenate_limit_chars("5 auto 2"),
+            Some(HyphenateLimitChars {
+                total: Some(5),
+                start: None,
+                end: Some(2),
+            })
+        );
+        assert_eq!(parse_hyphenate_limit_chars("a"), None);
+        assert_eq!(parse_text_size_adjust("auto"), Some(TextSizeAdjust::Auto));
+        assert_eq!(parse_text_size_adjust("NONE"), Some(TextSizeAdjust::None));
+        assert_eq!(parse_text_size_adjust("85%"), Some(TextSizeAdjust::Pct(85.0)));
+        assert_eq!(parse_text_size_adjust("100"), None);
+        assert_eq!(
+            parse_font_variant_emoji("emoji"),
+            Some(FontVariantEmoji::Emoji)
+        );
+        assert_eq!(
+            parse_font_variant_emoji("UNICODE"),
+            Some(FontVariantEmoji::Unicode)
+        );
+        assert_eq!(parse_font_variant_emoji("nope"), None);
+
+        // 2) E2E + herencia. Body declara las 5; div hijo NO redeclara →
+        // los hereda. Sibling con override no afecta el primero.
+        let html = r##"<html><head><style>
+            body {
+                hyphenate-character: "-";
+                hyphenate-limit-chars: 6 3 2;
+                text-size-adjust: 80%;
+                line-height-step: 24px;
+                font-variant-emoji: text;
+            }
+            div.heredero {}
+            div.override-emoji { font-variant-emoji: emoji }
+        </style></head><body>
+            <div class="heredero"></div>
+            <div class="override-emoji"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut herederos = Vec::new();
+        let mut overrides = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                match crate::dom::attr(n, "class").as_deref() {
+                    Some("heredero") => herederos.push(n.clone()),
+                    Some("override-emoji") => overrides.push(n.clone()),
+                    _ => {}
+                }
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.hyphenate_character.as_deref(), Some("-"));
+        assert_eq!(body_cs.hyphenate_limit_chars.total, Some(6));
+        assert_eq!(body_cs.hyphenate_limit_chars.start, Some(3));
+        assert_eq!(body_cs.hyphenate_limit_chars.end, Some(2));
+        assert_eq!(body_cs.text_size_adjust, TextSizeAdjust::Pct(80.0));
+        assert_eq!(body_cs.line_height_step, 24.0);
+        assert_eq!(body_cs.font_variant_emoji, FontVariantEmoji::Text);
+        // Heredero recibe TODAS.
+        let heredero_cs = eng.compute_with_parent(&herederos[0], Some(&body_cs));
+        assert_eq!(heredero_cs.hyphenate_character.as_deref(), Some("-"));
+        assert_eq!(heredero_cs.hyphenate_limit_chars.start, Some(3));
+        assert_eq!(heredero_cs.text_size_adjust, TextSizeAdjust::Pct(80.0));
+        assert_eq!(heredero_cs.line_height_step, 24.0);
+        assert_eq!(heredero_cs.font_variant_emoji, FontVariantEmoji::Text);
+        // Override sólo cambia emoji; resto sigue heredado.
+        let over_cs = eng.compute_with_parent(&overrides[0], Some(&body_cs));
+        assert_eq!(over_cs.font_variant_emoji, FontVariantEmoji::Emoji);
+        assert_eq!(over_cs.hyphenate_character.as_deref(), Some("-"));
+        assert_eq!(over_cs.line_height_step, 24.0);
     }
 
     #[test]
