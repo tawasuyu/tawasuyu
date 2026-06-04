@@ -20,3 +20,6 @@ ulid = { workspace = true }
 # Snapshot/re-hidratación de sesiones interactivas (persist.rs).
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

@@ -17,7 +17,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd};
-use std::path::PathBuf;
+use std::os::unix::net::UnixStream as StdUnixStream;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -242,6 +243,19 @@ fn spawn_pty(
 /// (replay) + el stream vivo; lo que el cliente escribe va al PTY. Múltiples
 /// clientes conviven (espejo de pantalla). Es el contrato estable con el
 /// front — agnóstico de si detrás hay un engine in-process o un holder.
+/// ¿Hay un peer respondiendo en `path`? Misma estrategia que `arje-zero`:
+/// connect síncrono — si responde, el socket está vivo (otra sesión lo
+/// atiende); si falla, asumimos stale (post-crash del daemon o socket
+/// ausente) y es seguro limpiarlo. No exigimos que `path` sea un socket
+/// real: cualquier error de connect cuenta como "no vivo", de modo que un
+/// archivo huérfano con permisos raros no nos deja bloqueados.
+fn socket_in_use(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    StdUnixStream::connect(path).is_ok()
+}
+
 fn spawn_socket_server(
     path: PathBuf,
     scrollback: Arc<Mutex<Scrollback>>,
@@ -249,6 +263,17 @@ fn spawn_socket_server(
     write: Arc<Mutex<File>>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        // Si OTRO daemon ya atiende ese path (dos sandokan apuntando al
+        // mismo run_dir, recovery race tras un reboot raro), abortamos en
+        // vez de barrer el socket vivo. El socket es por card_id, así que
+        // este caso es raro pero posible.
+        if socket_in_use(&path) {
+            eprintln!(
+                "sandokan-local: sesión ya atendida en {} — abortando spawn para no pisarlo",
+                path.display(),
+            );
+            return;
+        }
         let _ = std::fs::remove_file(&path); // limpiar un socket stale
         let listener = match UnixListener::bind(&path) {
             Ok(l) => l,
@@ -677,5 +702,39 @@ mod tests {
             "la sesión re-hidratada no respondió"
         );
         b.stop(id, Duration::ZERO).await.ok();
+    }
+
+    // -----------------------------------------------------------------
+    //  socket_in_use — discriminación stale vs vivo
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn socket_in_use_false_si_no_existe() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("inexistente.sock");
+        assert!(!socket_in_use(&path));
+    }
+
+    #[test]
+    fn socket_in_use_false_si_es_archivo_regular_huerfano() {
+        // Caso post-crash típico: el .sock quedó en disco pero sin listener.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("stale.sock");
+        std::fs::write(&path, b"residuo").unwrap();
+        assert!(
+            !socket_in_use(&path),
+            "un archivo sin listener no debe leerse como vivo",
+        );
+    }
+
+    #[tokio::test]
+    async fn socket_in_use_true_con_listener_vivo() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("vivo.sock");
+        let _listener = UnixListener::bind(&path).expect("bind testigo");
+        assert!(
+            socket_in_use(&path),
+            "con un listener bindeado, connect debe devolver Ok",
+        );
     }
 }
