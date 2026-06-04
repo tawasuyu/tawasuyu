@@ -411,9 +411,9 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
     }
 }
 
-/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
-/// que mapean a acciones reales. Sin "Editar": el explorer es de sólo
-/// lectura, no tiene campos de texto editables.
+/// El menú principal del explorer. Archivo / Ver / Idioma / Ayuda — sólo
+/// comandos que mapean a acciones reales. Sin "Editar": el explorer es de
+/// sólo lectura, no tiene campos de texto editables.
 fn app_menu(model: &Model) -> AppMenu {
     // "Traer por AoE" sólo aplica a un nodo seleccionado AUSENTE con iface
     // viable. Si no, lo grisamos.
@@ -426,6 +426,19 @@ fn app_menu(model: &Model) -> AppMenu {
     if !puede_fetch {
         fetch = fetch.disabled();
     }
+
+    // Menú de idioma: autónimos sin traducir (convención del SO). El item
+    // activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
             Menu::new(rimay_localize::t("wawa-menu-file"))
@@ -447,6 +460,12 @@ fn app_menu(model: &Model) -> AppMenu {
                 ),
         )
         .menu(
+            Menu::new(rimay_localize::t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
+        .menu(
             Menu::new(rimay_localize::t("wawa-menu-help"))
                 .item(MenuItem::new(rimay_localize::t("wawa-menu-about"), "help.about")),
         )
@@ -454,6 +473,15 @@ fn app_menu(model: &Model) -> AppMenu {
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
 fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en wawa-config para que sobreviva reinicios.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     match cmd {
         "file.reload" => {
             handle.dispatch(Msg::Reload);
@@ -938,5 +966,7 @@ const fn libc_eperm() -> i32 {
 
 fn main() {
     rimay_localize::init();
+    // Aplicar el idioma persistido en wawa-config antes de arrancar la UI.
+    let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     llimphi_ui::run::<Explorer>();
 }

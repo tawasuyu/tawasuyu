@@ -72,32 +72,35 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
     let running = focus.as_ref().map(|f| f.running).unwrap_or(false);
     let is_shell = focus.is_some();
 
+    // Alias para la función de localización.
+    let t = rimay_localize::t;
+
     // Archivo: lo único universal y honesto es salir del proceso.
-    let archivo = Menu::new("Archivo")
-        .item(MenuItem::new("Salir", "app.quit").shortcut("Ctrl+Q"));
+    let archivo = Menu::new(t("file"))
+        .item(MenuItem::new(t("exit"), "app.quit").shortcut("Ctrl+Q"));
 
     // Editar: opera sobre la línea de comando del shell focado. Sin
     // copiar/cortar porque `LineState` no tiene modelo de selección.
-    let mut pegar = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
-    let mut limpiar_in = MenuItem::new("Limpiar entrada", "edit.clear-input");
+    let mut pegar = MenuItem::new(t("paste"), "edit.paste").shortcut("Ctrl+V");
+    let mut limpiar_in = MenuItem::new(t("shuma-shell-clear-input"), "edit.clear-input");
     if !is_shell {
         pegar = pegar.disabled();
     }
     if !has_input {
         limpiar_in = limpiar_in.disabled();
     }
-    let editar = Menu::new("Editar").item(pegar).item(limpiar_in);
+    let editar = Menu::new(t("edit")).item(pegar).item(limpiar_in);
 
     // Ver: limpiar pantalla + cancelar comando + selector de tabs.
-    let mut limpiar_pant = MenuItem::new("Limpiar pantalla", "term.clear");
-    let mut cancelar = MenuItem::new("Cancelar comando", "term.cancel").shortcut("Ctrl+C");
+    let mut limpiar_pant = MenuItem::new(t("shuma-shell-clear-screen"), "term.clear");
+    let mut cancelar = MenuItem::new(t("shuma-shell-cancel-cmd"), "term.cancel").shortcut("Ctrl+C");
     if !is_shell {
         limpiar_pant = limpiar_pant.disabled();
     }
     if !running {
         cancelar = cancelar.disabled();
     }
-    let mut ver = Menu::new("Ver").item(limpiar_pant).item(cancelar);
+    let mut ver = Menu::new(t("view")).item(limpiar_pant).item(cancelar);
     // Una entrada por tab para saltar directo (mapea a `Msg::SelectTab`).
     for (i, inst) in model.tabs.iter().enumerate() {
         let mut it = MenuItem::new(inst.label.clone(), format!("view.tab.{i}"));
@@ -112,17 +115,34 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
 
     // Ayuda: imprime una línea "acerca de" en la entrada del shell
     // focado (efecto visible y real; sin diálogos que el chasis no tiene).
-    let mut acerca = MenuItem::new("Acerca de shuma", "help.about");
+    let mut acerca = MenuItem::new(t("shuma-shell-about"), "help.about");
     if !is_shell {
         acerca = acerca.disabled();
     }
-    let ayuda = Menu::new("Ayuda").item(acerca);
+    let ayuda = Menu::new(t("help")).item(acerca);
+
+    // Menú de idioma: autónimos sin traducir (convención del SO). El item
+    // activo lleva ✔. El comando `lang.<code>` lo resuelve `handle_command`
+    // → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+    let idioma = Menu::new(t("language"))
+        .item(lang_item("Español", "es-PE"))
+        .item(lang_item("English", "en-US"))
+        .item(lang_item("Runasimi", "qu-PE"));
 
     AppMenu::new()
         .menu(archivo)
         .menu(editar)
         .menu(ver)
         .menu(ayuda)
+        .menu(idioma)
 }
 
 /// `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -172,10 +192,11 @@ fn terminal_context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
 
     // "Pegar" reusa la ruta Ctrl+V del módulo, que internamente decide
     // si pega a la línea de comando o al PTY (cuando hay un TUI vt100).
-    let mut pegar = ContextMenuItem::action("Pegar").with_shortcut("Ctrl+V");
-    let mut limpiar_in = ContextMenuItem::action("Limpiar entrada");
-    let mut limpiar_pant = ContextMenuItem::action("Limpiar pantalla");
-    let mut cancelar = ContextMenuItem::action("Cancelar comando").with_shortcut("Ctrl+C");
+    let t = rimay_localize::t;
+    let mut pegar = ContextMenuItem::action(t("paste")).with_shortcut("Ctrl+V");
+    let mut limpiar_in = ContextMenuItem::action(t("shuma-shell-clear-input"));
+    let mut limpiar_pant = ContextMenuItem::action(t("shuma-shell-clear-screen"));
+    let mut cancelar = ContextMenuItem::action(t("shuma-shell-cancel-cmd")).with_shortcut("Ctrl+C");
 
     if !is_shell {
         pegar = pegar.disabled();
@@ -211,7 +232,7 @@ fn terminal_context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
     context_menu_view(ContextMenuSpec {
         anchor: (x, y),
         viewport: viewport(),
-        header: Some("Terminal".to_string()),
+        header: Some(rimay_localize::t("terminal")),
         items,
         active: usize::MAX,
         on_pick,
@@ -228,6 +249,18 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
     model.menu_open = None;
     model.menu_active = usize::MAX;
     model.ctx_menu = None;
+
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en la capa de usuario de wawa-config. El watcher de la
+    // propia app (y el del resto) reentra con `WawaConfigChanged`, así el
+    // cambio se propaga a todas las apps abiertas y sobrevive reinicios.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
 
     // Selector de tab: "view.tab.<i>".
     if let Some(rest) = cmd.strip_prefix("view.tab.") {

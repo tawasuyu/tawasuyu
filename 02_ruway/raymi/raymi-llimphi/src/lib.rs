@@ -192,7 +192,7 @@ impl Model {
         self.edit_scope = EditScope::Series;
         match self.default_calendar() {
             Some(cal) => self.editor = Editor::Event(EventDraft::new(cal, self.selected_day)),
-            None => self.status = "no hay calendarios donde crear un evento".into(),
+            None => self.status = rimay_localize::t("raymi-status-no-calendars"),
         }
     }
 
@@ -214,7 +214,7 @@ impl Model {
     fn open_new_contact(&mut self) {
         match self.default_book() {
             Some(book) => self.editor = Editor::Contact(ContactDraft::new(book)),
-            None => self.status = "no hay libretas donde crear un contacto".into(),
+            None => self.status = rimay_localize::t("raymi-status-no-books"),
         }
     }
 
@@ -269,7 +269,7 @@ impl Model {
                 }
             },
             None => {
-                self.status = "fecha u hora inválida (usá AAAA-MM-DD y HH:MM)".into();
+                self.status = rimay_localize::t("raymi-status-invalid-datetime");
                 self.editor = Editor::Event(d);
             }
         }
@@ -374,7 +374,7 @@ impl Model {
                 }
             },
             None => {
-                self.status = "el contacto necesita un nombre".into();
+                self.status = rimay_localize::t("raymi-status-contact-needs-name");
                 self.editor = Editor::Contact(d);
             }
         }
@@ -779,8 +779,8 @@ mod tests {
     use raymi_core::time::{to_unix, CivilDate, DAY};
     use raymi_core::{Calendar, Event, MockBackend};
 
-    /// Modelo con un único evento diario recurrente “serie” en el calendario
-    /// “cal”, anclado al 2026-06-01 09:00.
+    /// Modelo con un único evento diario recurrente "serie" en el calendario
+    /// "cal", anclado al 2026-06-01 09:00.
     fn recurring_model() -> Model {
         let mock = MockBackend::new(vec![Calendar::new("cal", "Cal")], vec![]);
         let start = to_unix(CivilDate { year: 2026, month: 6, day: 1 }, 9, 0, 0);

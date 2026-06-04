@@ -57,6 +57,7 @@ pub fn root(model: &Model) -> View<Msg> {
 /// Barra superior: marca + tabs de modo + (en calendario) navegación de mes.
 fn toolbar(model: &Model) -> View<Msg> {
     let theme = &model.theme;
+    let t = rimay_localize::t;
     let brand = View::new(Style {
         size: Size { width: length(120.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -73,17 +74,17 @@ fn toolbar(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
-        tab(theme, "Calendario", model.mode == Mode::Calendar, Msg::SetMode(Mode::Calendar)),
-        tab(theme, "Contactos", model.mode == Mode::Contacts, Msg::SetMode(Mode::Contacts)),
+        tab(theme, &t("raymi-tab-calendar"), model.mode == Mode::Calendar, Msg::SetMode(Mode::Calendar)),
+        tab(theme, &t("raymi-tab-contacts"), model.mode == Mode::Contacts, Msg::SetMode(Mode::Contacts)),
     ]);
 
     let mut children = vec![brand, tabs, spacer()];
     if model.mode == Mode::Calendar {
         // Conmutador Mes / Semana / Día.
-        children.push(view_tab(theme, "Mes", model.cal_view() == CalView::Month, Msg::SetCalView(CalView::Month)));
-        children.push(view_tab(theme, "Semana", model.cal_view() == CalView::Week, Msg::SetCalView(CalView::Week)));
-        children.push(view_tab(theme, "Día", model.cal_view() == CalView::Day, Msg::SetCalView(CalView::Day)));
-        children.push(button("＋ Evento", theme.accent, theme.bg_app, Msg::NewEvent));
+        children.push(view_tab(theme, &t("raymi-view-month"), model.cal_view() == CalView::Month, Msg::SetCalView(CalView::Month)));
+        children.push(view_tab(theme, &t("raymi-view-week"), model.cal_view() == CalView::Week, Msg::SetCalView(CalView::Week)));
+        children.push(view_tab(theme, &t("raymi-view-day"), model.cal_view() == CalView::Day, Msg::SetCalView(CalView::Day)));
+        children.push(button(&t("raymi-btn-new-event"), theme.accent, theme.bg_app, Msg::NewEvent));
         let label = match model.cal_view() {
             CalView::Month => format!("{}  {}", MONTHS[(model.view_month - 1) as usize], model.view_year),
             CalView::Week => week_label(model),
@@ -100,9 +101,9 @@ fn toolbar(model: &Model) -> View<Msg> {
             .text(label, 14.0, theme.fg_text),
         );
         children.push(button("›", theme.bg_button, theme.fg_text, Msg::NextMonth));
-        children.push(button("Hoy", theme.accent, theme.bg_app, Msg::Today));
+        children.push(button(&t("raymi-btn-today"), theme.accent, theme.bg_app, Msg::Today));
     } else {
-        children.push(button("＋ Contacto", theme.accent, theme.bg_app, Msg::NewContact));
+        children.push(button(&t("raymi-btn-new-contact"), theme.accent, theme.bg_app, Msg::NewContact));
     }
 
     View::new(Style {
@@ -182,7 +183,7 @@ fn week_label(model: &Model) -> String {
     }
 }
 
-/// Etiqueta del día mostrado (“Lun 1 Junio 2026”).
+/// Etiqueta del día mostrado ("Lun 1 Junio 2026").
 fn day_label(model: &Model) -> String {
     let days = model.selected_day.div_euclid(DAY);
     let d = time::civil_from_days(days);
@@ -425,7 +426,7 @@ fn day_agenda(model: &Model) -> View<Msg> {
                 justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
-            .text_aligned("sin eventos", 13.0, theme.fg_placeholder, Alignment::Center),
+            .text_aligned(rimay_localize::t("raymi-no-events"), 13.0, theme.fg_placeholder, Alignment::Center),
         );
     }
     let list = View::new(Style {
@@ -450,7 +451,7 @@ fn day_agenda(model: &Model) -> View<Msg> {
 
 fn agenda_row(theme: &Theme, o: &Occurrence, color: Color) -> View<Msg> {
     let mut when = if o.event.all_day {
-        "todo el día".to_string()
+        rimay_localize::t("raymi-all-day")
     } else {
         format!("{} – {}", hhmm(o.start), hhmm(o.end))
     };
@@ -543,7 +544,8 @@ fn week_grid(model: &Model) -> View<Msg> {
     let header = row_full(WK_HEADER_H, head);
 
     // Franja de eventos de día completo.
-    let mut strip = vec![gutter_label(theme, "todo el día", ALLDAY_H)];
+    let all_day_label = rimay_localize::t("raymi-all-day");
+    let mut strip = vec![gutter_label(theme, &all_day_label, ALLDAY_H)];
     for day in by_day.iter() {
         let chips: Vec<View<Msg>> = day
             .iter()
@@ -802,7 +804,7 @@ fn day_grid(model: &Model) -> View<Msg> {
     })
     .clip(true)
     .children(allday_chips);
-    let allday = row_full(ALLDAY_H, vec![gutter_label(theme, "todo el día", ALLDAY_H), strip_cell]);
+    let allday = row_full(ALLDAY_H, vec![gutter_label(theme, &rimay_localize::t("raymi-all-day"), ALLDAY_H), strip_cell]);
 
     let occ_refs: Vec<&Occurrence> = occ.iter().collect();
     let body = View::new(Style {
@@ -849,7 +851,7 @@ fn contacts_list(model: &Model) -> View<Msg> {
     .fill(theme.bg_panel)
     .children(vec![text_input_view(
         &model.search,
-        "🔍  Buscar contacto…",
+        &rimay_localize::t("raymi-search-contact-placeholder"),
         model.search_focused,
         &pal,
         Msg::ContactSearchFocus(true),
@@ -868,7 +870,7 @@ fn contacts_list(model: &Model) -> View<Msg> {
                 justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
-            .text_aligned("sin contactos", 13.0, theme.fg_placeholder, Alignment::Center),
+            .text_aligned(rimay_localize::t("raymi-no-contacts"), 13.0, theme.fg_placeholder, Alignment::Center),
         );
     }
     let list = View::new(Style {
@@ -939,7 +941,7 @@ fn contact_detail(model: &Model) -> View<Msg> {
             flex_grow: 1.0,
             ..Default::default()
         })
-        .text_aligned("Elegí un contacto", 14.0, theme.fg_placeholder, Alignment::Center);
+        .text_aligned(rimay_localize::t("raymi-select-contact-hint"), 14.0, theme.fg_placeholder, Alignment::Center);
         return View::new(Style {
             size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
             flex_grow: 1.0,
@@ -973,7 +975,7 @@ fn contact_detail(model: &Model) -> View<Msg> {
             View::new(Style { size: Size { width: percent(1.0_f32), height: length(15.0_f32) }, ..Default::default() })
                 .text_aligned(c.org.clone().unwrap_or_default(), 12.0, theme.fg_muted, Alignment::Start),
         ]),
-        button("✎ Editar", theme.bg_button, theme.fg_text, Msg::EditContact(c.uid.clone())),
+        button(&format!("✎ {}", rimay_localize::t("edit")), theme.bg_button, theme.fg_text, Msg::EditContact(c.uid.clone())),
     ]);
 
     let mut fields: Vec<View<Msg>> = Vec::new();
@@ -1035,8 +1037,9 @@ const EDITOR_W: f32 = 520.0;
 pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
     let theme = &model.theme;
     let pal = TextInputPalette::from_theme(theme);
+    let t = rimay_localize::t;
 
-    let title = if d.uid.is_some() { "Editar evento" } else { "Nuevo evento" };
+    let title = if d.uid.is_some() { t("raymi-title-edit-event") } else { t("raymi-title-new-event") };
 
     // Selector de calendario (clic → siguiente). Muestra punto de color + nombre.
     let colors = calendar_colors(model);
@@ -1071,26 +1074,27 @@ pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
         View::new(Style { size: Size { width: Dimension::auto(), height: percent(1.0_f32) }, flex_grow: 1.0, align_items: Some(AlignItems::Center), ..Default::default() })
             .text_aligned(cal_name, 13.0, theme.fg_text, Alignment::Start),
         View::new(Style { size: Size { width: length(80.0_f32), height: percent(1.0_f32) }, align_items: Some(AlignItems::Center), ..Default::default() })
-            .text_aligned("cambiar ⟳".to_string(), 11.0, theme.fg_muted, Alignment::End),
+            .text_aligned(format!("{} ⟳", t("raymi-change-cycle")), 11.0, theme.fg_muted, Alignment::End),
     ]);
 
-    let summary = ev_field(&d.summary, "Asunto", d.focus == EventField::Summary, &pal, EventField::Summary);
-    let allday = checkbox(theme, "Día completo", d.all_day, Msg::EventToggleAllDay);
+    let summary = ev_field(&d.summary, &t("raymi-field-summary"), d.focus == EventField::Summary, &pal, EventField::Summary);
+    let allday = checkbox(theme, &t("raymi-field-all-day"), d.all_day, Msg::EventToggleAllDay);
     let date = ev_field(&d.date, "AAAA-MM-DD", d.focus == EventField::Date, &pal, EventField::Date);
 
     let mut col: Vec<View<Msg>> = Vec::new();
     // Selector de alcance — sólo al editar una instancia de un recurrente.
     if d.is_recurring_instance() {
+        let scope_label = model.edit_scope().label();
         col.push(labeled(
             theme,
-            "Aplicar a",
-            cycle_chip(theme, model.edit_scope().label(), Msg::EventCycleScope),
+            &t("raymi-field-apply-to"),
+            cycle_chip(theme, &scope_label, Msg::EventCycleScope),
         ));
     }
-    col.push(labeled(theme, "Calendario", cal_chip));
-    col.push(labeled(theme, "Asunto", summary));
+    col.push(labeled(theme, &t("raymi-field-calendar"), cal_chip));
+    col.push(labeled(theme, &t("raymi-field-summary"), summary));
     col.push(allday);
-    col.push(labeled(theme, "Fecha", date));
+    col.push(labeled(theme, &t("raymi-field-date"), date));
     if !d.all_day {
         let start = ev_field(&d.start_hm, "HH:MM", d.focus == EventField::Start, &pal, EventField::Start);
         let end = ev_field(&d.end_hm, "HH:MM", d.focus == EventField::End, &pal, EventField::End);
@@ -1100,7 +1104,7 @@ pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
             gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
             ..Default::default()
         })
-        .children(vec![labeled(theme, "Inicio", start), labeled(theme, "Fin", end)]);
+        .children(vec![labeled(theme, &t("raymi-field-start"), start), labeled(theme, &t("raymi-field-end"), end)]);
         col.push(hours);
     }
     // Sección de repetición (cadencia + intervalo + días + término).
@@ -1109,38 +1113,39 @@ pub fn event_editor(model: &Model, d: &EventDraft) -> View<Msg> {
     }
     col.push(labeled(
         theme,
-        "Lugar",
-        ev_field(&d.location, "Lugar (opcional)", d.focus == EventField::Location, &pal, EventField::Location),
+        &t("raymi-field-location"),
+        ev_field(&d.location, &t("raymi-ph-location"), d.focus == EventField::Location, &pal, EventField::Location),
     ));
     col.push(labeled(
         theme,
-        "Descripción",
-        ev_field(&d.description, "Notas (opcional)", d.focus == EventField::Description, &pal, EventField::Description),
+        &t("raymi-field-description"),
+        ev_field(&d.description, &t("raymi-ph-description"), d.focus == EventField::Description, &pal, EventField::Description),
     ));
     col.push(attendees_section(model, &pal, d));
 
     let actions = editor_actions(theme, d.uid.is_some(), Msg::SaveEvent, Msg::DeleteEvent);
     col.push(actions);
 
-    editor_card(theme, title, col)
+    editor_card(theme, &title, col)
 }
 
 /// Modal del editor de **contacto**.
 pub fn contact_editor(model: &Model, d: &ContactDraft) -> View<Msg> {
     let theme = &model.theme;
     let pal = TextInputPalette::from_theme(theme);
-    let title = if d.uid.is_some() { "Editar contacto" } else { "Nuevo contacto" };
+    let t = rimay_localize::t;
+    let title = if d.uid.is_some() { t("raymi-title-edit-contact") } else { t("raymi-title-new-contact") };
 
     let col: Vec<View<Msg>> = vec![
-        labeled(theme, "Nombre", ct_field(&d.name, "Nombre y apellido", d.focus == ContactField::Name, &pal, ContactField::Name)),
-        labeled(theme, "Correos", ct_field(&d.emails, "correo@dominio, otro@…", d.focus == ContactField::Emails, &pal, ContactField::Emails)),
-        labeled(theme, "Teléfonos", ct_field(&d.phones, "+58 412…, …", d.focus == ContactField::Phones, &pal, ContactField::Phones)),
-        labeled(theme, "Organización", ct_field(&d.org, "Empresa (opcional)", d.focus == ContactField::Org, &pal, ContactField::Org)),
-        labeled(theme, "Nota", ct_field(&d.note, "Nota (opcional)", d.focus == ContactField::Note, &pal, ContactField::Note)),
+        labeled(theme, &t("raymi-field-name"), ct_field(&d.name, &t("raymi-ph-full-name"), d.focus == ContactField::Name, &pal, ContactField::Name)),
+        labeled(theme, &t("raymi-field-emails"), ct_field(&d.emails, &t("raymi-ph-emails"), d.focus == ContactField::Emails, &pal, ContactField::Emails)),
+        labeled(theme, &t("raymi-field-phones"), ct_field(&d.phones, &t("raymi-ph-phones"), d.focus == ContactField::Phones, &pal, ContactField::Phones)),
+        labeled(theme, &t("raymi-field-org"), ct_field(&d.org, &t("raymi-ph-org"), d.focus == ContactField::Org, &pal, ContactField::Org)),
+        labeled(theme, &t("raymi-field-note"), ct_field(&d.note, &t("raymi-ph-note"), d.focus == ContactField::Note, &pal, ContactField::Note)),
         editor_actions(theme, d.uid.is_some(), Msg::SaveContact, Msg::DeleteContact),
     ];
 
-    editor_card(theme, title, col)
+    editor_card(theme, &title, col)
 }
 
 const WD_INITIALS: [&str; 7] = ["L", "M", "X", "J", "V", "S", "D"];
@@ -1149,10 +1154,12 @@ const WD_INITIALS: [&str; 7] = ["L", "M", "X", "J", "V", "S", "D"];
 /// siempre el selector de cadencia; si repite, intervalo, (días si es semanal) y
 /// la condición de término con su campo contextual.
 fn repeat_section(theme: &Theme, pal: &TextInputPalette, d: &EventDraft) -> Vec<View<Msg>> {
+    let t = rimay_localize::t;
+    let repeat_label = d.repeat.label();
     let mut out = vec![labeled(
         theme,
-        "Repetir",
-        cycle_chip(theme, d.repeat.label(), Msg::EventCycleRepeat),
+        &t("raymi-field-repeat"),
+        cycle_chip(theme, &repeat_label, Msg::EventCycleRepeat),
     )];
     if d.repeat == Repeat::None {
         return out;
@@ -1165,7 +1172,7 @@ fn repeat_section(theme: &Theme, pal: &TextInputPalette, d: &EventDraft) -> Vec<
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(d.repeat.unit().to_string(), 12.0, theme.fg_muted, Alignment::Start);
+    .text_aligned(d.repeat.unit(), 12.0, theme.fg_muted, Alignment::Start);
     let every = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: Dimension::auto() },
@@ -1178,7 +1185,7 @@ fn repeat_section(theme: &Theme, pal: &TextInputPalette, d: &EventDraft) -> Vec<
             .children(vec![interval]),
         unit,
     ]);
-    out.push(labeled(theme, "Cada", every));
+    out.push(labeled(theme, &t("raymi-field-every"), every));
 
     // Días de la semana (sólo semanal).
     if d.repeat == Repeat::Weekly {
@@ -1193,11 +1200,12 @@ fn repeat_section(theme: &Theme, pal: &TextInputPalette, d: &EventDraft) -> Vec<
             ..Default::default()
         })
         .children(days);
-        out.push(labeled(theme, "Días", row));
+        out.push(labeled(theme, &t("raymi-field-days"), row));
     }
 
     // Condición de término + campo contextual.
-    let end_chip = cycle_chip(theme, d.repeat_end.label(), Msg::EventCycleRepeatEnd);
+    let repeat_end_label = d.repeat_end.label();
+    let end_chip = cycle_chip(theme, &repeat_end_label, Msg::EventCycleRepeatEnd);
     let end_extra: Option<View<Msg>> = match d.repeat_end {
         RepeatEnd::Never => None,
         RepeatEnd::Count => {
@@ -1222,7 +1230,7 @@ fn repeat_section(theme: &Theme, pal: &TextInputPalette, d: &EventDraft) -> Vec<
         ..Default::default()
     })
     .children(end_children);
-    out.push(labeled(theme, "Termina", end_row));
+    out.push(labeled(theme, &rimay_localize::t("raymi-field-ends"), end_row));
 
     out
 }
@@ -1257,7 +1265,7 @@ fn attendees_section(model: &Model, pal: &TextInputPalette, d: &EventDraft) -> V
     // Caja para sumar a mano (Enter agrega).
     block.push(ev_field(
         &d.invitee,
-        "Nombre <correo>  · Enter",
+        &rimay_localize::t("raymi-ph-invitee"),
         d.focus == EventField::Invitee,
         pal,
         EventField::Invitee,
@@ -1289,7 +1297,7 @@ fn attendees_section(model: &Model, pal: &TextInputPalette, d: &EventDraft) -> V
         ..Default::default()
     })
     .children(block);
-    labeled(theme, "Invitados", inner)
+    labeled(theme, &rimay_localize::t("raymi-field-attendees"), inner)
 }
 
 fn attendee_pill(theme: &Theme, a: &Address) -> View<Msg> {
@@ -1362,7 +1370,7 @@ fn suggestion_row(theme: &Theme, name: &str, email: &str) -> View<Msg> {
     .children(vec![texts, plus])
 }
 
-/// Chip que cicla un valor al hacer clic (muestra el valor + “⟳”).
+/// Chip que cicla un valor al hacer clic (muestra el valor + "⟳").
 fn cycle_chip(theme: &Theme, value: &str, msg: Msg) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -1420,13 +1428,14 @@ fn editor_card(theme: &Theme, title: &str, mut children: Vec<View<Msg>>) -> View
 
 /// Fila inferior de acciones: Eliminar (si es edición) · Cancelar · Guardar.
 fn editor_actions(theme: &Theme, editing: bool, save: Msg, delete: Msg) -> View<Msg> {
+    let t = rimay_localize::t;
     let mut row: Vec<View<Msg>> = Vec::new();
     if editing {
-        row.push(button("Eliminar", theme.bg_button, theme.fg_destructive, delete));
+        row.push(button(&t("delete"), theme.bg_button, theme.fg_destructive, delete));
     }
     row.push(spacer());
-    row.push(button("Cancelar", theme.bg_button, theme.fg_text, Msg::CloseEditor));
-    row.push(button("Guardar", theme.accent, theme.bg_app, save));
+    row.push(button(&t("cancel"), theme.bg_button, theme.fg_text, Msg::CloseEditor));
+    row.push(button(&t("save"), theme.accent, theme.bg_app, save));
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(40.0_f32) },

@@ -14,6 +14,8 @@ raymi-store = { path = "../raymi-store" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }
 
 [[example]]
 name = "agenda_demo"

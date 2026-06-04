@@ -81,16 +81,16 @@ impl EditScope {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            EditScope::Series => "Toda la serie",
-            EditScope::ThisOnly => "Esta instancia",
-            EditScope::ThisAndFuture => "Esta y siguientes",
+            EditScope::Series => rimay_localize::t("raymi-scope-series"),
+            EditScope::ThisOnly => rimay_localize::t("raymi-scope-this-only"),
+            EditScope::ThisAndFuture => rimay_localize::t("raymi-scope-this-and-future"),
         }
     }
 }
 
-/// Cadencia de repetición elegida en la UI (`Freq` + “no se repite”).
+/// Cadencia de repetición elegida en la UI (`Freq` + "no se repite").
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Repeat {
     None,
@@ -112,24 +112,24 @@ impl Repeat {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Repeat::None => "No se repite",
-            Repeat::Daily => "Diariamente",
-            Repeat::Weekly => "Semanalmente",
-            Repeat::Monthly => "Mensualmente",
-            Repeat::Yearly => "Anualmente",
+            Repeat::None => rimay_localize::t("raymi-repeat-none"),
+            Repeat::Daily => rimay_localize::t("raymi-repeat-daily"),
+            Repeat::Weekly => rimay_localize::t("raymi-repeat-weekly"),
+            Repeat::Monthly => rimay_localize::t("raymi-repeat-monthly"),
+            Repeat::Yearly => rimay_localize::t("raymi-repeat-yearly"),
         }
     }
 
-    /// Etiqueta de la unidad del intervalo (“cada N …”).
-    pub fn unit(self) -> &'static str {
+    /// Etiqueta de la unidad del intervalo ("cada N …").
+    pub fn unit(self) -> String {
         match self {
-            Repeat::None => "",
-            Repeat::Daily => "día(s)",
-            Repeat::Weekly => "semana(s)",
-            Repeat::Monthly => "mes(es)",
-            Repeat::Yearly => "año(s)",
+            Repeat::None => String::new(),
+            Repeat::Daily => rimay_localize::t("raymi-unit-days"),
+            Repeat::Weekly => rimay_localize::t("raymi-unit-weeks"),
+            Repeat::Monthly => rimay_localize::t("raymi-unit-months"),
+            Repeat::Yearly => rimay_localize::t("raymi-unit-years"),
         }
     }
 
@@ -171,11 +171,11 @@ impl RepeatEnd {
         }
     }
 
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            RepeatEnd::Never => "Sin fin",
-            RepeatEnd::Count => "Tras N veces",
-            RepeatEnd::Until => "Hasta fecha",
+            RepeatEnd::Never => rimay_localize::t("raymi-end-never"),
+            RepeatEnd::Count => rimay_localize::t("raymi-end-count"),
+            RepeatEnd::Until => rimay_localize::t("raymi-end-until"),
         }
     }
 }
@@ -214,7 +214,7 @@ pub struct EventDraft {
     keep_organizer: Option<raymi_core::Address>,
     /// `EXDATE`s preservadas de la serie (las gestiona el alcance de edición).
     keep_exdates: Vec<i64>,
-    /// Inicio de la **instancia** abierta desde la agenda (para editar “esta”),
+    /// Inicio de la **instancia** abierta desde la agenda (para editar "esta"),
     /// si el evento es recurrente; `None` para la base o eventos únicos.
     pub instance_start: Option<i64>,
 }
@@ -269,7 +269,7 @@ impl EventDraft {
 
     /// Edita un evento existente: vuelca sus campos al borrador. La `RRULE` se
     /// descompone en los controles si la sabemos parsear; si no, se preserva
-    /// cruda y el formulario muestra “No se repite”.
+    /// cruda y el formulario muestra "No se repite".
     pub fn from_event(e: &Event) -> Self {
         let (date, h, mi, _) = time::to_civil(e.start);
         let (_, eh, emi, _) = time::to_civil(e.end);
@@ -363,7 +363,7 @@ impl EventDraft {
         }
     }
 
-    /// Compone la `RRULE` desde los controles, o `None` si “No se repite”.
+    /// Compone la `RRULE` desde los controles, o `None` si "No se repite".
     /// Devuelve `None` también si la cadencia no parsea a una `Freq`.
     fn build_rrule(&self) -> Option<String> {
         let freq = self.repeat.to_freq()?;
@@ -399,7 +399,7 @@ impl EventDraft {
             (s, e)
         };
         let summary = self.summary.text();
-        // La regla compuesta gana; si “No se repite” pero había una cruda no
+        // La regla compuesta gana; si "No se repite" pero había una cruda no
         // representable, se preserva.
         let rrule = self.build_rrule().or_else(|| self.keep_rrule.clone());
         Some(Event {

@@ -72,7 +72,7 @@ pub(crate) fn pivot_overlay_view(wb: &Workbook, p: &PivotState) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned("Tabla dinámica".to_string(), 15.0, palette::FG_TEXT, Alignment::Start);
+    .text_aligned(rimay_localize::t("nakui-sheet-pivot-title"), 15.0, palette::FG_TEXT, Alignment::Start);
     let close = View::new(Style {
         size: Size {
             width: percent(0.2_f32),
@@ -81,7 +81,7 @@ pub(crate) fn pivot_overlay_view(wb: &Workbook, p: &PivotState) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned("✕  Esc".to_string(), 12.5, palette::FG_MUTED, Alignment::End)
+    .text_aligned(rimay_localize::t("nakui-sheet-pivot-close"), 12.5, palette::FG_MUTED, Alignment::End)
     .on_click(Msg::ClosePivot);
     card_children.push(
         View::new(Style {
@@ -103,9 +103,14 @@ pub(crate) fn pivot_overlay_view(wb: &Workbook, p: &PivotState) -> View<Msg> {
     );
 
     // Subtítulo: descripción de la agregación.
+    let header_label = if p.header_row {
+        rimay_localize::t("nakui-sheet-pivot-with-header")
+    } else {
+        rimay_localize::t("nakui-sheet-pivot-no-header")
+    };
     card_children.push(pivot_panel_row(
-        format!("Agrupar por «{gcol}»  ·  {}(«{vcol}»)", p.agg.label()),
-        format!("{} sobre {}", p.source, if p.header_row { "c/encab." } else { "s/encab." }),
+        format!("{}«{gcol}»  ·  {}(«{vcol}»)", rimay_localize::t("nakui-sheet-pivot-group-by"), p.agg.label()),
+        format!("{} {} {}", p.source, rimay_localize::t("nakui-sheet-pivot-over"), header_label),
         palette::ACCENT,
         palette::FG_MUTED,
         palette::BG_PANEL,
@@ -141,7 +146,7 @@ pub(crate) fn pivot_overlay_view(wb: &Workbook, p: &PivotState) -> View<Msg> {
     }
     if res.rows.len() > shown {
         card_children.push(pivot_panel_row(
-            format!("… +{} grupos", res.rows.len() - shown),
+            format!("… +{} {}", res.rows.len() - shown, rimay_localize::t("nakui-sheet-pivot-more-groups")),
             String::new(),
             palette::FG_MUTED,
             palette::FG_MUTED,
@@ -152,7 +157,14 @@ pub(crate) fn pivot_overlay_view(wb: &Workbook, p: &PivotState) -> View<Msg> {
 
     // Total.
     card_children.push(pivot_panel_row(
-        format!("TOTAL  ·  {} grupos · {} filas", res.groups, res.n),
+        format!(
+            "{}  ·  {} {} · {} {}",
+            rimay_localize::t("nakui-sheet-pivot-total"),
+            res.groups,
+            rimay_localize::t("nakui-sheet-pivot-groups"),
+            res.n,
+            rimay_localize::t("nakui-sheet-pivot-rows"),
+        ),
         res.total.normalize().to_string(),
         palette::ACCENT,
         palette::ACCENT,
@@ -162,7 +174,7 @@ pub(crate) fn pivot_overlay_view(wb: &Workbook, p: &PivotState) -> View<Msg> {
 
     // Línea de atajos.
     card_children.push(pivot_panel_row(
-        "A función · G grupo · V valor · H encabezado · Esc cerrar".to_string(),
+        rimay_localize::t("nakui-sheet-pivot-hint"),
         String::new(),
         palette::FG_PLACEHOLDER,
         palette::FG_PLACEHOLDER,

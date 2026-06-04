@@ -392,6 +392,7 @@ impl App for Explorer {
         // El menú contextual sobre la entrada tiene prioridad si está
         // abierto.
         if let Some((idx, x, y)) = model.context_menu {
+            let t = rimay_localize::t;
             let header = {
                 let snap = model.shared.lock().unwrap();
                 // `idx` es índice en la lista renderizada (rev). Mapear al
@@ -401,15 +402,15 @@ impl App for Explorer {
                     .rev()
                     .nth(idx)
                     .map(entry_label)
-                    .unwrap_or_else(|| "Entrada".to_string())
+                    .unwrap_or_else(|| t("nakui-explorer-ctx-entry-fallback"))
             };
             let viewport = viewport_of(model);
             // Acciones reales: el explorer es de sólo lectura, no
             // inventamos edición. Seleccionar/refrescar son las únicas
             // acciones reales que existen.
             let items = vec![
-                ContextMenuItem::action("Ver detalle"),
-                ContextMenuItem::action("Refrescar log"),
+                ContextMenuItem::action(t("nakui-explorer-ctx-view-detail")),
+                ContextMenuItem::action(t("nakui-explorer-ctx-refresh-log")),
             ];
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> =
                 Arc::new(move |i: usize| match i {
@@ -492,22 +493,51 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
     }
 }
 
-/// El menú principal del explorer. Archivo / Ver / Ayuda — sólo comandos
-/// que mapean a acciones reales (refrescar log, tema, salir). Sin
+/// El menú principal del explorer. Archivo / Ver / Idioma / Ayuda — sólo
+/// comandos que mapean a acciones reales (refrescar log, tema, salir). Sin
 /// "Editar": el explorer no tiene campos de texto editables.
 fn app_menu() -> AppMenu {
+    let t = rimay_localize::t;
+
+    // Menú de idioma: autónimos sin traducir (convención del SO). El item
+    // activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Refrescar log", "file.refresh").shortcut("Ctrl+R"))
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("nakui-explorer-menu-refresh-log"), "file.refresh").shortcut("Ctrl+R"))
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
-        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("view")).item(MenuItem::new(t("cycle-theme"), "view.theme")))
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
 }
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
 fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en la capa de usuario de wawa-config.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     match cmd {
         "file.refresh" => {
             handle.dispatch(Msg::ForceReload);

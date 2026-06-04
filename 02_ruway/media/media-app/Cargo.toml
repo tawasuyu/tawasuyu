@@ -39,3 +39,5 @@ media-source-wav = { path = "../media-source-wav" }
 parking_lot = { workspace = true }
 rhai = "1.20"
 ron = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }

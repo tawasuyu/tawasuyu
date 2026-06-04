@@ -54,5 +54,7 @@ impl App for Demo {
 }
 
 fn main() {
+    rimay_localize::init();
+    let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     llimphi_ui::run::<Demo>();
 }

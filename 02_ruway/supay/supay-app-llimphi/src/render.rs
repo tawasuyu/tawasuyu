@@ -153,8 +153,8 @@ pub(crate) fn scene_pane(model: &Model) -> View<Msg> {
                 scene,
                 ts,
                 rect,
-                "MUERTO",
-                "SPACE para reiniciar",
+                &rimay_localize::t("supay-status-dead"),
+                &rimay_localize::t("supay-hint-space-restart"),
                 (0.95, 0.30, 0.25),
             );
         } else if victory {
@@ -162,8 +162,8 @@ pub(crate) fn scene_pane(model: &Model) -> View<Msg> {
                 scene,
                 ts,
                 rect,
-                "VICTORIA",
-                "SPACE para reiniciar",
+                &rimay_localize::t("supay-status-victory"),
+                &rimay_localize::t("supay-hint-space-restart"),
                 (0.50, 0.95, 0.55),
             );
         }

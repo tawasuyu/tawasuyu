@@ -53,6 +53,8 @@ type DynAuth = Arc<dyn Authenticator + Send + Sync>;
 
 fn main() {
     rimay_localize::init();
+    // Carga el idioma persistido en wawa-config (sobrescribe el default "es-PE").
+    let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     llimphi_ui::run::<Greeter>();
 }
 
@@ -492,7 +494,7 @@ impl App for Greeter {
         let sess = model.sessions.get(model.session_idx);
         let sess_name = sess.map(|s| s.name.clone()).unwrap_or_else(|| "mirada".into());
         let sess_kind = sess.map(|s| s.kind.tag()).unwrap_or("wayland");
-        let sess_cap = row(14.0, "Escritorio", 10.0, theme.fg_muted);
+        let sess_cap = row(14.0, &rimay_localize::t("mirada-greeter-label-desktop"), 10.0, theme.fg_muted);
         let arrow = |glyph: &str, msg: Msg| {
             View::new(Style {
                 size: Size {
@@ -549,9 +551,9 @@ impl App for Greeter {
         // autentica se atenúa y cambia de rótulo.
         let busy = matches!(model.status, Status::Authenticating);
         let (btn_label, btn_fill) = if busy {
-            ("Entrando…", theme.bg_button)
+            (rimay_localize::t("mirada-greeter-btn-submitting"), theme.bg_button)
         } else {
-            ("Entrar", theme.accent)
+            (rimay_localize::t("mirada-greeter-btn-submit"), theme.accent)
         };
         let enter_btn = View::new(Style {
             size: Size {
@@ -608,8 +610,8 @@ impl App for Greeter {
             spacer(6.0),
             enter_btn,
             spacer(2.0),
-            row(13.0, "↑/↓: escritorio  ·  Enter: entrar", 9.0, theme.fg_muted),
-            row(13.0, "Ctrl+Alt+F1…F12: consola  ·  Ctrl+Alt+⌫: salir", 9.0, theme.fg_muted),
+            row(13.0, &rimay_localize::t("mirada-greeter-hint-nav"), 9.0, theme.fg_muted),
+            row(13.0, &rimay_localize::t("mirada-greeter-hint-console"), 9.0, theme.fg_muted),
         ]);
 
         // Zona central que aloja la tarjeta de login. Ocupa todo el
@@ -715,6 +717,7 @@ fn menubar_spec<'a>(
 /// campo focuseado (Cortar/Copiar grises sin selección o si enmascarado).
 fn app_menu(model: &Model) -> app_bus::AppMenu {
     use app_bus::{AppMenu, Menu, MenuItem};
+    let t = rimay_localize::t;
     let (input, masked) = focused_input(model);
     let editor = input.editor();
     let has_sel = editor.has_selection();
@@ -723,27 +726,27 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
     let has_text = !editor.is_empty();
     let busy = matches!(model.status, Status::Authenticating);
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    let mut undo = MenuItem::new(t("undo"), "edit.undo").shortcut("Ctrl+Z");
     if !can_undo { undo = undo.disabled(); }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("redo"), "edit.redo").shortcut("Ctrl+Y");
     if !can_redo { redo = redo.disabled(); }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new(t("cut"), "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new(t("copy"), "edit.copy").shortcut("Ctrl+C");
     // Enmascarado o sin selección ⇒ no se puede cortar/copiar.
     if !has_sel || masked { cut = cut.disabled(); copy = copy.disabled(); }
-    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
-    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated();
+    let paste = MenuItem::new(t("paste"), "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new(t("select-all"), "edit.selectall").shortcut("Ctrl+A").separated();
     if !has_text { sel_all = sel_all.disabled(); }
 
-    let mut iniciar = MenuItem::new("Iniciar sesión", "session.submit").shortcut("Enter");
+    let mut iniciar = MenuItem::new(t("mirada-greeter-session-submit"), "session.submit").shortcut("Enter");
     if busy { iniciar = iniciar.disabled(); }
 
     // Menú "Sesión": acciones de login + la lista de sesiones descubiertas.
     // La elegida lleva «●»; el resto «  ».
-    let mut sesion = Menu::new("Sesión")
+    let mut sesion = Menu::new(t("mirada-greeter-menu-session"))
         .item(iniciar)
-        .item(MenuItem::new("Ir a usuario", "session.user"))
-        .item(MenuItem::new("Ir a contraseña", "session.pass"));
+        .item(MenuItem::new(t("mirada-greeter-session-goto-user"), "session.user"))
+        .item(MenuItem::new(t("mirada-greeter-session-goto-pass"), "session.pass"));
     for (i, s) in model.sessions.iter().enumerate() {
         let mark = if i == model.session_idx { "● " } else { "   " };
         let label = format!("{mark}{} · {}", s.name, s.kind.tag());
@@ -754,10 +757,21 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
         sesion = sesion.item(item);
     }
 
+    // Menú de idioma: autónimos sin traducir. El item activo lleva ✔.
+    // El comando `lang.<code>` lo resuelve `handle_menu_command`.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(sesion)
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cut)
@@ -765,11 +779,26 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(paste)
                 .item(sel_all),
         )
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
 }
 
 /// Traduce el `command` del menú principal al `Msg` real y lo despacha.
 fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
     model.menu_open = None;
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en la capa de usuario de wawa-config.
+    if let Some(code) = command.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     // Elección de sesión: «session.pick.<idx>».
     if let Some(rest) = command.strip_prefix("session.pick.") {
         if let Ok(i) = rest.parse::<usize>() {

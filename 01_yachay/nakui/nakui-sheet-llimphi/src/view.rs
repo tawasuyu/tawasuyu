@@ -51,50 +51,51 @@ pub(crate) fn menu_items(
 ) -> Vec<ContextMenuItem> {
     let can_undo = wb.events().len() > 0; // approximation; el Workbook expone applied_count
     let _ = can_undo;
+    let t = rimay_localize::t;
     vec![
-        ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C"),       // 0
-        ContextMenuItem::action("Cortar").with_shortcut("Ctrl+X"),       // 1
+        ContextMenuItem::action(t("copy")).with_shortcut("Ctrl+C"),      // 0
+        ContextMenuItem::action(t("cut")).with_shortcut("Ctrl+X"),       // 1
         if has_clipboard {
-            ContextMenuItem::action("Pegar").with_shortcut("Ctrl+V")
+            ContextMenuItem::action(t("paste")).with_shortcut("Ctrl+V")
         } else {
-            ContextMenuItem::action("Pegar")
+            ContextMenuItem::action(t("paste"))
                 .with_shortcut("Ctrl+V")
                 .disabled()
         },                                                                // 2
         ContextMenuItem::separator(),                                    // 3
-        ContextMenuItem::action("Limpiar")
+        ContextMenuItem::action(t("nakui-sheet-ctx-clear"))
             .with_shortcut("Del")
             .destructive(),                                              // 4
         ContextMenuItem::separator(),                                    // 5
-        ContextMenuItem::action("Formato: Número").with_shortcut("Ctrl+!"), // 6
-        ContextMenuItem::action("Formato: Moneda  $").with_shortcut("Ctrl+$"), // 7
-        ContextMenuItem::action("Formato: Porcentaje").with_shortcut("Ctrl+%"), // 8
-        ContextMenuItem::action("Formato: General").with_shortcut("Ctrl+)"), // 9
+        ContextMenuItem::action(t("nakui-sheet-fmt-number")).with_shortcut("Ctrl+!"), // 6
+        ContextMenuItem::action(t("nakui-sheet-fmt-currency")).with_shortcut("Ctrl+$"), // 7
+        ContextMenuItem::action(t("nakui-sheet-fmt-percent")).with_shortcut("Ctrl+%"), // 8
+        ContextMenuItem::action(t("nakui-sheet-fmt-general")).with_shortcut("Ctrl+)"), // 9
         ContextMenuItem::separator(),                                    // 10
         if wb.can_undo() {
-            ContextMenuItem::action("Deshacer").with_shortcut("Ctrl+Z")
+            ContextMenuItem::action(t("undo")).with_shortcut("Ctrl+Z")
         } else {
-            ContextMenuItem::action("Deshacer")
+            ContextMenuItem::action(t("undo"))
                 .with_shortcut("Ctrl+Z")
                 .disabled()
         },                                                                // 11
         if wb.can_redo() {
-            ContextMenuItem::action("Rehacer").with_shortcut("Ctrl+Y")
+            ContextMenuItem::action(t("redo")).with_shortcut("Ctrl+Y")
         } else {
-            ContextMenuItem::action("Rehacer")
+            ContextMenuItem::action(t("redo"))
                 .with_shortcut("Ctrl+Y")
                 .disabled()
         },                                                                // 12
         ContextMenuItem::separator(),                                    // 13
-        ContextMenuItem::action("Inmovilizar paneles aquí")
+        ContextMenuItem::action(t("nakui-sheet-freeze-here"))
             .with_shortcut("Ctrl+Shift+F"),                              // 14
         if frozen {
-            ContextMenuItem::action("Liberar paneles")
+            ContextMenuItem::action(t("nakui-sheet-unfreeze"))
         } else {
-            ContextMenuItem::action("Liberar paneles").disabled()
+            ContextMenuItem::action(t("nakui-sheet-unfreeze")).disabled()
         },                                                                // 15
         ContextMenuItem::separator(),                                    // 16
-        ContextMenuItem::action("Tabla dinámica…").with_shortcut("Ctrl+Shift+P"), // 17
+        ContextMenuItem::action(t("nakui-sheet-pivot")).with_shortcut("Ctrl+Shift+P"), // 17
     ]
 }
 
@@ -210,7 +211,7 @@ pub(crate) fn formula_bar_view(t: &Theme, bar: &TextInputState, selected: CellRe
     })
     .children(vec![text_input_view(
         bar,
-        "ingresa fórmula o valor",
+        &rimay_localize::t("nakui-sheet-formula-placeholder"),
         true,
         &input_palette,
         Msg::SelectCell(selected),
@@ -599,11 +600,12 @@ pub(crate) fn status_bar_view(status: &Status) -> View<Msg> {
 }
 
 /// Construye el menú principal (barra superior). Archivo / Editar /
-/// Ver / Ayuda. El submenú "Editar" refleja en gris el estado real de
+/// Ver / Idioma / Ayuda. El submenú "Editar" refleja en gris el estado real de
 /// la barra de fórmula (input focuseado) y del Workbook.
 pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
     use app_bus::{AppMenu, Menu, MenuItem};
 
+    let t = rimay_localize::t;
     let ed = model.bar.editor();
     let has_sel = ed.has_selection();
     let has_text = !ed.is_empty();
@@ -614,35 +616,47 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
 
     // --- Editar: undo/redo del Workbook + cut/copy/paste de celda + edición
     //     in-situ del texto de la barra (cut/copy/paste/seleccionar todo).
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    let mut undo = MenuItem::new(t("undo"), "edit.undo").shortcut("Ctrl+Z");
     if !can_undo_wb { undo = undo.disabled(); }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("redo"), "edit.redo").shortcut("Ctrl+Y");
     if !can_redo_wb { redo = redo.disabled(); }
-    let cell_cut = MenuItem::new("Cortar celda", "cell.cut").shortcut("Ctrl+X").separated();
-    let cell_copy = MenuItem::new("Copiar celda", "cell.copy").shortcut("Ctrl+C");
-    let mut cell_paste = MenuItem::new("Pegar celda", "cell.paste").shortcut("Ctrl+V");
+    let cell_cut = MenuItem::new(t("nakui-sheet-menu-cell-cut"), "cell.cut").shortcut("Ctrl+X").separated();
+    let cell_copy = MenuItem::new(t("nakui-sheet-menu-cell-copy"), "cell.copy").shortcut("Ctrl+C");
+    let mut cell_paste = MenuItem::new(t("nakui-sheet-menu-cell-paste"), "cell.paste").shortcut("Ctrl+V");
     if !has_clip { cell_paste = cell_paste.disabled(); }
-    let cell_clear = MenuItem::new("Limpiar celda", "cell.clear").shortcut("Del");
+    let cell_clear = MenuItem::new(t("nakui-sheet-menu-cell-clear"), "cell.clear").shortcut("Del");
     // Edición del texto de la barra (input focuseado).
-    let mut bar_cut = MenuItem::new("Cortar texto", "bar.cut").separated();
-    let mut bar_copy = MenuItem::new("Copiar texto", "bar.copy");
+    let mut bar_cut = MenuItem::new(t("nakui-sheet-menu-bar-cut"), "bar.cut").separated();
+    let mut bar_copy = MenuItem::new(t("nakui-sheet-menu-bar-copy"), "bar.copy");
     if !has_sel { bar_cut = bar_cut.disabled(); bar_copy = bar_copy.disabled(); }
-    let bar_paste = MenuItem::new("Pegar texto", "bar.paste");
-    let mut bar_sel_all = MenuItem::new("Seleccionar todo (texto)", "bar.selectall");
+    let bar_paste = MenuItem::new(t("nakui-sheet-menu-bar-paste"), "bar.paste");
+    let mut bar_sel_all = MenuItem::new(t("nakui-sheet-menu-bar-select-all"), "bar.selectall");
     if !has_text { bar_sel_all = bar_sel_all.disabled(); }
 
     // --- Ver: tema + formatos + inmovilizar + tabla dinámica.
-    let mut unfreeze = MenuItem::new("Liberar paneles", "view.unfreeze");
+    let mut unfreeze = MenuItem::new(t("nakui-sheet-unfreeze"), "view.unfreeze");
     if !frozen { unfreeze = unfreeze.disabled(); }
+
+    // Menú de idioma: autónimos sin traducir (convención del SO).
+    // El item activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `menubar_command_msg` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
 
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Importar CSV", "file.import").shortcut("Ctrl+I"))
-                .item(MenuItem::new("Exportar CSV", "file.export").shortcut("Ctrl+E")),
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("nakui-sheet-menu-import-csv"), "file.import").shortcut("Ctrl+I"))
+                .item(MenuItem::new(t("nakui-sheet-menu-export-csv"), "file.export").shortcut("Ctrl+E")),
         )
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cell_cut)
@@ -655,24 +669,39 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(bar_sel_all),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Formato: Número", "fmt.number").shortcut("Ctrl+!"))
-                .item(MenuItem::new("Formato: Moneda $", "fmt.currency").shortcut("Ctrl+$"))
-                .item(MenuItem::new("Formato: Porcentaje", "fmt.percent").shortcut("Ctrl+%"))
-                .item(MenuItem::new("Formato: General", "fmt.general").shortcut("Ctrl+)"))
-                .item(MenuItem::new("Inmovilizar paneles aquí", "view.freeze").shortcut("Ctrl+Shift+F").separated())
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("nakui-sheet-fmt-number"), "fmt.number").shortcut("Ctrl+!"))
+                .item(MenuItem::new(t("nakui-sheet-fmt-currency"), "fmt.currency").shortcut("Ctrl+$"))
+                .item(MenuItem::new(t("nakui-sheet-fmt-percent"), "fmt.percent").shortcut("Ctrl+%"))
+                .item(MenuItem::new(t("nakui-sheet-fmt-general"), "fmt.general").shortcut("Ctrl+)"))
+                .item(MenuItem::new(t("nakui-sheet-freeze-here"), "view.freeze").shortcut("Ctrl+Shift+F").separated())
                 .item(unfreeze)
-                .item(MenuItem::new("Tabla dinámica…", "view.pivot").shortcut("Ctrl+Shift+P").separated()),
+                .item(MenuItem::new(t("nakui-sheet-pivot"), "view.pivot").shortcut("Ctrl+Shift+P").separated()),
         )
         .menu(
-            Menu::new("Ayuda")
-                .item(MenuItem::new("Acerca de Nakui Sheet", "help.about")),
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
+        .menu(
+            Menu::new(t("help"))
+                .item(MenuItem::new(t("nakui-sheet-menu-about"), "help.about")),
         )
 }
 
 /// Traduce un comando del menú principal al `Msg` real de la planilla.
 /// `None` para entradas informativas sin acción cableada.
 pub(crate) fn menubar_command_msg(model: &Model, command: &str) -> Option<Msg> {
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en
+    // caliente y lo persiste en wawa-config.
+    if let Some(code) = command.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return None;
+    }
     match command {
         "file.import" => Some(Msg::ImportCsv),
         "file.export" => Some(Msg::ExportCsv),

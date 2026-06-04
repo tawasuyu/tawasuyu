@@ -553,27 +553,58 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
 
     let dis = |it: MenuItem, on: bool| if on { it } else { it.disabled() };
 
+    // Etiquetas de UI localizadas; el 2º arg de MenuItem::new es el id de
+    // comando estable — nunca se localiza.
+    let t = rimay_localize::t;
+
+    // Menú de idioma: autónimos sin traducir (convención del SO).
+    // El item activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Editar")
-                .item(dis(MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z"), can_undo))
-                .item(dis(MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y"), can_redo))
-                .item(dis(MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated(), has_sel))
-                .item(dis(MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C"), has_sel))
-                .item(MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V"))
-                .item(dis(MenuItem::new("Seleccionar todo", "edit.selectall").shortcut("Ctrl+A").separated(), editing)),
+            Menu::new(t("edit"))
+                .item(dis(MenuItem::new(t("undo"), "edit.undo").shortcut("Ctrl+Z"), can_undo))
+                .item(dis(MenuItem::new(t("redo"), "edit.redo").shortcut("Ctrl+Y"), can_redo))
+                .item(dis(MenuItem::new(t("cut"), "edit.cut").shortcut("Ctrl+X").separated(), has_sel))
+                .item(dis(MenuItem::new(t("copy"), "edit.copy").shortcut("Ctrl+C"), has_sel))
+                .item(MenuItem::new(t("paste"), "edit.paste").shortcut("Ctrl+V"))
+                .item(dis(MenuItem::new(t("select-all"), "edit.selectall").shortcut("Ctrl+A").separated(), editing)),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Ajustar todo", "view.fitall").shortcut("F"))
-                .item(MenuItem::new("Centrar", "view.reset").shortcut("Inicio"))
-                .item(MenuItem::new("Zoom 100%", "view.zoomreset").separated()),
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("pluma-notebook-fit-all"), "view.fitall").shortcut("F"))
+                .item(MenuItem::new(t("pluma-notebook-center"), "view.reset").shortcut("Inicio"))
+                .item(MenuItem::new(t("pluma-notebook-zoom-reset"), "view.zoomreset").separated()),
+        )
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
         )
 }
 
 /// Traduce el comando del menú al `Msg` real y lo aplica. Cierra el menú.
 fn handle_menu_command(mut model: Model, command: String) -> Model {
     model.menu_open = None;
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en wawa-config para que sobreviva reinicios.
+    if let Some(code) = command.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     let action = match command.as_str() {
         "edit.undo" => Some(EditAction::Undo),
         "edit.redo" => Some(EditAction::Redo),
@@ -1312,5 +1343,8 @@ fn viewport_to_fit(nb: &Notebook) -> (f32, f32) {
 }
 
 fn main() {
+    rimay_localize::init();
+    let wawa_cfg = wawa_config::WawaConfig::load();
+    let _ = rimay_localize::set_locale(&wawa_cfg.lang);
     llimphi_ui::run::<Viewer>();
 }

@@ -258,6 +258,9 @@ impl App for Supay {
 
     fn init(handle: &Handle<Msg>) -> Model {
         handle.spawn_periodic(Duration::from_millis(TICK_MS), || Msg::Tick);
+        // Cargar el idioma global desde wawa-config al arrancar.
+        let wawa_cfg = wawa_config::WawaConfig::load();
+        let _ = rimay_localize::set_locale(&wawa_cfg.lang);
         Model {
             world: World::new(),
             theme: Theme::dark(),
@@ -492,6 +495,7 @@ fn hud_panel(model: &Model) -> View<Msg> {
         (0.95, 0.30, 0.25)
     };
 
+    let t = rimay_localize::t;
     let row = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -502,9 +506,9 @@ fn hud_panel(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
-        cell("VIDA", &health.to_string(), health_color),
-        cell("MUNICION", &ammo.to_string(), ammo_color),
-        cell("OBJETIVO", mat_name, (0.85, 0.80, 0.70)),
+        cell(&t("supay-hud-health"), &health.to_string(), health_color),
+        cell(&t("supay-hud-ammo"), &ammo.to_string(), ammo_color),
+        cell(&t("supay-hud-target"), mat_name, (0.85, 0.80, 0.70)),
     ]);
 
     let border_strip = View::new(Style {
@@ -550,30 +554,58 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &'a Model) -> MenuBarSpec<'a, Msg>
 }
 
 fn app_menu(model: &Model) -> AppMenu {
+    let t = rimay_localize::t;
     let can_fire = !model.world.game_over && !model.world.victory && model.world.ammo > 0;
-    let fire_item = MenuItem::new("Disparar", "play.fire").shortcut("Space");
+    let fire_item = MenuItem::new(t("supay-action-fire"), "play.fire").shortcut("Space");
     let fire_item = if can_fire {
         fire_item
     } else {
         fire_item.disabled()
     };
 
+    // Ítem de idioma: autónimos sin traducir (convención del SO).
+    // El ítem activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Reiniciar partida", "file.reset"))
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("supay-action-reset"), "file.reset"))
                 .item(
-                    MenuItem::new("Salir", "file.quit")
+                    MenuItem::new(t("exit"), "file.quit")
                         .shortcut("Esc")
                         .separated(),
                 ),
         )
-        .menu(Menu::new("Jugar").item(fire_item))
-        .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("supay-menu-play")).item(fire_item))
+        .menu(Menu::new(t("view")).item(MenuItem::new(t("cycle-theme"), "view.theme")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
 }
 
 fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
+    // Cambio de idioma desde el menú: aplica el locale en caliente
+    // y lo persiste en wawa-config para que sobreviva reinicios.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return;
+    }
     let msg = match cmd {
         "file.reset" => Some(Msg::Reset),
         "file.quit" => Some(Msg::Quit),
@@ -587,20 +619,21 @@ fn handle_menu_command(cmd: &str, handle: &Handle<Msg>) {
 }
 
 fn context_menu_for_scene(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let t = rimay_localize::t;
     let can_fire = !model.world.game_over && !model.world.victory && model.world.ammo > 0;
     let header = if model.world.game_over {
-        "fin de partida".to_string()
+        t("supay-status-game-over")
     } else if model.world.victory {
-        "victoria".to_string()
+        t("supay-status-victory")
     } else {
-        format!("munición {}", model.world.ammo)
+        format!("{} {}", t("supay-hud-ammo"), model.world.ammo)
     };
 
-    let fire = ContextMenuItem::action("Disparar").with_shortcut("Space");
+    let fire = ContextMenuItem::action(t("supay-action-fire")).with_shortcut("Space");
     let items = vec![
         if can_fire { fire } else { fire.disabled() },
         ContextMenuItem::separator(),
-        ContextMenuItem::action("Reiniciar partida"),
+        ContextMenuItem::action(t("supay-action-reset")),
     ];
 
     let cmds: Vec<&'static str> = vec!["play.fire", "", "file.reset"];
@@ -626,5 +659,6 @@ mod render;
 use render::*;
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<Supay>();
 }

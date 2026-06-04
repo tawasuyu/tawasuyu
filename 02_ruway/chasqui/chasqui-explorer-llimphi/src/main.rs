@@ -133,6 +133,10 @@ impl App for Explorer {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
+        // Cargar el idioma global del SO al arrancar.
+        let wawa_cfg = wawa_config::WawaConfig::load();
+        let _ = rimay_localize::set_locale(&wawa_cfg.lang);
+
         // Primer refresh inmediato + ticks periódicos. El tick dispara
         // discovery+query en un thread (vía `Handle::spawn` desde
         // update); así el broker bloqueante no congela el UI.
@@ -381,13 +385,14 @@ impl App for Explorer {
                 .as_ref()
                 .and_then(|s| s.monads.get(idx))
                 .map(|m| m.label.clone())
-                .unwrap_or_else(|| "Mónada".to_string());
+                .unwrap_or_else(|| rimay_localize::t("chasqui-explorer-monad-label"));
             let viewport = viewport_of(model);
             // Acciones reales del explorer: ver/seleccionar y refrescar.
             // El explorer es de sólo lectura, no inventamos edición.
+            let t = rimay_localize::t;
             let items = vec![
-                ContextMenuItem::action("Ver detalle"),
-                ContextMenuItem::action("Refrescar"),
+                ContextMenuItem::action(t("chasqui-explorer-ctx-detail")),
+                ContextMenuItem::action(t("refresh")),
             ];
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(move |i: usize| match i {
                 0 => Msg::SelectMonad(idx),
@@ -442,22 +447,50 @@ fn menubar_spec<'a>(
 /// que mapean a acciones reales (refrescar, reconectar, tema). Sin
 /// "Editar": el explorer no tiene campos de texto editables.
 fn app_menu() -> AppMenu {
+    let t = rimay_localize::t;
+
+    // Menú de idioma: autónimos sin traducir (convención del SO). El item
+    // activo lleva ✔. El comando `lang.<code>` lo resuelve `handle_menu_command`.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Refrescar", "file.refresh").shortcut("Ctrl+R"))
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("refresh"), "file.refresh").shortcut("Ctrl+R"))
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Reconectar", "view.reconnect"))
-                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("reconnect"), "view.reconnect"))
+                .item(MenuItem::new(t("cycle-theme"), "view.theme").separated()),
         )
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
 }
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
 fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en la capa de usuario de wawa-config.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     match cmd {
         "file.refresh" => {
             handle.dispatch(Msg::Tick);
@@ -519,7 +552,14 @@ fn monad_card(
     palette: &CardPalette,
 ) -> View<Msg> {
     let lens = lens_label(m.dominant_lens);
-    let stats = format!("{} files · ent {:.2} · {}", m.cardinality, m.entropy, lens);
+    let stats = rimay_localize::t_args(
+        "chasqui-explorer-monad-stats",
+        &[
+            ("count", m.cardinality.to_string().into()),
+            ("entropy", format!("{:.2}", m.entropy).into()),
+            ("lens", lens.into()),
+        ],
+    );
     let mut rows: Vec<View<Msg>> = vec![
         kind_row_with_stats("[monad]", &m.label, &stats, accent, theme),
         muted_line(

@@ -498,7 +498,7 @@ impl App for Panel {
                     if lang_changed {
                         let _ = rimay_localize::set_locale(&m.cfg.lang);
                     }
-                    m.status = "↻ config actualizada desde el bus".into();
+                    m.status = rimay_localize::t("wawa-panel-status-config-updated");
                 }
             }
             Msg::MenuOpen(which) => {
@@ -650,7 +650,7 @@ impl App for Panel {
             let items = vec![
                 ContextMenuItem::action(rimay_localize::t("wawa-panel-action-save")),
                 ContextMenuItem::action(rimay_localize::t("wawa-panel-action-reset")),
-                ContextMenuItem::action("Refrescar monitor"),
+                ContextMenuItem::action(rimay_localize::t("wawa-panel-ctx-refresh-monitor")),
             ];
             let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
                 0 => Msg::Save,
@@ -702,9 +702,9 @@ fn menubar_spec<'a>(
     }
 }
 
-/// El menú principal del panel. Archivo / Ver / Ayuda — sólo comandos
+/// El menú principal del panel. Archivo / Ver / Idioma / Ayuda — sólo comandos
 /// que mapean a acciones reales (guardar, restablecer, navegar
-/// categorías). Sin "Editar": el panel no tiene campos de texto
+/// categorías, cambiar idioma). Sin "Editar": el panel no tiene campos de texto
 /// editables (sus controles son chips, toggles y botones).
 fn app_menu(model: &Model) -> AppMenu {
     // Submenú "Ver": saltar a cada categoría. La activa va con check
@@ -723,6 +723,18 @@ fn app_menu(model: &Model) -> AppMenu {
         ver = ver.item(item);
     }
 
+    // Menú de idioma: autónimos sin traducir (convención del SO). El item
+    // activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
             Menu::new(rimay_localize::t("wawa-panel-menu-file"))
@@ -738,6 +750,12 @@ fn app_menu(model: &Model) -> AppMenu {
         )
         .menu(ver)
         .menu(
+            Menu::new(rimay_localize::t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
+        .menu(
             Menu::new(rimay_localize::t("wawa-panel-menu-help"))
                 .item(MenuItem::new(rimay_localize::t("wawa-panel-about-name"), "help.about")),
         )
@@ -747,6 +765,15 @@ fn app_menu(model: &Model) -> AppMenu {
 /// modelo. Mapea sólo a acciones que el panel ya implementa.
 fn handle_menu_command(model: Model, cmd: &str) -> Model {
     let mut m = model;
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en wawa-config. El watcher reentra con `ConfigChanged`,
+    // propagando el cambio a otras apps abiertas.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        m.cfg.lang = code.to_string();
+        let _ = m.cfg.save();
+        return m;
+    }
     match cmd {
         "file.save" => match m.cfg.save() {
             Ok(path) => {
@@ -791,7 +818,7 @@ fn main() {
 /// ende en el bus) sin requerir Save explícito.
 fn autosave(m: &mut Model) {
     match m.cfg.save() {
-        Ok(_) => m.status = "↻ aplicado".into(),
+        Ok(_) => m.status = rimay_localize::t("wawa-panel-autosave-ok"),
         Err(e) => m.status = format!("· save: {e}"),
     }
 }

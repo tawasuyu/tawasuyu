@@ -158,6 +158,11 @@ impl Model {
         db: Option<paloma_store::MailDb>,
         account_id: String,
     ) -> Self {
+        // Inicializar rimay-localize (idempotente si ya fue llamado).
+        rimay_localize::init();
+        // Cargar el idioma global configurado en wawa-config.
+        let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
+
         let mut store = MailStore::new();
         // Offline-first: pintar lo cacheado antes de tocar la red.
         if let Some(d) = &db {
@@ -167,7 +172,7 @@ impl Model {
             }
         }
         // Refrescar la lista de buzones de red; si funciona, persistirla.
-        let mut status = String::from("paloma · sin sincronizar");
+        let mut status = rimay_localize::t("paloma-status-init");
         match store.sync_mailboxes(&*backend) {
             Ok(()) => {
                 if let Some(d) = &db {
@@ -456,11 +461,11 @@ pub fn update(mut model: Model, msg: Msg, _handle: &llimphi_ui::Handle<Msg>) -> 
         Msg::SearchMode(semantic) => {
             model.search_semantic = semantic;
             if semantic {
-                model.status = "búsqueda semántica (rimay): pendiente — usando exacta".into();
+                model.status = rimay_localize::t("paloma-status-search-semantic");
             }
         }
         Msg::ViewRich(_id) => {
-            model.status = "HTML enriquecido vía puriy: pendiente (texto despojado por ahora)".into();
+            model.status = rimay_localize::t("paloma-status-view-rich");
         }
         Msg::OpenMessage(id) => {
             model.open_message(&id);
@@ -500,7 +505,7 @@ fn send_compose(mut model: Model) -> Model {
     let Some(c) = model.compose.as_ref() else { return model };
     let to = parse_address_list(&c.to.text());
     if to.is_empty() {
-        model.status = "no se puede enviar: falta un destinatario válido".into();
+        model.status = rimay_localize::t("paloma-status-no-recipient");
         return model;
     }
     let signed = c.sign;
@@ -518,7 +523,11 @@ fn send_compose(mut model: Model) -> Model {
     match model.backend.send(&out) {
         Ok(_id) => {
             model.compose = None;
-            model.status = if signed { "enviado · firmado (Ed25519)" } else { "enviado" }.into();
+            model.status = if signed {
+                rimay_localize::t("paloma-status-sent-signed")
+            } else {
+                rimay_localize::t("paloma-status-sent")
+            };
             // Si estamos viendo Sent, reflejar el envío recién aterrizado.
             if model.selected_mailbox.as_deref() == Some("Sent") {
                 model.open_mailbox("Sent");

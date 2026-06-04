@@ -1176,5 +1176,8 @@ fn seed(wb: &mut Workbook) {
 }
 
 fn main() {
+    rimay_localize::init();
+    let cfg = wawa_config::WawaConfig::load();
+    let _ = rimay_localize::set_locale(&cfg.lang);
     llimphi_ui::run::<NakuiSheetApp>();
 }

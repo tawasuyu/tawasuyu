@@ -14,6 +14,8 @@ paloma-store = { path = "../paloma-store" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }
 
 [dev-dependencies]
 # El demo siembra un MockBackend; nada de red.

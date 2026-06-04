@@ -47,6 +47,14 @@ use llimphi_clipboard::SystemClipboard;
 /// Cuántos mensajes pinta la ventana visible del hilo (con scroll por rueda).
 const VISIBLES: usize = 16;
 
+/// Cierre de cambio de idioma: aplica el locale en caliente y lo persiste.
+fn aplicar_idioma(code: &str) {
+    let _ = rimay_localize::set_locale(code);
+    let mut cfg = wawa_config::WawaConfig::load();
+    cfg.lang = code.to_string();
+    let _ = cfg.save();
+}
+
 #[derive(Clone)]
 enum Msg {
     Tecla(KeyEvent),
@@ -449,46 +457,62 @@ fn app_menu(model: &Modelo) -> app_bus::AppMenu {
     let masked = model.entrada.is_masked();
     let hay_sel = model.seleccionado.is_some();
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    // Etiquetas de UI localizadas. El segundo argumento de MenuItem::new
+    // es el id de comando estable — NO se localiza.
+    let t = rimay_localize::t;
+
+    let mut undo = MenuItem::new(t("undo"), "edit.undo").shortcut("Ctrl+Z");
     if !can_undo {
         undo = undo.disabled();
     }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("redo"), "edit.redo").shortcut("Ctrl+Y");
     if !can_redo {
         redo = redo.disabled();
     }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new(t("cut"), "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new(t("copy"), "edit.copy").shortcut("Ctrl+C");
     if !has_sel || masked {
         cut = cut.disabled();
         copy = copy.disabled();
     }
-    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
-    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+    let paste = MenuItem::new(t("paste"), "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new(t("select-all"), "edit.selectall")
         .shortcut("Ctrl+A")
         .separated();
     if !has_text {
         sel_all = sel_all.disabled();
     }
 
-    let mut admitir = MenuItem::new("Admitir seleccionado", "ayni.admitir");
-    let mut atestar = MenuItem::new("Atestar seleccionado", "ayni.atestar");
-    let mut expulsar = MenuItem::new("Expulsar seleccionado", "ayni.expulsar").separated();
+    let mut admitir = MenuItem::new(t("ayni-menu-admitir"), "ayni.admitir");
+    let mut atestar = MenuItem::new(t("ayni-menu-atestar"), "ayni.atestar");
+    let mut expulsar = MenuItem::new(t("ayni-menu-expulsar"), "ayni.expulsar").separated();
     if !hay_sel {
         admitir = admitir.disabled();
         atestar = atestar.disabled();
         expulsar = expulsar.disabled();
     }
 
+    // Menú de idioma: autónimos sin traducir (convención del SO).
+    // El item activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Enviar mensaje", "msg.enviar").shortcut("Enter"))
-                .item(MenuItem::new("Adjuntar archivo…", "msg.adjuntar").separated())
-                .item(MenuItem::new("Acuse de recibo", "ayni.recibo")),
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("ayni-menu-enviar-msg"), "msg.enviar").shortcut("Enter"))
+                .item(MenuItem::new(t("ayni-menu-adjuntar"), "msg.adjuntar").separated())
+                .item(MenuItem::new(t("ayni-menu-acuse"), "ayni.recibo")),
         )
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cut)
@@ -498,15 +522,21 @@ fn app_menu(model: &Modelo) -> app_bus::AppMenu {
         )
         .menu(
             Menu::new("Ayni")
-                .item(MenuItem::new("Cifrado E2EE", "ayni.cifrar"))
-                .item(MenuItem::new("Recibos de lectura", "ayni.recibos").separated())
+                .item(MenuItem::new(t("ayni-menu-cifrado"), "ayni.cifrar"))
+                .item(MenuItem::new(t("ayni-menu-recibos"), "ayni.recibos").separated())
                 .item(admitir)
                 .item(atestar)
                 .item(expulsar),
         )
         .menu(
-            Menu::new("Ayuda")
-                .item(MenuItem::new("Comandos de la barra /", "ayuda.comandos")),
+            Menu::new(t("help"))
+                .item(MenuItem::new(t("ayni-menu-comandos-barra"), "ayuda.comandos")),
+        )
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
         )
 }
 
@@ -514,6 +544,12 @@ fn app_menu(model: &Modelo) -> app_bus::AppMenu {
 /// Cierra el menú antes de actuar.
 fn handle_menu_command(mut model: Modelo, command: String, enlace: &Enlace) -> Modelo {
     model.menu_open = None;
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en wawa-config para que otras apps lo vean también.
+    if let Some(code) = command.strip_prefix("lang.") {
+        aplicar_idioma(code);
+        return model;
+    }
     match command.as_str() {
         // Edición → rebota a la acción del menú de edición sobre el input.
         "edit.undo" => {
@@ -670,8 +706,10 @@ fn panel_gente(model: &Modelo) -> View<Msg> {
     let confianza = model.nucleo.conv.confianza_desde(&yo);
     let conocidos = model.nucleo.conocidos();
 
+    let t = rimay_localize::t;
+
     let mut hijos: Vec<View<Msg>> = Vec::new();
-    hijos.push(rotulo("GENTE — miembros"));
+    hijos.push(rotulo(&t("ayni-label-gente-miembros")));
 
     for id in &memb.miembros {
         hijos.push(fila_persona(model, id, &memb, &yo));
@@ -684,17 +722,17 @@ fn panel_gente(model: &Modelo) -> View<Msg> {
         .copied()
         .collect();
     if !otros.is_empty() {
-        hijos.push(rotulo("otros vistos"));
+        hijos.push(rotulo(&t("ayni-label-otros-vistos")));
         for id in &otros {
             hijos.push(fila_persona(model, id, &memb, &yo));
         }
     }
 
     // Acciones sobre el seleccionado.
-    hijos.push(rotulo("acciones"));
+    hijos.push(rotulo(&t("ayni-label-acciones")));
     let etiqueta_sel = match model.seleccionado {
         Some(s) => format!("blanco: {}", hex_corto(&s)),
-        None => "elegí a alguien arriba".into(),
+        None => t("ayni-label-elige-alguien"),
     };
     hijos.push(
         View::new(estilo_fila_auto()).text_aligned(etiqueta_sel, 13.0, c(TENUE), Alignment::Start),
@@ -712,8 +750,8 @@ fn panel_gente(model: &Modelo) -> View<Msg> {
             ..Default::default()
         })
         .children(vec![
-            boton("admitir", ACENTO, Msg::Admitir),
-            boton("atestar", SOCIAL, Msg::Atestar),
+            boton(&t("ayni-btn-admitir"), ACENTO, Msg::Admitir),
+            boton(&t("ayni-btn-atestar"), SOCIAL, Msg::Atestar),
         ]),
     );
     hijos.push(
@@ -723,17 +761,17 @@ fn panel_gente(model: &Modelo) -> View<Msg> {
             ..Default::default()
         })
         .children(vec![
-            boton("expulsar", (150, 80, 80), Msg::Expulsar),
-            boton("acuse", VERDE, Msg::AcusarRecibo),
+            boton(&t("ayni-btn-expulsar"), (150, 80, 80), Msg::Expulsar),
+            boton(&t("ayni-btn-acuse"), VERDE, Msg::AcusarRecibo),
         ]),
     );
 
     // Grafo de confianza desde uno mismo.
-    hijos.push(rotulo("confianza (saltos)"));
+    hijos.push(rotulo(&t("ayni-label-confianza")));
     if confianza.is_empty() {
         hijos.push(
             View::new(estilo_fila_auto()).text_aligned(
-                "— sin atestaciones —".to_string(),
+                t("ayni-label-sin-atestaciones"),
                 13.0,
                 c(TENUE),
                 Alignment::Start,
@@ -811,7 +849,7 @@ fn columna_charla(model: &Modelo) -> View<Msg> {
     if n == 0 {
         filas.push(
             View::new(estilo_fila_auto()).text_aligned(
-                "— sin mensajes. Escribí abajo (o /ayuda para comandos). —".to_string(),
+                rimay_localize::t("ayni-label-sin-mensajes"),
                 14.0,
                 c(TENUE),
                 Alignment::Start,
@@ -880,7 +918,7 @@ fn fila_compose(model: &Modelo, hint: &str) -> View<Msg> {
     let actual = model.entrada.text();
     let (texto, color) = if actual.is_empty() {
         (
-            format!("{hint}escribí un mensaje, o /adjuntar <ruta>, /atestar <hex> …"),
+            format!("{hint}{}", rimay_localize::t("ayni-compose-placeholder")),
             TENUE,
         )
     } else {
@@ -912,7 +950,7 @@ fn fila_compose(model: &Modelo, hint: &str) -> View<Msg> {
         ..Default::default()
     })
     .fill(c(BARRA))
-    .children(vec![caja, boton("enviar", VERDE, Msg::Enviar)]);
+    .children(vec![caja, boton(&rimay_localize::t("ayni-btn-enviar"), VERDE, Msg::Enviar)]);
     fila
 }
 
@@ -1082,5 +1120,8 @@ fn si_no(b: bool) -> &'static str {
 }
 
 fn main() {
+    rimay_localize::init();
+    let wawa_cfg = wawa_config::WawaConfig::load();
+    let _ = rimay_localize::set_locale(&wawa_cfg.lang);
     llimphi_ui::run::<Ayni>();
 }

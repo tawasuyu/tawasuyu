@@ -42,3 +42,5 @@ llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 llimphi-clipboard = { workspace = true }
 app-bus = { workspace = true }
+rimay-localize = { path = "../../../shared/rimay-localize" }
+wawa-config = { path = "../../../shared/wawa-config" }

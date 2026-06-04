@@ -265,6 +265,10 @@ impl App for ChakaApp {
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
         };
+        // Cargamos el idioma persistido en wawa-config.
+        let wawa_cfg = wawa_config::WawaConfig::load();
+        let _ = rimay_localize::set_locale(&wawa_cfg.lang);
+
         // Si hay corpus, abrimos el primero — pantalla inicial poblada
         // en vez de placeholders vacíos.
         if !model.entries.is_empty() {
@@ -511,29 +515,45 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
     let can_redo = model.cobol.can_redo();
     let has_text = !model.cobol.is_empty();
 
-    let mut guardar = MenuItem::new("Guardar", "file.save").shortcut("Ctrl+S");
+    // Texto de UI localizado — IDs genéricos del catálogo cuando aplica;
+    // `chaka-*` para los que son exclusivos de esta app.
+    let t = rimay_localize::t;
+
+    let mut guardar = MenuItem::new(t("save"), "file.save").shortcut("Ctrl+S");
     if !has_open { guardar = guardar.disabled(); }
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").shortcut("Ctrl+Z");
+    let mut undo = MenuItem::new(t("undo"), "edit.undo").shortcut("Ctrl+Z");
     if !can_undo { undo = undo.disabled(); }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("redo"), "edit.redo").shortcut("Ctrl+Y");
     if !can_redo { redo = redo.disabled(); }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new(t("cut"), "edit.cut").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new(t("copy"), "edit.copy").shortcut("Ctrl+C");
     if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
-    let paste = MenuItem::new("Pegar", "edit.paste").shortcut("Ctrl+V");
-    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall")
+    let paste = MenuItem::new(t("paste"), "edit.paste").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new(t("select-all"), "edit.selectall")
         .shortcut("Ctrl+A")
         .separated();
     if !has_text { sel_all = sel_all.disabled(); }
 
+    // Menú de idioma: autónimos sin traducir (convención del SO).
+    // El item activo lleva ✔. El comando `lang.<code>` lo resuelve
+    // `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
+            Menu::new(t("file"))
                 .item(guardar),
         )
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cut)
@@ -542,20 +562,26 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(sel_all),
         )
         .menu(
-            Menu::new("Ejecutar")
-                .item(MenuItem::new("Correr pipeline", "run.run").shortcut("Ctrl+R")),
+            Menu::new(t("chaka-menu-run"))
+                .item(MenuItem::new(t("chaka-menu-run-pipeline"), "run.run").shortcut("Ctrl+R")),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Salida", "view.tab.salida").shortcut("Ctrl+1"))
-                .item(MenuItem::new("Rust generado", "view.tab.rust").shortcut("Ctrl+2"))
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("chaka-tab-output"), "view.tab.salida").shortcut("Ctrl+1"))
+                .item(MenuItem::new(t("chaka-tab-rust"), "view.tab.rust").shortcut("Ctrl+2"))
                 .item(MenuItem::new("IR", "view.tab.ir").shortcut("Ctrl+3"))
-                .item(MenuItem::new("Diagnósticos", "view.tab.diag").shortcut("Ctrl+4"))
-                .item(MenuItem::new("Cambiar tema", "view.theme").separated()),
+                .item(MenuItem::new(t("chaka-tab-diag"), "view.tab.diag").shortcut("Ctrl+4"))
+                .item(MenuItem::new(t("cycle-theme"), "view.theme").separated()),
         )
         .menu(
-            Menu::new("Ayuda")
-                .item(MenuItem::new("Acerca de chaka", "help.about")),
+            Menu::new(t("help"))
+                .item(MenuItem::new(format!("{} chaka", t("about")), "help.about")),
+        )
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
         )
 }
 
@@ -563,6 +589,15 @@ fn app_menu(model: &Model) -> app_bus::AppMenu {
 /// Cierra el menú antes de actuar.
 fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
     model.menu_open = None;
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en wawa-config para que sobreviva reinicios.
+    if let Some(code) = command.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     let target = match command.as_str() {
         "file.save" => Some(Msg::Save),
         "edit.undo" => Some(Msg::EditMenuAction(EditAction::Undo)),
@@ -578,8 +613,7 @@ fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) 
         "view.tab.diag" => Some(Msg::SelectTab(OutputTab::Diag)),
         "view.theme" => Some(Msg::CycleTheme(Theme::next_after(model.theme.name))),
         "help.about" => {
-            model.status =
-                "chaka · transpilador COBOL → Rust · pipeline lex→parse→ir→codegen→shadow".into();
+            model.status = rimay_localize::t("chaka-about-text");
             None
         }
         _ => None,
@@ -613,12 +647,13 @@ fn apply_edit_menu_action(mut model: Model, action: EditAction) -> Model {
 // ── Composición de la vista ───────────────────────────────────────────────
 
 fn header_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let t = rimay_localize::t;
     let open_label = match model.open.and_then(|i| model.entries.get(i)) {
         Some(e) => {
             let marker = if model.dirty { "● " } else { "  " };
             format!("{}{}", marker, e.label)
         }
-        None => "(sin archivo)".to_string(),
+        None => format!("({})", t("chaka-no-file")),
     };
     let label = format!(
         "chaka · COBOL → Rust · {} programas · {}",
@@ -643,14 +678,14 @@ fn header_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     };
     let btn_run = button_styled::<Msg>(
-        "▶ Correr",
+        format!("▶ {}", t("chaka-btn-run")),
         btn_style.clone(),
         Alignment::Center,
         &btn_pal,
         Msg::Run,
     );
     let btn_save = button_styled::<Msg>(
-        "💾 Guardar",
+        format!("\u{1F4BE} {}", t("save")),
         btn_style,
         Alignment::Center,
         &btn_pal,
@@ -700,6 +735,7 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
         })
         .collect();
 
+    let t = rimay_localize::t;
     let tree = if rows.is_empty() {
         View::new(Style {
             size: Size {
@@ -716,7 +752,7 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
         })
         .fill(theme.bg_panel)
         .text_aligned(
-            "corpus vacío",
+            t("chaka-corpus-empty"),
             12.0,
             theme.fg_muted,
             Alignment::Start,
@@ -746,7 +782,7 @@ fn corpus_tree(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .text_aligned("CORPUS", 10.0, theme.fg_muted, Alignment::Start);
+    .text_aligned(t("chaka-corpus-header"), 10.0, theme.fg_muted, Alignment::Start);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -778,7 +814,7 @@ fn cobol_editor(model: &Model, theme: &Theme) -> View<Msg> {
     // Header con el path (path completo si no hay archivo).
     let path_label = match model.open.and_then(|i| model.entries.get(i)) {
         Some(e) => e.path.display().to_string(),
-        None => "(seleccioná un programa del corpus)".to_string(),
+        None => rimay_localize::t("chaka-editor-placeholder"),
     };
     let header = View::new(Style {
         size: Size {
@@ -816,11 +852,12 @@ fn cobol_editor(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn output_tabs(model: &Model, theme: &Theme) -> View<Msg> {
+    let t = rimay_localize::t;
     let labels = vec![
-        format!("Salida ({})", salida_short(&model.pipe)),
-        "Rust".to_string(),
+        format!("{} ({})", t("chaka-tab-output"), salida_short(&model.pipe)),
+        t("chaka-tab-rust"),
         "IR".to_string(),
-        format!("Diag ({})", diag_short(&model.pipe)),
+        format!("{} ({})", t("chaka-tab-diag"), diag_short(&model.pipe)),
     ];
     let active = model.active_tab.index();
     let palette = TabsPalette::from_theme(theme);
@@ -861,10 +898,11 @@ fn output_tabs(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 fn salida_pane(model: &Model, theme: &Theme) -> View<Msg> {
+    let t = rimay_localize::t;
     let banner = match model.pipe.summary {
         PipelineSummary::Idle => banner_view::<Msg>(
             BannerKind::Info,
-            "abrí un programa del corpus a la izquierda".to_string(),
+            t("chaka-banner-open-corpus"),
         ),
         PipelineSummary::Ok { lines, match_ok } => match (match_ok, &model.pipe.compare) {
             (Some(true), _) => banner_view::<Msg>(
@@ -883,12 +921,12 @@ fn salida_pane(model: &Model, theme: &Theme) -> View<Msg> {
         },
         PipelineSummary::StepLimit => status_pill(
             ACCENT_WARN,
-            "shadow ⚠ se agotó el tope de pasos (¿bucle sin fin?)".to_string(),
+            t("chaka-banner-step-limit"),
             theme,
         ),
         PipelineSummary::PipelineError => banner_view::<Msg>(
             BannerKind::Error,
-            "el pipeline falló — ver tab «Diag» para detalles".to_string(),
+            t("chaka-banner-pipeline-error"),
         ),
     };
 
@@ -1054,7 +1092,7 @@ fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
 
 fn save_open(mut model: Model) -> Model {
     let Some(i) = model.open else {
-        model.status = "no hay archivo abierto para guardar".into();
+        model.status = rimay_localize::t("chaka-status-no-open-file");
         return model;
     };
     let Some(entry) = model.entries.get(i) else {
@@ -1416,6 +1454,7 @@ fn with_alpha(c: Color, alpha: u8) -> Color {
 }
 
 fn main() {
+    rimay_localize::init();
     llimphi_ui::run::<ChakaApp>();
 }
 

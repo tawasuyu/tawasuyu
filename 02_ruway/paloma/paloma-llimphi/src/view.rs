@@ -74,6 +74,7 @@ pub fn root(model: &Model) -> View<Msg> {
 /// Barra superior: marca + buscador + Redactar + Refrescar.
 fn toolbar(model: &Model) -> View<Msg> {
     let theme = &model.theme;
+    let t = rimay_localize::t;
     let brand = View::new(Style {
         size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
         flex_grow: 1.0,
@@ -91,7 +92,7 @@ fn toolbar(model: &Model) -> View<Msg> {
     })
     .children(vec![text_input_view(
         &model.search,
-        "🔍  Buscar…  ( / )",
+        &t("paloma-placeholder-search"),
         model.search_focused,
         &pal,
         Msg::SearchFocus(true),
@@ -109,7 +110,7 @@ fn toolbar(model: &Model) -> View<Msg> {
     .children(vec![
         brand,
         search,
-        button("✎  Redactar", theme.accent, theme.bg_app, Msg::ComposeOpen),
+        button(&t("paloma-btn-compose"), theme.accent, theme.bg_app, Msg::ComposeOpen),
         button("⟳", theme.bg_button, theme.fg_text, Msg::Refresh),
     ])
 }
@@ -125,8 +126,9 @@ fn mailboxes_panel(model: &Model) -> View<Msg> {
     }
 
     // Nota de roadmap: Calendario/Contactos compartirán esta capa de cuentas.
-    rows.push(nav_hint(theme, "🗓  Calendario", "pronto"));
-    rows.push(nav_hint(theme, "👤  Contactos", "pronto"));
+    let t = rimay_localize::t;
+    rows.push(nav_hint(theme, &format!("🗓  {}", t("paloma-nav-calendar")), &t("paloma-nav-soon")));
+    rows.push(nav_hint(theme, &format!("👤  {}", t("paloma-nav-contacts")), &t("paloma-nav-soon")));
 
     View::new(Style {
         padding: pad(8.0),
@@ -224,7 +226,7 @@ fn threads_panel(model: &Model) -> View<Msg> {
         rows.push(thread_row(theme, thread, newest, selected, idx));
     }
     if rows.is_empty() {
-        rows.push(empty_note(theme, "Bandeja vacía"));
+        rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-threads")));
     }
 
     let list = View::new(Style {
@@ -257,7 +259,7 @@ fn thread_row(
     let sender_email = newest.map(|m| m.from.email.clone()).unwrap_or_default();
     let snippet = newest.map(|m| m.snippet(60)).unwrap_or_default();
     let date = newest.map(|m| fmt_date_short(m.date)).unwrap_or_default();
-    let subject = if thread.subject.is_empty() { "(sin asunto)".to_string() } else { thread.subject.clone() };
+    let subject = if thread.subject.is_empty() { rimay_localize::t("paloma-no-subject") } else { thread.subject.clone() };
     let newest_id = newest.map(|m| m.id.clone());
 
     // Línea 1: remitente (negrita si no leído) · estrella · fecha.
@@ -365,7 +367,7 @@ fn search_results_panel(model: &Model) -> View<Msg> {
         rows.push(result_row(theme, m));
     }
     if rows.is_empty() {
-        rows.push(empty_note(theme, "sin coincidencias"));
+        rows.push(empty_note(theme, &rimay_localize::t("paloma-empty-search")));
     }
 
     let list = View::new(Style {
@@ -408,8 +410,8 @@ fn mode_toggle(theme: &Theme, semantic: bool) -> View<Msg> {
     })
     .fill(theme.bg_panel_alt)
     .children(vec![
-        seg("🔤  Exacta", !semantic, Msg::SearchMode(false)),
-        seg("🧠  Semántica", semantic, Msg::SearchMode(true)),
+        seg(&format!("🔤  {}", rimay_localize::t("paloma-search-exact")), !semantic, Msg::SearchMode(false)),
+        seg(&format!("🧠  {}", rimay_localize::t("paloma-search-semantic")), semantic, Msg::SearchMode(true)),
     ])
 }
 
@@ -438,7 +440,7 @@ fn result_row(theme: &Theme, m: &Message) -> View<Msg> {
         .text_aligned(fmt_date_short(m.date), 11.0, theme.fg_muted, Alignment::End),
     ]);
 
-    let subject = if m.subject.trim().is_empty() { "(sin asunto)".to_string() } else { m.subject.clone() };
+    let subject = if m.subject.trim().is_empty() { rimay_localize::t("paloma-no-subject") } else { m.subject.clone() };
     let subj = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         ..Default::default()
@@ -492,7 +494,7 @@ fn reading_panel(model: &Model) -> View<Msg> {
             View::new(Style { size: Size { width: percent(1.0_f32), height: length(40.0_f32) }, ..Default::default() })
                 .text_aligned("🕊", 34.0, theme.fg_placeholder, Alignment::Center),
             View::new(Style { size: Size { width: percent(1.0_f32), height: length(20.0_f32) }, ..Default::default() })
-                .text_aligned("Elegí un hilo para leerlo", 14.0, theme.fg_placeholder, Alignment::Center),
+                .text_aligned(rimay_localize::t("paloma-placeholder-read"), 14.0, theme.fg_placeholder, Alignment::Center),
         ]);
         return View::new(col(Dimension::auto()).grow()).fill(theme.bg_app).children(vec![placeholder]);
     };
@@ -502,7 +504,7 @@ fn reading_panel(model: &Model) -> View<Msg> {
     let flagged = newest.map(|m| m.flags.flagged).unwrap_or(false);
     let seen = newest.map(|m| m.flags.seen).unwrap_or(true);
 
-    let subject = if thread.subject.is_empty() { "(sin asunto)".to_string() } else { thread.subject.clone() };
+    let subject = if thread.subject.is_empty() { rimay_localize::t("paloma-no-subject") } else { thread.subject.clone() };
     let subject_view = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -531,23 +533,32 @@ fn reading_panel(model: &Model) -> View<Msg> {
     .children(vec![subject_view, meta]);
 
     // Barra de acciones.
-    let star_lbl = if flagged { "★ Destacado" } else { "☆ Destacar" };
-    let seen_lbl = if seen { "✉ Marcar no leído" } else { "✓ Marcar leído" };
+    let t = rimay_localize::t;
+    let star_lbl = if flagged {
+        format!("★ {}", t("paloma-btn-starred"))
+    } else {
+        format!("☆ {}", t("paloma-btn-star"))
+    };
+    let seen_lbl = if seen {
+        format!("✉ {}", t("paloma-btn-mark-unread"))
+    } else {
+        format!("✓ {}", t("paloma-btn-mark-read"))
+    };
     let mut actions: Vec<View<Msg>> = vec![
-        button("↩  Responder", theme.accent, theme.bg_app, Msg::ComposeReply),
-        button("↪  Reenviar", theme.bg_button, theme.fg_text, Msg::ComposeForward),
+        button(&format!("↩  {}", t("paloma-btn-reply")), theme.accent, theme.bg_app, Msg::ComposeReply),
+        button(&format!("↪  {}", t("paloma-btn-forward")), theme.bg_button, theme.fg_text, Msg::ComposeForward),
     ];
     if let Some(id) = &newest_id {
         actions.push(button(
-            star_lbl,
+            &star_lbl,
             theme.bg_button,
             if flagged { theme.accent } else { theme.fg_text },
             Msg::ToggleStar(id.clone()),
         ));
-        actions.push(button(seen_lbl, theme.bg_button, theme.fg_text, Msg::ToggleSeen(id.clone())));
+        actions.push(button(&seen_lbl, theme.bg_button, theme.fg_text, Msg::ToggleSeen(id.clone())));
     }
     actions.push(spacer());
-    actions.push(button("🗑  Borrar", theme.bg_button, theme.fg_destructive, Msg::DeleteThread));
+    actions.push(button(&format!("🗑  {}", t("delete")), theme.bg_button, theme.fg_destructive, Msg::DeleteThread));
     let action_bar = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(42.0_f32) },
@@ -656,7 +667,7 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        format!("para: {}", m.to.iter().map(|a| a.display_name()).collect::<Vec<_>>().join(", ")),
+        format!("{}: {}", rimay_localize::t("paloma-msg-to-label"), m.to.iter().map(|a| a.display_name()).collect::<Vec<_>>().join(", ")),
         11.0,
         theme.fg_muted,
         Alignment::Start,
@@ -698,7 +709,7 @@ fn message_card(theme: &Theme, m: &Message) -> View<Msg> {
             ..Default::default()
         })
         .children(vec![button(
-            "⌹  Ver HTML enriquecido",
+            &format!("⌹  {}", rimay_localize::t("paloma-btn-view-rich")),
             theme.bg_button,
             theme.fg_muted,
             Msg::ViewRich(m.id.clone()),
@@ -735,17 +746,18 @@ fn status_bar(model: &Model) -> View<Msg> {
 pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
     let theme = &model.theme;
     let pal = TextInputPalette::from_theme(theme);
+    let t = rimay_localize::t;
 
-    let title = if c.in_reply_to.is_some() { "Responder" } else { "Mensaje nuevo" };
+    let title = if c.in_reply_to.is_some() { t("paloma-compose-reply-title") } else { t("paloma-compose-new") };
     let title_view = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
         ..Default::default()
     })
     .text_aligned(title, 16.0, theme.fg_text, Alignment::Start);
 
-    let to = field(&c.to, "Para: nombre <correo@dominio>", c.focus == ComposeField::To, &pal, ComposeField::To);
-    let cc = field(&c.cc, "Cc: (opcional)", c.focus == ComposeField::Cc, &pal, ComposeField::Cc);
-    let subject = field(&c.subject, "Asunto", c.focus == ComposeField::Subject, &pal, ComposeField::Subject);
+    let to = field(&c.to, &t("paloma-compose-placeholder-to"), c.focus == ComposeField::To, &pal, ComposeField::To);
+    let cc = field(&c.cc, &t("paloma-compose-placeholder-cc"), c.focus == ComposeField::Cc, &pal, ComposeField::Cc);
+    let subject = field(&c.subject, &t("paloma-compose-placeholder-subject"), c.focus == ComposeField::Subject, &pal, ComposeField::Subject);
     let body = body_field(&c.body, c.focus == ComposeField::Body, theme);
 
     // Fila inferior: firmar (gancho agora) a la izquierda, acciones a la derecha.
@@ -759,8 +771,8 @@ pub fn compose_modal(model: &Model, c: &Compose) -> View<Msg> {
     .children(vec![
         sign_checkbox(theme, c.sign),
         spacer(),
-        button("Cancelar", theme.bg_button, theme.fg_text, Msg::ComposeClose),
-        button("Enviar  ⏎", theme.accent, theme.bg_app, Msg::ComposeSend),
+        button(&t("cancel"), theme.bg_button, theme.fg_text, Msg::ComposeClose),
+        button(&format!("{}  ⏎", t("paloma-compose-send")), theme.accent, theme.bg_app, Msg::ComposeSend),
     ]);
 
     let card = View::new(Style {
@@ -802,7 +814,7 @@ fn sign_checkbox(theme: &Theme, on: bool) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned("Firmar (Ed25519)", 12.0, theme.fg_muted, Alignment::Start);
+    .text_aligned(rimay_localize::t("paloma-compose-sign"), 12.0, theme.fg_muted, Alignment::Start);
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: length(170.0_f32), height: length(28.0_f32) },
@@ -834,7 +846,7 @@ fn body_field(state: &TextInputState, focused: bool, theme: &Theme) -> View<Msg>
     };
     let text = state.text();
     let (shown, color) = if text.is_empty() {
-        ("Escribí tu mensaje…".to_string(), theme.fg_placeholder)
+        (rimay_localize::t("paloma-compose-placeholder-body"), theme.fg_placeholder)
     } else {
         (text, theme.fg_text)
     };
@@ -937,8 +949,8 @@ fn badge(theme: &Theme, n: usize) -> View<Msg> {
 fn signature_badge(theme: &Theme, status: SignatureStatus) -> Option<View<Msg>> {
     let (label, fg) = match status {
         SignatureStatus::Unsigned => return None,
-        SignatureStatus::Verified => ("✓ firmado", Color::from_rgba8(90, 180, 120, 255)),
-        SignatureStatus::Invalid => ("⚠ firma inválida", theme.fg_destructive),
+        SignatureStatus::Verified => (format!("✓ {}", rimay_localize::t("paloma-sig-verified")), Color::from_rgba8(90, 180, 120, 255)),
+        SignatureStatus::Invalid => (format!("⚠ {}", rimay_localize::t("paloma-sig-invalid")), theme.fg_destructive),
     };
     Some(
         View::new(Style {

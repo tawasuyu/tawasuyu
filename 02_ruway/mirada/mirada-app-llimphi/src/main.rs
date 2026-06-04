@@ -181,7 +181,7 @@ impl App for Mirada {
             placements: Vec::new(),
             next_id: 1,
             link,
-            note: "listo".into(),
+            note: rimay_localize::t("success"),
             keymap_path,
             keymap_watch,
             ctl,
@@ -192,7 +192,7 @@ impl App for Mirada {
         };
         if let Some(link) = model.link.as_mut() {
             let _ = link.send(&model.desktop.grab_keys());
-            model.note = "Cuerpo conectado".into();
+            model.note = rimay_localize::t("mirada-status-body-connected");
         } else {
             // Simulación: una pantalla virtual y tres ventanas de muestra.
             feed(&mut model, BodyEvent::OutputAdded {
@@ -203,7 +203,7 @@ impl App for Mirada {
             for _ in 0..3 {
                 open_window(&mut model);
             }
-            model.note = "simulación — sin Cuerpo".into();
+            model.note = rimay_localize::t("mirada-status-simulation");
         }
 
         // El sondeo corre siempre: drena el Cuerpo (si lo hay), vigila el
@@ -372,16 +372,17 @@ impl App for Mirada {
             let label = focused
                 .and_then(|id| model.desktop.window_info(id))
                 .map(|i| i.title.clone())
-                .unwrap_or_else(|| "ventana".to_string());
+                .unwrap_or_else(|| rimay_localize::t("mirada-win-label-fallback"));
             // Acciones reales del Desktop sobre la enfocada. Sin edición
             // de texto: el contextual es de gestión de ventana.
-            let actions: [(&str, DesktopAction); 6] = [
-                ("Promover a maestra", DesktopAction::PromoteToMaster),
-                ("Flotar / anclar", DesktopAction::ToggleFloat),
-                ("Pantalla completa", DesktopAction::ToggleFullscreen),
-                ("Enviar al scratchpad", DesktopAction::SendToScratchpad),
-                ("Siguiente monitor", DesktopAction::FocusOutputNext),
-                ("Cerrar", DesktopAction::CloseFocused),
+            let t = rimay_localize::t;
+            let actions: [(String, DesktopAction); 6] = [
+                (t("mirada-win-promote"), DesktopAction::PromoteToMaster),
+                (t("mirada-win-float"), DesktopAction::ToggleFloat),
+                (t("mirada-win-fullscreen"), DesktopAction::ToggleFullscreen),
+                (t("mirada-win-scratchpad"), DesktopAction::SendToScratchpad),
+                (t("mirada-output-next"), DesktopAction::FocusOutputNext),
+                (t("close"), DesktopAction::CloseFocused),
             ];
             // "Cerrar" (último) se marca como destructivo.
             let last = actions.len() - 1;
@@ -389,7 +390,7 @@ impl App for Mirada {
                 .iter()
                 .enumerate()
                 .map(|(i, (l, _))| {
-                    let it = ContextMenuItem::action(*l);
+                    let it = ContextMenuItem::action(l.clone());
                     if i == last {
                         it.destructive()
                     } else {
@@ -469,9 +470,9 @@ fn reload_keymap(m: &mut Model) {
         Ok(km) => {
             let cmd = m.desktop.set_keymap(km);
             dispatch(m, vec![cmd]);
-            m.note = "keymap recargado".into();
+            m.note = rimay_localize::t("mirada-status-keymap-reloaded");
         }
-        Err(e) => m.note = format!("keymap inválido: {e}"),
+        Err(e) => m.note = format!("{}: {e}", rimay_localize::t("mirada-status-keymap-invalid")),
     }
 }
 
@@ -607,15 +608,15 @@ fn load_user_rules() -> Rules {
     }
 }
 
-fn mode_name(m: LayoutMode) -> &'static str {
+fn mode_name(m: LayoutMode) -> String {
     match m {
-        LayoutMode::MasterStack => "maestro + pila",
-        LayoutMode::Monocle => "monóculo",
-        LayoutMode::Grid => "rejilla",
-        LayoutMode::Columns => "columnas",
-        LayoutMode::Rows => "filas",
-        LayoutMode::CenteredMaster => "maestro centrado",
-        LayoutMode::Spiral => "espiral",
+        LayoutMode::MasterStack => rimay_localize::t("mirada-layout-master-stack"),
+        LayoutMode::Monocle => rimay_localize::t("mirada-layout-monocle"),
+        LayoutMode::Grid => rimay_localize::t("mirada-layout-grid"),
+        LayoutMode::Columns => rimay_localize::t("mirada-layout-columns"),
+        LayoutMode::Rows => rimay_localize::t("mirada-layout-rows"),
+        LayoutMode::CenteredMaster => rimay_localize::t("mirada-layout-centered"),
+        LayoutMode::Spiral => rimay_localize::t("mirada-layout-spiral"),
     }
 }
 
@@ -651,20 +652,25 @@ fn app_menu(model: &Model) -> AppMenu {
     let sim = model.link.is_none();
     let mode = model.desktop.active_workspace().params().mode;
 
-    let mut abrir = MenuItem::new("Abrir ventana", "file.new_window").shortcut("n");
-    let mut abrir_mon = MenuItem::new("Abrir monitor", "file.new_output").shortcut("Shift+n");
+    // Etiquetas de UI localizadas: IDs genéricos del catálogo o prefijados
+    // con `mirada-`. Los segundos argumentos de MenuItem (ids de comando)
+    // son estables y NO se localizan.
+    let t = rimay_localize::t;
+
+    let mut abrir = MenuItem::new(t("mirada-menu-open-window"), "file.new_window").shortcut("n");
+    let mut abrir_mon = MenuItem::new(t("mirada-menu-open-output"), "file.new_output").shortcut("Shift+n");
     if !sim {
         // Con Cuerpo conectado, las ventanas las crea el compositor real.
         abrir = abrir.disabled();
         abrir_mon = abrir_mon.disabled();
     }
-    let mut cerrar = MenuItem::new("Cerrar enfocada", "win.close").shortcut("w").separated();
+    let mut cerrar = MenuItem::new(t("mirada-menu-close-focused"), "win.close").shortcut("w").separated();
     if !has_focus {
         cerrar = cerrar.disabled();
     }
 
     // Submenú de layouts: el modo vigente queda en gris (ya aplicado).
-    let layout_item = |label: &str, cmd: &str, m: LayoutMode| {
+    let layout_item = |label: String, cmd: &str, m: LayoutMode| {
         let it = MenuItem::new(label, cmd);
         if mode == m {
             it.disabled()
@@ -673,10 +679,10 @@ fn app_menu(model: &Model) -> AppMenu {
         }
     };
 
-    let mut promover = MenuItem::new("Promover a maestra", "win.promote").shortcut("Enter");
-    let mut flotar = MenuItem::new("Flotar / anclar", "win.float").shortcut("f");
-    let mut fullscreen = MenuItem::new("Pantalla completa", "win.fullscreen").shortcut("Shift+f");
-    let mut scratch = MenuItem::new("Enviar al scratchpad", "win.scratchpad").shortcut("Shift+`");
+    let mut promover = MenuItem::new(t("mirada-win-promote"), "win.promote").shortcut("Enter");
+    let mut flotar = MenuItem::new(t("mirada-win-float"), "win.float").shortcut("f");
+    let mut fullscreen = MenuItem::new(t("mirada-win-fullscreen"), "win.fullscreen").shortcut("Shift+f");
+    let mut scratch = MenuItem::new(t("mirada-win-scratchpad"), "win.scratchpad").shortcut("Shift+`");
     if !has_focus {
         promover = promover.disabled();
         flotar = flotar.disabled();
@@ -684,40 +690,68 @@ fn app_menu(model: &Model) -> AppMenu {
         scratch = scratch.disabled();
     }
 
+    // Menú de idioma: autónimos sin traducir (convención del SO). El item
+    // activo lleva ✔. El comando `lang.<code>` lo resuelve `handle_menu_command`.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
+            Menu::new(t("file"))
                 .item(abrir)
                 .item(abrir_mon)
                 .item(cerrar)
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Ciclar layout", "view.cycle").shortcut("Tab"))
-                .item(layout_item("Maestro + pila", "layout.master", LayoutMode::MasterStack).separated())
-                .item(layout_item("Monóculo", "layout.monocle", LayoutMode::Monocle))
-                .item(layout_item("Rejilla", "layout.grid", LayoutMode::Grid))
-                .item(layout_item("Columnas", "layout.columns", LayoutMode::Columns))
-                .item(layout_item("Filas", "layout.rows", LayoutMode::Rows))
-                .item(layout_item("Maestro centrado", "layout.centered", LayoutMode::CenteredMaster))
-                .item(layout_item("Espiral", "layout.spiral", LayoutMode::Spiral))
-                .item(MenuItem::new("Achicar maestra", "view.shrink").shortcut("h").separated())
-                .item(MenuItem::new("Agrandar maestra", "view.grow").shortcut("l"))
-                .item(MenuItem::new("Siguiente monitor", "view.output_next").shortcut("o").separated()),
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("mirada-layout-cycle"), "view.cycle").shortcut("Tab"))
+                .item(layout_item(t("mirada-layout-master-stack"), "layout.master", LayoutMode::MasterStack).separated())
+                .item(layout_item(t("mirada-layout-monocle"), "layout.monocle", LayoutMode::Monocle))
+                .item(layout_item(t("mirada-layout-grid"), "layout.grid", LayoutMode::Grid))
+                .item(layout_item(t("mirada-layout-columns"), "layout.columns", LayoutMode::Columns))
+                .item(layout_item(t("mirada-layout-rows"), "layout.rows", LayoutMode::Rows))
+                .item(layout_item(t("mirada-layout-centered"), "layout.centered", LayoutMode::CenteredMaster))
+                .item(layout_item(t("mirada-layout-spiral"), "layout.spiral", LayoutMode::Spiral))
+                .item(MenuItem::new(t("mirada-layout-shrink"), "view.shrink").shortcut("h").separated())
+                .item(MenuItem::new(t("mirada-layout-grow"), "view.grow").shortcut("l"))
+                .item(MenuItem::new(t("mirada-output-next"), "view.output_next").shortcut("o").separated()),
         )
         .menu(
-            Menu::new("Ventana")
+            Menu::new(t("mirada-menu-window"))
                 .item(promover)
                 .item(flotar)
                 .item(fullscreen)
                 .item(scratch),
         )
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(
+            Menu::new(t("help"))
+                .item(MenuItem::new(t("about"), "help.about")),
+        )
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
 }
 
 /// Traduce un command id del menú principal a la acción real del Desktop.
 fn handle_menu_command(m: &mut Model, cmd: &str) {
+    // Cambio de idioma: aplica el locale en caliente y lo persiste en wawa-config.
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return;
+    }
     match cmd {
         "file.new_window" if m.link.is_none() => open_window(m),
         "file.new_output" if m.link.is_none() => {
@@ -833,7 +867,7 @@ fn top_bar(
     let sep_a = label_node("·".into(), theme.fg_placeholder, 12.0, 12.0);
     let sep_b = label_node("·".into(), theme.fg_placeholder, 12.0, 12.0);
     let layout_label = label_node(
-        format!("layout: {}", mode_name(mode)),
+        format!("{}: {}", rimay_localize::t("mirada-label-layout"), mode_name(mode)),
         theme.fg_muted,
         12.0,
         180.0,
@@ -847,7 +881,7 @@ fn top_bar(
         ..Default::default()
     });
     let focus_label_node = label_node(
-        format!("foco: {focus_label}"),
+        format!("{}: {focus_label}", rimay_localize::t("mirada-label-focus")),
         theme.fg_muted,
         12.0,
         320.0,
@@ -923,7 +957,13 @@ fn canvas_view(
             ..Default::default()
         })
         .text_aligned(
-            format!("salida {} · escritorio {}", i + 1, o.workspace + 1),
+            format!(
+                "{} {} · {} {}",
+                rimay_localize::t("mirada-label-output"),
+                i + 1,
+                rimay_localize::t("mirada-label-workspace"),
+                o.workspace + 1,
+            ),
             10.0,
             theme.fg_placeholder,
             Alignment::Start,
@@ -972,7 +1012,7 @@ fn canvas_view(
                 ..Default::default()
             })
             .text_aligned(
-                "escritorio vacío — pulsa  n  para abrir una ventana".to_string(),
+                rimay_localize::t("mirada-canvas-empty-hint"),
                 13.0,
                 theme.fg_placeholder,
                 Alignment::Center,
@@ -991,11 +1031,11 @@ fn canvas_view(
         let tb_bg = if p.focused { theme.accent } else { theme.bg_row_hover };
         let tb_fg = if p.focused { on_accent } else { theme.fg_muted };
         let kind_label = if p.fullscreen {
-            "· pantalla completa ·"
+            rimay_localize::t("mirada-win-kind-fullscreen")
         } else if p.floating {
-            "· ventana flotante ·"
+            rimay_localize::t("mirada-win-kind-floating")
         } else {
-            "· superficie del Cuerpo ·"
+            rimay_localize::t("mirada-win-kind-surface")
         };
 
         let titlebar = View::new(Style {
@@ -1047,7 +1087,7 @@ fn canvas_view(
                 },
                 ..Default::default()
             })
-            .text_aligned(kind_label.to_string(), 11.0, theme.fg_placeholder, Alignment::Center),
+            .text_aligned(kind_label, 11.0, theme.fg_placeholder, Alignment::Center),
         ]);
 
         children.push(
@@ -1092,5 +1132,7 @@ fn canvas_view(
 }
 
 fn main() {
+    rimay_localize::init();
+    let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     llimphi_ui::run::<Mirada>();
 }

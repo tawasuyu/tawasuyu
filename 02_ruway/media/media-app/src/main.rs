@@ -217,13 +217,14 @@ impl SettingsTab {
         SettingsTab::Bars,
         SettingsTab::Controls,
     ];
-    fn label(self) -> &'static str {
+    fn label(self) -> String {
+        let t = rimay_localize::t;
         match self {
-            SettingsTab::Audio => "Audio",
-            SettingsTab::Video => "Video",
-            SettingsTab::Playback => "Reproducción",
-            SettingsTab::Bars => "Barras",
-            SettingsTab::Controls => "Controles",
+            SettingsTab::Audio => t("media-settings-tab-audio"),
+            SettingsTab::Video => t("media-settings-tab-video"),
+            SettingsTab::Playback => t("media-settings-tab-playback"),
+            SettingsTab::Bars => t("media-settings-tab-bars"),
+            SettingsTab::Controls => t("media-settings-tab-controls"),
         }
     }
 }
@@ -2341,8 +2342,8 @@ impl App for MediaApp {
 
     fn secondary_title(_model: &Self::Model, key: u64) -> Option<String> {
         match key {
-            CONFIG_WIN => Some("Configuración — media".to_string()),
-            PLAYLIST_WIN => Some("Lista de reproducción — media".to_string()),
+            CONFIG_WIN => Some(rimay_localize::t("media-win-config-title")),
+            PLAYLIST_WIN => Some(rimay_localize::t("media-win-playlist-title")),
             _ => None,
         }
     }
@@ -2453,7 +2454,7 @@ impl App for MediaApp {
                 // La config es una ventana OS aparte (secundaria): abrir/cerrar
                 // la ventana real, no un overlay.
                 if m.settings_open {
-                    handle.open_window(CONFIG_WIN, "Configuración — media", 760, 600);
+                    handle.open_window(CONFIG_WIN, &rimay_localize::t("media-win-config-title"), 760, 600);
                 } else {
                     handle.close_window(CONFIG_WIN);
                 }
@@ -2468,7 +2469,7 @@ impl App for MediaApp {
                 let mut m = model;
                 m.playlist_open = !m.playlist_open;
                 if m.playlist_open {
-                    handle.open_window(PLAYLIST_WIN, "Lista de reproducción — media", 420, 560);
+                    handle.open_window(PLAYLIST_WIN, &rimay_localize::t("media-win-playlist-title"), 420, 560);
                 } else {
                     handle.close_window(PLAYLIST_WIN);
                 }
@@ -2671,6 +2672,7 @@ impl App for MediaApp {
         let theme = llimphi_theme::Theme::dark();
         // Un entry por binding del keymap vivo — la ayuda refleja
         // exactamente lo que el usuario configuró en controles.ron.
+        let t = rimay_localize::t;
         let acciones: Vec<ShortcutEntry> = settings()
             .keymap
             .bindings
@@ -2678,16 +2680,16 @@ impl App for MediaApp {
             .map(|b| ShortcutEntry::new(b.chord.display(), b.command.describe()))
             .collect();
         Some(shortcuts_help_view(ShortcutsHelpSpec {
-            title: "media · atajos".to_string(),
+            title: t("media-help-title"),
             groups: vec![
-                ShortcutGroup::new("Reproducción", acciones),
+                ShortcutGroup::new(t("media-help-group-playback"), acciones),
                 ShortcutGroup::new(
-                    "Ayuda",
+                    t("help"),
                     vec![
-                        ShortcutEntry::new("?", "Mostrar/ocultar esta ayuda"),
-                        ShortcutEntry::new("Esc", "Cerrar la ayuda"),
-                        ShortcutEntry::new("F5", "Recargar controles.ron en caliente"),
-                        ShortcutEntry::new("Ctrl+Shift+P", "Paleta de comandos (buscar acción)"),
+                        ShortcutEntry::new("?", t("media-help-toggle")),
+                        ShortcutEntry::new("Esc", t("media-help-close")),
+                        ShortcutEntry::new("F5", t("media-help-reload")),
+                        ShortcutEntry::new("Ctrl+Shift+P", t("command-palette")),
                     ],
                 ),
             ],
@@ -2945,11 +2947,11 @@ fn palette_overlay(model: &Model, state: &PaletteState) -> View<Msg> {
 /// Chip de toggle booleano: verde "sí" / gris "no".
 fn cfg_toggle(on: bool, edit: ConfigEdit) -> View<Msg> {
     let (label, bg) = if on {
-        ("sí", Color::from_rgba8(56, 120, 84, 255))
+        (rimay_localize::t("yes"), Color::from_rgba8(56, 120, 84, 255))
     } else {
-        ("no", Color::from_rgba8(74, 60, 70, 255))
+        (rimay_localize::t("no"), Color::from_rgba8(74, 60, 70, 255))
     };
-    chip_button(label, bg, Color::from_rgba8(235, 240, 248, 255), Msg::ConfigEdit(edit))
+    chip_button(&label, bg, Color::from_rgba8(235, 240, 248, 255), Msg::ConfigEdit(edit))
 }
 
 /// Chip de acción genérico de la ventana de config.
@@ -3089,24 +3091,25 @@ fn wide_chip(label: &str, bg: Color, msg: Msg) -> View<Msg> {
 
 /// Contenido de la pestaña Audio.
 fn tab_audio(c: &MediaConfig) -> Vec<View<Msg>> {
+    let t = rimay_localize::t;
     vec![
-        settings_header("Audio"),
+        settings_header(&t("media-settings-tab-audio")),
         settings_row(
-            "Volumen",
+            &t("media-audio-volume"),
             &format!("{:.0}%", (c.audio.volume * 100.0).round()),
             vec![
                 cfg_chip("−", ConfigEdit::VolumeDelta(-0.05)),
                 cfg_chip("+", ConfigEdit::VolumeDelta(0.05)),
             ],
         ),
-        settings_row("Ecualizador", "", vec![cfg_toggle(c.audio.eq_enabled, ConfigEdit::ToggleEq)]),
+        settings_row(&t("media-audio-eq"), "", vec![cfg_toggle(c.audio.eq_enabled, ConfigEdit::ToggleEq)]),
         settings_row(
-            "Normalización",
+            &t("media-audio-normalization"),
             "",
             vec![cfg_toggle(c.audio.normalization_enabled, ConfigEdit::ToggleNormalization)],
         ),
         settings_row(
-            "Objetivo LUFS",
+            &t("media-audio-lufs-target"),
             &format!("{:.0}", c.audio.normalization_target_lufs),
             vec![
                 cfg_chip("−", ConfigEdit::NormTargetDelta(-1.0)),
@@ -3114,7 +3117,7 @@ fn tab_audio(c: &MediaConfig) -> Vec<View<Msg>> {
             ],
         ),
         settings_row(
-            "Downmix estéreo",
+            &t("media-audio-downmix"),
             "",
             vec![cfg_toggle(c.audio.downmix_to_stereo, ConfigEdit::ToggleDownmix)],
         ),
@@ -3157,73 +3160,75 @@ fn two_columns(left: Vec<View<Msg>>, right: Vec<View<Msg>>) -> View<Msg> {
 
 /// Contenido de la pestaña Video — dos columnas: color | orientación.
 fn tab_video(c: &MediaConfig) -> Vec<View<Msg>> {
+    let t = rimay_localize::t;
     let v = &c.video;
     let color = vec![
-        settings_header("Color"),
-        settings_row("Activar", "", vec![cfg_toggle(v.color_enabled, ConfigEdit::ToggleColor)]),
+        settings_header(&t("media-video-color")),
+        settings_row(&t("media-video-enable"), "", vec![cfg_toggle(v.color_enabled, ConfigEdit::ToggleColor)]),
         settings_row(
-            "Brillo",
+            &t("media-video-brightness"),
             &format!("{:+.2}", v.brightness),
             vec![cfg_chip("−", ConfigEdit::BrightnessDelta(-0.05)), cfg_chip("+", ConfigEdit::BrightnessDelta(0.05))],
         ),
         settings_row(
-            "Contraste",
+            &t("media-video-contrast"),
             &format!("{:.2}", v.contrast),
             vec![cfg_chip("−", ConfigEdit::ContrastDelta(-0.05)), cfg_chip("+", ConfigEdit::ContrastDelta(0.05))],
         ),
         settings_row(
-            "Gamma",
+            &t("media-video-gamma"),
             &format!("{:.2}", v.gamma),
             vec![cfg_chip("−", ConfigEdit::GammaDelta(-0.05)), cfg_chip("+", ConfigEdit::GammaDelta(0.05))],
         ),
         settings_row(
-            "Saturación",
+            &t("media-video-saturation"),
             &format!("{:.2}", v.saturation),
             vec![cfg_chip("−", ConfigEdit::SaturationDelta(-0.05)), cfg_chip("+", ConfigEdit::SaturationDelta(0.05))],
         ),
         settings_row(
-            "Matiz",
+            &t("media-video-hue"),
             &format!("{:.0}°", v.hue),
             vec![cfg_chip("−", ConfigEdit::HueDelta(-10.0)), cfg_chip("+", ConfigEdit::HueDelta(10.0))],
         ),
-        settings_row("", "", vec![cfg_chip("reset", ConfigEdit::ColorReset)]),
+        settings_row("", "", vec![cfg_chip(&t("media-action-reset"), ConfigEdit::ColorReset)]),
     ];
     let orient = vec![
-        settings_header("Orientación"),
+        settings_header(&t("media-video-orientation")),
         settings_row(
-            "Rotación",
+            &t("media-video-rotation"),
             &format!("{}°", v.rotation),
-            vec![cfg_chip("rotar 90°", ConfigEdit::RotateCw)],
+            vec![cfg_chip(&t("media-video-rotate-cw"), ConfigEdit::RotateCw)],
         ),
-        settings_row("Espejo H", "", vec![cfg_toggle(v.flip_h, ConfigEdit::FlipH)]),
-        settings_row("Espejo V", "", vec![cfg_toggle(v.flip_v, ConfigEdit::FlipV)]),
+        settings_row(&t("media-video-flip-h"), "", vec![cfg_toggle(v.flip_h, ConfigEdit::FlipH)]),
+        settings_row(&t("media-video-flip-v"), "", vec![cfg_toggle(v.flip_v, ConfigEdit::FlipV)]),
     ];
     vec![two_columns(color, orient)]
 }
 
 /// Contenido de la pestaña Reproducción (playlist + subtítulos + comportamiento).
 fn tab_playback(c: &MediaConfig) -> Vec<View<Msg>> {
+    let t = rimay_localize::t;
     vec![
-        settings_header("Playlist"),
+        settings_header(&t("media-playback-playlist")),
         settings_row(
-            "Reanudar al abrir",
+            &t("media-playback-resume"),
             "",
             vec![cfg_toggle(c.playlist.resume_on_open, ConfigEdit::ToggleResumeOnOpen)],
         ),
         settings_row(
-            "Repetición",
+            &t("media-playback-repeat"),
             c.playlist.repeat.slug(),
-            vec![cfg_chip("ciclar", ConfigEdit::CycleRepeatDefault)],
+            vec![cfg_chip(&t("media-action-cycle"), ConfigEdit::CycleRepeatDefault)],
         ),
-        settings_row("Aleatorio", "", vec![cfg_toggle(c.playlist.shuffle, ConfigEdit::ToggleShuffleDefault)]),
-        settings_header("Subtítulos"),
+        settings_row(&t("media-playback-shuffle"), "", vec![cfg_toggle(c.playlist.shuffle, ConfigEdit::ToggleShuffleDefault)]),
+        settings_header(&t("media-playback-subtitles")),
         settings_row(
-            "Auto-cargar sidecar",
+            &t("media-playback-autoload-sidecar"),
             "",
             vec![cfg_toggle(c.subtitles.autoload_sidecar, ConfigEdit::ToggleAutoloadSidecar)],
         ),
         settings_row(
-            "Desfase (ms)",
+            &t("media-playback-sub-delay"),
             &format!("{}", c.subtitles.delay_ms),
             vec![
                 cfg_chip("−", ConfigEdit::SubDelayDelta(-100)),
@@ -3231,16 +3236,16 @@ fn tab_playback(c: &MediaConfig) -> Vec<View<Msg>> {
             ],
         ),
         settings_row(
-            "Tamaño de letra",
+            &t("media-playback-font-size"),
             &format!("{:.1}×", c.subtitles.font_scale),
             vec![
                 cfg_chip("−", ConfigEdit::SubFontDelta(-0.1)),
                 cfg_chip("+", ConfigEdit::SubFontDelta(0.1)),
             ],
         ),
-        settings_header("Comportamiento"),
+        settings_header(&t("media-playback-behavior")),
         settings_row(
-            "Crossfade (s)",
+            &t("media-playback-crossfade"),
             &format!("{:.1}", c.behavior.crossfade_secs),
             vec![
                 cfg_chip("−", ConfigEdit::CrossfadeDelta(-0.5)),
@@ -3252,6 +3257,7 @@ fn tab_playback(c: &MediaConfig) -> Vec<View<Msg>> {
 
 /// Contenido de la pestaña Controles (keymap, sólo lectura por ahora).
 fn tab_controls() -> Vec<View<Msg>> {
+    let t = rimay_localize::t;
     let s = settings();
     // Las teclas atadas como chips compactos (sólo informativo).
     let keys: Vec<View<Msg>> = s
@@ -3278,7 +3284,7 @@ fn tab_controls() -> Vec<View<Msg>> {
         })
         .collect();
     vec![
-        settings_header("Controles (teclado)"),
+        settings_header(&t("media-controls-header")),
         View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -3288,7 +3294,7 @@ fn tab_controls() -> Vec<View<Msg>> {
             ..Default::default()
         })
         .text(
-            "Editá controles.ron y apretá F5 para reasignar teclas. El editor visual de atajos llega después.".to_string(),
+            t("media-controls-hint"),
             12.5,
             Color::from_rgba8(150, 165, 185, 255),
         ),
@@ -3406,8 +3412,9 @@ fn editor_item_chip(item: BarItem, bg: Color, msg: Msg) -> View<Msg> {
 }
 
 fn tab_bars(model: &Model) -> Vec<View<Msg>> {
+    let t = rimay_localize::t;
     let tb = &model.config.toolbar;
-    let mut out: Vec<View<Msg>> = vec![settings_header("Barras de controles — clic en un item lo quita")];
+    let mut out: Vec<View<Msg>> = vec![settings_header(&t("media-bars-header"))];
 
     for (bi, bar) in tb.bars.iter().enumerate() {
         let head = View::new(Style {
@@ -3424,14 +3431,14 @@ fn tab_bars(model: &Model) -> Vec<View<Msg>> {
             ..Default::default()
         })
         .children(vec![
-            bar_label(format!("Barra {}", bi + 1), 70.0, Color::from_rgba8(118, 182, 232, 255)),
+            bar_label(format!("{} {}", rimay_localize::t("media-bars-bar-label"), bi + 1), 70.0, Color::from_rgba8(118, 182, 232, 255)),
             // Arriba/abajo del video.
             wide_chip(
                 bar.position.label(),
                 Color::from_rgba8(48, 66, 80, 255),
                 Msg::BarEdit(BarEdit::TogglePosition(bi)),
             ),
-            wide_chip("− quitar barra", Color::from_rgba8(74, 58, 64, 255), Msg::BarEdit(BarEdit::RemoveBar(bi))),
+            wide_chip(&rimay_localize::t("media-bars-remove-bar"), Color::from_rgba8(74, 58, 64, 255), Msg::BarEdit(BarEdit::RemoveBar(bi))),
         ]);
         // Items: clic quita; ‹ › reordenan. Con su ícono real.
         let chips: Vec<View<Msg>> = bar
@@ -3462,10 +3469,10 @@ fn tab_bars(model: &Model) -> Vec<View<Msg>> {
             } else {
                 Color::from_rgba8(48, 54, 66, 255)
             };
-            wide_chip(&format!("→ Barra {}", i + 1), bg, Msg::BarEdit(BarEdit::SetTarget(i)))
+            wide_chip(&format!("→ {} {}", rimay_localize::t("media-bars-bar-label"), i + 1), bg, Msg::BarEdit(BarEdit::SetTarget(i)))
         })
         .collect();
-    targets.push(wide_chip("+ barra nueva", Color::from_rgba8(48, 70, 58, 255), Msg::BarEdit(BarEdit::AddBar)));
+    targets.push(wide_chip(&rimay_localize::t("media-bars-add-bar"), Color::from_rgba8(48, 70, 58, 255), Msg::BarEdit(BarEdit::AddBar)));
 
     // Paleta de items disponibles → agregan a la barra destino, con ícono.
     let palette: Vec<View<Msg>> = BarItem::ALL
@@ -3479,7 +3486,7 @@ fn tab_bars(model: &Model) -> Vec<View<Msg>> {
         })
         .collect();
 
-    out.push(settings_header("Agregar items a:"));
+    out.push(settings_header(&t("media-bars-add-items-to")));
     out.push(wrap_row(targets));
     out.push(wrap_row(palette));
     out
@@ -3549,8 +3556,7 @@ fn settings_content(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .text(
-        "Se guarda en config.ron · Esc cierra · en Barras: clic en un item lo quita, ‹ › reordenan"
-            .to_string(),
+        rimay_localize::t("media-settings-footer"),
         11.5,
         Color::from_rgba8(140, 152, 170, 255),
     );
@@ -3586,7 +3592,7 @@ fn settings_content(model: &Model) -> View<Msg> {
 fn playlist_content() -> View<Msg> {
     let labels = playlist_labels_slot().get();
     let cur = playback_snapshot().idx;
-    let header = settings_header("Lista de reproducción — clic en una pista para saltar");
+    let header = settings_header(&rimay_localize::t("media-playlist-header"));
 
     let rows: Vec<View<Msg>> = match labels {
         Some(ls) if !ls.is_empty() => ls
@@ -3629,7 +3635,7 @@ fn playlist_content() -> View<Msg> {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text("Sin lista de reproducción.".to_string(), 13.0, Color::from_rgba8(150, 162, 182, 255))],
+        .text(rimay_localize::t("media-playlist-empty"), 13.0, Color::from_rgba8(150, 162, 182, 255))],
     };
 
     let list = View::new(Style {
@@ -3675,38 +3681,56 @@ fn menubar_spec<'a>(
     }
 }
 
-/// El menú principal del reproductor. Archivo / Reproducción / Ver / Ayuda.
+/// El menú principal del reproductor. Archivo / Reproducción / Ver / Idioma / Ayuda.
 /// Sin "Editar": media-app no tiene campos de texto editables. Sólo entran
 /// comandos que mapean a acciones reales (transporte, captura, ayuda,
 /// recarga de controles). Los atajos espejan el keymap default tipo VLC.
 fn app_menu() -> AppMenu {
+    let t = rimay_localize::t;
+
+    // Menú de idioma: autónimos sin traducir (convención del SO).
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
+
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Capturar fotograma", "file.snapshot"))
-                .item(MenuItem::new("Grabar / detener", "file.record").separated())
-                .item(MenuItem::new("Recargar controles", "file.reload").shortcut("F5"))
-                .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("media-menu-capture-frame"), "file.snapshot"))
+                .item(MenuItem::new(t("media-menu-record"), "file.record").separated())
+                .item(MenuItem::new(t("media-menu-reload-controls"), "file.reload").shortcut("F5"))
+                .item(MenuItem::new(t("exit"), "file.quit").shortcut("Ctrl+Q").separated()),
         )
         .menu(
-            Menu::new("Reproducción")
-                .item(MenuItem::new("Reproducir / pausar", "play.toggle").shortcut("Space"))
-                .item(MenuItem::new("Retroceder", "play.back").shortcut("←"))
-                .item(MenuItem::new("Avanzar", "play.fwd").shortcut("→").separated())
-                .item(MenuItem::new("Pista anterior", "play.prev"))
-                .item(MenuItem::new("Pista siguiente", "play.next").separated())
-                .item(MenuItem::new("Subir volumen", "play.vol_up"))
-                .item(MenuItem::new("Bajar volumen", "play.vol_dn")),
+            Menu::new(t("media-menu-playback"))
+                .item(MenuItem::new(t("media-menu-play-pause"), "play.toggle").shortcut("Space"))
+                .item(MenuItem::new(t("media-menu-seek-back"), "play.back").shortcut("←"))
+                .item(MenuItem::new(t("media-menu-seek-fwd"), "play.fwd").shortcut("→").separated())
+                .item(MenuItem::new(t("media-menu-prev-track"), "play.prev"))
+                .item(MenuItem::new(t("media-menu-next-track"), "play.next").separated())
+                .item(MenuItem::new(t("media-menu-volume-up"), "play.vol_up"))
+                .item(MenuItem::new(t("media-menu-volume-down"), "play.vol_dn")),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Configuración", "view.settings").shortcut("F2").separated())
-                .item(MenuItem::new("Lista de reproducción", "view.playlist"))
-                .item(MenuItem::new("Visualizadores de audio", "view.visualizers"))
-                .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
-                .item(MenuItem::new("Ayuda de atajos", "view.help").shortcut("?")),
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("settings"), "view.settings").shortcut("F2").separated())
+                .item(MenuItem::new(t("media-menu-playlist"), "view.playlist"))
+                .item(MenuItem::new(t("media-menu-visualizers"), "view.visualizers"))
+                .item(MenuItem::new(t("command-palette"), "view.palette").shortcut("Ctrl+Shift+P"))
+                .item(MenuItem::new(t("media-menu-shortcuts-help"), "view.help").shortcut("?")),
         )
-        .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
+        )
+        .menu(Menu::new(t("help")).item(MenuItem::new(t("about"), "help.about")))
 }
 
 /// Traduce un command id del menú (principal o contextual) al `Msg`/efecto
@@ -3714,6 +3738,15 @@ fn app_menu() -> AppMenu {
 /// [`MediaCommand`] — exactamente lo que ya disparan botones y teclado.
 fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
     use MediaCommand::*;
+    // Cambio de idioma desde el menú Idioma: aplica el locale en caliente y
+    // lo persiste en wawa-config (mismo patrón que nada).
+    if let Some(code) = cmd.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     let step = settings().seek_step_secs;
     let vstep = settings().volume_step;
     let dispatch = |c: MediaCommand| handle.dispatch(Msg::Command(c));
@@ -3748,14 +3781,15 @@ fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Mod
 /// ofrece edición: mapea a comandos de transporte y captura reales (los
 /// mismos que botones, teclado y menú principal).
 fn context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
+    let t = rimay_localize::t;
     let paused = pause().is_paused();
     let recording = recorder().is_recording();
     let items = vec![
-        ContextMenuItem::action(if paused { "Reproducir" } else { "Pausar" }),
-        ContextMenuItem::action("Capturar fotograma"),
-        ContextMenuItem::action(if recording { "Detener grabación" } else { "Grabar audio" }),
-        ContextMenuItem::action("Paleta de comandos"),
-        ContextMenuItem::action("Ayuda de atajos"),
+        ContextMenuItem::action(if paused { t("play") } else { t("pause") }),
+        ContextMenuItem::action(t("media-menu-capture-frame")),
+        ContextMenuItem::action(if recording { t("media-ctx-stop-record") } else { t("media-ctx-record-audio") }),
+        ContextMenuItem::action(t("command-palette")),
+        ContextMenuItem::action(t("media-menu-shortcuts-help")),
     ];
     let on_pick: Arc<dyn Fn(usize) -> Msg + Send + Sync> = Arc::new(|i: usize| match i {
         0 => Msg::Command(MediaCommand::TogglePause),
@@ -4602,6 +4636,8 @@ fn is_network_url(s: &str) -> bool {
 }
 
 fn main() {
+    rimay_localize::init();
+    let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     let args: Vec<String> = std::env::args().skip(1).collect();
     let cfg = match args.first() {
         // Stream de red: forzamos el decoder ffmpeg (resuelve el protocolo)
