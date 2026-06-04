@@ -171,6 +171,52 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `animation-range: <start> [<end>]` shorthand (Fase 7.466). El valor
+        // de cada lado puede ser 1 o 2 tokens (`cover`, `cover 20%`, `100px`).
+        // El divisor es el primer token que NO continúa el lado actual: si el
+        // lado actual ya consumió un keyword + offset, o un solo token que NO
+        // es una fase nombrada, el lado se cierra. Para simplificar y mantener
+        // la regla de "shorthand inválido = no emite", probamos las divisiones
+        // posibles (i=1,2,3) y nos quedamos con la primera donde ambos lados
+        // parsean. Si el valor tiene un solo lado válido, end ≡ start.
+        if prop.eq_ignore_ascii_case("animation-range") {
+            let toks: Vec<&str> = value.split_whitespace().collect();
+            if toks.is_empty() {
+                continue;
+            }
+            let mut start: Option<AnimationRange> = None;
+            let mut end: Option<AnimationRange> = None;
+            // Probar una sola pieza para start, end ≡ start.
+            if let Some(s) = parse_animation_range(&toks.join(" ")) {
+                start = Some(s.clone());
+                end = Some(s);
+            }
+            // Probar todas las divisiones, quedarse con la primera donde
+            // start y end son válidos.
+            for i in 1..toks.len() {
+                let left = toks[..i].join(" ");
+                let right = toks[i..].join(" ");
+                if let (Some(s), Some(e)) = (
+                    parse_animation_range(&left),
+                    parse_animation_range(&right),
+                ) {
+                    start = Some(s);
+                    end = Some(e);
+                    break;
+                }
+            }
+            if let (Some(s), Some(e)) = (start, end) {
+                out.push(Decl {
+                    kind: DeclKind::AnimationRangeStart(s),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::AnimationRangeEnd(e),
+                    important,
+                });
+            }
+            continue;
+        }
         // `position-try: [<order>]? <fallbacks>` shorthand (Fase 7.462).
         // `<order>` puede aparecer 0 o 1 vez al inicio; el resto se interpreta
         // como `position-try-fallbacks` (lista separada por coma). Si el
@@ -1063,6 +1109,33 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::PositionArea(Some(raw.to_string())))
             }
         }
+        // Fase 7.464 — `animation-range-start` (CSS Animations 2).
+        "animation-range-start" => {
+            parse_animation_range(value).map(DeclKind::AnimationRangeStart)
+        }
+        // Fase 7.465 — `animation-range-end` (CSS Animations 2).
+        "animation-range-end" => {
+            parse_animation_range(value).map(DeclKind::AnimationRangeEnd)
+        }
+        // Fase 7.466 — `animation-range` shorthand: ver `parse_declarations`.
+        // Fase 7.467 — `transition-behavior` (CSS Transitions 2).
+        "transition-behavior" => match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(DeclKind::TransitionBehavior(TransitionBehavior::Normal)),
+            "allow-discrete" => Some(DeclKind::TransitionBehavior(
+                TransitionBehavior::AllowDiscrete,
+            )),
+            _ => None,
+        },
+        // Fase 7.468 — `interpolate-size` (CSS Values 5). HEREDA.
+        "interpolate-size" => match value.trim().to_ascii_lowercase().as_str() {
+            "numeric-only" => {
+                Some(DeclKind::InterpolateSize(InterpolateSize::NumericOnly))
+            }
+            "allow-keywords" => {
+                Some(DeclKind::InterpolateSize(InterpolateSize::AllowKeywords))
+            }
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -4170,6 +4243,64 @@ pub(crate) fn parse_block_step_size(value: &str) -> Option<BlockStepSize> {
         return Some(BlockStepSize::None);
     }
     parse_length_px(v).map(BlockStepSize::Length)
+}
+
+/// `animation-range-{start,end}: normal | <length-percentage> | <name>
+/// <length-percentage>?`. CSS Animations 2. Fase 7.464/465.
+///
+/// - `normal` → `Normal`.
+/// - 1 token `<length-or-pct>` → `Length(LengthVal)`.
+/// - 1 token `<phase>` (`cover`/`contain`/`entry`/`exit`/`entry-crossing`/
+///   `exit-crossing`) → `Named { phase, offset: None }`.
+/// - 2 tokens `<phase> <length-or-pct>` → `Named { phase, offset: Some(%) }`.
+///
+/// Cualquier otra forma → `None`. El offset se acepta como length pero el
+/// modelo lo guarda como porcentaje crudo (el chrome no implementa scroll/
+/// view-timelines aún — sólo plumb).
+pub(crate) fn parse_animation_range(value: &str) -> Option<AnimationRange> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    if v.eq_ignore_ascii_case("normal") {
+        return Some(AnimationRange::Normal);
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    if toks.len() == 1 {
+        if let Some(phase) = parse_animation_range_phase(toks[0]) {
+            return Some(AnimationRange::Named { phase, offset_pct: None });
+        }
+        if let Some(len) = parse_length_or_pct(toks[0]) {
+            return Some(AnimationRange::Length(len));
+        }
+        return None;
+    }
+    if toks.len() == 2 {
+        let phase = parse_animation_range_phase(toks[0])?;
+        let off = parse_pct_value(toks[1])?;
+        return Some(AnimationRange::Named { phase, offset_pct: Some(off) });
+    }
+    None
+}
+
+fn parse_animation_range_phase(tok: &str) -> Option<AnimationRangePhase> {
+    match tok.to_ascii_lowercase().as_str() {
+        "cover" => Some(AnimationRangePhase::Cover),
+        "contain" => Some(AnimationRangePhase::Contain),
+        "entry" => Some(AnimationRangePhase::Entry),
+        "exit" => Some(AnimationRangePhase::Exit),
+        "entry-crossing" => Some(AnimationRangePhase::EntryCrossing),
+        "exit-crossing" => Some(AnimationRangePhase::ExitCrossing),
+        _ => None,
+    }
+}
+
+fn parse_pct_value(tok: &str) -> Option<f32> {
+    let t = tok.trim();
+    if let Some(num) = t.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok();
+    }
+    None
 }
 
 /// `position-try-order` keyword. Fase 7.460.

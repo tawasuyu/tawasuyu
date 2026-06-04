@@ -480,6 +480,14 @@ pub(crate) enum DeclKind {
     PositionTryFallbacks(Vec<String>),
     /// `position-area` (Fase 7.463). `None` = `none`. NO hereda. Plumb.
     PositionArea(Option<String>),
+    /// `animation-range-start` (Fase 7.464). NO hereda. Plumb.
+    AnimationRangeStart(AnimationRange),
+    /// `animation-range-end` (Fase 7.465). NO hereda. Plumb.
+    AnimationRangeEnd(AnimationRange),
+    /// `transition-behavior` (Fase 7.467). NO hereda. Plumb.
+    TransitionBehavior(TransitionBehavior),
+    /// `interpolate-size` (Fase 7.468). HEREDA. Plumb.
+    InterpolateSize(InterpolateSize),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -860,6 +868,10 @@ impl Decl {
             DeclKind::PositionTryOrder(o) => s.position_try_order = *o,
             DeclKind::PositionTryFallbacks(v) => s.position_try_fallbacks = v.clone(),
             DeclKind::PositionArea(a) => s.position_area = a.clone(),
+            DeclKind::AnimationRangeStart(r) => s.animation_range_start = r.clone(),
+            DeclKind::AnimationRangeEnd(r) => s.animation_range_end = r.clone(),
+            DeclKind::TransitionBehavior(b) => s.transition_behavior = *b,
+            DeclKind::InterpolateSize(i) => s.interpolate_size = *i,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

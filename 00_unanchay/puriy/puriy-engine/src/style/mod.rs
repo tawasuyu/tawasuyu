@@ -367,6 +367,9 @@ impl StyleEngine {
             style.marker_start = p.marker_start.clone();
             style.marker_mid = p.marker_mid.clone();
             style.marker_end = p.marker_end.clone();
+            // CSS Values 5 — interpolate-size hereda (CSS Animations 2 elige
+            // si keywords como `auto` participan de transitions/animations).
+            style.interpolate_size = p.interpolate_size;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -7526,6 +7529,131 @@ mod tests {
         assert_eq!(cs_e.position_try_order, PositionTryOrder::Normal);
         assert!(cs_e.position_try_fallbacks.is_empty());
         assert_eq!(cs_e.position_area, None);
+    }
+
+    #[test]
+    fn animation_range_transitions_fase_7_464_468() {
+        // Cinco props: animation-range-start (Fase 7.464), animation-range-end
+        // (Fase 7.465), animation-range shorthand (Fase 7.466), transition-
+        // behavior (Fase 7.467), interpolate-size (Fase 7.468). Sólo
+        // interpolate-size HEREDA.
+
+        // 1) Parser de cabecera.
+        assert_eq!(parse_animation_range("normal"), Some(AnimationRange::Normal));
+        assert_eq!(
+            parse_animation_range("cover"),
+            Some(AnimationRange::Named {
+                phase: AnimationRangePhase::Cover,
+                offset_pct: None,
+            })
+        );
+        assert_eq!(
+            parse_animation_range("entry 20%"),
+            Some(AnimationRange::Named {
+                phase: AnimationRangePhase::Entry,
+                offset_pct: Some(20.0),
+            })
+        );
+        assert_eq!(
+            parse_animation_range("50%"),
+            Some(AnimationRange::Length(LengthVal::Pct(50.0)))
+        );
+        assert_eq!(
+            parse_animation_range("100px"),
+            Some(AnimationRange::Length(LengthVal::Px(100.0)))
+        );
+        // Rechazo: dos longitudes, fase desconocida, vacío.
+        assert_eq!(parse_animation_range("10px 20px"), None);
+        assert_eq!(parse_animation_range("foo"), None);
+        assert_eq!(parse_animation_range(""), None);
+        // entry sin %: el segundo token NO es % → falla (no es length-or-pct).
+        assert_eq!(parse_animation_range("entry foo"), None);
+
+        // 2) E2E.
+        let html = r##"<html><head><style>
+            #a { animation-range-start: cover;
+                 animation-range-end: contain 80%;
+                 transition-behavior: allow-discrete;
+                 interpolate-size: allow-keywords }
+            #b { animation-range: entry 0% exit 100% }
+            #c { animation-range: 50% }
+            #d {}
+        </style></head><body>
+            <div id="a"><span id="a-child"></span></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // #a — longhands.
+        let cs_a = eng.compute(&by("a"));
+        assert_eq!(
+            cs_a.animation_range_start,
+            AnimationRange::Named {
+                phase: AnimationRangePhase::Cover,
+                offset_pct: None,
+            }
+        );
+        assert_eq!(
+            cs_a.animation_range_end,
+            AnimationRange::Named {
+                phase: AnimationRangePhase::Contain,
+                offset_pct: Some(80.0),
+            }
+        );
+        assert_eq!(cs_a.transition_behavior, TransitionBehavior::AllowDiscrete);
+        assert_eq!(cs_a.interpolate_size, InterpolateSize::AllowKeywords);
+        // El hijo HEREDA interpolate-size pero NO transition-behavior.
+        let cs_a_child = eng.compute_with_parent(&by("a-child"), Some(&cs_a));
+        assert_eq!(cs_a_child.interpolate_size, InterpolateSize::AllowKeywords);
+        assert_eq!(
+            cs_a_child.transition_behavior,
+            TransitionBehavior::Normal
+        );
+        // El hijo TAMPOCO hereda animation-range-{start,end}.
+        assert_eq!(cs_a_child.animation_range_start, AnimationRange::Normal);
+        // #b — shorthand con start y end ambos compuestos (fase + offset).
+        let cs_b = eng.compute(&by("b"));
+        assert_eq!(
+            cs_b.animation_range_start,
+            AnimationRange::Named {
+                phase: AnimationRangePhase::Entry,
+                offset_pct: Some(0.0),
+            }
+        );
+        assert_eq!(
+            cs_b.animation_range_end,
+            AnimationRange::Named {
+                phase: AnimationRangePhase::Exit,
+                offset_pct: Some(100.0),
+            }
+        );
+        // #c — shorthand de 1 lado: end ≡ start.
+        let cs_c = eng.compute(&by("c"));
+        assert_eq!(
+            cs_c.animation_range_start,
+            AnimationRange::Length(LengthVal::Pct(50.0))
+        );
+        assert_eq!(
+            cs_c.animation_range_end,
+            AnimationRange::Length(LengthVal::Pct(50.0))
+        );
+        // #d — defaults puros.
+        let cs_d = eng.compute(&by("d"));
+        assert_eq!(cs_d.animation_range_start, AnimationRange::Normal);
+        assert_eq!(cs_d.animation_range_end, AnimationRange::Normal);
+        assert_eq!(cs_d.transition_behavior, TransitionBehavior::Normal);
+        assert_eq!(cs_d.interpolate_size, InterpolateSize::NumericOnly);
     }
 
     #[test]

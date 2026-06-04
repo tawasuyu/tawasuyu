@@ -762,6 +762,14 @@ pub struct ComputedStyle {
     /// `position-area` (Fase 7.463). `None` = `none`; `Some(s)` guarda el
     /// valor crudo (parse opaco). NO hereda. Plumb.
     pub position_area: Option<String>,
+    /// `animation-range-start` (Fase 7.464). Default `Normal`. NO hereda. Plumb.
+    pub animation_range_start: AnimationRange,
+    /// `animation-range-end` (Fase 7.465). Default `Normal`. NO hereda. Plumb.
+    pub animation_range_end: AnimationRange,
+    /// `transition-behavior` (Fase 7.467). Default `Normal`. NO hereda. Plumb.
+    pub transition_behavior: TransitionBehavior,
+    /// `interpolate-size` (Fase 7.468). Default `NumericOnly`. **HEREDA**. Plumb.
+    pub interpolate_size: InterpolateSize,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2336,6 +2344,58 @@ pub enum PositionTryOrder {
     MostInlineSize,
 }
 
+/// `animation-range-{start,end}` (CSS Animations 2). Rango temporal del
+/// scroll/view-timeline en el que la animación está activa. `Normal` = 0%/100%
+/// del timeline. `Length(<length-or-pct>)` = offset numérico. `Named { phase,
+/// offset }` = fase + offset opcional (`cover 20%`, `entry 0%`). El offset es
+/// porcentaje del rango de la fase. Default `Normal`. NO hereda. Fase 7.464/465.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub enum AnimationRange {
+    #[default]
+    Normal,
+    Length(LengthVal),
+    Named {
+        phase: AnimationRangePhase,
+        /// Offset porcentual relativo a la fase. `None` = default de la fase
+        /// (start → 0%, end → 100%).
+        offset_pct: Option<f32>,
+    },
+}
+
+/// Fase nombrada de un `animation-range-{start,end}`. CSS Animations 2 sobre
+/// view-timeline. Fase 7.464/465.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimationRangePhase {
+    Cover,
+    Contain,
+    Entry,
+    Exit,
+    EntryCrossing,
+    ExitCrossing,
+}
+
+/// `transition-behavior` (CSS Transitions 2). `Normal` = sólo props
+/// interpolables; `AllowDiscrete` permite transiciones en propiedades
+/// discretas (`display`, `visibility`, ...). Default `Normal`. NO hereda.
+/// Fase 7.467.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TransitionBehavior {
+    #[default]
+    Normal,
+    AllowDiscrete,
+}
+
+/// `interpolate-size` (CSS Values 5). `NumericOnly` = el chrome interpola
+/// sólo entre dos `<length-percentage>` numéricos; `AllowKeywords` extiende
+/// la interpolación a `auto`/`min-content`/`max-content`/`fit-content`.
+/// Default `NumericOnly`. **HEREDA**. Fase 7.468.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InterpolateSize {
+    #[default]
+    NumericOnly,
+    AllowKeywords,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3533,6 +3593,10 @@ impl Default for ComputedStyle {
             position_try_order: PositionTryOrder::Normal,
             position_try_fallbacks: Vec::new(),
             position_area: None,
+            animation_range_start: AnimationRange::Normal,
+            animation_range_end: AnimationRange::Normal,
+            transition_behavior: TransitionBehavior::Normal,
+            interpolate_size: InterpolateSize::NumericOnly,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
