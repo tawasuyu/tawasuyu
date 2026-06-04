@@ -185,6 +185,25 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }
+        // `marker` shorthand (Fase 7.397): `none | <funcIRI>` — setea
+        // los 3 longhands (`marker-start/-mid/-end`) al mismo valor.
+        if prop.eq_ignore_ascii_case("marker") {
+            if let Some(r) = parse_marker_ref(value) {
+                out.push(Decl {
+                    kind: DeclKind::MarkerStart(r.clone()),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::MarkerMid(r.clone()),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::MarkerEnd(r),
+                    important,
+                });
+            }
+            continue;
+        }
         // `list-style` shorthand (Fase 7.296): `<type> || <position> || <image>`.
         // `none` apaga `type` y `image`; el resto cae en su longhand.
         if prop.eq_ignore_ascii_case("list-style") {
@@ -839,6 +858,12 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "glyph-orientation-vertical" => parse_glyph_orientation_vertical(value)
             .map(DeclKind::GlyphOrientationVertical),
         "transform-box" => parse_transform_box(value).map(DeclKind::TransformBox),
+        "marker-start" => {
+            parse_marker_ref(value).map(DeclKind::MarkerStart)
+        }
+        "marker-mid" => parse_marker_ref(value).map(DeclKind::MarkerMid),
+        "marker-end" => parse_marker_ref(value).map(DeclKind::MarkerEnd),
+        "mask-type" => parse_mask_type(value).map(DeclKind::MaskType),
         "flood-color" => {
             parse_color_or_current(value).map(DeclKind::FloodColor)
         }
@@ -3494,6 +3519,29 @@ pub(crate) fn parse_transform_box(value: &str) -> Option<TransformBox> {
         "fill-box" => Some(TransformBox::FillBox),
         "stroke-box" => Some(TransformBox::StrokeBox),
         "view-box" => Some(TransformBox::ViewBox),
+        _ => None,
+    }
+}
+
+/// `marker-{start,mid,end}` / `marker`: `none | <funcIRI>`. Fases
+/// 7.394–7.397. Guardamos el IRI tal cual (`url(#mid)`) o `None` para
+/// `none`. El IRI debe empezar con `url(` y cerrar con `)`.
+pub(crate) fn parse_marker_ref(value: &str) -> Option<MarkerRef> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    if v.len() < 5 || !v.to_ascii_lowercase().starts_with("url(") || !v.ends_with(')') {
+        return None;
+    }
+    Some(Some(v.to_string()))
+}
+
+/// `mask-type`: `luminance | alpha`. Fase 7.398.
+pub(crate) fn parse_mask_type(value: &str) -> Option<MaskType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "luminance" => Some(MaskType::Luminance),
+        "alpha" => Some(MaskType::Alpha),
         _ => None,
     }
 }

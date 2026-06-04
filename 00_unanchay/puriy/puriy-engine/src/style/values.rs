@@ -655,6 +655,15 @@ pub struct ComputedStyle {
     pub glyph_orientation_vertical: GlyphOrientationVertical,
     /// `transform-box` (Fase 7.393). Default `ViewBox`. NO hereda. Plumb.
     pub transform_box: TransformBox,
+    /// `marker-start` (Fase 7.394). `None` = `none`. **Heredable**. Plumb.
+    pub marker_start: MarkerRef,
+    /// `marker-mid` (Fase 7.395). `None` = `none`. **Heredable**. Plumb.
+    pub marker_mid: MarkerRef,
+    /// `marker-end` (Fase 7.396). `None` = `none`. **Heredable**. Plumb.
+    /// El shorthand `marker` (Fase 7.397) setea los tres a la vez.
+    pub marker_end: MarkerRef,
+    /// `mask-type` (Fase 7.398). Default `Luminance`. NO hereda. Plumb.
+    pub mask_type: MaskType,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2057,6 +2066,20 @@ pub enum TransformBox {
     ViewBox,
 }
 
+/// Referencia a un `<marker>` SVG: `None` = `marker-*: none`;
+/// `Some(s)` = IRI tal como vino (`url(#mid)`). Heredable. Fases
+/// 7.394–7.397.
+pub type MarkerRef = Option<String>;
+
+/// `mask-type` (CSS Masking 1). Default `Luminance` (spec). NO hereda.
+/// Fase 7.398.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskType {
+    #[default]
+    Luminance,
+    Alpha,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -3128,6 +3151,10 @@ impl Default for ComputedStyle {
             color_interpolation_filters: ColorInterpolationFilters::LinearRgb,
             glyph_orientation_vertical: GlyphOrientationVertical::Auto,
             transform_box: TransformBox::ViewBox,
+            marker_start: None,
+            marker_mid: None,
+            marker_end: None,
+            mask_type: MaskType::Luminance,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

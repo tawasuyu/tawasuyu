@@ -395,6 +395,13 @@ pub(crate) enum DeclKind {
     ColorInterpolationFilters(ColorInterpolationFilters),
     GlyphOrientationVertical(GlyphOrientationVertical),
     TransformBox(TransformBox),
+    /// `None` = `marker-start: none`.
+    MarkerStart(MarkerRef),
+    /// `None` = `marker-mid: none`.
+    MarkerMid(MarkerRef),
+    /// `None` = `marker-end: none`.
+    MarkerEnd(MarkerRef),
+    MaskType(MaskType),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -730,6 +737,10 @@ impl Decl {
                 s.glyph_orientation_vertical = *g
             }
             DeclKind::TransformBox(b) => s.transform_box = *b,
+            DeclKind::MarkerStart(r) => s.marker_start = r.clone(),
+            DeclKind::MarkerMid(r) => s.marker_mid = r.clone(),
+            DeclKind::MarkerEnd(r) => s.marker_end = r.clone(),
+            DeclKind::MaskType(t) => s.mask_type = *t,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

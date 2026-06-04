@@ -352,6 +352,11 @@ impl StyleEngine {
             style.color_rendering = p.color_rendering;
             style.color_interpolation_filters = p.color_interpolation_filters;
             style.glyph_orientation_vertical = p.glyph_orientation_vertical;
+            // SVG 2 — marker-{start,mid,end} heredan; mask-type
+            // (CSS Masking 1) NO hereda.
+            style.marker_start = p.marker_start.clone();
+            style.marker_mid = p.marker_mid.clone();
+            style.marker_end = p.marker_end.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -6776,6 +6781,155 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).transform_box,
             TransformBox::ViewBox
+        );
+    }
+
+    #[test]
+    fn marker_start_fase_7_394() {
+        assert_eq!(parse_marker_ref("none"), Some(None));
+        assert_eq!(
+            parse_marker_ref("url(#m)"),
+            Some(Some("url(#m)".to_string()))
+        );
+        assert_eq!(parse_marker_ref("xxx"), None);
+        assert_eq!(parse_marker_ref("url"), None);
+        assert_eq!(parse_marker_ref("url(#m"), None);
+
+        let html = r##"<html><head><style>
+            body { marker-start: url(#arrow) }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.marker_start.as_deref(), Some("url(#arrow)"));
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs))
+                .marker_start
+                .as_deref(),
+            Some("url(#arrow)")
+        );
+    }
+
+    #[test]
+    fn marker_mid_fase_7_395() {
+        let html = r##"<html><head><style>
+            body { marker-mid: url(#dot) }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.marker_mid.as_deref(), Some("url(#dot)"));
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs))
+                .marker_mid
+                .as_deref(),
+            Some("url(#dot)")
+        );
+    }
+
+    #[test]
+    fn marker_end_fase_7_396() {
+        let html = r##"<html><head><style>
+            body { marker-end: url(#arrow2) }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.marker_end.as_deref(), Some("url(#arrow2)"));
+    }
+
+    #[test]
+    fn marker_shorthand_fase_7_397() {
+        // El shorthand `marker` setea los 3 a la vez.
+        let html = r##"<html><head><style>
+            body { marker: url(#tri) }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.marker_start.as_deref(), Some("url(#tri)"));
+        assert_eq!(cs.marker_mid.as_deref(), Some("url(#tri)"));
+        assert_eq!(cs.marker_end.as_deref(), Some("url(#tri)"));
+
+        // `marker: none` apaga los 3.
+        let html2 = r##"<html><head><style>
+            body { marker: none }
+        </style></head><body></body></html>"##;
+        let dom2 = DomTree::parse(html2);
+        let eng2 = StyleEngine::from_dom(&dom2);
+        let mut bodies2 = Vec::new();
+        crate::dom::walk(&dom2.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies2.push(n.clone());
+            }
+        });
+        let cs2 = eng2.compute(&bodies2[0]);
+        assert!(cs2.marker_start.is_none());
+        assert!(cs2.marker_mid.is_none());
+        assert!(cs2.marker_end.is_none());
+    }
+
+    #[test]
+    fn mask_type_fase_7_398() {
+        assert_eq!(parse_mask_type("luminance"), Some(MaskType::Luminance));
+        assert_eq!(parse_mask_type("ALPHA"), Some(MaskType::Alpha));
+        assert_eq!(parse_mask_type("none"), None);
+
+        let html = r##"<html><head><style>
+            body { mask-type: alpha }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_type, MaskType::Alpha);
+        // NO hereda — vuelve a Luminance.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).mask_type,
+            MaskType::Luminance
         );
     }
 
