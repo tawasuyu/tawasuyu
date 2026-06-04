@@ -1623,6 +1623,51 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "contain" => Some(DeclKind::LineSnap(LineSnap::Contain)),
             _ => None,
         },
+        // Fase 7.524 — `line-grid` (CSS Line Grid). HEREDA.
+        "line-grid" => match value.trim().to_ascii_lowercase().as_str() {
+            "match" => Some(DeclKind::LineGrid(LineGrid::Match)),
+            "create" => Some(DeclKind::LineGrid(LineGrid::Create)),
+            _ => None,
+        },
+        // Fase 7.525 — `initial-letter` shorthand (CSS Inline 3). HEREDA.
+        // Parse opaco hasta que un layout de drop-cap lo necesite.
+        "initial-letter" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::InitialLetter(None))
+            } else {
+                Some(DeclKind::InitialLetter(Some(v.to_string())))
+            }
+        }
+        // Fase 7.526 — `highlight` (CSS Highlight API). HEREDA.
+        "highlight" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::Highlight(None))
+            } else {
+                Some(DeclKind::Highlight(Some(v.to_string())))
+            }
+        }
+        // Fase 7.527 — `ruby-merge` (CSS Ruby 1). HEREDA.
+        "ruby-merge" => match value.trim().to_ascii_lowercase().as_str() {
+            "separate" => Some(DeclKind::RubyMerge(RubyMerge::Separate)),
+            "collapse" => Some(DeclKind::RubyMerge(RubyMerge::Collapse)),
+            "auto" => Some(DeclKind::RubyMerge(RubyMerge::Auto)),
+            _ => None,
+        },
+        // Fase 7.528 — `text-spacing` shorthand (CSS Text 4). HEREDA.
+        // Parse opaco — `normal` reservado a None.
+        "text-spacing" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::TextSpacing(None))
+            } else {
+                Some(DeclKind::TextSpacing(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

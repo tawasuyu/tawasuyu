@@ -595,6 +595,16 @@ pub(crate) enum DeclKind {
     BoxDecorationBreak(BoxDecorationBreak),
     /// `line-snap` (Fase 7.523). HEREDA. Plumb.
     LineSnap(LineSnap),
+    /// `line-grid` (Fase 7.524). HEREDA. Plumb.
+    LineGrid(LineGrid),
+    /// `initial-letter` shorthand (Fase 7.525). `None` = `normal`. HEREDA. Plumb.
+    InitialLetter(Option<String>),
+    /// `highlight` (Fase 7.526). `None` = `none`. HEREDA. Plumb.
+    Highlight(Option<String>),
+    /// `ruby-merge` (Fase 7.527). HEREDA. Plumb.
+    RubyMerge(RubyMerge),
+    /// `text-spacing` shorthand (Fase 7.528). `None` = `normal`. HEREDA. Plumb.
+    TextSpacing(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1056,6 +1066,11 @@ impl Decl {
             DeclKind::FloatOffset(v) => s.float_offset = *v,
             DeclKind::BoxDecorationBreak(v) => s.box_decoration_break = *v,
             DeclKind::LineSnap(v) => s.line_snap = *v,
+            DeclKind::LineGrid(v) => s.line_grid = *v,
+            DeclKind::InitialLetter(v) => s.initial_letter = v.clone(),
+            DeclKind::Highlight(v) => s.highlight = v.clone(),
+            DeclKind::RubyMerge(v) => s.ruby_merge = *v,
+            DeclKind::TextSpacing(v) => s.text_spacing = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

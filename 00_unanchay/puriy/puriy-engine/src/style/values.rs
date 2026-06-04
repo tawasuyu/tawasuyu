@@ -929,6 +929,22 @@ pub struct ComputedStyle {
     /// `line-snap` (Fase 7.523). CSS Line Grid: cómo se alinean las
     /// líneas a la grilla baseline. Default `None`. **HEREDA**. Plumb.
     pub line_snap: LineSnap,
+    /// `line-grid` (Fase 7.524). CSS Line Grid: si el contenedor crea
+    /// nueva grilla o se acopla a la heredada. Default `Match`. **HEREDA**.
+    /// Plumb.
+    pub line_grid: LineGrid,
+    /// `initial-letter` shorthand (Fase 7.525). CSS Inline 3.
+    /// Parse opaco — `None` = `normal` (sin drop-cap). **HEREDA**. Plumb.
+    pub initial_letter: Option<String>,
+    /// `highlight` (Fase 7.526). CSS Highlight API: nombre del highlight
+    /// custom que se aplica. `None` = `none`. **HEREDA**. Plumb.
+    pub highlight: Option<String>,
+    /// `ruby-merge` (Fase 7.527). CSS Ruby 1: cómo se fusionan ruby
+    /// adyacentes. Default `Separate`. **HEREDA**. Plumb.
+    pub ruby_merge: RubyMerge,
+    /// `text-spacing` shorthand (Fase 7.528). CSS Text 4. Parse opaco —
+    /// `None` = `normal`. **HEREDA**. Plumb.
+    pub text_spacing: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2737,6 +2753,23 @@ pub enum LineSnap {
     Contain,
 }
 
+/// `line-grid` (CSS Line Grid). Default `Match`. Fase 7.524.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineGrid {
+    #[default]
+    Match,
+    Create,
+}
+
+/// `ruby-merge` (CSS Ruby 1). Default `Separate`. Fase 7.527.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RubyMerge {
+    #[default]
+    Separate,
+    Collapse,
+    Auto,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -4002,6 +4035,11 @@ impl Default for ComputedStyle {
             float_offset: 0.0,
             box_decoration_break: BoxDecorationBreak::Slice,
             line_snap: LineSnap::None,
+            line_grid: LineGrid::Match,
+            initial_letter: None,
+            highlight: None,
+            ruby_merge: RubyMerge::Separate,
+            text_spacing: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
