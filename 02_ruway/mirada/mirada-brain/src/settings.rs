@@ -49,7 +49,7 @@ impl Configurable for Config {
         Schema::new()
             .section(
                 Section::new("teselado", "Teselado")
-                    .icon("▦")
+                    .icon("🎛")
                     .help("Cómo se acomodan las ventanas")
                     .field(Field::dropdown(
                         "layout",
@@ -96,7 +96,7 @@ impl Configurable for Config {
             )
             .section(
                 Section::new("decoracion", "Decoración")
-                    .icon("◰")
+                    .icon("🎨")
                     .help("Marco y barra de título de las ventanas")
                     .field(Field::slider_int(
                         "border_width",
@@ -121,7 +121,7 @@ impl Configurable for Config {
             )
             .section(
                 Section::new("fondo", "Fondo")
-                    .icon("▤")
+                    .icon("")
                     .help("Wallpaper y fuente del escritorio")
                     .field(Field::text(
                         "wallpaper_path",
@@ -138,7 +138,7 @@ impl Configurable for Config {
             )
             .section(
                 Section::new("terminal", "Terminal")
-                    .icon("▢")
+                    .icon("⌨")
                     .help("La terminal desplegable (quake)")
                     .field(Field::text(
                         "dropterm_cmd",
@@ -155,7 +155,7 @@ impl Configurable for Config {
             )
             .section(
                 Section::new("monitores", "Monitores")
-                    .icon("▭")
+                    .icon("🖥")
                     .help("Disposición de varias salidas")
                     .field(Field::dropdown(
                         "output_direction",

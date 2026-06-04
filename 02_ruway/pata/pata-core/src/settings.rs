@@ -50,14 +50,10 @@ impl SurfaceKind {
             EnumOption::new("sidebar", "Sidebar"),
         ]
     }
-    /// Glifo del diente de la superficie según su tipo.
+    /// Glifo del diente de la superficie. Emoji que la fuente bundle sí tiene
+    /// (los geométricos salen tofu); el rótulo "Superficie N" distingue cada una.
     fn glyph(&self) -> &'static str {
-        match self {
-            SurfaceKind::Bar => "▭",
-            SurfaceKind::Panel => "▦",
-            SurfaceKind::Dock => "▣",
-            SurfaceKind::Sidebar => "❘",
-        }
+        "🎛"
     }
 }
 
@@ -133,7 +129,7 @@ impl Configurable for Config {
     fn schema(&self) -> Schema {
         let mut schema = Schema::new().section(
             Section::new("general", "General")
-                .icon("≡")
+                .icon("⚙")
                 .field(Field::text("timezone", "Zona horaria", self.general.timezone.clone())
                     .help("\"auto\" detecta del sistema; o un nombre IANA (America/Lima)")),
         );

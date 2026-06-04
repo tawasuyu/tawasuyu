@@ -578,6 +578,9 @@ enum Msg {
     SetDistro(Distro),
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
+    /// Reordenar dientes por drag: mover la sesión `from` a la posición `to`.
+    /// La draft (0) queda fija.
+    ReorderSession(usize, usize),
     /// Resize del panel de sesión (izq) / de herramienta (der), por drag del
     /// divisor del `splitter`.
     SetSessionWidth(f32),
@@ -804,6 +807,15 @@ impl App for Shell {
                 if idx > 0 && idx < m.sessions.len() {
                     m.sessions.remove(idx);
                     m.active_session = m.active_session.min(m.sessions.len() - 1);
+                }
+            }
+            Msg::ReorderSession(from, to) => {
+                // La draft (0) queda fija; el resto se reordena.
+                let len = m.sessions.len();
+                if from > 0 && from < len && to > 0 && to < len && from != to {
+                    let s = m.sessions.remove(from);
+                    m.sessions.insert(to, s);
+                    m.active_session = to;
                 }
             }
             Msg::SetSessionWidth(dx) => {

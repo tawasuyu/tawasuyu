@@ -42,8 +42,7 @@ use std::sync::Arc;
 use wawa_config::{ConfigWatcher, WawaConfig};
 
 use allichay::{Configurable, FieldPath, FieldValue};
-use llimphi_module_allichay::{section_view, AllichayMsg, AllichayState};
-use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_module_allichay::{diente_rail, section_view, AllichayMsg, AllichayState, Diente};
 
 /// Apps suscribibles que exponen su config como schema. El `key` casa con el
 /// id de módulo en `WawaConfig.modules` (un módulo apagado oculta su diente);
@@ -61,7 +60,7 @@ const APP_DIENTE_BASE: u64 = 1000;
 /// Refresco del monitor.
 const TICK_MS: u64 = 1_000;
 /// Ancho del sidebar de navegación.
-const NAV_WIDTH: f32 = 60.0;
+const NAV_WIDTH: f32 = 210.0;
 /// Alto de cada fila de control.
 const ROW_HEIGHT: f32 = 36.0;
 
@@ -91,13 +90,14 @@ impl Category {
         ]
     }
     fn glyph(self) -> &'static str {
+        // Emoji que la fuente bundle sí tiene (los geométricos salen tofu).
         match self {
-            Category::Appearance => "◐",
-            Category::Language => "✦",
-            Category::Apps => "▣",
-            Category::Monitor => "◉",
-            Category::Modules => "≡",
-            Category::About => "?",
+            Category::Appearance => "🎨",
+            Category::Language => "🌐",
+            Category::Apps => "▶",
+            Category::Monitor => "🖥",
+            Category::Modules => "⚙",
+            Category::About => "",
         }
     }
     fn i18n_key(self) -> &'static str {
@@ -1038,81 +1038,28 @@ fn build_header(theme: &Theme) -> View<Msg> {
 }
 
 fn build_nav(model: &Model, theme: &Theme, _accent: llimphi_ui::llimphi_raster::peniko::Color) -> View<Msg> {
-    // Las categorías builtin (0..N) + las secciones de las apps suscritas
-    // (APP_DIENTE_BASE+i) como un único rail de dientes.
-    let apps = app_sections(model);
-    let mut items: Vec<DockRailItem> = Category::all()
+    // Un diente es siempre un panel: el rail muestra el RÓTULO de cada panel.
+    // Categorías builtin (0..N) del SO + las secciones de las apps suscritas
+    // (APP_DIENTE_BASE+i), todas como dientes con nombre.
+    let mut items: Vec<Diente> = Category::all()
         .iter()
         .enumerate()
-        .map(|(i, cat)| DockRailItem {
+        .map(|(i, cat)| Diente {
             id: i as u64,
+            icon: cat.glyph().to_string(),
+            label: rimay_localize::t(cat.i18n_key()),
             active: model.app_sel.is_none() && model.category == *cat,
         })
         .collect();
-    for i in 0..apps.len() {
-        items.push(DockRailItem {
+    for (i, app) in app_sections(model).into_iter().enumerate() {
+        items.push(Diente {
             id: APP_DIENTE_BASE + i as u64,
+            icon: app.icon,
+            label: app.section.title,
             active: model.app_sel == Some(i),
         });
     }
-    let cat_glyphs: Vec<String> = Category::all().iter().map(|c| c.glyph().to_string()).collect();
-    let app_glyphs: Vec<String> = apps.iter().map(|a| a.icon.clone()).collect();
-
-    let rail = dock_rail_view(
-        &items,
-        44.0,
-        &DockRailPalette::from_theme(theme),
-        move |id, size, color| {
-            let g = if id >= APP_DIENTE_BASE {
-                app_glyphs.get((id - APP_DIENTE_BASE) as usize).cloned()
-            } else {
-                cat_glyphs.get(id as usize).cloned()
-            };
-            glyph_icon(g, size, color)
-        },
-        Msg::NavSelect,
-        |_| None,
-    );
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(NAV_WIDTH),
-            height: percent(1.0_f32),
-        },
-        padding: Rect {
-            left: length(6.0_f32),
-            right: length(6.0_f32),
-            top: length(8.0_f32),
-            bottom: length(8.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(vec![rail])
-}
-
-/// Pinta el glifo de un diente centrado, con el color ya resuelto por el rail.
-fn glyph_icon(
-    glyph: Option<String>,
-    size: f32,
-    color: llimphi_ui::llimphi_raster::peniko::Color,
-) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: length(size),
-            height: length(size),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .text_aligned(
-        glyph.unwrap_or_else(|| "•".to_string()),
-        size * 0.85,
-        color,
-        Alignment::Center,
-    )
+    diente_rail(&items, NAV_WIDTH, theme, Msg::NavSelect)
 }
 
 fn build_content(
