@@ -171,6 +171,34 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `contain-intrinsic-size: <w> [<h>]` shorthand (Fase 7.438). Cada
+        // mitad acepta `none | <length> | auto none | auto <length>`. Con 1
+        // valor se aplica a width y height; con 2 (separados por la primera
+        // "frontera" `<length-or-none>` que no esté precedida por `auto`), el
+        // primero va a width, el segundo a height. Si algún token falla,
+        // rechazamos el shorthand entero (no parcial).
+        if prop.eq_ignore_ascii_case("contain-intrinsic-size") {
+            let toks: Vec<&str> = value.split_whitespace().collect();
+            let halves = split_contain_intrinsic_halves(&toks);
+            if let Some((w_raw, h_raw)) = halves {
+                let w = parse_contain_intrinsic_size(&w_raw);
+                let h = match h_raw.as_deref() {
+                    Some(s) => parse_contain_intrinsic_size(s),
+                    None => w,
+                };
+                if let (Some(w), Some(h)) = (w, h) {
+                    out.push(Decl {
+                        kind: DeclKind::ContainIntrinsicWidth(w),
+                        important,
+                    });
+                    out.push(Decl {
+                        kind: DeclKind::ContainIntrinsicHeight(h),
+                        important,
+                    });
+                }
+            }
+            continue;
+        }
         // `scroll-snap-align: <block> [<inline>]` — con 1 valor se aplica a
         // ambos ejes. Fase 7.269.
         if prop.eq_ignore_ascii_case("scroll-snap-align") {
@@ -759,6 +787,23 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "font-variant-emoji" => {
             parse_font_variant_emoji(value).map(DeclKind::FontVariantEmoji)
         }
+        // Fase 7.434 — `contain-intrinsic-width` (CSS Containment 3). NO hereda. Plumb.
+        "contain-intrinsic-width" => {
+            parse_contain_intrinsic_size(value).map(DeclKind::ContainIntrinsicWidth)
+        }
+        // Fase 7.435 — `contain-intrinsic-height` (CSS Containment 3). NO hereda. Plumb.
+        "contain-intrinsic-height" => {
+            parse_contain_intrinsic_size(value).map(DeclKind::ContainIntrinsicHeight)
+        }
+        // Fase 7.436 — `contain-intrinsic-block-size` = height en horizontal LTR.
+        "contain-intrinsic-block-size" => {
+            parse_contain_intrinsic_size(value).map(DeclKind::ContainIntrinsicHeight)
+        }
+        // Fase 7.437 — `contain-intrinsic-inline-size` = width en horizontal LTR.
+        "contain-intrinsic-inline-size" => {
+            parse_contain_intrinsic_size(value).map(DeclKind::ContainIntrinsicWidth)
+        }
+        // Fase 7.438 — `contain-intrinsic-size` shorthand: ver `parse_declarations`.
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -3857,6 +3902,78 @@ pub(crate) fn parse_text_size_adjust(value: &str) -> Option<TextSizeAdjust> {
         return num.trim().parse::<f32>().ok().map(TextSizeAdjust::Pct);
     }
     None
+}
+
+/// Divide los tokens del shorthand `contain-intrinsic-size` en width y
+/// height (cada uno acepta `auto?` seguido de `none | <length>`). Devuelve
+/// `(raw_w, raw_h)` listos para `parse_contain_intrinsic_size`. Si hay un
+/// solo "lado", `h` queda en `None` (el caller copia w → h).
+fn split_contain_intrinsic_halves<'a>(
+    toks: &[&'a str],
+) -> Option<(String, Option<String>)> {
+    if toks.is_empty() {
+        return None;
+    }
+    let mut sides: Vec<Vec<&str>> = Vec::new();
+    let mut cur: Vec<&str> = Vec::new();
+    let mut i = 0;
+    while i < toks.len() {
+        let t = toks[i];
+        if t.eq_ignore_ascii_case("auto") {
+            // `auto` arranca un lado (y consume el siguiente token como su
+            // valor `none | <length>`). Si ya empezamos un lado sin cerrar,
+            // este `auto` pertenece al próximo → cerramos.
+            if !cur.is_empty() {
+                sides.push(std::mem::take(&mut cur));
+            }
+            cur.push(t);
+            if let Some(&next) = toks.get(i + 1) {
+                cur.push(next);
+                i += 2;
+            } else {
+                return None;
+            }
+            sides.push(std::mem::take(&mut cur));
+        } else {
+            // `none | <length>` cierra un lado por sí solo.
+            if !cur.is_empty() {
+                sides.push(std::mem::take(&mut cur));
+            }
+            cur.push(t);
+            sides.push(std::mem::take(&mut cur));
+            i += 1;
+        }
+    }
+    match sides.len() {
+        1 => Some((sides[0].join(" "), None)),
+        2 => Some((sides[0].join(" "), Some(sides[1].join(" ")))),
+        _ => None,
+    }
+}
+
+/// `contain-intrinsic-*: none | <length> | auto none | auto <length>`.
+/// CSS Containment 3. Fase 7.434.
+pub(crate) fn parse_contain_intrinsic_size(value: &str) -> Option<ContainIntrinsicSize> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(ContainIntrinsicSize::None);
+    }
+    let mut tokens = v.split_whitespace();
+    let first = tokens.next()?;
+    if first.eq_ignore_ascii_case("auto") {
+        let second = tokens.next()?;
+        if tokens.next().is_some() {
+            return None;
+        }
+        if second.eq_ignore_ascii_case("none") {
+            return Some(ContainIntrinsicSize::AutoNone);
+        }
+        return parse_length_px(second).map(ContainIntrinsicSize::AutoLength);
+    }
+    if tokens.next().is_some() {
+        return None;
+    }
+    parse_length_px(first).map(ContainIntrinsicSize::Length)
 }
 
 /// `font-variant-emoji: normal | text | emoji | unicode`. CSS Fonts 4.

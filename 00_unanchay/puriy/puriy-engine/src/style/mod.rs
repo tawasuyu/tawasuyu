@@ -7373,6 +7373,92 @@ mod tests {
     }
 
     #[test]
+    fn contain_intrinsic_size_fase_7_434_438() {
+        // Cinco props nuevas: contain-intrinsic-{width,height,block-size,
+        // inline-size} (longhands) + contain-intrinsic-size (shorthand).
+        // En LTR horizontal: block-size = height, inline-size = width.
+
+        // 1) Parser de cabecera (todas las formas).
+        assert_eq!(
+            parse_contain_intrinsic_size("none"),
+            Some(ContainIntrinsicSize::None)
+        );
+        assert_eq!(
+            parse_contain_intrinsic_size("200px"),
+            Some(ContainIntrinsicSize::Length(200.0))
+        );
+        assert_eq!(
+            parse_contain_intrinsic_size("auto none"),
+            Some(ContainIntrinsicSize::AutoNone)
+        );
+        assert_eq!(
+            parse_contain_intrinsic_size("auto 150px"),
+            Some(ContainIntrinsicSize::AutoLength(150.0))
+        );
+        // Rechazos: `auto` solo, basura, dos lengths.
+        assert_eq!(parse_contain_intrinsic_size("auto"), None);
+        assert_eq!(parse_contain_intrinsic_size("nope"), None);
+        assert_eq!(parse_contain_intrinsic_size("100px 200px"), None);
+
+        // 2) E2E — longhands físicos + lógicos + shorthand.
+        let html = r##"<html><head><style>
+            #a { contain-intrinsic-width: 300px;
+                 contain-intrinsic-height: auto 240px }
+            #b { contain-intrinsic-block-size: 180px;
+                 contain-intrinsic-inline-size: auto none }
+            #c { contain-intrinsic-size: 400px }
+            #d { contain-intrinsic-size: 500px auto 360px }
+            #e { contain-intrinsic-size: auto 150px none }
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+            <div id="e"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // #a — longhands físicos.
+        let cs_a = eng.compute(&by("a"));
+        assert_eq!(cs_a.contain_intrinsic_width, ContainIntrinsicSize::Length(300.0));
+        assert_eq!(
+            cs_a.contain_intrinsic_height,
+            ContainIntrinsicSize::AutoLength(240.0)
+        );
+        // #b — longhands lógicos mapean a height/width en LTR horizontal.
+        let cs_b = eng.compute(&by("b"));
+        assert_eq!(cs_b.contain_intrinsic_height, ContainIntrinsicSize::Length(180.0));
+        assert_eq!(cs_b.contain_intrinsic_width, ContainIntrinsicSize::AutoNone);
+        // #c — shorthand de 1 valor aplica a ambos.
+        let cs_c = eng.compute(&by("c"));
+        assert_eq!(cs_c.contain_intrinsic_width, ContainIntrinsicSize::Length(400.0));
+        assert_eq!(cs_c.contain_intrinsic_height, ContainIntrinsicSize::Length(400.0));
+        // #d — shorthand de 2 lados: width=500px, height=auto 360px.
+        let cs_d = eng.compute(&by("d"));
+        assert_eq!(cs_d.contain_intrinsic_width, ContainIntrinsicSize::Length(500.0));
+        assert_eq!(
+            cs_d.contain_intrinsic_height,
+            ContainIntrinsicSize::AutoLength(360.0)
+        );
+        // #e — shorthand con auto en el primer lado: width=auto 150px, height=none.
+        let cs_e = eng.compute(&by("e"));
+        assert_eq!(
+            cs_e.contain_intrinsic_width,
+            ContainIntrinsicSize::AutoLength(150.0)
+        );
+        assert_eq!(cs_e.contain_intrinsic_height, ContainIntrinsicSize::None);
+    }
+
+    #[test]
     fn hyphenate_text_size_emoji_fase_7_429_433() {
         // Parsers de cabecera + cascada heredable. Cinco props nuevas en
         // bloque: hyphenate-character, hyphenate-limit-chars,

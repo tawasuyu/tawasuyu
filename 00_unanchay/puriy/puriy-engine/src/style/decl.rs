@@ -428,6 +428,10 @@ pub(crate) enum DeclKind {
     LineHeightStep(f32),
     /// `font-variant-emoji` (Fase 7.433). HEREDA. Plumb.
     FontVariantEmoji(FontVariantEmoji),
+    /// `contain-intrinsic-width` (Fase 7.434). NO hereda. Plumb.
+    ContainIntrinsicWidth(ContainIntrinsicSize),
+    /// `contain-intrinsic-height` (Fase 7.435). NO hereda. Plumb.
+    ContainIntrinsicHeight(ContainIntrinsicSize),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -783,6 +787,8 @@ impl Decl {
             DeclKind::TextSizeAdjust(t) => s.text_size_adjust = *t,
             DeclKind::LineHeightStep(v) => s.line_height_step = *v,
             DeclKind::FontVariantEmoji(e) => s.font_variant_emoji = *e,
+            DeclKind::ContainIntrinsicWidth(c) => s.contain_intrinsic_width = *c,
+            DeclKind::ContainIntrinsicHeight(c) => s.contain_intrinsic_height = *c,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

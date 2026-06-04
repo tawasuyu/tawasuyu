@@ -707,6 +707,10 @@ pub struct ComputedStyle {
     pub line_height_step: f32,
     /// `font-variant-emoji` (Fase 7.433). Default `Normal`. HEREDA. Plumb.
     pub font_variant_emoji: FontVariantEmoji,
+    /// `contain-intrinsic-width` (Fase 7.434). Default `None`. NO hereda. Plumb.
+    pub contain_intrinsic_width: ContainIntrinsicSize,
+    /// `contain-intrinsic-height` (Fase 7.435). Default `None`. NO hereda. Plumb.
+    pub contain_intrinsic_height: ContainIntrinsicSize,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2216,6 +2220,23 @@ pub enum FontVariantEmoji {
     Unicode,
 }
 
+/// `contain-intrinsic-*` (CSS Containment 3). Tamaño intrínseco declarado
+/// para un elemento `contain: size` (o `content-visibility: auto`). El
+/// prefijo `auto` indica "usá el último recordado, si no, este length".
+/// Default `None`. NO hereda. Fase 7.434-7.438.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ContainIntrinsicSize {
+    /// `none` — sin tamaño intrínseco declarado.
+    #[default]
+    None,
+    /// `<length>` puro.
+    Length(f32),
+    /// `auto none`.
+    AutoNone,
+    /// `auto <length>`.
+    AutoLength(f32),
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -3310,6 +3331,8 @@ impl Default for ComputedStyle {
             text_size_adjust: TextSizeAdjust::Auto,
             line_height_step: 0.0,
             font_variant_emoji: FontVariantEmoji::Normal,
+            contain_intrinsic_width: ContainIntrinsicSize::None,
+            contain_intrinsic_height: ContainIntrinsicSize::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
