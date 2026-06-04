@@ -482,6 +482,9 @@ enum Msg {
     SelectView(SessionView),
     /// El `+` de la tira de sesiones: crea una sesión local nueva y la activa.
     NewSession,
+    /// Click en una línea del historial (columna izquierda): vuelve a la vista
+    /// Shell de la sesión activa y carga ese comando en el input.
+    RunFromHistory(String),
     /// Drag del splitter de monitores.
     ResizeMonitors(f32),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
@@ -666,6 +669,15 @@ impl App for Shell {
                 }
             }
             Msg::SelectView(v) => m.active_view = v,
+            Msg::RunFromHistory(cmd) => {
+                m.active_view = SessionView::Shell;
+                let slot = Slot::Session(m.active_session, Which::Shell);
+                m = apply_module_msg(
+                    m,
+                    slot,
+                    ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(cmd)),
+                );
+            }
             Msg::NewSession => {
                 let n = m.sessions.len() + 1;
                 m.sessions

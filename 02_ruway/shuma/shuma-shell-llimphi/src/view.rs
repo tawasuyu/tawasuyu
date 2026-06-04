@@ -143,13 +143,17 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
     // de la sesión lo llena.
     let rail = view_dock_rail(model, theme);
 
+    // Historial de la sesión activa a la IZQUIERDA (columna fija). El centro
+    // es la vista activa; el rail de dientes va a la derecha.
+    let history = history_column(model, theme);
+
     let cuerpo = View::new(Style {
         flex_direction: FlexDirection::Row,
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
-    .children(vec![main_col, rail]);
+    .children(vec![history, main_col, rail]);
 
     // Tira de sesiones arriba: una tab por sesión (cambia todo el ambiente) +
     // el botón «+» que crea una sesión local nueva.
@@ -222,6 +226,80 @@ fn session_strip(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .children(row)
+}
+
+/// Ancho de la columna de historial a la izquierda (px).
+const HISTORY_W: f32 = 220.0;
+
+/// La columna de **historial** a la izquierda: los comandos corridos en la
+/// sesión activa (líneas `Prompt` del shell), el más reciente arriba. Clickear
+/// una línea la recarga en el input del shell (`Msg::RunFromHistory`).
+fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+
+    // Comandos de la sesión activa (en orden de ejecución; los invertimos para
+    // mostrar el más nuevo arriba). Cada `Prompt` tiene la forma "$ <cmd>".
+    let mut comandos: Vec<String> = Vec::new();
+    if let Some(s) = model.active() {
+        if let ModuleState::Shell(sh) = &s.shell.state {
+            comandos = sh
+                .output
+                .iter()
+                .filter(|l| l.kind == shuma_module_shell::OutputKind::Prompt)
+                .map(|l| l.text.trim_start_matches("$ ").to_string())
+                .collect();
+        }
+    }
+    comandos.reverse();
+    comandos.truncate(60); // sin scroll todavía: el tope cabe en pantalla
+
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned("Historial".to_string(), 11.0, theme.fg_muted, Alignment::Start);
+
+    let mut children = vec![header];
+    if comandos.is_empty() {
+        children.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned("(sin comandos aún)".to_string(), 11.0, theme.fg_muted, Alignment::Start),
+        );
+    } else {
+        for cmd in comandos {
+            let label = cmd.clone();
+            children.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                    padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                    align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .hover_fill(theme.bg_row_hover)
+                .text_aligned(label, 12.0, theme.fg_text, Alignment::Start)
+                .on_click(Msg::RunFromHistory(cmd)),
+            );
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(HISTORY_W), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(children)
 }
 
 /// Dibuja el icono **vectorial** de un diente (no texto: la fuente no trae los
