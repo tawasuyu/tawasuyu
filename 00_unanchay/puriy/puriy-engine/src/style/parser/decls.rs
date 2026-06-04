@@ -1516,6 +1516,41 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::GridTemplateAreas(Some(v.to_string())))
             }
         }
+        // Fase 7.509-7.512 — `grid-{row,column}-{start,end}`. Parse opaco
+        // de `<grid-line>` (gramática completa `auto | <ident> | <int> |
+        // span ...`). El resolver de grid lo evalúa cuando coloca ítems.
+        "grid-row-start" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") { Some(DeclKind::GridRowStart(None)) }
+            else { Some(DeclKind::GridRowStart(Some(v.to_string()))) }
+        }
+        "grid-row-end" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") { Some(DeclKind::GridRowEnd(None)) }
+            else { Some(DeclKind::GridRowEnd(Some(v.to_string()))) }
+        }
+        "grid-column-start" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") { Some(DeclKind::GridColumnStart(None)) }
+            else { Some(DeclKind::GridColumnStart(Some(v.to_string()))) }
+        }
+        "grid-column-end" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") { Some(DeclKind::GridColumnEnd(None)) }
+            else { Some(DeclKind::GridColumnEnd(Some(v.to_string()))) }
+        }
+        // Fase 7.513 — `text-emphasis-skip` (CSS Text Decoration 4). HEREDA.
+        "text-emphasis-skip" => match value.trim().to_ascii_lowercase().as_str() {
+            "spaces" => Some(DeclKind::TextEmphasisSkip(TextEmphasisSkip::Spaces)),
+            "punctuation" => Some(DeclKind::TextEmphasisSkip(TextEmphasisSkip::Punctuation)),
+            "symbols" => Some(DeclKind::TextEmphasisSkip(TextEmphasisSkip::Symbols)),
+            "narrow" => Some(DeclKind::TextEmphasisSkip(TextEmphasisSkip::Narrow)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

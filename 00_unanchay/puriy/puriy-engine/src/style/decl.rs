@@ -564,6 +564,16 @@ pub(crate) enum DeclKind {
     BorderImage(Option<String>),
     /// `grid-template-areas` (Fase 7.508). `None` = `none`. NO hereda. Plumb.
     GridTemplateAreas(Option<String>),
+    /// `grid-row-start` (Fase 7.509). `None` = `auto`. NO hereda. Plumb.
+    GridRowStart(Option<String>),
+    /// `grid-row-end` (Fase 7.510). `None` = `auto`. NO hereda. Plumb.
+    GridRowEnd(Option<String>),
+    /// `grid-column-start` (Fase 7.511). `None` = `auto`. NO hereda. Plumb.
+    GridColumnStart(Option<String>),
+    /// `grid-column-end` (Fase 7.512). `None` = `auto`. NO hereda. Plumb.
+    GridColumnEnd(Option<String>),
+    /// `text-emphasis-skip` (Fase 7.513). HEREDA. Plumb.
+    TextEmphasisSkip(TextEmphasisSkip),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -992,6 +1002,11 @@ impl Decl {
             DeclKind::BorderImageOutset(v) => s.border_image_outset = v.clone(),
             DeclKind::BorderImage(v) => s.border_image = v.clone(),
             DeclKind::GridTemplateAreas(v) => s.grid_template_areas = v.clone(),
+            DeclKind::GridRowStart(v) => s.grid_row_start = v.clone(),
+            DeclKind::GridRowEnd(v) => s.grid_row_end = v.clone(),
+            DeclKind::GridColumnStart(v) => s.grid_column_start = v.clone(),
+            DeclKind::GridColumnEnd(v) => s.grid_column_end = v.clone(),
+            DeclKind::TextEmphasisSkip(v) => s.text_emphasis_skip = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -896,6 +896,23 @@ pub struct ComputedStyle {
     /// resolución de áreas con nombre se necesite. `None` = `none`. NO
     /// hereda. Plumb.
     pub grid_template_areas: Option<String>,
+    /// `grid-row-start` (Fase 7.509). Parse opaco — la gramática
+    /// `<grid-line>` se resuelve cuando un resolver de grid lo necesite.
+    /// `None` = `auto`. NO hereda. Plumb.
+    pub grid_row_start: Option<String>,
+    /// `grid-row-end` (Fase 7.510). Parse opaco. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub grid_row_end: Option<String>,
+    /// `grid-column-start` (Fase 7.511). Parse opaco. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub grid_column_start: Option<String>,
+    /// `grid-column-end` (Fase 7.512). Parse opaco. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub grid_column_end: Option<String>,
+    /// `text-emphasis-skip` (Fase 7.513). CSS Text Decoration 4: qué
+    /// caracteres saltea la marca de énfasis. Default `Spaces`. **HEREDA**.
+    /// Plumb.
+    pub text_emphasis_skip: TextEmphasisSkip,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2654,6 +2671,17 @@ pub enum BorderImageRepeat {
     Space,
 }
 
+/// `text-emphasis-skip` (CSS Text Decoration 4). Default `Spaces`.
+/// Fase 7.513.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEmphasisSkip {
+    #[default]
+    Spaces,
+    Punctuation,
+    Symbols,
+    Narrow,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3894,6 +3922,11 @@ impl Default for ComputedStyle {
             border_image_outset: None,
             border_image: None,
             grid_template_areas: None,
+            grid_row_start: None,
+            grid_row_end: None,
+            grid_column_start: None,
+            grid_column_end: None,
+            text_emphasis_skip: TextEmphasisSkip::Spaces,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
