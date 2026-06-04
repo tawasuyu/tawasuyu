@@ -7373,6 +7373,79 @@ mod tests {
     }
 
     #[test]
+    fn background_position_xy_grid_auto_fase_7_439_443() {
+        // Cinco props: background-position-{x,y} + grid-auto-{flow,columns,rows}.
+        // Las dos primeras reescriben sólo un eje del BackgroundPosition; las
+        // tres siguientes pueblan campos nuevos en ComputedStyle (no heredan).
+
+        // 1) Parsers de cabecera.
+        assert_eq!(parse_background_position_x("left"), Some(LengthVal::Pct(0.0)));
+        assert_eq!(parse_background_position_x("CENTER"), Some(LengthVal::Pct(50.0)));
+        assert_eq!(parse_background_position_x("right"), Some(LengthVal::Pct(100.0)));
+        assert_eq!(parse_background_position_x("25%"), Some(LengthVal::Pct(25.0)));
+        assert_eq!(parse_background_position_x("10px"), Some(LengthVal::Px(10.0)));
+        assert_eq!(parse_background_position_x("top"), None);
+        assert_eq!(parse_background_position_y("top"), Some(LengthVal::Pct(0.0)));
+        assert_eq!(parse_background_position_y("bottom"), Some(LengthVal::Pct(100.0)));
+        assert_eq!(parse_background_position_y("33%"), Some(LengthVal::Pct(33.0)));
+        assert_eq!(parse_background_position_y("left"), None);
+        assert_eq!(parse_grid_auto_flow("row"), Some(GridAutoFlow::Row));
+        assert_eq!(parse_grid_auto_flow("column"), Some(GridAutoFlow::Column));
+        assert_eq!(parse_grid_auto_flow("dense"), Some(GridAutoFlow::RowDense));
+        assert_eq!(parse_grid_auto_flow("row dense"), Some(GridAutoFlow::RowDense));
+        assert_eq!(
+            parse_grid_auto_flow("dense column"),
+            Some(GridAutoFlow::ColumnDense)
+        );
+        assert_eq!(parse_grid_auto_flow("nope"), None);
+
+        // 2) E2E.
+        let html = r##"<html><head><style>
+            #a { background-position: left top;
+                 background-position-x: 25%;
+                 background-position-y: 80% }
+            #b { background-position-y: bottom }
+            #c { grid-auto-flow: column dense;
+                 grid-auto-columns: 100px 200px;
+                 grid-auto-rows: 50px auto }
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // #a — los longhands -x/-y pisan al shorthand previo.
+        let cs_a = eng.compute(&by("a"));
+        assert_eq!(cs_a.background_position.x, LengthVal::Pct(25.0));
+        assert_eq!(cs_a.background_position.y, LengthVal::Pct(80.0));
+        // #b — sólo se cambia Y; X queda en default (0%).
+        let cs_b = eng.compute(&by("b"));
+        assert_eq!(cs_b.background_position.x, LengthVal::Pct(0.0));
+        assert_eq!(cs_b.background_position.y, LengthVal::Pct(100.0));
+        // #c — grid auto flow + tracks implícitos.
+        let cs_c = eng.compute(&by("c"));
+        assert_eq!(cs_c.grid_auto_flow, GridAutoFlow::ColumnDense);
+        assert_eq!(
+            cs_c.grid_auto_columns,
+            vec![GridTrackSize::Px(100.0), GridTrackSize::Px(200.0)]
+        );
+        assert_eq!(
+            cs_c.grid_auto_rows,
+            vec![GridTrackSize::Px(50.0), GridTrackSize::Auto]
+        );
+    }
+
+    #[test]
     fn contain_intrinsic_size_fase_7_434_438() {
         // Cinco props nuevas: contain-intrinsic-{width,height,block-size,
         // inline-size} (longhands) + contain-intrinsic-size (shorthand).

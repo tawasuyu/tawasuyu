@@ -711,6 +711,14 @@ pub struct ComputedStyle {
     pub contain_intrinsic_width: ContainIntrinsicSize,
     /// `contain-intrinsic-height` (Fase 7.435). Default `None`. NO hereda. Plumb.
     pub contain_intrinsic_height: ContainIntrinsicSize,
+    /// `grid-auto-flow` (Fase 7.441). Default `Row`. NO hereda. Plumb.
+    pub grid_auto_flow: GridAutoFlow,
+    /// `grid-auto-columns` (Fase 7.442). Lista de tracks implícitos
+    /// (CSS Grid 1). Vacío = `auto`. NO hereda. Plumb.
+    pub grid_auto_columns: Vec<GridTrackSize>,
+    /// `grid-auto-rows` (Fase 7.443). Lista de tracks implícitos
+    /// (CSS Grid 1). Vacío = `auto`. NO hereda. Plumb.
+    pub grid_auto_rows: Vec<GridTrackSize>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2220,6 +2228,17 @@ pub enum FontVariantEmoji {
     Unicode,
 }
 
+/// `grid-auto-flow` (CSS Grid 1). Cómo se colocan los ítems implícitos.
+/// Default `Row`. NO hereda. Fase 7.441.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GridAutoFlow {
+    #[default]
+    Row,
+    Column,
+    RowDense,
+    ColumnDense,
+}
+
 /// `contain-intrinsic-*` (CSS Containment 3). Tamaño intrínseco declarado
 /// para un elemento `contain: size` (o `content-visibility: auto`). El
 /// prefijo `auto` indica "usá el último recordado, si no, este length".
@@ -3333,6 +3352,9 @@ impl Default for ComputedStyle {
             font_variant_emoji: FontVariantEmoji::Normal,
             contain_intrinsic_width: ContainIntrinsicSize::None,
             contain_intrinsic_height: ContainIntrinsicSize::None,
+            grid_auto_flow: GridAutoFlow::Row,
+            grid_auto_columns: Vec::new(),
+            grid_auto_rows: Vec::new(),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

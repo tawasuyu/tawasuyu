@@ -432,6 +432,18 @@ pub(crate) enum DeclKind {
     ContainIntrinsicWidth(ContainIntrinsicSize),
     /// `contain-intrinsic-height` (Fase 7.435). NO hereda. Plumb.
     ContainIntrinsicHeight(ContainIntrinsicSize),
+    /// `background-position-x` (Fase 7.439). Reescribe sólo el eje X
+    /// de `background_position`. NO hereda. Plumb.
+    BackgroundPositionX(LengthVal),
+    /// `background-position-y` (Fase 7.440). Reescribe sólo el eje Y
+    /// de `background_position`. NO hereda. Plumb.
+    BackgroundPositionY(LengthVal),
+    /// `grid-auto-flow` (Fase 7.441). NO hereda. Plumb.
+    GridAutoFlow(GridAutoFlow),
+    /// `grid-auto-columns` (Fase 7.442). NO hereda. Plumb.
+    GridAutoColumns(Vec<GridTrackSize>),
+    /// `grid-auto-rows` (Fase 7.443). NO hereda. Plumb.
+    GridAutoRows(Vec<GridTrackSize>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -789,6 +801,11 @@ impl Decl {
             DeclKind::FontVariantEmoji(e) => s.font_variant_emoji = *e,
             DeclKind::ContainIntrinsicWidth(c) => s.contain_intrinsic_width = *c,
             DeclKind::ContainIntrinsicHeight(c) => s.contain_intrinsic_height = *c,
+            DeclKind::BackgroundPositionX(v) => s.background_position.x = *v,
+            DeclKind::BackgroundPositionY(v) => s.background_position.y = *v,
+            DeclKind::GridAutoFlow(f) => s.grid_auto_flow = *f,
+            DeclKind::GridAutoColumns(t) => s.grid_auto_columns = t.clone(),
+            DeclKind::GridAutoRows(t) => s.grid_auto_rows = t.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

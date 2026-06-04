@@ -804,6 +804,20 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_contain_intrinsic_size(value).map(DeclKind::ContainIntrinsicWidth)
         }
         // Fase 7.438 — `contain-intrinsic-size` shorthand: ver `parse_declarations`.
+        // Fase 7.439 — `background-position-x` (CSS Backgrounds 3). NO hereda.
+        "background-position-x" => {
+            parse_background_position_x(value).map(DeclKind::BackgroundPositionX)
+        }
+        // Fase 7.440 — `background-position-y` (CSS Backgrounds 3). NO hereda.
+        "background-position-y" => {
+            parse_background_position_y(value).map(DeclKind::BackgroundPositionY)
+        }
+        // Fase 7.441 — `grid-auto-flow` (CSS Grid 1). NO hereda.
+        "grid-auto-flow" => parse_grid_auto_flow(value).map(DeclKind::GridAutoFlow),
+        // Fase 7.442 — `grid-auto-columns` (CSS Grid 1). NO hereda.
+        "grid-auto-columns" => parse_grid_template(value).map(DeclKind::GridAutoColumns),
+        // Fase 7.443 — `grid-auto-rows` (CSS Grid 1). NO hereda.
+        "grid-auto-rows" => parse_grid_template(value).map(DeclKind::GridAutoRows),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -3902,6 +3916,47 @@ pub(crate) fn parse_text_size_adjust(value: &str) -> Option<TextSizeAdjust> {
         return num.trim().parse::<f32>().ok().map(TextSizeAdjust::Pct);
     }
     None
+}
+
+/// `background-position-x: left | center | right | <length-or-pct>`. Sólo
+/// eje X — los offsets con keyword (`right 10%`) no se soportan. Fase 7.439.
+pub(crate) fn parse_background_position_x(value: &str) -> Option<LengthVal> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "left" => Some(LengthVal::Pct(0.0)),
+        "center" => Some(LengthVal::Pct(50.0)),
+        "right" => Some(LengthVal::Pct(100.0)),
+        other => parse_length_or_pct(other),
+    }
+}
+
+/// `background-position-y: top | center | bottom | <length-or-pct>`. Sólo
+/// eje Y — los offsets con keyword (`bottom 10%`) no se soportan. Fase 7.440.
+pub(crate) fn parse_background_position_y(value: &str) -> Option<LengthVal> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "top" => Some(LengthVal::Pct(0.0)),
+        "center" => Some(LengthVal::Pct(50.0)),
+        "bottom" => Some(LengthVal::Pct(100.0)),
+        other => parse_length_or_pct(other),
+    }
+}
+
+/// `grid-auto-flow: row | column | row dense | column dense | dense`. CSS
+/// Grid 1. El `dense` solo equivale a `row dense`. Fase 7.441.
+pub(crate) fn parse_grid_auto_flow(value: &str) -> Option<GridAutoFlow> {
+    let toks: Vec<String> = value
+        .trim()
+        .split_whitespace()
+        .map(|t| t.to_ascii_lowercase())
+        .collect();
+    let refs: Vec<&str> = toks.iter().map(|s| s.as_str()).collect();
+    match refs.as_slice() {
+        ["row"] => Some(GridAutoFlow::Row),
+        ["column"] => Some(GridAutoFlow::Column),
+        ["dense"] => Some(GridAutoFlow::RowDense),
+        ["row", "dense"] | ["dense", "row"] => Some(GridAutoFlow::RowDense),
+        ["column", "dense"] | ["dense", "column"] => Some(GridAutoFlow::ColumnDense),
+        _ => None,
+    }
 }
 
 /// Divide los tokens del shorthand `contain-intrinsic-size` en width y
