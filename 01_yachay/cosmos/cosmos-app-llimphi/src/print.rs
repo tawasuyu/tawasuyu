@@ -285,7 +285,13 @@ mod tests {
     fn dial_90_a_png() {
         use llimphi_ui::llimphi_layout::taffy::prelude::{length, Size, Style};
         let chart = crate::engine::sample_chart();
-        let (render, _e) = crate::engine::compute(&chart, &[], 1, false, 0);
+        let (render, _e) = crate::engine::compute(
+            &chart,
+            &[crate::model::OverlayKind::Topocentric],
+            1,
+            false,
+            0,
+        );
         let size = 540.0_f32;
         let rgba = |r, g, b, a| cosmos_render::Rgba { r, g, b, a };
         let cmds = crate::chrome::uranian_dial_cmds(

@@ -108,6 +108,16 @@ pub(crate) fn tile_astrocarto(
         .flat_map(|l| l.glyphs.iter())
         .map(|g| (g.symbol.clone(), g.deg as f64))
         .collect();
+    // Cuerpos topocéntricos (si el overlay está activo): sus líneas se
+    // dibujan punteadas finas sobre las geocéntricas → el paralaje se ve
+    // donde la línea topo se despega de la geo (sobre todo la Luna).
+    let topo_bodies: Vec<(String, f64)> = render
+        .layers
+        .iter()
+        .filter(|l| l.module_id == "topocentric" && matches!(l.kind, LayerKind::Bodies))
+        .flat_map(|l| l.glyphs.iter())
+        .map(|g| (g.symbol.clone(), g.deg as f64))
+        .collect();
 
     let bg = theme.bg_panel_alt;
     let grid = theme.fg_muted;
@@ -333,6 +343,55 @@ pub(crate) fn tile_astrocarto(
                 if set_started {
                     scene.stroke(&Stroke::new(px_w(0.9)), xform, body_color, None, &set);
                 }
+            }
+        }
+
+        // Líneas TOPOCÉNTRICAS: mismas MC/orto/ocaso pero punteadas finas
+        // (dash corto) en el color del cuerpo. Coinciden con las geo salvo
+        // donde el paralaje las desplaza (la Luna, sobre todo).
+        for (name, ecl_lon) in &topo_bodies {
+            let (ra, dec) = ecliptic_to_equatorial(*ecl_lon);
+            let mc_lon = wrap_lon(ra - gmst);
+            let body_color = color_de_cuerpo(name);
+            let dash = Stroke::new(px_w(1.2)).with_dashes(0.0, [px_w(2.0), px_w(3.0)]);
+            let (x_mc, _) = project_lon_lat(mc_lon, 0.0);
+            let mut p = BezPath::new();
+            p.move_to((x_mc as f64, 0.0));
+            p.line_to((x_mc as f64, ASTROCARTO_H as f64));
+            scene.stroke(&dash, xform, body_color, None, &p);
+
+            if dec.abs() < 89.9 {
+                let mut rise = BezPath::new();
+                let mut set = BezPath::new();
+                let (mut rise_started, mut set_started) = (false, false);
+                let dec_r = dec.to_radians();
+                let mut phi_deg = -85.0_f64;
+                while phi_deg <= 85.0 {
+                    let cos_h = -phi_deg.to_radians().tan() * dec_r.tan();
+                    if cos_h.abs() <= 1.0 {
+                        let h_deg = cos_h.acos().to_degrees();
+                        let (xr, yr) = project_lon_lat(wrap_lon(ra - h_deg - gmst), phi_deg);
+                        let (xs, ys) = project_lon_lat(wrap_lon(ra + h_deg - gmst), phi_deg);
+                        if rise_started {
+                            rise.line_to((xr as f64, yr as f64));
+                        } else {
+                            rise.move_to((xr as f64, yr as f64));
+                            rise_started = true;
+                        }
+                        if set_started {
+                            set.line_to((xs as f64, ys as f64));
+                        } else {
+                            set.move_to((xs as f64, ys as f64));
+                            set_started = true;
+                        }
+                    } else {
+                        rise_started = false;
+                        set_started = false;
+                    }
+                    phi_deg += 3.0;
+                }
+                scene.stroke(&dash, xform, body_color, None, &rise);
+                scene.stroke(&dash, xform, body_color, None, &set);
             }
         }
 

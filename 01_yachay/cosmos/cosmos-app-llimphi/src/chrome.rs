@@ -1689,6 +1689,21 @@ pub(crate) fn uranian_dial_cmds(
         let col = if on_pointer { accent } else { pal.planet(&canon) };
         cmds.extend(planet_commands(&canon, gx, gy, size * 0.042, col, 1.7));
     }
+    // Posiciones TOPOCÉNTRICAS (si el overlay está activo): un anillo hueco
+    // en el aro, en el color del planeta. Donde difiere del geocéntrico (la
+    // Luna, sobre todo) el anillo se separa del glyph → se ve el paralaje.
+    for (sym, deg) in topo_body_lons(render) {
+        let ang = da(deg.rem_euclid(90.0));
+        let (mx, my) = pt(r * 0.96, ang);
+        cmds.push(DrawCommand::Circle {
+            cx: mx,
+            cy: my,
+            r: size * 0.012,
+            stroke: Some(pal.planet(&canon_glyph(&sym))),
+            fill: None,
+            stroke_w: 1.4,
+        });
+    }
     cmds
 }
 
