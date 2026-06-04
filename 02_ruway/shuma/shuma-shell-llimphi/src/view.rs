@@ -98,17 +98,56 @@ const RAIL_W: f32 = 44.0;
 const SESSION_RAIL_W: f32 = 50.0;
 
 pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Msg> {
-    // Dos rails de DIENTES. Regla uniforme: el rail va pegado a su lado y su
-    // PANEL se despliega a la derecha del rail (nunca el rail a la derecha del
-    // panel). Orden:  sesiones·rail | sesión·panel | CANVAS | tools·rail | tool·panel
-    let mut row: Vec<View<Msg>> = vec![session_rail(model, theme)];
-    if model.session_panel_open {
-        row.push(session_panel(model, theme));
-    }
-    row.push(canvas_view(model, theme));
-    row.push(tool_rail(model, theme));
+    // Estándar del dock-rail: el rail de dientes va PEGADO al canvas y su panel
+    // se despliega hacia AFUERA (resizable, drag del divisor). Nunca el rail a la
+    // derecha de su panel. Orden:
+    //   panel-sesión(resizable) | rail-sesión | CANVAS | rail-tool | panel-tool(resizable)
+    let sp = SplitterPalette::from_theme(theme);
+
+    // Núcleo: rail-sesión | canvas | rail-tool (los rails pegados al canvas).
+    let inner = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        session_rail(model, theme),
+        canvas_view(model, theme),
+        tool_rail(model, theme),
+    ]);
+
+    // Panel de herramienta a la derecha del rail-tool, resizable.
+    let mut core = inner;
     if let Some(tool) = model.active_tool {
-        row.push(tool_panel(model, tool, theme));
+        core = splitter_two(
+            Direction::Row,
+            core,
+            PaneSize::Flex,
+            tool_panel(model, tool, theme),
+            PaneSize::Fixed(model.monitors_width),
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetToolWidth(dx)),
+                DragPhase::End => None,
+            },
+            &sp,
+        );
+    }
+
+    // Panel de sesión a la izquierda del rail-sesión, resizable.
+    if model.session_panel_open {
+        core = splitter_two(
+            Direction::Row,
+            session_panel(model, theme),
+            PaneSize::Fixed(model.session_w),
+            core,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetSessionWidth(dx)),
+                DragPhase::End => None,
+            },
+            &sp,
+        );
     }
 
     View::new(Style {
@@ -116,7 +155,7 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(row)
+    .children(vec![core])
 }
 
 /// El **panel de la sesión activa** (a la derecha de su rail): TODA su
@@ -181,7 +220,7 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         );
     }
 
-    panel_frame(children, model.monitors_width, theme)
+    panel_frame(children, theme)
 }
 
 /// cwd del shell de una sesión (para el panel de config).
@@ -502,10 +541,10 @@ fn tool_rail(model: &Model, theme: &Theme) -> View<Msg> {
 
 /// Marco de un panel lateral: ancho fijo, **padding** (los márgenes que
 /// faltaban), fondo y gap entre secciones.
-fn panel_frame(children: Vec<View<Msg>>, width: f32, theme: &Theme) -> View<Msg> {
+fn panel_frame(children: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(width), height: percent(1.0_f32) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         padding: Rect {
             left: length(12.0_f32),
             right: length(12.0_f32),
@@ -604,7 +643,7 @@ fn tool_panel(model: &Model, tool: Tool, theme: &Theme) -> View<Msg> {
         Tool::Explorer => explorer_panel(model, theme),
         Tool::Matilda => matilda_panel(model, theme),
     };
-    panel_frame(vec![inner], model.monitors_width, theme)
+    panel_frame(vec![inner], theme)
 }
 
 /// Panel Explorer/SFTP: lista los archivos del cwd de la sesión (local). El

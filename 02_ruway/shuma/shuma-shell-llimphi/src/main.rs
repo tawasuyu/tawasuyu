@@ -43,8 +43,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, PathEl, Point, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{
-    App, Handle, KeyEvent, KeyState, Modifiers, PaintRect, View, WheelDelta,
+    App, DragPhase, Handle, KeyEvent, KeyState, Modifiers, PaintRect, View, WheelDelta,
 };
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
@@ -492,7 +493,8 @@ struct Model {
     /// re-clickear el activo lo cierra.
     session_panel_open: bool,
 
-    // Monitor stack en el panel derecho del área central.
+    // Anchos resizables de los paneles laterales (px).
+    session_w: f32,
     sysmon: SystemSampler,
     last_snapshot: Option<Snapshot>,
     monitors_width: f32,
@@ -566,6 +568,10 @@ enum Msg {
     SetDistro(Distro),
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
+    /// Resize del panel de sesión (izq) / de herramienta (der), por drag del
+    /// divisor del `splitter`.
+    SetSessionWidth(f32),
+    SetToolWidth(f32),
     /// Click en una línea del historial: carga ese comando en el input del
     /// shell de la sesión activa.
     RunFromHistory(String),
@@ -671,6 +677,7 @@ impl App for Shell {
             active_tool: Some(Tool::History),
             // Y el panel de la draft abierto a la izquierda (su config).
             session_panel_open: true,
+            session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
             monitors_width: MONITORS_INITIAL_WIDTH,
@@ -785,12 +792,11 @@ impl App for Shell {
                     m.active_session = m.active_session.min(m.sessions.len() - 1);
                 }
             }
-            Msg::CloseSession(idx) => {
-                // La draft (0) no se cierra; las demás se descartan.
-                if idx > 0 && idx < m.sessions.len() {
-                    m.sessions.remove(idx);
-                    m.active_session = m.active_session.min(m.sessions.len() - 1);
-                }
+            Msg::SetSessionWidth(dx) => {
+                m.session_w = (m.session_w + dx).clamp(180.0, 480.0);
+            }
+            Msg::SetToolWidth(dx) => {
+                m.monitors_width = (m.monitors_width - dx).clamp(180.0, 480.0);
             }
             Msg::Module(slot, mmsg) => {
                 // Hook: SelectRoot del módulo minga dispara la carga
