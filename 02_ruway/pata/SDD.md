@@ -461,6 +461,12 @@ borde; shuma provee el contenido.
     `Msg::NavOpenWith(id, Some(app_id))`; "el sistema" → `NavOpenWith(id, None)`
     (xdg-open); "Cancelar"/Esc → `NavMenuCancel`. El render lee sólo `NavState`
     (decoplado del registro). 2 tests del listado de handlers.
-  - **Pendientes opcionales**: discernimiento por contenido (`shuma-discern`) como
-    upgrade del mime por extensión; drag en el backend layer-shell para que el modo
-    grafo seleccione (hoy de sólo lectura ahí).
+  - **drag en layer-shell ✅** — el pointer handler del backend layer-shell rastrea
+    un drag mínimo (press→move→release) e invoca el handler `draggable` del nodo
+    bajo el cursor: en `Press` sobre un nodo arrastrable arranca el drag (no lo
+    trata como click), en `Motion` le pasa el delta (`Move`), en `Release` emite
+    `End`. Así el modo **grafo** del navegador selecciona también bajo Wayland (el
+    nodegraph selecciona al soltar) — ya no es de sólo lectura ahí. `LayerDrag`
+    guarda el handler + última posición.
+  - **Pendiente opcional**: discernimiento por contenido (`shuma-discern`) como
+    upgrade del mime por extensión (a costa de leer una muestra del archivo).

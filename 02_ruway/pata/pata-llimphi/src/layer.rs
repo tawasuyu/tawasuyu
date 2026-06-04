@@ -62,7 +62,8 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_compositor::{
-    hit_test_click, hit_test_hover, hit_test_scroll, measure_text_node, mount, paint, Mounted,
+    hit_test_click, hit_test_hover, hit_test_scroll, measure_text_node, mount, paint, DragFn,
+    DragPhase, Mounted,
 };
 use llimphi_ui::llimphi_hal::{wgpu, Hal, RawSurface, Surface as _};
 use llimphi_ui::llimphi_layout::{taffy, ComputedLayout, LayoutTree};
@@ -107,6 +108,18 @@ struct PanelGpu {
 struct RenderCache {
     mounted: Mounted<Msg>,
     computed: ComputedLayout,
+}
+
+/// Un arrastre en curso sobre un nodo arrastrable (p. ej. un nodo del grafo del
+/// navegador, que selecciona al soltar). El backend layer-shell rastrea el press→
+/// move→release mínimo para invocar el handler `draggable` del nodo —el bucle
+/// winit lo hace nativo; acá lo replicamos a mano para que el modo grafo
+/// seleccione también bajo Wayland.
+struct LayerDrag {
+    /// El handler del nodo: `Fn(DragPhase, dx, dy) -> Option<Msg>`.
+    handler: DragFn<Msg>,
+    /// Última posición del puntero, para el delta de cada `Move`.
+    last: (f32, f32),
 }
 
 /// El estado de una tarjeta flotante (estilo conky) montada como su propia layer
@@ -209,6 +222,8 @@ struct LayerApp {
     /// Canal para que los hilos one-shot de `resolve_monad` entreguen miembros.
     members_tx: Sender<MembersOutcome>,
     members_rx: Receiver<MembersOutcome>,
+    /// Arrastre en curso (selección de nodo del grafo). `None` si no se arrastra.
+    drag: Option<LayerDrag>,
     /// Una layer surface por cada barra de la config.
     panels: Vec<Panel>,
     /// Índice (en `panels`) de la surface del **tooltip flotante**: una layer
@@ -349,6 +364,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         nav_rx,
         members_tx,
         members_rx,
+        drag: None,
         panels: Vec::new(),
         tooltip_pi: None,
         tooltip_text: None,
@@ -1472,6 +1488,23 @@ impl PointerHandler for LayerApp {
             // realce estaba muerto en todas las barras.
             match e.kind {
                 PointerEventKind::Motion { .. } => {
+                    // Drag en curso: el delta va al handler del nodo (Move). El
+                    // nodegraph del navegador no reposiciona (devuelve None en
+                    // Move); selecciona al soltar (End).
+                    if self.drag.is_some() {
+                        let (px, py) = (e.position.0 as f32, e.position.1 as f32);
+                        let (handler, last) = {
+                            let d = self.drag.as_ref().unwrap();
+                            (d.handler.clone(), d.last)
+                        };
+                        if let Some(d) = self.drag.as_mut() {
+                            d.last = (px, py);
+                        }
+                        if let Some(msg) = (handler)(DragPhase::Move, px - last.0, py - last.1) {
+                            self.handle_msg(msg);
+                        }
+                        continue;
+                    }
                     if let Some(pi) = self.panel_de(&e.surface) {
                         let (px, py) = (e.position.0 as f32, e.position.1 as f32);
                         let nuevo = self.panels[pi]
@@ -1523,6 +1556,19 @@ impl PointerHandler for LayerApp {
                 }
                 continue;
             }
+            // Soltar el botón izquierdo termina un drag en curso: el handler del
+            // nodo recibe `End` y emite su Msg (p. ej. seleccionar el nodo del
+            // grafo). Los deltas en End los ignoran los consumidores.
+            if let PointerEventKind::Release { button, .. } = e.kind {
+                if button == BTN_LEFT {
+                    if let Some(d) = self.drag.take() {
+                        if let Some(msg) = (d.handler)(DragPhase::End, 0.0, 0.0) {
+                            self.handle_msg(msg);
+                        }
+                    }
+                }
+                continue;
+            }
             if let PointerEventKind::Press { button, .. } = e.kind {
                 if button != BTN_LEFT && button != BTN_RIGHT {
                     continue;
@@ -1536,6 +1582,18 @@ impl PointerHandler for LayerApp {
                 };
                 let (px, py) = (e.position.0 as f32, e.position.1 as f32);
                 let derecho = button == BTN_RIGHT;
+                // Nodo arrastrable bajo el press (izquierdo): arranca un drag y NO
+                // lo tratamos como click (el nodegraph selecciona al soltar).
+                if !derecho {
+                    let handler = self.panels[pi].cache.as_ref().and_then(|c| {
+                        let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
+                        c.mounted.nodes.get(i)?.drag.clone()
+                    });
+                    if let Some(handler) = handler {
+                        self.drag = Some(LayerDrag { handler, last: (px, py) });
+                        continue;
+                    }
+                }
                 let msg = self.panels[pi].cache.as_ref().and_then(|c| {
                     let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
                     let n = c.mounted.nodes.get(i)?;
