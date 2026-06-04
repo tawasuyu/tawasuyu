@@ -7365,6 +7365,46 @@ mod tests {
     }
 
     #[test]
+    fn scroll_margin_inline_padding_block_fase_7_419_423() {
+        // Cierre del lógico de `scroll-margin` (inline-end + shorthand) y
+        // arranque de `scroll-padding-block` longhands + shorthand. En LTR
+        // horizontal: inline=X (left/right), block=Y (top/bottom).
+        let html = r##"<html><head><style>
+            #a { scroll-margin-inline-end: 7px }
+            #b { scroll-margin-inline: 9px 11px }
+            #c { scroll-padding-block-start: 3px; scroll-padding-block-end: 13% }
+            #d { scroll-padding-block: 17px }
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut by_id: std::collections::HashMap<String, _> = Default::default();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if let Some(id) = crate::dom::attr(n, "id") {
+                by_id.insert(id, n.clone());
+            }
+        });
+        let cs_a = eng.compute(&by_id["a"]);
+        assert_eq!(cs_a.scroll_margin.right, 7.0);
+        let cs_b = eng.compute(&by_id["b"]);
+        assert_eq!(cs_b.scroll_margin.left, 9.0);
+        assert_eq!(cs_b.scroll_margin.right, 11.0);
+        let cs_c = eng.compute(&by_id["c"]);
+        assert_eq!(cs_c.scroll_padding.top, LengthVal::Px(3.0));
+        assert_eq!(cs_c.scroll_padding.bottom, LengthVal::Pct(13.0));
+        let cs_d = eng.compute(&by_id["d"]);
+        // 1 valor → mismo top y bottom.
+        assert_eq!(cs_d.scroll_padding.top, LengthVal::Px(17.0));
+        assert_eq!(cs_d.scroll_padding.bottom, LengthVal::Px(17.0));
+        // Lados no tocados quedan en `Auto` (default de scroll-padding).
+        assert_eq!(cs_d.scroll_padding.left, LengthVal::Auto);
+    }
+
+    #[test]
     fn overscroll_behavior_block_fase_7_413() {
         // `overscroll-behavior-block` mapea al longhand físico `-y`
         // (eje vertical en LTR horizontal). NO toca el `-x`.

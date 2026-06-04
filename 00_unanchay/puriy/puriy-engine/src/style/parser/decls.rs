@@ -125,6 +125,37 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `scroll-margin-inline: <start> [<end>]` (Fase 7.420). En LTR
+        // horizontal: start=left, end=right. Misma semántica que el
+        // `-block` (1→ambos, 2→start/end; rechazo total si algún token
+        // falla).
+        if prop.eq_ignore_ascii_case("scroll-margin-inline") {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            let vals: Vec<f32> =
+                parts.iter().filter_map(|p| parse_length_px(p)).collect();
+            if !vals.is_empty() && vals.len() == parts.len() {
+                let (s, e) =
+                    if vals.len() == 1 { (vals[0], vals[0]) } else { (vals[0], vals[1]) };
+                out.push(Decl { kind: DeclKind::ScrollMarginLeft(s), important });
+                out.push(Decl { kind: DeclKind::ScrollMarginRight(e), important });
+            }
+            continue;
+        }
+        // `scroll-padding-block: <start> [<end>]` (Fase 7.423). Misma
+        // semántica que `scroll-margin-block` pero los longhands usan
+        // `LengthVal` (length/%, no f32 puro).
+        if prop.eq_ignore_ascii_case("scroll-padding-block") {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            let vals: Vec<LengthVal> =
+                parts.iter().filter_map(|p| parse_length_or_pct(p)).collect();
+            if !vals.is_empty() && vals.len() == parts.len() {
+                let (s, e) =
+                    if vals.len() == 1 { (vals[0], vals[0]) } else { (vals[0], vals[1]) };
+                out.push(Decl { kind: DeclKind::ScrollPaddingTop(s), important });
+                out.push(Decl { kind: DeclKind::ScrollPaddingBottom(e), important });
+            }
+            continue;
+        }
         // `scroll-snap-align: <block> [<inline>]` — con 1 valor se aplica a
         // ambos ejes. Fase 7.269.
         if prop.eq_ignore_ascii_case("scroll-snap-align") {
@@ -656,7 +687,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "scroll-margin-inline-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginLeft)
         }
-        // `scroll-margin-block` shorthand (Fase 7.417): ver `parse_declarations`.
+        // Fase 7.419 — `scroll-margin-inline-end` = right en LTR horizontal.
+        "scroll-margin-inline-end" => {
+            parse_length_px(value).map(DeclKind::ScrollMarginRight)
+        }
+        // Fase 7.421 — `scroll-padding-block-start` = top en LTR horizontal.
+        "scroll-padding-block-start" => {
+            parse_length_or_pct(value).map(DeclKind::ScrollPaddingTop)
+        }
+        // Fase 7.422 — `scroll-padding-block-end` = bottom en LTR horizontal.
+        "scroll-padding-block-end" => {
+            parse_length_or_pct(value).map(DeclKind::ScrollPaddingBottom)
+        }
+        // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
+        // 7.420), `scroll-padding-block` (Fase 7.423) shorthands: ver
+        // `parse_declarations`.
         "touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
         "clip-path" | "-webkit-clip-path" => Some(DeclKind::ClipPath(parse_clip_path(value))),
         "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),
