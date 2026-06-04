@@ -554,6 +554,16 @@ pub(crate) enum DeclKind {
     BorderImageSource(Option<String>),
     /// `border-image-repeat` (Fase 7.503). NO hereda. Plumb.
     BorderImageRepeat(BorderImageRepeat, BorderImageRepeat),
+    /// `border-image-slice` (Fase 7.504). `None` = `100%`. NO hereda. Plumb.
+    BorderImageSlice(Option<String>),
+    /// `border-image-width` (Fase 7.505). `None` = `1`. NO hereda. Plumb.
+    BorderImageWidth(Option<String>),
+    /// `border-image-outset` (Fase 7.506). `None` = `0`. NO hereda. Plumb.
+    BorderImageOutset(Option<String>),
+    /// `border-image` shorthand (Fase 7.507). `None` = `none`. NO hereda. Plumb.
+    BorderImage(Option<String>),
+    /// `grid-template-areas` (Fase 7.508). `None` = `none`. NO hereda. Plumb.
+    GridTemplateAreas(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -977,6 +987,11 @@ impl Decl {
                 s.border_image_repeat_h = *h;
                 s.border_image_repeat_v = *v;
             }
+            DeclKind::BorderImageSlice(v) => s.border_image_slice = v.clone(),
+            DeclKind::BorderImageWidth(v) => s.border_image_width = v.clone(),
+            DeclKind::BorderImageOutset(v) => s.border_image_outset = v.clone(),
+            DeclKind::BorderImage(v) => s.border_image = v.clone(),
+            DeclKind::GridTemplateAreas(v) => s.grid_template_areas = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

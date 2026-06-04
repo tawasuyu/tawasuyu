@@ -879,6 +879,23 @@ pub struct ComputedStyle {
     /// Default `(Stretch, Stretch)`. NO hereda. Plumb.
     pub border_image_repeat_h: BorderImageRepeat,
     pub border_image_repeat_v: BorderImageRepeat,
+    /// `border-image-slice` (Fase 7.504). Parse opaco — la gramática
+    /// (`<number-percentage>{1,4} && fill?`) se evalúa cuando un
+    /// renderer lo necesite. `None` = default (`100%`). NO hereda. Plumb.
+    pub border_image_slice: Option<String>,
+    /// `border-image-width` (Fase 7.505). Parse opaco. `None` = default
+    /// (`1`). NO hereda. Plumb.
+    pub border_image_width: Option<String>,
+    /// `border-image-outset` (Fase 7.506). Parse opaco. `None` = default
+    /// (`0`). NO hereda. Plumb.
+    pub border_image_outset: Option<String>,
+    /// `border-image` shorthand (Fase 7.507). Parse opaco. `None` = `none`.
+    /// NO hereda. Plumb.
+    pub border_image: Option<String>,
+    /// `grid-template-areas` (Fase 7.508). Parse opaco hasta que la
+    /// resolución de áreas con nombre se necesite. `None` = `none`. NO
+    /// hereda. Plumb.
+    pub grid_template_areas: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3872,6 +3889,11 @@ impl Default for ComputedStyle {
             border_image_source: None,
             border_image_repeat_h: BorderImageRepeat::Stretch,
             border_image_repeat_v: BorderImageRepeat::Stretch,
+            border_image_slice: None,
+            border_image_width: None,
+            border_image_outset: None,
+            border_image: None,
+            grid_template_areas: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

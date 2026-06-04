@@ -1477,6 +1477,45 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 _ => None,
             }
         }
+        // Fase 7.504 — `border-image-slice`. Parse opaco (`<n-p>{1,4} && fill?`).
+        "border-image-slice" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else { Some(DeclKind::BorderImageSlice(Some(v.to_string()))) }
+        }
+        // Fase 7.505 — `border-image-width`. Parse opaco.
+        "border-image-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else { Some(DeclKind::BorderImageWidth(Some(v.to_string()))) }
+        }
+        // Fase 7.506 — `border-image-outset`. Parse opaco.
+        "border-image-outset" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else { Some(DeclKind::BorderImageOutset(Some(v.to_string()))) }
+        }
+        // Fase 7.507 — `border-image` shorthand. Parse opaco.
+        "border-image" | "-webkit-border-image" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::BorderImage(None))
+            } else {
+                Some(DeclKind::BorderImage(Some(v.to_string())))
+            }
+        }
+        // Fase 7.508 — `grid-template-areas`. Parse opaco (lista de strings
+        // quoted que un resolver de grid consume).
+        "grid-template-areas" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::GridTemplateAreas(None))
+            } else {
+                Some(DeclKind::GridTemplateAreas(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
