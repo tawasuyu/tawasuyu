@@ -592,6 +592,18 @@ pub struct ComputedStyle {
     /// `marker-side` (Fase 7.368). Default `MatchSelf`. **Heredable**.
     /// Plumb.
     pub marker_side: MarkerSide,
+    /// `fill` (Fase 7.369). Default `Color(black)` (la spec SVG).
+    /// **Heredable**. Plumb: SVG no implementado.
+    pub fill: SvgPaint,
+    /// `stroke` (Fase 7.370). Default `None`. **Heredable**. Plumb.
+    pub stroke: SvgPaint,
+    /// `fill-opacity` (Fase 7.371). Default `1.0`. **Heredable**. Plumb.
+    pub fill_opacity: f32,
+    /// `stroke-opacity` (Fase 7.372). Default `1.0`. **Heredable**. Plumb.
+    pub stroke_opacity: f32,
+    /// `stroke-width` (Fase 7.373). Default `Px(1.0)`. **Heredable**.
+    /// Plumb.
+    pub stroke_width: LengthVal,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1860,6 +1872,25 @@ pub enum MarkerSide {
     MatchParent,
 }
 
+/// `<paint>` (SVG 2). Default depende de la propiedad: `fill` arranca
+/// en `Color(Color::BLACK)`; `stroke` arranca en `None`. Heredable.
+/// Fases 7.369–7.370. `None` = sin pintura; `CurrentColor` = se
+/// resuelve contra `color` del elemento; `Color(c)` literal; `Url(s)`
+/// a un paint server (gradient/pattern/marker).
+#[derive(Debug, Clone, PartialEq)]
+pub enum SvgPaint {
+    None,
+    CurrentColor,
+    Color(Color),
+    Url(String),
+}
+
+impl Default for SvgPaint {
+    fn default() -> Self {
+        SvgPaint::None
+    }
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2906,6 +2937,11 @@ impl Default for ComputedStyle {
             dominant_baseline: DominantBaseline::Auto,
             paint_order: PaintOrder::default(),
             marker_side: MarkerSide::MatchSelf,
+            fill: SvgPaint::Color(Color::BLACK),
+            stroke: SvgPaint::None,
+            fill_opacity: 1.0,
+            stroke_opacity: 1.0,
+            stroke_width: LengthVal::Px(1.0),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

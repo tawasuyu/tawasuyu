@@ -327,6 +327,12 @@ impl StyleEngine {
             style.dominant_baseline = p.dominant_baseline;
             style.paint_order = p.paint_order;
             style.marker_side = p.marker_side;
+            // SVG 2 — fill, stroke y sus opacities/width heredan.
+            style.fill = p.fill.clone();
+            style.stroke = p.stroke.clone();
+            style.fill_opacity = p.fill_opacity;
+            style.stroke_opacity = p.stroke_opacity;
+            style.stroke_width = p.stroke_width;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -5943,6 +5949,135 @@ mod tests {
         assert_eq!(
             eng.compute_with_parent(&divs[0], Some(&body_cs)).marker_side,
             MarkerSide::MatchParent
+        );
+    }
+
+    #[test]
+    fn fill_fase_7_369() {
+        assert_eq!(parse_svg_paint("none"), Some(SvgPaint::None));
+        assert_eq!(parse_svg_paint("currentColor"), Some(SvgPaint::CurrentColor));
+        let red = parse_svg_paint("red").unwrap();
+        assert!(matches!(red, SvgPaint::Color(c) if (c.r,c.g,c.b)==(255,0,0)));
+        assert_eq!(
+            parse_svg_paint("url(#grad1)"),
+            Some(SvgPaint::Url("#grad1".to_string()))
+        );
+        assert_eq!(parse_svg_paint("nope"), None);
+
+        // E2E + cascada heredable.
+        let html = r##"<html><head><style>
+            body { fill: rgb(255,0,0) }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(matches!(body_cs.fill, SvgPaint::Color(c) if (c.r,c.g,c.b)==(255,0,0)));
+        // SÍ hereda.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(matches!(div_cs.fill, SvgPaint::Color(c) if (c.r,c.g,c.b)==(255,0,0)));
+    }
+
+    #[test]
+    fn stroke_fase_7_370() {
+        let html = r##"<html><head><style>
+            body { stroke: blue }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert!(matches!(cs.stroke, SvgPaint::Color(c) if (c.r,c.g,c.b)==(0,0,255)));
+    }
+
+    #[test]
+    fn fill_opacity_fase_7_371() {
+        // Número y % se parsean igual.
+        assert_eq!(parse_svg_opacity("0.5"), Some(0.5));
+        assert_eq!(parse_svg_opacity("50%"), Some(0.5));
+        // Clamp.
+        assert_eq!(parse_svg_opacity("2.5"), Some(1.0));
+        assert_eq!(parse_svg_opacity("-1"), Some(0.0));
+        assert_eq!(parse_svg_opacity("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { fill-opacity: 0.5 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.fill_opacity, 0.5);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).fill_opacity,
+            0.5
+        );
+    }
+
+    #[test]
+    fn stroke_opacity_fase_7_372() {
+        let html = r##"<html><head><style>
+            body { stroke-opacity: 25% }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.stroke_opacity, 0.25);
+    }
+
+    #[test]
+    fn stroke_width_fase_7_373() {
+        let html = r##"<html><head><style>
+            body { stroke-width: 3px }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.stroke_width, LengthVal::Px(3.0));
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).stroke_width,
+            LengthVal::Px(3.0)
         );
     }
 

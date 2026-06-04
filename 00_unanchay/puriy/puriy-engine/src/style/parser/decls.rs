@@ -795,6 +795,15 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "paint-order" => parse_paint_order(value).map(DeclKind::PaintOrder),
         "marker-side" => parse_marker_side(value).map(DeclKind::MarkerSide),
+        "fill" => parse_svg_paint(value).map(DeclKind::Fill),
+        "stroke" => parse_svg_paint(value).map(DeclKind::Stroke),
+        "fill-opacity" => parse_svg_opacity(value).map(DeclKind::FillOpacity),
+        "stroke-opacity" => {
+            parse_svg_opacity(value).map(DeclKind::StrokeOpacity)
+        }
+        "stroke-width" => {
+            parse_length_or_pct(value).map(DeclKind::StrokeWidth)
+        }
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
@@ -3262,6 +3271,50 @@ pub(crate) fn parse_marker_side(value: &str) -> Option<MarkerSide> {
         "match-parent" => Some(MarkerSide::MatchParent),
         _ => None,
     }
+}
+
+/// SVG `<paint>` (SVG 2): `none | currentColor | <color> | url(<id>)`.
+/// La sintaxis completa permite además un fallback `url(...) <paint>`
+/// — el fallback se descarta (acepta el url pelado o el fallback solo).
+/// Fases 7.369–7.370.
+pub(crate) fn parse_svg_paint(value: &str) -> Option<SvgPaint> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(SvgPaint::None);
+    }
+    if v.eq_ignore_ascii_case("currentcolor") {
+        return Some(SvgPaint::CurrentColor);
+    }
+    // `url(...)` — opcional fallback ignorado.
+    let lower = v.to_ascii_lowercase();
+    if let Some(open) = lower.strip_prefix("url(") {
+        if let Some(close) = open.find(')') {
+            // Tomamos el id entre paréntesis tal cual del original
+            // (preservando case).
+            let url_inner = &v[4..4 + close];
+            return Some(SvgPaint::Url(url_inner.trim().to_string()));
+        }
+        return None;
+    }
+    parse_color(v).map(SvgPaint::Color)
+}
+
+/// SVG `<opacity-value>`: número `0..=1` o porcentaje `0%..=100%`.
+/// Valores fuera de rango se clampean. Fases 7.371–7.372.
+pub(crate) fn parse_svg_opacity(value: &str) -> Option<f32> {
+    let v = value.trim();
+    if let Some(num) = v.strip_suffix('%') {
+        let n: f32 = num.trim().parse().ok()?;
+        if !n.is_finite() {
+            return None;
+        }
+        return Some((n / 100.0).clamp(0.0, 1.0));
+    }
+    let n: f32 = v.parse().ok()?;
+    if !n.is_finite() {
+        return None;
+    }
+    Some(n.clamp(0.0, 1.0))
 }
 
 /// Lista de `<custom-ident>` separados por espacios, con `none`
