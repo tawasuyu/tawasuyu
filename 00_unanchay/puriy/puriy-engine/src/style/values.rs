@@ -945,6 +945,22 @@ pub struct ComputedStyle {
     /// `text-spacing` shorthand (Fase 7.528). CSS Text 4. Parse opaco —
     /// `None` = `normal`. **HEREDA**. Plumb.
     pub text_spacing: Option<String>,
+    /// `speak-as` (Fase 7.529). CSS Speech 1: cómo se vocaliza el texto.
+    /// Default `Normal`. **HEREDA**. Plumb.
+    pub speak_as: SpeakAs,
+    /// `voice-balance` (Fase 7.530). CSS Speech 1: paneo estéreo de la
+    /// voz, -100 (izq) a 100 (der). Default `0.0` (centro). **HEREDA**.
+    /// Plumb.
+    pub voice_balance: f32,
+    /// `voice-pitch` (Fase 7.531). CSS Speech 1. Parse opaco — `None` =
+    /// `medium`. **HEREDA**. Plumb.
+    pub voice_pitch: Option<String>,
+    /// `voice-rate` (Fase 7.532). CSS Speech 1. Parse opaco — `None` =
+    /// `normal`. **HEREDA**. Plumb.
+    pub voice_rate: Option<String>,
+    /// `voice-volume` (Fase 7.533). CSS Speech 1. Parse opaco — `None` =
+    /// `medium`. **HEREDA**. Plumb.
+    pub voice_volume: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2770,6 +2786,17 @@ pub enum RubyMerge {
     Auto,
 }
 
+/// `speak-as` (CSS Speech 1). Default `Normal`. Fase 7.529.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpeakAs {
+    #[default]
+    Normal,
+    SpellOut,
+    Digits,
+    LiteralPunctuation,
+    NoPunctuation,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -4040,6 +4067,11 @@ impl Default for ComputedStyle {
             highlight: None,
             ruby_merge: RubyMerge::Separate,
             text_spacing: None,
+            speak_as: SpeakAs::Normal,
+            voice_balance: 0.0,
+            voice_pitch: None,
+            voice_rate: None,
+            voice_volume: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

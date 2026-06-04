@@ -1668,6 +1668,58 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::TextSpacing(Some(v.to_string())))
             }
         }
+        // Fase 7.529 — `speak-as` (CSS Speech 1). HEREDA.
+        "speak-as" => match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(DeclKind::SpeakAs(SpeakAs::Normal)),
+            "spell-out" => Some(DeclKind::SpeakAs(SpeakAs::SpellOut)),
+            "digits" => Some(DeclKind::SpeakAs(SpeakAs::Digits)),
+            "literal-punctuation" => Some(DeclKind::SpeakAs(SpeakAs::LiteralPunctuation)),
+            "no-punctuation" => Some(DeclKind::SpeakAs(SpeakAs::NoPunctuation)),
+            _ => None,
+        },
+        // Fase 7.530 — `voice-balance` (CSS Speech 1). -100..100. HEREDA.
+        // Keywords `left|center|right|leftwards|rightwards` → -100/0/100/-50/50.
+        "voice-balance" => match value.trim().to_ascii_lowercase().as_str() {
+            "left" => Some(DeclKind::VoiceBalance(-100.0)),
+            "leftwards" => Some(DeclKind::VoiceBalance(-50.0)),
+            "center" => Some(DeclKind::VoiceBalance(0.0)),
+            "rightwards" => Some(DeclKind::VoiceBalance(50.0)),
+            "right" => Some(DeclKind::VoiceBalance(100.0)),
+            other => other
+                .parse::<f32>()
+                .ok()
+                .filter(|n| (-100.0..=100.0).contains(n))
+                .map(DeclKind::VoiceBalance),
+        },
+        // Fase 7.531-7.533 — `voice-{pitch,rate,volume}` (CSS Speech 1).
+        // Parse opaco — `medium`/`normal` reservados a None.
+        "voice-pitch" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::VoicePitch(None))
+            } else {
+                Some(DeclKind::VoicePitch(Some(v.to_string())))
+            }
+        }
+        "voice-rate" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::VoiceRate(None))
+            } else {
+                Some(DeclKind::VoiceRate(Some(v.to_string())))
+            }
+        }
+        "voice-volume" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::VoiceVolume(None))
+            } else {
+                Some(DeclKind::VoiceVolume(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

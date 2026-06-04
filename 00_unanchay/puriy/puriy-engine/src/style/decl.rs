@@ -605,6 +605,16 @@ pub(crate) enum DeclKind {
     RubyMerge(RubyMerge),
     /// `text-spacing` shorthand (Fase 7.528). `None` = `normal`. HEREDA. Plumb.
     TextSpacing(Option<String>),
+    /// `speak-as` (Fase 7.529). HEREDA. Plumb.
+    SpeakAs(SpeakAs),
+    /// `voice-balance` (Fase 7.530). -100..100. HEREDA. Plumb.
+    VoiceBalance(f32),
+    /// `voice-pitch` (Fase 7.531). `None` = `medium`. HEREDA. Plumb.
+    VoicePitch(Option<String>),
+    /// `voice-rate` (Fase 7.532). `None` = `normal`. HEREDA. Plumb.
+    VoiceRate(Option<String>),
+    /// `voice-volume` (Fase 7.533). `None` = `medium`. HEREDA. Plumb.
+    VoiceVolume(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1071,6 +1081,11 @@ impl Decl {
             DeclKind::Highlight(v) => s.highlight = v.clone(),
             DeclKind::RubyMerge(v) => s.ruby_merge = *v,
             DeclKind::TextSpacing(v) => s.text_spacing = v.clone(),
+            DeclKind::SpeakAs(v) => s.speak_as = *v,
+            DeclKind::VoiceBalance(v) => s.voice_balance = *v,
+            DeclKind::VoicePitch(v) => s.voice_pitch = v.clone(),
+            DeclKind::VoiceRate(v) => s.voice_rate = v.clone(),
+            DeclKind::VoiceVolume(v) => s.voice_volume = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
