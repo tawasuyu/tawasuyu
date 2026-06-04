@@ -628,6 +628,10 @@ pub(crate) enum Msg {
     NavScroll(f32),
     /// Desplaza la previsualización de la hoja imprimible en `delta` px.
     PrintScroll(f32),
+    /// Importa un grupo de contactos desde un archivo JSON (diálogo Abrir).
+    ImportGroup,
+    /// Exporta el grupo seleccionado a un archivo JSON (diálogo Guardar).
+    ExportGroup,
     // rectificador de hora
     /// Corre el jog de la hora en `delta` minutos (puede ser negativo).
     RectifyNudge(i64),

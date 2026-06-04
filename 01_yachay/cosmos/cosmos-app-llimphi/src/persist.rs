@@ -2,9 +2,12 @@
 //! (`cosmos-chart.json`) con su watcher, y la librería multi-archivo de
 //! cartas en el subdirectorio `cosmos-charts/`.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use cosmos_model::{Chart, ChartId, ChartKind, ContactId, StoredBirthData, StoredChartConfig};
+use cosmos_model::{
+    Chart, ChartId, ChartKind, ContactId, GroupId, StoredBirthData, StoredChartConfig,
+};
+use cosmos_store::Store;
 use llimphi_ui::Handle;
 use serde::{Deserialize, Serialize};
 
@@ -260,6 +263,126 @@ pub(crate) fn save_chart_to_disk(chart: &Chart) {
     }
 }
 
+// =====================================================================
+// Import / export de grupos de contactos (archivo JSON portable)
+// =====================================================================
+
+fn default_chart_kind() -> ChartKind {
+    ChartKind::Natal
+}
+
+/// Una carta dentro de un grupo exportado (conserva su tipo).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GroupChartFile {
+    label: String,
+    #[serde(default = "default_chart_kind")]
+    kind: ChartKind,
+    birth_data: StoredBirthData,
+    #[serde(default)]
+    config: StoredChartConfig,
+}
+
+/// Un contacto exportado con sus cartas.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ContactFile {
+    name: String,
+    #[serde(default)]
+    charts: Vec<GroupChartFile>,
+}
+
+/// Forma serializable de un grupo (con subgrupos, contactos y cartas).
+/// Es el formato del archivo de import/export — JSON portable y editable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct GroupFile {
+    pub(crate) name: String,
+    #[serde(default)]
+    contacts: Vec<ContactFile>,
+    #[serde(default)]
+    subgroups: Vec<GroupFile>,
+}
+
+/// Arma el `GroupFile` de un grupo del store, recursivo en subgrupos.
+pub(crate) fn build_group_export(store: &Store, id: GroupId, name: &str) -> GroupFile {
+    let contacts = store
+        .list_contacts(Some(id))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| {
+            let charts = store
+                .list_charts(c.id)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|ch| GroupChartFile {
+                    label: ch.label,
+                    kind: ch.kind,
+                    birth_data: ch.birth_data,
+                    config: ch.config,
+                })
+                .collect();
+            ContactFile {
+                name: c.name,
+                charts,
+            }
+        })
+        .collect();
+    let subgroups = store
+        .list_groups(Some(id))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|g| build_group_export(store, g.id, &g.name))
+        .collect();
+    GroupFile {
+        name: name.to_string(),
+        contacts,
+        subgroups,
+    }
+}
+
+/// Escribe un grupo a un archivo JSON.
+pub(crate) fn write_group_file(path: &Path, g: &GroupFile) -> Result<(), String> {
+    let json = serde_json::to_vec_pretty(g).map_err(|e| e.to_string())?;
+    std::fs::write(path, json).map_err(|e| format!("{path:?}: {e}"))
+}
+
+/// Lee un grupo desde un archivo JSON.
+pub(crate) fn read_group_file(path: &Path) -> Result<GroupFile, String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{path:?}: {e}"))?;
+    serde_json::from_slice(&bytes).map_err(|e| format!("{path:?}: {e}"))
+}
+
+/// Crea en el store el grupo (y su subárbol) bajo `parent`. Genera ids
+/// nuevos — importar el mismo archivo dos veces duplica, no pisa.
+pub(crate) fn import_group_into(
+    store: &Store,
+    parent: Option<GroupId>,
+    g: &GroupFile,
+) -> Result<(), String> {
+    let grp = store
+        .create_group(parent, &g.name, None)
+        .map_err(|e| e.to_string())?;
+    for c in &g.contacts {
+        let contact = store
+            .create_contact(Some(grp.id), &c.name, None)
+            .map_err(|e| e.to_string())?;
+        for ch in &c.charts {
+            store
+                .create_chart(
+                    contact.id,
+                    ch.kind,
+                    &ch.label,
+                    &ch.birth_data,
+                    &ch.config,
+                    None,
+                )
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    for sub in &g.subgroups {
+        import_group_into(store, Some(grp.id), sub)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn load_ui_state() -> UiState {
     let Some(path) = ui_state_path() else {
         return UiState::default();
@@ -273,6 +396,54 @@ pub(crate) fn load_ui_state() -> UiState {
             eprintln!("cosmos · ui-state: no se pudo parsear {path:?}: {e}");
             UiState::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_export_import_roundtrip() {
+        let store = Store::in_memory().expect("store memoria");
+        let g = store.create_group(None, "Familia", None).unwrap();
+        let c = store.create_contact(Some(g.id), "Ana", None).unwrap();
+        let sub = store.create_group(Some(g.id), "Abuelos", None).unwrap();
+        let _ = store.create_contact(Some(sub.id), "Rosa", None).unwrap();
+        let birth = crate::engine::sample_chart().birth_data;
+        store
+            .create_chart(
+                c.id,
+                ChartKind::Natal,
+                "Natal Ana",
+                &birth,
+                &StoredChartConfig::default(),
+                None,
+            )
+            .unwrap();
+
+        // Exportar → JSON → leer de vuelta.
+        let export = build_group_export(&store, g.id, "Familia");
+        let json = serde_json::to_vec_pretty(&export).unwrap();
+        let back: GroupFile = serde_json::from_slice(&json).unwrap();
+
+        // Importar en un store limpio y verificar la jerarquía.
+        let store2 = Store::in_memory().expect("store memoria 2");
+        import_group_into(&store2, None, &back).unwrap();
+        let groups = store2.list_groups(None).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].name, "Familia");
+        let contacts = store2.list_contacts(Some(groups[0].id)).unwrap();
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].name, "Ana");
+        let charts = store2.list_charts(contacts[0].id).unwrap();
+        assert_eq!(charts.len(), 1);
+        assert_eq!(charts[0].label, "Natal Ana");
+        // Subgrupo con su contacto.
+        let subs = store2.list_groups(Some(groups[0].id)).unwrap();
+        assert_eq!(subs.len(), 1);
+        assert_eq!(subs[0].name, "Abuelos");
+        assert_eq!(store2.list_contacts(Some(subs[0].id)).unwrap().len(), 1);
     }
 }
 

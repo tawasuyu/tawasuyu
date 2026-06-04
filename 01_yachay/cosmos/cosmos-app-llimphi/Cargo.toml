@@ -44,6 +44,7 @@ pollster = { workspace = true }
 png = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+rfd = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }

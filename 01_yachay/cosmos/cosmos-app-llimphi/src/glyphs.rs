@@ -182,6 +182,7 @@ pub(crate) enum Icon {
     Window,
     Folder,
     FolderOpen,
+    Save,
     Moon,
     Triangle,
     ZoomIn,
@@ -665,6 +666,42 @@ fn icon_cmds(icon: Icon, cx: f32, cy: f32, box_px: f32, c: Rgba) -> Vec<DrawComm
                     stroke_w: w,
                 },
                 line(cx - s, cy - s * 0.45, cx + s, cy - s * 0.45),
+            ]
+        }
+        Icon::Save => {
+            // Disquete: cuerpo cuadrado con esquina superior derecha
+            // recortada + obturador arriba + etiqueta abajo.
+            let s = r * 0.62;
+            let notch = s * 0.4;
+            vec![
+                DrawCommand::Polygon {
+                    points: vec![
+                        (cx - s, cy - s),
+                        (cx + s - notch, cy - s),
+                        (cx + s, cy - s + notch),
+                        (cx + s, cy + s),
+                        (cx - s, cy + s),
+                    ],
+                    fill: None,
+                    stroke: Some(c),
+                    stroke_w: w,
+                },
+                // Obturador (rectángulo superior).
+                line(cx - s * 0.45, cy - s, cx - s * 0.45, cy - s * 0.35),
+                line(cx + s * 0.35, cy - s, cx + s * 0.35, cy - s * 0.35),
+                line(cx - s * 0.45, cy - s * 0.35, cx + s * 0.35, cy - s * 0.35),
+                // Etiqueta (rectángulo inferior).
+                DrawCommand::Polygon {
+                    points: vec![
+                        (cx - s * 0.55, cy + s * 0.05),
+                        (cx + s * 0.55, cy + s * 0.05),
+                        (cx + s * 0.55, cy + s),
+                        (cx - s * 0.55, cy + s),
+                    ],
+                    fill: None,
+                    stroke: Some(c),
+                    stroke_w: w * 0.8,
+                },
             ]
         }
         Icon::Folder | Icon::FolderOpen => {

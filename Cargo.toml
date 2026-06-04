@@ -496,6 +496,8 @@ app-bus = { path = "shared/app-bus" }
 # === Serialización ===
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Diálogos nativos de archivo (Abrir/Guardar) — import/export de grupos.
+rfd = "0.15"
 lsp-types = "0.97"
 serde-big-array = "0.5"
 postcard = { version = "1", features = ["use-std"] }

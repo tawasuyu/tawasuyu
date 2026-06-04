@@ -505,6 +505,84 @@ fn ancestors_expanded(
 pub(crate) const NAV_ROW_H: f32 = 26.0;
 const NAV_INDENT: f32 = 16.0;
 pub(crate) const NAV_TOOLBAR_H: f32 = 28.0;
+/// Alto del header del árbol (título + acciones de archivo).
+pub(crate) const NAV_HEADER_H: f32 = 28.0;
+
+/// Header del árbol de datos: título a la izquierda y acciones de archivo
+/// (importar/exportar un grupo de contactos desde/hacia un archivo) a la
+/// derecha.
+fn nav_header(theme: &Theme) -> View<Msg> {
+    let action = |icon: Icon, label: &str, msg: Msg| -> View<Msg> {
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: auto(),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            gap: Size {
+                width: length(3.0_f32),
+                height: length(0.0_f32),
+            },
+            padding: Rect {
+                left: length(4.0_f32),
+                right: length(5.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .radius(4.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(msg)
+        .children(vec![
+            glyphs::icon_view(icon, 13.0, theme.fg_muted),
+            View::new(Style {
+                size: Size {
+                    width: auto(),
+                    height: length(22.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(label.to_string(), 10.5, theme.fg_muted, Alignment::Start),
+        ])
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(NAV_HEADER_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(5.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![
+        // Título.
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: auto(),
+                height: percent(1.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned("Datos".to_string(), 12.0, theme.fg_text, Alignment::Start),
+        // Acciones de archivo.
+        action(Icon::FolderOpen, "Abrir", Msg::ImportGroup),
+        action(Icon::Save, "Guardar", Msg::ExportGroup),
+    ])
+}
 
 /// Icono de un nodo según su tipo (grupo abierto/cerrado, contacto, o el
 /// tipo de carta).
@@ -533,7 +611,7 @@ fn visible_nav_nodes<'a>(model: &'a Model) -> Vec<&'a NavNode> {
 /// Alto del viewport del árbol (de la barra de acciones a la barra de
 /// estado).
 pub(crate) fn nav_viewport_h(model: &Model) -> f32 {
-    (model.viewport.1 - MENU_BAR_H - STATUS_H - NAV_TOOLBAR_H).max(60.0)
+    (model.viewport.1 - MENU_BAR_H - STATUS_H - NAV_HEADER_H - NAV_TOOLBAR_H).max(60.0)
 }
 
 /// Alto total del contenido del árbol.
@@ -627,7 +705,7 @@ pub(crate) fn nav_tree(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![nav_toolbar(model, theme), scroll_box])
+    .children(vec![nav_header(theme), nav_toolbar(model, theme), scroll_box])
 }
 
 /// Barra de acciones del explorador: crear grupo/contacto/carta sobre la

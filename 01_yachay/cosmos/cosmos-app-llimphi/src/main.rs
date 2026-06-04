@@ -330,6 +330,65 @@ fn new_group(m: &mut Model) {
 }
 
 
+/// El grupo del store que corresponde a la selección actual: el nodo si es
+/// grupo, o el grupo ancestro más cercano de un contacto/carta.
+fn selected_group(m: &Model) -> Option<(cosmos_model::GroupId, String)> {
+    let mut key = m.nav_selected.clone()?;
+    loop {
+        let node = m.node(&key)?;
+        if node.kind == library::NavKind::Group {
+            return library::parse_group_key(&node.key).map(|id| (id, node.label.clone()));
+        }
+        key = node.parent.clone()?;
+    }
+}
+
+/// Exporta el grupo seleccionado a un archivo JSON elegido con el diálogo
+/// nativo Guardar.
+fn do_export_group(m: &mut Model) {
+    let Some(store) = &m.store else { return };
+    let Some((gid, name)) = selected_group(m) else {
+        m.error = Some("Seleccioná un grupo para exportar".into());
+        return;
+    };
+    let export = persist::build_group_export(store, gid, &name);
+    let default_name = format!("{}.json", name.replace(['/', '\\'], "_"));
+    if let Some(path) = rfd::FileDialog::new()
+        .add_filter("JSON", &["json"])
+        .set_file_name(&default_name)
+        .save_file()
+    {
+        match persist::write_group_file(&path, &export) {
+            Ok(()) => m.status_note = Some(format!("Grupo exportado a {}", path.display())),
+            Err(e) => m.error = Some(format!("exportar: {e}")),
+        }
+    }
+}
+
+/// Importa un grupo de contactos desde un archivo JSON elegido con el
+/// diálogo nativo Abrir; lo cuelga bajo el grupo seleccionado (o la raíz).
+fn do_import_group(m: &mut Model) {
+    let Some(store) = m.store.clone() else { return };
+    let parent = selected_group(m).map(|(g, _)| g);
+    let Some(path) = rfd::FileDialog::new()
+        .add_filter("JSON", &["json"])
+        .pick_file()
+    else {
+        return;
+    };
+    match persist::read_group_file(&path) {
+        Ok(g) => match persist::import_group_into(&store, parent, &g) {
+            Ok(()) => {
+                refresh_nav(m);
+                m.nav_expanded = library::container_keys(&m.nav_nodes).into_iter().collect();
+                m.status_note = Some(format!("Grupo «{}» importado", g.name));
+            }
+            Err(e) => m.error = Some(format!("importar: {e}")),
+        },
+        Err(e) => m.error = Some(format!("importar: {e}")),
+    }
+}
+
 fn delete_selected(m: &mut Model) {
     let Some(store) = &m.store else { return };
     let Some(node) = m.selected_node() else { return };
@@ -1229,6 +1288,8 @@ impl App for Cosmos {
                 m.print_scroll =
                     llimphi_widget_scroll::clamp_offset(m.print_scroll + delta, content, viewport);
             }
+            Msg::ImportGroup => do_import_group(&mut m),
+            Msg::ExportGroup => do_export_group(&mut m),
             // rectificador de hora
             Msg::RectifyNudge(d) => {
                 m.rectify_offset_min += d;
