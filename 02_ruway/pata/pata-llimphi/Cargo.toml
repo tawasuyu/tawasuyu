@@ -27,6 +27,10 @@ shuma-exec = { path = "../../shuma/sandbox/shuma-exec" }
 # El cerebro de la línea de shuma (agnóstico de GUI): descompone el comando en
 # etapas de pipe para las chips clickeables del drawer.
 shuma-line = { path = "../../shuma/sandbox/shuma-line" }
+# Terminal PTY real para el drawer Quake: shuma-exec (Exec::Pty) + vt100. El
+# drawer deja de ser un ejecutor de comandos sueltos y pasa a ser un terminal
+# completo (vim/htop/less/ssh corren dentro, con cwd propio y estado de shell).
+llimphi-module-shuma-term = { workspace = true }
 # IA en el drawer Quake: el submit sin prefijo `!`/`$` va al LLM (fachada
 # transparente de pluma; cae a Mock sin credenciales). Paridad con el quake de
 # mirada-launcher, que pata reemplaza (SDD Fase 10).

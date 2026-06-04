@@ -498,6 +498,38 @@ pub fn shuma_open_view(
     .children(vec![body, bar])
 }
 
+/// Como [`shuma_open_view`] pero con el cuerpo ya construido por el caller (el
+/// terminal PTY del drawer Quake). Mantiene la barra-cabezal abajo con su grosor
+/// original. `body` ya viene dimensionado a `surface - bar_px`.
+pub fn shuma_open_with_body(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    body: View<Msg>,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(bar_px),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![body, bar])
+}
+
 /// Construye los tres slots (start/center/end) de una superficie a lo largo de
 /// su eje. Compartido por [`surface_view`] (una superficie colocada en su rect
 /// dentro de una ventana grande) y [`bar_view`] (la barra llenando su propia

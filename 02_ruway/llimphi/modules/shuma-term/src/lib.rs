@@ -95,6 +95,39 @@ impl ShumaTermState {
     pub fn cwd(&self) -> &str {
         &self.cwd
     }
+
+    /// Envía bytes crudos al stdin del PTY. Para hosts que ya producen sus
+    /// propios códigos de tecla y no quieren pasar por [`apply`] —p. ej. el
+    /// backend layer-shell de pata, que recibe `Keysym` de SCTK y no
+    /// `KeyEvent` de llimphi. Los hosts con `KeyEvent` deberían usar
+    /// `apply(ShumaTermMsg::KeyInput(ev))` (que internamente llama a esto).
+    pub fn send_input(&self, bytes: Vec<u8>) -> bool {
+        if bytes.is_empty() {
+            return false;
+        }
+        self.handle.write_input(bytes)
+    }
+
+    /// Reescala el PTY y el buffer vt100 a `cols`×`rows`. No-op si el tamaño
+    /// no cambió. El host la llama cuando el panel que lo hospeda cambia de
+    /// tamaño (en pata: al abrir/redimensionar el drawer Quake).
+    pub fn resize(&mut self, cols: u16, rows: u16) {
+        let cols = cols.max(2);
+        let rows = rows.max(1);
+        if cols == self.cols && rows == self.rows {
+            return;
+        }
+        self.cols = cols;
+        self.rows = rows;
+        self.handle.resize(rows, cols);
+        self.parser.screen_mut().set_size(rows, cols);
+    }
+
+    /// Drena los eventos pendientes del PTY (bytes + exit). Atajo de
+    /// `apply(ShumaTermMsg::Tick)` para hosts que tickean a mano.
+    pub fn tick(&mut self) -> ShumaTermAction {
+        drain(self)
+    }
 }
 
 impl Drop for ShumaTermState {

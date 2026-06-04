@@ -74,6 +74,8 @@ use pata_core::config::FloatingCard;
 use pata_core::widget::{Widget, WidgetCtx};
 use pata_core::{Anchor, Config, SurfaceKind};
 
+use llimphi_module_shuma_term as shuma_term;
+
 use crate::nouser::{self, MembersOutcome, NavState, PollOutcome};
 use crate::sampler::SamplerHandle;
 use pata_host::HostServer;
@@ -238,7 +240,35 @@ struct LayerApp {
     tooltip_pi: Option<usize>,
     /// Texto del tooltip actualmente visible (`None` = oculto).
     tooltip_text: Option<String>,
+    /// Terminal PTY real del drawer Quake (shuma-term: `Exec::Pty` + vt100).
+    /// Se spawnea perezosamente al abrir el drawer la primera vez y se reusa
+    /// entre aperturas — conserva el cwd, el historial y los procesos vivos del
+    /// shell. Reemplaza al ejecutor de comandos sueltos: dentro corre un shell
+    /// de verdad (vim/htop/less/ssh incluidos). `None` hasta el primer despliegue.
+    term: Option<shuma_term::ShumaTermState>,
+    /// Modificadores activos del teclado (ctrl/alt/shift). SCTK los entrega en
+    /// `update_modifiers`, aparte de la tecla; el terminal los necesita para
+    /// traducir Ctrl+C, Alt+x, etc. a los bytes que el PTY espera.
+    mods: Modifiers,
     exit: bool,
+}
+
+/// Ctrl+letra → byte de control ASCII (Ctrl+A=1 … Ctrl+Z=26), más Ctrl+@/[/\\/
+/// ]/^/_/?/espacio. `None` si la tecla no tiene equivalente de control.
+fn ctrl_byte(c: char) -> Option<u8> {
+    match c {
+        'a'..='z' => Some((c as u8) - b'a' + 1),
+        'A'..='Z' => Some((c as u8) - b'A' + 1),
+        '@' => Some(0),
+        '[' => Some(0x1b),
+        '\\' => Some(0x1c),
+        ']' => Some(0x1d),
+        '^' => Some(0x1e),
+        '_' => Some(0x1f),
+        '?' => Some(0x7f),
+        ' ' => Some(0), // Ctrl+Space = NUL
+        _ => None,
+    }
 }
 
 /// El anclaje sctk + el tamaño `(w, h)` pedido para un borde y grosor. El eje
@@ -379,6 +409,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels: Vec::new(),
         tooltip_pi: None,
         tooltip_text: None,
+        term: None,
+        mods: Modifiers::default(),
         exit: false,
     };
 
@@ -672,6 +704,22 @@ impl LayerApp {
         }
         self.shuma.open = open;
         let h = if open { DRAWER_H } else { self.shuma_bar_px };
+        // Al abrir: spawneamos el terminal real (shell con PTY) si todavía no
+        // existe, dimensionado al cuerpo del drawer. Se reusa entre aperturas:
+        // el shell sigue vivo (cwd, jobs, historial) aunque se repliegue.
+        if open && self.term.is_none() {
+            let w_px = self.panels[pi].width as f32;
+            let body_px = (DRAWER_H - self.shuma_bar_px) as f32;
+            let cols = shuma_term::cols_for_width(w_px);
+            let rows = shuma_term::rows_for_height(body_px);
+            let cwd = std::env::current_dir()
+                .ok()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .or_else(|| std::env::var("HOME").ok())
+                .unwrap_or_else(|| "/".to_string());
+            let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+            self.term = Some(shuma_term::spawn_with(cwd, program, Vec::new(), cols, rows));
+        }
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
         // Abierto: foco Exclusive para escribir. Cerrado: `None` — no
@@ -687,6 +735,75 @@ impl LayerApp {
         // re-arma en el próximo frame con la geometría nueva.
         self.panels[pi].cache = None;
         self.panels[pi].dirty = true;
+    }
+
+    /// Traduce un evento de teclado de SCTK a los bytes que un terminal xterm
+    /// espera. Mismo contrato que `shuma_term::key_to_bytes`, pero partiendo del
+    /// `Keysym` + `Modifiers` de SCTK (el backend layer-shell no produce el
+    /// `KeyEvent` de llimphi que ese helper consume).
+    fn keysym_to_bytes(&self, event: &KbEvent) -> Vec<u8> {
+        use Keysym as K;
+        // Teclas con nombre (navegación/control) → secuencias CSI/SS3 estándar.
+        let named: Option<&[u8]> = match event.keysym {
+            K::Return | K::KP_Enter => Some(b"\r"),
+            K::BackSpace => Some(&[0x7f]),
+            K::Tab => Some(b"\t"),
+            K::ISO_Left_Tab => Some(b"\x1b[Z"),
+            K::Escape => Some(b"\x1b"),
+            K::Up => Some(b"\x1b[A"),
+            K::Down => Some(b"\x1b[B"),
+            K::Right => Some(b"\x1b[C"),
+            K::Left => Some(b"\x1b[D"),
+            K::Home => Some(b"\x1b[H"),
+            K::End => Some(b"\x1b[F"),
+            K::Page_Up => Some(b"\x1b[5~"),
+            K::Page_Down => Some(b"\x1b[6~"),
+            K::Delete => Some(b"\x1b[3~"),
+            K::Insert => Some(b"\x1b[2~"),
+            K::F1 => Some(b"\x1bOP"),
+            K::F2 => Some(b"\x1bOQ"),
+            K::F3 => Some(b"\x1bOR"),
+            K::F4 => Some(b"\x1bOS"),
+            K::F5 => Some(b"\x1b[15~"),
+            K::F6 => Some(b"\x1b[17~"),
+            K::F7 => Some(b"\x1b[18~"),
+            K::F8 => Some(b"\x1b[19~"),
+            K::F9 => Some(b"\x1b[20~"),
+            K::F10 => Some(b"\x1b[21~"),
+            K::F11 => Some(b"\x1b[23~"),
+            K::F12 => Some(b"\x1b[24~"),
+            _ => None,
+        };
+        if let Some(seq) = named {
+            return seq.to_vec();
+        }
+        // El char tipeado: preferimos el utf8 ya resuelto por el compositor; si
+        // no vino (combos con ctrl), lo derivamos del keysym.
+        let ch = event
+            .utf8
+            .as_deref()
+            .and_then(|s| s.chars().next())
+            .or_else(|| event.keysym.key_char());
+        let Some(ch) = ch else {
+            return Vec::new();
+        };
+        // Ctrl+letra → byte de control (Ctrl+A=1 … Ctrl+Z=26; @ [ \ ] ^ _ ? espacio).
+        if self.mods.ctrl && !self.mods.alt {
+            if let Some(b) = ctrl_byte(ch) {
+                return vec![b];
+            }
+        }
+        // Alt+x → ESC + x (meta-sends-escape, convención xterm).
+        if self.mods.alt {
+            let mut out = vec![0x1b];
+            out.extend_from_slice(ch.to_string().as_bytes());
+            return out;
+        }
+        // Caso general: el texto tal cual (ya trae shift/IME aplicados).
+        if let Some(txt) = event.utf8.as_deref() {
+            return txt.as_bytes().to_vec();
+        }
+        ch.to_string().into_bytes()
     }
 
     /// Despliega/repliega el menú de inicio: agranda/encoge hacia abajo la layer
@@ -1056,6 +1173,23 @@ impl LayerApp {
         self.poll_host();
         self.ensure_gpu(pi);
 
+        // Drawer abierto: el terminal avanza solo (el shell escribe sin que
+        // toquemos teclas), así que drenamos el PTY cada frame, lo ajustamos al
+        // cuerpo del drawer y forzamos repintado para verlo en vivo.
+        if self.shuma_panel == Some(pi) && self.shuma.open {
+            if let Some(term) = self.term.as_mut() {
+                let w_px = self.panels[pi].width as f32;
+                let body_px =
+                    self.panels[pi].height.saturating_sub(self.shuma_bar_px) as f32;
+                term.resize(
+                    shuma_term::cols_for_width(w_px),
+                    shuma_term::rows_for_height(body_px),
+                );
+                term.tick();
+            }
+            self.panels[pi].dirty = true;
+        }
+
         if !self.panels[pi].dirty {
             self.latido(pi, qh);
             return;
@@ -1090,20 +1224,39 @@ impl LayerApp {
                 self.registry.all(),
             )
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
-            // Viewport del historial: la surface menos la barra, la línea de
-            // input y los paddings. Lo cacheamos para que el clamp del scroll
-            // en `update` (rueda/arrastre) sea exacto.
-            let vh = (h as f32 - self.shuma_bar_px as f32 - 60.0).max(40.0);
-            self.shuma.viewport_h = vh;
-            render::shuma_open_view(
-                &self.cfg.surfaces[idx],
-                &self.surfaces[idx],
-                &self.shuma,
-                &data,
-                &self.theme,
-                self.shuma_bar_px as f32,
-                vh,
-            )
+            // El cuerpo del drawer es el terminal PTY real; abajo queda la barra
+            // (cabezal con el chip de shuma). El terminal mide la surface menos
+            // la barra.
+            let body_h = (h as f32 - self.shuma_bar_px as f32).max(40.0);
+            match self.term.as_ref() {
+                Some(term) => {
+                    let term_body = shuma_term::view(
+                        term,
+                        &shuma_term::ShumaTermPalette::from_theme(&self.theme),
+                        body_h,
+                        |_| Msg::ShumaAnim, // v0 ignora el to_host (sin eventos por celda)
+                    );
+                    render::shuma_open_with_body(
+                        &self.cfg.surfaces[idx],
+                        &self.surfaces[idx],
+                        &self.shuma,
+                        &data,
+                        &self.theme,
+                        self.shuma_bar_px as f32,
+                        term_body,
+                    )
+                }
+                // Fallback defensivo (no debería pasar: el toggle spawnea el term).
+                None => render::shuma_open_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.shuma_bar_px as f32,
+                    body_h,
+                ),
+            }
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Sidebar {
             // Dientes hospedados de la app enfocada (si registró alguno en el host).
             let hosted = {
@@ -1495,22 +1648,22 @@ impl KeyboardHandler for LayerApp {
         if !self.shuma.open {
             return;
         }
-        match event.keysym {
-            Keysym::Escape => self.set_shuma_open(false),
-            Keysym::BackSpace => {
-                self.shuma.buffer.pop();
-                self.marcar_shuma_dirty();
-            }
-            Keysym::Return | Keysym::KP_Enter => self.shuma_submit(),
-            _ => {
-                if let Some(txt) = event.utf8 {
-                    if !txt.is_empty() && !txt.chars().any(|c| c.is_control()) {
-                        self.shuma.buffer.push_str(&txt);
-                        self.marcar_shuma_dirty();
-                    }
-                }
-            }
+        // Ctrl+Shift+W repliega el drawer (el shell sigue vivo). Es el único
+        // atajo que el terminal NO traga — Escape, Ctrl+C, etc. van al shell.
+        if self.mods.ctrl
+            && self.mods.shift
+            && matches!(event.keysym, Keysym::w | Keysym::W)
+        {
+            self.set_shuma_open(false);
+            return;
         }
+        // Todo lo demás se traduce a los bytes que el PTY espera y se reenvía
+        // al terminal real. La vista se repinta cada frame mientras esté abierto.
+        let bytes = self.keysym_to_bytes(&event);
+        if let Some(term) = self.term.as_ref() {
+            term.send_input(bytes);
+        }
+        self.marcar_shuma_dirty();
     }
 
     fn release_key(
@@ -1529,9 +1682,11 @@ impl KeyboardHandler for LayerApp {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        modifiers: Modifiers,
         _: u32,
     ) {
+        // Los guarda para que el terminal traduzca Ctrl+C/Alt+x a bytes.
+        self.mods = modifiers;
     }
 }
 
