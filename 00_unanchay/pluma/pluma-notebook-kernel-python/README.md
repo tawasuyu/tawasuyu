@@ -2,18 +2,29 @@
 
 > Python kernel for the [pluma](../README.md) notebook.
 
-Implementation via **RustPython** compiled to WASM and run on [`pluma-notebook-kernel-wasm`](../pluma-notebook-kernel-wasm/README.md). No CPython, no subprocess — all in-memory, deterministic with seeded RNG. Stdlib subset: `math`, `random`, `json`, `re`, `decimal`. No `os`/`subprocess`/`socket` by sandbox.
+Built on top of **[RustPython](https://github.com/RustPython/RustPython)** — pure native Rust, no CPython, no subprocess, not compiled to WASM. The VM runs synchronously inside `tokio::task::spawn_blocking` (RustPython uses `Rc`/`RefCell` and is not `Send`), with a fresh boot per cell. No network, no fs by default.
 
 ## API
 
+Implements the `Kernel` trait from [`pluma-notebook-exec`](../pluma-notebook-exec/README.md):
+
 ```rust
 use pluma_notebook_kernel_python::PythonKernel;
+use pluma_notebook_exec::Kernel;
 
 let k = PythonKernel::new();
-let outputs = k.correr(&celda).await?;
+let out = k.execute("2 + 3", "python").await?;
 ```
+
+Accepts the languages `python` and `py`. Dual execution strategy:
+
+1. **Eval**: tries to parse `source` as an expression → repr() of the value into `OutputPayload::Text`; `int`/`float` also fill `OutputPayload::Scalar(f64)`.
+2. **Exec**: if eval fails, re-parses as statements (assignments, defs, prints, …).
+
+`print()` is captured via a `sys.stdout` monkey-patch (a `_PlumaCapture` class injected in the preamble) and surfaces in `KernelOutput::stdout` alongside the value.
 
 ## Deps
 
-- [`pluma-notebook-kernel-wasm`](../pluma-notebook-kernel-wasm/README.md)
-- RustPython WASM (prepackaged)
+- [`pluma-notebook-core`](../pluma-notebook-core/README.md), [`pluma-notebook-exec`](../pluma-notebook-exec/README.md)
+- `rustpython-vm`
+- `async-trait`, `tokio` (`rt`, `sync`)
