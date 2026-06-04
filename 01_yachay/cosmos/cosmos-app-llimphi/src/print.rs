@@ -397,8 +397,15 @@ mod tests {
     fn flor_armonica_a_png() {
         use llimphi_ui::llimphi_layout::taffy::prelude::{length, Size, Style};
         let chart = crate::engine::sample_chart();
-        // Armónico 5 → el motor recomputa los aspectos sobre H5.
-        let (render, _e) = crate::engine::compute(&chart, &[], 5, true, 0);
+        // Armónico 5 + overlay topocéntrico (para ver geo relleno + topo
+        // contorno en la flor).
+        let (render, _e) = crate::engine::compute(
+            &chart,
+            &[crate::model::OverlayKind::Topocentric],
+            5,
+            true,
+            0,
+        );
         let size = 420.0_f32;
         let cmds = crate::chrome::harmonic_flower_cmds(
             &render,
@@ -407,6 +414,7 @@ mod tests {
             size * 0.42,
             &cosmos_render::Palette::dark(),
             true,
+            5,
         );
         let canvas = cosmos_canvas_llimphi::canvas_view::<crate::model::Msg>(
             cmds,

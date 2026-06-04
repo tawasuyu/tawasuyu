@@ -147,7 +147,9 @@ fn circular_sep(a: f32, b: f32) -> f32 {
 
 /// Busca aspectos entre cada par de cuerpos por sus longitudes (ya
 /// armónicas). Devuelve los segmentos ordenados por orbe ascendente.
-fn harmonic_aspect_lines(bodies: &[(String, f32)]) -> Vec<LineSeg> {
+/// Público para reutilizarlo con otras longitudes (p. ej. la trama
+/// topocéntrica de la flor armónica).
+pub fn harmonic_aspect_lines(bodies: &[(String, f32)]) -> Vec<LineSeg> {
     let mut lines = Vec::new();
     for i in 0..bodies.len() {
         for j in (i + 1)..bodies.len() {

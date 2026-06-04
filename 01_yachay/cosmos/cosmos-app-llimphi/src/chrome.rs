@@ -1432,6 +1432,20 @@ fn natal_body_lons(render: &cosmos_render::RenderModel) -> Vec<(String, f32)> {
         .collect()
 }
 
+/// Longitudes eclípticas topocéntricas (símbolo → grados), si el overlay
+/// topocéntrico está activo. Vacío si no.
+fn topo_body_lons(render: &cosmos_render::RenderModel) -> Vec<(String, f32)> {
+    render
+        .layers
+        .iter()
+        .filter(|l| {
+            l.module_id == "topocentric" && matches!(l.kind, cosmos_render::LayerKind::Bodies)
+        })
+        .flat_map(|l| l.glyphs.iter())
+        .map(|g| (g.symbol.clone(), g.deg))
+        .collect()
+}
+
 /// Envuelve un lienzo custom (sin hit-test de cuerpos) en la columna con
 /// botonera de zoom + zoom/paneo, igual que la rueda estándar.
 fn custom_canvas(model: &Model, cmds: Vec<DrawCommand>, size: f32, theme: &Theme, fill: bool) -> View<Msg> {
@@ -1725,9 +1739,51 @@ pub(crate) fn harmonic_flower_cmds(
     rp: f32,
     pal: &Palette,
     show_minor: bool,
+    harmonic: u32,
 ) -> Vec<DrawCommand> {
     use cosmos_render::{Geometry, LayerKind};
     let mut cmds: Vec<DrawCommand> = Vec::new();
+
+    let is_minor = |k: &str| {
+        !matches!(
+            k,
+            "conjunction" | "sextile" | "square" | "trine" | "opposition"
+        )
+    };
+    // Un lóbulo convexo del centro hacia el planeta en `deg`. `filled`:
+    // geocéntrico (relleno); topocéntrico va sólo de contorno para que las
+    // diferencias salten (donde topo se separa de geo, queda el contorno
+    // suelto sin relleno debajo).
+    let lobe = |deg: f32, col: Rgba, intensity: f32, filled: bool| -> DrawCommand {
+        let th = (deg - 90.0).to_radians();
+        let (ux, uy) = (th.cos(), th.sin());
+        let (px, py) = (-uy, ux);
+        let (tx, ty) = (cx + ux * rp, cy + uy * rp);
+        let br = rp * 0.66;
+        let w = rp * (0.09 + 0.13 * intensity);
+        let (s1x, s1y) = (cx + ux * br + px * w, cy + uy * br + py * w);
+        let (s2x, s2y) = (cx + ux * br - px * w, cy + uy * br - py * w);
+        let d = format!("M {cx} {cy} Q {s1x} {s1y} {tx} {ty} Q {s2x} {s2y} {cx} {cy} Z");
+        if filled {
+            let a = 0.16 + 0.30 * intensity;
+            DrawCommand::Path {
+                d,
+                fill: Some(Rgba { a, ..col }),
+                stroke: Some(Rgba { a: (a + 0.20).min(0.7), ..col }),
+                stroke_w: 0.7,
+            }
+        } else {
+            DrawCommand::Path {
+                d,
+                fill: None,
+                stroke: Some(Rgba { a: (0.45 + 0.35 * intensity).min(0.9), ..col }),
+                stroke_w: 1.3,
+            }
+        }
+    };
+
+    // (1) GEOCÉNTRICO: la trama de aspectos que el motor ya recomputó en
+    //     armónica (capa Aspects/natal) — lóbulos rellenos.
     for layer in &render.layers {
         if !matches!(layer.kind, LayerKind::Aspects) || layer.module_id != "natal" {
             continue;
@@ -1736,40 +1792,36 @@ pub(crate) fn harmonic_flower_cmds(
             continue;
         };
         for seg in segs {
-            let is_minor = !matches!(
-                seg.kind.as_str(),
-                "conjunction" | "sextile" | "square" | "trine" | "opposition"
-            );
-            if is_minor && !show_minor {
+            if is_minor(&seg.kind) && !show_minor {
+                continue;
+            }
+            let col = pal.aspect(&seg.kind);
+            let intensity = ((1.0 - seg.orb_deg.abs() / 8.0).clamp(0.15, 1.0)) * seg.opacity;
+            cmds.push(lobe(seg.from_deg, col, intensity, true));
+            cmds.push(lobe(seg.to_deg, col, intensity, true));
+        }
+    }
+
+    // (2) TOPOCÉNTRICO: longitudes topo × H y su propia trama de aspectos
+    //     (mismo algoritmo del motor) — lóbulos de contorno. Resalta el
+    //     paralaje: donde topo difiere de geo, el contorno se despega.
+    let hf = harmonic.max(1) as f32;
+    let topo: Vec<(String, f32)> = topo_body_lons(render)
+        .into_iter()
+        .map(|(s, d)| (s, (d * hf).rem_euclid(360.0)))
+        .collect();
+    if !topo.is_empty() {
+        for seg in cosmos_render::harmonic::harmonic_aspect_lines(&topo) {
+            if is_minor(&seg.kind) && !show_minor {
                 continue;
             }
             let col = pal.aspect(&seg.kind);
             let intensity = (1.0 - seg.orb_deg.abs() / 8.0).clamp(0.15, 1.0);
-            let alpha = seg.opacity * (0.16 + 0.30 * intensity);
-            // Cada aspecto irradia un lóbulo CONVEXO desde el centro hacia
-            // cada uno de los dos cuerpos: el "campo de influencia" nace en el
-            // centro y se ensancha curvándose hacia el planeta. Dos cuerpos en
-            // aspecto comparten color → la trama armónica emerge de la suma.
-            for deg in [seg.from_deg, seg.to_deg] {
-                let th = (deg - 90.0).to_radians();
-                let (ux, uy) = (th.cos(), th.sin()); // radial hacia el planeta
-                let (px, py) = (-uy, ux); // perpendicular
-                let (tx, ty) = (cx + ux * rp, cy + uy * rp); // punta (planeta)
-                let br = rp * 0.66; // donde el lóbulo es más ancho (cerca del planeta)
-                let w = rp * (0.09 + 0.13 * intensity);
-                let (s1x, s1y) = (cx + ux * br + px * w, cy + uy * br + py * w);
-                let (s2x, s2y) = (cx + ux * br - px * w, cy + uy * br - py * w);
-                let d =
-                    format!("M {cx} {cy} Q {s1x} {s1y} {tx} {ty} Q {s2x} {s2y} {cx} {cy} Z");
-                cmds.push(DrawCommand::Path {
-                    d,
-                    fill: Some(Rgba { a: alpha, ..col }),
-                    stroke: Some(Rgba { a: (alpha + 0.20).min(0.7), ..col }),
-                    stroke_w: 0.7,
-                });
-            }
+            cmds.push(lobe(seg.from_deg, col, intensity, false));
+            cmds.push(lobe(seg.to_deg, col, intensity, false));
         }
     }
+
     // Centro luminoso.
     cmds.push(DrawCommand::Circle {
         cx,
@@ -1827,6 +1879,7 @@ fn harmonic_wheel_canvas(
         r * 0.64,
         &graphics_palette(model),
         model.cfg.minor_aspects,
+        model.harmonic,
     ));
     // 12 sectores zodiacales + glyph de cada signo en el anillo exterior.
     let sign_ids = crate::glyphs::SIGN_IDS;
