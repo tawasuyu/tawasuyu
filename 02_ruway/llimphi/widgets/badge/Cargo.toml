@@ -9,4 +9,3 @@ description = "llimphi-widget-badge — chip pequeño (count o dot) para notific
 
 [dependencies]
 llimphi-ui = { workspace = true }
-llimphi-theme = { workspace = true }

@@ -9,7 +9,6 @@ publish.workspace = true
 [dependencies]
 mirada-bar-core = { path = "../mirada-bar-core" }
 wasm-bindgen.workspace = true
-js-sys.workspace = true
 
 [dependencies.web-sys]
 workspace = true

@@ -9,4 +9,3 @@ description = "llimphi-widget-wawa-mark — sello vectorial de wawa: rombo con d
 
 [dependencies]
 llimphi-ui = { workspace = true }
-llimphi-theme = { workspace = true }

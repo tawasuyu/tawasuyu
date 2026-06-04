@@ -8,7 +8,6 @@ publish.workspace = true
 description = "puriy — bridge a Servo: net (ureq) + html5ever + markup5ever_rcdom + cssparser. Salida: Document con árbol de boxes para llimphi-raster."
 
 [dependencies]
-puriy-core = { path = "../puriy-core" }
 
 # Servo embebido — selección mínima para Fase 2
 html5ever = { workspace = true }

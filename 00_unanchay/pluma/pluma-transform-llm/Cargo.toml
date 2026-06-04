@@ -14,7 +14,6 @@ pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
 pluma-align = { path = "../pluma-align" }
 pluma-transform = { path = "../pluma-transform" }
-pluma-transform-tabla = { path = "../pluma-transform-tabla" }
 pluma-llm-core = { path = "../pluma-llm-core" }
 
 [dev-dependencies]

@@ -10,7 +10,6 @@ description = "Almacenamiento persistente para Minga: stores con backing sled pa
 minga-core = { path = "../minga-core" }
 sled = { workspace = true }
 postcard = { workspace = true }
-serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]

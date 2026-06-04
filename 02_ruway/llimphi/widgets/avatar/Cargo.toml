@@ -9,4 +9,3 @@ description = "llimphi-widget-avatar — círculo de identidad con inicial sobre
 
 [dependencies]
 llimphi-ui = { workspace = true }
-llimphi-theme = { workspace = true }

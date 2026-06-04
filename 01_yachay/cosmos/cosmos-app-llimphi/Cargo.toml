@@ -28,10 +28,8 @@ cosmos-eclipses = { path = "../cosmos-eclipses" }
 nahual-geo-core = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-llimphi-widget-button = { workspace = true }
 llimphi-widget-panel = { workspace = true }
 llimphi-widget-tree = { workspace = true }
-llimphi-widget-tabs = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-widget-segmented = { workspace = true }

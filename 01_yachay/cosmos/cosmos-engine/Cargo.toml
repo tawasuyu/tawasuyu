@@ -9,7 +9,6 @@ description = "Tahuantinsuyu — bridge entre el modelo agnóstico y cosmos-astr
 cosmos-model = { path = "../cosmos-model" }
 cosmos-render = { path = "../cosmos-render" }
 cosmos-corpus = { path = "../cosmos-corpus" }
-serde = { workspace = true }
 thiserror = { workspace = true }
 
 # cosmos-astrology vive en otro workspace (~/eternal). Lo enlazamos por

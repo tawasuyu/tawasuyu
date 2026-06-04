@@ -17,7 +17,6 @@ llimphi-theme = { workspace = true }
 llimphi-widget-app-header = { workspace = true }
 llimphi-widget-banner = { workspace = true }
 llimphi-widget-button = { workspace = true }
-llimphi-widget-card = { workspace = true }
 llimphi-widget-list = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
@@ -25,7 +24,6 @@ llimphi-widget-tabs = { workspace = true }
 llimphi-widget-theme-switcher = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
-llimphi-widget-tree = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 app-bus = { workspace = true }

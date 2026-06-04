@@ -32,4 +32,3 @@ ayni-store = { path = "../ayni-store" }
 # El transporte P2P real (libp2p). Que viva aquí —y no en `ayni-sync`— mantiene
 # a `ayni-sync` ligero: la anti-entropía no necesita arrastrar todo libp2p.
 ayni-minga = { path = "../ayni-minga" }
-thiserror = { workspace = true }

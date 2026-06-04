@@ -9,7 +9,6 @@ description = "pluma — alineador de cuerpos por embeddings: produce hebras (Ca
 
 [dependencies]
 uuid = { workspace = true, features = ["serde"] }
-async-trait = { workspace = true }
 anyhow = { workspace = true }
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }

@@ -11,9 +11,6 @@ description = "iniy — extracción de aserciones atómicas desde chunks de text
 [dependencies]
 iniy-core = { workspace = true }
 iniy-ingest = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 

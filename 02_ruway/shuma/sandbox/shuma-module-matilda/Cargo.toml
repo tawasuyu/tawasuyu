@@ -15,7 +15,6 @@ matilda-apply = { path = "../../baremetal/matilda-apply" }
 matilda-discover = { path = "../../baremetal/matilda-discover" }
 matilda-ghost = { path = "../../baremetal/matilda-ghost" }
 matilda-linker = { path = "../../baremetal/matilda-linker" }
-ssh = { path = "../../../../shared/ssh" }
 tokio = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }

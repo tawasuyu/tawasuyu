@@ -8,5 +8,4 @@ publish = { workspace = true }
 description = "Lapaloma — barras: columnas/barras simples, agrupadas y apiladas (vertical u horizontal) + histograma. Painter agnóstico sobre el trait Canvas."
 
 [dependencies]
-pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }

@@ -8,7 +8,6 @@ description = "Wrapper histórico sobre arje-incarnate para mantener la API set_
 
 [dependencies]
 arje-card = { path = "../../arje-card" }
-arje-bus = { path = "../../runtime/arje-bus" }
 arje-incarnate = { path = "../arje-incarnate" }
 nix = { workspace = true }
 anyhow = { workspace = true }

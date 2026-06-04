@@ -10,7 +10,6 @@ publish.workspace = true
 pluma-md = { path = "../pluma-md" }
 wasm-bindgen.workspace = true
 wasm-bindgen-futures.workspace = true
-js-sys.workspace = true
 
 [dependencies.web-sys]
 workspace = true

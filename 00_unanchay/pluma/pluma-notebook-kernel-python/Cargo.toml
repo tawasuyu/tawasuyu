@@ -9,10 +9,8 @@ publish.workspace = true
 description = "pluma-notebook — kernel Python sobre RustPython (intérprete Python 3 en Rust). Evalúa expresiones single-line del notebook; captura el repr del resultado como OutputPayload::Text. Segundo backend del trait Kernel tras wasmi."
 
 [dependencies]
-pluma-notebook-core = { path = "../pluma-notebook-core" }
 pluma-notebook-exec = { path = "../pluma-notebook-exec" }
 async-trait = { workspace = true }
-thiserror = { workspace = true }
 tokio = { workspace = true }
 # RustPython como dep directa (no workspace) — uso único + features
 # mínimos. Compile inicial es pesado (~1-2 min); ejecución es rápida.

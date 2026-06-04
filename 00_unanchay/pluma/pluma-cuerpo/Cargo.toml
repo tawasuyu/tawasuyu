@@ -11,4 +11,3 @@ description = "pluma — modelo de Cuerpo (lienzo): secuencia ordenada de párra
 uuid = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 postcard = { workspace = true }
-pluma-core = { path = "../pluma-core" }

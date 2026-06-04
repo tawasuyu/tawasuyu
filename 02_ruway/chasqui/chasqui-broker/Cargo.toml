@@ -11,5 +11,4 @@ description = "Brahman — broker de tipos: empareja productores↔consumidores 
 [dependencies]
 card-core = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }
-thiserror = { workspace = true }
 ulid = { workspace = true }

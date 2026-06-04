@@ -8,5 +8,4 @@ publish = { workspace = true }
 description = "Lapaloma — diagramas de flujo Sankey: columnas topológicas + barycenter ordering + ribbons como triangle strips de béziers."
 
 [dependencies]
-pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }

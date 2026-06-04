@@ -14,7 +14,6 @@ path = "src/main.rs"
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-llimphi-motion = { workspace = true }
 llimphi-icons = { workspace = true }
 llimphi-widget-wawa-mark = { workspace = true }
 llimphi-widget-tooltip = { workspace = true }

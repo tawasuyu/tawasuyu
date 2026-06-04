@@ -8,5 +8,4 @@ publish = { workspace = true }
 description = "Lapaloma — grafos. NodeBuffer / EdgeBuffer + layouts (force-directed con Barnes-Hut, Sugiyama-lite jerárquico, subtree-width)."
 
 [dependencies]
-pineal-core = { path = "../pineal-core" }
 pineal-render = { path = "../pineal-render" }

@@ -10,8 +10,6 @@ description = "iniy — Natural Language Inference: dado un par de aserciones, c
 
 [dependencies]
 iniy-core = { workspace = true }
-serde = { workspace = true }
-thiserror = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 

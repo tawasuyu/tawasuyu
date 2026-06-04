@@ -12,7 +12,6 @@ description = "khipu-brahman — transporte de sobres khipu sobre libp2p (Brahma
 khipu-share = { path = "../khipu-share" }
 card-net = { path = "../../../shared/card/card-net" }
 libp2p = { workspace = true }
-libp2p-stream = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 futures = { workspace = true }

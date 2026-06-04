@@ -13,7 +13,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-ulid = { workspace = true }
 card-core = { path = "../../shared/card/card-core" }
 chasqui-card = { path = "../chasqui/chasqui-card" }
 nahual-meta-schema = { path = "../nahual/libs/meta-schema" }

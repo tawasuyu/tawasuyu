@@ -12,7 +12,6 @@ sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
 sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
 arje-bus = { path = "../../arje/runtime/arje-bus" }
 async-trait = { workspace = true }
-tokio = { workspace = true }
 ulid = { workspace = true }
 
 [dev-dependencies]

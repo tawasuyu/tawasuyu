@@ -7,6 +7,5 @@ description = "Yahweh — meta-runtime: helpers puros (parse, delta, validación
 
 [dependencies]
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
 nahual-meta-schema = { path = "../meta-schema" }

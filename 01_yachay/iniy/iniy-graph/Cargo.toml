@@ -10,7 +10,4 @@ description = "iniy — grafo de implicaciones entre aserciones. Análisis: cont
 
 [dependencies]
 iniy-core = { workspace = true }
-serde = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
 petgraph = { workspace = true }

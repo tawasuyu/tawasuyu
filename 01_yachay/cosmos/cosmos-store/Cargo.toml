@@ -8,7 +8,6 @@ description = "Tahuantinsuyu — persistencia SQLite de groups / contacts / char
 [dependencies]
 cosmos-model = { path = "../cosmos-model" }
 rusqlite = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }

@@ -15,7 +15,6 @@ publish = false
 [dependencies]
 cosmos-core.workspace = true
 cosmos-time.workspace = true
-cosmos-coords.workspace = true
 cosmos-ephemeris.workspace = true
 cosmos-validation = { path = "../cosmos-validation" }
 libm.workspace = true

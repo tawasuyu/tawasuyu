@@ -9,4 +9,3 @@ description = "llimphi-widget-spinner — spinner circular animado por reloj abs
 
 [dependencies]
 llimphi-ui = { workspace = true }
-llimphi-theme = { workspace = true }

@@ -27,4 +27,3 @@ ed25519-compact = { version = "2", default-features = false }
 # la propagacion de errores en el lazo asincrono.
 tokio = { workspace = true }
 chrono = { workspace = true }
-anyhow = { workspace = true }

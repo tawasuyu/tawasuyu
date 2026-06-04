@@ -10,6 +10,5 @@ description = "Discernidor de contenido sobre buffers: MIME, codificación, pars
 
 [dependencies]
 card-core = { path = "../../../../shared/card/card-core" }
-serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

@@ -13,7 +13,6 @@ categories = ["science", "date-and-time"]
 cosmos-core.workspace = true
 libm.workspace = true
 serde = { workspace = true, optional = true }
-thiserror.workspace = true
 
 [features]
 default = []

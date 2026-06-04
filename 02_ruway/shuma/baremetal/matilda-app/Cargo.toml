@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 matilda-core = { path = "../matilda-core" }
-matilda-config = { path = "../matilda-config" }
 matilda-plan = { path = "../matilda-plan" }
 matilda-apply = { path = "../matilda-apply" }
 matilda-ghost = { path = "../matilda-ghost" }

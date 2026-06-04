@@ -14,5 +14,4 @@ path = "src/main.rs"
 puriy-core = { path = "../puriy-core" }
 puriy-engine = { path = "../puriy-engine" }
 puriy-llimphi = { path = "../puriy-llimphi" }
-llimphi-hal = { path = "../../../02_ruway/llimphi/llimphi-hal" }
 clap.workspace = true

@@ -10,6 +10,5 @@ description = "iniy — tipos núcleo: Asercion, Confianza, Postura, Implicacion
 
 [dependencies]
 serde = { workspace = true }
-serde_json = { workspace = true }
 thiserror = { workspace = true }
 ulid = { workspace = true }

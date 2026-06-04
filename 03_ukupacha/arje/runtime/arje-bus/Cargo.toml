@@ -12,7 +12,6 @@ postcard = { workspace = true }
 ulid = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
-tracing = { workspace = true }
 
 [dev-dependencies]
 arje-echo = { path = "../arje-echo" }

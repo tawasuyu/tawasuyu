@@ -10,4 +10,3 @@ description = "puriy — runtime JS sandboxed (QuickJS sobre wasmi). Fase 7.0: s
 [dependencies]
 thiserror = { workspace = true }
 wasmi = { workspace = true }
-wat = { workspace = true }

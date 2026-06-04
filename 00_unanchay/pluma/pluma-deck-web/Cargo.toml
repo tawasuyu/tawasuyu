@@ -9,7 +9,6 @@ publish.workspace = true
 [dependencies]
 pluma-deck-core = { path = "../pluma-deck-core" }
 wasm-bindgen.workspace = true
-js-sys.workspace = true
 
 [dependencies.web-sys]
 workspace = true

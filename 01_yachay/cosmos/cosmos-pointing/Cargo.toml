@@ -11,11 +11,9 @@ categories = ["science"]
 
 [dependencies]
 cosmos-core.workspace = true
-cosmos-coords.workspace = true
 cosmos-time.workspace = true
 libm.workspace = true
 thiserror.workspace = true
-regex.workspace = true
 rayon.workspace = true
 nalgebra = "0.34"
 bitflags = "2.10"
