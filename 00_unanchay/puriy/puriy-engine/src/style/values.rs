@@ -630,6 +630,19 @@ pub struct ComputedStyle {
     pub shape_rendering: ShapeRendering,
     /// `vector-effect` (Fase 7.383). Default `None`. NO hereda. Plumb.
     pub vector_effect: VectorEffect,
+    /// `flood-color` (Fase 7.384). `None` = `currentColor`. NO hereda.
+    /// Plumb.
+    pub flood_color: Option<Color>,
+    /// `flood-opacity` (Fase 7.385). Default `1.0`. NO hereda. Plumb.
+    pub flood_opacity: f32,
+    /// `lighting-color` (Fase 7.386). `None` = `currentColor`. NO hereda.
+    /// Plumb.
+    pub lighting_color: Option<Color>,
+    /// `stop-color` (Fase 7.387). `None` = `currentColor`. NO hereda.
+    /// Plumb.
+    pub stop_color: Option<Color>,
+    /// `stop-opacity` (Fase 7.388). Default `1.0`. NO hereda. Plumb.
+    pub stop_opacity: f32,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3038,6 +3051,11 @@ impl Default for ComputedStyle {
             color_interpolation: ColorInterpolation::SRgb,
             shape_rendering: ShapeRendering::Auto,
             vector_effect: VectorEffect::None,
+            flood_color: None,
+            flood_opacity: 1.0,
+            lighting_color: None,
+            stop_color: None,
+            stop_opacity: 1.0,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

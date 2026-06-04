@@ -382,6 +382,14 @@ pub(crate) enum DeclKind {
     ColorInterpolation(ColorInterpolation),
     ShapeRendering(ShapeRendering),
     VectorEffect(VectorEffect),
+    /// `None` = `flood-color: currentColor`.
+    FloodColor(Option<Color>),
+    FloodOpacity(f32),
+    /// `None` = `lighting-color: currentColor`.
+    LightingColor(Option<Color>),
+    /// `None` = `stop-color: currentColor`.
+    StopColor(Option<Color>),
+    StopOpacity(f32),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -703,6 +711,11 @@ impl Decl {
             DeclKind::ColorInterpolation(c) => s.color_interpolation = *c,
             DeclKind::ShapeRendering(r) => s.shape_rendering = *r,
             DeclKind::VectorEffect(e) => s.vector_effect = *e,
+            DeclKind::FloodColor(c) => s.flood_color = *c,
+            DeclKind::FloodOpacity(v) => s.flood_opacity = *v,
+            DeclKind::LightingColor(c) => s.lighting_color = *c,
+            DeclKind::StopColor(c) => s.stop_color = *c,
+            DeclKind::StopOpacity(v) => s.stop_opacity = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -6432,6 +6432,116 @@ mod tests {
     }
 
     #[test]
+    fn flood_color_fase_7_384() {
+        assert_eq!(parse_color_or_current("currentColor"), Some(None));
+        let red = parse_color_or_current("red").unwrap().unwrap();
+        assert_eq!((red.r, red.g, red.b), (255, 0, 0));
+
+        let html = r##"<html><head><style>
+            body { flood-color: red }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        let c = body_cs.flood_color.unwrap();
+        assert_eq!((c.r, c.g, c.b), (255, 0, 0));
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).flood_color,
+            None
+        );
+    }
+
+    #[test]
+    fn flood_opacity_fase_7_385() {
+        let html = r##"<html><head><style>
+            body { flood-opacity: 0.4 }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.flood_opacity, 0.4);
+        // NO hereda — vuelve a 1.0.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).flood_opacity,
+            1.0
+        );
+    }
+
+    #[test]
+    fn lighting_color_fase_7_386() {
+        let html = r##"<html><head><style>
+            body { lighting-color: rgb(0, 255, 0) }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        let c = cs.lighting_color.unwrap();
+        assert_eq!((c.r, c.g, c.b), (0, 255, 0));
+    }
+
+    #[test]
+    fn stop_color_fase_7_387() {
+        let html = r##"<html><head><style>
+            body { stop-color: blue }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        let c = cs.stop_color.unwrap();
+        assert_eq!((c.r, c.g, c.b), (0, 0, 255));
+    }
+
+    #[test]
+    fn stop_opacity_fase_7_388() {
+        let html = r##"<html><head><style>
+            body { stop-opacity: 0.7 }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.stop_opacity, 0.7);
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(

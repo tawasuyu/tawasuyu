@@ -830,6 +830,17 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "vector-effect" => {
             parse_vector_effect(value).map(DeclKind::VectorEffect)
         }
+        "flood-color" => {
+            parse_color_or_current(value).map(DeclKind::FloodColor)
+        }
+        "flood-opacity" => parse_svg_opacity(value).map(DeclKind::FloodOpacity),
+        "lighting-color" => {
+            parse_color_or_current(value).map(DeclKind::LightingColor)
+        }
+        "stop-color" => {
+            parse_color_or_current(value).map(DeclKind::StopColor)
+        }
+        "stop-opacity" => parse_svg_opacity(value).map(DeclKind::StopOpacity),
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
@@ -3355,6 +3366,17 @@ pub(crate) fn parse_stroke_miterlimit(value: &str) -> Option<f32> {
         return None;
     }
     Some(n)
+}
+
+/// `<color> | currentColor`: para los SVG paint-color (`flood-color`,
+/// `lighting-color`, `stop-color`). `None` = se difiere al `color`
+/// del elemento. Fases 7.384, 7.386, 7.387.
+pub(crate) fn parse_color_or_current(value: &str) -> Option<Option<Color>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("currentcolor") {
+        return Some(None);
+    }
+    parse_color(v).map(Some)
 }
 
 /// `fill-rule` / `clip-rule`: `nonzero | evenodd`. Fases 7.379, 7.380.
