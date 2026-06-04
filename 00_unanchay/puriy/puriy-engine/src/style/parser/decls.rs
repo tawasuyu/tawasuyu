@@ -1223,6 +1223,54 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "r" => parse_length_or_pct(value).map(DeclKind::R),
         "rx" => parse_length_or_pct(value).map(DeclKind::Rx),
         "ry" => parse_length_or_pct(value).map(DeclKind::Ry),
+        // Fase 7.479 — `order` (CSS Flexbox/Grid). `<integer>`. Default 0.
+        "order" => value.trim().parse::<i32>().ok().map(DeclKind::Order),
+        // Fase 7.480 — `path-length` (SVG2). `none | <number>`. NO hereda.
+        "path-length" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::PathLength(None))
+            } else {
+                v.parse::<f32>()
+                    .ok()
+                    .filter(|n| *n >= 0.0)
+                    .map(|n| DeclKind::PathLength(Some(n)))
+            }
+        }
+        // Fase 7.481 — `animation-composition` (CSS Animations 2).
+        "animation-composition" => match value.trim().to_ascii_lowercase().as_str() {
+            "replace" => Some(DeclKind::AnimationComposition(AnimationComposition::Replace)),
+            "add" => Some(DeclKind::AnimationComposition(AnimationComposition::Add)),
+            "accumulate" => Some(DeclKind::AnimationComposition(
+                AnimationComposition::Accumulate,
+            )),
+            _ => None,
+        },
+        // Fase 7.482 — `timeline-scope` (CSS Scroll-Driven Animations).
+        // `none | <dashed-ident>#`.
+        "timeline-scope" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("none") || v.is_empty() {
+                Some(DeclKind::TimelineScope(Vec::new()))
+            } else {
+                let names: Vec<String> = v
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if names.is_empty() {
+                    None
+                } else {
+                    Some(DeclKind::TimelineScope(names))
+                }
+            }
+        }
+        // Fase 7.483 — `reading-order` (CSS Inline 3). `<integer>`. NO hereda.
+        "reading-order" => value
+            .trim()
+            .parse::<i32>()
+            .ok()
+            .map(DeclKind::ReadingOrder),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

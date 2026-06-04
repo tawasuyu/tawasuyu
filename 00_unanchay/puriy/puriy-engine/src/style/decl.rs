@@ -504,6 +504,16 @@ pub(crate) enum DeclKind {
     Rx(LengthVal),
     /// `ry` (Fase 7.478). Radio elipse SVG. `Auto` = `auto`. NO hereda. Plumb.
     Ry(LengthVal),
+    /// `order` (Fase 7.479). Orden flex/grid. Default 0. NO hereda. Plumb.
+    Order(i32),
+    /// `path-length` (Fase 7.480). SVG. `None` = `none`. NO hereda. Plumb.
+    PathLength(Option<f32>),
+    /// `animation-composition` (Fase 7.481). NO hereda. Plumb.
+    AnimationComposition(AnimationComposition),
+    /// `timeline-scope` (Fase 7.482). Vec vacío = `none`. NO hereda. Plumb.
+    TimelineScope(Vec<String>),
+    /// `reading-order` (Fase 7.483). CSS Inline 3. Default 0. NO hereda. Plumb.
+    ReadingOrder(i32),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -899,6 +909,11 @@ impl Decl {
             DeclKind::R(v) => s.r = *v,
             DeclKind::Rx(v) => s.rx = *v,
             DeclKind::Ry(v) => s.ry = *v,
+            DeclKind::Order(v) => s.order = *v,
+            DeclKind::PathLength(v) => s.path_length = *v,
+            DeclKind::AnimationComposition(v) => s.animation_composition = *v,
+            DeclKind::TimelineScope(v) => s.timeline_scope = v.clone(),
+            DeclKind::ReadingOrder(v) => s.reading_order = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -792,6 +792,23 @@ pub struct ComputedStyle {
     /// `ry` (Fase 7.478). Radio elipse eje Y (`<ellipse>`/`<rect>`).
     /// Default `LengthVal::Auto`. NO hereda. Plumb.
     pub ry: LengthVal,
+    /// `order` (Fase 7.479). Reordena ítems en flex/grid sin alterar el DOM.
+    /// Default `0`. Negativos = antes del bloque. NO hereda. Plumb.
+    pub order: i32,
+    /// `path-length` (Fase 7.480). SVG: longitud "lógica" del path para
+    /// dasharray. `None` = `none` (usar la real). NO hereda. Plumb.
+    pub path_length: Option<f32>,
+    /// `animation-composition` (Fase 7.481). Cómo se combinan los efectos
+    /// concurrentes sobre una misma propiedad. Default `Replace`. NO hereda.
+    /// Plumb.
+    pub animation_composition: AnimationComposition,
+    /// `timeline-scope` (Fase 7.482). Lista de nombres de timeline que este
+    /// elemento expone hacia descendientes. Vec vacío = `none`. NO hereda.
+    /// Plumb.
+    pub timeline_scope: Vec<String>,
+    /// `reading-order` (Fase 7.483). CSS Inline 3: orden lógico para AT
+    /// que difiere del orden visual. Default `0`. NO hereda. Plumb.
+    pub reading_order: i32,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2440,6 +2457,17 @@ pub enum Interactivity {
     Inert,
 }
 
+/// `animation-composition` (CSS Animations 2). Cómo componer un efecto
+/// animado con el valor "underlying" en curso. Default `Replace`. NO
+/// hereda. Fase 7.481.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AnimationComposition {
+    #[default]
+    Replace,
+    Add,
+    Accumulate,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3649,6 +3677,11 @@ impl Default for ComputedStyle {
             r: LengthVal::Px(0.0),
             rx: LengthVal::Auto,
             ry: LengthVal::Auto,
+            order: 0,
+            path_length: None,
+            animation_composition: AnimationComposition::Replace,
+            timeline_scope: Vec::new(),
+            reading_order: 0,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
