@@ -1720,6 +1720,46 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::VoiceVolume(Some(v.to_string())))
             }
         }
+        // Fase 7.534-7.537 — `pause-{before,after}` y `rest-{before,after}`
+        // (CSS Speech 1). Parse opaco — `none` reservado a None.
+        "pause-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::PauseBefore(None))
+            } else {
+                Some(DeclKind::PauseBefore(Some(v.to_string())))
+            }
+        }
+        "pause-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::PauseAfter(None))
+            } else {
+                Some(DeclKind::PauseAfter(Some(v.to_string())))
+            }
+        }
+        "rest-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::RestBefore(None))
+            } else {
+                Some(DeclKind::RestBefore(Some(v.to_string())))
+            }
+        }
+        "rest-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::RestAfter(None))
+            } else {
+                Some(DeclKind::RestAfter(Some(v.to_string())))
+            }
+        }
+        // Fase 7.538 — `cue-fade-duration` (CSS Speech 1). `<time>`.
+        "cue-fade-duration" => parse_time_seconds(value.trim()).map(DeclKind::CueFadeDuration),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

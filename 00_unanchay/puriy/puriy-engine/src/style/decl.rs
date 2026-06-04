@@ -615,6 +615,16 @@ pub(crate) enum DeclKind {
     VoiceRate(Option<String>),
     /// `voice-volume` (Fase 7.533). `None` = `medium`. HEREDA. Plumb.
     VoiceVolume(Option<String>),
+    /// `pause-before` (Fase 7.534). `None` = `none`. HEREDA. Plumb.
+    PauseBefore(Option<String>),
+    /// `pause-after` (Fase 7.535). `None` = `none`. HEREDA. Plumb.
+    PauseAfter(Option<String>),
+    /// `rest-before` (Fase 7.536). `None` = `none`. HEREDA. Plumb.
+    RestBefore(Option<String>),
+    /// `rest-after` (Fase 7.537). `None` = `none`. HEREDA. Plumb.
+    RestAfter(Option<String>),
+    /// `cue-fade-duration` (Fase 7.538). Segundos. NO hereda. Plumb.
+    CueFadeDuration(f32),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1086,6 +1096,11 @@ impl Decl {
             DeclKind::VoicePitch(v) => s.voice_pitch = v.clone(),
             DeclKind::VoiceRate(v) => s.voice_rate = v.clone(),
             DeclKind::VoiceVolume(v) => s.voice_volume = v.clone(),
+            DeclKind::PauseBefore(v) => s.pause_before = v.clone(),
+            DeclKind::PauseAfter(v) => s.pause_after = v.clone(),
+            DeclKind::RestBefore(v) => s.rest_before = v.clone(),
+            DeclKind::RestAfter(v) => s.rest_after = v.clone(),
+            DeclKind::CueFadeDuration(v) => s.cue_fade_duration = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -961,6 +961,23 @@ pub struct ComputedStyle {
     /// `voice-volume` (Fase 7.533). CSS Speech 1. Parse opaco — `None` =
     /// `medium`. **HEREDA**. Plumb.
     pub voice_volume: Option<String>,
+    /// `pause-before` (Fase 7.534). CSS Speech 1: pausa antes del
+    /// elemento. Parse opaco — `None` = `none`. **HEREDA**. Plumb.
+    pub pause_before: Option<String>,
+    /// `pause-after` (Fase 7.535). Análogo a `pause-before`. **HEREDA**.
+    /// Plumb.
+    pub pause_after: Option<String>,
+    /// `rest-before` (Fase 7.536). CSS Speech 1: silencio antes/después
+    /// del contenido (sin pausa fonética). Parse opaco — `None` = `none`.
+    /// **HEREDA**. Plumb.
+    pub rest_before: Option<String>,
+    /// `rest-after` (Fase 7.537). Análogo a `rest-before`. **HEREDA**.
+    /// Plumb.
+    pub rest_after: Option<String>,
+    /// `cue-fade-duration` (Fase 7.538). CSS Speech 1: duración del
+    /// fade-in/out del cue audible en segundos. Default `0.0`. NO hereda.
+    /// Plumb.
+    pub cue_fade_duration: f32,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4072,6 +4089,11 @@ impl Default for ComputedStyle {
             voice_pitch: None,
             voice_rate: None,
             voice_volume: None,
+            pause_before: None,
+            pause_after: None,
+            rest_before: None,
+            rest_after: None,
+            cue_fade_duration: 0.0,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
