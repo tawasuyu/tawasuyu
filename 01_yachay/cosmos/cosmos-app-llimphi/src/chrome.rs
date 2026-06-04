@@ -1027,7 +1027,7 @@ fn graphic_for(
 // =====================================================================
 
 /// Lado del lienzo de la rueda en la hoja imprimible (px lógicos).
-const PRINT_WHEEL: f32 = 430.0;
+const PRINT_WHEEL: f32 = 500.0;
 /// Ancho de la hoja imprimible (px lógicos).
 const PRINT_SHEET_W: f32 = 600.0;
 /// Alto de la hoja imprimible: proporción tamaño carta (8.5 × 11"), o sea
@@ -1103,12 +1103,16 @@ pub(crate) fn print_page(
     // sobre sus esquinas superiores vacías (el círculo deja triángulos
     // libres), y la tabla de aspectos repartida en dos columnas abajo.
     let pad = 22.0_f32;
+    // Margen de los bloques de esquina respecto al borde del papel (el
+    // inset absoluto se mide desde el borde, ignorando el padding).
+    let m_top = 20.0_f32;
+    let m_side = 18.0_f32;
     // Datos de nacimiento: esquina superior izquierda, absoluto.
     let birth = View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(0.0_f32),
-            top: length(0.0_f32),
+            left: length(m_side),
+            top: length(m_top),
             right: auto(),
             bottom: auto(),
         },
@@ -1119,8 +1123,8 @@ pub(crate) fn print_page(
     let angles = View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            right: length(0.0_f32),
-            top: length(0.0_f32),
+            right: length(m_side),
+            top: length(m_top),
             left: auto(),
             bottom: auto(),
         },
@@ -1163,9 +1167,23 @@ pub(crate) fn print_page(
     ])
 }
 
-/// La vista en pantalla del modo «Hoja»: botón Imprimir arriba + la hoja
-/// (previsualización en papel) debajo, alineada arriba para que el botón
-/// quede siempre visible aunque la tabla sea larga.
+/// Alto total de la hoja imprimible (papel carta como mínimo; crece si los
+/// aspectos a dos columnas se pasan). Usado por el scroll de la vista.
+pub(crate) fn print_sheet_h(render: &cosmos_render::RenderModel) -> f32 {
+    // pad + rueda + gap + label(con margen) + gap + aspectos + pad.
+    let content = 22.0 + PRINT_WHEEL + 6.0 + 22.0 + 6.0 + view::print_aspects_h(render) + 22.0;
+    content.max(PRINT_SHEET_H)
+}
+
+/// Alto visible (viewport) de la previsualización de la hoja: el área
+/// central menos el botón y los paddings de `print_view`.
+pub(crate) fn print_viewport_h(model: &Model) -> f32 {
+    (model.viewport.1 - MENU_BAR_H - TAB_BAR_H - STATUS_H - 60.0).max(80.0)
+}
+
+/// La vista en pantalla del modo «Hoja»: botón Imprimir arriba (fijo) + la
+/// hoja (previsualización en papel) debajo, dentro de un área con scroll
+/// vertical para hojas más altas que la ventana.
 fn print_view(model: &Model, theme: &Theme) -> View<Msg> {
     let btn = View::new(Style {
         size: Size {
@@ -1189,6 +1207,43 @@ fn print_view(model: &Model, theme: &Theme) -> View<Msg> {
     .text_aligned("Imprimir hoja…".to_string(), 13.0, theme.fg_text, Alignment::Center)
     .on_click(Msg::PrintSheet);
 
+    // Hoja centrada horizontalmente dentro del ancho del viewport.
+    let centered = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![print_page_content(model)]);
+
+    let content = print_sheet_h(&model.render);
+    let viewport = print_viewport_h(model);
+    let offset = clamp_offset(model.print_scroll, content, viewport);
+    let scroll = scroll_y(
+        offset,
+        content,
+        viewport,
+        centered,
+        Msg::PrintScroll,
+        &ScrollPalette::from_theme(theme),
+    );
+    let scroll_box = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(0.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![scroll]);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -1205,7 +1260,7 @@ fn print_view(model: &Model, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .children(vec![btn, print_page_content(model)])
+    .children(vec![btn, scroll_box])
 }
 
 /// Arma la columna `[controles?, lienzo]`. Con `fill` el lienzo crece para

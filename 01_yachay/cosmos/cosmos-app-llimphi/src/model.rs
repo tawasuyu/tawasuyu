@@ -626,6 +626,8 @@ pub(crate) enum Msg {
     NavCtxPick(usize),
     /// Desplaza el árbol de datos (izquierda) en `delta` px.
     NavScroll(f32),
+    /// Desplaza la previsualización de la hoja imprimible en `delta` px.
+    PrintScroll(f32),
     // rectificador de hora
     /// Corre el jog de la hora en `delta` minutos (puede ser negativo).
     RectifyNudge(i64),
@@ -769,6 +771,8 @@ pub(crate) struct Model {
     pub(crate) nav_ctx: Option<String>,
     /// Desplazamiento vertical del árbol de datos (izquierda).
     pub(crate) nav_scroll: f32,
+    /// Desplazamiento vertical de la previsualización de la hoja imprimible.
+    pub(crate) print_scroll: f32,
     // rectificador de hora (direcciones primarias)
     /// Jog de la hora de nacimiento en minutos (no toca la carta guardada
     /// hasta «Aplicar»). Mueve ángulos/casas en vivo.

@@ -416,13 +416,14 @@ pub(crate) fn tile_aspectos(render: &RenderModel, theme: &Theme) -> View<Msg> {
 /// que rueda + aspectos quepan en una hoja tamaño carta.
 const PRINT_ROW_H: f32 = 14.0;
 
-/// Una fila horizontal de celdas con alto arbitrario (para las tablas
-/// compactas de la hoja imprimible).
+/// Una fila horizontal de celdas con alto arbitrario y ancho según su
+/// contenido (para las tablas compactas de la hoja imprimible, que viven
+/// en columnas shrink-wrap).
 fn cells_row_h(cells: Vec<View<Msg>>, h: f32) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
-            width: percent(1.0_f32),
+            width: Dimension::auto(),
             height: length(h),
         },
         flex_shrink: 0.0,
@@ -547,17 +548,32 @@ fn asp_row_view_compact(row: &AspRow, lons: &HashMap<String, f32>, theme: &Theme
     )
 }
 
+/// Tope de filas de aspectos por columna en la hoja imprimible.
+const PRINT_ASP_PER_COL: usize = 17;
+
+/// Cuántas filas de aspectos pinta la hoja (= total, topeado a dos columnas
+/// llenas). Sirve para estimar el alto de la hoja en el scroll.
+pub(crate) fn print_aspect_count(render: &RenderModel) -> usize {
+    asp_rows_sorted(render).len().min(PRINT_ASP_PER_COL * 2)
+}
+
+/// Alto que ocupa la tabla de aspectos de la hoja (la columna más larga).
+pub(crate) fn print_aspects_h(render: &RenderModel) -> f32 {
+    let per_col = print_aspect_count(render).div_ceil(2);
+    per_col as f32 * (PRINT_ROW_H + 1.0)
+}
+
 /// Tabla de aspectos de la hoja imprimible repartida en dos columnas: los
-/// aspectos más fuertes a la izquierda, el resto a la derecha. Filas
-/// compactas para apretar el máximo en una hoja tamaño carta.
+/// aspectos más fuertes a la izquierda (pegada al borde izquierdo) y el
+/// resto a la derecha (pegada al borde derecho), con el ancho libre entre
+/// medio. Filas compactas para apretar el máximo en una hoja tamaño carta.
 pub(crate) fn tile_aspectos_print(render: &RenderModel, theme: &Theme) -> View<Msg> {
     let lons = body_lons(render);
     let rows = asp_rows_sorted(render);
     if rows.is_empty() {
         return line(rimay_localize::t("cosmos-empty"), 11.0, theme.fg_muted);
     }
-    // Tope para no desbordar la hoja: ~17 por columna.
-    let rows: Vec<AspRow> = rows.into_iter().take(34).collect();
+    let rows: Vec<AspRow> = rows.into_iter().take(PRINT_ASP_PER_COL * 2).collect();
     let mid = rows.len().div_ceil(2);
     let mut left: Vec<View<Msg>> = Vec::new();
     let mut right: Vec<View<Msg>> = Vec::new();
@@ -569,14 +585,15 @@ pub(crate) fn tile_aspectos_print(render: &RenderModel, theme: &Theme) -> View<M
             right.push(v);
         }
     }
+    // Columnas con ancho según su contenido (shrink-wrap).
     let col = |children: Vec<View<Msg>>| {
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
-                width: percent(0.5_f32),
+                width: Dimension::auto(),
                 height: Dimension::auto(),
             },
-            flex_shrink: 1.0,
+            flex_shrink: 0.0,
             gap: Size {
                 width: length(0.0_f32),
                 height: length(1.0_f32),
@@ -585,6 +602,8 @@ pub(crate) fn tile_aspectos_print(render: &RenderModel, theme: &Theme) -> View<M
         })
         .children(children)
     };
+    // `SpaceBetween` empuja la columna izquierda al borde izquierdo y la
+    // derecha al borde derecho, repartiendo el ancho libre en el medio.
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -592,10 +611,7 @@ pub(crate) fn tile_aspectos_print(render: &RenderModel, theme: &Theme) -> View<M
             height: Dimension::auto(),
         },
         flex_shrink: 0.0,
-        gap: Size {
-            width: length(14.0_f32),
-            height: length(0.0_f32),
-        },
+        justify_content: Some(JustifyContent::SpaceBetween),
         ..Default::default()
     })
     .children(vec![col(left), col(right)])

@@ -972,6 +972,7 @@ impl App for Cosmos {
             ctx_open: None,
             nav_ctx: None,
             nav_scroll: 0.0,
+            print_scroll: 0.0,
             rectify_offset_min: 0,
             rectify_events: Vec::new(),
             rectify_result: None,
@@ -1221,6 +1222,12 @@ impl App for Cosmos {
                 let viewport = chrome::nav_viewport_h(&m);
                 m.nav_scroll =
                     llimphi_widget_scroll::clamp_offset(m.nav_scroll + delta, content, viewport);
+            }
+            Msg::PrintScroll(delta) => {
+                let content = chrome::print_sheet_h(&m.render);
+                let viewport = chrome::print_viewport_h(&m);
+                m.print_scroll =
+                    llimphi_widget_scroll::clamp_offset(m.print_scroll + delta, content, viewport);
             }
             // rectificador de hora
             Msg::RectifyNudge(d) => {
