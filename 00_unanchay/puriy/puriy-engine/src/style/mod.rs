@@ -284,6 +284,7 @@ impl StyleEngine {
             style.text_emphasis_position = p.text_emphasis_position;
             style.ruby_position = p.ruby_position;
             style.ruby_align = p.ruby_align;
+            style.ruby_overhang = p.ruby_overhang;
             // CSS Scrollbars 1 — scrollbar-width y scrollbar-color heredan.
             // scrollbar-gutter (CSS Overflow 3), overflow-anchor (CSS Scroll
             // Anchoring 1) y overflow-clip-margin (CSS Overflow 4) NO heredan.
@@ -7371,6 +7372,105 @@ mod tests {
         assert_eq!(cs_d.scroll_margin.left, 15.0);
         // Lados no tocados quedan en default (0).
         assert_eq!(cs_d.scroll_margin.right, 0.0);
+    }
+
+    #[test]
+    fn offset_extras_ruby_overhang_fase_7_449_453() {
+        // Cinco props: offset-rotate, offset-anchor, offset-position,
+        // object-view-box (NO heredan), ruby-overhang (HEREDA).
+
+        // 1) Parsers de cabecera — offset-rotate.
+        assert_eq!(
+            parse_offset_rotate("auto"),
+            Some(OffsetRotate { auto: true, reverse: false, angle_deg: 0.0 })
+        );
+        assert_eq!(
+            parse_offset_rotate("reverse"),
+            Some(OffsetRotate { auto: false, reverse: true, angle_deg: 0.0 })
+        );
+        assert_eq!(
+            parse_offset_rotate("90deg"),
+            Some(OffsetRotate { auto: false, reverse: false, angle_deg: 90.0 })
+        );
+        assert_eq!(
+            parse_offset_rotate("auto 45deg"),
+            Some(OffsetRotate { auto: true, reverse: false, angle_deg: 45.0 })
+        );
+        assert_eq!(
+            parse_offset_rotate("0.5turn"),
+            Some(OffsetRotate { auto: false, reverse: false, angle_deg: 180.0 })
+        );
+        // Rechazos: vacío, dos keywords, dos ángulos.
+        assert_eq!(parse_offset_rotate(""), None);
+        assert_eq!(parse_offset_rotate("auto reverse"), None);
+        assert_eq!(parse_offset_rotate("90deg 45deg"), None);
+
+        // 2) E2E.
+        let html = r##"<html><head><style>
+            body { ruby-overhang: none }
+            #a {
+                offset-rotate: auto 30deg;
+                offset-anchor: 10% 25%;
+                offset-position: center top;
+                object-view-box: inset(10% 20% round 5px)
+            }
+            #b { offset-anchor: auto; offset-position: normal; object-view-box: none }
+            #c {}
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.ruby_overhang, RubyOverhang::None);
+        // #a — todos los longhands aplican.
+        let cs_a = eng.compute_with_parent(&by("a"), Some(&body_cs));
+        assert_eq!(
+            cs_a.offset_rotate,
+            OffsetRotate { auto: true, reverse: false, angle_deg: 30.0 }
+        );
+        assert_eq!(
+            cs_a.offset_anchor,
+            Some(BackgroundPosition { x: LengthVal::Pct(10.0), y: LengthVal::Pct(25.0) })
+        );
+        // `center top` → ejes (50%, 0%).
+        assert_eq!(
+            cs_a.offset_position,
+            Some(BackgroundPosition { x: LengthVal::Pct(50.0), y: LengthVal::Pct(0.0) })
+        );
+        assert_eq!(
+            cs_a.object_view_box.as_deref(),
+            Some("inset(10% 20% round 5px)")
+        );
+        // ruby-overhang HEREDA.
+        assert_eq!(cs_a.ruby_overhang, RubyOverhang::None);
+        // #b — auto/normal/none.
+        let cs_b = eng.compute_with_parent(&by("b"), Some(&body_cs));
+        assert_eq!(cs_b.offset_anchor, None);
+        assert_eq!(cs_b.offset_position, None);
+        assert_eq!(cs_b.object_view_box, None);
+        // #c — default offset-rotate (auto, 0).
+        let cs_c = eng.compute_with_parent(&by("c"), Some(&body_cs));
+        assert_eq!(cs_c.offset_rotate, OffsetRotate::default());
+        // ruby-overhang sigue heredado.
+        assert_eq!(cs_c.ruby_overhang, RubyOverhang::None);
     }
 
     #[test]

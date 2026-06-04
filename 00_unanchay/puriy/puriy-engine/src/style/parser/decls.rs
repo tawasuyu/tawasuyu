@@ -849,6 +849,53 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.448 — `ruby-align` (CSS Ruby 1). HEREDA.
         "ruby-align" => parse_ruby_align(value).map(DeclKind::RubyAlign),
+        // Fase 7.449 — `offset-rotate` (CSS Motion Path 1). NO hereda.
+        "offset-rotate" => parse_offset_rotate(value).map(DeclKind::OffsetRotate),
+        // Fase 7.450 — `offset-anchor` (CSS Motion Path 1). `auto` o
+        // `<position>`. Reusa `parse_background_position`.
+        "offset-anchor" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::OffsetAnchor(None))
+            } else {
+                match parse_background_position(v) {
+                    Some(DeclKind::BackgroundPosition(p)) => {
+                        Some(DeclKind::OffsetAnchor(Some(p)))
+                    }
+                    _ => None,
+                }
+            }
+        }
+        // Fase 7.451 — `offset-position` (CSS Motion Path 1). `auto`/`normal`
+        // o `<position>`.
+        "offset-position" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("auto") || v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::OffsetPosition(None))
+            } else {
+                match parse_background_position(v) {
+                    Some(DeclKind::BackgroundPosition(p)) => {
+                        Some(DeclKind::OffsetPosition(Some(p)))
+                    }
+                    _ => None,
+                }
+            }
+        }
+        // Fase 7.452 — `object-view-box` (CSS Images 5). Parse opaco.
+        "object-view-box" => {
+            let raw = value.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+                Some(DeclKind::ObjectViewBox(None))
+            } else {
+                Some(DeclKind::ObjectViewBox(Some(raw.to_string())))
+            }
+        }
+        // Fase 7.453 — `ruby-overhang` (CSS Ruby 1). HEREDA.
+        "ruby-overhang" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::RubyOverhang(RubyOverhang::Auto)),
+            "none" => Some(DeclKind::RubyOverhang(RubyOverhang::None)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -3947,6 +3994,48 @@ pub(crate) fn parse_text_size_adjust(value: &str) -> Option<TextSizeAdjust> {
         return num.trim().parse::<f32>().ok().map(TextSizeAdjust::Pct);
     }
     None
+}
+
+/// `offset-rotate: [ auto | reverse ] || <angle>`. CSS Motion Path 1.
+/// Sin tokens explícitos → default `auto`. Fase 7.449.
+pub(crate) fn parse_offset_rotate(value: &str) -> Option<OffsetRotate> {
+    let mut out = OffsetRotate { auto: false, reverse: false, angle_deg: 0.0 };
+    let mut saw_angle = false;
+    let mut saw_kw = false;
+    for tok in value.trim().split_whitespace() {
+        let low = tok.to_ascii_lowercase();
+        match low.as_str() {
+            "auto" => {
+                if saw_kw {
+                    return None;
+                }
+                out.auto = true;
+                saw_kw = true;
+            }
+            "reverse" => {
+                if saw_kw {
+                    return None;
+                }
+                out.reverse = true;
+                saw_kw = true;
+            }
+            _ => {
+                if saw_angle {
+                    return None;
+                }
+                out.angle_deg = parse_angle_deg(tok)?;
+                saw_angle = true;
+            }
+        }
+    }
+    if !saw_kw && !saw_angle {
+        return None;
+    }
+    // Sin keyword explícito + sólo ángulo → fixed (no auto).
+    if !saw_kw {
+        out.auto = false;
+    }
+    Some(out)
 }
 
 /// `<alpha-value>`: `<number>` clamp [0..1] o `<pct>` (50% → 0.5). CSS Color 4.

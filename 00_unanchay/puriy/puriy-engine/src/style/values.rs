@@ -732,6 +732,19 @@ pub struct ComputedStyle {
     pub text_combine_upright: TextCombineUpright,
     /// `ruby-align` (Fase 7.448). Default `SpaceAround`. HEREDA. Plumb.
     pub ruby_align: RubyAlign,
+    /// `offset-rotate` (Fase 7.449). Default `auto`. NO hereda. Plumb.
+    pub offset_rotate: OffsetRotate,
+    /// `offset-anchor` (Fase 7.450). `None` = `auto` (espejo de
+    /// `transform-origin`). NO hereda. Plumb.
+    pub offset_anchor: Option<BackgroundPosition>,
+    /// `offset-position` (Fase 7.451). `None` = `auto` (usa la posición
+    /// del box). `Some(p)` = punto en el contenedor. NO hereda. Plumb.
+    pub offset_position: Option<BackgroundPosition>,
+    /// `object-view-box` (Fase 7.452). `None` = `none`; `Some(s)` guarda
+    /// el valor crudo (parse opaco). NO hereda. Plumb.
+    pub object_view_box: Option<String>,
+    /// `ruby-overhang` (Fase 7.453). Default `Auto`. HEREDA. Plumb.
+    pub ruby_overhang: RubyOverhang,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2241,6 +2254,35 @@ pub enum FontVariantEmoji {
     Unicode,
 }
 
+/// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
+/// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
+/// Fase 7.449.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OffsetRotate {
+    /// `auto` flag — orientación seguida del path.
+    pub auto: bool,
+    /// `reverse` flag — `auto + 180deg`.
+    pub reverse: bool,
+    /// `<angle>` aditivo en grados. 0 si no se especifica.
+    pub angle_deg: f32,
+}
+
+impl Default for OffsetRotate {
+    fn default() -> Self {
+        Self { auto: true, reverse: false, angle_deg: 0.0 }
+    }
+}
+
+/// `ruby-overhang` (CSS Ruby 1). Permite que el ruby sobresalga sobre
+/// caracteres adyacentes para mejor balance. Default `Auto`. HEREDA.
+/// Fase 7.453.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RubyOverhang {
+    #[default]
+    Auto,
+    None,
+}
+
 /// `text-combine-upright` (CSS Writing Modes 3). Combina caracteres
 /// horizontales en un cuadrado en escritura vertical. Default `None`.
 /// NO hereda. Fase 7.447.
@@ -3396,6 +3438,11 @@ impl Default for ComputedStyle {
             shape_image_threshold: 0.0,
             text_combine_upright: TextCombineUpright::None,
             ruby_align: RubyAlign::SpaceAround,
+            offset_rotate: OffsetRotate::default(),
+            offset_anchor: None,
+            offset_position: None,
+            object_view_box: None,
+            ruby_overhang: RubyOverhang::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

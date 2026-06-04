@@ -454,6 +454,16 @@ pub(crate) enum DeclKind {
     TextCombineUpright(TextCombineUpright),
     /// `ruby-align` (Fase 7.448). HEREDA. Plumb.
     RubyAlign(RubyAlign),
+    /// `offset-rotate` (Fase 7.449). NO hereda. Plumb.
+    OffsetRotate(OffsetRotate),
+    /// `offset-anchor` (Fase 7.450). `None` = `auto`. NO hereda. Plumb.
+    OffsetAnchor(Option<BackgroundPosition>),
+    /// `offset-position` (Fase 7.451). `None` = `auto`. NO hereda. Plumb.
+    OffsetPosition(Option<BackgroundPosition>),
+    /// `object-view-box` (Fase 7.452). `None` = `none`. NO hereda. Plumb.
+    ObjectViewBox(Option<String>),
+    /// `ruby-overhang` (Fase 7.453). HEREDA. Plumb.
+    RubyOverhang(RubyOverhang),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -821,6 +831,11 @@ impl Decl {
             DeclKind::ShapeImageThreshold(t) => s.shape_image_threshold = *t,
             DeclKind::TextCombineUpright(t) => s.text_combine_upright = *t,
             DeclKind::RubyAlign(r) => s.ruby_align = *r,
+            DeclKind::OffsetRotate(r) => s.offset_rotate = *r,
+            DeclKind::OffsetAnchor(a) => s.offset_anchor = *a,
+            DeclKind::OffsetPosition(p) => s.offset_position = *p,
+            DeclKind::ObjectViewBox(o) => s.object_view_box = o.clone(),
+            DeclKind::RubyOverhang(r) => s.ruby_overhang = *r,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
