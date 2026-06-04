@@ -33,9 +33,32 @@ fn hsla(h_deg: f32, s: f32, l: f32, a: f32) -> Rgba {
 /// Paleta astrológica completa. Mismos slots que el theme nativo —
 /// permite que el cliente WASM y el canvas Llimphi generen las mismas
 /// decisiones de color en su superficie.
+/// Oscurece un color para impresión en blanco y negro: si su luminancia
+/// supera un tope lo escala hacia abajo (para que tenga contraste sobre
+/// papel blanco) y lo hace casi opaco (líneas sólidas, no fantasmas).
+fn darken_for_print(c: Rgba) -> Rgba {
+    let lum = 0.2126 * c.r + 0.7152 * c.g + 0.0722 * c.b;
+    let cap = 0.42;
+    let (r, g, b) = if lum > cap && lum > 0.0 {
+        let k = cap / lum;
+        (c.r * k, c.g * k, c.b * k)
+    } else {
+        (c.r, c.g, c.b)
+    };
+    Rgba {
+        r,
+        g,
+        b,
+        a: c.a.max(0.92),
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
     pub is_dark: bool,
+    /// Variante de alto contraste para impresión B/N: oscurece signos/casas
+    /// y solidifica las líneas (ver [`Palette::print`]).
+    pub is_print: bool,
     // Elementos
     pub fire: Rgba,
     pub earth: Rgba,
@@ -79,6 +102,7 @@ impl Palette {
     pub fn dark() -> Self {
         Self {
             is_dark: true,
+            is_print: false,
             fire: hsla(11.0, 0.78, 0.58, 1.0),
             earth: hsla(95.0, 0.40, 0.48, 1.0),
             air: hsla(48.0, 0.72, 0.66, 1.0),
@@ -116,6 +140,7 @@ impl Palette {
     pub fn light() -> Self {
         Self {
             is_dark: false,
+            is_print: false,
             fire: hsla(11.0, 0.65, 0.42, 1.0),
             earth: hsla(95.0, 0.45, 0.30, 1.0),
             air: hsla(48.0, 0.55, 0.42, 1.0),
@@ -146,6 +171,50 @@ impl Palette {
             bg_panel: hsla(40.0, 0.25, 0.97, 1.0),
             fg_text: hsla(30.0, 0.15, 0.18, 1.0),
             fg_muted: hsla(30.0, 0.12, 0.40, 1.0),
+        }
+    }
+
+    /// Paleta de **impresión B/N**: parte de `light()` pero oscurece todos
+    /// los colores hasta un piso de contraste sobre papel blanco y los hace
+    /// sólidos, para que ni los más claros (amarillo Géminis, Luna pálida,
+    /// nodos beige) se pierdan en una fotocopia. `is_print` además oscurece
+    /// los signos/casas calculados en [`Palette::sign`].
+    pub fn print() -> Self {
+        let l = Self::light();
+        let d = darken_for_print;
+        Self {
+            is_dark: false,
+            is_print: true,
+            fire: d(l.fire),
+            earth: d(l.earth),
+            air: d(l.air),
+            water: d(l.water),
+            sun: d(l.sun),
+            moon: d(l.moon),
+            mercury: d(l.mercury),
+            venus: d(l.venus),
+            mars: d(l.mars),
+            jupiter: d(l.jupiter),
+            saturn: d(l.saturn),
+            uranus: d(l.uranus),
+            neptune: d(l.neptune),
+            pluto: d(l.pluto),
+            chiron: d(l.chiron),
+            north_node: d(l.north_node),
+            south_node: d(l.south_node),
+            lilith: d(l.lilith),
+            conjunction: d(l.conjunction),
+            sextile: d(l.sextile),
+            square: d(l.square),
+            trine: d(l.trine),
+            opposition: d(l.opposition),
+            minor_aspect: d(l.minor_aspect),
+            dial_ring: d(l.dial_ring),
+            house_cusp: d(l.house_cusp),
+            angle_highlight: d(l.angle_highlight),
+            bg_panel: Rgba { r: 1.0, g: 1.0, b: 1.0, a: 1.0 },
+            fg_text: Rgba { r: 0.0, g: 0.0, b: 0.0, a: 1.0 },
+            fg_muted: hsla(0.0, 0.0, 0.30, 1.0),
         }
     }
 
@@ -206,7 +275,15 @@ impl Palette {
             "pisces" => (165.0, 0.50, 0.58, 0.42),
             _ => return self.fg_muted,
         };
-        hsla(h, s, if self.is_dark { ld } else { ll }, 1.0)
+        let l = if self.is_print {
+            // Más oscuro aún que el tema claro, para contraste en B/N.
+            (ll * 0.62_f32).max(0.18_f32)
+        } else if self.is_dark {
+            ld
+        } else {
+            ll
+        };
+        hsla(h, s, l, 1.0)
     }
 
     /// Ids zodiacales en orden natural (Aries=0 … Piscis=11).

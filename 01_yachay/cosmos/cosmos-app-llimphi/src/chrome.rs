@@ -1027,7 +1027,7 @@ fn graphic_for(
 // =====================================================================
 
 /// Lado del lienzo de la rueda en la hoja imprimible (px lógicos).
-const PRINT_WHEEL: f32 = 500.0;
+const PRINT_WHEEL: f32 = 528.0;
 /// Ancho de la hoja imprimible (px lógicos).
 const PRINT_SHEET_W: f32 = 600.0;
 /// Alto de la hoja imprimible: proporción tamaño carta (8.5 × 11"), o sea
@@ -1043,7 +1043,7 @@ fn print_wheel(cfg: &CosmosConfig, render: &cosmos_render::RenderModel, size: f3
         size,
         rot_offset_deg: cfg.rot_offset_deg,
         include_bodies: true,
-        palette: Palette::light(),
+        palette: Palette::print(),
         draw_ascensional_cross: cfg.asc_cross,
         show_coord_labels: cfg.coord_labels,
         show_minor_aspects: cfg.minor_aspects,
@@ -1105,8 +1105,8 @@ pub(crate) fn print_page(
     let pad = 22.0_f32;
     // Margen de los bloques de esquina respecto al borde del papel (el
     // inset absoluto se mide desde el borde, ignorando el padding).
-    let m_top = 20.0_f32;
-    let m_side = 18.0_f32;
+    let m_top = 14.0_f32;
+    let m_side = 12.0_f32;
     // Datos de nacimiento: esquina superior izquierda, absoluto.
     let birth = View::new(Style {
         position: Position::Absolute,

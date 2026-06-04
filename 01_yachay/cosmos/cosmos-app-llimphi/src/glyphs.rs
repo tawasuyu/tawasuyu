@@ -141,9 +141,18 @@ pub(crate) fn sign_view<Msg: Clone + 'static>(name: &str, px: f32, color: Color)
 
 /// Glyph de un aspecto, coloreado por la paleta (oscura).
 pub(crate) fn aspect_view<Msg: Clone + 'static>(kind: &str, px: f32) -> View<Msg> {
-    let c = Palette::dark().aspect(kind);
+    aspect_view_pal(kind, px, &Palette::dark())
+}
+
+/// Glyph de un aspecto coloreado por una paleta dada (p. ej. `print()`
+/// para la hoja en B/N).
+pub(crate) fn aspect_view_pal<Msg: Clone + 'static>(
+    kind: &str,
+    px: f32,
+    pal: &Palette,
+) -> View<Msg> {
     cell(
-        aspect_commands(kind, px / 2.0, px / 2.0, px * 0.82, c, sw(px)),
+        aspect_commands(kind, px / 2.0, px / 2.0, px * 0.82, pal.aspect(kind), sw(px)),
         px,
     )
 }

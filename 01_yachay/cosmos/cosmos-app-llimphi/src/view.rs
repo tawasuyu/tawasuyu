@@ -487,12 +487,12 @@ pub(crate) fn print_birth_block(chart: &cosmos_model::Chart, theme: &Theme) -> V
     };
     vstack_fixed(
         vec![
-            line(label, 13.0, theme.fg_text),
-            line(lugar, 10.0, theme.fg_muted),
-            line(fecha, 10.0, theme.fg_muted),
-            line(lat_long, 10.0, theme.fg_muted),
+            line(label, 12.0, theme.fg_text),
+            line(lugar, 9.5, theme.fg_muted),
+            line(fecha, 9.5, theme.fg_muted),
+            line(lat_long, 9.5, theme.fg_muted),
         ],
-        170.0,
+        156.0,
     )
 }
 
@@ -518,7 +518,7 @@ pub(crate) fn print_angles_block(render: &RenderModel, theme: &Theme) -> View<Ms
                     theme.fg_muted,
                     Alignment::Start,
                 ),
-                glyphs::sign_view(sign_id(deg), SGN, sign_color(deg)),
+                glyphs::sign_view(sign_id(deg), SGN, print_sign_color(deg)),
             ],
             PRINT_ROW_H,
         ));
@@ -526,9 +526,50 @@ pub(crate) fn print_angles_block(render: &RenderModel, theme: &Theme) -> View<Ms
     vstack_fixed(rows, 120.0)
 }
 
+/// Color de signo para la hoja: paleta de impresión (oscurecida para B/N).
+fn print_sign_color(deg: f32) -> Color {
+    rgba_to_color(Palette::print().sign(sign_id(deg)))
+}
+
+/// Grupo cuerpo+signo con colores de impresión (signo oscurecido para B/N).
+fn print_body_sign(name: &str, lon: Option<f32>, theme: &Theme) -> View<Msg> {
+    let mut kids = vec![glyphs::body_view(name, GLYPH, theme.fg_text)];
+    if let Some(d) = lon {
+        kids.push(glyphs::sign_view(sign_id(d), SGN, print_sign_color(d)));
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: length(GLYPH + SGN + 4.0),
+            height: length(PRINT_ROW_H),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(kids)
+}
+
+/// Barra de intensidad con el color de aspecto de impresión (oscurecido).
+fn print_intensity_bar(kind: &str, intensity: f32) -> View<Msg> {
+    let c = Palette::print().aspect(kind);
+    let to = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u8;
+    View::new(Style {
+        size: Size {
+            width: length(4.0_f32),
+            height: length(PRINT_ROW_H - 4.0),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(to(c.r), to(c.g), to(c.b), to(intensity.max(0.4))))
+    .radius(2.0)
+}
+
 /// Una fila compacta de aspecto para la hoja: barra de intensidad, glyph
 /// del aspecto, ambos cuerpos+signos y los orbes geo/topo. Sin Δ ni
-/// dirección — la hoja prioriza encajar más filas.
+/// dirección — la hoja prioriza encajar más filas. Colores de impresión
+/// (oscurecidos) para contraste en B/N.
 fn asp_row_view_compact(row: &AspRow, lons: &HashMap<String, f32>, theme: &Theme) -> View<Msg> {
     let orb = row.geo.or(row.topo).unwrap_or(8.0);
     let intensity = (1.0 - orb / 8.0).clamp(0.15, 1.0) as f32;
@@ -537,10 +578,10 @@ fn asp_row_view_compact(row: &AspRow, lons: &HashMap<String, f32>, theme: &Theme
     let orb_col = if intensity > 0.55 { theme.fg_text } else { theme.fg_muted };
     cells_row_h(
         vec![
-            intensity_bar(&row.kind, intensity),
-            glyphs::aspect_view(&row.kind, GLYPH),
-            body_sign(&row.from, lons.get(&row.from).copied(), theme),
-            body_sign(&row.to, lons.get(&row.to).copied(), theme),
+            print_intensity_bar(&row.kind, intensity),
+            glyphs::aspect_view_pal(&row.kind, GLYPH, &Palette::print()),
+            print_body_sign(&row.from, lons.get(&row.from).copied(), theme),
+            print_body_sign(&row.to, lons.get(&row.to).copied(), theme),
             txt_cell(geo, 40.0, 10.0, orb_col, Alignment::Start),
             txt_cell(topo, 40.0, 10.0, orb_col, Alignment::Start),
         ],
