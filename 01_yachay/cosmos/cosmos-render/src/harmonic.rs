@@ -19,12 +19,24 @@ pub const HARMONIC_SPECTRUM_MAX: u32 = 32;
 
 /// Aspectos que se buscan en la carta armónica: `(id, ángulo, orbe)`.
 /// Conjunción y oposición llevan orbe más amplio, como es convención.
+// (id, ángulo exacto, orbe). Los mayores van primero: un par sólo forma un
+// aspecto (hay `break`), así que con orbes anchos los mayores ganan a los
+// menores cercanos. Los menores enriquecen la roseta armónica (quintiles,
+// septiles, etc.); la UI los muestra sólo si «aspectos menores» está activo.
 const HARMONIC_ASPECTS: &[(&str, f32, f32)] = &[
     ("conjunction", 0.0, 8.0),
     ("opposition", 180.0, 7.0),
     ("trine", 120.0, 6.0),
     ("square", 90.0, 6.0),
     ("sextile", 60.0, 4.0),
+    // Menores
+    ("quincunx", 150.0, 2.5),
+    ("sesquiquadrate", 135.0, 2.0),
+    ("biquintile", 144.0, 2.0),
+    ("quintile", 72.0, 2.0),
+    ("septile", 51.428572, 1.5),
+    ("semisquare", 45.0, 2.0),
+    ("semisextile", 30.0, 2.0),
 ];
 
 /// Transforma `model` —una carta natal ya compuesta— en su carta

@@ -1743,32 +1743,31 @@ pub(crate) fn harmonic_flower_cmds(
             if is_minor && !show_minor {
                 continue;
             }
-            let a = (seg.from_deg - 90.0).to_radians();
-            let b = (seg.to_deg - 90.0).to_radians();
-            let (ax, ay) = (cx + a.cos() * rp, cy + a.sin() * rp);
-            let (bx, by) = (cx + b.cos() * rp, cy + b.sin() * rp);
-            // Lente entre A y B que pasa por ambos lados del centro.
-            let (mut dx, mut dy) = (bx - ax, by - ay);
-            let len = (dx * dx + dy * dy).sqrt().max(1.0);
-            dx /= len;
-            dy /= len;
-            let (pxn, pyn) = (-dy, dx); // perpendicular unitaria
-            let half = rp * 0.12; // ancho del pétalo
-            let c1 = (cx + pxn * half, cy + pyn * half);
-            let c2 = (cx - pxn * half, cy - pyn * half);
-            let d = format!(
-                "M {ax} {ay} Q {} {} {bx} {by} Q {} {} {ax} {ay} Z",
-                c1.0, c1.1, c2.0, c2.1
-            );
             let col = pal.aspect(&seg.kind);
             let intensity = (1.0 - seg.orb_deg.abs() / 8.0).clamp(0.15, 1.0);
-            let alpha = seg.opacity * (0.18 + 0.30 * intensity);
-            cmds.push(DrawCommand::Path {
-                d,
-                fill: Some(Rgba { a: alpha, ..col }),
-                stroke: Some(Rgba { a: (alpha + 0.25).min(0.8), ..col }),
-                stroke_w: 0.8,
-            });
+            let alpha = seg.opacity * (0.16 + 0.30 * intensity);
+            // Cada aspecto irradia un lóbulo CONVEXO desde el centro hacia
+            // cada uno de los dos cuerpos: el "campo de influencia" nace en el
+            // centro y se ensancha curvándose hacia el planeta. Dos cuerpos en
+            // aspecto comparten color → la trama armónica emerge de la suma.
+            for deg in [seg.from_deg, seg.to_deg] {
+                let th = (deg - 90.0).to_radians();
+                let (ux, uy) = (th.cos(), th.sin()); // radial hacia el planeta
+                let (px, py) = (-uy, ux); // perpendicular
+                let (tx, ty) = (cx + ux * rp, cy + uy * rp); // punta (planeta)
+                let br = rp * 0.66; // donde el lóbulo es más ancho (cerca del planeta)
+                let w = rp * (0.09 + 0.13 * intensity);
+                let (s1x, s1y) = (cx + ux * br + px * w, cy + uy * br + py * w);
+                let (s2x, s2y) = (cx + ux * br - px * w, cy + uy * br - py * w);
+                let d =
+                    format!("M {cx} {cy} Q {s1x} {s1y} {tx} {ty} Q {s2x} {s2y} {cx} {cy} Z");
+                cmds.push(DrawCommand::Path {
+                    d,
+                    fill: Some(Rgba { a: alpha, ..col }),
+                    stroke: Some(Rgba { a: (alpha + 0.20).min(0.7), ..col }),
+                    stroke_w: 0.7,
+                });
+            }
         }
     }
     // Centro luminoso.
