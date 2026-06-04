@@ -832,6 +832,12 @@ impl App for Cosmos {
         "cosmos · canvas (llimphi)"
     }
 
+    /// El `app_id` Wayland: pata lo usa para correlacionar foco ↔ dientes en el
+    /// rail hospedado, así que el `HostClient` registra con este mismo string.
+    fn app_id() -> Option<&'static str> {
+        Some("gioser.cosmos")
+    }
+
     fn initial_size() -> (u32, u32) {
         (1200, 860)
     }
@@ -896,6 +902,25 @@ impl App for Cosmos {
             render: render.clone(),
         }];
 
+        // Rail hospedado: si `COSMOS_DELEGATE_SIDEBAR` está set, cosmos delega su
+        // sidebar a pata — publica sus dientes y queda puro canvas. El callback
+        // (en el hilo lector del cliente) reinyecta las activaciones al bucle Elm.
+        let delegated = std::env::var_os("COSMOS_DELEGATE_SIDEBAR").is_some();
+        let host = if delegated {
+            let teeth: Vec<pata_host::HostedTooth> = ui
+                .dock_left
+                .iter()
+                .chain(&ui.dock_right)
+                .map(|i| dock_item_tooth(*i))
+                .collect();
+            let h = handle.clone();
+            pata_host::HostClient::connect("gioser.cosmos", "Cosmos", teeth, move |id| {
+                h.dispatch(Msg::HostActivate(id))
+            })
+        } else {
+            None
+        };
+
         Model {
             chart,
             overlays: ui.overlays,
@@ -956,6 +981,8 @@ impl App for Cosmos {
             dialog: None,
             dialog_field: dialog::DialogField::Name,
             dialog_input: llimphi_widget_text_input::TextInputState::new(),
+            delegated,
+            host,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }
@@ -1283,6 +1310,27 @@ impl App for Cosmos {
                     }
                 }
             }
+            // Rail hospedado: pata reenvió el clic de un diente prestado. Mapea el
+            // id al DockItem, deduce el lado por dónde vive, y togglea ese panel
+            // (mismo comportamiento que DockActivate) — así aparece/desaparece
+            // sobre el canvas de cosmos.
+            Msg::HostActivate(id) => {
+                if let Some(item) = model::DockItem::from_u64(id as u64) {
+                    let side = if m.dock_left.contains(&item) {
+                        model::DockSide::Left
+                    } else {
+                        model::DockSide::Right
+                    };
+                    let toggle_off =
+                        m.dock_active(side) == Some(item) && m.dock_expanded == Some(side);
+                    match side {
+                        model::DockSide::Left => m.active_left = Some(item),
+                        model::DockSide::Right => m.active_right = Some(item),
+                    }
+                    m.dock_expanded = if toggle_off { None } else { Some(side) };
+                    persist = true;
+                }
+            }
             // tipo de gráfica
             Msg::SetChartView(v) => {
                 m.chart_view = v;
@@ -1329,8 +1377,20 @@ impl App for Cosmos {
         // barra azul queda pegada al panel. Angosto → sólo rails; clic en
         // un diente despliega ese lado (estilo web).
         let collapsed = chrome::dock_collapsed(model);
-        let left_show = !collapsed || model.dock_expanded == Some(model::DockSide::Left);
-        let right_show = !collapsed || model.dock_expanded == Some(model::DockSide::Right);
+        // En modo delegado los rails los pinta pata; el panel de un lado aparece
+        // sólo cuando ese lado está expandido (un diente hospedado activo) →
+        // sin nada activo, cosmos es puro canvas.
+        let (left_show, right_show) = if model.delegated {
+            (
+                model.dock_expanded == Some(model::DockSide::Left),
+                model.dock_expanded == Some(model::DockSide::Right),
+            )
+        } else {
+            (
+                !collapsed || model.dock_expanded == Some(model::DockSide::Left),
+                !collapsed || model.dock_expanded == Some(model::DockSide::Right),
+            )
+        };
         let left_panel = if left_show {
             chrome::dock_panel_for(model::DockSide::Left, model, &theme)
         } else {
@@ -1555,4 +1615,24 @@ impl App for Cosmos {
 fn main() {
     rimay_localize::init();
     llimphi_ui::run::<Cosmos>();
+}
+
+/// Proyecta un `DockItem` a un diente hospedado `(id, icono, etiqueta)` para
+/// publicarlo en el rail de pata. El `id` codifica el `DockItem` (`to_u64`) y
+/// vuelve tal cual en [`Msg::HostActivate`].
+fn dock_item_tooth(item: model::DockItem) -> pata_host::HostedTooth {
+    use model::{DockItem, ToolCat};
+    let (icon, label): (&str, String) = match item {
+        DockItem::Arbol => ("folder", "Biblioteca".to_string()),
+        other => {
+            let tc = other.tool_cat().unwrap_or(ToolCat::Principal);
+            let icon = match tc {
+                ToolCat::Astronomia => "astro",
+                ToolCat::Sistema => "settings",
+                _ => "tools",
+            };
+            (icon, tc.title().to_string())
+        }
+    };
+    pata_host::HostedTooth::new(item.to_u64() as u32, icon, label)
 }

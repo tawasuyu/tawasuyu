@@ -788,6 +788,11 @@ fn dock_rail(side: DockSide, items: &[DockItem], active: Option<DockItem>, theme
 /// interno del centro (los dientes flotan sobre la rueda; el hueco debajo
 /// lo usa la rueda). `None` si el lado no tiene rail.
 fn dock_rail_overlay(side: DockSide, model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    // En modo delegado el rail lo pinta pata (con los dientes prestados); cosmos
+    // queda puro canvas y no dibuja sus tiras.
+    if model.delegated {
+        return None;
+    }
     let rail = dock_rail_for(side, model, theme)?;
     let inset = match side {
         DockSide::Left => Rect {

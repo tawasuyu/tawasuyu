@@ -664,6 +664,9 @@ pub(crate) enum Msg {
     // dock: activar una pestaña de un sidebar / moverla de lado (drop)
     DockActivate(DockSide, DockItem),
     DockDrop(DockSide, u64),
+    /// Rail hospedado (modo delegado): pata reenvió un clic en un diente que
+    /// cosmos le prestó. El `u32` es el `DockItem` codificado (`DockItem::to_u64`).
+    HostActivate(u32),
     // tipo de gráfica del centro
     SetChartView(ChartView),
     /// Resultado del cómputo astronómico PESADO (orto/ocaso/efemérides),
@@ -786,6 +789,14 @@ pub(crate) struct Model {
     pub(crate) dialog_field: crate::dialog::DialogField,
     /// Buffer de edición del campo enfocado del diálogo.
     pub(crate) dialog_input: TextInputState,
+    // rail hospedado (sidebar delegado a pata)
+    /// `true` si cosmos delega su sidebar al marco pata: no pinta sus propios
+    /// rails (queda puro canvas) y sus dientes aparecen en el rail de pata
+    /// cuando cosmos tiene foco. Lo enciende `COSMOS_DELEGATE_SIDEBAR`.
+    pub(crate) delegated: bool,
+    /// Cliente del rail hospedado (mantiene viva la conexión a pata + el hilo
+    /// que recibe las activaciones). `None` si no se delega o pata no escucha.
+    pub(crate) host: Option<pata_host::HostClient>,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     pub(crate) _chart_watcher: Option<notify::RecommendedWatcher>,

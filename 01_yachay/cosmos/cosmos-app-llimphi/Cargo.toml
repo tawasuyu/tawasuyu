@@ -49,3 +49,6 @@ serde_json = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }
+# Rail hospedado: cosmos puede delegar su sidebar al marco pata (sus dientes
+# aparecen en el rail global cuando tiene foco; su ventana queda puro canvas).
+pata-host = { path = "../../../02_ruway/pata/pata-host" }
