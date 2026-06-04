@@ -1374,10 +1374,18 @@ impl LayerShellHandler for LayerApp {
         };
         diag!("pata diag · configure panel {pi} new_size={cw}x{ch}");
         // El compositor nos da el tamaño definitivo (el eje libre ya resuelto).
-        if cw > 0 {
+        // Filtramos valores degenerados: cuando escondemos el tooltip empujándolo
+        // fuera de vista con un margen enorme (`set_margin(100_000, …)`), el
+        // `arrange` de smithay resta ese margen del alto disponible —978 − 100000
+        // = −99022— y, a diferencia de KWin, NO lo clampa a cero: nos llega
+        // envuelto a un u32 gigante. Pasárselo crudo a `Surface::configure`
+        // revienta la validación de wgpu (límite de textura 16384). Un cliente
+        // jamás debe alimentar a la GPU con un tamaño del compositor sin validarlo.
+        const MAX_DIM: u32 = 16384; // máximo de textura de wgpu/Vulkan
+        if (1..=MAX_DIM).contains(&cw) {
             self.panels[pi].width = cw;
         }
-        if ch > 0 {
+        if (1..=MAX_DIM).contains(&ch) {
             self.panels[pi].height = ch;
         }
         self.panels[pi].dirty = true; // tamaño nuevo → re-pintar
