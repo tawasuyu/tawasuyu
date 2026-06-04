@@ -22,7 +22,7 @@ use llimphi_widget_menubar::{
     menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
 
-use super::{Model, Msg, ModuleMsg, ModuleState, Slot};
+use super::{Model, Msg, ModuleMsg, ModuleState, SessionView, Slot, Which};
 
 // ─── Estado del shell focado (lo que habilita/deshabilita el menú) ──
 
@@ -54,9 +54,16 @@ pub(crate) fn focused_shell(model: &Model) -> Option<FocusInfo> {
             return Some(info);
         }
     }
-    if let Some(inst) = model.tabs.get(model.active_tab) {
-        if let Some(info) = from(Slot::Tab(model.active_tab), &inst.state) {
-            return Some(info);
+    // El shell de la sesión activa (sólo cuenta como "focado" si su vista
+    // Shell está al frente — es la que recibe teclas).
+    if model.active_view == SessionView::Shell {
+        if let Some(s) = model.active() {
+            if let Some(info) = from(
+                Slot::Session(model.active_session, Which::Shell),
+                &s.shell.state,
+            ) {
+                return Some(info);
+            }
         }
     }
     None
@@ -101,13 +108,13 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
         cancelar = cancelar.disabled();
     }
     let mut ver = Menu::new(t("view")).item(limpiar_pant).item(cancelar);
-    // Una entrada por tab para saltar directo (mapea a `Msg::SelectTab`).
-    for (i, inst) in model.tabs.iter().enumerate() {
-        let mut it = MenuItem::new(inst.label.clone(), format!("view.tab.{i}"));
+    // Una entrada por sesión para saltar directo (mapea a `Msg::SelectSession`).
+    for (i, s) in model.sessions.iter().enumerate() {
+        let mut it = MenuItem::new(s.name.clone(), format!("view.session.{i}"));
         if i == 0 {
             it = it.separated();
         }
-        if i == model.active_tab {
+        if i == model.active_session {
             it = it.disabled(); // ya estás acá
         }
         ver = ver.item(it);
@@ -262,11 +269,11 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
         return model;
     }
 
-    // Selector de tab: "view.tab.<i>".
-    if let Some(rest) = cmd.strip_prefix("view.tab.") {
+    // Selector de sesión: "view.session.<i>".
+    if let Some(rest) = cmd.strip_prefix("view.session.") {
         if let Ok(i) = rest.parse::<usize>() {
-            if i < model.tabs.len() {
-                model.active_tab = i;
+            if i < model.sessions.len() {
+                model.active_session = i;
             }
         }
         return model;
@@ -286,7 +293,10 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
         "term.clear" => route_to_shell(model, ModuleMsg::Shell(shuma_module_shell::Msg::Clear)),
         "term.cancel" => route_to_shell(model, ModuleMsg::Shell(shuma_module_shell::Msg::Cancel)),
         "help.about" => {
-            let line = format!("# shuma — shell soberano · {} tabs", model.tabs.len());
+            let line = format!(
+                "# shuma — shell soberano · {} sesiones",
+                model.sessions.len()
+            );
             route_to_shell(
                 model,
                 ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(line)),
@@ -308,11 +318,7 @@ fn route_to_shell(model: Model, msg: ModuleMsg) -> Model {
 /// Vacía la línea de comando del shell en `slot` mutando su `LineState`
 /// directamente (no hay un `Msg` de "limpiar entrada" en el módulo).
 fn clear_input(model: &mut Model, slot: &Slot) {
-    let inst = match slot {
-        Slot::Main => model.main.as_mut(),
-        Slot::Tab(i) => model.tabs.get_mut(*i),
-        _ => None,
-    };
+    let inst = super::instance_for_slot_mut(model, slot);
     if let Some(inst) = inst {
         if let ModuleState::Shell(s) = &mut inst.state {
             s.input.clear();

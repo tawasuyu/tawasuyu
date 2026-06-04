@@ -71,24 +71,24 @@ const MONITORS_TOOTH: u32 = u32::MAX;
 /// foco, esos dientes aparecen en el rail global de pata; el área central
 /// queda como puro lienzo (monitores ocultos por default). `app_id` debe ser
 /// el mismo que reporta el compositor (`Shell::app_id`).
-fn shuma_host(handle: &Handle<Msg>, tabs: &[Instance]) -> Option<pata_host::HostClient> {
+fn shuma_host(handle: &Handle<Msg>) -> Option<pata_host::HostClient> {
     if std::env::var_os("SHUMA_DELEGATE_SIDEBAR").is_none() {
         return None;
     }
-    let teeth = host_teeth(tabs);
+    let teeth = host_view_teeth();
     let h = handle.clone();
     pata_host::HostClient::connect("shuma.shell", "shuma", teeth, move |id| {
         h.dispatch(Msg::HostActivate(id))
     })
 }
 
-/// Dientes que shuma presta al rail de pata: uno por tab (id = índice) más el
-/// toggle de monitores.
-fn host_teeth(tabs: &[Instance]) -> Vec<pata_host::HostedTooth> {
-    let mut teeth: Vec<pata_host::HostedTooth> = tabs
+/// Dientes que shuma presta al rail de pata: uno por **vista** de la sesión
+/// activa (id = índice en `SessionView::ALL`) más el toggle de monitores.
+fn host_view_teeth() -> Vec<pata_host::HostedTooth> {
+    let mut teeth: Vec<pata_host::HostedTooth> = SessionView::ALL
         .iter()
         .enumerate()
-        .map(|(i, inst)| pata_host::HostedTooth::new(i as u32, tooth_icon(inst.kind), inst.label.clone()))
+        .map(|(i, v)| pata_host::HostedTooth::new(i as u32, view_icon_name(*v), view_label(*v)))
         .collect();
     teeth.push(pata_host::HostedTooth::new(
         MONITORS_TOOTH,
@@ -98,16 +98,23 @@ fn host_teeth(tabs: &[Instance]) -> Vec<pata_host::HostedTooth> {
     teeth
 }
 
-/// Icono (vocabulario abierto de `pata`) para el diente de una tab según su
-/// `Kind`. pata mapea estos nombres a sus formas (`files`→carpeta,
-/// `tools`/`settings`→grupo, `monads`→mónada).
-fn tooth_icon(kind: Kind) -> &'static str {
-    match kind {
-        Kind::Shell => "tools",
-        Kind::Matilda => "settings",
-        Kind::Minga => "monads",
-        Kind::Canvas => "files",
-        Kind::Launcher | Kind::CommandBar => "tools",
+/// Nombre de icono (vocabulario abierto de `pata`) para una vista.
+fn view_icon_name(v: SessionView) -> &'static str {
+    match v {
+        SessionView::Shell => "tools",
+        SessionView::Hosts => "settings",
+        SessionView::Vhosts => "monads",
+        SessionView::Canvas => "files",
+    }
+}
+
+/// Etiqueta localizada de una vista (tooltip del diente).
+fn view_label(v: SessionView) -> String {
+    match v {
+        SessionView::Shell => rimay_localize::t("shuma-label-shell"),
+        SessionView::Hosts => "Hosts".to_string(),
+        SessionView::Vhosts => "Vhosts".to_string(),
+        SessionView::Canvas => rimay_localize::t("shuma-label-canvas"),
     }
 }
 
@@ -184,6 +191,45 @@ impl Kind {
     }
 }
 
+/// Cuál de las tres instancias-módulo de una sesión direcciona un `Slot` o un
+/// `Msg`. Las vistas Hosts y Vhosts comparten la instancia Matilda (mismo
+/// inventario, distinto render).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Which {
+    Shell,
+    Canvas,
+    Matilda,
+}
+
+/// La vista activa de una sesión — un diente del rail derecho. Hosts/Vhosts
+/// pintan el inventario de la instancia Matilda filtrado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionView {
+    Shell,
+    Hosts,
+    Vhosts,
+    Canvas,
+}
+
+impl SessionView {
+    /// Qué instancia-módulo respalda esta vista.
+    fn which(self) -> Which {
+        match self {
+            SessionView::Shell => Which::Shell,
+            SessionView::Canvas => Which::Canvas,
+            SessionView::Hosts | SessionView::Vhosts => Which::Matilda,
+        }
+    }
+
+    /// El orden de los dientes en el rail (debe seguir a `host_view_teeth`).
+    const ALL: [SessionView; 4] = [
+        SessionView::Shell,
+        SessionView::Hosts,
+        SessionView::Vhosts,
+        SessionView::Canvas,
+    ];
+}
+
 /// State vivo de un módulo. Una variante por `Kind` para evitar trait
 /// objects (cada módulo trae su propio `Msg` que no es object-safe).
 enum ModuleState {
@@ -201,6 +247,9 @@ enum ModuleState {
 /// (lo invariante lo garantiza el constructor).
 struct Instance {
     kind: Kind,
+    /// Etiqueta del módulo. El título de la vista lo arma la sesión
+    /// (`nombre · vista`); los constructores la setean y queda disponible.
+    #[allow(dead_code)]
     label: String,
     state: ModuleState,
 }
@@ -270,6 +319,51 @@ impl Instance {
     }
 }
 
+/// Una **sesión de trabajo**: un ambiente con su aislamiento (local o remoto)
+/// y sus tres vistas (shell, lienzo, inventario matilda). Cambiar de sesión
+/// (tab superior) cambia todo el ambiente; el rail derecho elige la vista.
+struct Session {
+    name: String,
+    /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
+    /// Es el aislamiento: local = procesos de la máquina; remoto = SSH/daemon.
+    /// (Se leerá al editar el aislamiento de una sesión existente — fase 4.)
+    #[allow(dead_code)]
+    source: Source,
+    shell: Instance,
+    canvas: Instance,
+    matilda: Instance,
+}
+
+impl Session {
+    /// Sesión nueva con un `source` (aislamiento). Cada sesión arranca con sus
+    /// tres vistas: shell + lienzo + inventario.
+    fn new(name: String, source: Source) -> Self {
+        Self {
+            shell: Instance::shell(name.clone(), source.clone()),
+            canvas: Instance::canvas(rimay_localize::t("shuma-label-canvas")),
+            matilda: Instance::matilda(name.clone(), source.clone()),
+            name,
+            source,
+        }
+    }
+
+    fn instance(&self, w: Which) -> &Instance {
+        match w {
+            Which::Shell => &self.shell,
+            Which::Canvas => &self.canvas,
+            Which::Matilda => &self.matilda,
+        }
+    }
+
+    fn instance_mut(&mut self, w: Which) -> &mut Instance {
+        match w {
+            Which::Shell => &mut self.shell,
+            Which::Canvas => &mut self.canvas,
+            Which::Matilda => &mut self.matilda,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum ModuleMsg {
     Launcher(shuma_module_launcher::Msg),
@@ -292,7 +386,8 @@ enum Slot {
     BottomBar,
     #[allow(dead_code)]
     Main,
-    Tab(usize),
+    /// Una instancia-módulo de la sesión `idx` (cuál, lo dice `Which`).
+    Session(usize, Which),
 }
 
 // ─── Modelo + Msg ───────────────────────────────────────────────────
@@ -308,9 +403,12 @@ struct Model {
     /// editor, etc.) vía shumarc.
     main: Option<Instance>,
 
-    // Tabs siempre visibles cuando `main` está vacío.
-    tabs: Vec<Instance>,
-    active_tab: usize,
+    // Sesiones de trabajo (tabs superiores cuando `main` está vacío). Cambiar
+    // de sesión cambia todo el ambiente; `active_view` (rail derecho) elige la
+    // vista de la sesión activa.
+    sessions: Vec<Session>,
+    active_session: usize,
+    active_view: SessionView,
 
     // Monitor stack en el panel derecho del área central.
     sysmon: SystemSampler,
@@ -351,14 +449,39 @@ struct Model {
     monitors_visible: bool,
 }
 
+impl Model {
+    /// La sesión activa (la primera si el índice quedó fuera de rango).
+    fn active(&self) -> Option<&Session> {
+        self.sessions.get(self.active_session).or_else(|| self.sessions.first())
+    }
+
+    /// Instancia-módulo `w` de la sesión `idx`, si existe.
+    fn session_instance(&self, idx: usize, w: Which) -> Option<&Instance> {
+        self.sessions.get(idx).map(|s| s.instance(w))
+    }
+
+    fn session_instance_mut(&mut self, idx: usize, w: Which) -> Option<&mut Instance> {
+        self.sessions.get_mut(idx).map(|s| s.instance_mut(w))
+    }
+
+    /// La instancia que respalda la vista activa de la sesión activa.
+    fn active_view_slot(&self) -> Slot {
+        Slot::Session(self.active_session, self.active_view.which())
+    }
+}
+
 #[derive(Clone)]
 enum Msg {
     Tick,
     /// Tick rápido que drena la salida del shell (~100 ms) sin tocar
     /// el muestreo de sysmon.
     ShellTick,
-    /// Click en una tab.
-    SelectTab(usize),
+    /// Click en una tab de sesión: cambia todo el ambiente.
+    SelectSession(usize),
+    /// Click en un diente del rail: cambia la vista de la sesión activa.
+    SelectView(SessionView),
+    /// El `+` de la tira de sesiones: crea una sesión local nueva y la activa.
+    NewSession,
     /// Drag del splitter de monitores.
     ResizeMonitors(f32),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
@@ -443,25 +566,18 @@ impl App for Shell {
         });
         let main = resolve_slot(cfg.main.as_ref());
 
-        let tabs = if cfg.tabs.is_empty() {
-            // Default cuando no hay `[[tabs]]`: shell + lienzo + matilda
-            // locales para que el chasis sea exploratorio desde el día
-            // uno sin que el usuario tenga que escribir un shumarc. El
-            // lienzo se mantiene en sync con el grafo del shell cada
-            // `SHELL_TICK` (~100 ms).
-            vec![
-                Instance::shell(rimay_localize::t("shuma-label-shell"), default_shell_source()),
-                Instance::canvas(rimay_localize::t("shuma-label-canvas")),
-                Instance::matilda(rimay_localize::t("shuma-label-matilda"), Source::Local),
-            ]
-        } else {
-            cfg.tabs.iter().filter_map(resolve_tab).collect()
-        };
+        // Una sesión de trabajo inicial con el aislamiento que digan las env
+        // vars (local por default). Cada sesión trae sus tres vistas (shell +
+        // lienzo + inventario); el usuario crea más con el `+`. El shumarc
+        // `[[tabs]]` quedó superado por el modelo de sesiones.
+        let sessions = vec![Session::new(
+            rimay_localize::t("shuma-label-shell"),
+            default_shell_source(),
+        )];
 
         // Rail hospedado: si `SHUMA_DELEGATE_SIDEBAR` está set, prestamos las
-        // tabs + el toggle de monitores al rail de pata. Se conecta acá, una
-        // vez armadas las tabs, para publicar sus etiquetas como dientes.
-        let host = shuma_host(handle, &tabs);
+        // VISTAS de la sesión activa + el toggle de monitores al rail de pata.
+        let host = shuma_host(handle);
         // Sin delegar el panel siempre se ve; delegado arranca oculto (puro
         // lienzo) y el rail de pata lo despliega.
         let monitors_visible = host.is_none();
@@ -471,8 +587,9 @@ impl App for Shell {
             topbar,
             bottombar,
             main,
-            tabs,
-            active_tab: 0,
+            sessions,
+            active_session: 0,
+            active_view: SessionView::Shell,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
             monitors_width: MONITORS_INITIAL_WIDTH,
@@ -543,10 +660,18 @@ impl App for Shell {
                 // refresca al instante).
                 let _ = rimay_localize::set_locale(&cfg.lang);
             }
-            Msg::SelectTab(i) => {
-                if i < m.tabs.len() {
-                    m.active_tab = i;
+            Msg::SelectSession(i) => {
+                if i < m.sessions.len() {
+                    m.active_session = i;
                 }
+            }
+            Msg::SelectView(v) => m.active_view = v,
+            Msg::NewSession => {
+                let n = m.sessions.len() + 1;
+                m.sessions
+                    .push(Session::new(format!("local {n}"), Source::Local));
+                m.active_session = m.sessions.len() - 1;
+                m.active_view = SessionView::Shell;
             }
             Msg::ResizeMonitors(dx) => {
                 m.monitors_width = (m.monitors_width - dx).clamp(180.0, 480.0);
@@ -622,12 +747,12 @@ impl App for Shell {
                 m = menu::handle_command(m, &cmd);
             }
             Msg::HostActivate(id) => {
-                // Rail hospedado: un diente de tab selecciona esa tab; el
+                // Rail hospedado: un diente de vista cambia la vista activa; el
                 // diente sentinela togglea el panel de monitores.
                 if id == MONITORS_TOOTH {
                     m.monitors_visible = !m.monitors_visible;
-                } else if (id as usize) < m.tabs.len() {
-                    m.active_tab = id as usize;
+                } else if let Some(v) = SessionView::ALL.get(id as usize) {
+                    m.active_view = *v;
                 }
             }
         }

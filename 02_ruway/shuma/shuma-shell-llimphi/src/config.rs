@@ -64,9 +64,10 @@ pub struct SlotEntry {
     pub inventory: Option<PathBuf>,
 }
 
-/// Una entrada del array `[[tabs]]`. Mismo shape que [`SlotEntry`]
-/// pero con el `id` separado del campo `module` por convención del
-/// shumarc.
+/// Una entrada del array `[[tabs]]`. Superada por el modelo de **sesiones**
+/// (las vistas shell/hosts/vhosts/canvas son fijas por sesión); se sigue
+/// parseando para no romper shumarc viejos, pero ya no arma tabs.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct TabEntry {
     /// `id` del módulo a activar como tab.
@@ -85,6 +86,8 @@ pub struct ShumaConfig {
     pub topbar: Option<SlotEntry>,
     pub bottombar: Option<SlotEntry>,
     pub main: Option<SlotEntry>,
+    /// Superado por el modelo de sesiones; se parsea por compatibilidad.
+    #[allow(dead_code)]
     #[serde(default)]
     pub tabs: Vec<TabEntry>,
 }

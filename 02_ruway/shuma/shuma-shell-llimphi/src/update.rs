@@ -2,6 +2,26 @@
 
 use super::*;
 
+/// La instancia-módulo que direcciona un `Slot` (compartida por todos los
+/// lookups). `Slot::Session(i, w)` resuelve a la vista `w` de la sesión `i`.
+pub(crate) fn instance_for_slot<'a>(m: &'a Model, slot: &Slot) -> Option<&'a Instance> {
+    match slot {
+        Slot::TopBar => m.topbar.as_ref(),
+        Slot::BottomBar => m.bottombar.as_ref(),
+        Slot::Main => m.main.as_ref(),
+        Slot::Session(i, w) => m.session_instance(*i, *w),
+    }
+}
+
+pub(crate) fn instance_for_slot_mut<'a>(m: &'a mut Model, slot: &Slot) -> Option<&'a mut Instance> {
+    match slot {
+        Slot::TopBar => m.topbar.as_mut(),
+        Slot::BottomBar => m.bottombar.as_mut(),
+        Slot::Main => m.main.as_mut(),
+        Slot::Session(i, w) => m.session_instance_mut(*i, *w),
+    }
+}
+
 /// Enruta un `ModuleMsg` al `update` del módulo correspondiente, y se
 /// encarga de interceptar mensajes que el chasis quiera promocionar
 /// (p. ej. el click en la command bar abre el drawer).
@@ -16,39 +36,16 @@ pub(crate) fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Mode
     // la enfocamos. La variante NO se propaga al canvas — el canvas
     // solo emite la intención.
     if let ModuleMsg::Canvas(shuma_module_canvas::Msg::InsertRef(text)) = &msg {
-        if let Some(target) = first_shell_slot(&m) {
-            let insert_msg =
-                ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(text.clone()));
-            if let Slot::Tab(i) = &target {
-                m.active_tab = *i;
-            }
-            return apply_module_msg(m, target, insert_msg);
-        }
-        // Sin shell activo: el pedido se descarta silencioso.
-        return m;
+        // El shell de la sesión activa recibe la inserción y pasamos a su vista.
+        let insert_msg =
+            ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(text.clone()));
+        let target = Slot::Session(m.active_session, Which::Shell);
+        m.active_view = SessionView::Shell;
+        return apply_module_msg(m, target, insert_msg);
     }
 
-    match slot {
-        Slot::TopBar => {
-            if let Some(inst) = m.topbar.as_mut() {
-                route_to_instance(inst, msg);
-            }
-        }
-        Slot::BottomBar => {
-            if let Some(inst) = m.bottombar.as_mut() {
-                route_to_instance(inst, msg);
-            }
-        }
-        Slot::Main => {
-            if let Some(inst) = m.main.as_mut() {
-                route_to_instance(inst, msg);
-            }
-        }
-        Slot::Tab(idx) => {
-            if let Some(inst) = m.tabs.get_mut(idx) {
-                route_to_instance(inst, msg);
-            }
-        }
+    if let Some(inst) = instance_for_slot_mut(&mut m, &slot) {
+        route_to_instance(inst, msg);
     }
     m
 }
@@ -60,15 +57,6 @@ pub(crate) fn resolve_slot(entry: Option<&config::SlotEntry>) -> Option<Instance
     let entry = entry?;
     resolve_instance(
         &entry.module,
-        entry.source.clone(),
-        entry.label.clone(),
-        entry.inventory.as_deref(),
-    )
-}
-
-pub(crate) fn resolve_tab(entry: &config::TabEntry) -> Option<Instance> {
-    resolve_instance(
-        &entry.id,
         entry.source.clone(),
         entry.label.clone(),
         entry.inventory.as_deref(),
@@ -161,8 +149,12 @@ pub(crate) fn collect_contributions(model: &Model) -> Vec<(Slot, ModuleContribut
     if let Some(inst) = &model.main {
         push(&mut out, Slot::Main, inst);
     }
-    for (i, inst) in model.tabs.iter().enumerate() {
-        push(&mut out, Slot::Tab(i), inst);
+    // Monitores/shortcuts de la sesión activa (sus tres vistas).
+    let i = model.active_session;
+    if let Some(s) = model.sessions.get(i) {
+        push(&mut out, Slot::Session(i, Which::Shell), &s.shell);
+        push(&mut out, Slot::Session(i, Which::Canvas), &s.canvas);
+        push(&mut out, Slot::Session(i, Which::Matilda), &s.matilda);
     }
     out
 }
@@ -209,106 +201,29 @@ pub(crate) fn drain_shell_instances(m: &mut Model) {
     if let Some(inst) = m.main.as_mut() {
         tick_one(inst);
     }
-    for inst in m.tabs.iter_mut() {
-        tick_one(inst);
-    }
-    sync_canvas_from_primary_shell(m);
-}
-
-/// Toma el `intent_graph` de la primera instancia `Shell` encontrada
-/// (en orden: topbar, bottombar, main, drawer tabs) y lo empuja a cada
-/// instancia `Canvas` activa vía `Msg::SyncGraph`. Si no hay shells, el
-/// canvas mantiene lo último que tenía (incluyendo su grafo de demo).
-pub(crate) fn sync_canvas_from_primary_shell(m: &mut Model) {
-    let snapshot = find_primary_shell_graph(m);
-    let Some(graph) = snapshot else { return };
-    let sync_one = |inst: &mut Instance| {
-        if let ModuleState::Canvas(s) = &mut inst.state {
-            *s = shuma_module_canvas::update(
-                s.clone(),
-                shuma_module_canvas::Msg::SyncGraph(graph.clone()),
+    // Cada sesión drena su propio shell y sincroniza su propio lienzo.
+    for s in m.sessions.iter_mut() {
+        tick_one(&mut s.shell);
+        let graph = match &s.shell.state {
+            ModuleState::Shell(sh) => Some(sh.intent_graph().clone()),
+            _ => None,
+        };
+        if let (Some(graph), ModuleState::Canvas(c)) = (graph, &mut s.canvas.state) {
+            *c = shuma_module_canvas::update(
+                c.clone(),
+                shuma_module_canvas::Msg::SyncGraph(graph),
             );
         }
-    };
-    if let Some(inst) = m.topbar.as_mut() {
-        sync_one(inst);
-    }
-    if let Some(inst) = m.bottombar.as_mut() {
-        sync_one(inst);
-    }
-    if let Some(inst) = m.main.as_mut() {
-        sync_one(inst);
-    }
-    for inst in m.tabs.iter_mut() {
-        sync_one(inst);
     }
 }
 
-/// Slot del primer `Shell` activo siguiendo el mismo orden que
-/// `find_primary_shell_graph`. Lo usa el hook de `Msg::Canvas(InsertRef)`
-/// para encontrar a quién enrutarle el `InsertAtCursor`.
-pub(crate) fn first_shell_slot(m: &Model) -> Option<Slot> {
-    if matches!(
-        m.topbar.as_ref().map(|i| &i.state),
-        Some(ModuleState::Shell(_))
-    ) {
-        return Some(Slot::TopBar);
-    }
-    if matches!(
-        m.bottombar.as_ref().map(|i| &i.state),
-        Some(ModuleState::Shell(_))
-    ) {
-        return Some(Slot::BottomBar);
-    }
-    if matches!(
-        m.main.as_ref().map(|i| &i.state),
-        Some(ModuleState::Shell(_))
-    ) {
-        return Some(Slot::Main);
-    }
-    m.tabs.iter().enumerate().find_map(|(i, inst)| {
-        if matches!(inst.state, ModuleState::Shell(_)) {
-            Some(Slot::Tab(i))
-        } else {
-            None
-        }
-    })
-}
-
-pub(crate) fn find_primary_shell_graph(m: &Model) -> Option<shuma_intent::SessionGraph> {
-    let pick = |inst: &Instance| match &inst.state {
-        ModuleState::Shell(s) => Some(s.intent_graph().clone()),
-        _ => None,
-    };
-    if let Some(inst) = m.topbar.as_ref() {
-        if let Some(g) = pick(inst) {
-            return Some(g);
-        }
-    }
-    if let Some(inst) = m.bottombar.as_ref() {
-        if let Some(g) = pick(inst) {
-            return Some(g);
-        }
-    }
-    if let Some(inst) = m.main.as_ref() {
-        if let Some(g) = pick(inst) {
-            return Some(g);
-        }
-    }
-    for inst in &m.tabs {
-        if let Some(g) = pick(inst) {
-            return Some(g);
-        }
-    }
-    None
-}
 
 pub(crate) fn monitor_key(slot: &Slot, spec: &MonitorSpec) -> String {
     let slot_label = match slot {
         Slot::TopBar => "topbar",
         Slot::BottomBar => "bottombar",
         Slot::Main => "main",
-        Slot::Tab(i) => return format!("tab:{i}/{}", spec.id),
+        Slot::Session(i, w) => return format!("session:{i}:{w:?}/{}", spec.id),
     };
     format!("{slot_label}/{}", spec.id)
 }
@@ -331,21 +246,24 @@ pub(crate) fn handle_shortcut(
 ) -> Model {
     match action {
         ShortcutAction::Command { line } => {
-            // Hack temporario: lo agregamos al log del primer matilda
-            // que encontremos para que el usuario vea feedback.
-            if let Some(inst) = m
-                .tabs
-                .iter_mut()
-                .find(|i| matches!(i.state, ModuleState::Matilda(_)))
-            {
-                if let ModuleState::Matilda(s) = &mut inst.state {
-                    s.log.push(format!("? command: {line}"));
+            // Lo agregamos al log del matilda de la sesión activa (feedback).
+            if let Some(s) = m.sessions.get_mut(m.active_session) {
+                if let ModuleState::Matilda(mat) = &mut s.matilda.state {
+                    mat.log.push(format!("? command: {line}"));
                 }
             }
         }
         ShortcutAction::FocusTab { target } => {
-            if let Some(i) = m.tabs.iter().position(|inst| inst.kind.id() == target) {
-                m.active_tab = i;
+            // Un shortcut que pide enfocar un módulo se traduce a cambiar de
+            // vista en la sesión activa (Hosts/Vhosts → matilda, etc.).
+            let view = match target {
+                t if t == shuma_module_shell::ID => Some(SessionView::Shell),
+                t if t == shuma_module_canvas::ID => Some(SessionView::Canvas),
+                t if t == shuma_module_matilda::ID => Some(SessionView::Hosts),
+                _ => None,
+            };
+            if let Some(v) = view {
+                m.active_view = v;
             }
         }
         ShortcutAction::ModuleAction { action_id } => {
@@ -500,12 +418,7 @@ pub(crate) fn handle_shortcut(
 
 /// Path del repo Minga de un slot que aloje el módulo minga.
 pub(crate) fn minga_repo_path(slot: &Slot, model: &Model) -> Option<std::path::PathBuf> {
-    let inst = match slot {
-        Slot::TopBar => model.topbar.as_ref()?,
-        Slot::BottomBar => model.bottombar.as_ref()?,
-        Slot::Main => model.main.as_ref()?,
-        Slot::Tab(i) => model.tabs.get(*i)?,
-    };
+    let inst = instance_for_slot(model, slot)?;
     match &inst.state {
         ModuleState::Minga(s) => Some(s.repo_path.clone()),
         _ => None,
@@ -519,12 +432,7 @@ pub(crate) fn minga_visible_alphas(
     slot: &Slot,
     model: &Model,
 ) -> Option<Vec<minga_core::ContentHash>> {
-    let inst = match slot {
-        Slot::TopBar => model.topbar.as_ref()?,
-        Slot::BottomBar => model.bottombar.as_ref()?,
-        Slot::Main => model.main.as_ref()?,
-        Slot::Tab(i) => model.tabs.get(*i)?,
-    };
+    let inst = instance_for_slot(model, slot)?;
     match &inst.state {
         ModuleState::Minga(s) => s
             .snapshot
@@ -540,6 +448,7 @@ pub(crate) fn minga_visible_alphas(
 /// Rutea la rueda del mouse al shell focado (mismo orden de prioridad
 /// que las teclas). `dpx` ya viene en px (positivo = ver historial).
 pub(crate) fn forward_wheel_to_focused_shell(model: &Model, dpx: f32) -> Option<Msg> {
+    // El slot Main como shell gana (config wrapper de una sola app).
     if let Some(inst) = model.main.as_ref() {
         if matches!(inst.state, ModuleState::Shell(_)) {
             return Some(Msg::Module(
@@ -548,21 +457,15 @@ pub(crate) fn forward_wheel_to_focused_shell(model: &Model, dpx: f32) -> Option<
             ));
         }
     }
-    if let Some(inst) = model.tabs.get(model.active_tab) {
-        if matches!(inst.state, ModuleState::Shell(_)) {
-            return Some(Msg::Module(
-                Slot::Tab(model.active_tab),
-                ModuleMsg::Shell(shuma_module_shell::Msg::Scroll(dpx)),
-            ));
-        }
-    }
-    None
+    // Si no, la rueda recorre el shell de la sesión activa (siempre tiene uno).
+    Some(Msg::Module(
+        Slot::Session(model.active_session, Which::Shell),
+        ModuleMsg::Shell(shuma_module_shell::Msg::Scroll(dpx)),
+    ))
 }
 
 pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Option<Msg> {
-    // 1) Slot Main siempre gana — si está configurado como shell, las
-    //    teclas van ahí. Permite al usuario poner el shell como módulo
-    //    principal de la ventana.
+    // 1) Slot Main siempre gana — si está configurado como shell.
     if let Some(inst) = model.main.as_ref() {
         if matches!(inst.state, ModuleState::Shell(_)) {
             return Some(Msg::Module(
@@ -571,26 +474,20 @@ pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Optio
             ));
         }
     }
-    // 2) Tab activo, si es un shell.
-    if let Some(inst) = model.tabs.get(model.active_tab) {
-        if matches!(inst.state, ModuleState::Shell(_)) {
-            return Some(Msg::Module(
-                Slot::Tab(model.active_tab),
-                ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
-            ));
-        }
+    // 2) Las teclas van al shell de la sesión activa sólo cuando su vista
+    //    Shell está al frente (Hosts/Vhosts/Canvas no consumen teclas).
+    if model.active_view == SessionView::Shell {
+        return Some(Msg::Module(
+            Slot::Session(model.active_session, Which::Shell),
+            ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
+        ));
     }
     None
 }
 
 /// Path del inventario JSON de un slot de matilda, si lo tiene cargado.
 pub(crate) fn matilda_inventory_path(slot: &Slot, model: &Model) -> Option<std::path::PathBuf> {
-    let inst = match slot {
-        Slot::TopBar => model.topbar.as_ref()?,
-        Slot::BottomBar => model.bottombar.as_ref()?,
-        Slot::Main => model.main.as_ref()?,
-        Slot::Tab(i) => model.tabs.get(*i)?,
-    };
+    let inst = instance_for_slot(model, slot)?;
     let state = match &inst.state {
         ModuleState::Matilda(s) => s.as_ref(),
         _ => return None,
@@ -605,12 +502,7 @@ pub(crate) fn remote_matilda_inputs(
     slot: &Slot,
     model: &Model,
 ) -> Option<(Source, matilda_core::Inventory)> {
-    let inst = match slot {
-        Slot::TopBar => model.topbar.as_ref()?,
-        Slot::BottomBar => model.bottombar.as_ref()?,
-        Slot::Main => model.main.as_ref()?,
-        Slot::Tab(i) => model.tabs.get(*i)?,
-    };
+    let inst = instance_for_slot(model, slot)?;
     let state = match &inst.state {
         ModuleState::Matilda(s) => s.as_ref(),
         _ => return None,
@@ -623,12 +515,7 @@ pub(crate) fn remote_matilda_inputs(
 }
 
 pub(crate) fn dispatch_to_module(slot: &Slot, model: &Model, action_id: &str) -> Option<ModuleMsg> {
-    let inst = match slot {
-        Slot::TopBar => model.topbar.as_ref()?,
-        Slot::BottomBar => model.bottombar.as_ref()?,
-        Slot::Main => model.main.as_ref()?,
-        Slot::Tab(i) => model.tabs.get(*i)?,
-    };
+    let inst = instance_for_slot(model, slot)?;
     match inst.kind {
         Kind::Launcher => shuma_module_launcher::dispatch(action_id).map(ModuleMsg::Launcher),
         Kind::CommandBar => shuma_module_commandbar::dispatch(action_id).map(ModuleMsg::CommandBar),
