@@ -1551,6 +1551,42 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "narrow" => Some(DeclKind::TextEmphasisSkip(TextEmphasisSkip::Narrow)),
             _ => None,
         },
+        // Fase 7.514-7.518 — `animation-*` longhands. Mutación parcial de
+        // `s.animation` (Option<AnimationBinding>) — el primer longhand
+        // crea la binding con defaults, los siguientes ajustan campos.
+        // De una lista separada por coma sólo tomamos el primer item, igual
+        // que el shorthand `animation:` ya hace en parser/sheet.rs.
+        "animation-name" => {
+            let v = first_comma(value.trim());
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::AnimationName(None))
+            } else {
+                Some(DeclKind::AnimationName(Some(v.to_string())))
+            }
+        }
+        "animation-duration" => parse_time_seconds(first_comma(value.trim()))
+            .map(DeclKind::AnimationDuration),
+        "animation-timing-function" => parse_easing_keyword(first_comma(value.trim()))
+            .map(DeclKind::AnimationTimingFunction),
+        "animation-iteration-count" => {
+            let t = first_comma(value.trim());
+            if t.eq_ignore_ascii_case("infinite") {
+                Some(DeclKind::AnimationIterationCount(AnimationIterations::Infinite))
+            } else {
+                t.parse::<f32>()
+                    .ok()
+                    .filter(|n| *n >= 0.0)
+                    .map(|n| DeclKind::AnimationIterationCount(AnimationIterations::Count(n)))
+            }
+        }
+        "animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::AnimationFillMode(AnimationFillMode::None)),
+            "forwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Forwards)),
+            "backwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Backwards)),
+            "both" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Both)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -5697,6 +5733,45 @@ pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {
 /// Acepta `auto`, `Npx`, `Nrem`/`Nem` (→ px), `N%`. Sin unidad y
 /// distinto de `0` → falla (a diferencia de `parse_length_px`, que
 /// asume px).
+/// Devuelve el primer item de una lista separada por coma. Si no hay
+/// coma, devuelve el string completo. Espacios al borde recortados.
+/// Fase 7.514+ (longhands animation que sólo guardan el primer item).
+fn first_comma(s: &str) -> &str {
+    match s.find(',') {
+        Some(i) => s[..i].trim(),
+        None => s.trim(),
+    }
+}
+
+/// Parsea `<time>` CSS: `<n>s` o `<n>ms`. Devuelve segundos.
+/// Fase 7.515.
+fn parse_time_seconds(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("ms") {
+        return num.trim().parse::<f32>().ok().map(|n| n / 1000.0);
+    }
+    if let Some(num) = s.strip_suffix('s') {
+        return num.trim().parse::<f32>().ok();
+    }
+    None
+}
+
+/// Parsea `<easing-function>` por keyword (sin cubic-bezier/steps por
+/// ahora — un parser completo vive en parser/sheet.rs si lo necesitás).
+/// Fase 7.516.
+fn parse_easing_keyword(s: &str) -> Option<EasingFunction> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "linear" => Some(EasingFunction::Linear),
+        "ease" => Some(EasingFunction::Ease),
+        "ease-in" => Some(EasingFunction::EaseIn),
+        "ease-out" => Some(EasingFunction::EaseOut),
+        "ease-in-out" => Some(EasingFunction::EaseInOut),
+        "step-start" => Some(EasingFunction::StepStart),
+        "step-end" => Some(EasingFunction::StepEnd),
+        _ => None,
+    }
+}
+
 /// Parsea `image-resolution: [ from-image || <resolution> ] && snap?`.
 /// Devuelve `Some(ImageResolution::FromImage)` cuando aparece sólo
 /// `from-image` (con o sin `snap`). Resoluciones aceptadas: `<n>dppx`,

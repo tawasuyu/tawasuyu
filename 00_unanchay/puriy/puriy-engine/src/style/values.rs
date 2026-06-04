@@ -3430,6 +3430,21 @@ pub struct AnimationBinding {
     pub play_state: AnimationPlayState,
 }
 
+impl Default for AnimationBinding {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            duration_s: 0.0,
+            timing: EasingFunction::Ease,
+            delay_s: 0.0,
+            iterations: AnimationIterations::Count(1.0),
+            direction: AnimationDirection::Normal,
+            fill_mode: AnimationFillMode::None,
+            play_state: AnimationPlayState::Running,
+        }
+    }
+}
+
 /// `transition: <property> <duration> <timing> <delay>`. Una lista
 /// separada por coma produce varios bindings. `property` queda como
 /// string cruda (`opacity`, `transform`, `all`...) — el matching contra

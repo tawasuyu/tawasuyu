@@ -574,6 +574,17 @@ pub(crate) enum DeclKind {
     GridColumnEnd(Option<String>),
     /// `text-emphasis-skip` (Fase 7.513). HEREDA. Plumb.
     TextEmphasisSkip(TextEmphasisSkip),
+    /// `animation-name` (Fase 7.514). `None` = `none` (desactiva la
+    /// binding). NO hereda. Plumb.
+    AnimationName(Option<String>),
+    /// `animation-duration` (Fase 7.515). Segundos. NO hereda. Plumb.
+    AnimationDuration(f32),
+    /// `animation-timing-function` (Fase 7.516). NO hereda. Plumb.
+    AnimationTimingFunction(EasingFunction),
+    /// `animation-iteration-count` (Fase 7.517). NO hereda. Plumb.
+    AnimationIterationCount(AnimationIterations),
+    /// `animation-fill-mode` (Fase 7.518). NO hereda. Plumb.
+    AnimationFillMode(AnimationFillMode),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1007,6 +1018,29 @@ impl Decl {
             DeclKind::GridColumnStart(v) => s.grid_column_start = v.clone(),
             DeclKind::GridColumnEnd(v) => s.grid_column_end = v.clone(),
             DeclKind::TextEmphasisSkip(v) => s.text_emphasis_skip = *v,
+            DeclKind::AnimationName(v) => match v {
+                None => s.animation = None,
+                Some(name) => {
+                    let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                    b.name = name.clone();
+                }
+            },
+            DeclKind::AnimationDuration(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.duration_s = *v;
+            }
+            DeclKind::AnimationTimingFunction(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.timing = *v;
+            }
+            DeclKind::AnimationIterationCount(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.iterations = *v;
+            }
+            DeclKind::AnimationFillMode(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.fill_mode = *v;
+            }
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
