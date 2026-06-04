@@ -42,6 +42,41 @@ pub fn proc_exists(pid: i32) -> bool {
     std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
+/// Ticks de CPU consumidos por el proceso desde su nacimiento: suma de
+/// `utime` (user) + `stime` (kernel) leídos de `/proc/<pid>/stat`. Es la
+/// magnitud que `telemetry()` compara entre dos samples espaciados para
+/// obtener `cpu_pct`. `None` si el proceso ya no existe o el parse falla
+/// (un PID transitorio que muere entre el `read_to_string` y el siguiente
+/// snapshot vale 0 también — el caller debe interpretar `None` como
+/// "no medible ahora", no como bug).
+pub fn read_cpu_ticks(pid: i32) -> Option<u64> {
+    let path = format!("/proc/{pid}/stat");
+    let content = std::fs::read_to_string(&path).ok()?;
+    // Formato: "pid (comm) state ppid pgrp ..."  — comm puede contener
+    // espacios y paréntesis, así que partimos en el último `)` y
+    // procesamos los campos POSTERIORES por posición.
+    let close_paren = content.rfind(')')?;
+    let after = content[close_paren + 1..].trim_start();
+    let mut it = after.split_ascii_whitespace();
+    // Tras el `)` los campos están 1-indexed empezando en `state` = 3.
+    // utime es el campo 14 → posición (14 - 3) = 11; stime, 15 → 12.
+    let utime: u64 = it.nth(11)?.parse().ok()?;
+    let stime: u64 = it.next()?.parse().ok()?;
+    Some(utime + stime)
+}
+
+/// Frecuencia del reloj de procesos (`USER_HZ` / `CLK_TCK`). Casi
+/// universalmente 100 en Linux, pero lo consultamos a `sysconf` para
+/// portabilidad y para descartar configuraciones no estándar.
+pub fn clock_ticks_per_second() -> u64 {
+    let v = unsafe { libc::sysconf(libc::_SC_CLK_TCK) };
+    if v > 0 {
+        v as u64
+    } else {
+        100
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

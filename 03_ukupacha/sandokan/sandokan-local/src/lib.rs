@@ -38,6 +38,10 @@ struct Entity {
     /// `telemetry()` expone el contador para que un orquestador externo
     /// (sandokan-monitor, supervisor) decida actuar.
     tracker: RestartTracker,
+    /// Último sample CPU `(instante, ticks)` para calcular `cpu_pct` en
+    /// `telemetry`. El primer sample sólo siembra el cache y devuelve
+    /// 0.0 %; del segundo en adelante hay delta vs wall-clock.
+    last_cpu_sample: Option<(Instant, u64)>,
 }
 
 /// Política y backoff por defecto del tracker en `LocalEngine`. Cuenta
@@ -51,6 +55,35 @@ fn default_tracker() -> RestartTracker {
         },
         Backoff::new(Duration::from_millis(100), Duration::from_secs(30)),
     )
+}
+
+/// Calcula `cpu_pct` por delta vs el último sample en `cache`. Devuelve
+/// 0.0 en el primer sample (sin baseline contra el que comparar) y de
+/// ahí en adelante el % real con respecto a un solo core. Sube por
+/// encima de 100% para procesos multi-thread quemando varios cores —
+/// es la convención clásica (top, htop). `cache` se actualiza al sample
+/// vigente para que la próxima llamada compare contra éste.
+fn cpu_pct_desde_ultimo_sample(pid: i32, cache: &mut Option<(Instant, u64)>) -> f64 {
+    let ticks = match proc::read_cpu_ticks(pid) {
+        Some(t) => t,
+        None => return 0.0,
+    };
+    let ahora = Instant::now();
+    let pct = match *cache {
+        Some((prev_t, prev_ticks)) => {
+            let dt = ahora.duration_since(prev_t).as_secs_f64();
+            if dt > 0.0 && ticks >= prev_ticks {
+                let dticks = (ticks - prev_ticks) as f64;
+                let clk = proc::clock_ticks_per_second() as f64;
+                (dticks / clk / dt) * 100.0
+            } else {
+                0.0
+            }
+        }
+        None => 0.0,
+    };
+    *cache = Some((ahora, ticks));
+    pct
 }
 
 /// `true` si el estado terminal indica una salida anómala — eso es lo
@@ -206,6 +239,7 @@ impl Engine for LocalEngine {
                     pid: VIRTUAL_PID,
                     state: LifecycleState::Running,
                     tracker: default_tracker(),
+                    last_cpu_sample: None,
                 },
             );
             return Ok(handle);
@@ -246,6 +280,7 @@ impl Engine for LocalEngine {
                 pid: outcome.pid.as_raw(),
                 state: LifecycleState::Running,
                 tracker: default_tracker(),
+                last_cpu_sample: None,
             },
         );
         Ok(handle)
@@ -329,10 +364,10 @@ impl Engine for LocalEngine {
     }
 
     async fn telemetry(&self, card_id: Ulid) -> Result<TelemetryFrame, EngineError> {
-        // Lock una sola vez: necesitamos el pid Y el conteo del tracker.
-        // Cualquier reap pendiente se ejecuta acá también para que el
-        // restarts reportado refleje el último estado conocido.
-        let (pid, restarts) = {
+        // Lock una sola vez: leemos pid + tracker count + samples CPU,
+        // y de paso ejecutamos cualquier reap pendiente para que
+        // `restarts` refleje la última transición conocida.
+        let (pid, restarts, cpu_pct) = {
             let mut reg = self.registry.lock().expect("registry lock");
             let ent = reg
                 .get_mut(&card_id)
@@ -345,11 +380,15 @@ impl Engine for LocalEngine {
                     ent.state = new_state;
                 }
             }
-            (ent.pid, ent.tracker.count())
+            // Sample CPU + cómputo del % desde el último sample. Virtual y
+            // procesos ya terminales devuelven 0.0 sin tocar /proc.
+            let cpu_pct = if is_virtual_pid(ent.pid) || ent.state.is_terminal() {
+                0.0
+            } else {
+                cpu_pct_desde_ultimo_sample(ent.pid, &mut ent.last_cpu_sample)
+            };
+            (ent.pid, ent.tracker.count(), cpu_pct)
         };
-        // Para entidades Virtual no hay /proc/0 — devolvemos 0s en vez
-        // de leer un path inexistente; el resto del frame mantiene su
-        // semántica (timestamp + tracker).
         let (mem_bytes, nproc) = if is_virtual_pid(pid) {
             (0, 0)
         } else {
@@ -360,8 +399,7 @@ impl Engine for LocalEngine {
             at: SystemTime::now(),
             mem_bytes,
             nproc,
-            // v1: CPU% requiere dos samples espaciados — pendiente.
-            cpu_pct: 0.0,
+            cpu_pct,
             restarts,
         })
     }
@@ -583,6 +621,36 @@ mod tests {
             EngineError::UnsupportedPayload { kind } => assert_eq!(kind, "Wasm"),
             other => panic!("esperaba UnsupportedPayload, fue {other:?}"),
         }
+    }
+
+    /// Telemetry calcula CPU% por delta entre dos samples. El primero
+    /// devuelve 0.0 (no hay baseline); el segundo —tras un ratito de
+    /// `sh -c "while true; do :; done"`— marca > 0%. No verificamos un
+    /// valor exacto porque depende del kernel, pero sí que sea > 0.
+    #[tokio::test]
+    async fn telemetry_cpu_pct_se_calcula_entre_dos_samples() {
+        let e = LocalEngine::new();
+        // Bucle activo de shell quemando CPU.
+        let card = sh_card("sandbox-cpu", "while true; do :; done");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run busy");
+
+        // Primer sample: siembra el cache → cpu_pct == 0.
+        let first = e.telemetry(id).await.expect("first telemetry");
+        assert_eq!(first.cpu_pct, 0.0, "primer sample debe sembrar el cache");
+
+        // Esperamos > 0.2s para que el delta sea medible aunque sysconf
+        // dé CLK_TCK = 100 (10 ms de granularidad).
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let second = e.telemetry(id).await.expect("second telemetry");
+        assert!(
+            second.cpu_pct > 0.0,
+            "esperaba cpu_pct > 0 con bucle activo, fue {}",
+            second.cpu_pct,
+        );
+
+        e.stop(id, Duration::ZERO).await.ok();
     }
 
     /// Una salida limpia (exit 0) NO es un fallo: el contador queda en 0.

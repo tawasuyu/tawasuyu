@@ -361,6 +361,7 @@ impl InteractiveEngine for LocalEngine {
                 pid,
                 state: LifecycleState::Running,
                 tracker: crate::default_tracker(),
+                last_cpu_sample: None,
             },
         );
         self.sessions

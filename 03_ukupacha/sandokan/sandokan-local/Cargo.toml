@@ -16,6 +16,7 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 # `term` agrega openpty/Winsize para las sesiones interactivas (PTY).
 nix = { workspace = true, features = ["term"] }
+libc = { workspace = true }
 ulid = { workspace = true }
 # Snapshot/re-hidratación de sesiones interactivas (persist.rs).
 serde = { workspace = true }
