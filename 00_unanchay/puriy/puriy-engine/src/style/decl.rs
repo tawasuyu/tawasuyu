@@ -412,6 +412,12 @@ pub(crate) enum DeclKind {
     /// Vec vacío = `container-name: none`.
     ContainerName(Vec<String>),
     ContainerType(ContainerType),
+    /// `offset-path` (Fase 7.427). `None` = `none`; `Some(s)` guarda el
+    /// valor crudo (parse opaco). NO hereda. Plumb.
+    OffsetPath(Option<String>),
+    /// `offset-distance` (Fase 7.428). `length | <pct>`. Default `Px(0)`.
+    /// NO hereda. Plumb.
+    OffsetDistance(LengthVal),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -760,6 +766,8 @@ impl Decl {
             DeclKind::MaskSize(sz) => s.mask_size = *sz,
             DeclKind::ContainerName(v) => s.container_name = v.clone(),
             DeclKind::ContainerType(t) => s.container_type = *t,
+            DeclKind::OffsetPath(p) => s.offset_path = p.clone(),
+            DeclKind::OffsetDistance(d) => s.offset_distance = *d,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

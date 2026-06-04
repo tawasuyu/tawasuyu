@@ -156,6 +156,21 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `scroll-padding-inline: <start> [<end>]` (Fase 7.426). En LTR
+        // horizontal: start=left, end=right. Misma semántica que
+        // `scroll-padding-block`.
+        if prop.eq_ignore_ascii_case("scroll-padding-inline") {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            let vals: Vec<LengthVal> =
+                parts.iter().filter_map(|p| parse_length_or_pct(p)).collect();
+            if !vals.is_empty() && vals.len() == parts.len() {
+                let (s, e) =
+                    if vals.len() == 1 { (vals[0], vals[0]) } else { (vals[0], vals[1]) };
+                out.push(Decl { kind: DeclKind::ScrollPaddingLeft(s), important });
+                out.push(Decl { kind: DeclKind::ScrollPaddingRight(e), important });
+            }
+            continue;
+        }
         // `scroll-snap-align: <block> [<inline>]` — con 1 valor se aplica a
         // ambos ejes. Fase 7.269.
         if prop.eq_ignore_ascii_case("scroll-snap-align") {
@@ -699,9 +714,33 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "scroll-padding-block-end" => {
             parse_length_or_pct(value).map(DeclKind::ScrollPaddingBottom)
         }
+        // Fase 7.424 — `scroll-padding-inline-start` = left en LTR horizontal.
+        "scroll-padding-inline-start" => {
+            parse_length_or_pct(value).map(DeclKind::ScrollPaddingLeft)
+        }
+        // Fase 7.425 — `scroll-padding-inline-end` = right en LTR horizontal.
+        "scroll-padding-inline-end" => {
+            parse_length_or_pct(value).map(DeclKind::ScrollPaddingRight)
+        }
+        // Fase 7.427 — `offset-path` (CSS Motion Path 1). Plumb: guarda el
+        // valor crudo (sin parsear `path(...)` / `ray(...)` / `<url>`).
+        // `none` o vacío → `None`. NO hereda.
+        "offset-path" => {
+            let raw = value.trim();
+            if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
+                Some(DeclKind::OffsetPath(None))
+            } else {
+                Some(DeclKind::OffsetPath(Some(raw.to_string())))
+            }
+        }
+        // Fase 7.428 — `offset-distance` (CSS Motion Path 1). Acepta
+        // length o porcentaje (no `auto`). NO hereda.
+        "offset-distance" => {
+            parse_length_or_pct(value).map(DeclKind::OffsetDistance)
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
-        // 7.420), `scroll-padding-block` (Fase 7.423) shorthands: ver
-        // `parse_declarations`.
+        // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
+        // (Fase 7.426) shorthands: ver `parse_declarations`.
         "touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
         "clip-path" | "-webkit-clip-path" => Some(DeclKind::ClipPath(parse_clip_path(value))),
         "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),

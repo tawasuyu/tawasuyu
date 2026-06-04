@@ -7365,6 +7365,47 @@ mod tests {
     }
 
     #[test]
+    fn scroll_padding_inline_offset_fase_7_424_428() {
+        // Cierre del eje inline de `scroll-padding` (longhands + shorthand)
+        // y arranque de `offset-path` + `offset-distance` (CSS Motion Path).
+        let html = r##"<html><head><style>
+            #a { scroll-padding-inline-start: 3px; scroll-padding-inline-end: 5px }
+            #b { scroll-padding-inline: 7% }
+            #c { offset-path: path('M 0 0 L 100 100'); offset-distance: 40% }
+            #d { offset-path: none }
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut by_id: std::collections::HashMap<String, _> = Default::default();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if let Some(id) = crate::dom::attr(n, "id") {
+                by_id.insert(id, n.clone());
+            }
+        });
+        let cs_a = eng.compute(&by_id["a"]);
+        assert_eq!(cs_a.scroll_padding.left, LengthVal::Px(3.0));
+        assert_eq!(cs_a.scroll_padding.right, LengthVal::Px(5.0));
+        let cs_b = eng.compute(&by_id["b"]);
+        assert_eq!(cs_b.scroll_padding.left, LengthVal::Pct(7.0));
+        assert_eq!(cs_b.scroll_padding.right, LengthVal::Pct(7.0));
+        let cs_c = eng.compute(&by_id["c"]);
+        assert_eq!(
+            cs_c.offset_path.as_deref(),
+            Some("path('M 0 0 L 100 100')")
+        );
+        assert_eq!(cs_c.offset_distance, LengthVal::Pct(40.0));
+        let cs_d = eng.compute(&by_id["d"]);
+        assert_eq!(cs_d.offset_path, None);
+        // `offset-distance` no tocado → default `Px(0)`.
+        assert_eq!(cs_d.offset_distance, LengthVal::Px(0.0));
+    }
+
+    #[test]
     fn scroll_margin_inline_padding_block_fase_7_419_423() {
         // Cierre del lógico de `scroll-margin` (inline-end + shorthand) y
         // arranque de `scroll-padding-block` longhands + shorthand. En LTR

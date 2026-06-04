@@ -686,6 +686,13 @@ pub struct ComputedStyle {
     /// `container-type` (Fase 7.407). Default `Normal`. NO hereda. Plumb.
     /// El shorthand `container` (Fase 7.408) setea name + type.
     pub container_type: ContainerType,
+    /// `offset-path` (Fase 7.427). `None` = `none`; `Some(s)` guarda la
+    /// cadena cruda (sin parsear `path(...)` / `ray(...)` / `<basic-shape>`).
+    /// NO hereda. Plumb.
+    pub offset_path: Option<String>,
+    /// `offset-distance` (Fase 7.428). Distancia recorrida a lo largo del
+    /// `offset-path`. Default `Px(0)`. NO hereda. Plumb.
+    pub offset_distance: LengthVal,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3247,6 +3254,8 @@ impl Default for ComputedStyle {
             mask_size: BackgroundSize::Auto,
             container_name: Vec::new(),
             container_type: ContainerType::Normal,
+            offset_path: None,
+            offset_distance: LengthVal::Px(0.0),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
