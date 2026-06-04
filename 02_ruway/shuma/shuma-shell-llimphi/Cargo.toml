@@ -27,7 +27,10 @@ shuma-sysmon = { path = "../sandbox/shuma-sysmon" }
 pata-host = { path = "../../pata/pata-host" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-llimphi-widget-tabs = { workspace = true }
+# Rail de dientes (el último widget): las tabs del shell (shell/lienzo/matilda) y
+# el toggle de monitores viven como dientes en una franja vertical a la derecha,
+# reemplazando la vieja tira horizontal de tabs.
+llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
 llimphi-widget-menubar = { workspace = true }

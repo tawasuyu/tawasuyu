@@ -47,7 +47,6 @@ use llimphi_ui::{
 };
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
-use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
 use std::collections::HashMap;

@@ -93,18 +93,17 @@ pub(crate) fn render_main_full(inst: &Instance, theme: &Theme) -> View<Msg> {
 
 /// Layout normal: tira de tabs arriba con toolbar de shortcuts del
 /// tab activo, splitter horizontal con (contenido | monitores).
+/// Ancho de la franja de dientes a la derecha (px).
+const RAIL_W: f32 = 44.0;
+
 pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Msg> {
-    let tabs_palette = TabsPalette::from_theme(theme);
     let splitter_palette = SplitterPalette::from_theme(theme);
 
     let toolbar = tabs_toolbar(model, theme);
     let content = tab_content(model, theme);
 
-    let labels: Vec<String> = model.tabs.iter().map(|inst| inst.label.clone()).collect();
-
-    // El panel de monitores se oculta en modo delegado hasta que el rail de
-    // pata lo despliega (`monitors_visible`). Oculto → el contenido toma todo
-    // el ancho, sin splitter (puro lienzo).
+    // El panel de monitores se togglea con su diente (`monitors_visible`).
+    // Oculto → el contenido toma todo el ancho, sin splitter (puro lienzo).
     let tab_body = if model.monitors_visible {
         splitter_two(
             Direction::Row,
@@ -122,25 +121,97 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
         content
     };
 
-    let tabs = tabs_view(TabsSpec {
-        labels,
-        active: model.active_tab,
-        on_select: Msg::SelectTab,
-        content: tab_body,
-        tab_height: 32.0,
-        palette: tabs_palette,
-        tab_width: None,
-    });
+    // Las tabs ya no son una tira horizontal: ahora son dientes en el rail
+    // vertical de la derecha. La columna principal es toolbar + cuerpo.
+    let body_wrap = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![tab_body]);
+
+    let main_col = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![toolbar, body_wrap]);
+
+    // Rail derecho: un diente por tab + el sentinela de monitores.
+    let rail = tab_dock_rail(model, theme);
 
     View::new(Style {
-        flex_direction: FlexDirection::Column,
+        flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
         ..Default::default()
     })
-    .children(vec![toolbar, tabs])
+    .children(vec![main_col, rail])
+}
+
+/// Glyph del diente según el tipo de módulo de la tab.
+fn rail_glyph(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Shell => "❯",
+        Kind::Matilda => "⚙",
+        Kind::Minga => "❖",
+        Kind::Canvas => "▦",
+        Kind::Launcher => "⊞",
+        Kind::CommandBar => "⌘",
+    }
+}
+
+/// El rail de dientes a la derecha: uno por tab (activo = la tab seleccionada)
+/// más un diente sentinela que togglea el panel de monitores. Reusa los mismos
+/// `Msg` que el rail hospedado de pata (`SelectTab` / `HostActivate`).
+fn tab_dock_rail(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+
+    let mut items: Vec<DockRailItem> = model
+        .tabs
+        .iter()
+        .enumerate()
+        .map(|(i, _)| DockRailItem { id: i as u64, active: i == model.active_tab })
+        .collect();
+    items.push(DockRailItem {
+        id: MONITORS_TOOTH as u64,
+        active: model.monitors_visible,
+    });
+
+    let kinds: Vec<Kind> = model.tabs.iter().map(|inst| inst.kind).collect();
+
+    dock_rail_view(
+        &items,
+        RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| {
+            let glyph = if id == MONITORS_TOOTH as u64 {
+                "▤" // panel de monitores
+            } else {
+                kinds.get(id as usize).copied().map(rail_glyph).unwrap_or("▸")
+            };
+            View::new(Style {
+                size: Size { width: length(size), height: length(size) },
+                align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                justify_content: Some(
+                    llimphi_ui::llimphi_layout::taffy::JustifyContent::Center,
+                ),
+                ..Default::default()
+            })
+            .text(glyph.to_string(), size, color)
+        },
+        move |id| {
+            if id == MONITORS_TOOTH as u64 {
+                Msg::HostActivate(MONITORS_TOOTH)
+            } else {
+                Msg::SelectTab(id as usize)
+            }
+        },
+        |_| None, // sin reorder
+    )
 }
 
 /// Toolbar de la tira de tabs: pinta los `ShortcutSpec` del tab activo
