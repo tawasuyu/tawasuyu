@@ -346,6 +346,15 @@ pub(crate) enum DeclKind {
     MathShift(MathShift),
     FieldSizing(FieldSizing),
     TextBoxEdge(TextBoxEdge),
+    /// `anchor-name`. Vec vacío = `none`.
+    AnchorName(Vec<String>),
+    /// `None` = `position-anchor: auto`.
+    PositionAnchor(Option<String>),
+    AnchorScope(AnchorScope),
+    /// `None` = `view-transition-name: none`.
+    ViewTransitionName(Option<String>),
+    /// `view-transition-class`. Vec vacío = `none`.
+    ViewTransitionClass(Vec<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -633,6 +642,11 @@ impl Decl {
             DeclKind::MathShift(m) => s.math_shift = *m,
             DeclKind::FieldSizing(f) => s.field_sizing = *f,
             DeclKind::TextBoxEdge(e) => s.text_box_edge = *e,
+            DeclKind::AnchorName(n) => s.anchor_name = n.clone(),
+            DeclKind::PositionAnchor(a) => s.position_anchor = a.clone(),
+            DeclKind::AnchorScope(sc) => s.anchor_scope = sc.clone(),
+            DeclKind::ViewTransitionName(n) => s.view_transition_name = n.clone(),
+            DeclKind::ViewTransitionClass(c) => s.view_transition_class = c.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

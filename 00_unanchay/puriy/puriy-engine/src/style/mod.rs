@@ -310,6 +310,11 @@ impl StyleEngine {
             style.math_depth = p.math_depth;
             style.math_shift = p.math_shift;
             style.text_box_edge = p.text_box_edge;
+            // CSS Anchor Positioning 1 — anchor-scope hereda;
+            // anchor-name y position-anchor NO heredan.
+            // CSS View Transitions — view-transition-name y
+            // view-transition-class NO heredan.
+            style.anchor_scope = p.anchor_scope.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -5346,6 +5351,160 @@ mod tests {
                 over: TextEdge::Cap,
                 under: TextEdge::Alphabetic
             }
+        );
+    }
+
+    #[test]
+    fn anchor_name_fase_7_354() {
+        assert_eq!(parse_ident_list_or_none("none"), Some(Vec::new()));
+        assert_eq!(
+            parse_ident_list_or_none("--a"),
+            Some(vec!["--a".to_string()])
+        );
+        assert_eq!(
+            parse_ident_list_or_none("--a --b --c"),
+            Some(vec!["--a".to_string(), "--b".to_string(), "--c".to_string()])
+        );
+        assert_eq!(parse_ident_list_or_none(""), None);
+
+        let html = r##"<html><head><style>
+            body { anchor-name: --tip }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.anchor_name, vec!["--tip".to_string()]);
+        // NO hereda.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(div_cs.anchor_name.is_empty());
+    }
+
+    #[test]
+    fn position_anchor_fase_7_355() {
+        assert_eq!(parse_ident_or_auto("auto"), Some(None));
+        assert_eq!(
+            parse_ident_or_auto("--tip"),
+            Some(Some("--tip".to_string()))
+        );
+        assert_eq!(parse_ident_or_auto(""), None);
+
+        let html = r##"<html><head><style>
+            body { position-anchor: --tip }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.position_anchor, Some("--tip".to_string()));
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).position_anchor,
+            None
+        );
+    }
+
+    #[test]
+    fn anchor_scope_fase_7_356() {
+        assert_eq!(parse_anchor_scope("none"), Some(AnchorScope::None));
+        assert_eq!(parse_anchor_scope("ALL"), Some(AnchorScope::All));
+        assert_eq!(
+            parse_anchor_scope("--a --b"),
+            Some(AnchorScope::Names(vec![
+                "--a".to_string(),
+                "--b".to_string()
+            ]))
+        );
+        assert_eq!(parse_anchor_scope(""), None);
+
+        let html = r##"<html><head><style>
+            body { anchor-scope: --tip }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.anchor_scope,
+            AnchorScope::Names(vec!["--tip".to_string()])
+        );
+        // SÍ hereda (CSS Anchor Positioning 1).
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).anchor_scope,
+            AnchorScope::Names(vec!["--tip".to_string()])
+        );
+    }
+
+    #[test]
+    fn view_transition_name_fase_7_357() {
+        let html = r##"<html><head><style>
+            body { view-transition-name: hero }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.view_transition_name, Some("hero".to_string()));
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).view_transition_name,
+            None
+        );
+    }
+
+    #[test]
+    fn view_transition_class_fase_7_358() {
+        let html = r##"<html><head><style>
+            body { view-transition-class: foo bar }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            cs.view_transition_class,
+            vec!["foo".to_string(), "bar".to_string()]
         );
     }
 

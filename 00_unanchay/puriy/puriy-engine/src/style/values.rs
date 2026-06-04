@@ -548,6 +548,22 @@ pub struct ComputedStyle {
     /// `text-box-edge` (Fase 7.353). Default `Auto`. **Heredable**.
     /// Plumb.
     pub text_box_edge: TextBoxEdge,
+    /// `anchor-name` (Fase 7.354). Vacío = `none`. NO hereda.
+    /// Plumb: el chrome no implementa anchor positioning.
+    pub anchor_name: Vec<String>,
+    /// `position-anchor` (Fase 7.355). `None` = `auto`. NO hereda.
+    /// Plumb.
+    pub position_anchor: Option<String>,
+    /// `anchor-scope` (Fase 7.356). Default `None` (=`none`). `All`
+    /// extiende a todos los anchors. `Names(v)` limita por lista.
+    /// **Heredable**. Plumb.
+    pub anchor_scope: AnchorScope,
+    /// `view-transition-name` (Fase 7.357). `None` = `none`. NO hereda.
+    /// Plumb.
+    pub view_transition_name: Option<String>,
+    /// `view-transition-class` (Fase 7.358). Vacío = `none`. NO hereda.
+    /// Plumb.
+    pub view_transition_class: Vec<String>,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1667,6 +1683,22 @@ pub enum TextEdge {
     Alphabetic,
 }
 
+/// `anchor-scope` (CSS Anchor Positioning 1). `None` = sin scope
+/// explícito; `All` = todos los anchors del subárbol; `Names` = lista.
+/// Heredable. Fase 7.356.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnchorScope {
+    None,
+    All,
+    Names(Vec<String>),
+}
+
+impl Default for AnchorScope {
+    fn default() -> Self {
+        AnchorScope::None
+    }
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2699,6 +2731,11 @@ impl Default for ComputedStyle {
             math_shift: MathShift::Normal,
             field_sizing: FieldSizing::Fixed,
             text_box_edge: TextBoxEdge::Auto,
+            anchor_name: Vec::new(),
+            position_anchor: None,
+            anchor_scope: AnchorScope::None,
+            view_transition_name: None,
+            view_transition_class: Vec::new(),
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

@@ -753,6 +753,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-box-edge" => {
             parse_text_box_edge(value).map(DeclKind::TextBoxEdge)
         }
+        "anchor-name" => parse_ident_list_or_none(value).map(DeclKind::AnchorName),
+        "position-anchor" => {
+            parse_ident_or_auto(value).map(DeclKind::PositionAnchor)
+        }
+        "anchor-scope" => {
+            parse_anchor_scope(value).map(DeclKind::AnchorScope)
+        }
+        "view-transition-name" => {
+            parse_dashed_ident_or_none(value).map(DeclKind::ViewTransitionName)
+        }
+        "view-transition-class" => {
+            parse_ident_list_or_none(value).map(DeclKind::ViewTransitionClass)
+        }
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
@@ -2977,6 +2990,55 @@ pub(crate) fn parse_field_sizing(value: &str) -> Option<FieldSizing> {
         "content" => Some(FieldSizing::Content),
         _ => None,
     }
+}
+
+/// Lista de `<custom-ident>` separados por espacios, con `none`
+/// → vector vacío. Reusada por `anchor-name`, `view-transition-class`,
+/// etc. (Fases 7.354, 7.358).
+pub(crate) fn parse_ident_list_or_none(value: &str) -> Option<Vec<String>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(Vec::new());
+    }
+    if v.is_empty() {
+        return None;
+    }
+    let toks: Vec<String> = v.split_whitespace().map(String::from).collect();
+    if toks.is_empty() {
+        return None;
+    }
+    Some(toks)
+}
+
+/// `position-anchor`: `auto | <dashed-ident>`. Fase 7.355.
+pub(crate) fn parse_ident_or_auto(value: &str) -> Option<Option<String>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(None);
+    }
+    if v.is_empty() || v.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(Some(v.to_string()))
+}
+
+/// `anchor-scope`: `none | all | <dashed-ident>+`. Fase 7.356.
+pub(crate) fn parse_anchor_scope(value: &str) -> Option<AnchorScope> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(AnchorScope::None);
+    }
+    if v.eq_ignore_ascii_case("all") {
+        return Some(AnchorScope::All);
+    }
+    if v.is_empty() {
+        return None;
+    }
+    let toks: Vec<String> = v.split_whitespace().map(String::from).collect();
+    if toks.is_empty() {
+        return None;
+    }
+    Some(AnchorScope::Names(toks))
 }
 
 /// `text-box-edge`: `auto | <text-edge> [<text-edge>]?`.
