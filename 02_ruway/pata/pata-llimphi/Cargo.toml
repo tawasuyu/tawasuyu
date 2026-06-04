@@ -17,6 +17,9 @@ path = "src/lib.rs"
 [dependencies]
 pata-core = { path = "../pata-core" }
 pata-config = { path = "../pata-config" }
+# Rail hospedado (sidebar delegado): pata hospeda los dientes de la app enfocada
+# y le reenvía las activaciones. Lado servidor del protocolo.
+pata-host = { path = "../pata-host" }
 # El puente pata→shuma (SDD §5): el marco provee el borde, shuma la ejecución.
 # El drawer Quake corre los comandos por el ejecutor real de shuma (captura
 # acotada, streaming) en vez de un `sh -c` pelado.

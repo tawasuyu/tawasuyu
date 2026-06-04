@@ -26,6 +26,7 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use pata_host::HostedTooth;
 use llimphi_widget_navigator::{
     navigator_view, NavId, NavKind, NavMode, NavNode, NavPalette, NavSpec,
 };
@@ -81,10 +82,68 @@ fn rail_widget(surface: &Surface, si: usize, width: f32, nav: &NavState, theme: 
     )
 }
 
+/// El rail de **dientes hospedados** de la app enfocada (`app_id`): un diente por
+/// [`HostedTooth`]. Al clickear, manda `HostToothActivate(app_id, id)` (la app lo
+/// resuelve sobre su propio canvas). No tienen estado "activo" en pata (lo lleva
+/// la app), así que van todos inactivos.
+fn hosted_rail(app_id: &str, teeth: &[HostedTooth], width: f32, theme: &Theme) -> View<Msg> {
+    let items: Vec<DockRailItem> = teeth
+        .iter()
+        .map(|t| DockRailItem {
+            id: t.id as u64,
+            active: false,
+        })
+        .collect();
+    let icons: Vec<String> = teeth.iter().map(|t| t.icon.clone()).collect();
+    let app = app_id.to_string();
+    dock_rail_view(
+        &items,
+        width,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| {
+            let name = icons.get(id as usize).map(|s| s.as_str()).unwrap_or("");
+            tooth_icon(name, size, color)
+        },
+        move |id| Msg::HostToothActivate(app.clone(), id as u32),
+        |_| None,
+    )
+}
+
 /// Una franja de rail que **llena su alto**: fondo de panel + el rail de dientes
-/// arriba. La usan ambos backends (en winit dentro del rect absoluto, en
-/// layer-shell como columna de ancho `thickness` dentro de la surface).
-fn rail_strip(surface: &Surface, si: usize, thickness: f32, nav: &NavState, theme: &Theme) -> View<Msg> {
+/// de la config arriba y, debajo, los dientes **hospedados** de la app enfocada
+/// (si los hay). La usan ambos backends (en winit dentro del rect absoluto —sin
+/// dientes hospedados, que dependen del foco—, en layer-shell como columna de
+/// ancho `thickness` dentro de la surface).
+fn rail_strip(
+    surface: &Surface,
+    si: usize,
+    thickness: f32,
+    nav: &NavState,
+    hosted: &[HostedTooth],
+    hosted_app: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut hijos = vec![rail_widget(surface, si, thickness, nav, theme)];
+    if !hosted.is_empty() {
+        // Un separador tenue entre los dientes propios y los hospedados.
+        hijos.push(
+            View::new(Style {
+                size: Size {
+                    width: length(thickness * 0.5),
+                    height: length(1.0_f32),
+                },
+                margin: TaffyRect {
+                    left: length(thickness * 0.25),
+                    right: length(thickness * 0.25),
+                    top: length(6.0_f32),
+                    bottom: length(6.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.fg_muted),
+        );
+        hijos.push(hosted_rail(hosted_app, hosted, thickness, theme));
+    }
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -92,10 +151,11 @@ fn rail_strip(surface: &Surface, si: usize, thickness: f32, nav: &NavState, them
             height: percent(1.0_f32),
         },
         flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(vec![rail_widget(surface, si, thickness, nav, theme)])
+    .children(hijos)
 }
 
 /// El contenido del panel (cabezal con toggle de modo + navegador con scroll),
@@ -240,7 +300,8 @@ pub fn sidebar_rail_view(
         },
         ..Default::default()
     })
-    .children(vec![rail_strip(surface, si, rect.w as f32, nav, theme)])
+    // El path winit no conoce el foco (no hay toplevels) → sin dientes hospedados.
+    .children(vec![rail_strip(surface, si, rect.w as f32, nav, &[], "", theme)])
 }
 
 /// El panel flotante del diente `ti` desplegado (path winit): flota junto al
@@ -295,10 +356,12 @@ pub fn sidebar_surface_view(
     w: f32,
     h: f32,
     nav: &NavState,
+    hosted: &[HostedTooth],
+    hosted_app: &str,
     theme: &Theme,
 ) -> View<Msg> {
     let thickness = surface.thickness;
-    let rail = rail_strip(surface, si, thickness, nav, theme);
+    let rail = rail_strip(surface, si, thickness, nav, hosted, hosted_app, theme);
 
     let open_ti = match nav.open {
         Some((s, ti)) if s == si => Some(ti),
@@ -447,8 +510,9 @@ fn count_visible(roots: &[NavNode], expanded: &HashSet<u64>) -> usize {
 fn tooth_icon(name: &str, size: f32, color: Color) -> View<Msg> {
     // Reusamos la semántica de iconos del navegador para coherencia visual.
     let kind = match name {
-        "monads" | "monadas" | "monad" => NavKind::Monad,
-        "files" | "archivos" | "file" | "dir" => NavKind::Dir,
+        "monads" | "monadas" | "monad" | "astro" => NavKind::Monad,
+        "files" | "archivos" | "file" | "dir" | "folder" | "tree" => NavKind::Dir,
+        "tools" | "group" | "settings" | "system" => NavKind::Group,
         _ => NavKind::Other,
     };
     View::new(Style {

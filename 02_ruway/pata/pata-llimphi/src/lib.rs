@@ -109,6 +109,10 @@ pub enum Msg {
     NavOpenWith(NavId, Option<String>),
     /// Cerrar el menú "Abrir con…" sin abrir nada.
     NavMenuCancel,
+    /// Clic en un diente **hospedado** (de la app enfocada) en el rail de pata:
+    /// `(app_id, tooth_id)`. Se reenvía a la app por el rail hospedado. Sólo el
+    /// backend layer-shell (que conoce el foco y corre el `HostServer`) lo resuelve.
+    HostToothActivate(String, u32),
     /// Desplazar el panel navegador `delta` px.
     NavScroll(f32),
     /// Disparo periódico del poll de Mónadas (`list_monads`).
@@ -543,6 +547,9 @@ impl App for PataApp {
                 model.nav.close_menu();
             }
             Msg::NavMenuCancel => model.nav.close_menu(),
+            // El rail hospedado vive en el backend layer-shell (conoce el foco y
+            // corre el HostServer). En winit no hay toplevels: no-op.
+            Msg::HostToothActivate(_, _) => {}
             Msg::NavScroll(delta) => {
                 model.nav.scroll = (model.nav.scroll + delta).max(0.0);
             }

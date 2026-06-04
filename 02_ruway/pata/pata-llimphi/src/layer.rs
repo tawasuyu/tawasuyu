@@ -76,6 +76,7 @@ use pata_core::{Anchor, Config, SurfaceKind};
 
 use crate::nouser::{self, MembersOutcome, NavState, PollOutcome};
 use crate::sampler::SamplerHandle;
+use pata_host::HostServer;
 use crate::toplevel::{Toplevel, WindowEntry};
 use crate::tray::TrayHandle;
 use crate::{render, Model, Msg};
@@ -224,6 +225,12 @@ struct LayerApp {
     members_rx: Receiver<MembersOutcome>,
     /// Arrastre en curso (selección de nodo del grafo). `None` si no se arrastra.
     drag: Option<LayerDrag>,
+    /// Servidor del rail hospedado: apps que prestan sus dientes a pata mientras
+    /// tienen foco. `None` si la config no tiene ningún sidebar donde alojarlos.
+    host: Option<HostServer>,
+    /// Última revisión vista del `host` (para detectar altas/bajas/updates y
+    /// re-pintar los sidebars).
+    last_host_rev: u64,
     /// Una layer surface por cada barra de la config.
     panels: Vec<Panel>,
     /// Índice (en `panels`) de la surface del **tooltip flotante**: una layer
@@ -365,6 +372,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         members_tx,
         members_rx,
         drag: None,
+        // El rail hospedado sólo tiene sentido si hay un sidebar donde alojar los
+        // dientes de la app enfocada.
+        host: (!sidebars.is_empty()).then(HostServer::spawn).flatten(),
+        last_host_rev: 0,
         panels: Vec::new(),
         tooltip_pi: None,
         tooltip_text: None,
@@ -840,6 +851,26 @@ impl LayerApp {
         }
     }
 
+    /// El `app_id` del toplevel que tiene foco ahora, si hay alguno.
+    fn focused_app_id(&self) -> Option<&str> {
+        self.toplevels
+            .iter()
+            .find(|t| t.activated)
+            .map(|t| t.app_id.as_str())
+    }
+
+    /// Sondea el rail hospedado: si cambió su revisión (un alta/baja/update de
+    /// dientes de alguna app), re-pinta los sidebars. El cambio de foco ya re-pinta
+    /// vía `marcar_todo_dirty` (eventos de toplevel).
+    fn poll_host(&mut self) {
+        let Some(h) = &self.host else { return };
+        let rev = h.revision();
+        if rev != self.last_host_rev {
+            self.last_host_rev = rev;
+            self.marcar_sidebars_dirty();
+        }
+    }
+
     /// Marca todas las superficies sidebar para re-pintar.
     fn marcar_sidebars_dirty(&mut self) {
         for p in &mut self.panels {
@@ -1022,6 +1053,7 @@ impl LayerApp {
         self.maybe_sample();
         self.poll_exec();
         self.poll_nav();
+        self.poll_host();
         self.ensure_gpu(pi);
 
         if !self.panels[pi].dirty {
@@ -1073,12 +1105,26 @@ impl LayerApp {
                 vh,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Sidebar {
+            // Dientes hospedados de la app enfocada (si registró alguno en el host).
+            let hosted = {
+                let app = self.focused_app_id().map(|s| s.to_string());
+                match (app, self.host.as_ref()) {
+                    (Some(id), Some(h)) => h.snapshot(&id).map(|(_, teeth)| (id, teeth)),
+                    _ => None,
+                }
+            };
+            let (hosted_app, hosted_teeth): (&str, &[pata_host::HostedTooth]) = match &hosted {
+                Some((id, teeth)) => (id.as_str(), teeth.as_slice()),
+                None => ("", &[]),
+            };
             render::sidebar_surface_view(
                 &self.cfg.surfaces[idx],
                 idx,
                 w as f32,
                 h as f32,
                 &self.nav,
+                hosted_teeth,
+                hosted_app,
                 &self.theme,
             )
         } else {
@@ -1215,6 +1261,13 @@ impl LayerApp {
             Msg::NavMenuCancel => {
                 self.nav.close_menu();
                 self.marcar_sidebars_dirty();
+            }
+            Msg::HostToothActivate(app_id, tooth) => {
+                // Reenvía el clic del diente hospedado a la app enfocada; ella
+                // muestra ese panel sobre su propio canvas.
+                if let Some(h) = &self.host {
+                    h.activate(&app_id, tooth);
+                }
             }
             Msg::NavScroll(delta) => {
                 self.nav.scroll = (self.nav.scroll + delta).max(0.0);
