@@ -544,6 +544,16 @@ pub(crate) enum DeclKind {
     WhiteSpaceTrim(Option<String>),
     /// `view-transition-group` (Fase 7.498). `None` = `normal`. NO hereda. Plumb.
     ViewTransitionGroup(Option<String>),
+    /// `inset-area` (Fase 7.499). `None` = `none`. NO hereda. Plumb.
+    InsetArea(Option<String>),
+    /// `view-transition-image-pair` (Fase 7.500). `None` = `auto`. NO hereda. Plumb.
+    ViewTransitionImagePair(Option<String>),
+    /// `animation-trigger` (Fase 7.501). Shorthand opaco. NO hereda. Plumb.
+    AnimationTrigger(Option<String>),
+    /// `border-image-source` (Fase 7.502). `None` = `none`. NO hereda. Plumb.
+    BorderImageSource(Option<String>),
+    /// `border-image-repeat` (Fase 7.503). NO hereda. Plumb.
+    BorderImageRepeat(BorderImageRepeat, BorderImageRepeat),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -959,6 +969,14 @@ impl Decl {
             DeclKind::TextAutospace(v) => s.text_autospace = v.clone(),
             DeclKind::WhiteSpaceTrim(v) => s.white_space_trim = v.clone(),
             DeclKind::ViewTransitionGroup(v) => s.view_transition_group = v.clone(),
+            DeclKind::InsetArea(v) => s.inset_area = v.clone(),
+            DeclKind::ViewTransitionImagePair(v) => s.view_transition_image_pair = v.clone(),
+            DeclKind::AnimationTrigger(v) => s.animation_trigger = v.clone(),
+            DeclKind::BorderImageSource(v) => s.border_image_source = v.clone(),
+            DeclKind::BorderImageRepeat(h, v) => {
+                s.border_image_repeat_h = *h;
+                s.border_image_repeat_v = *v;
+            }
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -1408,6 +1408,75 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::ViewTransitionGroup(Some(v.to_string())))
             }
         }
+        // Fase 7.499 — `inset-area` (CSS Anchor Positioning 1, alias
+        // legacy de `position-area`). Parse opaco.
+        "inset-area" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::InsetArea(None))
+            } else {
+                Some(DeclKind::InsetArea(Some(v.to_string())))
+            }
+        }
+        // Fase 7.500 — `view-transition-image-pair` (CSS View Transitions 2).
+        "view-transition-image-pair" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::ViewTransitionImagePair(None))
+            } else {
+                Some(DeclKind::ViewTransitionImagePair(Some(v.to_string())))
+            }
+        }
+        // Fase 7.501 — `animation-trigger` (CSS Animations 2, scroll-
+        // driven triggers). Shorthand opaco.
+        "animation-trigger" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::AnimationTrigger(None))
+            } else {
+                Some(DeclKind::AnimationTrigger(Some(v.to_string())))
+            }
+        }
+        // Fase 7.502 — `border-image-source` (CSS Backgrounds 3).
+        // `none | <image>`. Parse opaco para `<image>` (url/gradient).
+        "border-image-source" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::BorderImageSource(None))
+            } else {
+                Some(DeclKind::BorderImageSource(Some(v.to_string())))
+            }
+        }
+        // Fase 7.503 — `border-image-repeat`. `[stretch|repeat|round|space]{1,2}`.
+        "border-image-repeat" => {
+            fn kw(s: &str) -> Option<BorderImageRepeat> {
+                match s {
+                    "stretch" => Some(BorderImageRepeat::Stretch),
+                    "repeat" => Some(BorderImageRepeat::Repeat),
+                    "round" => Some(BorderImageRepeat::Round),
+                    "space" => Some(BorderImageRepeat::Space),
+                    _ => None,
+                }
+            }
+            let lower = value.trim().to_ascii_lowercase();
+            let parts: Vec<&str> = lower.split_whitespace().collect();
+            match parts.len() {
+                1 => kw(parts[0]).map(|h| DeclKind::BorderImageRepeat(h, h)),
+                2 => match (kw(parts[0]), kw(parts[1])) {
+                    (Some(h), Some(v)) => Some(DeclKind::BorderImageRepeat(h, v)),
+                    _ => None,
+                },
+                _ => None,
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

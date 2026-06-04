@@ -861,6 +861,24 @@ pub struct ComputedStyle {
     /// nombre del grupo donde el elemento participa. `None` = `normal`.
     /// NO hereda. Plumb.
     pub view_transition_group: Option<String>,
+    /// `inset-area` (Fase 7.499). CSS Anchor Positioning 1: alias legacy
+    /// de `position-area`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub inset_area: Option<String>,
+    /// `view-transition-image-pair` (Fase 7.500). CSS View Transitions 2:
+    /// nombre del par de imagen para la animación. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub view_transition_image_pair: Option<String>,
+    /// `animation-trigger` (Fase 7.501). CSS Animations 2: trigger
+    /// scroll-driven. Shorthand opaco — `None` = sin trigger. NO hereda.
+    /// Plumb.
+    pub animation_trigger: Option<String>,
+    /// `border-image-source` (Fase 7.502). `None` = `none` (renderer cae
+    /// al border tradicional). NO hereda. Plumb.
+    pub border_image_source: Option<String>,
+    /// `border-image-repeat` (Fase 7.503). Par (horizontal, vertical).
+    /// Default `(Stretch, Stretch)`. NO hereda. Plumb.
+    pub border_image_repeat_h: BorderImageRepeat,
+    pub border_image_repeat_v: BorderImageRepeat,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2608,6 +2626,17 @@ pub enum InitialLetterAlign {
     BorderBox,
 }
 
+/// `border-image-repeat` (CSS Backgrounds 3) — cómo se tilea el slice
+/// medio del border-image. Default `Stretch`. Fase 7.503.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BorderImageRepeat {
+    #[default]
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3837,6 +3866,12 @@ impl Default for ComputedStyle {
             text_autospace: None,
             white_space_trim: None,
             view_transition_group: None,
+            inset_area: None,
+            view_transition_image_pair: None,
+            animation_trigger: None,
+            border_image_source: None,
+            border_image_repeat_h: BorderImageRepeat::Stretch,
+            border_image_repeat_v: BorderImageRepeat::Stretch,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
