@@ -573,10 +573,8 @@ enum Msg {
     RunFromHistory(String),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
     Module(Slot, ModuleMsg),
-    /// Click en un shortcut. `slot` es el módulo emisor. Hoy sin emisor (la
-    /// toolbar de tabs se retiró); se conserva para los botones de acción de
-    /// matilda en su panel (discover/dry-run/apply) — fase próxima.
-    #[allow(dead_code)]
+    /// Click en un botón de acción (matilda: discover/dry-run/apply/reload).
+    /// `slot` es el módulo emisor; lo resuelve `handle_shortcut`.
     ShortcutClicked(Slot, ShortcutAction),
     /// La config de wawa (`$XDG_CONFIG_HOME/wawa/config.json`) cambió;
     /// rearmamos el theme, accent y locale sin reiniciar. Boxed por

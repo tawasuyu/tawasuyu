@@ -743,21 +743,54 @@ fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
 
 /// Panel Matilda: hosts + vhosts del inventario de la sesión activa.
 fn matilda_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    let inv = model.active().and_then(|s| match &s.matilda.state {
-        ModuleState::Matilda(st) => Some(st.desired.clone()),
-        _ => None,
-    });
-    let (hosts, vhosts) = match inv {
-        Some(inv) => (hosts_view(&inv, theme), vhosts_view(&inv, theme)),
-        None => (tool_header("Hosts", theme), tool_header("Vhosts", theme)),
+    let Some(session) = model.active() else {
+        return tool_header("Matilda", theme);
     };
+    let st = match &session.matilda.state {
+        ModuleState::Matilda(st) => st.as_ref(),
+        _ => return tool_header("Matilda", theme),
+    };
+    let slot = Slot::Session(model.active_session, Which::Matilda);
+
+    // Botones de acción del módulo (Discover/Plan/Dry-run/Apply/Reload) — los
+    // declara el propio módulo; los disparamos por el puente `handle_shortcut`.
+    let acciones = shuma_module_matilda::contributions(st)
+        .shortcuts
+        .into_iter()
+        .map(|spec| action_button(&spec.label, Msg::ShortcutClicked(slot.clone(), spec.action), theme))
+        .collect::<Vec<_>>();
+    let barra = chip_row(acciones); // wrap si no caben
+
+    let hosts = hosts_view(&st.desired, theme);
+    let vhosts = vhosts_view(&st.desired, theme);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
         ..Default::default()
     })
-    .children(vec![hosts, vhosts])
+    .children(vec![barra, hosts, vhosts])
+}
+
+/// Un botón de acción (para el panel de matilda).
+fn action_button(label: &str, msg: Msg, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(26.0_f32) },
+        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(6.0_f32), top: length(0.0_f32), bottom: length(6.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .hover_fill(theme.bg_button_hover)
+    .radius(5.0)
+    .text_aligned(label.to_string(), 11.5, theme.fg_text, Alignment::Center)
+    .on_click(msg)
 }
 
 /// Cabecera tenue de un panel/sección de herramienta.
