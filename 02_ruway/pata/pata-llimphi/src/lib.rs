@@ -21,6 +21,7 @@
 
 pub mod keys;
 pub mod layer;
+pub mod nouser;
 pub mod render;
 pub mod sampler;
 pub mod shuma;
@@ -33,10 +34,13 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 
+use llimphi_widget_navigator::{NavId, NavMode};
+
 use pata_core::config::{FloatingCard, SurfaceKind};
 use pata_core::widget::{build, Widget, WidgetCtx};
 use pata_core::{Config, Frame, Rect};
 
+use nouser::{MembersOutcome, NavState, PollOutcome};
 use sampler::Sampler;
 use shuma::ShumaState;
 use tray::TrayHandle;
@@ -83,6 +87,29 @@ pub enum Msg {
     /// Activar un item del `tray` (click). El `String` es la `key` del
     /// [`tray::TrayItem`]; sólo el backend layer-shell sabe resolverlo.
     TrayActivate(String),
+    // --- Sidebar navegador (Fase 11c) ---
+    /// Clic en un diente del rail `(surface_idx, tab_idx)`: despliega/repliega su
+    /// panel navegador.
+    NavTabActivate(usize, usize),
+    /// Cerrar el panel navegador desplegado (Esc / clic fuera).
+    NavClosePanel,
+    /// Cambiar el modo del navegador (árbol/grafo).
+    NavSetMode(NavMode),
+    /// Seleccionar un nodo del navegador.
+    NavSelect(NavId),
+    /// Expandir/colapsar un nodo rama; al expandir una Mónada sin miembros
+    /// resueltos dispara su `resolve_monad`.
+    NavToggle(NavId),
+    /// Abrir un nodo con la app que corresponda (right-click). Stub de Fase 11d.
+    NavOpen(NavId),
+    /// Desplazar el panel navegador `delta` px.
+    NavScroll(f32),
+    /// Disparo periódico del poll de Mónadas (`list_monads`).
+    NavTick,
+    /// Resultado del poll de Mónadas.
+    NavPoll(PollOutcome),
+    /// Resultado de resolver los miembros de una Mónada.
+    NavMembers(MembersOutcome),
     /// Cerrar la app.
     Quit,
 }
@@ -137,6 +164,12 @@ pub fn spawn_cmd(cmd: &str) {
     let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
 }
 
+/// Envuelve `s` en comillas simples para `sh -c`, escapando comillas internas.
+/// Para pasar rutas con espacios al stand-in de apertura (Fase 11d).
+pub fn shell_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
 /// `true` si la config declara al menos un widget de ese `kind` en cualquier slot
 /// de cualquier superficie. Lo usan ambos backends para arrancar servicios caros
 /// (el tray, que toma el nombre del watcher) sólo si hacen falta.
@@ -148,6 +181,17 @@ pub fn config_tiene_widget(cfg: &Config, kind: &str) -> bool {
             .chain(&s.end)
             .any(|w| w.kind == kind)
     })
+}
+
+/// `true` si la config declara al menos un `SurfaceKind::Sidebar` con un diente
+/// cuyo contenido es un navegador (`kind = "navigator"`). Sólo entonces arranca
+/// el plano de datos de nouser (el poll periódico de Mónadas).
+pub fn config_tiene_navigator(cfg: &Config) -> bool {
+    cfg.surfaces
+        .iter()
+        .filter(|s| s.kind == SurfaceKind::Sidebar)
+        .flat_map(|s| s.tabs.iter())
+        .any(|t| t.content.kind == "navigator")
 }
 
 /// Los widgets vivos de una superficie, repartidos por slot.
@@ -206,6 +250,9 @@ pub struct Model {
     /// La bandeja del sistema, corriendo en su propio hilo. `None` si la config no
     /// declara ningún widget `tray`.
     pub tray: Option<TrayHandle>,
+    /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
+    /// declara ningún `SurfaceKind::Sidebar` con un navegador.
+    pub nav: NavState,
     /// Tamaño de la pantalla en píxeles.
     pub screen: (i32, i32),
 }
@@ -347,12 +394,19 @@ impl App for PataApp {
             sampler,
             clipboard,
             tray,
+            nav: NavState::default(),
             screen,
         };
         // Primer tick para que los widgets arranquen con datos.
         model.tick_widgets(&ctx);
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
+        // Plano de datos del sidebar: poll de Mónadas a nouser, sólo si la config
+        // declara un navegador (no molestar al broker si no hace falta).
+        if config_tiene_navigator(&model.cfg) {
+            handle.dispatch(Msg::NavTick);
+            handle.spawn_periodic(nouser::REFRESH_INTERVAL, || Msg::NavTick);
+        }
         model
     }
 
@@ -441,6 +495,54 @@ impl App for PataApp {
             // layer-shell; bajo el compositor mirada llegará por su IPC. No-op acá.
             Msg::ActivateWindow(_) => {}
             Msg::CloseWindow(_) => {}
+            // --- Sidebar navegador (Fase 11c) ---
+            Msg::NavTabActivate(si, ti) => model.nav.toggle_tab(si, ti),
+            Msg::NavClosePanel => model.nav.open = None,
+            Msg::NavSetMode(m) => model.nav.mode = m,
+            Msg::NavSelect(id) => model.nav.selected = Some(id),
+            Msg::NavToggle(id) => {
+                if model.nav.expanded.contains(&id) {
+                    model.nav.expanded.remove(&id);
+                } else {
+                    model.nav.expanded.insert(id);
+                    // Carga perezosa: al abrir una Mónada sin miembros, pídelos.
+                    if let (Some(mid), Some(sock)) =
+                        (model.nav.needs_resolve(id), model.nav.socket.clone())
+                    {
+                        handle.spawn(move || Msg::NavMembers(nouser::resolve(sock, mid)));
+                    }
+                }
+            }
+            Msg::NavOpen(id) => {
+                // Stub de Fase 11d: abrir un archivo con el handler del sistema.
+                // Cuando exista el registro de apps de mirada, esto enrutará por
+                // Lens/tipo en vez de delegar en xdg-open.
+                if let Some(nouser::NavTarget::File(path)) = model.nav.targets.get(&id) {
+                    spawn_cmd(&format!("xdg-open {}", shell_quote(path)));
+                }
+            }
+            Msg::NavScroll(delta) => {
+                model.nav.scroll = (model.nav.scroll + delta).max(0.0);
+            }
+            Msg::NavTick => {
+                let sock = model.nav.socket.clone();
+                handle.spawn(move || Msg::NavPoll(nouser::poll(sock)));
+            }
+            Msg::NavPoll(outcome) => match outcome {
+                PollOutcome::Ok { socket, resp } => {
+                    model.nav.socket = Some(socket);
+                    model.nav.apply_monads(*resp);
+                }
+                PollOutcome::Failed(e) => {
+                    // Invalida el socket cacheado para re-descubrir en el próximo poll.
+                    model.nav.socket = None;
+                    model.nav.error = Some(e);
+                }
+            },
+            Msg::NavMembers(outcome) => match outcome {
+                MembersOutcome::Ok { monad, members } => model.nav.apply_members(monad, members),
+                MembersOutcome::Failed(e) => model.nav.error = Some(e),
+            },
         }
         model
     }
@@ -500,7 +602,13 @@ impl App for PataApp {
                 _ => None,
             };
         }
-        // 3) Sin drawer, Esc cierra la app.
+        // 3) Con el panel navegador desplegado, Esc lo cierra (no la app).
+        if model.nav.open.is_some() {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::NavClosePanel);
+            }
+        }
+        // 4) Sin nada abierto, Esc cierra la app.
         match &event.key {
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             _ => None,

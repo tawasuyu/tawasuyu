@@ -76,6 +76,23 @@ kind = "cpu_meter"
 [[surfaces.cards.widgets]]
 kind = "ram_meter"
 
+# --- Sidebar: rail de dientes acoplable con el navegador de Mónadas (Fase 11) ---
+# Colapsado es sólo el rail (una franja de `thickness` px pegada al borde); al
+# clickear un diente despliega su panel (de `panel_width` px) sobre el escritorio
+# con el navegador de las Mónadas de nouser y sus archivos, conmutable
+# árbol/grafo. Requiere un daemon nouser vivo (descubierto por el broker o por el
+# socket default); sin él, el panel muestra "Conectando con nouser…".
+[[surfaces]]
+kind = "sidebar"
+anchor = "left"
+thickness = 44
+panel_width = 300
+
+[[surfaces.tabs]]
+icon = "monads"
+label = "Mónadas"
+content = { kind = "navigator", source = "nouser" }
+
 # --- Shell: barra inferior autoescondible con el input de shuma ---
 # Al escribir, el frontend despliega el resto de shuma estilo Quake.
 [[surfaces]]

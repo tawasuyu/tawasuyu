@@ -393,9 +393,35 @@ borde; shuma provee el contenido.
     mode) vive en el caller. `navigator_view(spec, is_expanded, on_toggle,
     on_select, on_context)`. Demo `navigator_demo` con toggle segmentado; 4
     tests. El widget no sabe de nouser — lo alimenta pata.
-  - **11c ⏳ (`pata-llimphi`)** — pinta el rail en el borde (`llimphi-widget-dock-
-    rail`), despliega el panel animado al activar un diente, autohide del rail;
-    alimenta el navegador desde el query de nouser (`list_monads` +
-    `resolve_monad`).
-  - **11d ⏳** — abrir Mónada/archivo con la app que corresponda (registro de
-    apps / mirada).
+  - **11c ✅ (path winit, `pata-llimphi`)** — el frontend integra el plano de
+    datos de nouser y pinta el sidebar:
+    - **Plano de datos** (`nouser.rs`): descubre el socket del daemon (broker
+      brahman → fallback al default path, igual que `chasqui-explorer-llimphi`),
+      poll periódico de `list_monads` (2 s) y `resolve_monad` **bajo demanda** al
+      expandir una Mónada (carga perezosa: una Mónada con `cardinality > 0` aún
+      sin resolver lleva un hijo placeholder "…" para mostrar el chevron). El
+      `NavId` se deriva determinista del `MonadId`/path (FNV-1a con tag) para que
+      expansión y selección sobrevivan al re-poll. `NavState` (open/mode/selected/
+      expanded/scroll/roots/targets) vive en el `Model`; queries en thread vía
+      `Handle::spawn` (no bloquean el UI). 7 tests.
+    - **Render** (`render/sidebar.rs`): el rail (`llimphi-widget-dock-rail`) se
+      pinta en el rect que el layout reservó para el Sidebar, un diente por
+      `SidebarTab` (el del panel desplegado va resaltado). El panel **flota**
+      junto al rail (no entra en `resolve`): cabezal con el toggle Árbol/Grafo
+      (`llimphi-widget-segmented`) + el navegador (`llimphi-widget-navigator`)
+      dentro de un área de scroll (`llimphi-widget-scroll`). Clic en diente →
+      despliega/repliega; Esc cierra el panel. Iconos de diente vectoriales por
+      nombre (`monads`/`files`/…). 1 test.
+    - **Config**: el asset `pata-config/assets/launcher.toml` gana un sidebar de
+      ejemplo (`kind = "sidebar"`, un diente `navigator` source=nouser);
+      deserialización fijada en `toml_contract.rs`.
+    - Sólo arranca el poll si la config declara un navegador
+      (`config_tiene_navigator`).
+  - **11c-layer ⏳** — wiring del rail/panel en el backend `wlr-layer-shell`
+    (`layer.rs`), el path de producción en Hyprland: hoy filtra superficies a
+    `Bar`/`Panel`, así que el Sidebar no aparece bajo layer-shell todavía (mismo
+    estado que tuvo `window_list` al nacer en un solo path). Falta: layer surface
+    del rail (anclada left/right, exclusive zone = thickness) + panel desplegable.
+  - **11d ⏳ (stub)** — abrir Mónada/archivo con la app que corresponda. Hoy el
+    right-click sobre un archivo cae a `xdg-open` como stand-in; falta el registro
+    de apps de mirada (enrutar por Lens/tipo).

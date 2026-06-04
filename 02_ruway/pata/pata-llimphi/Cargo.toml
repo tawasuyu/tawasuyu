@@ -34,6 +34,21 @@ app-bus = { path = "../../../shared/app-bus" }
 llimphi-ui = { workspace = true }
 # Área de scroll del historial del drawer (clip + offset + barra arrastrable).
 llimphi-widget-scroll = { workspace = true }
+# Sidebars acoplables (Fase 11c): rail de dientes + navegador de Mónadas/archivos
+# + toggle Árbol/Grafo. El plano de datos lo provee nouser vía chasqui-card.
+llimphi-widget-dock-rail = { workspace = true }
+llimphi-widget-navigator = { workspace = true }
+llimphi-widget-segmented = { workspace = true }
+# Protocolo de query de nouser (list_monads / resolve_monad) — fuente
+# autoritativa de qué archivos componen una Mónada. Importamos sólo los wire
+# types + cliente blocking, sin arrastrar el engine (notify/sled/blake3).
+chasqui-card = { path = "../../chasqui/chasqui-card" }
+# Descubrimiento del socket del daemon vía broker brahman (Card consumer +
+# await_provider_blocking), con fallback al default path. Mismo patrón que
+# chasqui-explorer-llimphi.
+card-sidecar = { path = "../../chasqui/card-sidecar" }
+# MonadId = Ulid: derivamos NavId deterministas de sus bytes; los tests crean ids.
+ulid = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-motion = { workspace = true }
 chrono = { workspace = true }

@@ -88,6 +88,36 @@ fn props_desconocidas_se_conservan() {
 }
 
 #[test]
+fn deserializa_un_sidebar_con_dientes_navegador() {
+    // El rail (Fase 11): un SurfaceKind::Sidebar con `tabs` cuyo `content` es un
+    // WidgetSpec con props flatten (la fuente de datos del navegador).
+    let src = r#"
+        [[surfaces]]
+        kind = "sidebar"
+        anchor = "left"
+        thickness = 44
+        panel_width = 300
+
+        [[surfaces.tabs]]
+        icon = "monads"
+        label = "Mónadas"
+        content = { kind = "navigator", source = "nouser" }
+    "#;
+    let cfg: Config = toml::from_str(src).expect("el sidebar debe parsear");
+    let sb = &cfg.surfaces[0];
+    assert_eq!(sb.kind, SurfaceKind::Sidebar);
+    assert_eq!(sb.anchor, Anchor::Left);
+    assert_eq!(sb.thickness, 44.0);
+    assert_eq!(sb.panel_width, 300.0);
+    assert_eq!(sb.tabs.len(), 1);
+    assert_eq!(sb.tabs[0].icon, "monads");
+    assert_eq!(sb.tabs[0].label, "Mónadas");
+    assert_eq!(sb.tabs[0].content.kind, "navigator");
+    // La prop del contenido llega por flatten/untagged.
+    assert_eq!(sb.tabs[0].content.str_prop("source", "?"), "nouser");
+}
+
+#[test]
 fn marco_minimo_y_vacio() {
     // Sin superficies declaradas: config válido y vacío.
     let cfg: Config = toml::from_str("").unwrap();

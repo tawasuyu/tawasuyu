@@ -20,7 +20,7 @@ use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::View;
 
 use app_bus::AppEntry;
-use pata_core::config::{FloatingCard, Surface};
+use pata_core::config::{FloatingCard, Surface, SurfaceKind};
 use pata_core::layout::Rect;
 use pata_core::widget::{Widget, WidgetView};
 
@@ -28,6 +28,9 @@ use crate::shuma::{self, ShumaState};
 use crate::toplevel::WindowEntry;
 use crate::tray::{TrayIcon, TrayItem};
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
+
+mod sidebar;
+pub use sidebar::{nav_panel_view, sidebar_rail_view};
 
 /// Largo máximo de la etiqueta de una ventana en el `window_list` antes de
 /// recortar con `…`. Evita que un título largo empuje el resto de la barra.
@@ -348,6 +351,18 @@ pub fn root(model: &Model) -> View<Msg> {
         if !placed.rect.es_visible() {
             continue;
         }
+        // Un Sidebar no tiene slots: pinta el rail de dientes a partir de
+        // `surface.tabs` (su panel flota aparte, después, para quedar encima).
+        if surface.kind == SurfaceKind::Sidebar {
+            superficies.push(sidebar_rail_view(
+                surface,
+                placed.index,
+                placed.rect,
+                &model.nav,
+                &model.theme,
+            ));
+            continue;
+        }
         superficies.push(surface_view(
             surface,
             placed.rect,
@@ -356,6 +371,25 @@ pub fn root(model: &Model) -> View<Msg> {
             &data,
             &model.theme,
         ));
+    }
+
+    // El panel del diente desplegado flota sobre el área de trabajo, junto al
+    // rail (no entra en el layout — lo maneja el frontend, como un drawer).
+    if let Some((si, ti)) = model.nav.open {
+        if let Some(placed) = model.frame.surfaces.iter().find(|p| p.index == si) {
+            if let Some(surface) = model.cfg.surfaces.get(si) {
+                if surface.kind == SurfaceKind::Sidebar {
+                    superficies.push(nav_panel_view(
+                        surface,
+                        ti,
+                        placed.rect,
+                        (sw, sh),
+                        &model.nav,
+                        &model.theme,
+                    ));
+                }
+            }
+        }
     }
 
     // Tarjetas flotantes (estilo conky), posicionadas en absoluto sobre la
