@@ -1587,6 +1587,42 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "both" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Both)),
             _ => None,
         },
+        // Fase 7.519 — `float-defer` (CSS Page Floats 3). `none|last|<int>`.
+        "float-defer" => {
+            let v = value.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "none" => Some(DeclKind::FloatDefer(FloatDefer::None)),
+                "last" => Some(DeclKind::FloatDefer(FloatDefer::Last)),
+                _ => v.parse::<i32>().ok().map(|n| DeclKind::FloatDefer(FloatDefer::By(n))),
+            }
+        }
+        // Fase 7.520 — `float-reference` (CSS Page Floats 3).
+        "float-reference" => match value.trim().to_ascii_lowercase().as_str() {
+            "inline" => Some(DeclKind::FloatReference(FloatReference::Inline)),
+            "column" => Some(DeclKind::FloatReference(FloatReference::Column)),
+            "region" => Some(DeclKind::FloatReference(FloatReference::Region)),
+            "page" => Some(DeclKind::FloatReference(FloatReference::Page)),
+            _ => None,
+        },
+        // Fase 7.521 — `float-offset` (CSS Page Floats 3). `<length-percentage>`.
+        "float-offset" => parse_length_px(value).map(DeclKind::FloatOffset),
+        // Fase 7.522 — `box-decoration-break` (CSS Fragmentation 4).
+        "box-decoration-break" | "-webkit-box-decoration-break" => match value
+            .trim()
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "slice" => Some(DeclKind::BoxDecorationBreak(BoxDecorationBreak::Slice)),
+            "clone" => Some(DeclKind::BoxDecorationBreak(BoxDecorationBreak::Clone)),
+            _ => None,
+        },
+        // Fase 7.523 — `line-snap` (CSS Line Grid). HEREDA.
+        "line-snap" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::LineSnap(LineSnap::None)),
+            "baseline" => Some(DeclKind::LineSnap(LineSnap::Baseline)),
+            "contain" => Some(DeclKind::LineSnap(LineSnap::Contain)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

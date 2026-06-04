@@ -913,6 +913,22 @@ pub struct ComputedStyle {
     /// caracteres saltea la marca de énfasis. Default `Spaces`. **HEREDA**.
     /// Plumb.
     pub text_emphasis_skip: TextEmphasisSkip,
+    /// `float-defer` (Fase 7.519). CSS Page Floats 3: cuántas regiones
+    /// difiere el flotador. Default `None`. NO hereda. Plumb.
+    pub float_defer: FloatDefer,
+    /// `float-reference` (Fase 7.520). CSS Page Floats 3: contexto de
+    /// flotación. Default `Inline`. NO hereda. Plumb.
+    pub float_reference: FloatReference,
+    /// `float-offset` (Fase 7.521). CSS Page Floats 3: desplazamiento en
+    /// px del flotador. Default `0`. NO hereda. Plumb.
+    pub float_offset: f32,
+    /// `box-decoration-break` (Fase 7.522). CSS Fragmentation 4: cómo se
+    /// trozan borde/padding/etc. en saltos. Default `Slice`. NO hereda.
+    /// Plumb.
+    pub box_decoration_break: BoxDecorationBreak,
+    /// `line-snap` (Fase 7.523). CSS Line Grid: cómo se alinean las
+    /// líneas a la grilla baseline. Default `None`. **HEREDA**. Plumb.
+    pub line_snap: LineSnap,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2682,6 +2698,45 @@ pub enum TextEmphasisSkip {
     Narrow,
 }
 
+/// `float-defer` (CSS Page Floats 3). `None` = `none` (sin diferir);
+/// `Last` = `last`; `By(n)` = diferir N fragmentos. Default `None`.
+/// Fase 7.519.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FloatDefer {
+    #[default]
+    None,
+    Last,
+    By(i32),
+}
+
+/// `float-reference` (CSS Page Floats 3). Default `Inline`. Fase 7.520.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FloatReference {
+    #[default]
+    Inline,
+    Column,
+    Region,
+    Page,
+}
+
+/// `box-decoration-break` (CSS Fragmentation 4). Default `Slice`.
+/// Fase 7.522.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BoxDecorationBreak {
+    #[default]
+    Slice,
+    Clone,
+}
+
+/// `line-snap` (CSS Line Grid). Default `None`. Fase 7.523.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LineSnap {
+    #[default]
+    None,
+    Baseline,
+    Contain,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3942,6 +3997,11 @@ impl Default for ComputedStyle {
             grid_column_start: None,
             grid_column_end: None,
             text_emphasis_skip: TextEmphasisSkip::Spaces,
+            float_defer: FloatDefer::None,
+            float_reference: FloatReference::Inline,
+            float_offset: 0.0,
+            box_decoration_break: BoxDecorationBreak::Slice,
+            line_snap: LineSnap::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

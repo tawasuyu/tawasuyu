@@ -585,6 +585,16 @@ pub(crate) enum DeclKind {
     AnimationIterationCount(AnimationIterations),
     /// `animation-fill-mode` (Fase 7.518). NO hereda. Plumb.
     AnimationFillMode(AnimationFillMode),
+    /// `float-defer` (Fase 7.519). NO hereda. Plumb.
+    FloatDefer(FloatDefer),
+    /// `float-reference` (Fase 7.520). NO hereda. Plumb.
+    FloatReference(FloatReference),
+    /// `float-offset` (Fase 7.521). px. NO hereda. Plumb.
+    FloatOffset(f32),
+    /// `box-decoration-break` (Fase 7.522). NO hereda. Plumb.
+    BoxDecorationBreak(BoxDecorationBreak),
+    /// `line-snap` (Fase 7.523). HEREDA. Plumb.
+    LineSnap(LineSnap),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1041,6 +1051,11 @@ impl Decl {
                 let b = s.animation.get_or_insert_with(AnimationBinding::default);
                 b.fill_mode = *v;
             }
+            DeclKind::FloatDefer(v) => s.float_defer = *v,
+            DeclKind::FloatReference(v) => s.float_reference = *v,
+            DeclKind::FloatOffset(v) => s.float_offset = *v,
+            DeclKind::BoxDecorationBreak(v) => s.box_decoration_break = *v,
+            DeclKind::LineSnap(v) => s.line_snap = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
