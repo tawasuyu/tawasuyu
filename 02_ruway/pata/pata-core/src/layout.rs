@@ -107,7 +107,12 @@ pub fn resolve(config: &Config, screen: Rect) -> Frame {
     for (index, s) in config.surfaces.iter().enumerate() {
         let t = s.thickness as i32;
         let (rect, reserva) = match s.kind {
-            SurfaceKind::Bar => {
+            // Una barra y el rail de un sidebar reservan igual: su grosor pegado
+            // al borde, salvo que sean autohide (entonces flotan sin reservar).
+            // El panel que despliega un diente del sidebar no es parte de
+            // `resolve` —flota sobre el área de trabajo como un drawer de
+            // launcher, lo maneja el frontend—.
+            SurfaceKind::Bar | SurfaceKind::Sidebar => {
                 let r = strip(work, s.anchor, t);
                 if s.autohide {
                     (r, false)
@@ -243,6 +248,36 @@ mod tests {
         assert_eq!(f.surfaces[1].rect, Rect::new(0, 32, 1920, 1048));
         assert!(!f.surfaces[1].reserva);
         assert_eq!(f.work_area, Rect::new(0, 32, 1920, 1048));
+    }
+
+    #[test]
+    fn sidebar_reserva_su_rail_como_una_barra_vertical() {
+        let mut cfg = Config::default();
+        let mut sb = Surface::sidebar(Anchor::Left);
+        sb.thickness = 44.0;
+        cfg.surfaces.push(sb);
+
+        let f = resolve(&cfg, pantalla());
+        // El rail toma una franja vertical fina pegada a la izquierda…
+        assert_eq!(f.surfaces[0].rect, Rect::new(0, 0, 44, 1080));
+        assert!(f.surfaces[0].reserva);
+        // …y el área de trabajo arranca 44px a la derecha (el panel desplegado
+        // flota encima, no entra en `resolve`).
+        assert_eq!(f.work_area, Rect::new(44, 0, 1920 - 44, 1080));
+    }
+
+    #[test]
+    fn sidebar_autohide_no_reserva() {
+        let mut cfg = Config::default();
+        let mut sb = Surface::sidebar(Anchor::Right);
+        sb.thickness = 44.0;
+        sb.autohide = true;
+        cfg.surfaces.push(sb);
+
+        let f = resolve(&cfg, pantalla());
+        assert_eq!(f.surfaces[0].rect, Rect::new(1920 - 44, 0, 44, 1080));
+        assert!(!f.surfaces[0].reserva);
+        assert_eq!(f.work_area, pantalla());
     }
 
     #[test]

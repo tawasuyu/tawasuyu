@@ -360,3 +360,24 @@ borde; shuma provee el contenido.
   limpiaron las referencias (scripts/install-mirada-dm.sh, APPS.md, README de
   mirada, REPORTE de shuma, LEEME de launcher-llimphi). El triplete de launchers
   del §0 queda resuelto: el marco es **una sola capa**, `pata`.
+- **Fase 11 — sidebars acoplables (navegador de Mónadas/archivos)** (en curso):
+  el marco gana un cuarto tipo de superficie, el **Sidebar**, para integrar el
+  plano de datos de `chasqui`/nouser en el escritorio.
+  - **11a ✅ (modelo, `pata-core`)** — `SurfaceKind::Sidebar`: un **rail de
+    dientes** (`llimphi-widget-dock-rail`) anclado a un borde vertical (left/
+    right). Cada diente es un `SidebarTab { icon, label, content: WidgetSpec }`;
+    `content` es típicamente `kind = "navigator"`. Campos nuevos en `Surface`:
+    `tabs: Vec<SidebarTab>` + `panel_width` (el rail usa `thickness`, el panel
+    desplegado flota a su lado con `panel_width`). **Layout:** el rail reserva su
+    grosor como una barra vertical (salvo `autohide`, que flota); el panel que
+    despliega un diente **no** entra en `resolve` —flota sobre el área de trabajo
+    como un drawer de launcher, lo maneja el frontend—. Espejo postcard-safe
+    (`WireTab` + `tabs`/`panel_width` en `WireSurface`) para que viaje por akasha
+    en wawa; round-trip fijado en test. `no_std` (wasm32) verde, 36 tests.
+  - **11b ⏳ (widget navegador Llimphi)** — tree/grafo conmutable de nodos
+    agnósticos (Mónada/Dir/Archivo).
+  - **11c ⏳ (`pata-llimphi`)** — pinta el rail en el borde, despliega el panel
+    animado al activar un diente, autohide del rail; alimenta el navegador desde
+    el query de nouser (`chasqui-card::query`) + filesystem.
+  - **11d ⏳** — abrir Mónada/archivo con la app que corresponda (registro de
+    apps / mirada).

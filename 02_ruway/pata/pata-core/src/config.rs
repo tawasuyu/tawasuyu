@@ -60,6 +60,13 @@ pub enum SurfaceKind {
     /// Dock: lanzadores y/o ventanas abiertas, centrado en su borde y del
     /// tamaño justo de su contenido. Puede autoesconderse.
     Dock,
+    /// Sidebar acoplable: un **rail de dientes** vertical pegado a un borde
+    /// (left/right). Cada diente ([`SidebarTab`]) despliega un panel con su
+    /// widget de contenido (lógica de launcher: colapsado = sólo el rail,
+    /// activar un diente despliega su panel sobre el escritorio). El rail
+    /// reserva su grosor como una barra; si `autohide`, no reserva y reaparece
+    /// al rozar el borde. El panel desplegado flota, no reserva.
+    Sidebar,
 }
 
 /// El valor de una propiedad de widget, agnóstico del formato en disco. El
@@ -174,7 +181,41 @@ pub struct FloatingCard {
     pub widgets: Vec<WidgetSpec>,
 }
 
-/// Una superficie del marco: una barra, un panel o un dock anclado a un borde.
+/// Un diente de un [`SurfaceKind::Sidebar`]: una pestaña vertical del rail que,
+/// al activarse, despliega un panel con su widget de contenido.
+///
+/// El `icon` es un identificador que el frontend mapea a su glifo/dibujo (igual
+/// que el `kind` de un widget: conjunto abierto, cae a un default si no lo
+/// conoce). El `label` rotula el panel desplegado y el tooltip del diente. El
+/// `content` es un [`WidgetSpec`] —típicamente `kind = "navigator"`— que el
+/// frontend pinta en el panel; el modelo no asume qué es.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct SidebarTab {
+    /// Identificador del icono del diente (`"files"`, `"monads"`, `"search"`…).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub icon: String,
+    /// Rótulo del panel desplegado y tooltip del diente.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub label: String,
+    /// El widget que se pinta en el panel cuando el diente está activo.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub content: WidgetSpec,
+}
+
+impl SidebarTab {
+    /// Un diente con icono, rótulo y widget de contenido.
+    pub fn new(icon: impl Into<String>, label: impl Into<String>, content: WidgetSpec) -> Self {
+        Self {
+            icon: icon.into(),
+            label: label.into(),
+            content,
+        }
+    }
+}
+
+/// Una superficie del marco: una barra, un panel, un dock o un sidebar anclado
+/// a un borde.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Surface {
@@ -218,6 +259,13 @@ pub struct Surface {
     /// también cae al primario y se loguea un aviso.
     #[cfg_attr(feature = "serde", serde(default))]
     pub output: String,
+    /// Para `kind = sidebar`: los dientes del rail. Cada uno despliega su panel.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub tabs: Vec<SidebarTab>,
+    /// Para `kind = sidebar`: ancho (px) del panel que despliega un diente. El
+    /// rail mismo usa `thickness`; el panel flota a su lado con este ancho.
+    #[cfg_attr(feature = "serde", serde(default = "default_panel_width"))]
+    pub panel_width: f32,
 }
 
 impl Default for Surface {
@@ -234,6 +282,8 @@ impl Default for Surface {
             end: Vec::new(),
             cards: Vec::new(),
             output: String::new(),
+            tabs: Vec::new(),
+            panel_width: default_panel_width(),
         }
     }
 }
@@ -253,6 +303,17 @@ impl Surface {
         Self {
             kind: SurfaceKind::Dock,
             anchor,
+            ..Self::default()
+        }
+    }
+
+    /// Un sidebar acoplable anclado a `anchor` (left/right), con el rail vacío.
+    /// El grosor por defecto es el ancho del rail de dientes.
+    pub fn sidebar(anchor: Anchor) -> Self {
+        Self {
+            kind: SurfaceKind::Sidebar,
+            anchor,
+            thickness: default_rail_thickness(),
             ..Self::default()
         }
     }
@@ -331,6 +392,12 @@ fn default_padding() -> f32 {
 fn default_gap() -> f32 {
     16.0
 }
+fn default_rail_thickness() -> f32 {
+    44.0
+}
+fn default_panel_width() -> f32 {
+    280.0
+}
 fn default_timezone() -> String {
     "auto".to_string()
 }
@@ -399,5 +466,26 @@ mod tests {
     fn surface_constructores() {
         assert_eq!(Surface::bar(Anchor::Left).anchor, Anchor::Left);
         assert_eq!(Surface::dock(Anchor::Bottom).kind, SurfaceKind::Dock);
+    }
+
+    #[test]
+    fn sidebar_lleva_dientes_y_ancho_de_panel() {
+        let mut sb = Surface::sidebar(Anchor::Left);
+        sb.tabs.push(SidebarTab::new(
+            "monads",
+            "Mónadas",
+            WidgetSpec::new("navigator").with("source", Prop::Str("nouser".to_string())),
+        ));
+        sb.tabs
+            .push(SidebarTab::new("files", "Archivos", WidgetSpec::new("navigator")));
+        assert_eq!(sb.kind, SurfaceKind::Sidebar);
+        assert_eq!(sb.anchor, Anchor::Left);
+        // El rail por defecto es fino; el panel desplegado es ancho.
+        assert_eq!(sb.thickness, 44.0);
+        assert_eq!(sb.panel_width, 280.0);
+        assert_eq!(sb.tabs.len(), 2);
+        assert_eq!(sb.tabs[0].icon, "monads");
+        assert_eq!(sb.tabs[0].content.kind, "navigator");
+        assert_eq!(sb.tabs[0].content.str_prop("source", "?"), "nouser");
     }
 }

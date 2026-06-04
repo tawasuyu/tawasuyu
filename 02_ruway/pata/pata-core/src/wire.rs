@@ -23,7 +23,9 @@ use alloc::vec::Vec;
 #[cfg(feature = "serde")]
 use serde::{Deserialize, Serialize};
 
-use crate::config::{Anchor, Config, FloatingCard, General, Prop, Surface, SurfaceKind, WidgetSpec};
+use crate::config::{
+    Anchor, Config, FloatingCard, General, Prop, SidebarTab, Surface, SurfaceKind, WidgetSpec,
+};
 
 /// Valor de propiedad **etiquetado** (a diferencia de [`Prop`], que es
 /// `untagged`): así postcard puede deserializarlo sin auto-descripción.
@@ -131,6 +133,35 @@ impl From<WireCard> for FloatingCard {
     }
 }
 
+/// Espejo de [`SidebarTab`].
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct WireTab {
+    pub icon: String,
+    pub label: String,
+    pub content: WireWidget,
+}
+
+impl From<&SidebarTab> for WireTab {
+    fn from(t: &SidebarTab) -> Self {
+        Self {
+            icon: t.icon.clone(),
+            label: t.label.clone(),
+            content: WireWidget::from(&t.content),
+        }
+    }
+}
+
+impl From<WireTab> for SidebarTab {
+    fn from(t: WireTab) -> Self {
+        SidebarTab {
+            icon: t.icon,
+            label: t.label,
+            content: WidgetSpec::from(t.content),
+        }
+    }
+}
+
 /// Espejo de [`Surface`].
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
@@ -146,6 +177,8 @@ pub struct WireSurface {
     pub end: Vec<WireWidget>,
     pub cards: Vec<WireCard>,
     pub output: String,
+    pub tabs: Vec<WireTab>,
+    pub panel_width: f32,
 }
 
 impl From<&Surface> for WireSurface {
@@ -162,6 +195,8 @@ impl From<&Surface> for WireSurface {
             end: a_wire(&s.end),
             cards: s.cards.iter().map(WireCard::from).collect(),
             output: s.output.clone(),
+            tabs: s.tabs.iter().map(WireTab::from).collect(),
+            panel_width: s.panel_width,
         }
     }
 }
@@ -180,6 +215,8 @@ impl From<WireSurface> for Surface {
             end: de_wire(s.end),
             cards: s.cards.into_iter().map(FloatingCard::from).collect(),
             output: s.output,
+            tabs: s.tabs.into_iter().map(SidebarTab::from).collect(),
+            panel_width: s.panel_width,
         }
     }
 }
@@ -214,7 +251,7 @@ impl From<WireConfig> for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Prop;
+    use crate::config::{Prop, SidebarTab};
     use crate::{Config, Surface, WidgetSpec};
     use alloc::string::ToString;
 
@@ -242,9 +279,21 @@ mod tests {
             widgets: alloc::vec![WidgetSpec::new("cpu_meter"), WidgetSpec::new("ram_meter")],
         }];
 
+        let mut sidebar = Surface::sidebar(Anchor::Left);
+        sidebar.panel_width = 300.0;
+        sidebar.tabs = alloc::vec![
+            SidebarTab::new(
+                "monads",
+                "Mónadas",
+                WidgetSpec::new("navigator").with("source", Prop::Str("nouser".to_string())),
+            ),
+            SidebarTab::new("files", "Archivos", WidgetSpec::new("navigator")),
+        ];
+
         let mut cfg = Config::default();
         cfg.surfaces.push(top);
         cfg.surfaces.push(panel);
+        cfg.surfaces.push(sidebar);
         cfg
     }
 

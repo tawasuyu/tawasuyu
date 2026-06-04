@@ -37,7 +37,9 @@ pub mod widget;
 #[cfg(feature = "serde")]
 pub mod wire;
 
-pub use config::{Anchor, Config, FloatingCard, General, Prop, Surface, SurfaceKind, WidgetSpec};
+pub use config::{
+    Anchor, Config, FloatingCard, General, Prop, SidebarTab, Surface, SurfaceKind, WidgetSpec,
+};
 pub use layout::{resolve, Frame, Placed, Rect};
 pub use widget::{
     build, build_all, Astro, Clock, ClockReading, Meter, MeterSource, Placeholder, StartButton,
