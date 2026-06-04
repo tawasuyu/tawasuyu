@@ -115,6 +115,13 @@ pub struct NavState {
     pub socket: Option<PathBuf>,
     /// Último error de descubrimiento/query (para mostrar en el panel).
     pub error: Option<String>,
+    /// Menú "Abrir con…" abierto sobre un archivo (su [`NavId`]). `None` = sin
+    /// menú. Las opciones se precomputan al abrirlo ([`NavState::open_menu`]) para
+    /// que el render no toque el registro de apps.
+    pub menu: Option<NavId>,
+    /// Apps nativas que ofrece el menú abierto: `(app_id, label)`. El render las
+    /// pinta como filas "Abrir con <label>"; siempre se les suma "el sistema".
+    pub menu_options: Vec<(String, String)>,
 }
 
 impl Default for NavState {
@@ -131,6 +138,8 @@ impl Default for NavState {
             members: HashMap::new(),
             socket: None,
             error: None,
+            menu: None,
+            menu_options: Vec::new(),
         }
     }
 }
@@ -144,12 +153,35 @@ impl NavState {
     /// Activa/repliega el diente `(si, ti)`: si ya estaba abierto lo cierra, si
     /// no, lo abre (cerrando cualquier otro).
     pub fn toggle_tab(&mut self, si: usize, ti: usize) {
+        self.close_menu(); // un cambio de diente descarta el menú "Abrir con…"
         if self.open == Some((si, ti)) {
             self.open = None;
         } else {
             self.open = Some((si, ti));
             self.scroll = 0.0;
         }
+    }
+
+    /// La ruta del archivo que representa `id`, si es un archivo. `None` para
+    /// Mónadas (no tienen una ruta única).
+    pub fn file_path(&self, id: NavId) -> Option<&str> {
+        match self.targets.get(&id) {
+            Some(NavTarget::File(p)) => Some(p.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Abre el menú "Abrir con…" sobre `id` con las `options` (app_id, label) ya
+    /// resueltas por el caller (que tiene el registro de apps).
+    pub fn open_menu(&mut self, id: NavId, options: Vec<(String, String)>) {
+        self.menu = Some(id);
+        self.menu_options = options;
+    }
+
+    /// Cierra el menú "Abrir con…".
+    pub fn close_menu(&mut self) {
+        self.menu = None;
+        self.menu_options.clear();
     }
 
     /// Si `id` es una Mónada todavía sin miembros resueltos, devuelve su id para

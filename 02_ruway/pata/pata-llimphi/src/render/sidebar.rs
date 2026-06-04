@@ -26,7 +26,9 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
-use llimphi_widget_navigator::{navigator_view, NavKind, NavMode, NavNode, NavPalette, NavSpec};
+use llimphi_widget_navigator::{
+    navigator_view, NavId, NavKind, NavMode, NavNode, NavPalette, NavSpec,
+};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 
@@ -148,9 +150,12 @@ fn panel_inner(surface: &Surface, ti: usize, panel_h: f32, nav: &NavState, theme
     })
     .children(vec![titulo_view, toggle]);
 
-    // --- Cuerpo: navegador (o un aviso si no hay datos) ---
+    // --- Cuerpo: el menú "Abrir con…" si está abierto, si no el navegador (o un
+    // aviso si no hay datos) ---
     let viewport = (panel_h - HEADER_H - PAD * 2.0).max(0.0);
-    let cuerpo = if nav.roots.is_empty() {
+    let cuerpo = if let Some(mid) = nav.menu {
+        open_with_menu(nav, mid, theme)
+    } else if nav.roots.is_empty() {
         aviso_view(nav, theme, viewport)
     } else {
         let row_h = match nav.mode {
@@ -172,7 +177,8 @@ fn panel_inner(surface: &Surface, ti: usize, panel_h: f32, nav: &NavState, theme
             |id| nav.expanded.contains(&id),
             Msg::NavToggle,
             Msg::NavSelect,
-            Some(Msg::NavOpen),
+            // Right-click sobre un archivo → menú "Abrir con…".
+            Some(Msg::NavContextMenu),
         );
 
         scroll_y(
@@ -334,6 +340,70 @@ pub fn sidebar_surface_view(
 // =====================================================================
 // Auxiliares
 // =====================================================================
+
+/// El menú "Abrir con…" sobre el archivo `id`: una fila por app nativa que
+/// declare su mime (de `nav.menu_options`), más "el sistema" (`xdg-open`) y
+/// "Cancelar". Se pinta en el cuerpo del panel (sin overlay flotante: así
+/// funciona idéntico en winit y layer-shell sin necesitar coords del cursor).
+fn open_with_menu(nav: &NavState, id: NavId, theme: &Theme) -> View<Msg> {
+    let path = nav.file_path(id).unwrap_or("");
+    let name = path.rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or(path);
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(28.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(format!("Abrir «{name}» con:"), 12.0, theme.fg_muted),
+    );
+    for (app_id, label) in &nav.menu_options {
+        let aid = app_id.clone();
+        rows.push(menu_button(label, theme).on_click(Msg::NavOpenWith(id, Some(aid))));
+    }
+    rows.push(menu_button("El sistema (xdg-open)", theme).on_click(Msg::NavOpenWith(id, None)));
+    rows.push(menu_button("Cancelar", theme).on_click(Msg::NavMenuCancel));
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(rows)
+}
+
+/// Una fila clickeable del menú "Abrir con…". El caller le cuelga el `on_click`.
+fn menu_button(label: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .hover_fill(theme.bg_button_hover)
+    .radius(6.0)
+    .text(label.to_string(), 13.0, theme.fg_text)
+}
 
 /// Un aviso centrado cuando no hay Mónadas que mostrar (conectando, o error).
 fn aviso_view(nav: &NavState, theme: &Theme, viewport: f32) -> View<Msg> {

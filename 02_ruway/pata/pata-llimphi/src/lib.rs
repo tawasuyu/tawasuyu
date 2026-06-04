@@ -101,8 +101,14 @@ pub enum Msg {
     /// Expandir/colapsar un nodo rama; al expandir una Mónada sin miembros
     /// resueltos dispara su `resolve_monad`.
     NavToggle(NavId),
-    /// Abrir un nodo con la app que corresponda (right-click). Stub de Fase 11d.
-    NavOpen(NavId),
+    /// Right-click sobre un nodo: si es un archivo, abre el menú "Abrir con…"
+    /// (precomputa sus apps); si no, no-op.
+    NavContextMenu(NavId),
+    /// Elegir cómo abrir el archivo del menú: `Some(app_id)` con esa app nativa,
+    /// `None` con el handler del sistema (`xdg-open`).
+    NavOpenWith(NavId, Option<String>),
+    /// Cerrar el menú "Abrir con…" sin abrir nada.
+    NavMenuCancel,
     /// Desplazar el panel navegador `delta` px.
     NavScroll(f32),
     /// Disparo periódico del poll de Mónadas (`list_monads`).
@@ -514,13 +520,29 @@ impl App for PataApp {
                     }
                 }
             }
-            Msg::NavOpen(id) => {
-                // Fase 11d: abrir el archivo con la app nativa que declare su mime
-                // (registro app-bus), o `xdg-open` como fallback. Ver [`open`].
-                if let Some(nouser::NavTarget::File(path)) = model.nav.targets.get(&id) {
-                    let _ = open::open_file(&model.registry, path);
+            Msg::NavContextMenu(id) => {
+                // Fase 11d-extra: right-click sobre un archivo abre el menú "Abrir
+                // con…". Precomputamos sus apps acá (con el registro) para que el
+                // render no lo toque.
+                if let Some(path) = model.nav.file_path(id).map(str::to_owned) {
+                    let opts = open::handlers_for_path(&model.registry, &path);
+                    model.nav.open_menu(id, opts);
                 }
             }
+            Msg::NavOpenWith(id, app_id) => {
+                if let Some(path) = model.nav.file_path(id).map(str::to_owned) {
+                    match app_id {
+                        Some(aid) => {
+                            let _ = open::open_with_id(&model.registry, &aid, &path);
+                        }
+                        None => {
+                            let _ = open::open_system(&path);
+                        }
+                    }
+                }
+                model.nav.close_menu();
+            }
+            Msg::NavMenuCancel => model.nav.close_menu(),
             Msg::NavScroll(delta) => {
                 model.nav.scroll = (model.nav.scroll + delta).max(0.0);
             }
@@ -602,13 +624,19 @@ impl App for PataApp {
                 _ => None,
             };
         }
-        // 3) Con el panel navegador desplegado, Esc lo cierra (no la app).
+        // 3) Con el menú "Abrir con…" abierto, Esc lo cierra primero.
+        if model.nav.menu.is_some() {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::NavMenuCancel);
+            }
+        }
+        // 4) Con el panel navegador desplegado, Esc lo cierra (no la app).
         if model.nav.open.is_some() {
             if let Key::Named(NamedKey::Escape) = &event.key {
                 return Some(Msg::NavClosePanel);
             }
         }
-        // 4) Sin nada abierto, Esc cierra la app.
+        // 5) Sin nada abierto, Esc cierra la app.
         match &event.key {
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             _ => None,

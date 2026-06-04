@@ -73,7 +73,7 @@ use pata_core::config::FloatingCard;
 use pata_core::widget::{Widget, WidgetCtx};
 use pata_core::{Anchor, Config, SurfaceKind};
 
-use crate::nouser::{self, MembersOutcome, NavState, NavTarget, PollOutcome};
+use crate::nouser::{self, MembersOutcome, NavState, PollOutcome};
 use crate::sampler::SamplerHandle;
 use crate::toplevel::{Toplevel, WindowEntry};
 use crate::tray::TrayHandle;
@@ -1174,11 +1174,31 @@ impl LayerApp {
                 self.marcar_sidebars_dirty();
             }
             Msg::NavToggle(id) => self.nav_toggle(id),
-            Msg::NavOpen(id) => {
-                // Fase 11d: abrir con la app nativa que declare el mime, o xdg-open.
-                if let Some(NavTarget::File(path)) = self.nav.targets.get(&id) {
-                    let _ = crate::open::open_file(&self.registry, path);
+            Msg::NavContextMenu(id) => {
+                // Fase 11d-extra: right-click sobre archivo abre el menú "Abrir con…".
+                if let Some(path) = self.nav.file_path(id).map(str::to_owned) {
+                    let opts = crate::open::handlers_for_path(&self.registry, &path);
+                    self.nav.open_menu(id, opts);
+                    self.marcar_sidebars_dirty();
                 }
+            }
+            Msg::NavOpenWith(id, app_id) => {
+                if let Some(path) = self.nav.file_path(id).map(str::to_owned) {
+                    match app_id {
+                        Some(aid) => {
+                            let _ = crate::open::open_with_id(&self.registry, &aid, &path);
+                        }
+                        None => {
+                            let _ = crate::open::open_system(&path);
+                        }
+                    }
+                }
+                self.nav.close_menu();
+                self.marcar_sidebars_dirty();
+            }
+            Msg::NavMenuCancel => {
+                self.nav.close_menu();
+                self.marcar_sidebars_dirty();
             }
             Msg::NavScroll(delta) => {
                 self.nav.scroll = (self.nav.scroll + delta).max(0.0);

@@ -96,6 +96,38 @@ pub fn handler_for<'a>(registry: &'a AppRegistry, path: &str) -> Option<&'a app_
     registry.handlers_for(mime).into_iter().next()
 }
 
+/// Todas las apps nativas que declaran manejar el mime de `path`, como pares
+/// `(app_id, label)` — para poblar el menú "Abrir con…". Vacío si no hay mime
+/// conocido o ningún handler. Función **pura**.
+pub fn handlers_for_path(registry: &AppRegistry, path: &str) -> Vec<(String, String)> {
+    let Some(mime) = mime_for_path(path) else {
+        return Vec::new();
+    };
+    registry
+        .handlers_for(mime)
+        .into_iter()
+        .map(|a| (a.id.clone(), a.label.clone()))
+        .collect()
+}
+
+/// Abre `path` con la app de id `app_id`; si no existe o falla el spawn, cae a
+/// `xdg-open`. Para la elección explícita del menú "Abrir con…".
+pub fn open_with_id(registry: &AppRegistry, app_id: &str, path: &str) -> Opened {
+    if let Some(app) = registry.get(app_id) {
+        match app.open(path) {
+            Ok(_) => return Opened::NativeApp(app.label.clone()),
+            Err(e) => eprintln!("pata · {} no pudo abrir {path}: {e}; uso xdg-open", app.label),
+        }
+    }
+    open_system(path)
+}
+
+/// Abre `path` con el handler del escritorio (`xdg-open`).
+pub fn open_system(path: &str) -> Opened {
+    crate::spawn_cmd(&format!("xdg-open {}", crate::shell_quote(path)));
+    Opened::SystemDefault
+}
+
 /// Abre `path` con la app del registro que declare su mime; si ninguna, cae a
 /// `xdg-open`. No bloquea (spawnea y olvida). Devuelve qué ruta tomó.
 pub fn open_file(registry: &AppRegistry, path: &str) -> Opened {
@@ -107,8 +139,7 @@ pub fn open_file(registry: &AppRegistry, path: &str) -> Opened {
             }
         }
     }
-    crate::spawn_cmd(&format!("xdg-open {}", crate::shell_quote(path)));
-    Opened::SystemDefault
+    open_system(path)
 }
 
 #[cfg(test)]
@@ -169,5 +200,15 @@ mod tests {
         assert!(handler_for(&reg, "/d/manual.pdf").is_none());
         // Sin extensión, ni siquiera hay mime.
         assert!(handler_for(&reg, "/etc/hosts").is_none());
+    }
+
+    #[test]
+    fn handlers_for_path_lista_opciones_del_menu() {
+        let reg = registro_ejemplo();
+        // Un .rs ofrece "nada" como handler nativo.
+        let opts = handlers_for_path(&reg, "/s/lib.rs");
+        assert_eq!(opts, vec![("nada".to_string(), "Nada".to_string())]);
+        // Un .pdf no tiene handlers nativos → lista vacía (sólo "sistema" en UI).
+        assert!(handlers_for_path(&reg, "/d/x.pdf").is_empty());
     }
 }

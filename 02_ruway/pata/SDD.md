@@ -453,9 +453,14 @@ borde; shuma provee el contenido.
     texto/código); se copian a `~/.config/gioser/apps/`. La decisión de ruteo
     (`open::handler_for`) es pura y testeada; el formato de manifiesto tiene
     canario en `app-bus`.
-  - **11d-extra ⏳ (opcional)** — un menú contextual "Abrir con…" para elegir entre
-    varios handlers (hoy toma el primero por orden de label). Requiere que el
-    navegador propague las coords del right-click (`on_right_click_at`) para anclar
-    el menú al cursor; hoy el árbol usa `on_right_click` (Msg sin coords).
-    Discernimiento por contenido (`shuma-discern`) como upgrade del mime por
-    extensión.
+  - **11d-extra ✅** — menú "Abrir con…" para elegir el handler. El right-click
+    sobre un archivo (`Msg::NavContextMenu`) precomputa sus apps nativas
+    (`open::handlers_for_path`, guardadas en `NavState::menu_options`) y abre un
+    selector **dentro del panel** (no un overlay flotante: así no necesita coords
+    del cursor y funciona idéntico en winit y layer-shell). Cada fila →
+    `Msg::NavOpenWith(id, Some(app_id))`; "el sistema" → `NavOpenWith(id, None)`
+    (xdg-open); "Cancelar"/Esc → `NavMenuCancel`. El render lee sólo `NavState`
+    (decoplado del registro). 2 tests del listado de handlers.
+  - **Pendientes opcionales**: discernimiento por contenido (`shuma-discern`) como
+    upgrade del mime por extensión; drag en el backend layer-shell para que el modo
+    grafo seleccione (hoy de sólo lectura ahí).
