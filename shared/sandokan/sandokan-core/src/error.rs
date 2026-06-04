@@ -29,4 +29,11 @@ pub enum EngineError {
     /// La operación excedió su deadline.
     #[error("timeout")]
     Timeout,
+
+    /// El `Engine` no sabe encarnar este tipo de `Card::Payload`. Hoy
+    /// `LocalEngine` cubre `Native`, `Legacy` y `Virtual`; `Wasm` se
+    /// delega a un futuro `ente-wasm` y por ahora rebota como esta
+    /// variante para que el caller distinga "no soportado" de "fallé".
+    #[error("payload no soportado por este Engine: {kind}")]
+    UnsupportedPayload { kind: String },
 }

@@ -170,11 +170,55 @@ fn reap(pid: i32) -> Option<LifecycleState> {
     }
 }
 
+/// PID sentinel para entidades `Virtual` — nodos lógicos del grafo sin
+/// proceso real detrás. `0` no es nunca un PID válido en Linux (lo
+/// ocupa el scheduler swapper-task) y `nix::Pid::from_raw(0)` también
+/// tiene semántica especial en `waitpid`/`kill`. Para esquivar ambos,
+/// las operaciones que toquen pids consultan [`is_virtual_pid`] primero.
+const VIRTUAL_PID: i32 = 0;
+
+fn is_virtual_pid(pid: i32) -> bool {
+    pid == VIRTUAL_PID
+}
+
 #[async_trait]
 impl Engine for LocalEngine {
     async fn run(&self, intent: Intent) -> Result<ExecHandle, EngineError> {
+        use card_core::Payload;
         let card_id = intent.card_id();
         let label = intent.card.label.clone();
+
+        // Atajo para `Payload::Virtual`: registramos la entidad sin
+        // tocar el incarnator. Vive como Running indefinidamente y el
+        // operador la cierra con stop()/drop_session — ningún reap
+        // entra porque su pid es el sentinel `VIRTUAL_PID`.
+        if matches!(intent.card.payload, Payload::Virtual) {
+            let handle = ExecHandle {
+                card_id,
+                label,
+                started_at: SystemTime::now(),
+            };
+            let mut reg = self.registry.lock().expect("registry lock");
+            reg.insert(
+                card_id,
+                Entity {
+                    handle: handle.clone(),
+                    pid: VIRTUAL_PID,
+                    state: LifecycleState::Running,
+                    tracker: default_tracker(),
+                },
+            );
+            return Ok(handle);
+        }
+
+        // `Payload::Wasm` exige delegar a un runtime distinto (futuro
+        // `ente-wasm`); por ahora marcamos no-soportado en vez de
+        // pretender encarnarlo y fallar con un mensaje de exec.
+        if matches!(intent.card.payload, Payload::Wasm { .. }) {
+            return Err(EngineError::UnsupportedPayload {
+                kind: "Wasm".into(),
+            });
+        }
 
         // El env del contexto se mergea sobre el del engine base.
         let mut cfg = self.base_cfg.clone();
@@ -214,6 +258,12 @@ impl Engine for LocalEngine {
                 .map(|e| e.pid)
                 .ok_or(EngineError::NotFound(card_id))?
         };
+        // Entidades Virtual no tienen proceso: marcar Killed y salir.
+        if is_virtual_pid(pid) {
+            self.mark(card_id, LifecycleState::Killed);
+            self.drop_session(card_id);
+            return Ok(());
+        }
         let npid = Pid::from_raw(pid);
 
         // SIGTERM + período de gracia: damos chance a un cierre ordenado.
@@ -245,7 +295,9 @@ impl Engine for LocalEngine {
         let mut reg = self.registry.lock().expect("registry lock");
         let mut out = Vec::new();
         for ent in reg.values_mut() {
-            if !ent.state.is_terminal() {
+            // Entidades Virtual (sin pid real) no reapean: viven en
+            // Running hasta que un stop() las marque Killed.
+            if !ent.state.is_terminal() && !is_virtual_pid(ent.pid) {
                 if let Some(new_state) = reap(ent.pid) {
                     if es_fallo(&new_state) {
                         ent.tracker.on_failure();
@@ -265,7 +317,7 @@ impl Engine for LocalEngine {
         let ent = reg
             .get_mut(&card_id)
             .ok_or(EngineError::NotFound(card_id))?;
-        if !ent.state.is_terminal() {
+        if !ent.state.is_terminal() && !is_virtual_pid(ent.pid) {
             if let Some(new_state) = reap(ent.pid) {
                 if es_fallo(&new_state) {
                     ent.tracker.on_failure();
@@ -285,7 +337,7 @@ impl Engine for LocalEngine {
             let ent = reg
                 .get_mut(&card_id)
                 .ok_or(EngineError::NotFound(card_id))?;
-            if !ent.state.is_terminal() {
+            if !ent.state.is_terminal() && !is_virtual_pid(ent.pid) {
                 if let Some(new_state) = reap(ent.pid) {
                     if es_fallo(&new_state) {
                         ent.tracker.on_failure();
@@ -295,11 +347,19 @@ impl Engine for LocalEngine {
             }
             (ent.pid, ent.tracker.count())
         };
+        // Para entidades Virtual no hay /proc/0 — devolvemos 0s en vez
+        // de leer un path inexistente; el resto del frame mantiene su
+        // semántica (timestamp + tracker).
+        let (mem_bytes, nproc) = if is_virtual_pid(pid) {
+            (0, 0)
+        } else {
+            (proc::read_mem_bytes(pid), proc::read_thread_count(pid))
+        };
         Ok(TelemetryFrame {
             card_id,
             at: SystemTime::now(),
-            mem_bytes: proc::read_mem_bytes(pid),
-            nproc: proc::read_thread_count(pid),
+            mem_bytes,
+            nproc,
             // v1: CPU% requiere dos samples espaciados — pendiente.
             cpu_pct: 0.0,
             restarts,
@@ -465,6 +525,64 @@ mod tests {
             frame.restarts, 1,
             "tras llegar a terminal el contador no debe re-incrementar",
         );
+    }
+
+    // -----------------------------------------------------------------
+    //  RunCard arbitraria — Virtual + Wasm
+    // -----------------------------------------------------------------
+
+    fn virtual_card(label: &str) -> card_core::Card {
+        let mut c = card_core::Card::new(label);
+        c.payload = card_core::Payload::Virtual;
+        c
+    }
+
+    fn wasm_card(label: &str) -> card_core::Card {
+        let mut c = card_core::Card::new(label);
+        c.payload = card_core::Payload::Wasm {
+            module_sha256: [0u8; 32],
+            entry: "main".into(),
+        };
+        c
+    }
+
+    /// Una Card `Virtual` se acepta sin incarnator: aparece en list/status
+    /// como Running con pid sentinel. stop() la marca Killed sin tocar
+    /// señales (no hay proceso real).
+    #[tokio::test]
+    async fn virtual_card_corre_sin_proceso_y_se_para_limpio() {
+        let e = LocalEngine::new();
+        let card = virtual_card("nodo-logico");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run virtual");
+
+        assert_eq!(e.list().await.unwrap().len(), 1);
+        assert_eq!(e.status(id).await.unwrap(), LifecycleState::Running);
+
+        // Telemetry: no hay /proc/0 que leer, pero el frame se devuelve
+        // bien (mem y nproc en 0, sin panic).
+        let t = e.telemetry(id).await.expect("telemetry virtual");
+        assert_eq!(t.mem_bytes, 0);
+        assert_eq!(t.nproc, 0);
+        assert_eq!(t.restarts, 0);
+
+        e.stop(id, Duration::ZERO).await.expect("stop virtual");
+        assert!(e.list().await.unwrap().is_empty());
+        assert_eq!(e.status(id).await.unwrap(), LifecycleState::Killed);
+    }
+
+    /// Una Card `Wasm` se rechaza con error tipado, no se intenta
+    /// encarnar como si fuera Native (que daría un error de exec
+    /// confuso). El caller distingue "no soportado" de "fallé".
+    #[tokio::test]
+    async fn wasm_card_es_unsupported_payload() {
+        let e = LocalEngine::new();
+        let card = wasm_card("modulo-wasm");
+        let err = e.run(Intent::new(card)).await.unwrap_err();
+        match err {
+            EngineError::UnsupportedPayload { kind } => assert_eq!(kind, "Wasm"),
+            other => panic!("esperaba UnsupportedPayload, fue {other:?}"),
+        }
     }
 
     /// Una salida limpia (exit 0) NO es un fallo: el contador queda en 0.
