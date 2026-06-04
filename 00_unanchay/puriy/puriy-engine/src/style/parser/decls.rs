@@ -1760,6 +1760,54 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.538 — `cue-fade-duration` (CSS Speech 1). `<time>`.
         "cue-fade-duration" => parse_time_seconds(value.trim()).map(DeclKind::CueFadeDuration),
+        // Fase 7.539-7.541 — `cue-{before,after}` y `cue` shorthand (CSS Speech 1).
+        // Parse opaco — `none` reservado a None.
+        "cue-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::CueBefore(None))
+            } else {
+                Some(DeclKind::CueBefore(Some(v.to_string())))
+            }
+        }
+        "cue-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::CueAfter(None))
+            } else {
+                Some(DeclKind::CueAfter(Some(v.to_string())))
+            }
+        }
+        "cue" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::Cue(None))
+            } else {
+                Some(DeclKind::Cue(Some(v.to_string())))
+            }
+        }
+        // Fase 7.542 — `navigation-up` (CSS UI 3 legacy). Parse opaco —
+        // `auto` reservado a None.
+        "navigation-up" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavigationUp(None))
+            } else {
+                Some(DeclKind::NavigationUp(Some(v.to_string())))
+            }
+        }
+        // Fase 7.543 — `glyph-orientation-horizontal` (SVG 1.1 legacy).
+        // `<angle>` en grados; sólo aceptamos 0/90/180/270 y los keywords
+        // `0deg`/`90deg`/... — gramática extendida por simplicidad.
+        "glyph-orientation-horizontal" => {
+            let v = value.trim().to_ascii_lowercase();
+            let num = v.strip_suffix("deg").unwrap_or(&v);
+            num.parse::<f32>().ok().map(DeclKind::GlyphOrientationHorizontal)
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

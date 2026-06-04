@@ -625,6 +625,16 @@ pub(crate) enum DeclKind {
     RestAfter(Option<String>),
     /// `cue-fade-duration` (Fase 7.538). Segundos. NO hereda. Plumb.
     CueFadeDuration(f32),
+    /// `cue-before` (Fase 7.539). `None` = `none`. NO hereda. Plumb.
+    CueBefore(Option<String>),
+    /// `cue-after` (Fase 7.540). `None` = `none`. NO hereda. Plumb.
+    CueAfter(Option<String>),
+    /// `cue` shorthand (Fase 7.541). `None` = `none`. NO hereda. Plumb.
+    Cue(Option<String>),
+    /// `navigation-up` (Fase 7.542). `None` = `auto`. NO hereda. Plumb.
+    NavigationUp(Option<String>),
+    /// `glyph-orientation-horizontal` (Fase 7.543). Grados. HEREDA. Plumb.
+    GlyphOrientationHorizontal(f32),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1101,6 +1111,11 @@ impl Decl {
             DeclKind::RestBefore(v) => s.rest_before = v.clone(),
             DeclKind::RestAfter(v) => s.rest_after = v.clone(),
             DeclKind::CueFadeDuration(v) => s.cue_fade_duration = *v,
+            DeclKind::CueBefore(v) => s.cue_before = v.clone(),
+            DeclKind::CueAfter(v) => s.cue_after = v.clone(),
+            DeclKind::Cue(v) => s.cue = v.clone(),
+            DeclKind::NavigationUp(v) => s.navigation_up = v.clone(),
+            DeclKind::GlyphOrientationHorizontal(v) => s.glyph_orientation_horizontal = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -978,6 +978,22 @@ pub struct ComputedStyle {
     /// fade-in/out del cue audible en segundos. Default `0.0`. NO hereda.
     /// Plumb.
     pub cue_fade_duration: f32,
+    /// `cue-before` (Fase 7.539). CSS Speech 1: sonido de cue antes del
+    /// elemento. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub cue_before: Option<String>,
+    /// `cue-after` (Fase 7.540). Análogo a `cue-before`. NO hereda. Plumb.
+    pub cue_after: Option<String>,
+    /// `cue` shorthand (Fase 7.541). CSS Speech 1. Parse opaco — `None` =
+    /// `none`. NO hereda. Plumb.
+    pub cue: Option<String>,
+    /// `navigation-up` (Fase 7.542). CSS UI 3 legacy: cuál elemento
+    /// recibe foco al presionar la flecha arriba. Parse opaco — `None`
+    /// = `auto`. NO hereda. Plumb.
+    pub navigation_up: Option<String>,
+    /// `glyph-orientation-horizontal` (Fase 7.543). SVG 1.1 legacy: ángulo
+    /// (0/90/180/270) que rota glyphs en bloques horizontales. Default
+    /// `0.0`. **HEREDA**. Plumb.
+    pub glyph_orientation_horizontal: f32,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4094,6 +4110,11 @@ impl Default for ComputedStyle {
             rest_before: None,
             rest_after: None,
             cue_fade_duration: 0.0,
+            cue_before: None,
+            cue_after: None,
+            cue: None,
+            navigation_up: None,
+            glyph_orientation_horizontal: 0.0,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
