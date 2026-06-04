@@ -49,6 +49,36 @@ pub fn load() -> Config {
     Config::preset()
 }
 
+/// Serializa el marco a TOML. Lo expone aparte de [`save`] para testear el
+/// round-trip sin tocar el disco.
+pub fn to_toml(cfg: &Config) -> Result<String, toml::ser::Error> {
+    toml::to_string_pretty(cfg)
+}
+
+/// Persiste el marco al `launcher.toml` del usuario (la primera ruta candidata:
+/// `$XDG_CONFIG_HOME/pata/` o `$HOME/.config/pata/`). Escribe atómicamente
+/// (tmp + rename) y crea el directorio si falta. Devuelve la ruta escrita.
+///
+/// Es el camino inverso de [`load`]: lo usa el panel de configuración para
+/// guardar lo que el usuario edita en la UI, sin que tenga que tocar el archivo.
+pub fn save(cfg: &Config) -> std::io::Result<PathBuf> {
+    let path = candidate_paths().into_iter().next().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "ni XDG_CONFIG_HOME ni HOME definidos",
+        )
+    })?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let text =
+        to_toml(cfg).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, &path)?;
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -88,5 +118,31 @@ mod tests {
     #[test]
     fn toml_invalido_es_error_no_panic() {
         assert!(load_from_str("esto no es toml [[[").is_err());
+    }
+
+    #[test]
+    fn round_trip_preset_serializa_y_reparsea() {
+        // El preset trae barras con slots (arrays de tablas) + escalares: el
+        // caso que estresa el orden "valores antes que tablas" de toml.
+        let cfg = Config::preset();
+        let text = to_toml(&cfg).expect("preset debe serializar a TOML");
+        let back = load_from_str(&text).expect("el TOML serializado debe reparsear");
+        assert_eq!(cfg, back);
+    }
+
+    #[test]
+    fn round_trip_sidebar_con_dientes() {
+        use pata_core::{Prop, SidebarTab, Surface, WidgetSpec};
+        let mut cfg = Config::default();
+        let mut sb = Surface::sidebar(Anchor::Left);
+        sb.tabs.push(SidebarTab::new(
+            "monads",
+            "Mónadas",
+            WidgetSpec::new("navigator").with("source", Prop::Str("nouser".into())),
+        ));
+        cfg.surfaces.push(sb);
+        let text = to_toml(&cfg).expect("sidebar debe serializar");
+        let back = load_from_str(&text).expect("debe reparsear");
+        assert_eq!(cfg, back);
     }
 }

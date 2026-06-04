@@ -31,6 +31,8 @@ extern crate alloc;
 
 pub mod config;
 pub mod layout;
+/// `impl allichay::Configurable for Config` — vuelve el marco editable por UI.
+pub mod settings;
 pub mod widget;
 /// Espejo postcard-safe del modelo, para el cruce a wawa por akasha. Sólo con la
 /// feature `serde` (el kernel la activa; el camino TOML de Linux no lo necesita).
