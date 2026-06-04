@@ -524,6 +524,16 @@ pub(crate) enum DeclKind {
     BookmarkState(BookmarkState),
     /// `bookmark-label` (Fase 7.488). `None` = `content(text)`. NO hereda. Plumb.
     BookmarkLabel(Option<String>),
+    /// `string-set` (Fase 7.489). `None` = `none`. NO hereda. Plumb.
+    StringSet(Option<String>),
+    /// `footnote-display` (Fase 7.490). NO hereda. Plumb.
+    FootnoteDisplay(FootnoteDisplay),
+    /// `footnote-policy` (Fase 7.491). NO hereda. Plumb.
+    FootnotePolicy(FootnotePolicy),
+    /// `marker-knockout-left` (Fase 7.492). NO hereda. Plumb.
+    MarkerKnockoutLeft(MarkerKnockout),
+    /// `marker-knockout-right` (Fase 7.493). NO hereda. Plumb.
+    MarkerKnockoutRight(MarkerKnockout),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -929,6 +939,11 @@ impl Decl {
             DeclKind::BookmarkLevel(v) => s.bookmark_level = *v,
             DeclKind::BookmarkState(v) => s.bookmark_state = *v,
             DeclKind::BookmarkLabel(v) => s.bookmark_label = v.clone(),
+            DeclKind::StringSet(v) => s.string_set = v.clone(),
+            DeclKind::FootnoteDisplay(v) => s.footnote_display = *v,
+            DeclKind::FootnotePolicy(v) => s.footnote_policy = *v,
+            DeclKind::MarkerKnockoutLeft(v) => s.marker_knockout_left = *v,
+            DeclKind::MarkerKnockoutRight(v) => s.marker_knockout_right = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

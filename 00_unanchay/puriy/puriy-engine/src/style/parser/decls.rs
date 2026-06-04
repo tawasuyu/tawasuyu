@@ -1315,6 +1315,45 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::BookmarkLabel(Some(v.to_string())))
             }
         }
+        // Fase 7.489 — `string-set` (CSS GCPM). `none | [<custom-ident>
+        // <content-list>]#`. Parse opaco para que un renderer GCPM lo
+        // evalúe.
+        "string-set" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::StringSet(None))
+            } else {
+                Some(DeclKind::StringSet(Some(v.to_string())))
+            }
+        }
+        // Fase 7.490 — `footnote-display` (CSS GCPM 4).
+        "footnote-display" => match value.trim().to_ascii_lowercase().as_str() {
+            "block" => Some(DeclKind::FootnoteDisplay(FootnoteDisplay::Block)),
+            "inline" => Some(DeclKind::FootnoteDisplay(FootnoteDisplay::Inline)),
+            "compact" => Some(DeclKind::FootnoteDisplay(FootnoteDisplay::Compact)),
+            _ => None,
+        },
+        // Fase 7.491 — `footnote-policy` (CSS GCPM 4).
+        "footnote-policy" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::FootnotePolicy(FootnotePolicy::Auto)),
+            "line" => Some(DeclKind::FootnotePolicy(FootnotePolicy::Line)),
+            "block" => Some(DeclKind::FootnotePolicy(FootnotePolicy::Block)),
+            _ => None,
+        },
+        // Fase 7.492 — `marker-knockout-left` (CSS GCPM 4).
+        "marker-knockout-left" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::MarkerKnockoutLeft(MarkerKnockout::Auto)),
+            "none" => Some(DeclKind::MarkerKnockoutLeft(MarkerKnockout::None)),
+            _ => None,
+        },
+        // Fase 7.493 — `marker-knockout-right` (CSS GCPM 4).
+        "marker-knockout-right" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::MarkerKnockoutRight(MarkerKnockout::Auto)),
+            "none" => Some(DeclKind::MarkerKnockoutRight(MarkerKnockout::None)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

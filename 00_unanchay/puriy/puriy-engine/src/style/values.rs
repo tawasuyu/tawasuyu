@@ -825,6 +825,23 @@ pub struct ComputedStyle {
     /// `bookmark-label` (Fase 7.488). CSS GCPM. `None` = `content(text)`
     /// (default — toma el texto del elemento). NO hereda. Plumb.
     pub bookmark_label: Option<String>,
+    /// `string-set` (Fase 7.489). CSS GCPM: define strings nombradas que
+    /// luego `content: string()` consume en headers/footers paginados.
+    /// `None` = `none`. Parse opaco. NO hereda. Plumb.
+    pub string_set: Option<String>,
+    /// `footnote-display` (Fase 7.490). CSS GCPM 4: cómo se renderiza la
+    /// nota al pie. Default `Block`. NO hereda. Plumb.
+    pub footnote_display: FootnoteDisplay,
+    /// `footnote-policy` (Fase 7.491). CSS GCPM 4: cuándo desplazar una
+    /// nota al pie a la siguiente página. Default `Auto`. NO hereda. Plumb.
+    pub footnote_policy: FootnotePolicy,
+    /// `marker-knockout-left` (Fase 7.492). CSS GCPM 4: cómo el marker
+    /// del list-item evita la regla de margen izquierda. Default `Auto`.
+    /// NO hereda. Plumb.
+    pub marker_knockout_left: MarkerKnockout,
+    /// `marker-knockout-right` (Fase 7.493). Espejo del anterior para el
+    /// margen derecho. Default `Auto`. NO hereda. Plumb.
+    pub marker_knockout_right: MarkerKnockout,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2523,6 +2540,34 @@ pub enum BookmarkState {
     Closed,
 }
 
+/// `footnote-display` (CSS GCPM 4). Default `Block`. Fase 7.490.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FootnoteDisplay {
+    #[default]
+    Block,
+    Inline,
+    Compact,
+}
+
+/// `footnote-policy` (CSS GCPM 4). Política de quiebre de página al
+/// emitir la nota. Default `Auto`. Fase 7.491.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FootnotePolicy {
+    #[default]
+    Auto,
+    Line,
+    Block,
+}
+
+/// `marker-knockout-{left,right}` (CSS GCPM 4). Default `Auto`.
+/// Fase 7.492/493.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkerKnockout {
+    #[default]
+    Auto,
+    None,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3742,6 +3787,11 @@ impl Default for ComputedStyle {
             bookmark_level: None,
             bookmark_state: BookmarkState::Open,
             bookmark_label: None,
+            string_set: None,
+            footnote_display: FootnoteDisplay::Block,
+            footnote_policy: FootnotePolicy::Auto,
+            marker_knockout_left: MarkerKnockout::Auto,
+            marker_knockout_right: MarkerKnockout::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
