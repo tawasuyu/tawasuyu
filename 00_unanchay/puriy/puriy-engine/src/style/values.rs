@@ -675,6 +675,17 @@ pub struct ComputedStyle {
     /// `mask-repeat` (Fase 7.403). Default `Repeat`. NO hereda. Plumb.
     /// Reusa `BackgroundRepeat` (mismas formas).
     pub mask_repeat: BackgroundRepeat,
+    /// `mask-position` (Fase 7.404). Default `(Pct(0), Pct(0))` — esquina
+    /// superior-izquierda. NO hereda. Plumb. Reusa `BackgroundPosition`.
+    pub mask_position: BackgroundPosition,
+    /// `mask-size` (Fase 7.405). Default `Auto`. NO hereda. Plumb. Reusa
+    /// `BackgroundSize`.
+    pub mask_size: BackgroundSize,
+    /// `container-name` (Fase 7.406). Vec vacío = `none`. NO hereda. Plumb.
+    pub container_name: Vec<String>,
+    /// `container-type` (Fase 7.407). Default `Normal`. NO hereda. Plumb.
+    /// El shorthand `container` (Fase 7.408) setea name + type.
+    pub container_type: ContainerType,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2139,6 +2150,16 @@ pub enum MaskOrigin {
     ViewBox,
 }
 
+/// `container-type` (CSS Containment 3). Default `Normal` (no es un
+/// query container). NO hereda. Fase 7.407.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ContainerType {
+    #[default]
+    Normal,
+    Size,
+    InlineSize,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -3219,6 +3240,13 @@ impl Default for ComputedStyle {
             mask_composite: MaskComposite::Add,
             mask_origin: MaskOrigin::BorderBox,
             mask_repeat: BackgroundRepeat::Repeat,
+            mask_position: BackgroundPosition {
+                x: LengthVal::Pct(0.0),
+                y: LengthVal::Pct(0.0),
+            },
+            mask_size: BackgroundSize::Auto,
+            container_name: Vec::new(),
+            container_type: ContainerType::Normal,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

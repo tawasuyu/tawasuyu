@@ -185,6 +185,29 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }
+        // `container` shorthand (Fase 7.408): `<container-name> [ / <container-type> ]?`.
+        // Sin `/` → sólo name; con `/` → name antes, type después.
+        if prop.eq_ignore_ascii_case("container") {
+            let (name_part, type_part) = match value.split_once('/') {
+                Some((n, t)) => (n.trim(), Some(t.trim())),
+                None => (value.trim(), None),
+            };
+            if let Some(names) = parse_ident_list_or_none(name_part) {
+                out.push(Decl {
+                    kind: DeclKind::ContainerName(names),
+                    important,
+                });
+                let ct = match type_part {
+                    Some(s) => parse_container_type(s).unwrap_or(ContainerType::Normal),
+                    None => ContainerType::Normal,
+                };
+                out.push(Decl {
+                    kind: DeclKind::ContainerType(ct),
+                    important,
+                });
+            }
+            continue;
+        }
         // `marker` shorthand (Fase 7.397): `none | <funcIRI>` — setea
         // los 3 longhands (`marker-start/-mid/-end`) al mismo valor.
         if prop.eq_ignore_ascii_case("marker") {
@@ -879,6 +902,24 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 }
                 _ => None,
             }
+        }
+        "mask-position" => match parse_background_position(value) {
+            Some(DeclKind::BackgroundPosition(p)) => {
+                Some(DeclKind::MaskPosition(p))
+            }
+            _ => None,
+        },
+        "mask-size" => match parse_background_size(value) {
+            Some(DeclKind::BackgroundSize(sz)) => {
+                Some(DeclKind::MaskSize(sz))
+            }
+            _ => None,
+        },
+        "container-name" => {
+            parse_ident_list_or_none(value).map(DeclKind::ContainerName)
+        }
+        "container-type" => {
+            parse_container_type(value).map(DeclKind::ContainerType)
         }
         "flood-color" => {
             parse_color_or_current(value).map(DeclKind::FloodColor)
@@ -3593,6 +3634,16 @@ pub(crate) fn parse_mask_composite(value: &str) -> Option<MaskComposite> {
         "subtract" => Some(MaskComposite::Subtract),
         "intersect" => Some(MaskComposite::Intersect),
         "exclude" => Some(MaskComposite::Exclude),
+        _ => None,
+    }
+}
+
+/// `container-type`: `normal | size | inline-size`. Fase 7.407.
+pub(crate) fn parse_container_type(value: &str) -> Option<ContainerType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "normal" => Some(ContainerType::Normal),
+        "size" => Some(ContainerType::Size),
+        "inline-size" => Some(ContainerType::InlineSize),
         _ => None,
     }
 }

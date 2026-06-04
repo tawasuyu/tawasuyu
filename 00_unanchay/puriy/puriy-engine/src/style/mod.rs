@@ -7095,6 +7095,189 @@ mod tests {
     }
 
     #[test]
+    fn mask_position_fase_7_404() {
+        let html = r##"<html><head><style>
+            body { mask-position: 25% 75% }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_position.x, LengthVal::Pct(25.0));
+        assert_eq!(body_cs.mask_position.y, LengthVal::Pct(75.0));
+        // NO hereda — reset al default (0% 0%).
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(div_cs.mask_position.x, LengthVal::Pct(0.0));
+        assert_eq!(div_cs.mask_position.y, LengthVal::Pct(0.0));
+        // background-position queda intacto.
+        assert_eq!(body_cs.background_position.x, LengthVal::Pct(0.0));
+    }
+
+    #[test]
+    fn mask_size_fase_7_405() {
+        let html = r##"<html><head><style>
+            body { mask-size: cover }
+            div.contain { mask-size: contain }
+            div.plain {}
+        </style></head><body>
+            <div class="contain"></div>
+            <div class="plain"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut contains = Vec::new();
+        let mut plains = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                let class = crate::dom::attr(n, "class");
+                if class.as_deref() == Some("contain") {
+                    contains.push(n.clone());
+                } else if class.as_deref() == Some("plain") {
+                    plains.push(n.clone());
+                }
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_size, BackgroundSize::Cover);
+        let contain_cs = eng.compute_with_parent(&contains[0], Some(&body_cs));
+        assert_eq!(contain_cs.mask_size, BackgroundSize::Contain);
+        // NO hereda — reset a `Auto`.
+        let plain_cs = eng.compute_with_parent(&plains[0], Some(&body_cs));
+        assert_eq!(plain_cs.mask_size, BackgroundSize::Auto);
+    }
+
+    #[test]
+    fn container_name_fase_7_406() {
+        assert_eq!(
+            parse_ident_list_or_none("none"),
+            Some(Vec::new())
+        );
+
+        let html = r##"<html><head><style>
+            body { container-name: sidebar main }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.container_name, vec!["sidebar", "main"]);
+        // NO hereda — vacío.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(div_cs.container_name.is_empty());
+    }
+
+    #[test]
+    fn container_type_fase_7_407() {
+        assert_eq!(
+            parse_container_type("normal"),
+            Some(ContainerType::Normal)
+        );
+        assert_eq!(
+            parse_container_type("SIZE"),
+            Some(ContainerType::Size)
+        );
+        assert_eq!(
+            parse_container_type("inline-size"),
+            Some(ContainerType::InlineSize)
+        );
+        assert_eq!(parse_container_type("scroll-state"), None);
+
+        let html = r##"<html><head><style>
+            body { container-type: inline-size }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.container_type, ContainerType::InlineSize);
+        // NO hereda — reset a `Normal`.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert_eq!(div_cs.container_type, ContainerType::Normal);
+    }
+
+    #[test]
+    fn container_shorthand_fase_7_408() {
+        // Sólo name (sin `/`).
+        let html_a = r##"<html><head><style>
+            body { container: card }
+        </style></head><body></body></html>"##;
+        let dom_a = DomTree::parse(html_a);
+        let eng_a = StyleEngine::from_dom(&dom_a);
+        let mut bodies_a = Vec::new();
+        crate::dom::walk(&dom_a.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies_a.push(n.clone());
+            }
+        });
+        let cs_a = eng_a.compute(&bodies_a[0]);
+        assert_eq!(cs_a.container_name, vec!["card"]);
+        assert_eq!(cs_a.container_type, ContainerType::Normal);
+
+        // Name + type (`name / type`).
+        let html_b = r##"<html><head><style>
+            body { container: sidebar / inline-size }
+        </style></head><body></body></html>"##;
+        let dom_b = DomTree::parse(html_b);
+        let eng_b = StyleEngine::from_dom(&dom_b);
+        let mut bodies_b = Vec::new();
+        crate::dom::walk(&dom_b.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies_b.push(n.clone());
+            }
+        });
+        let cs_b = eng_b.compute(&bodies_b[0]);
+        assert_eq!(cs_b.container_name, vec!["sidebar"]);
+        assert_eq!(cs_b.container_type, ContainerType::InlineSize);
+
+        // `none / size` — name vacío, type Size.
+        let html_c = r##"<html><head><style>
+            body { container: none / size }
+        </style></head><body></body></html>"##;
+        let dom_c = DomTree::parse(html_c);
+        let eng_c = StyleEngine::from_dom(&dom_c);
+        let mut bodies_c = Vec::new();
+        crate::dom::walk(&dom_c.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies_c.push(n.clone());
+            }
+        });
+        let cs_c = eng_c.compute(&bodies_c[0]);
+        assert!(cs_c.container_name.is_empty());
+        assert_eq!(cs_c.container_type, ContainerType::Size);
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(
