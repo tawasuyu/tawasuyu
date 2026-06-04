@@ -29,6 +29,36 @@ help = Ayuda
 settings = Configuración
 exit = Salir
 
+# === chrome común (reutilizable por todas las apps Llimphi) ===
+# Etiquetas de menú/acción compartidas. Una app sólo crea IDs propios
+# (`<app>-*`) para texto que no aparezca acá.
+search = Buscar
+language = Idioma
+undo = Deshacer
+redo = Rehacer
+cut = Cortar
+copy = Copiar
+paste = Pegar
+select-all = Seleccionar todo
+open-dots = Abrir…
+save-as = Guardar como…
+close-tab = Cerrar pestaña
+find-in-file = Buscar en archivo
+find-in-project = Buscar en proyecto
+symbols = Símbolos
+goto-definition = Ir a definición
+terminal = Terminal
+command-palette = Paleta de comandos
+minimap = Minimapa
+cycle-theme = Cambiar tema
+editing = Edición
+about = Acerca de
+refresh = Refrescar
+reconnect = Reconectar
+
+# === nada (editor de archivos) ===
+nada-tagline = editor soberano sobre Llimphi
+
 # === niveles de mensaje ===
 info = Información
 warning = Advertencia

@@ -751,47 +751,50 @@ pub(crate) fn build_edit_menu(model: &Model) -> (Vec<ContextMenuItem>, Vec<CtxPi
         picks.push(p);
     };
     let sel = flags.has_selection;
+    // Etiquetas localizadas (IDs genéricos del catálogo). Los `EditAction`
+    // y el índice de submenú son estables — no se tocan.
+    let t = rimay_localize::t;
 
     push(
-        dis(ContextMenuItem::action("Deshacer").icon("\u{21A9}").with_shortcut("Ctrl+Z"), flags.can_undo),
+        dis(ContextMenuItem::action(t("undo")).icon("\u{21A9}").with_shortcut("Ctrl+Z"), flags.can_undo),
         CtxPick::Edit(EditAction::Undo),
     );
     push(
-        dis(ContextMenuItem::action("Rehacer").icon("\u{21AA}").with_shortcut("Ctrl+Y"), flags.can_redo),
+        dis(ContextMenuItem::action(t("redo")).icon("\u{21AA}").with_shortcut("Ctrl+Y"), flags.can_redo),
         CtxPick::Edit(EditAction::Redo),
     );
     push(ContextMenuItem::separator(), CtxPick::Noop);
     push(
-        dis(ContextMenuItem::action("Cortar").icon("\u{2702}").with_shortcut("Ctrl+X"), sel),
+        dis(ContextMenuItem::action(t("cut")).icon("\u{2702}").with_shortcut("Ctrl+X"), sel),
         CtxPick::Edit(EditAction::Cut),
     );
     push(
-        dis(ContextMenuItem::action("Copiar").icon("\u{29C9}").with_shortcut("Ctrl+C"), sel),
+        dis(ContextMenuItem::action(t("copy")).icon("\u{29C9}").with_shortcut("Ctrl+C"), sel),
         CtxPick::Edit(EditAction::Copy),
     );
     push(
-        ContextMenuItem::action("Pegar").icon("\u{2398}").with_shortcut("Ctrl+V"),
+        ContextMenuItem::action(t("paste")).icon("\u{2398}").with_shortcut("Ctrl+V"),
         CtxPick::Edit(EditAction::Paste),
     );
     push(
-        dis(ContextMenuItem::action("Eliminar").icon("\u{2717}").with_shortcut("Supr").destructive(), sel),
+        dis(ContextMenuItem::action(t("delete")).icon("\u{2717}").with_shortcut("Supr").destructive(), sel),
         CtxPick::Edit(EditAction::Delete),
     );
     push(ContextMenuItem::separator(), CtxPick::Noop);
     push(
-        dis(ContextMenuItem::action("Seleccionar todo").icon("\u{2750}").with_shortcut("Ctrl+A"), flags.has_text),
+        dis(ContextMenuItem::action(t("select-all")).icon("\u{2750}").with_shortcut("Ctrl+A"), flags.has_text),
         CtxPick::Edit(EditAction::SelectAll),
     );
     // Índice EDIT_BUSCAR_IDX (= 9): el item con submenú (8 ítems + 2
     // separadores antes).
     push(
-        ContextMenuItem::action("Buscar")
+        ContextMenuItem::action(t("search"))
             .icon("\u{1F50D}")
             .submenu(vec![
-                ContextMenuItem::action("Buscar en archivo").with_shortcut("Ctrl+F"),
-                ContextMenuItem::action("Buscar en proyecto").with_shortcut("Ctrl+Shift+F"),
-                ContextMenuItem::action("Símbolos").with_shortcut("Ctrl+Shift+O"),
-                ContextMenuItem::action("Ir a definición").with_shortcut("F12"),
+                ContextMenuItem::action(t("find-in-file")).with_shortcut("Ctrl+F"),
+                ContextMenuItem::action(t("find-in-project")).with_shortcut("Ctrl+Shift+F"),
+                ContextMenuItem::action(t("symbols")).with_shortcut("Ctrl+Shift+O"),
+                ContextMenuItem::action(t("goto-definition")).with_shortcut("F12"),
             ]),
         CtxPick::OpenSub(EDIT_BUSCAR_IDX),
     );
@@ -819,7 +822,7 @@ fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
     let spec = ContextMenuSpec {
         anchor: (x, y),
         viewport: (w as f32, h as f32),
-        header: Some("Edición".to_string()),
+        header: Some(rimay_localize::t("editing")),
         items,
         active: model.edit_active,
         on_pick,

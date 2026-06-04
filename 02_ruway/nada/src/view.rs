@@ -798,7 +798,7 @@ pub(crate) fn empty_editor_placeholder(theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned("editor soberano sobre Llimphi".to_string(), 12.0, theme.fg_muted, Alignment::Center);
+    .text_aligned(rimay_localize::t("nada-tagline"), 12.0, theme.fg_muted, Alignment::Center);
 
     fn row(theme: &Theme, key: &str, action: &str) -> View<Msg> {
         let key_v = View::new(Style {

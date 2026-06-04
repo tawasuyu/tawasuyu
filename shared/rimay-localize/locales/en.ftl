@@ -26,6 +26,36 @@ help = Help
 settings = Settings
 exit = Exit
 
+# === common chrome (reusable across all Llimphi apps) ===
+# Shared menu/action labels. An app only mints its own (`<app>-*`) IDs
+# for text not covered here.
+search = Search
+language = Language
+undo = Undo
+redo = Redo
+cut = Cut
+copy = Copy
+paste = Paste
+select-all = Select All
+open-dots = Open…
+save-as = Save As…
+close-tab = Close Tab
+find-in-file = Find in File
+find-in-project = Find in Project
+symbols = Symbols
+goto-definition = Go to Definition
+terminal = Terminal
+command-palette = Command Palette
+minimap = Minimap
+cycle-theme = Cycle Theme
+editing = Editing
+about = About
+refresh = Refresh
+reconnect = Reconnect
+
+# === nada (file editor) ===
+nada-tagline = a sovereign editor on Llimphi
+
 # === message levels ===
 info = Info
 warning = Warning

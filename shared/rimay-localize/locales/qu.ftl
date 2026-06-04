@@ -32,6 +32,34 @@ help = Yanapay
 settings = Allichana
 exit = Lluqsiy
 
+# === chrome común (reutilizable; PUNTO DE PARTIDA, pide revisión nativa) ===
+search = Maskay
+language = Rimay
+undo = Kutichiy
+redo = Kutirichiy
+cut = Kuchuy
+copy = Iskaychay
+paste = Llut'ay
+select-all = Llapanta akllay
+open-dots = Kichay…
+save-as = Wak hina waqaychay…
+close-tab = Wisq'ay
+find-in-file = Qillqapi maskay
+find-in-project = Llapanpi maskay
+symbols = Unanchakuna
+goto-definition = Sut'ipi riy
+terminal = Terminal
+command-palette = Kamachiykuna
+minimap = Huch'uy mapa
+cycle-theme = Rikch'aq tikray
+editing = Hukchana
+about = Imamanta
+refresh = Musuqyachiy
+reconnect = Kutillamanta tinkiy
+
+# === nada (qillqa llamk'ana) ===
+nada-tagline = Llimphi patapi kamachiq qillqaq
+
 # === niveles de mensaje ===
 info = Willay
 warning = Yuyaymanay

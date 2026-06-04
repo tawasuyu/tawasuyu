@@ -760,27 +760,45 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
     let can_redo = tab.map(|t| t.editor.can_redo()).unwrap_or(false);
     let has_tab = tab.is_some();
 
-    let mut undo = MenuItem::new("Deshacer", "edit.undo").icon("\u{21A9}").shortcut("Ctrl+Z");
+    // Texto de UI localizado: las etiquetas pasan por `rimay_localize::t`
+    // (IDs genéricos del bloque "chrome común" del catálogo). Los segundos
+    // argumentos (`"edit.undo"`, …) son ids de comando estables — NO se
+    // localizan.
+    let t = rimay_localize::t;
+
+    let mut undo = MenuItem::new(t("undo"), "edit.undo").icon("\u{21A9}").shortcut("Ctrl+Z");
     if !can_undo { undo = undo.disabled(); }
-    let mut redo = MenuItem::new("Rehacer", "edit.redo").icon("\u{21AA}").shortcut("Ctrl+Y");
+    let mut redo = MenuItem::new(t("redo"), "edit.redo").icon("\u{21AA}").shortcut("Ctrl+Y");
     if !can_redo { redo = redo.disabled(); }
-    let mut cut = MenuItem::new("Cortar", "edit.cut").icon("\u{2702}").shortcut("Ctrl+X").separated();
-    let mut copy = MenuItem::new("Copiar", "edit.copy").icon("\u{29C9}").shortcut("Ctrl+C");
+    let mut cut = MenuItem::new(t("cut"), "edit.cut").icon("\u{2702}").shortcut("Ctrl+X").separated();
+    let mut copy = MenuItem::new(t("copy"), "edit.copy").icon("\u{29C9}").shortcut("Ctrl+C");
     if !has_sel { cut = cut.disabled(); copy = copy.disabled(); }
-    let paste = MenuItem::new("Pegar", "edit.paste").icon("\u{2398}").shortcut("Ctrl+V");
-    let mut sel_all = MenuItem::new("Seleccionar todo", "edit.selectall").icon("\u{2750}").shortcut("Ctrl+A").separated();
+    let paste = MenuItem::new(t("paste"), "edit.paste").icon("\u{2398}").shortcut("Ctrl+V");
+    let mut sel_all = MenuItem::new(t("select-all"), "edit.selectall").icon("\u{2750}").shortcut("Ctrl+A").separated();
     if !has_tab { sel_all = sel_all.disabled(); }
+
+    // Menú de idioma: autónimos sin traducir (convención del SO — ver
+    // `wawa-panel`). El item activo lleva ✔. El comando `lang.<code>` lo
+    // resuelve `handle_menu_command` → set_locale + persiste en wawa-config.
+    let cur = rimay_localize::current_locale();
+    let lang_item = |label: &str, code: &str| {
+        let mut it = MenuItem::new(label, format!("lang.{code}"));
+        if cur == code {
+            it = it.icon("\u{2714}");
+        }
+        it
+    };
 
     AppMenu::new()
         .menu(
-            Menu::new("Archivo")
-                .item(MenuItem::new("Abrir…", "file.open").icon("\u{1F4C2}").shortcut("Ctrl+P"))
-                .item(MenuItem::new("Guardar", "file.save").icon("\u{1F4BE}").shortcut("Ctrl+S"))
-                .item(MenuItem::new("Guardar como…", "file.saveas").shortcut("Ctrl+Shift+S"))
-                .item(MenuItem::new("Cerrar pestaña", "file.close").icon("\u{2715}").shortcut("Ctrl+W").separated()),
+            Menu::new(t("file"))
+                .item(MenuItem::new(t("open-dots"), "file.open").icon("\u{1F4C2}").shortcut("Ctrl+P"))
+                .item(MenuItem::new(t("save"), "file.save").icon("\u{1F4BE}").shortcut("Ctrl+S"))
+                .item(MenuItem::new(t("save-as"), "file.saveas").shortcut("Ctrl+Shift+S"))
+                .item(MenuItem::new(t("close-tab"), "file.close").icon("\u{2715}").shortcut("Ctrl+W").separated()),
         )
         .menu(
-            Menu::new("Editar")
+            Menu::new(t("edit"))
                 .item(undo)
                 .item(redo)
                 .item(cut)
@@ -789,18 +807,24 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(sel_all),
         )
         .menu(
-            Menu::new("Buscar")
-                .item(MenuItem::new("Buscar en archivo", "search.find").icon("\u{1F50D}").shortcut("Ctrl+F"))
-                .item(MenuItem::new("Buscar en proyecto", "search.fif").shortcut("Ctrl+Shift+F"))
-                .item(MenuItem::new("Símbolos", "search.outline").icon("\u{2261}").shortcut("Ctrl+Shift+O"))
-                .item(MenuItem::new("Ir a definición", "search.gotodef").shortcut("F12").separated()),
+            Menu::new(t("search"))
+                .item(MenuItem::new(t("find-in-file"), "search.find").icon("\u{1F50D}").shortcut("Ctrl+F"))
+                .item(MenuItem::new(t("find-in-project"), "search.fif").shortcut("Ctrl+Shift+F"))
+                .item(MenuItem::new(t("symbols"), "search.outline").icon("\u{2261}").shortcut("Ctrl+Shift+O"))
+                .item(MenuItem::new(t("goto-definition"), "search.gotodef").shortcut("F12").separated()),
         )
         .menu(
-            Menu::new("Ver")
-                .item(MenuItem::new("Terminal", "view.term").icon("\u{2328}").shortcut("Ctrl+`"))
-                .item(MenuItem::new("Paleta de comandos", "view.palette").shortcut("Ctrl+Shift+P"))
-                .item(MenuItem::new("Minimapa", "view.minimap"))
-                .item(MenuItem::new("Cambiar tema", "view.theme").icon("\u{25D0}").shortcut("Ctrl+T").separated()),
+            Menu::new(t("view"))
+                .item(MenuItem::new(t("terminal"), "view.term").icon("\u{2328}").shortcut("Ctrl+`"))
+                .item(MenuItem::new(t("command-palette"), "view.palette").shortcut("Ctrl+Shift+P"))
+                .item(MenuItem::new(t("minimap"), "view.minimap"))
+                .item(MenuItem::new(t("cycle-theme"), "view.theme").icon("\u{25D0}").shortcut("Ctrl+T").separated()),
+        )
+        .menu(
+            Menu::new(t("language"))
+                .item(lang_item("Español", "es-PE"))
+                .item(lang_item("English", "en-US"))
+                .item(lang_item("Runasimi", "qu-PE")),
         )
 }
 
@@ -808,6 +832,17 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
 /// Cierra el menú antes de actuar.
 pub(crate) fn handle_menu_command(mut model: Model, command: String, handle: &Handle<Msg>) -> Model {
     model.menu_open = None;
+    // Cambio de idioma desde el menú "Idioma": aplica el locale en caliente
+    // y lo persiste en la capa de usuario de wawa-config. El watcher de la
+    // propia app (y el del resto) reentra con `WawaConfigChanged`, así el
+    // cambio se propaga a todas las apps abiertas y sobrevive reinicios.
+    if let Some(code) = command.strip_prefix("lang.") {
+        let _ = rimay_localize::set_locale(code);
+        let mut cfg = wawa_config::WawaConfig::load();
+        cfg.lang = code.to_string();
+        let _ = cfg.save();
+        return model;
+    }
     let target = match command.as_str() {
         "file.open" => Some(Msg::Picker(PickerMsg::Open)),
         "file.save" => Some(Msg::Save),
