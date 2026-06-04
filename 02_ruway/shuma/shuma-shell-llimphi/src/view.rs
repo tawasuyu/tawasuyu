@@ -98,18 +98,18 @@ const RAIL_W: f32 = 44.0;
 const SESSION_RAIL_W: f32 = 50.0;
 
 pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Msg> {
-    // Dos rails: SESIONES a la izquierda, HERRAMIENTAS a la derecha. El centro
-    // es el canvas de la sesión activa (su shell). El panel de la herramienta
-    // activa se inserta entre el canvas y el rail derecho.
-    let left = session_rail(model, theme);
-    let canvas = canvas_view(model, theme);
-    let right = tool_rail(model, theme);
-
-    let mut row: Vec<View<Msg>> = vec![left, canvas];
+    // Dos rails de DIENTES. Regla uniforme: el rail va pegado a su lado y su
+    // PANEL se despliega a la derecha del rail (nunca el rail a la derecha del
+    // panel). Orden:  sesiones·rail | sesión·panel | CANVAS | tools·rail | tool·panel
+    let mut row: Vec<View<Msg>> = vec![session_rail(model, theme)];
+    if model.session_panel_open {
+        row.push(session_panel(model, theme));
+    }
+    row.push(canvas_view(model, theme));
+    row.push(tool_rail(model, theme));
     if let Some(tool) = model.active_tool {
         row.push(tool_panel(model, tool, theme));
     }
-    row.push(right);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -117,6 +117,87 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
         ..Default::default()
     })
     .children(row)
+}
+
+/// El **panel de la sesión activa** (a la derecha de su rail): TODA su
+/// configuración. La draft trae el aislamiento a elegir → al configurarlo nace
+/// una sesión (no hay botón «+»). Una sesión real muestra su aislamiento + el
+/// botón para cerrarla.
+fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+
+    let Some(session) = model.active() else {
+        return View::new(Style::default());
+    };
+    let idx = model.active_session;
+
+    let mut children: Vec<View<Msg>> = vec![tool_header(&format!("Sesión · {}", session.name), theme)];
+
+    let fila = |texto: String, color| -> View<Msg> {
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+            padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(texto, 12.0, color, Alignment::Start)
+    };
+
+    let boton = |texto: &str, msg: Msg, theme: &Theme| -> View<Msg> {
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+            margin: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_button)
+        .hover_fill(theme.bg_button_hover)
+        .radius(5.0)
+        .text_aligned(texto.to_string(), 12.0, theme.fg_text, Alignment::Center)
+        .on_click(msg)
+    };
+
+    match session.kind {
+        SessionKind::Draft => {
+            children.push(fila(
+                "Borrador local — trabajás sin guardar nada.".into(),
+                theme.fg_muted,
+            ));
+            children.push(fila("Aislamiento de la sesión nueva:".into(), theme.fg_text));
+            children.push(boton("⊞  Crear sesión local", Msg::CreateSession(SessionKind::Local), theme));
+            children.push(boton("◍  Crear sesión remota (SSH)", Msg::CreateSession(SessionKind::Remote), theme));
+        }
+        SessionKind::Local => {
+            children.push(fila("Aislamiento: local".into(), theme.fg_text));
+            children.push(fila(format!("cwd: {}", session_cwd(session)), theme.fg_muted));
+            children.push(boton("Cerrar sesión", Msg::CloseSession(idx), theme));
+        }
+        SessionKind::Remote => {
+            children.push(fila("Aislamiento: remoto (SSH)".into(), theme.fg_text));
+            children.push(fila(format!("origen: {}", session.source.label()), theme.fg_muted));
+            children.push(fila("(config SSH detallada — pendiente)".into(), theme.fg_muted));
+            children.push(boton("Cerrar sesión", Msg::CloseSession(idx), theme));
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(model.monitors_width), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(children)
+}
+
+/// cwd del shell de una sesión (para el panel de config).
+fn session_cwd(session: &Session) -> String {
+    match &session.shell.state {
+        ModuleState::Shell(sh) => sh.cwd.display().to_string(),
+        _ => "·".to_string(),
+    }
 }
 
 /// El **canvas principal**: la vista del shell de la sesión activa, con su
@@ -147,7 +228,7 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
 
-    let mut teeth: Vec<View<Msg>> = model
+    let teeth: Vec<View<Msg>> = model
         .sessions
         .iter()
         .enumerate()
@@ -179,19 +260,7 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             .children(vec![icon, num])
         })
         .collect();
-
-    // El `+` para crear una sesión local nueva (se agrega al frente del rail).
-    teeth.push(
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .hover_fill(theme.bg_button_hover)
-        .text_aligned("+".to_string(), 18.0, theme.accent, Alignment::Center)
-        .on_click(Msg::NewSession),
-    );
+    // Sin botón «+»: la sesión nace al configurar la draft desde su panel.
 
     View::new(Style {
         flex_direction: FlexDirection::Column,

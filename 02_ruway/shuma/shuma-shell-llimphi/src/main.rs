@@ -409,8 +409,12 @@ struct Model {
     // vista de la sesión activa.
     sessions: Vec<Session>,
     active_session: usize,
-    /// Herramienta abierta a la derecha (`None` = canvas a ancho completo).
+    /// Herramienta abierta a la derecha (`None` = sin panel de herramienta).
     active_tool: Option<Tool>,
+    /// Si el panel de la sesión activa (su configuración, a la izquierda) está
+    /// desplegado. Cada diente de sesión ES su panel: al seleccionarlo se abre;
+    /// re-clickear el activo lo cierra.
+    session_panel_open: bool,
 
     // Monitor stack en el panel derecho del área central.
     sysmon: SystemSampler,
@@ -478,8 +482,12 @@ enum Msg {
     SelectSession(usize),
     /// Click en un diente de herramienta (rail derecho): abre/cierra su panel.
     SelectTool(Tool),
-    /// El `+` del rail de sesiones: crea una sesión local nueva y la activa.
-    NewSession,
+    /// Crear una sesión (desde la config del panel de la draft) con el
+    /// aislamiento elegido, y activarla. No hay botón «+» aparte: la sesión
+    /// nace al configurarla.
+    CreateSession(SessionKind),
+    /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
+    CloseSession(usize),
     /// Click en una línea del historial: carga ese comando en el input del
     /// shell de la sesión activa.
     RunFromHistory(String),
@@ -583,6 +591,8 @@ impl App for Shell {
             active_session: 0,
             // Arranca con el Historial abierto a la derecha.
             active_tool: Some(Tool::History),
+            // Y el panel de la draft abierto a la izquierda (su config).
+            session_panel_open: true,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
             monitors_width: MONITORS_INITIAL_WIDTH,
@@ -652,9 +662,16 @@ impl App for Shell {
                 // refresca al instante).
                 let _ = rimay_localize::set_locale(&cfg.lang);
             }
+            // Click en un diente de sesión: lo selecciona y abre su panel.
+            // Re-clickear el activo cierra/abre su panel (cada diente ES su panel).
             Msg::SelectSession(i) => {
                 if i < m.sessions.len() {
-                    m.active_session = i;
+                    if i == m.active_session {
+                        m.session_panel_open = !m.session_panel_open;
+                    } else {
+                        m.active_session = i;
+                        m.session_panel_open = true;
+                    }
                 }
             }
             // Click en una herramienta: toggle de su panel (re-click cierra).
@@ -669,13 +686,30 @@ impl App for Shell {
                     ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(cmd)),
                 );
             }
-            Msg::NewSession => {
-                // Las sesiones reales se generan al frente (a la izquierda, del
-                // lado del diente draft). Número de insignia incremental.
+            // Crear una sesión desde la config del panel de la draft. No hay
+            // botón «+»: la sesión nace al configurar el aislamiento. Se inserta
+            // al frente (tras la draft, índice 0) con insignia incremental.
+            Msg::CreateSession(kind) => {
                 let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;
-                let s = Session::build(format!("local {n}"), SessionKind::Local, Some(n), Source::Local);
-                m.sessions.insert(1, s); // tras la draft (índice 0)
+                let (name, source) = match kind {
+                    SessionKind::Remote => (format!("remota {n}"), default_shell_source()),
+                    _ => (format!("local {n}"), Source::Local),
+                };
+                let real_kind = if matches!(kind, SessionKind::Draft) {
+                    SessionKind::Local
+                } else {
+                    kind
+                };
+                m.sessions.insert(1, Session::build(name, real_kind, Some(n), source));
                 m.active_session = 1;
+                m.session_panel_open = true;
+            }
+            Msg::CloseSession(idx) => {
+                // La draft (0) no se cierra; las demás se descartan.
+                if idx > 0 && idx < m.sessions.len() {
+                    m.sessions.remove(idx);
+                    m.active_session = m.active_session.min(m.sessions.len() - 1);
+                }
             }
             Msg::Module(slot, mmsg) => {
                 // Hook: SelectRoot del módulo minga dispara la carga
