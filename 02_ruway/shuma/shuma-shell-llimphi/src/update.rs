@@ -36,11 +36,10 @@ pub(crate) fn apply_module_msg(mut m: Model, slot: Slot, msg: ModuleMsg) -> Mode
     // la enfocamos. La variante NO se propaga al canvas — el canvas
     // solo emite la intención.
     if let ModuleMsg::Canvas(shuma_module_canvas::Msg::InsertRef(text)) = &msg {
-        // El shell de la sesión activa recibe la inserción y pasamos a su vista.
+        // El shell de la sesión activa (el canvas) recibe la inserción.
         let insert_msg =
             ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(text.clone()));
         let target = Slot::Session(m.active_session, Which::Shell);
-        m.active_view = SessionView::Shell;
         return apply_module_msg(m, target, insert_msg);
     }
 
@@ -254,16 +253,11 @@ pub(crate) fn handle_shortcut(
             }
         }
         ShortcutAction::FocusTab { target } => {
-            // Un shortcut que pide enfocar un módulo se traduce a cambiar de
-            // vista en la sesión activa (Hosts/Vhosts → matilda, etc.).
-            let view = match target {
-                t if t == shuma_module_shell::ID => Some(SessionView::Shell),
-                t if t == shuma_module_canvas::ID => Some(SessionView::Canvas),
-                t if t == shuma_module_matilda::ID => Some(SessionView::Hosts),
-                _ => None,
-            };
-            if let Some(v) = view {
-                m.active_view = v;
+            // Un shortcut que pide enfocar un módulo abre su herramienta a la
+            // derecha (matilda → panel Matilda). El shell es el canvas, no una
+            // herramienta, así que no aplica.
+            if target == shuma_module_matilda::ID {
+                m.active_tool = Some(Tool::Matilda);
             }
         }
         ShortcutAction::ModuleAction { action_id } => {
@@ -474,15 +468,11 @@ pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Optio
             ));
         }
     }
-    // 2) Las teclas van al shell de la sesión activa sólo cuando su vista
-    //    Shell está al frente (Hosts/Vhosts/Canvas no consumen teclas).
-    if model.active_view == SessionView::Shell {
-        return Some(Msg::Module(
-            Slot::Session(model.active_session, Which::Shell),
-            ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
-        ));
-    }
-    None
+    // 2) Las teclas van al shell de la sesión activa (es el canvas principal).
+    Some(Msg::Module(
+        Slot::Session(model.active_session, Which::Shell),
+        ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
+    ))
 }
 
 /// Path del inventario JSON de un slot de matilda, si lo tiene cargado.

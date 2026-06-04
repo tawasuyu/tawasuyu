@@ -43,9 +43,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, PathEl, Point, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{
-    App, DragPhase, Handle, KeyEvent, KeyState, Modifiers, PaintRect, View, WheelDelta,
+    App, Handle, KeyEvent, KeyState, Modifiers, PaintRect, View, WheelDelta,
 };
-use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
 use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, ShortcutSpec, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
@@ -60,11 +59,6 @@ const TICK: Duration = Duration::from_secs(1);
 const SHELL_TICK: Duration = Duration::from_millis(100);
 const MONITORS_INITIAL_WIDTH: f32 = 280.0;
 
-/// Id del diente "Monitores" en el rail hospedado de pata. Los dientes de
-/// las tabs usan su índice (`0..tabs.len()`); este sentinela alto no choca
-/// con ningún índice real y togglea el panel de monitores.
-const MONITORS_TOOTH: u32 = u32::MAX;
-
 /// Construye el cliente del rail hospedado si `SHUMA_DELEGATE_SIDEBAR` está
 /// set. shuma publica sus tabs como dientes (cambian de tab al activarse) +
 /// un diente "Monitores" que togglea el panel derecho. Cuando shuma tiene
@@ -75,46 +69,30 @@ fn shuma_host(handle: &Handle<Msg>) -> Option<pata_host::HostClient> {
     if std::env::var_os("SHUMA_DELEGATE_SIDEBAR").is_none() {
         return None;
     }
-    let teeth = host_view_teeth();
+    let teeth = host_tool_teeth();
     let h = handle.clone();
     pata_host::HostClient::connect("shuma.shell", "shuma", teeth, move |id| {
         h.dispatch(Msg::HostActivate(id))
     })
 }
 
-/// Dientes que shuma presta al rail de pata: uno por **vista** de la sesión
-/// activa (id = índice en `SessionView::ALL`) más el toggle de monitores.
-fn host_view_teeth() -> Vec<pata_host::HostedTooth> {
-    let mut teeth: Vec<pata_host::HostedTooth> = SessionView::ALL
+/// Dientes que shuma presta al rail de pata: uno por **herramienta** de la
+/// sesión activa (id = índice en `Tool::ALL`).
+fn host_tool_teeth() -> Vec<pata_host::HostedTooth> {
+    Tool::ALL
         .iter()
         .enumerate()
-        .map(|(i, v)| pata_host::HostedTooth::new(i as u32, view_icon_name(*v), view_label(*v)))
-        .collect();
-    teeth.push(pata_host::HostedTooth::new(
-        MONITORS_TOOTH,
-        "system",
-        rimay_localize::t("shuma-label-monitors"),
-    ));
-    teeth
+        .map(|(i, t)| pata_host::HostedTooth::new(i as u32, tool_icon_name(*t), t.label().to_string()))
+        .collect()
 }
 
-/// Nombre de icono (vocabulario abierto de `pata`) para una vista.
-fn view_icon_name(v: SessionView) -> &'static str {
-    match v {
-        SessionView::Shell => "tools",
-        SessionView::Hosts => "settings",
-        SessionView::Vhosts => "monads",
-        SessionView::Canvas => "files",
-    }
-}
-
-/// Etiqueta localizada de una vista (tooltip del diente).
-fn view_label(v: SessionView) -> String {
-    match v {
-        SessionView::Shell => rimay_localize::t("shuma-label-shell"),
-        SessionView::Hosts => "Hosts".to_string(),
-        SessionView::Vhosts => "Vhosts".to_string(),
-        SessionView::Canvas => rimay_localize::t("shuma-label-canvas"),
+/// Nombre de icono (vocabulario abierto de `pata`) para una herramienta.
+fn tool_icon_name(t: Tool) -> &'static str {
+    match t {
+        Tool::History => "tools",
+        Tool::Monitor => "system",
+        Tool::Explorer => "files",
+        Tool::Matilda => "settings",
     }
 }
 
@@ -201,33 +179,42 @@ enum Which {
     Matilda,
 }
 
-/// La vista activa de una sesión — un diente del rail derecho. Hosts/Vhosts
-/// pintan el inventario de la instancia Matilda filtrado.
+/// El tipo de una sesión — define el icono de su diente (rail izquierdo).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SessionView {
-    Shell,
-    Hosts,
-    Vhosts,
-    Canvas,
+enum SessionKind {
+    /// La sesión por defecto, local y sin aislamiento — "no toca nada". No
+    /// lleva número de insignia. Es la primera y siempre está.
+    Draft,
+    /// Sesión local creada por el usuario (con número de insignia).
+    Local,
+    /// Sesión remota (SSH/daemon) — aislamiento remoto. Aún no la crea nadie
+    /// (el `+` hace local); el form de aislamiento remoto es la fase 4.
+    #[allow(dead_code)]
+    Remote,
 }
 
-impl SessionView {
-    /// Qué instancia-módulo respalda esta vista.
-    fn which(self) -> Which {
+/// Las **herramientas** de la sesión activa — un diente del rail DERECHO. Cada
+/// una abre su panel operando sobre la sesión activa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Tool {
+    History,
+    Monitor,
+    Explorer,
+    Matilda,
+}
+
+impl Tool {
+    /// Orden de los dientes en el rail derecho (debe seguir a `host_tool_teeth`).
+    const ALL: [Tool; 4] = [Tool::History, Tool::Monitor, Tool::Explorer, Tool::Matilda];
+
+    fn label(self) -> &'static str {
         match self {
-            SessionView::Shell => Which::Shell,
-            SessionView::Canvas => Which::Canvas,
-            SessionView::Hosts | SessionView::Vhosts => Which::Matilda,
+            Tool::History => "Historial",
+            Tool::Monitor => "Monitor",
+            Tool::Explorer => "Explorer",
+            Tool::Matilda => "Matilda",
         }
     }
-
-    /// El orden de los dientes en el rail (debe seguir a `host_view_teeth`).
-    const ALL: [SessionView; 4] = [
-        SessionView::Shell,
-        SessionView::Hosts,
-        SessionView::Vhosts,
-        SessionView::Canvas,
-    ];
 }
 
 /// State vivo de un módulo. Una variante por `Kind` para evitar trait
@@ -324,6 +311,9 @@ impl Instance {
 /// (tab superior) cambia todo el ambiente; el rail derecho elige la vista.
 struct Session {
     name: String,
+    kind: SessionKind,
+    /// Número de insignia del diente (None para la draft).
+    number: Option<u32>,
     /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
     /// Es el aislamiento: local = procesos de la máquina; remoto = SSH/daemon.
     /// (Se leerá al editar el aislamiento de una sesión existente — fase 4.)
@@ -335,16 +325,27 @@ struct Session {
 }
 
 impl Session {
-    /// Sesión nueva con un `source` (aislamiento). Cada sesión arranca con sus
-    /// tres vistas: shell + lienzo + inventario.
-    fn new(name: String, source: Source) -> Self {
+    fn build(name: String, kind: SessionKind, number: Option<u32>, source: Source) -> Self {
         Self {
             shell: Instance::shell(name.clone(), source.clone()),
             canvas: Instance::canvas(rimay_localize::t("shuma-label-canvas")),
             matilda: Instance::matilda(name.clone(), source.clone()),
             name,
+            kind,
+            number,
             source,
         }
+    }
+
+    /// La sesión por defecto: local, sin aislamiento, sin número. No toca nada.
+    fn draft() -> Self {
+        Self::build("draft".to_string(), SessionKind::Draft, None, default_shell_source())
+    }
+
+    /// `true` si la sesión está moviendo datos ahora (comando corriendo) — para
+    /// el puntito LED del diente.
+    fn active_data(&self) -> bool {
+        matches!(&self.shell.state, ModuleState::Shell(s) if s.is_running())
     }
 
     fn instance(&self, w: Which) -> &Instance {
@@ -408,7 +409,8 @@ struct Model {
     // vista de la sesión activa.
     sessions: Vec<Session>,
     active_session: usize,
-    active_view: SessionView,
+    /// Herramienta abierta a la derecha (`None` = canvas a ancho completo).
+    active_tool: Option<Tool>,
 
     // Monitor stack en el panel derecho del área central.
     sysmon: SystemSampler,
@@ -443,10 +445,6 @@ struct Model {
     /// activaciones llegan por callback → `Msg::HostActivate`); el `_` evita
     /// el lint de campo sin leer, como `_wawa_watcher`.
     _host: Option<pata_host::HostClient>,
-    /// Visibilidad del panel de monitores. Sin delegar arranca `true` (siempre
-    /// visible); en modo delegado arranca oculto y lo controla el diente
-    /// "Monitores" del rail de pata.
-    monitors_visible: bool,
 }
 
 impl Model {
@@ -464,9 +462,9 @@ impl Model {
         self.sessions.get_mut(idx).map(|s| s.instance_mut(w))
     }
 
-    /// La instancia que respalda la vista activa de la sesión activa.
-    fn active_view_slot(&self) -> Slot {
-        Slot::Session(self.active_session, self.active_view.which())
+    /// El slot del shell de la sesión activa (el canvas principal lo muestra).
+    fn shell_slot(&self) -> Slot {
+        Slot::Session(self.active_session, Which::Shell)
     }
 }
 
@@ -476,17 +474,15 @@ enum Msg {
     /// Tick rápido que drena la salida del shell (~100 ms) sin tocar
     /// el muestreo de sysmon.
     ShellTick,
-    /// Click en una tab de sesión: cambia todo el ambiente.
+    /// Click en un diente de sesión (rail izquierdo): cambia el ambiente.
     SelectSession(usize),
-    /// Click en un diente del rail: cambia la vista de la sesión activa.
-    SelectView(SessionView),
-    /// El `+` de la tira de sesiones: crea una sesión local nueva y la activa.
+    /// Click en un diente de herramienta (rail derecho): abre/cierra su panel.
+    SelectTool(Tool),
+    /// El `+` del rail de sesiones: crea una sesión local nueva y la activa.
     NewSession,
-    /// Click en una línea del historial (columna izquierda): vuelve a la vista
-    /// Shell de la sesión activa y carga ese comando en el input.
+    /// Click en una línea del historial: carga ese comando en el input del
+    /// shell de la sesión activa.
     RunFromHistory(String),
-    /// Drag del splitter de monitores.
-    ResizeMonitors(f32),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
     Module(Slot, ModuleMsg),
     /// Click en un shortcut de la toolbar. `slot` es el módulo emisor
@@ -569,21 +565,14 @@ impl App for Shell {
         });
         let main = resolve_slot(cfg.main.as_ref());
 
-        // Una sesión de trabajo inicial con el aislamiento que digan las env
-        // vars (local por default). Cada sesión trae sus tres vistas (shell +
-        // lienzo + inventario); el usuario crea más con el `+`. El shumarc
-        // `[[tabs]]` quedó superado por el modelo de sesiones.
-        let sessions = vec![Session::new(
-            rimay_localize::t("shuma-label-shell"),
-            default_shell_source(),
-        )];
+        // Sólo la sesión "draft" al arrancar (local, sin aislamiento, no toca
+        // nada). El usuario crea sesiones reales con el `+` del rail izquierdo;
+        // se van agregando a la izquierda. El shumarc `[[tabs]]` quedó superado.
+        let sessions = vec![Session::draft()];
 
         // Rail hospedado: si `SHUMA_DELEGATE_SIDEBAR` está set, prestamos las
-        // VISTAS de la sesión activa + el toggle de monitores al rail de pata.
+        // HERRAMIENTAS de la sesión activa al rail de pata.
         let host = shuma_host(handle);
-        // Sin delegar el panel siempre se ve; delegado arranca oculto (puro
-        // lienzo) y el rail de pata lo despliega.
-        let monitors_visible = host.is_none();
 
         Model {
             theme,
@@ -592,7 +581,8 @@ impl App for Shell {
             main,
             sessions,
             active_session: 0,
-            active_view: SessionView::Shell,
+            // Arranca con el Historial abierto a la derecha.
+            active_tool: Some(Tool::History),
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
             monitors_width: MONITORS_INITIAL_WIDTH,
@@ -604,7 +594,6 @@ impl App for Shell {
             menu_anim: Tween::idle(1.0),
             ctx_menu: None,
             _host: host,
-            monitors_visible,
         }
     }
 
@@ -668,9 +657,11 @@ impl App for Shell {
                     m.active_session = i;
                 }
             }
-            Msg::SelectView(v) => m.active_view = v,
+            // Click en una herramienta: toggle de su panel (re-click cierra).
+            Msg::SelectTool(t) => {
+                m.active_tool = if m.active_tool == Some(t) { None } else { Some(t) };
+            }
             Msg::RunFromHistory(cmd) => {
-                m.active_view = SessionView::Shell;
                 let slot = Slot::Session(m.active_session, Which::Shell);
                 m = apply_module_msg(
                     m,
@@ -679,14 +670,12 @@ impl App for Shell {
                 );
             }
             Msg::NewSession => {
-                let n = m.sessions.len() + 1;
-                m.sessions
-                    .push(Session::new(format!("local {n}"), Source::Local));
-                m.active_session = m.sessions.len() - 1;
-                m.active_view = SessionView::Shell;
-            }
-            Msg::ResizeMonitors(dx) => {
-                m.monitors_width = (m.monitors_width - dx).clamp(180.0, 480.0);
+                // Las sesiones reales se generan al frente (a la izquierda, del
+                // lado del diente draft). Número de insignia incremental.
+                let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;
+                let s = Session::build(format!("local {n}"), SessionKind::Local, Some(n), Source::Local);
+                m.sessions.insert(1, s); // tras la draft (índice 0)
+                m.active_session = 1;
             }
             Msg::Module(slot, mmsg) => {
                 // Hook: SelectRoot del módulo minga dispara la carga
@@ -759,12 +748,9 @@ impl App for Shell {
                 m = menu::handle_command(m, &cmd);
             }
             Msg::HostActivate(id) => {
-                // Rail hospedado: un diente de vista cambia la vista activa; el
-                // diente sentinela togglea el panel de monitores.
-                if id == MONITORS_TOOTH {
-                    m.monitors_visible = !m.monitors_visible;
-                } else if let Some(v) = SessionView::ALL.get(id as usize) {
-                    m.active_view = *v;
+                // Rail hospedado: un diente de herramienta abre/cierra su panel.
+                if let Some(t) = Tool::ALL.get(id as usize) {
+                    m.active_tool = if m.active_tool == Some(*t) { None } else { Some(*t) };
                 }
             }
         }

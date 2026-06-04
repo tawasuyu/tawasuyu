@@ -22,7 +22,7 @@ use llimphi_widget_menubar::{
     menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
 
-use super::{Model, Msg, ModuleMsg, ModuleState, SessionView, Slot, Which};
+use super::{Model, Msg, ModuleMsg, ModuleState, Slot, Which};
 
 // ─── Estado del shell focado (lo que habilita/deshabilita el menú) ──
 
@@ -54,16 +54,14 @@ pub(crate) fn focused_shell(model: &Model) -> Option<FocusInfo> {
             return Some(info);
         }
     }
-    // El shell de la sesión activa (sólo cuenta como "focado" si su vista
-    // Shell está al frente — es la que recibe teclas).
-    if model.active_view == SessionView::Shell {
-        if let Some(s) = model.active() {
-            if let Some(info) = from(
-                Slot::Session(model.active_session, Which::Shell),
-                &s.shell.state,
-            ) {
-                return Some(info);
-            }
+    // El shell de la sesión activa es el canvas principal → siempre recibe
+    // teclas (a menos que un menú las intercepte).
+    if let Some(s) = model.active() {
+        if let Some(info) = from(
+            Slot::Session(model.active_session, Which::Shell),
+            &s.shell.state,
+        ) {
+            return Some(info);
         }
     }
     None

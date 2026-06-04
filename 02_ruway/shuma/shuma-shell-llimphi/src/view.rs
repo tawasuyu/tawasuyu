@@ -93,139 +93,176 @@ pub(crate) fn render_main_full(inst: &Instance, theme: &Theme) -> View<Msg> {
 
 /// Layout normal: tira de tabs arriba con toolbar de shortcuts del
 /// tab activo, splitter horizontal con (contenido | monitores).
-/// Ancho de la franja de dientes a la derecha (px).
+/// Ancho del rail de herramientas (derecha) y de sesiones (izquierda), px.
 const RAIL_W: f32 = 44.0;
+const SESSION_RAIL_W: f32 = 50.0;
 
 pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Msg> {
-    let splitter_palette = SplitterPalette::from_theme(theme);
+    // Dos rails: SESIONES a la izquierda, HERRAMIENTAS a la derecha. El centro
+    // es el canvas de la sesión activa (su shell). El panel de la herramienta
+    // activa se inserta entre el canvas y el rail derecho.
+    let left = session_rail(model, theme);
+    let canvas = canvas_view(model, theme);
+    let right = tool_rail(model, theme);
 
+    let mut row: Vec<View<Msg>> = vec![left, canvas];
+    if let Some(tool) = model.active_tool {
+        row.push(tool_panel(model, tool, theme));
+    }
+    row.push(right);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(row)
+}
+
+/// El **canvas principal**: la vista del shell de la sesión activa, con su
+/// toolbar de shortcuts arriba.
+fn canvas_view(model: &Model, theme: &Theme) -> View<Msg> {
     let toolbar = tabs_toolbar(model, theme);
     let content = tab_content(model, theme);
-
-    // El panel de monitores se togglea con su diente (`monitors_visible`).
-    // Oculto → el contenido toma todo el ancho, sin splitter (puro lienzo).
-    let tab_body = if model.monitors_visible {
-        splitter_two(
-            Direction::Row,
-            content,
-            PaneSize::Flex,
-            monitor_stack(model, theme),
-            PaneSize::Fixed(model.monitors_width),
-            |phase, dx| match phase {
-                DragPhase::Move => Some(Msg::ResizeMonitors(dx)),
-                DragPhase::End => None,
-            },
-            &splitter_palette,
-        )
-    } else {
-        content
-    };
-
-    // Las tabs ya no son una tira horizontal: ahora son dientes en el rail
-    // vertical de la derecha. La columna principal es toolbar + cuerpo.
-    let body_wrap = View::new(Style {
+    let body = View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
-    .children(vec![tab_body]);
-
-    let main_col = View::new(Style {
+    .children(vec![content]);
+    View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![toolbar, body_wrap]);
-
-    // Rail derecho: un diente por VISTA de la sesión activa + el sentinela
-    // de medidores. Los dientes nunca reemplazan el espacio: eligen qué vista
-    // de la sesión lo llena.
-    let rail = view_dock_rail(model, theme);
-
-    // Historial de la sesión activa a la IZQUIERDA (columna fija). El centro
-    // es la vista activa; el rail de dientes va a la derecha.
-    let history = history_column(model, theme);
-
-    let cuerpo = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        flex_grow: 1.0,
-        size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
-        ..Default::default()
-    })
-    .children(vec![history, main_col, rail]);
-
-    // Tira de sesiones arriba: una tab por sesión (cambia todo el ambiente) +
-    // el botón «+» que crea una sesión local nueva.
-    let strip = session_strip(model, theme);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![strip, cuerpo])
+    .children(vec![toolbar, body])
 }
 
-/// La tira superior de **sesiones de trabajo**: una tab por sesión (la activa
-/// resaltada) más un `+` que crea una sesión local nueva. Cambiar de sesión
-/// switchea todo el ambiente (shell/historial/inventario).
-fn session_strip(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
+/// El rail IZQUIERDO de **sesiones**: la draft primero, luego las creadas (se
+/// agregan al frente). Cada diente lleva el icono de su tipo, una insignia
+/// numérica y un LED de actividad; al final, el `+` que crea una sesión local.
+/// (Reordenamiento por drag: pendiente.)
+fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
 
-    let mut row: Vec<View<Msg>> = model
+    let mut teeth: Vec<View<Msg>> = model
         .sessions
         .iter()
         .enumerate()
         .map(|(i, s)| {
             let activa = i == model.active_session;
-            let fill = if activa { theme.bg_selected } else { theme.bg_panel };
-            let fg = if activa { theme.fg_text } else { theme.fg_muted };
-            View::new(Style {
-                size: Size { width: Dimension::auto(), height: length(28.0_f32) },
-                padding: Rect {
-                    left: length(14.0_f32),
-                    right: length(14.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
+            let fill = if activa { theme.bg_selected } else { theme.bg_panel_alt };
+            let icon_color = if activa { theme.accent } else { theme.fg_muted };
+            // Insignia: número para las creadas, «·» para la draft.
+            let badge = s.number.map(|n| n.to_string()).unwrap_or_else(|| "·".into());
+            let icon = session_tooth_icon(s.kind, s.active_data(), 22.0, icon_color);
+            let num = View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(12.0_f32) },
                 align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .text_aligned(badge, 9.0, theme.fg_muted, Alignment::Center);
+            View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
                 ..Default::default()
             })
             .fill(fill)
             .hover_fill(theme.bg_row_hover)
-            .text_aligned(s.name.clone(), 12.0, fg, Alignment::Center)
             .on_click(Msg::SelectSession(i))
+            .children(vec![icon, num])
         })
         .collect();
 
-    // Botón «+»: crea una sesión local nueva.
-    row.push(
+    // El `+` para crear una sesión local nueva (se agrega al frente del rail).
+    teeth.push(
         View::new(Style {
-            size: Size { width: length(30.0_f32), height: length(28.0_f32) },
+            size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
-        .fill(theme.bg_panel)
         .hover_fill(theme.bg_button_hover)
-        .text_aligned("+".to_string(), 16.0, theme.accent, Alignment::Center)
+        .text_aligned("+".to_string(), 18.0, theme.accent, Alignment::Center)
         .on_click(Msg::NewSession),
     );
 
     View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
-        align_items: Some(AlignItems::Center),
-        gap: Size { width: length(2.0_f32), height: length(0.0_f32) },
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(SESSION_RAIL_W), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
         ..Default::default()
     })
-    .fill(theme.bg_app)
-    .children(row)
+    .fill(theme.bg_panel_alt)
+    .children(teeth)
+}
+
+/// Icono vectorial del diente de una sesión según su tipo, con el LED de
+/// actividad en la esquina (verde si hay datos moviéndose).
+fn session_tooth_icon(kind: SessionKind, active_data: bool, size: f32, color: Color) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    View::new(Style {
+        size: Size { width: length(size), height: length(size) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Line, Point, RoundedRect, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::{Color as PColor, Fill};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = (rect.w.min(rect.h) as f64 * 0.34).max(2.0);
+        let stroke = Stroke::new((r * 0.22).max(1.2));
+        match kind {
+            // Draft: cuadro punteado (vacío, no toca nada).
+            SessionKind::Draft => {
+                let sq = RoundedRect::new(cx - r, cy - r, cx + r, cy + r, 2.0);
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &sq);
+                let mut pencil = BezPath::new();
+                pencil.move_to(Point::new(cx - r * 0.4, cy + r * 0.4));
+                pencil.line_to(Point::new(cx + r * 0.4, cy - r * 0.4));
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &pencil);
+            }
+            // Local: cuadro lleno (caja local).
+            SessionKind::Local => {
+                let sq = RoundedRect::new(cx - r, cy - r, cx + r, cy + r, 2.5);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &sq);
+            }
+            // Remoto: globo (círculo + ecuador + meridiano).
+            SessionKind::Remote => {
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Circle::new((cx, cy), r));
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Line::new(Point::new(cx - r, cy), Point::new(cx + r, cy)));
+                let mut m = BezPath::new();
+                m.move_to(Point::new(cx, cy - r));
+                m.quad_to(Point::new(cx - r, cy), Point::new(cx, cy + r));
+                m.quad_to(Point::new(cx + r, cy), Point::new(cx, cy - r));
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &m);
+            }
+        }
+        // LED de actividad: punto en la esquina superior derecha.
+        let led = if active_data {
+            PColor::from_rgb8(0x4a, 0xde, 0x80) // verde = datos moviéndose
+        } else {
+            PColor::from_rgb8(0x55, 0x5a, 0x66) // gris apagado
+        };
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            led,
+            None,
+            &Circle::new((cx + r * 1.05, cy - r * 1.05), (r * 0.32).max(1.5)),
+        );
+    })
 }
 
 /// Ancho de la columna de historial a la izquierda (px).
@@ -305,7 +342,9 @@ fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
 /// Dibuja el icono **vectorial** de un diente (no texto: la fuente no trae los
 /// glyphs y salían cuadritos «tofu»). `kind = None` → el diente de medidores.
 /// Mismo enfoque que el rail de pata (`paint_with` + kurbo).
-fn rail_icon(view: Option<SessionView>, size: f32, color: Color) -> View<Msg> {
+/// Icono **vectorial** de una herramienta del rail derecho (`paint_with`+kurbo,
+/// no texto — eso daba "tofu").
+fn tool_icon(tool: Tool, size: f32, color: Color) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     View::new(Style {
         size: Size { width: length(size), height: length(size) },
@@ -315,7 +354,7 @@ fn rail_icon(view: Option<SessionView>, size: f32, color: Color) -> View<Msg> {
     })
     .paint_with(move |scene, _ts, rect| {
         use llimphi_ui::llimphi_raster::kurbo::{
-            Affine, BezPath, Circle, Line, Point, RoundedRect, Stroke,
+            Affine, BezPath, Circle, Point, RoundedRect, Stroke,
         };
         use llimphi_ui::llimphi_raster::peniko::Fill;
         if rect.w <= 0.0 || rect.h <= 0.0 {
@@ -325,9 +364,19 @@ fn rail_icon(view: Option<SessionView>, size: f32, color: Color) -> View<Msg> {
         let cy = (rect.y + rect.h * 0.5) as f64;
         let r = (rect.w.min(rect.h) as f64 * 0.34).max(2.0);
         let stroke = Stroke::new((r * 0.22).max(1.2));
-        match view {
-            // Medidores: tres barras verticales (estilo bar-chart).
-            None => {
+        match tool {
+            // Historial: reloj (círculo + manecillas).
+            Tool::History => {
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Circle::new((cx, cy), r));
+                let mut h = BezPath::new();
+                h.move_to(Point::new(cx, cy));
+                h.line_to(Point::new(cx, cy - r * 0.55));
+                h.move_to(Point::new(cx, cy));
+                h.line_to(Point::new(cx + r * 0.45, cy));
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &h);
+            }
+            // Monitor: tres barras verticales (bar-chart).
+            Tool::Monitor => {
                 let heights = [0.55_f64, 0.95, 0.7];
                 let bw = r * 0.45;
                 let gap = r * 0.32;
@@ -336,96 +385,161 @@ fn rail_icon(view: Option<SessionView>, size: f32, color: Color) -> View<Msg> {
                 for (i, h) in heights.iter().enumerate() {
                     let x = x0 + i as f64 * (bw + gap);
                     let top = (cy + r) - 2.0 * r * h;
-                    let bar = RoundedRect::new(x, top, x + bw, cy + r, 1.0);
-                    scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &bar);
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &RoundedRect::new(x, top, x + bw, cy + r, 1.0));
                 }
             }
-            // Shell: marco de terminal + chevron «>».
-            Some(SessionView::Shell) => {
-                let frame = RoundedRect::new(cx - r, cy - r * 0.78, cx + r, cy + r * 0.78, 2.0);
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &frame);
-                let mut p = BezPath::new();
-                p.move_to(Point::new(cx - r * 0.42, cy - r * 0.28));
-                p.line_to(Point::new(cx - r * 0.02, cy));
-                p.line_to(Point::new(cx - r * 0.42, cy + r * 0.28));
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &p);
+            // Explorer: carpeta (rect con pestaña).
+            Tool::Explorer => {
+                let body = RoundedRect::new(cx - r, cy - r * 0.5, cx + r, cy + r * 0.75, 2.0);
+                scene.stroke(&stroke, Affine::IDENTITY, color, None, &body);
+                let mut tab = BezPath::new();
+                tab.move_to(Point::new(cx - r, cy - r * 0.5));
+                tab.line_to(Point::new(cx - r * 0.4, cy - r * 0.5));
+                tab.line_to(Point::new(cx - r * 0.2, cy - r * 0.85));
+                tab.line_to(Point::new(cx - r, cy - r * 0.85));
+                tab.close_path();
+                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &tab);
             }
-            // Hosts: tres racks de servidor apilados.
-            Some(SessionView::Hosts) => {
+            // Matilda: tres racks apilados (inventario de servidores).
+            Tool::Matilda => {
                 for i in 0..3 {
                     let y = cy - r + i as f64 * (r * 0.78);
-                    let rack = RoundedRect::new(cx - r, y, cx + r, y + r * 0.5, 1.5);
-                    scene.stroke(&stroke, Affine::IDENTITY, color, None, &rack);
-                }
-            }
-            // Vhosts: globo (círculo + meridiano + ecuador) = dominios.
-            Some(SessionView::Vhosts) => {
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Circle::new((cx, cy), r));
-                scene.stroke(
-                    &stroke,
-                    Affine::IDENTITY,
-                    color,
-                    None,
-                    &Line::new(Point::new(cx - r, cy), Point::new(cx + r, cy)),
-                );
-                let mut meridiano = BezPath::new();
-                meridiano.move_to(Point::new(cx, cy - r));
-                meridiano.quad_to(Point::new(cx - r, cy), Point::new(cx, cy + r));
-                meridiano.quad_to(Point::new(cx + r, cy), Point::new(cx, cy - r));
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &meridiano);
-            }
-            // Lienzo/grafo: tres nodos conectados.
-            Some(SessionView::Canvas) => {
-                let a = Point::new(cx - r * 0.6, cy - r * 0.4);
-                let b = Point::new(cx + r * 0.55, cy - r * 0.5);
-                let c = Point::new(cx + r * 0.05, cy + r * 0.65);
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Line::new(a, b));
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &Line::new(a, c));
-                for pt in [a, b, c] {
-                    scene.fill(
-                        Fill::NonZero,
-                        Affine::IDENTITY,
-                        color,
-                        None,
-                        &Circle::new((pt.x, pt.y), r * 0.3),
-                    );
+                    scene.stroke(&stroke, Affine::IDENTITY, color, None, &RoundedRect::new(cx - r, y, cx + r, y + r * 0.5, 1.5));
                 }
             }
         }
     })
 }
 
-/// El rail de dientes a la derecha: uno por vista (la tab seleccionada va
-/// activa) más un diente sentinela que togglea el panel de medidores. Reusa los
-/// mismos `Msg` que el rail hospedado de pata (`SelectTab` / `HostActivate`).
-fn view_dock_rail(model: &Model, theme: &Theme) -> View<Msg> {
+/// El rail DERECHO de **herramientas** de la sesión activa (historial, monitor,
+/// explorer, matilda). La herramienta abierta va resaltada; re-clickear cierra
+/// su panel. Reusa el `dock_rail` (mismo look que pata).
+fn tool_rail(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 
-    // Un diente por vista (id = índice en SessionView::ALL) + el de medidores.
-    let mut items: Vec<DockRailItem> = SessionView::ALL
+    let items: Vec<DockRailItem> = Tool::ALL
         .iter()
         .enumerate()
-        .map(|(i, v)| DockRailItem { id: i as u64, active: *v == model.active_view })
+        .map(|(i, t)| DockRailItem { id: i as u64, active: model.active_tool == Some(*t) })
         .collect();
-    items.push(DockRailItem {
-        id: MONITORS_TOOTH as u64,
-        active: model.monitors_visible,
-    });
 
     dock_rail_view(
         &items,
         RAIL_W,
         &DockRailPalette::from_theme(theme),
         move |id, size, color| {
-            let view = SessionView::ALL.get(id as usize).copied();
-            rail_icon(view, size, color)
+            let t = Tool::ALL.get(id as usize).copied().unwrap_or(Tool::History);
+            tool_icon(t, size, color)
         },
-        move |id| match SessionView::ALL.get(id as usize) {
-            Some(v) => Msg::SelectView(*v),
-            None => Msg::HostActivate(MONITORS_TOOTH), // sentinela = toggle medidores
-        },
-        |_| None, // sin reorder
+        move |id| Msg::SelectTool(Tool::ALL.get(id as usize).copied().unwrap_or(Tool::History)),
+        |_| None,
     )
+}
+
+/// El panel de la herramienta activa (entre el canvas y el rail derecho).
+fn tool_panel(model: &Model, tool: Tool, theme: &Theme) -> View<Msg> {
+    let inner = match tool {
+        Tool::History => history_column(model, theme),
+        Tool::Monitor => monitor_stack(model, theme),
+        Tool::Explorer => explorer_panel(model, theme),
+        Tool::Matilda => matilda_panel(model, theme),
+    };
+    View::new(Style {
+        size: Size { width: length(model.monitors_width), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![inner])
+}
+
+/// Panel Explorer/SFTP: lista los archivos del cwd de la sesión (local). El
+/// SFTP remoto queda pendiente (fase de aislamiento remoto).
+fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let cwd = model
+        .active()
+        .and_then(|s| match &s.shell.state {
+            ModuleState::Shell(sh) => Some(sh.cwd.display().to_string()),
+            _ => None,
+        })
+        .unwrap_or_else(|| ".".to_string());
+
+    let mut filas: Vec<View<Msg>> = vec![tool_header(&format!("Explorer · {cwd}"), theme)];
+    match std::fs::read_dir(&cwd) {
+        Ok(rd) => {
+            let mut entradas: Vec<(bool, String)> = rd
+                .flatten()
+                .map(|e| {
+                    let dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                    (dir, e.file_name().to_string_lossy().to_string())
+                })
+                .collect();
+            entradas.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+            entradas.truncate(200);
+            for (dir, name) in entradas {
+                let etiqueta = if dir { format!("{name}/") } else { name };
+                filas.push(
+                    View::new(Style {
+                        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                        padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                        ..Default::default()
+                    })
+                    .hover_fill(theme.bg_row_hover)
+                    .text_aligned(etiqueta, 12.0, if dir { theme.accent } else { theme.fg_text }, Alignment::Start),
+                );
+            }
+        }
+        Err(_) => filas.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned("(cwd inaccesible · SFTP remoto pendiente)".to_string(), 11.0, theme.fg_muted, Alignment::Start),
+        ),
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(filas)
+}
+
+/// Panel Matilda: hosts + vhosts del inventario de la sesión activa.
+fn matilda_panel(model: &Model, theme: &Theme) -> View<Msg> {
+    let inv = model.active().and_then(|s| match &s.matilda.state {
+        ModuleState::Matilda(st) => Some(st.desired.clone()),
+        _ => None,
+    });
+    let (hosts, vhosts) = match inv {
+        Some(inv) => (hosts_view(&inv, theme), vhosts_view(&inv, theme)),
+        None => (tool_header("Hosts", theme), tool_header("Vhosts", theme)),
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![hosts, vhosts])
+}
+
+/// Cabecera tenue de un panel/sección de herramienta.
+fn tool_header(titulo: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(titulo.to_string(), 11.0, theme.fg_muted, Alignment::Start)
 }
 
 /// Toolbar de la tira de tabs: pinta los `ShortcutSpec` del tab activo
@@ -438,15 +552,11 @@ pub(crate) fn tabs_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     let Some(session) = model.active() else {
         return empty_bar(theme, 0.0);
     };
-    let inst = session.instance(model.active_view.which());
-    let slot = model.active_view_slot();
-    let contribs = match &inst.state {
-        ModuleState::Launcher(s) => shuma_module_launcher::contributions(s),
-        ModuleState::CommandBar(s) => shuma_module_commandbar::contributions(s),
+    // El canvas es el shell de la sesión; su toolbar son los shortcuts del shell.
+    let slot = model.shell_slot();
+    let contribs = match &session.shell.state {
         ModuleState::Shell(s) => shuma_module_shell::contributions(s),
-        ModuleState::Matilda(s) => shuma_module_matilda::contributions(s),
-        ModuleState::Minga(s) => shuma_module_minga::contributions(s),
-        ModuleState::Canvas(s) => shuma_module_canvas::contributions(s),
+        _ => return empty_bar(theme, 0.0),
     };
 
     if contribs.shortcuts.is_empty() {
@@ -459,8 +569,8 @@ pub(crate) fn tabs_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         .map(|spec| shortcut_button(slot.clone(), spec, theme))
         .collect();
 
-    // Label izquierdo: «sesión · vista».
-    let titulo = format!("{} · {}", session.name, view_label(model.active_view));
+    // Label izquierdo: el nombre de la sesión activa.
+    let titulo = session.name.clone();
     let label = View::new(Style {
         size: Size {
             width: Dimension::auto(),
@@ -532,34 +642,19 @@ pub(crate) fn shortcut_button(slot: Slot, spec: ShortcutSpec, theme: &Theme) -> 
     .on_click(Msg::ShortcutClicked(slot, spec.action))
 }
 
+/// El canvas principal de la sesión activa: su **shell** (terminal). Las demás
+/// cosas (historial, monitor, explorer, matilda) viven en los paneles de
+/// herramienta a la derecha.
 pub(crate) fn tab_content(model: &Model, theme: &Theme) -> View<Msg> {
     let Some(session) = model.active() else {
         return placeholder(theme, &rimay_localize::t("shuma-empty-no-tabs"));
     };
     let idx = model.active_session;
-    match model.active_view {
-        SessionView::Shell => match &session.shell.state {
-            ModuleState::Shell(state) => shuma_module_shell::view::<Msg>(state, theme, move |m| {
-                Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m))
-            }),
-            _ => placeholder(theme, ""),
-        },
-        SessionView::Canvas => match &session.canvas.state {
-            ModuleState::Canvas(state) => {
-                shuma_module_canvas::view::<Msg>(state, theme, move |m| {
-                    Msg::Module(Slot::Session(idx, Which::Canvas), ModuleMsg::Canvas(m))
-                })
-            }
-            _ => placeholder(theme, ""),
-        },
-        SessionView::Hosts => match &session.matilda.state {
-            ModuleState::Matilda(state) => hosts_view(&state.desired, theme),
-            _ => placeholder(theme, ""),
-        },
-        SessionView::Vhosts => match &session.matilda.state {
-            ModuleState::Matilda(state) => vhosts_view(&state.desired, theme),
-            _ => placeholder(theme, ""),
-        },
+    match &session.shell.state {
+        ModuleState::Shell(state) => shuma_module_shell::view::<Msg>(state, theme, move |m| {
+            Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m))
+        }),
+        _ => placeholder(theme, ""),
     }
 }
 
