@@ -268,6 +268,7 @@ members = [
     "02_ruway/llimphi/widgets/tiled",
     "02_ruway/llimphi/widgets/nodegraph",
     "02_ruway/llimphi/widgets/tree",
+    "02_ruway/llimphi/widgets/navigator",
     "02_ruway/llimphi/modules/command-palette",
     "02_ruway/llimphi/modules/diff-viewer",
     "02_ruway/llimphi/modules/fif",
@@ -669,6 +670,7 @@ llimphi-widget-text-input = { path = "02_ruway/llimphi/widgets/text-input" }
 llimphi-widget-tiled = { path = "02_ruway/llimphi/widgets/tiled" }
 llimphi-widget-nodegraph = { path = "02_ruway/llimphi/widgets/nodegraph" }
 llimphi-widget-tree = { path = "02_ruway/llimphi/widgets/tree" }
+llimphi-widget-navigator = { path = "02_ruway/llimphi/widgets/navigator" }
 # Sello vectorial wawa (rombo + W implícita + Merkle Core).
 llimphi-widget-wawa-mark = { path = "02_ruway/llimphi/widgets/wawa-mark" }
 # Widgets de elegancia transversal (tooltip, spinner, progress, toast,

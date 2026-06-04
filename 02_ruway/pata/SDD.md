@@ -382,11 +382,17 @@ borde; shuma provee el contenido.
     extraído a un `request<R>()` genérico compartido con `list_monads`); el
     `engine_socket` lo sirve mapeando `db.resolve_members(id) → FileView`. Tests
     de roundtrip + servidor.
-  - **11b-2 ⏳ (widget navegador Llimphi)** — `llimphi-widget-navigator`
-    **reutilizable y data-agnóstico** (decisión del autor): nodos `id/label/kind/
-    children` (kind = Mónada/Dir/Archivo) + toggle **tree ↔ grafo** (el grafo
-    reusa `llimphi-widget-nodegraph`). Lo alimenta pata; el widget no sabe de
-    nouser.
+  - **11b-2 ✅ (widget navegador Llimphi)** — `llimphi-widget-navigator`
+    **reutilizable y data-agnóstico**: bosque de `NavNode{id:u64,label,kind:
+    NavKind,children}` (kind = Monad/Group/Dir/File/Other) + dos modos
+    conmutables `NavMode::{Tree,Graph}`. **Árbol** reusa `llimphi-widget-tree`
+    (icono vectorial por kind, chevron toggle, click select, right-click
+    context). **Grafo** reusa `llimphi-widget-nodegraph` (layout en columnas por
+    profundidad, cables de contención padre→hijo, arrastrar selecciona, nodo
+    seleccionado resaltado por tint). Render-only: el estado (expanded/selected/
+    mode) vive en el caller. `navigator_view(spec, is_expanded, on_toggle,
+    on_select, on_context)`. Demo `navigator_demo` con toggle segmentado; 4
+    tests. El widget no sabe de nouser — lo alimenta pata.
   - **11c ⏳ (`pata-llimphi`)** — pinta el rail en el borde (`llimphi-widget-dock-
     rail`), despliega el panel animado al activar un diente, autohide del rail;
     alimenta el navegador desde el query de nouser (`list_monads` +

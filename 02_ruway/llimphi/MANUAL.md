@@ -685,6 +685,19 @@ La app prefiltra las filas visibles.
 depth, has_children, expanded, selected, on_toggle, on_select }>, row_height,
 indent_px, palette })`. La app aplana el árbol según nodos expandidos.
 
+**navigator** — navegador data-agnóstico de nodos en dos modos conmutables
+(**árbol** ↔ **grafo**, reusa tree + nodegraph). Render-only: la app guarda
+`expanded`/`selected`/`mode`. Pasa un bosque de `NavNode { id: u64, label,
+kind: NavKind (Monad|Group|Dir|File|Other), children }` y callbacks por id.
+```rust
+navigator_view(NavSpec { roots, mode: NavMode::{Tree,Graph}, selected, palette, guides },
+    is_expanded: Fn(u64)->bool, on_toggle: Fn(u64)->Msg,
+    on_select: Fn(u64)->Msg, on_context: Option<Fn(u64)->Msg>)
+// árbol: click selecciona, chevron expande, icono por kind. grafo: cables de
+// contención padre→hijo, arrastrar selecciona, right-click abre. Pensado para
+// el sidebar de Mónadas/archivos de pata, pero no sabe de nouser.
+```
+
 **app-header** — `app_header(label, actions: Vec<View<Msg>>, &palette)`.
 
 **status-bar** — `status_bar_view(left, center, right, &palette)` con
@@ -1007,8 +1020,8 @@ fn view_overlay(m) -> Option<View<Msg>> { if m.open { Some(menu) } else { None }
 
 **Widgets** (`widgets/`, dep `llimphi-widget-<n>`): app-header · avatar · badge ·
 banner · breadcrumb · button · card · clipboard · context-menu · edit-menu ·
-empty · field · gallery · grid · list · menubar · modal · nodegraph · panel ·
-panes · progress · segmented · shortcuts-help · skeleton · slider · splash ·
+empty · field · gallery · grid · list · menubar · modal · navigator · nodegraph ·
+panel · panes · progress · segmented · shortcuts-help · skeleton · slider · splash ·
 splitter · stat-card · status-bar · switch · tabs · text-area · text-editor ·
 text-editor-core · text-editor-lsp · text-input · theme-switcher · tiled ·
 timeline · toast · tooltip · tree · wawa-mark.

@@ -1,0 +1,17 @@
+[package]
+name = "llimphi-widget-navigator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-navigator — navegador data-agnóstico de nodos (Mónada/Dir/Archivo) en dos modos conmutables: árbol y grafo; click selecciona, right-click abre."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-tree = { workspace = true }
+llimphi-widget-nodegraph = { workspace = true }
+
+[dev-dependencies]
+llimphi-widget-segmented = { workspace = true }
