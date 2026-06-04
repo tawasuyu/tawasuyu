@@ -770,6 +770,13 @@ pub struct ComputedStyle {
     pub transition_behavior: TransitionBehavior,
     /// `interpolate-size` (Fase 7.468). Default `NumericOnly`. **HEREDA**. Plumb.
     pub interpolate_size: InterpolateSize,
+    /// `view-timeline-inset` (Fase 7.469). Par `(start, end)` — `LengthVal::Auto`
+    /// (= cero) por default. NO hereda. Plumb.
+    pub view_timeline_inset_start: LengthVal,
+    pub view_timeline_inset_end: LengthVal,
+    /// `interactivity` (Fase 7.473). Default `Auto`. **HEREDA** (CSS UI 4).
+    /// Plumb.
+    pub interactivity: Interactivity,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1679,17 +1686,26 @@ pub struct FontSynthesis {
     pub weight: bool,
     pub style: bool,
     pub small_caps: bool,
+    /// `font-synthesis-position` (Fase 7.470). CSS Fonts 4 extiende el
+    /// shorthand a un 4º axis que controla la síntesis de `font-variant-
+    /// position` (sub/super). Default `true`.
+    pub position: bool,
 }
 
 impl Default for FontSynthesis {
     fn default() -> Self {
-        Self { weight: true, style: true, small_caps: true }
+        Self { weight: true, style: true, small_caps: true, position: true }
     }
 }
 
 impl FontSynthesis {
-    /// `font-synthesis: none` apaga los tres.
-    pub const NONE: Self = Self { weight: false, style: false, small_caps: false };
+    /// `font-synthesis: none` apaga los cuatro.
+    pub const NONE: Self = Self {
+        weight: false,
+        style: false,
+        small_caps: false,
+        position: false,
+    };
 }
 
 /// `font-size-adjust` (CSS Fonts 5). `None` = sin ajuste; `Value(metric,
@@ -2394,6 +2410,19 @@ pub enum InterpolateSize {
     #[default]
     NumericOnly,
     AllowKeywords,
+}
+
+/// `interactivity` (CSS UI 4). `Auto` = el elemento responde a input
+/// normalmente; `Inert` = el elemento (y sus descendientes) NO reciben
+/// input ni foco — inert se propaga por herencia. Default `Auto`.
+/// **HEREDA** (no en spec strict — la herencia se logra normativamente
+/// porque inert se propaga al subtree completo; modelamos como property
+/// heredable para evitar recorrer ancestors al evaluar input). Fase 7.473.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Interactivity {
+    #[default]
+    Auto,
+    Inert,
 }
 
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
@@ -3597,6 +3626,9 @@ impl Default for ComputedStyle {
             animation_range_end: AnimationRange::Normal,
             transition_behavior: TransitionBehavior::Normal,
             interpolate_size: InterpolateSize::NumericOnly,
+            view_timeline_inset_start: LengthVal::Px(0.0),
+            view_timeline_inset_end: LengthVal::Px(0.0),
+            interactivity: Interactivity::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

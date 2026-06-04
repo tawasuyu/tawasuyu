@@ -171,6 +171,47 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `scroll-timeline: [<name> || <axis>]` shorthand (Fase 7.471). CSS
+        // Scroll-Driven Animations 1. Tokens en cualquier orden: el primero
+        // que matchea axis (`block`/`inline`/`x`/`y`) va a axis, el resto
+        // (un `<dashed-ident>` o `none`) va a name. Faltantes → default.
+        // Vacío rechaza entero.
+        if prop.eq_ignore_ascii_case("scroll-timeline") {
+            if let Some((name, axis)) = parse_scroll_view_timeline_short(value) {
+                out.push(Decl {
+                    kind: DeclKind::ScrollTimelineName(name),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::ScrollTimelineAxis(axis),
+                    important,
+                });
+            }
+            continue;
+        }
+        // `view-timeline: [<name> || <axis> || <inset>]` shorthand (Fase
+        // 7.472). Mismo dispatcher por token: name (`<dashed-ident>`/`none`)
+        // + axis + inset (1 ó 2 `<length-or-pct>`/`auto`). Faltantes →
+        // default. Vacío rechaza entero.
+        if prop.eq_ignore_ascii_case("view-timeline") {
+            if let Some((name, axis, inset_a, inset_b)) =
+                parse_view_timeline_short(value)
+            {
+                out.push(Decl {
+                    kind: DeclKind::ViewTimelineName(name),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::ViewTimelineAxis(axis),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::ViewTimelineInset(inset_a, inset_b),
+                    important,
+                });
+            }
+            continue;
+        }
         // `animation-range: <start> [<end>]` shorthand (Fase 7.466). El valor
         // de cada lado puede ser 1 o 2 tokens (`cover`, `cover 20%`, `100px`).
         // El divisor es el primer token que NO continúa el lado actual: si el
@@ -1134,6 +1175,43 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "allow-keywords" => {
                 Some(DeclKind::InterpolateSize(InterpolateSize::AllowKeywords))
             }
+            _ => None,
+        },
+        // Fase 7.469 — `view-timeline-inset: <inset>{1,2}` (CSS Scroll-Driven
+        // Animations 1). Cada inset acepta `auto | <length-percentage>`.
+        // `auto` se trata como `0px` (plumb sin runtime de timeline). Con 1
+        // valor se aplica a ambos lados.
+        "view-timeline-inset" => {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            if parts.is_empty() || parts.len() > 2 {
+                None
+            } else {
+                let parse = |p: &str| -> Option<LengthVal> {
+                    if p.eq_ignore_ascii_case("auto") {
+                        Some(LengthVal::Px(0.0))
+                    } else {
+                        parse_length_or_pct(p)
+                    }
+                };
+                let a = parse(parts[0])?;
+                let b = if parts.len() == 2 {
+                    parse(parts[1])?
+                } else {
+                    a
+                };
+                Some(DeclKind::ViewTimelineInset(a, b))
+            }
+        }
+        // Fase 7.470 — `font-synthesis-position` (CSS Fonts 4). HEREDA.
+        "font-synthesis-position" => {
+            parse_auto_or_none(value).map(DeclKind::FontSynthesisPosition)
+        }
+        // Fase 7.471 — `scroll-timeline` shorthand: ver `parse_declarations`.
+        // Fase 7.472 — `view-timeline` shorthand: ver `parse_declarations`.
+        // Fase 7.473 — `interactivity` (CSS UI 4). HEREDA.
+        "interactivity" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::Interactivity(Interactivity::Auto)),
+            "inert" => Some(DeclKind::Interactivity(Interactivity::Inert)),
             _ => None,
         },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
@@ -4245,6 +4323,98 @@ pub(crate) fn parse_block_step_size(value: &str) -> Option<BlockStepSize> {
     parse_length_px(v).map(BlockStepSize::Length)
 }
 
+/// `scroll-timeline: [<name> || <axis>]`. Fase 7.471. Devuelve `(name, axis)`
+/// con defaults rellenos (name=None, axis=Block). Tokens en orden libre. Cada
+/// rol se acepta a lo sumo una vez (token redundante → rechazo). Vacío
+/// rechaza entero.
+pub(crate) fn parse_scroll_view_timeline_short(
+    value: &str,
+) -> Option<(Option<String>, TimelineAxis)> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let mut name: Option<Option<String>> = None;
+    let mut axis: Option<TimelineAxis> = None;
+    for tok in v.split_whitespace() {
+        if let Some(a) = parse_timeline_axis(tok) {
+            if axis.is_some() {
+                return None;
+            }
+            axis = Some(a);
+            continue;
+        }
+        if let Some(n) = parse_dashed_ident_or_none(tok) {
+            if name.is_some() {
+                return None;
+            }
+            name = Some(n);
+            continue;
+        }
+        return None;
+    }
+    Some((name.unwrap_or(None), axis.unwrap_or(TimelineAxis::Block)))
+}
+
+/// `view-timeline: [<name> || <axis> || <inset>{1,2}]`. Fase 7.472. Devuelve
+/// `(name, axis, inset_start, inset_end)`. Mismo dispatcher: axis y name como
+/// en `scroll-timeline`; el resto se interpreta como inset (cada inset es
+/// `auto`/`<length-or-pct>`, hasta 2). Vacío rechaza entero.
+pub(crate) fn parse_view_timeline_short(
+    value: &str,
+) -> Option<(Option<String>, TimelineAxis, LengthVal, LengthVal)> {
+    let v = value.trim();
+    if v.is_empty() {
+        return None;
+    }
+    let mut name: Option<Option<String>> = None;
+    let mut axis: Option<TimelineAxis> = None;
+    let mut insets: Vec<LengthVal> = Vec::new();
+    for tok in v.split_whitespace() {
+        if let Some(a) = parse_timeline_axis(tok) {
+            if axis.is_some() {
+                return None;
+            }
+            axis = Some(a);
+            continue;
+        }
+        // Inset tiene precedencia sobre name para tokens como `auto` y
+        // `<length>` — `auto` y `none` son la única ambigüedad: `none`
+        // siempre va a name (el inset no tiene `none`); `auto` siempre
+        // va a inset (el name acepta `<dashed-ident>` pero no `auto`).
+        if tok.eq_ignore_ascii_case("auto") {
+            if insets.len() >= 2 {
+                return None;
+            }
+            insets.push(LengthVal::Px(0.0));
+            continue;
+        }
+        if let Some(l) = parse_length_or_pct(tok) {
+            if insets.len() >= 2 {
+                return None;
+            }
+            insets.push(l);
+            continue;
+        }
+        if let Some(n) = parse_dashed_ident_or_none(tok) {
+            if name.is_some() {
+                return None;
+            }
+            name = Some(n);
+            continue;
+        }
+        return None;
+    }
+    let inset_a = insets.first().copied().unwrap_or(LengthVal::Px(0.0));
+    let inset_b = insets.get(1).copied().unwrap_or(inset_a);
+    Some((
+        name.unwrap_or(None),
+        axis.unwrap_or(TimelineAxis::Block),
+        inset_a,
+        inset_b,
+    ))
+}
+
 /// `animation-range-{start,end}: normal | <length-percentage> | <name>
 /// <length-percentage>?`. CSS Animations 2. Fase 7.464/465.
 ///
@@ -4727,6 +4897,14 @@ pub(crate) fn parse_font_synthesis_shorthand(
                     return None;
                 }
                 fs.small_caps = true;
+            }
+            // Fase 7.470 — CSS Fonts 4 extiende el shorthand al 4º axis
+            // `position`.
+            "position" => {
+                if fs.position {
+                    return None;
+                }
+                fs.position = true;
             }
             _ => return None,
         }

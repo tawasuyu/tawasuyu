@@ -370,6 +370,8 @@ impl StyleEngine {
             // CSS Values 5 — interpolate-size hereda (CSS Animations 2 elige
             // si keywords como `auto` participan de transitions/animations).
             style.interpolate_size = p.interpolate_size;
+            // CSS UI 4 — interactivity hereda (inert se propaga al subtree).
+            style.interactivity = p.interactivity;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -4657,17 +4659,32 @@ mod tests {
         // `weight` solo: weight=true, los demás false.
         assert_eq!(
             parse_font_synthesis_shorthand("weight"),
-            Some(FontSynthesis { weight: true, style: false, small_caps: false })
+            Some(FontSynthesis {
+                weight: true,
+                style: false,
+                small_caps: false,
+                position: false,
+            })
         );
         // Combinación orden libre.
         assert_eq!(
             parse_font_synthesis_shorthand("small-caps weight"),
-            Some(FontSynthesis { weight: true, style: false, small_caps: true })
+            Some(FontSynthesis {
+                weight: true,
+                style: false,
+                small_caps: true,
+                position: false,
+            })
         );
-        // Los 3.
+        // Los 4 (CSS Fonts 4 — Fase 7.470 agrega `position`).
         assert_eq!(
-            parse_font_synthesis_shorthand("weight style small-caps"),
-            Some(FontSynthesis { weight: true, style: true, small_caps: true })
+            parse_font_synthesis_shorthand("weight style small-caps position"),
+            Some(FontSynthesis {
+                weight: true,
+                style: true,
+                small_caps: true,
+                position: true,
+            })
         );
         // Duplicado descarta.
         assert_eq!(parse_font_synthesis_shorthand("weight weight"), None);
@@ -7445,6 +7462,116 @@ mod tests {
         // #e — defaults puros.
         let cs_e = eng.compute(&by("e"));
         assert_eq!(cs_e.block_step_size, BlockStepSize::None);
+    }
+
+    #[test]
+    fn timelines_fontsyn_pos_interactivity_fase_7_469_473() {
+        // Cinco props: view-timeline-inset (Fase 7.469), font-synthesis-
+        // position (Fase 7.470), scroll-timeline shorthand (Fase 7.471),
+        // view-timeline shorthand (Fase 7.472), interactivity (Fase 7.473).
+        // HEREDAN: font-synthesis-position (toda la familia hereda),
+        // interactivity.
+
+        // 1) Parsers de cabecera para los dos shorthands de timeline.
+        assert_eq!(
+            parse_scroll_view_timeline_short("--t"),
+            Some((Some("--t".to_string()), TimelineAxis::Block))
+        );
+        assert_eq!(
+            parse_scroll_view_timeline_short("inline --t"),
+            Some((Some("--t".to_string()), TimelineAxis::Inline))
+        );
+        assert_eq!(
+            parse_scroll_view_timeline_short("none x"),
+            Some((None, TimelineAxis::X))
+        );
+        // Redundancia rechaza.
+        assert_eq!(parse_scroll_view_timeline_short("block inline"), None);
+        // Vacío rechaza.
+        assert_eq!(parse_scroll_view_timeline_short(""), None);
+
+        assert_eq!(
+            parse_view_timeline_short("--t inline 10px 20px"),
+            Some((
+                Some("--t".to_string()),
+                TimelineAxis::Inline,
+                LengthVal::Px(10.0),
+                LengthVal::Px(20.0),
+            ))
+        );
+        assert_eq!(
+            parse_view_timeline_short("auto"),
+            Some((None, TimelineAxis::Block, LengthVal::Px(0.0), LengthVal::Px(0.0)))
+        );
+        // Tres insets rechaza.
+        assert_eq!(
+            parse_view_timeline_short("10px 20px 30px"),
+            None
+        );
+
+        // 2) E2E.
+        let html = r##"<html><head><style>
+            #a { view-timeline-inset: 10px 30%;
+                 font-synthesis-position: none;
+                 scroll-timeline: --st inline;
+                 view-timeline: --vt y 5px;
+                 interactivity: inert }
+            #b { view-timeline: --b }
+            #c { view-timeline-inset: 8px }
+            #d {}
+        </style></head><body>
+            <div id="a"><span id="a-child"></span></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // #a — longhands + ambos shorthands. NOTA: view-timeline-inset:10px 30%
+        // arranca el bloque, pero view-timeline (shorthand) viene DESPUÉS en
+        // la cascada y reescribe inset a 5px/5px (1 valor → ambos lados).
+        let cs_a = eng.compute(&by("a"));
+        assert!(!cs_a.font_synthesis.position);
+        assert_eq!(cs_a.view_timeline_inset_start, LengthVal::Px(5.0));
+        assert_eq!(cs_a.view_timeline_inset_end, LengthVal::Px(5.0));
+        assert_eq!(cs_a.scroll_timeline_name.as_deref(), Some("--st"));
+        assert_eq!(cs_a.scroll_timeline_axis, TimelineAxis::Inline);
+        assert_eq!(cs_a.view_timeline_name.as_deref(), Some("--vt"));
+        assert_eq!(cs_a.view_timeline_axis, TimelineAxis::Y);
+        assert_eq!(cs_a.interactivity, Interactivity::Inert);
+        // El hijo HEREDA interactivity y font-synthesis (incluyendo el axis
+        // `position`); NO hereda view-timeline-{name,axis,inset}.
+        let cs_a_child = eng.compute_with_parent(&by("a-child"), Some(&cs_a));
+        assert_eq!(cs_a_child.interactivity, Interactivity::Inert);
+        assert!(!cs_a_child.font_synthesis.position);
+        assert_eq!(cs_a_child.view_timeline_name, None);
+        assert_eq!(cs_a_child.view_timeline_axis, TimelineAxis::Block);
+        assert_eq!(cs_a_child.view_timeline_inset_start, LengthVal::Px(0.0));
+        // #b — view-timeline shorthand sólo con name; axis=Block, inset=0.
+        let cs_b = eng.compute(&by("b"));
+        assert_eq!(cs_b.view_timeline_name.as_deref(), Some("--b"));
+        assert_eq!(cs_b.view_timeline_axis, TimelineAxis::Block);
+        assert_eq!(cs_b.view_timeline_inset_start, LengthVal::Px(0.0));
+        assert_eq!(cs_b.view_timeline_inset_end, LengthVal::Px(0.0));
+        // #c — view-timeline-inset 1 valor → ambos lados.
+        let cs_c = eng.compute(&by("c"));
+        assert_eq!(cs_c.view_timeline_inset_start, LengthVal::Px(8.0));
+        assert_eq!(cs_c.view_timeline_inset_end, LengthVal::Px(8.0));
+        // #d — defaults puros.
+        let cs_d = eng.compute(&by("d"));
+        assert_eq!(cs_d.interactivity, Interactivity::Auto);
+        assert!(cs_d.font_synthesis.position);
+        assert_eq!(cs_d.view_timeline_inset_start, LengthVal::Px(0.0));
+        assert_eq!(cs_d.view_timeline_axis, TimelineAxis::Block);
     }
 
     #[test]

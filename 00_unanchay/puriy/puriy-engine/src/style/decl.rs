@@ -488,6 +488,12 @@ pub(crate) enum DeclKind {
     TransitionBehavior(TransitionBehavior),
     /// `interpolate-size` (Fase 7.468). HEREDA. Plumb.
     InterpolateSize(InterpolateSize),
+    /// `view-timeline-inset` (Fase 7.469). Par `(start, end)`. NO hereda. Plumb.
+    ViewTimelineInset(LengthVal, LengthVal),
+    /// `font-synthesis-position` (Fase 7.470). HEREDA. Plumb.
+    FontSynthesisPosition(bool),
+    /// `interactivity` (Fase 7.473). HEREDA. Plumb.
+    Interactivity(Interactivity),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -872,6 +878,12 @@ impl Decl {
             DeclKind::AnimationRangeEnd(r) => s.animation_range_end = r.clone(),
             DeclKind::TransitionBehavior(b) => s.transition_behavior = *b,
             DeclKind::InterpolateSize(i) => s.interpolate_size = *i,
+            DeclKind::ViewTimelineInset(a, b) => {
+                s.view_timeline_inset_start = *a;
+                s.view_timeline_inset_end = *b;
+            }
+            DeclKind::FontSynthesisPosition(b) => s.font_synthesis.position = *b,
+            DeclKind::Interactivity(i) => s.interactivity = *i,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
