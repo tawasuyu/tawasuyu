@@ -6934,6 +6934,167 @@ mod tests {
     }
 
     #[test]
+    fn mask_mode_fase_7_399() {
+        assert_eq!(parse_mask_mode("alpha"), Some(MaskMode::Alpha));
+        assert_eq!(parse_mask_mode("LUMINANCE"), Some(MaskMode::Luminance));
+        assert_eq!(
+            parse_mask_mode("match-source"),
+            Some(MaskMode::MatchSource)
+        );
+        assert_eq!(parse_mask_mode("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { mask-mode: alpha }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_mode, MaskMode::Alpha);
+        // NO hereda — reset a `MatchSource`.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).mask_mode,
+            MaskMode::MatchSource
+        );
+    }
+
+    #[test]
+    fn mask_clip_fase_7_400() {
+        assert_eq!(parse_mask_clip("border-box"), Some(MaskClip::BorderBox));
+        assert_eq!(parse_mask_clip("PADDING-BOX"), Some(MaskClip::PaddingBox));
+        assert_eq!(parse_mask_clip("fill-box"), Some(MaskClip::FillBox));
+        assert_eq!(parse_mask_clip("no-clip"), Some(MaskClip::NoClip));
+        assert_eq!(parse_mask_clip("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { mask-clip: no-clip }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_clip, MaskClip::NoClip);
+        // NO hereda — reset a `BorderBox`.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).mask_clip,
+            MaskClip::BorderBox
+        );
+    }
+
+    #[test]
+    fn mask_composite_fase_7_401() {
+        assert_eq!(
+            parse_mask_composite("add"),
+            Some(MaskComposite::Add)
+        );
+        assert_eq!(
+            parse_mask_composite("SUBTRACT"),
+            Some(MaskComposite::Subtract)
+        );
+        assert_eq!(
+            parse_mask_composite("intersect"),
+            Some(MaskComposite::Intersect)
+        );
+        assert_eq!(
+            parse_mask_composite("exclude"),
+            Some(MaskComposite::Exclude)
+        );
+        assert_eq!(parse_mask_composite("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { mask-composite: exclude }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.mask_composite, MaskComposite::Exclude);
+    }
+
+    #[test]
+    fn mask_origin_fase_7_402() {
+        assert_eq!(
+            parse_mask_origin("border-box"),
+            Some(MaskOrigin::BorderBox)
+        );
+        assert_eq!(
+            parse_mask_origin("CONTENT-BOX"),
+            Some(MaskOrigin::ContentBox)
+        );
+        assert_eq!(
+            parse_mask_origin("stroke-box"),
+            Some(MaskOrigin::StrokeBox)
+        );
+        // `no-clip` NO es válido en mask-origin (sólo en mask-clip).
+        assert_eq!(parse_mask_origin("no-clip"), None);
+
+        let html = r##"<html><head><style>
+            body { mask-origin: padding-box }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.mask_origin, MaskOrigin::PaddingBox);
+    }
+
+    #[test]
+    fn mask_repeat_fase_7_403() {
+        let html = r##"<html><head><style>
+            body { mask-repeat: no-repeat }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.mask_repeat, BackgroundRepeat::NoRepeat);
+        // NO hereda — reset a `Repeat`.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).mask_repeat,
+            BackgroundRepeat::Repeat
+        );
+        // mask-repeat NO toca background-repeat (mismo tipo, campos distintos).
+        assert_eq!(body_cs.background_repeat, BackgroundRepeat::Repeat);
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(

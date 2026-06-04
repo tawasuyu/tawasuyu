@@ -864,6 +864,22 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "marker-mid" => parse_marker_ref(value).map(DeclKind::MarkerMid),
         "marker-end" => parse_marker_ref(value).map(DeclKind::MarkerEnd),
         "mask-type" => parse_mask_type(value).map(DeclKind::MaskType),
+        "mask-mode" => parse_mask_mode(value).map(DeclKind::MaskMode),
+        "mask-clip" => parse_mask_clip(value).map(DeclKind::MaskClip),
+        "mask-composite" => {
+            parse_mask_composite(value).map(DeclKind::MaskComposite)
+        }
+        "mask-origin" => parse_mask_origin(value).map(DeclKind::MaskOrigin),
+        "mask-repeat" => {
+            // Reusa `parse_background_repeat` (devuelve `DeclKind::BackgroundRepeat`);
+            // extraemos el valor y lo reemitimos como `MaskRepeat`.
+            match parse_background_repeat(value) {
+                Some(DeclKind::BackgroundRepeat(r)) => {
+                    Some(DeclKind::MaskRepeat(r))
+                }
+                _ => None,
+            }
+        }
         "flood-color" => {
             parse_color_or_current(value).map(DeclKind::FloodColor)
         }
@@ -3542,6 +3558,54 @@ pub(crate) fn parse_mask_type(value: &str) -> Option<MaskType> {
     match value.trim().to_ascii_lowercase().as_str() {
         "luminance" => Some(MaskType::Luminance),
         "alpha" => Some(MaskType::Alpha),
+        _ => None,
+    }
+}
+
+/// `mask-mode`: `alpha | luminance | match-source`. Fase 7.399.
+pub(crate) fn parse_mask_mode(value: &str) -> Option<MaskMode> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "alpha" => Some(MaskMode::Alpha),
+        "luminance" => Some(MaskMode::Luminance),
+        "match-source" => Some(MaskMode::MatchSource),
+        _ => None,
+    }
+}
+
+/// `mask-clip`: `<geometry-box> | no-clip`. Fase 7.400.
+pub(crate) fn parse_mask_clip(value: &str) -> Option<MaskClip> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "border-box" => Some(MaskClip::BorderBox),
+        "padding-box" => Some(MaskClip::PaddingBox),
+        "content-box" => Some(MaskClip::ContentBox),
+        "fill-box" => Some(MaskClip::FillBox),
+        "stroke-box" => Some(MaskClip::StrokeBox),
+        "view-box" => Some(MaskClip::ViewBox),
+        "no-clip" => Some(MaskClip::NoClip),
+        _ => None,
+    }
+}
+
+/// `mask-composite`: `add | subtract | intersect | exclude`. Fase 7.401.
+pub(crate) fn parse_mask_composite(value: &str) -> Option<MaskComposite> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "add" => Some(MaskComposite::Add),
+        "subtract" => Some(MaskComposite::Subtract),
+        "intersect" => Some(MaskComposite::Intersect),
+        "exclude" => Some(MaskComposite::Exclude),
+        _ => None,
+    }
+}
+
+/// `mask-origin`: `<geometry-box>`. Fase 7.402.
+pub(crate) fn parse_mask_origin(value: &str) -> Option<MaskOrigin> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "border-box" => Some(MaskOrigin::BorderBox),
+        "padding-box" => Some(MaskOrigin::PaddingBox),
+        "content-box" => Some(MaskOrigin::ContentBox),
+        "fill-box" => Some(MaskOrigin::FillBox),
+        "stroke-box" => Some(MaskOrigin::StrokeBox),
+        "view-box" => Some(MaskOrigin::ViewBox),
         _ => None,
     }
 }

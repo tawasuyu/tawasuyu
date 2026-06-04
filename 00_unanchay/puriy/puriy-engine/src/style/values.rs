@@ -664,6 +664,17 @@ pub struct ComputedStyle {
     pub marker_end: MarkerRef,
     /// `mask-type` (Fase 7.398). Default `Luminance`. NO hereda. Plumb.
     pub mask_type: MaskType,
+    /// `mask-mode` (Fase 7.399). Default `MatchSource`. NO hereda. Plumb.
+    pub mask_mode: MaskMode,
+    /// `mask-clip` (Fase 7.400). Default `BorderBox`. NO hereda. Plumb.
+    pub mask_clip: MaskClip,
+    /// `mask-composite` (Fase 7.401). Default `Add`. NO hereda. Plumb.
+    pub mask_composite: MaskComposite,
+    /// `mask-origin` (Fase 7.402). Default `BorderBox`. NO hereda. Plumb.
+    pub mask_origin: MaskOrigin,
+    /// `mask-repeat` (Fase 7.403). Default `Repeat`. NO hereda. Plumb.
+    /// Reusa `BackgroundRepeat` (mismas formas).
+    pub mask_repeat: BackgroundRepeat,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2080,6 +2091,54 @@ pub enum MaskType {
     Alpha,
 }
 
+/// `mask-mode` (CSS Masking 1). Default `MatchSource` (toma del
+/// `mask-image` su modo nativo). NO hereda. Fase 7.399.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    Alpha,
+    Luminance,
+    #[default]
+    MatchSource,
+}
+
+/// `mask-clip` (CSS Masking 1). Default `BorderBox`. NO hereda. Acepta
+/// los 5 `<geometry-box>` + `NoClip`. Fase 7.400.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskClip {
+    #[default]
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    FillBox,
+    StrokeBox,
+    ViewBox,
+    NoClip,
+}
+
+/// `mask-composite` (CSS Masking 1). Default `Add` (spec). NO hereda.
+/// Fase 7.401.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskComposite {
+    #[default]
+    Add,
+    Subtract,
+    Intersect,
+    Exclude,
+}
+
+/// `mask-origin` (CSS Masking 1). Default `BorderBox`. NO hereda.
+/// `<geometry-box>` puro (sin `no-clip`). Fase 7.402.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskOrigin {
+    #[default]
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+    FillBox,
+    StrokeBox,
+    ViewBox,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -3155,6 +3214,11 @@ impl Default for ComputedStyle {
             marker_mid: None,
             marker_end: None,
             mask_type: MaskType::Luminance,
+            mask_mode: MaskMode::MatchSource,
+            mask_clip: MaskClip::BorderBox,
+            mask_composite: MaskComposite::Add,
+            mask_origin: MaskOrigin::BorderBox,
+            mask_repeat: BackgroundRepeat::Repeat,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
