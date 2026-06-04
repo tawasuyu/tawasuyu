@@ -809,6 +809,22 @@ pub struct ComputedStyle {
     /// `reading-order` (Fase 7.483). CSS Inline 3: orden lógico para AT
     /// que difiere del orden visual. Default `0`. NO hereda. Plumb.
     pub reading_order: i32,
+    /// `reading-flow` (Fase 7.484). CSS Display 4: cómo recorrer el
+    /// contenido focalizable de un contenedor (lectura/tab). Default
+    /// `Normal`. NO hereda. Plumb.
+    pub reading_flow: ReadingFlow,
+    /// `image-resolution` (Fase 7.485). CSS Images 4. Default
+    /// `FromImage`. **HEREDA**. Plumb.
+    pub image_resolution: ImageResolution,
+    /// `bookmark-level` (Fase 7.486). CSS GCPM. Profundidad del marcador
+    /// PDF. `None` = `none` (no genera bookmark). NO hereda. Plumb.
+    pub bookmark_level: Option<u32>,
+    /// `bookmark-state` (Fase 7.487). CSS GCPM. Default `Open`. NO hereda.
+    /// Plumb.
+    pub bookmark_state: BookmarkState,
+    /// `bookmark-label` (Fase 7.488). CSS GCPM. `None` = `content(text)`
+    /// (default — toma el texto del elemento). NO hereda. Plumb.
+    pub bookmark_label: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2468,6 +2484,45 @@ pub enum AnimationComposition {
     Accumulate,
 }
 
+/// `reading-flow` (CSS Display 4). Reordena el "focus order" (tabbing /
+/// AT) en contenedores flex y grid. Default `Normal`. NO hereda.
+/// Fase 7.484.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReadingFlow {
+    #[default]
+    Normal,
+    FlexVisual,
+    FlexFlow,
+    GridRows,
+    GridColumns,
+    GridOrder,
+}
+
+/// `image-resolution` (CSS Images 4). Resolución intrínseca aplicada a
+/// imágenes raster — `FromImage` deja la metadata del archivo;
+/// `Resolution(dppx)` la sobreescribe. Default `FromImage`. **HEREDA**.
+/// Fase 7.485.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ImageResolution {
+    FromImage,
+    Resolution { dppx: f32, snap: bool },
+}
+
+impl Default for ImageResolution {
+    fn default() -> Self {
+        Self::FromImage
+    }
+}
+
+/// `bookmark-state` (CSS GCPM). Estado inicial del marcador PDF cuando
+/// el viewer lo abre. Default `Open`. NO hereda. Fase 7.487.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BookmarkState {
+    #[default]
+    Open,
+    Closed,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3682,6 +3737,11 @@ impl Default for ComputedStyle {
             animation_composition: AnimationComposition::Replace,
             timeline_scope: Vec::new(),
             reading_order: 0,
+            reading_flow: ReadingFlow::Normal,
+            image_resolution: ImageResolution::FromImage,
+            bookmark_level: None,
+            bookmark_state: BookmarkState::Open,
+            bookmark_label: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

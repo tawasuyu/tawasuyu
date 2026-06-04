@@ -1271,6 +1271,50 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             .parse::<i32>()
             .ok()
             .map(DeclKind::ReadingOrder),
+        // Fase 7.484 — `reading-flow` (CSS Display 4). Enum focus-order.
+        "reading-flow" => match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(DeclKind::ReadingFlow(ReadingFlow::Normal)),
+            "flex-visual" => Some(DeclKind::ReadingFlow(ReadingFlow::FlexVisual)),
+            "flex-flow" => Some(DeclKind::ReadingFlow(ReadingFlow::FlexFlow)),
+            "grid-rows" => Some(DeclKind::ReadingFlow(ReadingFlow::GridRows)),
+            "grid-columns" => Some(DeclKind::ReadingFlow(ReadingFlow::GridColumns)),
+            "grid-order" => Some(DeclKind::ReadingFlow(ReadingFlow::GridOrder)),
+            _ => None,
+        },
+        // Fase 7.485 — `image-resolution` (CSS Images 4).
+        // `[ from-image || <resolution> ] && snap?`. HEREDA.
+        "image-resolution" => parse_image_resolution(value).map(DeclKind::ImageResolution),
+        // Fase 7.486 — `bookmark-level` (CSS GCPM). `none | <integer>`.
+        "bookmark-level" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::BookmarkLevel(None))
+            } else {
+                v.parse::<u32>()
+                    .ok()
+                    .filter(|n| *n >= 1)
+                    .map(|n| DeclKind::BookmarkLevel(Some(n)))
+            }
+        }
+        // Fase 7.487 — `bookmark-state` (CSS GCPM). `open | closed`.
+        "bookmark-state" => match value.trim().to_ascii_lowercase().as_str() {
+            "open" => Some(DeclKind::BookmarkState(BookmarkState::Open)),
+            "closed" => Some(DeclKind::BookmarkState(BookmarkState::Closed)),
+            _ => None,
+        },
+        // Fase 7.488 — `bookmark-label` (CSS GCPM). `none | <content-list>`.
+        // Parse opaco: guardamos el value crudo para que un renderer GCPM
+        // lo evalúe; `none` reservado.
+        "bookmark-label" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::BookmarkLabel(None))
+            } else {
+                Some(DeclKind::BookmarkLabel(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -5417,6 +5461,40 @@ pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {
 /// Acepta `auto`, `Npx`, `Nrem`/`Nem` (→ px), `N%`. Sin unidad y
 /// distinto de `0` → falla (a diferencia de `parse_length_px`, que
 /// asume px).
+/// Parsea `image-resolution: [ from-image || <resolution> ] && snap?`.
+/// Devuelve `Some(ImageResolution::FromImage)` cuando aparece sólo
+/// `from-image` (con o sin `snap`). Resoluciones aceptadas: `<n>dppx`,
+/// `<n>dpi`, `<n>dpcm`. Cualquier orden entre los tokens. CSS Images 4.
+/// Fase 7.485.
+pub(crate) fn parse_image_resolution(s: &str) -> Option<ImageResolution> {
+    let lower = s.trim().to_ascii_lowercase();
+    let mut from_image = false;
+    let mut snap = false;
+    let mut dppx: Option<f32> = None;
+    for tok in lower.split_whitespace() {
+        match tok {
+            "from-image" => from_image = true,
+            "snap" => snap = true,
+            other => {
+                if let Some(num) = other.strip_suffix("dppx") {
+                    dppx = num.parse::<f32>().ok();
+                } else if let Some(num) = other.strip_suffix("dpi") {
+                    dppx = num.parse::<f32>().ok().map(|n| n / 96.0);
+                } else if let Some(num) = other.strip_suffix("dpcm") {
+                    dppx = num.parse::<f32>().ok().map(|n| n * 2.54 / 96.0);
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    match (from_image, dppx) {
+        (true, None) => Some(ImageResolution::FromImage),
+        (_, Some(d)) if d > 0.0 => Some(ImageResolution::Resolution { dppx: d, snap }),
+        _ => None,
+    }
+}
+
 pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("auto") {

@@ -514,6 +514,16 @@ pub(crate) enum DeclKind {
     TimelineScope(Vec<String>),
     /// `reading-order` (Fase 7.483). CSS Inline 3. Default 0. NO hereda. Plumb.
     ReadingOrder(i32),
+    /// `reading-flow` (Fase 7.484). CSS Display 4. NO hereda. Plumb.
+    ReadingFlow(ReadingFlow),
+    /// `image-resolution` (Fase 7.485). HEREDA. Plumb.
+    ImageResolution(ImageResolution),
+    /// `bookmark-level` (Fase 7.486). `None` = `none`. NO hereda. Plumb.
+    BookmarkLevel(Option<u32>),
+    /// `bookmark-state` (Fase 7.487). NO hereda. Plumb.
+    BookmarkState(BookmarkState),
+    /// `bookmark-label` (Fase 7.488). `None` = `content(text)`. NO hereda. Plumb.
+    BookmarkLabel(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -914,6 +924,11 @@ impl Decl {
             DeclKind::AnimationComposition(v) => s.animation_composition = *v,
             DeclKind::TimelineScope(v) => s.timeline_scope = v.clone(),
             DeclKind::ReadingOrder(v) => s.reading_order = *v,
+            DeclKind::ReadingFlow(v) => s.reading_flow = *v,
+            DeclKind::ImageResolution(v) => s.image_resolution = *v,
+            DeclKind::BookmarkLevel(v) => s.bookmark_level = *v,
+            DeclKind::BookmarkState(v) => s.bookmark_state = *v,
+            DeclKind::BookmarkLabel(v) => s.bookmark_label = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
