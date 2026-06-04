@@ -745,6 +745,14 @@ pub struct ComputedStyle {
     pub object_view_box: Option<String>,
     /// `ruby-overhang` (Fase 7.453). Default `Auto`. HEREDA. Plumb.
     pub ruby_overhang: RubyOverhang,
+    /// `block-step-size` (Fase 7.454). Default `None`. NO hereda. Plumb.
+    pub block_step_size: BlockStepSize,
+    /// `block-step-insert` (Fase 7.455). Default `MarginBox`. NO hereda. Plumb.
+    pub block_step_insert: BlockStepInsert,
+    /// `block-step-align` (Fase 7.456). Default `Auto`. NO hereda. Plumb.
+    pub block_step_align: BlockStepAlign,
+    /// `block-step-round` (Fase 7.457). Default `Up`. NO hereda. Plumb.
+    pub block_step_round: BlockStepRound,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2254,6 +2262,47 @@ pub enum FontVariantEmoji {
     Unicode,
 }
 
+/// `block-step-size` (CSS Inline Layout 3). Tamaño de la cuadrícula vertical
+/// (`<length>`). Default `None` (sin alineación a cuadrícula). NO hereda.
+/// Fase 7.454.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum BlockStepSize {
+    #[default]
+    None,
+    Length(f32),
+}
+
+/// `block-step-insert` (CSS Inline Layout 3). Dónde se inserta el espacio
+/// extra para alinear a la cuadrícula vertical. Default `MarginBox`. NO hereda.
+/// Fase 7.455.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockStepInsert {
+    #[default]
+    MarginBox,
+    PaddingBox,
+}
+
+/// `block-step-align` (CSS Inline Layout 3). Cómo se distribuye el espacio
+/// dentro del block-step. Default `Auto`. NO hereda. Fase 7.456.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockStepAlign {
+    #[default]
+    Auto,
+    Center,
+    Start,
+    End,
+}
+
+/// `block-step-round` (CSS Inline Layout 3). Redondeo al múltiplo de
+/// `block-step-size`. Default `Up`. NO hereda. Fase 7.457.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlockStepRound {
+    #[default]
+    Up,
+    Down,
+    Nearest,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -3443,6 +3492,10 @@ impl Default for ComputedStyle {
             offset_position: None,
             object_view_box: None,
             ruby_overhang: RubyOverhang::Auto,
+            block_step_size: BlockStepSize::None,
+            block_step_insert: BlockStepInsert::MarginBox,
+            block_step_align: BlockStepAlign::Auto,
+            block_step_round: BlockStepRound::Up,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

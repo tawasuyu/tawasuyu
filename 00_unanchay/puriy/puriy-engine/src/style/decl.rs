@@ -464,6 +464,14 @@ pub(crate) enum DeclKind {
     ObjectViewBox(Option<String>),
     /// `ruby-overhang` (Fase 7.453). HEREDA. Plumb.
     RubyOverhang(RubyOverhang),
+    /// `block-step-size` (Fase 7.454). NO hereda. Plumb.
+    BlockStepSize(BlockStepSize),
+    /// `block-step-insert` (Fase 7.455). NO hereda. Plumb.
+    BlockStepInsert(BlockStepInsert),
+    /// `block-step-align` (Fase 7.456). NO hereda. Plumb.
+    BlockStepAlign(BlockStepAlign),
+    /// `block-step-round` (Fase 7.457). NO hereda. Plumb.
+    BlockStepRound(BlockStepRound),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -836,6 +844,10 @@ impl Decl {
             DeclKind::OffsetPosition(p) => s.offset_position = *p,
             DeclKind::ObjectViewBox(o) => s.object_view_box = o.clone(),
             DeclKind::RubyOverhang(r) => s.ruby_overhang = *r,
+            DeclKind::BlockStepSize(b) => s.block_step_size = *b,
+            DeclKind::BlockStepInsert(b) => s.block_step_insert = *b,
+            DeclKind::BlockStepAlign(b) => s.block_step_align = *b,
+            DeclKind::BlockStepRound(b) => s.block_step_round = *b,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

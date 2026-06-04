@@ -7375,6 +7375,76 @@ mod tests {
     }
 
     #[test]
+    fn block_step_fase_7_454_458() {
+        // Cinco props: block-step-{size,insert,align,round} (longhands) +
+        // block-step (shorthand). NO heredan.
+
+        // 1) Parser de cabecera para -size.
+        assert_eq!(parse_block_step_size("none"), Some(BlockStepSize::None));
+        assert_eq!(
+            parse_block_step_size("24px"),
+            Some(BlockStepSize::Length(24.0))
+        );
+        assert_eq!(parse_block_step_size("bad"), None);
+
+        // 2) E2E — longhands + shorthand.
+        let html = r##"<html><head><style>
+            #a { block-step-size: 16px;
+                 block-step-insert: padding-box;
+                 block-step-align: center;
+                 block-step-round: down }
+            #b { block-step: 20px }
+            #c { block-step: down center 32px padding-box }
+            #d { block-step: 16px 32px }
+            #e {}
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+            <div id="e"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.unwrap()
+        };
+        // #a — longhands.
+        let cs_a = eng.compute(&by("a"));
+        assert_eq!(cs_a.block_step_size, BlockStepSize::Length(16.0));
+        assert_eq!(cs_a.block_step_insert, BlockStepInsert::PaddingBox);
+        assert_eq!(cs_a.block_step_align, BlockStepAlign::Center);
+        assert_eq!(cs_a.block_step_round, BlockStepRound::Down);
+        // #b — shorthand 1 token (sólo size); el resto se reinicia a defaults.
+        let cs_b = eng.compute(&by("b"));
+        assert_eq!(cs_b.block_step_size, BlockStepSize::Length(20.0));
+        assert_eq!(cs_b.block_step_insert, BlockStepInsert::MarginBox);
+        assert_eq!(cs_b.block_step_align, BlockStepAlign::Auto);
+        assert_eq!(cs_b.block_step_round, BlockStepRound::Up);
+        // #c — shorthand 4 tokens en orden distinto al canónico.
+        let cs_c = eng.compute(&by("c"));
+        assert_eq!(cs_c.block_step_size, BlockStepSize::Length(32.0));
+        assert_eq!(cs_c.block_step_insert, BlockStepInsert::PaddingBox);
+        assert_eq!(cs_c.block_step_align, BlockStepAlign::Center);
+        assert_eq!(cs_c.block_step_round, BlockStepRound::Down);
+        // #d — shorthand inválido (dos lengths) → no emite NADA, todo en default.
+        let cs_d = eng.compute(&by("d"));
+        assert_eq!(cs_d.block_step_size, BlockStepSize::None);
+        assert_eq!(cs_d.block_step_insert, BlockStepInsert::MarginBox);
+        assert_eq!(cs_d.block_step_align, BlockStepAlign::Auto);
+        assert_eq!(cs_d.block_step_round, BlockStepRound::Up);
+        // #e — defaults puros.
+        let cs_e = eng.compute(&by("e"));
+        assert_eq!(cs_e.block_step_size, BlockStepSize::None);
+    }
+
+    #[test]
     fn offset_extras_ruby_overhang_fase_7_449_453() {
         // Cinco props: offset-rotate, offset-anchor, offset-position,
         // object-view-box (NO heredan), ruby-overhang (HEREDA).

@@ -171,6 +171,78 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `block-step: <size>? <insert>? <align>? <round>?` shorthand
+        // (Fase 7.458). Hasta 4 tokens, en cualquier orden. Cada longhand
+        // se emite a lo sumo una vez (token redundante → rechazo). Faltantes
+        // se emiten con default explícito (reset del campo).
+        if prop.eq_ignore_ascii_case("block-step") {
+            let mut size: Option<BlockStepSize> = None;
+            let mut insert: Option<BlockStepInsert> = None;
+            let mut align: Option<BlockStepAlign> = None;
+            let mut round: Option<BlockStepRound> = None;
+            let mut ok = true;
+            for tok in value.split_whitespace() {
+                match parse_block_step_piece(tok) {
+                    Some(DeclKind::BlockStepSize(v)) => {
+                        if size.is_some() {
+                            ok = false;
+                            break;
+                        }
+                        size = Some(v);
+                    }
+                    Some(DeclKind::BlockStepInsert(v)) => {
+                        if insert.is_some() {
+                            ok = false;
+                            break;
+                        }
+                        insert = Some(v);
+                    }
+                    Some(DeclKind::BlockStepAlign(v)) => {
+                        if align.is_some() {
+                            ok = false;
+                            break;
+                        }
+                        align = Some(v);
+                    }
+                    Some(DeclKind::BlockStepRound(v)) => {
+                        if round.is_some() {
+                            ok = false;
+                            break;
+                        }
+                        round = Some(v);
+                    }
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                out.push(Decl {
+                    kind: DeclKind::BlockStepSize(size.unwrap_or(BlockStepSize::None)),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::BlockStepInsert(
+                        insert.unwrap_or(BlockStepInsert::MarginBox),
+                    ),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::BlockStepAlign(
+                        align.unwrap_or(BlockStepAlign::Auto),
+                    ),
+                    important,
+                });
+                out.push(Decl {
+                    kind: DeclKind::BlockStepRound(
+                        round.unwrap_or(BlockStepRound::Up),
+                    ),
+                    important,
+                });
+            }
+            continue;
+        }
         // `contain-intrinsic-size: <w> [<h>]` shorthand (Fase 7.438). Cada
         // mitad acepta `none | <length> | auto none | auto <length>`. Con 1
         // valor se aplica a width y height; con 2 (separados por la primera
@@ -896,6 +968,30 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "none" => Some(DeclKind::RubyOverhang(RubyOverhang::None)),
             _ => None,
         },
+        // Fase 7.454 — `block-step-size` (CSS Inline Layout 3). `none | <length>`.
+        "block-step-size" => parse_block_step_size(value).map(DeclKind::BlockStepSize),
+        // Fase 7.455 — `block-step-insert` (CSS Inline Layout 3).
+        "block-step-insert" => match value.trim().to_ascii_lowercase().as_str() {
+            "margin-box" => Some(DeclKind::BlockStepInsert(BlockStepInsert::MarginBox)),
+            "padding-box" => Some(DeclKind::BlockStepInsert(BlockStepInsert::PaddingBox)),
+            _ => None,
+        },
+        // Fase 7.456 — `block-step-align` (CSS Inline Layout 3).
+        "block-step-align" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::BlockStepAlign(BlockStepAlign::Auto)),
+            "center" => Some(DeclKind::BlockStepAlign(BlockStepAlign::Center)),
+            "start" => Some(DeclKind::BlockStepAlign(BlockStepAlign::Start)),
+            "end" => Some(DeclKind::BlockStepAlign(BlockStepAlign::End)),
+            _ => None,
+        },
+        // Fase 7.457 — `block-step-round` (CSS Inline Layout 3).
+        "block-step-round" => match value.trim().to_ascii_lowercase().as_str() {
+            "up" => Some(DeclKind::BlockStepRound(BlockStepRound::Up)),
+            "down" => Some(DeclKind::BlockStepRound(BlockStepRound::Down)),
+            "nearest" => Some(DeclKind::BlockStepRound(BlockStepRound::Nearest)),
+            _ => None,
+        },
+        // Fase 7.458 — `block-step` shorthand: ver `parse_declarations`.
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
@@ -3994,6 +4090,35 @@ pub(crate) fn parse_text_size_adjust(value: &str) -> Option<TextSizeAdjust> {
         return num.trim().parse::<f32>().ok().map(TextSizeAdjust::Pct);
     }
     None
+}
+
+/// `block-step-size: none | <length>`. CSS Inline Layout 3. Fase 7.454.
+pub(crate) fn parse_block_step_size(value: &str) -> Option<BlockStepSize> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(BlockStepSize::None);
+    }
+    parse_length_px(v).map(BlockStepSize::Length)
+}
+
+/// Pieza individual del shorthand `block-step`. Devuelve un `DeclKind` con
+/// el longhand correspondiente, o `None` si el token no pertenece a NINGÚN
+/// longhand. Fase 7.458.
+fn parse_block_step_piece(tok: &str) -> Option<DeclKind> {
+    let low = tok.to_ascii_lowercase();
+    match low.as_str() {
+        "none" => Some(DeclKind::BlockStepSize(BlockStepSize::None)),
+        "margin-box" => Some(DeclKind::BlockStepInsert(BlockStepInsert::MarginBox)),
+        "padding-box" => Some(DeclKind::BlockStepInsert(BlockStepInsert::PaddingBox)),
+        "auto" => Some(DeclKind::BlockStepAlign(BlockStepAlign::Auto)),
+        "center" => Some(DeclKind::BlockStepAlign(BlockStepAlign::Center)),
+        "start" => Some(DeclKind::BlockStepAlign(BlockStepAlign::Start)),
+        "end" => Some(DeclKind::BlockStepAlign(BlockStepAlign::End)),
+        "up" => Some(DeclKind::BlockStepRound(BlockStepRound::Up)),
+        "down" => Some(DeclKind::BlockStepRound(BlockStepRound::Down)),
+        "nearest" => Some(DeclKind::BlockStepRound(BlockStepRound::Nearest)),
+        _ => parse_length_px(tok).map(|n| DeclKind::BlockStepSize(BlockStepSize::Length(n))),
+    }
 }
 
 /// `offset-rotate: [ auto | reverse ] || <angle>`. CSS Motion Path 1.
