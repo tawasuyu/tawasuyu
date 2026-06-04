@@ -714,6 +714,21 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "image-orientation" => {
             parse_image_orientation(value).map(DeclKind::ImageOrientation)
         }
+        "animation-timeline" => {
+            parse_timeline_ref(value).map(DeclKind::AnimationTimeline)
+        }
+        "scroll-timeline-name" => {
+            parse_dashed_ident_or_none(value).map(DeclKind::ScrollTimelineName)
+        }
+        "scroll-timeline-axis" => {
+            parse_timeline_axis(value).map(DeclKind::ScrollTimelineAxis)
+        }
+        "view-timeline-name" => {
+            parse_dashed_ident_or_none(value).map(DeclKind::ViewTimelineName)
+        }
+        "view-timeline-axis" => {
+            parse_timeline_axis(value).map(DeclKind::ViewTimelineAxis)
+        }
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
@@ -2787,6 +2802,50 @@ pub(crate) fn parse_place_self(
             Some((v, v))
         }
         [a, b] => Some((parse_align_self(a)?, parse_justify_self(b)?)),
+        _ => None,
+    }
+}
+
+/// `animation-timeline`: `auto | none | <dashed-ident>`. Fase 7.339.
+pub(crate) fn parse_timeline_ref(value: &str) -> Option<TimelineRef> {
+    let v = value.trim();
+    match v.to_ascii_lowercase().as_str() {
+        "auto" => Some(TimelineRef::Auto),
+        "none" => Some(TimelineRef::None),
+        _ => {
+            // Aceptamos cualquier `<custom-ident>` (validamos solo
+            // que no esté vacío y no tenga espacios internos — el
+            // lexer ya separó por whitespace, pero filtramos por
+            // las dudas).
+            if v.is_empty() || v.contains(char::is_whitespace) {
+                return None;
+            }
+            Some(TimelineRef::Named(v.to_string()))
+        }
+    }
+}
+
+/// `scroll-timeline-name` / `view-timeline-name`: `none | <dashed-ident>`.
+/// Fases 7.340, 7.342.
+pub(crate) fn parse_dashed_ident_or_none(value: &str) -> Option<Option<String>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    if v.is_empty() || v.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(Some(v.to_string()))
+}
+
+/// `scroll-timeline-axis` / `view-timeline-axis`:
+/// `block | inline | x | y`. Fases 7.341, 7.343.
+pub(crate) fn parse_timeline_axis(value: &str) -> Option<TimelineAxis> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "block" => Some(TimelineAxis::Block),
+        "inline" => Some(TimelineAxis::Inline),
+        "x" => Some(TimelineAxis::X),
+        "y" => Some(TimelineAxis::Y),
         _ => None,
     }
 }

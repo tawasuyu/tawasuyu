@@ -501,6 +501,22 @@ pub struct ComputedStyle {
     /// `image-orientation` SÍ hereda al estilo (los `<img>` lo leen).
     /// Plumb: el chrome no aplica rotación a `<img>`/`background-image`.
     pub image_orientation: ImageOrientation,
+    /// `animation-timeline` (Fase 7.339). Default `Auto`. NO hereda.
+    /// Plumb: no hay runtime de animación (B4), así que la línea de
+    /// tiempo nunca se consume.
+    pub animation_timeline: TimelineRef,
+    /// `scroll-timeline-name` (Fase 7.340). `None` = sin timeline.
+    /// NO hereda. Plumb.
+    pub scroll_timeline_name: Option<String>,
+    /// `scroll-timeline-axis` (Fase 7.341). Default `Block`. NO hereda.
+    /// Plumb.
+    pub scroll_timeline_axis: TimelineAxis,
+    /// `view-timeline-name` (Fase 7.342). `None` = sin timeline.
+    /// NO hereda. Plumb.
+    pub view_timeline_name: Option<String>,
+    /// `view-timeline-axis` (Fase 7.343). Default `Block`. NO hereda.
+    /// Plumb.
+    pub view_timeline_axis: TimelineAxis,
     /// Sombras del texto. Vacío = ninguna.
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
@@ -1467,6 +1483,31 @@ impl Default for ImageOrientation {
     fn default() -> Self {
         ImageOrientation::FromImage
     }
+}
+
+/// `animation-timeline` (CSS Animations 2 / Scroll-driven Animations 1).
+/// `Auto` usa el monotonic timer del documento (el default
+/// implícito); `None` desactiva la animación; `Named(s)` la enlaza a
+/// un scroll/view-timeline declarado en otro lado. NO hereda.
+/// Fase 7.339.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TimelineRef {
+    #[default]
+    Auto,
+    None,
+    Named(String),
+}
+
+/// `scroll-timeline-axis` / `view-timeline-axis` (CSS Scroll-driven
+/// Animations 1). Default `Block` (el eje block del writing-mode).
+/// `X`/`Y` son aliases físicos. Fases 7.341, 7.343.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TimelineAxis {
+    #[default]
+    Block,
+    Inline,
+    X,
+    Y,
 }
 
 impl ContainFlags {
@@ -2486,6 +2527,11 @@ impl Default for ComputedStyle {
             font_synthesis: FontSynthesis::default(),
             font_size_adjust: FontSizeAdjust::None,
             image_orientation: ImageOrientation::FromImage,
+            animation_timeline: TimelineRef::Auto,
+            scroll_timeline_name: None,
+            scroll_timeline_axis: TimelineAxis::Block,
+            view_timeline_name: None,
+            view_timeline_axis: TimelineAxis::Block,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

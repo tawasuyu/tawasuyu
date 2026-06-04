@@ -4842,6 +4842,151 @@ mod tests {
     }
 
     #[test]
+    fn animation_timeline_fase_7_339() {
+        assert_eq!(parse_timeline_ref("auto"), Some(TimelineRef::Auto));
+        assert_eq!(parse_timeline_ref("NONE"), Some(TimelineRef::None));
+        assert_eq!(
+            parse_timeline_ref("--scroller"),
+            Some(TimelineRef::Named("--scroller".to_string()))
+        );
+        assert_eq!(parse_timeline_ref(""), None);
+
+        let html = r##"<html><head><style>
+            body { animation-timeline: --scroller }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(
+            body_cs.animation_timeline,
+            TimelineRef::Named("--scroller".to_string())
+        );
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).animation_timeline,
+            TimelineRef::Auto
+        );
+    }
+
+    #[test]
+    fn scroll_timeline_name_fase_7_340() {
+        assert_eq!(parse_dashed_ident_or_none("none"), Some(None));
+        assert_eq!(
+            parse_dashed_ident_or_none("--my-tl"),
+            Some(Some("--my-tl".to_string()))
+        );
+        assert_eq!(parse_dashed_ident_or_none(""), None);
+
+        let html = r##"<html><head><style>
+            body { scroll-timeline-name: --tl }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scroll_timeline_name, Some("--tl".to_string()));
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scroll_timeline_name,
+            None
+        );
+    }
+
+    #[test]
+    fn scroll_timeline_axis_fase_7_341() {
+        assert_eq!(parse_timeline_axis("block"), Some(TimelineAxis::Block));
+        assert_eq!(parse_timeline_axis("INLINE"), Some(TimelineAxis::Inline));
+        assert_eq!(parse_timeline_axis("x"), Some(TimelineAxis::X));
+        assert_eq!(parse_timeline_axis("y"), Some(TimelineAxis::Y));
+        assert_eq!(parse_timeline_axis("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { scroll-timeline-axis: inline }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.scroll_timeline_axis, TimelineAxis::Inline);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).scroll_timeline_axis,
+            TimelineAxis::Block
+        );
+    }
+
+    #[test]
+    fn view_timeline_name_fase_7_342() {
+        let html = r##"<html><head><style>
+            body { view-timeline-name: --section }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.view_timeline_name, Some("--section".to_string()));
+    }
+
+    #[test]
+    fn view_timeline_axis_fase_7_343() {
+        let html = r##"<html><head><style>
+            body { view-timeline-axis: y }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.view_timeline_axis, TimelineAxis::Y);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).view_timeline_axis,
+            TimelineAxis::Block
+        );
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(
