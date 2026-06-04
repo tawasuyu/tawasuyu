@@ -723,7 +723,10 @@ fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
             entradas.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             entradas.truncate(200);
             for (dir, name) in entradas {
-                let etiqueta = if dir { format!("{name}/") } else { name };
+                let etiqueta = if dir { format!("{name}/") } else { name.clone() };
+                // Click: una carpeta carga `cd <dir>` en el input del shell; un
+                // archivo carga su nombre. El usuario confirma con Enter.
+                let cmd = if dir { format!("cd {name}") } else { name.clone() };
                 filas.push(
                     View::new(Style {
                         size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
@@ -732,6 +735,7 @@ fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
                         ..Default::default()
                     })
                     .hover_fill(theme.bg_row_hover)
+                    .on_click(Msg::RunFromHistory(cmd))
                     .text_aligned(etiqueta, 12.0, if dir { theme.accent } else { theme.fg_text }, Alignment::Start),
                 );
             }
