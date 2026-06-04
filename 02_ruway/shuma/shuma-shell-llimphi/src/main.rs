@@ -138,6 +138,32 @@ fn main() {
     llimphi_ui::run::<Shell>();
 }
 
+/// Si la sesión activa es la draft y se acaba de configurar, la promueve a
+/// sesión propia (número + kind según aislamiento + nombre) e inserta una draft
+/// nueva al frente para que siga siendo el punto de entrada.
+fn promote_if_draft(m: &mut Model) {
+    let is_draft = matches!(m.sessions.get(m.active_session), Some(s) if s.kind == SessionKind::Draft);
+    if !is_draft {
+        return;
+    }
+    let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;
+    if let Some(s) = m.sessions.get_mut(m.active_session) {
+        s.number = Some(n);
+        s.kind = match s.isolation {
+            Isolation::Remote => SessionKind::Remote,
+            _ => SessionKind::Local,
+        };
+        s.name = match s.isolation {
+            Isolation::Local => format!("local {n}"),
+            Isolation::Container => format!("{} {n}", s.distro.label().to_lowercase()),
+            Isolation::Remote => format!("remota {n}"),
+        };
+    }
+    // Nace un draft nuevo al frente; la sesión promovida se corre un índice.
+    m.sessions.insert(0, Session::draft());
+    m.active_session += 1;
+}
+
 // ─── Tipos de módulos conocidos por este binario ───────────────────
 
 /// Qué `Kind` puede ocupar cada slot. Una variante por módulo
@@ -177,6 +203,50 @@ enum Which {
     Shell,
     Canvas,
     Matilda,
+}
+
+/// Cómo se aísla una sesión (el "qué aislar"). Es la config medular: define
+/// dónde corre el shell.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Isolation {
+    /// Directo sobre la máquina, sin aislar.
+    Local,
+    /// Dentro de un contenedor (con la distro elegida).
+    Container,
+    /// Sobre una máquina remota por SSH/daemon.
+    Remote,
+}
+
+impl Isolation {
+    const ALL: [Isolation; 3] = [Isolation::Local, Isolation::Container, Isolation::Remote];
+    fn label(self) -> &'static str {
+        match self {
+            Isolation::Local => "Local",
+            Isolation::Container => "Contenedor",
+            Isolation::Remote => "Remoto",
+        }
+    }
+}
+
+/// La distro del aislamiento (para contenedor/remoto).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Distro {
+    Ubuntu,
+    Debian,
+    Alpine,
+    Arch,
+}
+
+impl Distro {
+    const ALL: [Distro; 4] = [Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch];
+    fn label(self) -> &'static str {
+        match self {
+            Distro::Ubuntu => "Ubuntu",
+            Distro::Debian => "Debian",
+            Distro::Alpine => "Alpine",
+            Distro::Arch => "Arch",
+        }
+    }
 }
 
 /// El tipo de una sesión — define el icono de su diente (rail izquierdo).
@@ -314,9 +384,12 @@ struct Session {
     kind: SessionKind,
     /// Número de insignia del diente (None para la draft).
     number: Option<u32>,
+    /// Config del aislamiento (la misma que tendrán todas las sesiones).
+    isolation: Isolation,
+    distro: Distro,
     /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
-    /// Es el aislamiento: local = procesos de la máquina; remoto = SSH/daemon.
-    /// (Se leerá al editar el aislamiento de una sesión existente — fase 4.)
+    /// (El enforcement real del aislamiento contenedor/remoto es deuda; hoy el
+    /// shell corre con este `source`.)
     #[allow(dead_code)]
     source: Source,
     shell: Instance,
@@ -333,11 +406,14 @@ impl Session {
             name,
             kind,
             number,
+            isolation: Isolation::Local,
+            distro: Distro::Ubuntu,
             source,
         }
     }
 
-    /// La sesión por defecto: local, sin aislamiento, sin número. No toca nada.
+    /// La sesión por defecto: local, sin configurar, sin número. No toca nada.
+    /// Tiene los campos de config a sus defaults; al tocarlos pasa a sesión propia.
     fn draft() -> Self {
         Self::build("draft".to_string(), SessionKind::Draft, None, default_shell_source())
     }
@@ -482,10 +558,12 @@ enum Msg {
     SelectSession(usize),
     /// Click en un diente de herramienta (rail derecho): abre/cierra su panel.
     SelectTool(Tool),
-    /// Crear una sesión (desde la config del panel de la draft) con el
-    /// aislamiento elegido, y activarla. No hay botón «+» aparte: la sesión
-    /// nace al configurarla.
-    CreateSession(SessionKind),
+    /// Elegir el aislamiento en el panel de config. Sobre la draft, configurar
+    /// la promueve a sesión propia (y nace un draft nuevo); sobre una sesión
+    /// real, edita su config.
+    SetIsolation(Isolation),
+    /// Elegir la distro del aislamiento (idem promoción del draft).
+    SetDistro(Distro),
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
     /// Click en una línea del historial: carga ese comando en el input del
@@ -686,23 +764,26 @@ impl App for Shell {
                     ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(cmd)),
                 );
             }
-            // Crear una sesión desde la config del panel de la draft. No hay
-            // botón «+»: la sesión nace al configurar el aislamiento. Se inserta
-            // al frente (tras la draft, índice 0) con insignia incremental.
-            Msg::CreateSession(kind) => {
-                let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;
-                let (name, source) = match kind {
-                    SessionKind::Remote => (format!("remota {n}"), default_shell_source()),
-                    _ => (format!("local {n}"), Source::Local),
-                };
-                let real_kind = if matches!(kind, SessionKind::Draft) {
-                    SessionKind::Local
-                } else {
-                    kind
-                };
-                m.sessions.insert(1, Session::build(name, real_kind, Some(n), source));
-                m.active_session = 1;
-                m.session_panel_open = true;
+            // Config del aislamiento. Sobre la draft, configurarla la promueve
+            // a sesión propia (y nace un draft nuevo); sobre una real, edita.
+            Msg::SetIsolation(iso) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.isolation = iso;
+                }
+                promote_if_draft(&mut m);
+            }
+            Msg::SetDistro(d) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.distro = d;
+                }
+                promote_if_draft(&mut m);
+            }
+            Msg::CloseSession(idx) => {
+                // La draft (0) no se cierra; las demás se descartan.
+                if idx > 0 && idx < m.sessions.len() {
+                    m.sessions.remove(idx);
+                    m.active_session = m.active_session.min(m.sessions.len() - 1);
+                }
             }
             Msg::CloseSession(idx) => {
                 // La draft (0) no se cierra; las demás se descartan.

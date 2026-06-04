@@ -124,79 +124,71 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
 /// una sesión (no hay botón «+»). Una sesión real muestra su aislamiento + el
 /// botón para cerrarla.
 fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::AlignItems;
     use llimphi_ui::llimphi_text::Alignment;
 
     let Some(session) = model.active() else {
         return View::new(Style::default());
     };
     let idx = model.active_session;
+    let es_draft = session.kind == SessionKind::Draft;
 
-    let mut children: Vec<View<Msg>> = vec![tool_header(&format!("Sesión · {}", session.name), theme)];
+    let titulo = if es_draft { "Borrador".to_string() } else { session.name.clone() };
 
-    let fila = |texto: String, color| -> View<Msg> {
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-            padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(texto, 12.0, color, Alignment::Start)
-    };
+    let mut children: Vec<View<Msg>> = vec![panel_title(&titulo, theme)];
 
-    let boton = |texto: &str, msg: Msg, theme: &Theme| -> View<Msg> {
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
-            margin: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
-            ..Default::default()
-        })
-        .fill(theme.bg_button)
-        .hover_fill(theme.bg_button_hover)
-        .radius(5.0)
-        .text_aligned(texto.to_string(), 12.0, theme.fg_text, Alignment::Center)
-        .on_click(msg)
-    };
-
-    match session.kind {
-        SessionKind::Draft => {
-            children.push(fila(
-                "Borrador local — trabajás sin guardar nada.".into(),
-                theme.fg_muted,
-            ));
-            children.push(fila("Aislamiento de la sesión nueva:".into(), theme.fg_text));
-            children.push(boton("⊞  Crear sesión local", Msg::CreateSession(SessionKind::Local), theme));
-            children.push(boton("◍  Crear sesión remota (SSH)", Msg::CreateSession(SessionKind::Remote), theme));
-        }
-        SessionKind::Local => {
-            children.push(fila("Aislamiento: local".into(), theme.fg_text));
-            children.push(fila(format!("cwd: {}", session_cwd(session)), theme.fg_muted));
-            children.push(boton("Cerrar sesión", Msg::CloseSession(idx), theme));
-        }
-        SessionKind::Remote => {
-            children.push(fila("Aislamiento: remoto (SSH)".into(), theme.fg_text));
-            children.push(fila(format!("origen: {}", session.source.label()), theme.fg_muted));
-            children.push(fila("(config SSH detallada — pendiente)".into(), theme.fg_muted));
-            children.push(boton("Cerrar sesión", Msg::CloseSession(idx), theme));
-        }
+    if es_draft {
+        children.push(panel_note(
+            "Trabajás sin guardar. Al configurar abajo, nace una sesión propia.",
+            theme,
+        ));
     }
 
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: length(model.monitors_width), height: percent(1.0_f32) },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .children(children)
+    // Sección Aislamiento (qué aislar): chips Local / Contenedor / Remoto.
+    children.push(panel_label("Aislamiento", theme));
+    children.push(chip_row(
+        Isolation::ALL
+            .iter()
+            .map(|iso| chip(iso.label(), session.isolation == *iso, Msg::SetIsolation(*iso), theme))
+            .collect(),
+    ));
+
+    // Sección Distro (con qué distro): chips. Aplica a contenedor/remoto.
+    children.push(panel_label("Distro", theme));
+    children.push(chip_row(
+        Distro::ALL
+            .iter()
+            .map(|d| chip(d.label(), session.distro == *d, Msg::SetDistro(*d), theme))
+            .collect(),
+    ));
+
+    // Estado actual + cerrar (sólo sesiones reales).
+    if !es_draft {
+        children.push(panel_label("cwd", theme));
+        children.push(panel_note(&session_cwd(session), theme));
+        children.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+                margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(10.0_f32), bottom: length(0.0_f32) },
+                align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(theme.bg_button)
+            .hover_fill(theme.bg_button_hover)
+            .radius(5.0)
+            .text_aligned("Cerrar sesión".to_string(), 12.0, theme.fg_text, Alignment::Center)
+            .on_click(Msg::CloseSession(idx)),
+        );
+    }
+
+    panel_frame(children, model.monitors_width, theme)
 }
 
 /// cwd del shell de una sesión (para el panel de config).
 fn session_cwd(session: &Session) -> String {
     match &session.shell.state {
         ModuleState::Shell(sh) => sh.cwd.display().to_string(),
-        _ => "·".to_string(),
+        _ => "-".to_string(),
     }
 }
 
@@ -236,8 +228,8 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             let activa = i == model.active_session;
             let fill = if activa { theme.bg_selected } else { theme.bg_panel_alt };
             let icon_color = if activa { theme.accent } else { theme.fg_muted };
-            // Insignia: número para las creadas, «·» para la draft.
-            let badge = s.number.map(|n| n.to_string()).unwrap_or_else(|| "·".into());
+            // Insignia: número para las creadas, vacío para la draft.
+            let badge = s.number.map(|n| n.to_string()).unwrap_or_default();
             let icon = session_tooth_icon(s.kind, s.active_data(), 22.0, icon_color);
             let num = View::new(Style {
                 size: Size { width: percent(1.0_f32), height: length(12.0_f32) },
@@ -506,6 +498,105 @@ fn tool_rail(model: &Model, theme: &Theme) -> View<Msg> {
 }
 
 /// El panel de la herramienta activa (entre el canvas y el rail derecho).
+// ─── Estilo común de paneles (padding, chips, etiquetas) ───────────────
+
+/// Marco de un panel lateral: ancho fijo, **padding** (los márgenes que
+/// faltaban), fondo y gap entre secciones.
+fn panel_frame(children: Vec<View<Msg>>, width: f32, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(width), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(children)
+}
+
+/// Título de un panel (nombre de la sesión / herramienta).
+fn panel_title(t: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(t.to_string(), 13.0, theme.fg_text, Alignment::Start)
+}
+
+/// Etiqueta de sección (tenue, chica).
+fn panel_label(t: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(t.to_string(), 10.0, theme.fg_muted, Alignment::Start)
+}
+
+/// Nota/párrafo tenue dentro de un panel.
+fn panel_note(t: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(t.to_string(), 11.0, theme.fg_muted, Alignment::Start)
+}
+
+/// Un chip seleccionable (pill) para los selectores de config.
+fn chip(label: &str, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    let (fill, fg) = if selected {
+        (theme.bg_selected, theme.fg_text)
+    } else {
+        (theme.bg_button, theme.fg_muted)
+    };
+    View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(26.0_f32) },
+        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(6.0_f32), top: length(0.0_f32), bottom: length(6.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(fill)
+    .hover_fill(theme.bg_button_hover)
+    .radius(13.0)
+    .text_aligned(label.to_string(), 12.0, fg, Alignment::Center)
+    .on_click(msg)
+}
+
+/// Fila de chips, con wrap si no caben en el ancho del panel.
+fn chip_row(chips: Vec<View<Msg>>) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, FlexWrap};
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: FlexWrap::Wrap,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .children(chips)
+}
+
 fn tool_panel(model: &Model, tool: Tool, theme: &Theme) -> View<Msg> {
     let inner = match tool {
         Tool::History => history_column(model, theme),
@@ -513,13 +604,7 @@ fn tool_panel(model: &Model, tool: Tool, theme: &Theme) -> View<Msg> {
         Tool::Explorer => explorer_panel(model, theme),
         Tool::Matilda => matilda_panel(model, theme),
     };
-    View::new(Style {
-        size: Size { width: length(model.monitors_width), height: percent(1.0_f32) },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .children(vec![inner])
+    panel_frame(vec![inner], model.monitors_width, theme)
 }
 
 /// Panel Explorer/SFTP: lista los archivos del cwd de la sesión (local). El
@@ -766,8 +851,8 @@ fn vhosts_view(inv: &matilda_core::Inventory, theme: &Theme) -> View<Msg> {
                 Upstream::Address(a) => a.clone(),
                 Upstream::Container { name, port } => format!("{name}:{port}"),
             };
-            let tls = if v.tls { "  🔒 TLS" } else { "" };
-            inventory_row(v.domain.clone(), format!("→ {up}{tls}"), theme)
+            let tls = if v.tls { "  TLS" } else { "" };
+            inventory_row(v.domain.clone(), format!("-> {up}{tls}"), theme)
         })
         .collect();
     if filas.is_empty() {
@@ -891,7 +976,7 @@ pub(crate) fn monitor_stack(model: &Model, theme: &Theme) -> View<Msg> {
                 .extra_display
                 .get(&key)
                 .cloned()
-                .unwrap_or_else(|| "—".into());
+                .unwrap_or_else(|| "-".into());
             let accent = Color::from_rgb8(spec.accent.r, spec.accent.g, spec.accent.b);
             children.push(monitor_card(
                 spec.label.as_str(),
