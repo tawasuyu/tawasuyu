@@ -1214,6 +1214,15 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "inert" => Some(DeclKind::Interactivity(Interactivity::Inert)),
             _ => None,
         },
+        // Fase 7.474-7.478 — geometría SVG (`cx`, `cy`, `r`, `rx`, `ry`).
+        // SVG2 promueve estos atributos a propiedades CSS — `<length-percentage>`
+        // para los 5; `auto` válido sólo en `rx`/`ry` (sentinel `LengthVal::Auto`).
+        // NO heredan.
+        "cx" => parse_length_or_pct(value).map(DeclKind::Cx),
+        "cy" => parse_length_or_pct(value).map(DeclKind::Cy),
+        "r" => parse_length_or_pct(value).map(DeclKind::R),
+        "rx" => parse_length_or_pct(value).map(DeclKind::Rx),
+        "ry" => parse_length_or_pct(value).map(DeclKind::Ry),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

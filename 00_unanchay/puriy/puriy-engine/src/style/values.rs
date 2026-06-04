@@ -777,6 +777,21 @@ pub struct ComputedStyle {
     /// `interactivity` (Fase 7.473). Default `Auto`. **HEREDA** (CSS UI 4).
     /// Plumb.
     pub interactivity: Interactivity,
+    /// `cx` (Fase 7.474). Geometría SVG `<circle>`/`<ellipse>`. Default
+    /// `LengthVal::Px(0.0)`. NO hereda. Plumb.
+    pub cx: LengthVal,
+    /// `cy` (Fase 7.475). Geometría SVG `<circle>`/`<ellipse>`. Default
+    /// `LengthVal::Px(0.0)`. NO hereda. Plumb.
+    pub cy: LengthVal,
+    /// `r` (Fase 7.476). Radio de `<circle>`. Default `LengthVal::Px(0.0)`.
+    /// NO hereda. Plumb.
+    pub r: LengthVal,
+    /// `rx` (Fase 7.477). Radio elipse eje X (`<ellipse>`/`<rect>`).
+    /// Default `LengthVal::Auto`. NO hereda. Plumb.
+    pub rx: LengthVal,
+    /// `ry` (Fase 7.478). Radio elipse eje Y (`<ellipse>`/`<rect>`).
+    /// Default `LengthVal::Auto`. NO hereda. Plumb.
+    pub ry: LengthVal,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3629,6 +3644,11 @@ impl Default for ComputedStyle {
             view_timeline_inset_start: LengthVal::Px(0.0),
             view_timeline_inset_end: LengthVal::Px(0.0),
             interactivity: Interactivity::Auto,
+            cx: LengthVal::Px(0.0),
+            cy: LengthVal::Px(0.0),
+            r: LengthVal::Px(0.0),
+            rx: LengthVal::Auto,
+            ry: LengthVal::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

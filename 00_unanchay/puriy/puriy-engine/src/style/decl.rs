@@ -494,6 +494,16 @@ pub(crate) enum DeclKind {
     FontSynthesisPosition(bool),
     /// `interactivity` (Fase 7.473). HEREDA. Plumb.
     Interactivity(Interactivity),
+    /// `cx` (Fase 7.474). Geometría SVG. NO hereda. Plumb.
+    Cx(LengthVal),
+    /// `cy` (Fase 7.475). Geometría SVG. NO hereda. Plumb.
+    Cy(LengthVal),
+    /// `r` (Fase 7.476). Radio del círculo SVG. NO hereda. Plumb.
+    R(LengthVal),
+    /// `rx` (Fase 7.477). Radio elipse SVG. `Auto` = `auto`. NO hereda. Plumb.
+    Rx(LengthVal),
+    /// `ry` (Fase 7.478). Radio elipse SVG. `Auto` = `auto`. NO hereda. Plumb.
+    Ry(LengthVal),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -884,6 +894,11 @@ impl Decl {
             }
             DeclKind::FontSynthesisPosition(b) => s.font_synthesis.position = *b,
             DeclKind::Interactivity(i) => s.interactivity = *i,
+            DeclKind::Cx(v) => s.cx = *v,
+            DeclKind::Cy(v) => s.cy = *v,
+            DeclKind::R(v) => s.r = *v,
+            DeclKind::Rx(v) => s.rx = *v,
+            DeclKind::Ry(v) => s.ry = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
