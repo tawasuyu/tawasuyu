@@ -7278,6 +7278,54 @@ mod tests {
     }
 
     #[test]
+    fn border_radius_logico_fase_7_409_412() {
+        // En LTR horizontal: block-start = top, block-end = bottom,
+        // inline-start = left, inline-end = right. El primer eje es block.
+        let html = r##"<html><head><style>
+            body {
+                border-start-start-radius: 1px;
+                border-start-end-radius: 2px;
+                border-end-start-radius: 3px;
+                border-end-end-radius: 4px;
+            }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.border_radii.top_left, 1.0);
+        assert_eq!(cs.border_radii.top_right, 2.0);
+        assert_eq!(cs.border_radii.bottom_left, 3.0);
+        assert_eq!(cs.border_radii.bottom_right, 4.0);
+    }
+
+    #[test]
+    fn overscroll_behavior_block_fase_7_413() {
+        // `overscroll-behavior-block` mapea al longhand físico `-y`
+        // (eje vertical en LTR horizontal). NO toca el `-x`.
+        let html = r##"<html><head><style>
+            body { overscroll-behavior-block: contain }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.overscroll_behavior_y, OverscrollBehavior::Contain);
+        // `-x` no afectado → queda en default `Auto`.
+        assert_eq!(cs.overscroll_behavior_x, OverscrollBehavior::Auto);
+    }
+
+    #[test]
     fn text_decoration_color_y_style() {
         // Parser de longhands sueltos.
         assert_eq!(

@@ -594,6 +594,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "overscroll-behavior-y" => {
             parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorY)
         }
+        // Fase 7.413 — `overscroll-behavior-block`. En LTR horizontal el
+        // eje `block` es el vertical → mapea al longhand `-y`.
+        "overscroll-behavior-block" => {
+            parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorY)
+        }
         // `overscroll-behavior` shorthand: ver `parse_declarations`.
         "scroll-snap-type" => parse_scroll_snap_type(value).map(DeclKind::ScrollSnapType),
         // `scroll-snap-align` shorthand: ver `parse_declarations`.
@@ -4051,13 +4056,25 @@ pub(crate) fn match_border_side_prop(prop: &str, suffix: &str) -> Option<BorderE
     None
 }
 
-/// Match propiedades `border-{top|bottom}-{left|right}-radius`.
+/// Match propiedades `border-{top|bottom}-{left|right}-radius` y sus
+/// equivalentes lógicos `border-{start|end}-{start|end}-radius` (Fase
+/// 7.409-7.412). En LTR horizontal: `block-start = top`, `block-end =
+/// bottom`, `inline-start = left`, `inline-end = right`. El primer eje
+/// es el block; el segundo, el inline (spec CSS Backgrounds 4).
 pub(crate) fn match_border_corner_prop(prop: &str) -> Option<BorderCorner> {
     match prop.to_ascii_lowercase().as_str() {
         "border-top-left-radius" => Some(BorderCorner::TopLeft),
         "border-top-right-radius" => Some(BorderCorner::TopRight),
         "border-bottom-right-radius" => Some(BorderCorner::BottomRight),
         "border-bottom-left-radius" => Some(BorderCorner::BottomLeft),
+        // Fase 7.409 — `border-start-start-radius` = block-start + inline-start = top-left.
+        "border-start-start-radius" => Some(BorderCorner::TopLeft),
+        // Fase 7.410 — `border-start-end-radius` = block-start + inline-end = top-right.
+        "border-start-end-radius" => Some(BorderCorner::TopRight),
+        // Fase 7.411 — `border-end-start-radius` = block-end + inline-start = bottom-left.
+        "border-end-start-radius" => Some(BorderCorner::BottomLeft),
+        // Fase 7.412 — `border-end-end-radius` = block-end + inline-end = bottom-right.
+        "border-end-end-radius" => Some(BorderCorner::BottomRight),
         _ => None,
     }
 }
