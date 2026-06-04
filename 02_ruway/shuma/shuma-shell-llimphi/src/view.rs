@@ -255,8 +255,8 @@ fn canvas_view(model: &Model, theme: &Theme) -> View<Msg> {
 
 /// El rail IZQUIERDO de **sesiones**: la draft primero, luego las creadas (se
 /// agregan al frente). Cada diente lleva el icono de su tipo, una insignia
-/// numérica y un LED de actividad; al final, el `+` que crea una sesión local.
-/// (Reordenamiento por drag: pendiente.)
+/// numérica y un LED de actividad, y es **arrastrable** para reordenar (la draft
+/// queda fija). No hay `+`: la sesión nace al configurar la draft.
 fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
@@ -279,7 +279,10 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
                 ..Default::default()
             })
             .text_aligned(badge, 9.0, theme.fg_muted, Alignment::Center);
-            View::new(Style {
+            // Cada diente: clickeable (selecciona/togglea panel), arrastrable
+            // (payload = su índice) y drop-target (soltar otro acá lo reordena).
+            // La draft (0) no es arrastrable ni acepta drop (queda fija).
+            let mut tooth = View::new(Style {
                 flex_direction: FlexDirection::Column,
                 size: Size { width: percent(1.0_f32), height: length(48.0_f32) },
                 align_items: Some(AlignItems::Center),
@@ -290,7 +293,17 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             .fill(fill)
             .hover_fill(theme.bg_row_hover)
             .on_click(Msg::SelectSession(i))
-            .children(vec![icon, num])
+            .children(vec![icon, num]);
+            if i > 0 {
+                tooth = tooth
+                    .draggable_at(|phase, _, _, _, _| match phase {
+                        DragPhase::Move | DragPhase::End => None,
+                    })
+                    .drag_payload(i as u64)
+                    .on_drop(move |payload| Some(Msg::ReorderSession(payload as usize, i)))
+                    .drop_hover_fill(theme.bg_row_hover);
+            }
+            tooth
         })
         .collect();
     // Sin botón «+»: la sesión nace al configurar la draft desde su panel.
