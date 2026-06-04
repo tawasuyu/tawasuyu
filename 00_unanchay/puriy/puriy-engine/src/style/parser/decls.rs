@@ -109,6 +109,22 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `scroll-margin-block: <start> [<end>]` (Fase 7.417). En LTR
+        // horizontal: start=top, end=bottom. Con 1 valor se aplica a
+        // ambos lados; con 2, primero start, después end. Si falla algún
+        // token descartamos el shorthand entero (CSS spec).
+        if prop.eq_ignore_ascii_case("scroll-margin-block") {
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            let vals: Vec<f32> =
+                parts.iter().filter_map(|p| parse_length_px(p)).collect();
+            if !vals.is_empty() && vals.len() == parts.len() {
+                let (s, e) =
+                    if vals.len() == 1 { (vals[0], vals[0]) } else { (vals[0], vals[1]) };
+                out.push(Decl { kind: DeclKind::ScrollMarginTop(s), important });
+                out.push(Decl { kind: DeclKind::ScrollMarginBottom(e), important });
+            }
+            continue;
+        }
         // `scroll-snap-align: <block> [<inline>]` — con 1 valor se aplica a
         // ambos ejes. Fase 7.269.
         if prop.eq_ignore_ascii_case("scroll-snap-align") {
@@ -599,6 +615,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "overscroll-behavior-block" => {
             parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorY)
         }
+        // Fase 7.414 — `overscroll-behavior-inline`. En LTR horizontal el
+        // eje `inline` es el horizontal → mapea al longhand `-x`.
+        "overscroll-behavior-inline" => {
+            parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorX)
+        }
         // `overscroll-behavior` shorthand: ver `parse_declarations`.
         "scroll-snap-type" => parse_scroll_snap_type(value).map(DeclKind::ScrollSnapType),
         // `scroll-snap-align` shorthand: ver `parse_declarations`.
@@ -623,6 +644,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "scroll-margin-right" => parse_length_px(value).map(DeclKind::ScrollMarginRight),
         "scroll-margin-bottom" => parse_length_px(value).map(DeclKind::ScrollMarginBottom),
         "scroll-margin-left" => parse_length_px(value).map(DeclKind::ScrollMarginLeft),
+        // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
+        "scroll-margin-block-start" => {
+            parse_length_px(value).map(DeclKind::ScrollMarginTop)
+        }
+        // Fase 7.416 — `scroll-margin-block-end` = bottom en LTR horizontal.
+        "scroll-margin-block-end" => {
+            parse_length_px(value).map(DeclKind::ScrollMarginBottom)
+        }
+        // Fase 7.418 — `scroll-margin-inline-start` = left en LTR horizontal.
+        "scroll-margin-inline-start" => {
+            parse_length_px(value).map(DeclKind::ScrollMarginLeft)
+        }
+        // `scroll-margin-block` shorthand (Fase 7.417): ver `parse_declarations`.
         "touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
         "clip-path" | "-webkit-clip-path" => Some(DeclKind::ClipPath(parse_clip_path(value))),
         "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),

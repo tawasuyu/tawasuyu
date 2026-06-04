@@ -7305,6 +7305,66 @@ mod tests {
     }
 
     #[test]
+    fn overscroll_behavior_inline_fase_7_414() {
+        // `overscroll-behavior-inline` mapea al longhand físico `-x`
+        // (eje horizontal en LTR horizontal). NO toca el `-y`.
+        let html = r##"<html><head><style>
+            body { overscroll-behavior-inline: none }
+        </style></head><body></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("body") {
+                bodies.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&bodies[0]);
+        assert_eq!(cs.overscroll_behavior_x, OverscrollBehavior::None);
+        assert_eq!(cs.overscroll_behavior_y, OverscrollBehavior::Auto);
+    }
+
+    #[test]
+    fn scroll_margin_block_inline_fase_7_415_418() {
+        // Longhands `-block-start/-end` + `-inline-start` y shorthand
+        // `scroll-margin-block`. En LTR horizontal: block=Y, inline=X,
+        // start=top/left, end=bottom/right.
+        let html = r##"<html><head><style>
+            #a { scroll-margin-block-start: 5px; scroll-margin-block-end: 7px }
+            #b { scroll-margin-block: 9px 11px }
+            #c { scroll-margin-block: 13px }
+            #d { scroll-margin-inline-start: 15px }
+        </style></head><body>
+            <div id="a"></div>
+            <div id="b"></div>
+            <div id="c"></div>
+            <div id="d"></div>
+        </body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut by_id: std::collections::HashMap<String, _> = Default::default();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if let Some(id) = crate::dom::attr(n, "id") {
+                by_id.insert(id, n.clone());
+            }
+        });
+        let cs_a = eng.compute(&by_id["a"]);
+        assert_eq!(cs_a.scroll_margin.top, 5.0);
+        assert_eq!(cs_a.scroll_margin.bottom, 7.0);
+        let cs_b = eng.compute(&by_id["b"]);
+        assert_eq!(cs_b.scroll_margin.top, 9.0);
+        assert_eq!(cs_b.scroll_margin.bottom, 11.0);
+        let cs_c = eng.compute(&by_id["c"]);
+        // 1 valor → mismo en ambos lados.
+        assert_eq!(cs_c.scroll_margin.top, 13.0);
+        assert_eq!(cs_c.scroll_margin.bottom, 13.0);
+        let cs_d = eng.compute(&by_id["d"]);
+        assert_eq!(cs_d.scroll_margin.left, 15.0);
+        // Lados no tocados quedan en default (0).
+        assert_eq!(cs_d.scroll_margin.right, 0.0);
+    }
+
+    #[test]
     fn overscroll_behavior_block_fase_7_413() {
         // `overscroll-behavior-block` mapea al longhand físico `-y`
         // (eje vertical en LTR horizontal). NO toca el `-x`.
