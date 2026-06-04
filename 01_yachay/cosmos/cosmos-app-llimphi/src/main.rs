@@ -982,7 +982,7 @@ impl App for Cosmos {
             dialog_field: dialog::DialogField::Name,
             dialog_input: llimphi_widget_text_input::TextInputState::new(),
             delegated,
-            host,
+            _host: host,
             _wawa_watcher: watcher,
             _chart_watcher: chart_watcher,
         }

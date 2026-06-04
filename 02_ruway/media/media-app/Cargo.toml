@@ -11,6 +11,9 @@ llimphi-surface = { path = "../../llimphi/llimphi-surface" }
 llimphi-theme = { workspace = true }
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
 llimphi-icons = { workspace = true }
+# Rail hospedado: media puede prestar sus secciones (Config/Cola/Visualizadores/
+# Ayuda) al rail de pata cuando tiene foco (MEDIA_DELEGATE_SIDEBAR).
+pata-host = { path = "../../pata/pata-host" }
 llimphi-widget-tiled = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }

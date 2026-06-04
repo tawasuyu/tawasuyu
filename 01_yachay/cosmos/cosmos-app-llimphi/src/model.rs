@@ -796,7 +796,8 @@ pub(crate) struct Model {
     pub(crate) delegated: bool,
     /// Cliente del rail hospedado (mantiene viva la conexión a pata + el hilo
     /// que recibe las activaciones). `None` si no se delega o pata no escucha.
-    pub(crate) host: Option<pata_host::HostClient>,
+    /// Sólo se retiene (las activaciones llegan por callback); `_` evita el lint.
+    pub(crate) _host: Option<pata_host::HostClient>,
     // watchers
     pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     pub(crate) _chart_watcher: Option<notify::RecommendedWatcher>,

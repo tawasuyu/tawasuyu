@@ -146,6 +146,9 @@ enum Msg {
     /// Swap dos tiles del grid reorderable. `from`/`to` son índices
     /// sobre `Model::tile_order`.
     SwapTile { from: usize, to: usize },
+    /// Rail hospedado: pata reenvió un clic en un diente que media le prestó. El
+    /// `u32` identifica la sección (0=Config, 1=Cola, 2=Visualizadores, 3=Ayuda).
+    HostActivate(u32),
     /// Abre/cierra el overlay de ayuda de atajos (`?`).
     ToggleHelp,
     /// Relee `controles.ron` desde disco en caliente (`F5`).
@@ -843,6 +846,12 @@ struct Model {
     visualizers_open: bool,
     /// Si la ventana de lista de reproducción (cola) está abierta.
     playlist_open: bool,
+    /// Cliente del rail hospedado: con `MEDIA_DELEGATE_SIDEBAR`, media publica sus
+    /// secciones (Config/Cola/Visualizadores/Ayuda) como dientes en el rail de
+    /// pata y las activa desde ahí. `None` si no se delega o pata no escucha.
+    /// Mantiene viva la conexión + el hilo lector; Drop manda Bye. Sólo se retiene
+    /// (las activaciones llegan por callback); `_` evita el lint de campo sin leer.
+    _host: Option<pata_host::HostClient>,
 }
 
 struct Pipeline {
@@ -2274,6 +2283,25 @@ fn pipeline_for(device: &wgpu::Device, queue: &wgpu::Queue) -> &'static Pipeline
     })
 }
 
+/// Conecta el cliente del rail hospedado si `MEDIA_DELEGATE_SIDEBAR` está set.
+/// media no tiene rail propio que ocultar; delegar = publicar sus secciones como
+/// dientes en pata, que las activa cuando media tiene foco.
+fn media_host(handle: &Handle<Msg>) -> Option<pata_host::HostClient> {
+    if std::env::var_os("MEDIA_DELEGATE_SIDEBAR").is_none() {
+        return None;
+    }
+    let teeth = vec![
+        pata_host::HostedTooth::new(0, "settings", "Config"),
+        pata_host::HostedTooth::new(1, "files", "Cola"),
+        pata_host::HostedTooth::new(2, "astro", "Visualizadores"),
+        pata_host::HostedTooth::new(3, "tools", "Ayuda"),
+    ];
+    let h = handle.clone();
+    pata_host::HostClient::connect("gioser.media", "Media", teeth, move |id| {
+        h.dispatch(Msg::HostActivate(id))
+    })
+}
+
 struct MediaApp;
 
 impl App for MediaApp {
@@ -2282,6 +2310,11 @@ impl App for MediaApp {
 
     fn title() -> &'static str {
         "media · player"
+    }
+
+    /// `app_id` Wayland: pata lo usa para correlacionar foco ↔ dientes hospedados.
+    fn app_id() -> Option<&'static str> {
+        Some("gioser.media")
     }
 
     /// Título dinámico de la ventana: el medio en reproducción aparece en la
@@ -2366,6 +2399,7 @@ impl App for MediaApp {
             settings_scroll: 0.0,
             visualizers_open: false,
             playlist_open: false,
+            _host: media_host(handle),
         }
     }
 
@@ -2392,6 +2426,20 @@ impl App for MediaApp {
             Msg::Command(cmd) => {
                 apply_command(cmd);
                 model
+            }
+            Msg::HostActivate(id) => {
+                // Rail hospedado: reenviamos a la sección correspondiente. Config/
+                // Cola/Ayuda son ventanas/overlays con su propia lógica → despachamos
+                // su Msg; Visualizadores es un flag local.
+                let mut m = model;
+                match id {
+                    0 => handle.dispatch(Msg::ToggleSettings),
+                    1 => handle.dispatch(Msg::TogglePlaylist),
+                    2 => m.visualizers_open = !m.visualizers_open,
+                    3 => handle.dispatch(Msg::ToggleHelp),
+                    _ => {}
+                }
+                m
             }
             Msg::ToggleHelp => {
                 let mut m = model;
