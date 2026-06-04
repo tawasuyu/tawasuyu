@@ -315,6 +315,12 @@ impl StyleEngine {
             // CSS View Transitions — view-transition-name y
             // view-transition-class NO heredan.
             style.anchor_scope = p.anchor_scope.clone();
+            // CSS Fonts 4 — font-palette y font-variant-alternates heredan.
+            // CSS UI 4 — caret-shape hereda. CSS Backgrounds 3 —
+            // background-attachment NO hereda.
+            style.font_palette = p.font_palette.clone();
+            style.font_variant_alternates = p.font_variant_alternates.clone();
+            style.caret_shape = p.caret_shape;
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
@@ -5505,6 +5511,222 @@ mod tests {
         assert_eq!(
             cs.view_transition_class,
             vec!["foo".to_string(), "bar".to_string()]
+        );
+    }
+
+    #[test]
+    fn font_palette_fase_7_359() {
+        assert_eq!(parse_font_palette("normal"), Some(FontPalette::Normal));
+        assert_eq!(parse_font_palette("LIGHT"), Some(FontPalette::Light));
+        assert_eq!(parse_font_palette("dark"), Some(FontPalette::Dark));
+        assert_eq!(
+            parse_font_palette("--my-palette"),
+            Some(FontPalette::Named("--my-palette".to_string()))
+        );
+        assert_eq!(parse_font_palette(""), None);
+
+        let html = r##"<html><head><style>
+            body { font-palette: --hi }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.font_palette, FontPalette::Named("--hi".to_string()));
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).font_palette,
+            FontPalette::Named("--hi".to_string())
+        );
+    }
+
+    #[test]
+    fn font_variant_alternates_fase_7_360() {
+        assert_eq!(
+            parse_font_variant_alternates("normal"),
+            Some(FontVariantAlternates::default())
+        );
+        // historical-forms solo.
+        let hist = parse_font_variant_alternates("historical-forms").unwrap();
+        assert!(hist.historical_forms);
+        assert!(hist.functional.is_empty());
+        // funcional stylistic(...).
+        let s = parse_font_variant_alternates("stylistic(--swash)").unwrap();
+        assert!(!s.historical_forms);
+        assert_eq!(
+            s.functional,
+            vec![("stylistic".to_string(), "--swash".to_string())]
+        );
+        // combinado.
+        let combo = parse_font_variant_alternates(
+            "historical-forms stylistic(--a) styleset(--b)",
+        )
+        .unwrap();
+        assert!(combo.historical_forms);
+        assert_eq!(combo.functional.len(), 2);
+        // duplicado historical-forms descarta.
+        assert_eq!(
+            parse_font_variant_alternates("historical-forms historical-forms"),
+            None
+        );
+        // función desconocida descarta.
+        assert_eq!(parse_font_variant_alternates("foo(--x)"), None);
+        // función con paréntesis vacío descarta.
+        assert_eq!(parse_font_variant_alternates("stylistic()"), None);
+
+        let html = r##"<html><head><style>
+            body { font-variant-alternates: historical-forms }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert!(body_cs.font_variant_alternates.historical_forms);
+        // SÍ hereda.
+        let div_cs = eng.compute_with_parent(&divs[0], Some(&body_cs));
+        assert!(div_cs.font_variant_alternates.historical_forms);
+    }
+
+    #[test]
+    fn columns_shorthand_fase_7_361() {
+        // 2 auto.
+        assert_eq!(
+            parse_columns_shorthand("auto"),
+            Some((LengthVal::Auto, None))
+        );
+        // length sola.
+        assert_eq!(
+            parse_columns_shorthand("200px"),
+            Some((LengthVal::Px(200.0), None))
+        );
+        // integer solo.
+        assert_eq!(
+            parse_columns_shorthand("3"),
+            Some((LengthVal::Auto, Some(3)))
+        );
+        // length + integer.
+        assert_eq!(
+            parse_columns_shorthand("200px 3"),
+            Some((LengthVal::Px(200.0), Some(3)))
+        );
+        // orden libre.
+        assert_eq!(
+            parse_columns_shorthand("3 200px"),
+            Some((LengthVal::Px(200.0), Some(3)))
+        );
+        // dos integers descarta.
+        assert_eq!(parse_columns_shorthand("3 4"), None);
+        // 0 columnas descarta.
+        assert_eq!(parse_columns_shorthand("0"), None);
+
+        let html = r##"<html><head><style>
+            .grid { columns: 200px 3 }
+        </style></head><body><div class="grid"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(cs.column_width, LengthVal::Px(200.0));
+        assert_eq!(cs.column_count, Some(3));
+    }
+
+    #[test]
+    fn background_attachment_fase_7_362() {
+        assert_eq!(
+            parse_background_attachment("scroll"),
+            Some(vec![BackgroundAttachment::Scroll])
+        );
+        assert_eq!(
+            parse_background_attachment("FIXED"),
+            Some(vec![BackgroundAttachment::Fixed])
+        );
+        // Lista por coma.
+        assert_eq!(
+            parse_background_attachment("scroll, fixed, local"),
+            Some(vec![
+                BackgroundAttachment::Scroll,
+                BackgroundAttachment::Fixed,
+                BackgroundAttachment::Local,
+            ])
+        );
+        assert_eq!(parse_background_attachment("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { background-attachment: fixed }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.background_attachment, vec![BackgroundAttachment::Fixed]);
+        // NO hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).background_attachment,
+            vec![BackgroundAttachment::Scroll]
+        );
+    }
+
+    #[test]
+    fn caret_shape_fase_7_363() {
+        assert_eq!(parse_caret_shape("auto"), Some(CaretShape::Auto));
+        assert_eq!(parse_caret_shape("BAR"), Some(CaretShape::Bar));
+        assert_eq!(parse_caret_shape("block"), Some(CaretShape::Block));
+        assert_eq!(parse_caret_shape("underscore"), Some(CaretShape::Underscore));
+        assert_eq!(parse_caret_shape("nope"), None);
+
+        let html = r##"<html><head><style>
+            body { caret-shape: block }
+            div.plain {}
+        </style></head><body><div class="plain"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut bodies = Vec::new();
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            match crate::dom::element_name(n).as_deref() {
+                Some("body") => bodies.push(n.clone()),
+                Some("div") => divs.push(n.clone()),
+                _ => {}
+            }
+        });
+        let body_cs = eng.compute(&bodies[0]);
+        assert_eq!(body_cs.caret_shape, CaretShape::Block);
+        // SÍ hereda.
+        assert_eq!(
+            eng.compute_with_parent(&divs[0], Some(&body_cs)).caret_shape,
+            CaretShape::Block
         );
     }
 

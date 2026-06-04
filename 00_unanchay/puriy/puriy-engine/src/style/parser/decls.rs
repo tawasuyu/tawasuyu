@@ -207,6 +207,17 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `columns` shorthand (Fase 7.361):
+        // `auto | <column-width> || <column-count>`. Emite los 2
+        // longhands `ColumnWidth` y `ColumnCount`. `auto` único setea
+        // ambos a auto.
+        if prop.eq_ignore_ascii_case("columns") {
+            if let Some((w, n)) = parse_columns_shorthand(value) {
+                out.push(Decl { kind: DeclKind::ColumnWidth(w), important });
+                out.push(Decl { kind: DeclKind::ColumnCount(n), important });
+            }
+            continue;
+        }
         // `place-items` shorthand (Fase 7.336): `<align-items>
         // [<justify-items>]?`. Si falta el 2º, vale para ambos ejes
         // (regla CSS-Align 3). Emite los 2 longhands.
@@ -766,6 +777,14 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "view-transition-class" => {
             parse_ident_list_or_none(value).map(DeclKind::ViewTransitionClass)
         }
+        "font-palette" => parse_font_palette(value).map(DeclKind::FontPalette),
+        "font-variant-alternates" => parse_font_variant_alternates(value)
+            .map(DeclKind::FontVariantAlternates),
+        "background-attachment" => {
+            parse_background_attachment(value).map(DeclKind::BackgroundAttachment)
+        }
+        "caret-shape" => parse_caret_shape(value).map(DeclKind::CaretShape),
+        // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
         "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
@@ -2988,6 +3007,149 @@ pub(crate) fn parse_field_sizing(value: &str) -> Option<FieldSizing> {
     match value.trim().to_ascii_lowercase().as_str() {
         "fixed" => Some(FieldSizing::Fixed),
         "content" => Some(FieldSizing::Content),
+        _ => None,
+    }
+}
+
+/// `font-palette`: `normal | light | dark | <dashed-ident>`. Fase 7.359.
+pub(crate) fn parse_font_palette(value: &str) -> Option<FontPalette> {
+    let v = value.trim();
+    match v.to_ascii_lowercase().as_str() {
+        "normal" => Some(FontPalette::Normal),
+        "light" => Some(FontPalette::Light),
+        "dark" => Some(FontPalette::Dark),
+        _ => {
+            if v.is_empty() || v.contains(char::is_whitespace) {
+                return None;
+            }
+            Some(FontPalette::Named(v.to_string()))
+        }
+    }
+}
+
+/// `font-variant-alternates` (subset MVP): `normal | historical-forms
+/// || <funcname>(<ident>)+`. Soportamos `stylistic(--x)`, `styleset(...)`,
+/// `character-variant(...)`, `swash(...)`, `ornaments(...)`,
+/// `annotation(...)`. Fase 7.360.
+pub(crate) fn parse_font_variant_alternates(
+    value: &str,
+) -> Option<FontVariantAlternates> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("normal") {
+        return Some(FontVariantAlternates::default());
+    }
+    let mut out = FontVariantAlternates::default();
+    for tok in split_top_level_ws(v) {
+        let lower = tok.to_ascii_lowercase();
+        if lower == "historical-forms" {
+            if out.historical_forms {
+                return None;
+            }
+            out.historical_forms = true;
+            continue;
+        }
+        // `funcname(ident)` — el split top-level ws ya respeta paréntesis.
+        if let Some(open) = tok.find('(') {
+            if !tok.ends_with(')') {
+                return None;
+            }
+            let name = tok[..open].to_ascii_lowercase();
+            match name.as_str() {
+                "stylistic" | "styleset" | "character-variant" | "swash"
+                | "ornaments" | "annotation" => {}
+                _ => return None,
+            }
+            let inner = &tok[open + 1..tok.len() - 1];
+            let inner = inner.trim();
+            if inner.is_empty() {
+                return None;
+            }
+            out.functional.push((name, inner.to_string()));
+            continue;
+        }
+        return None;
+    }
+    if out.is_normal() {
+        return None;
+    }
+    Some(out)
+}
+
+/// `columns` shorthand: `auto | <length> || <integer> || auto`. Si una
+/// pieza falta, queda en su default (`LengthVal::Auto` para width,
+/// `None` para count). `auto` solo setea ambos a auto. Fase 7.361.
+pub(crate) fn parse_columns_shorthand(
+    value: &str,
+) -> Option<(LengthVal, Option<u32>)> {
+    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    if toks.is_empty() {
+        return None;
+    }
+    let mut width: Option<LengthVal> = None;
+    let mut count: Option<Option<u32>> = None;
+    for t in &toks {
+        if t.eq_ignore_ascii_case("auto") {
+            // `auto` toca el primer slot vacío (orden libre).
+            if width.is_none() {
+                width = Some(LengthVal::Auto);
+            } else if count.is_none() {
+                count = Some(None);
+            } else {
+                return None;
+            }
+            continue;
+        }
+        if let Ok(n) = t.parse::<u32>() {
+            if count.is_some() {
+                return None;
+            }
+            if n == 0 {
+                return None;
+            }
+            count = Some(Some(n));
+            continue;
+        }
+        if let Some(l) = parse_length_or_pct(t) {
+            if width.is_some() {
+                return None;
+            }
+            width = Some(l);
+            continue;
+        }
+        return None;
+    }
+    Some((width.unwrap_or(LengthVal::Auto), count.unwrap_or(None)))
+}
+
+/// `background-attachment`: lista separada por coma de
+/// `scroll | fixed | local`. Fase 7.362.
+pub(crate) fn parse_background_attachment(
+    value: &str,
+) -> Option<Vec<BackgroundAttachment>> {
+    let mut out = Vec::new();
+    for layer in value.split(',') {
+        let v = layer.trim().to_ascii_lowercase();
+        let att = match v.as_str() {
+            "scroll" => BackgroundAttachment::Scroll,
+            "fixed" => BackgroundAttachment::Fixed,
+            "local" => BackgroundAttachment::Local,
+            _ => return None,
+        };
+        out.push(att);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
+/// `caret-shape`: `auto | bar | block | underscore`. Fase 7.363.
+pub(crate) fn parse_caret_shape(value: &str) -> Option<CaretShape> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(CaretShape::Auto),
+        "bar" => Some(CaretShape::Bar),
+        "block" => Some(CaretShape::Block),
+        "underscore" => Some(CaretShape::Underscore),
         _ => None,
     }
 }

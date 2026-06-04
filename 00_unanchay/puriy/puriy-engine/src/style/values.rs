@@ -564,7 +564,19 @@ pub struct ComputedStyle {
     /// `view-transition-class` (Fase 7.358). Vacío = `none`. NO hereda.
     /// Plumb.
     pub view_transition_class: Vec<String>,
-    /// Sombras del texto. Vacío = ninguna.
+    /// `font-palette` (Fase 7.359). Default `Normal`. **Heredable**.
+    /// Plumb: el shaper usa la paleta default.
+    pub font_palette: FontPalette,
+    /// `font-variant-alternates` (Fase 7.360). Default `Normal`.
+    /// **Heredable**. Plumb: no se aplican alternates.
+    pub font_variant_alternates: FontVariantAlternates,
+    /// `background-attachment` (Fase 7.362). Vec paralelo a las capas
+    /// de background. Por defecto `[Scroll]` (1 capa). NO hereda.
+    /// Plumb: el chrome no implementa `fixed`/`local`.
+    pub background_attachment: Vec<BackgroundAttachment>,
+    /// `caret-shape` (Fase 7.363). Default `Auto`. **Heredable**.
+    /// Plumb: el caret se pinta siempre como bar.
+    pub caret_shape: CaretShape,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -1699,6 +1711,55 @@ impl Default for AnchorScope {
     }
 }
 
+/// `font-palette` (CSS Fonts 4). `Light` y `Dark` son keywords;
+/// `Named(s)` hace match contra `@font-palette-values --x`. Heredable.
+/// Default `Normal`. Fase 7.359.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum FontPalette {
+    #[default]
+    Normal,
+    Light,
+    Dark,
+    Named(String),
+}
+
+/// `font-variant-alternates` (CSS Fonts 4). Default `Normal`. Soporte
+/// MVP: solo el flag `historical_forms` + opcionalmente nombres de
+/// alternates funcionales (`stylistic(--x)`, `styleset(--y)`, etc).
+/// Heredable. Fase 7.360.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FontVariantAlternates {
+    pub historical_forms: bool,
+    /// Tuplas `(<function-name>, <ident>)` ej: `("stylistic", "--swash")`.
+    pub functional: Vec<(String, String)>,
+}
+
+impl FontVariantAlternates {
+    pub fn is_normal(&self) -> bool {
+        !self.historical_forms && self.functional.is_empty()
+    }
+}
+
+/// `background-attachment` (CSS Backgrounds 3). Vec paralelo a las
+/// capas de background. NO hereda. Fase 7.362.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackgroundAttachment {
+    #[default]
+    Scroll,
+    Fixed,
+    Local,
+}
+
+/// `caret-shape` (CSS UI 4). Heredable. Default `Auto`. Fase 7.363.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaretShape {
+    #[default]
+    Auto,
+    Bar,
+    Block,
+    Underscore,
+}
+
 impl ContainFlags {
     /// `strict` = `size layout style paint`.
     pub const STRICT: Self = Self {
@@ -2736,6 +2797,10 @@ impl Default for ComputedStyle {
             anchor_scope: AnchorScope::None,
             view_transition_name: None,
             view_transition_class: Vec::new(),
+            font_palette: FontPalette::Normal,
+            font_variant_alternates: FontVariantAlternates::default(),
+            background_attachment: vec![BackgroundAttachment::Scroll],
+            caret_shape: CaretShape::Auto,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

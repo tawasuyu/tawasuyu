@@ -355,6 +355,12 @@ pub(crate) enum DeclKind {
     ViewTransitionName(Option<String>),
     /// `view-transition-class`. Vec vacío = `none`.
     ViewTransitionClass(Vec<String>),
+    FontPalette(FontPalette),
+    FontVariantAlternates(FontVariantAlternates),
+    /// `background-attachment`. Lista paralela a las capas; vacía =
+    /// resetear a `[Scroll]`.
+    BackgroundAttachment(Vec<BackgroundAttachment>),
+    CaretShape(CaretShape),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -647,6 +653,15 @@ impl Decl {
             DeclKind::AnchorScope(sc) => s.anchor_scope = sc.clone(),
             DeclKind::ViewTransitionName(n) => s.view_transition_name = n.clone(),
             DeclKind::ViewTransitionClass(c) => s.view_transition_class = c.clone(),
+            DeclKind::FontPalette(p) => s.font_palette = p.clone(),
+            DeclKind::FontVariantAlternates(a) => {
+                s.font_variant_alternates = a.clone()
+            }
+            DeclKind::BackgroundAttachment(att) => {
+                s.background_attachment =
+                    if att.is_empty() { vec![BackgroundAttachment::Scroll] } else { att.clone() };
+            }
+            DeclKind::CaretShape(c) => s.caret_shape = *c,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
