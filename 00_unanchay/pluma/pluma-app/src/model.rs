@@ -63,6 +63,9 @@ pub(crate) enum Msg {
     SelectDiente(usize),
     /// Scroll horizontal del multilienzo, en píxeles (positivo = derecha).
     ScrollHoriz(f32),
+    /// Scroll vertical del lienzo con foco, en "notches" de rueda (positivo =
+    /// rueda hacia arriba). Los demás lienzos se nivelan al del foco.
+    ScrollVert(f32),
     /// La ventana cambió de tamaño (ancho, alto) — para clampear el scroll.
     Resized(f32, f32),
     NuevoDoc,

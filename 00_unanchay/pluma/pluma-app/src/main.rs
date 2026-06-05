@@ -209,25 +209,26 @@ impl App for Pluma {
         Some(Msg::EditorKey(event.clone()))
     }
 
-    /// Rueda → scroll horizontal del multilienzo. El eje primario de la app es
-    /// horizontal, así que la rueda vertical normal también desplaza en X
-    /// (además del eje X del touchpad). 48 px/línea.
+    /// Rueda: el eje X del touchpad o `Shift`+rueda desplazan el multilienzo en
+    /// HORIZONTAL; la rueda vertical normal scrollea el lienzo con foco en
+    /// VERTICAL (sin confundirse con el horizontal cuando hay texto que correr).
     fn on_wheel(
         _model: &Self::Model,
         delta: WheelDelta,
         _cursor: (f32, f32),
-        _modifiers: Modifiers,
+        modifiers: Modifiers,
     ) -> Option<Self::Msg> {
         const PX_POR_LINEA: f32 = 48.0;
-        let dx_lineas = if delta.x.abs() > 0.0 {
-            delta.x
-        } else {
-            delta.y
-        };
-        if dx_lineas == 0.0 {
-            return None;
+        if delta.x.abs() > 0.0 {
+            return Some(Msg::ScrollHoriz(-delta.x * PX_POR_LINEA));
         }
-        Some(Msg::ScrollHoriz(-dx_lineas * PX_POR_LINEA))
+        if modifiers.shift {
+            return Some(Msg::ScrollHoriz(-delta.y * PX_POR_LINEA));
+        }
+        if delta.y != 0.0 {
+            return Some(Msg::ScrollVert(delta.y));
+        }
+        None
     }
 
     fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {

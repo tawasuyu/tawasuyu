@@ -67,6 +67,14 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         Msg::ScrollHoriz(dx) => {
             model.scroll_x += dx; // el clamp final acota a [0, max]
         }
+        Msg::ScrollVert(dy) => {
+            // Rueda arriba (dy>0) → ver líneas anteriores (offset baja). 3
+            // líneas por notch. El nivelado al resto lo hace el final del update.
+            let lineas = (dy * 3.0).round() as i64;
+            let max = model.ide.state.line_count().saturating_sub(1) as i64;
+            let actual = model.ide.state.scroll_offset as i64;
+            model.ide.state.scroll_offset = (actual - lineas).clamp(0, max) as usize;
+        }
         Msg::Resized(w, h) => {
             model.viewport = (w, h);
         }
@@ -287,7 +295,21 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.
     clamp_scroll(&mut model);
+    // Nivela el scroll vertical de los lienzos read-only al del foco, para que
+    // las secciones queden alineadas y no se pierdan de vista.
+    nivelar_scroll(&mut model);
     model
+}
+
+/// Copia el `scroll_offset` vertical del lienzo con foco (`model.ide`) a todos
+/// los read-only, clampeado a la última línea de cada uno (si es más corto,
+/// queda topado). Mantiene las secciones alineadas entre columnas.
+fn nivelar_scroll(model: &mut Model) {
+    let s = model.ide.state.scroll_offset;
+    for ro in model.ides_ro.values_mut() {
+        let max = ro.state.line_count().saturating_sub(1);
+        ro.state.scroll_offset = s.min(max);
+    }
 }
 
 /// Acota `scroll_x` a `[0, ancho_contenido - ancho_centro]`. Con ≤1 columna o
