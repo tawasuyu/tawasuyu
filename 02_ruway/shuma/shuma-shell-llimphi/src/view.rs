@@ -12,8 +12,7 @@ const TRIGGER_H: f32 = 34.0;
 /// Ítems del dropdown de aislamiento (orden = `Isolation::ALL`).
 fn iso_items() -> Vec<SelectItem> {
     vec![
-        SelectItem::new("Local").with_sublabel("Directo en esta máquina, sin aislar."),
-        SelectItem::new("Contenedor").with_sublabel("Aislado en un contenedor (elegí la distro)."),
+        SelectItem::new("Local").with_sublabel("Directo en esta máquina."),
         SelectItem::new("Remoto (SSH)").with_sublabel("En otra máquina por SSH."),
     ]
 }
@@ -31,11 +30,13 @@ fn distro_index(d: Distro) -> usize {
 /// para anclar su menú. Sigue el orden de `session_panel` (padding+secciones).
 /// Aproximado: el menú flota, no va pegado al pixel.
 fn cfg_trigger_y(is_draft: bool, kind: DropKind) -> f32 {
-    let iso_y = if is_draft { 112.0 } else { 70.0 };
+    // Orden: title, conn, [note], label-aislamiento, ISO-trigger, header-cont,
+    // [abierto] label-distro, DISTRO-trigger, label-cont, CONT-trigger.
+    let iso_y = if is_draft { 134.0 } else { 92.0 };
     match kind {
         DropKind::Isolation => iso_y,
-        DropKind::Distro => iso_y + TRIGGER_H + 36.0,
-        DropKind::Container => iso_y + (TRIGGER_H + 36.0) * 2.0,
+        DropKind::Distro => iso_y + 98.0,
+        DropKind::Container => iso_y + 98.0 + 64.0,
     }
 }
 
@@ -76,7 +77,7 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
     let n_containers = model.containers.len();
     let on_pick: std::sync::Arc<dyn Fn(usize) -> Msg + Send + Sync> = match kind {
         DropKind::Isolation => {
-            std::sync::Arc::new(|i| Msg::SetIsolation(Isolation::ALL[i.min(2)]))
+            std::sync::Arc::new(|i| Msg::SetIsolation(Isolation::ALL[i.min(1)]))
         }
         DropKind::Distro => std::sync::Arc::new(|i| Msg::SetDistro(Distro::ALL[i.min(3)])),
         DropKind::Container => std::sync::Arc::new(move |i| {
@@ -279,7 +280,11 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
 
     let titulo = if es_draft { "Borrador".to_string() } else { session.name.clone() };
 
+    let pal = SelectPalette::from_theme(theme);
     let mut children: Vec<View<Msg>> = vec![panel_title(&titulo, theme)];
+
+    // Estado de conexión de la sesión (en espera / conectado / desconectado).
+    children.push(conn_pill(session.conn, theme));
 
     if es_draft {
         children.push(panel_note(
@@ -288,8 +293,7 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         ));
     }
 
-    // Sección Aislamiento (qué aislar): dropdown (select widget).
-    let pal = SelectPalette::from_theme(theme);
+    // Aislamiento base: dropdown Local / Remoto.
     children.push(panel_label("Aislamiento", theme));
     let isos = iso_items();
     children.push(select_trigger_view(
@@ -301,8 +305,9 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         Msg::ToggleDropdown(DropKind::Isolation),
     ));
 
-    // La distro y la suscripción sólo importan para contenedor.
-    if session.isolation == Isolation::Container {
+    // Contenedor: capa OPCIONAL (encima de Local o Remoto) en un colapsable.
+    children.push(container_header(session, theme));
+    if session.container_open {
         children.push(panel_label("Distro", theme));
         let distros = distro_items();
         children.push(select_trigger_view(
@@ -313,16 +318,10 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
             &pal,
             Msg::ToggleDropdown(DropKind::Distro),
         ));
-
-        // Suscribir: conectar a un contenedor existente o crear uno nuevo.
-        children.push(panel_label("Contenedor", theme));
-        let sub = session
-            .container
-            .as_ref()
-            .map(|c| SelectItem::new(c.clone()));
+        let sub = session.container.as_ref().map(|c| SelectItem::new(c.clone()));
         children.push(select_trigger_view(
             sub.as_ref(),
-            "Suscribir a un contenedor…",
+            "Crear / conectar contenedor…",
             model.dropdown_open == Some(DropKind::Container),
             None,
             &pal,
@@ -359,6 +358,107 @@ fn session_cwd(session: &Session) -> String {
         ModuleState::Shell(sh) => sh.cwd.display().to_string(),
         _ => "-".to_string(),
     }
+}
+
+/// Píldora de estado de conexión: punto de color + texto.
+fn conn_pill(conn: ConnState, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    let color = match conn {
+        ConnState::Connected => llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0x4a, 0xde, 0x80),
+        ConnState::Pending => llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0xf7, 0xc8, 0x7a),
+        ConnState::Disconnected => llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0xe0, 0x6c, 0x6c),
+    };
+    let dot = View::new(Style {
+        size: Size { width: length(12.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &Circle::new((cx, cy), 4.0));
+    });
+    let txt = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(conn.label().to_string(), 11.0, theme.fg_muted, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![dot, txt])
+}
+
+/// Cabecera clickeable del colapsable de contenedor: chevron (vectorial) +
+/// "Contenedor" + el nombre suscrito o «ninguno». Click → `Msg::ToggleContainer`.
+fn container_header(session: &Session, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
+    use llimphi_ui::llimphi_text::Alignment;
+    let open = session.container_open;
+    let accent = theme.accent;
+    let chevron = View::new(Style {
+        size: Size { width: length(16.0_f32), height: length(28.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Stroke};
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = 4.0;
+        let mut p = BezPath::new();
+        if open {
+            // ▾
+            p.move_to(Point::new(cx - r, cy - r * 0.5));
+            p.line_to(Point::new(cx, cy + r * 0.5));
+            p.line_to(Point::new(cx + r, cy - r * 0.5));
+        } else {
+            // ▸
+            p.move_to(Point::new(cx - r * 0.5, cy - r));
+            p.line_to(Point::new(cx + r * 0.5, cy));
+            p.line_to(Point::new(cx - r * 0.5, cy + r));
+        }
+        scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, accent, None, &p);
+    });
+    let label = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(28.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned("Contenedor (opcional)".to_string(), 12.0, theme.fg_text, Alignment::Start);
+    let estado = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        session.container.clone().unwrap_or_else(|| "ninguno".into()),
+        11.0,
+        theme.fg_muted,
+        Alignment::End,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .radius(5.0)
+    .on_click(Msg::ToggleContainer)
+    .children(vec![chevron, label, estado])
 }
 
 /// El **canvas principal**: SÓLO el shell de la sesión activa. Sin barra de

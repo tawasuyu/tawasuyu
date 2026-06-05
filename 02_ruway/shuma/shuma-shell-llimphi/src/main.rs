@@ -184,11 +184,10 @@ fn promote_if_draft(m: &mut Model) {
         s.number = Some(n);
         s.kind = match s.isolation {
             Isolation::Remote => SessionKind::Remote,
-            _ => SessionKind::Local,
+            Isolation::Local => SessionKind::Local,
         };
         s.name = match s.isolation {
             Isolation::Local => format!("local {n}"),
-            Isolation::Container => format!("{} {n}", s.distro.label().to_lowercase()),
             Isolation::Remote => format!("remota {n}"),
         };
     }
@@ -238,27 +237,46 @@ enum Which {
     Matilda,
 }
 
-/// Cómo se aísla una sesión (el "qué aislar"). Es la config medular: define
-/// dónde corre el shell.
+/// Dónde corre el shell de la sesión (la base del aislamiento). El contenedor
+/// NO es exclusivo: es una capa opcional **encima** de Local o Remoto.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Isolation {
-    /// Directo sobre la máquina, sin aislar.
+    /// Directo sobre esta máquina.
     Local,
-    /// Dentro de un contenedor (con la distro elegida).
-    Container,
-    /// Sobre una máquina remota por SSH/daemon.
+    /// Sobre una máquina remota por SSH.
     Remote,
 }
 
 impl Isolation {
-    const ALL: [Isolation; 3] = [Isolation::Local, Isolation::Container, Isolation::Remote];
+    const ALL: [Isolation; 2] = [Isolation::Local, Isolation::Remote];
     /// Etiqueta corta (la rica con sublabel la arma `view::iso_items`).
     #[allow(dead_code)]
     fn label(self) -> &'static str {
         match self {
             Isolation::Local => "Local",
-            Isolation::Container => "Contenedor",
             Isolation::Remote => "Remoto",
+        }
+    }
+}
+
+/// Estado de conexión de la sesión — lo refleja su panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConnState {
+    /// En espera (aún no conectada — remoto sin conectar / contenedor sin crear).
+    Pending,
+    /// Conectada y lista.
+    Connected,
+    /// Estuvo conectada y se cayó. (Se setea al caerse SSH/contenedor — fase B/C.)
+    #[allow(dead_code)]
+    Disconnected,
+}
+
+impl ConnState {
+    fn label(self) -> &'static str {
+        match self {
+            ConnState::Pending => "en espera",
+            ConnState::Connected => "conectado",
+            ConnState::Disconnected => "desconectado",
         }
     }
 }
@@ -437,12 +455,18 @@ struct Session {
     kind: SessionKind,
     /// Número de insignia del diente (None para la draft).
     number: Option<u32>,
-    /// Config del aislamiento (la misma que tendrán todas las sesiones).
+    /// Base del aislamiento (Local/Remoto).
     isolation: Isolation,
+    /// Capa de contenedor OPCIONAL (encima de Local o Remoto). El colapsable
+    /// del panel la crea/conecta.
     distro: Distro,
-    /// Contenedor suscrito (sólo aislamiento Container). El exec real del shell
-    /// dentro de él es deuda (necesita `Source::Container` en shuma-module).
+    /// Contenedor suscrito (`None` = sin contenedor). El exec real del shell
+    /// dentro de él se cablea con `Source::Container` (shuma-module).
     container: Option<String>,
+    /// Si el colapsable de contenedor está abierto en el panel.
+    container_open: bool,
+    /// Estado de conexión de la sesión (lo refleja el panel).
+    conn: ConnState,
     /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
     /// (El enforcement real del aislamiento contenedor/remoto es deuda; hoy el
     /// shell corre con este `source`.)
@@ -465,6 +489,9 @@ impl Session {
             isolation: Isolation::Local,
             distro: Distro::Ubuntu,
             container: None,
+            container_open: false,
+            // Local arranca conectado; remoto en espera hasta conectar.
+            conn: ConnState::Connected,
             source,
         }
     }
@@ -487,8 +514,13 @@ impl Session {
     /// deuda; Remote usa el daemon de `default_shell_source`.)
     fn apply_isolation(&mut self) {
         let source = match self.isolation {
-            Isolation::Local | Isolation::Container => Source::Local,
+            Isolation::Local => Source::Local,
             Isolation::Remote => default_shell_source(),
+        };
+        // Local está listo; remoto queda en espera hasta conectar.
+        self.conn = match self.isolation {
+            Isolation::Local => ConnState::Connected,
+            Isolation::Remote => ConnState::Pending,
         };
         self.shell = Instance::shell(self.name.clone(), source.clone());
         self.matilda = Instance::matilda(self.name.clone(), source.clone());
@@ -640,6 +672,8 @@ enum Msg {
     SetIsolation(Isolation),
     /// Elegir la distro del aislamiento (idem promoción del draft).
     SetDistro(Distro),
+    /// Abrir/cerrar el colapsable de contenedor (capa opcional).
+    ToggleContainer,
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
     /// Re-listar los contenedores locales (`docker ps -a`).
@@ -880,8 +914,16 @@ impl App for Shell {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.apply_isolation();
                 }
-                // Al entrar en Container, listamos los contenedores locales.
-                if iso == Isolation::Container {
+            }
+            // Abrir/cerrar el colapsable de contenedor (capa opcional). Al abrir,
+            // listamos los contenedores locales.
+            Msg::ToggleContainer => {
+                let mut opening = false;
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.container_open = !s.container_open;
+                    opening = s.container_open;
+                }
+                if opening {
                     spawn_list_containers(handle);
                 }
             }
@@ -899,6 +941,7 @@ impl App for Shell {
                 if let Some(name) = m.containers.get(i).cloned() {
                     if let Some(s) = m.sessions.get_mut(m.active_session) {
                         s.container = Some(name);
+                        s.conn = ConnState::Connected;
                     }
                 }
             }
@@ -914,6 +957,7 @@ impl App for Shell {
                 let name = format!("shuma-{}-{n}", distro.label().to_lowercase());
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.container = Some(name.clone());
+                    s.conn = ConnState::Connected;
                 }
                 spawn_create_container(handle, distro.image(), name);
             }
