@@ -6,19 +6,19 @@
 //! panel persiste con [`Config::save`] y el `FileWatch` del compositor recarga
 //! en caliente.
 //!
-//! v1 cubre los **escalares**: teselado, foco, decoración, fondo, terminal
-//! dropdown y disposición de monitores. Los editores de **tabla** (keymap,
-//! reglas) y de **listas** (menú raíz, zonas, overrides por salida) quedan para
-//! v2 — siguen editándose por RON mientras tanto.
+//! v1 cubrió los **escalares**: teselado, foco, decoración, fondo, terminal
+//! dropdown y disposición de monitores. v2 suma la **tabla** del menú raíz
+//! (etiqueta + comando, [`Control::Table`]). Los keymaps y los overrides por
+//! salida (tablas/listas más ricas) siguen editándose por RON por ahora.
 
 use allichay::{
-    AllichayError, Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section,
+    AllichayError, Column, Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section,
 };
 
 use mirada_layout::WallpaperFit;
 
 use crate::action::{layout_from_slug, layout_slug};
-use crate::config::Config;
+use crate::config::{Config, MenuEntry};
 
 /// Las opciones de modo de teselado (slug + rótulo).
 fn layout_options() -> Vec<EnumOption> {
@@ -167,6 +167,23 @@ impl Configurable for Config {
                         ],
                     )),
             )
+            .section(
+                Section::new("menu", "Menú raíz")
+                    .icon("☰")
+                    .help("Acciones del click derecho sobre el fondo")
+                    .field(Field::table(
+                        "entradas",
+                        "Entradas",
+                        vec![
+                            Column::new("label", "Etiqueta"),
+                            Column::new("command", "Comando"),
+                        ],
+                        self.menu
+                            .iter()
+                            .map(|e| vec![e.label.clone(), e.command.clone()])
+                            .collect(),
+                    )),
+            )
     }
 
     fn apply(&mut self, path: &FieldPath, value: FieldValue) -> Result<(), AllichayError> {
@@ -260,6 +277,35 @@ impl Configurable for Config {
                     }
                 }
             }
+            "entradas" => {
+                if let Some(rows) = value.as_table() {
+                    // Reconstruimos el menú desde la tabla (etiqueta, comando),
+                    // preservando el `submenu` de la entrada que estaba en esa
+                    // posición — la tabla plana no lo edita, pero no debe
+                    // perderlo. Filas nuevas son hojas; filas de más se truncan.
+                    let prev = core::mem::take(&mut self.menu);
+                    self.menu = rows
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| {
+                            let label = r.first().cloned().unwrap_or_default();
+                            let command = r.get(1).cloned().unwrap_or_default();
+                            match prev.get(i) {
+                                Some(p) if !p.submenu.is_empty() => MenuEntry {
+                                    label,
+                                    command: p.command.clone(),
+                                    submenu: p.submenu.clone(),
+                                },
+                                _ => MenuEntry {
+                                    label,
+                                    command,
+                                    submenu: Vec::new(),
+                                },
+                            }
+                        })
+                        .collect();
+                }
+            }
             _ => return Err(unknown()),
         }
         Ok(())
@@ -272,13 +318,49 @@ mod tests {
     use mirada_layout::LayoutMode;
 
     #[test]
-    fn schema_tiene_las_secciones_escalares() {
+    fn schema_tiene_las_secciones() {
         let schema = Config::default().schema();
         let ids: Vec<&str> = schema.sections.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(
             ids,
-            vec!["teselado", "decoracion", "fondo", "terminal", "monitores"]
+            vec!["teselado", "decoracion", "fondo", "terminal", "monitores", "menu"]
         );
+    }
+
+    #[test]
+    fn apply_menu_reconstruye_y_preserva_submenu() {
+        let mut c = Config::default();
+        c.menu = vec![
+            MenuEntry {
+                label: "Apps".into(),
+                command: String::new(),
+                submenu: vec![MenuEntry {
+                    label: "Editor".into(),
+                    command: "nada".into(),
+                    submenu: Vec::new(),
+                }],
+            },
+            MenuEntry {
+                label: "Terminal".into(),
+                command: "xterm".into(),
+                submenu: Vec::new(),
+            },
+        ];
+        // Renombramos la hoja y agregamos una fila nueva; la fila 0 (submenú)
+        // cambia de etiqueta pero conserva sus hijos.
+        let nuevo = FieldValue::Table(vec![
+            vec!["Programas".into(), "ignorado".into()],
+            vec!["Consola".into(), "alacritty".into()],
+            vec!["Navegador".into(), "puriy".into()],
+        ]);
+        c.apply(&"menu.entradas".into(), nuevo).unwrap();
+        assert_eq!(c.menu.len(), 3);
+        assert_eq!(c.menu[0].label, "Programas");
+        assert_eq!(c.menu[0].submenu.len(), 1); // submenú preservado
+        assert!(c.menu[0].command.is_empty()); // el comando de un submenú no se toca
+        assert_eq!(c.menu[1].command, "alacritty");
+        assert_eq!(c.menu[2].label, "Navegador");
+        assert!(c.menu[2].submenu.is_empty());
     }
 
     #[test]

@@ -8,7 +8,7 @@
 //! cargo run -p llimphi-module-allichay --example settings_demo --release
 //! ```
 
-use allichay::{Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section};
+use allichay::{Column, Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section};
 use llimphi_module_allichay::{allichay_view, AllichayMsg, AllichayState};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
@@ -24,6 +24,10 @@ struct DemoConfig {
     acento: [u8; 4],
     nombre: String,
     auto: bool,
+    /// Lista de textos (ejercita [`Control::List`]).
+    rutas: Vec<String>,
+    /// Tabla (etiqueta, comando) — ejercita [`Control::Table`].
+    accesos: Vec<(String, String)>,
 }
 
 impl Default for DemoConfig {
@@ -36,6 +40,11 @@ impl Default for DemoConfig {
             acento: [92, 143, 235, 255],
             nombre: "mi escritorio".into(),
             auto: false,
+            rutas: vec!["~/proyectos".into(), "/usr/share".into()],
+            accesos: vec![
+                ("Editor".into(), "nada".into()),
+                ("Terminal".into(), "alacritty".into()),
+            ],
         }
     }
 }
@@ -79,6 +88,26 @@ impl Configurable for DemoConfig {
                     .field(Field::text("nombre", "Nombre del equipo", self.nombre.clone()))
                     .field(Field::toggle("auto", "Arrancar al inicio", self.auto)),
             )
+            .section(
+                Section::new("agregados", "Listas y tablas")
+                    .icon("≣")
+                    .help("Los controles v2")
+                    .field(Field::list(
+                        "rutas",
+                        "Rutas de búsqueda",
+                        self.rutas.clone(),
+                        "ruta",
+                    ))
+                    .field(Field::table(
+                        "accesos",
+                        "Accesos directos",
+                        vec![Column::new("label", "Nombre"), Column::new("cmd", "Comando")],
+                        self.accesos
+                            .iter()
+                            .map(|(l, c)| vec![l.clone(), c.clone()])
+                            .collect(),
+                    )),
+            )
     }
 
     fn apply(
@@ -102,6 +131,24 @@ impl Configurable for DemoConfig {
                 }
             }
             Some("auto") => self.auto = value.as_bool().unwrap_or(self.auto),
+            Some("rutas") => {
+                if let Some(items) = value.as_list() {
+                    self.rutas = items.to_vec();
+                }
+            }
+            Some("accesos") => {
+                if let Some(rows) = value.as_table() {
+                    self.accesos = rows
+                        .iter()
+                        .map(|r| {
+                            (
+                                r.first().cloned().unwrap_or_default(),
+                                r.get(1).cloned().unwrap_or_default(),
+                            )
+                        })
+                        .collect();
+                }
+            }
             other => {
                 return Err(allichay::AllichayError::UnknownPath(
                     other.unwrap_or("").into(),
@@ -157,6 +204,12 @@ impl App for Demo {
                     .and_then(|f| f.value.as_str().map(str::to_string))
                     .unwrap_or_default();
                 m.state.focus(&path, &seed);
+            }
+            Msg::Allichay(AllichayMsg::FocusCell(path, row, col)) => {
+                // El estado siembra el buffer leyendo la celda del valor actual.
+                if let Some(f) = m.cfg.schema().find_field(&path) {
+                    m.state.focus_cell(&path, f.value.clone(), row, col);
+                }
             }
             Msg::Allichay(AllichayMsg::Change(path, value)) => {
                 println!("cambio: {path} = {value:?}");

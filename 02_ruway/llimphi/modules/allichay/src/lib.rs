@@ -66,6 +66,10 @@ pub enum AllichayMsg {
     SelectSection(usize),
     /// Se enfocó un campo de texto (para empezar a teclear sobre él).
     Focus(FieldPath),
+    /// Se enfocó la celda `(row, col)` de un agregado (lista/tabla) en `path`.
+    /// El host siembra el buffer con [`AllichayState::focus_cell`] pasándole el
+    /// [`FieldValue`] actual del campo.
+    FocusCell(FieldPath, usize, usize),
     /// Un campo cambió de valor. El host lo aplica a su config y persiste.
     Change(FieldPath, FieldValue),
     /// El panel se desplazó: nuevo offset absoluto (ya clampeado).
@@ -81,14 +85,37 @@ pub enum AllichayMsg {
 #[derive(Debug, Clone, Default)]
 pub struct AllichayState {
     selected: usize,
-    /// Buffers de los campos de texto, por `FieldPath` serializado. Sólo existe
-    /// entrada para el campo que se está editando.
+    /// Buffers de los campos de texto, por clave de foco. Para un campo escalar
+    /// la clave es su `FieldPath` serializado; para una celda de agregado es una
+    /// clave compuesta (ver [`cell_key`]). Sólo existe entrada para lo que se
+    /// está editando.
     inputs: BTreeMap<String, TextInputState>,
-    /// El `FieldPath` (serializado) del campo de texto focado, si hay uno.
+    /// La clave del campo/celda de texto focado, si hay uno.
     focused: Option<String>,
+    /// Contexto de edición cuando lo focado es una celda de agregado: el campo,
+    /// su valor base (la lista/tabla completa, fija durante la edición) y la
+    /// coordenada. `None` cuando se edita un campo de texto escalar.
+    edit_cell: Option<EditCell>,
     /// Desplazamiento vertical (px) del panel activo, si su contenido excede el
     /// viewport. Se reinicia al cambiar de diente.
     scroll: f32,
+}
+
+/// Lo que el estado guarda mientras se teclea una celda de lista/tabla: con esto
+/// reconstruye el [`FieldValue`] entero y nuevo en cada tecla (protocolo "valor
+/// entero"), sin que el host tenga que conocer las coordenadas.
+#[derive(Debug, Clone)]
+struct EditCell {
+    path: FieldPath,
+    base: FieldValue,
+    row: usize,
+    col: usize,
+}
+
+/// La clave de buffer de una celda de agregado. Usa separadores que no aparecen
+/// en un `FieldPath` (sus segmentos van con `.`).
+fn cell_key(path: &FieldPath, row: usize, col: usize) -> String {
+    format!("{path}\u{1}{row}\u{1}{col}")
 }
 
 impl AllichayState {
@@ -127,12 +154,36 @@ impl AllichayState {
         st.set_text(seed);
         self.inputs.insert(key.clone(), st);
         self.focused = Some(key);
+        self.edit_cell = None;
+    }
+
+    /// Enfoca la celda `(row, col)` de un agregado. El host le pasa el
+    /// [`FieldValue`] actual del campo (`value`); el estado lee de ahí el texto
+    /// inicial de la celda y guarda el valor como base para reconstruir el
+    /// cambio entero en cada tecla. Si la coordenada no corresponde a una celda,
+    /// no enfoca nada.
+    pub fn focus_cell(&mut self, path: &FieldPath, value: FieldValue, row: usize, col: usize) {
+        let Some(seed) = value.cell(row, col).map(str::to_string) else {
+            return;
+        };
+        let key = cell_key(path, row, col);
+        let mut st = TextInputState::new();
+        st.set_text(&seed);
+        self.inputs.insert(key.clone(), st);
+        self.focused = Some(key);
+        self.edit_cell = Some(EditCell {
+            path: path.clone(),
+            base: value,
+            row,
+            col,
+        });
     }
 
     /// Quita el foco de texto (sin descartar nada — el valor ya viajó por
     /// `Change` en cada tecla).
     pub fn blur(&mut self) {
         self.focused = None;
+        self.edit_cell = None;
         self.inputs.clear();
     }
 
@@ -147,22 +198,40 @@ impl AllichayState {
         self.focused.as_deref() == Some(path.to_string().as_str())
     }
 
-    /// Enruta una tecla al campo de texto focado. Devuelve el cambio resultante
-    /// (`FieldPath`, [`FieldValue::Text`]) si el contenido cambió, para que el
-    /// host lo aplique y persista. `None` si no hay foco o la tecla no editó.
+    /// `true` si la celda `(row, col)` de `path` es la focada.
+    pub fn is_focused_cell(&self, path: &FieldPath, row: usize, col: usize) -> bool {
+        self.focused.as_deref() == Some(cell_key(path, row, col).as_str())
+    }
+
+    /// Enruta una tecla al campo/celda de texto focado. Devuelve el cambio
+    /// resultante (`FieldPath`, [`FieldValue`]) si el contenido cambió, para que
+    /// el host lo aplique y persista. Para un campo escalar es un
+    /// [`FieldValue::Text`]; para una celda de agregado es el agregado entero
+    /// con esa celda reemplazada. `None` si no hay foco o la tecla no editó.
     pub fn apply_key(&mut self, event: &KeyEvent) -> Option<(FieldPath, FieldValue)> {
         let key = self.focused.clone()?;
         let st = self.inputs.get_mut(&key)?;
-        if st.apply_key(event) {
-            Some((FieldPath::from(key.as_str()), FieldValue::Text(st.text())))
-        } else {
-            None
+        if !st.apply_key(event) {
+            return None;
+        }
+        let text = st.text();
+        match &self.edit_cell {
+            None => Some((FieldPath::from(key.as_str()), FieldValue::Text(text))),
+            Some(c) => Some((
+                c.path.clone(),
+                c.base.clone().with_cell(c.row, c.col, &text),
+            )),
         }
     }
 
-    /// Acceso interno al buffer focado para pintarlo.
+    /// Acceso interno al buffer de un campo escalar focado para pintarlo.
     fn input(&self, path: &FieldPath) -> Option<&TextInputState> {
         self.inputs.get(&path.to_string())
+    }
+
+    /// Acceso interno al buffer de una celda focada para pintarla.
+    fn input_cell(&self, path: &FieldPath, row: usize, col: usize) -> Option<&TextInputState> {
+        self.inputs.get(&cell_key(path, row, col))
     }
 }
 
@@ -390,20 +459,25 @@ fn estimate_height(schema: &Schema) -> f32 {
     for section in &schema.sections {
         h += 44.0; // encabezado de sección
         for f in &section.fields {
-            h += field_height(&f.control) + 13.0; // + label/gap/separación
+            h += field_height(f) + 13.0; // + label/gap/separación
         }
         for sub in &section.subsections {
             h += 26.0; // encabezado de subsección
             for f in &sub.fields {
-                h += field_height(&f.control) + 13.0;
+                h += field_height(f) + 13.0;
             }
         }
     }
     h + 28.0 // padding del panel
 }
 
-fn field_height(control: &Control) -> f32 {
-    match control {
+/// Alto del control de un campo (px). Para los agregados (lista/tabla) depende
+/// del número de filas, por eso toma el [`Field`] entero y no sólo su control.
+const AGG_ROW_H: f32 = 30.0; // alto de una fila editable de lista/tabla
+const AGG_CHROME_H: f32 = 24.0 + 32.0; // encabezado de tabla + botón "agregar"
+
+fn field_height(field: &Field) -> f32 {
+    match &field.control {
         Control::Toggle => 22.0,
         Control::Slider { .. } => 22.0,
         // Segmented (1 fila) para pocas opciones; radio-group (N filas) si son
@@ -417,7 +491,10 @@ fn field_height(control: &Control) -> f32 {
         }
         Control::TextInput => 34.0,
         Control::ColorPicker => 16.0 + 4.0 * 24.0, // swatch + 4 sliders RGBA
-        Control::Display => 8.0,                   // fila compacta sin label arriba
+        Control::List { .. } | Control::Table { .. } => {
+            field.value.row_count() as f32 * AGG_ROW_H + AGG_CHROME_H
+        }
+        Control::Display => 8.0, // fila compacta sin label arriba
     }
 }
 
@@ -570,6 +647,10 @@ where
         Control::Dropdown { options } => dropdown_control(field, path, options, theme, on_msg),
         Control::ColorPicker => color_control(field, path, theme, on_msg),
         Control::TextInput => text_control(field, path, state, theme, on_msg),
+        Control::List { item_label } => {
+            list_control(field, path, item_label, state, theme, on_msg)
+        }
+        Control::Table { columns } => table_control(field, path, columns, state, theme, on_msg),
         Control::Display => return display_row(field, theme),
     };
 
@@ -876,4 +957,276 @@ where
     let mut tmp = TextInputState::new();
     tmp.set_text(cur);
     text_input_view(&tmp, "", false, &palette, focus_msg)
+}
+
+// =====================================================================
+// Agregados: lista y tabla
+// =====================================================================
+
+/// Pinta una **lista** editable: una fila de texto por item (+ quitar) y un
+/// botón "agregar" al pie. Cada edición/alta/baja emite el [`FieldValue::List`]
+/// entero y nuevo (protocolo "valor entero"), construido a partir del valor
+/// actual del campo.
+fn list_control<Msg, F>(
+    field: &Field,
+    path: FieldPath,
+    item_label: &str,
+    state: &AllichayState,
+    theme: &Theme,
+    on_msg: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let value = &field.value;
+    let rows_n = value.row_count();
+    let palette = TextInputPalette::from_theme(theme);
+
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(rows_n + 1);
+    for r in 0..rows_n {
+        let cell = cell_input(value, &path, r, 0, &palette, state, &on_msg);
+        let remove = remove_button(value.with_row_removed(r), path.clone(), theme, &on_msg);
+        rows.push(agg_row(vec![flex_cell(cell), remove]));
+    }
+    let add_label = if item_label.is_empty() {
+        "Agregar".to_string()
+    } else {
+        format!("+ {item_label}")
+    };
+    rows.push(add_button(
+        add_label,
+        value.with_row_pushed(1),
+        path,
+        theme,
+        on_msg,
+    ));
+    agg_column(rows)
+}
+
+/// Pinta una **tabla** editable: una fila de encabezados (las columnas) + una
+/// fila de celdas-texto por registro (+ quitar) + botón "agregar fila". Igual
+/// que la lista, cada cambio emite el [`FieldValue::Table`] entero.
+fn table_control<Msg, F>(
+    field: &Field,
+    path: FieldPath,
+    columns: &[allichay::Column],
+    state: &AllichayState,
+    theme: &Theme,
+    on_msg: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let value = &field.value;
+    let rows_n = value.row_count();
+    let ncols = columns.len();
+    let palette = TextInputPalette::from_theme(theme);
+
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(rows_n + 2);
+
+    // Encabezados: una etiqueta por columna + hueco de la columna de "quitar".
+    let mut head: Vec<View<Msg>> = columns
+        .iter()
+        .map(|c| flex_cell(column_head(&c.label, theme)))
+        .collect();
+    head.push(remove_spacer());
+    rows.push(agg_row(head));
+
+    for r in 0..rows_n {
+        let mut cells: Vec<View<Msg>> = Vec::with_capacity(ncols + 1);
+        for c in 0..ncols {
+            cells.push(flex_cell(cell_input(value, &path, r, c, &palette, state, &on_msg)));
+        }
+        cells.push(remove_button(
+            value.with_row_removed(r),
+            path.clone(),
+            theme,
+            &on_msg,
+        ));
+        rows.push(agg_row(cells));
+    }
+    rows.push(add_button(
+        "+ fila".to_string(),
+        value.with_row_pushed(ncols),
+        path,
+        theme,
+        on_msg,
+    ));
+    agg_column(rows)
+}
+
+/// Un campo de texto de celda: igual que [`text_control`] pero su foco es por
+/// coordenada (`FocusCell`), no por `FieldPath`.
+fn cell_input<Msg, F>(
+    value: &FieldValue,
+    path: &FieldPath,
+    row: usize,
+    col: usize,
+    palette: &TextInputPalette,
+    state: &AllichayState,
+    on_msg: &F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let focus_msg = on_msg(AllichayMsg::FocusCell(path.clone(), row, col));
+    if state.is_focused_cell(path, row, col) {
+        if let Some(st) = state.input_cell(path, row, col) {
+            return text_input_view(st, "", true, palette, focus_msg);
+        }
+    }
+    let mut tmp = TextInputState::new();
+    tmp.set_text(value.cell(row, col).unwrap_or(""));
+    text_input_view(&tmp, "", false, palette, focus_msg)
+}
+
+/// Envuelve una celda en un contenedor que reparte el ancho en partes iguales
+/// entre columnas (`flex_grow:1, flex_basis:0`).
+fn flex_cell<Msg: Clone + 'static>(child: View<Msg>) -> View<Msg> {
+    View::new(Style {
+        flex_grow: 1.0,
+        flex_basis: length(0.0_f32),
+        size: Size {
+            width: Dimension::auto(),
+            height: Dimension::auto(),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: Dimension::auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![child])
+}
+
+/// Una fila horizontal de un agregado (celdas + botón quitar).
+fn agg_row<Msg: Clone + 'static>(children: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(children)
+}
+
+/// El contenedor vertical del agregado (encabezado/filas/botón agregar).
+fn agg_column<Msg: Clone + 'static>(rows: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(rows)
+}
+
+/// El encabezado de una columna de tabla.
+fn column_head<Msg: Clone + 'static>(label: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(label.to_string(), 10.5, theme.fg_placeholder, Alignment::Start)
+}
+
+/// El botón cuadrado de "quitar fila" (✕).
+fn remove_button<Msg, F>(
+    new_value: FieldValue,
+    path: FieldPath,
+    theme: &Theme,
+    on_msg: &F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    View::new(Style {
+        size: Size {
+            width: length(26.0_f32),
+            height: length(26.0_f32),
+        },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(5.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(on_msg(AllichayMsg::Change(path, new_value)))
+    // `×` (U+00D7) en vez de `✕` (U+2715): la fuente del SO sí trae el de
+    // Latin-1. Ver la regla "usar glifos que la fuente tenga".
+    .text_aligned("×".to_string(), 15.0, theme.fg_muted, Alignment::Center)
+}
+
+/// Un hueco del ancho del botón quitar, para alinear el encabezado de tabla.
+fn remove_spacer<Msg: Clone + 'static>() -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(26.0_f32),
+            height: length(16.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+}
+
+/// El botón "agregar" al pie de un agregado.
+fn add_button<Msg, F>(
+    label: String,
+    new_value: FieldValue,
+    path: FieldPath,
+    theme: &Theme,
+    on_msg: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(26.0_f32),
+        },
+        align_self: Some(AlignItems::Start),
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(2.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .radius(6.0)
+    .border(1.0, theme.border)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(on_msg(AllichayMsg::Change(path, new_value)))
+    .text_aligned(label, 11.5, theme.accent, Alignment::Center)
 }

@@ -75,9 +75,24 @@ fn main() {
                 .field(Field::toggle("mirada", "mirada", true))
                 .field(Field::toggle("shuma", "shuma", true)),
         );
+    // Mirada con un par de entradas de menú, para que la tabla del menú raíz se
+    // vea poblada (el default trae el menú vacío).
+    let mut mirada_cfg = mirada_brain::Config::default();
+    mirada_cfg.menu = vec![
+        mirada_brain::MenuEntry {
+            label: "Editor".into(),
+            command: "nada".into(),
+            submenu: Vec::new(),
+        },
+        mirada_brain::MenuEntry {
+            label: "Terminal".into(),
+            command: "alacritty".into(),
+            submenu: Vec::new(),
+        },
+    ];
     let dientes: Vec<(&str, &str, Schema)> = vec![
         ("⚙", "Sistema", sistema),
-        ("☸", "mirada", prefix(mirada_brain::Config::default().schema(), "mirada")),
+        ("☸", "mirada", prefix(mirada_cfg.schema(), "mirada")),
         ("🎛", "pata", prefix(pata_core::Config::preset().schema(), "pata")),
     ];
 
@@ -112,9 +127,15 @@ fn main() {
         |_| None,
     );
     // 3 niveles: sidebar (items = secciones de la pestaña activa) | pestañas que
-    // sobresalen | canvas (contenido del item activo = item 0).
+    // sobresalen | canvas (contenido del item activo). El item se elige con el
+    // 3er arg (default 0) — útil para fotografiar una sección puntual (p. ej. la
+    // tabla del menú raíz de mirada).
     let active = &dientes[sel.min(dientes.len() - 1)].2;
-    let item = 0usize;
+    let item: usize = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0)
+        .min(active.sections.len().saturating_sub(1));
 
     // Sidebar: lista de items (secciones) con su iconito.
     let mut sidebar_kids: Vec<View<()>> = Vec::new();

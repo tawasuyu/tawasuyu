@@ -45,9 +45,14 @@ use serde::{Deserialize, Serialize};
 /// traduce su struct a esto al construir el [`Schema`], y de esto a su struct al
 /// recibir un cambio en [`Configurable::apply`].
 ///
-/// v1 cubre los **escalares**: booleano, entero, flotante, texto, selección de
-/// enum (el id elegido) y color RGBA. Las variantes de tabla y lista quedan para
-/// v2 (keymaps, reglas, listas de superficies).
+/// v1 cubrió los **escalares**: booleano, entero, flotante, texto, selección de
+/// enum (el id elegido) y color RGBA. v2 suma los **agregados**: lista de
+/// textos ([`FieldValue::List`]) y tabla de filas de celdas-texto
+/// ([`FieldValue::Table`]) — para keymaps, menús, reglas, listas de superficies.
+///
+/// El protocolo de edición es **valor entero**: al cambiar una celda, agregar o
+/// quitar una fila, el renderizador emite el [`FieldValue`] completo y nuevo (no
+/// una operación granular), así la app sólo reemplaza su `Vec` en `apply`.
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub enum FieldValue {
@@ -63,6 +68,12 @@ pub enum FieldValue {
     Enum(String),
     /// Color RGBA — con un [`Control::ColorPicker`].
     Color([u8; 4]),
+    /// Lista ordenada de textos — con un [`Control::List`]. Filas con un solo
+    /// campo editable; se agregan/quitan al final o por fila.
+    List(Vec<String>),
+    /// Tabla de filas, cada fila una lista de celdas-texto del mismo ancho que
+    /// las columnas del [`Control::Table`]. Se agregan/quitan filas enteras.
+    Table(Vec<Vec<String>>),
 }
 
 impl FieldValue {
@@ -75,6 +86,8 @@ impl FieldValue {
             FieldValue::Text(_) => "text",
             FieldValue::Enum(_) => "enum",
             FieldValue::Color(_) => "color",
+            FieldValue::List(_) => "list",
+            FieldValue::Table(_) => "table",
         }
     }
 
@@ -120,6 +133,103 @@ impl FieldValue {
             _ => None,
         }
     }
+
+    /// Lee el valor como lista de textos, si lo es.
+    pub fn as_list(&self) -> Option<&[String]> {
+        match self {
+            FieldValue::List(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Lee el valor como tabla (filas de celdas-texto), si lo es.
+    pub fn as_table(&self) -> Option<&[Vec<String>]> {
+        match self {
+            FieldValue::Table(rows) => Some(rows),
+            _ => None,
+        }
+    }
+
+    /// Cuántas filas tiene un agregado ([`FieldValue::List`] o
+    /// [`FieldValue::Table`]); `0` para escalares.
+    pub fn row_count(&self) -> usize {
+        match self {
+            FieldValue::List(v) => v.len(),
+            FieldValue::Table(rows) => rows.len(),
+            _ => 0,
+        }
+    }
+
+    /// El texto de una celda `(row, col)` de un agregado. En una
+    /// [`FieldValue::List`] sólo `col == 0` tiene valor. `None` fuera de rango o
+    /// si no es un agregado.
+    pub fn cell(&self, row: usize, col: usize) -> Option<&str> {
+        match self {
+            FieldValue::List(v) if col == 0 => v.get(row).map(String::as_str),
+            FieldValue::Table(rows) => rows.get(row).and_then(|r| r.get(col)).map(String::as_str),
+            _ => None,
+        }
+    }
+
+    /// Devuelve una copia del agregado con la celda `(row, col)` reemplazada por
+    /// `text`. Para escalares (o coordenadas fuera de rango) devuelve el valor
+    /// sin cambios. Es la base del protocolo "valor entero" al editar una celda.
+    pub fn with_cell(self, row: usize, col: usize, text: &str) -> FieldValue {
+        match self {
+            FieldValue::List(mut v) => {
+                if col == 0 {
+                    if let Some(slot) = v.get_mut(row) {
+                        *slot = text.to_string();
+                    }
+                }
+                FieldValue::List(v)
+            }
+            FieldValue::Table(mut rows) => {
+                if let Some(cell) = rows.get_mut(row).and_then(|r| r.get_mut(col)) {
+                    *cell = text.to_string();
+                }
+                FieldValue::Table(rows)
+            }
+            other => other,
+        }
+    }
+
+    /// Una copia del agregado con una fila vacía añadida al final. `ncols` fija
+    /// el ancho de la fila nueva en una [`FieldValue::Table`] (se ignora en una
+    /// [`FieldValue::List`], que siempre tiene un campo por fila).
+    pub fn with_row_pushed(&self, ncols: usize) -> FieldValue {
+        match self {
+            FieldValue::List(v) => {
+                let mut v = v.clone();
+                v.push(String::new());
+                FieldValue::List(v)
+            }
+            FieldValue::Table(rows) => {
+                let mut rows = rows.clone();
+                rows.push(alloc::vec![String::new(); ncols]);
+                FieldValue::Table(rows)
+            }
+            other => other.clone(),
+        }
+    }
+
+    /// Una copia del agregado sin la fila `row`. Fuera de rango devuelve el
+    /// valor sin cambios.
+    pub fn with_row_removed(&self, row: usize) -> FieldValue {
+        match self {
+            FieldValue::List(v) if row < v.len() => {
+                let mut v = v.clone();
+                v.remove(row);
+                FieldValue::List(v)
+            }
+            FieldValue::Table(rows) if row < rows.len() => {
+                let mut rows = rows.clone();
+                rows.remove(row);
+                FieldValue::Table(rows)
+            }
+            other => other.clone(),
+        }
+    }
 }
 
 // =====================================================================
@@ -139,6 +249,28 @@ pub struct EnumOption {
 
 impl EnumOption {
     /// Una opción con id y rótulo.
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+        }
+    }
+}
+
+/// Una columna de un [`Control::Table`]: un id estable y su encabezado visible.
+/// El id es para la app (mapear la celda a un campo de su struct); el render
+/// sólo pinta el `label` como cabecera.
+#[derive(Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+pub struct Column {
+    /// Id estable de la columna (no se traduce).
+    pub id: String,
+    /// Encabezado visible (puede traducirse al construir el schema).
+    pub label: String,
+}
+
+impl Column {
+    /// Una columna con id y encabezado.
     pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
         Self {
             id: id.into(),
@@ -172,6 +304,21 @@ pub enum Control {
     ColorPicker,
     /// Campo de texto libre para un [`FieldValue::Text`].
     TextInput,
+    /// Lista editable de textos para un [`FieldValue::List`]: una fila de texto
+    /// por item, con botón para quitar la fila y otro para agregar al final.
+    List {
+        /// Sustantivo singular del item, para el botón "agregar" (`"ruta"` →
+        /// «+ ruta»). Vacío cae a un rótulo genérico.
+        #[cfg_attr(feature = "serde", serde(default))]
+        item_label: String,
+    },
+    /// Tabla editable para un [`FieldValue::Table`]: una columna por
+    /// [`Column`], una fila de celdas-texto por registro, con quitar/agregar
+    /// fila. El ancho de fila lo fija `columns.len()`.
+    Table {
+        /// Las columnas, en orden. Definen los encabezados y el ancho de fila.
+        columns: Vec<Column>,
+    },
     /// Sólo lectura: muestra el valor (texto) sin editarlo. Para items de
     /// información (estado del sistema, versión…) que conviven con los
     /// editables en un mismo panel.
@@ -288,6 +435,40 @@ impl Field {
     /// Un selector de color RGBA.
     pub fn color(id: impl Into<String>, label: impl Into<String>, value: [u8; 4]) -> Self {
         Self::new(id, label, FieldValue::Color(value), Control::ColorPicker)
+    }
+
+    /// Una lista editable de textos. `item_label` es el sustantivo del item para
+    /// el botón "agregar" (p. ej. `"ruta"`).
+    pub fn list(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        items: Vec<String>,
+        item_label: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            id,
+            label,
+            FieldValue::List(items),
+            Control::List {
+                item_label: item_label.into(),
+            },
+        )
+    }
+
+    /// Una tabla editable. `columns` define los encabezados y el ancho de fila;
+    /// `rows` son las filas actuales (cada una con tantas celdas como columnas).
+    pub fn table(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        columns: Vec<Column>,
+        rows: Vec<Vec<String>>,
+    ) -> Self {
+        Self::new(
+            id,
+            label,
+            FieldValue::Table(rows),
+            Control::Table { columns },
+        )
     }
 
     /// Un item de sólo lectura: muestra `value` sin permitir editarlo.
@@ -601,6 +782,66 @@ mod tests {
         assert_eq!(FieldValue::Float(3.9).as_int(), Some(3));
         assert_eq!(FieldValue::Bool(true).as_int(), None);
         assert_eq!(FieldValue::Enum("x".into()).as_str(), Some("x"));
+    }
+
+    #[test]
+    fn list_edita_celda_agrega_y_quita() {
+        let v = FieldValue::List(vec!["a".into(), "b".into()]);
+        assert_eq!(v.row_count(), 2);
+        assert_eq!(v.cell(1, 0), Some("b"));
+        let v = v.with_cell(0, 0, "z");
+        assert_eq!(v.cell(0, 0), Some("z"));
+        let v = v.with_row_pushed(1);
+        assert_eq!(v.row_count(), 3);
+        assert_eq!(v.cell(2, 0), Some(""));
+        let v = v.with_row_removed(0);
+        assert_eq!(v.as_list().unwrap(), &["b".to_string(), String::new()]);
+    }
+
+    #[test]
+    fn table_edita_celda_por_columna() {
+        let v = FieldValue::Table(vec![
+            vec!["Editor".into(), "code".into()],
+            vec!["Terminal".into(), "xterm".into()],
+        ]);
+        assert_eq!(v.cell(1, 0), Some("Terminal"));
+        assert_eq!(v.cell(1, 1), Some("xterm"));
+        let v = v.with_cell(1, 1, "alacritty");
+        assert_eq!(v.cell(1, 1), Some("alacritty"));
+        let v = v.with_row_pushed(2);
+        assert_eq!(v.row_count(), 3);
+        assert_eq!(v.cell(2, 0), Some(""));
+        assert_eq!(v.cell(2, 1), Some(""));
+    }
+
+    #[test]
+    fn with_cell_no_toca_escalares_ni_fuera_de_rango() {
+        // Escalar: sin cambios.
+        assert_eq!(
+            FieldValue::Int(3).with_cell(0, 0, "x"),
+            FieldValue::Int(3)
+        );
+        // Fuera de rango: la lista queda igual.
+        let v = FieldValue::List(vec!["a".into()]);
+        assert_eq!(v.clone().with_cell(5, 0, "x"), v);
+    }
+
+    #[test]
+    fn field_list_y_table_constructores() {
+        let f = Field::list("rutas", "Rutas", vec!["/a".into()], "ruta");
+        assert!(matches!(f.control, Control::List { .. }));
+        assert_eq!(f.value, FieldValue::List(vec!["/a".to_string()]));
+        let g = Field::table(
+            "menu",
+            "Menú",
+            vec![Column::new("label", "Etiqueta"), Column::new("cmd", "Comando")],
+            vec![vec!["A".into(), "a".into()]],
+        );
+        if let Control::Table { columns } = &g.control {
+            assert_eq!(columns.len(), 2);
+        } else {
+            panic!("esperaba Control::Table");
+        }
     }
 
     #[cfg(feature = "serde")]
