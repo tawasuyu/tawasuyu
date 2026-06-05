@@ -14,11 +14,13 @@ llimphi-theme = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-segmented = { workspace = true }
+llimphi-widget-scroll = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 
 [dev-dependencies]
 # Volcado headless del view a PNG (llvmpipe) para verlo sin levantar ventana,
 # usando el schema real de mirada como muestra.
 mirada-brain = { path = "../../../mirada/mirada-brain" }
+pata-core = { path = "../../../pata/pata-core" }
 png = { workspace = true }
 pollster = { workspace = true }

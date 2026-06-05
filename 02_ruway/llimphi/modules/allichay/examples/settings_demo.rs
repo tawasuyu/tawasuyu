@@ -164,6 +164,7 @@ impl App for Demo {
                     eprintln!("  error: {e}");
                 }
             }
+            Msg::Allichay(AllichayMsg::ScrollTo(offset)) => m.state.set_scroll(offset),
             Msg::Key(event) => {
                 if let Some((path, value)) = m.state.apply_key(&event) {
                     println!("texto: {path} = {value:?}");

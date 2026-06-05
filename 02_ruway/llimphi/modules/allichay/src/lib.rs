@@ -35,6 +35,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, KeyEvent, View};
 use llimphi_theme::Theme;
 
+use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
@@ -61,6 +62,8 @@ pub enum AllichayMsg {
     Focus(FieldPath),
     /// Un campo cambió de valor. El host lo aplica a su config y persiste.
     Change(FieldPath, FieldValue),
+    /// El panel se desplazó: nuevo offset absoluto (ya clampeado).
+    ScrollTo(f32),
 }
 
 // =====================================================================
@@ -77,6 +80,9 @@ pub struct AllichayState {
     inputs: BTreeMap<String, TextInputState>,
     /// El `FieldPath` (serializado) del campo de texto focado, si hay uno.
     focused: Option<String>,
+    /// Desplazamiento vertical (px) del panel activo, si su contenido excede el
+    /// viewport. Se reinicia al cambiar de diente.
+    scroll: f32,
 }
 
 impl AllichayState {
@@ -90,11 +96,22 @@ impl AllichayState {
         self.selected
     }
 
-    /// Selecciona la sección `i`. Limpia el foco de texto (cambiar de diente
-    /// cierra cualquier edición en curso).
+    /// Selecciona la sección `i`. Limpia el foco de texto y el scroll (cambiar
+    /// de diente arranca arriba, sin edición en curso).
     pub fn select(&mut self, i: usize) {
         self.selected = i;
+        self.scroll = 0.0;
         self.blur();
+    }
+
+    /// Offset de scroll actual del panel (px).
+    pub fn scroll(&self) -> f32 {
+        self.scroll
+    }
+
+    /// Fija el offset de scroll (el valor ya viene clampeado por el renderer).
+    pub fn set_scroll(&mut self, offset: f32) {
+        self.scroll = offset;
     }
 
     /// Enfoca un campo de texto, sembrando su buffer con el valor actual `seed`.
@@ -374,6 +391,22 @@ where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
+    View::new(panel_style()).children(section_items(section, base, state, theme, on_msg))
+}
+
+/// Los views de una sección (encabezado + campos + subsecciones), sin el
+/// contenedor — para apilar varias secciones en un mismo panel ([`schema_panel`]).
+fn section_items<Msg, F>(
+    section: &allichay::Section,
+    base: &FieldPath,
+    state: &AllichayState,
+    theme: &Theme,
+    on_msg: F,
+) -> Vec<View<Msg>>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
     let mut children: Vec<View<Msg>> = Vec::new();
     children.push(section_head(&section.title, &section.help, theme));
 
@@ -390,8 +423,96 @@ where
             children.push(field_row(field, path, state, theme, on_msg.clone()));
         }
     }
+    children
+}
 
-    View::new(panel_style()).children(children)
+/// Pinta el panel de un diente: **todas** las secciones de `schema` apiladas
+/// (cada una con su encabezado de grupo), con scroll vertical si el contenido
+/// excede `viewport_h`. Es el panel de un diente del panel de control — el id
+/// de cada sección es el prefijo de ruteo (`"app::seccion"`), así que cada
+/// campo emite su `FieldPath` completo.
+///
+/// `state.scroll()` lleva el offset; el renderer emite [`AllichayMsg::ScrollTo`]
+/// con el offset ya clampeado para que el host sólo lo guarde.
+pub fn schema_panel<Msg, F>(
+    schema: &Schema,
+    state: &AllichayState,
+    theme: &Theme,
+    viewport_h: f32,
+    on_msg: F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let mut items: Vec<View<Msg>> = Vec::new();
+    for section in &schema.sections {
+        let base = FieldPath::empty().push(section.id.clone());
+        items.extend(section_items(section, &base, state, theme, on_msg.clone()));
+    }
+
+    let content = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(10.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(items);
+
+    let content_len = estimate_height(schema);
+    let offset = state.scroll().min(content_len);
+    let on_scroll = on_msg;
+    let scroller = scroll_y(
+        offset,
+        content_len,
+        viewport_h,
+        content,
+        move |delta| {
+            on_scroll(AllichayMsg::ScrollTo(clamp_offset(
+                offset + delta,
+                content_len,
+                viewport_h,
+            )))
+        },
+        &ScrollPalette::from_theme(theme),
+    );
+
+    View::new(panel_style()).children(vec![scroller])
+}
+
+/// Estimación (generosa) del alto del contenido de un schema, para el scroll.
+fn estimate_height(schema: &Schema) -> f32 {
+    let mut h = 0.0_f32;
+    for section in &schema.sections {
+        h += 44.0; // encabezado de sección
+        for f in &section.fields {
+            h += field_height(&f.control) + 13.0; // + label/gap/separación
+        }
+        for sub in &section.subsections {
+            h += 26.0; // encabezado de subsección
+            for f in &sub.fields {
+                h += field_height(&f.control) + 13.0;
+            }
+        }
+    }
+    h + 28.0 // padding del panel
+}
+
+fn field_height(control: &Control) -> f32 {
+    match control {
+        Control::Toggle => 22.0,
+        Control::Slider { .. } => 22.0,
+        Control::Dropdown { .. } => 28.0,
+        Control::TextInput => 34.0,
+        Control::ColorPicker => 16.0 + 4.0 * 24.0, // swatch + 4 sliders RGBA
+        Control::Display => 8.0,                   // fila compacta sin label arriba
+    }
 }
 
 fn panel_style() -> Style {
@@ -543,6 +664,7 @@ where
         Control::Dropdown { options } => dropdown_control(field, path, options, theme, on_msg),
         Control::ColorPicker => color_control(field, path, theme, on_msg),
         Control::TextInput => text_control(field, path, state, theme, on_msg),
+        Control::Display => return display_row(field, theme),
     };
 
     let mut kids = vec![label_view(&field.label, theme), control];
@@ -550,6 +672,44 @@ where
         kids.push(help_view(&field.help, theme));
     }
     View::new(field_col_style()).children(kids)
+}
+
+/// Fila de sólo lectura: rótulo a la izquierda, valor a la derecha. Para items
+/// de información del sistema (no editables).
+fn display_row<Msg: Clone + 'static>(field: &Field, theme: &Theme) -> View<Msg> {
+    let label = View::new(Style {
+        size: Size {
+            width: length(150.0_f32),
+            height: length(20.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(field.label.clone(), 12.0, theme.fg_muted, Alignment::Start);
+    let value = View::new(Style {
+        size: Size {
+            width: Dimension::auto(),
+            height: length(20.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        field.value.as_str().unwrap_or("").to_string(),
+        12.5,
+        theme.fg_text,
+        Alignment::Start,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![label, value])
 }
 
 // =====================================================================

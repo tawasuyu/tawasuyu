@@ -9,35 +9,88 @@
 use std::fs::File;
 use std::io::BufWriter;
 
-use allichay::Configurable;
-use llimphi_module_allichay::{allichay_view, AllichayMsg, AllichayState};
+use allichay::{Configurable, Field, Schema, Section};
+use llimphi_module_allichay::{diente_rail, schema_panel, AllichayMsg, AllichayState, Diente};
 
 use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy;
+use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
 use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
+use llimphi_ui::View;
 
-const W: u32 = 900;
-const H: u32 = 600;
+const W: u32 = 960;
+const H: u32 = 620;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+fn prefix(mut s: Schema, target: &str) -> Schema {
+    for sec in &mut s.sections {
+        sec.id = format!("{target}::{}", sec.id);
+    }
+    s
+}
 
 fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| "allichay.png".to_string());
-    let sec: usize = std::env::args()
-        .nth(2)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+    let sel: usize = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1);
 
     let theme = llimphi_theme::Theme::default();
-    // El schema real del compositor: teselado/decoración/fondo/terminal/monitores.
-    let schema = mirada_brain::Config::default().schema();
-    let mut state = AllichayState::new();
-    state.select(sec); // 1 = Decoración (sliders de borde + color pickers).
 
-    let v = allichay_view::<(), _>(&schema, &state, &theme, |_m: AllichayMsg| ());
+    // Rail de dientes representativo del panel: una categoría + dos apps.
+    let apariencia = Schema::new().section(
+        Section::new("wawa::apariencia", "Tema y acento")
+            .field(Field::toggle("oscuro", "Modo oscuro", true))
+            .field(Field::dropdown(
+                "acento",
+                "Acento",
+                "gioser",
+                vec![
+                    allichay::EnumOption::new("gioser", "gioser"),
+                    allichay::EnumOption::new("yachay", "yachay"),
+                    allichay::EnumOption::new("ruway", "ruway"),
+                ],
+            )),
+    );
+    let dientes: Vec<(&str, &str, Schema)> = vec![
+        ("🎨", "Apariencia", apariencia),
+        ("⚙", "mirada", prefix(mirada_brain::Config::default().schema(), "mirada")),
+        ("🎛", "pata", prefix(pata_core::Config::preset().schema(), "pata")),
+    ];
+
+    let mut state = AllichayState::new();
+    state.select(sel);
+
+    let rail_items: Vec<Diente> = dientes
+        .iter()
+        .enumerate()
+        .map(|(i, (icon, label, _))| Diente {
+            id: i as u64,
+            icon: (*icon).to_string(),
+            label: (*label).to_string(),
+            active: i == sel,
+        })
+        .collect();
+    let rail = diente_rail::<(), _>(&rail_items, 210.0, &theme, |_id| ());
+    let panel = schema_panel::<(), _>(
+        &dientes[sel.min(dientes.len() - 1)].2,
+        &state,
+        &theme,
+        H as f32 - 40.0,
+        |_m: AllichayMsg| (),
+    );
+    let v = View::<()>::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0),
+            height: percent(1.0),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![rail, panel]);
 
     // view → layout → scene (misma secuencia que el eventloop).
     let mut layout = LayoutTree::new();
@@ -83,7 +136,7 @@ fn main() {
         .expect("render_to_view");
 
     write_png(&hal, &target, &out);
-    eprintln!("dump_panel: escrito {out} ({W}x{H}) · sección {sec}");
+    eprintln!("dump_panel: escrito {out} ({W}x{H}) · diente {sel}");
 }
 
 fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {

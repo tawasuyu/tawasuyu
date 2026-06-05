@@ -172,6 +172,10 @@ pub enum Control {
     ColorPicker,
     /// Campo de texto libre para un [`FieldValue::Text`].
     TextInput,
+    /// Sólo lectura: muestra el valor (texto) sin editarlo. Para items de
+    /// información (estado del sistema, versión…) que conviven con los
+    /// editables en un mismo panel.
+    Display,
 }
 
 // =====================================================================
@@ -284,6 +288,15 @@ impl Field {
     /// Un selector de color RGBA.
     pub fn color(id: impl Into<String>, label: impl Into<String>, value: [u8; 4]) -> Self {
         Self::new(id, label, FieldValue::Color(value), Control::ColorPicker)
+    }
+
+    /// Un item de sólo lectura: muestra `value` sin permitir editarlo.
+    pub fn display(
+        id: impl Into<String>,
+        label: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self::new(id, label, FieldValue::Text(value.into()), Control::Display)
     }
 }
 
