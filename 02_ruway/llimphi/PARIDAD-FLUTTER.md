@@ -204,6 +204,30 @@ La suite tiene dominium/ERP y formularios — estas son composición pura, no pr
   primer caso concreto y es justo el único pendiente del Tier 1.
 - **Lottie / vector animado** cae bajo SVG (Tier 6, existe `vello_svg`).
 
+### Wishlist ampliada de controles (anotados, sin prioridad — para retomar después)
+
+Barrido del catálogo de Flutter/SwiftUI/Compose/web por controles que **resaltan**
+y faltan (verificado contra la lista de widgets: ninguno existe hoy). Columna clave:
+*¿influye en la arquitectura?* — **No** = composición pura, se hace cuando un caller
+lo pida; **Anim** = sólo extiende el `AnimRegistry`; **Seam** = ya cubierto por los
+cuatro seams de arriba, no abre uno nuevo.
+
+| Control | Análogo | ¿Influye arq.? | Nota |
+|---|---|---|---|
+| **Charts** (línea/barra/área/scatter/pie) | Swift Charts · `fl_chart` | No (sobre `paint_with`) | Familia grande y de alto valor transversal: ERP/dominium, cosmos, finanzas, nakui. **El que más resalta** por retorno. No hay nada genérico en el catálogo. |
+| **Ripple / InkWell** | Material `InkWell` ripple | Anim | Feedback de tap icónico: círculo que expande desde el punto y clippea al borde. `paint_with` + tween radial. Pulido material barato. |
+| **Carousel / Pager** | Compose `HorizontalPager` · iOS page control | Seam (gestos+scroll) | Páginas full-width con snap. Cae bajo scroll-physics + gestos (Tier 4/5), no abre seam nuevo. |
+| **Chips** (filter/choice/input, removibles) | `FilterChip`/`InputChip` · `AssistChip` | No | Selección múltiple compacta, tag-input. Composición sobre button+badge. |
+| **Range slider** (dos thumbs) | `RangeSlider` | No | Variante del `slider` que ya existe (filtros de rango, ecualizador en media). |
+| **Shimmer** (skeleton animado) | `Shimmer` · `redacted` animado | Anim | El `skeleton` existe estático; falta el barrido de gradiente. Tween de offset sobre gradiente (Tier 1 ya da gradientes). |
+| **Reorderable list** (drag de ítems) | `ReorderableListView` | No | Drag&drop ya existe (`on_drop`); `tiled` reordena paneles pero no ítems de lista. Útil para playlists/kanban/prioridades. |
+| **Wrap / flow layout** | `Wrap` · Compose `FlowRow` | No (verificar flex-wrap de taffy) | Ítems que saltan de línea (chips, tags, galería fluida). Probablemente sale de `flex-wrap` de taffy — verificar antes de widget nuevo. |
+| **FittedBox / scale-to-fit** | `FittedBox` | Seam (LayoutBuilder) | Escala un subárbol arbitrario para caber. Pariente de autotextsize pero para cualquier `View`; depende del seam de size-aware. |
+| **Calendar / agenda view** | `CalendarView` · agenda | No | Grilla de mes + vista de agenda. Scheduling de ERP; compone date-picker + grid. |
+| **Rating** (estrellas) · **Gauge** (radial) | `RatingBar` · SwiftUI `Gauge` | No | Pequeños, sobre `paint_with`. Gauge útil para dashboards/cosmos/nakui. |
+| **animateContentSize** | Compose `animateContentSize()` | Anim (re-layout) | Animar el alto/ancho al cambiar contenido. Ya anotado como extensión del Bloque 4 que requiere re-layout en el frame. |
+| **Markdown render** | `flutter_markdown` | No (depende de RichText) | Render de markdown a `View`; espera spans inline mixtos del Tier 2. Probable territorio de pluma, no widget genérico. |
+
 ### Mirado y descartado (no encaja hoy)
 
 - Widgets adaptativos plataforma (Cupertino vs Material): N/A, gioser tiene su
