@@ -193,6 +193,10 @@ struct Model {
     cfg: WawaConfig,
     mirada: mirada_brain::Config,
     mirada_path: Option<PathBuf>,
+    /// Filas crudas `[combinación, acción]` del keymap de mirada (buffer
+    /// editable; el `Keymap` válido se deriva al guardar — ver [`flush_saves`]).
+    keymap_rows: Vec<Vec<String>>,
+    keymap_path: Option<PathBuf>,
     pata: pata_core::Config,
     allichay: AllichayState,
     host: HostInfo,
@@ -220,6 +224,7 @@ const SAVE_DELAY_TICKS: u32 = 1;
 struct SaveDirty {
     wawa: bool,
     mirada: bool,
+    keymap: bool,
     pata: bool,
 }
 
@@ -288,6 +293,16 @@ impl App for Panel {
             .unwrap_or_default();
         let pata = pata_config::load();
 
+        // Keymap de mirada: vive en su propio RON. El buffer editable son las
+        // filas crudas (así no se pierde una fila a-medio-tipear); el `Keymap`
+        // válido se deriva al guardar.
+        let keymap_path = mirada_brain::Keymap::default_path();
+        let keymap_rows = keymap_path
+            .as_deref()
+            .map(mirada_brain::Keymap::load_or_init)
+            .unwrap_or_default()
+            .to_rows();
+
         Model {
             selected_pest: 0,
             selected_item: None,
@@ -296,6 +311,8 @@ impl App for Panel {
             cfg,
             mirada,
             mirada_path,
+            keymap_rows,
+            keymap_path,
             pata,
             allichay: AllichayState::new(),
             host,
@@ -522,10 +539,14 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         },
     ];
     if m.cfg.module_enabled("mirada") {
+        let mut schema = prefix_schema(m.mirada.schema(), "mirada");
+        // El keymap vive en su propio RON; se edita como una sección más de la
+        // pestaña mirada (id ya prefijado para que el ruteo lo reconozca).
+        schema.sections.push(keymap_section(&m.keymap_rows));
         out.push(PanelPestana {
             title: "mirada".into(),
             icon: "☸".into(),
-            schema: prefix_schema(m.mirada.schema(), "mirada"),
+            schema,
         });
     }
     if m.cfg.module_enabled("pata") {
@@ -545,6 +566,25 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
         sec.id = format!("{target}::{}", sec.id);
     }
     schema
+}
+
+/// La sección "Atajos" de mirada: el keymap como tabla (combinación · acción).
+/// El id va prefijado (`mirada::atajos`) para que [`route_change`] lo reconozca
+/// y lo aplique al buffer del keymap (no a la `Config`).
+fn keymap_section(rows: &[Vec<String>]) -> Section {
+    use allichay::{Column, Field};
+    Section::new("mirada::atajos", "Atajos")
+        .icon("⌨")
+        .help("Combinación → acción. Acciones tipo focus-next, layout:grid, spawn:kitty…")
+        .field(Field::table(
+            "bindings",
+            "Atajos de teclado",
+            vec![
+                Column::new("combo", "Combinación"),
+                Column::new("action", "Acción"),
+            ],
+            rows.to_vec(),
+        ))
 }
 
 /// La pestaña "Sistema": varios items de configuración del SO.
@@ -685,6 +725,15 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
             m.dirty.wawa = true;
         }
+        "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {
+            // El keymap no es parte de Config: su tabla actualiza el buffer de
+            // filas crudas (se preserva lo a-medio-tipear; el Keymap válido se
+            // deriva al guardar).
+            if let Some(rows) = value.as_table() {
+                m.keymap_rows = rows.to_vec();
+                m.dirty.keymap = true;
+            }
+        }
         "mirada" => {
             if let Err(e) = m.mirada.apply(&rel, value) {
                 m.status = format!("· mirada: {e}");
@@ -724,6 +773,16 @@ fn flush_saves(m: &mut Model) {
             None => err = Some("· mirada: sin ruta de config".into()),
         }
         m.dirty.mirada = false;
+    }
+    if m.dirty.keymap {
+        // Derivamos el Keymap válido de las filas y lo escribimos a su RON.
+        let km = mirada_brain::Keymap::from_rows(&m.keymap_rows);
+        match m.keymap_path.as_deref().map(|p| km.save(p)) {
+            Some(Ok(())) => ok = true,
+            Some(Err(e)) => err = Some(format!("· keymap save: {e}")),
+            None => err = Some("· keymap: sin ruta de config".into()),
+        }
+        m.dirty.keymap = false;
     }
     if m.dirty.pata {
         match pata_config::save(&m.pata) {
@@ -795,6 +854,10 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
 /// lista/tabla al focarla — necesita el agregado entero, no sólo un texto).
 fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
     let (key, rel) = split_app(path)?;
+    // El keymap no está en el schema de Config: su valor es el buffer de filas.
+    if key == "mirada" && rel.segments().first().map(String::as_str) == Some("atajos") {
+        return Some(FieldValue::Table(m.keymap_rows.clone()));
+    }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),
         "pata" => m.pata.schema(),

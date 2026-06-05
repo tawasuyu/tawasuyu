@@ -98,10 +98,25 @@ fn main() {
         scale_120: 0,
         transform: String::new(),
     }];
+    // El keymap de mirada como tabla (combinación · acción) — una tabla alta
+    // que ejercita el scroll del panel.
+    let keymap_rows = mirada_brain::Keymap::default().to_rows();
+    let atajos = Schema::new().section(
+        Section::new("mirada::atajos", "Atajos").icon("⌨").field(Field::table(
+            "bindings",
+            "Atajos de teclado",
+            vec![
+                allichay::Column::new("combo", "Combinación"),
+                allichay::Column::new("action", "Acción"),
+            ],
+            keymap_rows,
+        )),
+    );
     let dientes: Vec<(&str, &str, Schema)> = vec![
         ("⚙", "Sistema", sistema),
         ("☸", "mirada", prefix(mirada_cfg.schema(), "mirada")),
         ("🎛", "pata", prefix(pata_core::Config::preset().schema(), "pata")),
+        ("⌨", "Atajos", atajos),
     ];
 
     let mut state = AllichayState::new();

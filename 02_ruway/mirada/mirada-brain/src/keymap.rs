@@ -119,6 +119,37 @@ impl Keymap {
             .expect("un KeymapFile de cadenas siempre serializa")
     }
 
+    // --- Edición por tabla (panel de control) -------------------------
+
+    /// Las filas `[combinación, acción]` para editar el keymap como tabla, en
+    /// orden de combinación. La acción se muestra con su `Display` (la misma
+    /// forma que el RON, p. ej. `FocusNext` o `Spawn("kitty")`).
+    pub fn to_rows(&self) -> Vec<Vec<String>> {
+        self.bindings
+            .iter()
+            .map(|(combo, action)| vec![combo.clone(), action.to_string()])
+            .collect()
+    }
+
+    /// Reconstruye un keymap desde filas `[combinación, acción]` de la tabla.
+    /// Las filas con combinación vacía o acción que no parsea a [`DesktopAction`]
+    /// se **omiten** (el panel conserva el texto crudo aparte para que no se
+    /// pierdan mientras se editan; acá sólo entran las válidas).
+    pub fn from_rows(rows: &[Vec<String>]) -> Keymap {
+        let mut bindings = BTreeMap::new();
+        for r in rows {
+            let combo = r.first().map(String::as_str).unwrap_or("").trim();
+            let action = r.get(1).map(String::as_str).unwrap_or("").trim();
+            if combo.is_empty() {
+                continue;
+            }
+            if let Ok(parsed) = action.parse::<DesktopAction>() {
+                bindings.insert(combo.to_string(), parsed);
+            }
+        }
+        Keymap { bindings }
+    }
+
     // --- Disco --------------------------------------------------------
 
     /// La ruta canónica del keymap del usuario: `~/.config/mirada/keymap.ron`.
@@ -275,6 +306,29 @@ mod tests {
         let km = Keymap::default();
         let back = Keymap::from_ron(&km.to_ron()).unwrap();
         assert_eq!(km, back);
+    }
+
+    #[test]
+    fn to_rows_y_from_rows_round_trip() {
+        let km = Keymap::default();
+        let rows = km.to_rows();
+        assert_eq!(rows.len(), km.len());
+        // Cada fila es [combo, accion].
+        assert!(rows.iter().all(|r| r.len() == 2));
+        assert_eq!(Keymap::from_rows(&rows), km);
+    }
+
+    #[test]
+    fn from_rows_omite_invalidas_y_vacias() {
+        let rows = vec![
+            vec!["Super+q".into(), "close-focused".into()], // válida (slug kebab)
+            vec!["".into(), "focus-next".into()],           // combo vacío → omitida
+            vec!["Super+x".into(), "acción-inventada".into()], // acción inválida → omitida
+        ];
+        let km = Keymap::from_rows(&rows);
+        assert_eq!(km.len(), 1);
+        assert_eq!(km.lookup("Super+q"), Some(DesktopAction::CloseFocused));
+        assert_eq!(km.lookup("Super+x"), None);
     }
 
     #[test]
