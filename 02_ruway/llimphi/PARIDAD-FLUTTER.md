@@ -14,6 +14,35 @@ theming semántico · tweens. El render vectorial AA con Bézier y gradientes
 **existe** vía `paint_with` — buena parte del plan es *exponerlo* como propiedad
 de `View`, no inventarlo.
 
+## Regla de decisión: contrato vs composición
+
+Antes de pre-analizar un control de otro framework, clasificarlo:
+
+- **Composición o medida sobre primitivas que ya existen → sale solo.** No lo
+  pre-analices; emerge cuando un caller lo pida y cuesta poco retrofitear.
+  Ejemplos: `autotextsize` (es el inverso de `layout_clamped` — binary-search del
+  tamaño de fuente sobre la misma medida), la "decoración rica de input" de
+  Flutter (composición en `field` sobre bordes reales del Tier 1 + floating-label
+  del Bloque 4; el `text-input` se queda desnudo), acordeones, steppers.
+- **Contrato/protocolo entre capas → reservá la forma de la API ahora**, aunque no
+  lo implementes. Esto es lo caro de retrofitear porque toca el *seam*
+  compositor/runtime y rompe callers si cerrás la firma sin contemplarlo.
+
+### Los cuatro seams a reservar (todo lo demás es composición)
+
+1. **Viewport de scroll (slivers / collapsing app bar / sticky headers)** — Tier 5.
+   Hoy `scroll_y` no contempla "hijos que reaccionan al offset". El 80/20 real es
+   (a) lista virtualizada [ya está], (b) header colapsable, (c) sticky sections;
+   las tres son incrementales **si** la firma del viewport admite extent-por-offset.
+2. **Arena de gestos (desambiguación)** — Tier 4. long-press/double-tap/pinch/
+   rotate/fling necesitan un árbitro, no se cuelgan ad-hoc del hit-test.
+3. **Árbol de semántica (AccessKit)** — Tier 7. Árbol paralelo al `View`.
+4. **Build sensible al tamaño (`LayoutBuilder` / `MediaQuery` breakpoints)** —
+   **no estaba en los tiers; verificado ausente 2026-06-05.** `view()` construye
+   antes del layout, así que "construir distinto según el espacio disponible"
+   exige un builder diferido (o un nodo que reciba sus constraints medidas).
+   Habilita paneles responsive/adaptativos. Reservar la forma del builder ahora.
+
 ## Tiers por retorno de inversión
 
 ### 🟢 Tier 1 — exponer lo que vello ya hace (alto impacto, bajo costo)
@@ -90,8 +119,12 @@ a 5k nodos" de "a 50k".
    `Typesetter::layout_clamped`. Crítico para listas/labels/celdas.
 4. ✅ **Bloque 4 = animaciones implícitas** — `View::animated(key, dur)` +
    `AnimRegistry` + ticker autodetenido. Interpola fill/radius; ampliable.
-5. Pinch-zoom + scroll physics.
-6. AccessKit + slivers.
+5. **Bloque 5 = quick wins de la cosecha** — forma de cursor (`.cursor(...)`,
+   completa el hover que ya existe) + animación de contenido (cross-fade/enter-exit
+   extendiendo `AnimRegistry`) + scrollbar arrastrable. Composición barata, alto
+   retorno visual.
+6. Pinch-zoom + scroll physics.
+7. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
 ## Tier 7 — detalle (accesibilidad)
 
@@ -131,3 +164,53 @@ el árbol se sintetiza en `llimphi-compositor` (winit-free) y `llimphi-ui` lo
 empuja a AccessKit. Se difiere por prioridad, no por dificultad arquitectónica.
 Cuando se haga: empezar por roles básicos (button/text/heading/checkbox/textfield)
 + foco + acción activar; el resto incrementa.
+
+## Cosecha de otros frameworks (2026-06-05)
+
+Ojeada a Flutter / SwiftUI / Jetpack Compose buscando piezas valiosas que **no**
+estén ya en los tiers. Cada fila verificada contra el código, no contra la memoria.
+Clasificadas por la regla contrato-vs-composición de arriba.
+
+### Hacer ya — barato y alto retorno (completan lo que existe)
+
+| Pieza | Análogo | Estado verificado | Por qué |
+|---|---|---|---|
+| **Forma de cursor** (`.cursor(CursorIcon)`) | `MouseRegion.cursor` / `SystemMouseCursors` · Compose `pointerHoverIcon` | **Ausente** (no hay `set_cursor`/`CursorIcon` en runtime) | Pulido desktop crítico: beam sobre input, resize sobre splitter, pointer sobre botón. El plumbing de hover (`on_pointer_enter/leave`) **ya está** — falta que el runtime aplique el cursor del nodo hovered más alto vía `window.set_cursor()`. Es un mini-contrato (prop en `View` + resolución topmost), pero chico. |
+| **Animación de contenido** (cross-fade al swap + enter/exit) | `AnimatedSwitcher` · `AnimatedList` · `AnimatedVisibility` | **Parcial**: sólo animación de props (fill/radius) del Bloque 4 | Es el Bloque 5 natural: `AnimRegistry` ya keya por `key` estable, así que "apareció/desapareció una key" = enter/exit, y "cambió la identidad bajo la misma key" = cross-fade. Altísimo valor visual sobre el reconciliador que ya existe. |
+| **Scrollbar interactiva** (drag del thumb) | `Scrollbar` arrastrable | Falta (Tier 5 lo lista como "persistente") | Table-stakes desktop. `thumb_geometry` ya calcula la geometría; falta el hit-test + drag del thumb. |
+
+### Reservar el seam — ya cubierto arriba
+
+`LayoutBuilder`/breakpoints (4º seam), slivers (Tier 5), arena de gestos (Tier 4),
+semántica (Tier 7). No repetir; ver "Los cuatro seams a reservar".
+
+### Backlog con forma de ERP (composición sobre `field`/`grid`, construir cuando el dominio lo pida)
+
+La suite tiene dominium/ERP y formularios — estas son composición pura, no protocolo:
+
+- **Framework de validación** (`Form`/`FormField`/validators, validar-al-submit,
+  agregación de errores) sobre el `field` que ya tiene `error`/`required`.
+- **Pickers concretos**: fecha/hora y color. Faltan del catálogo; los formularios
+  los piden. Composición sobre overlay + grid.
+- **DataTable read-only ordenable/paginable** — distinto de `nakui-sheet` (que es
+  motor de cálculo): una tabla liviana para listar registros. allichay ya marcó
+  "tablas/listas = v2".
+- **Accordion / expansion panel**, **stepper / wizard** — triviales, composición.
+
+### Saber que es "gratis" con el camino GPU (diferenciador, no urgente)
+
+- **Shaders de fragmento / efectos de material** (`FragmentShader` Flutter ·
+  `RenderEffect` Compose) — `wgpu` lo habilita. **backdrop-blur (glass)** es el
+  primer caso concreto y es justo el único pendiente del Tier 1.
+- **Lottie / vector animado** cae bajo SVG (Tier 6, existe `vello_svg`).
+
+### Mirado y descartado (no encaja hoy)
+
+- Widgets adaptativos plataforma (Cupertino vs Material): N/A, gioser tiene su
+  theme semántico propio.
+- `RefreshIndicator` pull-to-refresh, `Dismissible` swipe-to-action: patrones
+  móviles; gioser es desktop-first (relevante sólo para `android`/`wawa`, diferir).
+- `InheritedWidget`/`PreferenceKey` (contexto que baja/sube por el árbol): el
+  bucle Elm pasa todo explícito a propósito; sólo haría falta si algún valor
+  *derivado del layout* (tamaño medido) tuviera que burbujear hacia un ancestro.
+  Anotado como tensión latente, no como deuda.
