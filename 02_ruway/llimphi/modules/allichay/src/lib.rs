@@ -28,7 +28,7 @@ use allichay::{Control, Field, FieldPath, FieldValue, Schema};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
-    AlignItems, JustifyContent, Rect,
+    AlignItems, FlexWrap, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
@@ -490,7 +490,8 @@ fn field_height(field: &Field) -> f32 {
             }
         }
         Control::TextInput => 34.0,
-        Control::ColorPicker => 16.0 + 4.0 * 24.0, // swatch + 4 sliders RGBA
+        // swatch + paleta de chips (2 filas a 22px) + 4 sliders RGBA
+        Control::ColorPicker => 16.0 + 54.0 + 4.0 * 24.0,
         Control::List { .. } | Control::Table { .. } => {
             field.value.row_count() as f32 * AGG_ROW_H + AGG_CHROME_H
         }
@@ -884,8 +885,9 @@ where
     let cur = field.value.as_color().unwrap_or([0, 0, 0, 255]);
     let palette = SliderPalette::from_theme(theme);
 
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(5);
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(6);
     rows.push(swatch_view(cur));
+    rows.push(swatch_palette(cur, &path, theme, &on_msg));
     for (ci, name) in [(0usize, "R"), (1, "G"), (2, "B"), (3, "A")] {
         let f = on_msg.clone();
         let p = path.clone();
@@ -932,6 +934,92 @@ fn swatch_view<Msg: Clone + 'static>(rgba: [u8; 4]) -> View<Msg> {
     })
     .fill(Color::from_rgba8(rgba[0], rgba[1], rgba[2], rgba[3]))
     .radius(3.0)
+}
+
+/// Paleta de colores preestablecidos: grises + una rampa de tonos saturados,
+/// los típicos para marcos/acentos. Clic en un chip fija el RGB conservando el
+/// alfa actual — el camino rápido frente a los sliders RGBA.
+const SWATCHES: &[[u8; 3]] = &[
+    [0xEC, 0xEC, 0xEC],
+    [0x9E, 0x9E, 0x9E],
+    [0x42, 0x42, 0x42],
+    [0x5C, 0x8F, 0xEB],
+    [0x00, 0xBC, 0xD4],
+    [0x4C, 0xAF, 0x50],
+    [0xFF, 0xC1, 0x07],
+    [0xFF, 0x98, 0x00],
+    [0xF4, 0x43, 0x36],
+    [0xE9, 0x1E, 0x63],
+    [0x9C, 0x27, 0xB0],
+    [0x79, 0x55, 0x48],
+];
+
+/// La fila (envuelta) de chips de la paleta de swatches.
+fn swatch_palette<Msg, F>(cur: [u8; 4], path: &FieldPath, theme: &Theme, on_msg: &F) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let chips: Vec<View<Msg>> = SWATCHES
+        .iter()
+        .map(|rgb| swatch_chip(*rgb, cur, path, theme, on_msg))
+        .collect();
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_wrap: FlexWrap::Wrap,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        gap: Size {
+            width: length(5.0_f32),
+            height: length(5.0_f32),
+        },
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(3.0_f32),
+            bottom: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(chips)
+}
+
+/// Un chip de la paleta: cuadrado de color clickeable. Si su RGB coincide con el
+/// color actual, lleva borde de acento (el chip activo); si no, borde sutil.
+fn swatch_chip<Msg, F>(
+    rgb: [u8; 3],
+    cur: [u8; 4],
+    path: &FieldPath,
+    theme: &Theme,
+    on_msg: &F,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let active = cur[0] == rgb[0] && cur[1] == rgb[1] && cur[2] == rgb[2];
+    // Fija el RGB del chip conservando el alfa actual.
+    let new_color = [rgb[0], rgb[1], rgb[2], cur[3]];
+    View::new(Style {
+        size: Size {
+            width: length(22.0_f32),
+            height: length(22.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(rgb[0], rgb[1], rgb[2], 255))
+    .radius(5.0)
+    .border(
+        if active { 2.0 } else { 1.0 },
+        if active { theme.accent } else { theme.border },
+    )
+    .on_click(on_msg(AllichayMsg::Change(
+        path.clone(),
+        FieldValue::Color(new_color),
+    )))
 }
 
 fn text_control<Msg, F>(
