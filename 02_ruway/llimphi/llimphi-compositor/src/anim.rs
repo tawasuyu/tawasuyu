@@ -24,17 +24,23 @@
 //! `radius` y `alpha` (opacidad). Es ampliable agregando campos a
 //! [`AnimSnapshot`].
 //!
-//! **Animación de contenido (entrada).** Aparte de los cambios de props, una
-//! key puede pedir animar su **entrada** ([`crate::View::animated_enter`]): su
-//! primera aparición sube la opacidad de 0 a su valor (fade-in estilo
-//! `AnimatedSwitcher`). El **exit** (fade-out al desmontarse) todavía no está:
-//! requiere que el registro retenga y siga pintando un nodo que ya salió del
-//! árbol — un nodo que desaparece hoy se va de una.
+//! **Animación de contenido (entrada y salida).** Aparte de los cambios de
+//! props, una key puede animar su **entrada** ([`crate::View::animated_enter`]:
+//! la primera aparición sube la opacidad de 0 a su valor) y su **salida**
+//! ([`crate::View::animated_exit`]: al desaparecer del árbol). El exit no se
+//! puede hacer sólo modificando nodos vivos — el nodo ya no está. La solución:
+//! el runtime captura la **subescena vello** que el nodo `exit` pinta cada
+//! frame mientras vive (vía [`AnimRegistry::live_exit_nodes`] +
+//! [`AnimRegistry::store_live_exit`]); cuando la key desaparece, esa subescena
+//! retenida se promueve a **fantasma** y [`AnimRegistry::replay_ghosts`] la
+//! reproduce con opacidad decreciente hasta que el reloj se agota.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-use vello::peniko::Color;
+use vello::kurbo::{Affine, Rect};
+use vello::peniko::{Color, Mix};
+use vello::Scene;
 
 use crate::Mounted;
 
@@ -54,6 +60,13 @@ pub struct Anim {
     /// el arranque del primer frame. Sin él, la primera aparición se asienta
     /// instantánea (default histórico de `View::animated`).
     pub enter: bool,
+    /// `true` si la **salida** de la key debe animar (fade-out): cuando el nodo
+    /// desaparece del árbol, el runtime retiene la última subescena que pintó y
+    /// la reproduce con opacidad decreciente durante `duration`, en vez de que
+    /// el nodo se esfume de golpe. Tiene coste por frame (captura el subárbol
+    /// mientras vive) — usar en pocos nodos (toasts, modales, paneles), no en
+    /// cada fila de una lista grande.
+    pub exit: bool,
 }
 
 /// Ease-out cúbico, el default razonable para transiciones implícitas
@@ -162,11 +175,50 @@ impl AnimEntry {
     }
 }
 
+/// Subescena retenida de un nodo marcado para animar su salida, capturada por
+/// el runtime el último frame que el nodo vivió. Mientras la key sigue presente
+/// se refresca cada frame; cuando desaparece, se promueve a [`Ghost`].
+struct LiveExit {
+    scene: Scene,
+    duration: Duration,
+    easing: fn(f32) -> f32,
+}
+
+/// Un nodo que ya salió del árbol y se está desvaneciendo: su subescena retenida
+/// + el reloj de fade-out.
+struct Ghost {
+    scene: Scene,
+    start: Instant,
+    duration: Duration,
+    easing: fn(f32) -> f32,
+}
+
+impl Ghost {
+    /// Opacidad actual del fantasma: `1 → 0` con easing aplicado.
+    fn alpha(&self, now: Instant) -> f32 {
+        if self.duration.is_zero() {
+            return 0.0;
+        }
+        let elapsed = now.saturating_duration_since(self.start).as_secs_f32();
+        let raw = (elapsed / self.duration.as_secs_f32()).clamp(0.0, 1.0);
+        1.0 - (self.easing)(raw)
+    }
+
+    fn done(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start) >= self.duration
+    }
+}
+
 /// Registro de animaciones implícitas, vivo entre frames. El runtime mantiene
 /// una instancia y llama [`Self::reconcile`] en cada redraw.
 #[derive(Default)]
 pub struct AnimRegistry {
     entries: HashMap<u64, AnimEntry>,
+    /// Snapshots de los nodos `exit` presentes (refrescados por el runtime tras
+    /// el paint de cada frame). Membresía = "presente el frame anterior".
+    live: HashMap<u64, LiveExit>,
+    /// Nodos `exit` que ya desaparecieron y se están desvaneciendo.
+    ghosts: HashMap<u64, Ghost>,
 }
 
 impl AnimRegistry {
@@ -186,9 +238,13 @@ impl AnimRegistry {
     pub fn reconcile<Msg>(&mut self, mounted: &mut Mounted<Msg>, now: Instant) -> bool {
         let mut animating = false;
         let mut seen: Vec<u64> = Vec::new();
+        let mut present_exit: Vec<u64> = Vec::new();
         for node in &mut mounted.nodes {
             let Some(anim) = node.anim else { continue };
             seen.push(anim.key);
+            if anim.exit {
+                present_exit.push(anim.key);
+            }
             let target = AnimSnapshot {
                 fill: node.fill,
                 radius: node.radius,
@@ -232,7 +288,87 @@ impl AnimRegistry {
         if self.entries.len() != seen.len() {
             self.entries.retain(|k, _| seen.contains(k));
         }
-        animating
+
+        // Salidas (fade-out). Una key `exit` presente el frame anterior (vive en
+        // `live`) que ya no aparece → se promueve a fantasma con su última
+        // subescena retenida. Si una key con fantasma reaparece, se cancela el
+        // fade. Por último, descartamos los fantasmas cuyo reloj se agotó.
+        let vanished: Vec<u64> = self
+            .live
+            .keys()
+            .filter(|k| !present_exit.contains(k))
+            .copied()
+            .collect();
+        for key in vanished {
+            if let Some(le) = self.live.remove(&key) {
+                self.ghosts.insert(
+                    key,
+                    Ghost {
+                        scene: le.scene,
+                        start: now,
+                        duration: le.duration,
+                        easing: le.easing,
+                    },
+                );
+            }
+        }
+        for key in &present_exit {
+            self.ghosts.remove(key);
+        }
+        self.ghosts.retain(|_, g| !g.done(now));
+        animating || !self.ghosts.is_empty()
+    }
+
+    /// Nodos `exit` presentes este frame que el runtime debe **capturar**: por
+    /// cada uno devuelve `(idx, subtree_end, key)` para pintar su subárbol en
+    /// una subescena con [`crate::paint_range`] y entregarla a
+    /// [`Self::store_live_exit`]. Llamar DESPUÉS de `paint` (cuando el árbol y
+    /// la geometría ya están firmes).
+    pub fn live_exit_nodes<Msg>(&self, mounted: &Mounted<Msg>) -> Vec<(usize, usize, u64)> {
+        mounted
+            .nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, n)| {
+                n.anim
+                    .filter(|a| a.exit)
+                    .map(|a| (idx, n.subtree_end, a.key))
+            })
+            .collect()
+    }
+
+    /// Guarda (o refresca) la subescena retenida de un nodo `exit` presente. El
+    /// runtime la captura con [`crate::paint_range`] tras el paint. `duration` y
+    /// `easing` se heredan al fantasma cuando la key desaparezca.
+    pub fn store_live_exit(
+        &mut self,
+        key: u64,
+        scene: Scene,
+        duration: Duration,
+        easing: fn(f32) -> f32,
+    ) {
+        self.live.insert(key, LiveExit { scene, duration, easing });
+    }
+
+    /// Reproduce los fantasmas activos sobre `scene`, cada uno con su opacidad
+    /// decreciente, clipeados al viewport `(w, h)`. Llamar DESPUÉS del paint
+    /// principal (van por encima). Devuelve `true` si queda algún fantasma vivo
+    /// (el runtime ya lo sabe por [`Self::reconcile`], pero es cómodo).
+    pub fn replay_ghosts(&mut self, scene: &mut Scene, now: Instant, w: f32, h: f32) -> bool {
+        if self.ghosts.is_empty() {
+            return false;
+        }
+        let clip = Rect::new(0.0, 0.0, w as f64, h as f64);
+        for g in self.ghosts.values() {
+            let a = g.alpha(now);
+            if a <= 0.0 {
+                continue;
+            }
+            scene.push_layer(Mix::Normal, a, Affine::IDENTITY, &clip);
+            scene.append(&g.scene, None);
+            scene.pop_layer();
+        }
+        true
     }
 }
 
@@ -341,6 +477,61 @@ mod tests {
         let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(400));
         assert!(!animating);
         assert_eq!(m.nodes[0].alpha, None, "aterriza en opaco sin capa");
+    }
+
+    /// Monta un nodo `exit` (key=7) y devuelve su `Mounted`.
+    fn one_exit() -> Mounted<()> {
+        let v = View::<()>::new(Style::default())
+            .fill(rgba(10, 20, 30))
+            .animated_exit(7, Duration::from_millis(200));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    /// Árbol vacío de nodos animados (la key `exit` ya no aparece).
+    fn empty() -> Mounted<()> {
+        let v = View::<()>::new(Style::default()).fill(rgba(9, 9, 9));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    #[test]
+    fn fade_out_de_salida_promueve_fantasma_y_lo_descarta_al_terminar() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        // Frame 1: el nodo exit está presente. No anima por sí solo, y el
+        // runtime captura su subescena (acá una vacía de prueba).
+        let mut m = one_exit();
+        let animating = reg.reconcile(&mut m, t0);
+        assert!(!animating, "presente y quieto no anima");
+        reg.store_live_exit(7, Scene::new(), Duration::from_millis(200), ease_out_cubic);
+        // Frame 2: la key desaparece → se promueve a fantasma y pide frames.
+        let mut m = empty();
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(10));
+        assert!(animating, "un fantasma vivo mantiene el ticker");
+        assert!(reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(10), 100.0, 100.0));
+        // Frame 3: pasada la duración el fantasma se descarta y el loop para.
+        let mut m = empty();
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(300));
+        assert!(!animating, "fantasma agotado → sin más frames");
+        assert!(!reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(300), 100.0, 100.0));
+    }
+
+    #[test]
+    fn reaparecer_cancela_el_fantasma() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        let mut m = one_exit();
+        reg.reconcile(&mut m, t0);
+        reg.store_live_exit(7, Scene::new(), Duration::from_millis(200), ease_out_cubic);
+        // Se va → fantasma.
+        let mut m = empty();
+        assert!(reg.reconcile(&mut m, t0 + Duration::from_millis(10)));
+        // Reaparece a mitad del fade → el fantasma se cancela (no hay doble).
+        let mut m = one_exit();
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(100));
+        assert!(!animating, "al reaparecer no queda fantasma");
+        assert!(!reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(100), 100.0, 100.0));
     }
 
     #[test]

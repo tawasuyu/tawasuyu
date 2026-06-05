@@ -119,7 +119,7 @@ impl<Msg> View<Msg> {
     /// key. La primera aparición no anima; sólo los cambios posteriores. Para
     /// otra curva, [`Self::animated_curve`].
     pub fn animated(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: false });
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: false, exit: false });
         self
     }
 
@@ -129,10 +129,30 @@ impl<Msg> View<Msg> {
     /// Útil para toasts, items de lista que aparecen, paneles que se montan,
     /// resultados que entran. Como toda animación implícita, depende de una
     /// `key` estable; reutilizar la key de un nodo que ya estaba NO refadea
-    /// (sólo la primera aparición anima). El **exit** (fade-out al
-    /// desmontarse) aún no está: un nodo que sale del árbol desaparece de una.
+    /// (sólo la primera aparición anima). Para animar también la salida, ver
+    /// [`Self::animated_inout`].
     pub fn animated_enter(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: true });
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: true, exit: false });
+        self
+    }
+
+    /// **Anima la salida** (fade-out): cuando esta `key` desaparece del árbol,
+    /// el runtime retiene la última subescena que pintó y la reproduce con
+    /// opacidad decreciente durante `duration` — estilo `AnimatedSwitcher` /
+    /// `AnimatedVisibility` al ocultarse. No anima la entrada (para ambas, ver
+    /// [`Self::animated_inout`]). Tiene coste por frame mientras el nodo vive
+    /// (captura su subárbol); usar con moderación (toasts, modales, paneles).
+    pub fn animated_exit(mut self, key: u64, duration: std::time::Duration) -> Self {
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: false, exit: true });
+        self
+    }
+
+    /// Anima **entrada y salida**: fade-in en la primera aparición y fade-out al
+    /// desmontarse, ambos en `duration`. La pieza completa de "animación de
+    /// contenido" para un nodo que aparece y desaparece (un toast, un panel que
+    /// se abre y cierra, un resultado que entra y se va).
+    pub fn animated_inout(mut self, key: u64, duration: std::time::Duration) -> Self {
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: true, exit: true });
         self
     }
 
@@ -144,7 +164,7 @@ impl<Msg> View<Msg> {
         duration: std::time::Duration,
         easing: fn(f32) -> f32,
     ) -> Self {
-        self.anim = Some(Anim { key, duration, easing, enter: false });
+        self.anim = Some(Anim { key, duration, easing, enter: false, exit: false });
         self
     }
 

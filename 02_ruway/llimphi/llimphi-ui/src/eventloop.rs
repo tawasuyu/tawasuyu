@@ -757,9 +757,8 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // con el estado retenido DESPUÉS del layout y ANTES del paint —
                 // interpola fill/radius de los nodos con `anim`. Si alguna sigue
                 // viva pedimos otro frame al final (ticker autodetenido).
-                let animating = state
-                    .anim_registry
-                    .reconcile(&mut mounted, std::time::Instant::now());
+                let now = std::time::Instant::now();
+                let animating = state.anim_registry.reconcile(&mut mounted, now);
                 // Mount + layout del overlay en un árbol aparte. Lo
                 // computamos con el mismo tamaño de viewport para que
                 // un scrim a percent(1.0) cubra toda la pantalla.
@@ -839,6 +838,33 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     hover_idx,
                     drop_hover_idx,
                 );
+                // Animación de salida (fade-out). 1) Capturá la subescena de
+                // cada nodo `exit` presente (snapshot para cuando desaparezca).
+                // 2) Reproducí los fantasmas de los que ya se fueron, con
+                // opacidad decreciente — por encima del contenido, debajo del
+                // overlay. Coste cero si ningún nodo usa `animated_exit`.
+                for (idx, end, key) in state.anim_registry.live_exit_nodes(&mounted) {
+                    let (dur, easing) = {
+                        let a = mounted.nodes[idx].anim.expect("nodo exit lleva anim");
+                        (a.duration, a.easing)
+                    };
+                    let mut sub = vello::Scene::new();
+                    paint_range(
+                        &mut sub,
+                        &mounted,
+                        &computed,
+                        &mut state.typesetter,
+                        None,
+                        None,
+                        idx,
+                        end,
+                        vello::kurbo::Affine::IDENTITY,
+                    );
+                    state.anim_registry.store_live_exit(key, sub, dur, easing);
+                }
+                state
+                    .anim_registry
+                    .replay_ghosts(&mut state.scene, now, w as f32, h as f32);
                 if !composite_overlay {
                     if let Some(ov) = overlay_built.as_ref() {
                         paint(

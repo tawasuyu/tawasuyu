@@ -196,6 +196,43 @@ pub fn paint<Msg>(
     hover_idx: Option<usize>,
     drop_hover_idx: Option<usize>,
 ) {
+    paint_range(
+        scene,
+        mounted,
+        computed,
+        typesetter,
+        hover_idx,
+        drop_hover_idx,
+        0,
+        mounted.nodes.len(),
+        Affine::IDENTITY,
+    );
+}
+
+/// Pinta el rango de nodos `[start, end)` de `mounted` en `scene`, partiendo de
+/// la transformación acumulada `base_xf`. [`paint`] lo llama con todo el árbol
+/// (`0..len`, `IDENTITY`). El rango permite **capturar un subárbol** en una
+/// escena aparte (p. ej. el snapshot de un nodo que va a animar su salida, ver
+/// [`crate::AnimRegistry`]): se pasa `(start, subtree_end)` del nodo raíz. Las
+/// coordenadas de los rects ya son absolutas, así que la subescena se puede
+/// reproducir luego con `scene.append` aunque sus ancestros ya no existan.
+///
+/// Las capas (clip/alpha) que el subárbol abre se cierran dentro del rango (su
+/// `subtree_end ≤ end`) o por el drenaje final — la LIFO se respeta. `base_xf`
+/// debería ser la transformación de los ancestros del nodo raíz; al capturar
+/// se pasa `IDENTITY` (v1 no contempla raíces bajo ancestros transformados).
+#[allow(clippy::too_many_arguments)]
+pub fn paint_range<Msg>(
+    scene: &mut vello::Scene,
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    typesetter: &mut llimphi_text::Typesetter,
+    hover_idx: Option<usize>,
+    drop_hover_idx: Option<usize>,
+    start: usize,
+    end: usize,
+    base_xf: Affine,
+) {
     // Stack de subtree_end de los `push_layer` activos (clip y/o alpha).
     // Vello requiere pop_layer en orden LIFO estricto, así que mantenemos
     // un único stack común y popeamos en el orden en que se pushearon.
@@ -206,11 +243,12 @@ pub fn paint<Msg>(
     // `subtree_end` y la `cur_xf` previa para restaurarla al salir del
     // subárbol. `cur_xf` es el producto acumulado de todos los `transform`
     // de los ancestros activos — se multiplica en cada draw call. Cuando
-    // ningún nodo transforma, queda en `IDENTITY` y el paint es idéntico
+    // ningún nodo transforma, queda en `base_xf` y el paint es idéntico
     // al previo (cero regresión).
     let mut xf_stack: Vec<(usize, Affine)> = Vec::new();
-    let mut cur_xf = Affine::IDENTITY;
-    for (idx, node) in mounted.nodes.iter().enumerate() {
+    let mut cur_xf = base_xf;
+    for idx in start..end {
+        let node = &mounted.nodes[idx];
         // Cierre de capas que ya quedaron atrás (idx ≥ subtree_end).
         while let Some(&end) = layer_stack.last() {
             if idx >= end {

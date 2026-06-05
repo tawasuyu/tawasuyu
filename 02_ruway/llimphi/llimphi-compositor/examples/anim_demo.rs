@@ -1,12 +1,14 @@
-//! Filmstrip headless de **animaciones implícitas**, dos filas:
+//! Filmstrip headless de **animaciones implícitas**, tres filas:
 //!
-//! - **Arriba** — `View::animated`: el mismo nodo cuyo `fill` cambia de rojo a
+//! - **Fila 1** — `View::animated`: el mismo nodo cuyo `fill` cambia de rojo a
 //!   azul, reconciliado a 6 instantes crecientes — crossfade rojo→púrpura→azul.
-//! - **Abajo** — `View::animated_enter`: el fade-in de ENTRADA de un nodo, de
+//! - **Fila 2** — `View::animated_enter`: el fade-in de ENTRADA de un nodo, de
 //!   opacidad 0 a opaco, a los mismos 6 progresos.
+//! - **Fila 3** — `View::animated_exit`: el fade-out de SALIDA de un nodo
+//!   (capturado mientras vivía, reproducido como fantasma), de opaco a 0.
 //!
-//! Prueba el camino completo View.animated[_enter] → AnimRegistry → paint →
-//! píxeles.
+//! Prueba el camino completo View.animated[_enter|_exit] → AnimRegistry →
+//! paint/paint_range/replay_ghosts → píxeles.
 //!
 //! `cargo run -p llimphi-compositor --example anim_demo -- [out.png]`
 
@@ -14,7 +16,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::time::{Duration, Instant};
 
-use llimphi_compositor::{mount, paint, AnimRegistry, View};
+use llimphi_compositor::{mount, paint, paint_range, AnimRegistry, View};
 use llimphi_hal::{wgpu, Hal};
 use llimphi_layout::taffy::prelude::{length, FlexDirection, Size, Style};
 use llimphi_layout::taffy::{AlignItems, JustifyContent};
@@ -25,10 +27,11 @@ use llimphi_text::{Alignment, Typesetter};
 use vello::kurbo::Affine;
 
 const W: u32 = 1180;
-const H: u32 = 400;
-/// Y de la fila superior (crossfade) y la inferior (fade-in de entrada).
+const H: u32 = 580;
+/// Y de la fila de crossfade, de fade-in de entrada y de fade-out de salida.
 const ROW_FADE_Y: f64 = 40.0;
 const ROW_ENTER_Y: f64 = 220.0;
+const ROW_EXIT_Y: f64 = 400.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FRAMES: usize = 6;
 const DUR: Duration = Duration::from_millis(500);
@@ -67,6 +70,14 @@ fn card_enter(col: usize, label: &str, fg: Color) -> View<()> {
     card_shell(col, ROW_ENTER_Y, label, fg)
         .fill(rgb(60, 90, 220))
         .animated_enter(10 + col as u64, DUR)
+}
+
+/// Tarjeta con animación de SALIDA: cuando desaparece, el runtime reproduce su
+/// subescena capturada con opacidad decreciente. Verde para distinguir la fila.
+fn card_exit(col: usize, label: &str, fg: Color) -> View<()> {
+    card_shell(col, ROW_EXIT_Y, label, fg)
+        .fill(rgb(40, 160, 90))
+        .animated_exit(20 + col as u64, DUR)
 }
 
 fn main() {
@@ -123,9 +134,51 @@ fn main() {
         cards.push((me, computed));
     }
 
-    // Pinta las 6 columnas (cada una su árbol ya reconciliado) en una escena.
+    // Fila de SALIDA: cada columna corre el ciclo real captura→fantasma→replay.
+    // (1) frame VIVO en t0: se reconcilia y se captura su subescena con
+    // `paint_range`. (2) frame AUSENTE en t0: la key desaparece → se promueve a
+    // fantasma (start=t0). (3) `replay_ghosts` a t0+paso·i lo pinta con la
+    // opacidad decreciente sobre `ghost_scene`, que luego se compone.
+    let mut ts_exit = Typesetter::new();
+    let mut ghost_scene = vello::Scene::new();
+    for i in 0..FRAMES {
+        let mut reg = AnimRegistry::new();
+        // (1) Vivo: reconcilia y captura su subárbol (root = idx 0).
+        {
+            let mut layout = LayoutTree::new();
+            let mut mv = mount(&mut layout, card_exit(i, "", white));
+            let computed = layout.compute(mv.root, (W as f32, H as f32)).expect("layout");
+            reg.reconcile(&mut mv, t0);
+            let n = mv.nodes.len();
+            let mut sub = vello::Scene::new();
+            paint_range(&mut sub, &mv, &computed, &mut ts_exit, None, None, 0, n, Affine::IDENTITY);
+            reg.store_live_exit(20 + i as u64, sub, DUR, llimphi_compositor::ease_out_cubic);
+        }
+        // (2) Ausente: la key se va → fantasma con start=t0.
+        {
+            let mut layout = LayoutTree::new();
+            let mut empty = mount(&mut layout, card_shell(i, ROW_EXIT_Y, "", white));
+            layout.compute(empty.root, (W as f32, H as f32)).expect("layout");
+            reg.reconcile(&mut empty, t0);
+        }
+        // (3) Observación: el fantasma se reproduce al progreso `now`.
+        let now = t0 + step * i as u32;
+        let pct = (i as f32 / (FRAMES as f32 - 1.0) * 100.0).round() as i32;
+        reg.replay_ghosts(&mut ghost_scene, now, W as f32, H as f32);
+        // Rótulo del progreso sobre la tarjeta (fuera del fantasma, siempre nítido).
+        let mut layout = LayoutTree::new();
+        let mut lbl = mount(&mut layout, card_shell(i, ROW_EXIT_Y, &format!("{pct}%"), rgb(40, 50, 60)));
+        let lc = layout.compute(lbl.root, (W as f32, H as f32)).expect("layout");
+        // Sólo el texto (sin fill): reusa la tarjeta vacía como portador del label.
+        lbl.nodes[0].fill = None;
+        cards.push((lbl, lc));
+    }
+
+    // Pinta las columnas (cada una su árbol ya reconciliado) en una escena, y
+    // por debajo de los rótulos compone los fantasmas de la fila de salida.
     let mut ts = Typesetter::new();
     let mut scene = vello::Scene::new();
+    scene.append(&ghost_scene, None);
     for (m, computed) in &cards {
         paint(&mut scene, m, computed, &mut ts, None, None);
     }
@@ -151,7 +204,7 @@ fn main() {
     write_png(&hal, &target, &out);
     eprintln!(
         "anim_demo: escrito {out} ({W}x{H}) — fila 1: crossfade rojo→azul · \
-         fila 2: fade-in de entrada · {FRAMES} pasos"
+         fila 2: fade-in de entrada · fila 3: fade-out de salida · {FRAMES} pasos"
     );
 }
 
