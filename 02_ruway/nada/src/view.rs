@@ -667,7 +667,10 @@ pub(crate) fn hover_view(hp: &HoverPopup, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .text_aligned(body_text, 11.0, theme.fg_text, Alignment::Start);
+    .text_aligned(body_text, 11.0, theme.fg_text, Alignment::Start)
+    // La caja del hover tiene alto fijo (~78px): clampamos a las líneas que
+    // caben terminando en «…» en vez de confiar en el recorte de la caja.
+    .ellipsis(5);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
