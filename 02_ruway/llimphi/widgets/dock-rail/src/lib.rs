@@ -159,7 +159,13 @@ where
         .drag_payload(id)
         .children(vec![accent_bar, icon_box]);
         if item.active {
-            tooth = tooth.fill(palette.bg_active);
+            // Pestaña activa: además del fill, redondea el lado que sobresale
+            // hacia el contenido (la barra de acento marca el borde interno a
+            // la izquierda, así que el diente abre a la derecha). Le da el look
+            // de pestaña que sale del rail en vez de un rectángulo plano.
+            tooth = tooth
+                .fill(palette.bg_active)
+                .radius_corners(0.0, 8.0, 8.0, 0.0);
         }
         teeth.push(tooth);
     }
