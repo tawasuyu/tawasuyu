@@ -413,8 +413,24 @@ contenido desplazado `-offset` + barra arrastrable. Es **stateless**: el offset
 vive en tu Model. `on_scroll(delta_px)` (rueda y arrastre) emite un delta a
 sumar; clampealo con `scroll::clamp_offset` en tu `update`. Helpers:
 `ensure_visible(offset, vp, item_top, item_h)` para llevar la selección a la
-vista (teclado); `approach(cur, target, factor)` para scroll suave/inercia
-(driveado por `Handle::spawn_periodic`).
+vista (teclado); `approach(cur, target, factor)` para scroll suave hacia un
+objetivo (driveado por `Handle::spawn_periodic`).
+
+**Scroll 2D / física / slivers** (Tier 5, mismo widget, todo stateless):
+- `scroll_xy(offset:(x,y), content_size:(w,h), viewport_size:(w,h), content,
+  on_scroll:(dx,dy)→Msg, &palette)` — dos ejes, una barra por eje con overflow.
+- **Inercia (fling)**: `fling_step(velocity, dt, friction) → (v', delta)` +
+  `fling_settled(v)` — soltá con velocidad y avanzá el offset por frame con el
+  ticker (`spawn_periodic`); `FLING_FRICTION`/`FLING_STOP` defaults. **Bounce**:
+  `rubber_band(overscroll, dim)` amortigua el desplazamiento más allá del tope.
+- **Sliver app-bar colapsable**: `sliver_app_bar(offset, header_max, header_min,
+  header(frac)→View, content, content_len, viewport_len, on_scroll, &palette)` —
+  un único offset colapsa el header (de max a min) y luego scrollea el cuerpo
+  bajo él; `header(frac)` recibe `frac∈[0,1]` para fundir título/subtítulo.
+  Clampeá con `sliver_max_offset(...)`. Helpers puros: `collapsed_height`,
+  `collapse_fraction`, `sticky_y(offset, section_top, section_h, header_h)` para
+  encabezados de sección pegados al tope. Demo: `cargo run -p
+  llimphi-widget-scroll --example scroll_avanzado`.
 
 **Foco y teclado.** Marcá los nodos navegables con `.focusable(id)` (id `u64`
 que vos elegís). El runtime es la **única fuente de verdad** del foco: lo mueve

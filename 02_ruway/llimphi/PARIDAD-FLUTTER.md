@@ -31,9 +31,10 @@ Antes de pre-analizar un control de otro framework, clasificarlo:
 ### Los cuatro seams a reservar (todo lo demás es composición)
 
 1. **Viewport de scroll (slivers / collapsing app bar / sticky headers)** — Tier 5.
-   Hoy `scroll_y` no contempla "hijos que reaccionan al offset". El 80/20 real es
-   (a) lista virtualizada [ya está], (b) header colapsable, (c) sticky sections;
-   las tres son incrementales **si** la firma del viewport admite extent-por-offset.
+   **Resuelto (Bloque 7):** como Llimphi es Elm y el offset vive en el Model,
+   `view()` ya puede construir hijos que reaccionan al offset — no hizo falta un
+   seam de runtime nuevo. (a) lista virtualizada [ya estaba], (b) header
+   colapsable = `sliver_app_bar`, (c) sticky = `sticky_y`. Todo composición.
 2. **Arena de gestos (desambiguación)** — Tier 4. **Parcial (Bloque 6):**
    long-press/double-tap/pinch ya tienen árbitro (hit-test por gesto + árbitro
    temporal en `about_to_wait`). Falta rotate/fling y, si aparecen gestos que
@@ -102,10 +103,25 @@ Hoy: tap, drag(delta), scroll **+ pinch/scale (zoom), double-tap, long-press**.
   competitivo entre gestos rivales — alcanza para el set actual; ampliable si
   aparecen gestos que compitan por el mismo press.
 
-### 🟡 Tier 5 — scroll avanzado
-Sólo `scroll_y` vertical con inercia manual. Falta: scroll horizontal y 2D,
-physics momentum/bounce, scroll anidado, slivers (app bars colapsables, sticky
-headers), scrollbar persistente, pull-to-refresh.
+### 🟡 Tier 5 — scroll avanzado · **parcial (Bloque 7)**
+Antes: sólo `scroll_y` vertical. Ahora (todo stateless, offset en el Model):
+- ✅ **Scroll 2D / horizontal** — `scroll_xy(offset:(x,y), content_size,
+  viewport_size, …)`, una barra por eje con overflow (reusa `thumb_geometry`).
+- ✅ **Física momentum/bounce** — `fling_step`/`fling_settled` (decaimiento
+  exponencial, integral exacta indep. del frame-rate) + `rubber_band` overscroll
+  estilo iOS. Pure helpers; el caller los driverea por frame (patrón `approach`).
+- ✅ **Slivers** — `sliver_app_bar(offset, header_max, header_min, header(frac),
+  …)`: un offset colapsa el header y luego scrollea el cuerpo (el seam #1
+  "extent-por-offset", resuelto como composición sobre offset-en-Model).
+  Helpers: `collapsed_height`/`collapse_fraction`/`sliver_max_offset` +
+  `sticky_y` (encabezados de sección pegados). Demo: `--example scroll_avanzado`.
+- Falta: **scrollbar persistente con auto-hide**, **scroll anidado** (hoy el
+  `on_scroll` del nodo más al frente consume; falta el "pasar el sobrante al
+  padre" al llegar al tope), **pull-to-refresh** (patrón móvil, diferido), y un
+  **builder de lista sticky** llave-en-mano (hoy `sticky_y` es el helper; el
+  caller posiciona los encabezados). El **fling desde arrastre** necesita
+  capturar velocidad del drag (timestamp por evento) — hoy el helper existe pero
+  el caller estima la velocidad; un seam de "drag con velocidad" lo haría directo.
 
 ### 🟠 Tier 6 — assets / media
 - SVG: hoy sólo `llimphi-icons` a mano. Falta parser (existe `vello_svg`).
@@ -155,8 +171,11 @@ a 5k nodos" de "a 50k".
    Ctrl+rueda + `PinchGesture`), `on_double_tap`, `on_long_press` + arena por
    tiempo (`about_to_wait` vence el long-press). Falta rotate + fling + pinch
    multi-touch. Demo: `--example gestos`.
-7. Scroll physics (Tier 5: momentum/bounce, 2D, slivers) — y con él, fling.
-8. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
+7. ✅ **Bloque 7 = Tier 5 scroll avanzado (parcial)** — `scroll_xy` (2D),
+   `fling_step`/`rubber_band` (física), `sliver_app_bar`/`sticky_y` (slivers).
+   Falta scroll anidado, scrollbar auto-hide, pull-to-refresh, fling-desde-drag.
+   Demo: `--example scroll_avanzado`.
+8. AccessKit + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
 ## Tier 7 — detalle (accesibilidad)
 

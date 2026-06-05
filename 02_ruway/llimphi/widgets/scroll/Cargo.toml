@@ -10,3 +10,7 @@ description = "llimphi-widget-scroll — área de scroll vertical reutilizable: 
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+
+[[example]]
+name = "scroll_avanzado"
+path = "examples/scroll_avanzado.rs"
