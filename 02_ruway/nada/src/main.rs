@@ -37,7 +37,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_ui::{App, Handle, ImeEvent, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_module_command_palette::{
     self as palette, Command as PaletteCommand, PaletteAction, PaletteMsg, PalettePalette,
     PaletteState,
@@ -110,6 +110,10 @@ enum Msg {
     ToggleNode(usize),
     SelectNode(usize),
     EditKey(KeyEvent),
+    /// Evento de IME para el editor activo (acentos compuestos por dead
+    /// keys, CJK, emoji picker). Llega por `App::on_ime` cuando
+    /// `ime_allowed()` está activo.
+    EditIme(ImeEvent),
     EditorPointer(PointerEvent),
     Save,
     SaveResult(Result<(), String>),
@@ -665,6 +669,25 @@ impl App for EditorApp {
 
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
         crate::keys::handle_key(model, event)
+    }
+
+    /// Habilita el IME para que el texto compuesto (acentos por dead key,
+    /// CJK, emoji picker) llegue por `on_ime` en vez de perderse. Sin
+    /// esto, en Wayland los acentos no se componen y el editor es
+    /// inusable en español.
+    fn ime_allowed() -> bool {
+        true
+    }
+
+    /// Sólo ruteamos el IME cuando hay un editor activo; si no, lo
+    /// ignoramos (el preedit no tiene dónde pintarse). El editor decide
+    /// qué hacer con cada fase en `EditorState::apply_ime_event`.
+    fn on_ime(model: &Self::Model, event: &ImeEvent) -> Option<Self::Msg> {
+        if model.active.is_some() {
+            Some(Msg::EditIme(event.clone()))
+        } else {
+            None
+        }
     }
 
     fn on_resize(_model: &Self::Model, _width: u32, height: u32) -> Option<Self::Msg> {

@@ -96,6 +96,7 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 m
             }
             Msg::EditKey(ev) => apply_editor_key(model, ev),
+            Msg::EditIme(ev) => apply_editor_ime(model, ev),
             Msg::EditorPointer(ev) => apply_editor_pointer(model, ev),
             Msg::Save => {
                 // Si tenemos format-on-save activo y un LSP real,

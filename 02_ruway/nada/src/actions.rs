@@ -625,6 +625,25 @@ pub(crate) fn apply_editor_key(mut model: Model, ev: KeyEvent) -> Model {
     model
 }
 
+/// Rutea un evento de IME al editor del tab activo — el camino por el que
+/// llegan los acentos compuestos (dead keys), CJK y el emoji picker.
+/// Espeja [`apply_editor_key`]: marca dirty + notifica al LSP sólo si el
+/// `Commit` modificó el buffer; el `Preedit` sólo redibuja.
+pub(crate) fn apply_editor_ime(mut model: Model, ev: llimphi_ui::ImeEvent) -> Model {
+    let Some(idx) = model.active else { return model };
+    let r = model.tabs[idx].editor.apply_ime_event(&ev);
+    if r.changed() {
+        model.tabs[idx].dirty = true;
+        let path = model.tabs[idx].path.clone();
+        let text = model.tabs[idx].editor.text();
+        model.lsp.did_change(&path, &text);
+    }
+    if r.touched() {
+        model.tabs[idx].editor.ensure_caret_visible(EDITOR_VISIBLE_LINES);
+    }
+    model
+}
+
 pub(crate) fn apply_editor_pointer(mut model: Model, ev: PointerEvent) -> Model {
     let Some(idx) = model.active else { return model };
     let metrics = EditorMetrics::for_font_size(13.0);
