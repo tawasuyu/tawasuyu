@@ -197,10 +197,30 @@ struct Model {
     allichay: AllichayState,
     host: HostInfo,
     status: String,
+    /// Qué configs tienen cambios sin persistir (se aplican en memoria al
+    /// instante pero el `save()` a disco se difiere — ver [`SaveDirty`]).
+    dirty: SaveDirty,
+    /// Ticks que faltan para volcar lo sucio a disco. `0` = nada pendiente. Cada
+    /// cambio lo rearma a [`SAVE_DELAY_TICKS`]; un drag de slider lo resetea en
+    /// cada movimiento, así que sólo se guarda una vez al soltar (debounce).
+    save_in: u32,
     _config_watcher: Option<ConfigWatcher>,
     menu_open: Option<usize>,
     menu_active: usize,
     menu_anim: Tween<f32>,
+}
+
+/// Ticks (de [`TICK_MS`]) que se espera tras el último cambio antes de persistir.
+const SAVE_DELAY_TICKS: u32 = 1;
+
+/// Banderas de "config sucia": cuáles tienen cambios aplicados en memoria pero
+/// todavía no escritos a disco. Evita el martilleo de `save()` (y la tormenta de
+/// recargas del `FileWatch` del compositor) durante el arrastre de un slider.
+#[derive(Default)]
+struct SaveDirty {
+    wawa: bool,
+    mirada: bool,
+    pata: bool,
 }
 
 #[derive(Clone)]
@@ -280,6 +300,8 @@ impl App for Panel {
             allichay: AllichayState::new(),
             host,
             status: String::new(),
+            dirty: SaveDirty::default(),
+            save_in: 0,
             _config_watcher: watcher,
             menu_open: None,
             menu_active: usize::MAX,
@@ -290,7 +312,17 @@ impl App for Panel {
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         let mut m = model;
         match msg {
-            Msg::Tick => refresh_host(&mut m.host),
+            Msg::Tick => {
+                refresh_host(&mut m.host);
+                // Debounce de guardado: el último cambio armó `save_in`; cuando
+                // llega a 0 sin nuevos cambios, se vuelca a disco.
+                if m.save_in > 0 {
+                    m.save_in -= 1;
+                    if m.save_in == 0 {
+                        flush_saves(&mut m);
+                    }
+                }
+            }
             Msg::SelectPestana(id) => {
                 let n = pestanas(&m).len().max(1);
                 let id = (id as usize).min(n - 1);
@@ -633,39 +665,75 @@ fn split_app(path: &FieldPath) -> Option<(String, FieldPath)> {
 }
 
 /// Aplica un cambio a la app destino y lo persiste en su formato nativo.
+/// Aplica un cambio a la config destino **en memoria** y marca su bandera de
+/// sucio + arma el debounce; el `save()` a disco lo hace [`flush_saves`] cuando
+/// el contador llega a cero (ver [`SaveDirty`]).
 fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
     let Some((key, rel)) = split_app(path) else {
         m.status = format!("· ruta inválida: {path}");
         return;
     };
     match key.as_str() {
-        "wawa" => apply_wawa(m, rel.leaf().unwrap_or(""), value),
+        "wawa" => {
+            apply_wawa(m, rel.leaf().unwrap_or(""), value);
+            m.dirty.wawa = true;
+        }
         "mirada" => {
             if let Err(e) = m.mirada.apply(&rel, value) {
                 m.status = format!("· mirada: {e}");
                 return;
             }
-            match m.mirada_path.as_deref().map(|p| m.mirada.save(p)) {
-                Some(Ok(())) => m.status = rimay_localize::t("wawa-panel-autosave-ok"),
-                Some(Err(e)) => m.status = format!("· mirada save: {e}"),
-                None => m.status = "· mirada: sin ruta de config".into(),
-            }
+            m.dirty.mirada = true;
         }
         "pata" => {
             if let Err(e) = m.pata.apply(&rel, value) {
                 m.status = format!("· pata: {e}");
                 return;
             }
-            match pata_config::save(&m.pata) {
-                Ok(_) => m.status = rimay_localize::t("wawa-panel-autosave-ok"),
-                Err(e) => m.status = format!("· pata save: {e}"),
-            }
+            m.dirty.pata = true;
         }
-        _ => {}
+        _ => return,
+    }
+    m.save_in = SAVE_DELAY_TICKS;
+}
+
+/// Persiste a disco las configs marcadas como sucias y limpia las banderas. Lo
+/// llama el `Tick` cuando el debounce expira. Cada `save()` que falla deja su
+/// error en el status; si al menos uno fue OK y ninguno falló, status = "ok".
+fn flush_saves(m: &mut Model) {
+    let mut ok = false;
+    let mut err: Option<String> = None;
+    if m.dirty.wawa {
+        match m.cfg.save() {
+            Ok(_) => ok = true,
+            Err(e) => err = Some(format!("· save: {e}")),
+        }
+        m.dirty.wawa = false;
+    }
+    if m.dirty.mirada {
+        match m.mirada_path.as_deref().map(|p| m.mirada.save(p)) {
+            Some(Ok(())) => ok = true,
+            Some(Err(e)) => err = Some(format!("· mirada save: {e}")),
+            None => err = Some("· mirada: sin ruta de config".into()),
+        }
+        m.dirty.mirada = false;
+    }
+    if m.dirty.pata {
+        match pata_config::save(&m.pata) {
+            Ok(_) => ok = true,
+            Err(e) => err = Some(format!("· pata save: {e}")),
+        }
+        m.dirty.pata = false;
+    }
+    if let Some(e) = err {
+        m.status = e;
+    } else if ok {
+        m.status = rimay_localize::t("wawa-panel-autosave-ok");
     }
 }
 
-/// Aplica un cambio a la config del SO (`WawaConfig`) por id de campo y persiste.
+/// Aplica un cambio a la config del SO (`WawaConfig`) por id de campo (sin
+/// persistir: el guardado lo difiere [`flush_saves`]).
 fn apply_wawa(m: &mut Model, leaf: &str, value: FieldValue) {
     match leaf {
         "theme_variant" => {
@@ -697,10 +765,6 @@ fn apply_wawa(m: &mut Model, leaf: &str, value: FieldValue) {
                 }
             }
         }
-    }
-    match m.cfg.save() {
-        Ok(_) => m.status = rimay_localize::t("wawa-panel-autosave-ok"),
-        Err(e) => m.status = format!("· save: {e}"),
     }
 }
 
