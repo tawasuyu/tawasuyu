@@ -818,7 +818,8 @@ pub(crate) fn app_menu(model: &Model) -> app_bus::AppMenu {
                 .item(MenuItem::new(t("terminal"), "view.term").icon("\u{2328}").shortcut("Ctrl+`"))
                 .item(MenuItem::new(t("command-palette"), "view.palette").shortcut("Ctrl+Shift+P"))
                 .item(MenuItem::new(t("minimap"), "view.minimap"))
-                .item(MenuItem::new(t("cycle-theme"), "view.theme").icon("\u{25D0}").shortcut("Ctrl+T").separated()),
+                .item(MenuItem::new(t("cycle-theme"), "view.theme").icon("\u{25D0}").shortcut("Ctrl+T").separated())
+                .item(MenuItem::new(t("settings"), "view.settings").icon("\u{2699}").shortcut("Ctrl+,")),
         )
         .menu(
             Menu::new(t("language"))
@@ -862,6 +863,7 @@ pub(crate) fn handle_menu_command(mut model: Model, command: String, handle: &Ha
         "view.palette" => Some(Msg::Palette(PaletteMsg::Open)),
         "view.minimap" => Some(Msg::MiniMap(MiniMapMsg::Open)),
         "view.theme" => Some(Msg::CycleTheme),
+        "view.settings" => Some(Msg::SettingsToggle),
         _ => None,
     };
     match target {

@@ -61,6 +61,8 @@ use llimphi_module_shuma_term::{
 use llimphi_module_symbol_outline::{
     self as outline, OutlineAction, OutlineMsg, OutlinePalette, OutlineState, SymbolItem,
 };
+use allichay::FieldPath;
+use llimphi_module_allichay::{AllichayMsg, AllichayState};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_text_editor::{
     all_matches, find_next, find_prev, text_editor_view_full, Clipboard, Diagnostic,
@@ -229,6 +231,17 @@ enum Msg {
     EditNav(i32),
     /// Ejecuta la fila activa del menú de edición (Enter).
     EditActivate,
+    /// Abre/cierra el panel de configuración (Ctrl+, o menú Vista).
+    SettingsToggle,
+    /// Cierra el panel de configuración (Esc / scrim / botón Cerrar).
+    SettingsClose,
+    /// Mensaje del módulo allichay (selección de diente, scroll, cambio de
+    /// campo). El host lo aplica al `Model` y persiste lo que corresponda.
+    Settings(AllichayMsg),
+    /// Tecla dirigida a un campo de texto del panel de configuración (cuando
+    /// alguno está en edición). Hoy ningún campo es de texto, pero deja el
+    /// cableado listo para futuros campos editables.
+    SettingsKey(KeyEvent),
 }
 
 #[derive(Debug, Clone)]
@@ -364,6 +377,11 @@ struct Model {
     /// arranca en `initial_size().1`. Se usa para dimensionar el viewport
     /// del scroll del árbol de archivos.
     win_h: f32,
+    /// Ancho de la ventana en px (físicos). Lo actualiza `on_resize`. Se usa
+    /// para centrar el modal del panel de configuración.
+    win_w: f32,
+    /// Panel de configuración (allichay) embebido como modal; `None` cerrado.
+    settings: Option<AllichayState>,
     /// Desplazamiento vertical del árbol de archivos (px, ≥0). El árbol
     /// scrollea con la rueda (cursor encima) y la barra arrastrable.
     tree_scroll: f32,
@@ -593,6 +611,8 @@ impl App for EditorApp {
             edit_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             win_h: EditorApp::initial_size().1 as f32,
+            win_w: EditorApp::initial_size().0 as f32,
+            settings: None,
             tree_scroll: 0.0,
         };
         // Restaurar sesion previa si la hay: tabs, bookmarks, theme.
@@ -682,6 +702,11 @@ impl App for EditorApp {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
+        // El panel de configuración es un modal: captura todo mientras está
+        // abierto, así que tiene prioridad sobre los menús.
+        if let Some(state) = model.settings.as_ref() {
+            return Some(crate::settings::settings_overlay_view(model, state));
+        }
         // El menú de edición tiene prioridad si está abierto.
         if let Some((x, y)) = model.edit_menu {
             return Some(edit_menu_view(model, x, y));
@@ -843,6 +868,7 @@ mod clipboard;
 mod fsutil;
 mod keys;
 mod session;
+mod settings;
 mod update;
 mod view;
 

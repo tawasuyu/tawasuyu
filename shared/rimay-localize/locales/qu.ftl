@@ -59,6 +59,12 @@ reconnect = Kutillamanta tinkiy
 
 # === nada (qillqa llamk'ana) ===
 nada-tagline = Llimphi patapi kamachiq qillqaq
+nada-settings-appearance = Rikch'ay
+nada-settings-theme = Tema
+nada-settings-editor = Qillqaq
+nada-settings-fmt-on-save = Waqaychaspa allichay
+nada-settings-demo-diag = Qhawarichiy diagnostikukuna
+nada-settings-lsp = Simi servidor
 
 # === niveles de mensaje ===
 info = Willay

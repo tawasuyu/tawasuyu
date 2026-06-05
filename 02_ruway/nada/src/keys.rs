@@ -5,6 +5,19 @@ pub(crate) fn handle_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
             return None;
         }
 
+        // Panel de configuración abierto: es un modal, captura TODO. Esc lo
+        // cierra; si hay un campo de texto en edición la tecla va a su buffer;
+        // el resto se traga (no llega al editor de fondo).
+        if let Some(state) = model.settings.as_ref() {
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::SettingsClose);
+            }
+            if state.is_editing() {
+                return Some(Msg::SettingsKey(event.clone()));
+            }
+            return None;
+        }
+
         // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
         // raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta, Esc
         // cierra. Tiene prioridad sobre todo lo demás.
@@ -193,6 +206,10 @@ pub(crate) fn handle_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
                 && matches!(&event.key, Key::Character(s) if s.eq_ignore_ascii_case("t"))
             {
                 return Some(Msg::CycleTheme);
+            }
+            // Ctrl+, = abre/cierra el panel de configuración.
+            if matches!(&event.key, Key::Character(s) if s == ",") {
+                return Some(Msg::SettingsToggle);
             }
             if bookmarks::open_shortcut(event) {
                 let already_open = model.bookmarks.overlay.is_some();

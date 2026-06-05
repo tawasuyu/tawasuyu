@@ -201,6 +201,7 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
             Msg::WinResized(_w, h) => {
                 let mut m = model;
                 m.win_h = h as f32;
+                m.win_w = _w as f32;
                 // Re-clampea el scroll del árbol: si la ventana creció, el
                 // contenido puede haber dejado de desbordar.
                 m.tree_scroll = llimphi_widget_scroll::clamp_offset(
@@ -767,6 +768,52 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                         &[("err", e.to_string().into())],
                     ),
                 };
+                m
+            }
+            Msg::SettingsToggle => {
+                let mut m = model;
+                m.settings = if m.settings.is_some() {
+                    None
+                } else {
+                    Some(AllichayState::new())
+                };
+                m
+            }
+            Msg::SettingsClose => {
+                let mut m = model;
+                m.settings = None;
+                m
+            }
+            Msg::Settings(am) => {
+                let mut m = model;
+                match am {
+                    // Un cambio de campo se aplica al `Model` (y al status).
+                    AllichayMsg::Change(path, value) => {
+                        crate::settings::apply_settings_change(&mut m, &path, value);
+                    }
+                    // El resto sólo muta el estado del panel (diente activo,
+                    // scroll, foco). Los `Focus*` no se disparan hoy porque
+                    // ningún campo es de texto/celda/hex; quedan como no-op.
+                    other => {
+                        if let Some(st) = m.settings.as_mut() {
+                            match other {
+                                AllichayMsg::SelectSection(i) => st.select(i),
+                                AllichayMsg::ScrollTo(o) => st.set_scroll(o),
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                m
+            }
+            Msg::SettingsKey(ev) => {
+                let mut m = model;
+                // Enruta la tecla al campo de texto focado del panel; si editó,
+                // devuelve el cambio entero para aplicarlo.
+                let change = m.settings.as_mut().and_then(|st| st.apply_key(&ev));
+                if let Some((path, value)) = change {
+                    crate::settings::apply_settings_change(&mut m, &path, value);
+                }
                 m
             }
         }

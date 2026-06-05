@@ -28,6 +28,8 @@ llimphi-module-bookmarks = { workspace = true }
 llimphi-module-mini-map = { workspace = true }
 llimphi-module-shuma-term = { workspace = true }
 llimphi-module-symbol-outline = { workspace = true }
+llimphi-module-allichay = { workspace = true }
+allichay = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-text-editor-lsp = { workspace = true }

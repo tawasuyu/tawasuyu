@@ -55,6 +55,12 @@ reconnect = Reconnect
 
 # === nada (file editor) ===
 nada-tagline = a sovereign editor on Llimphi
+nada-settings-appearance = Appearance
+nada-settings-theme = Theme
+nada-settings-editor = Editor
+nada-settings-fmt-on-save = Format on save
+nada-settings-demo-diag = Demo diagnostics
+nada-settings-lsp = Language server
 
 # === message levels ===
 info = Info
