@@ -1750,6 +1750,15 @@ pub(crate) fn drain_run(mut s: State) -> State {
             _ => unreachable!(),
         };
         s.push_in_block(run_block, OutputLine::notice(notice));
+        // Disclosure progresiva (estilo Claude): un comando que terminó con
+        // salida larga se pliega solo a su resumen ("⋯ N líneas"), para que
+        // la vista no sea un volcado plano y el foco quede en lo nuevo. Es
+        // reversible (click en el header lo expande) y animado (C). No
+        // toca comandos cortos ni los que el usuario ya plegó/expandió a
+        // mano si la cuenta no llega al umbral.
+        if body_lines_for_block(&s, run_block).len() > AUTO_COLLAPSE_LINES {
+            s.collapsed.insert(run_block);
+        }
         // Cerrá el nodo del grafo de intenciones — el lienzo lo refleja
         // como verde/rojo en el próximo render.
         if let Some(id) = s.current_run_node.take() {

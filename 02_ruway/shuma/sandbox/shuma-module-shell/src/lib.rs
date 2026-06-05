@@ -54,6 +54,11 @@ pub const ID: &str = "shell";
 /// crezca sin límite.
 pub const MAX_OUTPUT_LINES: usize = 500;
 
+/// Umbral de líneas del cuerpo a partir del cual un comando terminado se
+/// pliega solo a su resumen (disclosure progresiva estilo Claude, G del
+/// PLAN-OUTPUT). Reversible con click; los comandos cortos quedan abiertos.
+pub const AUTO_COLLAPSE_LINES: usize = 14;
+
 /// Tipo de cada línea del buffer — define el color que la `view` usa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputKind {
@@ -1784,6 +1789,34 @@ mod tests {
         let ed = body_editor_state(&s, blk);
         let sel = ed.selected_text().expect("hay selección tras el drag");
         assert_eq!(sel, "hola", "seleccionó las primeras 4 columnas, fue {sel:?}");
+    }
+
+    #[test]
+    fn long_finished_command_auto_collapses() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("seq 1 20"); // 20 líneas > AUTO_COLLAPSE_LINES
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let blk = s.current_block;
+        s = drain_until_idle(s);
+        assert!(
+            s.collapsed.contains(&blk),
+            "un comando con salida larga se pliega solo al terminar"
+        );
+    }
+
+    #[test]
+    fn short_finished_command_stays_open() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("echo hola");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let blk = s.current_block;
+        s = drain_until_idle(s);
+        assert!(
+            !s.collapsed.contains(&blk),
+            "un comando corto queda abierto"
+        );
     }
 
     #[test]
