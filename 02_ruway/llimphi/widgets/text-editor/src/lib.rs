@@ -34,7 +34,7 @@ pub use diagnostics::{Diagnostic, DiagnosticRange, Severity};
 pub use find::{all_matches, find_next, find_prev, FindState};
 pub use highlight::{Highlighter, Language, Span, SyntaxPalette, TokenKind};
 pub use ops::{indent_str, EditDelta};
-pub use state::{ApplyResult, EditorOptions, EditorState};
+pub use state::{ApplyResult, EditorOptions, EditorState, Preedit};
 pub use undo::UndoStack;
 pub use view::{
     text_editor_view, text_editor_view_full, text_editor_view_highlighted, EditorMetrics,

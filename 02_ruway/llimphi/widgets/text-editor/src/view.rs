@@ -473,12 +473,30 @@ fn build_content<Msg: Clone + 'static>(
         children.extend(diagnostic_underline(d, scroll, end_line, metrics, palette));
     }
 
-    // 4) Caret — uno por cursor, sólo si visible.
+    // 4) Caret — uno por cursor, sólo si visible. El caret del cursor
+    //    primario se corre detrás del preedit del IME en composición (el
+    //    texto compuesto se pinta desde `p.col`), para que quede al final
+    //    de lo que el usuario está tecleando.
+    let preedit_cols = state.preedit.as_ref().map_or(0, |p| p.text.chars().count());
     for c in state.all_cursors() {
         let p = c.caret;
         if p.line >= scroll && p.line < end_line {
-            let local = crate::cursor::Pos::new(p.line - scroll, p.col);
+            let is_primary = std::ptr::eq(c, &state.cursor);
+            let col = if is_primary { p.col + preedit_cols } else { p.col };
+            let local = crate::cursor::Pos::new(p.line - scroll, col);
             children.push(caret_rect(local, metrics, palette));
+        }
+    }
+
+    // 5) Preedit del IME — texto en composición pintado en el caret con
+    //    subrayado, todavía fuera del buffer. Sólo en el cursor primario y
+    //    si su línea está en viewport. (En mono el ancho es exacto; el
+    //    texto que sigue al caret puede solaparse mientras se compone —
+    //    transitorio y, en el caso típico de acentos, de un solo char.)
+    if let Some(pre) = state.preedit.as_ref() {
+        let p = state.cursor.caret;
+        if p.line >= scroll && p.line < end_line {
+            children.extend(preedit_views(p.line - scroll, p.col, &pre.text, metrics, palette));
         }
     }
 
@@ -681,6 +699,51 @@ fn caret_rect<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.caret)
+}
+
+/// Pinta el texto en composición del IME en `(local_line, col)`: el texto
+/// provisional + un subrayado debajo que lo marca como no-confirmado.
+/// Devuelve los dos Views (texto y subrayado). Posición en coords del
+/// área de contenido (mismo origen que [`line_text_plain`]).
+fn preedit_views<Msg: Clone + 'static>(
+    local_line: usize,
+    col: usize,
+    text: &str,
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+) -> Vec<View<Msg>> {
+    let x = 4.0 + col as f32 * metrics.char_width;
+    let y = local_line as f32 * metrics.line_height;
+    let w = (text.chars().count() as f32 * metrics.char_width).max(metrics.char_width);
+    vec![
+        // Texto provisional, en el color de texto normal.
+        View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(x),
+                top: length(y),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size { width: length(w), height: length(metrics.line_height) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(text.to_string(), metrics.font_size, palette.fg_text, Alignment::Start),
+        // Subrayado: una línea fina en el color del caret bajo el texto.
+        View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(x),
+                top: length(y + metrics.line_height - 2.0),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size { width: length(w), height: length(1.5_f32) },
+            ..Default::default()
+        })
+        .fill(palette.caret),
+    ]
 }
 
 fn bracket_highlight<Msg: Clone + 'static>(

@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 
-use llimphi_ui::{Key, KeyEvent, KeyState, NamedKey};
+use llimphi_ui::{ImeEvent, Key, KeyEvent, KeyState, NamedKey};
 
 use crate::buffer::Buffer;
 use crate::clipboard::{Clipboard, NullClipboard};
@@ -75,6 +75,12 @@ pub struct EditorState {
     /// ~40/255 sobre el bg).
     pub line_tints: Vec<Option<llimphi_ui::llimphi_raster::peniko::Color>>,
     pub undo: UndoStack,
+    /// Texto en composición del IME (dead keys de acentos, CJK, emoji
+    /// picker). No vive en el buffer hasta el `Commit`: el view lo pinta
+    /// subrayado en el caret y el caret se corre detrás. `None` = sin
+    /// composición activa (el caso normal). Lo administra
+    /// [`Self::apply_ime_event`].
+    pub preedit: Option<Preedit>,
     /// Línea inicial visible — el viewport renderiza
     /// `[scroll_offset, scroll_offset + visible)`. El caller llama a
     /// [`Self::ensure_caret_visible`] tras movimientos para auto-scrollear.
@@ -93,6 +99,22 @@ pub struct EditorState {
     /// actualice on-demand. Se invalida cuando cambian `edit_seq` o el
     /// `Language` solicitado.
     pub highlight_cache: RefCell<Option<HighlightCache>>,
+}
+
+/// Texto en composición del IME — el que el método de entrada está
+/// armando antes de confirmarlo (un acento muerto a medio componer, una
+/// sílaba CJK con su ventana de candidatos, un emoji del picker). No
+/// pertenece al buffer todavía; el view lo dibuja en el caret con
+/// subrayado para que el usuario vea lo que está tecleando.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Preedit {
+    /// Texto provisional a pintar en el caret.
+    pub text: String,
+    /// Rango `(inicio, fin)` en **bytes** dentro de `text` que el IME
+    /// quiere resaltar (la "clause" activa), si lo reporta. Hoy el view
+    /// subraya todo el preedit por igual; el campo se conserva para un
+    /// resaltado más fino cuando haga falta.
+    pub cursor: Option<(usize, usize)>,
 }
 
 /// Entrada del cache: spans por línea + clave que la generó.
@@ -120,6 +142,7 @@ impl EditorState {
             guard_lines: Vec::new(),
             line_tints: Vec::new(),
             undo: UndoStack::new(),
+            preedit: None,
             scroll_offset: 0,
             edit_seq: 0,
             pending_input_edits: RefCell::new(Vec::new()),
@@ -375,6 +398,60 @@ impl EditorState {
     /// usá [`Self::apply_key_with_clipboard`] pasando un backend.
     pub fn apply_key(&mut self, event: &KeyEvent) -> ApplyResult {
         self.apply_key_with_clipboard(event, &mut NullClipboard)
+    }
+
+    /// Aplica un evento de IME al editor — el camino por el que llegan los
+    /// acentos compuestos (dead keys), CJK y el emoji picker cuando la app
+    /// habilita `App::ime_allowed`. El flujo del IME es
+    /// `Enabled → Preedit* → Commit | Disabled`:
+    ///
+    /// - `Enabled`: el IME tomó el foco; no hay nada que insertar aún.
+    /// - `Preedit{text,..}`: texto en composición. Lo guardamos en
+    ///   [`Self::preedit`] para que el view lo pinte subrayado en el caret
+    ///   **sin** tocar el buffer. Un `Preedit` con `text` vacío cierra la
+    ///   composición sin confirmar.
+    /// - `Commit(text)`: texto confirmado. Limpiamos el preedit e
+    ///   insertamos `text` en todos los cursores, exactamente como si se
+    ///   hubiera tecleado (mismo camino de undo + parseo incremental).
+    /// - `Disabled`: el IME soltó el foco; descartamos cualquier
+    ///   composición pendiente.
+    ///
+    /// Devuelve [`ApplyResult::Changed`] sólo en el `Commit` no-vacío (lo
+    /// único que persiste); el resto es `CursorMoved` (hubo que
+    /// redibujar el preedit) o `Ignored`.
+    pub fn apply_ime_event(&mut self, event: &ImeEvent) -> ApplyResult {
+        match event {
+            ImeEvent::Enabled => ApplyResult::Ignored,
+            ImeEvent::Preedit { text, cursor } => {
+                let had = self.preedit.is_some();
+                if text.is_empty() {
+                    self.preedit = None;
+                    if had { ApplyResult::CursorMoved } else { ApplyResult::Ignored }
+                } else {
+                    self.preedit = Some(Preedit { text: text.clone(), cursor: *cursor });
+                    ApplyResult::CursorMoved
+                }
+            }
+            ImeEvent::Commit(text) => {
+                let had = self.preedit.take().is_some();
+                if text.is_empty() {
+                    return if had { ApplyResult::CursorMoved } else { ApplyResult::Ignored };
+                }
+                let text = text.clone();
+                let changed =
+                    self.apply_edit_all(|b, c, _opts| Some(replace_selection(b, c, &text)));
+                if changed {
+                    self.bump_edit_seq();
+                    ApplyResult::Changed
+                } else {
+                    ApplyResult::Ignored
+                }
+            }
+            ImeEvent::Disabled => {
+                let had = self.preedit.take().is_some();
+                if had { ApplyResult::CursorMoved } else { ApplyResult::Ignored }
+            }
+        }
     }
 
     /// Como [`Self::apply_key`] pero con backend de clipboard activo:
@@ -1242,6 +1319,61 @@ mod tests {
         s.set_guard_lines(vec![1]); // línea "bbb" es guarda
         s.set_caret_at(1, 0);
         assert!(s.cursor.caret.line != 1);
+    }
+
+    #[test]
+    fn ime_commit_inserta_como_tecleo() {
+        // El caso español: el dead-key compone "á" y llega como Commit.
+        let mut s = EditorState::new();
+        s.apply_key(&evtext("c", false, false));
+        let r = s.apply_ime_event(&ImeEvent::Commit("á".into()));
+        assert_eq!(r, ApplyResult::Changed);
+        assert_eq!(s.text(), "cá");
+        assert!(s.preedit.is_none());
+    }
+
+    #[test]
+    fn ime_preedit_no_toca_el_buffer() {
+        let mut s = EditorState::new();
+        s.set_text("ab");
+        s.cursor = Cursor::at(0, 2);
+        let r = s.apply_ime_event(&ImeEvent::Preedit { text: "´".into(), cursor: None });
+        assert_eq!(r, ApplyResult::CursorMoved);
+        // El buffer sigue intacto; el preedit vive aparte.
+        assert_eq!(s.text(), "ab");
+        assert_eq!(s.preedit.as_ref().map(|p| p.text.as_str()), Some("´"));
+        // El Commit reemplaza la composición e inserta el char final.
+        s.apply_ime_event(&ImeEvent::Commit("é".into()));
+        assert_eq!(s.text(), "abé");
+        assert!(s.preedit.is_none());
+    }
+
+    #[test]
+    fn ime_preedit_vacio_y_disabled_cierran_la_composicion() {
+        let mut s = EditorState::new();
+        s.apply_ime_event(&ImeEvent::Preedit { text: "ㅎ".into(), cursor: None });
+        assert!(s.preedit.is_some());
+        // Un Preedit vacío cancela sin confirmar.
+        let r = s.apply_ime_event(&ImeEvent::Preedit { text: String::new(), cursor: None });
+        assert_eq!(r, ApplyResult::CursorMoved);
+        assert!(s.preedit.is_none());
+        // Disabled sobre algo en composición también limpia.
+        s.apply_ime_event(&ImeEvent::Preedit { text: "ㅎ".into(), cursor: None });
+        s.apply_ime_event(&ImeEvent::Disabled);
+        assert!(s.preedit.is_none());
+    }
+
+    #[test]
+    fn ime_commit_reemplaza_seleccion() {
+        let mut s = EditorState::new();
+        s.set_text("abc");
+        s.cursor = Cursor {
+            anchor: Some(Pos::new(0, 0)),
+            caret: Pos::new(0, 2),
+            desired_col: 2,
+        };
+        s.apply_ime_event(&ImeEvent::Commit("ñ".into()));
+        assert_eq!(s.text(), "ñc");
     }
 
     #[test]
