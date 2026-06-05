@@ -7,6 +7,9 @@ impl<Msg> View<Msg> {
             fill: None,
             hover_fill: None,
             radius: 0.0,
+            shadow: None,
+            fill_gradient: None,
+            border: None,
             text: None,
             image: None,
             painter: None,
@@ -157,6 +160,46 @@ impl<Msg> View<Msg> {
 
     pub fn radius(mut self, r: f64) -> Self {
         self.radius = r;
+        self
+    }
+
+    /// Proyecta una sombra detrás del nodo (drop shadow), rasterizada con
+    /// el blur gaussiano nativo de vello. Se pinta antes del relleno, así
+    /// el fill opaco la tapa y la sombra asoma por el desenfoque/offset.
+    /// El radio de la sombra sigue al del nodo (más el `spread`). Ver
+    /// [`Shadow`] (`Shadow::soft(alpha, blur)` es el default tasteful).
+    pub fn shadow(mut self, shadow: Shadow) -> Self {
+        self.shadow = Some(shadow);
+        self
+    }
+
+    /// Rellena el nodo con un **gradiente** en vez de un color sólido. El
+    /// gradiente se autorea en el **cuadrado unidad** `[0,1]²` y el runtime
+    /// lo mapea al rect del nodo (así no necesitás saber el tamaño al
+    /// construir el `View`) — igual que `Alignment` relativo de Flutter.
+    ///
+    /// ```ignore
+    /// use llimphi_ui::llimphi_raster::peniko::{Color, Gradient};
+    /// use llimphi_ui::llimphi_raster::kurbo::Point;
+    /// // vertical: arriba claro → abajo oscuro
+    /// let g = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(0.0, 1.0))
+    ///     .with_stops([Color::from_rgba8(80,90,110,255), Color::from_rgba8(30,34,44,255)].as_slice());
+    /// view.fill_gradient(g)
+    /// ```
+    ///
+    /// Gana sobre `fill` como base; un `hover_fill` (color) lo sigue
+    /// overrideando mientras el cursor está encima.
+    pub fn fill_gradient(mut self, gradient: Gradient) -> Self {
+        self.fill_gradient = Some(gradient);
+        self
+    }
+
+    /// Dibuja un borde (stroke) sobre el contorno redondeado del nodo,
+    /// inset media línea hacia adentro (el grosor queda dentro del rect).
+    /// Reemplaza el viejo truco de envolver el nodo en un rect-padre del
+    /// color del borde con padding de 1px.
+    pub fn border(mut self, width: f64, color: Color) -> Self {
+        self.border = Some(Border::new(width, color));
         self
     }
 

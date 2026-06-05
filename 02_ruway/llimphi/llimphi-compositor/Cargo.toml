@@ -14,3 +14,12 @@ vello = { workspace = true }
 # Sólo para los tipos de la firma de GpuPaintFn (Device/Queue/Encoder/View).
 # wgpu NO depende de winit — el compositor sigue libre de windowing.
 wgpu = { workspace = true }
+
+[dev-dependencies]
+# Volcado headless del paint a PNG (llvmpipe) para VER sombra/gradiente/borde
+# sin levantar ventana. Sólo capas inferiores — no llimphi-ui (sin ciclo).
+llimphi-hal = { path = "../llimphi-hal" }
+llimphi-raster = { path = "../llimphi-raster" }
+llimphi-theme = { path = "../llimphi-theme" }
+png = { workspace = true }
+pollster = { workspace = true }

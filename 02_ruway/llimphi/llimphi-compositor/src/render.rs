@@ -21,6 +21,9 @@ pub fn mount_recursive<Msg: Clone>(
         fill,
         hover_fill,
         radius,
+        shadow,
+        fill_gradient,
+        border,
         text,
         image,
         painter,
@@ -51,6 +54,9 @@ pub fn mount_recursive<Msg: Clone>(
         fill,
         hover_fill,
         radius,
+        shadow,
+        fill_gradient,
+        border,
         text,
         image,
         painter,
@@ -216,25 +222,64 @@ pub fn paint<Msg>(
             scene.push_layer(Mix::Normal, a, cur_xf, &rect);
             layer_stack.push(node.subtree_end);
         }
+        // Sombra (drop shadow): se pinta ANTES del relleno para quedar
+        // detrás. Usa el blur gaussiano nativo de vello sobre un rect
+        // redondeado offseteado + inflado por `spread`.
+        if let Some(sh) = node.shadow.as_ref() {
+            if sh.color.components[3] > 0.0 && r.w > 0.0 && r.h > 0.0 {
+                let rect = KurboRect::new(
+                    (r.x as f64) + sh.dx - sh.spread,
+                    (r.y as f64) + sh.dy - sh.spread,
+                    (r.x + r.w) as f64 + sh.dx + sh.spread,
+                    (r.y + r.h) as f64 + sh.dy + sh.spread,
+                );
+                let radius = (node.radius + sh.spread).max(0.0);
+                scene.draw_blurred_rounded_rect(cur_xf, rect, sh.color, radius, sh.blur);
+            }
+        }
         // Prioridad de pintura: drop-hover (drag activo) > hover normal >
-        // fill base. Solo aplica el override si el slot correspondiente
-        // está poblado; el siguiente cae como fallback.
-        let effective_fill = if Some(idx) == drop_hover_idx {
+        // gradiente base > fill color base. Solo aplica el override si el
+        // slot correspondiente está poblado; el siguiente cae como fallback.
+        let hover_color = if Some(idx) == drop_hover_idx {
             node.drop_hover_fill.or(node.hover_fill).or(node.fill)
         } else if Some(idx) == hover_idx {
             node.hover_fill.or(node.fill)
         } else {
-            node.fill
+            None
         };
-        if let Some(color) = effective_fill {
-            let rr = RoundedRect::new(
-                r.x as f64,
-                r.y as f64,
-                (r.x + r.w) as f64,
-                (r.y + r.h) as f64,
-                node.radius,
-            );
+        let rr = RoundedRect::new(
+            r.x as f64,
+            r.y as f64,
+            (r.x + r.w) as f64,
+            (r.y + r.h) as f64,
+            node.radius,
+        );
+        if let Some(color) = hover_color {
+            // Hover/drop gana sobre el gradiente y el fill base.
             scene.fill(Fill::NonZero, cur_xf, color, None, &rr);
+        } else if let Some(grad) = node.fill_gradient.as_ref() {
+            // Gradiente autoreado en `[0,1]²`, mapeado al rect vía
+            // brush_transform (incluye la transformación acumulada).
+            let brush_xf = cur_xf
+                * Affine::translate((r.x as f64, r.y as f64))
+                * Affine::scale_non_uniform(r.w as f64, r.h as f64);
+            scene.fill(Fill::NonZero, cur_xf, grad, Some(brush_xf), &rr);
+        } else if let Some(color) = node.fill {
+            scene.fill(Fill::NonZero, cur_xf, color, None, &rr);
+        }
+        // Borde (stroke) sobre el relleno, inset media línea hacia adentro.
+        if let Some(b) = node.border.as_ref() {
+            if b.width > 0.0 && b.color.components[3] > 0.0 && r.w > 0.0 && r.h > 0.0 {
+                let inset = b.width * 0.5;
+                let brr = RoundedRect::new(
+                    r.x as f64 + inset,
+                    r.y as f64 + inset,
+                    (r.x + r.w) as f64 - inset,
+                    (r.y + r.h) as f64 - inset,
+                    (node.radius - inset).max(0.0),
+                );
+                scene.stroke(&Stroke::new(b.width), cur_xf, b.color, None, &brr);
+            }
         }
         if let Some(image) = node.image.as_ref() {
             // Aspect-fit centrado: el min de las dos escalas ocupa

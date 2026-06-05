@@ -19,8 +19,8 @@ use std::sync::Arc;
 
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
-use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect};
-use vello::peniko::{Color, Fill, Image, Mix};
+use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, Stroke};
+use vello::peniko::{Color, Fill, Gradient, Image, Mix};
 
 mod render;
 mod view;
@@ -163,6 +163,68 @@ pub type GpuPaintFn = Arc<
         + Sync,
 >;
 
+/// Sombra proyectada detrás del rect del nodo (drop shadow), rasterizada
+/// con el `draw_blurred_rounded_rect` nativo de vello. Se pinta **antes**
+/// del relleno, así el fill (si es opaco) tapa la parte solapada y la
+/// sombra sólo asoma por el desenfoque + el offset. El radio sigue al del
+/// nodo (más `spread`).
+#[derive(Clone, Copy, Debug)]
+pub struct Shadow {
+    pub color: Color,
+    /// Desviación estándar del gaussiano (qué tan difusa). En px.
+    pub blur: f64,
+    /// Desplazamiento de la sombra respecto del nodo.
+    pub dx: f64,
+    pub dy: f64,
+    /// Cuánto crece (px) el rect de la sombra respecto del nodo.
+    pub spread: f64,
+}
+
+impl Shadow {
+    /// Sombra con color + blur explícitos, sin offset ni spread.
+    pub fn new(color: Color, blur: f64) -> Self {
+        Self { color, blur, dx: 0.0, dy: 0.0, spread: 0.0 }
+    }
+
+    /// Elevación suave y tasteful: negro translúcido, leve caída hacia
+    /// abajo. El default razonable para cards/menús/modales.
+    pub fn soft(alpha: u8, blur: f64) -> Self {
+        Self {
+            color: Color::from_rgba8(0, 0, 0, alpha),
+            blur,
+            dx: 0.0,
+            dy: blur * 0.4,
+            spread: 0.0,
+        }
+    }
+
+    pub fn offset(mut self, dx: f64, dy: f64) -> Self {
+        self.dx = dx;
+        self.dy = dy;
+        self
+    }
+
+    pub fn spread(mut self, spread: f64) -> Self {
+        self.spread = spread;
+        self
+    }
+}
+
+/// Borde (stroke) pintado sobre el contorno redondeado del nodo, **inset**
+/// hacia adentro media línea para que el grosor quede dentro del rect
+/// (convención CSS `box-sizing: border-box`). Se pinta después del relleno.
+#[derive(Clone, Copy, Debug)]
+pub struct Border {
+    pub width: f64,
+    pub color: Color,
+}
+
+impl Border {
+    pub fn new(width: f64, color: Color) -> Self {
+        Self { width, color }
+    }
+}
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
@@ -172,6 +234,15 @@ pub struct View<Msg> {
     /// = no se reacciona al hover.
     pub hover_fill: Option<Color>,
     pub radius: f64,
+    /// Sombra proyectada detrás del nodo (drop shadow). `None` = sin sombra
+    /// (la mayoría de nodos). Ver [`Shadow`].
+    pub shadow: Option<Shadow>,
+    /// Relleno con **gradiente**, autoreado en el cuadrado unidad `[0,1]²` y
+    /// mapeado al rect del nodo. Gana sobre `fill` como base; `hover_fill`
+    /// (un color) lo sigue overrideando en hover. Ver [`View::fill_gradient`].
+    pub fill_gradient: Option<Gradient>,
+    /// Borde (stroke) sobre el contorno redondeado. Ver [`Border`].
+    pub border: Option<Border>,
     pub text: Option<TextSpec>,
     /// Imagen a pintar dentro del rect del nodo. Se centra y escala
     /// preservando aspect ratio (`min(rect.w/img.w, rect.h/img.h)`).
@@ -315,6 +386,9 @@ pub struct MountedNode<Msg> {
     pub fill: Option<Color>,
     pub hover_fill: Option<Color>,
     pub radius: f64,
+    pub shadow: Option<Shadow>,
+    pub fill_gradient: Option<Gradient>,
+    pub border: Option<Border>,
     pub text: Option<TextSpec>,
     pub image: Option<Image>,
     pub painter: Option<PaintFn>,
