@@ -144,6 +144,57 @@ pub fn approach(current: f32, target: f32, factor: f32) -> f32 {
     }
 }
 
+/// Velocidad (px/s) por debajo de la cual una inercia se considera detenida.
+pub const FLING_STOP: f32 = 8.0;
+/// Fricción por defecto del fling: fracción de velocidad que **sobrevive por
+/// segundo** (más chico = frena antes). 0.0015 ≈ deslizamiento tipo lista
+/// táctil; subilo (p. ej. 0.1) para frenar rápido.
+pub const FLING_FRICTION: f32 = 0.0015;
+
+/// Un paso de **inercia** (fling): dado `velocity` en px/s y `dt` en segundos,
+/// devuelve `(nueva_velocidad, delta_offset)` bajo decaimiento exponencial
+/// `v(t) = v·friction^t`. `friction ∈ (0,1]` es la fracción de velocidad que
+/// sobrevive por segundo. El `delta` es la integral exacta de la velocidad
+/// sobre el paso (no el rectángulo `v·dt`), así el frenado no depende del
+/// frame-rate. El caller suma `delta` al offset (clampeando con
+/// [`clamp_offset`]) y reusa `nueva_velocidad` el próximo frame hasta que
+/// [`fling_settled`] dé `true`. Es el análogo de [`approach`] pero para
+/// "soltar con envión" en vez de "ir hacia un objetivo".
+pub fn fling_step(velocity: f32, dt: f32, friction: f32) -> (f32, f32) {
+    let f = friction.clamp(1e-6, 1.0);
+    let decay = f.powf(dt.max(0.0));
+    let new_v = velocity * decay;
+    let delta = if (f - 1.0).abs() < 1e-6 {
+        velocity * dt
+    } else {
+        // ∫₀^dt v·f^s ds = v·(f^dt − 1)/ln f.
+        velocity * (decay - 1.0) / f.ln()
+    };
+    (new_v, delta)
+}
+
+/// ¿La inercia ya se detuvo? `true` cuando `|velocity| < FLING_STOP` — el
+/// caller corta el ticker y deja el offset quieto.
+pub fn fling_settled(velocity: f32) -> bool {
+    velocity.abs() < FLING_STOP
+}
+
+/// Resistencia elástica (rubber-band) al **sobrepasar un borde**, estilo iOS:
+/// dado cuánto se pasó del límite (`overscroll`, px; el signo se conserva) y la
+/// dimensión del viewport (`dim`), devuelve el desplazamiento visual
+/// **amortiguado** — siempre menor en magnitud que `overscroll`, con
+/// rendimiento decreciente cuanto más se estira. El caller lo usa para pintar
+/// el contenido un poco más allá del tope mientras arrastra, y lo libera
+/// (anima a 0 con [`approach`]) al soltar. Constante 0.55 = la de Apple.
+pub fn rubber_band(overscroll: f32, dim: f32) -> f32 {
+    if dim <= 0.0 || overscroll == 0.0 {
+        return overscroll;
+    }
+    const C: f32 = 0.55;
+    let x = overscroll.abs();
+    (1.0 - 1.0 / (x * C / dim + 1.0)) * dim * overscroll.signum()
+}
+
 /// Geometría del thumb: `(altura, posición_y)` dentro del track de alto
 /// `viewport_len`, y `offset_por_px` (cuánto offset de contenido equivale
 /// a 1 px de arrastre del thumb). Público para tests y para callers que
@@ -307,6 +358,46 @@ mod tests {
         assert_eq!(approach(99.8, 100.0, 0.25), 100.0);
         // factor 1.0 salta de una.
         assert_eq!(approach(0.0, 100.0, 1.0), 100.0);
+    }
+
+    #[test]
+    fn fling_decae_y_se_detiene() {
+        // Con fricción <1, la velocidad decae cada paso y el delta tiene el
+        // signo de la velocidad.
+        let (v1, d1) = fling_step(1000.0, 0.016, FLING_FRICTION);
+        assert!(v1 < 1000.0 && v1 > 0.0);
+        assert!(d1 > 0.0 && d1 < 1000.0 * 0.016 + 0.01); // < rectángulo v·dt
+        // Tras muchos pasos de 16 ms, termina por debajo del umbral.
+        let mut v = 1200.0_f32;
+        let mut steps = 0;
+        while !fling_settled(v) && steps < 100_000 {
+            v = fling_step(v, 0.016, FLING_FRICTION).0;
+            steps += 1;
+        }
+        assert!(fling_settled(v));
+        // Velocidad negativa → delta negativo (scrollea al revés).
+        let (_, dneg) = fling_step(-500.0, 0.016, FLING_FRICTION);
+        assert!(dneg < 0.0);
+        // friction = 1.0 (sin fricción) → delta = v·dt exacto.
+        let (v2, d2) = fling_step(300.0, 0.02, 1.0);
+        assert!((v2 - 300.0).abs() < 1e-3);
+        assert!((d2 - 6.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn rubber_band_amortigua() {
+        let dim = 600.0;
+        // Siempre menor en magnitud que el overscroll crudo.
+        assert!(rubber_band(100.0, dim) < 100.0);
+        assert!(rubber_band(100.0, dim) > 0.0);
+        // Conserva el signo.
+        assert!(rubber_band(-80.0, dim) < 0.0);
+        // Rendimiento decreciente: estirar 2× no duplica el desplazamiento.
+        let a = rubber_band(100.0, dim);
+        let b = rubber_band(200.0, dim);
+        assert!(b > a && b < 2.0 * a);
+        // Cerca de 0 es casi lineal (poca amortiguación todavía).
+        assert!(rubber_band(0.0, dim).abs() < 1e-6);
     }
 
     #[test]
