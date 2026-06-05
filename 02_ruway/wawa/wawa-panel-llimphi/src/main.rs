@@ -24,8 +24,8 @@ use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
-    AlignItems, Rect,
+    prelude::{auto, length, percent, Dimension, FlexDirection, Position, Size, Style},
+    AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
@@ -42,8 +42,10 @@ use wawa_config::{ConfigWatcher, WawaConfig};
 
 /// Refresco del monitor (Información).
 const TICK_MS: u64 = 1_000;
-/// Ancho del rail de dientes (pestañitas con icono).
-const NAV_WIDTH: f32 = 52.0;
+/// Ancho del rail de dientes (la tira de pestañas que sobresale).
+const RAIL_W: f32 = 46.0;
+/// Ancho del panel del diente activo (a la izquierda).
+const PANEL_W: f32 = 340.0;
 /// Alto del viewport del panel (para el scroll). Conservador respecto del alto
 /// de ventana inicial menos menubar/header/status; si la ventana es más alta
 /// queda algo de aire abajo. (Mejorable cuando el host trackee el resize.)
@@ -377,24 +379,8 @@ impl App for Panel {
         let menu = app_menu();
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = build_header(&theme);
-        let nav = build_nav(&dientes, sel, &theme);
-        let content = build_content(&dientes, sel, model, &theme);
+        let body = build_body(&dientes, sel, model, &theme);
         let status = build_status(model, &theme);
-
-        let body = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: Dimension::auto(),
-            },
-            flex_grow: 1.0,
-            min_size: Size {
-                width: length(0.0_f32),
-                height: length(0.0_f32),
-            },
-            ..Default::default()
-        })
-        .children(vec![nav, content]);
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -700,7 +686,67 @@ fn build_header(theme: &Theme) -> View<Msg> {
     app_header(rimay_localize::t("wawa-panel-title"), vec![], &palette)
 }
 
-fn build_nav(dientes: &[PanelDiente], sel: usize, theme: &Theme) -> View<Msg> {
+/// El cuerpo del panel de control, al modo cosmos: el **panel** del diente
+/// activo es un pane a la izquierda; el **rail de dientes** es un overlay pegado
+/// al borde interno del centro, así las pestañas **sobresalen** del panel hacia
+/// el centro. El centro queda como área de resumen.
+fn build_body(dientes: &[PanelDiente], sel: usize, model: &Model, theme: &Theme) -> View<Msg> {
+    // Panel del diente activo (izquierda, ancho fijo).
+    let panel = match dientes.get(sel) {
+        Some(d) => schema_panel(&d.schema, &model.allichay, theme, VIEWPORT_H, Msg::Allichay),
+        None => View::new(Style::default()),
+    };
+    let panel_pane = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(PANEL_W),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![panel]);
+
+    // Centro: resumen + el rail de dientes superpuesto en su borde izquierdo
+    // (pegado al panel), de modo que las pestañas asomen sobre el centro.
+    let rail = rail_overlay(dientes, sel, theme);
+    let center = View::new(Style {
+        position: Position::Relative,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(0.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![resumen_view(theme), rail]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![panel_pane, center])
+}
+
+/// El rail de dientes como **overlay absoluto** pegado al borde izquierdo del
+/// centro (el patrón de cosmos `dock_rail_overlay`): las pestañas sobresalen del
+/// panel hacia el centro. Clic en una pestaña activa su panel.
+fn rail_overlay(dientes: &[PanelDiente], sel: usize, theme: &Theme) -> View<Msg> {
     let items: Vec<DockRailItem> = dientes
         .iter()
         .enumerate()
@@ -710,14 +756,81 @@ fn build_nav(dientes: &[PanelDiente], sel: usize, theme: &Theme) -> View<Msg> {
         })
         .collect();
     let icons: Vec<String> = dientes.iter().map(|d| d.icon.clone()).collect();
-    dock_rail_view(
+    let rail = dock_rail_view(
         &items,
-        NAV_WIDTH,
+        RAIL_W,
         &DockRailPalette::from_theme(theme),
         move |id, size, color| tooth_icon(icons.get(id as usize).cloned(), size, color),
         Msg::NavSelect,
         |_| None,
-    )
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0_f32),
+            left: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(RAIL_W),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![rail])
+}
+
+/// El resumen del centro: nombre de la suite + pista. Padding izquierdo para no
+/// quedar bajo las pestañas que asoman.
+fn resumen_view(theme: &Theme) -> View<Msg> {
+    let title = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        rimay_localize::t("wawa-panel-title"),
+        18.0,
+        theme.fg_text,
+        Alignment::Center,
+    );
+    let hint = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        rimay_localize::t("wawa-panel-status-hint"),
+        12.0,
+        theme.fg_muted,
+        Alignment::Center,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(RAIL_W + 12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![title, hint])
 }
 
 /// Icono de un diente (emoji que la fuente tenga), color resuelto por el rail.
@@ -741,16 +854,6 @@ fn tooth_icon(
         color,
         Alignment::Center,
     )
-}
-
-fn build_content(dientes: &[PanelDiente], sel: usize, model: &Model, theme: &Theme) -> View<Msg> {
-    match dientes.get(sel) {
-        Some(d) => schema_panel(&d.schema, &model.allichay, theme, VIEWPORT_H, Msg::Allichay),
-        None => View::new(Style {
-            flex_grow: 1.0,
-            ..Default::default()
-        }),
-    }
 }
 
 fn build_status(model: &Model, theme: &Theme) -> View<Msg> {

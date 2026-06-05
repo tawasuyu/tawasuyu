@@ -17,7 +17,10 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy;
-use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
+use llimphi_ui::llimphi_layout::taffy::prelude::{
+    auto, length, percent, FlexDirection, Position, Size, Style,
+};
+use llimphi_ui::llimphi_layout::taffy::Rect;
 use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
@@ -99,6 +102,43 @@ fn main() {
         H as f32 - 40.0,
         |_m: AllichayMsg| (),
     );
+    // Layout cosmos: panel (izq, ancho fijo) + centro con el rail superpuesto en
+    // su borde izquierdo (las pestañas asoman del panel hacia el centro).
+    let panel_pane = View::<()>::new(Style {
+        size: Size {
+            width: length(340.0),
+            height: percent(1.0),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![panel]);
+    let rail_overlay = View::<()>::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0),
+            left: length(0.0),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(46.0),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![rail]);
+    let center = View::<()>::new(Style {
+        position: Position::Relative,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(0.0),
+            height: percent(1.0),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![rail_overlay]);
     let v = View::<()>::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -108,7 +148,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![rail, panel]);
+    .children(vec![panel_pane, center]);
 
     // view → layout → scene (misma secuencia que el eventloop).
     let mut layout = LayoutTree::new();
