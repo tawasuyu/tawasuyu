@@ -123,6 +123,78 @@ impl Typesetter {
         layout
     }
 
+    /// Como [`Self::layout`] pero **clampado** a `max_lines` líneas (CSS
+    /// `-webkit-line-clamp` / Flutter `maxLines`). Si el texto envuelto cabe en
+    /// `max_lines` o menos, devuelve el layout completo. Si excede:
+    /// - `ellipsis = true` → la última línea visible termina en `…` (se
+    ///   recortan graphemes del final hasta que el bloque vuelve a caber en
+    ///   `max_lines`).
+    /// - `ellipsis = false` → se corta sin glifo (queda el prefijo que cupo).
+    ///
+    /// `max_lines = None` o `Some(0)` ⇒ sin límite (idéntico a `layout`). El
+    /// clamp sólo recorta cuando hay envoltura, así que requiere un `max_width`
+    /// definido para tener efecto (un label en una caja dimensionada — el caso
+    /// típico). Reusa `layout` internamente: 0 costo extra cuando no trunca.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_clamped(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        max_width: Option<f32>,
+        alignment: Alignment,
+        line_height: f32,
+        italic: bool,
+        font_family: Option<&str>,
+        weight: f32,
+        max_lines: Option<usize>,
+        ellipsis: bool,
+    ) -> parley::Layout<()> {
+        let full = self.layout(
+            text, size_px, max_width, alignment, line_height, italic, font_family, weight,
+        );
+        let limit = match max_lines {
+            Some(n) if n >= 1 => n,
+            _ => return full,
+        };
+        if full.lines().count() <= limit {
+            return full;
+        }
+        // Byte de fin de la última línea visible (rango sobre `text` original).
+        let mut cutoff = full
+            .lines()
+            .nth(limit - 1)
+            .map(|l| l.text_range().end)
+            .unwrap_or(text.len())
+            .min(text.len());
+        while cutoff > 0 && !text.is_char_boundary(cutoff) {
+            cutoff -= 1;
+        }
+        let base = text[..cutoff].trim_end();
+        if !ellipsis {
+            return self.layout(
+                base, size_px, max_width, alignment, line_height, italic, font_family, weight,
+            );
+        }
+        // Recortá graphemes del final hasta que `base…` vuelva a caber en
+        // `limit` líneas (apilar el `…` puede empujar una palabra a una línea
+        // extra). Acotado: cada vuelta quita ≥1 char.
+        let mut s = base.to_string();
+        loop {
+            let candidate = format!("{s}…");
+            let lay = self.layout(
+                &candidate, size_px, max_width, alignment, line_height, italic, font_family,
+                weight,
+            );
+            if s.is_empty() || lay.lines().count() <= limit {
+                return lay;
+            }
+            s.pop();
+            while s.ends_with(char::is_whitespace) {
+                s.pop();
+            }
+        }
+    }
+
     /// Construye un layout **multicolor** en una sola pasada de shaping:
     /// `default_color` cubre todo el texto y cada `(start_byte, end_byte,
     /// color)` lo sobreescribe en su rango (offsets en **bytes**, no chars —
@@ -374,4 +446,54 @@ pub fn measure(ts: &mut Typesetter, block: &TextBlock<'_>) -> Measurement {
 pub fn draw_block(scene: &mut vello::Scene, ts: &mut Typesetter, block: &TextBlock<'_>) {
     let layout = layout_block(ts, block);
     draw_layout(scene, &layout, block.color, block.origin);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Texto que envuelve a muchas líneas en un ancho angosto.
+    const LARGO: &str =
+        "palabras varias que envuelven en bastantes renglones cuando el ancho \
+         disponible es realmente angosto y no caben de un solo tirón";
+
+    fn n_lineas(ts: &mut Typesetter, max_lines: Option<usize>, ellipsis: bool) -> usize {
+        ts.layout_clamped(
+            LARGO,
+            14.0,
+            Some(120.0),
+            Alignment::Start,
+            1.2,
+            false,
+            None,
+            400.0,
+            max_lines,
+            ellipsis,
+        )
+        .lines()
+        .count()
+    }
+
+    #[test]
+    fn clamp_limita_el_numero_de_lineas() {
+        let mut ts = Typesetter::new();
+        let libre = n_lineas(&mut ts, None, false);
+        assert!(libre > 2, "el fixture debe envolver a >2 líneas (dio {libre})");
+        // Con clamp, nunca más que el límite — con o sin ellipsis.
+        assert_eq!(n_lineas(&mut ts, Some(1), false), 1);
+        assert_eq!(n_lineas(&mut ts, Some(1), true), 1);
+        assert!(n_lineas(&mut ts, Some(2), true) <= 2);
+        // max_lines None ⇒ sin límite (idéntico a layout).
+        assert_eq!(n_lineas(&mut ts, None, true), libre);
+    }
+
+    #[test]
+    fn clamp_no_trunca_si_ya_cabe() {
+        let mut ts = Typesetter::new();
+        // "Hola" cabe en una línea: pedir 3 no debe inventar truncado.
+        let lay = ts.layout_clamped(
+            "Hola", 14.0, Some(200.0), Alignment::Start, 1.2, false, None, 400.0, Some(3), true,
+        );
+        assert_eq!(lay.lines().count(), 1);
+    }
 }

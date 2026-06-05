@@ -295,6 +295,8 @@ View::new(style: Style) -> View<Msg>
 .line_height(mult)                                        // override interlínea (default 1.2)
 .text_weight(f32)                                         // peso CSS: 400 normal, 600 semibold, 700 bold
 .bold()                                                   // atajo de text_weight(700.0)
+.ellipsis(n)                                              // clampa a n líneas terminando en … (n=1 = single-line)
+.max_lines(n)                                             // clampa a n líneas sin glifo (corte seco)
 ```
 
 ### Interacción (ver §8)
@@ -989,7 +991,7 @@ llimphi_ui::run::<X>();
 // ── Nodo ────────────────────────────────────────────────────
 View::new(Style{ flex_direction, size, gap, padding, align_items, justify_content, ..default() })
     .fill(c).fill_gradient(g).hover_fill(c).radius(r).radius_corners(tl,tr,br,bl).shadow(sh).border(w,c).clip(b).alpha(a).transform(xf)
-    .text(s, px, c) | .text_aligned(s,px,c,al) | .text_runs(s,px,c,runs,al) | .text_weight(w) | .bold()
+    .text(s, px, c) | .text_aligned(s,px,c,al) | .text_runs(s,px,c,runs,al) | .text_weight(w) | .bold() | .ellipsis(n) | .max_lines(n)
     .image(img) | .paint_with(|scene,ts,rect|{}) | .gpu_paint_with(|d,q,enc,view,rect,vp|{})
     .on_click(m) | .on_click_at(|lx,ly,w,h|) | .on_right_click(m) | .on_middle_click(m)
     .on_pointer_enter(m) | .on_pointer_leave(m)

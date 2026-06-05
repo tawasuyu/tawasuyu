@@ -32,9 +32,9 @@ fingen el borde con un rect-padre inset).
 `TextSpec` hoy expone `italic`, color por rango y **peso de fuente**.
 
 - ✅ Peso/bold → `weight: f32` en `TextSpec` + `.text_weight(...)`/`.bold()`. Fluye por medida y pintado (camino directo a `Typesetter::layout`, no `TextBlock`).
+- ✅ Overflow/ellipsis (`maxLines` + `…`) → `.ellipsis(n)`/`.max_lines(n)` + `Typesetter::layout_clamped`. Clampa medida y pintado; recorta graphemes hasta caber. Cubre single-line y N líneas.
 - Spans inline mixtos (tamaño/peso/familia/link por rango, no sólo color) → `RichText` real.
 - Decoración: subrayado / tachado.
-- Overflow/ellipsis (`maxLines` + `…`) → crítico para listas/labels. Hoy no existe.
 - Texto seleccionable fuera del editor (selección + copiar).
 
 ### 🟡 Tier 3 — animación declarativa (brecha de arquitectura)
@@ -83,9 +83,11 @@ a 5k nodos" de "a 50k".
    fingen.
 2. ✅ **Bloque 2 = radio por esquina + peso de fuente** — cierra Tier 1 (salvo
    backdrop-blur) y abre Tier 2. `.radius_corners(...)`, `.text_weight(...)`/`.bold()`.
-3. Overflow/ellipsis + animaciones implícitas.
-4. Pinch-zoom + scroll physics.
-5. AccessKit + slivers.
+3. ✅ **Bloque 3 = overflow/ellipsis** — `.ellipsis(n)`/`.max_lines(n)` +
+   `Typesetter::layout_clamped`. Crítico para listas/labels/celdas.
+4. Animaciones implícitas (AnimatedContainer) — la mejora de DX más grande de Tier 3.
+5. Pinch-zoom + scroll physics.
+6. AccessKit + slivers.
 
 ## Tier 7 — detalle (accesibilidad)
 

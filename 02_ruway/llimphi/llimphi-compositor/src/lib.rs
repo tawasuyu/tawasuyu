@@ -41,6 +41,14 @@ pub struct TextSpec {
     /// tanto al **medir** como al **pintar**, así medida y dibujo coinciden.
     /// Default 400.
     pub weight: f32,
+    /// Límite de líneas (CSS `-webkit-line-clamp` / Flutter `maxLines`). `None`
+    /// = sin límite (envuelve libre). Cuando el texto excede, se trunca: con
+    /// [`Self::ellipsis`] la última línea termina en `…`, sin él se corta seco.
+    /// Afecta medida (taffy reserva el alto de N líneas) y pintado.
+    pub max_lines: Option<usize>,
+    /// Si `true` y `max_lines` trunca, la última línea visible termina en `…`.
+    /// Sin efecto si `max_lines` es `None`. Default false.
+    pub ellipsis: bool,
     /// CSS-style font-family string (acepta lista con fallbacks). `None`
     /// = la fuente default de parley.
     pub font_family: Option<String>,
@@ -393,6 +401,8 @@ pub struct TextMeasure {
     pub font_family: Option<String>,
     pub line_height: f32,
     pub weight: f32,
+    pub max_lines: Option<usize>,
+    pub ellipsis: bool,
 }
 
 pub struct MountedNode<Msg> {

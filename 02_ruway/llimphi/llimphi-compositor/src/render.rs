@@ -110,6 +110,8 @@ pub fn mount_recursive<Msg: Clone>(
                         font_family: text.font_family.clone(),
                         line_height: text.line_height,
                         weight: text.weight,
+                        max_lines: text.max_lines,
+                        ellipsis: text.ellipsis,
                     },
                 );
             }
@@ -136,9 +138,10 @@ pub fn measure_text_node(
         AvailableSpace::MaxContent => None,
         AvailableSpace::MinContent => Some(0.0),
     });
-    // Camino directo a `layout` (no `TextBlock`) para transportar el `weight`:
-    // bold mide más ancho que normal, así taffy reserva el alto correcto.
-    let layout = ts.layout(
+    // Camino directo a `layout_clamped` (no `TextBlock`) para transportar
+    // `weight` (bold mide más ancho) y `max_lines` (taffy reserva el alto de
+    // N líneas, no el del texto completo). Sin clamp, equivale a `layout`.
+    let layout = ts.layout_clamped(
         &tm.content,
         tm.size_px,
         max_width,
@@ -147,6 +150,8 @@ pub fn measure_text_node(
         tm.italic,
         tm.font_family.as_deref(),
         tm.weight,
+        tm.max_lines,
+        tm.ellipsis,
     );
     let m = llimphi_text::measurement(&layout);
     llimphi_layout::taffy::Size { width: m.width, height: m.height }
@@ -374,8 +379,9 @@ pub fn paint<Msg>(
                 // Parley resuelve la alineación horizontal vía max_width +
                 // alignment. Para Center también centramos verticalmente; para
                 // Start/End/Justify anclamos arriba (párrafo/editor). Camino
-                // directo a `layout` para transportar el `weight` del TextSpec.
-                let layout = typesetter.layout(
+                // directo a `layout_clamped` para transportar `weight` y el
+                // clamp de `max_lines`/`ellipsis` del TextSpec.
+                let layout = typesetter.layout_clamped(
                     &text.content,
                     text.size_px,
                     Some(r.w),
@@ -384,6 +390,8 @@ pub fn paint<Msg>(
                     text.italic,
                     text.font_family.as_deref(),
                     text.weight,
+                    text.max_lines,
+                    text.ellipsis,
                 );
                 let origin =
                     if matches!(text.alignment, llimphi_text::Alignment::Center) {

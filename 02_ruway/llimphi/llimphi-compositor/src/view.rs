@@ -226,6 +226,8 @@ impl<Msg> View<Msg> {
             font_family: None,
             line_height: 1.2,
             weight: 400.0,
+            max_lines: None,
+            ellipsis: false,
             runs: None,
         });
         self
@@ -247,6 +249,8 @@ impl<Msg> View<Msg> {
             font_family: None,
             line_height: 1.2,
             weight: 400.0,
+            max_lines: None,
+            ellipsis: false,
             runs: None,
         });
         self
@@ -271,6 +275,8 @@ impl<Msg> View<Msg> {
             font_family: None,
             line_height: 1.2,
             weight: 400.0,
+            max_lines: None,
+            ellipsis: false,
             runs: None,
         });
         self
@@ -297,6 +303,8 @@ impl<Msg> View<Msg> {
             font_family,
             line_height: 1.2,
             weight: 400.0,
+            max_lines: None,
+            ellipsis: false,
             runs: None,
         });
         self
@@ -324,6 +332,8 @@ impl<Msg> View<Msg> {
             font_family: None,
             line_height: 1.2,
             weight: 400.0,
+            max_lines: None,
+            ellipsis: false,
             runs: Some(runs),
         });
         self
@@ -354,6 +364,31 @@ impl<Msg> View<Msg> {
     /// Atajo de [`Self::text_weight`] a 700 (bold). No-op sin texto.
     pub fn bold(self) -> Self {
         self.text_weight(700.0)
+    }
+
+    /// Clampa el texto a `n` líneas **sin** glifo de ellipsis (corte seco del
+    /// prefijo que cupo). CSS `-webkit-line-clamp` sin `text-overflow`. No-op
+    /// sin texto. Para el corte con `…` usar [`Self::ellipsis`]. Sólo trunca si
+    /// hay envoltura (requiere ancho acotado por el layout).
+    pub fn max_lines(mut self, n: usize) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.max_lines = Some(n);
+            t.ellipsis = false;
+        }
+        self
+    }
+
+    /// Clampa el texto a `n` líneas terminando la última en `…` cuando excede
+    /// (CSS `text-overflow: ellipsis` + `-webkit-line-clamp: n`). Lo más común
+    /// para items de lista, celdas de tabla, breadcrumbs y labels en cajas
+    /// dimensionadas. `n = 1` es el clásico single-line ellipsis. No-op sin
+    /// texto.
+    pub fn ellipsis(mut self, n: usize) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.max_lines = Some(n.max(1));
+            t.ellipsis = true;
+        }
+        self
     }
 
     pub fn on_click(mut self, msg: Msg) -> Self {

@@ -20,7 +20,7 @@ use llimphi_raster::{vello, Renderer};
 use llimphi_text::{Alignment, Typesetter};
 use vello::kurbo::Point;
 
-const W: u32 = 1276;
+const W: u32 = 1476;
 const H: u32 = 340;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -128,6 +128,38 @@ fn main() {
         white,
     );
 
+    // 7) Overflow / ellipsis: texto largo clampado a 1 y a 2 líneas, terminando
+    //    en `…`. El ancho de la caja fuerza la envoltura; el clamp recorta.
+    let long = "Texto largo que no entra en el ancho de esta tarjeta angosta y debe recortarse";
+    let clamp = |txt: &str, n: usize, h: f32| {
+        View::<()>::new(Style {
+            size: Size { width: percent(0.86_f32), height: length(h) },
+            ..Default::default()
+        })
+        .text_aligned(txt.to_string(), 13.0, dark, Alignment::Start)
+        .ellipsis(n)
+    };
+    let elipsis = View::<()>::new(Style {
+        size: Size { width: length(180.0_f32), height: length(150.0_f32) },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(0.0_f32), height: length(10.0_f32) },
+        ..Default::default()
+    })
+    .radius(16.0)
+    .fill(panel)
+    .border(1.0, theme.accent)
+    .children(vec![
+        clamp(long, 1, 18.0),
+        clamp(long, 2, 36.0),
+        View::<()>::new(Style {
+            size: Size { width: percent(0.9_f32), height: length(20.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned("Ellipsis 1·2", 14.0, dark, Alignment::Center),
+    ]);
+
     let root = View::<()>::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         flex_direction: FlexDirection::Row,
@@ -143,7 +175,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![sombra, gradiente, borde, combo, peso, esquinas]);
+    .children(vec![sombra, gradiente, borde, combo, peso, esquinas, elipsis]);
 
     // view → layout → scene (misma secuencia que el eventloop).
     let mut layout = LayoutTree::new();
