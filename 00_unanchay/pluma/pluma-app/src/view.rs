@@ -8,6 +8,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
+use llimphi_icons::{icon_view, Icon};
 use llimphi_theme::Theme;
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_button::{button_view, ButtonPalette};
@@ -46,13 +47,14 @@ const RAIL_W: f32 = 46.0;
 /// overflow → scroll horizontal). Con 1 lienzo la columna es elástica y llena.
 const ANCHO_COL: f32 = 360.0;
 
-/// Nombres y letras de los cuatro dientes del rail. La letra es el icono (sin
-/// tofu garantizado); el nombre completo va en la cabecera del panel.
-const DIENTES: [(&str, &str); 4] = [
-    ("A", "Archivo"),
-    ("L", "Lienzos"),
-    ("D", "Derivar"),
-    ("M", "Modelo"),
+/// Icono vectorial y nombre de los cuatro dientes del rail. El icono lo pinta
+/// `llimphi-icons` (mismo set canónico que cosmos — sin tofu); el nombre
+/// completo va en la cabecera del panel.
+const DIENTES: [(Icon, &str); 4] = [
+    (Icon::File, "Archivo"),
+    (Icon::Folder, "Lienzos"),
+    (Icon::Edit, "Derivar"),
+    (Icon::Settings, "Modelo"),
 ];
 
 /// Arma el `MenuBarSpec` compartido entre `menubar_view` (barra) y
@@ -85,11 +87,34 @@ pub(crate) fn vista(model: &Model) -> View<Msg> {
     let panel = panel_diente(model, &theme);
     let centro = centro_multilienzo(model, &theme);
 
+    // El rail flota como overlay pegado al borde INTERNO (el que da al centro),
+    // dentro del área central — los dientes "sobresalen" del panel hacia el
+    // centro, exactamente como cosmos (center_view + dock_rail_overlay). En
+    // modo delegado lo dibuja pata, así que pluma no lo pinta.
+    let mut centro_hijos: Vec<View<Msg>> = vec![centro];
+    if !model.delegated {
+        centro_hijos.push(rail_overlay(model, &theme));
+    }
+    let centro_con_rail = View::new(Style {
+        position: Position::Relative,
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(centro_hijos);
+
     let split = splitter_two(
         Direction::Row,
         panel,
         PaneSize::Fixed(model.panel_w),
-        centro,
+        centro_con_rail,
         PaneSize::Flex,
         |phase, dx| match phase {
             DragPhase::Move => Some(Msg::ResizePanel(dx)),
@@ -97,24 +122,6 @@ pub(crate) fn vista(model: &Model) -> View<Msg> {
         },
         &splitter_palette,
     );
-
-    // El rail flota como overlay pegado al borde izquierdo (los dientes
-    // "sobresalen" sobre el panel, como en cosmos). En modo delegado lo dibuja
-    // pata, así que pluma no lo pinta.
-    let mut body_hijos: Vec<View<Msg>> = vec![split];
-    if !model.delegated {
-        body_hijos.push(rail_overlay(model, &theme));
-    }
-    let body = View::new(Style {
-        position: Position::Relative,
-        flex_grow: 1.0,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(body_hijos);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -126,7 +133,7 @@ pub(crate) fn vista(model: &Model) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
-    .children(vec![menubar, status, body])
+    .children(vec![menubar, status, split])
 }
 
 /// El rail de dientes como overlay absoluto en el borde interno izquierdo.
@@ -144,15 +151,28 @@ fn rail_overlay(model: &Model, theme: &Theme) -> View<Msg> {
         RAIL_W,
         &DockRailPalette::from_theme(theme),
         |id, size, color| {
-            let letra = DIENTES.get(id as usize).map(|d| d.0).unwrap_or("·");
+            let icono = DIENTES.get(id as usize).map(|d| d.0).unwrap_or(Icon::File);
+            // Caja cuadrada centrada que contiene el icono vectorial (Absolute,
+            // llena su contenedor Relative) — proporción uniforme sin importar
+            // la forma del diente.
             View::<Msg>::new(Style {
                 size: Size {
                     width: percent(1.0_f32),
                     height: percent(1.0_f32),
                 },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
                 ..Default::default()
             })
-            .text_aligned(letra.to_string(), size, color, Alignment::Center)
+            .children(vec![View::<Msg>::new(Style {
+                position: Position::Relative,
+                size: Size {
+                    width: length(size),
+                    height: length(size),
+                },
+                ..Default::default()
+            })
+            .children(vec![icon_view::<Msg>(icono, color, 1.8)])])
         },
         |id| Msg::SelectDiente(id as usize),
         |_| None,
@@ -230,7 +250,8 @@ fn panel_diente(model: &Model, theme: &Theme) -> View<Msg> {
         .unwrap_or("");
     let header = encabezado(nombre, theme);
 
-    let pad_izq = if model.delegated { 10.0 } else { RAIL_W + 6.0 };
+    // El rail ya no se monta sobre el panel (vive en el centro), así que el
+    // panel usa padding normal.
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -238,7 +259,7 @@ fn panel_diente(model: &Model, theme: &Theme) -> View<Msg> {
             height: percent(1.0_f32),
         },
         padding: Rect {
-            left: length(pad_izq),
+            left: length(10.0_f32),
             right: length(10.0_f32),
             top: length(10.0_f32),
             bottom: length(10.0_f32),
@@ -795,11 +816,21 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
     }
     hijos.push(centro);
 
+    // Padding izquierdo = ancho del rail: los dientes sobresalen sobre el
+    // borde del centro sin tapar la primera columna. Sin rail interno
+    // (delegado) no hace falta.
+    let pad_rail = if model.delegated { 0.0 } else { RAIL_W };
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
             height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(pad_rail),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
         },
         ..Default::default()
     })

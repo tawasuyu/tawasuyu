@@ -34,6 +34,7 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-list = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
+llimphi-icons = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
