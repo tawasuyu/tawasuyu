@@ -19,6 +19,7 @@ pub mod profile;
 pub mod session;
 pub mod store;
 pub mod tab;
+pub mod ui;
 
 pub use bookmark::{Bookmark, BookmarkId, BookmarkStore};
 pub use history::{History, HistoryEntry};
@@ -26,6 +27,7 @@ pub use profile::Profile;
 pub use session::{Session, SessionError};
 pub use store::{load, save, Error as StoreError, SCHEMA};
 pub use tab::{Tab, TabId};
+pub use ui::{SpacePref, UiPrefs};
 
 /// Segundos UNIX al instante de invocación. Wrapper alrededor de
 /// `SystemTime::now()` para que los tests no toquen el reloj.
