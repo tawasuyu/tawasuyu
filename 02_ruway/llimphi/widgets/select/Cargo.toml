@@ -1,0 +1,17 @@
+[package]
+name = "llimphi-widget-select"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-select — control select/dropdown moderno para Llimphi: disparador cerrado + menú flotante (view_overlay) con búsqueda, ítems ricos (icono · sublabel · badge), selección múltiple y estados de carga asíncrona (Cargando / Error+reintento / vacío)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-panel = { workspace = true }
+llimphi-widget-badge = { workspace = true }
+
+[dev-dependencies]
+# El demo arranca una App real (winit + GPU) vía llimphi_ui::run.
