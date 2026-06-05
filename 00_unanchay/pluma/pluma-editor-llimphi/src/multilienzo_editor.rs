@@ -107,15 +107,18 @@ pub fn color_seccion(i: usize) -> Color {
     Color::from_rgba8(r, g, b, 255)
 }
 
-/// Datos pre-calculados de una hebra entre dos editores vivos.
+/// Datos pre-calculados de una **cinta** (ribbon Sankey) entre dos editores
+/// vivos: el rango vertical `[top, bot]` que ocupa la sección en cada lado
+/// (ya considera `scroll_offset` y `alto_header`), y su color. La cinta se
+/// rellena con borde superior e inferior en curva-S (tangentes horizontales),
+/// igual que `pineal-flow::ribbon`.
 #[derive(Debug, Clone, Copy)]
 struct HebraEditor {
-    /// Y en píxeles dentro del rect del carril (ya considera el
-    /// `scroll_offset` y `alto_header` de cada editor).
-    y_izq: f32,
-    y_der: f32,
+    izq_top: f32,
+    izq_bot: f32,
+    der_top: f32,
+    der_bot: f32,
     color: Color,
-    punteada: bool,
 }
 
 /// Render principal: N editores en HStack con carriles de hebras entre
@@ -280,14 +283,6 @@ where
     let overlay_separadores =
         overlay_separadores_atomos::<Msg>(ide, metrics, palette_lienzo);
 
-    // Capas del editor: texto · bandas de color por sección (si está on) ·
-    // separadores. Las bandas van detrás de los separadores.
-    let mut capas: Vec<View<Msg>> = vec![editor];
-    if cfg.colorear_secciones {
-        capas.push(overlay_bandas_seccion::<Msg>(ide, metrics));
-    }
-    capas.push(overlay_separadores);
-
     let contenedor_editor = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -297,7 +292,7 @@ where
         ..Default::default()
     })
     .fill(palette_editor.bg)
-    .children(capas);
+    .children(vec![editor, overlay_separadores]);
 
     // Wrapper con padding accent cuando es el activo — el padding actúa
     // como borde grueso visible (Llimphi todavía no expone `border()`
@@ -354,11 +349,7 @@ fn carril_editor<Msg: Clone + 'static>(
     paleta: &PaletaHebras,
     metrics: EditorMetrics,
 ) -> View<Msg> {
-    let hebras = match carta {
-        Some(c) => precomputar_hebras_editor(izq, der, c, cfg, paleta, metrics),
-        None => Vec::new(),
-    };
-    let grosor = cfg.grosor_hebra;
+    let hebras = precomputar_hebras_editor(izq, der, carta, cfg, paleta, metrics);
     let nodo = View::new(Style {
         size: Size {
             width: length(cfg.ancho_carril),
@@ -370,30 +361,28 @@ fn carril_editor<Msg: Clone + 'static>(
         return nodo;
     }
     nodo.paint_with(move |scene, _ts, rect| {
-        let solido = Stroke::new(grosor as f64);
-        let punteado = Stroke::new(grosor as f64).with_dashes(0.0, [6.0, 4.0]);
-        let alto_carril = rect.h;
-        // Bezier cúbica con tangentes horizontales en ambos extremos —
-        // mismo look que un grafo Sankey o las hebras de `git log
-        // --graph`. El control point arranca a `t * ancho` del extremo
-        // en X y queda a la altura del extremo en Y. `t = 0.5` deja la
-        // curva con su panza justo en el centro del carril.
-        let t = 0.5_f32;
-        let dx = (rect.w * t) as f64;
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let alto = rect.h;
+        // Curva-S con tangentes horizontales en ambos extremos (igual que
+        // `pineal-flow`): el control point arranca a `0.5 * ancho` del extremo.
+        let dx = (rect.w * 0.5) as f64;
+        let x1 = rect.x as f64;
+        let x2 = (rect.x + rect.w) as f64;
         for h in &hebras {
-            // Clamp suave al alto del carril — cuando un átomo está fuera
-            // del viewport, la hebra se "asoma" pegada al borde.
-            let y_izq = h.y_izq.clamp(0.0, alto_carril);
-            let y_der = h.y_der.clamp(0.0, alto_carril);
-            let x1 = rect.x as f64;
-            let x2 = (rect.x + rect.w) as f64;
-            let y1 = (rect.y + y_izq) as f64;
-            let y2 = (rect.y + y_der) as f64;
+            // Clamp de cada borde al alto visible del carril.
+            let it = (rect.y + h.izq_top.clamp(0.0, alto)) as f64;
+            let ib = (rect.y + h.izq_bot.clamp(0.0, alto)) as f64;
+            let dt = (rect.y + h.der_top.clamp(0.0, alto)) as f64;
+            let db = (rect.y + h.der_bot.clamp(0.0, alto)) as f64;
+            // Cinta cerrada: borde superior (S) → lado derecho → borde
+            // inferior (S de vuelta) → lado izquierdo (close) → relleno.
             let mut path = BezPath::new();
-            path.move_to((x1, y1));
-            path.curve_to((x1 + dx, y1), (x2 - dx, y2), (x2, y2));
-            let stroke = if h.punteada { &punteado } else { &solido };
-            scene.stroke(stroke, Affine::IDENTITY, h.color, None, &path);
+            path.move_to((x1, it));
+            path.curve_to((x1 + dx, it), (x2 - dx, dt), (x2, dt));
+            path.line_to((x2, db));
+            path.curve_to((x2 - dx, db), (x1 + dx, ib), (x1, ib));
+            path.close_path();
+            scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &path);
         }
     })
 }
@@ -455,82 +444,6 @@ fn overlay_separadores_atomos<Msg: Clone + 'static>(
     })
 }
 
-/// Overlay que pinta una **banda de color de identidad** en el borde
-/// izquierdo de cada sección (átomo). La sección `i` lleva `color_seccion(i)`,
-/// el mismo color en todas las columnas → une las secciones por color entre
-/// lienzos. Va sin `on_click` (transparente al hit-test, los clicks llegan al
-/// editor abajo).
-fn overlay_bandas_seccion<Msg: Clone + 'static>(
-    ide: &CuerpoIde,
-    metrics: EditorMetrics,
-) -> View<Msg> {
-    let bandas = precomputar_bandas(ide, metrics);
-    let nodo = View::new(Style {
-        position: llimphi_ui::llimphi_layout::taffy::Position::Absolute,
-        inset: Rect {
-            left: length(0.0_f32),
-            top: length(0.0_f32),
-            right: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    });
-    if bandas.is_empty() {
-        return nodo;
-    }
-    // Ancho de la banda, en px.
-    const W: f64 = 4.0;
-    nodo.paint_with(move |scene, _ts, rect| {
-        use llimphi_ui::llimphi_raster::kurbo::Rect as KRect;
-        use llimphi_ui::llimphi_raster::peniko::Fill;
-        for (y0, y1, color) in &bandas {
-            // Clamp al alto visible del editor.
-            let top = (rect.y + y0).max(rect.y) as f64;
-            let bot = (rect.y + y1).min(rect.y + rect.h) as f64;
-            if bot <= top {
-                continue;
-            }
-            let x0 = rect.x as f64;
-            let banda = KRect::new(x0, top, x0 + W, bot);
-            scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &banda);
-        }
-    })
-}
-
-/// Devuelve, por cada sección (átomo) del ide, su rango vertical local
-/// `(y_top, y_bot)` y su color de identidad, ajustado al scroll. El rango va
-/// del inicio del átomo hasta justo antes del separador siguiente (o el fin
-/// del buffer para el último).
-fn precomputar_bandas(ide: &CuerpoIde, metrics: EditorMetrics) -> Vec<(f32, f32, Color)> {
-    let ids = &ide.editor_cuerpo.atom_ids;
-    let scroll = ide.state.scroll_offset as f32;
-    let lh = metrics.line_height;
-    let total = ide.state.line_count();
-    let mut out = Vec::with_capacity(ids.len());
-    for (i, id) in ids.iter().enumerate() {
-        let Some((start, _)) = ide.posicion_de_atom(*id) else {
-            continue;
-        };
-        // Fin = inicio del siguiente átomo menos la línea vacía del separador,
-        // o el fin del buffer para el último.
-        let end = if i + 1 < ids.len() {
-            ide.posicion_de_atom(ids[i + 1])
-                .map(|(l, _)| l.saturating_sub(1))
-                .unwrap_or(start + 1)
-        } else {
-            total
-        };
-        let y_top = (start as f32 - scroll) * lh;
-        let y_bot = (end as f32 - scroll) * lh;
-        out.push((y_top, y_bot, color_seccion(i)));
-    }
-    out
-}
-
 /// Devuelve los Y locales (en el rect del editor, sin contar el header
 /// que vive en otro nodo) donde cae el separador entre átomos
 /// consecutivos del ide, ajustados al scroll actual.
@@ -559,76 +472,123 @@ fn precomputar_y_separadores(ide: &CuerpoIde, metrics: EditorMetrics) -> Vec<f32
     out
 }
 
-/// Resuelve para cada hebra de la carta su posición Y en cada editor.
-/// Acepta que la carta tenga `atom_a/atom_b` en cualquier orden respecto
-/// a `izq/der` — ya lo hacía el multilienzo readonly, replicamos la
-/// misma robustez acá.
+/// Construye las **cintas Sankey** entre dos columnas. Empareja secciones por
+/// la carta de hebras si la hay (respeta su alineamiento real, en cualquier
+/// orden atom_a/atom_b); si no hay carta (o está vacía), cae a un emparejado
+/// **posicional** (sección *i* ↔ sección *i*) — así las cintas fluyen por
+/// todos los lienzos aunque no exista una carta entre ese par puntual, que es
+/// el caso típico de traducciones paralelas.
+///
+/// El grosor de la cinta es la altura de la sección en cada lado (no un punto):
+/// arranca y termina cubriendo el bloque de párrafo completo.
 fn precomputar_hebras_editor(
     izq: &CuerpoIde,
     der: &CuerpoIde,
-    carta: &CartaHebras,
+    carta: Option<&CartaHebras>,
     cfg: &ConfigMultilienzoEditor,
     paleta: &PaletaHebras,
     metrics: EditorMetrics,
 ) -> Vec<HebraEditor> {
     let header = cfg.alto_header;
-    let y_de_atom = |ide: &CuerpoIde, id: Uuid| -> Option<f32> {
-        let (line, _) = ide.posicion_de_atom(id)?;
-        let scroll = ide.state.scroll_offset as f32;
-        // Centro vertical de la línea, en coordenadas locales al carril.
-        Some(header + (line as f32 - scroll + 0.5) * metrics.line_height)
-    };
+    let lh = metrics.line_height;
+    // Hueco vertical entre cintas vecinas, para que se lean separadas.
+    const GAP: f32 = 2.5;
 
-    let mut out = Vec::with_capacity(carta.hebras.len());
-    for h in &carta.hebras {
-        // Resolver y + identificar cuál átomo cae a la izquierda (su índice
-        // de sección da el color cuando `colorear_secciones`).
-        let (y_izq, y_der, atom_izq) = if let (Some(a), Some(b)) =
-            (y_de_atom(izq, h.atom_a), y_de_atom(der, h.atom_b))
-        {
-            (a, b, h.atom_a)
-        } else if let (Some(a), Some(b)) =
-            (y_de_atom(izq, h.atom_b), y_de_atom(der, h.atom_a))
-        {
-            (a, b, h.atom_b)
+    // Rango vertical [top, bot] que ocupa la sección `idx` de un ide, en
+    // coords locales al carril (con header + scroll).
+    let extent = |ide: &CuerpoIde, idx: usize| -> Option<(f32, f32)> {
+        let ids = &ide.editor_cuerpo.atom_ids;
+        let id = *ids.get(idx)?;
+        let (start, _) = ide.posicion_de_atom(id)?;
+        let end = if idx + 1 < ids.len() {
+            ide.posicion_de_atom(ids[idx + 1])
+                .map(|(l, _)| l.saturating_sub(1))
+                .unwrap_or(start + 1)
         } else {
+            ide.state.line_count()
+        };
+        let scroll = ide.state.scroll_offset as f32;
+        let top = header + (start as f32 - scroll) * lh + GAP;
+        let bot = header + (end as f32 - scroll) * lh - GAP;
+        Some((top, bot.max(top + 1.0)))
+    };
+    let idx_of =
+        |ide: &CuerpoIde, id: Uuid| ide.editor_cuerpo.atom_ids.iter().position(|x| *x == id);
+
+    // Pares (idx_izq, idx_der, color) a unir.
+    let mut pares: Vec<(usize, usize, Color)> = Vec::new();
+    let con_carta = carta.map(|c| !c.hebras.is_empty()).unwrap_or(false);
+    if let (true, Some(c)) = (con_carta, carta) {
+        for h in &c.hebras {
+            let (ii, jj) = if let (Some(a), Some(b)) = (idx_of(izq, h.atom_a), idx_of(der, h.atom_b))
+            {
+                (a, b)
+            } else if let (Some(a), Some(b)) = (idx_of(izq, h.atom_b), idx_of(der, h.atom_a)) {
+                (a, b)
+            } else {
+                continue;
+            };
+            pares.push((ii, jj, color_hebra(cfg, ii, paleta, Some(h))));
+        }
+    } else {
+        // Emparejado posicional: la sección i fluye a la sección i.
+        let n = izq
+            .editor_cuerpo
+            .atom_ids
+            .len()
+            .min(der.editor_cuerpo.atom_ids.len());
+        for i in 0..n {
+            pares.push((i, i, color_hebra(cfg, i, paleta, None)));
+        }
+    }
+
+    let mut out = Vec::with_capacity(pares.len());
+    for (ii, jj, color) in pares {
+        let (Some((it, ib)), Some((dt, db))) = (extent(izq, ii), extent(der, jj)) else {
             continue;
         };
-
-        let color = if cfg.colorear_secciones {
-            // Mismo color que la banda de esa sección — une el hilo a las bandas.
-            let idx = izq
-                .editor_cuerpo
-                .atom_ids
-                .iter()
-                .position(|x| *x == atom_izq)
-                .unwrap_or(0);
-            color_seccion(idx)
-        } else {
-            let (color_base, modular_fuerza) = if !h.fresco {
-                (paleta.stale, false)
-            } else {
-                match &h.origen {
-                    OrigenAlineamiento::Derivado { .. } => (paleta.derivada, false),
-                    OrigenAlineamiento::Manual { .. } => (paleta.manual, false),
-                    OrigenAlineamiento::Embeddings { .. } => (paleta.embeddings, true),
-                }
-            };
-            if modular_fuerza {
-                modular_alpha(color_base, h.fuerza)
-            } else {
-                color_base
-            }
-        };
-
         out.push(HebraEditor {
-            y_izq,
-            y_der,
+            izq_top: it,
+            izq_bot: ib,
+            der_top: dt,
+            der_bot: db,
             color,
-            punteada: !h.fresco,
         });
     }
     out
+}
+
+/// Color de una cinta. Con `colorear_secciones` usa el color de identidad de
+/// la sección (mismo en todos los lienzos → flujo continuo de un color);
+/// si no, el color por origen del alineamiento. Translúcido para que los
+/// solapes se lean; stale (carta no fresca) más tenue.
+fn color_hebra(
+    cfg: &ConfigMultilienzoEditor,
+    idx_izq: usize,
+    paleta: &PaletaHebras,
+    hebra: Option<&pluma_align::Alineamiento>,
+) -> Color {
+    const ALPHA: f32 = 0.5;
+    const ALPHA_STALE: f32 = 0.22;
+    let fresco = hebra.map(|h| h.fresco).unwrap_or(true);
+    let alpha = if fresco { ALPHA } else { ALPHA_STALE };
+    let base = if cfg.colorear_secciones {
+        color_seccion(idx_izq)
+    } else if let Some(h) = hebra {
+        if !h.fresco {
+            paleta.stale
+        } else {
+            match &h.origen {
+                OrigenAlineamiento::Derivado { .. } => paleta.derivada,
+                OrigenAlineamiento::Manual { .. } => paleta.manual,
+                OrigenAlineamiento::Embeddings { .. } => paleta.embeddings,
+            }
+        }
+    } else {
+        color_seccion(idx_izq)
+    };
+    let [r, g, b, _] = base.components;
+    Color::new([r, g, b, alpha])
 }
 
 /// Copia el `scroll_offset` del cuerpo activo al resto de los editores —
@@ -661,12 +621,6 @@ pub fn sincronizar_scroll(ides: &mut [CuerpoIde], scroll: usize, excepto: usize)
         let max = ide.state.line_count().saturating_sub(1);
         ide.state.scroll_offset = scroll.min(max);
     }
-}
-
-fn modular_alpha(c: Color, factor: f32) -> Color {
-    let f = factor.clamp(0.0, 1.0);
-    let [r, g, b, a] = c.components;
-    Color::new([r, g, b, a * f])
 }
 
 /// Rótulo corto y legible para cada variante de `Intencion`. Copiado
@@ -787,22 +741,22 @@ mod pruebas {
         let paleta = PaletaHebras::default();
         let metrics = EditorMetrics::for_font_size(13.0);
 
-        let hebras = precomputar_hebras_editor(&ide_a, &ide_b, &carta, &cfg, &paleta, metrics);
+        let hebras =
+            precomputar_hebras_editor(&ide_a, &ide_b, Some(&carta), &cfg, &paleta, metrics);
         assert_eq!(hebras.len(), 2);
 
-        // El primer átomo arranca en línea 0 — centro vertical = header + 0.5 * line_height.
-        let y_esperada_atom_0 = cfg.alto_header + 0.5 * metrics.line_height;
-        assert!((hebras[0].y_izq - y_esperada_atom_0).abs() < 1e-3);
-        assert!((hebras[0].y_der - y_esperada_atom_0).abs() < 1e-3);
+        // La cinta de una sección es simétrica: el rango vertical izquierdo
+        // coincide con el derecho (traducción 1-1, mismas líneas).
+        assert!((hebras[0].izq_top - hebras[0].der_top).abs() < 1e-3);
+        assert!((hebras[0].izq_bot - hebras[0].der_bot).abs() < 1e-3);
 
-        // El segundo átomo arranca después del primer párrafo (1 línea de
-        // contenido + 1 línea vacía del separador) = línea 2.
-        let y_esperada_atom_1 = cfg.alto_header + (2.0 + 0.5) * metrics.line_height;
-        assert!((hebras[1].y_izq - y_esperada_atom_1).abs() < 1e-3);
+        // La sección 1 arranca 2 líneas (contenido + separador) debajo de la 0.
+        let salto = hebras[1].izq_top - hebras[0].izq_top;
+        assert!((salto - 2.0 * metrics.line_height).abs() < 1e-3);
     }
 
     #[test]
-    fn stale_pinta_punteada() {
+    fn stale_baja_el_alpha_de_la_cinta() {
         let (a, _atoms_a, ide_a) = ide_con_textos("es", Intencion::Original, &["x"]);
         let (b, _atoms_b, ide_b) = ide_con_textos("qu", Intencion::Traduccion, &["y"]);
         let mut carta = alinear_uno_a_uno(
@@ -818,13 +772,31 @@ mod pruebas {
         let hebras = precomputar_hebras_editor(
             &ide_a,
             &ide_b,
-            &carta,
+            Some(&carta),
             &ConfigMultilienzoEditor::default(),
             &PaletaHebras::default(),
             EditorMetrics::for_font_size(13.0),
         );
         assert_eq!(hebras.len(), 1);
-        assert!(hebras[0].punteada);
+        // Cinta stale = más tenue (alpha bajo).
+        assert!(hebras[0].color.components[3] < 0.3);
+    }
+
+    #[test]
+    fn sin_carta_empareja_por_posicion() {
+        // Sin carta entre el par, las cintas igual fluyen sección-a-sección.
+        let (_, _, ide_a) = ide_con_textos("es", Intencion::Original, &["uno", "dos", "tres"]);
+        let (_, _, ide_b) = ide_con_textos("qu", Intencion::Traduccion, &["huk", "iskay"]);
+        let hebras = precomputar_hebras_editor(
+            &ide_a,
+            &ide_b,
+            None,
+            &ConfigMultilienzoEditor::default(),
+            &PaletaHebras::default(),
+            EditorMetrics::for_font_size(13.0),
+        );
+        // min(3, 2) = 2 cintas, por posición.
+        assert_eq!(hebras.len(), 2);
     }
 
     #[test]
@@ -881,13 +853,14 @@ mod pruebas {
         let paleta = PaletaHebras::default();
         let metrics = EditorMetrics::for_font_size(13.0);
 
-        let antes = precomputar_hebras_editor(&ide_a, &ide_b, &carta, &cfg, &paleta, metrics);
+        let antes = precomputar_hebras_editor(&ide_a, &ide_b, Some(&carta), &cfg, &paleta, metrics);
         ide_a.state.scroll_offset = 3;
-        let despues = precomputar_hebras_editor(&ide_a, &ide_b, &carta, &cfg, &paleta, metrics);
+        let despues =
+            precomputar_hebras_editor(&ide_a, &ide_b, Some(&carta), &cfg, &paleta, metrics);
         // El lado izquierdo se desplaza 3 líneas hacia arriba; el lado
         // derecho queda igual.
-        let delta = antes[0].y_izq - despues[0].y_izq;
+        let delta = antes[0].izq_top - despues[0].izq_top;
         assert!((delta - 3.0 * metrics.line_height).abs() < 1e-3);
-        assert!((antes[0].y_der - despues[0].y_der).abs() < 1e-3);
+        assert!((antes[0].der_top - despues[0].der_top).abs() < 1e-3);
     }
 }
