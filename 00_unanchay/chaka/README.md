@@ -37,11 +37,19 @@ The contract — *shadow ≡ transpiled ≡ hand-verified `.expected`* — is ex
 cargo test -p chaka-app --test corpus_e2e --release -- --ignored
 ```
 
+## Indexed and relative files
+
+`ORGANIZATION INDEXED`/`RELATIVE` with `RECORD`/`RELATIVE KEY` and `ACCESS
+SEQUENTIAL`/`RANDOM`/`DYNAMIC` are supported end-to-end: random `READ` by key,
+`READ NEXT` in key order, and `WRITE`/`REWRITE`/`DELETE`/`START` keyed with
+`INVALID KEY` branches. The runtime (`chaka-runtime::CobFile`) keeps a `BTreeMap`
+keyed store; group records carry the key as a subfield (concatenated on write,
+sliced by field width on read). See corpus fixtures `26-indexed` and
+`27-relative`.
+
 ## Out of scope (v1)
 
 - Non-COBOL dialects: the `Dialect` enum is wired in `chaka-lexer` but only `Cobol` has an implementation.
 - WASM target for `chaka-codegen` and WASM sandbox in `chaka-runtime` — both planned, both blocked on a `no_std` rework.
-- Llimphi UI for `chaka-app` — today the binary is CLI-only.
-- `REPLACE` directive (the preprocessor expands `COPY` but drops `REPLACE` with a comment).
-- Indexed and relative file organizations: `START`, `REWRITE` and `DELETE` are parsed but treated as no-ops over line-sequential storage.
+- `REDEFINES` (the parser recognizes it but drops it with the other data clauses).
 - COBOL CICS and embedded SQL.

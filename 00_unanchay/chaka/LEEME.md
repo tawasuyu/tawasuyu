@@ -37,30 +37,29 @@ El contrato — *sombra ≡ transpilado ≡ `.expected` verificado a mano* — s
 cargo test -p chaka-app --test corpus_e2e --release -- --ignored
 ```
 
-## Estado (2026-05-31)
+## Estado (2026-06-05)
 
 ### Hecho
 
 - Pipeline completo `lexer → parser → ir → codegen` (8 subcrates: app/lexer/parser/ir/codegen/runtime/bcd/shadow) — fases F0-F3 cerradas.
 - Statements: `MOVE`, `IF`, `PERFORM`, `CALL`, `SEARCH`, `SORT/MERGE`, `REWRITE/DELETE/START`, `COPY`, `INSPECT`, `SET`.
+- Preprocesador: `COPY` (expansión) y `REPLACE` (sustitución léxica activa, boundary-aware).
+- **Ficheros indexados y relativos**: `ORGANIZATION INDEXED/RELATIVE`, `RECORD/RELATIVE KEY`, `ACCESS SEQUENTIAL/RANDOM/DYNAMIC`. `READ` aleatoria por clave, `READ NEXT` en orden de clave, `WRITE`/`REWRITE`/`DELETE`/`START` por clave con ramas `INVALID KEY`. Almacén `BTreeMap` en `chaka-runtime::CobFile`; registros de grupo con clave-subcampo (concatenación/troceo por ancho). Probado e2e con los fixtures 26-indexed y 27-relative.
 - `chaka-bcd`: aritmética decimal con semántica COBOL + codec packed-decimal (`COMP-3`).
 - `chaka-shadow`: intérprete en proceso + harness GnuCOBOL para diff diferencial; target JSON además de Rust.
-- Corpus de ~51 fixtures + test diferencial e2e (`chaka-app/tests/corpus_e2e.rs`).
-- UI de escritorio sobre Llimphi (`chaka-app-llimphi`): corpus + editor + sombra + Rust generado en vivo, con menú principal y contextual (la nota histórica «CLI-only» de §Fuera de alcance quedó superada).
+- Corpus de 27 fixtures (`.cob` + `.expected`) + test diferencial e2e (`chaka-app/tests/corpus_e2e.rs`).
+- UI de escritorio sobre Llimphi (`chaka-app-llimphi`): corpus + editor + sombra + Rust generado en vivo, con menú principal y contextual.
 
 ### Pendiente
 
 - Dialectos no-COBOL: sólo `Cobol` está implementado (enum `Dialect` enchufado).
 - Target WASM (`chaka-codegen`) + sandbox WASM (`chaka-runtime`), bloqueados por rework `no_std`.
-- Directiva `REPLACE` (hoy se descarta con un comentario).
-- Organizaciones de fichero indexada/relativa: `START`/`REWRITE`/`DELETE` son no-op sobre line-sequential.
+- `REDEFINES` (hoy se saltea como otras cláusulas de datos).
 - COBOL CICS y SQL embebido.
 
 ## Fuera de alcance (v1)
 
 - Dialectos no-COBOL: el enum `Dialect` queda enchufado en `chaka-lexer` pero sólo `Cobol` tiene implementación.
 - Target WASM en `chaka-codegen` y sandbox WASM en `chaka-runtime` — los dos planificados, los dos bloqueados por un rework `no_std`.
-- UI Llimphi para `chaka-app` — hoy el binario es sólo CLI.
-- Directiva `REPLACE` (el preprocesador expande `COPY` pero descarta `REPLACE` con un comentario).
-- Organizaciones de fichero indexada y relativa: `START`, `REWRITE` y `DELETE` se parsean pero se tratan como no-op sobre line-sequential.
+- `REDEFINES` (el parser lo reconoce pero lo descarta con las demás cláusulas de datos).
 - COBOL CICS y SQL embebido.

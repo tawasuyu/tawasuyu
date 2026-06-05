@@ -134,6 +134,8 @@ mod tests {
     corpus_test!(corpus_22_sort, "22-sort");
     corpus_test!(corpus_23_fileops, "23-fileops");
     corpus_test!(corpus_25_inspect_set, "25-inspect-set");
+    corpus_test!(corpus_26_indexed, "26-indexed");
+    corpus_test!(corpus_27_relative, "27-relative");
 
     #[test]
     fn corpus_24_copy() {
