@@ -136,6 +136,15 @@ mod client;
 #[cfg(unix)]
 pub use client::HostClient;
 
+// pata es un marco Linux/Wayland: no hay rail hospedado fuera de unix. El stub
+// mantiene la API ([`HostClient::connect`] → siempre `None`) para que las apps
+// que delegan su sidebar (p. ej. cosmos) compilen en Windows y sigan con su
+// propio rail.
+#[cfg(not(unix))]
+mod client_stub;
+#[cfg(not(unix))]
+pub use client_stub::HostClient;
+
 #[cfg(test)]
 mod tests {
     use super::*;
