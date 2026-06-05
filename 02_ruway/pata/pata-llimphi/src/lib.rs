@@ -19,6 +19,7 @@
 //! layout resolvió. Cuando el compositor `mirada` reconozca superficies `pata`
 //! (Fase 8), cada una será su propia ventana acoplada.
 
+pub mod cava;
 pub mod keys;
 pub mod layer;
 pub mod nouser;
@@ -28,6 +29,7 @@ pub mod sampler;
 pub mod shuma;
 pub mod toplevel;
 pub mod tray;
+pub mod weather;
 
 use std::time::Duration;
 
@@ -51,6 +53,9 @@ use tray::TrayHandle;
 pub enum Msg {
     /// Refresh periódico (1 Hz): re-muestrea el sistema y `tick`ea los widgets.
     Tick,
+    /// Refresh rápido del visualizador de audio (~20 Hz): drena el último cuadro
+    /// de cava y re-pinta. Sólo se dispara si la config declara un `cava`.
+    CavaTick,
     /// Desplegar/replegar el drawer de shuma.
     ShumaToggle,
     /// Carácter al input de shuma.
@@ -181,6 +186,16 @@ pub enum SlotWidget {
     /// La bandeja del sistema (StatusNotifierItem). Dato del host (vía D-Bus, ver
     /// [`tray`]), no del view-model de core. Cada item se activa al clickearlo.
     Tray,
+    /// El clima: un dibujo colorido del cielo + la temperatura. Dato del host
+    /// (servicio público por `curl`, ver [`weather`]). `exec` (opcional) abre el
+    /// pronóstico al clickearlo.
+    Weather {
+        /// Comando a lanzar al click (un sitio del tiempo), o `None`.
+        exec: Option<String>,
+    },
+    /// El visualizador de audio estilo CAVA: barras animadas con el espectro.
+    /// Dato del host (el binario `cava` en modo raw, ver [`cava`]).
+    Cava,
 }
 
 /// `true` si la config pide el reloj en **UTC** (`general.timezone = "UTC"`).
@@ -213,6 +228,33 @@ pub fn config_tiene_widget(cfg: &Config, kind: &str) -> bool {
             .chain(&s.center)
             .chain(&s.end)
             .any(|w| w.kind == kind)
+    })
+}
+
+/// La `place` (ciudad) del primer widget `weather` de la config, o `""` para que
+/// el servicio detecte la ubicación por IP.
+pub fn weather_place(cfg: &Config) -> String {
+    primer_widget(cfg, "weather")
+        .map(|w| w.str_prop("place", "").to_string())
+        .unwrap_or_default()
+}
+
+/// El número de barras del primer widget `cava` (prop `bars`, default 12,
+/// acotado a 4..=64).
+pub fn cava_bars(cfg: &Config) -> u32 {
+    primer_widget(cfg, "cava")
+        .map(|w| (w.num_prop("bars", 12.0) as u32).clamp(4, 64))
+        .unwrap_or(12)
+}
+
+/// El primer `WidgetSpec` de ese `kind` en cualquier slot de cualquier superficie.
+fn primer_widget<'a>(cfg: &'a Config, kind: &str) -> Option<&'a pata_core::WidgetSpec> {
+    cfg.surfaces.iter().find_map(|s| {
+        s.start
+            .iter()
+            .chain(&s.center)
+            .chain(&s.end)
+            .find(|w| w.kind == kind)
     })
 }
 
@@ -250,7 +292,9 @@ impl SurfaceWidgets {
                 | SlotWidget::Shuma
                 | SlotWidget::WindowList
                 | SlotWidget::Clipboard { .. }
-                | SlotWidget::Tray => None,
+                | SlotWidget::Tray
+                | SlotWidget::Weather { .. }
+                | SlotWidget::Cava => None,
             })
     }
 }
@@ -287,6 +331,15 @@ pub struct Model {
     /// La bandeja del sistema, corriendo en su propio hilo. `None` si la config no
     /// declara ningún widget `tray`.
     pub tray: Option<TrayHandle>,
+    /// Feed de clima en su propio hilo. `None` si la config no declara `weather`.
+    pub weather: Option<weather::WeatherHandle>,
+    /// Última lectura del clima (se refresca con `latest()` cada tick).
+    pub weather_now: Option<weather::Weather>,
+    /// Visualizador de audio (cava) en su propio hilo. `None` si la config no
+    /// declara `cava`.
+    pub cava: Option<cava::CavaHandle>,
+    /// Último cuadro del visualizador (una fracción `0..1` por banda).
+    pub cava_frame: Vec<f32>,
     /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
     /// declara ningún `SurfaceKind::Sidebar` con un navegador.
     pub nav: NavState,
@@ -323,6 +376,13 @@ impl Model {
                         }
                     } else if spec.kind == "tray" {
                         SlotWidget::Tray
+                    } else if spec.kind == "weather" {
+                        let exec = spec.str_prop("exec", "");
+                        SlotWidget::Weather {
+                            exec: (!exec.is_empty()).then(|| exec.to_string()),
+                        }
+                    } else if spec.kind == "cava" {
+                        SlotWidget::Cava
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -420,6 +480,9 @@ impl App for PataApp {
         let tray = config_tiene_widget(&cfg, "tray")
             .then(TrayHandle::spawn)
             .flatten();
+        let weather = config_tiene_widget(&cfg, "weather")
+            .then(|| weather::WeatherHandle::spawn(weather_place(&cfg)));
+        let cava = config_tiene_widget(&cfg, "cava").then(|| cava::CavaHandle::spawn(cava_bars(&cfg)));
 
         let mut theme = Theme::dark();
         if let Some(c) = render::parse_hex(&cfg.general.accent) {
@@ -439,6 +502,10 @@ impl App for PataApp {
             sampler,
             clipboard,
             tray,
+            weather,
+            weather_now: None,
+            cava,
+            cava_frame: Vec::new(),
             nav: NavState::default(),
             screen,
         };
@@ -446,6 +513,11 @@ impl App for PataApp {
         model.tick_widgets(&ctx);
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
+        // Visualizador de audio: re-pinta a ~20 Hz (el cuadro de cava cambia
+        // rápido), pero sólo si la config declara un `cava`.
+        if model.cava.is_some() {
+            handle.spawn_periodic(Duration::from_millis(50), || Msg::CavaTick);
+        }
         // Plano de datos del sidebar: poll de Mónadas a nouser, sólo si la config
         // declara un navegador (no molestar al broker si no hace falta).
         if config_tiene_navigator(&model.cfg) {
@@ -461,6 +533,18 @@ impl App for PataApp {
                 let ctx = model.sampler.sample();
                 model.tick_widgets(&ctx);
                 model.clipboard = crate::sampler::leer_clipboard();
+                if let Some(h) = &model.weather {
+                    if let Some(w) = h.latest() {
+                        model.weather_now = Some(w);
+                    }
+                }
+            }
+            Msg::CavaTick => {
+                if let Some(h) = &model.cava {
+                    if let Some(frame) = h.latest() {
+                        model.cava_frame = frame;
+                    }
+                }
             }
             Msg::Quit => handle.quit(),
             Msg::ShumaToggle => {

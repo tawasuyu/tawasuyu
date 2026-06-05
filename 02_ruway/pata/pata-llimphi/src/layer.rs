@@ -192,6 +192,14 @@ struct LayerApp {
     /// La bandeja del sistema (StatusNotifierItem), corriendo en su propio hilo.
     /// `None` si la config no tiene ningún widget `tray`.
     tray: Option<TrayHandle>,
+    /// Feed de clima en su propio hilo. `None` si la config no declara `weather`.
+    weather: Option<crate::weather::WeatherHandle>,
+    /// Última lectura del clima.
+    weather_now: Option<crate::weather::Weather>,
+    /// Visualizador de audio (cava) en su propio hilo. `None` si no hay `cava`.
+    cava: Option<crate::cava::CavaHandle>,
+    /// Último cuadro del visualizador (una fracción `0..1` por banda).
+    cava_frame: Vec<f32>,
     theme: Theme,
     cfg: Config,
     surfaces: Vec<crate::SurfaceWidgets>,
@@ -351,6 +359,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let tray = crate::config_tiene_widget(&cfg, "tray")
         .then(TrayHandle::spawn)
         .flatten();
+    let weather = crate::config_tiene_widget(&cfg, "weather")
+        .then(|| crate::weather::WeatherHandle::spawn(crate::weather_place(&cfg)));
+    let cava = crate::config_tiene_widget(&cfg, "cava")
+        .then(|| crate::cava::CavaHandle::spawn(crate::cava_bars(&cfg)));
 
     // Plano de datos del sidebar: un hilo que poolea `list_monads` cada ~2s y
     // entrega por canal (mismo patrón que el sampler/exec — el bucle Wayland lo
@@ -392,6 +404,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         next_toplevel_id: 0,
         clipboard: None,
         tray,
+        weather,
+        weather_now: None,
+        cava,
+        cava_frame: Vec::new(),
         theme,
         cfg,
         surfaces,
@@ -1109,6 +1125,11 @@ impl LayerApp {
         };
         self.ctx = ctx;
         self.clipboard = clipboard;
+        if let Some(h) = &self.weather {
+            if let Some(w) = h.latest() {
+                self.weather_now = Some(w);
+            }
+        }
         for sw in &mut self.surfaces {
             for w in sw.core_mut() {
                 w.tick(&ctx);
@@ -1122,6 +1143,24 @@ impl LayerApp {
                 }
             }
             p.dirty = true;
+        }
+    }
+
+    /// Drena el último cuadro del visualizador (cava) y, si llegó uno nuevo,
+    /// marca las barras para re-pintar. El frame-callback corre continuo, así que
+    /// esto da el refresco rápido del visualizador sin un timer aparte.
+    fn maybe_cava(&mut self) {
+        let Some(h) = &self.cava else {
+            return;
+        };
+        let Some(frame) = h.latest() else {
+            return;
+        };
+        self.cava_frame = frame;
+        for p in &mut self.panels {
+            if p.card.is_none() {
+                p.dirty = true;
+            }
         }
     }
 
@@ -1212,6 +1251,7 @@ impl LayerApp {
     /// hay algo nuevo; entre cambios sólo mantiene el latido.
     fn draw(&mut self, pi: usize, qh: &QueueHandle<Self>) {
         self.maybe_sample();
+        self.maybe_cava();
         self.poll_exec();
         self.poll_nav();
         self.poll_host();
@@ -1247,6 +1287,8 @@ impl LayerApp {
             windows: &windows,
             clipboard: self.clipboard.as_deref(),
             tray: &tray_items,
+            weather: self.weather_now.as_ref(),
+            cava: &self.cava_frame,
         };
         // Una tarjeta flotante pinta su contenido (relleno de su surface); la
         // barra de shuma desplegada pinta el drawer (cuerpo + cabezal); el resto

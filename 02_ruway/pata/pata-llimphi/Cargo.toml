@@ -59,6 +59,8 @@ ulid = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-motion = { workspace = true }
 chrono = { workspace = true }
+# Parseo del JSON del clima (widget `weather`): wttr.in / open-meteo por curl.
+serde_json = { workspace = true }
 # Backend wlr-layer-shell (Linux/Wayland): hace que pata se siente al nivel de
 # eww/waybar — layer surface anclada con exclusive zone, no una ventana cliente.
 smithay-client-toolkit = "0.19"

@@ -49,6 +49,15 @@ kind = "astro"          # posición zodiacal del sol + ciclo lunar (aporte)
 moon = true
 
 [[surfaces.end]]
+kind = "weather"        # dibujo colorido del cielo + temperatura (wttr.in por curl)
+# place = "Lima"        # ciudad fija; vacío = ubicación por IP
+# exec = "xdg-open https://wttr.in"   # click → abre el pronóstico
+
+[[surfaces.end]]
+kind = "cava"           # visualizador de audio (binario `cava` en modo raw)
+bars = 12               # número de barras (4..64)
+
+[[surfaces.end]]
 kind = "clipboard"          # preview del texto copiado (vía wl-paste)
 # Click → selector de historial. Ejemplo con cliphist + wofi:
 exec = "cliphist list | wofi --dmenu | cliphist decode | wl-copy"
