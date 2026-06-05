@@ -177,8 +177,12 @@ vt100); se mueve a la superficie como `BlockKind`.
 > dump de prueba con output alto DEBE simular el **viewport medido y el scroll al
 > fondo** (`out_viewport_h` real), o el bug se esconde y se commitea algo roto.
 
-- **Fase 0 — Store + índice.** `llimphi-widget-terminal` crate, Capa 0: append, índice
-  de líneas, cap por MB, acceso O(1). Tests puros (sin render).
+- **Fase 0 — Store + índice. ✅ (2026-06-05)** Crate `llimphi-widget-terminal`
+  (`02_ruway/llimphi/widgets/terminal`), módulo `store`: `Scrollback` append-only,
+  índice de offsets de línea (sentinela), acceso O(1), cap por memoria con recorte
+  de frente en un `drain`+reindex, ids globales estables (`line_id`/`index_of_id`)
+  que sobreviven al recorte, numeración 1-based, `slice_text` para copiar, `clear`.
+  Puro, sin deps de UI. 11 tests (incl. 100k líneas acotadas e indexadas).
 - **Fase 1 — Virtualización modo línea.** Capas 1–2 + render vello de la ventana
   visible con numeración y color. Reemplaza el cuerpo de UNA card. Verificación: 1 M de
   líneas, scroll al fondo y arrastre → costo constante, sin negro, alineado.
