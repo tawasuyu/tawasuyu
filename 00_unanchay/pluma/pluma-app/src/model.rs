@@ -61,6 +61,13 @@ pub(crate) enum Msg {
     ToggleSeleccion(Uuid),
     /// Selecciona el diente del rail (0=Archivo,1=Lienzos,2=Derivar,3=LLM).
     SelectDiente(usize),
+    /// Ctrl+Tab / Ctrl+Shift+Tab: mueve el foco al lienzo siguiente/anterior
+    /// de la selección (cicla).
+    FocoSiguiente,
+    FocoAnterior,
+    /// Activa/desactiva el foco por hover (pasar el cursor cambia el lienzo
+    /// activo).
+    ToggleFocoHover,
     /// Scroll horizontal del multilienzo, en píxeles (positivo = derecha).
     ScrollHoriz(f32),
     /// Scroll vertical del lienzo con foco, en "notches" de rueda (positivo =
@@ -171,6 +178,9 @@ pub(crate) struct Model {
     pub(crate) viewport: (f32, f32),
     /// Diente activo del rail: 0=Archivo · 1=Lienzos · 2=Derivar · 3=LLM.
     pub(crate) diente_activo: usize,
+    /// Si `true`, pasar el cursor sobre una columna le pasa el foco (off por
+    /// defecto — se togglea desde el menú Multilienzo).
+    pub(crate) foco_por_hover: bool,
     /// Ancho del panel del diente activo, en px (resizable con el divisor).
     pub(crate) panel_w: f32,
     pub(crate) clipboard: ArboardClipboard,

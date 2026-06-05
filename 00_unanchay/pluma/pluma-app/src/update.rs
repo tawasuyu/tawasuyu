@@ -64,6 +64,20 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         Msg::SelectDiente(i) => {
             model.diente_activo = i;
         }
+        Msg::FocoSiguiente => {
+            mover_foco(&mut model, 1);
+        }
+        Msg::FocoAnterior => {
+            mover_foco(&mut model, -1);
+        }
+        Msg::ToggleFocoHover => {
+            model.foco_por_hover = !model.foco_por_hover;
+            model.ultimo_status = if model.foco_por_hover {
+                "foco por hover: ON".into()
+            } else {
+                "foco por hover: off".into()
+            };
+        }
         Msg::ScrollHoriz(dx) => {
             model.scroll_x += dx; // el clamp final acota a [0, max]
         }
@@ -304,6 +318,22 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
 /// Copia el `scroll_offset` vertical del lienzo con foco (`model.ide`) a todos
 /// los read-only, clampeado a la última línea de cada uno (si es más corto,
 /// queda topado). Mantiene las secciones alineadas entre columnas.
+/// Mueve el foco al lienzo siguiente (`dir=1`) o anterior (`dir=-1`) de la
+/// selección visible, ciclando. Sin selección o con una sola columna, no-op.
+fn mover_foco(model: &mut Model, dir: i32) {
+    let n = model.seleccionados.len();
+    if n < 2 {
+        return;
+    }
+    let actual = model
+        .activo
+        .and_then(|a| model.seleccionados.iter().position(|x| *x == a))
+        .unwrap_or(0);
+    let siguiente = (actual as i32 + dir).rem_euclid(n as i32) as usize;
+    let id = model.seleccionados[siguiente];
+    cambiar_activo(model, id);
+}
+
 fn nivelar_scroll(model: &mut Model) {
     let s = model.ide.state.scroll_offset;
     for ro in model.ides_ro.values_mut() {
@@ -388,6 +418,15 @@ pub(crate) fn menu_principal(model: &Model) -> app_bus::AppMenu {
         .menu(
             Menu::new("Multilienzo")
                 .item(MenuItem::new("Sólo activo / todos", "mult.diff").shortcut("Ctrl+D"))
+                .item(MenuItem::new(
+                    if model.foco_por_hover {
+                        "Foco por hover: ON"
+                    } else {
+                        "Foco por hover: off"
+                    },
+                    "mult.hover",
+                ))
+                .item(MenuItem::new("Foco siguiente", "mult.foco_sig").shortcut("Ctrl+Tab"))
                 .item(MenuItem::new("Togglear fusión (zona)", "mult.fusion").shortcut("Ctrl+J"))
                 .item(MenuItem::new("Zona siguiente", "mult.zona_sig").separated())
                 .item(MenuItem::new("Zona anterior", "mult.zona_ant")),
@@ -426,6 +465,8 @@ fn ejecutar_menu_command(mut model: Model, command: String, handle: &Handle<Msg>
         "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
         "search.find" => Some(Msg::FindToggle),
         "mult.diff" => Some(Msg::DiffToggle),
+        "mult.hover" => Some(Msg::ToggleFocoHover),
+        "mult.foco_sig" => Some(Msg::FocoSiguiente),
         "mult.fusion" => Some(Msg::ToglearFusion),
         "mult.zona_sig" => Some(Msg::ZonaSiguiente),
         "mult.zona_ant" => Some(Msg::ZonaAnterior),

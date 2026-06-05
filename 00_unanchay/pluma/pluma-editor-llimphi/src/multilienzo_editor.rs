@@ -135,11 +135,14 @@ struct HebraEditor {
 ///     `i`. El caller convierte `(x, y)` a `(line, col)` con
 ///     `metrics.screen_to_pos(x, y, scroll_offset)` y aplica al ide
 ///     correspondiente.
+///   - `on_hover(i)` produce un `Msg` opcional al entrar el cursor a la columna
+///     `i` (foco por hover). Devolver `None` lo desactiva — pasar `|_| None`.
 ///
 /// El nodo raíz mide ancho fijo (suma de columnas + carriles) y `height
 /// = percent(1.0)` — el caller lo envuelve si quiere darle un tamaño
 /// concreto.
-pub fn multilienzo_editor_view<Msg, FPtr>(
+#[allow(clippy::too_many_arguments)]
+pub fn multilienzo_editor_view<Msg, FPtr, FHover>(
     ides: &[&CuerpoIde],
     cuerpos: &[&Cuerpo],
     cartas: &[Option<&CartaHebras>],
@@ -152,10 +155,12 @@ pub fn multilienzo_editor_view<Msg, FPtr>(
     visible_lines: usize,
     language: Language,
     on_pointer: FPtr,
+    on_hover: FHover,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
     FPtr: Fn(usize, PointerEvent) -> Msg + Send + Sync + Clone + 'static,
+    FHover: Fn(usize) -> Option<Msg>,
 {
     assert_eq!(
         ides.len(),
@@ -183,6 +188,7 @@ where
             visible_lines,
             language,
             on_pointer_i,
+            on_hover(i),
         ));
         if i + 1 < ides.len() {
             let carta = cartas.get(i).copied().flatten();
@@ -235,6 +241,7 @@ fn columna_editor<Msg, FPtr>(
     visible_lines: usize,
     language: Language,
     on_pointer: FPtr,
+    hover: Option<Msg>,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
@@ -309,7 +316,7 @@ where
         Some(w) => (length(w), 0.0),
         None => (percent(1.0_f32), 1.0),
     };
-    View::new(Style {
+    let wrapper = View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: flex_wrapper,
         flex_shrink: 0.0,
@@ -335,7 +342,12 @@ where
         },
         ..Default::default()
     })
-    .children(vec![header, contenedor_editor])])
+    .children(vec![header, contenedor_editor])]);
+    // Foco por hover: el caller decide si emite un Msg al entrar el cursor.
+    match hover {
+        Some(msg) => wrapper.on_pointer_enter(msg),
+        None => wrapper,
+    }
 }
 
 /// Carril entre dos editores: pinta las hebras de la carta correspondiente

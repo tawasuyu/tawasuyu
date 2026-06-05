@@ -93,6 +93,7 @@ pub(crate) fn init_modelo() -> Model {
         scroll_x: 0.0,
         viewport: (1600.0, 900.0),
         diente_activo: 1, // arranca en Lienzos (el tree)
+        foco_por_hover: false,
         panel_w: 280.0,
         clipboard: ArboardClipboard::new(),
         drag_accum: (0.0, 0.0),

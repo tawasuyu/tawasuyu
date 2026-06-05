@@ -790,7 +790,10 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
     // de esa columna — así el foco va al cuerpo correcto sin depender de que
     // el orden visible coincida con `seleccionados`.
     let ids_col: Vec<Uuid> = cuerpos_sel.iter().map(|c| c.id).collect();
-    let mult = multilienzo_editor_view::<Msg, _>(
+    let ids_click = ids_col.clone();
+    let ids_hover = ids_col;
+    let hover_on = model.foco_por_hover;
+    let mult = multilienzo_editor_view::<Msg, _, _>(
         &ides_sel,
         &cuerpos_sel,
         &cartas_sel,
@@ -803,8 +806,15 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
         VISIBLE_LINES,
         Language::Plain,
         move |i, ev| {
-            let id = ids_col.get(i).copied().unwrap_or_default();
+            let id = ids_click.get(i).copied().unwrap_or_default();
             Msg::MultiPointer(id, ev)
+        },
+        move |i| {
+            if hover_on {
+                ids_hover.get(i).copied().map(Msg::AbrirDoc)
+            } else {
+                None
+            }
         },
     );
 

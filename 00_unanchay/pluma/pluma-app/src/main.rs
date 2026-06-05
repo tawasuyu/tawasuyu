@@ -182,6 +182,14 @@ impl App for Pluma {
             return Some(Msg::FindKey(event.clone()));
         }
         if ctrl {
+            // Ctrl+Tab / Ctrl+Shift+Tab: cicla el foco entre lienzos.
+            if matches!(&event.key, Key::Named(NamedKey::Tab)) {
+                return Some(if shift {
+                    Msg::FocoAnterior
+                } else {
+                    Msg::FocoSiguiente
+                });
+            }
             if let Key::Character(s) = &event.key {
                 if s.eq_ignore_ascii_case("s") {
                     return Some(Msg::Guardar);

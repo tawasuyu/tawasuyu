@@ -326,7 +326,7 @@ impl App for Demo {
         let ides_ref: Vec<&CuerpoIde> = model.ides.iter().collect();
         let cuerpos_ref: Vec<&Cuerpo> = model.cuerpos.iter().collect();
         let cartas_ref: Vec<Option<&CartaHebras>> = model.cartas.iter().map(Some).collect();
-        let editores = multilienzo_editor_view::<Msg, _>(
+        let editores = multilienzo_editor_view::<Msg, _, _>(
             &ides_ref,
             &cuerpos_ref,
             &cartas_ref,
@@ -339,6 +339,7 @@ impl App for Demo {
             VISIBLE_LINES,
             Language::Plain,
             |cuerpo, ev| Msg::EditorPointer { cuerpo, ev },
+            |_| None,
         );
         let area_principal = View::new(Style {
             flex_direction: FlexDirection::Row,
