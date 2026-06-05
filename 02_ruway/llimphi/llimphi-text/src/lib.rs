@@ -577,7 +577,22 @@ pub fn draw_layout_runs(
     layout: &parley::Layout<RunBrush>,
     origin: (f64, f64),
 ) {
-    let transform = vello::kurbo::Affine::translate(origin);
+    draw_layout_runs_xf(scene, layout, vello::kurbo::Affine::translate(origin));
+}
+
+/// Igual que [`draw_layout_runs`] pero con una **afín completa** en vez de sólo
+/// un desplazamiento — el equivalente multicolor de [`draw_layout_xf`]. Lo
+/// necesita el compositor para que el texto multicolor herede la
+/// transformación acumulada del subárbol (scroll/rotación del padre): sin esto,
+/// el texto con `runs` se pintaba en coords de layout crudas, **ignorando** el
+/// transform, y se desalineaba del resto (p. ej. el cuerpo coloreado del shell
+/// no seguía el scroll del panel). El origen del layout (0,0) lo mapea
+/// `transform`; las posiciones de glifo se aplican en ese espacio.
+pub fn draw_layout_runs_xf(
+    scene: &mut vello::Scene,
+    layout: &parley::Layout<RunBrush>,
+    transform: vello::kurbo::Affine,
+) {
     for line in layout.lines() {
         for item in line.items() {
             if let parley::PositionedLayoutItem::GlyphRun(glyph_run) = item {

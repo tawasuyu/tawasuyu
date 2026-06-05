@@ -433,7 +433,15 @@ pub fn paint_range<Msg>(
                     text.line_height,
                     text.weight,
                 );
-                llimphi_text::draw_layout_runs(scene, &layout, (r.x as f64, r.y as f64));
+                // `cur_xf *` para que el texto multicolor herede la
+                // transformación del subárbol (scroll/rotación del padre), igual
+                // que el texto de color único de abajo. Sin esto se pintaba en
+                // coords de layout crudas y se desalineaba al scrollear.
+                llimphi_text::draw_layout_runs_xf(
+                    scene,
+                    &layout,
+                    cur_xf * Affine::translate((r.x as f64, r.y as f64)),
+                );
             } else {
                 // Parley resuelve la alineación horizontal vía max_width +
                 // alignment. Para Center también centramos verticalmente; para
