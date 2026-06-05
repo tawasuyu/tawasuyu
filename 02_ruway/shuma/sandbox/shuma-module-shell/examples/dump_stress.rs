@@ -29,11 +29,18 @@ fn main() {
         l.block = b;
         state.output.push(l);
     };
-    push(&mut state, OutputLine::prompt("$ echo larga"), block);
     let larga = "esta es una linea de salida deliberadamente muy larga que supera el ancho del panel para forzar el wrap y ver si se pisa con la siguiente linea de abajo del output del shell";
-    push(&mut state, OutputLine::stdout(larga), block);
-    push(&mut state, OutputLine::stdout("LINEA-DE-ABAJO-QUE-NO-DEBERIA-PISARSE"), block);
+    // 3a. Línea suelta larga (block 0, sin Prompt) → render_output_line (altura
+    // fija 16px + text_aligned) → wrappea y pisa la de abajo.
+    push(&mut state, OutputLine::stdout(larga), 0);
+    push(&mut state, OutputLine::stdout("SUELTA-DE-ABAJO-NO-DEBERIA-PISARSE"), 0);
+    // 3b. Etapa capturada larga (stage row de altura fija) → mismo wrap.
+    push(&mut state, OutputLine::prompt("$ cat archivo | grep x"), block);
+    push(&mut state, OutputLine::stage_stdout(0, larga), block);
+    push(&mut state, OutputLine::stage_stdout(0, "ETAPA-DE-ABAJO-NO-DEBERIA-PISARSE"), block);
+    push(&mut state, OutputLine::stdout("resultado final corto"), block);
     push(&mut state, OutputLine::notice("✔ exit 0"), block);
+    state.expanded_stages.insert((block, 0));
 
     // (2) Output largo: muchos comandos cortos para llenar y empujar al input.
     for b in 2u64..=14 {

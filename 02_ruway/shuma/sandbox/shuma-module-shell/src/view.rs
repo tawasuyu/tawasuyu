@@ -1931,7 +1931,10 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
                 col_children.push(
                     row_text(ROW_H)
                         .text_aligned(l.text.clone(), 12.0, dim, Alignment::Start)
-                        .mono(),
+                        .mono()
+                        // 1 fila: sin esto una línea de etapa larga wrappea y
+                        // pisa la de abajo (la fila es de altura fija ROW_H).
+                        .max_lines(1),
                 );
             }
             lines.len() as f32 * ROW_H
@@ -2095,7 +2098,10 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             ..Default::default()
         })
         .text_aligned(header_text.clone(), 12.0, cmd_color, Alignment::Start)
-        .mono(),
+        .mono()
+        // Comando largo: una sola fila (el header es de altura fija); si no,
+        // wrappea y pisa la fila de etapas / el cuerpo de abajo.
+        .max_lines(1),
     ];
     // Chip de reprocess: alimenta el stdout de esta card como stdin del
     // próximo comando. Sólo en cards con stdout. Hit-test innermost-wins:
@@ -2443,13 +2449,19 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
         ..Default::default()
     };
 
+    // `max_lines(1)`: el nodo es de altura fija (16px). Sin esto, una línea
+    // larga wrappea a 2+ filas y la sobrante se pinta ENCIMA de la línea de
+    // abajo (solapamiento). Cortamos a una sola fila — igual que el cuerpo IDE,
+    // que no envuelve. El resto se pierde a la derecha (clip), no se apila.
     match line.kind {
         OutputKind::Prompt => View::new(line_style)
             .text_aligned(line.text.clone(), 12.0, theme.accent, Alignment::Start)
-            .mono(),
+            .mono()
+            .max_lines(1),
         OutputKind::Notice => View::new(line_style)
             .text_aligned(line.text.clone(), 12.0, theme.fg_muted, Alignment::Start)
-            .mono(),
+            .mono()
+            .max_lines(1),
         OutputKind::Stdout | OutputKind::Stderr => {
             let base = if matches!(line.kind, OutputKind::Stderr) {
                 theme.fg_destructive
@@ -2461,7 +2473,8 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
             if decorations.is_empty() {
                 return View::new(line_style)
                     .text_aligned(line.text.clone(), 12.0, base, Alignment::Start)
-                    .mono();
+                    .mono()
+                    .max_lines(1);
             }
             let children =
                 build_span_children::<HostMsg>(&line.text, &decorations, base, theme, lift);
@@ -2474,6 +2487,9 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
+            // Clip: spans en Row nowrap; si uno desborda no debe pisar la fila
+            // de abajo (misma razón que el `max_lines(1)` de las líneas planas).
+            .clip(true)
             .children(children)
         }
     }
