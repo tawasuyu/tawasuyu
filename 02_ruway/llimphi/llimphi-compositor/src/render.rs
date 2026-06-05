@@ -55,6 +55,7 @@ pub fn mount_recursive<Msg: Clone>(
         tooltip,
         cursor,
         ripple,
+        layout_builder,
         children,
     } = v;
     let parent_idx = out.len();
@@ -97,6 +98,10 @@ pub fn mount_recursive<Msg: Clone>(
         tooltip,
         cursor,
         ripple,
+        // Un layout_builder ya expandido llega como nodo normal; si llega sin
+        // expandir (caller no pasó por el runtime), se monta como hoja y este
+        // flag permite que el runtime lo detecte y resuelva.
+        is_layout_builder: layout_builder.is_some(),
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());

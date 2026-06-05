@@ -41,10 +41,16 @@ Antes de pre-analizar un control de otro framework, clasificarlo:
    compitan por el mismo press, un grafo de desambiguación competitivo.
 3. **Árbol de semántica (AccessKit)** — Tier 7. Árbol paralelo al `View`.
 4. **Build sensible al tamaño (`LayoutBuilder` / `MediaQuery` breakpoints)** —
-   **no estaba en los tiers; verificado ausente 2026-06-05.** `view()` construye
-   antes del layout, así que "construir distinto según el espacio disponible"
-   exige un builder diferido (o un nodo que reciba sus constraints medidas).
-   Habilita paneles responsive/adaptativos. Reservar la forma del builder ahora.
+   **Resuelto (Bloque 9).** El `MediaQuery` a nivel ventana ya era posible
+   (`on_resize` → el Model → `view()` ramifica por breakpoint). El gap real era
+   el **`LayoutBuilder` por-nodo** (construir según el slot local, que depende del
+   flex/hermanos, no de la ventana): `View::layout_builder(|Constraints| -> View)`,
+   resuelto en **dos pasadas** por el runtime (`resolve_layout_builders`): monta
+   con los builders como hojas, computa para conocer sus slots
+   (`collect_builder_constraints`), y reconstruye un `view()` fresco expandiendo
+   cada builder con sus constraints (`expand_layout_builders`). Coste cero sin
+   builders (`has_layout_builder`). Límite v1: sin anidamiento. Demo
+   `--example layout_builder_demo` (1 vs 2 columnas según el slot).
 
 ## Tiers por retorno de inversión
 
@@ -180,7 +186,14 @@ a 5k nodos" de "a 50k".
    aditivo); el runtime la pinta tras el contenido como círculo expansivo
    recortado al contorno, atenuado por el fade, con ticker autodetenido.
    Consumidor: `button_ripple`. Demo: `--example ripple_demo`.
-9. AccessKit + `LayoutBuilder` (los seams a reservar, ya con forma de API).
+9. ✅ **Bloque 9 = LayoutBuilder (4º seam)** — `View::layout_builder(|Constraints|
+   -> View)` + resolución en dos pasadas en el runtime
+   (`resolve_layout_builders`): mount-builders-como-hojas → compute →
+   `collect_builder_constraints` → `expand_layout_builders` sobre un `view()`
+   fresco. Coste cero sin builders. Funciones puras testables en
+   `llimphi-compositor/src/layout_builder.rs`. Demo `--example layout_builder_demo`.
+   Límite v1: sin anidamiento. **Queda sólo AccessKit (Tier 7)** — necesita
+   lector de pantalla real, no verificable headless en este entorno.
 
 ## Tier 7 — detalle (accesibilidad)
 

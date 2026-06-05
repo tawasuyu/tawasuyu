@@ -23,10 +23,12 @@ use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, RoundedRectRad
 use vello::peniko::{Color, Fill, Gradient, Image, Mix};
 
 mod anim;
+mod layout_builder;
 mod render;
 mod ripple;
 mod view;
 pub use anim::{ease_out_cubic, Anim, AnimRegistry};
+pub use layout_builder::{collect_builder_constraints, expand_layout_builders, has_layout_builder};
 pub use render::*;
 pub use ripple::{Ripple, RippleRegistry};
 
@@ -148,6 +150,25 @@ pub enum GesturePhase {
 /// cursor que declare un `on_scale` consume el gesto. Es la base del zoom de
 /// los canvases (pineal/cosmos/nakui).
 pub type ScaleFn<Msg> = Arc<dyn Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync>;
+
+/// Restricciones de tamaño que un [`LayoutBuilderFn`] recibe: las dimensiones
+/// del slot que el layout le asignó al nodo (en px físicos). Análogo a las
+/// `BoxConstraints` de Flutter `LayoutBuilder` / al `MediaQuery` pero **local
+/// al nodo** (no a la ventana). El builder construye su subárbol en función de
+/// esto — p. ej. una columna si `max_width < 600`, dos si es ancho.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Constraints {
+    pub max_width: f32,
+    pub max_height: f32,
+}
+
+/// Constructor **diferido** de subárbol sensible al tamaño (Flutter
+/// `LayoutBuilder`). El runtime resuelve el tamaño del slot del nodo en una
+/// primera pasada de layout y luego invoca esta closure con esas
+/// [`Constraints`] para producir los hijos — así "construir distinto según el
+/// espacio disponible" deja de exigir conocer el tamaño al armar el `View`. Ver
+/// [`View::layout_builder`].
+pub type LayoutBuilderFn<Msg> = Arc<dyn Fn(Constraints) -> View<Msg> + Send + Sync>;
 
 /// Rect absoluto del nodo (en coordenadas físicas del frame). Lo
 /// recibe el callback de [`View::paint_with`] para que pueda
@@ -449,6 +470,12 @@ pub struct View<Msg> {
     /// aditivo al `on_click`; vive en el runtime ([`RippleRegistry`]), no en el
     /// `Model`. `None` = sin ripple. Ver [`View::ripple`].
     pub ripple: Option<Ripple>,
+    /// Constructor **diferido** sensible al tamaño (`LayoutBuilder`). Si está
+    /// presente, este nodo NO usa sus `children` estáticos: el runtime resuelve
+    /// su slot en una primera pasada de layout y luego invoca esta closure con
+    /// las [`Constraints`] resueltas para producir el subárbol. `None` = nodo
+    /// normal (la abrumadora mayoría). Ver [`View::layout_builder`].
+    pub layout_builder: Option<LayoutBuilderFn<Msg>>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -583,6 +610,11 @@ pub struct MountedNode<Msg> {
     /// Ripple/InkWell de este nodo (ver [`View::ripple`]). El runtime lo
     /// dispara en el press y lo pinta vía [`RippleRegistry`].
     pub ripple: Option<Ripple>,
+    /// `true` si este nodo era un [`View::layout_builder`] (constructor diferido)
+    /// al montarse. El runtime lo usa tras la primera pasada de layout para leer
+    /// el rect del slot (vía [`collect_builder_constraints`]) e invocar la
+    /// closure. Tras expandirse, el nodo final ya es normal (`false`).
+    pub is_layout_builder: bool,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.

@@ -41,8 +41,32 @@ impl<Msg> View<Msg> {
             tooltip: None,
             cursor: None,
             ripple: None,
+            layout_builder: None,
             children: Vec::new(),
         }
+    }
+
+    /// Construye los hijos de este nodo **de forma diferida**, en función del
+    /// tamaño del slot que el layout le asigne (Flutter `LayoutBuilder`). El
+    /// runtime resuelve primero el rect del nodo (una pasada de layout con este
+    /// nodo como hoja, sized por su `Style`/contexto flex) y recién entonces
+    /// invoca `builder(Constraints)` para producir el subárbol — habilitando
+    /// paneles responsive cuyo punto de quiebre depende del **espacio local**,
+    /// no de la ventana (para eso alcanza `on_resize` + el Model).
+    ///
+    /// El `Style` de este nodo define su tamaño (debe quedar acotado por el
+    /// contexto: `flex_grow`, `size` definido o `percent` — no intrínseco a los
+    /// hijos, que aún no existen). Cualquier `children` estático que se haya
+    /// seteado se ignora: el builder es la fuente de los hijos.
+    ///
+    /// **Límite v1**: sin anidamiento — un `layout_builder` dentro del subárbol
+    /// que produce otro `layout_builder` no se resuelve (queda como hoja).
+    pub fn layout_builder<F>(mut self, builder: F) -> Self
+    where
+        F: Fn(Constraints) -> View<Msg> + Send + Sync + 'static,
+    {
+        self.layout_builder = Some(Arc::new(builder));
+        self
     }
 
     /// Marca este nodo para emitir un **ripple/InkWell** (la salpicadura de tap

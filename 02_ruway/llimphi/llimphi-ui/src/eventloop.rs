@@ -138,6 +138,42 @@ fn ripple_hit_from_cache<Msg: Clone>(
     })
 }
 
+/// Resuelve los [`View::layout_builder`] del árbol de la app en dos pasadas
+/// (ver [`llimphi_compositor::expand_layout_builders`]). **Coste cero** cuando
+/// ningún nodo usa el builder: devuelve el `view()` sin tocar tras un walk
+/// barato. Cuando hay builders: monta el árbol (builders como hojas), computa
+/// para conocer sus slots, y reconstruye un `view()` fresco expandiendo cada
+/// builder con sus constraints reales. `viewport` en px físicos; `ts` para medir
+/// texto igual que el compute principal. Lo llaman el redraw (vía cache) y el
+/// fallback de press.
+fn resolve_layout_builders<A: App>(
+    model: &A::Model,
+    viewport: (f32, f32),
+    ts: &mut llimphi_text::Typesetter,
+) -> View<A::Msg> {
+    let view = A::view(model);
+    if !has_layout_builder(&view) {
+        return view;
+    }
+    // Pasada 1: montar (builders = hojas con su Style) y computar el layout.
+    let mut l1 = LayoutTree::new();
+    let m1: Mounted<A::Msg> = mount(&mut l1, view);
+    let c1 = {
+        let tmap = &m1.text_measures;
+        l1.compute_with_measure(m1.root, viewport, |nid, known, avail| {
+            match tmap.get(&nid) {
+                Some(tm) => measure_text_node(ts, tm, known, avail),
+                None => llimphi_layout::taffy::Size::ZERO,
+            }
+        })
+        .expect("layout layout_builder pasada 1")
+    };
+    let cons = collect_builder_constraints(&m1, &c1);
+    // Pasada 2: árbol fresco (mismo Model → misma estructura, mismo pre-orden de
+    // builders) + expand con las constraints resueltas.
+    expand_layout_builders(A::view(model), &cons)
+}
+
 impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -680,12 +716,18 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         lookup_hit(&cache.mounted, &cache.computed)
                     }
                 } else {
+                    let (w, h) = state.surface.size();
+                    // Mismo resolve de LayoutBuilder que el redraw, para que el
+                    // hit-test del fallback vea los hijos producidos por builders.
+                    let view = resolve_layout_builders::<A>(
+                        state.model.as_ref().expect("model"),
+                        (w as f32, h as f32),
+                        &mut state.typesetter,
+                    );
                     let model_ref = state.model.as_ref().expect("model");
-                    let view = A::view(model_ref);
                     let overlay_view = A::view_overlay(model_ref);
                     let mut layout = LayoutTree::new();
                     let mounted: Mounted<A::Msg> = mount(&mut layout, view);
-                    let (w, h) = state.surface.size();
                     let ts = &mut state.typesetter;
                     let computed = {
                         let tmap = &mounted.text_measures;
@@ -953,8 +995,15 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     }
                 };
                 let (w, h) = frame.size();
+                // LayoutBuilder: resuelve los constructores diferidos en dos
+                // pasadas (coste cero si no hay ninguno). Necesita el typesetter
+                // para medir, así que va antes de tomar `model_ref` para el overlay.
+                let view = resolve_layout_builders::<A>(
+                    state.model.as_ref().expect("model"),
+                    (w as f32, h as f32),
+                    &mut state.typesetter,
+                );
                 let model_ref = state.model.as_ref().expect("model");
-                let view = A::view(model_ref);
                 let overlay_view = A::view_overlay(model_ref);
                 // Reusamos los árboles de layout del runtime: `clear()` +
                 // `mount` evita re-allocar el slotmap de taffy por frame.
