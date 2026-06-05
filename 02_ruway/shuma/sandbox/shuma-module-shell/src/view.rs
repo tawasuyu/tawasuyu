@@ -70,7 +70,7 @@ pub fn view<HostMsg: Clone + 'static>(
             .hover_fill(theme.bg_row_hover)
             .on_click(lift(Msg::SetReprocess(src)))
             .text_aligned(
-                format!("» reprocesando la salida del bloque #{src} — Enter ejecuta · click cancela"),
+                format!("reprocesando la salida del bloque #{src} — Enter ejecuta · click cancela"),
                 10.0,
                 theme.accent,
                 Alignment::Start,
@@ -1136,6 +1136,45 @@ pub(crate) const ROW_H: f32 = 16.0; // una línea de output
 /// Duración del fade de colapso/despliegue de los bloques del output.
 pub(crate) const COLLAPSE_ANIM: std::time::Duration = std::time::Duration::from_millis(160);
 
+/// Sobre cuántos comandos hacia atrás se difumina el negro de recencia: el
+/// más reciente es negro profundo, y al cabo de `RECENCY_FADE` comandos el
+/// fondo llega al tono normal de card.
+pub(crate) const RECENCY_FADE: f32 = 6.0;
+
+/// Mezcla lineal de dos colores sRGB (`t=0` → `a`, `t=1` → `b`).
+pub(crate) fn mix_color(
+    a: llimphi_ui::llimphi_raster::peniko::Color,
+    b: llimphi_ui::llimphi_raster::peniko::Color,
+    t: f32,
+) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let t = t.clamp(0.0, 1.0);
+    let ca = a.components;
+    let cb = b.components;
+    Color::from_rgba8(
+        ((ca[0] + (cb[0] - ca[0]) * t) * 255.0).round() as u8,
+        ((ca[1] + (cb[1] - ca[1]) * t) * 255.0).round() as u8,
+        ((ca[2] + (cb[2] - ca[2]) * t) * 255.0).round() as u8,
+        255,
+    )
+}
+
+/// Fondo de una card según su `depth` de recencia (0 = más reciente, negro
+/// profundo; 1 = viejo, tono normal `bg_panel_alt`).
+pub(crate) fn recency_base(theme: &Theme, depth: f32) -> llimphi_ui::llimphi_raster::peniko::Color {
+    // Negro profundo derivado del tema (canal × 0.28) — para temas oscuros
+    // queda casi negro; para claros, un gris hundido.
+    let alt = theme.bg_panel_alt.components;
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let deep = Color::from_rgba8(
+        (alt[0] * 0.28 * 255.0).round() as u8,
+        (alt[1] * 0.28 * 255.0).round() as u8,
+        (alt[2] * 0.28 * 255.0).round() as u8,
+        255,
+    );
+    mix_color(deep, theme.bg_panel_alt, depth)
+}
+
 pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
@@ -1159,6 +1198,21 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
         groups.entry(line.block).or_default().push(line);
     }
 
+    // Bloque-comando más reciente visible → ancla del gradiente de recencia:
+    // el último es negro profundo, los de más arriba menos negros.
+    let newest_cmd = order
+        .iter()
+        .copied()
+        .filter(|id| {
+            groups
+                .get(id)
+                .and_then(|g| g.first())
+                .map(|l| l.kind == OutputKind::Prompt)
+                .unwrap_or(false)
+        })
+        .max()
+        .unwrap_or(0);
+
     // Cada item lleva su alto exacto → `content_h` para el scroll.
     let mut items: Vec<(View<HostMsg>, f32)> = Vec::new();
     for id in &order {
@@ -1167,9 +1221,16 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
             .map(|l| l.kind == OutputKind::Prompt)
             .unwrap_or(false)
         {
+            // depth 0 = el más reciente (negro profundo); crece hacia atrás.
+            let depth = if newest_cmd > 0 {
+                (newest_cmd.saturating_sub(*id) as f32 / RECENCY_FADE).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
             items.push(command_card::<HostMsg>(
                 g.as_slice(),
                 *id,
+                depth,
                 state,
                 theme,
                 lift,
@@ -1339,27 +1400,86 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
 /// Color del badge de estado a partir del texto de la notice de cierre
 /// (`✔ exit 0`, `✘ exit N`, `⏹ cancel …`). `None` si la línea no es un
 /// estado de cierre — se queda en el cuerpo de la card.
-pub(crate) fn status_color(
-    text: &str,
-    theme: &Theme,
-) -> Option<llimphi_ui::llimphi_raster::peniko::Color> {
-    use llimphi_ui::llimphi_raster::peniko::Color;
-    let t = text.trim_start();
-    if t.starts_with('✔') {
-        Some(Color::from_rgba8(120, 200, 140, 255)) // verde "ok"
-    } else if t.starts_with('✘') || t.starts_with('⏹') {
-        Some(theme.fg_destructive)
-    } else {
-        None
-    }
-}
-
-/// `true` si la línea es una notice de cierre (`✔/✘/⏹`) — la versión
-/// theme-free de [`status_color`], para que `update` (que no tiene theme)
-/// calcule el cuerpo igual que la `view`.
+/// `true` si la línea es una notice de cierre (`✔/✘/⏹`) — para que tanto
+/// `update` (que no tiene theme) como la `view` calculen el cuerpo igual.
 pub(crate) fn is_status_line(text: &str) -> bool {
     let t = text.trim_start();
     t.starts_with('✔') || t.starts_with('✘') || t.starts_with('⏹')
+}
+
+/// Estado de cierre de un comando, para el badge (icono + color en vez del
+/// crudo "exit N").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CmdStatus {
+    Running,
+    Ok,
+    Fail,
+    Cancelled,
+}
+
+impl CmdStatus {
+    /// Deriva el estado de la notice de cierre (`✔ exit 0`, `✘ exit N`,
+    /// `⏹ cancel…`). `None` si no es una notice de estado.
+    pub(crate) fn from_notice(text: &str) -> Option<Self> {
+        let t = text.trim_start();
+        if t.starts_with('✔') {
+            Some(Self::Ok)
+        } else if t.starts_with('⏹') {
+            Some(Self::Cancelled)
+        } else if t.starts_with('✘') {
+            Some(Self::Fail)
+        } else {
+            None
+        }
+    }
+
+    /// Icono vectorial + color del badge.
+    pub(crate) fn icon_color(
+        self,
+        theme: &Theme,
+    ) -> (llimphi_icons::Icon, llimphi_ui::llimphi_raster::peniko::Color) {
+        use llimphi_icons::Icon;
+        use llimphi_ui::llimphi_raster::peniko::Color;
+        match self {
+            CmdStatus::Ok => (Icon::Check, Color::from_rgba8(120, 200, 140, 255)),
+            CmdStatus::Fail => (Icon::X, theme.fg_destructive),
+            CmdStatus::Cancelled => (Icon::Stop, theme.fg_destructive),
+            CmdStatus::Running => (Icon::Play, theme.accent),
+        }
+    }
+}
+
+/// Tiempo relativo legible ("hace 4 minutos", "hace 2 h", "hace 3 d"…).
+/// `then`/`now` en segundos unix. Vacío si `then == 0` (sin timestamp).
+/// Cubre del segundo al año; el foco es la lectura rápida del año en curso.
+pub(crate) fn relative_time(then: u64, now: u64) -> String {
+    if then == 0 {
+        return String::new();
+    }
+    let d = now.saturating_sub(then);
+    if d < 5 {
+        "recién".to_string()
+    } else if d < 60 {
+        format!("hace {d} s")
+    } else if d < 3600 {
+        let m = d / 60;
+        format!("hace {m} min")
+    } else if d < 86_400 {
+        let h = d / 3600;
+        format!("hace {h} h")
+    } else if d < 7 * 86_400 {
+        let days = d / 86_400;
+        format!("hace {days} d")
+    } else if d < 30 * 86_400 {
+        let w = d / (7 * 86_400);
+        format!("hace {w} sem")
+    } else if d < 365 * 86_400 {
+        let mo = d / (30 * 86_400);
+        format!("hace {mo} mes{}", if mo == 1 { "" } else { "es" })
+    } else {
+        let y = d / (365 * 86_400);
+        format!("hace {y} año{}", if y == 1 { "" } else { "s" })
+    }
 }
 
 /// Líneas del **cuerpo** de un bloque, en orden del buffer: stdout/stderr
@@ -1515,7 +1635,11 @@ pub(crate) fn pipe_stages_row<HostMsg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .text_aligned("⇢".to_string(), 11.0, theme.fg_muted, Alignment::Start)];
+    .children(vec![llimphi_icons::icon_view(
+        llimphi_icons::Icon::ChevronRight,
+        theme.fg_muted,
+        1.6,
+    )])];
 
     for (i, st) in pipe.stages.iter().enumerate() {
         let label = st
@@ -1636,7 +1760,11 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .text_aligned("⇢".to_string(), 11.0, theme.fg_muted, Alignment::Start)];
+    .children(vec![llimphi_icons::icon_view(
+        llimphi_icons::Icon::ChevronRight,
+        theme.fg_muted,
+        1.6,
+    )])];
 
     for (i, st) in pipe.stages.iter().enumerate() {
         let captured = stage_lines.iter().filter(|l| l.stage == Some(i)).count();
@@ -1817,6 +1945,7 @@ fn row_text<HostMsg: Clone + 'static>(h: f32) -> View<HostMsg> {
 pub(crate) fn command_card<HostMsg: Clone + 'static>(
     group: &[&OutputLine],
     block: u64,
+    depth: f32,
     state: &State,
     theme: &Theme,
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
@@ -1829,19 +1958,18 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     // Si hay varias notices de cierre, gana la última.
     let mut body: Vec<&OutputLine> = Vec::new();
     let mut stage_lines: Vec<&OutputLine> = Vec::new();
-    let mut badge: Option<(String, llimphi_ui::llimphi_raster::peniko::Color)> = None;
+    let mut status: Option<CmdStatus> = None;
     for &l in &group[1..] {
         if l.stage.is_some() {
             stage_lines.push(l);
-        } else if let Some(color) = status_color(&l.text, theme) {
-            badge = Some((l.text.clone(), color));
+        } else if let Some(st) = CmdStatus::from_notice(&l.text) {
+            status = Some(st);
         } else {
             body.push(l);
         }
     }
-    // Comando aún vivo (sin notice de cierre todavía): spinner en accent.
-    // (Foreground o job de fondo: ambos siguen "vivos" hasta su exit.)
-    let still_running = badge.is_none()
+    // Comando aún vivo (sin notice de cierre todavía).
+    let still_running = status.is_none()
         && ((state.current_block == block && state.is_running())
             || state.bg_jobs.iter().any(|j| {
                 j.lock()
@@ -1849,19 +1977,54 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     .unwrap_or(false)
             }));
     if still_running {
-        badge = Some(("⟳".to_string(), theme.accent));
+        status = Some(CmdStatus::Running);
     }
 
-    let chevron = if collapsed { "▸" } else { "▾" };
-    let mut header_children: Vec<View<HostMsg>> = vec![
+    let has_body = !body.is_empty();
+    let expandable = has_body || !stage_lines.is_empty();
+    // Comando terminado sin salida: se muestra distinto (atenuado, sin
+    // chevron, no expandible) para no tentar a desplegarlo.
+    let no_output = !expandable && status != Some(CmdStatus::Running);
+
+    // ── Marcador de despliegue (chevron por icono, no glifo) ──
+    let chevron_icon = if collapsed {
+        llimphi_icons::Icon::ChevronRight
+    } else {
+        llimphi_icons::Icon::ChevronDown
+    };
+    let marker: View<HostMsg> = if expandable {
         View::new(Style {
             size: Size {
                 width: length(14.0_f32),
-                height: length(16.0_f32),
+                height: length(14.0_f32),
             },
+            flex_shrink: 0.0,
             ..Default::default()
         })
-        .text_aligned(chevron.to_string(), 11.0, theme.fg_muted, Alignment::Start),
+        .children(vec![llimphi_icons::icon_view(
+            chevron_icon,
+            theme.fg_muted,
+            1.6,
+        )])
+    } else {
+        // Sin salida: un guion tenue en lugar del chevron (no clickable).
+        View::new(Style {
+            size: Size {
+                width: length(14.0_f32),
+                height: length(14.0_f32),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+    };
+
+    let cmd_color = if no_output {
+        theme.fg_muted
+    } else {
+        theme.accent
+    };
+    let mut header_children: Vec<View<HostMsg>> = vec![
+        marker,
         View::new(Style {
             size: Size {
                 width: Dimension::auto(),
@@ -1870,7 +2033,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             flex_grow: 1.0,
             ..Default::default()
         })
-        .text_aligned(header_text.clone(), 12.0, theme.accent, Alignment::Start)
+        .text_aligned(header_text.clone(), 12.0, cmd_color, Alignment::Start)
         .mono(),
     ];
     // Chip de reprocess: alimenta el stdout de esta card como stdin del
@@ -1904,23 +2067,63 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             .radius(3.0)
             .hover_fill(theme.bg_row_hover)
             .on_click(lift(Msg::SetReprocess(block)))
-            .text_aligned("» stdin".to_string(), 10.0, fg, Alignment::Start),
+            // `.mono()` para que el `»` salga de la fuente embebida (que sí lo
+            // tiene) y no como tofu de la fuente del sistema.
+            .text_aligned("» stdin".to_string(), 10.0, fg, Alignment::Start)
+            .mono(),
         );
     }
-    if let Some((btxt, bcolor)) = badge {
+    // Badge: icono de estado (verde ✓ / rojo ✕ / ⏹ / ▶ corriendo) + cuándo
+    // corrió ("hace 4 min"), en vez del crudo "exit N".
+    if let Some(st) = status {
+        let (icon, color) = st.icon_color(theme);
+        let when = relative_time(
+            state.block_started.get(&block).copied().unwrap_or(0),
+            now_unix_secs(),
+        );
+        let icon_box: View<HostMsg> = View::new(Style {
+            size: Size {
+                width: length(13.0_f32),
+                height: length(13.0_f32),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![llimphi_icons::icon_view(icon, color, 1.8)]);
+        let mut badge_children = vec![icon_box];
+        if !when.is_empty() {
+            badge_children.push(
+                View::new(Style {
+                    size: Size {
+                        width: Dimension::auto(),
+                        height: length(16.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(when, 10.0, theme.fg_muted, Alignment::End),
+            );
+        }
         header_children.push(
             View::new(Style {
+                flex_direction: FlexDirection::Row,
                 size: Size {
                     width: Dimension::auto(),
                     height: length(16.0_f32),
                 },
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(4.0_f32),
+                    height: length(0.0_f32),
+                },
                 ..Default::default()
             })
-            .text_aligned(btxt, 11.0, bcolor, Alignment::End),
+            .children(badge_children),
         );
     }
 
-    let header = View::new(Style {
+    // El header sólo se hunde y es clickable si el bloque es expandible; los
+    // sin salida quedan planos (no invitan al click).
+    let mut header_view = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
@@ -1939,11 +2142,15 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .fill(theme.bg_input)
     .radius(4.0)
-    .hover_fill(theme.bg_row_hover)
-    .on_click(lift(Msg::ToggleBlock(block)))
     .children(header_children);
+    if expandable {
+        header_view = header_view
+            .fill(theme.bg_input)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::ToggleBlock(block)));
+    }
+    let header = header_view;
 
     let mut card_children: Vec<View<HostMsg>> = vec![header];
     let mut child_h_sum = HEADER_H;
@@ -1986,11 +2193,12 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     ..Default::default()
                 })
                 .text_aligned(
-                    format!("⋯ {} líneas", body.len()),
+                    format!("…  {} líneas ocultas · clic para ver", body.len()),
                     11.0,
                     theme.fg_muted,
                     Alignment::Start,
                 )
+                .mono()
                 // Key distinta del cuerpo (mismo bloque) para que el resumen
                 // tenga su propia animación de aparición/desaparición.
                 .animated_inout(block ^ (1 << 63), COLLAPSE_ANIM),
@@ -2074,9 +2282,24 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel_alt)
     .radius(5.0)
     .children(card_children);
+
+    // Fondo por recencia: el más reciente (depth 0) negro profundo, los de
+    // atrás menos negros, con un gradiente vertical sutil (un toque de acento
+    // abajo, más marcado cuanto más reciente) — "sutil pero interesante".
+    use llimphi_ui::llimphi_raster::peniko::Gradient;
+    use llimphi_ui::llimphi_raster::kurbo::Point;
+    let base = recency_base(theme, depth);
+    let top = mix_color(
+        base,
+        llimphi_ui::llimphi_raster::peniko::Color::WHITE,
+        0.04 * (1.0 - depth),
+    );
+    let bottom = mix_color(base, theme.accent, 0.07 * (1.0 - depth));
+    let grad = Gradient::new_linear(Point::new(0.5, 0.0), Point::new(0.5, 1.0))
+        .with_stops([top, bottom].as_slice());
+    let view = view.fill(base).fill_gradient(grad);
 
     (view, card_h)
 }

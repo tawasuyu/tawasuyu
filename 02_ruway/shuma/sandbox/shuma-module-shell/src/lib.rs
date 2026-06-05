@@ -54,11 +54,6 @@ pub const ID: &str = "shell";
 /// crezca sin límite.
 pub const MAX_OUTPUT_LINES: usize = 500;
 
-/// Umbral de líneas del cuerpo a partir del cual un comando terminado se
-/// pliega solo a su resumen (disclosure progresiva estilo Claude, G del
-/// PLAN-OUTPUT). Reversible con click; los comandos cortos quedan abiertos.
-pub const AUTO_COLLAPSE_LINES: usize = 14;
-
 /// Tipo de cada línea del buffer — define el color que la `view` usa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OutputKind {
@@ -409,6 +404,10 @@ pub struct State {
     /// Acumulador del drag de selección del cuerpo (el `PointerEvent::Drag`
     /// del editor entrega deltas; hay que acumularlos contra el press).
     pub body_drag_accum: (f32, f32),
+    /// Momento de creación de cada bloque (unix secs) — alimenta el badge
+    /// de "hace N minutos" en vez del crudo "exit N". Lo setea
+    /// [`State::push_output`] (Prompt) y [`State::open_block`].
+    pub block_started: std::collections::HashMap<u64, u64>,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -471,6 +470,7 @@ impl State {
             out_overflow: Arc::new(Mutex::new(0.0)),
             body_sel: None,
             body_drag_accum: (0.0, 0.0),
+            block_started: std::collections::HashMap::new(),
         }
     }
 
@@ -482,6 +482,7 @@ impl State {
         if line.kind == OutputKind::Prompt {
             self.block_seq += 1;
             self.current_block = self.block_seq;
+            self.block_started.insert(self.current_block, now_unix_secs());
         }
         line.block = self.current_block;
         push_line(&mut self.output, line);
@@ -492,6 +493,7 @@ impl State {
     /// propia card aunque otros comandos se intercalen mientras tanto.
     pub(crate) fn open_block(&mut self) -> u64 {
         self.block_seq += 1;
+        self.block_started.insert(self.block_seq, now_unix_secs());
         self.block_seq
     }
 
@@ -633,6 +635,14 @@ fn open_history() -> shuma_history::History {
     // Fallback: historial en /dev/null (existe siempre, append-only OK).
     shuma_history::History::open(std::path::PathBuf::from("/dev/null"))
         .unwrap_or_else(|_| panic!("no se pudo abrir ni /dev/null como history"))
+}
+
+/// Segundos unix actuales (0 si el reloj está antes de la época).
+pub(crate) fn now_unix_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone)]
@@ -1792,31 +1802,36 @@ mod tests {
     }
 
     #[test]
-    fn long_finished_command_auto_collapses() {
+    fn finished_command_stays_expanded_then_recedes_on_next() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
-        s.input.set_text("seq 1 20"); // 20 líneas > AUTO_COLLAPSE_LINES
+        s.input.set_text("seq 1 20");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         let blk = s.current_block;
         s = drain_until_idle(s);
-        assert!(
-            s.collapsed.contains(&blk),
-            "un comando con salida larga se pliega solo al terminar"
-        );
+        // Recién terminado: sigue EXPANDIDO (se ve completo).
+        assert!(!s.collapsed.contains(&blk), "el comando recién hecho queda expandido");
+        // Al correr uno nuevo, el anterior recede (se pliega).
+        s.input.set_text("echo otra");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.collapsed.contains(&blk), "el anterior se pliega al nacer uno nuevo");
+        let nuevo = s.current_block;
+        assert!(!s.collapsed.contains(&nuevo), "el nuevo nace expandido");
     }
 
     #[test]
-    fn short_finished_command_stays_open() {
+    fn command_without_output_does_not_recede() {
+        // Un comando sin cuerpo (no produjo salida) no se pliega al pasar al
+        // siguiente — no hay nada que esconder, y se mostrará distinto.
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
-        s.input.set_text("echo hola");
+        s.input.set_text("true"); // exit 0, sin stdout
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         let blk = s.current_block;
         s = drain_until_idle(s);
-        assert!(
-            !s.collapsed.contains(&blk),
-            "un comando corto queda abierto"
-        );
+        s.input.set_text("echo x");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(!s.collapsed.contains(&blk), "un comando sin salida no recede");
     }
 
     #[test]
