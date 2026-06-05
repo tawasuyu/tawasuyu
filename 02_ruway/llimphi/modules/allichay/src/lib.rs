@@ -48,6 +48,12 @@ use std::collections::BTreeMap;
 /// icono, no un rótulo (el nombre lo lleva el encabezado del panel desplegado).
 const RAIL_W: f32 = 52.0;
 
+/// Cuántas opciones de un [`Control::Dropdown`] caben cómodas como botones
+/// segmentados en una fila. Por encima de esto el segmented se amontona y
+/// desborda (p. ej. 7 modos de tiling), así que el renderer cae a un
+/// **radio-group vertical** (una fila seleccionable por opción).
+const SEGMENTED_MAX: usize = 4;
+
 // =====================================================================
 // Mensajes del módulo
 // =====================================================================
@@ -400,7 +406,15 @@ fn field_height(control: &Control) -> f32 {
     match control {
         Control::Toggle => 22.0,
         Control::Slider { .. } => 22.0,
-        Control::Dropdown { .. } => 28.0,
+        // Segmented (1 fila) para pocas opciones; radio-group (N filas) si son
+        // muchas. Ver [`dropdown_control`].
+        Control::Dropdown { options } => {
+            if options.len() <= SEGMENTED_MAX {
+                28.0
+            } else {
+                options.len() as f32 * 30.0
+            }
+        }
         Control::TextInput => 34.0,
         Control::ColorPicker => 16.0 + 4.0 * 24.0, // swatch + 4 sliders RGBA
         Control::Display => 8.0,                   // fila compacta sin label arriba
@@ -671,15 +685,114 @@ where
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
     let cur = field.value.as_str().unwrap_or("");
-    let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
-    let selected = options.iter().position(|o| o.id == cur).unwrap_or(0);
-    let ids: Vec<String> = options.iter().map(|o| o.id.clone()).collect();
-    segmented_view(
-        &labels,
-        selected,
-        move |i| on_msg(AllichayMsg::Change(path.clone(), FieldValue::Enum(ids[i].clone()))),
-        &SegmentedPalette::from_theme(theme),
+    // Pocas opciones: botones segmentados (compacto, una fila).
+    if options.len() <= SEGMENTED_MAX {
+        let labels: Vec<&str> = options.iter().map(|o| o.label.as_str()).collect();
+        let selected = options.iter().position(|o| o.id == cur).unwrap_or(0);
+        let ids: Vec<String> = options.iter().map(|o| o.id.clone()).collect();
+        return segmented_view(
+            &labels,
+            selected,
+            move |i| on_msg(AllichayMsg::Change(path.clone(), FieldValue::Enum(ids[i].clone()))),
+            &SegmentedPalette::from_theme(theme),
+        );
+    }
+    // Muchas opciones: radio-group vertical. Cada fila emite el mismo
+    // `Change` que el segmented — sin overlay, sin estado nuevo, sin tocar el
+    // `update` del host. El segmented se amontonaba con >4 (locales, modos…).
+    let rows: Vec<View<Msg>> = options
+        .iter()
+        .map(|o| {
+            let selected = o.id == cur;
+            let msg = on_msg(AllichayMsg::Change(
+                path.clone(),
+                FieldValue::Enum(o.id.clone()),
+            ));
+            radio_row(&o.label, selected, msg, theme)
+        })
+        .collect();
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(rows)
+}
+
+/// Una fila de radio del dropdown largo: punto a la izquierda (relleno si está
+/// seleccionada) + rótulo. La fila entera es clickeable y resalta en hover; la
+/// seleccionada lleva fondo y rótulo en negrita.
+fn radio_row<Msg: Clone + 'static>(
+    label: &str,
+    selected: bool,
+    msg: Msg,
+    theme: &Theme,
+) -> View<Msg> {
+    let dot_inner = if selected {
+        vec![View::new(Style {
+            size: Size { width: length(8.0_f32), height: length(8.0_f32) },
+            ..Default::default()
+        })
+        .radius(4.0)
+        .fill(theme.accent)]
+    } else {
+        Vec::new()
+    };
+    let dot = View::new(Style {
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .radius(8.0)
+    .border(1.5, if selected { theme.accent } else { theme.border })
+    .children(dot_inner);
+
+    let mut lbl = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(20.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        label.to_string(),
+        12.5,
+        if selected { theme.fg_text } else { theme.fg_muted },
+        Alignment::Start,
     )
+    .ellipsis(1);
+    if selected {
+        lbl = lbl.bold();
+    }
+
+    let mut row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .radius(6.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(msg)
+    .children(vec![dot, lbl]);
+    if selected {
+        row = row.fill(theme.bg_selected);
+    }
+    row
 }
 
 fn color_control<Msg, F>(field: &Field, path: FieldPath, theme: &Theme, on_msg: F) -> View<Msg>
