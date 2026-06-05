@@ -541,6 +541,35 @@ mod tests {
     }
 
     #[test]
+    fn group_record_concatenates_on_write_and_distributes_on_read() {
+        let out = gen("ENVIRONMENT DIVISION.\n\
+             INPUT-OUTPUT SECTION.\n\
+             FILE-CONTROL.\n\
+                 SELECT ARCH ASSIGN TO 'g.dat'.\n\
+             DATA DIVISION.\n\
+             FILE SECTION.\n\
+             FD ARCH.\n\
+             01 REG.\n\
+                05 REG-ID PIC X(3).\n\
+                05 REG-NOM PIC X(7).\n\
+             PROCEDURE DIVISION.\n\
+             MAIN.\n\
+                 OPEN OUTPUT ARCH.\n\
+                 WRITE REG.\n\
+                 CLOSE ARCH.\n\
+                 OPEN INPUT ARCH.\n\
+                 READ ARCH AT END CONTINUE END-READ.\n\
+                 CLOSE ARCH.\n");
+        // WRITE concatena el display de los dos miembros del grupo.
+        assert!(out.contains("self.file_arch.write(&format!(\"{}{}\", self.reg_id.display(), self.reg_nom.display()));"));
+        // READ trocea la línea por el ancho de cada miembro (3 y 7).
+        assert!(out.contains("let __f: String = __rec[0..3].iter().collect();"));
+        assert!(out.contains("let __f: String = __rec[3..10].iter().collect();"));
+        assert!(out.contains("self.reg_id.store(__f.as_str());"));
+        assert!(out.contains("self.reg_nom.store(__f.as_str());"));
+    }
+
+    #[test]
     fn edited_field_is_text_and_move_formats_it() {
         let out = gen("DATA DIVISION.\n\
              WORKING-STORAGE SECTION.\n\

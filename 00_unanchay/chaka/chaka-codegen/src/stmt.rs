@@ -654,14 +654,11 @@ fn emit_read(em: &mut Emitter, sym: &Symbols, file: &str, at_end: &[Stmt], not_a
         em.line("// chaka: READ de fichero no resuelto");
         return;
     };
-    let record_ident = sym.lookup(&fs.record).map(|r| r.ident.clone());
     em.line(&format!("match self.{}.read() {{", fs.ident));
     em.indent();
     em.line("Some(__line) => {");
     em.indent();
-    if let Some(rec) = &record_ident {
-        em.line(&format!("self.{rec}.store(__line.as_str());"));
-    }
+    emit_store_record(em, sym, &fs.record, "__line.as_str()");
     emit_block(em, sym, not_at_end);
     em.dedent();
     em.line("}");
@@ -677,20 +674,94 @@ fn emit_read(em: &mut Emitter, sym: &Symbols, file: &str, at_end: &[Stmt], not_a
 /// `WRITE record [FROM from]` — escribe el registro en su fichero.
 fn emit_write(em: &mut Emitter, sym: &Symbols, record: &str, from: Option<&Operand>) {
     if let Some(src) = from {
-        if let Some((lref, _)) = field_ref(sym, &Operand::Data(record.to_string())) {
-            em.line(&format!("{lref}.store({});", operand_str(sym, src)));
-        }
+        let value = operand_str(sym, src);
+        emit_store_record(em, sym, record, &value);
     }
-    match sym.file_of_record(record) {
-        Some(fs) => {
-            if let Some(rec) = sym.lookup(record) {
-                em.line(&format!(
-                    "self.{}.write(&self.{}.display());",
-                    fs.ident, rec.ident
-                ));
-            }
-        }
-        None => em.line("// chaka: WRITE de registro no resuelto"),
+    match (sym.file_of_record(record), record_value(sym, record)) {
+        (Some(fs), Some(val)) => em.line(&format!("self.{}.write(&{val});", fs.ident)),
+        _ => em.line("// chaka: WRITE de registro no resuelto"),
+    }
+}
+
+/// El ancho en caracteres del registro que ocupa un campo elemental —
+/// su tamaño dentro de un registro de longitud fija. Para un numérico
+/// es el total de dígitos de la PICTURE (sin signo de presentación).
+fn field_width(kind: &FieldKind) -> usize {
+    match kind {
+        FieldKind::Text { len } => *len,
+        FieldKind::Num { int, frac, .. } => *int as usize + *frac as usize,
+    }
+}
+
+/// Una expresión Rust de tipo `String` con el valor completo de un
+/// registro: el `display()` del campo si es elemental, o la
+/// concatenación del `display()` de sus miembros si es un grupo. `None`
+/// si el nombre no resuelve a ningún dato.
+fn record_value(sym: &Symbols, record: &str) -> Option<String> {
+    if let Some(f) = sym.lookup(record) {
+        return Some(format!("self.{}.display()", f.ident));
+    }
+    let members = sym.group(record)?;
+    let parts: Vec<String> = members
+        .iter()
+        .filter_map(|m| sym.lookup(m))
+        .map(|f| format!("self.{}.display()", f.ident))
+        .collect();
+    if parts.is_empty() {
+        return None;
+    }
+    let fmt = "{}".repeat(parts.len());
+    Some(format!("format!(\"{fmt}\", {})", parts.join(", ")))
+}
+
+/// Distribuye el texto `value` (una expresión Rust `&str`) en el
+/// registro `record`: lo asigna entero si es elemental, o lo trocea por
+/// el ancho de cada miembro si es un grupo (un registro de longitud
+/// fija). El bloque se emite con su propio scope.
+fn emit_store_record(em: &mut Emitter, sym: &Symbols, record: &str, value: &str) {
+    if let Some(f) = sym.lookup(record) {
+        emit_store_slice(em, &f.ident, f.kind, value);
+        return;
+    }
+    let Some(members) = sym.group(record) else {
+        em.line("// chaka: registro no resuelto");
+        return;
+    };
+    let fields: Vec<(String, FieldKind)> = members
+        .iter()
+        .filter_map(|m| sym.lookup(m).map(|f| (f.ident.clone(), f.kind)))
+        .collect();
+    if fields.is_empty() {
+        em.line("// chaka: registro de grupo vacío");
+        return;
+    }
+    let total: usize = fields.iter().map(|(_, k)| field_width(k)).sum();
+    em.line("{");
+    em.indent();
+    em.line(&format!("let mut __rec: Vec<char> = ({value}).chars().collect();"));
+    em.line(&format!("while __rec.len() < {total} {{ __rec.push(' '); }}"));
+    let mut off = 0usize;
+    for (ident, kind) in &fields {
+        let w = field_width(kind);
+        em.line(&format!(
+            "let __f: String = __rec[{off}..{}].iter().collect();",
+            off + w
+        ));
+        emit_store_slice(em, ident, *kind, "__f.as_str()");
+        off += w;
+    }
+    em.dedent();
+    em.line("}");
+}
+
+/// Asigna `value` (expresión `&str`) a un campo elemental, parseándolo a
+/// `Decimal` si el campo es numérico.
+fn emit_store_slice(em: &mut Emitter, ident: &str, kind: FieldKind, value: &str) {
+    match kind {
+        FieldKind::Text { .. } => em.line(&format!("self.{ident}.store({value});")),
+        FieldKind::Num { .. } => em.line(&format!(
+            "self.{ident}.store(Decimal::parse(({value}).trim()).unwrap_or_else(|_| Decimal::zero()));"
+        )),
     }
 }
 
