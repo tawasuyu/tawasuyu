@@ -284,20 +284,24 @@ fn interaccion_widget(v: View<Msg>, kind: &str, exec: Option<&str>) -> View<Msg>
     }
 }
 
-/// Volumen interactivo: rueda sube/baja, click togglea mute, click derecho abre
-/// el mezclador (`exec`) o el panel. (Cableado completo en el bloque de
-/// interacción.)
+/// Volumen interactivo (idioma waybar): la **rueda** sube/baja el volumen del
+/// sink, el **click** abre el mezclador (`exec`, la "ventana correspondiente") o
+/// —sin `exec`— togglea el mute, y el **click derecho** togglea el mute. El
+/// medidor refleja el cambio en el próximo tick.
 fn volume_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
+    let v = v
+        .on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::VolumeWheel(dy)))
+        .on_right_click(Msg::VolumeMute);
     match exec {
         Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
-        None => v,
+        None => v.on_click(Msg::VolumeMute),
     }
 }
 
-/// Brillo interactivo: la rueda ajusta la luminosidad. (Cableado completo en el
-/// bloque de interacción.)
+/// Brillo interactivo: la **rueda** sube/baja la luminosidad de la pantalla. El
+/// medidor refleja el cambio en el próximo tick.
 fn brightness_interactivo(v: View<Msg>) -> View<Msg> {
-    v
+    v.on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::BrightnessWheel(dy)))
 }
 
 /// Reloj interactivo: el click abre el panel para fijar fecha/hora. (Cableado

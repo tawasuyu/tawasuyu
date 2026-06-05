@@ -74,6 +74,14 @@ pub enum Msg {
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
+    /// Rueda del mouse sobre el medidor de volumen: ajusta el volumen del sink
+    /// por defecto. El `f32` es el delta de la rueda (signo = dirección).
+    VolumeWheel(f32),
+    /// Click/click-derecho sobre el volumen: togglea el mute del sink.
+    VolumeMute,
+    /// Rueda del mouse sobre el medidor de brillo: ajusta la luminosidad de la
+    /// pantalla. El `f32` es el delta de la rueda (signo = dirección).
+    BrightnessWheel(f32),
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
     /// Carácter al buscador del menú de inicio.
@@ -516,6 +524,17 @@ impl App for PataApp {
             Msg::ShumaScroll(delta) => model.shuma.scroll_by(delta),
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
+            Msg::VolumeWheel(dy) => {
+                if dy != 0.0 {
+                    sampler::nudge_volume(dy > 0.0);
+                }
+            }
+            Msg::VolumeMute => sampler::toggle_mute(),
+            Msg::BrightnessWheel(dy) => {
+                if dy != 0.0 {
+                    sampler::nudge_brightness(dy > 0.0);
+                }
+            }
             Msg::StartToggle => {
                 model.menu_open = !model.menu_open;
                 if !model.menu_open {

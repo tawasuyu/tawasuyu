@@ -323,6 +323,43 @@ fn sample_volume() -> Option<(f32, bool)> {
     Some((vol, muted))
 }
 
+/// Ajusta el volumen del sink por defecto en pasos de 5% (relativo). `up` sube,
+/// `!up` baja. Lanza el comando **desacoplado** (no espera): se llama desde el
+/// hilo de UI al girar la rueda y no debe bloquearlo. Prueba PipeWire (`wpctl`,
+/// con tope `-l 1.5` para no pasarse de 150%) y cae a PulseAudio (`pactl`) en la
+/// misma invocación de `sh`. El medidor refleja el cambio en el próximo tick.
+pub fn nudge_volume(up: bool) {
+    let cmd = if up {
+        "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+ || pactl set-sink-volume @DEFAULT_SINK@ +5%"
+    } else {
+        "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- || pactl set-sink-volume @DEFAULT_SINK@ -5%"
+    };
+    crate::spawn_cmd(cmd);
+}
+
+/// Togglea el mute del sink por defecto (PipeWire `wpctl`, fallback PulseAudio
+/// `pactl`). Desacoplado, como [`nudge_volume`].
+pub fn toggle_mute() {
+    crate::spawn_cmd(
+        "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle || pactl set-sink-mute @DEFAULT_SINK@ toggle",
+    );
+}
+
+/// Ajusta el brillo de la pantalla en pasos de 5% (relativo). `up` sube, `!up`
+/// baja. Usa `brightnessctl` (resuelve permisos vía systemd-logind o udev) y cae
+/// a `light`. Desacoplado, como [`nudge_volume`]. Cubre el panel del portátil
+/// (`/sys/class/backlight`); para monitores externos por DDC haría falta
+/// `ddcutil` (pendiente). El medidor refleja el cambio en el próximo tick.
+pub fn nudge_brightness(up: bool) {
+    let cmd = if up {
+        "brightnessctl set 5%+ || light -A 5"
+    } else {
+        // Tope inferior 1% para no apagar la pantalla del todo.
+        "brightnessctl set 5%- || light -U 5"
+    };
+    crate::spawn_cmd(cmd);
+}
+
 /// El texto del portapapeles vía `wl-paste` (wl-clipboard), ya colapsado a una
 /// línea. `None` si `wl-paste` no está, si el portapapeles está vacío o no es
 /// texto (p. ej. una imagen). Corre un subproceso por muestreo (~1Hz), como el

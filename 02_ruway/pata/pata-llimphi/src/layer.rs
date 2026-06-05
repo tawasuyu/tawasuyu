@@ -1416,6 +1416,17 @@ impl LayerApp {
                 self.marcar_shuma_dirty();
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
+            Msg::VolumeWheel(dy) => {
+                if dy != 0.0 {
+                    crate::sampler::nudge_volume(dy > 0.0);
+                }
+            }
+            Msg::VolumeMute => crate::sampler::toggle_mute(),
+            Msg::BrightnessWheel(dy) => {
+                if dy != 0.0 {
+                    crate::sampler::nudge_brightness(dy > 0.0);
+                }
+            }
             Msg::StartToggle => self.set_menu_open(!self.menu_open),
             Msg::StartScroll(delta) => {
                 // Recorre la lista del menú. content/viewport aproximados (el
