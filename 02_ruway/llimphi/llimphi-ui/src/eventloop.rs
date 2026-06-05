@@ -56,6 +56,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             drag: None,
             focused: None,
             last_title: None,
+            anim_registry: llimphi_compositor::AnimRegistry::new(),
         });
         // Sincroniza el factor de escala inicial (el de la ventana recién
         // creada) ANTES del primer render: así una app que dependa del DPI
@@ -699,7 +700,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // Reusamos los árboles de layout del runtime: `clear()` +
                 // `mount` evita re-allocar el slotmap de taffy por frame.
                 state.layout.clear();
-                let mounted: Mounted<A::Msg> = mount(&mut state.layout, view);
+                let mut mounted: Mounted<A::Msg> = mount(&mut state.layout, view);
                 let computed = {
                     let ts = &mut state.typesetter;
                     let tmap = &mounted.text_measures;
@@ -713,6 +714,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         })
                         .expect("layout")
                 };
+                // Animaciones implícitas (`View::animated`): reconcilia el árbol
+                // con el estado retenido DESPUÉS del layout y ANTES del paint —
+                // interpola fill/radius de los nodos con `anim`. Si alguna sigue
+                // viva pedimos otro frame al final (ticker autodetenido).
+                let animating = state
+                    .anim_registry
+                    .reconcile(&mut mounted, std::time::Instant::now());
                 // Mount + layout del overlay en un árbol aparte. Lo
                 // computamos con el mismo tamaño de viewport para que
                 // un scrim a percent(1.0) cubra toda la pantalla.
@@ -900,6 +908,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         .submit(std::iter::once(gpu_encoder.finish()));
                 }
                 state.surface.present(frame, &state.hal);
+                // Ticker de animaciones implícitas: si quedó alguna en curso,
+                // pedí el próximo frame. Cuando todas se asientan, `animating`
+                // queda false y el loop de redraws se detiene solo (sin render
+                // ocioso, sin spawn_periodic por animación).
+                if animating {
+                    state.window.request_redraw();
+                }
                 state.last_render = Some(RenderCache {
                     mounted,
                     computed,

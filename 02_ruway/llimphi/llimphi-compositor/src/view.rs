@@ -31,6 +31,7 @@ impl<Msg> View<Msg> {
             on_scroll: None,
             focusable: None,
             alpha: None,
+            anim: None,
             transform: None,
             tooltip: None,
             children: Vec::new(),
@@ -94,6 +95,31 @@ impl<Msg> View<Msg> {
     /// cuando sea necesario (no es gratuito).
     pub fn alpha(mut self, a: f32) -> Self {
         self.alpha = Some(a.clamp(0.0, 1.0));
+        self
+    }
+
+    /// Anima de forma **implícita** las props de paint de este nodo
+    /// (hoy `fill` y `radius`): cuando su valor cambia entre frames, el
+    /// runtime interpola en `duration` con ease-out cúbico en vez de saltar
+    /// (estilo Flutter `AnimatedContainer`). `key` debe ser **estable** entre
+    /// rebuilds del `View` (índice de item, hash de id) — es lo que enlaza
+    /// "el mismo nodo" entre frames; dos nodos distintos no deben compartir
+    /// key. La primera aparición no anima; sólo los cambios posteriores. Para
+    /// otra curva, [`Self::animated_curve`].
+    pub fn animated(mut self, key: u64, duration: std::time::Duration) -> Self {
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic });
+        self
+    }
+
+    /// Como [`Self::animated`] pero con easing explícito (p. ej.
+    /// `llimphi_theme::motion::ease_in_out_cubic`).
+    pub fn animated_curve(
+        mut self,
+        key: u64,
+        duration: std::time::Duration,
+        easing: fn(f32) -> f32,
+    ) -> Self {
+        self.anim = Some(Anim { key, duration, easing });
         self
     }
 

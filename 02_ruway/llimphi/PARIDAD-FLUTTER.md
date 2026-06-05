@@ -41,10 +41,13 @@ fingen el borde con un rect-padre inset).
 Hay `Tween` + `animate()`, pero cada animación se cablea a mano (tween en Model +
 `spawn_periodic` + guard de generación).
 
-- Animaciones **implícitas** (`AnimatedContainer`/`AnimatedOpacity`): el nodo
-  interpola solo entre valor anterior y nuevo. Requiere identidad/keys de nodo en
-  el compositor. La mejora de DX más grande.
-- Ticker central (vsync) en vez de N `spawn_periodic`.
+- ✅ Animaciones **implícitas** (`AnimatedContainer`): `View::animated(key, dur)`
+  + `AnimRegistry` (estado retenido en el runtime, keyado por `key` estable). El
+  runtime reconcilia el árbol entre layout y paint, interpola `fill`/`radius` y
+  pide otro frame mientras alguna anima (ticker autodetenido, sin `spawn_periodic`).
+  Falta extender a más props (alpha, border, size→requiere re-layout) y `AnimatedOpacity`.
+- ✅ Ticker central: el redraw se reencola solo mientras haya animación viva; se
+  detiene al asentarse. Reemplaza N `spawn_periodic` para las implícitas.
 - Curvas: hoy 3 easings (`linear`, `ease_out_cubic`, `ease_in_out_cubic`) + spring physics.
 - Transiciones de página + Hero (shared-element). Hoy no hay routing.
 
@@ -85,7 +88,8 @@ a 5k nodos" de "a 50k".
    backdrop-blur) y abre Tier 2. `.radius_corners(...)`, `.text_weight(...)`/`.bold()`.
 3. ✅ **Bloque 3 = overflow/ellipsis** — `.ellipsis(n)`/`.max_lines(n)` +
    `Typesetter::layout_clamped`. Crítico para listas/labels/celdas.
-4. Animaciones implícitas (AnimatedContainer) — la mejora de DX más grande de Tier 3.
+4. ✅ **Bloque 4 = animaciones implícitas** — `View::animated(key, dur)` +
+   `AnimRegistry` + ticker autodetenido. Interpola fill/radius; ampliable.
 5. Pinch-zoom + scroll physics.
 6. AccessKit + slivers.
 

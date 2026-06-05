@@ -281,6 +281,7 @@ View::new(style: Style) -> View<Msg>
 | `.border(width, Color)` | stroke sobre el contorno redondeado, inset hacia adentro (border-box) |
 | `.alpha(f32)` | opacidad de todo el subtree `[0,1]` (capa intermedia — no gratis) |
 | `.transform(Affine)` | afín 2D alrededor del centro del rect (estilo CSS `transform-origin:50% 50%`) |
+| `.animated(key, Duration)` | animación **implícita** estilo Flutter `AnimatedContainer`: si `fill`/`radius` cambian entre frames, el runtime interpola (ease-out cúbico) en vez de saltar. `key` estable entre rebuilds. `.animated_curve(key,dur,fn)` para otra curva |
 | `.clip(bool)` | recorta hijos al rect (paint + hit-test) |
 | `.image(Image)` | pinta `peniko::Image` centrada, preservando aspect ratio |
 | `.children(Vec<View<Msg>>)` | hijos |
@@ -990,7 +991,7 @@ llimphi_ui::run::<X>();
 
 // ── Nodo ────────────────────────────────────────────────────
 View::new(Style{ flex_direction, size, gap, padding, align_items, justify_content, ..default() })
-    .fill(c).fill_gradient(g).hover_fill(c).radius(r).radius_corners(tl,tr,br,bl).shadow(sh).border(w,c).clip(b).alpha(a).transform(xf)
+    .fill(c).fill_gradient(g).hover_fill(c).radius(r).radius_corners(tl,tr,br,bl).shadow(sh).border(w,c).clip(b).alpha(a).transform(xf).animated(key,dur)
     .text(s, px, c) | .text_aligned(s,px,c,al) | .text_runs(s,px,c,runs,al) | .text_weight(w) | .bold() | .ellipsis(n) | .max_lines(n)
     .image(img) | .paint_with(|scene,ts,rect|{}) | .gpu_paint_with(|d,q,enc,view,rect,vp|{})
     .on_click(m) | .on_click_at(|lx,ly,w,h|) | .on_right_click(m) | .on_middle_click(m)

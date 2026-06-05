@@ -541,6 +541,11 @@ struct RuntimeState<A: App> {
     /// Último título dinámico aplicado a la ventana (ver [`App::window_title`]).
     /// Evita llamar `set_title` en cada frame cuando no cambió.
     last_title: Option<String>,
+    /// Registro de animaciones implícitas (`View::animated`), vivo entre
+    /// frames. En cada redraw reconcilia el árbol y, si alguna sigue en curso,
+    /// el runtime pide otro frame (ticker autodetenido). Ver
+    /// [`llimphi_compositor::AnimRegistry`].
+    anim_registry: llimphi_compositor::AnimRegistry,
 }
 
 struct RenderCache<Msg> {

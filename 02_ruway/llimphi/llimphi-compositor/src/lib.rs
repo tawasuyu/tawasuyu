@@ -22,8 +22,10 @@ use llimphi_layout::{ComputedLayout, LayoutTree, Style};
 use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, RoundedRectRadii, Stroke};
 use vello::peniko::{Color, Fill, Gradient, Image, Mix};
 
+mod anim;
 mod render;
 mod view;
+pub use anim::{ease_out_cubic, Anim, AnimRegistry};
 pub use render::*;
 
 /// Texto a pintar dentro de un nodo. Alineación por defecto `Center`
@@ -347,6 +349,12 @@ pub struct View<Msg> {
     /// composición tiene costo (allocate + blit), por lo que sólo
     /// poblar este slot cuando hace falta — no es un atributo gratis.
     pub alpha: Option<f32>,
+    /// Animación **implícita** de las props de paint (fill/radius): cuando el
+    /// valor cambia entre frames, el runtime interpola en vez de saltar. `None`
+    /// = sin animación (la abrumadora mayoría). La `key` debe ser estable entre
+    /// rebuilds. Ver [`Anim`] y [`View::animated`]. Lo consume el runtime vía
+    /// [`AnimRegistry::reconcile`] (DESPUÉS de layout, ANTES de paint).
+    pub anim: Option<Anim>,
     /// Transformación afín 2D aplicada a este nodo y todo su subtree
     /// **alrededor del centro de su propio rect** (convención CSS
     /// `transform-origin: 50% 50%`). El runtime resuelve el centro en
@@ -434,6 +442,7 @@ pub struct MountedNode<Msg> {
     pub on_scroll: Option<ScrollFn<Msg>>,
     pub focusable: Option<u64>,
     pub alpha: Option<f32>,
+    pub anim: Option<Anim>,
     /// Transformación afín 2D del nodo (alrededor del centro de su rect).
     /// Ver [`View::transform`]. `paint` la compone con la del padre.
     pub transform: Option<Affine>,
