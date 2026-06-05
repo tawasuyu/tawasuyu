@@ -1278,10 +1278,13 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     let mut items: Vec<(View<HostMsg>, f32)> = Vec::new();
     for id in &order {
         let g = &groups[id];
-        if g.first()
-            .map(|l| l.kind == OutputKind::Prompt)
-            .unwrap_or(false)
-        {
+        // Un bloque REAL (id != 0) va siempre a `command_card` (cuerpo IDE con
+        // select/copy/numeración), aunque su línea Prompt se haya recortado del
+        // buffer por el tope (output gigante tipo `ls -alR`): antes caía a
+        // `render_output_line` (líneas planas, sin IDE). Sólo `id == 0` (líneas
+        // huérfanas sin comando dueño) sigue como líneas sueltas. (El render
+        // plano que el usuario NO quiere ver — la app existe para desplanar.)
+        if *id != 0 {
             // depth 0 = el más reciente (negro profundo); crece hacia atrás.
             let depth = if newest_cmd > 0 {
                 (newest_cmd.saturating_sub(*id) as f32 / RECENCY_FADE).clamp(0.0, 1.0)
@@ -1297,7 +1300,7 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
                 lift,
             ));
         } else {
-            // Líneas sueltas (tope parcial tras capar, notices iniciales).
+            // Líneas sueltas (notices iniciales sin bloque dueño).
             for &line in g.iter() {
                 items.push((
                     render_output_line::<HostMsg>(line, &state.cwd, theme, lift),
@@ -2015,7 +2018,23 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
 ) -> (View<HostMsg>, f32) {
     let collapsed = state.collapsed.contains(&block);
-    let header_text = group[0].text.clone();
+    // El Prompt es `group[0]` salvo que se haya recortado del buffer (output
+    // gigante). En ese caso recuperamos el comando del mapa por bloque
+    // (`block_command`, poblado al abrir el bloque) y el cuerpo arranca en 0.
+    let has_prompt = group
+        .first()
+        .map(|l| l.kind == OutputKind::Prompt)
+        .unwrap_or(false);
+    let header_text = if has_prompt {
+        group[0].text.clone()
+    } else {
+        state
+            .block_command
+            .get(&block)
+            .cloned()
+            .unwrap_or_else(|| "$ … (salida recortada)".to_string())
+    };
+    let body_slice: &[&OutputLine] = if has_prompt { &group[1..] } else { group };
 
     // Separamos la notice de cierre (se promueve a badge), las líneas de
     // etapas intermedias (tee — van a su desplegable) y el resto (cuerpo).
@@ -2023,7 +2042,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     let mut body: Vec<&OutputLine> = Vec::new();
     let mut stage_lines: Vec<&OutputLine> = Vec::new();
     let mut status: Option<CmdStatus> = None;
-    for &l in &group[1..] {
+    for &l in body_slice {
         if l.stage.is_some() {
             stage_lines.push(l);
         } else if let Some(st) = CmdStatus::from_notice(&l.text) {

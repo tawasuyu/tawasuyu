@@ -408,6 +408,10 @@ pub struct State {
     /// de "hace N minutos" en vez del crudo "exit N". Lo setea
     /// [`State::push_output`] (Prompt) y [`State::open_block`].
     pub block_started: std::collections::HashMap<u64, u64>,
+    /// Texto del comando (`$ …`) por bloque. Se guarda al abrir el bloque para
+    /// que el header de la card sobreviva aunque la línea Prompt se recorte del
+    /// buffer en un output gigante (`MAX_OUTPUT_LINES`).
+    pub block_command: std::collections::HashMap<u64, String>,
     /// Instante (unix ms) de la última tecla en el input — ancla del
     /// parpadeo del caret: queda sólido un instante tras tipear y luego
     /// titila, para que se sienta vivo sin distraer.
@@ -500,6 +504,7 @@ impl State {
             body_sel: None,
             body_drag_accum: (0.0, 0.0),
             block_started: std::collections::HashMap::new(),
+            block_command: std::collections::HashMap::new(),
             input_edit_at_ms: now_unix_millis(),
             config,
         }
@@ -514,6 +519,10 @@ impl State {
             self.block_seq += 1;
             self.current_block = self.block_seq;
             self.block_started.insert(self.current_block, now_unix_secs());
+            // Guardamos el comando para que el header sobreviva al recorte del
+            // buffer en outputs gigantes (ver `command_card`).
+            self.block_command
+                .insert(self.current_block, line.text.clone());
         }
         line.block = self.current_block;
         push_line(&mut self.output, line);
