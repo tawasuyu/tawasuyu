@@ -26,6 +26,16 @@ use crate::diagnostics::{Diagnostic, Severity};
 use crate::highlight::{Language, Span, SyntaxPalette, TokenKind};
 use crate::state::EditorState;
 
+/// Tope de líneas que la variante embebida (`text_editor_view_colored`)
+/// renderiza de una. La virtualización del editor-de-archivos capa a 200 para
+/// no generar miles de Views (wgpu rechaza el bind group); pero la variante
+/// embebida deja el scroll al contenedor de afuera y necesita pintar TODAS sus
+/// líneas (si no, la mitad de abajo queda sin pintar = negro al anclar el panel
+/// al fondo). Este tope es sólo la red de seguridad de wgpu — el caller acota el
+/// total real (el shell, por su `MAX_VISIBLE = 400`). Probado: ~400 líneas
+/// renderizan sin que wgpu rechace nada (el render plano viejo ya lo hacía).
+pub const EMBEDDED_LINE_CAP: usize = 512;
+
 /// Paleta del editor. Defaults dark.
 #[derive(Debug, Clone, Copy)]
 pub struct EditorPalette {
@@ -307,7 +317,10 @@ pub fn text_editor_view_colored<Msg: Clone + 'static>(
 ) -> View<Msg> {
     let caret = state.cursor.caret;
     let syntax = crate::syntax_palette_dark(&llimphi_theme::Theme::dark());
-    let visible = visible_lines.max(1).min(200);
+    // Variante embebida: el contenedor de afuera (el panel de output del shell)
+    // hace el scroll y reserva alto para TODAS las líneas, así que las pintamos
+    // completas (cap alto = red de seguridad de wgpu, ver `EMBEDDED_LINE_CAP`).
+    let visible = visible_lines.max(1).min(EMBEDDED_LINE_CAP);
     let line_count = state.line_count();
     let scroll = state.scroll_offset.min(line_count.saturating_sub(1));
     let end_line = (scroll + visible).min(line_count);
