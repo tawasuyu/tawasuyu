@@ -22,16 +22,16 @@ fingen el borde con un rect-padre inset).
 
 | Falta | Función a desarrollar | Dónde | Notas |
 |---|---|---|---|
-| Sombras / elevación | `.shadow(ShadowSpec{ blur, offset, color, spread })` | compositor + raster | vello: `draw_blurred_rounded_rect` nativo. Brecha #1. |
-| Gradientes como fill | `.fill_gradient(Gradient)` (linear/radial/sweep) | compositor | `peniko::Gradient` ya está. |
-| Bordes reales | `.border(width, color)` / `.border_sides(...)` | compositor + raster | stroke de rounded-rect; mata el truco del rect-padre. |
-| Radio por esquina | `.radius_corners(tl,tr,br,bl)` | compositor | hoy `radius` es `f64` uniforme. |
-| Backdrop blur (glass) | `.backdrop_blur(sigma)` | raster | caro (samplea el framebuffer detrás); el look "moderno". |
+| ✅ Sombras / elevación | `.shadow(Shadow{ blur, offset, color, spread })` | compositor | vello: `draw_blurred_rounded_rect` nativo. Brecha #1. |
+| ✅ Gradientes como fill | `.fill_gradient(Gradient)` (linear/radial/sweep) | compositor | `peniko::Gradient` ya está. |
+| ✅ Bordes reales | `.border(width, color)` | compositor | stroke de rounded-rect; mata el truco del rect-padre. Respeta radio por esquina. |
+| ✅ Radio por esquina | `.radius_corners(tl,tr,br,bl)` | compositor | override de `radius` uniforme; sombra sigue usando el escalar. |
+| Backdrop blur (glass) | `.backdrop_blur(sigma)` | raster | caro (samplea el framebuffer detrás); el look "moderno". Único pendiente del Tier 1. |
 
 ### 🟢 Tier 2 — texto rico (parley lo soporta, falta exponerlo)
-`TextSpec` hoy sólo expone `italic` + color por rango. **No hay peso de fuente.**
+`TextSpec` hoy expone `italic`, color por rango y **peso de fuente**.
 
-- Peso/bold → `weight: FontWeight` en `TextSpec` + `.text_weight(...)`. Casi gratis, altísimo impacto.
+- ✅ Peso/bold → `weight: f32` en `TextSpec` + `.text_weight(...)`/`.bold()`. Fluye por medida y pintado (camino directo a `Typesetter::layout`, no `TextBlock`).
 - Spans inline mixtos (tamaño/peso/familia/link por rango, no sólo color) → `RichText` real.
 - Decoración: subrayado / tachado.
 - Overflow/ellipsis (`maxLines` + `…`) → crítico para listas/labels. Hoy no existe.
@@ -78,12 +78,14 @@ a 5k nodos" de "a 50k".
 
 ## Orden de ejecución sugerido
 
-1. **Bloque 1 = Tier 1 (sombra+gradiente+borde+peso)** — builders de `View` sobre
+1. ✅ **Bloque 1 = Tier 1 (sombra+gradiente+borde)** — builders de `View` sobre
    primitivas existentes. Máximo retorno visual; limpia deuda de widgets que las
-   fingen. ← arrancamos por acá.
-2. Overflow/ellipsis + animaciones implícitas.
-3. Pinch-zoom + scroll physics.
-4. AccessKit + slivers.
+   fingen.
+2. ✅ **Bloque 2 = radio por esquina + peso de fuente** — cierra Tier 1 (salvo
+   backdrop-blur) y abre Tier 2. `.radius_corners(...)`, `.text_weight(...)`/`.bold()`.
+3. Overflow/ellipsis + animaciones implícitas.
+4. Pinch-zoom + scroll physics.
+5. AccessKit + slivers.
 
 ## Tier 7 — detalle (accesibilidad)
 

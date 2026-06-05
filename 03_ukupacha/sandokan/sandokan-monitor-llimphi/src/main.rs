@@ -1158,13 +1158,13 @@ fn map_body(model: &Model) -> View<Msg> {
 
             // Etiqueta: nombre arriba y, si hay alto, %CPU · RAM debajo.
             if c.w > 46.0 && c.h > 15.0 {
-                let name = ts.layout(&c.label, 11.0, None, Alignment::Start, 1.2, false, None);
+                let name = ts.layout(&c.label, 11.0, None, Alignment::Start, 1.2, false, None, 400.0);
                 if measurement(&name).width <= c.w - 6.0 {
                     draw_layout(scene, &name, label_col, ((c.x + 3.0) as f64, (c.y + 2.0) as f64));
                 }
                 if c.h > 30.0 {
                     let stats = format!("{:.0}% · {}", c.cpu, fmt_mem(c.mem_kb * 1024));
-                    let sl = ts.layout(&stats, 9.5, None, Alignment::Start, 1.2, false, None);
+                    let sl = ts.layout(&stats, 9.5, None, Alignment::Start, 1.2, false, None, 400.0);
                     if measurement(&sl).width <= c.w - 6.0 {
                         let sc = label_col.with_alpha(0.72);
                         draw_layout(scene, &sl, sc, ((c.x + 3.0) as f64, (c.y + 15.0) as f64));
@@ -2000,7 +2000,7 @@ fn command_node(cmd: &str, color: Color) -> View<Msg> {
             return;
         }
         let avail = (rect.w - 4.0).max(1.0);
-        let layout = ts.layout(&cmd, 11.5, None, Alignment::Start, 1.2, false, None);
+        let layout = ts.layout(&cmd, 11.5, None, Alignment::Start, 1.2, false, None, 400.0);
         let m = measurement(&layout);
         let x = (rect.x + 2.0) as f64;
         let y = (rect.y + ((rect.h - m.height) / 2.0).max(0.0)) as f64;
@@ -2013,7 +2013,7 @@ fn command_node(cmd: &str, color: Color) -> View<Msg> {
             let fit = ((avail / avg).floor() as usize).saturating_sub(2).min(n);
             let mut s: String = cmd.chars().take(fit).collect();
             s.push_str("...");
-            let lay = ts.layout(&s, 11.5, None, Alignment::Start, 1.2, false, None);
+            let lay = ts.layout(&s, 11.5, None, Alignment::Start, 1.2, false, None, 400.0);
             draw_layout(scene, &lay, color, (x, y));
         }
     })

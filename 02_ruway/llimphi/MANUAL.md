@@ -275,7 +275,8 @@ View::new(style: Style) -> View<Msg>
 | `.fill(Color)` | color de fondo |
 | `.fill_gradient(Gradient)` | relleno con gradiente (autoreado en el cuadrado unidad `[0,1]²`, mapeado al rect). Gana sobre `fill`; `hover_fill` lo overridea en hover |
 | `.hover_fill(Color)` | color al pasar el cursor (habilita hit-test de hover) |
-| `.radius(f64)` | esquinas redondeadas |
+| `.radius(f64)` | esquinas redondeadas (radio uniforme) |
+| `.radius_corners(tl,tr,br,bl)` | radio **por esquina** (CSS `border-radius` 4 valores); override de `.radius`. El borde sigue las 4 esquinas; la sombra usa el radio escalar |
 | `.shadow(Shadow)` | drop shadow (vello `draw_blurred_rounded_rect`). `Shadow::soft(alpha,blur)` + `.offset(dx,dy)`/`.spread(s)` |
 | `.border(width, Color)` | stroke sobre el contorno redondeado, inset hacia adentro (border-box) |
 | `.alpha(f32)` | opacidad de todo el subtree `[0,1]` (capa intermedia — no gratis) |
@@ -292,6 +293,8 @@ View::new(style: Style) -> View<Msg>
 .text_aligned_full(content, size_px, color, Alignment, italic, font_family: Option<String>)
 .text_runs(content, size_px, default_color, runs: Vec<(usize,usize,Color)>, Alignment) // multicolor 1-pasada
 .line_height(mult)                                        // override interlínea (default 1.2)
+.text_weight(f32)                                         // peso CSS: 400 normal, 600 semibold, 700 bold
+.bold()                                                   // atajo de text_weight(700.0)
 ```
 
 ### Interacción (ver §8)
@@ -985,8 +988,8 @@ llimphi_ui::run::<X>();
 
 // ── Nodo ────────────────────────────────────────────────────
 View::new(Style{ flex_direction, size, gap, padding, align_items, justify_content, ..default() })
-    .fill(c).fill_gradient(g).hover_fill(c).radius(r).shadow(sh).border(w,c).clip(b).alpha(a).transform(xf)
-    .text(s, px, c) | .text_aligned(s,px,c,al) | .text_runs(s,px,c,runs,al)
+    .fill(c).fill_gradient(g).hover_fill(c).radius(r).radius_corners(tl,tr,br,bl).shadow(sh).border(w,c).clip(b).alpha(a).transform(xf)
+    .text(s, px, c) | .text_aligned(s,px,c,al) | .text_runs(s,px,c,runs,al) | .text_weight(w) | .bold()
     .image(img) | .paint_with(|scene,ts,rect|{}) | .gpu_paint_with(|d,q,enc,view,rect,vp|{})
     .on_click(m) | .on_click_at(|lx,ly,w,h|) | .on_right_click(m) | .on_middle_click(m)
     .on_pointer_enter(m) | .on_pointer_leave(m)
