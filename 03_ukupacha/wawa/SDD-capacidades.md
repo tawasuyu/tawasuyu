@@ -147,7 +147,26 @@ génesis se forjan **fuera de banda** y se embeben:
    Calcula el hash del OBJETO-bytecode IGUAL que el génesis (`Objeto{datos:wasm,
    hijos:[]}` → BLAKE3 — contrato lockeado por test contra `construir_release`),
    firma `(hash, permisos)` y emite la concesión envuelta en un `Objeto` del
-   grafo. `--permisos` acepta máscara (`0x4`) o nombres (`RED,RAIZ`).
+   grafo. `--permisos` acepta máscara (`0x4`) o nombres (`RED,RAIZ`). Ojo: `--como`
+   es el **ID hex (o prefijo)** de la identidad firmante, no un nombre — `concesion`
+   resuelve por hex contra el grafo (`resolver_id`), no por el `--name` de
+   `forjar-clave`; la pubkey que debe estar en `AGORA_AUTH_RING` es el **autor** que
+   imprime el comando (la `IdentityId` no es la pubkey Ed25519 de firma).
+
+   **CEREMONIA AUTOMATIZADA (2026-06-05):** `scripts/wawa-conceder-genesis.sh`
+   recorre la tabla viva `GENESIS` de `wawa-boot/src/main.rs` (guard anti-drift:
+   cuenta declarada vs parseada), filtra las apps con `permisos != 0` y corre
+   `agora-cli wawa concesion` por cada una hacia `assets/concesiones/`. Una sola
+   invocación cubre las 9 apps con permisos en vez de 9 a mano:
+
+   ```
+   scripts/wawa-conceder-genesis.sh --dry-run               # ver el plan
+   scripts/wawa-conceder-genesis.sh --como <hex_id_slot0>   # firmar las 9
+   ```
+
+   El contrato hash-del-objeto + intersección está lockeado por el test
+   `pipeline_concesion_ata_el_objeto_bytecode_y_resuelve_por_interseccion`
+   (agora-channel).
 2. Esas concesiones se siembran como objetos del grafo y sus hashes se ponen en
    el campo `concesion` de cada `EntradaApp` del manifiesto génesis. **SEAM
    CABLEADO (2026-05-30):** `wawa-boot::sembrar_grafo` llama a `sembrar_concesion`

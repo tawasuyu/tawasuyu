@@ -141,7 +141,7 @@ de lo automatizable.
 
 | App | Acción de cierre | Quién |
 |---|---|---|
-| **agora** (80) | Tabla de capacidades por bytecode hash (§14.1.3 — *primitivos YA existen*) | 🤖 — alto valor, es el "norte" de wawa |
+| **agora** (80) | Tabla de capacidades por bytecode hash (§14.1.3) — **code-complete**: enforcement cableado + tool + boot-anchor + ceremonia scripteada (`scripts/wawa-conceder-genesis.sh`). Resta SÓLO el paso de operador (firmar con seed slot-0 + flip a estricto). | 🧑 — ceremonia con tu seed |
 | **minga** (80) | `MingaPeer` genérico para escala | 🤖 |
 | **arje** (78) | Cleanup socket daemon + `RestartTracker` en `LocalEngine` | 🤖 |
 | **supay** (78) | BSP-walking real (orden de render). *Audio vía takiy: ✅ hecho (`play_takiy_score`).* | 🤖 |

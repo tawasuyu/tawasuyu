@@ -47,6 +47,6 @@ cargo run --release -p agora-app
 - UI Llimphi `agora-app` con tiles (identidades, atestaciones, multifirma, política, capacidad, release) + menú principal y contextuales; `agora-channel` (forja de propuestas/release) con demo y test e2e de mudanza.
 
 ### Pendiente
-- Tabla de capacidades por hash de bytecode (WAWA.md §14.1.3): derivar permisos de la firma sobre `(hash_bytecode, permisos)` en vez de declararlos en `EntradaApp`.
+- Tabla de capacidades por hash de bytecode (WAWA.md §14.1.3): **code-complete** — primitivos (`firmar/verificar_capacidad`), espejo kernel (`verificar_concesion_capacidad`), intersección cableada en la carga (`permisos_efectivos_de`), tool de operador (`agora-cli wawa concesion`), anclaje en boot (`sembrar_concesion`) y ceremonia automatizada (`scripts/wawa-conceder-genesis.sh`) ya existen. Resta sólo el **paso de operador**: correr la ceremonia con la seed slot-0 (siembra `assets/concesiones/`) y luego flipear `MODO_CAPACIDAD_ESTRICTO_GLOBAL = true`.
 - Convergencia de red más allá del par agora/minga: aún sin descubrimiento masivo ni hardening de rate-limit en escenarios adversarios reales.
 - Las 17 aplicaciones priorizadas en `APLICACIONES.md` son diseño/roadmap; sólo el sustrato (identidad + grafo de confianza) está implementado.

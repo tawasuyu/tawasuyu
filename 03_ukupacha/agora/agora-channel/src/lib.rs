@@ -482,6 +482,54 @@ mod tests {
     }
 
     #[test]
+    fn pipeline_concesion_ata_el_objeto_bytecode_y_resuelve_por_interseccion() {
+        use format::{PERMISO_GRAFO_ESCRITURA, PERMISO_RAIZ, PERMISO_RED};
+        // Contrato end-to-end de la ceremonia (WAWA §14.1.3), el seam del que
+        // dependen `agora-cli wawa concesion`, `wawa-boot::sembrar_concesion` y
+        // `wawa-kernel::permisos_efectivos_de`. Un regresión acá rompe TODA
+        // concesión en silencio.
+
+        // 1. "wasm" crudo de la app.
+        let wasm: Vec<u8> = vec![0x00, 0x61, 0x73, 0x6d, 1, 2, 3, 4];
+        // 2. El hash que el génesis ancla y que `wawa concesion` firma es el del
+        //    OBJETO del grafo `Objeto{datos:wasm,hijos:[]}` (serializado→BLAKE3),
+        //    NO el de los bytes crudos. Es la sutileza que más fácil se rompe.
+        let obj = format::Objeto { datos: wasm.clone(), hijos: Vec::new() };
+        let bytecode = format::hash(&obj.serializar().expect("serializar objeto"));
+        assert_ne!(
+            bytecode,
+            format::hash(&wasm),
+            "la concesión firma el OBJETO, no el wasm crudo"
+        );
+
+        // 3. El operador concede RED|RAIZ sobre ese bytecode (lo que hace el script).
+        let kp = Keypair::from_seed([7; 32]);
+        let concedidos = PERMISO_RED | PERMISO_RAIZ;
+        let c = firmar_capacidad(&kp, &bytecode, concedidos);
+
+        // 4. Lo que valida `wawa-boot::sembrar_concesion` al anclarla: la concesión
+        //    ata EXACTO el bytecode del objeto sembrado, y la firma verifica.
+        assert_eq!(c.bytecode, bytecode, "ata el bytecode del objeto");
+        assert!(verificar_capacidad(&c).is_ok());
+
+        // 5. Lo que hace el kernel: efectivos = declarados ∩ concedidos. La
+        //    concesión NUNCA puede AÑADIR sobre lo declarado, sólo recortar
+        //    (y el manifiesto tampoco puede escalar más allá de la concesión).
+        let declarados = PERMISO_RED | PERMISO_RAIZ | PERMISO_GRAFO_ESCRITURA;
+        assert_eq!(
+            format::permisos_efectivos(declarados, c.permisos),
+            PERMISO_RED | PERMISO_RAIZ,
+            "intersección: GRAFO_ESCRITURA declarado pero no concedido → fuera"
+        );
+
+        // 6. Una concesión para OTRO objeto-bytecode no aplica (boot la rechaza por
+        //    el match `c.bytecode == entrada.bytecode`).
+        let otro = format::Objeto { datos: vec![9, 9, 9], hijos: Vec::new() };
+        let otro_bc = format::hash(&otro.serializar().unwrap());
+        assert_ne!(c.bytecode, otro_bc);
+    }
+
+    #[test]
     fn concesion_con_autor_ajeno_falla() {
         use format::PERMISO_RED;
         let real = Keypair::from_seed([7; 32]);
