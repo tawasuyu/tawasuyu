@@ -17,6 +17,8 @@ llimphi-widget-slider = { workspace = true }
 llimphi-widget-segmented = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
+llimphi-widget-table = { workspace = true }
+llimphi-widget-color-picker = { workspace = true }
 
 [dev-dependencies]
 # Volcado headless del view a PNG (llvmpipe) para verlo sin levantar ventana,

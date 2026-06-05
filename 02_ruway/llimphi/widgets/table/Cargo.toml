@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-table"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-table — tabla y lista editables: celdas-texto con quitar/agregar fila. Stateless (el caller posee el foco). Agnóstico."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }

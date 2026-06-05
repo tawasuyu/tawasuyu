@@ -253,6 +253,8 @@ members = [
     "02_ruway/llimphi/llimphi-workspace",
     "02_ruway/llimphi/widgets/list",
     "02_ruway/llimphi/widgets/grid",
+    "02_ruway/llimphi/widgets/table",
+    "02_ruway/llimphi/widgets/color-picker",
     "02_ruway/llimphi/widgets/slider",
     "02_ruway/llimphi/widgets/scroll",
     "02_ruway/llimphi/widgets/splitter",
@@ -655,6 +657,8 @@ llimphi-widget-edit-menu = { path = "02_ruway/llimphi/widgets/edit-menu" }
 llimphi-widget-menubar = { path = "02_ruway/llimphi/widgets/menubar" }
 llimphi-widget-list = { path = "02_ruway/llimphi/widgets/list" }
 llimphi-widget-grid = { path = "02_ruway/llimphi/widgets/grid" }
+llimphi-widget-table = { path = "02_ruway/llimphi/widgets/table" }
+llimphi-widget-color-picker = { path = "02_ruway/llimphi/widgets/color-picker" }
 llimphi-widget-slider = { path = "02_ruway/llimphi/widgets/slider" }
 llimphi-widget-scroll = { path = "02_ruway/llimphi/widgets/scroll" }
 llimphi-widget-splitter = { path = "02_ruway/llimphi/widgets/splitter" }

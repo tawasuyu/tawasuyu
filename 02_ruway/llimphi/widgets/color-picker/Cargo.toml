@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-color-picker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-color-picker — selector de color RGBA: swatch actual + paleta de chips preestablecidos + sliders RGBA. Agnóstico (emite [u8;4])."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-slider = { workspace = true }

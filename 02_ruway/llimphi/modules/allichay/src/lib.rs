@@ -28,18 +28,20 @@ use allichay::{Control, Field, FieldPath, FieldValue, Schema};
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
-    AlignItems, FlexWrap, JustifyContent, Rect,
+    AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, KeyEvent, View};
 use llimphi_theme::Theme;
 
+use llimphi_widget_color_picker::{color_picker_view, color_picker_height, ColorPickerPalette, DEFAULT_SWATCHES};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_switch::{switch_view, SwitchPalette};
+use llimphi_widget_table::{list_view, table_view, table_height, TablePalette};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
 use std::collections::BTreeMap;
@@ -232,6 +234,16 @@ impl AllichayState {
     /// Acceso interno al buffer de una celda focada para pintarla.
     fn input_cell(&self, path: &FieldPath, row: usize, col: usize) -> Option<&TextInputState> {
         self.inputs.get(&cell_key(path, row, col))
+    }
+
+    /// La celda focada `(row, col)` si pertenece a `path`; `None` si el foco está
+    /// en otro campo o no hay foco de celda. Para pasarle al widget de tabla cuál
+    /// celda de ESTE agregado está en edición.
+    fn focused_cell_of(&self, path: &FieldPath) -> Option<(usize, usize)> {
+        self.edit_cell
+            .as_ref()
+            .filter(|c| &c.path == path)
+            .map(|c| (c.row, c.col))
     }
 }
 
@@ -473,9 +485,6 @@ fn estimate_height(schema: &Schema) -> f32 {
 
 /// Alto del control de un campo (px). Para los agregados (lista/tabla) depende
 /// del número de filas, por eso toma el [`Field`] entero y no sólo su control.
-const AGG_ROW_H: f32 = 30.0; // alto de una fila editable de lista/tabla
-const AGG_CHROME_H: f32 = 24.0 + 32.0; // encabezado de tabla + botón "agregar"
-
 fn field_height(field: &Field) -> f32 {
     match &field.control {
         Control::Toggle => 22.0,
@@ -490,11 +499,9 @@ fn field_height(field: &Field) -> f32 {
             }
         }
         Control::TextInput => 34.0,
-        // swatch + paleta de chips (2 filas a 22px) + 4 sliders RGBA
-        Control::ColorPicker => 16.0 + 54.0 + 4.0 * 24.0,
-        Control::List { .. } | Control::Table { .. } => {
-            field.value.row_count() as f32 * AGG_ROW_H + AGG_CHROME_H
-        }
+        Control::ColorPicker => color_picker_height(),
+        Control::List { .. } => table_height(field.value.row_count(), false),
+        Control::Table { .. } => table_height(field.value.row_count(), true),
         Control::Display => 8.0, // fila compacta sin label arriba
     }
 }
@@ -877,149 +884,20 @@ fn radio_row<Msg: Clone + 'static>(
     row
 }
 
+/// Delega en el widget agnóstico `llimphi-widget-color-picker`, traduciendo su
+/// `[u8;4]` a `AllichayMsg::Change(path, Color(..))`.
 fn color_control<Msg, F>(field: &Field, path: FieldPath, theme: &Theme, on_msg: F) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
     let cur = field.value.as_color().unwrap_or([0, 0, 0, 255]);
-    let palette = SliderPalette::from_theme(theme);
-
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(6);
-    rows.push(swatch_view(cur));
-    rows.push(swatch_palette(cur, &path, theme, &on_msg));
-    for (ci, name) in [(0usize, "R"), (1, "G"), (2, "B"), (3, "A")] {
-        let f = on_msg.clone();
-        let p = path.clone();
-        rows.push(slider_view(
-            name.to_string(),
-            cur[ci] as f32,
-            0.0,
-            255.0,
-            &palette,
-            move |phase, dv| match phase {
-                DragPhase::Move => {
-                    let nv = (cur[ci] as f64 + dv as f64).clamp(0.0, 255.0) as u8;
-                    let mut c = cur;
-                    c[ci] = nv;
-                    Some(f(AllichayMsg::Change(p.clone(), FieldValue::Color(c))))
-                }
-                DragPhase::End => None,
-            },
-        ));
-    }
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: Dimension::auto(),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(2.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(rows)
-}
-
-fn swatch_view<Msg: Clone + 'static>(rgba: [u8; 4]) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: length(40.0_f32),
-            height: length(16.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(rgba[0], rgba[1], rgba[2], rgba[3]))
-    .radius(3.0)
-}
-
-/// Paleta de colores preestablecidos: grises + una rampa de tonos saturados,
-/// los típicos para marcos/acentos. Clic en un chip fija el RGB conservando el
-/// alfa actual — el camino rápido frente a los sliders RGBA.
-const SWATCHES: &[[u8; 3]] = &[
-    [0xEC, 0xEC, 0xEC],
-    [0x9E, 0x9E, 0x9E],
-    [0x42, 0x42, 0x42],
-    [0x5C, 0x8F, 0xEB],
-    [0x00, 0xBC, 0xD4],
-    [0x4C, 0xAF, 0x50],
-    [0xFF, 0xC1, 0x07],
-    [0xFF, 0x98, 0x00],
-    [0xF4, 0x43, 0x36],
-    [0xE9, 0x1E, 0x63],
-    [0x9C, 0x27, 0xB0],
-    [0x79, 0x55, 0x48],
-];
-
-/// La fila (envuelta) de chips de la paleta de swatches.
-fn swatch_palette<Msg, F>(cur: [u8; 4], path: &FieldPath, theme: &Theme, on_msg: &F) -> View<Msg>
-where
-    Msg: Clone + Send + Sync + 'static,
-    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
-{
-    let chips: Vec<View<Msg>> = SWATCHES
-        .iter()
-        .map(|rgb| swatch_chip(*rgb, cur, path, theme, on_msg))
-        .collect();
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        flex_wrap: FlexWrap::Wrap,
-        size: Size {
-            width: percent(1.0_f32),
-            height: Dimension::auto(),
-        },
-        gap: Size {
-            width: length(5.0_f32),
-            height: length(5.0_f32),
-        },
-        margin: Rect {
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            top: length(3.0_f32),
-            bottom: length(2.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(chips)
-}
-
-/// Un chip de la paleta: cuadrado de color clickeable. Si su RGB coincide con el
-/// color actual, lleva borde de acento (el chip activo); si no, borde sutil.
-fn swatch_chip<Msg, F>(
-    rgb: [u8; 3],
-    cur: [u8; 4],
-    path: &FieldPath,
-    theme: &Theme,
-    on_msg: &F,
-) -> View<Msg>
-where
-    Msg: Clone + Send + Sync + 'static,
-    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
-{
-    let active = cur[0] == rgb[0] && cur[1] == rgb[1] && cur[2] == rgb[2];
-    // Fija el RGB del chip conservando el alfa actual.
-    let new_color = [rgb[0], rgb[1], rgb[2], cur[3]];
-    View::new(Style {
-        size: Size {
-            width: length(22.0_f32),
-            height: length(22.0_f32),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(rgb[0], rgb[1], rgb[2], 255))
-    .radius(5.0)
-    .border(
-        if active { 2.0 } else { 1.0 },
-        if active { theme.accent } else { theme.border },
+    color_picker_view(
+        cur,
+        DEFAULT_SWATCHES,
+        &ColorPickerPalette::from_theme(theme),
+        move |rgba| on_msg(AllichayMsg::Change(path.clone(), FieldValue::Color(rgba))),
     )
-    .on_click(on_msg(AllichayMsg::Change(
-        path.clone(),
-        FieldValue::Color(new_color),
-    )))
 }
 
 fn text_control<Msg, F>(
@@ -1051,10 +929,10 @@ where
 // Agregados: lista y tabla
 // =====================================================================
 
-/// Pinta una **lista** editable: una fila de texto por item (+ quitar) y un
-/// botón "agregar" al pie. Cada edición/alta/baja emite el [`FieldValue::List`]
-/// entero y nuevo (protocolo "valor entero"), construido a partir del valor
-/// actual del campo.
+/// Delega en `list_view` del widget agnóstico `llimphi-widget-table`. El foco de
+/// celda lo posee el estado ([`AllichayState::focused_cell_of`]/`input_cell`);
+/// cada alta/baja/edición emite el [`FieldValue::List`] entero (protocolo "valor
+/// entero").
 fn list_control<Msg, F>(
     field: &Field,
     path: FieldPath,
@@ -1067,34 +945,34 @@ where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
-    let value = &field.value;
-    let rows_n = value.row_count();
-    let palette = TextInputPalette::from_theme(theme);
-
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(rows_n + 1);
-    for r in 0..rows_n {
-        let cell = cell_input(value, &path, r, 0, &palette, state, &on_msg);
-        let remove = remove_button(value.with_row_removed(r), path.clone(), theme, &on_msg);
-        rows.push(agg_row(vec![flex_cell(cell), remove]));
-    }
+    let items: Vec<String> = field.value.as_list().map(<[String]>::to_vec).unwrap_or_default();
+    let value = field.value.clone();
+    let focused = state.focused_cell_of(&path);
+    let focused_state = focused.and_then(|(r, c)| state.input_cell(&path, r, c));
     let add_label = if item_label.is_empty() {
         "Agregar".to_string()
     } else {
         format!("+ {item_label}")
     };
-    rows.push(add_button(
-        add_label,
-        value.with_row_pushed(1),
-        path,
-        theme,
-        on_msg,
-    ));
-    agg_column(rows)
+
+    let (p_focus, p_remove, p_add) = (path.clone(), path.clone(), path);
+    let (m_focus, m_remove, m_add) = (on_msg.clone(), on_msg.clone(), on_msg);
+    let v_remove = value.clone();
+    list_view(
+        &items,
+        focused.map(|(r, _)| r),
+        focused_state,
+        &add_label,
+        &TablePalette::from_theme(theme),
+        move |r| m_focus(AllichayMsg::FocusCell(p_focus.clone(), r, 0)),
+        move |r| m_remove(AllichayMsg::Change(p_remove.clone(), v_remove.with_row_removed(r))),
+        move || m_add(AllichayMsg::Change(p_add.clone(), value.with_row_pushed(1))),
+    )
 }
 
-/// Pinta una **tabla** editable: una fila de encabezados (las columnas) + una
-/// fila de celdas-texto por registro (+ quitar) + botón "agregar fila". Igual
-/// que la lista, cada cambio emite el [`FieldValue::Table`] entero.
+/// Delega en `table_view` del widget agnóstico `llimphi-widget-table`, igual que
+/// [`list_control`] pero con encabezados por columna. Cada cambio emite el
+/// [`FieldValue::Table`] entero.
 fn table_control<Msg, F>(
     field: &Field,
     path: FieldPath,
@@ -1107,214 +985,29 @@ where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
-    let value = &field.value;
-    let rows_n = value.row_count();
+    let headers: Vec<String> = columns.iter().map(|c| c.label.clone()).collect();
+    let rows: Vec<Vec<String>> = field
+        .value
+        .as_table()
+        .map(<[Vec<String>]>::to_vec)
+        .unwrap_or_default();
     let ncols = columns.len();
-    let palette = TextInputPalette::from_theme(theme);
+    let value = field.value.clone();
+    let focused = state.focused_cell_of(&path);
+    let focused_state = focused.and_then(|(r, c)| state.input_cell(&path, r, c));
 
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(rows_n + 2);
-
-    // Encabezados: una etiqueta por columna + hueco de la columna de "quitar".
-    let mut head: Vec<View<Msg>> = columns
-        .iter()
-        .map(|c| flex_cell(column_head(&c.label, theme)))
-        .collect();
-    head.push(remove_spacer());
-    rows.push(agg_row(head));
-
-    for r in 0..rows_n {
-        let mut cells: Vec<View<Msg>> = Vec::with_capacity(ncols + 1);
-        for c in 0..ncols {
-            cells.push(flex_cell(cell_input(value, &path, r, c, &palette, state, &on_msg)));
-        }
-        cells.push(remove_button(
-            value.with_row_removed(r),
-            path.clone(),
-            theme,
-            &on_msg,
-        ));
-        rows.push(agg_row(cells));
-    }
-    rows.push(add_button(
-        "+ fila".to_string(),
-        value.with_row_pushed(ncols),
-        path,
-        theme,
-        on_msg,
-    ));
-    agg_column(rows)
-}
-
-/// Un campo de texto de celda: igual que [`text_control`] pero su foco es por
-/// coordenada (`FocusCell`), no por `FieldPath`.
-fn cell_input<Msg, F>(
-    value: &FieldValue,
-    path: &FieldPath,
-    row: usize,
-    col: usize,
-    palette: &TextInputPalette,
-    state: &AllichayState,
-    on_msg: &F,
-) -> View<Msg>
-where
-    Msg: Clone + Send + Sync + 'static,
-    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
-{
-    let focus_msg = on_msg(AllichayMsg::FocusCell(path.clone(), row, col));
-    if state.is_focused_cell(path, row, col) {
-        if let Some(st) = state.input_cell(path, row, col) {
-            return text_input_view(st, "", true, palette, focus_msg);
-        }
-    }
-    let mut tmp = TextInputState::new();
-    tmp.set_text(value.cell(row, col).unwrap_or(""));
-    text_input_view(&tmp, "", false, palette, focus_msg)
-}
-
-/// Envuelve una celda en un contenedor que reparte el ancho en partes iguales
-/// entre columnas (`flex_grow:1, flex_basis:0`).
-fn flex_cell<Msg: Clone + 'static>(child: View<Msg>) -> View<Msg> {
-    View::new(Style {
-        flex_grow: 1.0,
-        flex_basis: length(0.0_f32),
-        size: Size {
-            width: Dimension::auto(),
-            height: Dimension::auto(),
-        },
-        min_size: Size {
-            width: length(0.0_f32),
-            height: Dimension::auto(),
-        },
-        ..Default::default()
-    })
-    .children(vec![child])
-}
-
-/// Una fila horizontal de un agregado (celdas + botón quitar).
-fn agg_row<Msg: Clone + 'static>(children: Vec<View<Msg>>) -> View<Msg> {
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: Dimension::auto(),
-        },
-        align_items: Some(AlignItems::Center),
-        gap: Size {
-            width: length(6.0_f32),
-            height: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(children)
-}
-
-/// El contenedor vertical del agregado (encabezado/filas/botón agregar).
-fn agg_column<Msg: Clone + 'static>(rows: Vec<View<Msg>>) -> View<Msg> {
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: Dimension::auto(),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(rows)
-}
-
-/// El encabezado de una columna de tabla.
-fn column_head<Msg: Clone + 'static>(label: &str, theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(16.0_f32),
-        },
-        ..Default::default()
-    })
-    .text_aligned(label.to_string(), 10.5, theme.fg_placeholder, Alignment::Start)
-}
-
-/// El botón cuadrado de "quitar fila" (✕).
-fn remove_button<Msg, F>(
-    new_value: FieldValue,
-    path: FieldPath,
-    theme: &Theme,
-    on_msg: &F,
-) -> View<Msg>
-where
-    Msg: Clone + Send + Sync + 'static,
-    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
-{
-    View::new(Style {
-        size: Size {
-            width: length(26.0_f32),
-            height: length(26.0_f32),
-        },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .radius(5.0)
-    .hover_fill(theme.bg_row_hover)
-    .on_click(on_msg(AllichayMsg::Change(path, new_value)))
-    // `×` (U+00D7) en vez de `✕` (U+2715): la fuente del SO sí trae el de
-    // Latin-1. Ver la regla "usar glifos que la fuente tenga".
-    .text_aligned("×".to_string(), 15.0, theme.fg_muted, Alignment::Center)
-}
-
-/// Un hueco del ancho del botón quitar, para alinear el encabezado de tabla.
-fn remove_spacer<Msg: Clone + 'static>() -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: length(26.0_f32),
-            height: length(16.0_f32),
-        },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-}
-
-/// El botón "agregar" al pie de un agregado.
-fn add_button<Msg, F>(
-    label: String,
-    new_value: FieldValue,
-    path: FieldPath,
-    theme: &Theme,
-    on_msg: F,
-) -> View<Msg>
-where
-    Msg: Clone + Send + Sync + 'static,
-    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
-{
-    View::new(Style {
-        size: Size {
-            width: Dimension::auto(),
-            height: length(26.0_f32),
-        },
-        align_self: Some(AlignItems::Start),
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        margin: Rect {
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            top: length(2.0_f32),
-            bottom: length(0.0_f32),
-        },
-        ..Default::default()
-    })
-    .radius(6.0)
-    .border(1.0, theme.border)
-    .hover_fill(theme.bg_row_hover)
-    .on_click(on_msg(AllichayMsg::Change(path, new_value)))
-    .text_aligned(label, 11.5, theme.accent, Alignment::Center)
+    let (p_focus, p_remove, p_add) = (path.clone(), path.clone(), path);
+    let (m_focus, m_remove, m_add) = (on_msg.clone(), on_msg.clone(), on_msg);
+    let v_remove = value.clone();
+    table_view(
+        &headers,
+        &rows,
+        focused,
+        focused_state,
+        "+ fila",
+        &TablePalette::from_theme(theme),
+        move |r, c| m_focus(AllichayMsg::FocusCell(p_focus.clone(), r, c)),
+        move |r| m_remove(AllichayMsg::Change(p_remove.clone(), v_remove.with_row_removed(r))),
+        move || m_add(AllichayMsg::Change(p_add.clone(), value.with_row_pushed(ncols))),
+    )
 }
