@@ -1175,6 +1175,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             }
             ":jobs" => return apply_jobs_list(s),
             ":term" => return apply_jobs_signal(s, rest, JobSignal::Term),
+            ":kill" => return apply_jobs_signal(s, rest, JobSignal::Kill),
             ":stop" => return apply_jobs_signal(s, rest, JobSignal::Stop),
             ":cont" => return apply_jobs_signal(s, rest, JobSignal::Cont),
             ":limit" => return apply_capture_limit(s, rest),
@@ -1209,7 +1210,10 @@ pub(crate) fn run_submitted(mut s: State) -> State {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum JobSignal {
+    /// SIGTERM — pedido cortés de terminar (`:term N`).
     Term,
+    /// SIGKILL — fin inmediato e incondicional (`:kill N`).
+    Kill,
     Stop,
     Cont,
 }
@@ -1250,13 +1254,14 @@ pub(crate) fn apply_jobs_list(mut s: State) -> State {
     s
 }
 
-/// Aplica `:term N` / `:stop N` / `:cont N` al job de índice `N`.
-/// Stop/Cont son no-op en jobs sin `Killer` (remotos vía daemon).
+/// Aplica `:term N` / `:kill N` / `:stop N` / `:cont N` al job de índice `N`.
+/// Stop/Cont son no-op en jobs sin `Killer` (remotos vía daemon); Term/Kill
+/// caen a cerrar el stream del daemon.
 pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> State {
     let idx: usize = match rest.trim().parse() {
         Ok(n) => n,
         Err(_) => {
-            s.push_output(OutputLine::notice("uso: :term N | :stop N | :cont N"));
+            s.push_output(OutputLine::notice("uso: :term N | :kill N | :stop N | :cont N"));
             return s;
         }
     };
@@ -1280,11 +1285,24 @@ pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> Sta
                 true
             }
         },
+        JobSignal::Kill => match guard.killer.as_ref() {
+            Some(k) => {
+                k.kill();
+                true
+            }
+            None => {
+                // Remoto: el daemon no expone SIGKILL fino; cerrar el stream
+                // es lo más fuerte que tenemos.
+                guard.handle.kill();
+                true
+            }
+        },
         JobSignal::Stop => guard.killer.as_ref().map(|k| k.stop()).unwrap_or(false),
         JobSignal::Cont => guard.killer.as_ref().map(|k| k.cont()).unwrap_or(false),
     };
     let label = match sig {
         JobSignal::Term => "TERM",
+        JobSignal::Kill => "KILL",
         JobSignal::Stop => "STOP",
         JobSignal::Cont => "CONT",
     };

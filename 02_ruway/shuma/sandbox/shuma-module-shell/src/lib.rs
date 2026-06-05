@@ -1649,6 +1649,22 @@ mod tests {
     }
 
     #[test]
+    fn kill_builtin_signals_background_job() {
+        // `:kill N` manda SIGKILL al job N (paralelo a `:term`).
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text("sleep 5 &");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.bg_jobs.len(), 1);
+        s.input.set_text(":kill 0");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.text.contains("[0] SIGKILL enviado")));
+    }
+
+    #[test]
     fn jobs_builtin_lists_background_jobs() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
