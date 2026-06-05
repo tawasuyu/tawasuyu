@@ -24,7 +24,7 @@ mod text;
 
 pub use chaka_bcd::{Decimal, Picture, Rounding};
 pub use edited::format_edited;
-pub use file::CobFile;
+pub use file::{CobFile, Organization, StartCmp};
 pub use num::Num;
 pub use text::Text;
 
