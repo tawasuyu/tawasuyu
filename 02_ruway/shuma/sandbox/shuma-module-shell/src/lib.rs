@@ -1046,6 +1046,29 @@ mod tests {
     }
 
     #[test]
+    fn alt_screen_is_the_hard_tui_signal() {
+        // `ESC[?1049h` entra a alternate screen (señal dura de TUI
+        // full-screen); `ESC[?1049l` sale y vuelve a modo líneas.
+        let mut p = vt100::Parser::new(24, 80, 0);
+        p.process(b"hola mundo\r\n");
+        assert!(!p.screen().alternate_screen(), "arranca en modo líneas");
+        p.process(b"\x1b[?1049h");
+        assert!(p.screen().alternate_screen(), "1049h = pantalla completa");
+        p.process(b"\x1b[?1049l");
+        assert!(!p.screen().alternate_screen(), "1049l = vuelve a líneas");
+    }
+
+    #[test]
+    fn screen_to_lines_trims_trailing_blanks() {
+        let mut p = vt100::Parser::new(24, 80, 0);
+        p.process(b"primera\r\nsegunda\r\n");
+        let lines = screen_to_lines(p.screen());
+        // Sólo las dos filas con contenido; las 22 filas vacías de abajo
+        // se recortan.
+        assert_eq!(lines, vec!["primera", "segunda"]);
+    }
+
+    #[test]
     fn build_spec_pipe_with_glob_falls_back_to_shell() {
         let (spec, _) = build_spec("ls *.rs | cat", "/");
         assert!(matches!(spec.exec, shuma_exec::Exec::Shell { .. }));

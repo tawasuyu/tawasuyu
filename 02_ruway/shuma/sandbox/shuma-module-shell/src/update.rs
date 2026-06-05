@@ -520,8 +520,9 @@ pub(crate) fn handle_search_key(mut s: State, ev: &KeyEvent) -> State {
     s
 }
 
-/// `true` si hay un `ActiveRun` en modo TUI (PTY + vt100). Las teclas
-/// van al stdin del PTY mientras esto sea cierto.
+/// `true` si hay un `ActiveRun` con PTY vivo. Las teclas van al stdin del
+/// PTY mientras esto sea cierto (el programa es interactivo, esté o no en
+/// pantalla completa). El **render** en cambio sigue a [`is_tui_fullscreen`].
 pub(crate) fn is_tui_active(s: &State) -> bool {
     let Some(arc) = s.running.as_ref() else {
         return false;
@@ -531,6 +532,59 @@ pub(crate) fn is_tui_active(s: &State) -> bool {
         Err(p) => p.into_inner(),
     };
     g.tui.is_some()
+}
+
+/// `true` si el PTY vivo entró a **alternate screen** (`ESC[?1049h`) — la
+/// señal dura de una app TUI de pantalla completa (vim, htop, less, man…).
+/// Es lo que decide pintar el panel full-screen (grid/vim) en vez de las
+/// líneas. Al salir del alt-screen (`ESC[?1049l`) vuelve a modo líneas.
+pub(crate) fn is_tui_fullscreen(s: &State) -> bool {
+    let Some(arc) = s.running.as_ref() else {
+        return false;
+    };
+    let g = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    g.tui
+        .as_ref()
+        .map(|t| t.parser.screen().alternate_screen())
+        .unwrap_or(false)
+}
+
+/// Contenido de la pantalla del PTY vivo cuando está en **modo líneas**
+/// (PTY presente, sin alt-screen). Devuelve las filas como texto (sin
+/// formato), recortando las filas vacías del final. `None` si no hay PTY
+/// o está en pantalla completa (ese caso lo pinta el panel full-screen).
+/// Las salidas de programas que no toman la pantalla (p. ej. `watch`) se
+/// leen así como texto normal en vez de una grilla apretada.
+pub(crate) fn pty_line_text(s: &State) -> Option<Vec<String>> {
+    let arc = s.running.as_ref()?;
+    let g = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let tui = g.tui.as_ref()?;
+    let screen = tui.parser.screen();
+    if screen.alternate_screen() {
+        return None;
+    }
+    Some(screen_to_lines(screen))
+}
+
+/// Filas de un `vt100::Screen` como texto sin formato, recortando las
+/// filas vacías del final. Pura (sin State) para poder testearla con un
+/// parser construido a mano.
+pub(crate) fn screen_to_lines(screen: &vt100::Screen) -> Vec<String> {
+    let (_rows, cols) = screen.size();
+    let mut lines: Vec<String> = screen
+        .rows(0, cols)
+        .map(|r| r.trim_end().to_string())
+        .collect();
+    while lines.last().map(|l| l.is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+    lines
 }
 
 /// Traduce una tecla a su secuencia de bytes para el PTY (xterm-compat).

@@ -8,8 +8,13 @@ pub fn view<HostMsg: Clone + 'static>(
     lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 ) -> View<HostMsg> {
     let header = shell_header(state, theme);
-    let main_panel: View<HostMsg> = if is_tui_active(state) {
+    // Render según la señal dura de alt-screen: pantalla completa (grid/vim)
+    // sólo si el PTY entró a alternate screen; un PTY en modo líneas (p. ej.
+    // `watch`) se lee como IDE-text; sin PTY, las cards de comandos.
+    let main_panel: View<HostMsg> = if is_tui_fullscreen(state) {
         tui_panel::<HostMsg>(state, theme, lift.clone())
+    } else if is_tui_active(state) {
+        pty_lines_panel::<HostMsg>(state, theme)
     } else {
         output_pane::<HostMsg>(state, theme, &lift)
     };
@@ -347,8 +352,8 @@ pub(crate) fn state_dialect_default() -> shuma_line::Dialect {
 }
 
 /// Panel de TUI app-aware: según el programa bajo el PTY elige un skin.
-/// `is_tui_active(state)` ya garantiza que hay un run con PTY. vim se
-/// pinta como un card themeable; el resto cae al grid vt100 crudo.
+/// `is_tui_fullscreen(state)` ya garantiza que hay un PTY en alt-screen.
+/// vim se pinta como un card themeable; el resto cae al grid vt100 crudo.
 pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
@@ -1425,6 +1430,56 @@ pub(crate) fn body_editor_state(
         }
     }
     ed
+}
+
+/// Panel de un PTY en **modo líneas** (sin alt-screen): pinta la pantalla
+/// del programa como text de IDE read-only (numeración + mono), no como una
+/// grilla apretada. Sin selección interactiva por ahora (el contenido viene
+/// del screen vt100, no del buffer de OutputLine). Las teclas siguen yendo
+/// al PTY (`is_tui_active`).
+pub(crate) fn pty_lines_panel<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+) -> View<HostMsg> {
+    let lines = pty_line_text(state).unwrap_or_default();
+    let n = lines.len().max(1);
+    let mut ed = llimphi_widget_text_editor::EditorState::new();
+    ed.set_text(&lines.join("\n"));
+    let metrics = body_editor_metrics();
+    let mut palette = body_editor_palette(theme);
+    palette.bg = theme.sunken();
+    palette.bg_gutter = theme.sunken();
+    let editor = llimphi_widget_text_editor::text_editor_view::<HostMsg>(
+        &ed,
+        &palette,
+        metrics,
+        n,
+        |_ev| None,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_basis: length(0.0_f32),
+        flex_grow: 1.0,
+        min_size: Size {
+            width: Dimension::auto(),
+            height: length(0.0_f32),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.sunken())
+    .radius(3.0)
+    .clip(true)
+    .children(vec![editor])
 }
 
 /// Extrae el comando crudo del texto del header (`$ ls | wc`, o el de un
