@@ -239,7 +239,7 @@ enum Which {
 
 /// Dónde corre el shell de la sesión (la base del aislamiento). El contenedor
 /// NO es exclusivo: es una capa opcional **encima** de Local o Remoto.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Isolation {
     /// Directo sobre esta máquina.
     Local,
@@ -282,7 +282,7 @@ impl ConnState {
 }
 
 /// La distro del aislamiento (para contenedor/remoto).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Distro {
     Ubuntu,
     Debian,
@@ -542,6 +542,83 @@ impl Session {
             Which::Matilda => &mut self.matilda,
         }
     }
+
+    /// Config persistible de la sesión (sin las instancias-módulo vivas).
+    fn to_config(&self) -> SessionConfig {
+        SessionConfig {
+            name: self.name.clone(),
+            number: self.number,
+            isolation: self.isolation,
+            distro: self.distro,
+            container: self.container.clone(),
+        }
+    }
+
+    /// Reconstruye una sesión desde su config persistida.
+    fn from_config(c: SessionConfig) -> Self {
+        let kind = match c.isolation {
+            Isolation::Remote => SessionKind::Remote,
+            Isolation::Local => SessionKind::Local,
+        };
+        let source = match c.isolation {
+            Isolation::Local => Source::Local,
+            Isolation::Remote => default_shell_source(),
+        };
+        let mut s = Session::build(c.name, kind, c.number, source);
+        s.isolation = c.isolation;
+        s.distro = c.distro;
+        s.container = c.container;
+        s.conn = match c.isolation {
+            Isolation::Local => ConnState::Connected,
+            Isolation::Remote => ConnState::Pending,
+        };
+        s
+    }
+}
+
+/// Config persistible de una sesión (lo que sobrevive a reiniciar shuma).
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SessionConfig {
+    name: String,
+    #[serde(default)]
+    number: Option<u32>,
+    isolation: Isolation,
+    distro: Distro,
+    #[serde(default)]
+    container: Option<String>,
+}
+
+/// `$XDG_CONFIG_HOME/shuma/sessions.json`.
+fn sessions_path() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("sessions.json"))
+}
+
+/// Guarda las sesiones reales (no la draft) para reiniciarlas en el próximo
+/// arranque. Silencioso ante errores de IO.
+fn save_sessions(m: &Model) {
+    let Some(path) = sessions_path() else {
+        return;
+    };
+    let cfgs: Vec<SessionConfig> = m
+        .sessions
+        .iter()
+        .filter(|s| s.kind != SessionKind::Draft)
+        .map(|s| s.to_config())
+        .collect();
+    if let Ok(json) = serde_json::to_string_pretty(&cfgs) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Lee las sesiones persistidas (vacío si no hay archivo o no parsea).
+fn load_sessions() -> Vec<SessionConfig> {
+    sessions_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Vec<SessionConfig>>(&s).ok())
+        .unwrap_or_default()
 }
 
 #[derive(Debug, Clone)]
@@ -776,10 +853,11 @@ impl App for Shell {
         });
         let main = resolve_slot(cfg.main.as_ref());
 
-        // Sólo la sesión "draft" al arrancar (local, sin aislamiento, no toca
-        // nada). El usuario crea sesiones reales con el `+` del rail izquierdo;
-        // se van agregando a la izquierda. El shumarc `[[tabs]]` quedó superado.
-        let sessions = vec![Session::draft()];
+        // La draft (índice 0) + las sesiones persistidas del último arranque.
+        let mut sessions = vec![Session::draft()];
+        for c in load_sessions() {
+            sessions.push(Session::from_config(c));
+        }
 
         // Rail hospedado: si `SHUMA_DELEGATE_SIDEBAR` está set, prestamos las
         // HERRAMIENTAS de la sesión activa al rail de pata.
@@ -914,6 +992,7 @@ impl App for Shell {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.apply_isolation();
                 }
+                save_sessions(&m);
             }
             // Abrir/cerrar el colapsable de contenedor (capa opcional). Al abrir,
             // listamos los contenedores locales.
@@ -933,6 +1012,7 @@ impl App for Shell {
                     s.distro = d;
                 }
                 promote_if_draft(&mut m);
+                save_sessions(&m);
             }
             Msg::RefreshContainers => spawn_list_containers(handle),
             Msg::ContainersLoaded(v) => m.containers = v,
@@ -944,6 +1024,7 @@ impl App for Shell {
                         s.conn = ConnState::Connected;
                     }
                 }
+                save_sessions(&m);
             }
             Msg::CreateContainer => {
                 m.dropdown_open = None;
@@ -960,6 +1041,7 @@ impl App for Shell {
                     s.conn = ConnState::Connected;
                 }
                 spawn_create_container(handle, distro.image(), name);
+                save_sessions(&m);
             }
             Msg::CloseSession(idx) => {
                 // La draft (0) no se cierra; las demás se descartan.
@@ -967,6 +1049,7 @@ impl App for Shell {
                     m.sessions.remove(idx);
                     m.active_session = m.active_session.min(m.sessions.len() - 1);
                 }
+                save_sessions(&m);
             }
             Msg::ReorderSession(from, to) => {
                 // La draft (0) queda fija; el resto se reordena.
@@ -976,6 +1059,7 @@ impl App for Shell {
                     m.sessions.insert(to, s);
                     m.active_session = to;
                 }
+                save_sessions(&m);
             }
             Msg::SetSessionWidth(dx) => {
                 m.session_w = (m.session_w + dx).clamp(180.0, 480.0);
