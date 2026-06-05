@@ -40,13 +40,54 @@ pub struct Program {
     pub paragraphs: Vec<Paragraph>,
 }
 
+/// La organización física de un fichero (`ORGANIZATION`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum FileOrg {
+    /// `LINE SEQUENTIAL` — cada registro es una línea de texto. Es el
+    /// default histórico de chaka y el único soportado antes de las
+    /// organizaciones por clave.
+    #[default]
+    LineSequential,
+    /// `SEQUENTIAL` — registros de longitud fija, acceso secuencial.
+    /// chaka lo trata como `LINE SEQUENTIAL` (una línea por registro).
+    Sequential,
+    /// `INDEXED` — registros con `RECORD KEY`; acceso por clave o
+    /// secuencial en orden de clave.
+    Indexed,
+    /// `RELATIVE` — registros numerados; la `RELATIVE KEY` es el número
+    /// de registro (1-based).
+    Relative,
+}
+
+/// El modo de acceso declarado (`ACCESS MODE`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum AccessMode {
+    /// `SEQUENTIAL` — sólo lectura/escritura en orden.
+    #[default]
+    Sequential,
+    /// `RANDOM` — sólo acceso directo por clave.
+    Random,
+    /// `DYNAMIC` — mezcla acceso directo y secuencial (`READ NEXT`).
+    Dynamic,
+}
+
 /// Un fichero declarado: su nombre lógico, la ruta a la que se asigna
-/// (`ASSIGN TO`) y el dato de registro asociado (el `01` bajo su `FD`).
+/// (`ASSIGN TO`), el dato de registro asociado (el `01` bajo su `FD`) y
+/// las cláusulas de organización del `SELECT` (`ORGANIZATION`, `ACCESS
+/// MODE`, `RECORD KEY`, `RELATIVE KEY`).
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct FileEntry {
     pub name: String,
     pub path: String,
     pub record: String,
+    /// Organización física (`LINE SEQUENTIAL` por defecto).
+    pub organization: FileOrg,
+    /// Modo de acceso (`SEQUENTIAL` por defecto).
+    pub access: AccessMode,
+    /// Nombre COBOL del campo `RECORD KEY` (sólo `INDEXED`), en mayúsculas.
+    pub record_key: Option<String>,
+    /// Nombre COBOL del campo `RELATIVE KEY` (sólo `RELATIVE`), en mayúsculas.
+    pub relative_key: Option<String>,
 }
 
 /// Un ítem de datos de la DATA division: un número de nivel, un nombre
@@ -199,17 +240,70 @@ fn parse_environment(body: &[Token], program: &mut Program) {
             continue;
         }
         let mut path = String::new();
+        let mut organization = FileOrg::default();
+        let mut access = AccessMode::default();
+        let mut record_key = None;
+        let mut relative_key = None;
         let mut i = 2;
         while i < sent.len() {
-            if kw(sent.get(i)).as_deref() == Some("ASSIGN") {
-                i += 1;
-                if kw(sent.get(i)).as_deref() == Some("TO") {
+            match kw(sent.get(i)).as_deref() {
+                Some("ASSIGN") => {
                     i += 1;
+                    if kw(sent.get(i)).as_deref() == Some("TO") {
+                        i += 1;
+                    }
+                    if let Some(t) = sent.get(i) {
+                        path = t.text.clone();
+                    }
                 }
-                if let Some(t) = sent.get(i) {
-                    path = t.text.clone();
+                Some("ORGANIZATION") => {
+                    i += 1;
+                    if kw(sent.get(i)).as_deref() == Some("IS") {
+                        i += 1;
+                    }
+                    organization = match kw(sent.get(i)).as_deref() {
+                        Some("INDEXED") => FileOrg::Indexed,
+                        Some("RELATIVE") => FileOrg::Relative,
+                        Some("SEQUENTIAL") => FileOrg::Sequential,
+                        // `LINE [SEQUENTIAL]`: la palabra `SEQUENTIAL` la
+                        // consume la próxima vuelta del bucle, sin efecto.
+                        Some("LINE") => FileOrg::LineSequential,
+                        _ => organization,
+                    };
                 }
-                break;
+                Some("ACCESS") => {
+                    i += 1;
+                    if kw(sent.get(i)).as_deref() == Some("MODE") {
+                        i += 1;
+                    }
+                    if kw(sent.get(i)).as_deref() == Some("IS") {
+                        i += 1;
+                    }
+                    access = match kw(sent.get(i)).as_deref() {
+                        Some("RANDOM") => AccessMode::Random,
+                        Some("DYNAMIC") => AccessMode::Dynamic,
+                        Some("SEQUENTIAL") => AccessMode::Sequential,
+                        _ => access,
+                    };
+                }
+                // `RECORD KEY [IS] name` (la cláusula `RECORD CONTAINS`
+                // no lleva `KEY`, así que se distingue por la 2ª palabra).
+                Some("RECORD") if kw(sent.get(i + 1)).as_deref() == Some("KEY") => {
+                    i += 2;
+                    if kw(sent.get(i)).as_deref() == Some("IS") {
+                        i += 1;
+                    }
+                    record_key = kw(sent.get(i));
+                }
+                // `RELATIVE KEY [IS] name`.
+                Some("RELATIVE") if kw(sent.get(i + 1)).as_deref() == Some("KEY") => {
+                    i += 2;
+                    if kw(sent.get(i)).as_deref() == Some("IS") {
+                        i += 1;
+                    }
+                    relative_key = kw(sent.get(i));
+                }
+                _ => {}
             }
             i += 1;
         }
@@ -217,6 +311,10 @@ fn parse_environment(body: &[Token], program: &mut Program) {
             name: name_tok.text.to_uppercase(),
             path,
             record: String::new(),
+            organization,
+            access,
+            record_key,
+            relative_key,
         });
     }
 }
@@ -718,6 +816,50 @@ mod tests {
         assert_eq!(p.files[0].name, "CLIENTES");
         assert_eq!(p.files[0].path, "clientes.dat");
         assert_eq!(p.files[0].record, "REG-CLIENTE");
+        // Sin cláusulas, los defaults: line-sequential, acceso secuencial.
+        assert_eq!(p.files[0].organization, FileOrg::LineSequential);
+        assert_eq!(p.files[0].access, AccessMode::Sequential);
+        assert_eq!(p.files[0].record_key, None);
+    }
+
+    #[test]
+    fn select_indexed_captures_organization_and_key() {
+        let p = parse_src(
+            "ENVIRONMENT DIVISION.\n\
+             INPUT-OUTPUT SECTION.\n\
+             FILE-CONTROL.\n\
+                 SELECT CLIENTES ASSIGN TO 'clientes.idx'\n\
+                     ORGANIZATION IS INDEXED\n\
+                     ACCESS MODE IS DYNAMIC\n\
+                     RECORD KEY IS CLI-ID.\n\
+             DATA DIVISION.\n\
+             FILE SECTION.\n\
+             FD CLIENTES.\n\
+             01 REG-CLIENTE.\n\
+                05 CLI-ID PIC X(5).\n\
+                05 CLI-NOMBRE PIC X(35).\n",
+        );
+        assert_eq!(p.files[0].organization, FileOrg::Indexed);
+        assert_eq!(p.files[0].access, AccessMode::Dynamic);
+        assert_eq!(p.files[0].record_key.as_deref(), Some("CLI-ID"));
+        assert_eq!(p.files[0].relative_key, None);
+    }
+
+    #[test]
+    fn select_relative_captures_relative_key() {
+        let p = parse_src(
+            "ENVIRONMENT DIVISION.\n\
+             INPUT-OUTPUT SECTION.\n\
+             FILE-CONTROL.\n\
+                 SELECT MOV ASSIGN TO 'mov.rel'\n\
+                     ORGANIZATION IS RELATIVE\n\
+                     ACCESS MODE IS RANDOM\n\
+                     RELATIVE KEY IS MOV-NUM.\n",
+        );
+        assert_eq!(p.files[0].organization, FileOrg::Relative);
+        assert_eq!(p.files[0].access, AccessMode::Random);
+        assert_eq!(p.files[0].relative_key.as_deref(), Some("MOV-NUM"));
+        assert_eq!(p.files[0].record_key, None);
     }
 
     #[test]
