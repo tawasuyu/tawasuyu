@@ -48,6 +48,17 @@ pub enum SourceCfg {
     Nasa { api_key: String },
     /// Rota por las imágenes de una carpeta local (offline).
     Folder { dir: String },
+    /// Fondo según la posición del Sol (estilo "dynamic desktop"): elige la
+    /// imagen de la fase del día (noche/amanecer/día/atardecer) para tu lat/lon.
+    /// Offline — calcula la altura solar con cosmos, sin servicio externo.
+    Solar {
+        lat: f64,
+        lon: f64,
+        night: String,
+        dawn: String,
+        day: String,
+        dusk: String,
+    },
 }
 
 impl Default for SourceCfg {
@@ -116,6 +127,14 @@ impl Config {
             SourceCfg::Folder { dir } => Box::new(source::Folder {
                 dir: PathBuf::from(dir),
             }),
+            SourceCfg::Solar { lat, lon, night, dawn, day, dusk } => Box::new(source::Solar {
+                lat: *lat,
+                lon: *lon,
+                night: night.clone(),
+                dawn: dawn.clone(),
+                day: day.clone(),
+                dusk: dusk.clone(),
+            }),
         }
     }
 
@@ -125,7 +144,8 @@ impl Config {
         match self.source {
             SourceCfg::Bing { .. } => Some("bing-"),
             SourceCfg::Nasa { .. } => Some("apod-"),
-            SourceCfg::Folder { .. } => None,
+            // Folder y Solar apuntan a archivos in situ: no descargan, no podan.
+            SourceCfg::Folder { .. } | SourceCfg::Solar { .. } => None,
         }
     }
 }
@@ -249,6 +269,9 @@ const CONFIG_TEMPLATE: &str = "\
     //   Bing(market: \"en-US\", resolution: \"1920x1080\")  // foto del día, sin API key
     //   Nasa(api_key: \"DEMO_KEY\")                          // astrofoto del día
     //   Folder(dir: \"/home/yo/fondos\")                     // rota una carpeta local (offline)
+    //   Solar(lat: -12.05, lon: -77.05,                     // \"dynamic desktop\": imagen
+    //         night: \"/f/noche.jpg\", dawn: \"/f/amanecer.jpg\", //   por fase del día según
+    //         day: \"/f/dia.jpg\", dusk: \"/f/atardecer.jpg\")  //   la altura del Sol (offline)
     // market: en-US, es-ES, ja-JP, …   resolution: 1920x1080, 1366x768, UHD (4K).
     source: Bing(market: \"en-US\", resolution: \"1920x1080\"),
 

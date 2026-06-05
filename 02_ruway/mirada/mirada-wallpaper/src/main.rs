@@ -100,6 +100,8 @@ fn print_sources(cfg: &Config) {
     println!("  Bing(market: \"en-US\", resolution: \"1920x1080\")  — foto del día, sin API key");
     println!("  Nasa(api_key: \"DEMO_KEY\")                        — astrofoto del día (APOD)");
     println!("  Folder(dir: \"/home/yo/fondos\")                   — rota una carpeta local, offline");
+    println!("  Solar(lat: -12.05, lon: -77.05, night:.., dawn:.., day:.., dusk:..)");
+    println!("                                                  — imagen por fase del día (offline)");
 }
 
 fn print_help() {

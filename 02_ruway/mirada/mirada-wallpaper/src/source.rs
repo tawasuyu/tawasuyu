@@ -220,6 +220,118 @@ fn pick_next(imgs: &[PathBuf], current: Option<&str>) -> Option<PathBuf> {
     Some(imgs[idx].clone())
 }
 
+// ─────────────────────────── Solar (dynamic desktop) ───────────────────────
+
+/// Fondo según la posición del Sol —el "dynamic desktop" de macOS, pero
+/// **offline y exacto**: no consulta ningún servicio, calcula la altura solar
+/// con [`cosmos_sundial`] para tu lat/lon y elige la imagen de la fase actual.
+/// El signo del ángulo horario distingue amanecer (antes del mediodía solar)
+/// de atardecer (después), que la altura sola no puede.
+pub struct Solar {
+    pub lat: f64,
+    pub lon: f64,
+    /// Imagen de cada fase (rutas locales). Una vacía cae a `day`.
+    pub night: String,
+    pub dawn: String,
+    pub day: String,
+    pub dusk: String,
+}
+
+/// Las cuatro fases del día solar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    Night,
+    Dawn,
+    Day,
+    Dusk,
+}
+
+impl Solar {
+    fn path_for(&self, phase: Phase) -> Result<String> {
+        let pick = match phase {
+            Phase::Night => &self.night,
+            Phase::Dawn => &self.dawn,
+            Phase::Day => &self.day,
+            Phase::Dusk => &self.dusk,
+        };
+        // Fase sin imagen → cae a `day`; si `day` también está vacío, error.
+        let chosen = if pick.is_empty() { &self.day } else { pick };
+        if chosen.is_empty() {
+            return Err(anyhow!(
+                "el provider solar no tiene imagen para la fase {phase:?} ni para `day`"
+            ));
+        }
+        Ok(chosen.clone())
+    }
+}
+
+impl WallpaperSource for Solar {
+    fn label(&self) -> String {
+        format!("Solar (dynamic desktop) en lat {:.3}, lon {:.3}", self.lat, self.lon)
+    }
+
+    fn fetch(&self, _ctx: &FetchCtx) -> Result<Fetched> {
+        let loc = cosmos_core::Location::from_degrees(self.lat, self.lon, 0.0)
+            .map_err(|e| anyhow!("ubicación inválida (lat {}, lon {}): {e:?}", self.lat, self.lon))?;
+        let tdb = now_tdb()?;
+        let r = cosmos_sundial::sundial_reading(&tdb, &loc);
+        let phase = phase_for(r.sun.altitude_deg, r.hour_angle_deg);
+        Ok(Fetched::Local(PathBuf::from(self.path_for(phase)?)))
+    }
+}
+
+/// Clasifica la fase del día a partir de la altura del Sol y el ángulo horario.
+/// Día con el Sol franco arriba (≥10°), noche bien debajo (≤-8°), y en el
+/// crepúsculo el signo del HA decide: negativo (antes del mediodía solar) =
+/// amanecer, positivo = atardecer. Pura para poder testearla sin efemérides.
+fn phase_for(altitude_deg: f64, hour_angle_deg: f64) -> Phase {
+    if altitude_deg >= 10.0 {
+        Phase::Day
+    } else if altitude_deg <= -8.0 {
+        Phase::Night
+    } else if hour_angle_deg < 0.0 {
+        Phase::Dawn
+    } else {
+        Phase::Dusk
+    }
+}
+
+/// El instante actual como [`TDB`](cosmos_time::TDB). Tratamos el UTC del
+/// sistema como TDB: la diferencia es de segundos, irrelevante para decidir la
+/// fase del día. Construye la fecha civil sin depender de `chrono`.
+fn now_tdb() -> Result<cosmos_time::TDB> {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|e| anyhow!("reloj del sistema antes de 1970: {e}"))?
+        .as_secs() as i64;
+    let (y, mo, d, h, mi, s) = civil_from_unix(secs);
+    let jd = cosmos_time::JulianDate::from_calendar(y, mo, d, h, mi, s as f64);
+    Ok(cosmos_time::TDB::from(jd))
+}
+
+/// Convierte segundos Unix (UTC) a fecha civil `(año, mes, día, hora, min, seg)`.
+/// Algoritmo de Howard Hinnant (`civil_from_days`), válido para el calendario
+/// gregoriano proléptico.
+fn civil_from_unix(secs: i64) -> (i32, u8, u8, u8, u8, u8) {
+    let days = secs.div_euclid(86_400);
+    let rem = secs.rem_euclid(86_400);
+    let hour = (rem / 3600) as u8;
+    let minute = ((rem % 3600) / 60) as u8;
+    let second = (rem % 60) as u8;
+
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u8; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = (y + if m <= 2 { 1 } else { 0 }) as i32;
+    (year, m as u8, d, hour, minute, second)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -286,5 +398,54 @@ mod tests {
         assert_eq!(pick_next(&imgs, Some("/x.png")).unwrap(), PathBuf::from("/a/1.png"));
         assert_eq!(pick_next(&imgs, None).unwrap(), PathBuf::from("/a/1.png"));
         assert!(pick_next(&[], None).is_none());
+    }
+
+    #[test]
+    fn phase_clasifica_por_altura_y_ha() {
+        // Sol franco arriba → día, sin importar el HA.
+        assert_eq!(phase_for(45.0, -30.0), Phase::Day);
+        assert_eq!(phase_for(45.0, 30.0), Phase::Day);
+        // Bien debajo del horizonte → noche.
+        assert_eq!(phase_for(-15.0, -30.0), Phase::Night);
+        // Crepúsculo: el signo del HA separa amanecer de atardecer.
+        assert_eq!(phase_for(2.0, -10.0), Phase::Dawn); // antes del mediodía
+        assert_eq!(phase_for(2.0, 10.0), Phase::Dusk); // después
+    }
+
+    #[test]
+    fn civil_from_unix_epoch_y_conocidos() {
+        assert_eq!(civil_from_unix(0), (1970, 1, 1, 0, 0, 0));
+        // 2026-06-05T05:54:36Z = 1780638876 (verificado).
+        assert_eq!(civil_from_unix(1_780_638_876), (2026, 6, 5, 5, 54, 36));
+        // Año bisiesto: 2024-02-29T12:00:00Z = 1709208000.
+        assert_eq!(civil_from_unix(1_709_208_000), (2024, 2, 29, 12, 0, 0));
+    }
+
+    #[test]
+    fn solar_path_cae_a_day_si_la_fase_esta_vacia() {
+        let s = Solar {
+            lat: -12.05,
+            lon: -77.05,
+            night: "noche.png".into(),
+            dawn: String::new(), // vacía → cae a day
+            day: "dia.png".into(),
+            dusk: "tarde.png".into(),
+        };
+        assert_eq!(s.path_for(Phase::Night).unwrap(), "noche.png");
+        assert_eq!(s.path_for(Phase::Dawn).unwrap(), "dia.png"); // fallback
+        assert_eq!(s.path_for(Phase::Dusk).unwrap(), "tarde.png");
+    }
+
+    #[test]
+    fn solar_path_error_si_fase_y_day_vacias() {
+        let s = Solar {
+            lat: 0.0,
+            lon: 0.0,
+            night: String::new(),
+            dawn: String::new(),
+            day: String::new(),
+            dusk: String::new(),
+        };
+        assert!(s.path_for(Phase::Night).is_err());
     }
 }
