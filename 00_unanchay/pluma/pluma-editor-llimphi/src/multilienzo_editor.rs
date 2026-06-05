@@ -281,7 +281,7 @@ where
     // handler de click, así que es transparente al hit-test —
     // `paint_with` solo dibuja, no captura.
     let overlay_separadores =
-        overlay_separadores_atomos::<Msg>(ide, metrics, palette_lienzo);
+        overlay_separadores_atomos::<Msg>(ide, metrics, palette_lienzo, cfg.colorear_secciones);
 
     let contenedor_editor = View::new(Style {
         size: Size {
@@ -395,14 +395,15 @@ fn overlay_separadores_atomos<Msg: Clone + 'static>(
     ide: &CuerpoIde,
     metrics: EditorMetrics,
     palette_lienzo: &Palette,
+    colorear: bool,
 ) -> View<Msg> {
     let ys = precomputar_y_separadores(ide, metrics);
-    let line_h = metrics.line_height;
     let gutter = metrics.gutter_width as f64;
-    // Color sutil: fg_muted con alpha reducido — visible pero sin
-    // competir con el texto.
+    // Sin colorear: gris sutil (fg_muted desaturado). Coloreando: cada
+    // separador toma el color de la sección que cierra (la de arriba), el
+    // mismo que su cinta Sankey → la línea divide y el color une.
     let base = palette_lienzo.fg_muted.components;
-    let color = Color::new([base[0], base[1], base[2], base[3] * 0.35]);
+    let gris = Color::new([base[0], base[1], base[2], base[3] * 0.35]);
 
     let nodo = View::new(Style {
         position: llimphi_ui::llimphi_layout::taffy::Position::Absolute,
@@ -422,25 +423,25 @@ fn overlay_separadores_atomos<Msg: Clone + 'static>(
         return nodo;
     }
     nodo.paint_with(move |scene, _ts, rect| {
-        let stroke = Stroke::new(1.0);
-        for &y_local in &ys {
-            // El editor no tiene padding vertical interno; rangos válidos
-            // del overlay son [0, rect.h]. Las líneas fuera de viewport
-            // se omiten (no se pintan recortadas — confundiría).
+        for (i, &y_local) in ys.iter().enumerate() {
             if y_local < 0.0 || y_local > rect.h {
                 continue;
             }
-            // Salta el gutter (no separamos sobre los números de línea).
+            // El separador `i` cierra la sección `i` → su color.
+            let (color, grosor) = if colorear {
+                let c = color_seccion(i).components;
+                (Color::new([c[0], c[1], c[2], 0.85]), 2.0)
+            } else {
+                (gris, 1.0)
+            };
             let x1 = rect.x as f64 + gutter;
             let x2 = (rect.x + rect.w) as f64;
             let y = (rect.y + y_local) as f64;
             let mut path = BezPath::new();
             path.move_to((x1, y));
             path.line_to((x2, y));
-            scene.stroke(&stroke, Affine::IDENTITY, color, None, &path);
+            scene.stroke(&Stroke::new(grosor), Affine::IDENTITY, color, None, &path);
         }
-        // suppress unused warning if compiler complains about line_h
-        let _ = line_h;
     })
 }
 
