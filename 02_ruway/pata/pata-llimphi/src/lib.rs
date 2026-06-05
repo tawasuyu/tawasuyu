@@ -88,6 +88,15 @@ pub enum Msg {
     ClipboardMenu,
     /// Elegir una entrada del historial: la vuelve a copiar (`wl-copy`) y cierra.
     ClipboardPick(String),
+    /// Click en el reloj: despliega/repliega el panel para fijar fecha/hora.
+    ClockPanel,
+    /// Ajusta un campo del borrador de fecha/hora `(campo 0..=4, delta)`:
+    /// 0=año 1=mes 2=día 3=hora 4=minuto.
+    ClockAdjust(u8, i32),
+    /// Aplica el borrador al reloj del sistema (apaga NTP + `timedatectl`).
+    ClockApply,
+    /// Re-activa la sincronización NTP (vuelve a la hora automática).
+    ClockSyncNtp,
     /// Rueda del mouse sobre el medidor de brillo: ajusta la luminosidad de la
     /// pantalla. El `f32` es el delta de la rueda (signo = dirección).
     BrightnessWheel(f32),
@@ -214,6 +223,88 @@ pub fn usa_utc(cfg: &Config) -> bool {
 /// usan ambos backends al recibir [`Msg::Spawn`].
 pub fn spawn_cmd(cmd: &str) {
     let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+}
+
+/// Borrador editable de fecha/hora para el panel del reloj. Se inicializa con la
+/// hora actual al abrir el panel; los botones ▲/▼ lo ajustan; "Aplicar" lo
+/// escribe al reloj del sistema.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ClockDraft {
+    pub year: i32,
+    pub month: i32,
+    pub day: i32,
+    pub hour: i32,
+    pub minute: i32,
+}
+
+impl Default for ClockDraft {
+    fn default() -> Self {
+        Self {
+            year: 2026,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+        }
+    }
+}
+
+impl ClockDraft {
+    /// El borrador inicializado con la hora actual (UTC si `utc`, si no local).
+    pub fn from_now(utc: bool) -> Self {
+        use chrono::{Datelike, Timelike};
+        let (y, mo, d, h, mi) = if utc {
+            let n = chrono::Utc::now();
+            (n.year(), n.month(), n.day(), n.hour(), n.minute())
+        } else {
+            let n = chrono::Local::now();
+            (n.year(), n.month(), n.day(), n.hour(), n.minute())
+        };
+        Self {
+            year: y,
+            month: mo as i32,
+            day: d as i32,
+            hour: h as i32,
+            minute: mi as i32,
+        }
+    }
+
+    /// Ajusta el campo `f` (0=año…4=minuto) por `delta`. Mes/hora/minuto dan la
+    /// vuelta; año y día se acotan a un rango sano.
+    pub fn adjust(&mut self, f: u8, delta: i32) {
+        let wrap = |v: i32, lo: i32, hi: i32| {
+            let span = hi - lo + 1;
+            (((v - lo) % span + span) % span) + lo
+        };
+        match f {
+            0 => self.year = (self.year + delta).clamp(1970, 2100),
+            1 => self.month = wrap(self.month + delta, 1, 12),
+            2 => self.day = (self.day + delta).clamp(1, 31),
+            3 => self.hour = wrap(self.hour + delta, 0, 23),
+            4 => self.minute = wrap(self.minute + delta, 0, 59),
+            _ => {}
+        }
+    }
+
+    /// El campo `f` como texto a dos/cuatro dígitos.
+    pub fn campo(&self, f: u8) -> String {
+        match f {
+            0 => format!("{:04}", self.year),
+            1 => format!("{:02}", self.month),
+            2 => format!("{:02}", self.day),
+            3 => format!("{:02}", self.hour),
+            4 => format!("{:02}", self.minute),
+            _ => String::new(),
+        }
+    }
+
+    /// El sello `"YYYY-MM-DD HH:MM:00"` que consume `timedatectl set-time`.
+    pub fn stamp(&self) -> String {
+        format!(
+            "{:04}-{:02}-{:02} {:02}:{:02}:00",
+            self.year, self.month, self.day, self.hour, self.minute
+        )
+    }
 }
 
 /// El grosor (px) de la primera barra que hospeda un widget de `kind`, para
@@ -372,6 +463,10 @@ pub struct Model {
     pub clip_history: Vec<String>,
     /// `true` cuando el popup del historial del portapapeles está desplegado.
     pub clip_open: bool,
+    /// `true` cuando el panel del reloj (fijar fecha/hora) está desplegado.
+    pub clock_open: bool,
+    /// Borrador de fecha/hora que el panel del reloj edita.
+    pub clock_draft: ClockDraft,
     /// La bandeja del sistema, corriendo en su propio hilo. `None` si la config no
     /// declara ningún widget `tray`.
     pub tray: Option<TrayHandle>,
@@ -547,6 +642,8 @@ impl App for PataApp {
             clipboard,
             clip_history: Vec::new(),
             clip_open: false,
+            clock_open: false,
+            clock_draft: ClockDraft::default(),
             tray,
             weather,
             weather_now: None,
@@ -670,6 +767,23 @@ impl App for PataApp {
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
                 model.clip_open = false;
+            }
+            Msg::ClockPanel => {
+                model.clock_open = !model.clock_open;
+                if model.clock_open {
+                    model.clock_draft = ClockDraft::from_now(usa_utc(&model.cfg));
+                    model.menu_open = false;
+                    model.clip_open = false;
+                }
+            }
+            Msg::ClockAdjust(f, delta) => model.clock_draft.adjust(f, delta),
+            Msg::ClockApply => {
+                sampler::set_system_time(&model.clock_draft.stamp());
+                model.clock_open = false;
+            }
+            Msg::ClockSyncNtp => {
+                sampler::sync_ntp();
+                model.clock_open = false;
             }
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
@@ -823,6 +937,10 @@ impl App for PataApp {
                 &model.theme,
             ));
         }
+        if model.clock_open {
+            let bar_h = bar_thickness_for(&model.cfg, "clock");
+            return Some(render::clock_overlay(&model.clock_draft, bar_h, &model.theme));
+        }
         None
     }
 
@@ -858,10 +976,16 @@ impl App for PataApp {
                 _ => None,
             };
         }
-        // 2.6) Con el popup del portapapeles abierto, Esc lo cierra.
+        // 2.6) Con el popup del portapapeles o el panel del reloj abierto, Esc
+        // los cierra.
         if model.clip_open {
             if let Key::Named(NamedKey::Escape) = &event.key {
                 return Some(Msg::ClipboardMenu);
+            }
+        }
+        if model.clock_open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::ClockPanel);
             }
         }
         // 3) Con el menú "Abrir con…" abierto, Esc lo cierra primero.
@@ -881,5 +1005,61 @@ impl App for PataApp {
             Key::Named(NamedKey::Escape) => Some(Msg::Quit),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn historial_dedup_y_tope() {
+        let mut h = Vec::new();
+        push_clip_history(&mut h, &Some("a".into()));
+        push_clip_history(&mut h, &Some("b".into()));
+        push_clip_history(&mut h, &Some("a".into())); // re-copia: a vuelve al frente
+        assert_eq!(h, vec!["a".to_string(), "b".to_string()]);
+        // vacío y repetido del tope se ignoran
+        push_clip_history(&mut h, &Some(String::new()));
+        push_clip_history(&mut h, &Some("a".into()));
+        assert_eq!(h.len(), 2);
+        // tope
+        for i in 0..30 {
+            push_clip_history(&mut h, &Some(format!("x{i}")));
+        }
+        assert_eq!(h.len(), CLIP_HISTORY_MAX);
+    }
+
+    #[test]
+    fn clock_draft_ajusta_con_wrap_y_clamp() {
+        let mut d = ClockDraft {
+            year: 2026,
+            month: 12,
+            day: 1,
+            hour: 23,
+            minute: 59,
+        };
+        d.adjust(1, 1); // mes 12 +1 → 1 (wrap)
+        assert_eq!(d.month, 1);
+        d.adjust(3, 1); // hora 23 +1 → 0 (wrap)
+        assert_eq!(d.hour, 0);
+        d.adjust(4, 1); // min 59 +1 → 0 (wrap)
+        assert_eq!(d.minute, 0);
+        d.adjust(0, -1000); // año clamp inferior
+        assert_eq!(d.year, 1970);
+        d.adjust(2, 100); // día clamp superior
+        assert_eq!(d.day, 31);
+    }
+
+    #[test]
+    fn clock_draft_stamp() {
+        let d = ClockDraft {
+            year: 2026,
+            month: 6,
+            day: 5,
+            hour: 9,
+            minute: 7,
+        };
+        assert_eq!(d.stamp(), "2026-06-05 09:07:00");
     }
 }

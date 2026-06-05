@@ -39,6 +39,7 @@ label = "⊞"
 [[surfaces.start]]
 kind = "clock"
 format = "%H:%M"
+# Click → panel para fijar la fecha/hora del sistema (timedatectl vía pkexec).
 
 [[surfaces.center]]
 kind = "window_list"

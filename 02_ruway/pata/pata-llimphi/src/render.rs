@@ -310,10 +310,10 @@ fn brightness_interactivo(v: View<Msg>) -> View<Msg> {
     v.on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::BrightnessWheel(dy)))
 }
 
-/// Reloj interactivo: el click abre el panel para fijar fecha/hora. (Cableado
-/// completo en el bloque de interacción.)
+/// Reloj interactivo: el click abre el panel para fijar la fecha/hora del
+/// sistema.
 fn clock_interactivo(v: View<Msg>) -> View<Msg> {
-    v
+    v.on_click(Msg::ClockPanel)
 }
 
 /// Un medidor: etiqueta opcional + barrita proporcional + leyenda. La barra de
@@ -1454,6 +1454,252 @@ pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<
         ..Default::default()
     })
     .children(vec![scrim])
+}
+
+/// Ancho del panel del reloj (px).
+const CLOCK_PANEL_W: f32 = 360.0;
+
+/// Los cinco campos editables del reloj: índice + rótulo.
+const CLOCK_FIELDS: [(u8, &str); 5] = [
+    (0, "Año"),
+    (1, "Mes"),
+    (2, "Día"),
+    (3, "Hora"),
+    (4, "Min"),
+];
+
+/// Un botón chico genérico para los paneles (texto centrado, hover, click).
+fn boton_panel(label: &str, msg: Msg, theme: &Theme, fondo: Option<Color>) -> View<Msg> {
+    let mut v = View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(28.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(6.0)
+    .hover_fill(theme.bg_button_hover)
+    .on_click(msg);
+    if let Some(bg) = fondo {
+        v = v.fill(bg);
+    }
+    let fg = if fondo.is_some() { theme.bg_panel } else { theme.fg_text };
+    v.text(label.to_string(), 12.0, fg)
+}
+
+/// Un selector ▲/valor/▼ para un campo de fecha/hora.
+fn spinner(label: &str, field: u8, valor: &str, theme: &Theme) -> View<Msg> {
+    let flecha = |glifo: &str, delta: i32| {
+        View::new(Style {
+            size: Size {
+                width: length(34.0_f32),
+                height: length(22.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .radius(5.0)
+        .hover_fill(theme.bg_button_hover)
+        .on_click(Msg::ClockAdjust(field, delta))
+        .text(glifo.to_string(), 12.0, theme.accent)
+    };
+    let val = View::new(Style {
+        size: Size {
+            width: length(40.0_f32),
+            height: length(26.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(5.0)
+    .text(valor.to_string(), 15.0, theme.fg_text);
+    let rotulo = View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(14.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(label.to_string(), 10.0, theme.fg_muted);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(3.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![flecha("▲", 1), val, flecha("▼", -1), rotulo])
+}
+
+/// El **panel del reloj**: spinners de fecha/hora + Aplicar/NTP. Posicionado en
+/// absoluto arriba-izquierda; lo enmarca el scrim/overlay como el de
+/// portapapeles. Cambiar la hora escribe al sistema (`timedatectl` vía pkexec).
+pub fn clock_panel(draft: &crate::ClockDraft, theme: &Theme) -> View<Msg> {
+    let header = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text("Fecha y hora del sistema", 12.0, theme.fg_muted);
+
+    let spinners: Vec<View<Msg>> = CLOCK_FIELDS
+        .iter()
+        .map(|(f, l)| spinner(l, *f, &draft.campo(*f), theme))
+        .collect();
+    let fila = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(spinners);
+
+    let botones = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![
+        boton_panel("Aplicar", Msg::ClockApply, theme, Some(theme.accent)),
+        boton_panel("Sincronizar NTP", Msg::ClockSyncNtp, theme, None),
+    ]);
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(CLOCK_PANEL_W),
+            height: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(10.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .children(vec![header, fila, botones])
+}
+
+/// El panel del reloj como **overlay** para winit (scrim que cierra + panel bajo
+/// la barra). Espeja [`clipboard_overlay`].
+pub fn clock_overlay(draft: &crate::ClockDraft, bar_h: f32, theme: &Theme) -> View<Msg> {
+    let scrim = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .alpha(0.45)
+    .on_click(Msg::ClockPanel)
+    .children(vec![clock_panel(draft, theme)]);
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(bar_h),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![scrim])
+}
+
+/// El panel del reloj para **layer-shell**: barra arriba + panel llenando lo que
+/// la surface creció. Espeja [`clipboard_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn clock_menu_view(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    draft: &crate::ClockDraft,
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(bar_px),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
+    let mut body_style = Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    let body = View::new(body_style)
+        .on_click(Msg::ClockPanel)
+        .children(vec![clock_panel(draft, theme)]);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar, body])
 }
 
 /// Tamaño del ícono del tray en la barra (px).

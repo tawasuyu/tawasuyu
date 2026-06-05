@@ -173,6 +173,8 @@ enum MenuKind {
     Apps,
     /// El historial de portapapeles (lista de copias, sólo clicks).
     Clipboard,
+    /// El panel del reloj (spinners de fecha/hora, sólo clicks).
+    Clock,
 }
 
 /// El cliente Wayland del backend layer-shell.
@@ -230,6 +232,8 @@ struct LayerApp {
     menu_kind: MenuKind,
     /// Historial de copias (más reciente al frente, sin repetidos, tope 16).
     clip_history: Vec<String>,
+    /// Borrador de fecha/hora que el panel del reloj edita.
+    clock_draft: crate::ClockDraft,
     /// Texto del buscador del menú de inicio (filtra apps por label). Se limpia
     /// al cerrar el menú.
     menu_query: String,
@@ -437,6 +441,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         menu_open: false,
         menu_kind: MenuKind::Apps,
         clip_history: Vec::new(),
+        clock_draft: crate::ClockDraft::default(),
         menu_query: String::new(),
         menu_scroll: 0.0,
         menu_panel: None,
@@ -1370,6 +1375,15 @@ impl LayerApp {
                     self.menu_bar_px as f32,
                     &self.clip_history,
                 ),
+                MenuKind::Clock => render::clock_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    &self.clock_draft,
+                ),
             }
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             // El cuerpo del drawer es el terminal PTY real; abajo queda la barra
@@ -1531,6 +1545,24 @@ impl LayerApp {
             Msg::ClipboardMenu => self.toggle_menu(MenuKind::Clipboard),
             Msg::ClipboardPick(text) => {
                 crate::sampler::copiar_clipboard(&text);
+                self.set_menu_open(false);
+            }
+            Msg::ClockPanel => {
+                if !(self.menu_open && self.menu_kind == MenuKind::Clock) {
+                    self.clock_draft = crate::ClockDraft::from_now(crate::usa_utc(&self.cfg));
+                }
+                self.toggle_menu(MenuKind::Clock);
+            }
+            Msg::ClockAdjust(f, delta) => {
+                self.clock_draft.adjust(f, delta);
+                self.marcar_menu_dirty();
+            }
+            Msg::ClockApply => {
+                crate::sampler::set_system_time(&self.clock_draft.stamp());
+                self.set_menu_open(false);
+            }
+            Msg::ClockSyncNtp => {
+                crate::sampler::sync_ntp();
                 self.set_menu_open(false);
             }
             Msg::StartToggle => self.toggle_menu(MenuKind::Apps),

@@ -360,6 +360,22 @@ pub fn nudge_brightness(up: bool) {
     crate::spawn_cmd(cmd);
 }
 
+/// Fija la hora del sistema al sello `"YYYY-MM-DD HH:MM:SS"`. Como `timedatectl
+/// set-time` falla con NTP activo, primero lo apaga, en una sola elevación de
+/// privilegios (`pkexec`, que muestra el diálogo de polkit). Desacoplado.
+pub fn set_system_time(stamp: &str) {
+    // `stamp` lo arma `ClockDraft::stamp` (sólo dígitos y `-: `), así que no hay
+    // riesgo de inyección de comillas en el `sh -c` interno.
+    crate::spawn_cmd(&format!(
+        "pkexec sh -c 'timedatectl set-ntp false && timedatectl set-time \"{stamp}\"'"
+    ));
+}
+
+/// Re-activa la sincronización NTP (la hora vuelve a ser automática).
+pub fn sync_ntp() {
+    crate::spawn_cmd("pkexec timedatectl set-ntp true");
+}
+
 /// Copia `text` al portapapeles vía `wl-copy` (wl-clipboard). `wl-copy` se
 /// queda en segundo plano sosteniendo la selección, así que no lo esperamos:
 /// escribimos el texto a su stdin y soltamos. Lo usa el popup de historial al
