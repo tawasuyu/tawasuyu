@@ -10,7 +10,7 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
 use llimphi_ui::{App, Handle, View};
 use nahual_image_viewer_llimphi::{
-    image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
+    image_viewer_view_zoom, load_image, ImagePreviewState, ImageViewerPalette, ImageViewport,
     DEFAULT_IMAGE_BYTES_MAX,
 };
 
@@ -20,10 +20,15 @@ const PROC_H: u32 = 320;
 struct Model {
     state: ImagePreviewState,
     path: Option<PathBuf>,
+    viewport: ImageViewport,
 }
 
 #[derive(Clone)]
-enum Msg {}
+enum Msg {
+    Zoom { factor: f32 },
+    Pan { dx: f32, dy: f32 },
+    Reset,
+}
 
 struct Showcase;
 
@@ -41,25 +46,37 @@ impl App for Showcase {
 
     fn init(_: &Handle<Msg>) -> Model {
         let arg = std::env::args().nth(1).map(PathBuf::from);
-        match arg {
-            Some(p) => Model {
-                state: load_image(&p, DEFAULT_IMAGE_BYTES_MAX),
-                path: Some(p),
-            },
-            None => Model {
-                state: procedural_state(),
-                path: None,
-            },
+        let (state, path) = match arg {
+            Some(p) => (load_image(&p, DEFAULT_IMAGE_BYTES_MAX), Some(p)),
+            None => (procedural_state(), None),
+        };
+        Model {
+            state,
+            path,
+            viewport: ImageViewport::default(),
         }
     }
 
-    fn update(model: Model, _: Msg, _: &Handle<Msg>) -> Model {
+    fn update(mut model: Model, msg: Msg, _: &Handle<Msg>) -> Model {
+        match msg {
+            Msg::Zoom { factor } => model.viewport.zoom_by(factor),
+            Msg::Pan { dx, dy } => model.viewport.pan_by(dx, dy),
+            Msg::Reset => model.viewport.reset(),
+        }
         model
     }
 
     fn view(model: &Model) -> View<Msg> {
         let palette = ImageViewerPalette::default();
-        let viewer = image_viewer_view::<Msg>(&model.state, model.path.as_deref(), &palette);
+        let viewer = image_viewer_view_zoom::<Msg, _, _>(
+            &model.state,
+            model.path.as_deref(),
+            &palette,
+            model.viewport,
+            |factor, _fx, _fy| Msg::Zoom { factor },
+            |dx, dy| Msg::Pan { dx, dy },
+            Msg::Reset,
+        );
         View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
