@@ -20,8 +20,16 @@
 //!    (el ticker se autodetiene; no hay render loop ocioso).
 //!
 //! La **primera** aparición de una key no anima (igual que Flutter): sólo los
-//! **cambios** posteriores se interpolan. Props soportadas hoy: `fill` (color)
-//! y `radius`. Es ampliable agregando campos a [`AnimSnapshot`].
+//! **cambios** posteriores se interpolan. Props soportadas hoy: `fill` (color),
+//! `radius` y `alpha` (opacidad). Es ampliable agregando campos a
+//! [`AnimSnapshot`].
+//!
+//! **Animación de contenido (entrada).** Aparte de los cambios de props, una
+//! key puede pedir animar su **entrada** ([`crate::View::animated_enter`]): su
+//! primera aparición sube la opacidad de 0 a su valor (fade-in estilo
+//! `AnimatedSwitcher`). El **exit** (fade-out al desmontarse) todavía no está:
+//! requiere que el registro retenga y siga pintando un nodo que ya salió del
+//! árbol — un nodo que desaparece hoy se va de una.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -40,6 +48,12 @@ pub struct Anim {
     /// Easing aplicado a `t ∈ [0,1]`. Las canónicas viven en
     /// `llimphi_theme::motion`; por defecto el builder usa un ease-out cúbico.
     pub easing: fn(f32) -> f32,
+    /// `true` si la **primera aparición** de la key debe animar la opacidad de
+    /// 0 hacia su valor (fade-in de entrada, estilo `AnimatedSwitcher`). Las
+    /// animaciones de props (fill/radius/alpha) no entran por acá: sólo cambian
+    /// el arranque del primer frame. Sin él, la primera aparición se asienta
+    /// instantánea (default histórico de `View::animated`).
+    pub enter: bool,
 }
 
 /// Ease-out cúbico, el default razonable para transiciones implícitas
@@ -50,11 +64,14 @@ pub fn ease_out_cubic(t: f32) -> f32 {
     1.0 - u * u * u
 }
 
-/// Foto de las props animables de un nodo en un frame.
+/// Foto de las props animables de un nodo en un frame. `alpha == None` ≡ nodo
+/// opaco (1.0): es la convención de `View::alpha` y la usa el lerp para mezclar
+/// hacia/desde "sin alpha explícito" sin tratarlo como un salto.
 #[derive(Clone, Copy, PartialEq)]
 struct AnimSnapshot {
     fill: Option<Color>,
     radius: f64,
+    alpha: Option<f32>,
 }
 
 #[inline]
@@ -86,9 +103,21 @@ impl AnimSnapshot {
             (Some(a), Some(b)) => Some(lerp_color(a, b, t)),
             _ => to.fill,
         };
+        // `None` ≡ opaco (1.0): un lado sin alpha se mezcla contra 1.0 en vez
+        // de saltar, así fade-in (0→opaco) y fade de un alpha explícito a/desde
+        // "sin alpha" interpolan suave. None↔None se mantiene None (sin capa).
+        let alpha = match (self.alpha, to.alpha) {
+            (None, None) => None,
+            (a, b) => {
+                let from = a.unwrap_or(1.0);
+                let dst = b.unwrap_or(1.0);
+                Some(from + (dst - from) * t)
+            }
+        };
         AnimSnapshot {
             fill,
             radius: lerp_f64(self.radius, to.radius, t),
+            alpha,
         }
     }
 }
@@ -163,11 +192,24 @@ impl AnimRegistry {
             let target = AnimSnapshot {
                 fill: node.fill,
                 radius: node.radius,
+                alpha: node.alpha,
             };
-            let entry = self
-                .entries
-                .entry(anim.key)
-                .or_insert_with(|| AnimEntry::settled(target, now));
+            let entry = self.entries.entry(anim.key).or_insert_with(|| {
+                // Primera aparición. Con `enter`, arranca un tween de opacidad
+                // 0 → objetivo (fade-in); si no, se asienta instantánea.
+                if anim.enter {
+                    let from = AnimSnapshot { alpha: Some(0.0), ..target };
+                    AnimEntry {
+                        from,
+                        to: target,
+                        start: now,
+                        duration: anim.duration,
+                        easing: anim.easing,
+                    }
+                } else {
+                    AnimEntry::settled(target, now)
+                }
+            });
             // Cambió el objetivo: congelá el valor actual como nuevo origen y
             // rearrancá el reloj hacia el objetivo nuevo.
             if entry.to != target {
@@ -177,9 +219,12 @@ impl AnimRegistry {
                 entry.duration = anim.duration;
                 entry.easing = anim.easing;
             }
-            let v = entry.value(now);
+            // Al terminar aterriza EXACTO en el objetivo (incluido `alpha:
+            // None`, que evita una capa de opacidad residual frame a frame).
+            let v = if entry.done(now) { entry.to } else { entry.value(now) };
             node.fill = v.fill;
             node.radius = v.radius;
+            node.alpha = v.alpha;
             if !entry.done(now) {
                 animating = true;
             }
@@ -256,6 +301,64 @@ mod tests {
         let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(400));
         assert!(!animating);
         assert_eq!(m.nodes[0].fill, Some(rgba(0, 0, 255)));
+    }
+
+    /// Monta un nodo con alpha + anim(key=1) y devuelve su `Mounted`.
+    fn one_alpha(alpha: f32) -> Mounted<()> {
+        let v = View::<()>::new(Style::default())
+            .alpha(alpha)
+            .animated(1, Duration::from_millis(200));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    /// Monta un nodo opaco (sin alpha) con animación de ENTRADA.
+    fn one_enter() -> Mounted<()> {
+        let v = View::<()>::new(Style::default())
+            .fill(rgba(10, 20, 30))
+            .animated_enter(1, Duration::from_millis(200));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    #[test]
+    fn fade_in_de_entrada_arranca_transparente_y_llega_a_opaco() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        // Primera aparición de un nodo `enter`: a diferencia de `animated`,
+        // SÍ anima — arranca casi transparente y pide frames.
+        let mut m = one_enter();
+        let animating = reg.reconcile(&mut m, t0);
+        assert!(animating, "la entrada debe animar desde el primer frame");
+        assert_eq!(m.nodes[0].alpha, Some(0.0), "arranca transparente");
+        // A mitad del tween, alpha intermedio.
+        let mut m = one_enter();
+        reg.reconcile(&mut m, t0 + Duration::from_millis(100));
+        let a = m.nodes[0].alpha.expect("alpha");
+        assert!(a > 0.0 && a < 1.0, "alpha intermedio: {a}");
+        // Pasada la duración: opaco exacto (None, sin capa residual) y quieto.
+        let mut m = one_enter();
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(400));
+        assert!(!animating);
+        assert_eq!(m.nodes[0].alpha, None, "aterriza en opaco sin capa");
+    }
+
+    #[test]
+    fn cambio_de_alpha_interpola() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        // Frame 1: alpha 1.0, se asienta (no es `enter`).
+        let mut m = one_alpha(1.0);
+        let animating = reg.reconcile(&mut m, t0);
+        assert!(!animating, "primera aparición sin enter no anima");
+        // Frame 2: la view baja a 0.0 → arranca tween.
+        let mut m = one_alpha(0.0);
+        reg.reconcile(&mut m, t0 + Duration::from_millis(50));
+        // Frame 3: a mitad, alpha intermedio.
+        let mut m = one_alpha(0.0);
+        reg.reconcile(&mut m, t0 + Duration::from_millis(150));
+        let a = m.nodes[0].alpha.expect("alpha");
+        assert!(a > 0.0 && a < 1.0, "alpha intermedio: {a}");
     }
 
     #[test]

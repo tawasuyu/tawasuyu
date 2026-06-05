@@ -1,7 +1,12 @@
-//! Filmstrip headless de una **animación implícita** (`View::animated`): el
-//! mismo nodo, cuyo `fill` cambia de rojo a azul, reconciliado a 6 instantes
-//! crecientes del mismo registro — se ve el crossfade rojo → púrpura → azul.
-//! Prueba el camino completo View.animated → AnimRegistry → paint → píxeles.
+//! Filmstrip headless de **animaciones implícitas**, dos filas:
+//!
+//! - **Arriba** — `View::animated`: el mismo nodo cuyo `fill` cambia de rojo a
+//!   azul, reconciliado a 6 instantes crecientes — crossfade rojo→púrpura→azul.
+//! - **Abajo** — `View::animated_enter`: el fade-in de ENTRADA de un nodo, de
+//!   opacidad 0 a opaco, a los mismos 6 progresos.
+//!
+//! Prueba el camino completo View.animated[_enter] → AnimRegistry → paint →
+//! píxeles.
 //!
 //! `cargo run -p llimphi-compositor --example anim_demo -- [out.png]`
 
@@ -20,7 +25,10 @@ use llimphi_text::{Alignment, Typesetter};
 use vello::kurbo::Affine;
 
 const W: u32 = 1180;
-const H: u32 = 220;
+const H: u32 = 400;
+/// Y de la fila superior (crossfade) y la inferior (fade-in de entrada).
+const ROW_FADE_Y: f64 = 40.0;
+const ROW_ENTER_Y: f64 = 220.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 const FRAMES: usize = 6;
 const DUR: Duration = Duration::from_millis(500);
@@ -31,7 +39,7 @@ fn rgb(r: u8, g: u8, b: u8) -> Color {
 
 /// Una tarjeta animada (key=1) con `fill`, transladada (vía `transform`) a su
 /// columna `i` y con el `fill` que la `view` "quiere" este frame.
-fn card(fill: Color, col: usize, label: &str, fg: Color) -> View<()> {
+fn card_shell(col: usize, row_y: f64, label: &str, fg: Color) -> View<()> {
     View::<()>::new(Style {
         size: Size { width: length(170.0), height: length(140.0) },
         align_items: Some(AlignItems::Center),
@@ -39,15 +47,26 @@ fn card(fill: Color, col: usize, label: &str, fg: Color) -> View<()> {
         flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .transform(Affine::translate((20.0 + col as f64 * 190.0, 40.0)))
+    .transform(Affine::translate((20.0 + col as f64 * 190.0, row_y)))
     .radius(18.0)
-    .fill(fill)
-    .animated(1, DUR)
     .children(vec![View::<()>::new(Style {
         size: Size { width: length(150.0), height: length(20.0) },
         ..Default::default()
     })
     .text_aligned(label.to_string(), 13.0, fg, Alignment::Center)])
+}
+
+fn card(fill: Color, col: usize, label: &str, fg: Color) -> View<()> {
+    card_shell(col, ROW_FADE_Y, label, fg).fill(fill).animated(1, DUR)
+}
+
+/// Tarjeta con animación de ENTRADA: su primera aparición sube de opacidad 0
+/// a opaco. La key se varía por columna (key=10+col) para que cada registro la
+/// trate como una entrada nueva e independiente.
+fn card_enter(col: usize, label: &str, fg: Color) -> View<()> {
+    card_shell(col, ROW_ENTER_Y, label, fg)
+        .fill(rgb(60, 90, 220))
+        .animated_enter(10 + col as u64, DUR)
 }
 
 fn main() {
@@ -86,6 +105,22 @@ fn main() {
         let computed = layout.compute(m.root, (W as f32, H as f32)).expect("layout");
         reg.reconcile(&mut m, now);
         cards.push((m, computed));
+
+        // Fila de entrada: la PRIMERA aparición ARRANCA el tween (en t0), así
+        // que el frame de observación a `now` ve el progreso correcto. Si se
+        // reconciliara una sola vez en `now`, el tween arrancaría y se
+        // observaría en el mismo instante → siempre t=0 (invisible).
+        let mut reg_enter = AnimRegistry::new();
+        {
+            let mut layout = LayoutTree::new();
+            let mut me = mount(&mut layout, card_enter(i, "", white));
+            reg_enter.reconcile(&mut me, t0);
+        }
+        let mut layout = LayoutTree::new();
+        let mut me = mount(&mut layout, card_enter(i, &format!("{pct}%"), white));
+        let computed = layout.compute(me.root, (W as f32, H as f32)).expect("layout");
+        reg_enter.reconcile(&mut me, now);
+        cards.push((me, computed));
     }
 
     // Pinta las 6 columnas (cada una su árbol ya reconciliado) en una escena.
@@ -114,7 +149,10 @@ fn main() {
     let bg = rgb(244, 245, 248);
     renderer.render_to_view(&hal, &scene, &view, W, H, bg).expect("render_to_view");
     write_png(&hal, &target, &out);
-    eprintln!("anim_demo: escrito {out} ({W}x{H}) — crossfade rojo→azul en {FRAMES} pasos");
+    eprintln!(
+        "anim_demo: escrito {out} ({W}x{H}) — fila 1: crossfade rojo→azul · \
+         fila 2: fade-in de entrada · {FRAMES} pasos"
+    );
 }
 
 fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {

@@ -119,7 +119,20 @@ impl<Msg> View<Msg> {
     /// key. La primera aparición no anima; sólo los cambios posteriores. Para
     /// otra curva, [`Self::animated_curve`].
     pub fn animated(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic });
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: false });
+        self
+    }
+
+    /// Como [`Self::animated`] pero además **anima la entrada**: la primera vez
+    /// que esta `key` aparece, su opacidad sube de 0 a su valor (`alpha` o 1.0)
+    /// en `duration` — fade-in estilo `AnimatedSwitcher`/`AnimatedVisibility`.
+    /// Útil para toasts, items de lista que aparecen, paneles que se montan,
+    /// resultados que entran. Como toda animación implícita, depende de una
+    /// `key` estable; reutilizar la key de un nodo que ya estaba NO refadea
+    /// (sólo la primera aparición anima). El **exit** (fade-out al
+    /// desmontarse) aún no está: un nodo que sale del árbol desaparece de una.
+    pub fn animated_enter(mut self, key: u64, duration: std::time::Duration) -> Self {
+        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: true });
         self
     }
 
@@ -131,7 +144,7 @@ impl<Msg> View<Msg> {
         duration: std::time::Duration,
         easing: fn(f32) -> f32,
     ) -> Self {
-        self.anim = Some(Anim { key, duration, easing });
+        self.anim = Some(Anim { key, duration, easing, enter: false });
         self
     }
 
