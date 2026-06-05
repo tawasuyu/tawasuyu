@@ -47,6 +47,32 @@ fn to_winit_cursor(c: Option<llimphi_compositor::Cursor>) -> llimphi_hal::winit:
     }
 }
 
+/// Resuelve el handler de **escala** (pinch-to-zoom) bajo el punto `(x, y)`
+/// contra el cache del último frame (overlay con prioridad, igual que clicks).
+/// Devuelve `(handler, focal_x, focal_y)` con el punto focal ya en coordenadas
+/// **locales** al rect del nodo. `None` si no hay nodo `on_scale` bajo el
+/// cursor. Compartido por el camino Ctrl+rueda y el de `PinchGesture`.
+fn scale_hit_from_cache<Msg: Clone>(
+    cache: &RenderCache<Msg>,
+    x: f32,
+    y: f32,
+) -> Option<(ScaleFn<Msg>, f32, f32)> {
+    let (m, c) = match cache.overlay.as_ref() {
+        Some(ov) => (&ov.mounted, &ov.computed),
+        None => (&cache.mounted, &cache.computed),
+    };
+    hit_test_scale(m, c, x, y).and_then(|i| {
+        let node = &m.nodes[i];
+        node.on_scale.clone().map(|h| {
+            let (fx, fy) = c
+                .get(node.id)
+                .map(|r| (x - r.x, y - r.y))
+                .unwrap_or((0.0, 0.0));
+            (h, fx, fy)
+        })
+    })
+}
+
 impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -361,6 +387,31 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     },
                 };
                 let cursor = (state.cursor.x as f32, state.cursor.y as f32);
+                // Ctrl+rueda = **pinch-to-zoom sintético** (camino universal de
+                // desktop: Wayland/Windows no emiten el gesto de pinch del
+                // trackpad). Si hay un nodo `on_scale` bajo el cursor, el zoom
+                // lo consume ANTES que el scroll/`on_wheel`. Factor
+                // multiplicativo incremental `1.1^(-dy)`: rueda hacia arriba
+                // (`dy<0`) agranda, hacia abajo achica. El punto focal es el
+                // cursor (en coords locales al nodo), para zoomear "hacia el
+                // cursor". Sin nodo zoomeable, Ctrl+rueda cae al `on_wheel`
+                // global como siempre (browsers, etc. lo siguen recibiendo).
+                if state.modifiers.ctrl {
+                    let scale_hit = state
+                        .last_render
+                        .as_ref()
+                        .and_then(|cache| scale_hit_from_cache(cache, cursor.0, cursor.1));
+                    if let Some((h, fx, fy)) = scale_hit {
+                        let factor = 1.1_f32.powf(-wd.y);
+                        if let Some(msg) = h(GesturePhase::Update, factor, fx, fy) {
+                            let model = state.model.take().expect("model");
+                            state.model = Some(A::update(model, msg, &self.handle));
+                            state.last_render = None;
+                            state.window.request_redraw();
+                        }
+                        return;
+                    }
+                }
                 // Primero: ¿hay un nodo con `on_scroll` bajo el cursor? Si
                 // consume el evento (`Some`), no cae al `on_wheel` global.
                 // El overlay tiene prioridad, igual que con clicks. Se
@@ -391,6 +442,41 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;
                     state.window.request_redraw();
+                }
+            }
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                // Pinch del trackpad (winit lo emite **sólo en macOS/iOS**; en
+                // Wayland/Windows el zoom va por Ctrl+rueda, arriba). `delta` es
+                // el cambio de escala incremental (p. ej. 0.01 = +1%); lo
+                // mapeamos al mismo `on_scale` que Ctrl+rueda, con factor
+                // multiplicativo `1.0 + delta`. La fase de winit se traduce a
+                // la de gesto (Begin/Update/End) para que el handler pueda, p.
+                // ej., abrir/cerrar un estado de zoom en vivo.
+                use llimphi_hal::winit::event::TouchPhase;
+                let cursor = (state.cursor.x as f32, state.cursor.y as f32);
+                let gphase = match phase {
+                    TouchPhase::Started => GesturePhase::Begin,
+                    TouchPhase::Moved => GesturePhase::Update,
+                    TouchPhase::Ended | TouchPhase::Cancelled => GesturePhase::End,
+                };
+                // `delta` puede venir NaN según la doc de winit; en ese caso
+                // (o fuera de Update) el factor neutro es 1.0.
+                let factor = if gphase == GesturePhase::Update && delta.is_finite() {
+                    (1.0 + delta) as f32
+                } else {
+                    1.0
+                };
+                let scale_hit = state
+                    .last_render
+                    .as_ref()
+                    .and_then(|cache| scale_hit_from_cache(cache, cursor.0, cursor.1));
+                if let Some((h, fx, fy)) = scale_hit {
+                    if let Some(msg) = h(gphase, factor, fx, fy) {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
                 }
             }
             WindowEvent::MouseInput {

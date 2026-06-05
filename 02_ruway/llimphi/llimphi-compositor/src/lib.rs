@@ -115,6 +115,38 @@ pub type ScrollFn<Msg> = Arc<dyn Fn(f32, f32) -> Option<Msg> + Send + Sync>;
 /// Recibe `(phase, dx, dy, initial_lx, initial_ly)`.
 pub type DragAtFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
 
+/// Fase de un **gesto continuo** (pinch-to-zoom de momento; rotación a futuro).
+/// El runtime emite `Begin` al iniciar el gesto, `Update` por cada cambio
+/// incremental y `End` al terminar. El camino de Ctrl+rueda (universal, sin
+/// trackpad) emite un único `Update` por click de rueda — no hay un "inicio"
+/// ni "fin" naturales, así que el handler debe tolerar `Update`s sueltos sin
+/// `Begin` previo (es lo común en desktop). El camino de trackpad
+/// (`PinchGesture`, sólo macOS/iOS) sí entrega `Begin`/`Update*`/`End`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GesturePhase {
+    Begin,
+    Update,
+    End,
+}
+
+/// Handler de gesto de **escala** (pinch-to-zoom). Recibe `(phase, factor,
+/// focal_x, focal_y)`:
+/// - `factor`: cambio de escala **incremental y multiplicativo** desde el
+///   evento anterior — `1.0` = sin cambio, `>1.0` agranda (zoom in), `<1.0`
+///   achica (zoom out). El caller acumula con `mi_zoom *= factor` y, si
+///   quiere, lo clampa a su rango. En `Begin`/`End` el factor es `1.0`.
+/// - `focal_x`/`focal_y`: punto focal del gesto **relativo a la esquina
+///   superior-izquierda del rect del nodo** (mismo espacio que los handlers
+///   `*_at`). Es el punto que debe quedar fijo bajo el cursor al hacer zoom —
+///   el caller lo usa para zoomear "hacia el cursor" en vez de hacia el
+///   centro. En Ctrl+rueda es la posición del cursor; en trackpad, idem.
+///
+/// Devolver `Some(Msg)` dispara una transición; `None` ignora el evento. El
+/// runtime lo resuelve con [`hit_test_scale`]: el nodo más al frente bajo el
+/// cursor que declare un `on_scale` consume el gesto. Es la base del zoom de
+/// los canvases (pineal/cosmos/nakui).
+pub type ScaleFn<Msg> = Arc<dyn Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Rect absoluto del nodo (en coordenadas físicas del frame). Lo
 /// recibe el callback de [`View::paint_with`] para que pueda
 /// posicionar sus primitivas custom dentro del nodo.
@@ -333,6 +365,11 @@ pub struct View<Msg> {
     /// `Some(Msg)` consume el evento. Base de las áreas de scroll
     /// autocontenidas. Ver [`ScrollFn`].
     pub on_scroll: Option<ScrollFn<Msg>>,
+    /// Handler de gesto de **escala** (pinch-to-zoom). Si está presente y el
+    /// gesto cae sobre este nodo (Ctrl+rueda en desktop, pinch de trackpad en
+    /// macOS), el runtime lo invoca con el factor incremental + el punto focal
+    /// local. Base del zoom de canvases. Ver [`ScaleFn`] y [`View::on_scale`].
+    pub on_scale: Option<ScaleFn<Msg>>,
     /// Marca este nodo como **enfocable** con el id opaco `u64`. El runtime
     /// mantiene el foco (uno por ventana) y lo mueve con Tab/Shift+Tab en
     /// orden de árbol (pre-orden) y al clickear un nodo enfocable; notifica
@@ -491,6 +528,9 @@ pub struct MountedNode<Msg> {
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_scroll: Option<ScrollFn<Msg>>,
+    /// Handler de gesto de escala (pinch-to-zoom) de este nodo. Ver
+    /// [`View::on_scale`] y [`ScaleFn`].
+    pub on_scale: Option<ScaleFn<Msg>>,
     pub focusable: Option<u64>,
     pub alpha: Option<f32>,
     pub anim: Option<Anim>,

@@ -29,6 +29,7 @@ impl<Msg> View<Msg> {
             drop_hover_fill: None,
             clip: false,
             on_scroll: None,
+            on_scale: None,
             focusable: None,
             alpha: None,
             anim: None,
@@ -69,6 +70,25 @@ impl<Msg> View<Msg> {
         F: Fn(f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.on_scroll = Some(Arc::new(handler));
+        self
+    }
+
+    /// Registra un handler de **pinch-to-zoom** (gesto de escala). El runtime
+    /// lo invoca cuando el cursor está sobre este nodo y el usuario hace un
+    /// gesto de escala: **Ctrl + rueda** en cualquier desktop (camino
+    /// universal) o un pinch de trackpad en macOS. El handler recibe
+    /// `(phase, factor, focal_x, focal_y)` — ver [`ScaleFn`]: `factor` es el
+    /// cambio multiplicativo incremental (`>1` agranda, `<1` achica) y
+    /// `(focal_x, focal_y)` es el punto bajo el cursor relativo al rect del
+    /// nodo, para zoomear "hacia el cursor". El típico patrón de canvas:
+    /// `Msg::Zoom { factor, fx, fy }` que multiplica la escala del viewport y
+    /// reajusta el pan para mantener el punto focal fijo. Devolver `Some(Msg)`
+    /// consume el gesto (no cae al scroll/`on_wheel`).
+    pub fn on_scale<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_scale = Some(Arc::new(handler));
         self
     }
 

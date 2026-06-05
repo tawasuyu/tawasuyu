@@ -43,6 +43,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_enter,
         on_pointer_leave,
         on_scroll,
+        on_scale,
         focusable,
         alpha,
         anim,
@@ -79,6 +80,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_enter,
         on_pointer_leave,
         on_scroll,
+        on_scale,
         focusable,
         alpha,
         anim,
@@ -707,6 +709,21 @@ pub fn hit_test_scroll<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| n.on_scroll.is_some())
 }
 
+/// Hit-test específico para gestos de **escala** (pinch-to-zoom): el nodo más
+/// al frente bajo el punto que declaró un `on_scale`. Como un hijo sin handler
+/// no matchea el predicado, el gesto "cae" al ancestro más cercano que lo
+/// declare (un canvas grande zoomeable con widgets encima que no zoomean). El
+/// runtime lo invoca al recibir Ctrl+rueda o un pinch de trackpad. `None` =
+/// ningún nodo zoomeable bajo el cursor (el evento cae al scroll/`on_wheel`).
+pub fn hit_test_scale<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.on_scale.is_some())
+}
+
 /// Hit-test para foco: el id `focusable` del nodo más al frente bajo el
 /// cursor (click-to-focus). `None` si no se clickeó nada enfocable.
 pub fn hit_test_focusable<Msg>(
@@ -881,5 +898,35 @@ mod tests {
         assert_eq!(next_focus(&order, Some(99), false), Some(10));
         // Lista vacía.
         assert_eq!(next_focus(&[], Some(10), false), None);
+    }
+
+    #[test]
+    fn hit_test_scale_directo_y_por_herencia() {
+        use crate::{hit_test_scale, GesturePhase};
+        // Canvas zoomeable 200×200 (declara on_scale); dentro un widget 50×50
+        // (arriba-izq) SIN on_scale (no zoomea). El gesto sobre el widget debe
+        // "caer" al canvas ancestro (herencia, como el cursor), y fuera de
+        // todo debe dar None (el evento cae al scroll/on_wheel).
+        let widget = View::<()>::new(Style {
+            size: Size { width: length(50.0), height: length(50.0) },
+            ..Default::default()
+        });
+        let canvas = View::<()>::new(Style {
+            size: Size { width: length(200.0), height: length(200.0) },
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .on_scale(|_phase: GesturePhase, _f, _fx, _fy| None)
+        .children(vec![widget]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, canvas);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        // Sobre el widget sin on_scale (0..50,0..50) → cae al canvas (idx 0).
+        assert_eq!(hit_test_scale(&m, &c, 25.0, 25.0), Some(0));
+        // Sobre el canvas fuera del widget (x>50) → el canvas (idx 0).
+        assert_eq!(hit_test_scale(&m, &c, 150.0, 25.0), Some(0));
+        // Fuera del canvas → None.
+        assert_eq!(hit_test_scale(&m, &c, 350.0, 350.0), None);
     }
 }
