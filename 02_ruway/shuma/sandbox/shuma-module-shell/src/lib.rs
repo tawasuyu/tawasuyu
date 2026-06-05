@@ -393,6 +393,17 @@ pub struct State {
     /// publica la `view` y lo usa `Msg::Scroll` para clampar `scroll_px`
     /// sin recalcular la geometría en el handler.
     pub out_overflow: Arc<Mutex<f32>>,
+    /// Selección viva en el cuerpo (IDE-text) de una card: `(block,
+    /// cursor)`. El cuerpo de cada comando se pinta con
+    /// `llimphi-widget-text-editor` read-only (numeración + selección +
+    /// copiar); acá vive el cursor/selección del bloque que el usuario
+    /// está seleccionando con el mouse. `None` = sin selección. La `view`
+    /// reconstruye el `EditorState` por frame desde las `OutputLine` +
+    /// este cursor (la fuente de verdad sigue siendo el buffer de output).
+    pub body_sel: Option<(u64, llimphi_widget_text_editor::Cursor)>,
+    /// Acumulador del drag de selección del cuerpo (el `PointerEvent::Drag`
+    /// del editor entrega deltas; hay que acumularlos contra el press).
+    pub body_drag_accum: (f32, f32),
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -453,6 +464,8 @@ impl State {
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
+            body_sel: None,
+            body_drag_accum: (0.0, 0.0),
         }
     }
 
@@ -674,6 +687,16 @@ pub enum Msg {
     /// Ejecuta el grupo guardado de índice `idx` (0-based). La dispara el
     /// click en su card del panel de grupos (equivale a la tecla F{idx+1}).
     RunGroup(usize),
+    /// Mouse sobre el cuerpo (IDE-text) de la card del bloque `block`:
+    /// click posiciona el caret, drag extiende la selección. La dispara el
+    /// `on_pointer` del `text-editor` del cuerpo.
+    BodyPointer {
+        block: u64,
+        ev: llimphi_widget_text_editor::PointerEvent,
+    },
+    /// Copia al clipboard la selección viva del cuerpo del bloque `block`
+    /// (click derecho sobre el cuerpo). No-op si no hay selección.
+    CopyBody(u64),
 }
 
 mod update;
@@ -1698,6 +1721,42 @@ mod tests {
         assert_eq!(bg, job_block);
         assert_eq!(fg, fg_block);
         assert_ne!(bg, fg, "job y foreground en cards distintas");
+    }
+
+    #[test]
+    fn body_lines_excludes_prompt_stage_and_status() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ echo hola | cat"));
+        let blk = s.current_block;
+        s.push_output(OutputLine::stage_stdout(0, "intermedia"));
+        s.push_output(OutputLine::stdout("hola"));
+        s.push_output(OutputLine::stderr("ups"));
+        s.push_output(OutputLine::notice("✔ exit 0"));
+        // Cuerpo = stdout/stderr/notice no-status, sin el prompt ni la etapa.
+        assert_eq!(body_lines_for_block(&s, blk), vec!["hola", "ups"]);
+    }
+
+    #[test]
+    fn body_pointer_click_then_drag_selects_text() {
+        use llimphi_widget_text_editor::PointerEvent;
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ echo"));
+        let blk = s.current_block;
+        s.push_output(OutputLine::stdout("hola mundo"));
+        s.push_output(OutputLine::stdout("segunda"));
+        // Click al inicio (línea 0, col 0) ancla el caret.
+        s = update(s, Msg::BodyPointer { block: blk, ev: PointerEvent::Click { x: 0.0, y: 0.0 } });
+        // Drag hasta ~col 4 de la línea 0 (char_width 7.2 ⇒ x≈30) extiende.
+        s = update(
+            s,
+            Msg::BodyPointer {
+                block: blk,
+                ev: PointerEvent::Drag { initial_x: 0.0, initial_y: 0.0, dx: 30.0, dy: 2.0 },
+            },
+        );
+        let ed = body_editor_state(&s, blk);
+        let sel = ed.selected_text().expect("hay selección tras el drag");
+        assert_eq!(sel, "hola", "seleccionó las primeras 4 columnas, fue {sel:?}");
     }
 
     #[test]

@@ -225,6 +225,12 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::RunGroup(idx) => {
             s = run_group(s, idx);
         }
+        Msg::BodyPointer { block, ev } => {
+            s = apply_body_pointer(s, block, ev);
+        }
+        Msg::CopyBody(block) => {
+            copy_body_selection(&s, block);
+        }
         Msg::Tick => {
             s = drain_run(s);
         }
@@ -574,6 +580,59 @@ pub(crate) fn read_clipboard() -> Option<String> {
 pub(crate) fn set_clipboard(text: &str) {
     if let Ok(mut clip) = arboard::Clipboard::new() {
         let _ = clip.set_text(text.to_string());
+    }
+}
+
+/// Aplica un evento de puntero del cuerpo IDE-text de una card: Click
+/// posiciona el caret, Drag extiende la selección (acumulando el delta
+/// contra el press, igual que `nada`). Reconstruye el `EditorState` del
+/// bloque desde su texto (la fuente de verdad) + el cursor guardado, lo
+/// muta, y guarda el cursor de vuelta en `state.body_sel`.
+pub(crate) fn apply_body_pointer(
+    mut s: State,
+    block: u64,
+    ev: llimphi_widget_text_editor::PointerEvent,
+) -> State {
+    use llimphi_widget_text_editor::PointerEvent;
+    let metrics = body_editor_metrics();
+    let mut ed = body_editor_state(&s, block);
+    let scroll = ed.scroll_offset;
+    match ev {
+        PointerEvent::Click { x, y } => {
+            s.body_drag_accum = (0.0, 0.0);
+            let (line, col) = metrics.screen_to_pos(x, y, scroll);
+            ed.set_caret_at(line, col);
+        }
+        PointerEvent::Drag {
+            initial_x,
+            initial_y,
+            dx,
+            dy,
+        } => {
+            s.body_drag_accum.0 += dx;
+            s.body_drag_accum.1 += dy;
+            let cur_x = initial_x + s.body_drag_accum.0;
+            let cur_y = initial_y + s.body_drag_accum.1;
+            let (line, col) = metrics.screen_to_pos(cur_x, cur_y, scroll);
+            ed.extend_selection_to(line, col);
+        }
+    }
+    s.body_sel = Some((block, ed.cursor.clone()));
+    s
+}
+
+/// Copia al clipboard la selección viva del cuerpo de `block` (click
+/// derecho). No-op si no hay selección en ese bloque.
+pub(crate) fn copy_body_selection(s: &State, block: u64) {
+    let Some((b, _)) = s.body_sel.as_ref() else {
+        return;
+    };
+    if *b != block {
+        return;
+    }
+    let ed = body_editor_state(s, block);
+    if let Some(text) = ed.selected_text() {
+        set_clipboard(&text);
     }
 }
 

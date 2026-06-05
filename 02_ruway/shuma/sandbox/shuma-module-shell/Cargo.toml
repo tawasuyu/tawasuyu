@@ -21,6 +21,7 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-icons = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+llimphi-widget-text-editor = { workspace = true }
 vt100 = { workspace = true }
 arboard = { workspace = true }
 

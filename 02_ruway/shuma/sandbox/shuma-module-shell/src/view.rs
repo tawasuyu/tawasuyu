@@ -1346,6 +1346,87 @@ pub(crate) fn status_color(
     }
 }
 
+/// `true` si la línea es una notice de cierre (`✔/✘/⏹`) — la versión
+/// theme-free de [`status_color`], para que `update` (que no tiene theme)
+/// calcule el cuerpo igual que la `view`.
+pub(crate) fn is_status_line(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with('✔') || t.starts_with('✘') || t.starts_with('⏹')
+}
+
+/// Líneas del **cuerpo** de un bloque, en orden del buffer: stdout/stderr
+/// y notices que no son de cierre, excluyendo el Prompt (header) y las
+/// líneas de etapa (tee). Es exactamente lo que `command_card` pinta en el
+/// cuerpo IDE-text; `update` la usa para mapear el puntero a (línea, col)
+/// sobre el mismo texto. El editor las une con `\n`.
+pub(crate) fn body_lines_for_block(state: &State, block: u64) -> Vec<String> {
+    state
+        .output
+        .iter()
+        .filter(|l| {
+            l.block == block
+                && l.kind != OutputKind::Prompt
+                && l.stage.is_none()
+                && !is_status_line(&l.text)
+        })
+        .map(|l| l.text.clone())
+        .collect()
+}
+
+/// Kinds de las líneas del cuerpo, alineados 1:1 con
+/// [`body_lines_for_block`] — para tintar stderr sin perder el resto.
+pub(crate) fn body_kinds_for_block(state: &State, block: u64) -> Vec<OutputKind> {
+    state
+        .output
+        .iter()
+        .filter(|l| {
+            l.block == block
+                && l.kind != OutputKind::Prompt
+                && l.stage.is_none()
+                && !is_status_line(&l.text)
+        })
+        .map(|l| l.kind)
+        .collect()
+}
+
+/// Métricas del editor de cuerpo: mono 12px con `line_height` clavado a
+/// `ROW_H` para que la contabilidad de alturas del scroll (que asume
+/// ROW_H por línea) siga cuadrando.
+pub(crate) fn body_editor_metrics() -> llimphi_widget_text_editor::EditorMetrics {
+    let mut m = llimphi_widget_text_editor::EditorMetrics::for_font_size(12.0);
+    m.line_height = ROW_H;
+    m
+}
+
+/// Paleta del editor de cuerpo: fondo de la card (`bg_panel_alt`), gutter
+/// sutil, resto desde el theme.
+pub(crate) fn body_editor_palette(theme: &Theme) -> llimphi_widget_text_editor::EditorPalette {
+    let mut p = llimphi_widget_text_editor::EditorPalette::from_theme(theme);
+    p.bg = theme.bg_panel_alt;
+    p.bg_gutter = theme.bg_panel_alt;
+    p
+}
+
+/// Reconstruye el `EditorState` read-only del cuerpo de `block` desde su
+/// texto + el cursor/selección guardado en `state.body_sel` (si es de este
+/// bloque). El buffer es la fuente de verdad (las `OutputLine`); sólo el
+/// cursor persiste entre frames. Lo comparten `view` (pintar) y `update`
+/// (mapear puntero), así la geometría coincide exacta.
+pub(crate) fn body_editor_state(
+    state: &State,
+    block: u64,
+) -> llimphi_widget_text_editor::EditorState {
+    let text = body_lines_for_block(state, block).join("\n");
+    let mut ed = llimphi_widget_text_editor::EditorState::new();
+    ed.set_text(&text);
+    if let Some((b, cur)) = &state.body_sel {
+        if *b == block {
+            ed.cursor = cur.clone();
+        }
+    }
+    ed
+}
+
 /// Extrae el comando crudo del texto del header (`$ ls | wc`, o el de un
 /// job de fondo `[0] $ sleep 5 &`) — para parsear las etapas del pipe.
 pub(crate) fn extract_command(header: &str) -> String {
@@ -1853,9 +1934,45 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             child_h_sum += ROW_H;
         }
     } else {
-        for &line in &body {
-            card_children.push(render_output_line::<HostMsg>(line, &state.cwd, theme, lift));
-            child_h_sum += ROW_H;
+        // Cuerpo como text de IDE read-only: numeración de líneas +
+        // selección moderna + copiar (click derecho), reusando el widget
+        // canónico (uso de referencia: `nada`). La fuente de verdad sigue
+        // siendo el buffer de output; el editor se reconstruye por frame
+        // desde él + el cursor guardado en `state.body_sel`. (Las
+        // decoraciones clickables de paths/urls del render por-línea quedan
+        // en deuda — el editor todavía no expone spans accionables.)
+        let body_lines = body_lines_for_block(state, block);
+        if !body_lines.is_empty() {
+            let n = body_lines.len();
+            let mut ed = body_editor_state(state, block);
+            // Tinte rojo tenue en líneas stderr — preserva la señal de error
+            // que el coloreado por-línea daba, ahora como fondo sutil.
+            let stderr_tint = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(
+                220, 110, 110, 28,
+            );
+            ed.line_tints = body_kinds_for_block(state, block)
+                .into_iter()
+                .map(|k| {
+                    if matches!(k, OutputKind::Stderr) {
+                        Some(stderr_tint)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let metrics = body_editor_metrics();
+            let palette = body_editor_palette(theme);
+            let lift_ptr = (*lift).clone();
+            let editor = llimphi_widget_text_editor::text_editor_view::<HostMsg>(
+                &ed,
+                &palette,
+                metrics,
+                n,
+                move |ev| Some(lift_ptr(Msg::BodyPointer { block, ev })),
+            )
+            .on_right_click(lift(Msg::CopyBody(block)));
+            card_children.push(editor);
+            child_h_sum += n as f32 * ROW_H;
         }
     }
 

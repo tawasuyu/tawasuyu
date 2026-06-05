@@ -336,7 +336,8 @@ fn build_gutter<Msg: Clone + 'static>(
                         align_items: Some(AlignItems::Center),
                         ..Default::default()
                     })
-                    .text_aligned(label, metrics.font_size * 0.85, color, Alignment::End),
+                    .text_aligned(label, metrics.font_size * 0.85, color, Alignment::End)
+                    .mono(),
                 );
             }
             GutterStyle::Phantom => {
@@ -621,6 +622,7 @@ fn line_text_plain<Msg: Clone + 'static>(
         ..Default::default()
     })
     .text_aligned(text, metrics.font_size, palette.fg_text, Alignment::Start)
+    .mono()
 }
 
 /// Renderiza una línea como secuencia de Views absolutos posicionados,
@@ -678,6 +680,7 @@ fn line_text_tokens<Msg: Clone + 'static>(
         runs,
         Alignment::Start,
     )
+    .mono()
 }
 
 fn caret_rect<Msg: Clone + 'static>(
@@ -729,7 +732,8 @@ fn preedit_views<Msg: Clone + 'static>(
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text_aligned(text.to_string(), metrics.font_size, palette.fg_text, Alignment::Start),
+        .text_aligned(text.to_string(), metrics.font_size, palette.fg_text, Alignment::Start)
+        .mono(),
         // Subrayado: una línea fina en el color del caret bajo el texto.
         View::new(Style {
             position: Position::Absolute,
