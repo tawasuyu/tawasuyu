@@ -1,9 +1,10 @@
 //! Chrome del navegador: la UI que rodea al contenido de la página. Menús
 //! (menubar/app menu/edit menu + `FocusTarget`), feature de búsqueda en página
 //! (`Matcher`, `count_matches`, `find_match_y*`, `find_bar`/`find_toggle`),
-//! paneles laterales (bookmarks/historial/fuente) y las barras de pestañas y
-//! dirección (`tabs_bar`/`header_bar`). Extraído de `lib.rs` (regla #1).
-//! Comparte todos los tipos del crate vía `use super::*`.
+//! paneles laterales (bookmarks/historial/fuente) y la barra de pestañas
+//! horizontal (`tabs_bar`). Extraído de `lib.rs` (regla #1). El header de
+//! dirección renovado (theme-driven, con autocompletar) vive en `container.rs`
+//! (`nav_header_bar`). Comparte todos los tipos del crate vía `use super::*`.
 use super::*;
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -911,92 +912,4 @@ pub(crate) fn tabs_bar(model: &Model) -> View<Msg> {
     })
     .fill(Color::from_rgb8(18, 18, 22))
     .children(kids)
-}
-
-pub(crate) fn header_bar(t: &TabState, zoom: f32, hover_link: Option<&str>) -> View<Msg> {
-    let palette = TextInputPalette::default();
-    let addr = text_input_view(&t.addr, "ingresar URL…", t.addr_focused, &palette, Msg::FocusAddr);
-
-    // Botones nav: ← → ⟳
-    let back_color = if t.can_back() { Color::from_rgb8(220, 220, 230) } else { Color::from_rgb8(90, 90, 100) };
-    let fwd_color = if t.can_fwd() { Color::from_rgb8(220, 220, 230) } else { Color::from_rgb8(90, 90, 100) };
-    let nav_btn = |label: &str, color: Color, msg: Msg| {
-        View::new(Style {
-            size: Size { width: length(28.0_f32), height: length(28.0_f32) },
-            margin: Rect {
-                left: length(0.0_f32),
-                right: length(4.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .fill(Color::from_rgb8(40, 40, 50))
-        .radius(3.0)
-        .text_aligned(label.to_string(), 14.0, color, Alignment::Center)
-        .on_click(msg)
-    };
-
-    let addr_row = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
-        flex_direction: FlexDirection::Row,
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .children(vec![
-        nav_btn("◀", back_color, Msg::Back),
-        nav_btn("▶", fwd_color, Msg::Forward),
-        nav_btn("⟳", Color::from_rgb8(220, 220, 230), Msg::Reload),
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
-            ..Default::default()
-        })
-        .children(vec![addr]),
-    ]);
-
-    let title_line = if t.title.is_empty() { t.url.as_str() } else { t.title.as_str() };
-    let zoom_tag = if (zoom - 1.0).abs() > 0.005 {
-        format!("    ·    zoom: {}%", (zoom * 100.0).round() as i32)
-    } else {
-        String::new()
-    };
-    // Si el cursor está sobre un link, el preview de la URL reemplaza
-    // la línea de status normal (estilo browser tradicional).
-    let status_line = if let Some(href) = hover_link {
-        format!("→ {}", truncate(href, 220))
-    } else {
-        format!(
-            "{}    ·    status: {}{}    ·    [Ctrl+T/W/Tab · Alt+←/→ · F5 · Ctrl+= / Ctrl+- / Ctrl+0 zoom · Ctrl+F buscar · Ctrl+B bookmarks · Ctrl+H historial · Ctrl+U source]",
-            title_line, t.status, zoom_tag,
-        )
-    };
-
-    View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(HEADER_H - TABS_H) },
-        padding: Rect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
-            top: length(6.0_f32),
-            bottom: length(6.0_f32),
-        },
-        flex_direction: FlexDirection::Column,
-        ..Default::default()
-    })
-    .fill(Color::from_rgb8(28, 28, 36))
-    .children(vec![
-        addr_row,
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(14.0_f32) },
-            margin: Rect {
-                left: length(0.0_f32),
-                right: length(0.0_f32),
-                top: length(2.0_f32),
-                bottom: length(0.0_f32),
-            },
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(status_line, 10.0, Color::from_rgb8(150, 150, 165), Alignment::Start),
-    ])
 }

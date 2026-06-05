@@ -46,6 +46,7 @@ use llimphi_clipboard::SystemClipboard;
 // para puentear `navigator.clipboard` (Fase 7.176) con el portapapeles real.
 use llimphi_widget_text_editor::Clipboard as _;
 use llimphi_theme::Theme;
+use llimphi_module_allichay::AllichayState;
 
 use puriy_engine::{
     AlignItems as CssAlignItems, AlignSelf as CssAlignSelf,
@@ -67,8 +68,11 @@ mod jsbridge;
 use jsbridge::*;
 mod nav;
 use nav::*;
+mod container;
+use container::*;
+mod settings;
+use settings::*;
 
-const HEADER_H: f32 = 78.0;
 const TABS_H: f32 = 30.0;
 const LINE_PX: f32 = 24.0;
 const NEW_TAB_URL: &str = "about:blank";
@@ -146,6 +150,50 @@ fn fresh_tab_id() -> TabId {
 
 pub struct Puriy;
 
+/// Orientación de las pestañas del navegador. **Horizontal** = barra
+/// clásica arriba, un solo nivel (las pestañas del space activo). **Vertical**
+/// = sidebar acoplable estilo cosmos: un rail de **dientes** (un diente por
+/// space) + la lista vertical de pestañas del space activo. Configurable desde
+/// el panel de ajustes y persistido en el Profile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TabOrientation {
+    Horizontal,
+    Vertical,
+}
+
+impl TabOrientation {
+    /// Id estable para el dropdown de ajustes y la persistencia.
+    pub fn id(self) -> &'static str {
+        match self {
+            TabOrientation::Horizontal => "horizontal",
+            TabOrientation::Vertical => "vertical",
+        }
+    }
+    pub fn from_id(s: &str) -> Option<Self> {
+        match s {
+            "horizontal" => Some(TabOrientation::Horizontal),
+            "vertical" => Some(TabOrientation::Vertical),
+            _ => None,
+        }
+    }
+}
+
+/// Un **space** (pestaña de alto nivel): agrupa varias pestañas del navegador.
+/// En modo vertical cada space es un **diente** del rail; al activarlo, su
+/// panel lista las pestañas que le pertenecen. En modo horizontal sólo se ve
+/// el space activo (un nivel). El `icon` es un glifo para el diente.
+#[derive(Debug, Clone)]
+pub struct Space {
+    pub name: String,
+    pub icon: String,
+}
+
+impl Space {
+    pub fn new(name: impl Into<String>, icon: impl Into<String>) -> Self {
+        Self { name: name.into(), icon: icon.into() }
+    }
+}
+
 /// Estado per-`<select>` en una pestaña: opción seleccionada + si está
 /// abierto.
 #[derive(Debug, Clone)]
@@ -190,6 +238,10 @@ impl HoverTween {
 
 pub struct TabState {
     pub id: TabId,
+    /// Índice del [`Space`] al que pertenece esta pestaña. Default `0` (el
+    /// space inicial). En modo vertical decide bajo qué diente aparece; en
+    /// horizontal sólo se muestran las del space activo.
+    pub space: usize,
     pub url: String,
     pub title: String,
     pub status: String,
@@ -291,6 +343,7 @@ impl TabState {
         addr.set_text(url.clone());
         Self {
             id: fresh_tab_id(),
+            space: 0,
             url: url.clone(),
             title: String::new(),
             status: "cargando…".into(),
@@ -341,6 +394,26 @@ impl TabState {
 pub struct Model {
     pub tabs: Vec<TabState>,
     pub active: usize,
+    /// Spaces de alto nivel (las "pestañas" del usuario). Siempre ≥ 1.
+    /// `tabs[i].space` indexa acá. En modo vertical son los dientes del rail.
+    pub spaces: Vec<Space>,
+    /// Space activo — sus pestañas son las visibles. Siempre `< spaces.len()`.
+    pub active_space: usize,
+    /// Orientación de las pestañas (horizontal/vertical). Persistida.
+    pub orientation: TabOrientation,
+    /// Tema que pinta el chrome renovado (sidebar, rail, panel de ajustes,
+    /// input de URL). El dropdown de ajustes lo cambia.
+    pub theme: Theme,
+    /// `Ctrl+,` abre el panel de configuración embebido (allichay). `Esc` o
+    /// clic en el scrim lo cierra.
+    pub settings_open: bool,
+    /// Estado del renderizador del panel de configuración (diente activo,
+    /// buffers de edición). Vive mientras el panel está abierto.
+    pub settings: AllichayState,
+    /// Sugerencias de autocompletar del address bar (historial + marcadores)
+    /// recomputadas en cada tecla. Vacío = sin dropdown. Cada entrada es
+    /// `(url, título)`.
+    pub addr_suggest: Vec<(String, String)>,
     /// Factor de zoom de la página (1.0 = 100%). `Ctrl+=` lo sube,
     /// `Ctrl+-` lo baja, `Ctrl+0` lo resetea. Clampado a 0.5..3.0.
     pub zoom: f32,
@@ -427,6 +500,27 @@ impl Model {
     }
     fn tab_idx(&self, id: TabId) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
+    }
+
+    /// Índices (en `self.tabs`) de las pestañas que pertenecen al space `sp`,
+    /// en orden de aparición. Es el contenido del panel de un diente.
+    fn tabs_in_space(&self, sp: usize) -> Vec<usize> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.space == sp)
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Pestañas del space activo — lo que se pinta en la barra/sidebar.
+    fn active_space_tabs(&self) -> Vec<usize> {
+        self.tabs_in_space(self.active_space)
+    }
+
+    /// Cuántos spaces no vacíos hay (para no dejar dientes fantasma).
+    fn space_count(&self) -> usize {
+        self.spaces.len()
     }
     /// Compila el predicado de búsqueda activo (query + toggles) en un
     /// `Matcher` reutilizable por count/highlight/scroll. La query se
@@ -732,6 +826,25 @@ pub enum Msg {
     EditNav(i32),
     /// Enter sobre la fila activa del menú de edición.
     EditActivate,
+    /// Crea un space nuevo (un diente nuevo en el rail) con una pestaña vacía
+    /// adentro, y lo activa. El "+" del rail lo dispara.
+    NewSpace,
+    /// Activa el space `idx` (clic en su diente). Cambia el conjunto de
+    /// pestañas visibles y enfoca la última pestaña de ese space.
+    SelectSpace(usize),
+    /// Mueve la pestaña `tab_idx` al space `dest` (drop de un diente de
+    /// pestaña sobre otro diente de space). No-op si el destino no existe.
+    MoveTabToSpace { tab_idx: usize, dest: usize },
+    /// `Ctrl+,` — abre el panel de configuración embebido.
+    OpenSettings,
+    /// `Esc` / clic en el scrim — cierra el panel de configuración.
+    CloseSettings,
+    /// Mensaje del renderizador del panel de configuración (allichay). El
+    /// `update` lo enruta: foco de campos, scroll y `Change(path, value)`.
+    Settings(llimphi_module_allichay::AllichayMsg),
+    /// Clic en una sugerencia del autocompletar del address bar — navega a
+    /// esa URL.
+    AddrSuggestPick(String),
 }
 
 /// Decide qué hace un evento de rueda según los modifiers: con `Ctrl`
@@ -739,6 +852,55 @@ pub enum Msg {
 /// Pura para poder testearla sin construir un `Model`.
 ///
 /// Convención CSS de `WheelDelta`: `y > 0` = rueda hacia abajo
+/// Construye un `Model` de demostración **sin red ni threads** (no llama a
+/// `spawn_load`/`spawn_periodic`), para ejemplos de render headless. Trae dos
+/// spaces con varias pestañas y orientación vertical, así el sidebar de dientes
+/// se ve poblado. No es parte del runtime real — sólo lo usa
+/// `examples/dump_container.rs`.
+pub fn demo_model() -> Model {
+    let mk = |space: usize, url: &str, title: &str| {
+        let mut t = TabState::new(url.to_string());
+        t.space = space;
+        t.title = title.to_string();
+        t.status = "OK".into();
+        t
+    };
+    let tabs = vec![
+        mk(0, "https://gioser.net", "gioser · suite soberana"),
+        mk(0, "https://example.com", "Example Domain"),
+        mk(0, "about:blank", ""),
+        mk(1, "https://docs.rs/serde", "serde — Rust"),
+    ];
+    Model {
+        tabs,
+        active: 0,
+        spaces: vec![Space::new("Principal", "◆"), Space::new("Trabajo", "▲")],
+        active_space: 0,
+        orientation: TabOrientation::Vertical,
+        theme: Theme::dark(),
+        settings_open: false,
+        settings: AllichayState::new(),
+        addr_suggest: Vec::new(),
+        zoom: 1.0,
+        find_active: false,
+        find_input: TextInputState::new(),
+        find_current: 0,
+        find_case_sensitive: false,
+        find_whole_word: false,
+        panel: None,
+        panel_filter: TextInputState::new(),
+        hover_link: None,
+        start: std::time::Instant::now(),
+        menu_open: None,
+        edit_menu: None,
+        clipboard: SystemClipboard::new(),
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
+        edit_active: usize::MAX,
+        edit_anim: Tween::idle(1.0),
+    }
+}
+
 /// (contenido baja) → alejar; `y < 0` = rueda hacia arriba → acercar.
 /// Cada notch da un paso, igual que `Ctrl+=`/`Ctrl+-`.
 fn wheel_to_msg(delta: WheelDelta, mods: Modifiers) -> Option<Msg> {
@@ -784,9 +946,22 @@ impl App for Puriy {
             std::time::Duration::from_millis(JS_POLL_PERIOD_MS),
             || Msg::JsTick,
         );
+        // Orientación inicial desde el Profile (si está cableado); default
+        // horizontal (un nivel, comportamiento clásico).
+        let orientation = profile_handle()
+            .and_then(|h| h.lock().ok().map(|p| p.ui.orientation.clone()))
+            .and_then(|o| TabOrientation::from_id(&o))
+            .unwrap_or(TabOrientation::Horizontal);
         Model {
             tabs: vec![tab],
             active: 0,
+            spaces: vec![Space::new("Principal", "◆")],
+            active_space: 0,
+            orientation,
+            theme: Theme::dark(),
+            settings_open: false,
+            settings: AllichayState::new(),
+            addr_suggest: Vec::new(),
             zoom: 1.0,
             find_active: false,
             find_input: TextInputState::new(),
@@ -809,6 +984,15 @@ impl App for Puriy {
 
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
+            return None;
+        }
+        // Panel de configuración abierto: Esc lo cierra; el resto de teclas se
+        // tragan (los campos son dropdowns, sin edición de texto). Prioridad
+        // sobre todo lo demás para que las teclas no fuguen a la página.
+        if model.settings_open {
+            if matches!(&e.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::CloseSettings);
+            }
             return None;
         }
         // Menú principal abierto: las flechas navegan. ←/→ cambian de menú
@@ -858,6 +1042,14 @@ impl App for Puriy {
                 }
                 Key::Character(s) if s.eq_ignore_ascii_case("u") => {
                     return Some(Msg::ViewSource);
+                }
+                // Ctrl+, — abre/cierra el panel de configuración embebido.
+                Key::Character(s) if s.as_str() == "," => {
+                    return Some(if model.settings_open {
+                        Msg::CloseSettings
+                    } else {
+                        Msg::OpenSettings
+                    });
                 }
                 Key::Named(NamedKey::Tab) if mods.shift => return Some(Msg::PrevTab),
                 Key::Named(NamedKey::Tab) => return Some(Msg::NextTab),
@@ -1165,6 +1357,7 @@ impl App for Puriy {
                 // ver la página, no la lista de bookmarks/history.
                 m.panel = None;
                 m.panel_filter.clear();
+                m.addr_suggest.clear();
                 // Same-page fragment navigation: si la URL solicitada
                 // sólo difiere de la actual en el fragment, scrolleamos
                 // al elemento con id matching y NO recargamos. Esto
@@ -1310,19 +1503,32 @@ impl App for Puriy {
             }
             Msg::FocusAddr => {
                 m.active_mut().addr_focused = true;
+                // Al enfocar, sembrá sugerencias contra el texto actual (vacío
+                // ⇒ sin dropdown hasta que el usuario teclee).
+                let q = m.active().addr.text();
+                m.addr_suggest = compute_addr_suggestions(&q);
             }
             Msg::AddrKey(e) => {
                 if matches!(&e.key, Key::Named(NamedKey::Enter)) {
-                    let target = m.active().addr.text().trim().to_string();
-                    if !target.is_empty() {
+                    let raw = m.active().addr.text().trim().to_string();
+                    if !raw.is_empty() {
+                        m.addr_suggest.clear();
+                        // Repotenciado: "buscar-o-navegar". Si parece URL/dominio
+                        // navega; si no, lo manda al buscador.
+                        let target = normalize_omnibox_input(&raw);
                         return Self::update(m, Msg::Navigate(target), handle);
                     }
                 } else if matches!(&e.key, Key::Named(NamedKey::Escape)) {
                     let t = m.active_mut();
                     t.addr_focused = false;
                     t.addr.set_text(t.url.clone());
+                    m.addr_suggest.clear();
                 } else {
                     m.active_mut().addr.apply_key(&e);
+                    // Recomputá las sugerencias de autocompletar (historial +
+                    // marcadores) contra el texto vigente.
+                    let q = m.active().addr.text();
+                    m.addr_suggest = compute_addr_suggestions(&q);
                 }
             }
             Msg::Back => {
@@ -1345,26 +1551,49 @@ impl App for Puriy {
                 let mut t = TabState::new(NEW_TAB_URL.into());
                 t.status = "nueva pestaña".into();
                 t.box_tree = None;
+                // La pestaña nueva nace en el space activo (en horizontal hay
+                // un solo space visible; en vertical, bajo el diente activo).
+                t.space = m.active_space;
                 m.tabs.push(t);
                 let new_idx = m.tabs.len() - 1;
                 switch_active_tab(&mut m, new_idx);
                 m.active_mut().addr_focused = true;
             }
             Msg::CloseTab(idx) => {
+                let closing_active = idx == m.active;
+                let closed_space = m.tabs.get(idx).map(|t| t.space).unwrap_or(m.active_space);
                 if idx < m.tabs.len() {
                     // Corta los EventSource de la pestaña antes de tirarla.
                     m.tabs[idx].cancel_all_eventsources();
                     m.tabs.remove(idx);
                 }
                 if m.tabs.is_empty() {
-                    let t = TabState::new(NEW_TAB_URL.into());
+                    // No quedan pestañas: sembrá una en el space que se vació.
+                    let mut t = TabState::new(NEW_TAB_URL.into());
+                    t.space = m.active_space;
                     m.tabs.push(t);
                     m.active = 0;
                 } else if m.active >= m.tabs.len() {
-                    // El active quedó out-of-bounds — apuntar al último.
-                    // No usamos switch_active_tab porque no hay tab "vieja"
-                    // a marcar hidden (la borramos arriba).
+                    // El active quedó out-of-bounds tras el remove — apuntá al
+                    // último (sin switch: la tab vieja ya no existe).
                     m.active = m.tabs.len() - 1;
+                    if let Some(rt) = m.tabs[m.active].js.as_mut() {
+                        let _ = rt.set_visibility(false);
+                    }
+                } else if closing_active {
+                    // Cerramos la activa pero el índice sigue válido (apunta a
+                    // lo que ocupó su lugar). Si esa pestaña cayó en otro space,
+                    // preferí una del space que estábamos viendo para no saltar
+                    // de contexto.
+                    if m.tabs[m.active].space != closed_space {
+                        if let Some(&sib) = m.tabs_in_space(closed_space).first() {
+                            m.active = sib;
+                        } else {
+                            // El space quedó sin pestañas: seguí el space de la
+                            // pestaña que ocupó el hueco.
+                            m.active_space = m.tabs[m.active].space;
+                        }
+                    }
                     if let Some(rt) = m.tabs[m.active].js.as_mut() {
                         let _ = rt.set_visibility(false);
                     }
@@ -1376,19 +1605,21 @@ impl App for Puriy {
                 }
             }
             Msg::NextTab => {
-                if !m.tabs.is_empty() {
-                    let next = (m.active + 1) % m.tabs.len();
-                    if next != m.active {
-                        switch_active_tab(&mut m, next);
-                    }
+                // Cicla dentro del space activo (con wrap). Si el space tiene
+                // una sola pestaña, no-op.
+                let sibs = m.active_space_tabs();
+                if sibs.len() > 1 {
+                    let here = sibs.iter().position(|&i| i == m.active).unwrap_or(0);
+                    let next = sibs[(here + 1) % sibs.len()];
+                    switch_active_tab(&mut m, next);
                 }
             }
             Msg::PrevTab => {
-                if !m.tabs.is_empty() {
-                    let prev = (m.active + m.tabs.len() - 1) % m.tabs.len();
-                    if prev != m.active {
-                        switch_active_tab(&mut m, prev);
-                    }
+                let sibs = m.active_space_tabs();
+                if sibs.len() > 1 {
+                    let here = sibs.iter().position(|&i| i == m.active).unwrap_or(0);
+                    let prev = sibs[(here + sibs.len() - 1) % sibs.len()];
+                    switch_active_tab(&mut m, prev);
                 }
             }
             Msg::Bookmark => {
@@ -1930,13 +2161,73 @@ impl App for Puriy {
             Msg::EditMenuAction(action) => {
                 apply_edit_menu_action(&mut m, action);
             }
+            Msg::NewSpace => {
+                let n = m.spaces.len();
+                // Glifo rotativo para el diente nuevo (ciclo corto y legible).
+                const GLYPHS: [&str; 8] = ["◆", "●", "▲", "■", "★", "✦", "◈", "❖"];
+                m.spaces.push(Space::new(
+                    format!("Space {}", n + 1),
+                    GLYPHS[n % GLYPHS.len()],
+                ));
+                m.active_space = n;
+                // Un space nace con una pestaña vacía adentro.
+                let mut t = TabState::new(NEW_TAB_URL.into());
+                t.status = "nuevo space".into();
+                t.box_tree = None;
+                t.space = n;
+                m.tabs.push(t);
+                let new_idx = m.tabs.len() - 1;
+                switch_active_tab(&mut m, new_idx);
+                m.active_mut().addr_focused = true;
+                persist_ui_prefs(&m);
+            }
+            Msg::SelectSpace(idx) => {
+                if idx < m.spaces.len() && idx != m.active_space {
+                    m.active_space = idx;
+                    // Enfocá la última pestaña de ese space; si no tiene ninguna
+                    // (caso raro tras mover pestañas), creá una vacía.
+                    match m.tabs_in_space(idx).last().copied() {
+                        Some(tab_idx) => switch_active_tab(&mut m, tab_idx),
+                        None => {
+                            let mut t = TabState::new(NEW_TAB_URL.into());
+                            t.space = idx;
+                            m.tabs.push(t);
+                            let new_idx = m.tabs.len() - 1;
+                            switch_active_tab(&mut m, new_idx);
+                        }
+                    }
+                }
+            }
+            Msg::MoveTabToSpace { tab_idx, dest } => {
+                if tab_idx < m.tabs.len() && dest < m.spaces.len() {
+                    m.tabs[tab_idx].space = dest;
+                }
+            }
+            Msg::OpenSettings => {
+                m.settings_open = true;
+                m.settings = AllichayState::new();
+            }
+            Msg::CloseSettings => {
+                m.settings_open = false;
+            }
+            Msg::Settings(amsg) => {
+                apply_settings_msg(&mut m, amsg);
+            }
+            Msg::AddrSuggestPick(url) => {
+                m.addr_suggest.clear();
+                m.active_mut().addr_focused = false;
+                return Self::update(m, Msg::Navigate(url), handle);
+            }
         }
         m
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
-        // Prioridad: menú contextual de edición > dropdown del menú
-        // principal > overlay del `<select>` abierto.
+        // Prioridad: panel de configuración > menú contextual de edición >
+        // dropdown del menú principal > overlay del `<select>` abierto.
+        if model.settings_open {
+            return Some(settings_overlay_view(model));
+        }
         if let Some((x, y)) = model.edit_menu {
             let flags = match model.focused_text_input() {
                 Some((input, masked)) => EditFlags::from_editor(input.editor(), masked),
@@ -1994,8 +2285,9 @@ impl App for Puriy {
     }
 
     fn view(model: &Self::Model) -> View<Self::Msg> {
-        let tabs_bar = tabs_bar(model);
-        let header = header_bar(model.active(), model.zoom, model.hover_link.as_deref());
+        // Header renovado (theme-driven): nav + indicador de seguridad + URL
+        // repotenciada + autocompletar. Compartido por ambas orientaciones.
+        let header = nav_header_bar(model);
         // Predicado de búsqueda activo (query + toggles case/whole-word).
         // Si la find bar está cerrada, un matcher vacío → sin highlight.
         let matcher = if model.find_active {
@@ -2030,21 +2322,57 @@ impl App for Puriy {
             }
         };
 
-        // Barra de menú principal — PRIMER hijo del column raíz.
-        let menu = app_menu(model);
-        let menubar = menubar_view(&menubar_spec(&menu, model));
-
-        let mut children: Vec<View<Msg>> = vec![menubar, tabs_bar, header];
-        if model.find_active {
-            children.push(find_bar(
+        let find = if model.find_active {
+            Some(find_bar(
                 &model.find_input,
                 find_count,
                 model.find_current,
                 model.find_case_sensitive,
                 model.find_whole_word,
-            ));
-        }
-        children.push(body);
+            ))
+        } else {
+            None
+        };
+
+        // Barra de menú principal — PRIMER hijo del column raíz, full width en
+        // ambas orientaciones.
+        let menu = app_menu(model);
+        let menubar = menubar_view(&menubar_spec(&menu, model));
+
+        let children: Vec<View<Msg>> = match model.orientation {
+            TabOrientation::Horizontal => {
+                // Un nivel: barra de pestañas del space activo arriba.
+                let mut c: Vec<View<Msg>> = vec![menubar, tabs_bar(model), header];
+                if let Some(f) = find {
+                    c.push(f);
+                }
+                c.push(body);
+                c
+            }
+            TabOrientation::Vertical => {
+                // Sidebar de dientes a la izquierda; header + body a la derecha.
+                let mut main: Vec<View<Msg>> = vec![header];
+                if let Some(f) = find {
+                    main.push(f);
+                }
+                main.push(body);
+                let main_col = View::new(Style {
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Column,
+                    size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(main);
+                let row = View::new(Style {
+                    flex_grow: 1.0,
+                    flex_direction: FlexDirection::Row,
+                    size: Size { width: percent(1.0_f32), height: percent(0.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![sidebar_view(model), main_col]);
+                vec![menubar, row]
+            }
+        };
 
         // Right-click en la raíz (origen 0,0 → las coords locales que
         // llegan al handler ya son de ventana) abre el menú contextual de
@@ -2054,7 +2382,7 @@ impl App for Puriy {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
-        .fill(Color::from_rgb8(245, 245, 248))
+        .fill(model.theme.bg_app)
         .on_right_click_at(|x, y, _w, _h| Some(Msg::EditMenuOpen(x, y)))
         .children(children)
     }
@@ -2419,6 +2747,13 @@ mod tests {
         Model {
             tabs: vec![t],
             active: 0,
+            spaces: vec![Space::new("Principal", "◆")],
+            active_space: 0,
+            orientation: TabOrientation::Horizontal,
+            theme: Theme::dark(),
+            settings_open: false,
+            settings: AllichayState::new(),
+            addr_suggest: Vec::new(),
             zoom: 1.0,
             find_active: false,
             find_input: TextInputState::new(),
@@ -2709,6 +3044,13 @@ mod tests {
         Model {
             tabs: vec![t],
             active: 0,
+            spaces: vec![Space::new("Principal", "◆")],
+            active_space: 0,
+            orientation: TabOrientation::Horizontal,
+            theme: Theme::dark(),
+            settings_open: false,
+            settings: AllichayState::new(),
+            addr_suggest: Vec::new(),
             zoom: 1.0,
             find_active: false,
             find_input: TextInputState::new(),
@@ -2747,6 +3089,13 @@ mod tests {
         let mut m = Model {
             tabs: vec![t],
             active: 0,
+            spaces: vec![Space::new("Principal", "◆")],
+            active_space: 0,
+            orientation: TabOrientation::Horizontal,
+            theme: Theme::dark(),
+            settings_open: false,
+            settings: AllichayState::new(),
+            addr_suggest: Vec::new(),
             zoom: 1.0,
             find_active: false,
             find_input: TextInputState::new(),
