@@ -360,6 +360,25 @@ pub fn nudge_brightness(up: bool) {
     crate::spawn_cmd(cmd);
 }
 
+/// Copia `text` al portapapeles vía `wl-copy` (wl-clipboard). `wl-copy` se
+/// queda en segundo plano sosteniendo la selección, así que no lo esperamos:
+/// escribimos el texto a su stdin y soltamos. Lo usa el popup de historial al
+/// re-elegir una entrada.
+pub fn copiar_clipboard(text: &str) {
+    use std::io::Write;
+    if let Ok(mut child) = std::process::Command::new("wl-copy")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
+        if let Some(mut si) = child.stdin.take() {
+            let _ = si.write_all(text.as_bytes());
+        }
+        // No esperamos: wl-copy se daemoniza para mantener la selección.
+    }
+}
+
 /// El texto del portapapeles vía `wl-paste` (wl-clipboard), ya colapsado a una
 /// línea. `None` si `wl-paste` no está, si el portapapeles está vacío o no es
 /// texto (p. ej. una imagen). Corre un subproceso por muestreo (~1Hz), como el

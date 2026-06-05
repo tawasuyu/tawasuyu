@@ -164,6 +164,17 @@ const DRAWER_H: u32 = 420;
 /// abajo hasta este alto, manteniendo su exclusive zone en el grosor de la barra.
 const MENU_H: u32 = 480;
 
+/// Qué cuerpo muestra el drawer que crece de la barra del `start_button`: el
+/// menú de apps, o un popup de widget que reusa el mismo crecimiento.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum MenuKind {
+    /// El menú de inicio (lista de apps con buscador, toma el teclado).
+    #[default]
+    Apps,
+    /// El historial de portapapeles (lista de copias, sólo clicks).
+    Clipboard,
+}
+
 /// El cliente Wayland del backend layer-shell.
 struct LayerApp {
     registry_state: RegistryState,
@@ -210,8 +221,15 @@ struct LayerApp {
     shuma_bar_px: u32,
     /// Registro de apps para el menú de inicio (descubierto del dir canónico).
     registry: app_bus::AppRegistry,
-    /// `true` cuando el menú de inicio está desplegado.
+    /// `true` cuando el drawer de la barra del menú está desplegado (apps, o un
+    /// popup de widget como el portapapeles — ver [`menu_kind`]).
     menu_open: bool,
+    /// Qué cuerpo muestra el drawer desplegado: el menú de apps o un popup de
+    /// widget (historial de portapapeles). Reusa el mismo crecimiento de la
+    /// barra del `start_button`.
+    menu_kind: MenuKind,
+    /// Historial de copias (más reciente al frente, sin repetidos, tope 16).
+    clip_history: Vec<String>,
     /// Texto del buscador del menú de inicio (filtra apps por label). Se limpia
     /// al cerrar el menú.
     menu_query: String,
@@ -417,6 +435,8 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         shuma_bar_px: 40,
         registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
+        menu_kind: MenuKind::Apps,
+        clip_history: Vec::new(),
         menu_query: String::new(),
         menu_scroll: 0.0,
         menu_panel: None,
@@ -851,9 +871,10 @@ impl LayerApp {
         let h = if open { MENU_H } else { self.menu_bar_px };
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
-        // El menú toma el teclado mientras está abierto (para teclear en el
-        // buscador); al cerrar lo suelta.
-        layer.set_keyboard_interactivity(if open {
+        // El menú de apps toma el teclado (buscador); los popups de widget
+        // (portapapeles) son sólo clicks, así que no roban teclado.
+        let toma_teclado = open && self.menu_kind == MenuKind::Apps;
+        layer.set_keyboard_interactivity(if toma_teclado {
             KeyboardInteractivity::Exclusive
         } else {
             KeyboardInteractivity::None
@@ -862,6 +883,32 @@ impl LayerApp {
         // Invalida el cache de hit-test (geometría vieja) — igual que shuma.
         self.panels[pi].cache = None;
         self.panels[pi].dirty = true;
+    }
+
+    /// Abre/cierra el drawer de la barra del menú mostrando el cuerpo `kind`. Si
+    /// ya está abierto con otro `kind`, cambia el cuerpo (y el modo de teclado)
+    /// sin recrear; si es el mismo, lo cierra (toggle).
+    fn toggle_menu(&mut self, kind: MenuKind) {
+        if self.menu_open && self.menu_kind == kind {
+            self.set_menu_open(false);
+        } else if self.menu_open {
+            self.menu_kind = kind;
+            if let Some(pi) = self.menu_panel {
+                let toma = kind == MenuKind::Apps;
+                let layer = &self.panels[pi].layer;
+                layer.set_keyboard_interactivity(if toma {
+                    KeyboardInteractivity::Exclusive
+                } else {
+                    KeyboardInteractivity::None
+                });
+                layer.commit();
+                self.panels[pi].cache = None;
+                self.panels[pi].dirty = true;
+            }
+        } else {
+            self.menu_kind = kind;
+            self.set_menu_open(true);
+        }
     }
 
     /// Actualiza el tooltip flotante para el nodo `node_idx` bajo el cursor en el
@@ -1124,6 +1171,7 @@ impl LayerApp {
             return;
         };
         self.ctx = ctx;
+        crate::push_clip_history(&mut self.clip_history, &clipboard);
         self.clipboard = clipboard;
         if let Some(h) = &self.weather {
             if let Some(w) = h.latest() {
@@ -1300,18 +1348,29 @@ impl LayerApp {
         } else if let Some(c) = self.panels[pi].card.as_ref() {
             render::card_view(&c.spec, &c.widgets, &self.theme)
         } else if self.menu_panel == Some(pi) && self.menu_open {
-            render::start_menu_view(
-                &self.cfg.surfaces[idx],
-                &self.surfaces[idx],
-                &self.shuma,
-                &data,
-                &self.theme,
-                self.menu_bar_px as f32,
-                self.registry.all(),
-                &self.menu_query,
-                self.menu_scroll,
-                h as f32,
-            )
+            match self.menu_kind {
+                MenuKind::Apps => render::start_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    self.registry.all(),
+                    &self.menu_query,
+                    self.menu_scroll,
+                    h as f32,
+                ),
+                MenuKind::Clipboard => render::clipboard_menu_view(
+                    &self.cfg.surfaces[idx],
+                    &self.surfaces[idx],
+                    &self.shuma,
+                    &data,
+                    &self.theme,
+                    self.menu_bar_px as f32,
+                    &self.clip_history,
+                ),
+            }
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
             // El cuerpo del drawer es el terminal PTY real; abajo queda la barra
             // (cabezal con el chip de shuma). El terminal mide la surface menos
@@ -1469,7 +1528,12 @@ impl LayerApp {
                     crate::sampler::nudge_brightness(dy > 0.0);
                 }
             }
-            Msg::StartToggle => self.set_menu_open(!self.menu_open),
+            Msg::ClipboardMenu => self.toggle_menu(MenuKind::Clipboard),
+            Msg::ClipboardPick(text) => {
+                crate::sampler::copiar_clipboard(&text);
+                self.set_menu_open(false);
+            }
+            Msg::StartToggle => self.toggle_menu(MenuKind::Apps),
             Msg::StartScroll(delta) => {
                 // Recorre la lista del menú. content/viewport aproximados (el
                 // render reclampa para pintar); evita la deriva del offset.

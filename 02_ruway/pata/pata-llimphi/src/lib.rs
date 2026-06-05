@@ -84,6 +84,10 @@ pub enum Msg {
     VolumeWheel(f32),
     /// Click/click-derecho sobre el volumen: togglea el mute del sink.
     VolumeMute,
+    /// Click en el `clipboard`: despliega/repliega el popup con el historial.
+    ClipboardMenu,
+    /// Elegir una entrada del historial: la vuelve a copiar (`wl-copy`) y cierra.
+    ClipboardPick(String),
     /// Rueda del mouse sobre el medidor de brillo: ajusta la luminosidad de la
     /// pantalla. El `f32` es el delta de la rueda (signo = dirección).
     BrightnessWheel(f32),
@@ -212,6 +216,41 @@ pub fn spawn_cmd(cmd: &str) {
     let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
 }
 
+/// El grosor (px) de la primera barra que hospeda un widget de `kind`, para
+/// posicionar su popup debajo. Default 32 si no se encuentra.
+pub fn bar_thickness_for(cfg: &Config, kind: &str) -> f32 {
+    cfg.surfaces
+        .iter()
+        .find(|s| {
+            s.start
+                .iter()
+                .chain(&s.center)
+                .chain(&s.end)
+                .any(|w| w.kind == kind)
+        })
+        .map(|s| s.thickness)
+        .unwrap_or(32.0)
+}
+
+/// Tope del historial de portapapeles.
+pub const CLIP_HISTORY_MAX: usize = 16;
+
+/// Agrega `nuevo` al frente del `historial` de portapapeles si no es vacío ni
+/// igual al actual tope; deduplica (mueve al frente) y recorta a
+/// [`CLIP_HISTORY_MAX`]. Compartido por ambos backends.
+pub fn push_clip_history(historial: &mut Vec<String>, nuevo: &Option<String>) {
+    let Some(s) = nuevo else { return };
+    if s.is_empty() {
+        return;
+    }
+    if historial.first().map(|f| f == s).unwrap_or(false) {
+        return; // ya es el tope
+    }
+    historial.retain(|x| x != s);
+    historial.insert(0, s.clone());
+    historial.truncate(CLIP_HISTORY_MAX);
+}
+
 /// Envuelve `s` en comillas simples para `sh -c`, escapando comillas internas.
 /// Para pasar rutas con espacios al stand-in de apertura (Fase 11d).
 pub fn shell_quote(s: &str) -> String {
@@ -328,6 +367,11 @@ pub struct Model {
     /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
     /// re-muestrea cada tick vía `wl-paste`.
     pub clipboard: Option<String>,
+    /// Historial de copias (más reciente al frente, sin repetidos, tope 16). Lo
+    /// alimenta cada tick desde `clipboard`; el popup lo lista.
+    pub clip_history: Vec<String>,
+    /// `true` cuando el popup del historial del portapapeles está desplegado.
+    pub clip_open: bool,
     /// La bandeja del sistema, corriendo en su propio hilo. `None` si la config no
     /// declara ningún widget `tray`.
     pub tray: Option<TrayHandle>,
@@ -501,6 +545,8 @@ impl App for PataApp {
             menu_scroll: 0.0,
             sampler,
             clipboard,
+            clip_history: Vec::new(),
+            clip_open: false,
             tray,
             weather,
             weather_now: None,
@@ -533,6 +579,7 @@ impl App for PataApp {
                 let ctx = model.sampler.sample();
                 model.tick_widgets(&ctx);
                 model.clipboard = crate::sampler::leer_clipboard();
+                push_clip_history(&mut model.clip_history, &model.clipboard);
                 if let Some(h) = &model.weather {
                     if let Some(w) = h.latest() {
                         model.weather_now = Some(w);
@@ -614,6 +661,16 @@ impl App for PataApp {
                 }
             }
             Msg::VolumeMute => sampler::toggle_mute(),
+            Msg::ClipboardMenu => {
+                model.clip_open = !model.clip_open;
+                if model.clip_open {
+                    model.menu_open = false;
+                }
+            }
+            Msg::ClipboardPick(text) => {
+                sampler::copiar_clipboard(&text);
+                model.clip_open = false;
+            }
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     sampler::nudge_brightness(dy > 0.0);
@@ -742,31 +799,27 @@ impl App for PataApp {
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
-        // El drawer Quake tiene prioridad; si no, el menú de inicio.
+        // El drawer Quake tiene prioridad; luego el menú de inicio; luego los
+        // popups de widgets (historial de portapapeles, panel del reloj).
         if let Some(d) = shuma::drawer_overlay(&model.shuma, model.screen, &model.theme) {
             return Some(d);
         }
         if model.menu_open {
-            // Lo ofrecemos bajo la barra superior que hospeda el start_button.
-            let bar_h = model
-                .cfg
-                .surfaces
-                .iter()
-                .find(|s| {
-                    s.start
-                        .iter()
-                        .chain(&s.center)
-                        .chain(&s.end)
-                        .any(|w| w.kind == "start_button")
-                })
-                .map(|s| s.thickness)
-                .unwrap_or(32.0);
+            let bar_h = bar_thickness_for(&model.cfg, "start_button");
             return Some(render::start_menu_overlay(
                 model.registry.all(),
                 &model.menu_query,
                 model.menu_scroll,
                 bar_h,
                 model.screen.1 as f32,
+                &model.theme,
+            ));
+        }
+        if model.clip_open {
+            let bar_h = bar_thickness_for(&model.cfg, "clipboard");
+            return Some(render::clipboard_overlay(
+                &model.clip_history,
+                bar_h,
                 &model.theme,
             ));
         }
@@ -804,6 +857,12 @@ impl App for PataApp {
                 Key::Character(s) => s.chars().next().map(Msg::StartChar),
                 _ => None,
             };
+        }
+        // 2.6) Con el popup del portapapeles abierto, Esc lo cierra.
+        if model.clip_open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::ClipboardMenu);
+            }
         }
         // 3) Con el menú "Abrir con…" abierto, Esc lo cierra primero.
         if model.nav.menu.is_some() {

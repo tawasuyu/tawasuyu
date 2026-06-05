@@ -1240,6 +1240,52 @@ pub fn start_menu_view(
     .children(vec![bar, body])
 }
 
+/// El historial de portapapeles para el **layer-shell**: la barra arriba (su
+/// grosor) y el panel del historial llenando lo que la surface creció hacia
+/// abajo. Espeja [`start_menu_view`].
+#[allow(clippy::too_many_arguments)]
+pub fn clipboard_menu_view(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    bar_px: f32,
+    history: &[String],
+) -> View<Msg> {
+    let bar = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(bar_px),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
+
+    let mut body_style = Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    };
+    body_style.flex_grow = 1.0;
+    // Scrim que cierra al click + el panel del historial a la izquierda.
+    let body = View::new(body_style)
+        .on_click(Msg::ClipboardMenu)
+        .children(vec![clipboard_panel(history, theme)]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![bar, body])
+}
+
 /// El `clipboard`: un chip con el ícono 📋 y un preview del texto copiado
 /// (recortado). Si `exec` está, clickearlo lanza ese comando —típicamente un
 /// selector de historial (cliphist)— con realce al hover. Sin texto copiado
@@ -1259,10 +1305,155 @@ fn clipboard_view(text: Option<&str>, exec: Option<&str>, theme: &Theme) -> View
         Some(t) if !t.is_empty() => v.tooltip(t.to_string()),
         _ => v,
     };
+    // Click izquierdo: el popup con el historial (in-app). Click derecho: el
+    // selector externo (`exec`, p. ej. cliphist) si la config lo fija.
+    let v = v.on_click(Msg::ClipboardMenu);
     match exec {
-        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
+        Some(cmd) => v.on_right_click(Msg::Spawn(cmd.to_string())),
         None => v,
     }
+}
+
+/// Ancho del popup del historial de portapapeles (px).
+const CLIP_MENU_W: f32 = 360.0;
+/// Largo máximo de cada fila del historial antes de recortar.
+const CLIP_ROW_MAX: usize = 48;
+
+/// El **panel** del historial de portapapeles: cabecera + una fila por copia,
+/// cada una re-copia al clickearse ([`Msg::ClipboardPick`]). Posicionado en
+/// absoluto arriba-izquierda; lo enmarca el scrim del overlay (winit) o el área
+/// que crece de la barra (layer-shell).
+pub fn clipboard_panel(history: &[String], theme: &Theme) -> View<Msg> {
+    let mut hijos: Vec<View<Msg>> = Vec::new();
+    hijos.push(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(22.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .text("Portapapeles", 12.0, theme.fg_muted),
+    );
+    if history.is_empty() {
+        hijos.push(
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text("(sin copias todavía)", 12.0, theme.fg_muted),
+        );
+    } else {
+        for entry in history {
+            let fila = View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(26.0_f32),
+                },
+                padding: TaffyRect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexStart),
+                ..Default::default()
+            })
+            .radius(6.0)
+            .hover_fill(theme.bg_button_hover)
+            .tooltip(entry.clone())
+            .on_click(Msg::ClipboardPick(entry.clone()))
+            .text(recortar(entry, CLIP_ROW_MAX), 12.0, theme.fg_text);
+            hijos.push(fila);
+        }
+    }
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(CLIP_MENU_W),
+            height: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .children(vec![View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(hijos)])
+}
+
+/// El historial de portapapeles como **overlay** para el path winit: un scrim a
+/// pantalla completa (cierra al click) bajo la barra, con el panel a la
+/// izquierda. Espeja [`start_menu_overlay`].
+pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<Msg> {
+    let scrim = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .alpha(0.45)
+    .on_click(Msg::ClipboardMenu)
+    .children(vec![clipboard_panel(history, theme)]);
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(bar_h),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![scrim])
 }
 
 /// Tamaño del ícono del tray en la barra (px).
