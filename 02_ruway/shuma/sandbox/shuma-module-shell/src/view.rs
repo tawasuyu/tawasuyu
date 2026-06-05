@@ -175,6 +175,8 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
         let elapsed = now.saturating_sub(edit_anchor);
         (elapsed / 530) % 2 == 0
     };
+    // Rango de selección del input (bytes), para pintar el realce.
+    let sel_range = state.input.selection();
 
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -303,6 +305,50 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                     &layout,
                     theme_clone.fg_placeholder,
                     (last_line_end_x, last_line_y),
+                );
+            }
+        }
+
+        // Realce de selección (caso single-line, que es el típico del input).
+        // La fuente es mono, así que medir prefijos como bloque coincide con
+        // el render por-token.
+        if let Some((ss, se)) = sel_range {
+            if !text.contains('\n') && se <= text.len() {
+                use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
+                use llimphi_ui::llimphi_raster::peniko::Fill;
+                let measure_w = |ts: &mut llimphi_ui::llimphi_text::Typesetter, upto: usize| -> f64 {
+                    if upto == 0 {
+                        return 0.0;
+                    }
+                    let blk = TextBlock {
+                        text: &text[..upto],
+                        size_px: 13.0,
+                        color: theme_clone.fg_text,
+                        origin: (0.0, 0.0),
+                        max_width: None,
+                        alignment: TAlign::Start,
+                        line_height: 1.2,
+                        italic: false,
+                        font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
+                    };
+                    measurement(&layout_block(ts, &blk)).width as f64
+                };
+                let x0 = line_x_start + measure_w(ts, ss);
+                let x1 = line_x_start + measure_w(ts, se);
+                let rect = KurboRect::new(x0, baseline_y, x1, baseline_y + LINE_H);
+                let a = theme_clone.bg_selected;
+                let sel_color = Color::from_rgba8(
+                    (a.components[0] * 255.0) as u8,
+                    (a.components[1] * 255.0) as u8,
+                    (a.components[2] * 255.0) as u8,
+                    150,
+                );
+                scene.fill(
+                    Fill::NonZero,
+                    vello::kurbo::Affine::IDENTITY,
+                    sel_color,
+                    None,
+                    &rect,
                 );
             }
         }

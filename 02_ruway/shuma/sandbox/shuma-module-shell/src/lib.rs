@@ -1353,6 +1353,37 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_a_selects_whole_input_line() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("git status");
+        let ctrl_a = KeyEvent {
+            key: Key::Character("a".into()),
+            state: KeyState::Pressed,
+            text: Some("a".into()),
+            modifiers: Modifiers { ctrl: true, ..Default::default() },
+            repeat: false,
+        };
+        s = update(s, Msg::Key(ctrl_a));
+        assert_eq!(s.input.selected_text().as_deref(), Some("git status"));
+    }
+
+    #[test]
+    fn shift_arrow_extends_input_selection() {
+        let mut s = State::new(Source::Local);
+        s.input.set_text("abc");
+        // Shift+Left desde el final selecciona el último char.
+        let shift_left = KeyEvent {
+            key: Key::Named(NamedKey::ArrowLeft),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: Modifiers { shift: true, ..Default::default() },
+            repeat: false,
+        };
+        s = update(s, Msg::Key(shift_left));
+        assert_eq!(s.input.selected_text().as_deref(), Some("c"));
+    }
+
+    #[test]
     fn rank_completion_by_usage_orders_by_history() {
         let mut s = State::new(Source::Local);
         // Historial aislado (el real del usuario contaminaría el ranking).

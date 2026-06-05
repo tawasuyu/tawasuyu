@@ -20,6 +20,11 @@ pub struct LineState {
     /// Offset de byte del cursor; invariante: siempre en límite de carácter.
     cursor: usize,
     dialect: Dialect,
+    /// Ancla de selección (offset de byte). `Some` cuando hay una selección
+    /// viva entre `anchor` y `cursor`. Las ediciones y los movimientos sin
+    /// `shift` la limpian. `#[serde(default)]` para leer estados viejos.
+    #[serde(default)]
+    anchor: Option<usize>,
 }
 
 impl LineState {
@@ -56,18 +61,77 @@ impl LineState {
     pub fn set_text(&mut self, text: impl Into<String>) {
         self.text = text.into();
         self.cursor = self.text.len();
+        self.anchor = None;
     }
 
     /// Vacía la línea.
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.anchor = None;
     }
 
-    /// Inserta texto en el cursor y lo avanza.
+    /// Inserta texto en el cursor y lo avanza. Si hay selección viva, la
+    /// reemplaza primero (comportamiento estándar de editor).
     pub fn insert(&mut self, s: &str) {
+        self.delete_selection();
         self.text.insert_str(self.cursor, s);
         self.cursor += s.len();
+    }
+
+    // ── Selección ──
+
+    /// Offset de ancla de la selección, si hay.
+    pub fn anchor(&self) -> Option<usize> {
+        self.anchor
+    }
+
+    /// Empieza (o continúa) una selección: si no había ancla, la fija en el
+    /// cursor actual. Llamar antes de un movimiento con `shift`.
+    pub fn begin_or_extend_selection(&mut self) {
+        if self.anchor.is_none() {
+            self.anchor = Some(self.cursor);
+        }
+    }
+
+    /// Limpia la selección (sin tocar el texto ni el cursor).
+    pub fn clear_selection(&mut self) {
+        self.anchor = None;
+    }
+
+    /// Rango `[start, end)` de la selección en bytes (ordenado), o `None`.
+    pub fn selection(&self) -> Option<(usize, usize)> {
+        let a = self.anchor?;
+        if a == self.cursor {
+            return None;
+        }
+        Some((a.min(self.cursor), a.max(self.cursor)))
+    }
+
+    /// Texto seleccionado, si hay.
+    pub fn selected_text(&self) -> Option<String> {
+        let (s, e) = self.selection()?;
+        Some(self.text[s..e].to_string())
+    }
+
+    /// Selecciona toda la línea (ancla al inicio, cursor al final).
+    pub fn select_all(&mut self) {
+        self.anchor = Some(0);
+        self.cursor = self.text.len();
+    }
+
+    /// Si hay selección, la borra y deja el cursor en su inicio. Devuelve
+    /// `true` si borró algo.
+    pub fn delete_selection(&mut self) -> bool {
+        if let Some((s, e)) = self.selection() {
+            self.text.replace_range(s..e, "");
+            self.cursor = s;
+            self.anchor = None;
+            true
+        } else {
+            self.anchor = None;
+            false
+        }
     }
 
     /// Inserta un carácter en el cursor.
@@ -76,8 +140,11 @@ impl LineState {
         self.insert(c.encode_utf8(&mut buf));
     }
 
-    /// Borra el carácter a la izquierda del cursor.
+    /// Borra el carácter a la izquierda del cursor (o la selección, si hay).
     pub fn backspace(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if let Some(prev) = self.text[..self.cursor].chars().next_back() {
             let bl = prev.len_utf8();
             self.text.replace_range(self.cursor - bl..self.cursor, "");
@@ -85,8 +152,11 @@ impl LineState {
         }
     }
 
-    /// Borra el carácter a la derecha del cursor.
+    /// Borra el carácter a la derecha del cursor (o la selección, si hay).
     pub fn delete(&mut self) {
+        if self.delete_selection() {
+            return;
+        }
         if let Some(next) = self.text[self.cursor..].chars().next() {
             let nl = next.len_utf8();
             self.text.replace_range(self.cursor..self.cursor + nl, "");
@@ -205,6 +275,37 @@ mod tests {
         l.backspace();
         assert_eq!(l.text(), "ab");
         assert_eq!(l.cursor(), 2);
+    }
+
+    #[test]
+    fn select_all_and_copy_text() {
+        let mut l = LineState::new();
+        l.insert("ls -la");
+        l.select_all();
+        assert_eq!(l.selection(), Some((0, 6)));
+        assert_eq!(l.selected_text().as_deref(), Some("ls -la"));
+    }
+
+    #[test]
+    fn insert_replaces_live_selection() {
+        let mut l = LineState::new();
+        l.insert("hola");
+        l.select_all();
+        l.insert("chau");
+        assert_eq!(l.text(), "chau");
+        assert!(l.selection().is_none(), "tras reemplazar no queda selección");
+    }
+
+    #[test]
+    fn shift_extend_then_backspace_deletes_selection() {
+        let mut l = LineState::new();
+        l.insert("abcdef");
+        // Simula Shift+Home: ancla en cursor (6), luego mueve a inicio.
+        l.begin_or_extend_selection();
+        l.move_home();
+        assert_eq!(l.selection(), Some((0, 6)));
+        l.backspace();
+        assert_eq!(l.text(), "", "backspace borra la selección entera");
     }
 
     #[test]

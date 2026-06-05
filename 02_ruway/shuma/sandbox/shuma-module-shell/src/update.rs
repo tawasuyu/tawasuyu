@@ -13,6 +13,20 @@ pub fn dispatch(action_id: &str) -> Option<Msg> {
 /// `true` si tocó el state. No maneja Enter, Tab, Up/Down ni Ctrl-C
 /// (esos los intercepta el `update` del módulo).
 pub(crate) fn apply_key_to_line(line: &mut LineState, ev: &KeyEvent) -> bool {
+    // Movimientos con `shift` extienden la selección; sin `shift` la limpian.
+    let movement = matches!(
+        &ev.key,
+        Key::Named(
+            NamedKey::ArrowLeft | NamedKey::ArrowRight | NamedKey::Home | NamedKey::End
+        )
+    );
+    if movement {
+        if ev.modifiers.shift {
+            line.begin_or_extend_selection();
+        } else {
+            line.clear_selection();
+        }
+    }
     match &ev.key {
         Key::Named(NamedKey::Backspace) => {
             line.backspace();
@@ -95,10 +109,24 @@ pub fn update(state: State, msg: Msg) -> State {
             if s.history_search.is_some() {
                 return handle_search_key(s, &ev);
             }
-            // Ctrl-C: si hay run vivo, mandarle SIGTERM y comer la tecla.
+            // Ctrl-A: seleccionar toda la línea del input.
+            if ev.modifiers.ctrl
+                && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("a"))
+                && !s.input.is_empty()
+            {
+                s.input.select_all();
+                s.input_edit_at_ms = now_unix_millis();
+                return s;
+            }
+            // Ctrl-C: si hay selección en el input, copiarla (no cancela).
+            // Si no, y hay run vivo, SIGTERM. Si no hay nada, no-op.
             if ev.modifiers.ctrl
                 && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("c"))
             {
+                if let Some(sel) = s.input.selected_text() {
+                    set_clipboard(&sel);
+                    return s;
+                }
                 if s.running.is_some() {
                     return cancel_running(s);
                 }
@@ -180,8 +208,12 @@ pub fn update(state: State, msg: Msg) -> State {
                 return navigate_history(s, shuma_history::Nav::Newer);
             }
             // Flecha derecha al final de línea con ghost visible: acepta ghost.
+            // (Con shift extiende selección, así que no acepta.)
             if let Key::Named(NamedKey::ArrowRight) = ev.key {
-                if !ev.modifiers.ctrl && s.input.cursor() == s.input.text().len() {
+                if !ev.modifiers.ctrl
+                    && !ev.modifiers.shift
+                    && s.input.cursor() == s.input.text().len()
+                {
                     if let Some(suffix) = current_ghost(&s) {
                         if !suffix.is_empty() {
                             s.input.insert(&suffix);
