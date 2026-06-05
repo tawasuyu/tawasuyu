@@ -119,11 +119,19 @@ a 5k nodos" de "a 50k".
    `Typesetter::layout_clamped`. Crítico para listas/labels/celdas.
 4. ✅ **Bloque 4 = animaciones implícitas** — `View::animated(key, dur)` +
    `AnimRegistry` + ticker autodetenido. Interpola fill/radius; ampliable.
-5. **Bloque 5 = quick wins de la cosecha** — ✅ forma de cursor
-   (`View::cursor(Cursor)`, enum llimphi-native mapeado a winit en el runtime;
-   herencia CSS gratis vía `hit_test_cursor`; consumidores: text-input=Text,
-   splitter=Col/RowResize, button=Pointer). Falta: animación de contenido
-   (cross-fade/enter-exit extendiendo `AnimRegistry`) + scrollbar arrastrable.
+5. **Bloque 5 = quick wins de la cosecha** —
+   - ✅ **forma de cursor** (`View::cursor(Cursor)`, enum llimphi-native mapeado
+     a winit en el runtime; herencia CSS gratis vía `hit_test_cursor`;
+     consumidores: text-input=Text, splitter=Col/RowResize, button=Pointer).
+   - ✅ **scrollbar arrastrable** — ya estaba en `llimphi-widget-scroll`: el
+     thumb es `.draggable(...)` y convierte el delta de px a delta de offset vía
+     `thumb_geometry`. (El roadmap lo listaba pendiente por error.)
+   - ✅ **animación de opacidad + fade-in de entrada** — `alpha` entra en
+     `AnimSnapshot` (regla `None ≡ opaco`), así `.alpha(x).animated()` interpola
+     opacidad; `View::animated_enter(key, dur)` hace fade-in en la primera
+     aparición de la key. Falta el **exit** (fade-out al desmontarse): requiere
+     que `AnimRegistry` retenga y siga pintando un nodo que ya salió del árbol —
+     cambio arquitectónico mayor, diferido.
 6. Pinch-zoom + scroll physics.
 7. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
@@ -177,8 +185,8 @@ Clasificadas por la regla contrato-vs-composición de arriba.
 | Pieza | Análogo | Estado verificado | Por qué |
 |---|---|---|---|
 | ✅ **Forma de cursor** (`View::cursor(Cursor)`) | `MouseRegion.cursor` / `SystemMouseCursors` · Compose `pointerHoverIcon` | **Hecho 2026-06-05** | Enum `Cursor` llimphi-native (19 formas) en el compositor; `hit_test_cursor` da herencia CSS (hijo sin cursor cae al ancestro); `llimphi-ui` lo mapea a `winit::CursorIcon` y lo aplica en la transición de hover. Consumidores: text-input=Text, splitter=Col/RowResize, button=Pointer. |
-| **Animación de contenido** (cross-fade al swap + enter/exit) | `AnimatedSwitcher` · `AnimatedList` · `AnimatedVisibility` | **Parcial**: sólo animación de props (fill/radius) del Bloque 4 | Es el Bloque 5 natural: `AnimRegistry` ya keya por `key` estable, así que "apareció/desapareció una key" = enter/exit, y "cambió la identidad bajo la misma key" = cross-fade. Altísimo valor visual sobre el reconciliador que ya existe. |
-| **Scrollbar interactiva** (drag del thumb) | `Scrollbar` arrastrable | Falta (Tier 5 lo lista como "persistente") | Table-stakes desktop. `thumb_geometry` ya calcula la geometría; falta el hit-test + drag del thumb. |
+| **Animación de contenido** (cross-fade al swap + enter/exit) | `AnimatedSwitcher` · `AnimatedList` · `AnimatedVisibility` | **Parcial→casi**: props (fill/radius) del Bloque 4 + **opacidad animable** + **fade-in de entrada** (`animated_enter`) del Bloque 5. **Falta sólo el exit** (fade-out al desmontarse). | El enter ya entró por `AnimRegistry` (alpha como prop + arranque desde 0 en la primera aparición). El **exit** es el resto duro: requiere retener y seguir pintando un nodo que ya salió del árbol (resurrección en el paint), cambio arquitectónico mayor. |
+| ✅ **Scrollbar interactiva** (drag del thumb) | `Scrollbar` arrastrable | **Hecho** en `llimphi-widget-scroll` | El thumb es `.draggable(...)` y convierte delta-px del arrastre a delta-offset vía `thumb_geometry`; sólo aparece si hay overflow. (Antes figuraba pendiente por error.) |
 
 ### Reservar el seam — ya cubierto arriba
 
