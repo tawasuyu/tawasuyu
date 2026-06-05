@@ -47,6 +47,7 @@ use llimphi_ui::{
 };
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_stat_card::{stat_card_view, StatCardPalette};
+use llimphi_widget_text_input::TextInputState;
 use shuma_module::{ModuleContributions, MonitorSpec, ShortcutAction, Source};
 use shuma_sysmon::{Snapshot, SystemSampler};
 use std::collections::HashMap;
@@ -311,6 +312,14 @@ impl Distro {
     }
 }
 
+/// Campo del form de conexión remota que tiene el foco de teclado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RemoteField {
+    Host,
+    User,
+    Port,
+}
+
 /// Cuál dropdown de la config de sesión está abierto (overlay del select).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DropKind {
@@ -467,6 +476,10 @@ struct Session {
     container_open: bool,
     /// Estado de conexión de la sesión (lo refleja el panel).
     conn: ConnState,
+    /// Campos del form de conexión remota (sólo se usan con `Isolation::Remote`).
+    host: TextInputState,
+    user: TextInputState,
+    port: TextInputState,
     /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
     /// (El enforcement real del aislamiento contenedor/remoto es deuda; hoy el
     /// shell corre con este `source`.)
@@ -492,6 +505,13 @@ impl Session {
             container_open: false,
             // Local arranca conectado; remoto en espera hasta conectar.
             conn: ConnState::Connected,
+            host: TextInputState::new(),
+            user: TextInputState::new(),
+            port: {
+                let mut p = TextInputState::new();
+                p.set_text("22");
+                p
+            },
             source,
         }
     }
@@ -551,6 +571,9 @@ impl Session {
             isolation: self.isolation,
             distro: self.distro,
             container: self.container.clone(),
+            host: self.host.text(),
+            user: self.user.text(),
+            port: self.port.text(),
         }
     }
 
@@ -568,11 +591,46 @@ impl Session {
         s.isolation = c.isolation;
         s.distro = c.distro;
         s.container = c.container;
+        s.host.set_text(c.host);
+        s.user.set_text(c.user);
+        if !c.port.is_empty() {
+            s.port.set_text(c.port);
+        }
         s.conn = match c.isolation {
             Isolation::Local => ConnState::Connected,
             Isolation::Remote => ConnState::Pending,
         };
         s
+    }
+
+    /// El campo de input del form remoto (mutable, para `apply_key`).
+    fn remote_field_mut(&mut self, f: RemoteField) -> &mut TextInputState {
+        match f {
+            RemoteField::Host => &mut self.host,
+            RemoteField::User => &mut self.user,
+            RemoteField::Port => &mut self.port,
+        }
+    }
+
+    /// Conecta el aislamiento remoto: arma `Source::Remote{host,user,port}` con
+    /// lo que hay en los campos y reconstruye el shell. Conn → Connected.
+    fn connect_remote(&mut self) {
+        let host = self.host.text();
+        let user = self.user.text();
+        if host.trim().is_empty() || user.trim().is_empty() {
+            return; // sin host/usuario no hay a dónde conectar
+        }
+        let port: u16 = self.port.text().trim().parse().unwrap_or(22);
+        let source = Source::Remote {
+            host,
+            user,
+            port,
+            label: None,
+        };
+        self.shell = Instance::shell(self.name.clone(), source.clone());
+        self.matilda = Instance::matilda(self.name.clone(), source.clone());
+        self.source = source;
+        self.conn = ConnState::Connected;
     }
 }
 
@@ -586,6 +644,12 @@ struct SessionConfig {
     distro: Distro,
     #[serde(default)]
     container: Option<String>,
+    #[serde(default)]
+    host: String,
+    #[serde(default)]
+    user: String,
+    #[serde(default)]
+    port: String,
 }
 
 /// `$XDG_CONFIG_HOME/shuma/sessions.json`.
@@ -675,6 +739,8 @@ struct Model {
     dropdown_open: Option<DropKind>,
     /// Contenedores locales descubiertos (`docker ps -a`) — para suscribir.
     containers: Vec<String>,
+    /// Campo del form remoto con foco de teclado (`None` = ninguno).
+    focused_field: Option<RemoteField>,
 
     // Anchos resizables de los paneles laterales (px).
     session_w: f32,
@@ -751,6 +817,12 @@ enum Msg {
     SetDistro(Distro),
     /// Abrir/cerrar el colapsable de contenedor (capa opcional).
     ToggleContainer,
+    /// Dar foco a un campo del form remoto (click).
+    FocusField(RemoteField),
+    /// Tecla al campo remoto focado (Esc desenfoca, Enter conecta).
+    RemoteKey(KeyEvent),
+    /// Conectar el aislamiento remoto con los datos del form.
+    ConnectRemote,
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
     /// Re-listar los contenedores locales (`docker ps -a`).
@@ -876,6 +948,7 @@ impl App for Shell {
             session_panel_open: true,
             dropdown_open: None,
             containers: Vec::new(),
+            focused_field: None,
             session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
@@ -894,6 +967,10 @@ impl App for Shell {
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Con un campo del form remoto focado, las teclas van ahí (no al shell).
+        if model.focused_field.is_some() {
+            return Some(Msg::RemoteKey(e.clone()));
         }
         // Con un dropdown de config abierto, Esc lo cierra (no va al shell).
         if model.dropdown_open.is_some() {
@@ -1012,6 +1089,37 @@ impl App for Shell {
                     s.distro = d;
                 }
                 promote_if_draft(&mut m);
+                save_sessions(&m);
+            }
+            Msg::FocusField(f) => {
+                m.focused_field = Some(f);
+                m.dropdown_open = None;
+            }
+            Msg::RemoteKey(e) => {
+                let Some(f) = m.focused_field else { return m };
+                match &e.key {
+                    llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                        m.focused_field = None;
+                    }
+                    llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                        if let Some(s) = m.sessions.get_mut(m.active_session) {
+                            s.connect_remote();
+                        }
+                        m.focused_field = None;
+                        save_sessions(&m);
+                    }
+                    _ => {
+                        if let Some(s) = m.sessions.get_mut(m.active_session) {
+                            s.remote_field_mut(f).apply_key(&e);
+                        }
+                    }
+                }
+            }
+            Msg::ConnectRemote => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.connect_remote();
+                }
+                m.focused_field = None;
                 save_sessions(&m);
             }
             Msg::RefreshContainers => spawn_list_containers(handle),

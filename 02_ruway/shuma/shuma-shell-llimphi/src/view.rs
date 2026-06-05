@@ -5,6 +5,7 @@ use super::*;
 use llimphi_widget_select::{
     select_menu_view, select_trigger_view, SelectItem, SelectMenuSpec, SelectPalette, SelectPhase,
 };
+use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 
 /// Alto del disparador del select (debe seguir a `llimphi-widget-select`).
 const TRIGGER_H: f32 = 34.0;
@@ -304,6 +305,36 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         &pal,
         Msg::ToggleDropdown(DropKind::Isolation),
     ));
+
+    // Remoto: form de conexión (host/usuario/puerto) + Conectar.
+    if session.isolation == Isolation::Remote {
+        let tpal = TextInputPalette::from_theme(theme);
+        children.push(panel_label("Host", theme));
+        children.push(text_input_view(
+            &session.host,
+            "ejemplo.com",
+            model.focused_field == Some(RemoteField::Host),
+            &tpal,
+            Msg::FocusField(RemoteField::Host),
+        ));
+        children.push(panel_label("Usuario", theme));
+        children.push(text_input_view(
+            &session.user,
+            "usuario",
+            model.focused_field == Some(RemoteField::User),
+            &tpal,
+            Msg::FocusField(RemoteField::User),
+        ));
+        children.push(panel_label("Puerto", theme));
+        children.push(text_input_view(
+            &session.port,
+            "22",
+            model.focused_field == Some(RemoteField::Port),
+            &tpal,
+            Msg::FocusField(RemoteField::Port),
+        ));
+        children.push(action_button("Conectar", Msg::ConnectRemote, theme));
+    }
 
     // Contenedor: capa OPCIONAL (encima de Local o Remoto) en un colapsable.
     children.push(container_header(session, theme));
