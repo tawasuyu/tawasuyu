@@ -112,6 +112,7 @@ pub fn update(state: State, msg: Msg) -> State {
             if is_paste {
                 if let Some(text) = read_clipboard() {
                     s.input.insert(&text);
+                    refresh_completion(&mut s);
                 }
                 return s;
             }
@@ -122,24 +123,28 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.history_search = Some(HistorySearch::default());
                 return s;
             }
-            // Popup de completado abierto: las teclas lo navegan.
+            // Popup de completado abierto (vivo, mientras tipeás): las teclas
+            // lo navegan. Tab/→ aceptan el resaltado; las flechas ↑↓ y
+            // Shift+Tab ciclan; Enter NO acepta — ejecuta el comando como
+            // está (el popup es una sugerencia, no un modal).
             if s.completion.is_some() {
                 match &ev.key {
-                    // Tab cicla adelante; Shift+Tab atrás.
-                    Key::Named(NamedKey::Tab) => {
-                        return cycle_completion(s, if ev.modifiers.shift { -1 } else { 1 });
+                    Key::Named(NamedKey::Tab) if ev.modifiers.shift => {
+                        return cycle_completion(s, -1);
+                    }
+                    Key::Named(NamedKey::Tab) | Key::Named(NamedKey::ArrowRight) => {
+                        return accept_completion(s);
                     }
                     Key::Named(NamedKey::ArrowDown) => return cycle_completion(s, 1),
                     Key::Named(NamedKey::ArrowUp) => return cycle_completion(s, -1),
-                    // Enter o flecha derecha: acepta el resaltado (no ejecuta).
-                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::ArrowRight) => {
-                        return accept_completion(s);
-                    }
                     Key::Named(NamedKey::Escape) => {
                         close_completion(&mut s);
                         return s;
                     }
-                    // Cualquier otra tecla cierra el popup y se procesa normal.
+                    // Enter cae al manejador de abajo (ejecuta); el resto de
+                    // teclas cierra el popup y se procesa normal (lo
+                    // reabriremos vivo tras la edición).
+                    Key::Named(NamedKey::Enter) => close_completion(&mut s),
                     _ => close_completion(&mut s),
                 }
             }
@@ -188,6 +193,9 @@ pub fn update(state: State, msg: Msg) -> State {
             apply_key_to_line(&mut s.input, &ev);
             // Cualquier edición rompe el cursor de navegación de historial.
             s.history_cursor = None;
+            // Refresco vivo del popup de completado (as-you-type, estilo el
+            // shuma viejo): aparece solo mientras hay un prefijo a completar.
+            refresh_completion(&mut s);
         }
         Msg::FocusInput => {
             s.focused = true;
@@ -405,6 +413,43 @@ pub(crate) fn apply_completion_msg(mut s: State) -> State {
 pub(crate) fn close_completion(s: &mut State) {
     s.completion = None;
     s.completion_index = 0;
+}
+
+/// Refresca el popup de completado **en vivo** (as-you-type): lo abre cuando
+/// hay un prefijo a completar y candidatos, lo cierra si no. Rankea los
+/// comandos por uso (frecuencia en el historial) — los más usados primero.
+pub(crate) fn refresh_completion(s: &mut State) {
+    let mut comp = s.input.complete(s.completion_source.as_ref());
+    if comp.candidates.is_empty() || comp.replace_end <= comp.replace_start {
+        s.completion = None;
+        s.completion_index = 0;
+        return;
+    }
+    rank_completion_by_usage(s, &mut comp);
+    s.completion = Some(comp);
+    s.completion_index = 0;
+}
+
+/// Reordena los candidatos de comando por frecuencia de uso en el historial
+/// (desc), con desempate alfabético — "ordenado por prioridad y uso". Sólo
+/// aplica a completados de comando; paths/flags quedan como vienen.
+pub(crate) fn rank_completion_by_usage(s: &State, comp: &mut shuma_line::Completion) {
+    if comp.kind != shuma_line::CompletionKind::Command {
+        return;
+    }
+    let mut freq: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    if let Ok(h) = s.history.lock() {
+        for e in h.entries() {
+            if let Some(w) = e.line.split_whitespace().next() {
+                *freq.entry(w.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    comp.candidates.sort_by(|a, b| {
+        let fa = freq.get(a).copied().unwrap_or(0);
+        let fb = freq.get(b).copied().unwrap_or(0);
+        fb.cmp(&fa).then_with(|| a.cmp(b))
+    });
 }
 
 /// Cicla el candidato resaltado del popup (`delta` ±1, con wrap). No-op si

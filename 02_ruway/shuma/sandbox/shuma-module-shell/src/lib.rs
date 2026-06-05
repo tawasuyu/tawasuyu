@@ -1341,16 +1341,37 @@ mod tests {
     }
 
     #[test]
-    fn completion_tab_cycles_then_wraps() {
+    fn completion_tab_accepts_highlighted() {
+        // Con popup vivo, Tab acepta el candidato resaltado (no cicla).
         let mut s = State::new(Source::Local);
-        s.completion = Some(fake_completion(&["cargo", "cat", "cal"], 0, 0));
-        s.completion_index = 0;
+        s.input.set_text("ca");
+        s.completion = Some(fake_completion(&["cargo", "cat", "cal"], 0, 2));
+        s.completion_index = 1; // "cat"
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Tab), None)));
-        assert_eq!(s.completion_index, 1);
-        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Tab), None)));
-        assert_eq!(s.completion_index, 2);
-        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Tab), None)));
-        assert_eq!(s.completion_index, 0, "Tab cicla con wrap");
+        assert_eq!(s.input.text(), "cat", "Tab aplica el resaltado");
+        assert!(s.completion.is_none(), "y cierra el popup");
+    }
+
+    #[test]
+    fn rank_completion_by_usage_orders_by_history() {
+        let mut s = State::new(Source::Local);
+        // Historial aislado (el real del usuario contaminaría el ranking).
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null")).unwrap(),
+        ));
+        {
+            let mut h = s.history.lock().unwrap();
+            // Líneas distintas (el dedup colapsa repetidas consecutivas).
+            let _ = h.append(shuma_history::Entry::new("cat a", "/", 0));
+            let _ = h.append(shuma_history::Entry::new("cargo build", "/", 1));
+            let _ = h.append(shuma_history::Entry::new("cat b", "/", 2));
+            let _ = h.append(shuma_history::Entry::new("cat c", "/", 3));
+        }
+        let mut comp = fake_completion(&["cargo", "cat", "cal"], 0, 2);
+        rank_completion_by_usage(&s, &mut comp);
+        assert_eq!(comp.candidates[0], "cat", "el más usado primero");
+        assert_eq!(comp.candidates[1], "cargo");
+        assert_eq!(comp.candidates[2], "cal", "sin uso, al final");
     }
 
     #[test]
@@ -1365,15 +1386,21 @@ mod tests {
     }
 
     #[test]
-    fn completion_enter_accepts_without_submitting() {
+    fn completion_enter_submits_not_accepts() {
+        // Con popup vivo, Enter ejecuta el comando como está (no acepta el
+        // resaltado): el popup es sugerencia, no modal.
         let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
         s.input.set_text("ca");
         s.completion = Some(fake_completion(&["cargo", "cat"], 0, 2));
         s.completion_index = 1; // "cat"
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
-        assert_eq!(s.input.text(), "cat", "Enter aplica el resaltado");
-        assert!(s.completion.is_none(), "y cierra el popup");
-        assert!(!s.is_running(), "Enter con popup NO ejecuta el comando");
+        assert!(s.completion.is_none(), "Enter cierra el popup");
+        assert!(
+            s.input.text().is_empty(),
+            "ejecutó (limpió el input) en vez de aplicar 'cat'"
+        );
+        s = drain_until_idle(s);
     }
 
     #[test]
@@ -1387,7 +1414,10 @@ mod tests {
     }
 
     #[test]
-    fn typing_closes_completion_popup() {
+    fn typing_processes_key_and_refreshes_completion() {
+        // Tipear procesa la tecla y refresca el popup en vivo (puede reabrir
+        // con nuevos candidatos según el entorno; lo determinístico es que la
+        // tecla entró al input).
         let mut s = State::new(Source::Local);
         s.input.set_text("ca");
         s.completion = Some(fake_completion(&["cargo", "cat"], 0, 2));
@@ -1399,8 +1429,7 @@ mod tests {
             repeat: false,
         };
         s = update(s, Msg::Key(key));
-        assert!(s.completion.is_none(), "tipear cierra el popup");
-        assert_eq!(s.input.text(), "car", "y la tecla se procesa normal");
+        assert_eq!(s.input.text(), "car", "la tecla se procesa normal");
     }
 
     #[test]
