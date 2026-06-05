@@ -408,6 +408,10 @@ pub struct State {
     /// de "hace N minutos" en vez del crudo "exit N". Lo setea
     /// [`State::push_output`] (Prompt) y [`State::open_block`].
     pub block_started: std::collections::HashMap<u64, u64>,
+    /// Instante (unix ms) de la última tecla en el input — ancla del
+    /// parpadeo del caret: queda sólido un instante tras tipear y luego
+    /// titila, para que se sienta vivo sin distraer.
+    pub input_edit_at_ms: u64,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -471,6 +475,7 @@ impl State {
             body_sel: None,
             body_drag_accum: (0.0, 0.0),
             block_started: std::collections::HashMap::new(),
+            input_edit_at_ms: now_unix_millis(),
         }
     }
 
@@ -642,6 +647,14 @@ pub(crate) fn now_unix_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Milisegundos unix actuales — para el parpadeo del caret del input.
+pub(crate) fn now_unix_millis() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
 }
 

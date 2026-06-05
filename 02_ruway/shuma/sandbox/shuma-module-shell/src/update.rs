@@ -88,6 +88,9 @@ pub fn update(state: State, msg: Msg) -> State {
                 forward_key_to_pty(&s, &ev);
                 return s;
             }
+            // Cualquier tecla del input reancla el parpadeo del caret (queda
+            // sólido un instante y luego titila) — el input se siente vivo.
+            s.input_edit_at_ms = now_unix_millis();
             // Si el overlay de búsqueda está abierto, las teclas van ahí.
             if s.history_search.is_some() {
                 return handle_search_key(s, &ev);

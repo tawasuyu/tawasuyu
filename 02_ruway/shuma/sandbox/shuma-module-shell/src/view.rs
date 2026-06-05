@@ -166,6 +166,15 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
     let container_h = BORDER_INNER_H + LINE_H * line_count as f64;
     let theme_clone = *theme;
     let focused = state.focused;
+    // Parpadeo del caret: sólido el primer medio período tras la última tecla,
+    // luego on/off cada ~530 ms. Se computa contra el reloj en el painter (el
+    // chasis redibuja cada 100 ms, así que titila suave).
+    let edit_anchor = state.input_edit_at_ms;
+    let caret_on = {
+        let now = now_unix_millis();
+        let elapsed = now.saturating_sub(edit_anchor);
+        (elapsed / 530) % 2 == 0
+    };
 
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
@@ -298,16 +307,17 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             }
         }
 
-        // Cursor — barra vertical de 2 px en la línea calculada.
-        if focused {
+        // Cursor — barra vertical de 2 px en la línea calculada, parpadeante.
+        if focused && caret_on {
             use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
             use llimphi_ui::llimphi_raster::peniko::Fill;
+            // Caret un poco más ancho (2.5px) y en el acento para que se note.
             let cursor_rect =
-                KurboRect::new(cursor_x, cursor_y + 2.0, cursor_x + 2.0, cursor_y + LINE_H);
+                KurboRect::new(cursor_x, cursor_y + 1.0, cursor_x + 2.5, cursor_y + LINE_H);
             scene.fill(
                 Fill::NonZero,
                 vello::kurbo::Affine::IDENTITY,
-                Color::from_rgba8(214, 222, 232, 220),
+                theme_clone.accent,
                 None,
                 &cursor_rect,
             );
