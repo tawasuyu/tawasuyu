@@ -9,7 +9,7 @@
 //!   resolvió (posición absoluta, en píxeles de pantalla) y reparte sus widgets
 //!   en los slots start/center/end según el eje del anclaje.
 
-use llimphi_theme::Theme;
+use llimphi_theme::{Color, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{
         auto, length, percent, AlignItems, FlexDirection, JustifyContent, Position, Size, Style,
@@ -108,8 +108,16 @@ pub fn tooltip_view(text: &str, theme: &Theme) -> View<Msg> {
     .text(text.to_string(), 12.0, theme.fg_text)
 }
 
-/// Traduce el view-model de un widget al `View<Msg>` que lo pinta.
+/// Traduce el view-model de un widget al `View<Msg>` que lo pinta (sin teñido
+/// por `kind` — los medidores caen al gradiente del acento). Lo usan las
+/// tarjetas flotantes, que no rastrean el `kind`.
 pub fn widget_view(v: &WidgetView, theme: &Theme) -> View<Msg> {
+    widget_view_kinded(v, None, theme)
+}
+
+/// Como [`widget_view`] pero con el `kind` del widget, para que el medidor use
+/// su gradiente propio (verde→rojo teñido por widget, [`meter_stops`]).
+pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> View<Msg> {
     match v {
         WidgetView::Empty => View::new(Style {
             size: Size {
@@ -123,7 +131,13 @@ pub fn widget_view(v: &WidgetView, theme: &Theme) -> View<Msg> {
             label,
             fraction,
             caption,
-        } => meter_view(label.as_deref(), *fraction, caption, theme),
+        } => {
+            let stops = match kind {
+                Some(k) => meter_stops(k),
+                None => (theme.accent, aclarar(theme.accent, 0.5)),
+            };
+            meter_view(label.as_deref(), *fraction, caption, theme, stops)
+        }
         WidgetView::Placeholder(kind) => chip(theme)
             .fill(theme.bg_panel)
             .radius(6.0)
@@ -153,21 +167,158 @@ fn chip(_theme: &Theme) -> View<Msg> {
 
 /// Aclara un color hacia el blanco en `amount` (`0.0` = igual, `1.0` = blanco).
 /// Para el extremo claro del gradiente de los medidores.
-fn aclarar(c: llimphi_theme::Color, amount: f32) -> llimphi_theme::Color {
+fn aclarar(c: Color, amount: f32) -> Color {
     use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
     let [r, g, b, a] = c.components;
     let m = amount.clamp(0.0, 1.0);
     AlphaColor::new([r + (1.0 - r) * m, g + (1.0 - g) * m, b + (1.0 - b) * m, a])
 }
 
+/// El mismo color con su alfa multiplicado por `op` (`0..1`). Para barras
+/// translúcidas (`Surface::opacity`) sin teñir los widgets de adentro.
+fn con_opacidad(c: Color, op: f32) -> Color {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let [r, g, b, a] = c.components;
+    AlphaColor::new([r, g, b, a * op.clamp(0.0, 1.0)])
+}
+
+/// Parsea un color hex `#rrggbb` o `#rrggbbaa` (el `#` es opcional). `None` si no
+/// cuadra. Lo usa el acento configurable (`general.accent`).
+pub fn parse_hex(s: &str) -> Option<Color> {
+    let h = s.trim().trim_start_matches('#');
+    let par = |i: usize| u8::from_str_radix(h.get(i..i + 2)?, 16).ok();
+    match h.len() {
+        6 => Some(Color::from_rgba8(par(0)?, par(2)?, par(4)?, 255)),
+        8 => Some(Color::from_rgba8(par(0)?, par(2)?, par(4)?, par(6)?)),
+        _ => None,
+    }
+}
+
+/// Color desde HSV (`h` en grados `0..360`, `s`/`v` en `0..1`). Base del
+/// gradiente verde→rojo de los medidores, que rota el matiz por widget.
+fn hsv(h: f32, s: f32, v: f32) -> Color {
+    use llimphi_ui::llimphi_raster::peniko::color::AlphaColor;
+    let h = h.rem_euclid(360.0);
+    let c = v * s;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let m = v - c;
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    AlphaColor::new([r + m, g + m, b + m, 1.0])
+}
+
+/// Los dos extremos del gradiente de un medidor según su `kind`: **verde (bajo)
+/// → rojo (alto)**, pero con una **tonalidad propia** por widget (un corrimiento
+/// de matiz) para que el racimo de indicadores no sea monocromo. El corrimiento
+/// del extremo rojo va atenuado para que siga leyéndose como rojo.
+fn meter_stops(kind: &str) -> (Color, Color) {
+    let shift = match kind {
+        "cpu_meter" => 0.0,
+        "ram_meter" => 18.0,
+        "volume" => -22.0,
+        "brightness" => 36.0,
+        _ => 8.0,
+    };
+    let verde = hsv(135.0 + shift, 0.60, 0.80);
+    let rojo = hsv(4.0 + shift * 0.30, 0.78, 0.92);
+    (verde, rojo)
+}
+
+/// Celdas de ancho que un `kind` reserva por defecto en la grilla (`cell`), si
+/// el spec no fija `cells`. Los medidores ocupan más; los chips de texto, una.
+fn default_cells(kind: &str) -> u32 {
+    match kind {
+        "cpu_meter" | "ram_meter" | "volume" | "brightness" => 3,
+        "clock" => 2,
+        "astro" => 4,
+        "weather" => 3,
+        "cava" => 3,
+        _ => 1,
+    }
+}
+
+/// Envuelve `v` en un contenedor con **ancho (o alto) mínimo cuantizado** a la
+/// grilla de la barra (`cell`): el widget reserva al menos `cell * n` px sobre el
+/// eje principal, así el racimo de indicadores queda alineado en vez de bailar
+/// con cada cambio de dígitos. `cell <= 0` desactiva la grilla (ancho
+/// automático). `n` sale de la prop `cells` o, si es 0, de [`default_cells`].
+fn cuantizar(v: View<Msg>, cell: f32, cells: u32, kind: &str, dir: FlexDirection) -> View<Msg> {
+    if cell <= 0.0 {
+        return v;
+    }
+    let n = if cells > 0 { cells } else { default_cells(kind) };
+    let q = length(cell * n as f32);
+    let min_size = if matches!(dir, FlexDirection::Row) {
+        Size { width: q, height: auto() }
+    } else {
+        Size { width: auto(), height: q }
+    };
+    View::new(Style {
+        min_size,
+        flex_direction: dir,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![v])
+}
+
+/// Cablea la interacción de un widget de core según su `kind`. Los kinds con
+/// interacción propia (volumen, brillo, reloj) la traen acá; el resto cae al
+/// `exec` configurable (click → lanzar comando), si lo hay.
+fn interaccion_widget(v: View<Msg>, kind: &str, exec: Option<&str>) -> View<Msg> {
+    match kind {
+        "volume" => volume_interactivo(v, exec),
+        "brightness" => brightness_interactivo(v),
+        "clock" => clock_interactivo(v),
+        _ => match exec {
+            Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
+            None => v,
+        },
+    }
+}
+
+/// Volumen interactivo: rueda sube/baja, click togglea mute, click derecho abre
+/// el mezclador (`exec`) o el panel. (Cableado completo en el bloque de
+/// interacción.)
+fn volume_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
+    match exec {
+        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
+        None => v,
+    }
+}
+
+/// Brillo interactivo: la rueda ajusta la luminosidad. (Cableado completo en el
+/// bloque de interacción.)
+fn brightness_interactivo(v: View<Msg>) -> View<Msg> {
+    v
+}
+
+/// Reloj interactivo: el click abre el panel para fijar fecha/hora. (Cableado
+/// completo en el bloque de interacción.)
+fn clock_interactivo(v: View<Msg>) -> View<Msg> {
+    v
+}
+
 /// Un medidor: etiqueta opcional + barrita proporcional + leyenda. La barra de
 /// relleno lleva un **gradiente** horizontal del acento (izquierda) a un acento
 /// aclarado (derecha), pintado a mano con `paint_with` (Llimphi no tiene fill de
 /// brush, sólo color sólido).
-fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) -> View<Msg> {
+fn meter_view(
+    label: Option<&str>,
+    fraction: f32,
+    caption: &str,
+    theme: &Theme,
+    stops: (Color, Color),
+) -> View<Msg> {
     let frac = fraction.clamp(0.0, 1.0);
-    let c0 = theme.accent;
-    let c1 = aclarar(theme.accent, 0.5);
+    let (c0, c1) = stops;
     let relleno = View::new(Style {
         size: Size {
             width: length(BARRA_W * frac),
@@ -184,7 +335,11 @@ fn meter_view(label: Option<&str>, fraction: f32, caption: &str, theme: &Theme) 
         let (x0, y0) = (rect.x as f64, rect.y as f64);
         let (x1, y1) = ((rect.x + rect.w) as f64, (rect.y + rect.h) as f64);
         let rr = RoundedRect::new(x0, y0, x1, y1, 2.0);
-        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x1, y0))
+        // El gradiente abarca **toda** la barra (no sólo el relleno): así un
+        // valor bajo muestra el tramo verde y uno alto llega al rojo —el color
+        // indica el nivel, no sólo el largo—. El relleno recorta su porción.
+        let x_full = x0 + BARRA_W as f64;
+        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x_full, y0))
             .with_stops([c0, c1].as_slice());
         scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
     });
@@ -411,8 +566,86 @@ pub fn root(model: &Model) -> View<Msg> {
     .children(superficies)
 }
 
-/// Una superficie colocada: rectángulo absoluto con los tres slots repartidos
-/// a lo largo de su eje (fila si el anclaje es horizontal, columna si vertical).
+/// Aplica la **apariencia configurable** al cuerpo de la barra `v`: fondo
+/// translúcido (`opacity`) o degradé vertical sutil (`gradient`) y esquinas
+/// redondeadas (`radius`). Compartido por el path winit y el layer-shell.
+fn aplicar_apariencia(v: View<Msg>, surface: &Surface, theme: &Theme) -> View<Msg> {
+    let bg = con_opacidad(theme.bg_panel_alt, surface.opacity);
+    let v = if surface.gradient {
+        use llimphi_ui::llimphi_raster::kurbo::Point;
+        use llimphi_ui::llimphi_raster::peniko::Gradient;
+        let top = con_opacidad(aclarar(theme.bg_panel_alt, 0.10), surface.opacity);
+        let g = Gradient::new_linear(Point::new(0.0, 0.0), Point::new(0.0, 1.0))
+            .with_stops([top, bg].as_slice());
+        v.fill_gradient(g)
+    } else {
+        v.fill(bg)
+    };
+    if surface.radius > 0.0 {
+        v.radius(surface.radius as f64)
+    } else {
+        v
+    }
+}
+
+/// Si la barra tiene `margin > 0`, la separa del borde con un contenedor
+/// transparente de padding `margin` (el look de barra **flotante**). La reserva
+/// de franja no cambia: el margen es sólo pincel.
+fn envolver_margen(inner: View<Msg>, surface: &Surface) -> View<Msg> {
+    if surface.margin <= 0.0 {
+        return inner;
+    }
+    let m = length(surface.margin);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: TaffyRect {
+            left: m,
+            right: m,
+            top: m,
+            bottom: m,
+        },
+        ..Default::default()
+    })
+    .children(vec![inner])
+}
+
+/// El cuerpo de una barra (100%×100% de su contenedor): los tres slots a lo
+/// largo de su eje, con la apariencia configurable aplicada. Lo comparten
+/// [`surface_view`] (winit, dentro de un rect absoluto) y [`bar_view`]
+/// (layer-shell, llenando su layer surface).
+fn bar_body(
+    surface: &Surface,
+    widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+    dir: FlexDirection,
+) -> View<Msg> {
+    let cuerpo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_direction: dir,
+        padding: TaffyRect {
+            left: length(surface.padding),
+            right: length(surface.padding),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        ..Default::default()
+    })
+    .children(slots_de(surface, widgets, shuma_state, data, theme, dir));
+    envolver_margen(aplicar_apariencia(cuerpo, surface, theme), surface)
+}
+
+/// Una superficie colocada: rectángulo absoluto que aloja el cuerpo de la barra
+/// (con su apariencia + slots repartidos por su eje).
 fn surface_view(
     surface: &Surface,
     rect: Rect,
@@ -439,19 +672,9 @@ fn surface_view(
             width: length(rect.w as f32),
             height: length(rect.h as f32),
         },
-        flex_direction: dir,
-        padding: TaffyRect {
-            left: length(surface.padding),
-            right: length(surface.padding),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::SpaceBetween),
         ..Default::default()
     })
-    .fill(theme.bg_panel_alt)
-    .children(slots_de(surface, widgets, shuma_state, data, theme, dir))
+    .children(vec![bar_body(surface, widgets, shuma_state, data, theme, dir)])
 }
 
 /// La barra de shuma **desplegada**: la propia layer surface creció hacia
@@ -547,21 +770,25 @@ fn slots_de(
         let items: Vec<View<Msg>> = ws
             .iter()
             .map(|sw| match sw {
-                SlotWidget::Core { widget, exec } => {
+                SlotWidget::Core {
+                    kind,
+                    widget,
+                    exec,
+                    cells,
+                } => {
                     // Realce al hover en todos los widgets (feedback de "estoy
                     // encima") + tooltip con su lectura completa; los que tienen
-                    // `exec` además lanzan su comando.
+                    // `exec` además lanzan su comando. El medidor se tiñe con su
+                    // gradiente propio (verde→rojo por widget).
                     let wv = widget.view();
-                    let mut v = widget_view(&wv, theme)
+                    let mut v = widget_view_kinded(&wv, Some(kind), theme)
                         .radius(6.0)
                         .hover_fill(theme.bg_button_hover);
                     if let Some(tip) = widget_tooltip(&wv) {
                         v = v.tooltip(tip);
                     }
-                    match exec {
-                        Some(cmd) => v.on_click(Msg::Spawn(cmd.clone())),
-                        None => v,
-                    }
+                    v = interaccion_widget(v, kind, exec.as_deref());
+                    cuantizar(v, surface.cell, *cells, kind, dir)
                 }
                 SlotWidget::Start { label, exec } => start_button_view(label, exec.as_deref(), theme),
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
@@ -1110,24 +1337,7 @@ pub fn bar_view(
     } else {
         FlexDirection::Column
     };
-    View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        flex_direction: dir,
-        padding: TaffyRect {
-            left: length(surface.padding),
-            right: length(surface.padding),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::SpaceBetween),
-        ..Default::default()
-    })
-    .fill(theme.bg_panel_alt)
-    .children(slots_de(surface, widgets, shuma_state, data, theme, dir))
+    bar_body(surface, widgets, shuma_state, data, theme, dir)
 }
 
 #[cfg(test)]

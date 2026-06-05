@@ -303,6 +303,10 @@ fn anchor_y_size(anchor: Anchor, thickness: u32) -> (LayerAnchor, (u32, u32)) {
 /// compositor no expone `wlr-layer-shell` (en ese caso el caller cae a winit).
 pub fn run() -> Result<(), Box<dyn Error>> {
     let cfg = pata_config::load();
+    let mut theme = Theme::dark();
+    if let Some(c) = crate::render::parse_hex(&cfg.general.accent) {
+        theme.accent = c;
+    }
     let bars: Vec<usize> = cfg
         .surfaces
         .iter()
@@ -388,7 +392,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         next_toplevel_id: 0,
         clipboard: None,
         tray,
-        theme: Theme::dark(),
+        theme,
         cfg,
         surfaces,
         shuma,

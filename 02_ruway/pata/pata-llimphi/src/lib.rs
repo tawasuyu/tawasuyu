@@ -138,9 +138,15 @@ pub enum Msg {
 pub enum SlotWidget {
     /// Un widget builtin de `pata-core`. `exec` es el comando que lanza al
     /// clickearlo (de la prop `exec` del spec), o `None` si no es clickeable.
+    /// `kind` es el `WidgetSpec::kind` (cpu_meter/volume/brightness/clock…): el
+    /// render lo usa para teñir el medidor con su gradiente propio y para
+    /// cablear la interacción específica (rueda de volumen/brillo, click en el
+    /// reloj). `cells` es el ancho cuantizado pedido (0 = automático).
     Core {
+        kind: String,
         widget: Box<dyn Widget>,
         exec: Option<String>,
+        cells: u32,
     },
     /// El botón de inicio: muestra su `label` y, al clickearlo, despliega el
     /// menú nativo de apps (o lanza `exec` si la config lo fija, override estilo
@@ -312,8 +318,10 @@ impl Model {
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
+                            kind: spec.kind.clone(),
                             widget: build(spec),
                             exec: (!exec.is_empty()).then(|| exec.to_string()),
+                            cells: spec.num_prop("cells", 0.0).max(0.0) as u32,
                         }
                     }
                 })
@@ -405,8 +413,12 @@ impl App for PataApp {
             .then(TrayHandle::spawn)
             .flatten();
 
+        let mut theme = Theme::dark();
+        if let Some(c) = render::parse_hex(&cfg.general.accent) {
+            theme.accent = c;
+        }
         let mut model = Model {
-            theme: Theme::dark(),
+            theme,
             cfg,
             frame,
             surfaces,

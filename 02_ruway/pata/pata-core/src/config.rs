@@ -240,6 +240,33 @@ pub struct Surface {
     /// Separación (px) entre widgets adyacentes.
     #[cfg_attr(feature = "serde", serde(default = "default_gap"))]
     pub gap: f32,
+    /// Opacidad del fondo de la superficie `0.0..=1.0` (default `1.0` = opaco).
+    /// El frontend la aplica al color de fondo de la barra — una barra
+    /// translúcida que deja ver el escritorio detrás. Sólo afecta el pincel; la
+    /// reserva de franja no cambia.
+    #[cfg_attr(feature = "serde", serde(default = "default_opacity"))]
+    pub opacity: f32,
+    /// Radio de las esquinas del fondo de la superficie (px, default `0.0` =
+    /// rectas). Con [`Surface::margin`] > 0 da el look de barra flotante con
+    /// esquinas redondeadas.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub radius: f32,
+    /// Margen (px) entre la barra y el borde de pantalla — el look de barra
+    /// "flotante". Default `0.0` = pegada al borde. Sólo es pincel: la reserva
+    /// de franja sigue siendo `thickness` (las ventanas no entran en el margen).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub margin: f32,
+    /// Si `true`, el fondo de la barra se pinta con un degradé vertical sutil
+    /// (claro arriba → oscuro abajo) en vez de un color plano. Embellecimiento.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub gradient: bool,
+    /// Unidad de **cuantización de ancho** (px). Si `> 0`, cada widget reserva
+    /// un ancho múltiplo de `cell` (mínimo), así el racimo de indicadores queda
+    /// alineado a una grilla en vez de bailar con cada cambio de dígitos.
+    /// Default `0.0` = ancho automático (sin grilla). Un widget puede pedir N
+    /// celdas con la prop `cells`.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub cell: f32,
     /// Slot inicial: pegado al inicio del eje (izquierda / arriba).
     #[cfg_attr(feature = "serde", serde(default))]
     pub start: Vec<WidgetSpec>,
@@ -277,6 +304,11 @@ impl Default for Surface {
             autohide: false,
             padding: default_padding(),
             gap: default_gap(),
+            opacity: default_opacity(),
+            radius: 0.0,
+            margin: 0.0,
+            gradient: false,
+            cell: 0.0,
             start: Vec::new(),
             center: Vec::new(),
             end: Vec::new(),
@@ -327,12 +359,19 @@ pub struct General {
     /// nombres IANA. La sincronización NTP no es de pata: la da el SO.
     #[cfg_attr(feature = "serde", serde(default = "default_timezone"))]
     pub timezone: String,
+    /// Color de acento global como hex `"#rrggbb"` (o `"#rrggbbaa"`). Vacío =
+    /// el del tema. El frontend lo parsea (el core no conoce colores); tiñe
+    /// medidores, glifos del botón de inicio y bordes. Embellecer el marco sin
+    /// recompilar.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub accent: String,
 }
 
 impl Default for General {
     fn default() -> Self {
         Self {
             timezone: default_timezone(),
+            accent: String::new(),
         }
     }
 }
@@ -391,6 +430,9 @@ fn default_padding() -> f32 {
 }
 fn default_gap() -> f32 {
     16.0
+}
+fn default_opacity() -> f32 {
+    1.0
 }
 fn default_rail_thickness() -> f32 {
     44.0

@@ -8,14 +8,26 @@
 
 [general]
 timezone = "auto"   # "auto" lo detecta del sistema; o un IANA como "America/Lima"
+accent = ""         # color de acento hex "#rrggbb" (vacío = el del tema). Tiñe
+                    # medidores, glifos y bordes sin recompilar.
 
 # --- Barra superior: el menú clásico tipo waybar/eww ---
+# Embellecimiento (todo opcional):
+#   opacity  fondo translúcido 0..1 (1 = opaco)
+#   gradient degradé vertical sutil en el fondo (true/false)
+#   radius   esquinas redondeadas (px) — combina con `margin` para barra flotante
+#   margin   separación del borde de pantalla (px); sólo pincel, no cambia reserva
+#   cell     cuantiza el ancho de cada widget a múltiplos de `cell` px (grilla
+#            alineada). Un widget pide N celdas con la prop `cells`.
 [[surfaces]]
 kind = "bar"
 anchor = "top"
 thickness = 32
 gap = 16
 padding = 12
+opacity = 0.92
+gradient = true
+cell = 24
 
 [[surfaces.start]]
 kind = "start_button"
