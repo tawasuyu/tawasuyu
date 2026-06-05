@@ -401,6 +401,11 @@ pub struct State {
     /// reconstruye el `EditorState` por frame desde las `OutputLine` +
     /// este cursor (la fuente de verdad sigue siendo el buffer de output).
     pub body_sel: Option<(u64, llimphi_widget_text_editor::Cursor)>,
+    /// Menú contextual del output abierto: `(x, y, bloque_objetivo)` en coords
+    /// del nodo raíz del shell. `None` = cerrado. Lo abre el click derecho; sus
+    /// acciones (copiar / copiar todo / seleccionar todo) operan sobre el
+    /// `bloque_objetivo`.
+    pub body_menu: Option<(f32, f32, u64)>,
     /// Acumulador del drag de selección del cuerpo (el `PointerEvent::Drag`
     /// del editor entrega deltas; hay que acumularlos contra el press).
     pub body_drag_accum: (f32, f32),
@@ -502,6 +507,7 @@ impl State {
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
             body_sel: None,
+            body_menu: None,
             body_drag_accum: (0.0, 0.0),
             block_started: std::collections::HashMap::new(),
             block_command: std::collections::HashMap::new(),
@@ -764,6 +770,14 @@ pub enum Msg {
     /// la palabra bajo `(x, y)` (coords locales al nodo del editor, incluyen
     /// el gutter). La dispara el `on_double_tap_at` del cuerpo.
     BodyDoubleClick { block: u64, x: f32, y: f32 },
+    /// Click derecho sobre el output: abre el menú contextual en `(x, y)`
+    /// (coords del nodo raíz del shell = espacio de su view). Las acciones
+    /// operan sobre el bloque seleccionado (o el más reciente).
+    OpenBodyMenu { x: f32, y: f32 },
+    /// Elegir un item del menú contextual del output (índice 0-based).
+    BodyMenuPick(usize),
+    /// Cerrar el menú contextual del output (scrim / Esc).
+    BodyMenuDismiss,
 }
 
 mod update;
@@ -1671,6 +1685,48 @@ mod tests {
             .output
             .iter()
             .any(|l| l.text.contains("[0] SIGKILL enviado")));
+    }
+
+    #[test]
+    fn open_body_menu_targets_a_block_with_body() {
+        // Click derecho sobre el output abre el menú apuntando al bloque con
+        // cuerpo más reciente (no hay selección previa).
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ echo hi"));
+        s.push_output(OutputLine::stdout("hola mundo"));
+        s = update(s, Msg::OpenBodyMenu { x: 10.0, y: 20.0 });
+        match s.body_menu {
+            Some((x, y, b)) => {
+                assert_eq!((x, y), (10.0, 20.0));
+                assert_ne!(b, 0, "el bloque objetivo no es huérfano");
+            }
+            None => panic!("el menú debería abrirse"),
+        }
+    }
+
+    #[test]
+    fn body_menu_select_all_then_pick_closes() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ ls"));
+        s.push_output(OutputLine::stdout("linea uno"));
+        s.push_output(OutputLine::stdout("linea dos"));
+        s = update(s, Msg::OpenBodyMenu { x: 0.0, y: 0.0 });
+        assert!(s.body_menu.is_some());
+        // Item 2 = "Seleccionar todo".
+        s = update(s, Msg::BodyMenuPick(2));
+        assert!(s.body_sel.is_some(), "seleccionar todo deja selección viva");
+        assert!(s.body_menu.is_none(), "elegir un item cierra el menú");
+    }
+
+    #[test]
+    fn body_menu_dismiss_clears_it() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ x"));
+        s.push_output(OutputLine::stdout("y"));
+        s = update(s, Msg::OpenBodyMenu { x: 0.0, y: 0.0 });
+        assert!(s.body_menu.is_some());
+        s = update(s, Msg::BodyMenuDismiss);
+        assert!(s.body_menu.is_none());
     }
 
     #[test]

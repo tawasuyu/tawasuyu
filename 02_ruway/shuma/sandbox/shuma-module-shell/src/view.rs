@@ -86,7 +86,14 @@ pub fn view<HostMsg: Clone + 'static>(
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
     }
+    // Menú contextual del output (click derecho): overlay por encima de todo,
+    // sin clip — por eso va último en los children del root. Sus coords son del
+    // nodo raíz (este mismo), así que el `anchor` cae donde se hizo click.
+    if let Some(menu) = body_context_menu::<HostMsg>(state, theme, &lift) {
+        children.push(menu);
+    }
 
+    let lift_menu = lift.clone();
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -106,7 +113,65 @@ pub fn view<HostMsg: Clone + 'static>(
         ..Default::default()
     })
     .fill(theme.bg_app)
+    // Click derecho en cualquier parte del output → menú contextual en `(x, y)`
+    // (coords locales a este nodo raíz). El cuerpo IDE ya no captura el right-
+    // click (lo delega acá) para que el menú gane.
+    .on_right_click_at(move |x, y, _w, _h| Some(lift_menu(Msg::OpenBodyMenu { x, y })))
     .children(children)
+}
+
+/// Menú contextual del output (click derecho): Copiar selección · Copiar todo ·
+/// Seleccionar todo. `None` si no está abierto. Las acciones operan sobre el
+/// bloque guardado en `state.body_menu`. "Copiar" se deshabilita sin selección.
+pub(crate) fn body_context_menu<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Option<View<HostMsg>> {
+    use llimphi_widget_context_menu::{
+        context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    };
+    let (x, y, block) = state.body_menu?;
+    let mut copiar = ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C");
+    if !menu_has_selection(state, block) {
+        copiar = copiar.disabled();
+    }
+    let items = vec![
+        copiar,
+        ContextMenuItem::action("Copiar todo"),
+        ContextMenuItem::action("Seleccionar todo"),
+    ];
+    let lift_pick = lift.clone();
+    let menu = context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: (1280.0, 800.0),
+        header: None,
+        items,
+        active: usize::MAX,
+        on_pick: std::sync::Arc::new(move |i| lift_pick(Msg::BodyMenuPick(i))),
+        on_dismiss: lift(Msg::BodyMenuDismiss),
+        palette: ContextMenuPalette::from_theme(theme),
+    });
+    // El menú (con su scrim full-screen) está hecho para `view_overlay`; acá lo
+    // hospedamos en el flujo del shell, así que lo sacamos del layout flex con
+    // un contenedor `Position::Absolute` (si no, el scrim aplasta el output).
+    Some(
+        View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(0.0_f32),
+                top: length(0.0_f32),
+                right: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![menu]),
+    )
 }
 
 /// Color por `TokenKind` — paleta diseñada para que el comando salte y
@@ -2331,7 +2396,8 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                 &color_runs,
                 move |ev| Some(lift_ptr(Msg::BodyPointer { block, ev })),
             )
-            .on_right_click(lift(Msg::CopyBody(block)))
+            // El click derecho del cuerpo se delega al nodo raíz (menú
+            // contextual con coords de su espacio); no lo capturamos acá.
             // Doble-click = seleccionar palabra. `(lx,ly)` es local al nodo
             // del editor (incluye el gutter); `update` resta `gutter_width`.
             .on_double_tap_at(move |lx, ly, _w, _h| {

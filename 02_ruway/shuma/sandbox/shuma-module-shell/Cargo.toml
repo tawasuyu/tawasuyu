@@ -23,6 +23,7 @@ llimphi-theme = { workspace = true }
 llimphi-icons = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
 vt100 = { workspace = true }
 arboard = { workspace = true }
 

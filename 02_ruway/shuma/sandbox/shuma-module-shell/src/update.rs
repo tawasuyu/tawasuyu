@@ -277,6 +277,19 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::BodyDoubleClick { block, x, y } => {
             s = apply_body_double_click(s, block, x, y);
         }
+        Msg::OpenBodyMenu { x, y } => {
+            // Bloque objetivo: el que el usuario seleccionó, o el más reciente
+            // con cuerpo. Si no hay ninguno, no abrimos (nada que copiar).
+            if let Some(block) = menu_target_block(&s) {
+                s.body_menu = Some((x, y, block));
+            }
+        }
+        Msg::BodyMenuDismiss => {
+            s.body_menu = None;
+        }
+        Msg::BodyMenuPick(idx) => {
+            s = apply_body_menu_pick(s, idx);
+        }
         Msg::Tick => {
             s = drain_run(s);
         }
@@ -849,6 +862,57 @@ pub(crate) fn copy_body_selection(s: &State, block: u64) {
     if let Some(text) = ed.selected_text() {
         set_clipboard(&text);
     }
+}
+
+/// Bloque objetivo del menú contextual del output: el que el usuario tiene
+/// seleccionado, o el más reciente con cuerpo. `None` si no hay ninguno (no
+/// hay nada que copiar → no se abre el menú).
+pub(crate) fn menu_target_block(s: &State) -> Option<u64> {
+    if let Some((b, _)) = s.body_sel {
+        return Some(b);
+    }
+    s.output
+        .iter()
+        .rev()
+        .find(|l| {
+            l.block != 0
+                && l.kind != OutputKind::Prompt
+                && l.stage.is_none()
+                && !is_status_line(&l.text)
+        })
+        .map(|l| l.block)
+}
+
+/// `true` si el bloque objetivo del menú tiene una selección viva (para
+/// habilitar/deshabilitar el item "Copiar selección").
+pub(crate) fn menu_has_selection(s: &State, block: u64) -> bool {
+    matches!(s.body_sel.as_ref(), Some((b, _)) if *b == block)
+        && body_editor_state(s, block).selected_text().is_some()
+}
+
+/// Aplica el item elegido del menú contextual del output y lo cierra.
+/// 0 = Copiar selección · 1 = Copiar todo el bloque · 2 = Seleccionar todo.
+pub(crate) fn apply_body_menu_pick(mut s: State, idx: usize) -> State {
+    let Some((_, _, block)) = s.body_menu else {
+        return s;
+    };
+    match idx {
+        0 => copy_body_selection(&s, block),
+        1 => {
+            let text = body_lines_for_block(&s, block).join("\n");
+            if !text.is_empty() {
+                set_clipboard(&text);
+            }
+        }
+        2 => {
+            let mut ed = body_editor_state(&s, block);
+            ed.select_all();
+            s.body_sel = Some((block, ed.cursor.clone()));
+        }
+        _ => {}
+    }
+    s.body_menu = None;
+    s
 }
 
 /// Extrae el texto de la selección del card de vim sobre el screen
