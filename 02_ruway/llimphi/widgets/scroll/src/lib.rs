@@ -323,6 +323,120 @@ where
     .children(children)
 }
 
+/// Área de scroll **2D** (horizontal + vertical). Generaliza [`scroll_y`] a dos
+/// ejes: el contenido toma su tamaño natural y se desplaza `(-x, -y)`, recortado
+/// al viewport; aparece una barra por eje que tenga overflow (ninguna, una o
+/// las dos). Para scroll puramente horizontal, pasá `content_size.1 ==
+/// viewport_size.1` (no sale barra vertical).
+///
+/// `on_scroll(dx, dy)` recibe el **delta en px por eje** a sumar a cada offset
+/// (rueda → ambos ejes; arrastre de la barra vertical → sólo `dy`; horizontal →
+/// sólo `dx`). El caller acumula y clampea cada eje con [`clamp_offset`]. Las
+/// dos barras se solapan en una esquinita inferior-derecha (v1; cosmético).
+pub fn scroll_xy<Msg, F>(
+    offset: (f32, f32),
+    content_size: (f32, f32),
+    viewport_size: (f32, f32),
+    content: View<Msg>,
+    on_scroll: F,
+    palette: &ScrollPalette,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    F: Fn(f32, f32) -> Msg + Send + Sync + 'static,
+{
+    let (ox, oy) = offset;
+    let (cw, ch) = content_size;
+    let (vw, vh) = viewport_size;
+    let on_scroll = Arc::new(on_scroll);
+
+    // Contenido a tamaño natural, desplazado (-x, -y). right/bottom = auto para
+    // que no lo achique el viewport (a diferencia de scroll_y, que ancla
+    // left/right para tomar el ancho del viewport).
+    let content_wrap = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(-oy),
+            left: length(-ox),
+            right: auto(),
+            bottom: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![content]);
+
+    let mut children = vec![content_wrap];
+
+    // Barra vertical (borde derecho) — sólo si hay overflow vertical.
+    if max_offset(ch, vh) > 0.0 {
+        let (thumb_h, thumb_y, opp) = thumb_geometry(oy, ch, vh);
+        let f = on_scroll.clone();
+        let thumb = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { top: length(thumb_y), right: length(0.0), left: auto(), bottom: auto() },
+            size: Size { width: length(palette.bar_width), height: length(thumb_h) },
+            ..Default::default()
+        })
+        .fill(palette.thumb)
+        .hover_fill(palette.thumb_hover)
+        .radius((palette.bar_width * 0.5) as f64)
+        .draggable(move |phase, _dx, dy| match phase {
+            DragPhase::Move => Some((f)(0.0, dy * opp)),
+            DragPhase::End => None,
+        });
+        let track = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { top: length(0.0), right: length(0.0), bottom: length(0.0), left: auto() },
+            size: Size { width: length(palette.bar_width), height: auto() },
+            ..Default::default()
+        })
+        .fill(palette.track)
+        .children(vec![thumb]);
+        children.push(track);
+    }
+
+    // Barra horizontal (borde inferior) — sólo si hay overflow horizontal.
+    if max_offset(cw, vw) > 0.0 {
+        let (thumb_w, thumb_x, opp) = thumb_geometry(ox, cw, vw);
+        let f = on_scroll.clone();
+        let thumb = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { left: length(thumb_x), bottom: length(0.0), top: auto(), right: auto() },
+            size: Size { width: length(thumb_w), height: length(palette.bar_width) },
+            ..Default::default()
+        })
+        .fill(palette.thumb)
+        .hover_fill(palette.thumb_hover)
+        .radius((palette.bar_width * 0.5) as f64)
+        .draggable(move |phase, dx, _dy| match phase {
+            DragPhase::Move => Some((f)(dx * opp, 0.0)),
+            DragPhase::End => None,
+        });
+        let track = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { left: length(0.0), right: length(0.0), bottom: length(0.0), top: auto() },
+            size: Size { width: auto(), height: length(palette.bar_width) },
+            ..Default::default()
+        })
+        .fill(palette.track)
+        .children(vec![thumb]);
+        children.push(track);
+    }
+
+    let line_px = palette.line_px;
+    let on_wheel = on_scroll;
+    View::new(Style {
+        position: Position::Relative,
+        size: Size { width: length(vw), height: length(vh) },
+        ..Default::default()
+    })
+    .clip(true)
+    // Rueda: dy = eje vertical; dx = eje horizontal (ratones/touchpads 2D, o
+    // Shift+rueda en algunos backends). Ambos en px-línea.
+    .on_scroll(move |dx, dy| Some((on_wheel)(dx * line_px, dy * line_px)))
+    .children(children)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
