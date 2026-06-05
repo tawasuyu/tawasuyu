@@ -352,11 +352,19 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         let sub = session.container.as_ref().map(|c| SelectItem::new(c.clone()));
         children.push(select_trigger_view(
             sub.as_ref(),
-            "Crear / conectar contenedor…",
+            "Conectar a un contenedor…",
             model.dropdown_open == Some(DropKind::Container),
             None,
             &pal,
             Msg::ToggleDropdown(DropKind::Container),
+        ));
+        // Botón explícito para crear uno nuevo de la distro elegida (antes el
+        // único disparador estaba enterrado como item "+ Crear nuevo" del
+        // dropdown de arriba — no se veía).
+        children.push(action_button(
+            &format!("+ Crear contenedor {}", session.distro.label()),
+            Msg::CreateContainer,
+            theme,
         ));
     }
 
