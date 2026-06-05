@@ -20,21 +20,16 @@ pata-config = { path = "../pata-config" }
 # Rail hospedado (sidebar delegado): pata hospeda los dientes de la app enfocada
 # y le reenvía las activaciones. Lado servidor del protocolo.
 pata-host = { path = "../pata-host" }
-# El puente pata→shuma (SDD §5): el marco provee el borde, shuma la ejecución.
-# El drawer Quake corre los comandos por el ejecutor real de shuma (captura
-# acotada, streaming) en vez de un `sh -c` pelado.
-shuma-exec = { path = "../../shuma/sandbox/shuma-exec" }
-# El cerebro de la línea de shuma (agnóstico de GUI): descompone el comando en
-# etapas de pipe para las chips clickeables del drawer.
-shuma-line = { path = "../../shuma/sandbox/shuma-line" }
-# Terminal PTY real para el drawer Quake: shuma-exec (Exec::Pty) + vt100. El
-# drawer deja de ser un ejecutor de comandos sueltos y pasa a ser un terminal
-# completo (vim/htop/less/ssh corren dentro, con cwd propio y estado de shell).
-llimphi-module-shuma-term = { workspace = true }
-# IA en el drawer Quake: el submit sin prefijo `!`/`$` va al LLM (fachada
-# transparente de pluma; cae a Mock sin credenciales). Paridad con el quake de
-# mirada-launcher, que pata reemplaza (SDD Fase 10).
-pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+# El puente pata→shuma (SDD §5): el marco provee el borde, shuma el contenido.
+# El drawer Quake **hospeda el shell real de shuma** montando el módulo
+# `shuma-module-shell` —el mismo de `shuma-shell-llimphi`, con cards, cuerpo
+# IDE-text, scroll y detección PTY/TUI—. pata no reimplementa nada: instancia su
+# `State`, le rutea teclas/tick/clicks (vía el `lift` Msg::ShumaShell) y pinta su
+# `view`. Reemplaza al viejo reimplemento de cards + al terminal PTY aparte.
+shuma-module-shell = { path = "../../shuma/sandbox/shuma-module-shell" }
+# Vocabulario común de los módulos de shuma — `Source` (Local/Daemon/…) para
+# construir el `State` del shell hospedado.
+shuma-module = { path = "../../shuma/sandbox/shuma-module" }
 # Registro de apps para el menú del botón de inicio (descubre ~/.config/gioser/
 # apps/*.toml). El menú nativo reemplaza a depender de wofi/rofi externos.
 app-bus = { path = "../../../shared/app-bus" }

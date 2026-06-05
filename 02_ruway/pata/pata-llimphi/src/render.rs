@@ -696,9 +696,9 @@ fn surface_view(
 }
 
 /// La barra de shuma **desplegada**: la propia layer surface creció hacia
-/// arriba, así que pintamos el cuerpo del drawer (input + salida) llenando lo
-/// alto y la barra (su cabezal) abajo, con su grosor original `bar_px`. Asume
-/// anclaje inferior (el caso del preset).
+/// arriba, así que pintamos el cuerpo del drawer —el **shell real** hospedado
+/// ([`shuma::drawer_body_view`])— llenando lo alto y la barra (su cabezal) abajo,
+/// con su grosor original `bar_px`. Asume anclaje inferior (el caso del preset).
 pub fn shuma_open_view(
     surface: &Surface,
     widgets: &SurfaceWidgets,
@@ -706,7 +706,6 @@ pub fn shuma_open_view(
     data: &BarData,
     theme: &Theme,
     bar_px: f32,
-    viewport_h: f32,
 ) -> View<Msg> {
     // El cuerpo del drawer ocupa todo lo que sobra por encima de la barra.
     let mut body_style = Style {
@@ -717,41 +716,8 @@ pub fn shuma_open_view(
         ..Default::default()
     };
     body_style.flex_grow = 1.0;
-    let body =
-        View::new(body_style).children(vec![shuma::drawer_body_view(shuma_state, theme, viewport_h)]);
+    let body = View::new(body_style).children(vec![shuma::drawer_body_view(shuma_state, theme)]);
 
-    let bar = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(bar_px),
-        },
-        ..Default::default()
-    })
-    .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(vec![body, bar])
-}
-
-/// Como [`shuma_open_view`] pero con el cuerpo ya construido por el caller (el
-/// terminal PTY del drawer Quake). Mantiene la barra-cabezal abajo con su grosor
-/// original. `body` ya viene dimensionado a `surface - bar_px`.
-pub fn shuma_open_with_body(
-    surface: &Surface,
-    widgets: &SurfaceWidgets,
-    shuma_state: &ShumaState,
-    data: &BarData,
-    theme: &Theme,
-    bar_px: f32,
-    body: View<Msg>,
-) -> View<Msg> {
     let bar = View::new(Style {
         size: Size {
             width: percent(1.0_f32),

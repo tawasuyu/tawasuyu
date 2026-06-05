@@ -79,13 +79,38 @@ en wawa el config llega por akasha.
 
 Cada uno se coloca libremente: superficie + slot se eligen desde el config.
 
-## 5. Integración con shuma (el Quake)
+## 5. Integración con shuma (el Quake) — **hospedaje del shell real**
 
 El `shuma_input` es un widget que vive típicamente en una `Surface { kind: Bar,
-anchor: Bottom, autohide: true }`. Muestra el cabezal del shell; al recibir
-foco/escritura, el frontend **anima el despliegue** del resto de shuma sobre el
-escritorio (drawer estilo Quake) y lo repliega al soltar. El marco provee el
-borde; shuma provee el contenido.
+anchor: Bottom, autohide: true }`. Muestra el cabezal del shell; al activarlo
+(click o hotkey) el frontend **anima el despliegue** de shuma sobre el escritorio
+(drawer estilo Quake) y lo repliega al cerrar. El marco provee el borde; shuma
+provee el contenido — y "contenido" es, literalmente, **el shell real**.
+
+**pata no reimplementa el shell**: el drawer **monta el módulo
+`shuma-module-shell`** —el mismo de `shuma-shell-llimphi`— con su `State`,
+`update` y `view`. Es la Regla 2 en acción (la lógica de dominio no sabe quién la
+pinta) y la regla "un sustituto paralelo está prohibido". El cableado
+(`pata-llimphi/src/shuma.rs`):
+
+- `ShumaState::inner: shuma_module_shell::State` es el shell vivo (input, runs,
+  historial, cwd, PTY/TUI). pata nunca toca sus campos.
+- `drawer_overlay`/`drawer_body_view` montan `shuma_module_shell::view(&inner,
+  theme, Msg::ShumaShell)`. Todas las interacciones del shell vuelven envueltas
+  por ese `lift` como `Msg::ShumaShell(..)` y se reenvían a
+  `shuma_module_shell::update` — clicks en cards/etapas, scroll, selección del
+  cuerpo IDE-text, todo.
+- El teclado del drawer va al shell (`Msg::Key`); un latido ~100 ms drena su
+  salida (`Msg::Tick`). En layer-shell el teclado se normaliza de `Keysym` SCTK a
+  `llimphi_ui::KeyEvent` (`layer.rs::keysym_to_keyevent`). `Ctrl+Shift+W` (o el
+  hotkey) repliega; el resto —Esc/Ctrl+C/flechas— lo ve el shell.
+
+Esto **reemplazó de un saque** las dos viejas reimplementaciones que pata tenía:
+las cards propias del path winit (`DrawerBlock`/`card_view`/`ejecutar`/`classify`)
+y el terminal PTY aparte del path layer-shell (`llimphi-module-shuma-term`). El
+módulo ya hace su propia detección PTY/TUI (vim/htop a pantalla completa), así que
+los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
+--example dump_shell` (es el mismo `view` que pinta el drawer).
 
 ## 6. Estado y plan por fases
 
@@ -129,28 +154,21 @@ borde; shuma provee el contenido.
   agnóstico de core, igual que mirada con su shuma_bar): un cabezal clicable en
   la barra + hotkey (`keys`) despliegan un **drawer** animado (`llimphi-motion`,
   scrim que cierra al click + panel inferior que crece con el tween) que captura
-  el teclado. El estado vive en `Model::shuma`, no en core. La ejecución del
-  comando es, estrictamente, de `shuma`: mientras no haya puente, `shuma::
-  ejecutar_stand_in` corre por `sh -c` como **sustituto temporal** (patrón de
-  mirada) — se reemplaza sin tocar el mecanismo del drawer.
-  - **Puente real + cards (✅)** — el drawer corre por `shuma-exec` (no `sh -c`
-    pelado): historial de *cards* (`$ cmd` + etapas + salida + código), plegables,
-    con scroll. **Captura por etapa (tee, paridad con el shell de shuma):** un
-    pipe «simple» (sólo comandos/args/flags y `|`, sin comillas/variables/
-    redirecciones/globs/`~`) corre por `Exec::Direct` con `capture_stages`; cada
-    etapa **intermedia** emite su stdout en vivo (`StageStdout`) y se guarda en
-    `DrawerBlock::stage_lines`. Clickear la chip de una etapa intermedia **revela
-    su salida capturada inline** (sin re-ejecutar); la última etapa no se captura
-    aparte (su stdout es el cuerpo de la card). Cualquier otra sintaxis cae a
-    `sh -c` (sin tee). Detección en `shuma::simple_pipe_stages` (espeja
-    `shuma-module-shell`), testeada.
-  - **Submit a IA (✅, paridad con el quake de mirada-launcher)** — el buffer sin
-    prefijo va al **LLM** (`pluma-llm::from_env`, cae a Mock sin credenciales); el
-    prefijo `!`/`$` lo fuerza a shell. `shuma::classify` decide (`Empty`/`Shell`/
-    `Ia`, testeada); las consultas IA abren una card `✦ <prompt>` sin chips de
-    etapa que muestra `…pensando` y luego la respuesta. El resultado llega por el
-    mismo `ShumaResult`/`finish_last` que un comando. Es el último gap que tenía
-    `mirada-launcher-llimphi` sobre pata de cara a la Fase 10.
+  el teclado. El estado vive en `Model::shuma`, no en core.
+  - **Hospedaje del shell real (✅, 2026-06-05) — ver §5.** El drawer **monta el
+    módulo `shuma-module-shell`** (el mismo de `shuma-shell-llimphi`): cards,
+    etapas de pipe clickeables, cuerpo IDE-text, scroll, completado, grupos y
+    detección PTY/TUI. `ShumaState::inner` es ese `State`; el `view` se monta con
+    `lift = Msg::ShumaShell`, el teclado va por `Msg::Key` y un latido ~100 ms
+    drena por `Msg::Tick`. **Cero reimplementación** (Regla 2).
+  - **Histórico — superado.** Antes de hospedar, pata tenía **dos sustitutos
+    paralelos** que se eliminaron: (a) cards propias en el path winit
+    (`DrawerBlock`/`card_view`/`blocks_view`/`ejecutar`/`classify`/`preguntar_ia`,
+    que corrían por `shuma-exec`/`shuma-line` + IA por `pluma-llm`), y (b) un
+    terminal PTY aparte en el path layer-shell (`llimphi-module-shuma-term`). El
+    módulo real superó a ambos de un saque (ya hace su propio PTY/TUI), así que se
+    borraron junto con sus deps. Fue exactamente el anti-patrón "fabricar un
+    sustituto paralelo con el nombre del original" que prohíbe el CLAUDE.md.
 - **Fase 8 ✅** — `mirada-compositor` reconoce el marco `pata`:
   - Identidad: el viejo `SHELL_APP_ID = "carmen.shell"` → `is_shell_app_id`, que
     matchea `gioser.pata` (la identidad que anuncia `pata-llimphi`) o el alias
@@ -197,9 +215,10 @@ borde; shuma provee el contenido.
     `OnDemand` → al abrir pasa a `Exclusive`). En vez de una segunda surface, la
     propia barra de shuma **crece hacia arriba** hasta `DRAWER_H` (su exclusive
     zone queda en el grosor de la barra, así no recoloca el teselado);
-    `render::shuma_open_view` pinta el cuerpo del drawer (input + salida) arriba
-    y el cabezal abajo. Teclado con foco: Esc cierra, Backspace, Enter ejecuta
-    (`shuma::ejecutar_stand_in`, `sh -c` bloqueante), texto → buffer.
+    `render::shuma_open_view` pinta el cuerpo del drawer —el **shell real**
+    hospedado (`shuma_module_shell::view`, ver §5)— arriba y el cabezal abajo.
+    Teclado con foco: se normaliza a `llimphi_ui::KeyEvent` y va al shell
+    (`Msg::Key`); `Ctrl+Shift+W` repliega.
   - **Clicks por hit-test** ✅ — cada panel guarda su árbol pintado
     (`RenderCache`: `Mounted` + `ComputedLayout`); al click, `hit_test_click`
     ubica el nodo bajo el puntero y dispara su `on_click` (vía `handle_msg`). El

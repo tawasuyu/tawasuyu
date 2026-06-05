@@ -74,8 +74,6 @@ use pata_core::config::FloatingCard;
 use pata_core::widget::{Widget, WidgetCtx};
 use pata_core::{Anchor, Config, SurfaceKind};
 
-use llimphi_module_shuma_term as shuma_term;
-
 use crate::nouser::{self, MembersOutcome, NavState, PollOutcome};
 use crate::sampler::SamplerHandle;
 use pata_host::HostServer;
@@ -248,9 +246,6 @@ struct LayerApp {
     sampler: SamplerHandle,
     /// Último snapshot del sistema recogido del hilo de muestreo.
     ctx: WidgetCtx,
-    /// Comando del Quake corriendo en un hilo: su resultado llega por aquí. El
-    /// latido del frame-callback lo sondea (`try_recv`) sin bloquear el loop.
-    exec_rx: Option<std::sync::mpsc::Receiver<crate::shuma::RunResult>>,
     /// Estado del sidebar navegador (Mónadas de nouser). Vacío si la config no
     /// declara un navegador.
     nav: NavState,
@@ -275,35 +270,11 @@ struct LayerApp {
     tooltip_pi: Option<usize>,
     /// Texto del tooltip actualmente visible (`None` = oculto).
     tooltip_text: Option<String>,
-    /// Terminal PTY real del drawer Quake (shuma-term: `Exec::Pty` + vt100).
-    /// Se spawnea perezosamente al abrir el drawer la primera vez y se reusa
-    /// entre aperturas — conserva el cwd, el historial y los procesos vivos del
-    /// shell. Reemplaza al ejecutor de comandos sueltos: dentro corre un shell
-    /// de verdad (vim/htop/less/ssh incluidos). `None` hasta el primer despliegue.
-    term: Option<shuma_term::ShumaTermState>,
-    /// Modificadores activos del teclado (ctrl/alt/shift). SCTK los entrega en
-    /// `update_modifiers`, aparte de la tecla; el terminal los necesita para
-    /// traducir Ctrl+C, Alt+x, etc. a los bytes que el PTY espera.
+    /// Modificadores activos del teclado (ctrl/alt/shift/logo). SCTK los entrega
+    /// en `update_modifiers`, aparte de la tecla; los necesitamos para armar el
+    /// `llimphi_ui::KeyEvent` que recibe el shell hospedado.
     mods: Modifiers,
     exit: bool,
-}
-
-/// Ctrl+letra → byte de control ASCII (Ctrl+A=1 … Ctrl+Z=26), más Ctrl+@/[/\\/
-/// ]/^/_/?/espacio. `None` si la tecla no tiene equivalente de control.
-fn ctrl_byte(c: char) -> Option<u8> {
-    match c {
-        'a'..='z' => Some((c as u8) - b'a' + 1),
-        'A'..='Z' => Some((c as u8) - b'A' + 1),
-        '@' => Some(0),
-        '[' => Some(0x1b),
-        '\\' => Some(0x1c),
-        ']' => Some(0x1d),
-        '^' => Some(0x1e),
-        '_' => Some(0x1f),
-        '?' => Some(0x7f),
-        ' ' => Some(0), // Ctrl+Space = NUL
-        _ => None,
-    }
 }
 
 /// El anclaje sctk + el tamaño `(w, h)` pedido para un borde y grosor. El eje
@@ -448,7 +419,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         menu_bar_px: 32,
         sampler: SamplerHandle::spawn(utc),
         ctx: WidgetCtx::default(),
-        exec_rx: None,
         nav: NavState::default(),
         nav_rx,
         members_tx,
@@ -461,7 +431,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         panels: Vec::new(),
         tooltip_pi: None,
         tooltip_text: None,
-        term: None,
         mods: Modifiers::default(),
         exit: false,
     };
@@ -756,22 +725,9 @@ impl LayerApp {
         }
         self.shuma.open = open;
         let h = if open { DRAWER_H } else { self.shuma_bar_px };
-        // Al abrir: spawneamos el terminal real (shell con PTY) si todavía no
-        // existe, dimensionado al cuerpo del drawer. Se reusa entre aperturas:
-        // el shell sigue vivo (cwd, jobs, historial) aunque se repliegue.
-        if open && self.term.is_none() {
-            let w_px = self.panels[pi].width as f32;
-            let body_px = (DRAWER_H - self.shuma_bar_px) as f32;
-            let cols = shuma_term::cols_for_width(w_px);
-            let rows = shuma_term::rows_for_height(body_px);
-            let cwd = std::env::current_dir()
-                .ok()
-                .and_then(|p| p.to_str().map(str::to_owned))
-                .or_else(|| std::env::var("HOME").ok())
-                .unwrap_or_else(|| "/".to_string());
-            let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-            self.term = Some(shuma_term::spawn_with(cwd, program, Vec::new(), cols, rows));
-        }
+        // El contenido es el shell real hospedado (`self.shuma.inner`), vivo
+        // desde el arranque: no hace falta spawnear nada al abrir. El cwd, los
+        // jobs y el historial persisten en el `State` aunque se repliegue.
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
         // Abierto: foco Exclusive para escribir. Cerrado: `None` — no
@@ -789,73 +745,69 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
-    /// Traduce un evento de teclado de SCTK a los bytes que un terminal xterm
-    /// espera. Mismo contrato que `shuma_term::key_to_bytes`, pero partiendo del
-    /// `Keysym` + `Modifiers` de SCTK (el backend layer-shell no produce el
-    /// `KeyEvent` de llimphi que ese helper consume).
-    fn keysym_to_bytes(&self, event: &KbEvent) -> Vec<u8> {
+    /// Traduce un evento de teclado de SCTK al `llimphi_ui::KeyEvent` que consume
+    /// el shell hospedado (`shuma_module_shell::Msg::Key`). El backend layer-shell
+    /// trabaja con `Keysym` + `Modifiers` crudos; el shell —y su PTY/TUI interno—
+    /// esperan el evento normalizado de llimphi (igual que la app standalone bajo
+    /// winit). Las teclas con nombre van a `Key::Named`; las de texto a
+    /// `Key::Character` con su `utf8`. `None` si la tecla no produce nada útil.
+    fn keysym_to_keyevent(&self, event: &KbEvent) -> Option<llimphi_ui::KeyEvent> {
+        use llimphi_ui::{Key, NamedKey};
         use Keysym as K;
-        // Teclas con nombre (navegación/control) → secuencias CSI/SS3 estándar.
-        let named: Option<&[u8]> = match event.keysym {
-            K::Return | K::KP_Enter => Some(b"\r"),
-            K::BackSpace => Some(&[0x7f]),
-            K::Tab => Some(b"\t"),
-            K::ISO_Left_Tab => Some(b"\x1b[Z"),
-            K::Escape => Some(b"\x1b"),
-            K::Up => Some(b"\x1b[A"),
-            K::Down => Some(b"\x1b[B"),
-            K::Right => Some(b"\x1b[C"),
-            K::Left => Some(b"\x1b[D"),
-            K::Home => Some(b"\x1b[H"),
-            K::End => Some(b"\x1b[F"),
-            K::Page_Up => Some(b"\x1b[5~"),
-            K::Page_Down => Some(b"\x1b[6~"),
-            K::Delete => Some(b"\x1b[3~"),
-            K::Insert => Some(b"\x1b[2~"),
-            K::F1 => Some(b"\x1bOP"),
-            K::F2 => Some(b"\x1bOQ"),
-            K::F3 => Some(b"\x1bOR"),
-            K::F4 => Some(b"\x1bOS"),
-            K::F5 => Some(b"\x1b[15~"),
-            K::F6 => Some(b"\x1b[17~"),
-            K::F7 => Some(b"\x1b[18~"),
-            K::F8 => Some(b"\x1b[19~"),
-            K::F9 => Some(b"\x1b[20~"),
-            K::F10 => Some(b"\x1b[21~"),
-            K::F11 => Some(b"\x1b[23~"),
-            K::F12 => Some(b"\x1b[24~"),
+        let named = match event.keysym {
+            K::Return | K::KP_Enter => Some(NamedKey::Enter),
+            K::BackSpace => Some(NamedKey::Backspace),
+            K::Tab | K::ISO_Left_Tab => Some(NamedKey::Tab),
+            K::Escape => Some(NamedKey::Escape),
+            K::Up => Some(NamedKey::ArrowUp),
+            K::Down => Some(NamedKey::ArrowDown),
+            K::Right => Some(NamedKey::ArrowRight),
+            K::Left => Some(NamedKey::ArrowLeft),
+            K::Home => Some(NamedKey::Home),
+            K::End => Some(NamedKey::End),
+            K::Page_Up => Some(NamedKey::PageUp),
+            K::Page_Down => Some(NamedKey::PageDown),
+            K::Delete => Some(NamedKey::Delete),
+            K::Insert => Some(NamedKey::Insert),
+            K::F1 => Some(NamedKey::F1),
+            K::F2 => Some(NamedKey::F2),
+            K::F3 => Some(NamedKey::F3),
+            K::F4 => Some(NamedKey::F4),
+            K::F5 => Some(NamedKey::F5),
+            K::F6 => Some(NamedKey::F6),
+            K::F7 => Some(NamedKey::F7),
+            K::F8 => Some(NamedKey::F8),
+            K::F9 => Some(NamedKey::F9),
+            K::F10 => Some(NamedKey::F10),
+            K::F11 => Some(NamedKey::F11),
+            K::F12 => Some(NamedKey::F12),
             _ => None,
         };
-        if let Some(seq) = named {
-            return seq.to_vec();
-        }
-        // El char tipeado: preferimos el utf8 ya resuelto por el compositor; si
-        // no vino (combos con ctrl), lo derivamos del keysym.
-        let ch = event
-            .utf8
-            .as_deref()
-            .and_then(|s| s.chars().next())
-            .or_else(|| event.keysym.key_char());
-        let Some(ch) = ch else {
-            return Vec::new();
+        let modifiers = llimphi_ui::Modifiers {
+            shift: self.mods.shift,
+            ctrl: self.mods.ctrl,
+            alt: self.mods.alt,
+            meta: self.mods.logo,
         };
-        // Ctrl+letra → byte de control (Ctrl+A=1 … Ctrl+Z=26; @ [ \ ] ^ _ ? espacio).
-        if self.mods.ctrl && !self.mods.alt {
-            if let Some(b) = ctrl_byte(ch) {
-                return vec![b];
-            }
-        }
-        // Alt+x → ESC + x (meta-sends-escape, convención xterm).
-        if self.mods.alt {
-            let mut out = vec![0x1b];
-            out.extend_from_slice(ch.to_string().as_bytes());
-            return out;
-        }
-        // Caso general: el texto tal cual (ya trae shift/IME aplicados).
-        if let Some(txt) = event.utf8.as_deref() {
-            return txt.as_bytes().to_vec();
-        }
-        ch.to_string().into_bytes()
+        let (key, text) = if let Some(n) = named {
+            (Key::Named(n), None)
+        } else {
+            // Tecla de texto: preferimos el utf8 del compositor, salvo que sea un
+            // carácter de control (combos con Ctrl) — ahí usamos el char limpio
+            // del keysym para que el shell vea 'c' y no 0x03 (y decida con ctrl).
+            let txt = match event.utf8.as_deref() {
+                Some(s) if !s.is_empty() && !s.chars().all(char::is_control) => s.to_string(),
+                _ => event.keysym.key_char()?.to_string(),
+            };
+            (Key::Character(txt.as_str().into()), Some(txt))
+        };
+        Some(llimphi_ui::KeyEvent {
+            key,
+            state: llimphi_ui::KeyState::Pressed,
+            text,
+            modifiers,
+            repeat: false,
+        })
     }
 
     /// Despliega/repliega el menú de inicio: agranda/encoge hacia abajo la layer
@@ -1005,40 +957,6 @@ impl LayerApp {
             .map(|a| a.id.clone());
         if let Some(id) = id {
             self.lanzar_app(id);
-        }
-    }
-
-    /// Enter en el drawer: corre el comando por el **ejecutor real de shuma**
-    /// (`shuma::ejecutar`, sobre `shuma-exec`) en un hilo de fondo y muestra su
-    /// salida en el drawer — el puente pata→shuma del SDD §5. El hilo manda el
-    /// `Result` por un canal que `poll_exec` sondea cada frame; la UI no se
-    /// bloquea. El drawer **queda abierto** (sigue Exclusive, podés encadenar
-    /// comandos y leer la salida); se cierra con Esc. Para lanzar una app GUI y
-    /// olvidarte, está el launcher (clic en un ítem) o `Super+p`.
-    fn shuma_submit(&mut self) {
-        let cmd = std::mem::take(&mut self.shuma.buffer);
-        if cmd.trim().is_empty() {
-            self.marcar_shuma_dirty();
-            return;
-        }
-        self.shuma.push_pending(cmd.clone());
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(crate::shuma::ejecutar(&cmd));
-        });
-        self.exec_rx = Some(rx);
-        self.marcar_shuma_dirty();
-    }
-
-    /// Sondea (sin bloquear) si el comando del Quake terminó; si sí, guarda su
-    /// salida y re-pinta. Se llama en cada frame (el latido del shuma corre a
-    /// ~60fps, así que el resultado aparece a los ~16ms de terminar).
-    fn poll_exec(&mut self) {
-        let got = self.exec_rx.as_ref().and_then(|rx| rx.try_recv().ok());
-        if let Some(res) = got {
-            self.shuma.finish_last(res);
-            self.exec_rx = None;
-            self.marcar_shuma_dirty();
         }
     }
 
@@ -1305,25 +1223,16 @@ impl LayerApp {
     fn draw(&mut self, pi: usize, qh: &QueueHandle<Self>) {
         self.maybe_sample();
         self.maybe_cava();
-        self.poll_exec();
         self.poll_nav();
         self.poll_host();
         self.ensure_gpu(pi);
 
-        // Drawer abierto: el terminal avanza solo (el shell escribe sin que
-        // toquemos teclas), así que drenamos el PTY cada frame, lo ajustamos al
-        // cuerpo del drawer y forzamos repintado para verlo en vivo.
+        // Drawer abierto: el shell hospedado avanza solo (el proceso/PTY escribe
+        // sin que toquemos teclas). Lo latimos cada frame (`Tick` del módulo drena
+        // la salida — `update` puro) y forzamos repintado para verlo en vivo.
         if self.shuma_panel == Some(pi) && self.shuma.open {
-            if let Some(term) = self.term.as_mut() {
-                let w_px = self.panels[pi].width as f32;
-                let body_px =
-                    self.panels[pi].height.saturating_sub(self.shuma_bar_px) as f32;
-                term.resize(
-                    shuma_term::cols_for_width(w_px),
-                    shuma_term::rows_for_height(body_px),
-                );
-                term.tick();
-            }
+            self.shuma.inner =
+                shuma_module_shell::update(self.shuma.inner.clone(), shuma_module_shell::Msg::Tick);
             self.panels[pi].dirty = true;
         }
 
@@ -1386,39 +1295,16 @@ impl LayerApp {
                 ),
             }
         } else if self.shuma_panel == Some(pi) && self.shuma.open {
-            // El cuerpo del drawer es el terminal PTY real; abajo queda la barra
-            // (cabezal con el chip de shuma). El terminal mide la surface menos
-            // la barra.
-            let body_h = (h as f32 - self.shuma_bar_px as f32).max(40.0);
-            match self.term.as_ref() {
-                Some(term) => {
-                    let term_body = shuma_term::view(
-                        term,
-                        &shuma_term::ShumaTermPalette::from_theme(&self.theme),
-                        body_h,
-                        |_| Msg::ShumaAnim, // v0 ignora el to_host (sin eventos por celda)
-                    );
-                    render::shuma_open_with_body(
-                        &self.cfg.surfaces[idx],
-                        &self.surfaces[idx],
-                        &self.shuma,
-                        &data,
-                        &self.theme,
-                        self.shuma_bar_px as f32,
-                        term_body,
-                    )
-                }
-                // Fallback defensivo (no debería pasar: el toggle spawnea el term).
-                None => render::shuma_open_view(
-                    &self.cfg.surfaces[idx],
-                    &self.surfaces[idx],
-                    &self.shuma,
-                    &data,
-                    &self.theme,
-                    self.shuma_bar_px as f32,
-                    body_h,
-                ),
-            }
+            // El cuerpo del drawer es el **shell real** hospedado (cards/PTY/TUI);
+            // abajo queda la barra (cabezal con el chip de shuma).
+            render::shuma_open_view(
+                &self.cfg.surfaces[idx],
+                &self.surfaces[idx],
+                &self.shuma,
+                &data,
+                &self.theme,
+                self.shuma_bar_px as f32,
+            )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Sidebar {
             // Dientes hospedados de la app enfocada (si registró alguno en el host).
             let hosted = {
@@ -1508,26 +1394,11 @@ impl LayerApp {
     fn handle_msg(&mut self, msg: Msg) {
         match msg {
             Msg::ShumaToggle => self.set_shuma_open(!self.shuma.open),
-            // Clic en una etapa de pipe de una card: re-ejecuta la línea
-            // truncada en el drawer (lo abre si estaba cerrado).
-            Msg::ShumaRunLine(line) => {
-                if !line.trim().is_empty() {
-                    if !self.shuma.open {
-                        self.set_shuma_open(true);
-                    }
-                    self.shuma.buffer = line;
-                    self.shuma_submit();
-                }
-            }
-            // Clic en el `$` de una card: la pliega/despliega.
-            Msg::ShumaCollapse(idx) => {
-                if let Some(b) = self.shuma.blocks.get_mut(idx) {
-                    b.collapsed = !b.collapsed;
-                    self.marcar_shuma_dirty();
-                }
-            }
-            Msg::ShumaScroll(delta) => {
-                self.shuma.scroll_by(delta);
+            // Cualquier interacción del shell hospedado (clic en cards/etapas,
+            // scroll, selección del cuerpo IDE-text…) llega envuelta por el `lift`
+            // del `view`: la reenviamos a `shuma_module_shell::update`.
+            Msg::ShumaShell(m) => {
+                self.shuma.inner = shuma_module_shell::update(self.shuma.inner.clone(), m);
                 self.marcar_shuma_dirty();
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
@@ -1882,7 +1753,7 @@ impl KeyboardHandler for LayerApp {
             return;
         }
         // Ctrl+Shift+W repliega el drawer (el shell sigue vivo). Es el único
-        // atajo que el terminal NO traga — Escape, Ctrl+C, etc. van al shell.
+        // atajo que el shell NO ve — Escape, Ctrl+C, etc. van al shell hospedado.
         if self.mods.ctrl
             && self.mods.shift
             && matches!(event.keysym, Keysym::w | Keysym::W)
@@ -1890,11 +1761,14 @@ impl KeyboardHandler for LayerApp {
             self.set_shuma_open(false);
             return;
         }
-        // Todo lo demás se traduce a los bytes que el PTY espera y se reenvía
-        // al terminal real. La vista se repinta cada frame mientras esté abierto.
-        let bytes = self.keysym_to_bytes(&event);
-        if let Some(term) = self.term.as_ref() {
-            term.send_input(bytes);
+        // Todo lo demás se normaliza a un `llimphi_ui::KeyEvent` y se reenvía al
+        // **shell real** hospedado (`Msg::Key`), que decide entre su input de
+        // línea y el PTY/TUI. La vista se repinta cada frame mientras esté abierto.
+        if let Some(ke) = self.keysym_to_keyevent(&event) {
+            self.shuma.inner = shuma_module_shell::update(
+                self.shuma.inner.clone(),
+                shuma_module_shell::Msg::Key(ke),
+            );
         }
         self.marcar_shuma_dirty();
     }

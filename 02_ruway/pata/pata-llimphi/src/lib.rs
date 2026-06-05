@@ -58,24 +58,14 @@ pub enum Msg {
     CavaTick,
     /// Desplegar/replegar el drawer de shuma.
     ShumaToggle,
-    /// Carácter al input de shuma.
-    ShumaChar(char),
-    /// Backspace en el input de shuma.
-    ShumaBackspace,
-    /// Enter en el input de shuma — ejecuta el comando.
-    ShumaSubmit,
-    /// Resultado estructurado del comando (líneas + código) para la card.
-    ShumaResult(shuma::RunResult),
-    /// Re-ejecutar una línea (clic en el comando de una card sin pipe).
-    ShumaRunLine(String),
-    /// Revelar/ocultar la salida capturada (tee) de una etapa intermedia de la
-    /// card `idx`: `(idx_card, idx_etapa)`.
-    ShumaStageToggle(usize, usize),
-    /// Plegar/desplegar la card `idx` del historial.
-    ShumaCollapse(usize),
-    /// Desplazar el historial del drawer `delta` px (rueda / arrastre de barra).
-    ShumaScroll(f32),
-    /// Tick de la animación de despliegue (sólo re-render).
+    /// Un evento del **shell real** hospedado (`shuma-module-shell`): teclas,
+    /// latido que drena la salida, clicks en cards/etapas, scroll, selección del
+    /// cuerpo IDE-text… Todo el contenido del drawer llega por aquí (el `view`
+    /// del módulo lo envuelve con su `lift`). pata sólo lo reenvía a
+    /// `shuma_module_shell::update`.
+    ShumaShell(shuma_module_shell::Msg),
+    /// Tick de la animación de despliegue (sólo re-render). También sirve de
+    /// no-op para absorber clicks sobre el borde del panel del drawer.
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
@@ -660,6 +650,14 @@ impl App for PataApp {
         model.tick_widgets(&ctx);
 
         handle.spawn_periodic(Duration::from_secs(1), || Msg::Tick);
+        // Latido del shell hospedado: drena su salida (`Tick` del módulo) a
+        // ~100 ms —igual que `shuma-shell-llimphi`—, sólo si la config declara un
+        // `shuma_input`. El `update` puro avanza runs y PTY/TUI sin bloquear.
+        if model.shuma.present {
+            handle.spawn_periodic(Duration::from_millis(100), || {
+                Msg::ShumaShell(shuma_module_shell::Msg::Tick)
+            });
+        }
         // Visualizador de audio: re-pinta a ~20 Hz (el cuadro de cava cambia
         // rápido), pero sólo si la config declara un `cava`.
         if model.cava.is_some() {
@@ -702,58 +700,11 @@ impl App for PataApp {
                     model.animar_shuma(destino, handle);
                 }
             }
-            Msg::ShumaChar(c) => {
-                if model.shuma.open {
-                    model.shuma.buffer.push(c);
-                }
+            Msg::ShumaShell(m) => {
+                // Todo el contenido del drawer es el shell real: le reenviamos el
+                // evento y guardamos el `State` devuelto (update puro).
+                model.shuma.inner = shuma_module_shell::update(model.shuma.inner.clone(), m);
             }
-            Msg::ShumaBackspace => {
-                if model.shuma.open {
-                    model.shuma.buffer.pop();
-                }
-            }
-            Msg::ShumaSubmit => {
-                if model.shuma.open {
-                    // El buffer sin prefijo `!`/`$` va a la IA; con prefijo, al
-                    // shell (paridad con el quake de mirada-launcher).
-                    let buffer = std::mem::take(&mut model.shuma.buffer);
-                    match shuma::classify(&buffer) {
-                        shuma::SubmitKind::Empty => {}
-                        shuma::SubmitKind::Shell(cmd) => {
-                            let cmd = cmd.to_string();
-                            model.shuma.push_pending(cmd.clone());
-                            handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&cmd)));
-                        }
-                        shuma::SubmitKind::Ia(prompt) => {
-                            let prompt = prompt.to_string();
-                            model.shuma.push_pending_ia(prompt.clone());
-                            handle.spawn(move || Msg::ShumaResult(shuma::preguntar_ia(&prompt)));
-                        }
-                    }
-                }
-            }
-            Msg::ShumaResult(res) => model.shuma.finish_last(res),
-            Msg::ShumaRunLine(line) => {
-                if model.shuma.open && !line.trim().is_empty() {
-                    model.shuma.push_pending(line.clone());
-                    handle.spawn(move || Msg::ShumaResult(shuma::ejecutar(&line)));
-                }
-            }
-            Msg::ShumaStageToggle(idx, stage) => {
-                if let Some(b) = model.shuma.blocks.get_mut(idx) {
-                    b.expanded_stage = if b.expanded_stage == Some(stage) {
-                        None
-                    } else {
-                        Some(stage)
-                    };
-                }
-            }
-            Msg::ShumaCollapse(idx) => {
-                if let Some(b) = model.shuma.blocks.get_mut(idx) {
-                    b.collapsed = !b.collapsed;
-                }
-            }
-            Msg::ShumaScroll(delta) => model.shuma.scroll_by(delta),
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
             Msg::SwitchWorkspace(n) => sampler::switch_workspace(n),
@@ -961,15 +912,19 @@ impl App for PataApp {
                 }
             }
         }
-        // 2) Con el drawer abierto, el teclado va al input.
+        // 2) Con el drawer abierto, el teclado va al **shell real**. Ctrl+Shift+W
+        // repliega (el shell sigue vivo); todo lo demás —Esc/Ctrl+C/flechas/Tab/
+        // texto— va al módulo, que decide entre su input de línea y el PTY/TUI.
         if model.shuma.open {
-            return match &event.key {
-                Key::Named(NamedKey::Escape) => Some(Msg::ShumaToggle),
-                Key::Named(NamedKey::Backspace) => Some(Msg::ShumaBackspace),
-                Key::Named(NamedKey::Enter) => Some(Msg::ShumaSubmit),
-                Key::Character(s) => s.chars().next().map(Msg::ShumaChar),
-                _ => None,
-            };
+            let m = &event.modifiers;
+            if m.ctrl && m.shift {
+                if let Key::Character(s) = &event.key {
+                    if s.eq_ignore_ascii_case("w") {
+                        return Some(Msg::ShumaToggle);
+                    }
+                }
+            }
+            return Some(Msg::ShumaShell(shuma_module_shell::Msg::Key(event.clone())));
         }
         // 2.5) Con el menú de inicio abierto, el teclado va al buscador.
         if model.menu_open {
