@@ -18,6 +18,17 @@ Lectura previa obligatoria al tocar cualquier cosa de fondo: `README.md`, `PLAN.
 6. **Nombres con carga semántica fuerte se respetan en su idioma** (mayormente quechua/español). No retraducir `khipu`, `rimay`, `pluma`, `wawa`, `mirada`, `nahual`, `chasqui`, `takiy`, `agora`, `arje`, `minga`, `shuma`, `nakui`, `iniy`, `tinkuy`, `chaka`, `pineal`, `puriy`, `supay`, `sandokan`, `dominium`, `cosmos`, `tullpu`, `yupay`, `llimphi`, `akasha`, `unanchay`, `yachay`, `ruway`, `ukupacha`.
 7. **Comentarios y mensajes de commit en español.** Es la convención del repo (ver `git log`).
 
+## Un término nombrado = un artefacto concreto, no un concepto a re-derivar (lección 2026-06-05)
+
+Cuando el usuario nombra algo con una palabra del dominio (**diente**, khipu, mirada, rueda, pluma…), casi siempre es una **referencia dura** a un artefacto que **ya existe** en el repo (un widget, un crate, un patrón) con forma delimitada y, muchas veces, un **uso canónico** en alguna app. No es un concepto abstracto para rediseñar. Protocolo **obligatorio** antes de diseñar, afirmar o codear sobre uno de esos términos:
+
+1. **Localizá el artefacto.** `grep` por el nombre + revisá `02_ruway/llimphi/MANUAL.md` (catálogo de widgets/modules). Si existe, **se usa**; está prohibido fabricar un sustituto paralelo (y peor, bautizarlo con el nombre del original).
+2. **Leé su uso canónico y reproducilo.** Buscá qué app lo usa bien y copiá su composición exacta. No improvises un layout y lo llames como el original.
+3. **No afirmes paridad sin verificar.** Nunca digas "esto es como X / es lo que querés" sin leer la fuente. Mostrá **evidencia** (render headless a PNG, código citado), no aserción.
+4. **Ante una corrección, cambio mínimo dirigido.** No respondas un feedback puntual con un rewrite grande que mete un desvío nuevo — así no se converge.
+
+Caso que originó la regla: **"diente" = el widget `llimphi-widget-dock-rail`** (pestaña que *sobresale* del panel, arrastrable, **representa un panel**). Layout canónico = rail como overlay pegado al borde interno + panel del item activo como pane al costado, exactamente como cosmos (`01_yachay/cosmos/cosmos-app-llimphi/src/chrome.rs`: `dock_rail_overlay` / `dock_panel_for`, y `src/main.rs` `view`). Costó una tarde entera porque se reinterpretó la palabra como concepto, se inventó una lista con rótulo llamada "diente", y se afirmó "así está cosmos" sin leer cosmos — violando además la Regla 3 ("leerlo antes de inventar UX o reimplementar widgets").
+
 ## Layout del workspace
 
 ```
