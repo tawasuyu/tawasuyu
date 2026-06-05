@@ -273,8 +273,11 @@ View::new(style: Style) -> View<Msg>
 | Método | Efecto |
 |---|---|
 | `.fill(Color)` | color de fondo |
+| `.fill_gradient(Gradient)` | relleno con gradiente (autoreado en el cuadrado unidad `[0,1]²`, mapeado al rect). Gana sobre `fill`; `hover_fill` lo overridea en hover |
 | `.hover_fill(Color)` | color al pasar el cursor (habilita hit-test de hover) |
 | `.radius(f64)` | esquinas redondeadas |
+| `.shadow(Shadow)` | drop shadow (vello `draw_blurred_rounded_rect`). `Shadow::soft(alpha,blur)` + `.offset(dx,dy)`/`.spread(s)` |
+| `.border(width, Color)` | stroke sobre el contorno redondeado, inset hacia adentro (border-box) |
 | `.alpha(f32)` | opacidad de todo el subtree `[0,1]` (capa intermedia — no gratis) |
 | `.transform(Affine)` | afín 2D alrededor del centro del rect (estilo CSS `transform-origin:50% 50%`) |
 | `.clip(bool)` | recorta hijos al rect (paint + hit-test) |
@@ -982,7 +985,7 @@ llimphi_ui::run::<X>();
 
 // ── Nodo ────────────────────────────────────────────────────
 View::new(Style{ flex_direction, size, gap, padding, align_items, justify_content, ..default() })
-    .fill(c).hover_fill(c).radius(r).clip(b).alpha(a).transform(xf)
+    .fill(c).fill_gradient(g).hover_fill(c).radius(r).shadow(sh).border(w,c).clip(b).alpha(a).transform(xf)
     .text(s, px, c) | .text_aligned(s,px,c,al) | .text_runs(s,px,c,runs,al)
     .image(img) | .paint_with(|scene,ts,rect|{}) | .gpu_paint_with(|d,q,enc,view,rect,vp|{})
     .on_click(m) | .on_click_at(|lx,ly,w,h|) | .on_right_click(m) | .on_middle_click(m)
