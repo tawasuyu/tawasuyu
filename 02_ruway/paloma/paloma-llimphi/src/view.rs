@@ -5,7 +5,7 @@
 //! remitente, estrella por hilo, barra de acciones en lectura (responder ·
 //! reenviar · destacar · leído · papelera) y estados de selección/hover claros.
 
-use llimphi_theme::Theme;
+use llimphi_theme::{stable_color as avatar_color, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, LengthPercentage, Rect, Size, Style},
     AlignItems, JustifyContent,
@@ -989,27 +989,6 @@ fn initials(name: &str) -> String {
         (Some(a), None) => a.to_uppercase().to_string(),
         _ => "?".to_string(),
     }
-}
-
-/// Color estable de avatar derivado del correo (hash FNV-1a → paleta).
-fn avatar_color(seed: &str) -> Color {
-    const PALETTE: [(u8, u8, u8); 8] = [
-        (94, 129, 172),   // azul acero
-        (163, 109, 156),  // malva
-        (122, 162, 110),  // verde salvia
-        (191, 138, 92),   // terракота
-        (108, 153, 168),  // celeste apagado
-        (170, 120, 120),  // rosa viejo
-        (130, 140, 175),  // lavanda
-        (150, 150, 110),  // oliva
-    ];
-    let mut h: u32 = 2_166_136_261;
-    for b in seed.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(16_777_619);
-    }
-    let (r, g, b) = PALETTE[(h as usize) % PALETTE.len()];
-    Color::from_rgba8(r, g, b, 255)
 }
 
 /// Glifo por rol de buzón.

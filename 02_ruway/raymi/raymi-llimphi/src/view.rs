@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use llimphi_theme::Theme;
+use llimphi_theme::{stable_color, Theme};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, LengthPercentage, Position, Rect, Size, Style},
     style::LengthPercentageAuto,
@@ -1581,27 +1581,6 @@ fn parse_hex(s: &str) -> Option<Color> {
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
     Some(Color::from_rgba8(r, g, b, 255))
-}
-
-/// Color estable derivado de una semilla (hash FNV-1a → paleta sobria).
-fn stable_color(seed: &str) -> Color {
-    const PALETTE: [(u8, u8, u8); 8] = [
-        (94, 129, 172),
-        (163, 109, 156),
-        (122, 162, 110),
-        (191, 138, 92),
-        (108, 153, 168),
-        (170, 120, 120),
-        (130, 140, 175),
-        (150, 150, 110),
-    ];
-    let mut h: u32 = 2_166_136_261;
-    for b in seed.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(16_777_619);
-    }
-    let (r, g, b) = PALETTE[(h as usize) % PALETTE.len()];
-    Color::from_rgba8(r, g, b, 255)
 }
 
 impl Model {

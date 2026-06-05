@@ -21,6 +21,37 @@ pub use llimphi_raster::peniko::Color;
 use std::time::Duration;
 
 // =====================================================================
+// Color estable por semilla — avatares, etiquetas, hash-coloring
+// =====================================================================
+
+/// Paleta sobria de 8 tonos para colorear entidades por hash (avatares de
+/// contactos, etiquetas de calendario…). Tonos apagados que conviven con
+/// cualquier `Theme`. Usada vía [`stable_color`].
+pub const ENTITY_PALETTE: [(u8, u8, u8); 8] = [
+    (94, 129, 172),  // azul acero
+    (163, 109, 156), // malva
+    (122, 162, 110), // verde salvia
+    (191, 138, 92),  // terracota
+    (108, 153, 168), // celeste apagado
+    (170, 120, 120), // rosa viejo
+    (130, 140, 175), // lavanda
+    (150, 150, 110), // oliva
+];
+
+/// Color estable derivado de una semilla: hash FNV-1a del texto → índice en
+/// [`ENTITY_PALETTE`]. La misma semilla da siempre el mismo color, sin estado.
+/// Para avatares (por correo), etiquetas, badges de entidad, etc.
+pub fn stable_color(seed: &str) -> Color {
+    let mut h: u32 = 2_166_136_261;
+    for b in seed.bytes() {
+        h ^= b as u32;
+        h = h.wrapping_mul(16_777_619);
+    }
+    let (r, g, b) = ENTITY_PALETTE[(h as usize) % ENTITY_PALETTE.len()];
+    Color::from_rgba8(r, g, b, 255)
+}
+
+// =====================================================================
 // Tokens transversales — motion, alpha, radius
 // =====================================================================
 //
