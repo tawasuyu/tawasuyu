@@ -66,6 +66,13 @@ pub struct ConfigMultilienzoEditor {
     /// (puede exceder el viewport) y el caller lo envuelve en un contenedor
     /// con `clip` + desplazamiento horizontal para scrollearlo.
     pub ancho_cuerpo: Option<f32>,
+    /// Si `true`, cada sección (átomo) lleva una **banda de color de identidad**
+    /// en su borde izquierdo, con el mismo color en todos los lienzos: la
+    /// sección *i* es del color *i* en todas las columnas. Une las secciones
+    /// por color entre lienzos sin depender de que exista una carta de hebras,
+    /// y dentro de un mismo lienzo las divide (separadores) sin perder la
+    /// unión (color). Las hebras, cuando hay carta, toman ese mismo color.
+    pub colorear_secciones: bool,
 }
 
 impl Default for ConfigMultilienzoEditor {
@@ -76,8 +83,28 @@ impl Default for ConfigMultilienzoEditor {
             grosor_hebra: 2.0,
             grosor_foco: 2.0,
             ancho_cuerpo: None,
+            colorear_secciones: true,
         }
     }
+}
+
+/// Color de identidad de la sección `i` — paleta fija de tonos bien
+/// distinguibles que cicla. El mismo `i` da el mismo color en cualquier
+/// columna, que es lo que "une por color" las secciones entre lienzos.
+pub fn color_seccion(i: usize) -> Color {
+    // 8 tonos saturados pero no estridentes (estilo "category10" recortado).
+    const PALETA: [(u8, u8, u8); 8] = [
+        (94, 184, 124),  // verde
+        (96, 150, 220),  // azul
+        (238, 178, 53),  // ámbar
+        (208, 110, 196), // magenta
+        (96, 200, 200),  // cian
+        (230, 120, 100), // coral
+        (170, 150, 235), // lavanda
+        (190, 200, 90),  // lima
+    ];
+    let (r, g, b) = PALETA[i % PALETA.len()];
+    Color::from_rgba8(r, g, b, 255)
 }
 
 /// Datos pre-calculados de una hebra entre dos editores vivos.
@@ -253,6 +280,14 @@ where
     let overlay_separadores =
         overlay_separadores_atomos::<Msg>(ide, metrics, palette_lienzo);
 
+    // Capas del editor: texto · bandas de color por sección (si está on) ·
+    // separadores. Las bandas van detrás de los separadores.
+    let mut capas: Vec<View<Msg>> = vec![editor];
+    if cfg.colorear_secciones {
+        capas.push(overlay_bandas_seccion::<Msg>(ide, metrics));
+    }
+    capas.push(overlay_separadores);
+
     let contenedor_editor = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -262,7 +297,7 @@ where
         ..Default::default()
     })
     .fill(palette_editor.bg)
-    .children(vec![editor, overlay_separadores]);
+    .children(capas);
 
     // Wrapper con padding accent cuando es el activo — el padding actúa
     // como borde grueso visible (Llimphi todavía no expone `border()`
@@ -420,6 +455,82 @@ fn overlay_separadores_atomos<Msg: Clone + 'static>(
     })
 }
 
+/// Overlay que pinta una **banda de color de identidad** en el borde
+/// izquierdo de cada sección (átomo). La sección `i` lleva `color_seccion(i)`,
+/// el mismo color en todas las columnas → une las secciones por color entre
+/// lienzos. Va sin `on_click` (transparente al hit-test, los clicks llegan al
+/// editor abajo).
+fn overlay_bandas_seccion<Msg: Clone + 'static>(
+    ide: &CuerpoIde,
+    metrics: EditorMetrics,
+) -> View<Msg> {
+    let bandas = precomputar_bandas(ide, metrics);
+    let nodo = View::new(Style {
+        position: llimphi_ui::llimphi_layout::taffy::Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    });
+    if bandas.is_empty() {
+        return nodo;
+    }
+    // Ancho de la banda, en px.
+    const W: f64 = 4.0;
+    nodo.paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::Rect as KRect;
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        for (y0, y1, color) in &bandas {
+            // Clamp al alto visible del editor.
+            let top = (rect.y + y0).max(rect.y) as f64;
+            let bot = (rect.y + y1).min(rect.y + rect.h) as f64;
+            if bot <= top {
+                continue;
+            }
+            let x0 = rect.x as f64;
+            let banda = KRect::new(x0, top, x0 + W, bot);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, *color, None, &banda);
+        }
+    })
+}
+
+/// Devuelve, por cada sección (átomo) del ide, su rango vertical local
+/// `(y_top, y_bot)` y su color de identidad, ajustado al scroll. El rango va
+/// del inicio del átomo hasta justo antes del separador siguiente (o el fin
+/// del buffer para el último).
+fn precomputar_bandas(ide: &CuerpoIde, metrics: EditorMetrics) -> Vec<(f32, f32, Color)> {
+    let ids = &ide.editor_cuerpo.atom_ids;
+    let scroll = ide.state.scroll_offset as f32;
+    let lh = metrics.line_height;
+    let total = ide.state.line_count();
+    let mut out = Vec::with_capacity(ids.len());
+    for (i, id) in ids.iter().enumerate() {
+        let Some((start, _)) = ide.posicion_de_atom(*id) else {
+            continue;
+        };
+        // Fin = inicio del siguiente átomo menos la línea vacía del separador,
+        // o el fin del buffer para el último.
+        let end = if i + 1 < ids.len() {
+            ide.posicion_de_atom(ids[i + 1])
+                .map(|(l, _)| l.saturating_sub(1))
+                .unwrap_or(start + 1)
+        } else {
+            total
+        };
+        let y_top = (start as f32 - scroll) * lh;
+        let y_bot = (end as f32 - scroll) * lh;
+        out.push((y_top, y_bot, color_seccion(i)));
+    }
+    out
+}
+
 /// Devuelve los Y locales (en el rect del editor, sin contar el header
 /// que vive en otro nodo) donde cae el separador entre átomos
 /// consecutivos del ide, ajustados al scroll actual.
@@ -470,31 +581,44 @@ fn precomputar_hebras_editor(
 
     let mut out = Vec::with_capacity(carta.hebras.len());
     for h in &carta.hebras {
-        let (y_izq, y_der) = if let (Some(a), Some(b)) =
+        // Resolver y + identificar cuál átomo cae a la izquierda (su índice
+        // de sección da el color cuando `colorear_secciones`).
+        let (y_izq, y_der, atom_izq) = if let (Some(a), Some(b)) =
             (y_de_atom(izq, h.atom_a), y_de_atom(der, h.atom_b))
         {
-            (a, b)
+            (a, b, h.atom_a)
         } else if let (Some(a), Some(b)) =
             (y_de_atom(izq, h.atom_b), y_de_atom(der, h.atom_a))
         {
-            (a, b)
+            (a, b, h.atom_b)
         } else {
             continue;
         };
 
-        let (color_base, modular_fuerza) = if !h.fresco {
-            (paleta.stale, false)
+        let color = if cfg.colorear_secciones {
+            // Mismo color que la banda de esa sección — une el hilo a las bandas.
+            let idx = izq
+                .editor_cuerpo
+                .atom_ids
+                .iter()
+                .position(|x| *x == atom_izq)
+                .unwrap_or(0);
+            color_seccion(idx)
         } else {
-            match &h.origen {
-                OrigenAlineamiento::Derivado { .. } => (paleta.derivada, false),
-                OrigenAlineamiento::Manual { .. } => (paleta.manual, false),
-                OrigenAlineamiento::Embeddings { .. } => (paleta.embeddings, true),
+            let (color_base, modular_fuerza) = if !h.fresco {
+                (paleta.stale, false)
+            } else {
+                match &h.origen {
+                    OrigenAlineamiento::Derivado { .. } => (paleta.derivada, false),
+                    OrigenAlineamiento::Manual { .. } => (paleta.manual, false),
+                    OrigenAlineamiento::Embeddings { .. } => (paleta.embeddings, true),
+                }
+            };
+            if modular_fuerza {
+                modular_alpha(color_base, h.fuerza)
+            } else {
+                color_base
             }
-        };
-        let color = if modular_fuerza {
-            modular_alpha(color_base, h.fuerza)
-        } else {
-            color_base
         };
 
         out.push(HebraEditor {
