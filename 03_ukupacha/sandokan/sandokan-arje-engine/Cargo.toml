@@ -13,6 +13,5 @@ sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
 arje-bus = { path = "../../arje/runtime/arje-bus" }
 async-trait = { workspace = true }
 ulid = { workspace = true }
-
-[dev-dependencies]
+# WireCard: proyección postcard-friendly de la Card para el wire de RunCard.
 card-core = { path = "../../../shared/card/card-core" }

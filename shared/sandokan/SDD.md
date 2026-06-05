@@ -229,6 +229,9 @@ es la cara de lectura del Engine.
   - **Nota de límites (SDD §6):** el modo **Sistema** lee `/proc` directo a propósito —es el SO entero, una fuente sin dueño en el control plane—. NO viola "una sola fuente de verdad": esa regla aplica a las **unidades gestionadas**, que siguen observándose por el `Engine` (pestaña Unidades). Sistema y Unidades son fuentes distintas que no se pisan.
 
 ### Pendiente
-- Cleanup: deprecar/borrar el socket propio de `sandokan-daemon` (redundante con arje-bus, sin consumidores); soportar `RunCard{card}` arbitraria (hoy `run` mapea a `SpawnCardFromDisk{name}` store-based).
-- `RestartTracker::count` en `LocalEngine` (hoy restarts = 0 fuera de PID 1).
+- **`RunCard{card}` arbitraria** *(en curso)*: el `Engine::run` transmite la `Card` entera por el bus (`BusRequest::RunCard{card: WireCard}`) en vez de pedirla del store por nombre. Modelo de confianza fijado (2026-06-05): **gate por `Capability::Spawn` del caller + caller como requester** — sólo Entes con `Spawn` pueden usarlo y la card se encarna con las caps del caller (no de la Semilla), así que es imposible escalar privilegios. `SpawnCardFromDisk` sigue existiendo para el caso store-based (timers, systemd1-compat).
 - Monitor Fase 4 (lado Wawa): leer censo del executor + balizas del compositor — pieza futura, fuera de `sandokan-monitor-core`.
+
+### Resuelto / reconciliado (2026-06-05)
+- ~~`RestartTracker::count` en `LocalEngine`~~ **✅ ya estaba hecho**: `sandokan-local::telemetry` lee `tracker.count()` (incrementado en `on_failure`); test `telemetry_cuenta_restarts_en_salida_anomala`. La entrada anterior estaba stale.
+- ~~Deprecar/borrar el socket de `sandokan-daemon`~~ **❌ NO procede**: la premisa "redundante, sin consumidores" era falsa. `sandokan-daemon` tiene consumidores vivos — `sandokan::auto()` lo usa como **tier 2** (embedding horizontal sobre `LocalEngine` no-PID1), `sandokan-remote` **reusa su `protocol`** (`DaemonRequest/Response`) para engines por SSH, y `sandokan-app daemon` lo sirve. No es redundante con `arje-bus`: arje-bus frontea a arje-zero (PID 1); el daemon frontea un `LocalEngine` para sesiones shuma/sandboxes/tests. Se mantiene.

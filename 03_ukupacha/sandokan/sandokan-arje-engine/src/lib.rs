@@ -14,7 +14,7 @@
 //!
 //! | Engine | arje-bus | compromiso |
 //! |---|---|---|
-//! | `run` | `SpawnCardFromDisk{name: card.label}` | arje spawnea **del store por nombre**; la Card debe existir en `ARJE_CARDS_DIR`. No se transmite una Card arbitraria por el wire. |
+//! | `run` | `RunCard{card: WireCard}` | la Card viaja **entera por el wire**; no necesita existir en el store. arje la encarna con el bridge como `requester` (exige `Capability::Spawn`, hereda sus caps — sin escalada). |
 //! | `stop` | `KillEnte{SIGTERM\|SIGKILL}` | `grace==0` → SIGKILL; si no, SIGTERM (el bus no escala SIGTERM→SIGKILL). |
 //! | `list` | `ListEntes` | `started_at` no lo da el bus → `now()` aproximado. |
 //! | `status` | `EnteStatus` | sólo `Running`/`Gone`; `Gone` → `NotFound` (arje-zero no retiene exit codes). |
@@ -113,13 +113,12 @@ fn sample_to_frame(card_id: Ulid, at: SystemTime, s: ResourceSample) -> Telemetr
 #[async_trait]
 impl Engine for ArjeEngine {
     async fn run(&self, intent: Intent) -> Result<ExecHandle, EngineError> {
-        // arje spawnea del store por nombre; usamos el label de la Card.
+        // La Card viaja entera por el wire (RunCard): no necesita existir en el
+        // store. arje la encarna con el bridge como requester (exige Spawn).
         let label = intent.card.label.clone();
         let card_id = intent.card_id();
-        match self
-            .call(BusRequest::SpawnCardFromDisk { name: label.clone() })
-            .await?
-        {
+        let card = card_core::WireCard::from(intent.card);
+        match self.call(BusRequest::RunCard { card }).await? {
             BusResponse::Ok => Ok(ExecHandle {
                 card_id,
                 label,
@@ -127,7 +126,7 @@ impl Engine for ArjeEngine {
             }),
             BusResponse::Error(e) => Err(EngineError::Incarnate(e)),
             other => Err(EngineError::Transport(format!(
-                "respuesta inesperada a SpawnCardFromDisk: {other:?}"
+                "respuesta inesperada a RunCard: {other:?}"
             ))),
         }
     }

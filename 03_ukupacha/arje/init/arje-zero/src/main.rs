@@ -642,6 +642,9 @@ fn bus_request_to_audit(
         BusRequest::SpawnCardFromDisk { name } => from.map(|caller| AuditAction::SpawnCardFromDisk {
             caller, name: name.clone(),
         }),
+        BusRequest::RunCard { card } => from.map(|caller| AuditAction::RunCard {
+            caller, label: card.label.clone(),
+        }),
         BusRequest::PowerOff { interactive } => Some(AuditAction::PowerMgmt {
             caller: *from, peer_pid: peer.pid, kind: "PowerOff".into(), interactive: *interactive,
         }),
@@ -993,6 +996,23 @@ mod tests {
                 assert_eq!(name, "foo");
             }
             other => panic!("esperaba SpawnCardFromDisk, fue {other:?}"),
+        }
+    }
+
+    #[test]
+    fn audit_runcard_solo_con_caller_lleva_label() {
+        let caller = Ulid::new();
+        let card = arje_card::WireCard::from(arje_card::EntityCard::new("mi-app"));
+        let req = BusRequest::RunCard { card };
+        // Anónimo no audita (RunCard requiere identidad autenticada).
+        assert!(bus_request_to_audit(&peer(), &None, &req).is_none());
+        let entry = bus_request_to_audit(&peer(), &Some(caller), &req).expect("audita");
+        match entry {
+            AuditAction::RunCard { caller: c, label } => {
+                assert_eq!(c, caller);
+                assert_eq!(label, "mi-app");
+            }
+            other => panic!("esperaba RunCard, fue {other:?}"),
         }
     }
 

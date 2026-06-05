@@ -11,7 +11,7 @@ use super::{EnteGraph, INHIBIT_TTL, SERVER_SEQ_FLAG};
 use arje_bus::{
     BusMessage, BusPayload, BusRequest, BusResponse, EnteInfo, Liveness, PeerCreds, ResourceSample,
 };
-use arje_card::Capability;
+use arje_card::{Capability, EntityCard, WireCard};
 use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, info, warn};
@@ -31,6 +31,7 @@ fn requires_auth(req: &BusRequest) -> bool {
             | BusRequest::UpdateCapabilities { .. }
             | BusRequest::KillEnte { .. }
             | BusRequest::SpawnCardFromDisk { .. }
+            | BusRequest::RunCard { .. }
     )
 }
 
@@ -171,6 +172,11 @@ impl EnteGraph {
                 let resp = self.spawn_card_from_disk(caller, name).await;
                 let _ = reply.send(resp);
             }
+            BusRequest::RunCard { card } => {
+                let caller = from_authenticated.expect("auth-required guarantees Some");
+                let resp = self.run_card(caller, card).await;
+                let _ = reply.send(resp);
+            }
             BusRequest::EnteStatus { target } => {
                 // Observabilidad anónima. Vivo = está en el grafo; arje-zero no
                 // guarda exit codes tras la muerte, así que sólo Running/Gone.
@@ -245,6 +251,35 @@ impl EnteGraph {
         info!(%caller, %name, label = %card.label, "SpawnCardFromDisk");
         let seed_id = self.seed.id;
         match self.authorize_and_spawn(card, seed_id).await {
+            Ok(()) => BusResponse::Ok,
+            Err(e) => BusResponse::Error(format!("spawn: {e}")),
+        }
+    }
+
+    /// Encarna una Card transmitida por el bus (no del store en disco). Es el
+    /// `Engine::run` de sandokan con una Card arbitraria. Modelo de confianza
+    /// (distinto de [`spawn_card_from_disk`](Self::spawn_card_from_disk), que usa
+    /// la Semilla): el caller debe tener `Capability::Spawn` y la Card se encarna
+    /// con el **caller como requester** —hereda sus capacidades, no las de la
+    /// Semilla—, así que es imposible escalar privilegios. El gate va explícito
+    /// aquí para devolver un error claro: `authorize_and_spawn` deniega en
+    /// silencio (`Ok(())`), lo que para una orden remota sería engañoso.
+    async fn run_card(&mut self, caller: Ulid, card: WireCard) -> BusResponse {
+        if !self.holder_has(caller, &Capability::Spawn) {
+            warn!(%caller, "RunCard denegado: caller sin Capability::Spawn");
+            return BusResponse::Error("RunCard: caller carece de Capability::Spawn".into());
+        }
+        if let Some(reasons) = self.inhibit_block_reason() {
+            warn!(%caller, ?reasons, "RunCard denegado por inhibición");
+            return BusResponse::Error(format!("inhibited: {reasons}"));
+        }
+        let card = EntityCard::from(card);
+        if let Err(e) = card.validate() {
+            warn!(%caller, label = %card.label, ?e, "RunCard: card inválida");
+            return BusResponse::Error(format!("card inválida: {e}"));
+        }
+        info!(%caller, label = %card.label, "RunCard (card por el wire, caller como requester)");
+        match self.authorize_and_spawn(card, caller).await {
             Ok(()) => BusResponse::Ok,
             Err(e) => BusResponse::Error(format!("spawn: {e}")),
         }

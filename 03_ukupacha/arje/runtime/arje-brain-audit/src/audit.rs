@@ -40,6 +40,11 @@ pub enum AuditAction {
     /// `caller` es la identidad autenticada del peer; `name` el filename
     /// sin la extensión `.json`.
     SpawnCardFromDisk { caller: Ulid, name: String },
+    /// Un peer del bus pidió encarnar una Card **transmitida por el wire**
+    /// (no del store). `caller` es la identidad autenticada; `label` el de la
+    /// Card. La card se encarna con las capacidades del caller (ver
+    /// `arje_bus::BusRequest::RunCard`).
+    RunCard { caller: Ulid, label: String },
     /// El cerebro declaró una inhibición. Mientras la entrada esté viva
     /// (TTL en el grafo), las acciones escalatorias quedan bloqueadas;
     /// auditar la entrada permite reconstruir por qué.
@@ -64,6 +69,7 @@ pub enum AuditActionKind {
     LoadRulesFile,
     KillEnte,
     SpawnCardFromDisk,
+    RunCard,
     BrainInhibit,
     PowerMgmt,
 }
@@ -79,6 +85,7 @@ impl AuditActionKind {
             Self::LoadRulesFile => "load-rules-file",
             Self::KillEnte => "kill-ente",
             Self::SpawnCardFromDisk => "spawn-card-from-disk",
+            Self::RunCard => "run-card",
             Self::BrainInhibit => "brain-inhibit",
             Self::PowerMgmt => "power-mgmt",
         }
@@ -91,6 +98,7 @@ impl AuditActionKind {
             "load-rules-file" => Some(Self::LoadRulesFile),
             "kill-ente" => Some(Self::KillEnte),
             "spawn-card-from-disk" => Some(Self::SpawnCardFromDisk),
+            "run-card" => Some(Self::RunCard),
             "brain-inhibit" => Some(Self::BrainInhibit),
             "power-mgmt" => Some(Self::PowerMgmt),
             _ => None,
@@ -106,6 +114,7 @@ impl AuditAction {
             Self::LoadRulesFile { .. } => AuditActionKind::LoadRulesFile,
             Self::KillEnte { .. } => AuditActionKind::KillEnte,
             Self::SpawnCardFromDisk { .. } => AuditActionKind::SpawnCardFromDisk,
+            Self::RunCard { .. } => AuditActionKind::RunCard,
             Self::BrainInhibit { .. } => AuditActionKind::BrainInhibit,
             Self::PowerMgmt { .. } => AuditActionKind::PowerMgmt,
         }
@@ -477,6 +486,7 @@ pub fn replay_chain(
             }
             AuditAction::KillEnte { .. }
             | AuditAction::SpawnCardFromDisk { .. }
+            | AuditAction::RunCard { .. }
             | AuditAction::BrainInhibit { .. }
             | AuditAction::PowerMgmt { .. } => {
                 // Acciones del bus son auditoría narrativa, no estado del
@@ -763,6 +773,7 @@ mod tests {
             AuditActionKind::LoadRulesFile,
             AuditActionKind::KillEnte,
             AuditActionKind::SpawnCardFromDisk,
+            AuditActionKind::RunCard,
             AuditActionKind::BrainInhibit,
             AuditActionKind::PowerMgmt,
         ] {

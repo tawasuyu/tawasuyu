@@ -26,5 +26,6 @@ pub use card_core::{
     ResourceLimits,
     SomaSpec,
     Supervision,
+    WireCard,
     CARD_SCHEMA_VERSION,
 };

@@ -107,6 +107,16 @@ pub enum BusRequest {
     /// distribuirla a cada shim de compat.
     SpawnCardFromDisk { name: String },
 
+    /// Encarna una Card **transmitida por el wire** (no del store en disco).
+    /// Es el transporte de `sandokan_core::Engine::run` con una Card arbitraria
+    /// (ver `shared/sandokan/SDD.md` §5). Modelo de confianza (a diferencia de
+    /// `SpawnCardFromDisk`, que spawnea con la Semilla): el caller debe tener
+    /// `Capability::Spawn` y la Card se encarna con el **caller como requester**
+    /// —hereda sus capacidades, no las de la Semilla—, así que no hay escalada
+    /// de privilegios. La Card viaja como [`WireCard`](arje_card::WireCard)
+    /// (proyección postcard-friendly; las `extensions` locales no cruzan).
+    RunCard { card: arje_card::WireCard },
+
     /// Estado de vida de un Ente. arje-zero sólo distingue "vivo" (en el
     /// grafo) de "ido" (muerto/inexistente): no retiene exit codes tras la
     /// muerte. Observabilidad — anónimo, como `ListEntes`. Es el vocabulario
