@@ -8,10 +8,12 @@
 use std::collections::HashMap;
 
 use chaka_ir::{
-    BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, FileMode, InspectOp, Ir, Operand, Perform,
-    PerformControl, PerformTarget, SearchBranch, Stmt, WhenTest,
+    AccessMode, BinOp, CmpOp, Cond, ConditionName, Expr, Figurative, FileMode, FileOrg, InspectOp,
+    Ir, Operand, Perform, PerformControl, PerformTarget, SearchBranch, Stmt, WhenTest,
 };
-use chaka_runtime::{cobol_text_cmp, format_edited, CobFile, Decimal, Num, Rounding, Text};
+use chaka_runtime::{
+    cobol_text_cmp, format_edited, CobFile, Decimal, Num, Organization, Rounding, StartCmp, Text,
+};
 
 use crate::field::{build_fields, Cell};
 
@@ -62,7 +64,14 @@ impl<'a> Machine<'a> {
         let files = ir
             .files
             .iter()
-            .map(|f| (f.name.to_uppercase(), CobFile::new(&f.path)))
+            .map(|f| {
+                let org = match f.organization {
+                    FileOrg::Indexed => Organization::Indexed,
+                    FileOrg::Relative => Organization::Relative,
+                    _ => Organization::LineSequential,
+                };
+                (f.name.to_uppercase(), CobFile::with_org(&f.path, org))
+            })
             .collect();
         Self {
             ir,
@@ -379,6 +388,8 @@ impl<'a> Machine<'a> {
                         match mode {
                             FileMode::Input => cf.open_input(),
                             FileMode::Output => cf.open_output(),
+                            FileMode::IO => cf.open_io(),
+                            FileMode::Extend => cf.open_extend(),
                         }
                     }
                 }
@@ -394,47 +405,60 @@ impl<'a> Machine<'a> {
             }
             Stmt::Read {
                 file,
+                key,
                 at_end,
                 not_at_end,
+                invalid_key,
+                not_invalid_key,
             } => {
-                let line = self
-                    .files
-                    .get_mut(&file.to_uppercase())
-                    .and_then(|cf| cf.read());
-                match line {
-                    Some(text) => {
-                        let record = self
-                            .ir
-                            .files
-                            .iter()
-                            .find(|f| f.name.eq_ignore_ascii_case(file))
-                            .map(|f| f.record.clone());
-                        if let Some(rec) = record {
-                            self.store_text(&Operand::Data(rec), &text);
+                let meta = self.ir.files.iter().find(|f| f.name.eq_ignore_ascii_case(file));
+                let record = meta.map(|m| m.record.clone()).unwrap_or_default();
+                let org = meta.map(|m| m.organization).unwrap_or(FileOrg::LineSequential);
+                let access = meta.map(|m| m.access).unwrap_or(AccessMode::Sequential);
+                let keyed = matches!(org, FileOrg::Indexed | FileOrg::Relative);
+                let random = keyed
+                    && (key.is_some()
+                        || !invalid_key.is_empty()
+                        || !not_invalid_key.is_empty()
+                        || access == AccessMode::Random);
+                if random {
+                    let key_text = self.key_text(file, key.as_deref());
+                    let rec = self
+                        .files
+                        .get_mut(&file.to_uppercase())
+                        .and_then(|cf| cf.read_keyed(&key_text));
+                    match rec {
+                        Some(text) => {
+                            self.store_record(&record, &text);
+                            self.exec_block(not_invalid_key)
                         }
-                        self.exec_block(not_at_end)
+                        None => self.exec_block(invalid_key),
                     }
-                    None => self.exec_block(at_end),
+                } else {
+                    let line = self
+                        .files
+                        .get_mut(&file.to_uppercase())
+                        .and_then(|cf| cf.read());
+                    match line {
+                        Some(text) => {
+                            self.store_record(&record, &text);
+                            self.exec_block(not_at_end)
+                        }
+                        None => self.exec_block(at_end),
+                    }
                 }
             }
-            Stmt::Write { record, from } => {
+            Stmt::Write {
+                record,
+                from,
+                invalid_key,
+                not_invalid_key,
+            } => {
                 if let Some(src) = from {
                     let text = self.eval_text(src);
-                    self.store_text(&Operand::Data(record.clone()), &text);
+                    self.store_record(record, &text);
                 }
-                let file = self
-                    .ir
-                    .files
-                    .iter()
-                    .find(|f| f.record.eq_ignore_ascii_case(record))
-                    .map(|f| f.name.to_uppercase());
-                if let Some(file) = file {
-                    let line = self.eval_text(&Operand::Data(record.clone()));
-                    if let Some(cf) = self.files.get_mut(&file) {
-                        cf.write(&line);
-                    }
-                }
-                Flow::Normal
+                self.exec_keyed_write(record, /* is_rewrite = */ false, invalid_key, not_invalid_key)
             }
             Stmt::Perform(p) => self.exec_perform(p),
             Stmt::Search {
@@ -446,42 +470,65 @@ impl<'a> Machine<'a> {
             Stmt::Rewrite {
                 record,
                 from,
+                invalid_key,
                 not_invalid_key,
-                ..
             } => {
-                // En la v1 el almacenamiento es line-sequential: REWRITE
-                // se comporta como WRITE (sin distinción de `INVALID KEY`).
                 if let Some(src) = from {
                     let text = self.eval_text(src);
-                    self.store_text(&Operand::Data(record.clone()), &text);
+                    self.store_record(record, &text);
                 }
-                let file = self
-                    .ir
-                    .files
-                    .iter()
-                    .find(|f| f.record.eq_ignore_ascii_case(record))
-                    .map(|f| f.name.to_uppercase());
-                if let Some(file) = file {
-                    let line = self.eval_text(&Operand::Data(record.clone()));
-                    if let Some(cf) = self.files.get_mut(&file) {
-                        cf.write(&line);
-                    }
-                }
-                self.exec_block(not_invalid_key)
+                self.exec_keyed_write(record, /* is_rewrite = */ true, invalid_key, not_invalid_key)
             }
             Stmt::Delete {
-                not_invalid_key, ..
+                file,
+                invalid_key,
+                not_invalid_key,
             } => {
-                // No-op: el almacenamiento line-sequential no soporta
-                // borrar un registro. Dispara siempre `NOT INVALID KEY`.
-                self.exec_block(not_invalid_key)
+                let keyed = self.file_is_keyed(file);
+                if keyed {
+                    let key_text = self.key_text(file, None);
+                    let ok = self
+                        .files
+                        .get_mut(&file.to_uppercase())
+                        .is_some_and(|cf| cf.delete_keyed(&key_text));
+                    if ok {
+                        self.exec_block(not_invalid_key)
+                    } else {
+                        self.exec_block(invalid_key)
+                    }
+                } else {
+                    self.exec_block(not_invalid_key)
+                }
             }
             Stmt::Start {
-                not_invalid_key, ..
+                file,
+                key,
+                cmp,
+                invalid_key,
+                not_invalid_key,
             } => {
-                // No-op: el acceso es secuencial; `START` no posiciona
-                // un puntero. Dispara siempre `NOT INVALID KEY`.
-                self.exec_block(not_invalid_key)
+                let keyed = self.file_is_keyed(file);
+                if keyed {
+                    let key_text = self.key_text(file, key.as_deref());
+                    let rt_cmp = match cmp {
+                        chaka_ir::StartCmp::Eq => StartCmp::Eq,
+                        chaka_ir::StartCmp::Gt => StartCmp::Gt,
+                        chaka_ir::StartCmp::Ge => StartCmp::Ge,
+                        chaka_ir::StartCmp::Lt => StartCmp::Lt,
+                        chaka_ir::StartCmp::Le => StartCmp::Le,
+                    };
+                    let ok = self
+                        .files
+                        .get_mut(&file.to_uppercase())
+                        .is_some_and(|cf| cf.start(&key_text, rt_cmp));
+                    if ok {
+                        self.exec_block(not_invalid_key)
+                    } else {
+                        self.exec_block(invalid_key)
+                    }
+                } else {
+                    self.exec_block(not_invalid_key)
+                }
             }
             Stmt::Sort {
                 using, giving, ..
@@ -822,6 +869,128 @@ impl<'a> Machine<'a> {
     }
 
     /// Almacena un texto en un destino, conformándolo a su tipo.
+    // ── Registros de fichero (elementales o de grupo) ─────────────
+
+    /// El texto completo de un registro: el campo si es elemental, o la
+    /// concatenación del display de sus miembros si es un grupo.
+    fn record_text(&self, record: &str) -> String {
+        match self.ir.model.group(record) {
+            Some(g) => g
+                .members
+                .iter()
+                .map(|m| self.eval_text(&Operand::Data(m.clone())))
+                .collect(),
+            None => self.eval_text(&Operand::Data(record.to_string())),
+        }
+    }
+
+    /// Distribuye `text` en un registro: lo asigna entero si es
+    /// elemental, o lo trocea por el ancho de cada miembro si es un
+    /// grupo (un registro de longitud fija).
+    fn store_record(&mut self, record: &str, text: &str) {
+        let Some(members) = self.ir.model.group(record).map(|g| g.members.clone()) else {
+            self.store_text(&Operand::Data(record.to_string()), text);
+            return;
+        };
+        let chars: Vec<char> = text.chars().collect();
+        let mut off = 0usize;
+        for m in &members {
+            let w = self.field_width(m);
+            let slice: String = chars
+                .get(off..off + w)
+                .map(|s| s.iter().collect())
+                .unwrap_or_else(|| {
+                    chars
+                        .get(off..)
+                        .map(|s| s.iter().collect())
+                        .unwrap_or_default()
+                });
+            self.store_text(&Operand::Data(m.clone()), &slice);
+            off += w;
+        }
+    }
+
+    /// El ancho en caracteres de un campo elemental (su tamaño en un
+    /// registro de longitud fija).
+    fn field_width(&self, name: &str) -> usize {
+        match self.ir.model.field(name).map(|f| f.kind) {
+            Some(chaka_ir::FieldKind::Text { len }) => len,
+            Some(chaka_ir::FieldKind::Num { int, frac, .. }) => int as usize + frac as usize,
+            None => 0,
+        }
+    }
+
+    /// El texto de la clave de un fichero: el campo `KEY` explícito, o la
+    /// `RECORD`/`RELATIVE KEY` por defecto según su organización.
+    fn key_text(&self, file: &str, explicit: Option<&str>) -> String {
+        let key_name = explicit.map(|s| s.to_string()).or_else(|| {
+            self.ir
+                .files
+                .iter()
+                .find(|f| f.name.eq_ignore_ascii_case(file))
+                .and_then(|e| match e.organization {
+                    FileOrg::Indexed => e.record_key.clone(),
+                    FileOrg::Relative => e.relative_key.clone(),
+                    _ => None,
+                })
+        });
+        match key_name {
+            Some(n) => self.eval_text(&Operand::Data(n)),
+            None => String::new(),
+        }
+    }
+
+    /// ¿Es un fichero por clave (indexado o relativo)?
+    fn file_is_keyed(&self, file: &str) -> bool {
+        self.ir
+            .files
+            .iter()
+            .find(|f| f.name.eq_ignore_ascii_case(file))
+            .is_some_and(|f| matches!(f.organization, FileOrg::Indexed | FileOrg::Relative))
+    }
+
+    /// Cuerpo común de `WRITE`/`REWRITE`: escribe el registro en su
+    /// fichero. Sobre un fichero por clave usa `write_keyed`/`rewrite_keyed`
+    /// (cuyo `bool` decide la rama `INVALID KEY`); sobre line-sequential,
+    /// un `write` simple seguido de `NOT INVALID KEY`.
+    fn exec_keyed_write(
+        &mut self,
+        record: &str,
+        is_rewrite: bool,
+        invalid_key: &'a [Stmt],
+        not_invalid_key: &'a [Stmt],
+    ) -> Flow {
+        let (file_name, keyed) =
+            match self.ir.files.iter().find(|f| f.record.eq_ignore_ascii_case(record)) {
+                Some(m) => (
+                    m.name.to_uppercase(),
+                    matches!(m.organization, FileOrg::Indexed | FileOrg::Relative),
+                ),
+                None => return Flow::Normal,
+            };
+        let line = self.record_text(record);
+        if keyed {
+            let key_text = self.key_text(&file_name, None);
+            let ok = self.files.get_mut(&file_name).is_some_and(|cf| {
+                if is_rewrite {
+                    cf.rewrite_keyed(&key_text, &line)
+                } else {
+                    cf.write_keyed(&key_text, &line)
+                }
+            });
+            if ok {
+                self.exec_block(not_invalid_key)
+            } else {
+                self.exec_block(invalid_key)
+            }
+        } else {
+            if let Some(cf) = self.files.get_mut(&file_name) {
+                cf.write(&line);
+            }
+            self.exec_block(not_invalid_key)
+        }
+    }
+
     fn store_text(&mut self, target: &Operand, text: &str) {
         let Some((key, idx)) = self.resolve(target) else {
             return;

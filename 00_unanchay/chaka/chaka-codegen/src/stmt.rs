@@ -107,10 +107,27 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Close { files } => emit_close(em, sym, files),
         Stmt::Read {
             file,
+            key,
             at_end,
             not_at_end,
-        } => emit_read(em, sym, file, at_end, not_at_end),
-        Stmt::Write { record, from } => emit_write(em, sym, record, from.as_ref()),
+            invalid_key,
+            not_invalid_key,
+        } => emit_read(
+            em,
+            sym,
+            file,
+            key.as_deref(),
+            at_end,
+            not_at_end,
+            invalid_key,
+            not_invalid_key,
+        ),
+        Stmt::Write {
+            record,
+            from,
+            invalid_key,
+            not_invalid_key,
+        } => emit_write(em, sym, record, from.as_ref(), invalid_key, not_invalid_key),
         Stmt::Perform(p) => emit_perform(em, sym, p),
         Stmt::Search {
             table,
@@ -123,30 +140,21 @@ pub(crate) fn emit_stmt(em: &mut Emitter, sym: &Symbols, stmt: &Stmt) {
         Stmt::Rewrite {
             record,
             from,
+            invalid_key,
             not_invalid_key,
-            ..
-        } => {
-            emit_write(em, sym, record, from.as_ref());
-            if !not_invalid_key.is_empty() {
-                emit_block(em, sym, not_invalid_key);
-            }
-        }
+        } => emit_rewrite(em, sym, record, from.as_ref(), invalid_key, not_invalid_key),
         Stmt::Delete {
-            not_invalid_key, ..
-        } => {
-            em.line("// chaka: DELETE — no-op en line-sequential");
-            if !not_invalid_key.is_empty() {
-                emit_block(em, sym, not_invalid_key);
-            }
-        }
+            file,
+            invalid_key,
+            not_invalid_key,
+        } => emit_delete(em, sym, file, invalid_key, not_invalid_key),
         Stmt::Start {
-            not_invalid_key, ..
-        } => {
-            em.line("// chaka: START — no-op (acceso secuencial)");
-            if !not_invalid_key.is_empty() {
-                emit_block(em, sym, not_invalid_key);
-            }
-        }
+            file,
+            key,
+            cmp,
+            invalid_key,
+            not_invalid_key,
+        } => emit_start(em, sym, file, key.as_deref(), *cmp, invalid_key, not_invalid_key),
         Stmt::Call {
             program,
             on_overflow,
@@ -628,6 +636,8 @@ fn emit_open(em: &mut Emitter, sym: &Symbols, mode: FileMode, files: &[String]) 
     let method = match mode {
         FileMode::Input => "open_input",
         FileMode::Output => "open_output",
+        FileMode::IO => "open_io",
+        FileMode::Extend => "open_extend",
     };
     for f in files {
         match sym.file(f) {
@@ -649,11 +659,52 @@ fn emit_close(em: &mut Emitter, sym: &Symbols, files: &[String]) {
 
 /// `READ file [AT END ...] [NOT AT END ...]` — lee la línea siguiente
 /// en el registro del fichero.
-fn emit_read(em: &mut Emitter, sym: &Symbols, file: &str, at_end: &[Stmt], not_at_end: &[Stmt]) {
+/// `READ file ...`. Sobre un fichero por clave con ramas `INVALID KEY`,
+/// clave explícita o acceso aleatorio, es una lectura directa
+/// (`read_keyed`); en cualquier otro caso es secuencial (`read`).
+#[allow(clippy::too_many_arguments)]
+fn emit_read(
+    em: &mut Emitter,
+    sym: &Symbols,
+    file: &str,
+    key: Option<&str>,
+    at_end: &[Stmt],
+    not_at_end: &[Stmt],
+    invalid_key: &[Stmt],
+    not_invalid_key: &[Stmt],
+) {
     let Some(fs) = sym.file(file) else {
         em.line("// chaka: READ de fichero no resuelto");
         return;
     };
+    let random = fs.is_keyed()
+        && (key.is_some()
+            || !invalid_key.is_empty()
+            || !not_invalid_key.is_empty()
+            || fs.access == chaka_ir::AccessMode::Random);
+    if random {
+        let key_expr = key_value(sym, fs, key).unwrap_or_else(|| "String::new()".to_string());
+        em.line(&format!(
+            "match self.{}.read_keyed(&{key_expr}) {{",
+            fs.ident
+        ));
+        em.indent();
+        em.line("Some(__line) => {");
+        em.indent();
+        emit_store_record(em, sym, &fs.record, "__line.as_str()");
+        emit_block(em, sym, not_invalid_key);
+        em.dedent();
+        em.line("}");
+        em.line("None => {");
+        em.indent();
+        emit_block(em, sym, invalid_key);
+        em.dedent();
+        em.line("}");
+        em.dedent();
+        em.line("}");
+        return;
+    }
+    // Lectura secuencial (line-sequential, o `READ NEXT` de un keyed).
     em.line(&format!("match self.{}.read() {{", fs.ident));
     em.indent();
     em.line("Some(__line) => {");
@@ -671,16 +722,170 @@ fn emit_read(em: &mut Emitter, sym: &Symbols, file: &str, at_end: &[Stmt], not_a
     em.line("}");
 }
 
-/// `WRITE record [FROM from]` — escribe el registro en su fichero.
-fn emit_write(em: &mut Emitter, sym: &Symbols, record: &str, from: Option<&Operand>) {
+/// `WRITE record [FROM from] [INVALID KEY ...]`. Sobre un fichero por
+/// clave usa `write_keyed` (que devuelve `false` ante clave duplicada,
+/// disparando `INVALID KEY`); sobre line-sequential, un `write` simple.
+fn emit_write(
+    em: &mut Emitter,
+    sym: &Symbols,
+    record: &str,
+    from: Option<&Operand>,
+    invalid_key: &[Stmt],
+    not_invalid_key: &[Stmt],
+) {
     if let Some(src) = from {
         let value = operand_str(sym, src);
         emit_store_record(em, sym, record, &value);
     }
-    match (sym.file_of_record(record), record_value(sym, record)) {
-        (Some(fs), Some(val)) => em.line(&format!("self.{}.write(&{val});", fs.ident)),
-        _ => em.line("// chaka: WRITE de registro no resuelto"),
+    let (Some(fs), Some(val)) = (sym.file_of_record(record), record_value(sym, record)) else {
+        em.line("// chaka: WRITE de registro no resuelto");
+        return;
+    };
+    if fs.is_keyed() {
+        let key_expr = key_value(sym, fs, None).unwrap_or_else(|| "String::new()".to_string());
+        emit_keyed_result(
+            em,
+            sym,
+            &format!("self.{}.write_keyed(&{key_expr}, &{val})", fs.ident),
+            invalid_key,
+            not_invalid_key,
+        );
+    } else {
+        em.line(&format!("self.{}.write(&{val});", fs.ident));
+        emit_block(em, sym, not_invalid_key);
     }
+}
+
+/// `REWRITE record [FROM from] [INVALID KEY ...]`. Por clave usa
+/// `rewrite_keyed` (`false` si la clave no existe); en line-sequential
+/// se comporta como un `WRITE` y dispara siempre `NOT INVALID KEY`.
+fn emit_rewrite(
+    em: &mut Emitter,
+    sym: &Symbols,
+    record: &str,
+    from: Option<&Operand>,
+    invalid_key: &[Stmt],
+    not_invalid_key: &[Stmt],
+) {
+    if let Some(src) = from {
+        let value = operand_str(sym, src);
+        emit_store_record(em, sym, record, &value);
+    }
+    let (Some(fs), Some(val)) = (sym.file_of_record(record), record_value(sym, record)) else {
+        em.line("// chaka: REWRITE de registro no resuelto");
+        return;
+    };
+    if fs.is_keyed() {
+        let key_expr = key_value(sym, fs, None).unwrap_or_else(|| "String::new()".to_string());
+        emit_keyed_result(
+            em,
+            sym,
+            &format!("self.{}.rewrite_keyed(&{key_expr}, &{val})", fs.ident),
+            invalid_key,
+            not_invalid_key,
+        );
+    } else {
+        em.line(&format!("self.{}.write(&{val});", fs.ident));
+        emit_block(em, sym, not_invalid_key);
+    }
+}
+
+/// `DELETE file [INVALID KEY ...]`. Por clave usa `delete_keyed`
+/// (`false` si la clave no existe); en line-sequential es un no-op que
+/// dispara `NOT INVALID KEY`.
+fn emit_delete(
+    em: &mut Emitter,
+    sym: &Symbols,
+    file: &str,
+    invalid_key: &[Stmt],
+    not_invalid_key: &[Stmt],
+) {
+    let Some(fs) = sym.file(file) else {
+        em.line("// chaka: DELETE de fichero no resuelto");
+        return;
+    };
+    if fs.is_keyed() {
+        let key_expr = key_value(sym, fs, None).unwrap_or_else(|| "String::new()".to_string());
+        emit_keyed_result(
+            em,
+            sym,
+            &format!("self.{}.delete_keyed(&{key_expr})", fs.ident),
+            invalid_key,
+            not_invalid_key,
+        );
+    } else {
+        em.line("// chaka: DELETE — no-op en line-sequential");
+        emit_block(em, sym, not_invalid_key);
+    }
+}
+
+/// `START file [KEY op k] [INVALID KEY ...]`. Por clave posiciona el
+/// cursor con `start` (`false` si no hay registro que satisfaga); en
+/// line-sequential es un no-op que dispara `NOT INVALID KEY`.
+fn emit_start(
+    em: &mut Emitter,
+    sym: &Symbols,
+    file: &str,
+    key: Option<&str>,
+    cmp: chaka_ir::StartCmp,
+    invalid_key: &[Stmt],
+    not_invalid_key: &[Stmt],
+) {
+    let Some(fs) = sym.file(file) else {
+        em.line("// chaka: START de fichero no resuelto");
+        return;
+    };
+    if fs.is_keyed() {
+        let key_expr = key_value(sym, fs, key).unwrap_or_else(|| "String::new()".to_string());
+        let cmp_variant = match cmp {
+            chaka_ir::StartCmp::Eq => "Eq",
+            chaka_ir::StartCmp::Gt => "Gt",
+            chaka_ir::StartCmp::Ge => "Ge",
+            chaka_ir::StartCmp::Lt => "Lt",
+            chaka_ir::StartCmp::Le => "Le",
+        };
+        emit_keyed_result(
+            em,
+            sym,
+            &format!(
+                "self.{}.start(&{key_expr}, StartCmp::{cmp_variant})",
+                fs.ident
+            ),
+            invalid_key,
+            not_invalid_key,
+        );
+    } else {
+        em.line("// chaka: START — no-op (acceso secuencial)");
+        emit_block(em, sym, not_invalid_key);
+    }
+}
+
+/// Emite `if <cond> { not_invalid_key } else { invalid_key }` para una
+/// operación por clave que devuelve `bool` (true = éxito).
+fn emit_keyed_result(
+    em: &mut Emitter,
+    sym: &Symbols,
+    cond: &str,
+    invalid_key: &[Stmt],
+    not_invalid_key: &[Stmt],
+) {
+    em.line(&format!("if {cond} {{"));
+    em.indent();
+    emit_block(em, sym, not_invalid_key);
+    em.dedent();
+    em.line("} else {");
+    em.indent();
+    emit_block(em, sym, invalid_key);
+    em.dedent();
+    em.line("}");
+}
+
+/// La expresión Rust (`String`) con el valor de la clave de un fichero:
+/// el `display()` del campo `KEY` explícito, o de la `RECORD`/`RELATIVE
+/// KEY` por defecto. `None` si no resuelve a ningún campo.
+fn key_value(sym: &Symbols, fs: &crate::sym::FileSym, explicit: Option<&str>) -> Option<String> {
+    let name = explicit.or_else(|| fs.key_name())?;
+    sym.lookup(name).map(|f| format!("self.{}.display()", f.ident))
 }
 
 /// El ancho en caracteres del registro que ocupa un campo elemental —

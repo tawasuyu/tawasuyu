@@ -132,11 +132,17 @@ fn emit_impl(em: &mut Emitter, sym: &Symbols, ir: &Ir) {
         em.line(&format!("{}: {},", f.ident, field_init(f)));
     }
     for fs in &sym.files {
-        em.line(&format!(
-            "{}: CobFile::new({}),",
-            fs.ident,
-            rust_str(&fs.path)
-        ));
+        let path = rust_str(&fs.path);
+        let ctor = match fs.org {
+            chaka_ir::FileOrg::Indexed => {
+                format!("CobFile::with_org({path}, Organization::Indexed)")
+            }
+            chaka_ir::FileOrg::Relative => {
+                format!("CobFile::with_org({path}, Organization::Relative)")
+            }
+            _ => format!("CobFile::new({path})"),
+        };
+        em.line(&format!("{}: {ctor},", fs.ident));
     }
     em.dedent();
     em.line("}");

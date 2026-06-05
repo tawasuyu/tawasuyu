@@ -6,8 +6,8 @@
 use chaka_parser::TokenKind;
 
 use crate::ast::{
-    FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, SearchBranch, Stmt,
-    WhenBranch, WhenTest,
+    FileMode, InspectOp, Operand, Perform, PerformControl, PerformTarget, SearchBranch, StartCmp,
+    Stmt, WhenBranch, WhenTest,
 };
 use crate::cursor::{parse_operand, Cursor};
 use crate::expr::{parse_cond, parse_expr};
@@ -459,11 +459,14 @@ fn parse_initialize(c: &mut Cursor) -> Stmt {
 
 fn parse_open(c: &mut Cursor) -> Stmt {
     c.bump(); // OPEN
-    let mode = if c.eat_word("OUTPUT") || c.eat_word("EXTEND") {
+    let mode = if c.eat_word("OUTPUT") {
         FileMode::Output
+    } else if c.eat_word("EXTEND") {
+        FileMode::Extend
+    } else if c.eat_word("I-O") {
+        FileMode::IO
     } else {
         c.eat_word("INPUT");
-        c.eat_word("I-O");
         FileMode::Input
     };
     let mut files = Vec::new();
@@ -495,16 +498,33 @@ fn parse_read(c: &mut Cursor) -> Stmt {
     if c.eat_word("INTO") {
         let _ = parse_operand(c); // `READ ... INTO`: la v1 lo ignora
     }
+    // `READ ... KEY [IS] k`: lectura aleatoria por una clave explícita.
+    let mut key = None;
+    if c.eat_word("KEY") {
+        c.eat_word("IS");
+        key = parse_one_name(c);
+    }
     let mut at_end = Vec::new();
     let mut not_at_end = Vec::new();
+    let mut invalid_key = Vec::new();
+    let mut not_invalid_key = Vec::new();
     loop {
         if c.eat_word("AT") {
             c.eat_word("END");
-            at_end = parse_statements(c, &["NOT", "END-READ"]);
+            at_end = parse_statements(c, &["NOT", "INVALID", "END-READ"]);
+        } else if c.eat_word("INVALID") {
+            c.eat_word("KEY");
+            invalid_key = parse_statements(c, &["NOT", "AT", "END-READ"]);
         } else if c.eat_word("NOT") {
-            c.eat_word("AT");
-            c.eat_word("END");
-            not_at_end = parse_statements(c, &["END-READ"]);
+            // `NOT AT END` o `NOT INVALID KEY`.
+            if c.eat_word("AT") {
+                c.eat_word("END");
+                not_at_end = parse_statements(c, &["INVALID", "END-READ"]);
+            } else {
+                c.eat_word("INVALID");
+                c.eat_word("KEY");
+                not_invalid_key = parse_statements(c, &["AT", "END-READ"]);
+            }
         } else {
             break;
         }
@@ -512,8 +532,11 @@ fn parse_read(c: &mut Cursor) -> Stmt {
     c.eat_word("END-READ");
     Stmt::Read {
         file,
+        key,
         at_end,
         not_at_end,
+        invalid_key,
+        not_invalid_key,
     }
 }
 
@@ -525,9 +548,21 @@ fn parse_write(c: &mut Cursor) -> Stmt {
     } else {
         None
     };
-    skip_to_stmt_boundary(c); // p. ej. `AFTER ADVANCING`
-    c.eat_word("END-WRITE");
-    Stmt::Write { record, from }
+    // `AFTER/BEFORE ADVANCING ...`: la v1 lo descarta, pero sin tragarse
+    // las ramas `INVALID KEY`.
+    while let Some(w) = c.peek_word() {
+        if matches!(w.as_str(), "INVALID" | "NOT" | "END-WRITE") || is_boundary(&w) {
+            break;
+        }
+        c.bump();
+    }
+    let (invalid_key, not_invalid_key) = parse_invalid_key_branches(c, "END-WRITE");
+    Stmt::Write {
+        record,
+        from,
+        invalid_key,
+        not_invalid_key,
+    }
 }
 
 fn parse_inspect(c: &mut Cursor) -> Stmt {
@@ -730,27 +765,71 @@ fn parse_delete(c: &mut Cursor) -> Stmt {
 fn parse_start(c: &mut Cursor) -> Stmt {
     c.bump(); // START
     let file = parse_one_name(c).unwrap_or_default();
-    // Cláusula `KEY {= | > | >= | < | <=} k`: la v1 la descarta.
+    // Cláusula `KEY [IS] {= | > | >= | < | <= | GREATER | LESS...} k`.
+    let mut key = None;
+    let mut cmp = StartCmp::Eq;
     if c.eat_word("KEY") {
-        // operador opcional
-        for sym in &["=", ">=", "<=", ">", "<"] {
-            if c.eat_sym(sym) {
-                break;
-            }
-        }
-        // nombre de campo opcional
-        if let Some(w) = c.peek_word() {
-            if !is_boundary(&w) && !matches!(w.as_str(), "INVALID" | "NOT" | "END-START") {
-                c.bump();
-            }
-        }
+        c.eat_word("IS");
+        cmp = parse_start_cmp(c);
+        key = parse_one_name(c);
     }
     let (invalid_key, not_invalid_key) = parse_invalid_key_branches(c, "END-START");
     Stmt::Start {
         file,
+        key,
+        cmp,
         invalid_key,
         not_invalid_key,
     }
+}
+
+/// Parsea el operador de comparación de un `START`, en forma de símbolo
+/// (`>=`) o de palabras (`GREATER THAN OR EQUAL TO`). Sin operador, el
+/// default de COBOL es `=`.
+fn parse_start_cmp(c: &mut Cursor) -> StartCmp {
+    // Forma simbólica.
+    for (sym, op) in [
+        (">=", StartCmp::Ge),
+        ("<=", StartCmp::Le),
+        (">", StartCmp::Gt),
+        ("<", StartCmp::Lt),
+        ("=", StartCmp::Eq),
+    ] {
+        if c.eat_sym(sym) {
+            return op;
+        }
+    }
+    // Forma con palabras: `[NOT] GREATER/LESS [THAN] [OR EQUAL] [TO]` y
+    // `EQUAL [TO]`.
+    let negated = c.eat_word("NOT");
+    if c.eat_word("GREATER") {
+        c.eat_word("THAN");
+        let or_equal = c.eat_word("OR") && c.eat_word("EQUAL");
+        c.eat_word("TO");
+        return match (negated, or_equal) {
+            (false, false) => StartCmp::Gt,
+            (false, true) => StartCmp::Ge,
+            // `NOT GREATER` ≡ `<=`; `NOT GREATER OR EQUAL` ≡ `<`.
+            (true, false) => StartCmp::Le,
+            (true, true) => StartCmp::Lt,
+        };
+    }
+    if c.eat_word("LESS") {
+        c.eat_word("THAN");
+        let or_equal = c.eat_word("OR") && c.eat_word("EQUAL");
+        c.eat_word("TO");
+        return match (negated, or_equal) {
+            (false, false) => StartCmp::Lt,
+            (false, true) => StartCmp::Le,
+            (true, false) => StartCmp::Ge,
+            (true, true) => StartCmp::Gt,
+        };
+    }
+    if c.eat_word("EQUAL") {
+        c.eat_word("TO");
+        return StartCmp::Eq;
+    }
+    StartCmp::Eq
 }
 
 fn parse_sort_or_merge(c: &mut Cursor, is_merge: bool) -> Stmt {

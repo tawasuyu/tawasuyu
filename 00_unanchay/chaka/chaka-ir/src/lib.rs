@@ -507,6 +507,53 @@ mod tests {
     }
 
     #[test]
+    fn keyed_io_statements_parse() {
+        let b = body(
+            "OPEN I-O ARCH \
+             READ ARCH KEY IS CLI-ID \
+                 INVALID KEY DISPLAY 'NO' \
+                 NOT INVALID KEY DISPLAY 'SI' \
+             END-READ \
+             WRITE REG \
+                 INVALID KEY DISPLAY 'DUP' \
+             END-WRITE \
+             START ARCH KEY >= CLI-ID \
+                 INVALID KEY DISPLAY 'VACIO' \
+             END-START.",
+        );
+        assert!(matches!(
+            b[0],
+            Stmt::Open {
+                mode: FileMode::IO,
+                ..
+            }
+        ));
+        // READ aleatoria: clave explícita + ramas INVALID KEY.
+        assert!(matches!(
+            &b[1],
+            Stmt::Read { key, invalid_key, not_invalid_key, .. }
+                if key.as_deref() == Some("CLI-ID")
+                    && invalid_key.len() == 1
+                    && not_invalid_key.len() == 1
+        ));
+        assert!(matches!(
+            &b[2],
+            Stmt::Write { invalid_key, .. } if invalid_key.len() == 1
+        ));
+        assert!(matches!(
+            &b[3],
+            Stmt::Start { key, cmp: StartCmp::Ge, invalid_key, .. }
+                if key.as_deref() == Some("CLI-ID") && invalid_key.len() == 1
+        ));
+    }
+
+    #[test]
+    fn start_word_form_comparison_parses() {
+        let b = body("START ARCH KEY GREATER THAN OR EQUAL TO CLI-ID END-START.");
+        assert!(matches!(&b[0], Stmt::Start { cmp: StartCmp::Ge, .. }));
+    }
+
+    #[test]
     fn several_statements_in_one_sentence() {
         let b = body("MOVE 1 TO X DISPLAY X STOP RUN.");
         assert_eq!(b.len(), 3);

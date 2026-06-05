@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use chaka_ir::{ConditionName, Ir};
+use chaka_ir::{AccessMode, ConditionName, FileOrg, Ir};
 
 /// El tipo de campo lo aporta `chaka-ir`; se reexporta para que el
 /// resto del crate lo nombre como `crate::sym::FieldKind`.
@@ -36,6 +36,31 @@ pub(crate) struct FileSym {
     pub path: String,
     /// Nombre COBOL del registro asociado (su `FD`).
     pub record: String,
+    /// Organización física (`LINE SEQUENTIAL`/`INDEXED`/`RELATIVE`).
+    pub org: FileOrg,
+    /// Modo de acceso declarado.
+    pub access: AccessMode,
+    /// Campo `RECORD KEY` (indexado), en mayúsculas.
+    pub record_key: Option<String>,
+    /// Campo `RELATIVE KEY` (relativo), en mayúsculas.
+    pub relative_key: Option<String>,
+}
+
+impl FileSym {
+    /// ¿Es un fichero por clave (indexado o relativo)?
+    pub(crate) fn is_keyed(&self) -> bool {
+        !matches!(self.org, FileOrg::LineSequential | FileOrg::Sequential)
+    }
+
+    /// El nombre COBOL del campo clave por defecto del fichero: la
+    /// `RECORD KEY` si es indexado, la `RELATIVE KEY` si es relativo.
+    pub(crate) fn key_name(&self) -> Option<&str> {
+        match self.org {
+            FileOrg::Indexed => self.record_key.as_deref(),
+            FileOrg::Relative => self.relative_key.as_deref(),
+            _ => None,
+        }
+    }
 }
 
 /// Los campos del programa, sus nombres de condición, sus grupos, sus
@@ -104,6 +129,10 @@ impl Symbols {
                 ident: format!("file_{}", sanitize_ident(&f.name)),
                 path: f.path.clone(),
                 record: f.record.clone(),
+                org: f.organization,
+                access: f.access,
+                record_key: f.record_key.clone(),
+                relative_key: f.relative_key.clone(),
             })
             .collect();
         Self {

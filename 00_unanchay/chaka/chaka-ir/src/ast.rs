@@ -1,7 +1,7 @@
 //! Los tipos del IR: el programa COBOL con su PROCEDURE division ya
 //! parseada a instrucciones tipadas.
 
-pub use chaka_parser::{DataItem, FileEntry, Token};
+pub use chaka_parser::{AccessMode, DataItem, FileEntry, FileOrg, Token};
 
 /// Un programa COBOL en representación intermedia.
 #[derive(Debug, Clone, PartialEq, Default, serde::Serialize, serde::Deserialize)]
@@ -203,20 +203,34 @@ pub enum Stmt {
         by: Operand,
         up: bool,
     },
-    /// `OPEN {INPUT|OUTPUT} files...`
+    /// `OPEN {INPUT|OUTPUT|I-O|EXTEND} files...`
     Open { mode: FileMode, files: Vec<String> },
     /// `CLOSE files...`
     Close { files: Vec<String> },
-    /// `READ file [AT END at_end] [NOT AT END not_at_end] [END-READ]`
+    /// `READ file [KEY IS key] [AT END at_end] [NOT AT END not_at_end]
+    /// [INVALID KEY invalid_key] [NOT INVALID KEY not_invalid_key]
+    /// [END-READ]`. Una lectura **secuencial** usa las ramas
+    /// `AT END`/`NOT AT END`; una lectura **aleatoria** (por clave) usa
+    /// `INVALID KEY`/`NOT INVALID KEY`. El codegen elige una u otra según
+    /// la organización/acceso del fichero y la forma presente.
     Read {
         file: String,
+        /// `READ ... KEY IS k`: el campo clave a usar en la lectura
+        /// aleatoria. `None` = la `RECORD KEY` por defecto del fichero.
+        key: Option<String>,
         at_end: Vec<Stmt>,
         not_at_end: Vec<Stmt>,
+        invalid_key: Vec<Stmt>,
+        not_invalid_key: Vec<Stmt>,
     },
-    /// `WRITE record [FROM from]`
+    /// `WRITE record [FROM from] [INVALID KEY ...] [NOT INVALID KEY ...]
+    /// [END-WRITE]`. Sobre un fichero indexado, `INVALID KEY` se dispara
+    /// si la clave ya existe (registro duplicado).
     Write {
         record: String,
         from: Option<Operand>,
+        invalid_key: Vec<Stmt>,
+        not_invalid_key: Vec<Stmt>,
     },
     /// `REWRITE record [FROM from] [INVALID KEY ...] [NOT INVALID KEY ...]
     /// [END-REWRITE]`. La v1 reescribe sobre un fichero line-sequential
@@ -237,11 +251,17 @@ pub enum Stmt {
         not_invalid_key: Vec<Stmt>,
     },
     /// `START file [KEY {= | > | >= | < | <=} k] [INVALID KEY ...]
-    /// [NOT INVALID KEY ...] [END-START]`. La v1 trata `START` como un
-    /// no-op (sólo soporta acceso secuencial); dispara siempre la rama
-    /// `NOT INVALID KEY`.
+    /// [NOT INVALID KEY ...] [END-START]`. Posiciona el cursor de un
+    /// fichero indexado/relativo en el primer registro cuya clave
+    /// satisface la comparación; sobre un fichero secuencial es un no-op
+    /// que dispara `NOT INVALID KEY`.
     Start {
         file: String,
+        /// El campo clave de la cláusula `KEY`; `None` = la `RECORD KEY`
+        /// por defecto del fichero.
+        key: Option<String>,
+        /// El operador de comparación (`=` por defecto).
+        cmp: StartCmp,
         invalid_key: Vec<Stmt>,
         not_invalid_key: Vec<Stmt>,
     },
@@ -307,6 +327,26 @@ pub enum FileMode {
     Input,
     /// `OPEN OUTPUT` — para escritura (crea el fichero de cero).
     Output,
+    /// `OPEN I-O` — lectura y escritura sobre el fichero existente
+    /// (lo que requieren `REWRITE`/`DELETE`/`START`).
+    IO,
+    /// `OPEN EXTEND` — para añadir al final del fichero existente.
+    Extend,
+}
+
+/// El operador de comparación de un `START`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum StartCmp {
+    /// `KEY = k` (el default de `START` sin operador).
+    Eq,
+    /// `KEY > k`.
+    Gt,
+    /// `KEY >= k` (o `NOT < k`).
+    Ge,
+    /// `KEY < k`.
+    Lt,
+    /// `KEY <= k` (o `NOT > k`).
+    Le,
 }
 
 /// La operación de un `INSPECT`.
