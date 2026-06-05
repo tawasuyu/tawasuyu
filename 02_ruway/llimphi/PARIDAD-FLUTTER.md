@@ -34,8 +34,10 @@ Antes de pre-analizar un control de otro framework, clasificarlo:
    Hoy `scroll_y` no contempla "hijos que reaccionan al offset". El 80/20 real es
    (a) lista virtualizada [ya está], (b) header colapsable, (c) sticky sections;
    las tres son incrementales **si** la firma del viewport admite extent-por-offset.
-2. **Arena de gestos (desambiguación)** — Tier 4. long-press/double-tap/pinch/
-   rotate/fling necesitan un árbitro, no se cuelgan ad-hoc del hit-test.
+2. **Arena de gestos (desambiguación)** — Tier 4. **Parcial (Bloque 6):**
+   long-press/double-tap/pinch ya tienen árbitro (hit-test por gesto + árbitro
+   temporal en `about_to_wait`). Falta rotate/fling y, si aparecen gestos que
+   compitan por el mismo press, un grafo de desambiguación competitivo.
 3. **Árbol de semántica (AccessKit)** — Tier 7. Árbol paralelo al `View`.
 4. **Build sensible al tamaño (`LayoutBuilder` / `MediaQuery` breakpoints)** —
    **no estaba en los tiers; verificado ausente 2026-06-05.** `view()` construye
@@ -80,10 +82,25 @@ Hay `Tween` + `animate()`, pero cada animación se cablea a mano (tween en Model
 - Curvas: hoy 3 easings (`linear`, `ease_out_cubic`, `ease_in_out_cubic`) + spring physics.
 - Transiciones de página + Hero (shared-element). Hoy no hay routing.
 
-### 🟡 Tier 4 — gestos
-Hoy: tap, drag(delta), scroll. Falta el set de `GestureDetector`: long-press,
-double-tap, pinch/scale (zoom), rotate, velocity/fling, y arena de
-desambiguación. Pinch-zoom es lo más pedido por los canvases (pineal/cosmos/nakui).
+### 🟡 Tier 4 — gestos · **parcial (Bloque 6)**
+Hoy: tap, drag(delta), scroll **+ pinch/scale (zoom), double-tap, long-press**.
+- ✅ **Pinch-to-zoom** (`View::on_scale` + `GesturePhase` + `hit_test_scale`):
+  factor multiplicativo incremental + focal local. **Ctrl+rueda** lo sintetiza
+  en cualquier desktop (Wayland/Windows no emiten el pinch del trackpad);
+  `PinchGesture` lo cubre en macOS. Desbloquea el zoom de canvases
+  (pineal/cosmos/nakui).
+- ✅ **Double-tap** (`on_double_tap[_at]`) y **long-press** (`on_long_press[_at]`):
+  eventos **aditivos** (hit-test propio, no tocan click/drag). El árbitro es el
+  tiempo — double-tap = dos presses dentro de 400 ms y <16px; long-press = press
+  que sobrevive 500 ms quieto (lo vence `about_to_wait`, lo cancelan movimiento
+  >8px o release). Caso canónico limpio: canvas con pan + gesto sin `on_click`.
+- Falta: **rotate** (trackpad, sólo macOS — plumbing igual al scale, sin
+  fallback de teclado), **velocity/fling** (vive con scroll-physics, Tier 5), y
+  pinch **multi-touch real** desde eventos `Touch` (touchscreen wawa/android:
+  trackear dos dedos y derivar distancia → factor). La arena hoy es por-gesto
+  (cada uno su hit-test + su árbitro temporal), no un grafo de desambiguación
+  competitivo entre gestos rivales — alcanza para el set actual; ampliable si
+  aparecen gestos que compitan por el mismo press.
 
 ### 🟡 Tier 5 — scroll avanzado
 Sólo `scroll_y` vertical con inercia manual. Falta: scroll horizontal y 2D,
@@ -134,8 +151,12 @@ a 5k nodos" de "a 50k".
      la reproduce como fantasma con `replay_ghosts` cuando la key desaparece);
      `View::animated_inout` para ambas. El exit tiene coste por frame
      (captura el subárbol) → usar en pocos nodos.
-6. Pinch-zoom + scroll physics.
-7. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
+6. ✅ **Bloque 6 = Tier 4 gestos (parcial)** — `on_scale` (pinch-zoom vía
+   Ctrl+rueda + `PinchGesture`), `on_double_tap`, `on_long_press` + arena por
+   tiempo (`about_to_wait` vence el long-press). Falta rotate + fling + pinch
+   multi-touch. Demo: `--example gestos`.
+7. Scroll physics (Tier 5: momentum/bounce, 2D, slivers) — y con él, fling.
+8. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
 ## Tier 7 — detalle (accesibilidad)
 

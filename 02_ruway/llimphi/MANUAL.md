@@ -313,6 +313,9 @@ View::new(style: Style) -> View<Msg>
 .on_drop(|payload: u64| -> Option<Msg>)                   // este nodo es drop target
 .drop_hover_fill(Color)                                   // resaltado mientras un drag lo sobrevuela
 .on_scroll(|dx, dy| -> Option<Msg>)                       // rueda local (antes del on_wheel global)
+.on_scale(|phase: GesturePhase, factor, fx, fy| -> Option<Msg>)  // pinch-to-zoom (Ctrl+rueda / trackpad)
+.on_double_tap(Msg) / .on_double_tap_at(|lx, ly, w, h| ...)      // dos clicks rápidos y cercanos
+.on_long_press(Msg) / .on_long_press_at(|lx, ly, w, h| ...)      // mantener ~500 ms quieto
 .focusable(u64)                                           // nodo enfocable por Tab/click (id opaco)
 ```
 
@@ -329,6 +332,16 @@ Notas clave:
 - `PaintRect { x, y, w, h }` es el rect **absoluto** del nodo en píxeles físicos.
 - `DragPhase` = `Move` (un evento por `CursorMoved`, `dx/dy` = delta **desde el
   evento anterior**, no acumulado) | `End` (al soltar).
+- **Gestos (`on_scale`/`on_double_tap`/`on_long_press`)** son **aditivos**: se
+  resuelven con su propio hit-test y no interfieren con `on_click`/`draggable`
+  del mismo nodo. El caso limpio (sin disparos cruzados) es ponerlos en un nodo
+  que **no** tenga `on_click` — p. ej. un canvas con `draggable` (pan) +
+  `on_scale` (zoom) + `on_long_press` (marca). `GesturePhase` = `Begin`/`Update`/
+  `End`; en `on_scale`, `factor` es **multiplicativo incremental** (`>1` agranda)
+  y `(fx, fy)` el focal local — `Ctrl+rueda` lo sintetiza en cualquier desktop
+  (Wayland/Windows no emiten el pinch del trackpad; macOS sí, vía `PinchGesture`).
+  El long-press lo arbitra el tiempo (~500 ms quieto); moverse (>8px) o soltar lo
+  cancela. Demo completo: `cargo run -p llimphi-ui --example gestos --release`.
 
 ---
 
@@ -380,6 +393,9 @@ montar tu `View`. Sólo armás `Style`s.
 | Drag&drop entre zonas | origen: `.drag_payload(id)`; destino: `.on_drop(\|id\| ...)` + `.drop_hover_fill` |
 | Scroll global | `App::on_wheel(model, delta, cursor, mods)` |
 | Área de scroll | widget `scroll_y(...)` (autocontenido) o `.on_scroll(\|dx,dy\| ...)` por nodo |
+| Zoom de canvas (pinch) | `.on_scale(\|phase,factor,fx,fy\| ...)` → `zoom *= factor`, reajustar pan al focal |
+| Doble-click | `.on_double_tap(Msg)` / `.on_double_tap_at(\|lx,ly,w,h\| ...)` |
+| Long-press (mantener) | `.on_long_press(Msg)` / `.on_long_press_at(\|lx,ly,w,h\| ...)` |
 | Teclado | `App::on_key(model, &KeyEvent) -> Option<Msg>` |
 | Foco / Tab | `.focusable(id)` en los nodos + `App::on_focus(model, id)` (ver abajo) |
 | IME (CJK, acentos) | `App::ime_allowed() -> true` + `App::on_ime(model, &ImeEvent)` (ver abajo) |

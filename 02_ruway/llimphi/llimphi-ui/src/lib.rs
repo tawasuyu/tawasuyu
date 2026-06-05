@@ -626,6 +626,20 @@ const DOUBLE_TAP_WINDOW: std::time::Duration = std::time::Duration::from_millis(
 /// Distancia máxima (px físicos) entre los dos taps de un doble-tap.
 const DOUBLE_TAP_DIST: f64 = 16.0;
 
+/// ¿El press actual (`now`, `pos`) completa un doble-tap con el tap previo
+/// `last`? Verdadero si hubo un tap previo dentro de [`DOUBLE_TAP_WINDOW`] y a
+/// menos de [`DOUBLE_TAP_DIST`]. Función pura (testeable sin event loop).
+fn double_tap_qualifies(
+    last: Option<(std::time::Instant, PhysicalPosition<f64>)>,
+    now: std::time::Instant,
+    pos: PhysicalPosition<f64>,
+) -> bool {
+    last.is_some_and(|(t, p)| {
+        now.duration_since(t) <= DOUBLE_TAP_WINDOW
+            && ((p.x - pos.x).powi(2) + (p.y - pos.y).powi(2)).sqrt() <= DOUBLE_TAP_DIST
+    })
+}
+
 struct DragState<Msg> {
     handler: DragHandlerKind<Msg>,
     /// Cursor en el último evento (Press o CursorMoved). El delta del
@@ -654,4 +668,38 @@ pub fn run<A: App>() {
         secondaries: Vec::new(),
     };
     event_loop.run_app(&mut runtime).expect("run app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn double_tap_ventana_y_distancia() {
+        let t0 = Instant::now();
+        let p = PhysicalPosition::new(100.0, 100.0);
+        // Sin tap previo → nunca califica.
+        assert!(!double_tap_qualifies(None, t0, p));
+        // Segundo tap a tiempo (100 ms < 400) y cerca (3px < 16) → califica.
+        let near = PhysicalPosition::new(102.0, 102.0);
+        assert!(double_tap_qualifies(
+            Some((t0, p)),
+            t0 + Duration::from_millis(100),
+            near
+        ));
+        // A tiempo pero lejos (>16px) → no.
+        let far = PhysicalPosition::new(140.0, 100.0);
+        assert!(!double_tap_qualifies(
+            Some((t0, p)),
+            t0 + Duration::from_millis(100),
+            far
+        ));
+        // Cerca pero tarde (>400 ms) → no.
+        assert!(!double_tap_qualifies(
+            Some((t0, p)),
+            t0 + Duration::from_millis(600),
+            near
+        ));
+    }
 }

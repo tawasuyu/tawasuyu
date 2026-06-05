@@ -581,11 +581,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         double_tap_hit_from_cache(c, cursor.x as f32, cursor.y as f32)
                     })
                 {
-                    let qualifies = state.last_tap.is_some_and(|(t, p)| {
-                        now.duration_since(t) <= DOUBLE_TAP_WINDOW
-                            && ((p.x - cursor.x).powi(2) + (p.y - cursor.y).powi(2)).sqrt()
-                                <= DOUBLE_TAP_DIST
-                    });
+                    let qualifies = double_tap_qualifies(state.last_tap, now, cursor);
                     if qualifies {
                         state.last_tap = None; // consumido; un 3er tap no re-dispara
                         if let Some(msg) = resolved.invoke() {
