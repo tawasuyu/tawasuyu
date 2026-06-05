@@ -139,7 +139,7 @@ pub fn update(state: State, msg: Msg) -> State {
                 || (ev.modifiers.shift && matches!(&ev.key, Key::Named(NamedKey::Insert)));
             if is_paste {
                 if let Some(text) = read_clipboard() {
-                    s.input.insert(&text);
+                    s.input.insert(&sanitize_paste(&text));
                     refresh_completion(&mut s);
                 }
                 return s;
@@ -711,6 +711,30 @@ pub(crate) fn key_to_pty_bytes(ev: &KeyEvent) -> Vec<u8> {
 pub(crate) fn read_clipboard() -> Option<String> {
     let mut clip = arboard::Clipboard::new().ok()?;
     clip.get_text().ok()
+}
+
+/// Limpia texto pegado al editor de línea. A diferencia del shell GPUI
+/// (que colapsaba todo a una línea unida por `; `), este input es
+/// **multilínea** —editar construcciones abiertas, pegar scripts—, así que
+/// los saltos se **preservan**. Lo que sí hacemos:
+///
+/// - normalizar `\r\n` y `\r` a `\n` (pastes de Windows / terminales),
+/// - tab → espacio (el line editor no tabula columnas),
+/// - descartar caracteres de control peligrosos (ESC, BEL, …) que un paste
+///   de terminal puede arrastrar y que corromperían el render del input,
+/// - recortar **un** salto final, para que pegar `"ls -la\n"` no deje una
+///   línea vacía colgando bajo el comando.
+pub(crate) fn sanitize_paste(s: &str) -> String {
+    let normalized = s.replace("\r\n", "\n").replace('\r', "\n");
+    let cleaned: String = normalized
+        .chars()
+        .map(|c| if c == '\t' { ' ' } else { c })
+        .filter(|c| *c == '\n' || !c.is_control())
+        .collect();
+    cleaned
+        .strip_suffix('\n')
+        .map(str::to_string)
+        .unwrap_or(cleaned)
 }
 
 /// Escribe texto al clipboard del SO. No-op silencioso sin display server.

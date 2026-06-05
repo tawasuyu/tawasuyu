@@ -1269,6 +1269,37 @@ mod tests {
     }
 
     #[test]
+    fn sanitize_paste_drops_single_trailing_newline() {
+        // Pegar "ls -la\n" no debe dejar una línea vacía colgando.
+        assert_eq!(sanitize_paste("ls -la\n"), "ls -la");
+    }
+
+    #[test]
+    fn sanitize_paste_preserves_interior_newlines() {
+        // El input es multilínea: pegar un script conserva sus saltos
+        // (no se colapsa a `;` como el shell GPUI).
+        assert_eq!(sanitize_paste("ls\npwd\n"), "ls\npwd");
+    }
+
+    #[test]
+    fn sanitize_paste_normalizes_crlf() {
+        assert_eq!(sanitize_paste("a\r\nb"), "a\nb");
+        assert_eq!(sanitize_paste("a\rb"), "a\nb");
+    }
+
+    #[test]
+    fn sanitize_paste_strips_control_chars_and_tabs() {
+        // ESC (\x1b) y BEL (\x07) se descartan; tab → espacio; los saltos
+        // de línea sobreviven.
+        assert_eq!(sanitize_paste("ls\t-la\x1b[X\x07"), "ls -la[X");
+    }
+
+    #[test]
+    fn sanitize_paste_keeps_plain_text() {
+        assert_eq!(sanitize_paste("echo hola mundo"), "echo hola mundo");
+    }
+
+    #[test]
     fn alias_from_config_expands_before_run() {
         // Un alias del `.shumarc` reemplaza la primera palabra; lo tipeado
         // queda en el historial, lo resuelto es lo que se ejecuta.
