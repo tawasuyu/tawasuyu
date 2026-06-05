@@ -126,12 +126,14 @@ a 5k nodos" de "a 50k".
    - ✅ **scrollbar arrastrable** — ya estaba en `llimphi-widget-scroll`: el
      thumb es `.draggable(...)` y convierte el delta de px a delta de offset vía
      `thumb_geometry`. (El roadmap lo listaba pendiente por error.)
-   - ✅ **animación de opacidad + fade-in de entrada** — `alpha` entra en
-     `AnimSnapshot` (regla `None ≡ opaco`), así `.alpha(x).animated()` interpola
-     opacidad; `View::animated_enter(key, dur)` hace fade-in en la primera
-     aparición de la key. Falta el **exit** (fade-out al desmontarse): requiere
-     que `AnimRegistry` retenga y siga pintando un nodo que ya salió del árbol —
-     cambio arquitectónico mayor, diferido.
+   - ✅ **animación de contenido completa (opacidad + entrada + salida)** —
+     `alpha` entra en `AnimSnapshot` (regla `None ≡ opaco`), así
+     `.alpha(x).animated()` interpola opacidad; `View::animated_enter` hace
+     fade-in en la primera aparición; `View::animated_exit` hace fade-out al
+     desmontarse (el runtime captura la subescena vello del nodo mientras vive y
+     la reproduce como fantasma con `replay_ghosts` cuando la key desaparece);
+     `View::animated_inout` para ambas. El exit tiene coste por frame
+     (captura el subárbol) → usar en pocos nodos.
 6. Pinch-zoom + scroll physics.
 7. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
@@ -185,7 +187,7 @@ Clasificadas por la regla contrato-vs-composición de arriba.
 | Pieza | Análogo | Estado verificado | Por qué |
 |---|---|---|---|
 | ✅ **Forma de cursor** (`View::cursor(Cursor)`) | `MouseRegion.cursor` / `SystemMouseCursors` · Compose `pointerHoverIcon` | **Hecho 2026-06-05** | Enum `Cursor` llimphi-native (19 formas) en el compositor; `hit_test_cursor` da herencia CSS (hijo sin cursor cae al ancestro); `llimphi-ui` lo mapea a `winit::CursorIcon` y lo aplica en la transición de hover. Consumidores: text-input=Text, splitter=Col/RowResize, button=Pointer. |
-| **Animación de contenido** (cross-fade al swap + enter/exit) | `AnimatedSwitcher` · `AnimatedList` · `AnimatedVisibility` | **Parcial→casi**: props (fill/radius) del Bloque 4 + **opacidad animable** + **fade-in de entrada** (`animated_enter`) del Bloque 5. **Falta sólo el exit** (fade-out al desmontarse). | El enter ya entró por `AnimRegistry` (alpha como prop + arranque desde 0 en la primera aparición). El **exit** es el resto duro: requiere retener y seguir pintando un nodo que ya salió del árbol (resurrección en el paint), cambio arquitectónico mayor. |
+| ✅ **Animación de contenido** (enter/exit + opacidad) | `AnimatedSwitcher` · `AnimatedList` · `AnimatedVisibility` | **Hecho** (Bloques 4–5): props (fill/radius) + opacidad animable + `animated_enter` (fade-in) + `animated_exit` (fade-out) + `animated_inout`. | El exit se resolvió capturando la subescena vello del nodo mientras vive (`paint_range`) y reproduciéndola como fantasma (`replay_ghosts`) cuando la key desaparece — sin resucitar el árbol. Falta sólo el **cross-fade real** entre dos identidades bajo la misma key (hoy se logra combinando enter+exit de dos keys). |
 | ✅ **Scrollbar interactiva** (drag del thumb) | `Scrollbar` arrastrable | **Hecho** en `llimphi-widget-scroll` | El thumb es `.draggable(...)` y convierte delta-px del arrastre a delta-offset vía `thumb_geometry`; sólo aparece si hay overflow. (Antes figuraba pendiente por error.) |
 
 ### Reservar el seam — ya cubierto arriba
