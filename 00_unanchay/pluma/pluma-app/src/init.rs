@@ -91,6 +91,7 @@ pub(crate) fn init_modelo() -> Model {
         ides_ro: HashMap::new(),
         solo_activo: false,
         scroll_x: 0.0,
+        viewport: (1600.0, 900.0),
         diente_activo: 1, // arranca en Lienzos (el tree)
         panel_w: 280.0,
         clipboard: ArboardClipboard::new(),

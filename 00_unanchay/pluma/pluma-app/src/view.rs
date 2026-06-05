@@ -32,20 +32,15 @@ use pluma_editor_llimphi::Palette as MultPalette;
 use pluma_transform::Transformacion;
 use uuid::Uuid;
 
-use crate::model::{Model, Msg, BACKENDS, METRICS, VISIBLE_LINES};
+use crate::model::{
+    ancho_contenido, Model, Msg, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
+};
 use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
 
 /// Tamaño de ventana del init — usado como viewport para clampear los
 /// dropdowns del menú (la app no trackea el tamaño real hoy).
 const VIEWPORT: (f32, f32) = (1600.0, 900.0);
-
-/// Ancho del rail de dientes, en px.
-const RAIL_W: f32 = 46.0;
-
-/// Ancho fijo de cada columna del multilienzo cuando hay ≥2 lienzos (habilita
-/// overflow → scroll horizontal). Con 1 lienzo la columna es elástica y llena.
-const ANCHO_COL: f32 = 360.0;
 
 /// Icono vectorial y nombre de los cuatro dientes del rail. El icono lo pinta
 /// `llimphi-icons` (mismo set canónico que cosmos — sin tofu); el nombre
@@ -816,7 +811,7 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
     let centro: View<Msg> = if fijo {
         // Envoltorio scrollable: contenedor relative que recorta; el interior
         // va absolute con left = -scroll_x (mismo patrón que el demo completo).
-        let total_w = n as f32 * ANCHO_COL + (n as f32 - 1.0) * cfg.ancho_carril;
+        let total_w = ancho_contenido(n);
         View::new(Style {
             position: Position::Relative,
             size: Size {
@@ -846,12 +841,33 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
         mult
     };
 
+    // El centro ocupa el alto disponible; la barra de scroll (si hay overflow)
+    // va abajo, fija.
+    let centro = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![centro]);
+
     // Find overlay (inline) arriba del centro cuando está visible.
     let mut hijos: Vec<View<Msg>> = Vec::new();
     if model.find_visible {
         hijos.push(barra_find(model));
     }
     hijos.push(centro);
+    if fijo {
+        if let Some(bar) = scrollbar_horizontal(model, theme, cuerpos_sel.len()) {
+            hijos.push(bar);
+        }
+    }
 
     // Padding izquierdo = ancho del rail: los dientes sobresalen sobre el
     // borde del centro sin tapar la primera columna. Sin rail interno
@@ -874,6 +890,74 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
     .fill(editor_palette.bg)
     .clip(true)
     .children(hijos)
+}
+
+/// Barra de scroll horizontal del multilienzo: track + thumb arrastrable.
+/// `None` si el contenido cabe entero (sin overflow). El thumb refleja la
+/// fracción visible y su posición; arrastrarlo desplaza el scroll.
+fn scrollbar_horizontal(model: &Model, theme: &Theme, n_cols: usize) -> Option<View<Msg>> {
+    let contenido = ancho_contenido(n_cols);
+    let centro = (model.viewport.0 - model.panel_w - RAIL_W).max(1.0);
+    if contenido <= centro + 1.0 {
+        return None; // cabe entero, sin barra
+    }
+    let track_w = centro;
+    let thumb_w = (centro / contenido * track_w).clamp(28.0, track_w);
+    let max_scroll = (contenido - centro).max(1.0);
+    let max_thumb = (track_w - thumb_w).max(1.0);
+    let thumb_x = (model.scroll_x / max_scroll) * max_thumb;
+    // Arrastre del thumb: dx de pantalla → dx de scroll (proporción inversa).
+    let factor = max_scroll / max_thumb;
+
+    let thumb = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(thumb_x),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(thumb_w),
+            height: length(7.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .radius(3.5)
+    .draggable(move |phase, dx, _dy| match phase {
+        DragPhase::Move => Some(Msg::ScrollHoriz(dx * factor)),
+        DragPhase::End => None,
+    });
+
+    let track = View::new(Style {
+        position: Position::Relative,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(7.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.border)
+    .radius(3.5)
+    .children(vec![thumb]);
+
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(13.0_f32),
+            },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(8.0_f32),
+                top: length(3.0_f32),
+                bottom: length(3.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![track]),
+    )
 }
 
 /// Busca la carta de hebras entre dos cuerpos, en cualquier orden.

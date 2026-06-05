@@ -230,6 +230,10 @@ impl App for Pluma {
         Some(Msg::ScrollHoriz(-dx_lineas * PX_POR_LINEA))
     }
 
+    fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {
+        Some(Msg::Resized(width as f32, height as f32))
+    }
+
     fn view(model: &Model) -> View<Msg> {
         vista(model)
     }

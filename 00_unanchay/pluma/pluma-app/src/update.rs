@@ -65,7 +65,10 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             model.diente_activo = i;
         }
         Msg::ScrollHoriz(dx) => {
-            model.scroll_x = (model.scroll_x + dx).max(0.0);
+            model.scroll_x += dx; // el clamp final acota a [0, max]
+        }
+        Msg::Resized(w, h) => {
+            model.viewport = (w, h);
         }
         Msg::NuevoDoc => {
             crear_doc_nuevo(&mut model);
@@ -281,7 +284,24 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             }
         }
     }
+    // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
+    // tamaño, panel…). Idempotente y barato.
+    clamp_scroll(&mut model);
     model
+}
+
+/// Acota `scroll_x` a `[0, ancho_contenido - ancho_centro]`. Con ≤1 columna o
+/// contenido que cabe entero, queda en 0.
+fn clamp_scroll(model: &mut Model) {
+    let n = if model.solo_activo {
+        model.activo.iter().count()
+    } else {
+        model.seleccionados.len()
+    };
+    let contenido = crate::model::ancho_contenido(n);
+    let centro = (model.viewport.0 - model.panel_w - crate::model::RAIL_W).max(0.0);
+    let max = (contenido - centro).max(0.0);
+    model.scroll_x = model.scroll_x.clamp(0.0, max);
 }
 
 /// Construye el menú principal de pluma reflejando el estado actual: los

@@ -21,6 +21,23 @@ use crate::clipboard::ArboardClipboard;
 pub(crate) const METRICS: EditorMetrics = EditorMetrics::for_font_size(13.0);
 pub(crate) const VISIBLE_LINES: usize = 200;
 
+/// Ancho del rail de dientes, en px.
+pub(crate) const RAIL_W: f32 = 46.0;
+/// Ancho fijo de cada columna del multilienzo cuando hay ≥2 lienzos.
+pub(crate) const ANCHO_COL: f32 = 360.0;
+/// Ancho del carril entre columnas (= `ConfigMultilienzoEditor::ancho_carril`).
+pub(crate) const ANCHO_CARRIL: f32 = 56.0;
+
+/// Ancho total del contenido del multilienzo para `n` columnas fijas, o `0`
+/// si `n < 2` (con una sola columna es elástica, sin scroll).
+pub(crate) fn ancho_contenido(n: usize) -> f32 {
+    if n < 2 {
+        0.0
+    } else {
+        n as f32 * ANCHO_COL + (n as f32 - 1.0) * ANCHO_CARRIL
+    }
+}
+
 pub(crate) const BACKENDS: [BackendKind; 6] = [
     BackendKind::Mock,
     BackendKind::Gemini,
@@ -46,6 +63,8 @@ pub(crate) enum Msg {
     SelectDiente(usize),
     /// Scroll horizontal del multilienzo, en píxeles (positivo = derecha).
     ScrollHoriz(f32),
+    /// La ventana cambió de tamaño (ancho, alto) — para clampear el scroll.
+    Resized(f32, f32),
     NuevoDoc,
     Guardar,
     PathInputKey(KeyEvent),
@@ -141,8 +160,12 @@ pub(crate) struct Model {
     /// Si `true`, el centro muestra sólo el cuerpo activo (una columna);
     /// si `false`, todo el multilienzo de `seleccionados`. Togglea con Ctrl+D.
     pub(crate) solo_activo: bool,
-    /// Desplazamiento horizontal del multilienzo, en píxeles. `>= 0`.
+    /// Desplazamiento horizontal del multilienzo, en píxeles. Clampeado a
+    /// `[0, ancho_contenido - ancho_centro]`.
     pub(crate) scroll_x: f32,
+    /// Tamaño actual de la ventana (ancho, alto) en px lógicos. Lo actualiza
+    /// `on_resize`; arranca en `initial_size`.
+    pub(crate) viewport: (f32, f32),
     /// Diente activo del rail: 0=Archivo · 1=Lienzos · 2=Derivar · 3=LLM.
     pub(crate) diente_activo: usize,
     /// Ancho del panel del diente activo, en px (resizable con el divisor).

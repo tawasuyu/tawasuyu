@@ -140,6 +140,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         ides_ro,
         solo_activo: false,
         scroll_x: 0.0,
+        viewport: (W as f32, H as f32),
         diente_activo: diente,
         panel_w: 280.0,
         clipboard: ArboardClipboard::new(),
