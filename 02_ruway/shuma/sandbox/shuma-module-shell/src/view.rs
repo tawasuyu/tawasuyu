@@ -217,6 +217,27 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             (line_idx, cursor - line_start)
         };
 
+        // Ancho de carácter de la fuente mono: medimos un bloque de N
+        // caracteres y dividimos. Avanzamos el cursor y los tokens por
+        // **conteo de caracteres**, NO por medición de cada token: parley
+        // colapsa el ancho de un token que es sólo espacio(s) a 0 (trailing
+        // whitespace), por eso antes el espacio "no se veía" y `echo hola`
+        // se pintaba `echohola`. Con ancho fijo esto además alinea exacto.
+        let char_w: f64 = {
+            let probe = TextBlock {
+                text: "0000000000",
+                size_px: 13.0,
+                color: theme_clone.fg_text,
+                origin: (0.0, 0.0),
+                max_width: None,
+                alignment: TAlign::Start,
+                line_height: 1.2,
+                italic: false,
+                font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
+            };
+            (measurement(&layout_block(ts, &probe)).width as f64 / 10.0).max(1.0)
+        };
+
         let mut cursor_x: f64 = line_x_start;
         let mut cursor_y: f64 = baseline_y;
         let mut last_line_end_x: f64 = line_x_start;
@@ -243,33 +264,17 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                     font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
                 };
                 let layout = layout_block(ts, &block);
-                let m = measurement(&layout);
                 draw_layout(scene, &layout, color, (x, line_y));
                 if line_idx == cursor_line_idx
                     && tok.start < cursor_byte_in_line
                     && cursor_byte_in_line <= tok.end
                 {
                     let prefix = &line_str[tok.start..cursor_byte_in_line];
-                    if prefix.is_empty() {
-                        cursor_x = x;
-                    } else {
-                        let pblock = TextBlock {
-                            text: prefix,
-                            size_px: 13.0,
-                            color,
-                            origin: (x, line_y),
-                            max_width: None,
-                            alignment: TAlign::Start,
-                            line_height: 1.2,
-                            italic: false,
-                            font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
-                        };
-                        let plat = layout_block(ts, &pblock);
-                        cursor_x = x + measurement(&plat).width as f64;
-                    }
+                    cursor_x = x + prefix.chars().count() as f64 * char_w;
                     cursor_y = line_y;
                 }
-                x += m.width as f64;
+                // Avance mono por conteo de caracteres (incluye espacios).
+                x += segment.chars().count() as f64 * char_w;
             }
             // Cursor al final de una línea vacía / sin tokens hasta el cursor.
             if line_idx == cursor_line_idx
