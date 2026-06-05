@@ -1133,6 +1133,9 @@ pub(crate) const HEADER_H: f32 = 20.0; // header de la card
 pub(crate) const STAGES_H: f32 = 20.0; // fila de etapas de pipe
 pub(crate) const ROW_H: f32 = 16.0; // una línea de output
 
+/// Duración del fade de colapso/despliegue de los bloques del output.
+pub(crate) const COLLAPSE_ANIM: std::time::Duration = std::time::Duration::from_millis(160);
+
 pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
@@ -1783,7 +1786,10 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
                 },
                 ..Default::default()
             })
-            .children(vec![bar, col]),
+            .children(vec![bar, col])
+            // Desplegar/plegar la captura de la etapa con transición. Key en
+            // un namespace propio (etapa) para no chocar con cuerpo/resumen.
+            .animated_inout(((block << 8) | (i as u64 & 0xff)) ^ (1 << 62), COLLAPSE_ANIM),
         );
         height += block_h;
     }
@@ -1984,7 +1990,10 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     11.0,
                     theme.fg_muted,
                     Alignment::Start,
-                ),
+                )
+                // Key distinta del cuerpo (mismo bloque) para que el resumen
+                // tenga su propia animación de aparición/desaparición.
+                .animated_inout(block ^ (1 << 63), COLLAPSE_ANIM),
             );
             child_h_sum += ROW_H;
         }
@@ -2035,7 +2044,10 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     x: lx,
                     y: ly,
                 }))
-            });
+            })
+            // Colapsar/desplegar con transición (fade in/out), no salto seco.
+            // Key estable por bloque para que el runtime reconcilie su anim.
+            .animated_inout(block, COLLAPSE_ANIM);
             card_children.push(editor);
             child_h_sum += n as f32 * ROW_H;
         }
