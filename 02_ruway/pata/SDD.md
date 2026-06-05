@@ -1,8 +1,9 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 8b** (layer-shell sobre wlroots: barras, Quake, clicks,
-> `window_list`). Este documento es la fuente autoritativa de qué es `pata` y
-> dónde termina, por encima de README.
+> Estado: **Fase 13** (barras embellecidas + widgets interactivos: volumen/
+> brillo por rueda, clipboard con historial, clima, cava, reloj que fija la
+> hora). Este documento es la fuente autoritativa de qué es `pata` y dónde
+> termina, por encima de README.
 
 ## 0. El problema que resuelve
 
@@ -534,3 +535,46 @@ borde; shuma provee el contenido.
     registran una vez al init; el lado de activación se computa en vivo, así que el
     drop entre lados sigue funcionando); estado "activo" del diente hospedado (hoy
     siempre inactivo en pata, lo lleva la app).
+
+- **Fase 13 — barras embellecidas + widgets interactivos** (2026-06-05):
+  - **Apariencia configurable** (`pata-core`): `Surface` gana `opacity`
+    (fondo translúcido), `radius` (esquinas), `margin` (barra flotante; sólo
+    pincel, no cambia la reserva de franja), `gradient` (degradé vertical sutil)
+    y `cell` (cuantización de ancho); `General` gana `accent` (hex, tiñe el tema
+    en ambos backends). Espejo postcard-safe (`WireSurface`) al día. El render
+    aplica todo en `aplicar_apariencia`/`envolver_margen`/`bar_body` (compartido
+    winit + layer-shell).
+  - **Anchos cuantizados**: con `cell > 0` cada widget reserva un múltiplo de
+    `cell` px sobre el eje (`cuantizar` + `default_cells` por kind, override con
+    la prop `cells`) → el racimo de indicadores queda en grilla, no baila con los
+    dígitos.
+  - **Gradiente verde→rojo por medidor**: `meter_stops(kind)` da el par de
+    extremos (verde bajo → rojo alto) con un corrimiento de matiz propio por
+    widget (cpu/ram/volumen/brillo), y el gradiente abarca **toda** la barra (el
+    color indica el nivel). `SlotWidget::Core` ahora lleva `kind`+`cells`.
+  - **Volumen interactivo**: rueda ajusta el sink (`wpctl`/`pactl set-volume`
+    5%, tope 150%), click abre el mezclador (`exec`) o togglea mute, click
+    derecho togglea mute. **Brillo interactivo**: rueda ajusta la luminosidad
+    (`brightnessctl`/`light`, panel del portátil; DDC externo pendiente). Ambos
+    desacoplados; el medidor refleja en el próximo tick. El scroll/right-click ya
+    se rutean por hit-test genérico en ambos backends.
+  - **Clipboard con historial**: el frontend acumula las copias
+    (`push_clip_history`, tope 16, dedup); click izquierdo despliega un popup con
+    la lista (cada fila re-copia vía `wl-copy`), click derecho mantiene el
+    selector externo (`exec`/cliphist). winit por `view_overlay`; layer-shell
+    reusando el crecimiento de la barra del `start_button` vía `MenuKind`.
+  - **Clima** (`weather`): feed en hilo propio desde un servicio público
+    configurable (`wttr.in` por `curl`, ubicación por IP o `place`); dibujo a
+    mano del cielo (sol/nube/lluvia/nieve/tormenta/niebla) + temperatura;
+    `exec` al click. `SlotWidget::Weather`, dato del host en `BarData`.
+  - **CAVA** (`cava`): corre el binario `cava` en modo raw ascii desde un hilo;
+    barras con gradiente verde→rojo por altura; repaint ~20 Hz (winit
+    `spawn_periodic`, layer por el frame-callback continuo). Degrada en silencio
+    si `cava` no está. `SlotWidget::Cava`.
+  - **Reloj interactivo**: click abre un panel con spinners de fecha/hora +
+    Aplicar (apaga NTP y `timedatectl set-time` vía `pkexec`) + Sincronizar NTP.
+    `ClockDraft` (con wrap/clamp y `stamp`), `MenuKind::Clock`.
+  - **Estado runtime**: compila y `cargo check --workspace` verde; los tests
+    puros (parseo j1/cava, `ClockDraft`, historial) pasan. El render bajo Wayland
+    no se verifica headless (norma de pata) — validar en el compositor del
+    usuario.
