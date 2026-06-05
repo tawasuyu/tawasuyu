@@ -319,6 +319,11 @@ impl App for Panel {
                 let seed = current_text_value(&m, &path);
                 m.allichay.focus(&path, &seed);
             }
+            Msg::Allichay(AllichayMsg::FocusCell(path, row, col)) => {
+                if let Some(value) = current_field_value(&m, &path) {
+                    m.allichay.focus_cell(&path, value, row, col);
+                }
+            }
             Msg::Allichay(AllichayMsg::Change(path, value)) => route_change(&mut m, &path, value),
             Msg::Allichay(AllichayMsg::ScrollTo(offset)) => m.allichay.set_scroll(offset),
             Msg::AllichayKey(event) => {
@@ -713,6 +718,18 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
         .find_field(&rel)
         .and_then(|f| f.value.as_str().map(str::to_string))
         .unwrap_or_default()
+}
+
+/// Valor completo de un campo de app (para sembrar el buffer de una celda de
+/// lista/tabla al focarla — necesita el agregado entero, no sólo un texto).
+fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
+    let (key, rel) = split_app(path)?;
+    let schema = match key.as_str() {
+        "mirada" => m.mirada.schema(),
+        "pata" => m.pata.schema(),
+        _ => return None,
+    };
+    schema.find_field(&rel).map(|f| f.value.clone())
 }
 
 // =====================================================================
