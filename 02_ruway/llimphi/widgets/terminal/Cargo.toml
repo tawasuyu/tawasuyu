@@ -5,6 +5,17 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "llimphi-widget-terminal — superficie de terminal infinita y virtualizada (ver 02_ruway/shuma/SDD-TERMINAL.md). Fase 0: el store de scrollback append-only con índice de líneas, cap por memoria y acceso O(1). Sin render todavía."
+description = "llimphi-widget-terminal — superficie de terminal infinita y virtualizada (ver 02_ruway/shuma/SDD-TERMINAL.md). Fase 0: store de scrollback append-only (acceso O(1), cap por memoria). Fase 1: virtualización modo línea (sólo se pinta la ventana visible, numeración global + color, scroll propio del widget — costo de render constante a scrollback ilimitado)."
 
 [dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-scroll = { workspace = true }
+
+[dev-dependencies]
+png = { workspace = true }
+pollster = { workspace = true }
+
+[[example]]
+name = "dump_terminal"
+path = "examples/dump_terminal.rs"

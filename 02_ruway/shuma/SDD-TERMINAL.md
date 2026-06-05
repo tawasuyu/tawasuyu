@@ -183,9 +183,18 @@ vt100); se mueve a la superficie como `BlockKind`.
   de frente en un `drain`+reindex, ids globales estables (`line_id`/`index_of_id`)
   que sobreviven al recorte, numeración 1-based, `slice_text` para copiar, `clear`.
   Puro, sin deps de UI. 11 tests (incl. 100k líneas acotadas e indexadas).
-- **Fase 1 — Virtualización modo línea.** Capas 1–2 + render vello de la ventana
-  visible con numeración y color. Reemplaza el cuerpo de UNA card. Verificación: 1 M de
-  líneas, scroll al fondo y arrastre → costo constante, sin negro, alineado.
+- **Fase 1 — Virtualización modo línea. ✅ (2026-06-05)** Capas 1–2 en
+  `llimphi-widget-terminal::view`: `line_surface` materializa **sólo** la ventana
+  visible (`visible_window`, pura y testeada) bajo un `scroll_y` **propio del
+  widget** (no transform de contenido alto — la anti-feature del SDD), con
+  numeración global 1-based del store, color base + runs + tinte de fondo por
+  renglón (inyectados por el caller vía `LineStyle`, Regla 2), scrollbar via
+  `thumb_geometry` dimensionada al alto TOTAL virtual, scroll sub-renglón
+  (`partial_px`) y painter de medición del viewport. 19 tests (store + ventana).
+  **Verificado headless** (`examples/dump_terminal.rs`): 1 M de líneas, anclado al
+  fondo → **38 filas materializadas** (999963..1000000), sin negro, alineado,
+  costo constante (independiente del scrollback). Falta: enganchar al shell
+  (Fase 2 trae bloques/chrome y el flag `SHUMA_TERMINAL_SURFACE`).
 - **Fase 2 — Bloques + chrome.** Múltiples bloques con header/badge/colapso
   virtualizados. Reemplaza `output_pane` entero detrás de un flag; A/B con el viejo.
 - **Fase 3 — Selección + find sobre el stream.** Extraer el núcleo de selección del

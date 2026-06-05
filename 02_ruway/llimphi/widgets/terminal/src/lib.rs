@@ -6,13 +6,24 @@
 //! **constante** (sólo se pinta la ventana visible), tres modos sobre la misma
 //! tela (línea IDE / grilla TUI / híbrido) y GPU directo donde paga.
 //!
-//! **Fase 0 (esto):** la **Capa 0** del SDD — el [`store::Scrollback`], el store
-//! de scrollback append-only con índice de líneas, cap por memoria y acceso
-//! O(1). Sin render todavía (llega en la Fase 1). Es puro y sin dependencias de
-//! UI a propósito: el núcleo agnóstico vive aparte de quien lo pinta (Regla 2).
+//! **Fase 0:** la **Capa 0** — el [`store::Scrollback`], store de scrollback
+//! append-only con índice de líneas, cap por memoria y acceso O(1). Puro, sin
+//! dependencias de UI: el núcleo agnóstico vive aparte de quien lo pinta
+//! (Regla 2).
+//!
+//! **Fase 1 (esto):** las **Capas 1–2** — [`view::line_surface`], la superficie
+//! modo línea **virtualizada**: materializa sólo las filas visibles bajo un
+//! `scroll_y` propio del widget (costo de render **constante** a scrollback
+//! ilimitado), con numeración global y color por runs. El corazón
+//! ([`view::visible_window`]) es puro y testeable sin GPU.
 
 #![forbid(unsafe_code)]
 
 pub mod store;
+pub mod view;
 
 pub use store::Scrollback;
+pub use view::{
+    content_height, line_surface, scroll_to_bottom, visible_window, LineStyle, TermMetrics,
+    TermPalette, VisibleWindow,
+};
