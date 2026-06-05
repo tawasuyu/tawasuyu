@@ -90,6 +90,14 @@ fn main() {
             submenu: Vec::new(),
         },
     ];
+    mirada_cfg.outputs = vec![mirada_brain::OutputOverride {
+        name: "HDMI-A-1".into(),
+        wallpaper_path: "/fondos/mar.png".into(),
+        wallpaper_fit: "fill".into(),
+        order: 0,
+        scale_120: 0,
+        transform: String::new(),
+    }];
     let dientes: Vec<(&str, &str, Schema)> = vec![
         ("⚙", "Sistema", sistema),
         ("☸", "mirada", prefix(mirada_cfg.schema(), "mirada")),

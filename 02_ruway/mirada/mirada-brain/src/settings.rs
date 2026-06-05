@@ -18,7 +18,7 @@ use allichay::{
 use mirada_layout::WallpaperFit;
 
 use crate::action::{layout_from_slug, layout_slug};
-use crate::config::{Config, MenuEntry};
+use crate::config::{Config, MenuEntry, OutputOverride};
 
 /// Las opciones de modo de teselado (slug + rótulo).
 fn layout_options() -> Vec<EnumOption> {
@@ -165,7 +165,31 @@ impl Configurable for Config {
                             EnumOption::new("horizontal", "Horizontal"),
                             EnumOption::new("vertical", "Vertical"),
                         ],
-                    )),
+                    ))
+                    .field(
+                        Field::table(
+                            "outputs",
+                            "Overrides por monitor",
+                            vec![
+                                Column::new("name", "Monitor"),
+                                Column::new("wallpaper", "Fondo"),
+                                Column::new("fit", "Ajuste"),
+                                Column::new("order", "Orden"),
+                            ],
+                            self.outputs
+                                .iter()
+                                .map(|o| {
+                                    vec![
+                                        o.name.clone(),
+                                        o.wallpaper_path.clone(),
+                                        o.wallpaper_fit.clone(),
+                                        o.order.to_string(),
+                                    ]
+                                })
+                                .collect(),
+                        )
+                        .help("Conector DRM (HDMI-A-1, DP-1…). Escala y rotación siguen en RON."),
+                    ),
             )
             .section(
                 Section::new("menu", "Menú raíz")
@@ -306,6 +330,42 @@ impl Configurable for Config {
                         .collect();
                 }
             }
+            "outputs" => {
+                if let Some(rows) = value.as_table() {
+                    // Reconstruimos los overrides desde la tabla, preservando por
+                    // índice los campos que la tabla no edita (escala, rotación).
+                    // El ajuste se valida: un slug inválido cae al previo (o vacío).
+                    let prev = core::mem::take(&mut self.outputs);
+                    self.outputs = rows
+                        .iter()
+                        .enumerate()
+                        .map(|(i, r)| {
+                            let p = prev.get(i);
+                            let name = r.first().cloned().unwrap_or_default();
+                            let wallpaper_path = r.get(1).cloned().unwrap_or_default();
+                            let fit_in = r.get(2).map(String::as_str).unwrap_or("");
+                            let wallpaper_fit =
+                                if fit_in.is_empty() || WallpaperFit::from_slug(fit_in).is_some() {
+                                    fit_in.to_string()
+                                } else {
+                                    p.map(|p| p.wallpaper_fit.clone()).unwrap_or_default()
+                                };
+                            let order = r
+                                .get(3)
+                                .and_then(|s| s.trim().parse::<i32>().ok())
+                                .unwrap_or_else(|| p.map(|p| p.order).unwrap_or(0));
+                            OutputOverride {
+                                name,
+                                wallpaper_path,
+                                wallpaper_fit,
+                                order,
+                                scale_120: p.map(|p| p.scale_120).unwrap_or(0),
+                                transform: p.map(|p| p.transform.clone()).unwrap_or_default(),
+                            }
+                        })
+                        .collect();
+                }
+            }
             _ => return Err(unknown()),
         }
         Ok(())
@@ -401,6 +461,55 @@ mod tests {
         c.apply(&"terminal.dropterm_height_pct".into(), FieldValue::Int(250))
             .unwrap();
         assert_eq!(c.dropterm_height_pct, 100);
+    }
+
+    #[test]
+    fn apply_outputs_preserva_escala_y_rotacion() {
+        let mut c = Config::default();
+        c.outputs = vec![OutputOverride {
+            name: "HDMI-A-1".into(),
+            wallpaper_path: "/viejo.png".into(),
+            wallpaper_fit: "fill".into(),
+            order: 0,
+            scale_120: 180,
+            transform: "90".into(),
+        }];
+        // La tabla edita nombre/fondo/ajuste/orden; escala y rotación no se tocan.
+        let nuevo = FieldValue::Table(vec![vec![
+            "HDMI-A-1".into(),
+            "/nuevo.png".into(),
+            "center".into(),
+            "2".into(),
+        ]]);
+        c.apply(&"monitores.outputs".into(), nuevo).unwrap();
+        assert_eq!(c.outputs.len(), 1);
+        let o = &c.outputs[0];
+        assert_eq!(o.wallpaper_path, "/nuevo.png");
+        assert_eq!(o.wallpaper_fit, "center");
+        assert_eq!(o.order, 2);
+        assert_eq!(o.scale_120, 180); // preservado
+        assert_eq!(o.transform, "90"); // preservado
+    }
+
+    #[test]
+    fn apply_outputs_fit_invalido_cae_al_previo() {
+        let mut c = Config::default();
+        c.outputs = vec![OutputOverride {
+            name: "DP-1".into(),
+            wallpaper_path: String::new(),
+            wallpaper_fit: "fit".into(),
+            order: 0,
+            scale_120: 0,
+            transform: String::new(),
+        }];
+        let nuevo = FieldValue::Table(vec![vec![
+            "DP-1".into(),
+            String::new(),
+            "garabato".into(), // slug inválido
+            "0".into(),
+        ]]);
+        c.apply(&"monitores.outputs".into(), nuevo).unwrap();
+        assert_eq!(c.outputs[0].wallpaper_fit, "fit"); // conserva el válido previo
     }
 
     #[test]
