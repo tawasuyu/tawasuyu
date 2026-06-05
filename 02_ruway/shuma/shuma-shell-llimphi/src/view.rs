@@ -414,8 +414,9 @@ fn conn_pill(conn: ConnState, theme: &Theme) -> View<Msg> {
         scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &Circle::new((cx, cy), 4.0));
     });
     let txt = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
-        align_items: Some(AlignItems::Center),
+        // height auto → el Row (align Center) lo centra; con 22px fijo el texto
+        // Start quedaba pegado arriba. Ver `container_header`.
+        size: Size { width: percent(1.0_f32), height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto() },
         ..Default::default()
     })
     .text_aligned(conn.label().to_string(), 11.0, theme.fg_muted, Alignment::Start);
@@ -461,16 +462,18 @@ fn container_header(session: &Session, theme: &Theme) -> View<Msg> {
         }
         scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, accent, None, &p);
     });
+    // `height: auto` (no 28px fijo): el texto Start se ancla ARRIBA del nodo
+    // (el compositor sólo centra vertical el texto Center), así que un nodo más
+    // alto que el texto lo deja descentrado. Con altura = altura del texto, el
+    // `align_items: Center` del Row de afuera lo centra en sus 28px.
     let label = View::new(Style {
-        size: Size { width: Dimension::auto(), height: length(28.0_f32) },
+        size: Size { width: Dimension::auto(), height: Dimension::auto() },
         flex_grow: 1.0,
-        align_items: Some(AlignItems::Center),
         ..Default::default()
     })
     .text_aligned("Contenedor".to_string(), 12.0, theme.fg_text, Alignment::Start);
     let estado = View::new(Style {
-        size: Size { width: Dimension::auto(), height: length(28.0_f32) },
-        align_items: Some(AlignItems::Center),
+        size: Size { width: Dimension::auto(), height: Dimension::auto() },
         ..Default::default()
     })
     .text_aligned(
@@ -840,12 +843,13 @@ fn panel_title(t: &str, theme: &Theme) -> View<Msg> {
 
 /// Etiqueta de sección (tenue, chica).
 fn panel_label(t: &str, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_layout::taffy::prelude::Dimension;
     use llimphi_ui::llimphi_text::Alignment;
+    // `height: auto` = altura del texto: con `Start` el texto se ancla arriba,
+    // así que un nodo fijo de 18px lo dejaba descentrado. Ver `container_header`.
     View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
-        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
-        align_items: Some(AlignItems::Center),
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(8.0_f32), bottom: length(2.0_f32) },
         flex_shrink: 0.0,
         ..Default::default()
     })
