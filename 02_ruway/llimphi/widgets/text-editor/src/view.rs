@@ -278,9 +278,54 @@ pub fn text_editor_view_full<Msg: Clone + 'static>(
         spans,
         &syntax,
         match_ranges,
+        None,
         on_pointer,
     );
 
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(height) },
+        ..Default::default()
+    })
+    .fill(palette.bg)
+    .clip(true)
+    .children(vec![gutter, content])
+}
+
+/// Como [`text_editor_view`] pero el caller provee el color de cada tramo de
+/// cada línea (`line_color_runs[n]` = `(byte_start, byte_end, Color)` de la
+/// línea `n`), en vez de derivarlo de un `Language`. Para outputs con coloreo
+/// semántico propio (un shell que tinta `ls`, paths, urls, números…) sobre el
+/// mismo editor read-only (numeración + selección + copiar).
+pub fn text_editor_view_colored<Msg: Clone + 'static>(
+    state: &EditorState,
+    palette: &EditorPalette,
+    metrics: EditorMetrics,
+    visible_lines: usize,
+    line_color_runs: &[Vec<(usize, usize, Color)>],
+    on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
+) -> View<Msg> {
+    let caret = state.cursor.caret;
+    let syntax = crate::syntax_palette_dark(&llimphi_theme::Theme::dark());
+    let visible = visible_lines.max(1).min(200);
+    let line_count = state.line_count();
+    let scroll = state.scroll_offset.min(line_count.saturating_sub(1));
+    let end_line = (scroll + visible).min(line_count);
+    let height = (end_line - scroll) as f32 * metrics.line_height;
+    let gutter = build_gutter(state, scroll, end_line, caret.line, metrics, palette);
+    let content = build_content(
+        state,
+        palette,
+        metrics,
+        height,
+        scroll,
+        end_line,
+        Vec::new(),
+        &syntax,
+        &[],
+        Some(line_color_runs),
+        on_pointer,
+    );
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(height) },
@@ -395,6 +440,7 @@ fn with_alpha(c: Color, alpha: f32) -> Color {
     Color::from_rgba8(rgba.r, rgba.g, rgba.b, a)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_content<Msg: Clone + 'static>(
     state: &EditorState,
     palette: &EditorPalette,
@@ -405,6 +451,11 @@ fn build_content<Msg: Clone + 'static>(
     spans_per_line: Vec<Vec<Span>>,
     syntax: &SyntaxPalette,
     match_ranges: &[(usize, usize)],
+    // Override de color por línea: `color_runs[n]` son `(byte_start, byte_end,
+    // Color)` para la línea `n` del buffer (índice absoluto). Cuando es `Some`,
+    // gana sobre el syntax highlight — para callers que colorean por semántica
+    // propia (un shell que tinta `ls`, paths, urls…). `None` = highlight normal.
+    color_runs: Option<&[Vec<(usize, usize, Color)>]>,
     on_pointer: impl Fn(PointerEvent) -> Option<Msg> + Send + Sync + Clone + 'static,
 ) -> View<Msg> {
     let caret = state.cursor.caret;
@@ -462,7 +513,9 @@ fn build_content<Msg: Clone + 'static>(
             children.push(phantom_guard_divider(local_line, metrics, palette));
             continue;
         }
-        if let Some(line_spans) = spans_per_line.get(n) {
+        if let Some(runs) = color_runs.and_then(|cr| cr.get(n)) {
+            children.push(line_text_color_runs(local_line, &text, runs, metrics, palette));
+        } else if let Some(line_spans) = spans_per_line.get(n) {
             children.push(line_text_tokens(local_line, &text, line_spans, metrics, palette, syntax));
         } else {
             children.push(line_text_plain(local_line, text, metrics, palette));
@@ -678,6 +731,37 @@ fn line_text_tokens<Msg: Clone + 'static>(
         metrics.font_size,
         palette.fg_text,
         runs,
+        Alignment::Start,
+    )
+    .mono()
+}
+
+/// Como [`line_text_tokens`] pero con `(byte_start, byte_end, Color)`
+/// explícitos provistos por el caller (coloreo semántico propio, p. ej. un
+/// shell que tinta `ls`/paths/urls). El resto del texto va en `fg_text`.
+fn line_text_color_runs<Msg: Clone + 'static>(
+    line: usize,
+    text: &str,
+    runs: &[(usize, usize, Color)],
+    metrics: EditorMetrics,
+    palette: &EditorPalette,
+) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(4.0_f32),
+            top: length(line as f32 * metrics.line_height),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(2000.0_f32), height: length(metrics.line_height) },
+        ..Default::default()
+    })
+    .text_runs(
+        text.to_string(),
+        metrics.font_size,
+        palette.fg_text,
+        runs.to_vec(),
         Alignment::Start,
     )
     .mono()

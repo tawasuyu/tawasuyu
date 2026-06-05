@@ -37,8 +37,8 @@ pub use ops::{indent_str, EditDelta};
 pub use state::{ApplyResult, EditorOptions, EditorState, Preedit};
 pub use undo::UndoStack;
 pub use view::{
-    text_editor_view, text_editor_view_full, text_editor_view_highlighted, EditorMetrics,
-    EditorPalette, GutterStyle, PointerEvent,
+    text_editor_view, text_editor_view_colored, text_editor_view_full,
+    text_editor_view_highlighted, EditorMetrics, EditorPalette, GutterStyle, PointerEvent,
 };
 
 use llimphi_ui::llimphi_raster::peniko::Color;

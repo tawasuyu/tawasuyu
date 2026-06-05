@@ -2206,19 +2206,19 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             child_h_sum += ROW_H;
         }
     } else {
-        // Cuerpo como text de IDE read-only: numeración de líneas +
-        // selección moderna + copiar (click derecho), reusando el widget
-        // canónico (uso de referencia: `nada`). La fuente de verdad sigue
-        // siendo el buffer de output; el editor se reconstruye por frame
-        // desde él + el cursor guardado en `state.body_sel`. (Las
-        // decoraciones clickables de paths/urls del render por-línea quedan
-        // en deuda — el editor todavía no expone spans accionables.)
+        // Cuerpo como text de IDE read-only: numeración + selección moderna +
+        // copiar (click derecho), CON coloreo semántico propio (ls por tipo
+        // de archivo, paths/urls/grep/sha, stderr en rojo) vía
+        // `text_editor_view_colored`. La fuente de verdad sigue siendo el
+        // buffer de output; el editor se reconstruye por frame desde él + el
+        // cursor en `state.body_sel`. (Los paths siguen sin ser *clickables*
+        // —el editor no expone spans accionables todavía—; se copian con
+        // selección/doble-click. Deuda anotada.)
         let body_lines = body_lines_for_block(state, block);
         if !body_lines.is_empty() {
             let n = body_lines.len();
             let mut ed = body_editor_state(state, block);
-            // Tinte rojo tenue en líneas stderr — preserva la señal de error
-            // que el coloreado por-línea daba, ahora como fondo sutil.
+            // Tinte rojo tenue de fondo en líneas stderr — refuerza la señal.
             let stderr_tint = llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(
                 220, 110, 110, 28,
             );
@@ -2232,15 +2232,17 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     }
                 })
                 .collect();
+            let color_runs = body_color_runs(state, block, theme);
             let metrics = body_editor_metrics();
             let palette = body_editor_palette(theme);
             let lift_ptr = (*lift).clone();
             let lift_dbl = (*lift).clone();
-            let editor = llimphi_widget_text_editor::text_editor_view::<HostMsg>(
+            let editor = llimphi_widget_text_editor::text_editor_view_colored::<HostMsg>(
                 &ed,
                 &palette,
                 metrics,
                 n,
+                &color_runs,
                 move |ev| Some(lift_ptr(Msg::BodyPointer { block, ev })),
             )
             .on_right_click(lift(Msg::CopyBody(block)))
@@ -2440,6 +2442,85 @@ fn kind_icon(kind: shuma_line::FileKind) -> llimphi_icons::Icon {
         K::Executable => Icon::Settings,
         K::Generic => Icon::File,
     }
+}
+
+/// Color por tipo de archivo, estilo `ls --color` — para que el `ls` (y
+/// cualquier listado con paths) deje de verse plano.
+pub(crate) fn kind_color(
+    kind: shuma_line::FileKind,
+    theme: &Theme,
+) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use shuma_line::FileKind as K;
+    match kind {
+        K::Folder => Color::from_rgba8(100, 160, 235, 255),    // azul
+        K::Symlink => Color::from_rgba8(90, 200, 205, 255),    // cyan
+        K::Image => Color::from_rgba8(200, 140, 210, 255),     // magenta
+        K::Audio => Color::from_rgba8(210, 165, 120, 255),     // ámbar
+        K::Video => Color::from_rgba8(210, 140, 165, 255),     // rosa
+        K::Archive => Color::from_rgba8(210, 120, 110, 255),   // rojo
+        K::Document => Color::from_rgba8(205, 200, 140, 255),  // amarillo
+        K::Code => Color::from_rgba8(130, 185, 225, 255),      // azul claro
+        K::Data => Color::from_rgba8(150, 200, 160, 255),      // verde agua
+        K::Font => Color::from_rgba8(190, 170, 220, 255),      // violeta
+        K::Executable => Color::from_rgba8(130, 205, 140, 255), // verde
+        K::Generic => theme.fg_text,
+    }
+}
+
+/// Color de una decoración (path/url/grep/sha/issue/box) — el mismo
+/// vocabulario semántico que el render por-línea viejo, ahora como runs de
+/// color para el editor del cuerpo.
+pub(crate) fn decoration_color(
+    kind: &shuma_line::DecorationKind,
+    theme: &Theme,
+) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use shuma_line::DecorationKind as Dk;
+    match kind {
+        Dk::Path {
+            abs,
+            is_dir,
+            is_executable,
+            is_symlink,
+        } => kind_color(
+            shuma_line::file_kind(abs, *is_dir, *is_executable, *is_symlink),
+            theme,
+        ),
+        Dk::Url(_) => Color::from_rgba8(110, 180, 220, 255),
+        Dk::GrepRef { .. } => theme.accent,
+        Dk::GitSha(_) => Color::from_rgba8(210, 165, 120, 255),
+        Dk::IssueRef(_) => Color::from_rgba8(200, 200, 140, 255),
+        Dk::BoxDraw => theme.fg_muted,
+    }
+}
+
+/// Runs de color `(byte_start, byte_end, Color)` por cada línea del cuerpo
+/// de `block`, alimentando `text_editor_view_colored`: stderr en rojo, y
+/// las decoraciones de `shuma-line` (paths por tipo, urls, grep, sha…)
+/// coloreadas. Devuelve un vec alineado 1:1 con `body_lines_for_block`.
+pub(crate) fn body_color_runs(
+    state: &State,
+    block: u64,
+    theme: &Theme,
+) -> Vec<Vec<(usize, usize, llimphi_ui::llimphi_raster::peniko::Color)>> {
+    let lines = body_lines_for_block(state, block);
+    let kinds = body_kinds_for_block(state, block);
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            // stderr: toda la línea en rojo (señal de error, además del tinte).
+            if matches!(kinds.get(i), Some(OutputKind::Stderr)) {
+                return vec![(0usize, text.len(), theme.fg_destructive)];
+            }
+            shuma_line::decorate_line(text, &state.cwd)
+                .into_iter()
+                .filter(|d| d.start < d.end && d.end <= text.len())
+                .map(|d| (d.start, d.end, decoration_color(&d.kind, theme)))
+                .collect()
+        })
+        .collect()
 }
 
 pub(crate) fn build_span_children<HostMsg: Clone + 'static>(

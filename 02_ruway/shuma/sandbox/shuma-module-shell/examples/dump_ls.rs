@@ -30,10 +30,20 @@ fn main() {
         state.output.push(l);
     };
     push(&mut state, OutputLine::prompt("$ ls -la"));
-    for i in 0..50 {
+    // Entradas REALES del cwd → `decorate_line` las reconoce y las colorea
+    // por tipo (carpeta/código/ejecutable…). Así el dump ejercita el coloreo.
+    let mut names: Vec<String> = std::fs::read_dir(".")
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    for name in names.iter().take(40) {
         push(
             &mut state,
-            OutputLine::stdout(format!("-rw-r--r-- 1 sergio sergio {:>6}  archivo_{:02}.rs", i * 137, i)),
+            OutputLine::stdout(format!("-rw-r--r-- 1 sergio sergio   1234  {name}")),
         );
     }
     push(&mut state, OutputLine::notice("✔ exit 0"));
