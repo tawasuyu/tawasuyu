@@ -1117,8 +1117,19 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     // alimentan la predicción del ghost para el próximo comando.
     refresh_patterns(&mut s);
 
+    // Expansión de aliases del `.shumarc`: la primera palabra se reemplaza si
+    // está declarada. Los meta-comandos del shell (`:save`, `:limit`, …) se
+    // dejan SIN expandir para que el rc no pueda secuestrarlos. Lo que se
+    // muestra (`$ trimmed`) y se persiste en el historial es lo que el usuario
+    // tipeó; lo que se ejecuta es `exec_line` ya resuelto.
+    let exec_line = if trimmed.starts_with(':') {
+        trimmed.clone()
+    } else {
+        s.config.expand_aliases(&trimmed).into_owned()
+    };
+
     // Builtins primero — no spawnean proceso, corren aunque haya run vivo.
-    if let Some((cmd, rest)) = split_first_word(&trimmed) {
+    if let Some((cmd, rest)) = split_first_word(&exec_line) {
         match cmd {
             "cd" => {
                 return apply_cd(s, rest);
@@ -1152,7 +1163,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
 
     // Sufijo `&` (con espacios opcionales antes) → background. El
     // background siempre arranca, sin encolar; no hay límite.
-    if let Some(stripped) = trimmed.strip_suffix('&') {
+    if let Some(stripped) = exec_line.strip_suffix('&') {
         let cmd = stripped.trim_end().to_string();
         if cmd.is_empty() {
             return s;
@@ -1163,13 +1174,13 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     // Comando externo foreground. Si ya hay uno corriendo, lo encolamos;
     // si no, arrancamos ahora mismo.
     if s.running.is_some() {
-        s.queue.push_back(trimmed);
+        s.queue.push_back(exec_line);
         s.push_output(OutputLine::notice(
             "⌛ en cola — esperando a que el comando actual termine",
         ));
         return s;
     }
-    start_run(s, trimmed)
+    start_run(s, exec_line)
 }
 
 #[derive(Debug, Clone, Copy)]

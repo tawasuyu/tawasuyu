@@ -412,6 +412,12 @@ pub struct State {
     /// parpadeo del caret: queda sólido un instante tras tipear y luego
     /// titila, para que se sienta vivo sin distraer.
     pub input_edit_at_ms: u64,
+    /// Configuración personal cargada de `~/.config/shuma/shumarc.toml`
+    /// (aliases, env, dedup, captura). Si falta o no parsea, es
+    /// [`shuma_config::Config::default`] — el shell arranca igual. Sus
+    /// aliases se expanden en cada submit; sus env vars ya se aplicaron al
+    /// proceso en [`State::new`].
+    pub config: shuma_config::Config,
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.
@@ -433,7 +439,24 @@ impl State {
     pub fn new(source: Source) -> Self {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         let completion_source = Arc::new(ShellSource::new(&cwd));
+        // Configuración personal: fallback silencioso a default si falta o no
+        // parsea (no hay nada crítico, sólo preferencias). Las env vars del
+        // `.shumarc` se exportan AHORA, antes de spawnear ningún subproceso —
+        // los hijos las heredan.
+        let config = shuma_config::Config::load_default().unwrap_or_default();
+        config.apply_env();
         let history = Arc::new(Mutex::new(open_history()));
+        // La política de dedup del historial sale del rc (default
+        // `IgnoreConsecutive` si no se declara).
+        if let Ok(mut h) = history.lock() {
+            h.set_dedup(match config.history.dedup {
+                shuma_config::DedupPolicy::None => shuma_history::DedupPolicy::None,
+                shuma_config::DedupPolicy::IgnoreConsecutive => {
+                    shuma_history::DedupPolicy::IgnoreConsecutive
+                }
+                shuma_config::DedupPolicy::EraseDups => shuma_history::DedupPolicy::EraseDups,
+            });
+        }
         // El anchor de grupos arranca al final del historial durable: el
         // primer `:save` agrupa sólo lo tipeado en ESTA sesión, no meses
         // de historial persistido.
@@ -462,8 +485,10 @@ impl State {
             collapsed: HashSet::new(),
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
-            capture_limit_bytes: 0,
-            spill: false,
+            // Política de captura inicial desde el rc (los builtins `:limit` /
+            // `:spill` la sobreescriben en vivo). `0` MiB = sin tope.
+            capture_limit_bytes: config.capture.limit_mb.saturating_mul(1024 * 1024),
+            spill: config.capture.spill,
             reprocess_source: None,
             groups: Vec::new(),
             group_anchor,
@@ -476,6 +501,7 @@ impl State {
             body_drag_accum: (0.0, 0.0),
             block_started: std::collections::HashMap::new(),
             input_edit_at_ms: now_unix_millis(),
+            config,
         }
     }
 
@@ -1240,6 +1266,54 @@ mod tests {
         s.input.set_text(":spill off");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         assert!(!s.spill);
+    }
+
+    #[test]
+    fn alias_from_config_expands_before_run() {
+        // Un alias del `.shumarc` reemplaza la primera palabra; lo tipeado
+        // queda en el historial, lo resuelto es lo que se ejecuta.
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.config
+            .aliases
+            .insert("saluda".into(), "echo hola_alias".into());
+        s.input.set_text("saluda");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.is_running(), "el alias resuelto debe arrancar un run");
+        s = drain_until_idle(s);
+        let combined: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
+        assert!(
+            combined.iter().any(|t| t == "hola_alias"),
+            "esperaba stdout del alias resuelto en {combined:?}"
+        );
+        // El prompt muestra lo tipeado, no lo resuelto.
+        assert!(combined.iter().any(|t| t == "$ saluda"));
+    }
+
+    #[test]
+    fn alias_can_resolve_to_a_builtin() {
+        // `alias raiz='cd /'` debe disparar el builtin cd sobre la línea ya
+        // expandida.
+        let mut s = State::new(Source::Local);
+        s.config.aliases.insert("raiz".into(), "cd /".into());
+        s.input.set_text("raiz");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.cwd, PathBuf::from("/"));
+        assert!(!s.is_running(), "cd no spawnea proceso");
+    }
+
+    #[test]
+    fn alias_never_hijacks_meta_command() {
+        // Un alias declarado con el nombre de un meta-comando no debe
+        // secuestrarlo: `:limit` sigue siendo el builtin del shell.
+        let mut s = State::new(Source::Local);
+        s.config
+            .aliases
+            .insert(":limit".into(), "echo secuestrado".into());
+        s.input.set_text(":limit 7");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.capture_limit_bytes, 7 * 1024 * 1024);
+        assert!(!s.is_running(), "el meta no debe ejecutar el alias");
     }
 
     #[test]
