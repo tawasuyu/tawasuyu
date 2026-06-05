@@ -1660,7 +1660,9 @@ pub(crate) fn body_editor_metrics() -> llimphi_widget_text_editor::EditorMetrics
 pub(crate) fn body_editor_palette(theme: &Theme) -> llimphi_widget_text_editor::EditorPalette {
     let mut p = llimphi_widget_text_editor::EditorPalette::from_theme(theme);
     p.bg = theme.bg_panel_alt;
-    p.bg_gutter = theme.bg_panel_alt;
+    // Gutter un escalón más hundido que el cuerpo: la columna de numeración se
+    // lee como gutter (look IDE), no flotando sobre el mismo fondo.
+    p.bg_gutter = mix_color(theme.bg_panel_alt, theme.sunken(), 0.6);
     p
 }
 
