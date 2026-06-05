@@ -2027,13 +2027,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
     let header_text = if has_prompt {
         group[0].text.clone()
     } else {
-        // Prompt recortado del buffer: recuperamos el comando del mapa por
-        // bloque; si tampoco está, un header genérico honesto.
-        state
-            .block_command
-            .get(&block)
-            .cloned()
-            .unwrap_or_else(|| "$ … (salida recortada)".to_string())
+        "$ … (salida recortada — comando fuera del buffer)".to_string()
     };
     let body_lines_slice: &[&OutputLine] = if has_prompt { &group[1..] } else { group };
 

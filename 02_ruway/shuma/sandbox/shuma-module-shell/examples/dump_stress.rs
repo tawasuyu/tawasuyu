@@ -60,9 +60,6 @@ fn main() {
     state.current_block = big;
     state.block_started.insert(big, 0);
     state.block_started.insert(block, 0);
-    // En la app real lo llena push_output al abrir el bloque; acá lo simulamos
-    // (el example empuja directo a output) para ver el header recuperado.
-    state.block_command.insert(big, "$ ls -alR /".to_string());
 
     // (1) Input que termina en espacio — ¿se ve el espacio / avanza el caret?
     state.input.set_text("echo hola ");
