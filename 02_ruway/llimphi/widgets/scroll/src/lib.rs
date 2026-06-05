@@ -195,6 +195,53 @@ pub fn rubber_band(overscroll: f32, dim: f32) -> f32 {
     (1.0 - 1.0 / (x * C / dim + 1.0)) * dim * overscroll.signum()
 }
 
+// ── Slivers: app-bar colapsable + sticky headers (seam "extent-por-offset") ──
+
+/// Altura de un **app-bar colapsable** dado el `offset` de scroll: arranca en
+/// `header_max` (offset 0) y baja linealmente hasta `header_min`, donde queda
+/// fijado (pinned). El "rango de colapso" es `header_max - header_min`.
+pub fn collapsed_height(offset: f32, header_max: f32, header_min: f32) -> f32 {
+    (header_max - offset.max(0.0)).clamp(header_min, header_max)
+}
+
+/// Fracción de colapso del app-bar en `[0, 1]`: `0` = expandido (offset 0),
+/// `1` = colapsado al mínimo. El caller la usa para fundir el título, achicar
+/// un subtítulo, bajar la opacidad de una imagen de fondo, etc.
+pub fn collapse_fraction(offset: f32, header_max: f32, header_min: f32) -> f32 {
+    let range = (header_max - header_min).max(0.0);
+    if range <= 0.0 {
+        return 1.0;
+    }
+    (offset.max(0.0) / range).clamp(0.0, 1.0)
+}
+
+/// Offset máximo de scroll con un app-bar colapsable: los `header_max -
+/// header_min` px que consume el colapso **más** lo que scrollee el cuerpo
+/// bajo el header ya fijado en `header_min`. El caller lo usa para clampear.
+pub fn sliver_max_offset(
+    content_len: f32,
+    viewport_len: f32,
+    header_max: f32,
+    header_min: f32,
+) -> f32 {
+    let range = (header_max - header_min).max(0.0);
+    let body_vp = (viewport_len - header_min).max(0.0);
+    range + max_offset(content_len, body_vp)
+}
+
+/// Posición `y` (relativa al tope del viewport) de un encabezado **sticky** de
+/// una sección que ocupa `[section_top, section_top + section_h]` en
+/// coordenadas de contenido, con altura de encabezado `header_h`. Mientras la
+/// sección está en pantalla, el encabezado se **pega al tope** (`y = 0`); al
+/// llegar la próxima sección, ésta lo **empuja** hacia arriba (no pasa de
+/// `section_bottom - header_h`). Antes de que la sección llegue al tope, sigue
+/// su posición natural. El caller posiciona el encabezado absoluto en esta `y`.
+pub fn sticky_y(offset: f32, section_top: f32, section_h: f32, header_h: f32) -> f32 {
+    let natural = section_top - offset; // y del encabezado sin sticky
+    let section_bottom = section_top + section_h - offset;
+    natural.max(0.0).min(section_bottom - header_h)
+}
+
 /// Geometría del thumb: `(altura, posición_y)` dentro del track de alto
 /// `viewport_len`, y `offset_por_px` (cuánto offset de contenido equivale
 /// a 1 px de arrastre del thumb). Público para tests y para callers que
@@ -437,6 +484,78 @@ where
     .children(children)
 }
 
+/// **App-bar colapsable + cuerpo scrolleable** en un solo viewport (el sliver
+/// más pedido). Un único `offset` (en el Model) maneja las dos cosas: primero
+/// **colapsa** el header de `header_max` a `header_min` (consume los primeros
+/// `header_max - header_min` px de scroll), y luego **scrollea** el cuerpo bajo
+/// el header ya fijado en `header_min`.
+///
+/// `header(frac)` construye el contenido del header dado `frac ∈ [0,1]` (ver
+/// [`collapse_fraction`]) — el caller lo usa para fundir el título, mostrar una
+/// versión compacta al colapsar, etc. El header se pinta a la altura
+/// [`collapsed_height`] del momento.
+///
+/// `content_len` es el alto natural del cuerpo; el viewport del cuerpo cambia
+/// con el colapso (crece a medida que el header se achica). La rueda funciona
+/// tanto sobre el header como sobre el cuerpo (ambos emiten `on_scroll`). El
+/// caller clampea el offset con [`sliver_max_offset`].
+pub fn sliver_app_bar<Msg, H, F>(
+    offset: f32,
+    header_max: f32,
+    header_min: f32,
+    header: H,
+    content: View<Msg>,
+    content_len: f32,
+    viewport_len: f32,
+    on_scroll: F,
+    palette: &ScrollPalette,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    H: FnOnce(f32) -> View<Msg>,
+    F: Fn(f32) -> Msg + Send + Sync + 'static,
+{
+    let range = (header_max - header_min).max(0.0);
+    let h = collapsed_height(offset, header_max, header_min);
+    let frac = collapse_fraction(offset, header_max, header_min);
+    // El cuerpo recién empieza a scrollear cuando el colapso terminó.
+    let body_offset = (offset - range).max(0.0);
+    let body_vp = (viewport_len - h).max(0.0);
+
+    let on_scroll = Arc::new(on_scroll);
+    let line_px = palette.line_px;
+
+    // Header pinned (altura `h`), recortado, con rueda propia.
+    let s_head = on_scroll.clone();
+    let header_box = View::new(Style {
+        size: Size { width: percent(1.0), height: length(h) },
+        ..Default::default()
+    })
+    .clip(true)
+    .on_scroll(move |_dx, dy| Some((s_head)(dy * line_px)))
+    .children(vec![header(frac)]);
+
+    // Cuerpo: reusa scroll_y con el viewport restante y el offset del cuerpo.
+    let s_body = on_scroll;
+    let body = scroll_y(
+        body_offset,
+        content_len,
+        body_vp,
+        content,
+        move |d| (s_body)(d),
+        palette,
+    );
+
+    View::new(Style {
+        flex_direction:
+            llimphi_ui::llimphi_layout::taffy::prelude::FlexDirection::Column,
+        size: Size { width: percent(1.0), height: length(viewport_len) },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![header_box, body])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +631,39 @@ mod tests {
         assert!(b > a && b < 2.0 * a);
         // Cerca de 0 es casi lineal (poca amortiguación todavía).
         assert!(rubber_band(0.0, dim).abs() < 1e-6);
+    }
+
+    #[test]
+    fn sliver_colapso_y_max() {
+        // Header 200→64, viewport 500, contenido 1200.
+        let (max_h, min_h) = (200.0, 64.0);
+        // Offset 0 → expandido, frac 0.
+        assert_eq!(collapsed_height(0.0, max_h, min_h), 200.0);
+        assert_eq!(collapse_fraction(0.0, max_h, min_h), 0.0);
+        // A mitad del rango (68px de 136) → ~0.5 y altura ~132.
+        let mid = (max_h - min_h) / 2.0; // 68
+        assert!((collapse_fraction(mid, max_h, min_h) - 0.5).abs() < 1e-3);
+        assert!((collapsed_height(mid, max_h, min_h) - 132.0).abs() < 1e-3);
+        // Pasado el rango → fijado al mínimo, frac 1.
+        assert_eq!(collapsed_height(500.0, max_h, min_h), 64.0);
+        assert_eq!(collapse_fraction(500.0, max_h, min_h), 1.0);
+        // Max offset = rango (136) + scroll del cuerpo bajo el header mínimo.
+        let body_vp = 500.0 - min_h; // 436
+        let expected = 136.0 + max_offset(1200.0, body_vp);
+        assert!((sliver_max_offset(1200.0, 500.0, max_h, min_h) - expected).abs() < 1e-3);
+    }
+
+    #[test]
+    fn sticky_pegado_y_empujado() {
+        // Sección [100, 100+300], encabezado 40px de alto.
+        let (top, sh, hh) = (100.0, 300.0, 40.0);
+        // Antes de llegar al tope (offset 50 < 100): posición natural 50.
+        assert_eq!(sticky_y(50.0, top, sh, hh), 50.0);
+        // Dentro de la sección (offset 200 > top): pegado al tope (0).
+        assert_eq!(sticky_y(200.0, top, sh, hh), 0.0);
+        // Cerca del fondo de la sección: la próxima lo empuja hacia arriba (<0).
+        // section_bottom - hh = (100+300-380) - 40 = -20.
+        assert_eq!(sticky_y(380.0, top, sh, hh), -20.0);
     }
 
     #[test]
