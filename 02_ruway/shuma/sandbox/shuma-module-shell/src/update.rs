@@ -1200,8 +1200,10 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     // si no, arrancamos ahora mismo.
     if s.running.is_some() {
         s.queue.push_back(exec_line);
+        // `»` (no ⌛): el reloj de arena U+231B no está ni en la mono embebida
+        // ni en el fallback DejaVu → daba tofu. `»` sí está en la mono.
         s.push_output(OutputLine::notice(
-            "⌛ en cola — esperando a que el comando actual termine",
+            "» en cola — esperando a que el comando actual termine",
         ));
         return s;
     }
