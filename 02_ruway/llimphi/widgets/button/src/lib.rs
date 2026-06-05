@@ -121,4 +121,5 @@ pub fn button_styled<Msg: Clone + 'static>(
         })
         .text_aligned(label.into(), 13.0, palette.fg, text_alignment)
         .on_click(on_click)
+        .cursor(llimphi_ui::Cursor::Pointer)
 }

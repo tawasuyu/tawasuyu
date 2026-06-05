@@ -157,6 +157,12 @@ where
         Direction::Row => (length(palette.thickness), percent(1.0_f32)),
         Direction::Column => (percent(1.0_f32), length(palette.thickness)),
     };
+    // Divisor vertical (Row, separa izq/der) → resize este-oeste; divisor
+    // horizontal (Column, separa arriba/abajo) → resize norte-sur.
+    let cursor = match direction {
+        Direction::Row => llimphi_ui::Cursor::ColResize,
+        Direction::Column => llimphi_ui::Cursor::RowResize,
+    };
     View::new(Style {
         size: Size { width, height },
         flex_shrink: 0.0,
@@ -170,5 +176,6 @@ where
     })
     .fill(palette.divider)
     .hover_fill(palette.divider_hover)
+    .cursor(cursor)
     .draggable(handler)
 }

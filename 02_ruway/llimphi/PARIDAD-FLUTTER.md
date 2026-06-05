@@ -119,10 +119,11 @@ a 5k nodos" de "a 50k".
    `Typesetter::layout_clamped`. Crítico para listas/labels/celdas.
 4. ✅ **Bloque 4 = animaciones implícitas** — `View::animated(key, dur)` +
    `AnimRegistry` + ticker autodetenido. Interpola fill/radius; ampliable.
-5. **Bloque 5 = quick wins de la cosecha** — forma de cursor (`.cursor(...)`,
-   completa el hover que ya existe) + animación de contenido (cross-fade/enter-exit
-   extendiendo `AnimRegistry`) + scrollbar arrastrable. Composición barata, alto
-   retorno visual.
+5. **Bloque 5 = quick wins de la cosecha** — ✅ forma de cursor
+   (`View::cursor(Cursor)`, enum llimphi-native mapeado a winit en el runtime;
+   herencia CSS gratis vía `hit_test_cursor`; consumidores: text-input=Text,
+   splitter=Col/RowResize, button=Pointer). Falta: animación de contenido
+   (cross-fade/enter-exit extendiendo `AnimRegistry`) + scrollbar arrastrable.
 6. Pinch-zoom + scroll physics.
 7. AccessKit + slivers + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
@@ -175,7 +176,7 @@ Clasificadas por la regla contrato-vs-composición de arriba.
 
 | Pieza | Análogo | Estado verificado | Por qué |
 |---|---|---|---|
-| **Forma de cursor** (`.cursor(CursorIcon)`) | `MouseRegion.cursor` / `SystemMouseCursors` · Compose `pointerHoverIcon` | **Ausente** (no hay `set_cursor`/`CursorIcon` en runtime) | Pulido desktop crítico: beam sobre input, resize sobre splitter, pointer sobre botón. El plumbing de hover (`on_pointer_enter/leave`) **ya está** — falta que el runtime aplique el cursor del nodo hovered más alto vía `window.set_cursor()`. Es un mini-contrato (prop en `View` + resolución topmost), pero chico. |
+| ✅ **Forma de cursor** (`View::cursor(Cursor)`) | `MouseRegion.cursor` / `SystemMouseCursors` · Compose `pointerHoverIcon` | **Hecho 2026-06-05** | Enum `Cursor` llimphi-native (19 formas) en el compositor; `hit_test_cursor` da herencia CSS (hijo sin cursor cae al ancestro); `llimphi-ui` lo mapea a `winit::CursorIcon` y lo aplica en la transición de hover. Consumidores: text-input=Text, splitter=Col/RowResize, button=Pointer. |
 | **Animación de contenido** (cross-fade al swap + enter/exit) | `AnimatedSwitcher` · `AnimatedList` · `AnimatedVisibility` | **Parcial**: sólo animación de props (fill/radius) del Bloque 4 | Es el Bloque 5 natural: `AnimRegistry` ya keya por `key` estable, así que "apareció/desapareció una key" = enter/exit, y "cambió la identidad bajo la misma key" = cross-fade. Altísimo valor visual sobre el reconciliador que ya existe. |
 | **Scrollbar interactiva** (drag del thumb) | `Scrollbar` arrastrable | Falta (Tier 5 lo lista como "persistente") | Table-stakes desktop. `thumb_geometry` ya calcula la geometría; falta el hit-test + drag del thumb. |
 
@@ -214,8 +215,8 @@ cuatro seams de arriba, no abre uno nuevo.
 
 | Control | Análogo | ¿Influye arq.? | Nota |
 |---|---|---|---|
-| **Charts** (línea/barra/área/scatter/pie) | Swift Charts · `fl_chart` | No (sobre `paint_with`) | Familia grande y de alto valor transversal: ERP/dominium, cosmos, finanzas, nakui. **El que más resalta** por retorno. No hay nada genérico en el catálogo. |
-| **Ripple / InkWell** | Material `InkWell` ripple | Anim | Feedback de tap icónico: círculo que expande desde el punto y clippea al borde. `paint_with` + tween radial. Pulido material barato. |
+| ~~**Charts**~~ | Swift Charts · `fl_chart` | — | **YA EXISTE: es `pineal`** (`00_unanchay/pineal`, dominio cerrado): cartesian/polar/financial/heatmap/treemap/hexbin/contour/bars/flow/stream/mesh/phosphor sobre el trait `Canvas`, agnóstico de backend, **ya pinta a vello/llimphi**. No es un gap. Único faltante posible: un `llimphi-widget` fino que embeba un canvas pineal en un `View` vía `paint_with` — **verificar si el bridge ya existe** (la migración a Llimphi trajo backend SceneCanvas + widgets) antes de anotar nada. |
+| **Ripple / InkWell** | Material `InkWell` ripple | Anim | Feedback de tap icónico: círculo que expande desde el punto y clippea al borde. `paint_with` + tween radial. Pulido material barato. **El que más resalta ahora** por retorno/costo. |
 | **Carousel / Pager** | Compose `HorizontalPager` · iOS page control | Seam (gestos+scroll) | Páginas full-width con snap. Cae bajo scroll-physics + gestos (Tier 4/5), no abre seam nuevo. |
 | **Chips** (filter/choice/input, removibles) | `FilterChip`/`InputChip` · `AssistChip` | No | Selección múltiple compacta, tag-input. Composición sobre button+badge. |
 | **Range slider** (dos thumbs) | `RangeSlider` | No | Variante del `slider` que ya existe (filtros de rango, ecualizador en media). |

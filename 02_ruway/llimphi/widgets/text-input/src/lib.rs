@@ -199,6 +199,7 @@ pub fn text_input_view<Msg: Clone + 'static>(
     .fill(border)
     .radius(4.0)
     .on_click(on_focus)
+    .cursor(llimphi_ui::Cursor::Text)
     .children(vec![inner])
 }
 

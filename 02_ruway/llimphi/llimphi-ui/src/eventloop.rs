@@ -18,6 +18,35 @@ pub(crate) fn build_window_attributes<A: App>() -> WindowAttributes {
     attrs
 }
 
+/// Mapea el [`Cursor`](llimphi_compositor::Cursor) llimphi-native (resuelto por
+/// el hit-test de hover) a `winit::window::CursorIcon`. `None` → flecha default.
+/// Mantiene al compositor winit-free: la traducción vive sólo en el runtime.
+fn to_winit_cursor(c: Option<llimphi_compositor::Cursor>) -> llimphi_hal::winit::window::CursorIcon {
+    use llimphi_compositor::Cursor as C;
+    use llimphi_hal::winit::window::CursorIcon as I;
+    match c {
+        None | Some(C::Default) => I::Default,
+        Some(C::Pointer) => I::Pointer,
+        Some(C::Text) => I::Text,
+        Some(C::Crosshair) => I::Crosshair,
+        Some(C::Move) => I::Move,
+        Some(C::Grab) => I::Grab,
+        Some(C::Grabbing) => I::Grabbing,
+        Some(C::NotAllowed) => I::NotAllowed,
+        Some(C::Wait) => I::Wait,
+        Some(C::Progress) => I::Progress,
+        Some(C::Help) => I::Help,
+        Some(C::ColResize) => I::ColResize,
+        Some(C::RowResize) => I::RowResize,
+        Some(C::EwResize) => I::EwResize,
+        Some(C::NsResize) => I::NsResize,
+        Some(C::NeswResize) => I::NeswResize,
+        Some(C::NwseResize) => I::NwseResize,
+        Some(C::ZoomIn) => I::ZoomIn,
+        Some(C::ZoomOut) => I::ZoomOut,
+    }
+}
+
 impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -196,6 +225,9 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     let mut enter_msg: Option<A::Msg> = None;
                     let mut hovered_changed = false;
                     let mut new_hovered: Option<usize> = state.hovered;
+                    // Forma del cursor del nodo recién hovereado (sólo se
+                    // resuelve en la transición; ver `to_winit_cursor`).
+                    let mut new_cursor: Option<Cursor> = None;
                     if let Some(cache) = state.last_render.as_ref() {
                         let (mounted, computed) = match cache.overlay.as_ref() {
                             Some(ov) => (&ov.mounted, &ov.computed),
@@ -217,11 +249,18 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             enter_msg = new_hover
                                 .and_then(|i| mounted.nodes.get(i))
                                 .and_then(|n| n.on_pointer_enter.clone());
+                            new_cursor = hit_test_cursor(
+                                mounted,
+                                computed,
+                                position.x as f32,
+                                position.y as f32,
+                            );
                         }
                         new_hovered = new_hover;
                     }
                     state.hovered = new_hovered;
                     if hovered_changed {
+                        state.window.set_cursor(to_winit_cursor(new_cursor));
                         state.window.request_redraw();
                     }
                     if let Some(msg) = enter_msg {

@@ -34,8 +34,20 @@ impl<Msg> View<Msg> {
             anim: None,
             transform: None,
             tooltip: None,
+            cursor: None,
             children: Vec::new(),
         }
+    }
+
+    /// Fija la forma del puntero del mouse mientras el cursor está sobre este
+    /// nodo (o un descendiente que no declare la suya — se hereda del ancestro
+    /// más cercano que la tenga). El runtime la resuelve en el hit-test de hover
+    /// y la aplica a la ventana. Ejemplos: `.cursor(Cursor::Text)` en un input,
+    /// `.cursor(Cursor::ColResize)` en un divisor de splitter,
+    /// `.cursor(Cursor::Pointer)` en un botón.
+    pub fn cursor(mut self, cursor: Cursor) -> Self {
+        self.cursor = Some(cursor);
+        self
     }
 
     /// Asocia un texto de **tooltip** a este nodo. Llimphi sólo lo transporta

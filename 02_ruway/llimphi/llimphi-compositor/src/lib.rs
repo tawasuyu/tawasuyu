@@ -375,6 +375,12 @@ pub struct View<Msg> {
     /// del runtime, una surface popup del cliente) lo decide el consumidor. El
     /// hit-test de hover ya localiza el nodo bajo el cursor. `None` = sin tip.
     pub tooltip: Option<String>,
+    /// Forma del puntero del mouse mientras está sobre este nodo (o un
+    /// descendiente sin cursor propio — se hereda del ancestro más cercano que
+    /// lo declare). El runtime lo resuelve en el hit-test de hover y lo aplica a
+    /// la ventana. `None` = hereda (default flecha en la raíz). Ver [`Cursor`] y
+    /// [`View::cursor`]. Llimphi-native (sin winit); el runtime lo mapea.
+    pub cursor: Option<Cursor>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -413,6 +419,51 @@ pub struct TextMeasure {
     pub ellipsis: bool,
 }
 
+/// Forma del puntero del mouse. Subconjunto práctico, llimphi-native (el
+/// compositor no depende de winit). El runtime (`llimphi-ui`) mapea 1:1 a
+/// `winit::window::CursorIcon`. Nombres alineados con CSS/winit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cursor {
+    /// Flecha por defecto.
+    Default,
+    /// Manito — sobre algo clickeable (links, botones).
+    Pointer,
+    /// I-beam — sobre texto editable/seleccionable.
+    Text,
+    /// Cruz — selección precisa (canvas, picker de color).
+    Crosshair,
+    /// Cuatro flechas — mover un objeto.
+    Move,
+    /// Mano abierta — agarrable (antes de arrastrar).
+    Grab,
+    /// Mano cerrada — arrastrando.
+    Grabbing,
+    /// Prohibido — drop no permitido / acción inválida.
+    NotAllowed,
+    /// Reloj/espera — operación bloqueante.
+    Wait,
+    /// Progreso — ocupado pero la UI responde.
+    Progress,
+    /// Interrogación — ayuda contextual.
+    Help,
+    /// Resize horizontal (columna / divisor vertical).
+    ColResize,
+    /// Resize vertical (fila / divisor horizontal).
+    RowResize,
+    /// Resize este-oeste.
+    EwResize,
+    /// Resize norte-sur.
+    NsResize,
+    /// Resize diagonal ↗↙.
+    NeswResize,
+    /// Resize diagonal ↖↘.
+    NwseResize,
+    /// Lupa + (zoom in).
+    ZoomIn,
+    /// Lupa − (zoom out).
+    ZoomOut,
+}
+
 pub struct MountedNode<Msg> {
     pub id: NodeId,
     pub fill: Option<Color>,
@@ -449,6 +500,9 @@ pub struct MountedNode<Msg> {
     /// Texto de tooltip de este nodo (ver [`View::tooltip`]). El consumidor lo
     /// lee tras un hit-test de hover para pintar el rótulo flotante.
     pub tooltip: Option<String>,
+    /// Forma del puntero sobre este nodo (ver [`View::cursor`]). El runtime la
+    /// resuelve heredando del ancestro más cercano que la declare.
+    pub cursor: Option<Cursor>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.

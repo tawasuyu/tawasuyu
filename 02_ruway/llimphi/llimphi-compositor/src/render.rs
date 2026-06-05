@@ -48,6 +48,7 @@ pub fn mount_recursive<Msg: Clone>(
         anim,
         transform,
         tooltip,
+        cursor,
         children,
     } = v;
     let parent_idx = out.len();
@@ -83,6 +84,7 @@ pub fn mount_recursive<Msg: Clone>(
         anim,
         transform,
         tooltip,
+        cursor,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -626,6 +628,22 @@ pub fn hit_test_hover<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| n.hover_fill.is_some())
 }
 
+/// Hit-test específico para la **forma del cursor**: devuelve el [`Cursor`]
+/// del nodo más al frente bajo el punto que declare uno. Como un hijo sin
+/// cursor no matchea el predicado, el cursor "cae" al ancestro más cercano que
+/// lo declare — herencia estilo CSS sin recorrer el árbol a mano. `None` =
+/// ningún nodo bajo el punto declara cursor (el runtime usa el default de la
+/// ventana). Lo invoca `llimphi-ui` en la transición de hover.
+pub fn hit_test_cursor<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<Cursor> {
+    hit_test_pred(mounted, computed, x, y, |n| n.cursor.is_some())
+        .and_then(|i| mounted.nodes[i].cursor)
+}
+
 /// Hit-test específico para drop targets (nodos con `on_drop`). Usado
 /// durante un drag activo para resaltar el destino y para invocar el
 /// handler al soltar.
@@ -770,6 +788,42 @@ mod tests {
     fn escala_cero_es_inalcanzable() {
         let (m, c) = fixture(Some(Affine::scale(0.0)));
         assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), None);
+    }
+
+    #[test]
+    fn hit_test_cursor_directo_y_por_herencia() {
+        use crate::{hit_test_cursor, Cursor};
+        // Padre 200×200 con cursor Text; dentro un hijo 100×100 (arriba-izq)
+        // SIN cursor propio; y un segundo hijo 50×50 con cursor Pointer.
+        let hijo_sin = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(100.0) },
+            ..Default::default()
+        });
+        let hijo_con = View::<()>::new(Style {
+            size: Size { width: length(50.0), height: length(50.0) },
+            ..Default::default()
+        })
+        .cursor(Cursor::Pointer);
+        let root = View::<()>::new(Style {
+            size: Size { width: length(200.0), height: length(200.0) },
+            flex_direction: FlexDirection::Column,
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .cursor(Cursor::Text)
+        .children(vec![hijo_sin, hijo_con]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, root);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        // Sobre el hijo sin cursor (0..100, 0..100) → hereda Text del padre.
+        assert_eq!(hit_test_cursor(&m, &c, 50.0, 50.0), Some(Cursor::Text));
+        // Sobre el hijo con cursor propio (apilado debajo: y 100..150) → Pointer.
+        assert_eq!(hit_test_cursor(&m, &c, 25.0, 120.0), Some(Cursor::Pointer));
+        // Sobre el padre pero fuera de ambos hijos (x>100) → Text del padre.
+        assert_eq!(hit_test_cursor(&m, &c, 150.0, 50.0), Some(Cursor::Text));
+        // Fuera del padre → None (la ventana usa su default).
+        assert_eq!(hit_test_cursor(&m, &c, 350.0, 350.0), None);
     }
 
     #[test]
