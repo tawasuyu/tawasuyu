@@ -180,7 +180,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                 alignment: TAlign::Start,
                 line_height: 1.2,
                 italic: false,
-                font_family: None,
+                font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
             };
             let layout = layout_block(ts, &block);
             draw_layout(
@@ -222,7 +222,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                     alignment: TAlign::Start,
                     line_height: 1.2,
                     italic: false,
-                    font_family: None,
+                    font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
                 };
                 let layout = layout_block(ts, &block);
                 let m = measurement(&layout);
@@ -244,7 +244,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                             alignment: TAlign::Start,
                             line_height: 1.2,
                             italic: false,
-                            font_family: None,
+                            font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
                         };
                         let plat = layout_block(ts, &pblock);
                         cursor_x = x + measurement(&plat).width as f64;
@@ -279,7 +279,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                     alignment: TAlign::Start,
                     line_height: 1.2,
                     italic: false,
-                    font_family: None,
+                    font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
                 };
                 let layout = layout_block(ts, &block);
                 draw_layout(
@@ -451,7 +451,7 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
                         alignment: TAlign::Start,
                         line_height: 1.0,
                         italic: false,
-                        font_family: None,
+                        font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
                     };
                     let layout = layout_block(ts, &block);
                     draw_layout(scene, &layout, fg, (x0, y0));
@@ -555,7 +555,7 @@ where
             alignment: TAlign::Start,
             line_height: 1.0,
             italic: false,
-            font_family: None,
+            font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
         };
         let m = llimphi_ui::llimphi_text::measure(ts, &probe);
         let char_w = if m.width > 1.0 {
@@ -649,7 +649,7 @@ where
                     alignment: TAlign::Start,
                     line_height: 1.0,
                     italic: false,
-                    font_family: None,
+                    font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
                 };
                 let layout = layout_block(ts, &block);
                 draw_layout(scene, &layout, color, (origin_x, y));
@@ -1251,7 +1251,10 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
+    // Superficie hundida (un escalón más profunda que el chrome): el output
+    // se lee recesado y con más contraste, como un panel de terminal. Las
+    // cards (`bg_panel_alt`) flotan por encima.
+    .fill(theme.sunken())
     .radius(3.0)
     .clip(true)
     .paint_with(painter)
@@ -1532,7 +1535,8 @@ pub(crate) fn stage_capture_rows<HostMsg: Clone + 'static>(
             for l in &lines {
                 col_children.push(
                     row_text(ROW_H)
-                        .text_aligned(l.text.clone(), 12.0, dim, Alignment::Start),
+                        .text_aligned(l.text.clone(), 12.0, dim, Alignment::Start)
+                        .mono(),
                 );
             }
             lines.len() as f32 * ROW_H
@@ -1657,7 +1661,8 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             flex_grow: 1.0,
             ..Default::default()
         })
-        .text_aligned(header_text.clone(), 12.0, theme.accent, Alignment::Start),
+        .text_aligned(header_text.clone(), 12.0, theme.accent, Alignment::Start)
+        .mono(),
     ];
     // Chip de reprocess: alimenta el stdout de esta card como stdin del
     // próximo comando. Sólo en cards con stdout. Hit-test innermost-wins:
@@ -1892,18 +1897,12 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
     };
 
     match line.kind {
-        OutputKind::Prompt => View::new(line_style).text_aligned(
-            line.text.clone(),
-            12.0,
-            theme.accent,
-            Alignment::Start,
-        ),
-        OutputKind::Notice => View::new(line_style).text_aligned(
-            line.text.clone(),
-            12.0,
-            theme.fg_muted,
-            Alignment::Start,
-        ),
+        OutputKind::Prompt => View::new(line_style)
+            .text_aligned(line.text.clone(), 12.0, theme.accent, Alignment::Start)
+            .mono(),
+        OutputKind::Notice => View::new(line_style)
+            .text_aligned(line.text.clone(), 12.0, theme.fg_muted, Alignment::Start)
+            .mono(),
         OutputKind::Stdout | OutputKind::Stderr => {
             let base = if matches!(line.kind, OutputKind::Stderr) {
                 theme.fg_destructive
@@ -1913,12 +1912,9 @@ pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
             let decorations = shuma_line::decorate_line(&line.text, cwd);
             // Atajo: si no hubo decoraciones, una sola text_aligned alcanza.
             if decorations.is_empty() {
-                return View::new(line_style).text_aligned(
-                    line.text.clone(),
-                    12.0,
-                    base,
-                    Alignment::Start,
-                );
+                return View::new(line_style)
+                    .text_aligned(line.text.clone(), 12.0, base, Alignment::Start)
+                    .mono();
             }
             let children =
                 build_span_children::<HostMsg>(&line.text, &decorations, base, theme, lift);
@@ -1987,7 +1983,8 @@ pub(crate) fn build_span_children<HostMsg: Clone + 'static>(
         let text_view: View<HostMsg> = View::new(Style {
             ..Default::default()
         })
-        .text_aligned(p.text.clone(), 12.0, p.color, Alignment::Start);
+        .text_aligned(p.text.clone(), 12.0, p.color, Alignment::Start)
+        .mono();
         let mut span_view: View<HostMsg> = match &p.deco {
             Some(Dk::Path {
                 abs,

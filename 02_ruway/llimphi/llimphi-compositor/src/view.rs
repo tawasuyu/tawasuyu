@@ -553,6 +553,17 @@ impl<Msg> View<Msg> {
         self.text_weight(700.0)
     }
 
+    /// Fija la familia de fuente del texto ya seteado a la monoespaciada
+    /// embebida ([`llimphi_text::MONOSPACE`]) — ancho fijo garantizado para
+    /// que `ls`, tablas y logs columneen. No-op si el nodo no tiene texto.
+    /// Afecta medida y pintado.
+    pub fn mono(mut self) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.font_family = Some(llimphi_text::MONOSPACE.to_string());
+        }
+        self
+    }
+
     /// Clampa el texto a `n` líneas **sin** glifo de ellipsis (corte seco del
     /// prefijo que cupo). CSS `-webkit-line-clamp` sin `text-overflow`. No-op
     /// sin texto. Para el corte con `…` usar [`Self::ellipsis`]. Sólo trunca si

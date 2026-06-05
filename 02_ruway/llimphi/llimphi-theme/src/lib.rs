@@ -309,6 +309,27 @@ impl Theme {
         }
     }
 
+    /// Superficie "hundida" — un escalón más profunda que `bg_app`, para
+    /// áreas de lectura intensa (output de terminal, viewports de log,
+    /// IDE-text) que deben recibir el texto con más contraste que el chrome
+    /// y leerse recesadas respecto del marco. En temas oscuros oscurece
+    /// `bg_app` hacia el negro; en claros lo aleja un paso del blanco. Las
+    /// cards/strips (`bg_panel`, `bg_panel_alt`) quedan flotando por encima.
+    /// Derivada de la paleta — no inventa un color suelto.
+    pub fn sunken(&self) -> Color {
+        let c = self.bg_app.components;
+        // Luminancia relativa aproximada en sRGB (sin linealizar — alcanza
+        // para decidir oscuro/claro).
+        let lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        let factor = if lum < 0.5 { 0.5 } else { 0.93 };
+        Color::from_rgba8(
+            (c[0] * factor * 255.0).round().clamp(0.0, 255.0) as u8,
+            (c[1] * factor * 255.0).round().clamp(0.0, 255.0) as u8,
+            (c[2] * factor * 255.0).round().clamp(0.0, 255.0) as u8,
+            255,
+        )
+    }
+
     /// Todos los presets del repo, en el orden canónico de rotación
     /// (Dark → Light → Aurora → Sunset → Dark…). El theme-switcher
     /// los consume vía [`Theme::next_after`]. `print()` queda fuera de la
@@ -388,5 +409,23 @@ mod tests {
     #[test]
     fn dark_is_the_default() {
         assert_eq!(Theme::default().name, "Dark");
+    }
+
+    /// En temas oscuros la superficie hundida es más oscura que el chrome
+    /// (`bg_app`); en claros, también desciende (se lee recesada). En ambos
+    /// casos difiere de `bg_app` — no es un no-op.
+    #[test]
+    fn sunken_is_deeper_than_bg_app() {
+        let lum = |c: Color| {
+            let k = c.components;
+            0.2126 * k[0] + 0.7152 * k[1] + 0.0722 * k[2]
+        };
+        for t in Theme::all() {
+            assert!(
+                lum(t.sunken()) < lum(t.bg_app),
+                "{}: sunken debe ser más oscura que bg_app",
+                t.name
+            );
+        }
     }
 }

@@ -146,10 +146,23 @@ impl Default for Typesetter {
 /// Licencia: Bitstream Vera + Arev (libre, redistribuible).
 const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
 
+/// Fuente monoespaciada embebida (Liberation Mono, SIL OFL — metric-
+/// compatible con Courier). Va embebida para que *cualquier* app Llimphi
+/// pueda pedir ancho fijo (output de terminal, IDE-text, tablas que
+/// columnean) sin depender de que el sistema tenga una mono instalada.
+/// Se referencia por su nombre de familia con [`MONOSPACE`].
+const LIBERATION_MONO: &[u8] = include_bytes!("../assets/LiberationMono.ttf");
+
+/// Nombre de familia de la fuente monoespaciada embebida. Pasalo como
+/// `font_family: Some(llimphi_text::MONOSPACE)` en un [`TextBlock`] (o el
+/// `font_family` de `layout`) para render de ancho fijo garantizado.
+pub const MONOSPACE: &str = "Liberation Mono";
+
 impl Typesetter {
     pub fn new() -> Self {
         let mut font_cx = parley::FontContext::new();
         Self::install_symbol_fallback(&mut font_cx);
+        Self::install_monospace(&mut font_cx);
         Self {
             font_cx,
             layout_cx: parley::LayoutContext::new(),
@@ -175,6 +188,18 @@ impl Typesetter {
                 .collection
                 .append_fallbacks("Zyyy", std::iter::once(*family_id));
         }
+    }
+
+    /// Registra la fuente monoespaciada embebida (Liberation Mono) bajo su
+    /// nombre de familia [`MONOSPACE`], para que `FontStack::Source`
+    /// (`font_family: Some(MONOSPACE)`) la resuelva aunque el sistema no
+    /// tenga ninguna mono instalada. Best-effort: si falla, los callers que
+    /// pidan monospace caen al fallback de fontique (mono del sistema, o la
+    /// proporcional si no hay) — el texto sigue, sólo pierde el ancho fijo.
+    fn install_monospace(font_cx: &mut parley::FontContext) {
+        use parley::fontique::Blob;
+        let blob = Blob::new(std::sync::Arc::new(LIBERATION_MONO));
+        font_cx.collection.register_fonts(blob, None);
     }
 
     /// Acceso al `FontContext` por si se necesita registrar fuentes extra
