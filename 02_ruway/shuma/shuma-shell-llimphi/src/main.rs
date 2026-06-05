@@ -345,7 +345,7 @@ enum SessionKind {
 
 /// Las **herramientas** de la sesión activa — un diente del rail DERECHO. Cada
 /// una abre su panel operando sobre la sesión activa.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Tool {
     History,
     Monitor,
@@ -685,6 +685,65 @@ fn load_sessions() -> Vec<SessionConfig> {
         .unwrap_or_default()
 }
 
+/// Estado de chrome persistible: qué paneles están abiertos y qué pestaña
+/// (sesión) está activa, para reabrir shuma como lo dejaste. Separado de
+/// `sessions.json` para no acoplar el layout de UI al de las sesiones.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ChromeState {
+    /// Herramienta abierta a la derecha (`None` = rail derecho colapsado).
+    /// Por defecto colapsado — el panel derecho no se impone al arrancar.
+    #[serde(default)]
+    active_tool: Option<Tool>,
+    /// Panel de config de la sesión (izquierda) desplegado.
+    #[serde(default = "yes")]
+    session_panel_open: bool,
+    /// Índice de la sesión/pestaña activa.
+    #[serde(default)]
+    active_session: usize,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for ChromeState {
+    fn default() -> Self {
+        // Default pedido: panel derecho colapsado, panel de config abierto.
+        Self { active_tool: None, session_panel_open: true, active_session: 0 }
+    }
+}
+
+/// `$XDG_CONFIG_HOME/shuma/chrome.json`.
+fn chrome_path() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("chrome.json"))
+}
+
+/// Guarda el estado de chrome (paneles + pestaña activa). Silencioso ante IO.
+fn save_chrome(m: &Model) {
+    let Some(path) = chrome_path() else {
+        return;
+    };
+    let state = ChromeState {
+        active_tool: m.active_tool,
+        session_panel_open: m.session_panel_open,
+        active_session: m.active_session,
+    };
+    if let Ok(json) = serde_json::to_string_pretty(&state) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Lee el estado de chrome persistido (default si no hay archivo o no parsea).
+fn load_chrome() -> ChromeState {
+    chrome_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<ChromeState>(&s).ok())
+        .unwrap_or_default()
+}
+
 #[derive(Debug, Clone)]
 enum ModuleMsg {
     Launcher(shuma_module_launcher::Msg),
@@ -931,6 +990,12 @@ impl App for Shell {
             sessions.push(Session::from_config(c));
         }
 
+        // Estado de chrome (paneles + pestaña) del último arranque. El default
+        // deja el panel derecho colapsado. La pestaña activa se clampa por si
+        // se borraron sesiones desde el último guardado.
+        let chrome = load_chrome();
+        let active_session = chrome.active_session.min(sessions.len().saturating_sub(1));
+
         // Rail hospedado: si `SHUMA_DELEGATE_SIDEBAR` está set, prestamos las
         // HERRAMIENTAS de la sesión activa al rail de pata.
         let host = shuma_host(handle);
@@ -941,11 +1006,11 @@ impl App for Shell {
             bottombar,
             main,
             sessions,
-            active_session: 0,
-            // Arranca con el Historial abierto a la derecha.
-            active_tool: Some(Tool::History),
-            // Y el panel de la draft abierto a la izquierda (su config).
-            session_panel_open: true,
+            active_session,
+            // Panel derecho: lo que se dejó la última vez (default colapsado).
+            active_tool: chrome.active_tool,
+            // Panel de config (izquierda): idem, default abierto.
+            session_panel_open: chrome.session_panel_open,
             dropdown_open: None,
             containers: Vec::new(),
             focused_field: None,
@@ -1039,11 +1104,13 @@ impl App for Shell {
                         m.active_session = i;
                         m.session_panel_open = true;
                     }
+                    save_chrome(&m);
                 }
             }
             // Click en una herramienta: toggle de su panel (re-click cierra).
             Msg::SelectTool(t) => {
                 m.active_tool = if m.active_tool == Some(t) { None } else { Some(t) };
+                save_chrome(&m);
             }
             Msg::RunFromHistory(cmd) => {
                 let slot = Slot::Session(m.active_session, Which::Shell);
@@ -1158,6 +1225,7 @@ impl App for Shell {
                     m.active_session = m.active_session.min(m.sessions.len() - 1);
                 }
                 save_sessions(&m);
+                save_chrome(&m);
             }
             Msg::ReorderSession(from, to) => {
                 // La draft (0) queda fija; el resto se reordena.
@@ -1168,6 +1236,7 @@ impl App for Shell {
                     m.active_session = to;
                 }
                 save_sessions(&m);
+                save_chrome(&m);
             }
             Msg::SetSessionWidth(dx) => {
                 m.session_w = (m.session_w + dx).clamp(180.0, 480.0);
@@ -1249,6 +1318,7 @@ impl App for Shell {
                 // Rail hospedado: un diente de herramienta abre/cierra su panel.
                 if let Some(t) = Tool::ALL.get(id as usize) {
                     m.active_tool = if m.active_tool == Some(*t) { None } else { Some(*t) };
+                    save_chrome(&m);
                 }
             }
         }

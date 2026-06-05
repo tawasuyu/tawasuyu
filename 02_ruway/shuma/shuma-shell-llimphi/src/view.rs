@@ -467,7 +467,7 @@ fn container_header(session: &Session, theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned("Contenedor (opcional)".to_string(), 12.0, theme.fg_text, Alignment::Start);
+    .text_aligned("Contenedor".to_string(), 12.0, theme.fg_text, Alignment::Start);
     let estado = View::new(Style {
         size: Size { width: Dimension::auto(), height: length(28.0_f32) },
         align_items: Some(AlignItems::Center),
