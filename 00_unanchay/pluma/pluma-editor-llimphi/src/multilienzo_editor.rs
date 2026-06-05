@@ -60,6 +60,12 @@ pub struct ConfigMultilienzoEditor {
     /// Padding (en px) que rodea cada editor cuando es el cuerpo activo
     /// — pintado con `palette.border_strong` para destacar el foco.
     pub grosor_foco: f32,
+    /// Ancho de cada columna de editor. `None` = columnas elásticas
+    /// (`flex_grow`) que se reparten el viewport — sin overflow horizontal.
+    /// `Some(w)` = ancho fijo por columna: el HStack mide su ancho real
+    /// (puede exceder el viewport) y el caller lo envuelve en un contenedor
+    /// con `clip` + desplazamiento horizontal para scrollearlo.
+    pub ancho_cuerpo: Option<f32>,
 }
 
 impl Default for ConfigMultilienzoEditor {
@@ -69,6 +75,7 @@ impl Default for ConfigMultilienzoEditor {
             alto_header: 28.0,
             grosor_hebra: 2.0,
             grosor_foco: 2.0,
+            ancho_cuerpo: None,
         }
     }
 }
@@ -160,10 +167,21 @@ where
         }
     }
 
+    // Con ancho fijo, el HStack mide su ancho real (suma de columnas +
+    // carriles) para poder desbordar el viewport — el caller scrollea.
+    // Sin ancho fijo, ocupa el 100% y las columnas elásticas se reparten.
+    let ancho_root = match cfg.ancho_cuerpo {
+        Some(w) => {
+            let n = ides.len() as f32;
+            length(n * w + (n - 1.0).max(0.0) * cfg.ancho_carril)
+        }
+        None => percent(1.0_f32),
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
-            width: percent(1.0_f32),
+            width: ancho_root,
             height: percent(1.0_f32),
         },
         ..Default::default()
@@ -255,11 +273,18 @@ where
     } else {
         palette_lienzo.bg_app
     };
+    // Ancho fijo → columna rígida que desborda (scroll del caller). Elástico
+    // → flex_grow reparte el viewport entre columnas.
+    let (ancho_wrapper, flex_wrapper) = match cfg.ancho_cuerpo {
+        Some(w) => (length(w), 0.0),
+        None => (percent(1.0_f32), 1.0),
+    };
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
+        flex_grow: flex_wrapper,
+        flex_shrink: 0.0,
         size: Size {
-            width: percent(1.0_f32),
+            width: ancho_wrapper,
             height: percent(1.0_f32),
         },
         padding: Rect {
