@@ -624,7 +624,7 @@ pub(crate) fn body_field_view(model: &Model, editor: View<Msg>) -> View<Msg> {
         },
         ..Default::default()
     })
-    .fill(border)
+    .border(1.0, border)
     .radius(4.0)
     .on_click(Msg::Focus(Focus::Body))
     .children(vec![editor]);
