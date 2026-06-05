@@ -54,6 +54,7 @@ pub fn mount_recursive<Msg: Clone>(
         transform,
         tooltip,
         cursor,
+        ripple,
         children,
     } = v;
     let parent_idx = out.len();
@@ -95,6 +96,7 @@ pub fn mount_recursive<Msg: Clone>(
         transform,
         tooltip,
         cursor,
+        ripple,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -174,7 +176,7 @@ pub fn measure_text_node(
 /// Construye el `RoundedRect` del nodo respetando radio por esquina si lo
 /// hay (si no, el escalar uniforme), con un `inset` opcional restado al rect
 /// y a cada radio (lo usa el borde, que pinta media línea hacia adentro).
-fn node_rrect(
+pub(crate) fn node_rrect(
     x0: f64,
     y0: f64,
     x1: f64,
@@ -758,6 +760,18 @@ pub fn hit_test_long_press<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| {
         n.on_long_press.is_some() || n.on_long_press_at.is_some()
     })
+}
+
+/// Hit-test para **ripple**: el nodo más al frente bajo el punto que declaró
+/// un [`Ripple`] (vía [`View::ripple`]). El runtime lo usa en el press para
+/// disparar la salpicadura. Aditivo — no compite con click/drag.
+pub fn hit_test_ripple<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.ripple.is_some())
 }
 
 /// Hit-test para foco: el id `focusable` del nodo más al frente bajo el

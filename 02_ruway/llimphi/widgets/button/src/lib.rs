@@ -79,6 +79,29 @@ pub fn button_view<Msg: Clone + 'static>(
     )
 }
 
+/// Tinte de la onda de ripple derivado de la paleta: el color de texto
+/// (`fg`, normalmente claro sobre el botón dark) a alpha bajo, así contrasta
+/// con el fondo y se adapta al theme sin añadir un campo a [`ButtonPalette`].
+fn ripple_ink(palette: &ButtonPalette) -> Color {
+    let c = palette.fg.components;
+    Color { components: [c[0], c[1], c[2], 0.22], ..palette.fg }
+}
+
+/// Como [`button_view`] pero con feedback **ripple/InkWell**: al presionarlo
+/// emite la salpicadura Material (círculo que se expande desde el punto del
+/// tap y se desvanece, recortado al contorno del botón). `key` debe ser
+/// **estable y único** entre los botones vivos del frame (índice del botón,
+/// hash de su acción) — es lo que enlaza la onda retenida con este botón entre
+/// frames. El tinte sale de la paleta ([`ripple_ink`]).
+pub fn button_ripple<Msg: Clone + 'static>(
+    label: impl Into<String>,
+    key: u64,
+    palette: &ButtonPalette,
+    on_click: Msg,
+) -> View<Msg> {
+    button_view(label, palette, on_click).ripple(key, ripple_ink(palette))
+}
+
 /// Variante con `Style` y alineación de texto explícitos — útil cuando
 /// la app necesita un botón con dimensiones particulares o el texto a
 /// la izquierda.
@@ -122,4 +145,18 @@ pub fn button_styled<Msg: Clone + 'static>(
         .text_aligned(label.into(), 13.0, palette.fg, text_alignment)
         .on_click(on_click)
         .cursor(llimphi_ui::Cursor::Pointer)
+}
+
+/// Como [`button_styled`] pero con feedback **ripple/InkWell** (ver
+/// [`button_ripple`] para la semántica de `key`).
+pub fn button_styled_ripple<Msg: Clone + 'static>(
+    label: impl Into<String>,
+    key: u64,
+    style: Style,
+    text_alignment: Alignment,
+    palette: &ButtonPalette,
+    on_click: Msg,
+) -> View<Msg> {
+    button_styled(label, style, text_alignment, palette, on_click)
+        .ripple(key, ripple_ink(palette))
 }

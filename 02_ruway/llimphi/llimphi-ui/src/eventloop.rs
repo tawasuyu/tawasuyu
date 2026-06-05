@@ -117,6 +117,27 @@ fn long_press_hit_from_cache<Msg: Clone>(
     })
 }
 
+/// Resuelve el **ripple** bajo `(x, y)` contra el cache del último frame
+/// (overlay con prioridad). Devuelve `(Ripple, lx, ly)`: la config de la onda
+/// + el punto del tap relativo al rect del nodo. `None` si no hay nodo ripple.
+fn ripple_hit_from_cache<Msg: Clone>(
+    cache: &RenderCache<Msg>,
+    x: f32,
+    y: f32,
+) -> Option<(llimphi_compositor::Ripple, f32, f32)> {
+    let (m, c) = match cache.overlay.as_ref() {
+        Some(ov) => (&ov.mounted, &ov.computed),
+        None => (&cache.mounted, &cache.computed),
+    };
+    hit_test_ripple(m, c, x, y).and_then(|i| {
+        let node = &m.nodes[i];
+        node.ripple.map(|rp| {
+            let (rx, ry) = c.get(node.id).map(|r| (r.x, r.y)).unwrap_or_default();
+            (rp, x - rx, y - ry)
+        })
+    })
+}
+
 impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -156,6 +177,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             focused: None,
             last_title: None,
             anim_registry: llimphi_compositor::AnimRegistry::new(),
+            ripple_registry: llimphi_compositor::RippleRegistry::new(),
             last_tap: None,
             pending_long_press: None,
         });
@@ -606,6 +628,20 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         handler,
                     });
                 }
+                // Ripple/InkWell: si el press cae sobre un nodo con ripple,
+                // dispará la salpicadura desde el punto. Aditivo — no toca el
+                // camino click/drag de abajo; un botón con `on_click` +
+                // `.ripple(...)` recibe ambos.
+                if let Some((rp, lx, ly)) = state
+                    .last_render
+                    .as_ref()
+                    .and_then(|c| ripple_hit_from_cache(c, cursor.x as f32, cursor.y as f32))
+                {
+                    state
+                        .ripple_registry
+                        .trigger(rp.key, lx, ly, rp.color, rp.duration, now);
+                    state.window.request_redraw();
+                }
                 // Tupla: (drag_fn, drag_at_fn, payload, on_click_msg,
                 //         on_click_at_handler, rect: (x, y, w, h))
                 type HitInfo<M> = (
@@ -1049,6 +1085,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 state
                     .anim_registry
                     .replay_ghosts(&mut state.scene, now, w as f32, h as f32);
+                // Ripples/InkWell: las salpicaduras vivas se pintan sobre el
+                // contenido (translúcidas, recortadas al nodo) y debajo del
+                // overlay. Si alguna sigue viva, pide otro frame al final.
+                let rippling =
+                    state
+                        .ripple_registry
+                        .paint(&mut state.scene, &mounted, &computed, now);
                 if !composite_overlay {
                     if let Some(ov) = overlay_built.as_ref() {
                         paint(
@@ -1161,7 +1204,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // pedí el próximo frame. Cuando todas se asientan, `animating`
                 // queda false y el loop de redraws se detiene solo (sin render
                 // ocioso, sin spawn_periodic por animación).
-                if animating {
+                if animating || rippling {
                     state.window.request_redraw();
                 }
                 state.last_render = Some(RenderCache {

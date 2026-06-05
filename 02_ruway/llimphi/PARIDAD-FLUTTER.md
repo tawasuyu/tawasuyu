@@ -175,7 +175,12 @@ a 5k nodos" de "a 50k".
    `fling_step`/`rubber_band` (física), `sliver_app_bar`/`sticky_y` (slivers).
    Falta scroll anidado, scrollbar auto-hide, pull-to-refresh, fling-desde-drag.
    Demo: `--example scroll_avanzado`.
-8. AccessKit + `LayoutBuilder` (los seams a reservar, ya con forma de API).
+8. ✅ **Bloque 8 = ripple/InkWell** — `View::ripple(key, color)` + `RippleRegistry`
+   (retenido en el runtime). El press dispara la salpicadura (`hit_test_ripple`,
+   aditivo); el runtime la pinta tras el contenido como círculo expansivo
+   recortado al contorno, atenuado por el fade, con ticker autodetenido.
+   Consumidor: `button_ripple`. Demo: `--example ripple_demo`.
+9. AccessKit + `LayoutBuilder` (los seams a reservar, ya con forma de API).
 
 ## Tier 7 — detalle (accesibilidad)
 
@@ -266,7 +271,7 @@ cuatro seams de arriba, no abre uno nuevo.
 | Control | Análogo | ¿Influye arq.? | Nota |
 |---|---|---|---|
 | ~~**Charts**~~ | Swift Charts · `fl_chart` | — | **YA EXISTE: es `pineal`** (`00_unanchay/pineal`, dominio cerrado): cartesian/polar/financial/heatmap/treemap/hexbin/contour/bars/flow/stream/mesh/phosphor sobre el trait `Canvas`, agnóstico de backend, **ya pinta a vello/llimphi**. No es un gap. Único faltante posible: un `llimphi-widget` fino que embeba un canvas pineal en un `View` vía `paint_with` — **verificar si el bridge ya existe** (la migración a Llimphi trajo backend SceneCanvas + widgets) antes de anotar nada. |
-| **Ripple / InkWell** | Material `InkWell` ripple | Anim | Feedback de tap icónico: círculo que expande desde el punto y clippea al borde. `paint_with` + tween radial. Pulido material barato. **El que más resalta ahora** por retorno/costo. |
+| ✅ **Ripple / InkWell** | Material `InkWell` ripple | Anim | **Hecho (Bloque 8).** `View::ripple(key, color)`/`ripple_styled` + `RippleRegistry` (retenido en el runtime como `AnimRegistry`): el press dispara una salpicadura (`hit_test_ripple`, aditivo — no toca click/drag), el runtime la pinta tras el contenido como círculo expansivo (radio ease-out hasta cubrir el nodo) recortado al `node_rrect` y atenuado por el fade; ticker autodetenido. Consumidor: `button_ripple`/`button_styled_ripple`. Demo `--example ripple_demo`. Limitación v1: ignora `transform` de ancestros y no "sostiene" mientras se mantiene el press. |
 | **Carousel / Pager** | Compose `HorizontalPager` · iOS page control | Seam (gestos+scroll) | Páginas full-width con snap. Cae bajo scroll-physics + gestos (Tier 4/5), no abre seam nuevo. |
 | **Chips** (filter/choice/input, removibles) | `FilterChip`/`InputChip` · `AssistChip` | No | Selección múltiple compacta, tag-input. Composición sobre button+badge. |
 | **Range slider** (dos thumbs) | `RangeSlider` | No | Variante del `slider` que ya existe (filtros de rango, ecualizador en media). |

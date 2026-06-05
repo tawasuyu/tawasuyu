@@ -40,8 +40,33 @@ impl<Msg> View<Msg> {
             transform: None,
             tooltip: None,
             cursor: None,
+            ripple: None,
             children: Vec::new(),
         }
+    }
+
+    /// Marca este nodo para emitir un **ripple/InkWell** (la salpicadura de tap
+    /// de Material) al recibir un press: un círculo que se expande desde el
+    /// punto presionado y se desvanece, recortado al contorno del nodo. `key`
+    /// debe ser **estable** entre rebuilds del `View` (índice/hash del item),
+    /// igual que la key de [`Self::animated`]. `color` es el tinte de la onda —
+    /// usá un color semitransparente (blanco a alpha ~0.25 sobre superficies
+    /// oscuras, negro a alpha ~0.12 sobre claras); su alpha se atenúa con el
+    /// fade. Es **aditivo**: convive con `on_click`/`drag` sin pisarlos. Duración
+    /// por defecto 450 ms; para otra usar [`Self::ripple_styled`].
+    pub fn ripple(self, key: u64, color: Color) -> Self {
+        self.ripple_styled(key, color, std::time::Duration::from_millis(450))
+    }
+
+    /// Como [`Self::ripple`] pero con la duración explícita de la salpicadura.
+    pub fn ripple_styled(
+        mut self,
+        key: u64,
+        color: Color,
+        duration: std::time::Duration,
+    ) -> Self {
+        self.ripple = Some(Ripple { key, color, duration });
+        self
     }
 
     /// Fija la forma del puntero del mouse mientras el cursor está sobre este

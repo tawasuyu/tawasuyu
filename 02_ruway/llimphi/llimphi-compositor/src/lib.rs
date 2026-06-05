@@ -24,9 +24,11 @@ use vello::peniko::{Color, Fill, Gradient, Image, Mix};
 
 mod anim;
 mod render;
+mod ripple;
 mod view;
 pub use anim::{ease_out_cubic, Anim, AnimRegistry};
 pub use render::*;
+pub use ripple::{Ripple, RippleRegistry};
 
 /// Texto a pintar dentro de un nodo. Alineación por defecto `Center`
 /// (horizontal y vertical), apta para labels de botón. Para layouts tipo
@@ -441,6 +443,12 @@ pub struct View<Msg> {
     /// la ventana. `None` = hereda (default flecha en la raíz). Ver [`Cursor`] y
     /// [`View::cursor`]. Llimphi-native (sin winit); el runtime lo mapea.
     pub cursor: Option<Cursor>,
+    /// Feedback de tap **ripple/InkWell**: al presionar este nodo, el runtime
+    /// emite una salpicadura Material (círculo que se expande desde el punto y
+    /// se desvanece, recortado al contorno del nodo). Es puro feedback visual,
+    /// aditivo al `on_click`; vive en el runtime ([`RippleRegistry`]), no en el
+    /// `Model`. `None` = sin ripple. Ver [`View::ripple`].
+    pub ripple: Option<Ripple>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -572,6 +580,9 @@ pub struct MountedNode<Msg> {
     /// Forma del puntero sobre este nodo (ver [`View::cursor`]). El runtime la
     /// resuelve heredando del ancestro más cercano que la declare.
     pub cursor: Option<Cursor>,
+    /// Ripple/InkWell de este nodo (ver [`View::ripple`]). El runtime lo
+    /// dispara en el press y lo pinta vía [`RippleRegistry`].
+    pub ripple: Option<Ripple>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.

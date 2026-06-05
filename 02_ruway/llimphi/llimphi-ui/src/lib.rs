@@ -546,6 +546,11 @@ struct RuntimeState<A: App> {
     /// el runtime pide otro frame (ticker autodetenido). Ver
     /// [`llimphi_compositor::AnimRegistry`].
     anim_registry: llimphi_compositor::AnimRegistry,
+    /// Registro de **ripples/InkWell** (`View::ripple`), vivo entre frames. El
+    /// press dispara una salpicadura; cada redraw la pinta sobre el contenido y,
+    /// mientras alguna siga viva, pide otro frame (ticker autodetenido). Ver
+    /// [`llimphi_compositor::RippleRegistry`].
+    ripple_registry: llimphi_compositor::RippleRegistry,
     /// Último tap (press izquierdo) sobre un nodo con `on_double_tap`: instante
     /// + posición. El próximo press que caiga cerca y a tiempo dispara el
     /// doble-tap. `None` cuando no hay un primer tap pendiente.
