@@ -16,8 +16,8 @@
 //! ```
 //!
 //! Si `~/.config/shuma/apps/` no existe (o está vacío), el launcher
-//! cae al `State::demo()` con tres entries fijas (Files/Shell/Matilda)
-//! para que el chasis sea exploratorio desde el día uno.
+//! arranca **vacío** (sólo la marca). Antes caía a entries de placeholder
+//! (Files/Shell/Matilda); se quitaron porque no eran apps reales.
 
 #![forbid(unsafe_code)]
 
@@ -86,31 +86,16 @@ impl LauncherEntry {
 }
 
 impl State {
-    /// State de demo con entries fijas: Files / Shell / Matilda. El
-    /// loader real las reemplaza si encuentra manifests en disco.
-    pub fn demo() -> Self {
-        Self {
-            entries: vec![
-                LauncherEntry::new("Files", "open:files"),
-                LauncherEntry::new("Shell", "focus:shell"),
-                LauncherEntry::new("Matilda", "focus:matilda"),
-            ],
-        }
-    }
-
     /// Lee `$XDG_CONFIG_HOME/shuma/apps/*.toml` (orden alfabético) y
-    /// arma las entries. Si el dir no existe o no hay manifests
-    /// válidos, devuelve `State::demo()` — el chasis arranca usable.
+    /// arma las entries. Si el dir no existe o no hay manifests válidos,
+    /// arranca **vacío** (sólo la marca) — antes caía a `State::demo()`
+    /// (Files/Shell/Matilda), entries de placeholder que no eran apps
+    /// reales y confundían; se quitaron de producción.
     pub fn from_apps_dir() -> Self {
-        let Some(dir) = apps_dir() else {
-            return Self::demo();
-        };
-        let entries = load_entries_from_dir(&dir);
-        if entries.is_empty() {
-            Self::demo()
-        } else {
-            Self { entries }
-        }
+        let entries = apps_dir()
+            .map(|dir| load_entries_from_dir(&dir))
+            .unwrap_or_default();
+        Self { entries }
     }
 }
 
@@ -320,11 +305,11 @@ mod tests {
     }
 
     #[test]
-    fn demo_state_has_three_entries() {
-        let s = State::demo();
-        assert_eq!(s.entries.len(), 3);
-        assert_eq!(s.entries[0].label, "Files");
-        assert_eq!(s.entries[1].action_id, "focus:shell");
+    fn no_manifests_means_empty_launcher() {
+        // Sin manifests reales, el launcher arranca vacío — ya no inventa
+        // entries de placeholder (Files/Shell/Matilda).
+        let empty = load_entries_from_dir(std::path::Path::new("/nonexistent/shuma/apps"));
+        assert!(empty.is_empty());
     }
 
     #[test]
