@@ -83,6 +83,10 @@ fn main() {
                         CtlReply::Ok
                     }
                     CtlRequest::ListWindows => CtlReply::Windows(desktop.window_lines()),
+                    CtlRequest::Workspaces => CtlReply::Workspaces(mirada_brain::WorkspacesState {
+                        active: desktop.active_index() + 1,
+                        loads: desktop.workspace_loads(),
+                    }),
                     // Las zonas son del Cuerpo (compositor); este ejemplo
                     // headless del Cerebro no las tiene.
                     CtlRequest::CycleZones => CtlReply::Ok,

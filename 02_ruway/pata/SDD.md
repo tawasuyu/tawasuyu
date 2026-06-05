@@ -1,9 +1,10 @@
 # SDD — `pata`, el marco del escritorio
 
-> Estado: **Fase 13** (barras embellecidas + widgets interactivos: volumen/
-> brillo por rueda, clipboard con historial, clima, cava, reloj que fija la
-> hora). Este documento es la fuente autoritativa de qué es `pata` y dónde
-> termina, por encima de README.
+> Estado: **Fase 14** (workspace switcher: escritorios virtuales clickeables en
+> la barra, vía mirada-ctl; sobre la Fase 13 — barras embellecidas + widgets
+> interactivos: volumen/brillo por rueda, clipboard con historial, clima, cava,
+> reloj que fija la hora). Este documento es la fuente autoritativa de qué es
+> `pata` y dónde termina, por encima de README.
 
 ## 0. El problema que resuelve
 
@@ -71,9 +72,10 @@ en wawa el config llega por akasha.
 ## 4. Widgets builtin previstos
 
 `start_button` · `window_list` (ventanas abiertas, vía mirada-ctl/-link) ·
-`clipboard` · `volume` · `brightness` · `tray` · `clock` · medidores
-(`ram_meter`/`cpu_meter`) · **`astro`** (posición zodiacal del sol + ciclo
-lunar, reusando `cosmos-ephemeris`) · `shuma_input` (el cabezal del shell).
+`workspaces` (selector de escritorios virtuales, vía mirada-ctl) · `clipboard` ·
+`volume` · `brightness` · `tray` · `clock` · medidores (`ram_meter`/`cpu_meter`) ·
+**`astro`** (posición zodiacal del sol + ciclo lunar, reusando `cosmos-ephemeris`)
+· `shuma_input` (el cabezal del shell).
 
 Cada uno se coloca libremente: superficie + slot se eligen desde el config.
 
@@ -578,3 +580,47 @@ borde; shuma provee el contenido.
     puros (parseo j1/cava, `ClockDraft`, historial) pasan. El render bajo Wayland
     no se verifica headless (norma de pata) — validar en el compositor del
     usuario.
+
+- **Fase 14 — workspace switcher (escritorios virtuales en la barra)** (2026-06-05):
+  - **El widget plano primero** (el rumbo elegido; lo espacial tipo Prezi y el
+    grafo quedan como capas siguientes, aditivas sobre esto). Una celda por
+    escritorio en la barra: la **activa** en acento, las **ocupadas** (con
+    ventanas) con realce de panel, las **vacías** tenues. Click en una celda →
+    salta a ese escritorio.
+  - **Desacople por CLI (Regla 2)**: pata **no** depende de mirada. Habla con el
+    WM por su CLI, igual que con `wpctl`/`pactl`/`wl-paste`: **lee** estado con
+    `mirada-ctl workspaces` y **cambia** con `mirada-ctl workspace N`. Backend
+    pluggable — bajo Hyprland el día de mañana son sólo otros dos comandos
+    (`hyprctl activeworkspace -j` / `hyprctl dispatch workspace N`). Sin un WM que
+    responda (`workspace_count == 0`), el widget **se oculta solo**.
+  - **mirada**: nueva consulta `CtlRequest::Workspaces` →
+    `CtlReply::Workspaces(WorkspacesState{ active, loads })` (en `mirada-brain`,
+    derivada de `Desktop::active_index` + `workspace_loads`). La atienden los tres
+    front-ends del ctl (compositor, app `mirada`, ejemplo headless). `mirada-ctl
+    workspaces` imprime una línea estable parseable: `active=2 count=9
+    loads=1,0,3,…`.
+  - **pata-core**: `WidgetCtx` gana `active_workspace`/`workspace_count`/
+    `workspace_occupied` (máscara de 16 bits, no_std, `Copy`); `WidgetView::
+    Workspaces{active,count,occupied}`; widget `WorkspaceSwitcher` (kinds
+    `workspaces` | `workspace_switcher`). El host muestrea el estado; el core sólo
+    lo transcribe a view-model.
+  - **pata-llimphi**: `sampler::sample_workspaces` (parser con test de ida y
+    vuelta) llena el ctx; `switch_workspace` lanza el cambio (desacoplado);
+    `workspaces_view`/`workspace_cell` pintan la fila de celdas clickeables
+    (`Msg::SwitchWorkspace`) respetando gap y dirección del slot — sin pasar por
+    el wrapping de un widget simple, cada celda trae su interacción.
+  - **wawa**: el kernel framebuffer (`pata_marco.rs`) pinta el view-model
+    (display, sin click — el launcher aún no provee estado, así que con `count=0`
+    queda oculto). Compila en `x86_64-unknown-none`.
+  - **Evidencia**: el inspector `pata --widgets` materializa el widget desde la
+    config y muestra su view-model (`workspaces 2/4 ocupados=0b101`). Tests puros
+    verdes (transcripción del estado + parser de la línea de mirada-ctl). El
+    render bajo Wayland no se verifica headless (norma de pata).
+  - **Latencia**: el switcher refleja el cambio en el próximo tick (≤1 s); el
+    salto en sí es inmediato. Optimistic-update y refresco sub-segundo quedan como
+    pulido si molesta.
+  - **Pendiente (capas siguientes, ya decididas con el usuario)**: overlay
+    **espacial tipo Prezi** (zoom-out a todos los escritorios con miniaturas,
+    cámara de `pluma-deck` Recorrido) y, más adelante, vista **grafo** (escritorios
+    como nodos de un DAG, `llimphi-widget-nodegraph`). Ambas leen el mismo estado
+    que este widget plano.

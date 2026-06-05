@@ -42,6 +42,13 @@ format = "%H:%M"
 # Click → panel para fijar la fecha/hora del sistema (timedatectl vía pkexec).
 
 [[surfaces.center]]
+kind = "workspaces"     # una celda por escritorio virtual; click → salta a él.
+# Lee el estado del WM con `mirada-ctl workspaces` y cambia con `mirada-ctl
+# workspace N` (idioma swaymsg/hyprctl). Bajo otro compositor sin ese CLI, el
+# widget se oculta solo. La activa va en acento; las que tienen ventanas, con
+# realce; las vacías, tenues.
+
+[[surfaces.center]]
 kind = "window_list"
 
 # El racimo de indicadores a la derecha — orden libre.

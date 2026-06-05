@@ -46,6 +46,8 @@ impl Sampler {
         let (ram, ram_used_mb, ram_total_mb) = sample_ram();
         let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
         let (volume, muted) = sample_volume().unwrap_or((0.0, false));
+        let (active_workspace, workspace_count, workspace_occupied) =
+            sample_workspaces().unwrap_or((0, 0, 0));
         WidgetCtx {
             clock: sample_clock(self.utc),
             cpu: self.sample_cpu(),
@@ -57,6 +59,9 @@ impl Sampler {
             brightness: sample_brightness().unwrap_or(0.0),
             sun_longitude_deg,
             moon_phase,
+            active_workspace,
+            workspace_count,
+            workspace_occupied,
         }
     }
 
@@ -246,6 +251,26 @@ mod tests {
     }
 
     #[test]
+    fn parse_workspaces_deriva_activo_y_mascara_de_ocupados() {
+        // Escritorios 1 y 3 con ventanas → bits 0 y 2 (0b101 = 5); activo el 2.
+        let (active, count, mask) =
+            parse_workspaces("active=2 count=9 loads=1,0,3,0,0,0,0,0,0").unwrap();
+        assert_eq!(active, 2);
+        assert_eq!(count, 9);
+        assert_eq!(mask, 0b0000_0101);
+    }
+
+    #[test]
+    fn parse_workspaces_sin_count_cae_al_largo_de_loads() {
+        let (active, count, mask) = parse_workspaces("active=1 loads=2,0,0").unwrap();
+        assert_eq!(active, 1);
+        assert_eq!(count, 3);
+        assert_eq!(mask, 0b001);
+        // Una línea sin `active=` no es válida.
+        assert_eq!(parse_workspaces("count=9 loads=0,0"), None);
+    }
+
+    #[test]
     fn parse_meminfo_extrae_total_y_disponible() {
         let txt = "MemTotal:       16252000 kB\n\
                    MemFree:         1000000 kB\n\
@@ -343,6 +368,63 @@ pub fn toggle_mute() {
     crate::spawn_cmd(
         "wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle || pactl set-sink-mute @DEFAULT_SINK@ toggle",
     );
+}
+
+// --- Escritorios virtuales (workspace switcher) -------------------------------
+//
+// pata habla con el WM por su CLI, igual que con wpctl/pactl/wl-paste: **lee** el
+// estado con `mirada-ctl workspaces` y **cambia** con `mirada-ctl workspace N`.
+// Así el marco no depende del compositor (Regla 2): si mañana corre sobre
+// Hyprland, sólo cambian estos dos comandos por `hyprctl` (`hyprctl
+// activeworkspace -j` / `hyprctl dispatch workspace N`). El switcher se oculta
+// solo cuando ningún WM responde (count = 0).
+
+/// Salta al escritorio virtual `n` (**1-based**) pidiéndoselo al WM. Desacoplado
+/// (no espera), como [`nudge_volume`]: se llama desde el hilo de UI al clickear
+/// una celda. El switcher refleja el cambio en el próximo tick.
+pub fn switch_workspace(n: u8) {
+    crate::spawn_cmd(&format!("mirada-ctl workspace {n}"));
+}
+
+/// Estado de los escritorios del WM: `(activo_1based, total, máscara_ocupados)`.
+/// `None` si no hay compositor que responda (`mirada-ctl` falla o no está) — el
+/// switcher se oculta entonces. Corre un subproceso por muestreo (~1Hz), con el
+/// mismo tope de tiempo que el resto (barato a esa frecuencia).
+fn sample_workspaces() -> Option<(u8, u8, u16)> {
+    let out = run("mirada-ctl", &["workspaces"])?;
+    parse_workspaces(&out)
+}
+
+/// Parsea la línea estable de `mirada-ctl workspaces`:
+/// `active=2 count=9 loads=1,0,3,0,0,0,0,0,0`. La máscara de ocupados se deriva
+/// de `loads` (un escritorio con ≥1 ventana enciende su bit). `count` cae al
+/// largo de `loads` si no viniera. `None` si la línea no trae lo mínimo.
+fn parse_workspaces(s: &str) -> Option<(u8, u8, u16)> {
+    let line = s.lines().find(|l| l.contains("active="))?;
+    let mut active = None;
+    let mut count = None;
+    let mut occupied = 0u16;
+    let mut loads_len = 0u8;
+    for tok in line.split_whitespace() {
+        if let Some(v) = tok.strip_prefix("active=") {
+            active = v.parse::<u8>().ok();
+        } else if let Some(v) = tok.strip_prefix("count=") {
+            count = v.parse::<u8>().ok();
+        } else if let Some(v) = tok.strip_prefix("loads=") {
+            for (i, n) in v.split(',').enumerate() {
+                if i >= 16 {
+                    break; // la máscara cubre 16 escritorios
+                }
+                loads_len = loads_len.saturating_add(1);
+                if n.parse::<u32>().ok().is_some_and(|c| c > 0) {
+                    occupied |= 1 << i;
+                }
+            }
+        }
+    }
+    let count = count.filter(|&c| c > 0).unwrap_or(loads_len);
+    let active = active?;
+    (count > 0).then_some((active, count, occupied))
 }
 
 /// Ajusta el brillo de la pantalla en pasos de 5% (relativo). `up` sube, `!up`

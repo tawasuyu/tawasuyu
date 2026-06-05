@@ -32,6 +32,10 @@ pub enum CtlRequest {
     Do(DesktopAction),
     /// Pide la lista de ventanas conocidas, en todos los escritorios.
     ListWindows,
+    /// Pide el estado de los escritorios virtuales: cuál está activo y cuántas
+    /// ventanas tiene cada uno. Es lo que consume un *workspace switcher* de la
+    /// barra (en `pata`) para pintar el escritorio activo y los ocupados.
+    Workspaces,
     /// Cicla al siguiente conjunto de zonas de arrastre (presets de
     /// `config.ron`). Lo atiende el Cuerpo (las zonas son suyas), no el Cerebro.
     CycleZones,
@@ -46,6 +50,20 @@ pub enum CtlReply {
     Error(String),
     /// La lista pedida con [`CtlRequest::ListWindows`].
     Windows(Vec<WindowLine>),
+    /// El estado pedido con [`CtlRequest::Workspaces`].
+    Workspaces(WorkspacesState),
+}
+
+/// El estado de los escritorios virtuales, para un *workspace switcher*.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacesState {
+    /// Escritorio activo —el que muestra la salida enfocada—, **1-based**
+    /// (`1..=loads.len()`), para casar con la numeración de `mirada-ctl
+    /// workspace N` y de los atajos `Super+1..9`.
+    pub active: usize,
+    /// Cuántas ventanas tiene cada escritorio, en orden (`loads[0]` = esc. 1).
+    /// Su largo es el número total de escritorios.
+    pub loads: Vec<usize>,
 }
 
 /// Una ventana en la vista de `mirada-ctl windows`.

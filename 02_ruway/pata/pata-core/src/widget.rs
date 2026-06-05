@@ -70,6 +70,16 @@ pub struct WidgetCtx {
     /// Fase lunar como fracción del ciclo sinódico `0.0..=1.0`: `0` = luna nueva,
     /// `0.5` = llena, de vuelta a `1` = nueva.
     pub moon_phase: f32,
+    /// Escritorio virtual activo, **1-based** (`1..=workspace_count`). `0` =
+    /// desconocido (no hay compositor que lo reporte): el switcher se oculta. El
+    /// host lo muestrea del WM (en Linux, `mirada-ctl workspaces`).
+    pub active_workspace: u8,
+    /// Cuántos escritorios virtuales hay. `0` = desconocido.
+    pub workspace_count: u8,
+    /// Máscara de escritorios **ocupados** (con al menos una ventana): el bit `i`
+    /// (desde el menos significativo) marca el escritorio `i + 1`. Cubre hasta 16
+    /// escritorios — de sobra para los 9 de mirada.
+    pub workspace_occupied: u16,
 }
 
 /// El view-model que un widget emite: describe qué pintar sin atarse a ningún
@@ -89,6 +99,17 @@ pub enum WidgetView {
         fraction: f32,
         /// Leyenda ya formateada (`"42%"`, `"3.2G"`, `"muted"`).
         caption: String,
+    },
+    /// Un selector de escritorios virtuales: una celda por escritorio, la activa
+    /// resaltada y las ocupadas con un realce tenue. El frontend pinta la fila y
+    /// cablea el click de cada celda a "ir a ese escritorio".
+    Workspaces {
+        /// Escritorio activo, **1-based** (`1..=count`).
+        active: u8,
+        /// Total de escritorios a pintar.
+        count: u8,
+        /// Máscara de ocupados (bit `i` → escritorio `i + 1`).
+        occupied: u16,
     },
     /// Un widget cuyo `kind` el core no implementa todavía: el frontend pinta un
     /// chip tenue con este nombre. Permite encodear la visión completa del marco
@@ -357,6 +378,50 @@ impl Widget for StartButton {
     }
 }
 
+/// Selector de escritorios virtuales (*workspace switcher*): refleja el estado
+/// del WM —escritorio activo y cuáles tienen ventanas— que el host muestrea y
+/// entrega en el [`WidgetCtx`]. El core sólo transcribe ese estado a un
+/// view-model; el frontend lo pinta como una fila de celdas clickeables y, al
+/// click, le pide al WM saltar a ese escritorio.
+///
+/// Si el host no reporta escritorios (`workspace_count == 0`, p. ej. no hay
+/// compositor que responda), su `view` es [`WidgetView::Empty`]: el widget
+/// desaparece en vez de pintar una fila vacía.
+#[derive(Debug, Clone, Default)]
+pub struct WorkspaceSwitcher {
+    active: u8,
+    count: u8,
+    occupied: u16,
+}
+
+impl WorkspaceSwitcher {
+    /// Construye desde el spec. Hoy no lee props (el estado viene del WM por el
+    /// [`WidgetCtx`]); la firma se mantiene homogénea con los demás widgets.
+    pub fn from_spec(_spec: &WidgetSpec) -> Self {
+        Self::default()
+    }
+}
+
+impl Widget for WorkspaceSwitcher {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        self.active = ctx.active_workspace;
+        self.count = ctx.workspace_count;
+        self.occupied = ctx.workspace_occupied;
+    }
+
+    fn view(&self) -> WidgetView {
+        if self.count == 0 {
+            WidgetView::Empty
+        } else {
+            WidgetView::Workspaces {
+                active: self.active,
+                count: self.count,
+                occupied: self.occupied,
+            }
+        }
+    }
+}
+
 /// Widget de relleno para un `kind` que el core no implementa todavía. Su `view`
 /// es siempre un [`WidgetView::Placeholder`] con el nombre del kind.
 #[derive(Debug, Clone)]
@@ -393,6 +458,7 @@ pub fn build(spec: &WidgetSpec) -> Box<dyn Widget> {
         "brightness" => Box::new(Meter::from_spec(MeterSource::Brightness, spec)),
         "astro" => Box::new(Astro::from_spec(spec)),
         "start_button" => Box::new(StartButton::from_spec(spec)),
+        "workspaces" | "workspace_switcher" => Box::new(WorkspaceSwitcher::from_spec(spec)),
         _ => Box::new(Placeholder::new(&spec.kind)),
     }
 }
@@ -581,6 +647,41 @@ mod tests {
         match m.view() {
             WidgetView::Meter { label, .. } => assert_eq!(label, Some("Proc".to_string())),
             v => panic!("esperaba Meter, vino {v:?}"),
+        }
+    }
+
+    #[test]
+    fn workspace_switcher_sin_compositor_es_vacio() {
+        // Sin estado de escritorios (count 0), el widget desaparece.
+        let mut w = WorkspaceSwitcher::from_spec(&WidgetSpec::new("workspaces"));
+        w.tick(&ctx()); // el ctx de prueba no setea campos de workspace
+        assert_eq!(w.view(), WidgetView::Empty);
+    }
+
+    #[test]
+    fn workspace_switcher_transcribe_estado_del_wm() {
+        let mut c = ctx();
+        c.active_workspace = 2;
+        c.workspace_count = 9;
+        c.workspace_occupied = 0b0000_0101; // escritorios 1 y 3 ocupados
+        let mut w = WorkspaceSwitcher::from_spec(&WidgetSpec::new("workspace_switcher"));
+        w.tick(&c);
+        assert_eq!(
+            w.view(),
+            WidgetView::Workspaces {
+                active: 2,
+                count: 9,
+                occupied: 0b0000_0101,
+            }
+        );
+    }
+
+    #[test]
+    fn build_despacha_el_workspace_switcher() {
+        // Ambos alias materializan el mismo widget; sin estado da Empty.
+        for kind in ["workspaces", "workspace_switcher"] {
+            let w = build(&WidgetSpec::new(kind));
+            assert_eq!(w.view(), WidgetView::Empty);
         }
     }
 

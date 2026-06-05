@@ -536,6 +536,15 @@ impl App {
                 Brain::Embedded(d) => CtlReply::Windows(d.window_lines()),
                 Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
             },
+            CtlRequest::Workspaces => match &self.brain {
+                Brain::Embedded(d) => CtlReply::Workspaces(mirada_brain::WorkspacesState {
+                    // `active_index` es 0-based; lo publicamos 1-based para casar
+                    // con `workspace N` y los atajos `Super+1..9`.
+                    active: d.active_index() + 1,
+                    loads: d.workspace_loads(),
+                }),
+                Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
+            },
             // El ciclo de zonas lo intercepta el bucle de control del backend
             // DRM (las zonas son estado del Cuerpo). Si llega aquí (p. ej. en
             // winit, sin zonas), es un no-op.

@@ -79,6 +79,10 @@ pub enum Msg {
     ShumaAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
+    /// Saltar al escritorio virtual `n` (**1-based**), por click en una celda del
+    /// `workspaces` switcher. Se lo pide al WM (`mirada-ctl workspace N`); el
+    /// switcher refleja el cambio en el próximo tick.
+    SwitchWorkspace(u8),
     /// Rueda del mouse sobre el medidor de volumen: ajusta el volumen del sink
     /// por defecto. El `f32` es el delta de la rueda (signo = dirección).
     VolumeWheel(f32),
@@ -752,6 +756,7 @@ impl App for PataApp {
             Msg::ShumaScroll(delta) => model.shuma.scroll_by(delta),
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
+            Msg::SwitchWorkspace(n) => sampler::switch_workspace(n),
             Msg::VolumeWheel(dy) => {
                 if dy != 0.0 {
                     sampler::nudge_volume(dy > 0.0);

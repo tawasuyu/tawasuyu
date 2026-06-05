@@ -85,6 +85,7 @@ pub fn widget_tooltip(v: &WidgetView) -> Option<String> {
             let s = s.trim().to_string();
             (!s.is_empty()).then_some(s)
         }
+        WidgetView::Workspaces { active, count, .. } => Some(format!("Escritorio {active}/{count}")),
         WidgetView::Placeholder(kind) => Some(kind.clone()),
     }
 }
@@ -143,6 +144,11 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
                 None => (theme.accent, aclarar(theme.accent, 0.5)),
             };
             meter_view(label.as_deref(), *fraction, caption, theme, stops)
+        }
+        WidgetView::Workspaces { active, count, occupied } => {
+            // Para tarjetas flotantes (que no rastrean kind/dir): fila horizontal
+            // con gap chico. En la barra, el slot lo pinta con su gap real.
+            workspaces_view(*active, *count, *occupied, 4.0, FlexDirection::Row, theme)
         }
         WidgetView::Placeholder(kind) => chip(theme)
             .fill(theme.bg_panel)
@@ -793,14 +799,22 @@ fn slots_de(
                     // `exec` además lanzan su comando. El medidor se tiñe con su
                     // gradiente propio (verde→rojo por widget).
                     let wv = widget.view();
-                    let mut v = widget_view_kinded(&wv, Some(kind), theme)
-                        .radius(6.0)
-                        .hover_fill(theme.bg_button_hover);
-                    if let Some(tip) = widget_tooltip(&wv) {
-                        v = v.tooltip(tip);
+                    // El workspace switcher es una fila de celdas con click por
+                    // escritorio: no pasa por el wrapping de chip/hover/tooltip/
+                    // cuantizar de un widget simple — cada celda trae su propia
+                    // interacción, y respeta el gap y la dirección del slot.
+                    if let WidgetView::Workspaces { active, count, occupied } = wv {
+                        workspaces_view(active, count, occupied, surface.gap, dir, theme)
+                    } else {
+                        let mut v = widget_view_kinded(&wv, Some(kind), theme)
+                            .radius(6.0)
+                            .hover_fill(theme.bg_button_hover);
+                        if let Some(tip) = widget_tooltip(&wv) {
+                            v = v.tooltip(tip);
+                        }
+                        v = interaccion_widget(v, kind, exec.as_deref());
+                        cuantizar(v, surface.cell, *cells, kind, dir)
                     }
-                    v = interaccion_widget(v, kind, exec.as_deref());
-                    cuantizar(v, surface.cell, *cells, kind, dir)
                 }
                 SlotWidget::Start { label, exec } => start_button_view(label, exec.as_deref(), theme),
                 SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
@@ -927,6 +941,66 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
     .on_click(Msg::ActivateWindow(w.id))
     .on_right_click(Msg::CloseWindow(w.id))
     .children(vec![badge, titulo])
+}
+
+/// El **workspace switcher**: una celda por escritorio virtual, en fila. La
+/// activa va en acento; las ocupadas (con ventanas) llevan el fondo de panel; las
+/// vacías quedan tenues. Cada celda salta a su escritorio al clickearla
+/// ([`Msg::SwitchWorkspace`] → `mirada-ctl workspace N`). Es el análogo del
+/// `window_list` —items clickeables en un row—, pero indexado por escritorio.
+fn workspaces_view(
+    active: u8,
+    count: u8,
+    occupied: u16,
+    gap: f32,
+    dir: FlexDirection,
+    theme: &Theme,
+) -> View<Msg> {
+    let celdas: Vec<View<Msg>> = (1..=count)
+        .map(|n| {
+            let ocupado = occupied & (1u16 << (n as u16 - 1)) != 0;
+            workspace_cell(n, n == active, ocupado, theme)
+        })
+        .collect();
+    let g = gap.max(2.0);
+    View::new(Style {
+        flex_direction: dir,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(g),
+            height: length(g),
+        },
+        ..Default::default()
+    })
+    .children(celdas)
+}
+
+/// Una celda del switcher: un cuadradito con el número del escritorio. El color
+/// codifica su estado —activo (acento) / ocupado (panel) / vacío (tenue)— y el
+/// click pide saltar a él.
+fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Msg> {
+    let (fill, fg) = if active {
+        (theme.accent, theme.bg_panel)
+    } else if occupied {
+        (theme.bg_panel, theme.fg_text)
+    } else {
+        (theme.bg_panel_alt, theme.fg_muted)
+    };
+    View::new(Style {
+        size: Size {
+            width: length(22.0_f32),
+            height: length(20.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(fill)
+    .radius(5.0)
+    .hover_fill(theme.bg_button_hover)
+    .tooltip(format!("Escritorio {n}"))
+    .on_click(Msg::SwitchWorkspace(n))
+    .text(n.to_string(), 12.0, fg)
 }
 
 /// El **botón de inicio**: un chip con su label/ícono. Clic → despliega el menú

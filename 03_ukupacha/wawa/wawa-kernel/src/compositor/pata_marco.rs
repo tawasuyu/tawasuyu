@@ -17,6 +17,7 @@
 //  widgets (reloj wall-clock, etc.) llegan después.
 // =============================================================================
 
+use alloc::format;
 use alloc::vec;
 use alloc::vec::Vec;
 
@@ -221,7 +222,22 @@ fn medir_vista(v: &WidgetView) -> usize {
             w += BARRA_W + GAP + medir_texto(caption);
             w
         }
+        WidgetView::Workspaces { count, .. } => {
+            let n = *count as usize;
+            let celdas: usize = (1..=*count).map(ancho_celda_ws).sum();
+            celdas + GAP_CELDA * n.saturating_sub(1)
+        }
     }
+}
+
+/// Padding horizontal de una celda del switcher (a cada lado del número).
+const PAD_CELDA: usize = 6;
+/// Separación entre celdas del switcher (más compacta que [`GAP`]).
+const GAP_CELDA: usize = 4;
+
+/// Ancho en px de la celda del escritorio `n`: el número más el padding.
+fn ancho_celda_ws(n: u8) -> usize {
+    medir_texto(&format!("{n}")) + PAD_CELDA * 2
 }
 
 /// El ancho total (con gaps) de una secuencia de vistas.
@@ -256,6 +272,31 @@ fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, region: RegionPan
             dibujar_texto(lienzo, cur, base_y, caption, fondo, Color::TEXTO);
             cur += medir_texto(caption);
             cur - x
+        }
+        WidgetView::Workspaces { active, count, occupied } => {
+            // Una celda por escritorio: la activa con fondo de foco, las ocupadas
+            // con el gris de "sin foco", las vacías sobre el fondo de la barra.
+            // El framebuffer no rutea clicks — es display; el cambio sigue por
+            // atajo o por la celda en el frontend Llimphi.
+            let mut cur = x;
+            let celda_h = region.alto.saturating_sub(8);
+            let cy = region.y + 4;
+            for n in 1..=*count {
+                let num = format!("{n}");
+                let w = medir_texto(&num) + PAD_CELDA * 2;
+                let ocupado = occupied & (1u16 << (n as u16 - 1)) != 0;
+                let bg = if n == *active {
+                    Color::FOCO
+                } else if ocupado {
+                    Color::SIN_FOCO
+                } else {
+                    fondo
+                };
+                lienzo.rellenar_rect(cur, cy, w, celda_h, bg);
+                dibujar_texto(lienzo, cur + PAD_CELDA, base_y, &num, bg, Color::TEXTO);
+                cur += w + GAP_CELDA;
+            }
+            cur.saturating_sub(x).saturating_sub(GAP_CELDA)
         }
     }
 }

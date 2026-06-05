@@ -150,6 +150,9 @@ fn ctx_muestra() -> WidgetCtx {
         brightness: 0.55,
         sun_longitude_deg: 132.0, // Leo 12°
         moon_phase: 0.5,          // llena
+        active_workspace: 2,
+        workspace_count: 4,
+        workspace_occupied: 0b0101, // escritorios 1 y 3 con ventanas
     }
 }
 
@@ -165,6 +168,9 @@ fn render_view(v: &WidgetView) -> String {
         } => {
             let etiqueta = label.as_deref().unwrap_or("—");
             format!("meter [{etiqueta}] {:.0}% «{caption}»", fraction * 100.0)
+        }
+        WidgetView::Workspaces { active, count, occupied } => {
+            format!("workspaces {active}/{count} ocupados={occupied:#b}")
         }
         WidgetView::Placeholder(k) => format!("placeholder ⟨{k}⟩"),
     }

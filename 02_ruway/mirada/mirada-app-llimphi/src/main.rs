@@ -503,6 +503,10 @@ fn serve_ctl(m: &mut Model, req: CtlRequest) -> CtlReply {
             CtlReply::Ok
         }
         CtlRequest::ListWindows => CtlReply::Windows(m.desktop.window_lines()),
+        CtlRequest::Workspaces => CtlReply::Workspaces(mirada_brain::WorkspacesState {
+            active: m.desktop.active_index() + 1,
+            loads: m.desktop.workspace_loads(),
+        }),
         // Las zonas de arrastre son del compositor; esta app de Cerebro no las
         // gestiona.
         CtlRequest::CycleZones => CtlReply::Ok,
