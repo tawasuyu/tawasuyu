@@ -35,6 +35,8 @@ llimphi-widget-splitter = { workspace = true }
 llimphi-widget-stat-card = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
+# Dropdown/select para la config de la sesión (aislamiento + distro).
+llimphi-widget-select = { workspace = true }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 serde = { workspace = true }

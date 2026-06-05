@@ -2,6 +2,85 @@
 
 use super::*;
 
+use llimphi_widget_select::{
+    select_menu_view, select_trigger_view, SelectItem, SelectMenuSpec, SelectPalette, SelectPhase,
+};
+
+/// Alto del disparador del select (debe seguir a `llimphi-widget-select`).
+const TRIGGER_H: f32 = 34.0;
+
+/// Ítems del dropdown de aislamiento (orden = `Isolation::ALL`).
+fn iso_items() -> Vec<SelectItem> {
+    vec![
+        SelectItem::new("Local").with_sublabel("Directo en esta máquina, sin aislar."),
+        SelectItem::new("Contenedor").with_sublabel("Aislado en un contenedor (elegí la distro)."),
+        SelectItem::new("Remoto (SSH)").with_sublabel("En otra máquina por SSH."),
+    ]
+}
+fn distro_items() -> Vec<SelectItem> {
+    Distro::ALL.iter().map(|d| SelectItem::new(d.label())).collect()
+}
+fn iso_index(iso: Isolation) -> usize {
+    Isolation::ALL.iter().position(|x| *x == iso).unwrap_or(0)
+}
+fn distro_index(d: Distro) -> usize {
+    Distro::ALL.iter().position(|x| *x == d).unwrap_or(0)
+}
+
+/// `y` aproximado del disparador de un dropdown dentro del panel de sesión —
+/// para anclar su menú. Sigue el orden de `session_panel` (padding+secciones).
+/// Aproximado: el menú flota, no va pegado al pixel.
+fn cfg_trigger_y(is_draft: bool, kind: DropKind) -> f32 {
+    let iso_y = if is_draft { 112.0 } else { 70.0 };
+    match kind {
+        DropKind::Isolation => iso_y,
+        DropKind::Distro => iso_y + TRIGGER_H + 36.0,
+    }
+}
+
+/// El menú del dropdown de config abierto (para `App::view_overlay`).
+pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
+    let kind = model.dropdown_open?;
+    let session = model.active()?;
+    let is_draft = session.kind == SessionKind::Draft;
+    let pal = SelectPalette::from_theme(&model.theme);
+
+    let (items, selected_idx) = match kind {
+        DropKind::Isolation => (iso_items(), iso_index(session.isolation)),
+        DropKind::Distro => (distro_items(), distro_index(session.distro)),
+    };
+    let visible: Vec<usize> = (0..items.len()).collect();
+    let selected = [selected_idx];
+    let anchor = (12.0, cfg_trigger_y(is_draft, kind) + TRIGGER_H + 4.0);
+    let width = (model.session_w - 24.0).max(140.0);
+
+    let on_pick: std::sync::Arc<dyn Fn(usize) -> Msg + Send + Sync> = match kind {
+        DropKind::Isolation => {
+            std::sync::Arc::new(|i| Msg::SetIsolation(Isolation::ALL[i.min(2)]))
+        }
+        DropKind::Distro => std::sync::Arc::new(|i| Msg::SetDistro(Distro::ALL[i.min(3)])),
+    };
+
+    Some(select_menu_view(SelectMenuSpec {
+        anchor,
+        viewport: (1280.0, 800.0),
+        width,
+        phase: SelectPhase::Ready(&items),
+        visible: &visible,
+        active: usize::MAX,
+        selected: &selected,
+        query: "",
+        searchable: false,
+        empty_text: "",
+        appear: 1.0,
+        on_pick,
+        on_hover: None,
+        on_dismiss: Msg::DismissDropdown,
+        on_retry: None,
+        palette: &pal,
+    }))
+}
+
 // ─── Render de cada slot ────────────────────────────────────────────
 
 pub(crate) fn render_topbar(model: &Model, theme: &Theme) -> View<Msg> {
@@ -182,31 +261,30 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         ));
     }
 
-    // Sección Aislamiento (qué aislar): filas de opción con descripción.
+    // Sección Aislamiento (qué aislar): dropdown (select widget).
+    let pal = SelectPalette::from_theme(theme);
     children.push(panel_label("Aislamiento", theme));
-    let iso_desc = |iso: Isolation| match iso {
-        Isolation::Local => "Directo en esta máquina, sin aislar.",
-        Isolation::Container => "Aislado en un contenedor (elegí la distro).",
-        Isolation::Remote => "En otra máquina por SSH.",
-    };
-    for iso in Isolation::ALL {
-        children.push(option_row(
-            iso.label(),
-            iso_desc(iso),
-            session.isolation == iso,
-            Msg::SetIsolation(iso),
-            theme,
-        ));
-    }
+    let isos = iso_items();
+    children.push(select_trigger_view(
+        isos.get(iso_index(session.isolation)),
+        "Elegí el aislamiento…",
+        model.dropdown_open == Some(DropKind::Isolation),
+        None,
+        &pal,
+        Msg::ToggleDropdown(DropKind::Isolation),
+    ));
 
-    // La distro sólo importa para contenedor → se muestra sólo entonces.
+    // La distro sólo importa para contenedor → su dropdown sale sólo entonces.
     if session.isolation == Isolation::Container {
         children.push(panel_label("Distro", theme));
-        children.push(chip_row(
-            Distro::ALL
-                .iter()
-                .map(|d| chip(d.label(), session.distro == *d, Msg::SetDistro(*d), theme))
-                .collect(),
+        let distros = distro_items();
+        children.push(select_trigger_view(
+            distros.get(distro_index(session.distro)),
+            "Elegí la distro…",
+            model.dropdown_open == Some(DropKind::Distro),
+            None,
+            &pal,
+            Msg::ToggleDropdown(DropKind::Distro),
         ));
     }
 
@@ -614,67 +692,6 @@ fn panel_note(t: &str, theme: &Theme) -> View<Msg> {
     .text_aligned(t.to_string(), 11.0, theme.fg_muted, Alignment::Start)
 }
 
-/// Un chip seleccionable (pill) para los selectores de config.
-fn chip(label: &str, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
-    use llimphi_ui::llimphi_text::Alignment;
-    let (fill, fg) = if selected {
-        (theme.bg_selected, theme.fg_text)
-    } else {
-        (theme.bg_button, theme.fg_muted)
-    };
-    View::new(Style {
-        size: Size { width: Dimension::auto(), height: length(26.0_f32) },
-        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
-        margin: Rect { left: length(0.0_f32), right: length(6.0_f32), top: length(0.0_f32), bottom: length(6.0_f32) },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(fill)
-    .hover_fill(theme.bg_button_hover)
-    .radius(13.0)
-    .text_aligned(label.to_string(), 12.0, fg, Alignment::Center)
-    .on_click(msg)
-}
-
-/// Fila de opción (vertical): título + descripción, seleccionable. Mejor UX que
-/// un chip para elegir entre alternativas con matices (aislamiento).
-fn option_row(title: &str, desc: &str, selected: bool, msg: Msg, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
-    use llimphi_ui::llimphi_text::Alignment;
-    let (fill, fg) = if selected {
-        (theme.bg_selected, theme.fg_text)
-    } else {
-        (theme.bg_panel, theme.fg_muted)
-    };
-    let titulo = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(title.to_string(), 12.5, fg, Alignment::Start);
-    let descr = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text_aligned(desc.to_string(), 10.0, theme.fg_muted, Alignment::Start);
-    View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
-        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(6.0_f32), bottom: length(6.0_f32) },
-        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(0.0_f32), bottom: length(4.0_f32) },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .fill(fill)
-    .hover_fill(theme.bg_row_hover)
-    .radius(5.0)
-    .on_click(msg)
-    .children(vec![titulo, descr])
-}
 
 /// Fila de chips, con wrap si no caben en el ancho del panel.
 fn chip_row(chips: Vec<View<Msg>>) -> View<Msg> {

@@ -220,6 +220,8 @@ enum Isolation {
 
 impl Isolation {
     const ALL: [Isolation; 3] = [Isolation::Local, Isolation::Container, Isolation::Remote];
+    /// Etiqueta corta (la rica con sublabel la arma `view::iso_items`).
+    #[allow(dead_code)]
     fn label(self) -> &'static str {
         match self {
             Isolation::Local => "Local",
@@ -248,6 +250,13 @@ impl Distro {
             Distro::Arch => "Arch",
         }
     }
+}
+
+/// Cuál dropdown de la config de sesión está abierto (overlay del select).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DropKind {
+    Isolation,
+    Distro,
 }
 
 /// El tipo de una sesión — define el icono de su diente (rail izquierdo).
@@ -506,6 +515,8 @@ struct Model {
     /// desplegado. Cada diente de sesión ES su panel: al seleccionarlo se abre;
     /// re-clickear el activo lo cierra.
     session_panel_open: bool,
+    /// Dropdown de config abierto (overlay del select), o `None`.
+    dropdown_open: Option<DropKind>,
 
     // Anchos resizables de los paneles laterales (px).
     session_w: f32,
@@ -570,6 +581,10 @@ enum Msg {
     SelectSession(usize),
     /// Click en un diente de herramienta (rail derecho): abre/cierra su panel.
     SelectTool(Tool),
+    /// Abrir/cerrar un dropdown de config (aislamiento o distro).
+    ToggleDropdown(DropKind),
+    /// Cerrar el dropdown (scrim / Esc).
+    DismissDropdown,
     /// Elegir el aislamiento en el panel de config. Sobre la draft, configurar
     /// la promueve a sesión propia (y nace un draft nuevo); sobre una sesión
     /// real, edita su config.
@@ -690,6 +705,7 @@ impl App for Shell {
             active_tool: Some(Tool::History),
             // Y el panel de la draft abierto a la izquierda (su config).
             session_panel_open: true,
+            dropdown_open: None,
             session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
@@ -708,6 +724,12 @@ impl App for Shell {
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Con un dropdown de config abierto, Esc lo cierra (no va al shell).
+        if model.dropdown_open.is_some() {
+            if let llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) = &e.key {
+                return Some(Msg::DismissDropdown);
+            }
         }
         // Con un menú abierto, Esc lo cierra y se come la tecla (no va al
         // shell). El resto de teclas siguen su curso normal.
@@ -784,9 +806,14 @@ impl App for Shell {
                     ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(cmd)),
                 );
             }
+            Msg::ToggleDropdown(kind) => {
+                m.dropdown_open = if m.dropdown_open == Some(kind) { None } else { Some(kind) };
+            }
+            Msg::DismissDropdown => m.dropdown_open = None,
             // Config del aislamiento. Sobre la draft, configurarla la promueve
             // a sesión propia (y nace un draft nuevo); sobre una real, edita.
             Msg::SetIsolation(iso) => {
+                m.dropdown_open = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.isolation = iso;
                 }
@@ -797,6 +824,7 @@ impl App for Shell {
                 }
             }
             Msg::SetDistro(d) => {
+                m.dropdown_open = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.distro = d;
                 }
@@ -931,7 +959,8 @@ impl App for Shell {
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
-        menu::overlay(model)
+        // El dropdown de config (select) tiene prioridad sobre el menú.
+        view::dropdown_overlay(model).or_else(|| menu::overlay(model))
     }
 }
 
