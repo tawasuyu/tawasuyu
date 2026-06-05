@@ -27,12 +27,11 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         Msg::EditorKey(ev) => {
             let _ = model.ide.apply_key_with_clipboard(&ev, &mut model.clipboard);
         }
-        Msg::MultiPointer(col, ev) => {
-            // Click en una columna que no es el activo → primero le da el foco.
-            if let Some(&id) = model.seleccionados.get(col) {
-                if model.activo != Some(id) {
-                    cambiar_activo(&mut model, id);
-                }
+        Msg::MultiPointer(id, ev) => {
+            // Click en una columna que no es el activo → primero le da el foco
+            // (a partir de acá el teclado va a ese cuerpo, vía model.ide).
+            if model.activo != Some(id) {
+                cambiar_activo(&mut model, id);
             }
             let scroll = model.ide.state.scroll_offset;
             match ev {

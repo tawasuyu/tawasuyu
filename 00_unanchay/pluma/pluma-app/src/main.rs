@@ -209,23 +209,24 @@ impl App for Pluma {
         Some(Msg::EditorKey(event.clone()))
     }
 
-    /// Rueda → scroll horizontal del multilienzo. Touchpad con eje X directo,
-    /// o Shift+rueda-Y (común en Linux). Rueda-Y sin Shift se ignora (cada
-    /// editor scrollea su propio eje vertical). 30 px/línea, igual que el demo.
+    /// Rueda → scroll horizontal del multilienzo. El eje primario de la app es
+    /// horizontal, así que la rueda vertical normal también desplaza en X
+    /// (además del eje X del touchpad). 48 px/línea.
     fn on_wheel(
         _model: &Self::Model,
         delta: WheelDelta,
         _cursor: (f32, f32),
-        modifiers: Modifiers,
+        _modifiers: Modifiers,
     ) -> Option<Self::Msg> {
-        const PX_POR_LINEA: f32 = 30.0;
+        const PX_POR_LINEA: f32 = 48.0;
         let dx_lineas = if delta.x.abs() > 0.0 {
             delta.x
-        } else if modifiers.shift {
-            delta.y
         } else {
-            return None;
+            delta.y
         };
+        if dx_lineas == 0.0 {
+            return None;
+        }
         Some(Msg::ScrollHoriz(-dx_lineas * PX_POR_LINEA))
     }
 

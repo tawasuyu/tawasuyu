@@ -33,9 +33,11 @@ pub(crate) const BACKENDS: [BackendKind; 6] = [
 #[derive(Clone, Debug)]
 pub(crate) enum Msg {
     EditorKey(KeyEvent),
-    /// Click/drag dentro de la columna `usize` del multilienzo. Si esa
-    /// columna no es el cuerpo activo, primero le pasa el foco.
-    MultiPointer(usize, PointerEvent),
+    /// Click/drag dentro de la columna del cuerpo `Uuid` del multilienzo. Si
+    /// ese cuerpo no es el activo, primero le pasa el foco (se apropia del
+    /// teclado). Se identifica por `Uuid` y no por índice porque la lista de
+    /// columnas visibles puede no coincidir 1-1 con `seleccionados`.
+    MultiPointer(Uuid, PointerEvent),
     /// Abre un cuerpo como activo (lo agrega a la selección si no estaba).
     AbrirDoc(Uuid),
     /// Agrega/saca un cuerpo de la selección visible del multilienzo.

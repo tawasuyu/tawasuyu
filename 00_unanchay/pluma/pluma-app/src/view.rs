@@ -391,53 +391,79 @@ fn panel_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
     columna(vec![lista, pista])
 }
 
-/// Una fila del tree: [toggle ▣/▢] [nombre · intención]. El toggle suma/saca
-/// del multilienzo; el nombre abre (activa) el lienzo.
+/// Una fila del tree: [checkbox] [nombre · intención]. El checkbox suma/saca
+/// del multilienzo; el nombre abre (activa) el lienzo. Texto a una sola línea
+/// con elipsis (no se parte al angostar el panel).
 fn fila_lienzo(model: &Model, c: &Cuerpo, derivada: bool, theme: &Theme) -> View<Msg> {
     let en_sel = model.seleccionados.contains(&c.id);
     let es_activo = model.activo == Some(c.id);
 
-    // Cajita de selección PINTADA (no glifo → sin riesgo de tofu): cuadrito
-    // relleno con el acento cuando está en el multilienzo, sólo borde si no.
-    let cuadro = View::new(Style {
-        size: Size {
-            width: length(11.0_f32),
-            height: length(11.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(if en_sel { theme.accent } else { theme.bg_panel_alt })
-    .radius(2.0);
-    let toggle = View::new(Style {
+    // Checkbox pintado con `paint_with` → toda la celda (20×20) es clickeable
+    // (no un cuadrito chico imposible de acertar), y nunca tofu. Caja con
+    // borde; rellena con el acento cuando el lienzo está en el multilienzo.
+    let accent = theme.accent;
+    let borde = theme.border;
+    let vacio = theme.bg_panel_alt;
+    let checkbox = View::new(Style {
         size: Size {
             width: length(20.0_f32),
             height: length(20.0_f32),
         },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .children(vec![cuadro])
-    .on_click(Msg::ToggleSeleccion(c.id));
+    .on_click(Msg::ToggleSeleccion(c.id))
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, RoundedRect, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let s = 13.0_f64;
+        let x = rect.x as f64 + (rect.w as f64 - s) / 2.0;
+        let y = rect.y as f64 + (rect.h as f64 - s) / 2.0;
+        let caja = RoundedRect::new(x, y, x + s, y + s, 3.0);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            if en_sel { accent } else { vacio },
+            None,
+            &caja,
+        );
+        scene.stroke(&Stroke::new(1.3), Affine::IDENTITY, borde, None, &caja);
+    });
 
-    let sangria = if derivada { "  » " } else { "" };
-    let fg = if es_activo { theme.fg_text } else if en_sel { theme.fg_text } else { theme.fg_muted };
+    let fg = if es_activo || en_sel {
+        theme.fg_text
+    } else {
+        theme.fg_muted
+    };
     let etiqueta = format!(
-        "{sangria}{} · {}",
-        recortar(&c.metadatos.nombre_legible, 22),
+        "{} · {}",
+        c.metadatos.nombre_legible,
         etiqueta_intencion(&c.metadatos.intencion)
     );
+    // Sangría de las derivadas vía padding (no con caracteres), una sola línea.
     let nombre = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(20.0_f32),
         },
         flex_grow: 1.0,
+        flex_shrink: 1.0,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: auto(),
+        },
+        padding: Rect {
+            left: length(if derivada { 14.0_f32 } else { 2.0_f32 }),
+            right: length(2.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     })
     .text_aligned(etiqueta, 12.0, fg, Alignment::Start)
+    .ellipsis(1)
     .on_click(Msg::AbrirDoc(c.id));
 
+    // El activo se distingue por fondo + barra de acento a la izquierda (3px).
     let fondo = if es_activo {
         theme.bg_panel_alt
     } else {
@@ -447,18 +473,22 @@ fn fila_lienzo(model: &Model, c: &Cuerpo, derivada: bool, theme: &Theme) -> View
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(22.0_f32),
+            height: length(24.0_f32),
         },
         align_items: Some(AlignItems::Center),
+        min_size: Size {
+            width: length(0.0_f32),
+            height: auto(),
+        },
         gap: Size {
-            width: length(4.0_f32),
+            width: length(2.0_f32),
             height: length(0.0_f32),
         },
         ..Default::default()
     })
     .fill(fondo)
-    .radius(3.0)
-    .children(vec![toggle, nombre])
+    .radius(4.0)
+    .children(vec![checkbox, nombre])
 }
 
 /// Diente Derivar-IA: input de prompt + botones (derivar/guardar preset) +
@@ -761,6 +791,10 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     };
 
+    // El índice de columna que reporta el widget se traduce al Uuid del cuerpo
+    // de esa columna — así el foco va al cuerpo correcto sin depender de que
+    // el orden visible coincida con `seleccionados`.
+    let ids_col: Vec<Uuid> = cuerpos_sel.iter().map(|c| c.id).collect();
     let mult = multilienzo_editor_view::<Msg, _>(
         &ides_sel,
         &cuerpos_sel,
@@ -773,7 +807,10 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
         METRICS,
         VISIBLE_LINES,
         Language::Plain,
-        |i, ev| Msg::MultiPointer(i, ev),
+        move |i, ev| {
+            let id = ids_col.get(i).copied().unwrap_or_default();
+            Msg::MultiPointer(id, ev)
+        },
     );
 
     let centro: View<Msg> = if fijo {
