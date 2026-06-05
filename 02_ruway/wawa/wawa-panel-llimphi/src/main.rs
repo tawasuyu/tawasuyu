@@ -21,6 +21,8 @@ use allichay::{Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, S
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_module_allichay::{schema_panel, AllichayMsg, AllichayState};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
+use llimphi_ui::DragPhase;
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -82,14 +84,8 @@ const MODULES: &[(&str, &str, &str)] = &[
     ("agora", "◯", "wawa-panel-mod-agora"),
 ];
 
-/// Apps suscribibles que traen su propio diente. El `key` casa con un id de
-/// módulo en `WawaConfig.modules` (módulo apagado = diente oculto); pata no es
-/// módulo del SO, así que `module_enabled` lo deja siempre visible.
-const CONFIGURABLE_APPS: &[(&str, &str, &str)] =
-    &[("mirada", "mirada", "⚙"), ("pata", "pata", "🎛")];
-
-/// Índice del diente "Información" (4ª categoría) — para el menú Ayuda.
-const INFO_DIENTE: usize = 3;
+/// Índice de la pestaña "Información" (2ª) — para el menú Ayuda.
+const INFO_DIENTE: usize = 1;
 
 // =====================================================================
 // Información del host (Linux /proc)
@@ -187,8 +183,13 @@ struct Model {
     /// Pestaña activa: índice en [`pestanas`] (la app/categoría).
     selected_pest: usize,
     /// Item activo dentro de la pestaña: índice de sección en su schema (lo que
-    /// se abre en el canvas central).
-    selected_item: usize,
+    /// se abre en el canvas central). `None` = ninguno → el canvas muestra el
+    /// resumen de la pestaña.
+    selected_item: Option<usize>,
+    /// Si el sidebar de items está visible (se oculta clickeando la pestaña activa).
+    sidebar_open: bool,
+    /// Ancho del sidebar (px), arrastrable.
+    sidebar_w: f32,
     cfg: WawaConfig,
     mirada: mirada_brain::Config,
     mirada_path: Option<PathBuf>,
@@ -205,10 +206,13 @@ struct Model {
 #[derive(Clone)]
 enum Msg {
     Tick,
-    /// Click en una pestaña del rail (app/categoría): cambia el sidebar.
+    /// Click en una pestaña del rail (app/categoría): cambia el sidebar; si ya
+    /// estaba activa, lo oculta/muestra.
     SelectPestana(u64),
     /// Click en un item del sidebar: abre su contenido en el canvas central.
     SelectItem(u64),
+    /// Arrastre del divisor: delta de ancho del sidebar.
+    SetSidebarWidth(f32),
     /// Mensaje del renderizador de config (foco/cambio/scroll).
     Allichay(AllichayMsg),
     /// Tecla al campo de texto en edición.
@@ -266,7 +270,9 @@ impl App for Panel {
 
         Model {
             selected_pest: 0,
-            selected_item: 0,
+            selected_item: None,
+            sidebar_open: true,
+            sidebar_w: SIDEBAR_W,
             cfg,
             mirada,
             mirada_path,
@@ -287,16 +293,26 @@ impl App for Panel {
             Msg::Tick => refresh_host(&mut m.host),
             Msg::SelectPestana(id) => {
                 let n = pestanas(&m).len().max(1);
-                m.selected_pest = (id as usize).min(n - 1);
-                // Al cambiar de pestaña, vuelve al primer item de su sidebar.
-                m.selected_item = 0;
-                m.allichay.select(0);
+                let id = (id as usize).min(n - 1);
+                if id == m.selected_pest {
+                    // Clic en la pestaña activa: oculta/muestra su sidebar.
+                    m.sidebar_open = !m.sidebar_open;
+                } else {
+                    m.selected_pest = id;
+                    m.sidebar_open = true;
+                    // Nueva pestaña: sin item → el canvas muestra su resumen.
+                    m.selected_item = None;
+                    m.allichay.select(0);
+                }
                 m.status.clear();
             }
             Msg::SelectItem(id) => {
-                m.selected_item = id as usize;
+                m.selected_item = Some(id as usize);
                 m.allichay.select(id as usize);
                 m.status.clear();
+            }
+            Msg::SetSidebarWidth(dx) => {
+                m.sidebar_w = (m.sidebar_w + dx).clamp(160.0, 520.0);
             }
             Msg::Allichay(AllichayMsg::SelectSection(_)) => {}
             Msg::Allichay(AllichayMsg::Focus(path)) => {
@@ -429,55 +445,50 @@ fn main() {
 }
 
 // =====================================================================
-// Registro de dientes (categorías + apps suscritas)
+// Registro de pestañas (categorías) + sus items (secciones)
 // =====================================================================
 
-/// Un diente del panel: su nombre, su icono y el esquema que lista en su panel.
+/// Una pestaña del rail: su nombre, su icono y el schema cuyas secciones son los
+/// **items** que lista su sidebar.
 struct PanelPestana {
     title: String,
     icon: String,
     schema: Schema,
 }
 
-/// Arma el rail completo: dientes-categoría del SO + dientes-de-app suscritas.
+/// Arma el rail aprovechando la triple jerarquía: pocas pestañas, cada una con
+/// varios items (sin paneles de un solo item).
+///
+/// - **Sistema** (categoría SO): Apariencia · Idioma · Interfaz (llimphi) ·
+///   Arranque (arje como init) · Módulos.
+/// - **Información** (categoría SO, sólo lectura): Estado del equipo · Acerca.
+/// - **mirada** (app suscrita): sus secciones (Teselado, Decoración, …).
+/// - **pata** (app suscrita): sus secciones (General, Superficie N, …).
 fn pestanas(m: &Model) -> Vec<PanelPestana> {
-    let t = rimay_localize::t;
     let mut out = vec![
         PanelPestana {
-            title: t("wawa-panel-cat-appearance"),
-            icon: "🎨".into(),
-            schema: wawa_appearance_schema(&m.cfg),
-        },
-        PanelPestana {
-            title: t("wawa-panel-cat-language"),
-            icon: "🌐".into(),
-            schema: wawa_language_schema(&m.cfg),
-        },
-        PanelPestana {
-            title: t("wawa-panel-cat-modules"),
-            icon: "☸".into(),
-            schema: wawa_modules_schema(&m.cfg),
+            title: "Sistema".into(),
+            icon: "⚙".into(),
+            schema: sistema_schema(&m.cfg),
         },
         PanelPestana {
             title: "Información".into(),
             icon: "🖥".into(),
-            schema: wawa_info_schema(&m.host),
+            schema: info_schema(&m.host),
         },
     ];
-    // Dientes-de-app: cada app suscrita (módulo activo) trae su propio esquema.
-    for (key, label, icon) in CONFIGURABLE_APPS {
-        if !m.cfg.module_enabled(key) {
-            continue;
-        }
-        let schema = match *key {
-            "mirada" => prefix_schema(m.mirada.schema(), "mirada"),
-            "pata" => prefix_schema(m.pata.schema(), "pata"),
-            _ => continue,
-        };
+    if m.cfg.module_enabled("mirada") {
         out.push(PanelPestana {
-            title: (*label).to_string(),
-            icon: (*icon).to_string(),
-            schema,
+            title: "mirada".into(),
+            icon: "☸".into(),
+            schema: prefix_schema(m.mirada.schema(), "mirada"),
+        });
+    }
+    if m.cfg.module_enabled("pata") {
+        out.push(PanelPestana {
+            title: "pata".into(),
+            icon: "🎛".into(),
+            schema: prefix_schema(m.pata.schema(), "pata"),
         });
     }
     out
@@ -492,64 +503,97 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
     schema
 }
 
-fn wawa_appearance_schema(cfg: &WawaConfig) -> Schema {
-    let t = rimay_localize::t;
-    Schema::new().section(
-        Section::new("wawa::apariencia", t("wawa-panel-cat-appearance"))
-            .field(Field::dropdown(
-                "theme_variant",
-                t("wawa-panel-label-variant"),
-                cfg.theme_variant.clone(),
-                THEME_VARIANTS.iter().map(|(id, k)| EnumOption::new(*id, t(k))).collect(),
-            ))
-            .field(Field::dropdown(
-                "accent",
-                t("wawa-panel-label-accent"),
-                cfg.accent.clone(),
-                ACCENTS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
-            )),
-    )
+/// La pestaña "Sistema": varios items de configuración del SO.
+fn sistema_schema(cfg: &WawaConfig) -> Schema {
+    Schema::new()
+        .section(appearance_section(cfg))
+        .section(idioma_section(cfg))
+        .section(interfaz_section())
+        .section(arranque_section())
+        .section(modulos_section(cfg))
 }
 
-fn wawa_language_schema(cfg: &WawaConfig) -> Schema {
+fn appearance_section(cfg: &WawaConfig) -> Section {
     let t = rimay_localize::t;
-    Schema::new().section(
-        Section::new("wawa::idioma", t("language"))
-            .field(Field::dropdown(
-                "lang",
-                t("wawa-panel-label-language"),
-                cfg.lang.clone(),
-                LANGS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
-            ))
-            .field(
-                Field::toggle("timefmt_24h", t("wawa-panel-label-clock"), cfg.timefmt_24h)
-                    .help(t("wawa-panel-clock-24h")),
-            ),
-    )
+    Section::new("wawa::apariencia", t("wawa-panel-cat-appearance"))
+        .icon("🎨")
+        .field(Field::dropdown(
+            "theme_variant",
+            t("wawa-panel-label-variant"),
+            cfg.theme_variant.clone(),
+            THEME_VARIANTS.iter().map(|(id, k)| EnumOption::new(*id, t(k))).collect(),
+        ))
+        .field(Field::dropdown(
+            "accent",
+            t("wawa-panel-label-accent"),
+            cfg.accent.clone(),
+            ACCENTS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+        ))
 }
 
-fn wawa_modules_schema(cfg: &WawaConfig) -> Schema {
+fn idioma_section(cfg: &WawaConfig) -> Section {
     let t = rimay_localize::t;
-    let mut section = Section::new("wawa::modulos", t("wawa-panel-cat-modules"));
+    Section::new("wawa::idioma", t("language"))
+        .icon("🌐")
+        .field(Field::dropdown(
+            "lang",
+            t("wawa-panel-label-language"),
+            cfg.lang.clone(),
+            LANGS.iter().map(|(id, l)| EnumOption::new(*id, *l)).collect(),
+        ))
+        .field(
+            Field::toggle("timefmt_24h", t("wawa-panel-label-clock"), cfg.timefmt_24h)
+                .help(t("wawa-panel-clock-24h")),
+        )
+}
+
+/// Interfaz (llimphi): toolkit del SO. Controles reales próximamente (present
+/// mode, fuente, animaciones) — por ahora informativo.
+fn interfaz_section() -> Section {
+    Section::new("wawa::interfaz", "Interfaz")
+        .icon("🎛")
+        .help("El toolkit gráfico del sistema (llimphi)")
+        .field(Field::display("toolkit", "Toolkit", "llimphi"))
+        .field(Field::display(
+            "proximamente",
+            "Próximamente",
+            "present mode (vsync) · fuente · animaciones",
+        ))
+}
+
+/// Arranque: usar arje como init del sistema. Control real próximamente.
+fn arranque_section() -> Section {
+    Section::new("wawa::arranque", "Arranque")
+        .icon("▶")
+        .help("Init del sistema en Linux")
+        .field(Field::display("init", "Init", "systemd (actual)"))
+        .field(Field::display(
+            "proximamente",
+            "Próximamente",
+            "elegir arje como init (PID 1)",
+        ))
+}
+
+fn modulos_section(cfg: &WawaConfig) -> Section {
+    let t = rimay_localize::t;
+    let mut section = Section::new("wawa::modulos", t("wawa-panel-cat-modules")).icon("☸");
     for (id, _glyph, key) in MODULES {
         section = section.field(Field::toggle(*id, t(key), cfg.module_enabled(id)));
     }
-    Schema::new().section(section)
+    section
 }
 
-fn wawa_info_schema(host: &HostInfo) -> Schema {
+/// La pestaña "Información": estado del equipo + acerca (sólo lectura).
+fn info_schema(host: &HostInfo) -> Schema {
     let t = rimay_localize::t;
     let used_kb = host.mem_total_kb.saturating_sub(host.mem_avail_kb);
     Schema::new()
         .section(
             Section::new("wawa::infohost", t("wawa-panel-cat-monitor"))
+                .icon("🖥")
                 .field(Field::display("host", t("wawa-panel-stat-host"), &host.host))
                 .field(Field::display("kernel", t("wawa-panel-stat-kernel"), &host.kernel))
-                .field(Field::display(
-                    "uptime",
-                    t("wawa-panel-stat-uptime"),
-                    fmt_uptime(host.uptime),
-                ))
+                .field(Field::display("uptime", t("wawa-panel-stat-uptime"), fmt_uptime(host.uptime)))
                 .field(Field::display(
                     "mem",
                     t("wawa-panel-stat-mem"),
@@ -564,11 +608,7 @@ fn wawa_info_schema(host: &HostInfo) -> Schema {
         .section(
             Section::new("wawa::about", t("wawa-panel-about-name"))
                 .field(Field::display("name", t("wawa-panel-about-name"), "wawa"))
-                .field(Field::display(
-                    "version",
-                    t("wawa-panel-about-version"),
-                    env!("CARGO_PKG_VERSION"),
-                ))
+                .field(Field::display("version", t("wawa-panel-about-version"), env!("CARGO_PKG_VERSION")))
                 .field(Field::display("toolkit", t("wawa-panel-about-toolkit"), "llimphi")),
         )
 }
@@ -706,21 +746,19 @@ fn build_header(theme: &Theme) -> View<Msg> {
 fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &Theme) -> View<Msg> {
     let empty: &[Section] = &[];
     let sections: &[Section] = pestanas.get(pest).map(|p| p.schema.sections.as_slice()).unwrap_or(empty);
-    let item = model.selected_item.min(sections.len().saturating_sub(1));
+    let title = pestanas.get(pest).map(|p| p.title.as_str()).unwrap_or("");
+    // Item activo, sólo si está en rango; `None` → el canvas muestra el resumen.
+    let sel_item = model.selected_item.filter(|&i| i < sections.len());
 
-    // Sidebar: rótulo de la pestaña + lista de items.
-    let sidebar = sidebar_view(pestanas.get(pest).map(|p| p.title.as_str()), sections, item, theme);
-
-    // Canvas: el contenido del item activo (su formulario). El rail de pestañas
-    // va superpuesto en el borde izquierdo del canvas, sobresaliendo del sidebar.
-    let canvas_content = match sections.get(item) {
+    // Canvas: contenido del item activo, o resumen de la pestaña si no hay item.
+    let canvas_content = match sel_item.and_then(|i| sections.get(i)) {
         Some(sec) => {
             let one = Schema {
                 sections: vec![sec.clone()],
             };
             schema_panel(&one, &model.allichay, theme, VIEWPORT_H, Msg::Allichay)
         }
-        None => resumen_view(theme),
+        None => resumen_view(title, sections, theme),
     };
     let canvas = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -756,6 +794,27 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
     .fill(theme.bg_app)
     .children(vec![canvas, rail]);
 
+    // Sidebar acoplable: visible si está abierto y la pestaña tiene items. Es
+    // un pane redimensionable (divisor arrastrable); ocultable clickeando la
+    // pestaña activa.
+    let inner = if model.sidebar_open && !sections.is_empty() {
+        let sidebar = sidebar_view(title, sections, sel_item, theme);
+        splitter_two(
+            Direction::Row,
+            sidebar,
+            PaneSize::Fixed(model.sidebar_w),
+            center,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetSidebarWidth(dx)),
+                DragPhase::End => None,
+            },
+            &SplitterPalette::from_theme(theme),
+        )
+    } else {
+        center
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -769,21 +828,22 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
         },
         ..Default::default()
     })
-    .children(vec![sidebar, center])
+    .children(vec![inner])
 }
 
 /// El sidebar de una pestaña: su rótulo + la lista de items (secciones), cada
 /// uno con su iconito. Clic en un item lo abre en el canvas.
-fn sidebar_view(title: Option<&str>, sections: &[Section], sel_item: usize, theme: &Theme) -> View<Msg> {
+fn sidebar_view(title: &str, sections: &[Section], sel_item: Option<usize>, theme: &Theme) -> View<Msg> {
     let mut kids: Vec<View<Msg>> = Vec::with_capacity(sections.len() + 1);
     // Rótulo de la pestaña.
     kids.push(
         View::new(Style {
+            flex_direction: FlexDirection::Column,
             size: Size {
                 width: percent(1.0_f32),
                 height: length(34.0_f32),
             },
-            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
             padding: Rect {
                 left: length(12.0_f32),
                 right: length(8.0_f32),
@@ -792,15 +852,10 @@ fn sidebar_view(title: Option<&str>, sections: &[Section], sel_item: usize, them
             },
             ..Default::default()
         })
-        .text_aligned(
-            title.unwrap_or("").to_string(),
-            13.0,
-            theme.fg_muted,
-            Alignment::Start,
-        ),
+        .text_aligned(title.to_string(), 13.0, theme.fg_muted, Alignment::Start),
     );
     for (i, sec) in sections.iter().enumerate() {
-        kids.push(item_row(i, &sec.icon, &sec.title, i == sel_item, theme));
+        kids.push(item_row(i, &sec.icon, &sec.title, sel_item == Some(i), theme));
     }
 
     View::new(Style {
@@ -834,16 +889,15 @@ fn item_row(i: usize, icon: &str, label: &str, active: bool, theme: &Theme) -> V
     } else {
         (theme.bg_panel, theme.fg_muted)
     };
+    // Celdas con alto auto (≈ alto del texto): la fila las centra verticalmente.
     let mut cells: Vec<View<Msg>> = Vec::with_capacity(3);
     cells.push(
         View::new(Style {
             size: Size {
                 width: length(22.0_f32),
-                height: percent(1.0_f32),
+                height: Dimension::auto(),
             },
             flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
         .text_aligned(
@@ -857,10 +911,9 @@ fn item_row(i: usize, icon: &str, label: &str, active: bool, theme: &Theme) -> V
         View::new(Style {
             size: Size {
                 width: Dimension::auto(),
-                height: percent(1.0_f32),
+                height: Dimension::auto(),
             },
             flex_grow: 1.0,
-            align_items: Some(AlignItems::Center),
             ..Default::default()
         })
         .text_aligned(label.to_string(), 12.5, fg, Alignment::Start),
@@ -950,20 +1003,54 @@ fn rail_overlay(pestanas: &[PanelPestana], pest: usize, theme: &Theme) -> View<M
 }
 
 /// Resumen del canvas cuando la pestaña no tiene items: nombre de la suite + pista.
-fn resumen_view(theme: &Theme) -> View<Msg> {
-    let title = View::new(Style {
+/// El resumen del canvas al entrar a una pestaña (antes de elegir item):
+/// el nombre de la pestaña + una pista + el listado de sus items.
+fn resumen_view(title: &str, sections: &[Section], theme: &Theme) -> View<Msg> {
+    let head = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(28.0_f32),
+            height: length(30.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(title.to_string(), 20.0, theme.fg_text, Alignment::Center);
+
+    let hint = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(18.0_f32),
         },
         ..Default::default()
     })
     .text_aligned(
-        rimay_localize::t("wawa-panel-title"),
-        18.0,
-        theme.fg_text,
+        format!("{} opciones — elegí una a la izquierda", sections.len()),
+        12.0,
+        theme.fg_muted,
         Alignment::Center,
     );
+
+    let items: Vec<View<Msg>> = sections
+        .iter()
+        .map(|s| {
+            let icon = if s.icon.is_empty() { "·" } else { s.icon.as_str() };
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(20.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_aligned(
+                format!("{}  {}", icon, s.title),
+                12.5,
+                theme.fg_muted,
+                Alignment::Center,
+            )
+        })
+        .collect();
+    let mut kids = vec![head, hint];
+    kids.extend(items);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
@@ -973,9 +1060,13 @@ fn resumen_view(theme: &Theme) -> View<Msg> {
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
         ..Default::default()
     })
-    .children(vec![title])
+    .children(kids)
 }
 
 /// Icono de un diente (emoji que la fuente tenga), color resuelto por el rail.
@@ -1092,8 +1183,9 @@ fn handle_menu_command(model: Model, cmd: &str) -> Model {
         "file.quit" => std::process::exit(0),
         "help.about" => {
             m.selected_pest = INFO_DIENTE;
-            m.selected_item = 0;
-            m.allichay.select(0);
+            m.sidebar_open = true;
+            m.selected_item = Some(1); // "Acerca de"
+            m.allichay.select(1);
             m.status.clear();
         }
         _ => {}

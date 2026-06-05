@@ -20,7 +20,7 @@ use llimphi_ui::llimphi_layout::taffy;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Position, Size, Style,
 };
-use llimphi_ui::llimphi_layout::taffy::Rect;
+use llimphi_ui::llimphi_layout::taffy::{AlignItems, Rect};
 use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
@@ -44,24 +44,40 @@ fn main() {
 
     let theme = llimphi_theme::Theme::default();
 
-    // Rail de dientes representativo del panel: una categoría + dos apps.
-    let apariencia = Schema::new().section(
-        Section::new("wawa::apariencia", "Tema y acento")
-            .field(Field::toggle("oscuro", "Modo oscuro", true))
-            .field(Field::dropdown(
-                "acento",
-                "Acento",
-                "gioser",
-                vec![
-                    allichay::EnumOption::new("gioser", "gioser"),
-                    allichay::EnumOption::new("yachay", "yachay"),
-                    allichay::EnumOption::new("ruway", "ruway"),
-                ],
-            )),
-    );
+    // Rail de pestañas representativo del panel: la categoría Sistema (varios
+    // items) + dos apps. Aprovecha la triple jerarquía (sin paneles de 1 item).
+    let eo = allichay::EnumOption::new;
+    let sistema = Schema::new()
+        .section(
+            Section::new("wawa::apariencia", "Apariencia")
+                .icon("🎨")
+                .field(Field::toggle("oscuro", "Modo oscuro", true))
+                .field(Field::dropdown("acento", "Acento", "gioser", vec![eo("gioser", "gioser"), eo("yachay", "yachay")])),
+        )
+        .section(
+            Section::new("wawa::idioma", "Idioma")
+                .icon("🌐")
+                .field(Field::dropdown("lang", "Idioma", "es-PE", vec![eo("es-PE", "Español"), eo("en-US", "English")])),
+        )
+        .section(
+            Section::new("wawa::interfaz", "Interfaz")
+                .icon("🎛")
+                .field(Field::display("toolkit", "Toolkit", "llimphi")),
+        )
+        .section(
+            Section::new("wawa::arranque", "Arranque")
+                .icon("▶")
+                .field(Field::display("init", "Init", "systemd (actual)")),
+        )
+        .section(
+            Section::new("wawa::modulos", "Módulos")
+                .icon("☸")
+                .field(Field::toggle("mirada", "mirada", true))
+                .field(Field::toggle("shuma", "shuma", true)),
+        );
     let dientes: Vec<(&str, &str, Schema)> = vec![
-        ("🎨", "Apariencia", apariencia),
-        ("⚙", "mirada", prefix(mirada_brain::Config::default().schema(), "mirada")),
+        ("⚙", "Sistema", sistema),
+        ("☸", "mirada", prefix(mirada_brain::Config::default().schema(), "mirada")),
         ("🎛", "pata", prefix(pata_core::Config::preset().schema(), "pata")),
     ];
 
@@ -112,6 +128,17 @@ fn main() {
                 width: percent(1.0),
                 height: length(32.0),
             },
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(8.0),
+                right: length(8.0),
+                top: length(0.0),
+                bottom: length(0.0),
+            },
+            gap: Size {
+                width: length(6.0),
+                height: length(0.0),
+            },
             ..Default::default()
         })
         .fill(if act { theme.bg_selected } else { theme.bg_panel })
@@ -119,8 +146,8 @@ fn main() {
         .children(vec![
             View::<()>::new(Style {
                 size: Size {
-                    width: length(28.0),
-                    height: percent(1.0),
+                    width: length(22.0),
+                    height: auto(),
                 },
                 ..Default::default()
             })
@@ -128,7 +155,7 @@ fn main() {
             View::<()>::new(Style {
                 size: Size {
                     width: percent(1.0),
-                    height: percent(1.0),
+                    height: auto(),
                 },
                 ..Default::default()
             })
