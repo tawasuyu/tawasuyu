@@ -36,7 +36,7 @@ use llimphi_ui::{DragPhase, KeyEvent, View};
 use llimphi_theme::Theme;
 
 use llimphi_widget_color_picker::{
-    color_picker_height, color_picker_view, parse_hex, rgba_to_hex, ColorPickerPalette, HexField,
+    color_picker_height, color_picker_view, parse_hex, ColorPickerPalette, HexField,
     DEFAULT_SWATCHES,
 };
 
@@ -1098,4 +1098,140 @@ where
         move |r| m_remove(AllichayMsg::Change(p_remove.clone(), v_remove.with_row_removed(r))),
         move || m_add(AllichayMsg::Change(p_add.clone(), value.with_row_pushed(ncols))),
     )
+}
+
+// =====================================================================
+// Tests del estado del renderizador
+// =====================================================================
+//
+// Cubren la lógica con estado de `AllichayState` (foco de campo escalar, de
+// celda de agregado y de hex; reconstrucción del `FieldValue` entero en cada
+// tecla; selección de diente que reinicia scroll + foco). El vocabulario en sí
+// (`Schema`/`Field`/`FieldValue`) se testea en el crate `allichay`.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use llimphi_ui::{Key, KeyState, Modifiers};
+
+    /// Un evento de tecleo de un carácter (con su `text`, que es de donde el
+    /// editor inserta — respeta IME + modifiers).
+    fn evtext(s: &str) -> KeyEvent {
+        KeyEvent {
+            key: Key::Character(s.into()),
+            state: KeyState::Pressed,
+            text: Some(s.to_owned()),
+            modifiers: Modifiers::default(),
+            repeat: false,
+        }
+    }
+
+    #[test]
+    fn select_reinicia_scroll_y_foco() {
+        let mut st = AllichayState::new();
+        st.set_scroll(120.0);
+        st.focus(&"a.b".into(), "x");
+        assert!(st.is_editing());
+        st.select(3);
+        assert_eq!(st.selected(), 3);
+        assert_eq!(st.scroll(), 0.0);
+        assert!(!st.is_editing(), "cambiar de diente debe soltar el foco");
+    }
+
+    #[test]
+    fn focus_escalar_y_blur() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "editor.nombre".into();
+        st.focus(&path, "hola");
+        assert!(st.is_focused(&path));
+        assert!(!st.is_focused(&"editor.otro".into()));
+        st.blur();
+        assert!(!st.is_editing());
+        assert!(!st.is_focused(&path));
+    }
+
+    #[test]
+    fn apply_key_campo_escalar_emite_texto_entero() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "editor.nombre".into();
+        st.focus(&path, "abc"); // el caret queda al final
+        let r = st.apply_key(&evtext("d"));
+        assert_eq!(r, Some((path, FieldValue::Text("abcd".into()))));
+    }
+
+    #[test]
+    fn apply_key_sin_foco_no_emite() {
+        let mut st = AllichayState::new();
+        assert_eq!(st.apply_key(&evtext("x")), None);
+    }
+
+    #[test]
+    fn focus_cell_lista_reconstruye_el_agregado() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "rutas".into();
+        let base = FieldValue::List(vec!["a".into(), "b".into()]);
+        st.focus_cell(&path, base, 0, 0); // siembra "a", caret al final
+        assert!(st.is_focused_cell(&path, 0, 0));
+        assert!(!st.is_focused_cell(&path, 1, 0));
+        let r = st.apply_key(&evtext("x"));
+        assert_eq!(
+            r,
+            Some((path, FieldValue::List(vec!["ax".into(), "b".into()])))
+        );
+    }
+
+    #[test]
+    fn focus_cell_tabla_solo_toca_su_celda() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "menu".into();
+        let base = FieldValue::Table(vec![
+            vec!["A".into(), "a".into()],
+            vec!["B".into(), "b".into()],
+        ]);
+        st.focus_cell(&path, base, 1, 1); // siembra "b"
+        let r = st.apply_key(&evtext("z"));
+        assert_eq!(
+            r,
+            Some((
+                path,
+                FieldValue::Table(vec![
+                    vec!["A".into(), "a".into()],
+                    vec!["B".into(), "bz".into()],
+                ])
+            ))
+        );
+    }
+
+    #[test]
+    fn focus_cell_fuera_de_rango_no_enfoca() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "rutas".into();
+        let base = FieldValue::List(vec!["a".into()]);
+        st.focus_cell(&path, base, 5, 0); // coordenada inexistente
+        assert!(!st.is_editing(), "no debe enfocar una celda fuera de rango");
+    }
+
+    #[test]
+    fn apply_key_hex_emite_color_solo_si_parsea() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "apariencia.acento".into();
+        // Semilla de 5 dígitos: incompleta, no parsea todavía.
+        st.focus_hex(&path, "#11223");
+        assert!(st.is_editing_hex(&path));
+        // Al completar el 6º dígito el hex parsea → emite el Color.
+        let r = st.apply_key(&evtext("3"));
+        assert_eq!(r, Some((path, FieldValue::Color([0x11, 0x22, 0x33, 255]))));
+    }
+
+    #[test]
+    fn focos_son_mutuamente_excluyentes() {
+        let mut st = AllichayState::new();
+        let path: FieldPath = "a.b".into();
+        st.focus_cell(&path, FieldValue::List(vec!["v".into()]), 0, 0);
+        assert!(st.is_focused_cell(&path, 0, 0));
+        // Pasar a editar el hex de otro campo descarta el foco de celda.
+        let hex_path: FieldPath = "a.color".into();
+        st.focus_hex(&hex_path, "#000000");
+        assert!(st.is_editing_hex(&hex_path));
+        assert!(!st.is_focused_cell(&path, 0, 0));
+    }
 }
