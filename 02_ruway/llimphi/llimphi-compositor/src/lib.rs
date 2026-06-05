@@ -370,6 +370,29 @@ pub struct View<Msg> {
     /// macOS), el runtime lo invoca con el factor incremental + el punto focal
     /// local. Base del zoom de canvases. Ver [`ScaleFn`] y [`View::on_scale`].
     pub on_scale: Option<ScaleFn<Msg>>,
+    /// Msg a emitir en **doble-tap** (dos presses izquierdos sobre este nodo
+    /// dentro de una ventana temporal corta y muy cerca). Es un evento
+    /// **aditivo**: si el nodo también tiene `on_click`, éste igual dispara en
+    /// cada press; el doble-tap llega además en el segundo. Para doble-tap
+    /// exclusivo, poné el handler en un nodo sin `on_click`. Ver
+    /// [`View::on_double_tap`].
+    pub on_double_tap: Option<Msg>,
+    /// Variante posicional de [`Self::on_double_tap`]: recibe la posición del
+    /// segundo tap relativa al rect del nodo (para zoom-to-point, etc.). Gana
+    /// sobre `on_double_tap` si ambos están.
+    pub on_double_tap_at: Option<ClickAtFn<Msg>>,
+    /// Msg a emitir en **long-press** (mantener el botón izquierdo sobre este
+    /// nodo ~500 ms sin moverse ni soltar). El runtime lo arbitra por tiempo:
+    /// si el cursor se aleja (pasó a drag/scroll) o se suelta antes, se
+    /// cancela. Evento **aditivo** (ver [`Self::on_double_tap`]); el caso
+    /// limpio es un nodo con drag-to-pan + long-press y sin `on_click` (un
+    /// canvas). Útil para menús contextuales táctiles / selección. Ver
+    /// [`View::on_long_press`].
+    pub on_long_press: Option<Msg>,
+    /// Variante posicional de [`Self::on_long_press`]: recibe la posición del
+    /// press relativa al rect del nodo (para abrir el menú en el punto). Gana
+    /// sobre `on_long_press` si ambos están.
+    pub on_long_press_at: Option<ClickAtFn<Msg>>,
     /// Marca este nodo como **enfocable** con el id opaco `u64`. El runtime
     /// mantiene el foco (uno por ventana) y lo mueve con Tab/Shift+Tab en
     /// orden de árbol (pre-orden) y al clickear un nodo enfocable; notifica
@@ -531,6 +554,12 @@ pub struct MountedNode<Msg> {
     /// Handler de gesto de escala (pinch-to-zoom) de este nodo. Ver
     /// [`View::on_scale`] y [`ScaleFn`].
     pub on_scale: Option<ScaleFn<Msg>>,
+    /// Handlers de doble-tap (ver [`View::on_double_tap`]).
+    pub on_double_tap: Option<Msg>,
+    pub on_double_tap_at: Option<ClickAtFn<Msg>>,
+    /// Handlers de long-press (ver [`View::on_long_press`]).
+    pub on_long_press: Option<Msg>,
+    pub on_long_press_at: Option<ClickAtFn<Msg>>,
     pub focusable: Option<u64>,
     pub alpha: Option<f32>,
     pub anim: Option<Anim>,

@@ -546,6 +546,13 @@ struct RuntimeState<A: App> {
     /// el runtime pide otro frame (ticker autodetenido). Ver
     /// [`llimphi_compositor::AnimRegistry`].
     anim_registry: llimphi_compositor::AnimRegistry,
+    /// Último tap (press izquierdo) sobre un nodo con `on_double_tap`: instante
+    /// + posición. El próximo press que caiga cerca y a tiempo dispara el
+    /// doble-tap. `None` cuando no hay un primer tap pendiente.
+    last_tap: Option<(std::time::Instant, PhysicalPosition<f64>)>,
+    /// Long-press armado (ver [`PendingLongPress`]). El runtime lo vence por
+    /// tiempo en `about_to_wait` y lo cancela en movimiento/release.
+    pending_long_press: Option<PendingLongPress<A::Msg>>,
 }
 
 struct RenderCache<Msg> {
@@ -577,6 +584,47 @@ enum DragHandlerKind<Msg> {
     Delta(DragFn<Msg>),
     DeltaAt(DragAtFn<Msg>, f32, f32),
 }
+
+/// Un handler de gesto "tipo click" (doble-tap / long-press) ya **resuelto**
+/// contra el nodo: o un `Msg` directo, o un handler posicional con la posición
+/// local `(lx, ly, w, h)` ya calculada. Se captura en el press para poder
+/// dispararlo más tarde (long-press, que vence por tiempo) sin volver a tocar
+/// el árbol.
+enum GestureResolved<Msg> {
+    Direct(Msg),
+    At(ClickAtFn<Msg>, f32, f32, f32, f32),
+}
+
+impl<Msg: Clone> GestureResolved<Msg> {
+    /// Materializa el `Msg` (clona el directo o invoca el handler posicional).
+    fn invoke(&self) -> Option<Msg> {
+        match self {
+            GestureResolved::Direct(m) => Some(m.clone()),
+            GestureResolved::At(h, lx, ly, w, ht) => h(*lx, *ly, *w, *ht),
+        }
+    }
+}
+
+/// Long-press **armado**: el press cayó sobre un nodo con `on_long_press`. El
+/// runtime lo dispara cuando pasa `deadline` (en `about_to_wait`), salvo que
+/// antes el cursor se aleje de `origin` (pasó a drag) o se suelte el botón —
+/// en ambos casos se cancela. Es la parte de "arena" del gesto: el árbitro es
+/// el tiempo + el movimiento.
+struct PendingLongPress<Msg> {
+    deadline: std::time::Instant,
+    origin: PhysicalPosition<f64>,
+    handler: GestureResolved<Msg>,
+}
+
+/// Umbral de duración para que un press se convierta en long-press.
+const LONG_PRESS_DELAY: std::time::Duration = std::time::Duration::from_millis(500);
+/// Si el cursor se aleja más que esto (px físicos) del origen del press, deja
+/// de ser long-press (pasó a drag/scroll) y se cancela.
+const LONG_PRESS_MOVE_CANCEL: f64 = 8.0;
+/// Ventana temporal máxima entre los dos taps de un doble-tap.
+const DOUBLE_TAP_WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
+/// Distancia máxima (px físicos) entre los dos taps de un doble-tap.
+const DOUBLE_TAP_DIST: f64 = 16.0;
 
 struct DragState<Msg> {
     handler: DragHandlerKind<Msg>,

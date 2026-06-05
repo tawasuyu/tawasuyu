@@ -73,6 +73,50 @@ fn scale_hit_from_cache<Msg: Clone>(
     })
 }
 
+/// Resuelve el handler de **doble-tap** bajo `(x, y)` contra el cache del
+/// último frame (overlay con prioridad). Elige la variante `_at` (con focal
+/// local) si está, o el `Msg` directo. `None` si no hay nodo con doble-tap.
+fn double_tap_hit_from_cache<Msg: Clone>(
+    cache: &RenderCache<Msg>,
+    x: f32,
+    y: f32,
+) -> Option<GestureResolved<Msg>> {
+    let (m, c) = match cache.overlay.as_ref() {
+        Some(ov) => (&ov.mounted, &ov.computed),
+        None => (&cache.mounted, &cache.computed),
+    };
+    hit_test_double_tap(m, c, x, y).and_then(|i| {
+        let node = &m.nodes[i];
+        let (rx, ry, rw, rh) = c.get(node.id).map(|r| (r.x, r.y, r.w, r.h)).unwrap_or_default();
+        if let Some(h) = node.on_double_tap_at.clone() {
+            Some(GestureResolved::At(h, x - rx, y - ry, rw, rh))
+        } else {
+            node.on_double_tap.clone().map(GestureResolved::Direct)
+        }
+    })
+}
+
+/// Como [`double_tap_hit_from_cache`] pero para **long-press**.
+fn long_press_hit_from_cache<Msg: Clone>(
+    cache: &RenderCache<Msg>,
+    x: f32,
+    y: f32,
+) -> Option<GestureResolved<Msg>> {
+    let (m, c) = match cache.overlay.as_ref() {
+        Some(ov) => (&ov.mounted, &ov.computed),
+        None => (&cache.mounted, &cache.computed),
+    };
+    hit_test_long_press(m, c, x, y).and_then(|i| {
+        let node = &m.nodes[i];
+        let (rx, ry, rw, rh) = c.get(node.id).map(|r| (r.x, r.y, r.w, r.h)).unwrap_or_default();
+        if let Some(h) = node.on_long_press_at.clone() {
+            Some(GestureResolved::At(h, x - rx, y - ry, rw, rh))
+        } else {
+            node.on_long_press.clone().map(GestureResolved::Direct)
+        }
+    })
+}
+
 impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.state.is_some() {
@@ -112,6 +156,8 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             focused: None,
             last_title: None,
             anim_registry: llimphi_compositor::AnimRegistry::new(),
+            last_tap: None,
+            pending_long_press: None,
         });
         // Sincroniza el factor de escala inicial (el de la ventana recién
         // creada) ANTES del primer render: así una app que dependa del DPI
@@ -197,6 +243,15 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             WindowEvent::CursorMoved { position, .. } => {
                 let prev_cursor = state.cursor;
                 state.cursor = position;
+                // Long-press armado: si el cursor se alejó del origen del press
+                // más que el umbral, el gesto pasó a drag/scroll → cancelar.
+                if let Some(p) = state.pending_long_press.as_ref() {
+                    let dx = position.x - p.origin.x;
+                    let dy = position.y - p.origin.y;
+                    if (dx * dx + dy * dy).sqrt() > LONG_PRESS_MOVE_CANCEL {
+                        state.pending_long_press = None;
+                    }
+                }
                 // Drag activo: dispatchear delta al handler + actualizar
                 // tracking del drop target hovereado (solo si hay payload).
                 if let Some(drag) = state.drag.as_mut() {
@@ -511,6 +566,50 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     }
                     state.last_render = None;
                 }
+                // ── Arena de gestos (aditiva): doble-tap + long-press ──────
+                // Se resuelven con su propio hit-test y NO tocan el camino de
+                // click/drag de abajo (intacto). El árbitro real es el tiempo:
+                // doble-tap = dos presses cercanos dentro de una ventana;
+                // long-press = un press que sobrevive ~500 ms quieto (lo vence
+                // `about_to_wait`, lo cancela el movimiento/release).
+                let now = std::time::Instant::now();
+                // Doble-tap: si este press cae sobre un nodo con doble-tap y
+                // hubo un tap previo cercano y a tiempo, dispará. Si no, este
+                // press queda registrado como "primer tap".
+                if let Some(resolved) =
+                    state.last_render.as_ref().and_then(|c| {
+                        double_tap_hit_from_cache(c, cursor.x as f32, cursor.y as f32)
+                    })
+                {
+                    let qualifies = state.last_tap.is_some_and(|(t, p)| {
+                        now.duration_since(t) <= DOUBLE_TAP_WINDOW
+                            && ((p.x - cursor.x).powi(2) + (p.y - cursor.y).powi(2)).sqrt()
+                                <= DOUBLE_TAP_DIST
+                    });
+                    if qualifies {
+                        state.last_tap = None; // consumido; un 3er tap no re-dispara
+                        if let Some(msg) = resolved.invoke() {
+                            let model = state.model.take().expect("model");
+                            state.model = Some(A::update(model, msg, &self.handle));
+                            state.last_render = None;
+                            state.window.request_redraw();
+                        }
+                    } else {
+                        state.last_tap = Some((now, cursor));
+                    }
+                }
+                // Long-press: si el press cae sobre un nodo con long-press,
+                // armalo. `about_to_wait` lo dispara al vencer; CursorMoved lo
+                // cancela si el cursor se aleja; el release lo cancela siempre.
+                if let Some(handler) = state.last_render.as_ref().and_then(|c| {
+                    long_press_hit_from_cache(c, cursor.x as f32, cursor.y as f32)
+                }) {
+                    state.pending_long_press = Some(PendingLongPress {
+                        deadline: now + LONG_PRESS_DELAY,
+                        origin: cursor,
+                        handler,
+                    });
+                }
                 // Tupla: (drag_fn, drag_at_fn, payload, on_click_msg,
                 //         on_click_at_handler, rect: (x, y, w, h))
                 type HitInfo<M> = (
@@ -742,6 +841,9 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 button: MouseButton::Left,
                 ..
             } => {
+                // El botón se soltó antes de vencer el long-press → no era un
+                // long-press (fue un click/drag); cancelá el gesto armado.
+                state.pending_long_press = None;
                 if let Some(drag) = state.drag.take() {
                     let cursor = state.cursor;
                     // 1. Drop: si hay payload + drop target bajo cursor,
@@ -1075,6 +1177,38 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 });
             }
             _ => {}
+        }
+    }
+
+    /// Se ejecuta tras procesar los eventos de cada vuelta, justo antes de que
+    /// el loop se duerma. Es donde vence el **long-press**: si hay uno armado y
+    /// ya pasó su `deadline` (el botón siguió apretado y quieto), se dispara su
+    /// `Msg`. Mientras quede uno pendiente, ponemos `WaitUntil(deadline)` para
+    /// que winit nos despierte a tiempo (con `ControlFlow::Wait` el loop dormiría
+    /// indefinidamente sin un evento que lo despierte). Sin long-press armado,
+    /// volvemos a `Wait` (no dejar un `WaitUntil` viejo: con un deadline pasado
+    /// el loop spinearía). Las animaciones implícitas no usan el control flow
+    /// (piden frames con `request_redraw`), así que esto no las afecta.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let Some(state) = self.state.as_mut() else {
+            return;
+        };
+        match state.pending_long_press.as_ref() {
+            Some(p) => {
+                if std::time::Instant::now() >= p.deadline {
+                    let handler = state.pending_long_press.take().expect("pending").handler;
+                    event_loop.set_control_flow(ControlFlow::Wait);
+                    if let Some(msg) = handler.invoke() {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(p.deadline));
+                }
+            }
+            None => event_loop.set_control_flow(ControlFlow::Wait),
         }
     }
 }

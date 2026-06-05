@@ -44,6 +44,10 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_leave,
         on_scroll,
         on_scale,
+        on_double_tap,
+        on_double_tap_at,
+        on_long_press,
+        on_long_press_at,
         focusable,
         alpha,
         anim,
@@ -81,6 +85,10 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_leave,
         on_scroll,
         on_scale,
+        on_double_tap,
+        on_double_tap_at,
+        on_long_press,
+        on_long_press_at,
         focusable,
         alpha,
         anim,
@@ -724,6 +732,34 @@ pub fn hit_test_scale<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| n.on_scale.is_some())
 }
 
+/// Hit-test para **doble-tap**: el nodo más al frente bajo el punto que
+/// declaró `on_double_tap`/`on_double_tap_at`. El runtime lo usa al detectar
+/// dos presses rápidos y cercanos.
+pub fn hit_test_double_tap<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| {
+        n.on_double_tap.is_some() || n.on_double_tap_at.is_some()
+    })
+}
+
+/// Hit-test para **long-press**: el nodo más al frente bajo el punto que
+/// declaró `on_long_press`/`on_long_press_at`. El runtime lo usa al armar el
+/// gesto en el press (que vence por tiempo si no hay movimiento ni release).
+pub fn hit_test_long_press<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| {
+        n.on_long_press.is_some() || n.on_long_press_at.is_some()
+    })
+}
+
 /// Hit-test para foco: el id `focusable` del nodo más al frente bajo el
 /// cursor (click-to-focus). `None` si no se clickeó nada enfocable.
 pub fn hit_test_focusable<Msg>(
@@ -928,5 +964,41 @@ mod tests {
         assert_eq!(hit_test_scale(&m, &c, 150.0, 25.0), Some(0));
         // Fuera del canvas → None.
         assert_eq!(hit_test_scale(&m, &c, 350.0, 350.0), None);
+    }
+
+    #[test]
+    fn hit_test_double_tap_y_long_press() {
+        use crate::{hit_test_double_tap, hit_test_long_press};
+        // Un nodo 100×100 con doble-tap; otro 100×100 apilado debajo con
+        // long-press. Cada hit-test sólo ve su propio gesto.
+        let arriba = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(100.0) },
+            ..Default::default()
+        })
+        .on_double_tap(());
+        let abajo = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(100.0) },
+            ..Default::default()
+        })
+        .on_long_press(());
+        let root = View::<()>::new(Style {
+            flex_direction: FlexDirection::Column,
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .children(vec![arriba, abajo]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, root);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        // Nodo de arriba (y 0..100): doble-tap sí, long-press no.
+        assert_eq!(hit_test_double_tap(&m, &c, 50.0, 50.0), Some(1));
+        assert_eq!(hit_test_long_press(&m, &c, 50.0, 50.0), None);
+        // Nodo de abajo (y 100..200): long-press sí, doble-tap no.
+        assert_eq!(hit_test_long_press(&m, &c, 50.0, 150.0), Some(2));
+        assert_eq!(hit_test_double_tap(&m, &c, 50.0, 150.0), None);
+        // Fuera de ambos.
+        assert_eq!(hit_test_double_tap(&m, &c, 300.0, 300.0), None);
+        assert_eq!(hit_test_long_press(&m, &c, 300.0, 300.0), None);
     }
 }

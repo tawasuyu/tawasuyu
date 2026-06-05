@@ -30,6 +30,10 @@ impl<Msg> View<Msg> {
             clip: false,
             on_scroll: None,
             on_scale: None,
+            on_double_tap: None,
+            on_double_tap_at: None,
+            on_long_press: None,
+            on_long_press_at: None,
             focusable: None,
             alpha: None,
             anim: None,
@@ -89,6 +93,49 @@ impl<Msg> View<Msg> {
         F: Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.on_scale = Some(Arc::new(handler));
+        self
+    }
+
+    /// Emite `msg` en **doble-tap** (dos clicks izquierdos rápidos y cercanos
+    /// sobre este nodo). Aditivo respecto de `on_click`. Ver
+    /// [`Self::on_double_tap`](#structfield.on_double_tap) (campo) para la
+    /// semántica completa; para la posición del tap usar
+    /// [`Self::on_double_tap_at`].
+    pub fn on_double_tap(mut self, msg: Msg) -> Self {
+        self.on_double_tap = Some(msg);
+        self
+    }
+
+    /// Como [`Self::on_double_tap`] pero el handler recibe la posición del
+    /// segundo tap relativa al rect del nodo `(lx, ly, w, h)` — para
+    /// zoom-to-point o seleccionar la entidad bajo el cursor. Gana sobre
+    /// `on_double_tap` si ambos están.
+    pub fn on_double_tap_at<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_double_tap_at = Some(Arc::new(handler));
+        self
+    }
+
+    /// Emite `msg` en **long-press** (mantener el botón ~500 ms sin moverse).
+    /// El runtime lo cancela si el cursor se aleja (pasó a drag) o se suelta
+    /// antes. Aditivo respecto de `on_click`/`drag`. Ver
+    /// [`Self::on_long_press`](#structfield.on_long_press) (campo); para la
+    /// posición usar [`Self::on_long_press_at`].
+    pub fn on_long_press(mut self, msg: Msg) -> Self {
+        self.on_long_press = Some(msg);
+        self
+    }
+
+    /// Como [`Self::on_long_press`] pero el handler recibe la posición del
+    /// press relativa al rect del nodo `(lx, ly, w, h)` — para abrir un menú
+    /// contextual en el punto. Gana sobre `on_long_press` si ambos están.
+    pub fn on_long_press_at<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_long_press_at = Some(Arc::new(handler));
         self
     }
 
