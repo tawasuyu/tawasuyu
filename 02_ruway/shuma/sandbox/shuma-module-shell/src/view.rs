@@ -2018,6 +2018,7 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
             let metrics = body_editor_metrics();
             let palette = body_editor_palette(theme);
             let lift_ptr = (*lift).clone();
+            let lift_dbl = (*lift).clone();
             let editor = llimphi_widget_text_editor::text_editor_view::<HostMsg>(
                 &ed,
                 &palette,
@@ -2025,7 +2026,16 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                 n,
                 move |ev| Some(lift_ptr(Msg::BodyPointer { block, ev })),
             )
-            .on_right_click(lift(Msg::CopyBody(block)));
+            .on_right_click(lift(Msg::CopyBody(block)))
+            // Doble-click = seleccionar palabra. `(lx,ly)` es local al nodo
+            // del editor (incluye el gutter); `update` resta `gutter_width`.
+            .on_double_tap_at(move |lx, ly, _w, _h| {
+                Some(lift_dbl(Msg::BodyDoubleClick {
+                    block,
+                    x: lx,
+                    y: ly,
+                }))
+            });
             card_children.push(editor);
             child_h_sum += n as f32 * ROW_H;
         }

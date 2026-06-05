@@ -231,6 +231,9 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::CopyBody(block) => {
             copy_body_selection(&s, block);
         }
+        Msg::BodyDoubleClick { block, x, y } => {
+            s = apply_body_double_click(s, block, x, y);
+        }
         Msg::Tick => {
             s = drain_run(s);
         }
@@ -672,6 +675,60 @@ pub(crate) fn apply_body_pointer(
         }
     }
     s.body_sel = Some((block, ed.cursor.clone()));
+    s
+}
+
+/// Rango `[start, end)` (en columnas/chars) de la palabra en `line_text`
+/// que contiene la columna `col` — alfanumérico + `_`, igual que el
+/// text-editor. Si `col` cae sobre un no-word-char, devuelve un rango
+/// vacío en `col` (no selecciona).
+pub(crate) fn word_range_at(line_text: &str, col: usize) -> (usize, usize) {
+    let chars: Vec<char> = line_text.chars().collect();
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    if col >= chars.len() || !is_word(chars[col]) {
+        // Permití también el caso "el cursor quedó justo después de la
+        // última letra de la palabra" (col == len o sobre separador): mirá
+        // el char anterior.
+        if col > 0 && col <= chars.len() && is_word(chars[col - 1]) {
+            let mut start = col;
+            while start > 0 && is_word(chars[start - 1]) {
+                start -= 1;
+            }
+            return (start, col);
+        }
+        return (col, col);
+    }
+    let mut start = col;
+    while start > 0 && is_word(chars[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end < chars.len() && is_word(chars[end]) {
+        end += 1;
+    }
+    (start, end)
+}
+
+/// Doble-click sobre el cuerpo: selecciona la palabra bajo el punto. `x`/`y`
+/// son locales al nodo del editor (incluyen el gutter), así que restamos
+/// `gutter_width` para pasar a coords del área de texto.
+pub(crate) fn apply_body_double_click(mut s: State, block: u64, x: f32, y: f32) -> State {
+    let metrics = body_editor_metrics();
+    let mut ed = body_editor_state(&s, block);
+    let content_x = x - metrics.gutter_width;
+    let (line, col) = metrics.screen_to_pos(content_x, y, ed.scroll_offset);
+    // Texto de la línea para calcular los límites de la palabra.
+    let lines = body_lines_for_block(&s, block);
+    let Some(line_text) = lines.get(line) else {
+        return s;
+    };
+    let (start, end) = word_range_at(line_text, col);
+    if end > start {
+        ed.set_caret_at(line, start);
+        ed.extend_selection_to(line, end);
+        s.body_drag_accum = (0.0, 0.0);
+        s.body_sel = Some((block, ed.cursor.clone()));
+    }
     s
 }
 

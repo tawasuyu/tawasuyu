@@ -697,6 +697,10 @@ pub enum Msg {
     /// Copia al clipboard la selección viva del cuerpo del bloque `block`
     /// (click derecho sobre el cuerpo). No-op si no hay selección.
     CopyBody(u64),
+    /// Doble-click sobre el cuerpo IDE-text del bloque `block`: selecciona
+    /// la palabra bajo `(x, y)` (coords locales al nodo del editor, incluyen
+    /// el gutter). La dispara el `on_double_tap_at` del cuerpo.
+    BodyDoubleClick { block: u64, x: f32, y: f32 },
 }
 
 mod update;
@@ -1780,6 +1784,31 @@ mod tests {
         let ed = body_editor_state(&s, blk);
         let sel = ed.selected_text().expect("hay selección tras el drag");
         assert_eq!(sel, "hola", "seleccionó las primeras 4 columnas, fue {sel:?}");
+    }
+
+    #[test]
+    fn word_range_picks_the_word_under_the_column() {
+        // "foo bar_baz qux" — col dentro de "bar_baz" selecciona toda la
+        // palabra (incluye `_`); sobre el espacio no selecciona.
+        let t = "foo bar_baz qux";
+        assert_eq!(word_range_at(t, 5), (4, 11)); // dentro de bar_baz
+        assert_eq!(word_range_at(t, 0), (0, 3)); // foo
+        assert_eq!(word_range_at(t, 3), (0, 3)); // justo después de foo
+        assert_eq!(word_range_at(t, 11), (4, 11)); // justo después de bar_baz
+    }
+
+    #[test]
+    fn double_click_selects_word_in_body() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ echo"));
+        let blk = s.current_block;
+        s.push_output(OutputLine::stdout("hola mundo cruel"));
+        // Doble-click sobre "mundo": col≈7 ⇒ x = 7*char_width + gutter.
+        let metrics = body_editor_metrics();
+        let x = metrics.gutter_width + 7.0 * metrics.char_width + 1.0;
+        s = update(s, Msg::BodyDoubleClick { block: blk, x, y: 2.0 });
+        let ed = body_editor_state(&s, blk);
+        assert_eq!(ed.selected_text().as_deref(), Some("mundo"));
     }
 
     #[test]
