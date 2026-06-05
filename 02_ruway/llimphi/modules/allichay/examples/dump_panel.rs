@@ -10,7 +10,9 @@ use std::fs::File;
 use std::io::BufWriter;
 
 use allichay::{Configurable, Field, Schema, Section};
-use llimphi_module_allichay::{diente_rail, schema_panel, AllichayMsg, AllichayState, Diente};
+use llimphi_module_allichay::{schema_panel, AllichayMsg, AllichayState};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_ui::llimphi_text::Alignment;
 
 use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
@@ -63,17 +65,33 @@ fn main() {
     let mut state = AllichayState::new();
     state.select(sel);
 
-    let rail_items: Vec<Diente> = dientes
+    let rail_items: Vec<DockRailItem> = dientes
         .iter()
         .enumerate()
-        .map(|(i, (icon, label, _))| Diente {
+        .map(|(i, _)| DockRailItem {
             id: i as u64,
-            icon: (*icon).to_string(),
-            label: (*label).to_string(),
             active: i == sel,
         })
         .collect();
-    let rail = diente_rail::<(), _>(&rail_items, 210.0, &theme, |_id| ());
+    let icons: Vec<String> = dientes.iter().map(|(icon, _, _)| (*icon).to_string()).collect();
+    let rail = dock_rail_view::<(), _, _, _>(
+        &rail_items,
+        52.0,
+        &DockRailPalette::from_theme(&theme),
+        move |id, size, color| {
+            let g = icons.get(id as usize).cloned().unwrap_or_default();
+            View::<()>::new(Style {
+                size: Size {
+                    width: percent(1.0),
+                    height: percent(1.0),
+                },
+                ..Default::default()
+            })
+            .text_aligned(g, size * 0.9, color, Alignment::Center)
+        },
+        |_id| (),
+        |_| None,
+    );
     let panel = schema_panel::<(), _>(
         &dientes[sel.min(dientes.len() - 1)].2,
         &state,

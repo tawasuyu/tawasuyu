@@ -19,7 +19,8 @@ use std::sync::Arc;
 
 use allichay::{Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section};
 use app_bus::{AppMenu, Menu, MenuItem};
-use llimphi_module_allichay::{diente_rail, schema_panel, AllichayMsg, AllichayState, Diente};
+use llimphi_module_allichay::{schema_panel, AllichayMsg, AllichayState};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -41,8 +42,8 @@ use wawa_config::{ConfigWatcher, WawaConfig};
 
 /// Refresco del monitor (Información).
 const TICK_MS: u64 = 1_000;
-/// Ancho del rail de dientes.
-const NAV_WIDTH: f32 = 210.0;
+/// Ancho del rail de dientes (pestañitas con icono).
+const NAV_WIDTH: f32 = 52.0;
 /// Alto del viewport del panel (para el scroll). Conservador respecto del alto
 /// de ventana inicial menos menubar/header/status; si la ventana es más alta
 /// queda algo de aire abajo. (Mejorable cuando el host trackee el resize.)
@@ -700,17 +701,46 @@ fn build_header(theme: &Theme) -> View<Msg> {
 }
 
 fn build_nav(dientes: &[PanelDiente], sel: usize, theme: &Theme) -> View<Msg> {
-    let items: Vec<Diente> = dientes
+    let items: Vec<DockRailItem> = dientes
         .iter()
         .enumerate()
-        .map(|(i, d)| Diente {
+        .map(|(i, _)| DockRailItem {
             id: i as u64,
-            icon: d.icon.clone(),
-            label: d.title.clone(),
             active: i == sel,
         })
         .collect();
-    diente_rail(&items, NAV_WIDTH, theme, Msg::NavSelect)
+    let icons: Vec<String> = dientes.iter().map(|d| d.icon.clone()).collect();
+    dock_rail_view(
+        &items,
+        NAV_WIDTH,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| tooth_icon(icons.get(id as usize).cloned(), size, color),
+        Msg::NavSelect,
+        |_| None,
+    )
+}
+
+/// Icono de un diente (emoji que la fuente tenga), color resuelto por el rail.
+fn tooth_icon(
+    glyph: Option<String>,
+    size: f32,
+    color: llimphi_ui::llimphi_raster::peniko::Color,
+) -> View<Msg> {
+    View::new(Style {
+        size: Size {
+            width: length(size),
+            height: length(size),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        glyph.unwrap_or_else(|| "•".to_string()),
+        size * 0.9,
+        color,
+        Alignment::Center,
+    )
 }
 
 fn build_content(dientes: &[PanelDiente], sel: usize, model: &Model, theme: &Theme) -> View<Msg> {

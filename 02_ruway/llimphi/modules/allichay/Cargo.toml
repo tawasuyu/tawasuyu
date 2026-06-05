@@ -11,6 +11,7 @@ description = "llimphi-module-allichay — el renderizador único de la config d
 allichay = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
+llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-switch = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-segmented = { workspace = true }

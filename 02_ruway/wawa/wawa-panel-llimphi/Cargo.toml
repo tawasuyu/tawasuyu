@@ -18,6 +18,7 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
+llimphi-widget-dock-rail = { workspace = true }
 llimphi-module-allichay = { workspace = true }
 app-bus = { workspace = true }
 allichay = { workspace = true }

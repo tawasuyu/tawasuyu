@@ -27,7 +27,7 @@
 use allichay::{Control, Field, FieldPath, FieldValue, Schema};
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{auto, length, percent, Dimension, FlexDirection, Position, Size, Style},
+    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -35,6 +35,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, KeyEvent, View};
 use llimphi_theme::Theme;
 
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
@@ -43,10 +44,9 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputStat
 
 use std::collections::BTreeMap;
 
-/// Ancho del rail de dientes (px). Un diente es siempre un panel: el rail
-/// muestra el **rótulo** de cada panel (con su icono opcional), no un icono
-/// suelto — por eso es ancho.
-const RAIL_W: f32 = 210.0;
+/// Ancho del rail de dientes (px). El diente es la pestañita que sobresale: un
+/// icono, no un rótulo (el nombre lo lleva el encabezado del panel desplegado).
+const RAIL_W: f32 = 52.0;
 
 // =====================================================================
 // Mensajes del módulo
@@ -194,162 +194,54 @@ where
     .children(vec![rail, panel])
 }
 
+/// Rail de **dientes** (el widget `dock-rail`): una sección = un diente. El
+/// diente sobresale del rail, lleva su icono y se arrastra; al activarse muestra
+/// su panel (las demás secciones quedan ocultas hasta que se las elige).
 fn build_rail<Msg, F>(schema: &Schema, state: &AllichayState, theme: &Theme, on_msg: F) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
     let sel = state.selected.min(schema.sections.len().saturating_sub(1));
-    let items: Vec<Diente> = schema
+    let items: Vec<DockRailItem> = schema
         .sections
         .iter()
         .enumerate()
-        .map(|(i, s)| Diente {
+        .map(|(i, _)| DockRailItem {
             id: i as u64,
-            icon: s.icon.clone(),
-            label: s.title.clone(),
             active: i == sel,
         })
         .collect();
+    let icons: Vec<String> = schema.sections.iter().map(|s| s.icon.clone()).collect();
     let activate = on_msg;
-    diente_rail(&items, RAIL_W, theme, move |id| {
-        activate(AllichayMsg::SelectSection(id as usize))
-    })
+    dock_rail_view(
+        &items,
+        RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| tooth_icon(icons.get(id as usize).cloned(), size, color),
+        move |id| activate(AllichayMsg::SelectSection(id as usize)),
+        |_| None,
+    )
 }
 
-/// Un diente del rail: su id, su icono (opcional) y su **rótulo** — porque un
-/// diente es siempre un panel, y se presenta con su nombre, no como un icono
-/// suelto.
-#[derive(Debug, Clone)]
-pub struct Diente {
-    /// Id opaco que viaja en el callback de selección.
-    pub id: u64,
-    /// Icono opcional (un glifo que la fuente tenga; vacío = sin icono).
-    pub icon: String,
-    /// Rótulo del panel — lo que el usuario lee.
-    pub label: String,
-    /// Si es el diente activo.
-    pub active: bool,
-}
-
-/// Rail vertical de dientes **con rótulo**: cada diente nombra su panel. El
-/// activo lleva una barra de acento a la izquierda y fondo resaltado. Lo expone
-/// el módulo para que cualquier host (el panel de control, sidebars) arme su
-/// rail de dientes de forma consistente, sin reducirlos a iconos.
-pub fn diente_rail<Msg, F>(items: &[Diente], width: f32, theme: &Theme, on_select: F) -> View<Msg>
-where
-    Msg: Clone + 'static,
-    F: Fn(u64) -> Msg,
-{
-    let kids: Vec<View<Msg>> = items
-        .iter()
-        .map(|d| diente_view(d, theme, on_select(d.id)))
-        .collect();
+/// Dibuja el icono de un diente (un glifo emoji que la fuente tenga), con el
+/// color ya resuelto por el widget según el estado activo/inactivo.
+fn tooth_icon<Msg: Clone + 'static>(glyph: Option<String>, size: f32, color: Color) -> View<Msg> {
     View::new(Style {
-        flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(width),
-            height: percent(1.0_f32),
-        },
-        padding: Rect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(10.0_f32),
-            bottom: length(10.0_f32),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(3.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .children(kids)
-}
-
-fn diente_view<Msg: Clone + 'static>(d: &Diente, theme: &Theme, msg: Msg) -> View<Msg> {
-    let (bg, fg) = if d.active {
-        (theme.bg_selected, theme.fg_text)
-    } else {
-        (theme.bg_panel, theme.fg_muted)
-    };
-
-    let mut cells: Vec<View<Msg>> = Vec::with_capacity(2);
-    if !d.icon.is_empty() {
-        cells.push(
-            View::new(Style {
-                size: Size {
-                    width: length(22.0_f32),
-                    height: percent(1.0_f32),
-                },
-                flex_shrink: 0.0,
-                align_items: Some(AlignItems::Center),
-                justify_content: Some(JustifyContent::Center),
-                ..Default::default()
-            })
-            .text_aligned(d.icon.clone(), 15.0, fg, Alignment::Center),
-        );
-    }
-    cells.push(
-        View::new(Style {
-            size: Size {
-                width: Dimension::auto(),
-                height: percent(1.0_f32),
-            },
-            flex_grow: 1.0,
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text_aligned(d.label.clone(), 12.5, fg, Alignment::Start),
-    );
-
-    if d.active {
-        // Barra de acento a la izquierda — la firma del diente activo. Va
-        // absoluta, así no desplaza al icono/rótulo.
-        cells.push(
-            View::new(Style {
-                position: Position::Absolute,
-                inset: Rect {
-                    left: length(0.0_f32),
-                    right: auto(),
-                    top: length(6.0_f32),
-                    bottom: length(6.0_f32),
-                },
-                size: Size {
-                    width: length(3.0_f32),
-                    height: auto(),
-                },
-                ..Default::default()
-            })
-            .fill(theme.accent)
-            .radius(2.0),
-        );
-    }
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(34.0_f32),
+            width: length(size),
+            height: length(size),
         },
         align_items: Some(AlignItems::Center),
-        padding: Rect {
-            left: length(12.0_f32),
-            right: length(10.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        gap: Size {
-            width: length(8.0_f32),
-            height: length(0.0_f32),
-        },
+        justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .fill(bg)
-    .hover_fill(theme.bg_row_hover)
-    .radius(4.0)
-    .on_click(msg)
-    .children(cells)
+    .text_aligned(
+        glyph.unwrap_or_else(|| "•".to_string()),
+        size * 0.9,
+        color,
+        Alignment::Center,
+    )
 }
 
 fn build_panel<Msg, F>(schema: &Schema, state: &AllichayState, theme: &Theme, on_msg: F) -> View<Msg>
