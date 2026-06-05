@@ -21,7 +21,113 @@ pub struct Typesetter {
     /// brush genérico de parley no puede ser `()` y `RunBrush` a la vez en
     /// el mismo `LayoutContext`, así que mantenemos uno por sabor.
     runs_cx: parley::LayoutContext<RunBrush>,
+    /// Caché de shaping: `[`Self::layout`]` es el único chokepoint por el que
+    /// pasan medición y pintado (vía `layout_clamped`), y se invoca por cada
+    /// nodo de texto en **cada** redraw — dos veces (medir + pintar). Shapear
+    /// con parley (font matching, bidi, clusters, line break) es lo caro; el
+    /// `parley::Layout` resultante es `Clone`. Cacheamos por los parámetros
+    /// que lo determinan y clonamos en el hit: durante scroll/tipeo, el texto
+    /// que no cambió no se re-shapea.
+    cache: ShapeCache,
+    cache_hits: u64,
+    cache_misses: u64,
 }
+
+/// Estadísticas del caché de shaping (evidencia/benchmark). `entries` es el
+/// total vivo entre las dos generaciones.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CacheStats {
+    pub hits: u64,
+    pub misses: u64,
+    pub entries: usize,
+}
+
+/// Clave de caché: todos los parámetros que determinan un `layout`. Los `f32`
+/// van por `to_bits` para ser `Hash + Eq` exactos (sin problemas de NaN/−0.0:
+/// comparamos los bits crudos, no el valor numérico). `Alignment` se mapea a
+/// un tag `u8` porque su enum no deriva `Hash`.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ShapeKey {
+    text: String,
+    size_bits: u32,
+    max_width_bits: Option<u32>,
+    align: u8,
+    line_height_bits: u32,
+    italic: bool,
+    font_family: Option<String>,
+    weight_bits: u32,
+}
+
+fn align_tag(a: Alignment) -> u8 {
+    match a {
+        Alignment::Start => 0,
+        Alignment::Center => 1,
+        Alignment::End => 2,
+        Alignment::Justify => 3,
+    }
+}
+
+/// Caché generacional (LRU aproximado, sin dependencias). Dos mapas: `hot`
+/// recibe inserciones y promociones; cuando `hot` llega a `cap`, rota
+/// (`cold = hot`, `hot = ∅`) y la generación vieja se descarta. Un hit en
+/// `cold` se promueve a `hot`, así lo accedido en la última época sobrevive a
+/// la rotación — el texto visible, re-consultado cada frame, queda siempre
+/// caliente; lo transitorio (candidatos de elipsis, tooltips) cae solo. Es el
+/// patrón de los cachés de glyph/shape de swash/cosmic-text: O(1), sin orden
+/// enlazado.
+struct ShapeCache {
+    hot: std::collections::HashMap<ShapeKey, parley::Layout<()>>,
+    cold: std::collections::HashMap<ShapeKey, parley::Layout<()>>,
+    cap: usize,
+}
+
+impl ShapeCache {
+    fn new(cap: usize) -> Self {
+        Self {
+            hot: std::collections::HashMap::new(),
+            cold: std::collections::HashMap::new(),
+            cap,
+        }
+    }
+
+    /// Devuelve un clon del layout cacheado si existe, promoviendo desde
+    /// `cold` a `hot` en el camino.
+    fn get(&mut self, key: &ShapeKey) -> Option<parley::Layout<()>> {
+        if let Some(v) = self.hot.get(key) {
+            return Some(v.clone());
+        }
+        // Hit frío: sacalo de cold y reinsertalo en hot (promoción). Una sola
+        // clonación: el clon queda en hot, el original se devuelve al caller.
+        if let Some(v) = self.cold.remove(key) {
+            self.hot.insert(key.clone(), v.clone());
+            return Some(v);
+        }
+        None
+    }
+
+    fn put(&mut self, key: ShapeKey, layout: parley::Layout<()>) {
+        if self.hot.len() >= self.cap {
+            // Rotá la generación: lo no reaccedido desde la última rotación
+            // (quedó sólo en cold) se libera acá.
+            self.cold = std::mem::take(&mut self.hot);
+        }
+        self.hot.insert(key, layout);
+    }
+
+    fn clear(&mut self) {
+        self.hot.clear();
+        self.cold.clear();
+    }
+
+    fn entries(&self) -> usize {
+        self.hot.len() + self.cold.len()
+    }
+}
+
+/// Capacidad de la generación caliente antes de rotar. 512 layouts cubre con
+/// holgura el texto visible de una UI densa (un editor de ~50 líneas + chrome)
+/// sin retener de más. La memoria real es ~2× (dos generaciones).
+const SHAPE_CACHE_CAP: usize = 512;
 
 impl Default for Typesetter {
     fn default() -> Self {
@@ -48,6 +154,9 @@ impl Typesetter {
             font_cx,
             layout_cx: parley::LayoutContext::new(),
             runs_cx: parley::LayoutContext::new(),
+            cache: ShapeCache::new(SHAPE_CACHE_CAP),
+            cache_hits: 0,
+            cache_misses: 0,
         }
     }
 
@@ -69,9 +178,22 @@ impl Typesetter {
     }
 
     /// Acceso al `FontContext` por si se necesita registrar fuentes extra
-    /// o cambiar la stack de fallback.
+    /// o cambiar la stack de fallback. **Invalida el caché de shaping**: tocar
+    /// el set de fuentes o el fallback puede cambiar el resultado de cualquier
+    /// layout, así que descartamos lo cacheado (operación rara, de setup).
     pub fn font_context_mut(&mut self) -> &mut parley::FontContext {
+        self.cache.clear();
         &mut self.font_cx
+    }
+
+    /// Estadísticas del caché de shaping (hits/misses acumulados + entradas
+    /// vivas). Para benchmark/evidencia; no afecta el render.
+    pub fn cache_stats(&self) -> CacheStats {
+        CacheStats {
+            hits: self.cache_hits,
+            misses: self.cache_misses,
+            entries: self.cache.entries(),
+        }
     }
 
     /// Construye y resuelve un `parley::Layout`. Aplica `font_size`,
@@ -91,6 +213,26 @@ impl Typesetter {
         font_family: Option<&str>,
         weight: f32,
     ) -> parley::Layout<()> {
+        // Caché de shaping: clave por todos los parámetros que determinan el
+        // layout. En el hit clonamos el `parley::Layout` (memcpy de vectores,
+        // ~órdenes de magnitud más barato que re-shapear). El `String`/clave
+        // que se aloca para consultar es un costo menor frente al shaping que
+        // evita; mantener la firma `&str` no fuerza alloc en el caller.
+        let key = ShapeKey {
+            text: text.to_string(),
+            size_bits: size_px.to_bits(),
+            max_width_bits: max_width.map(f32::to_bits),
+            align: align_tag(alignment),
+            line_height_bits: line_height.to_bits(),
+            italic,
+            font_family: font_family.map(str::to_string),
+            weight_bits: weight.to_bits(),
+        };
+        if let Some(hit) = self.cache.get(&key) {
+            self.cache_hits += 1;
+            return hit;
+        }
+        self.cache_misses += 1;
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, text, 1.0, true);
@@ -120,6 +262,7 @@ impl Typesetter {
             alignment.into(),
             parley::AlignmentOptions::default(),
         );
+        self.cache.put(key, layout.clone());
         layout
     }
 
@@ -495,5 +638,77 @@ mod tests {
             "Hola", 14.0, Some(200.0), Alignment::Start, 1.2, false, None, 400.0, Some(3), true,
         );
         assert_eq!(lay.lines().count(), 1);
+    }
+
+    /// El caché no debe cambiar el resultado: misma medida con o sin hit, y la
+    /// segunda llamada idéntica tiene que pegar en el caché (hit), no re-shapear.
+    #[test]
+    fn cache_es_transparente_y_pega() {
+        let mut ts = Typesetter::new();
+        let m1 = {
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0);
+            (l.width(), l.height(), l.lines().count())
+        };
+        let s1 = ts.cache_stats();
+        assert_eq!(s1.misses, 1, "primera vez = miss");
+        assert_eq!(s1.hits, 0);
+        // Misma llamada exacta: debe ser hit y dar la misma geometría.
+        let m2 = {
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0);
+            (l.width(), l.height(), l.lines().count())
+        };
+        let s2 = ts.cache_stats();
+        assert_eq!(s2.hits, 1, "segunda vez idéntica = hit");
+        assert_eq!(s2.misses, 1, "no hubo nuevo miss");
+        assert_eq!(m1, m2, "el layout cacheado es idéntico al fresco");
+        // Cambiar un parámetro (ancho) es una clave distinta: miss nuevo.
+        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0);
+        assert_eq!(ts.cache_stats().misses, 2, "otro ancho = otra clave");
+    }
+
+    /// `font_context_mut` invalida el caché (cambiar fuentes puede alterar el
+    /// shaping): la siguiente llamada idéntica vuelve a ser miss.
+    #[test]
+    fn font_context_mut_invalida_el_cache() {
+        let mut ts = Typesetter::new();
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0);
+        assert_eq!(ts.cache_stats().entries, 1);
+        let _ = ts.font_context_mut();
+        assert_eq!(ts.cache_stats().entries, 0, "el caché quedó vacío");
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0);
+        assert_eq!(ts.cache_stats().misses, 2, "post-invalidación = miss");
+    }
+
+    /// Mecánica generacional: al pasar `cap`, `hot` rota a `cold`; un ítem
+    /// reaccedido se promueve y sobrevive a la siguiente rotación.
+    #[test]
+    fn cache_generacional_promueve_y_rota() {
+        let mut c = ShapeCache::new(2);
+        let mk = |s: &str| ShapeKey {
+            text: s.to_string(),
+            size_bits: 0,
+            max_width_bits: None,
+            align: 0,
+            line_height_bits: 0,
+            italic: false,
+            font_family: None,
+            weight_bits: 0,
+        };
+        // Layouts vacíos como valores (sólo nos importa la presencia de claves).
+        let dummy = parley::Layout::<()>::default;
+        c.put(mk("a"), dummy());
+        c.put(mk("b"), dummy());
+        // "a" sigue caliente; lo accedemos para que se quede al rotar.
+        assert!(c.get(&mk("a")).is_some());
+        // Tercer insert: hot llegó a cap(2) → rota (a,b→cold), c entra a hot.
+        c.put(mk("c"), dummy());
+        // "a" estaba en cold; get lo encuentra y lo promueve a hot.
+        assert!(c.get(&mk("a")).is_some(), "ítem reaccedido sobrevive la rotación");
+        // "b" no se reaccedió: cae en la siguiente rotación.
+        c.put(mk("d"), dummy()); // hot = {c, a-promovido}? -> al llegar a cap rota
+        // Tras suficientes rotaciones sin tocar "b", desaparece.
+        c.put(mk("e"), dummy());
+        c.put(mk("f"), dummy());
+        assert!(c.get(&mk("b")).is_none(), "ítem nunca reaccedido se libera");
     }
 }
