@@ -76,8 +76,10 @@ impl Typesetter {
 
     /// Construye y resuelve un `parley::Layout`. Aplica `font_size`,
     /// `line_height` (multiplicador del font_size), `max_width` (line
-    /// break), y `alignment`. `italic`=true selecciona la variante
-    /// italic/oblique de la fuente activa (vía `parley::FontStyle`).
+    /// break), `alignment` y `weight` (peso de fuente CSS: 400 normal,
+    /// 700 bold). `italic`=true selecciona la variante italic/oblique de
+    /// la fuente activa (vía `parley::FontStyle`).
+    #[allow(clippy::too_many_arguments)]
     pub fn layout(
         &mut self,
         text: &str,
@@ -87,12 +89,18 @@ impl Typesetter {
         line_height: f32,
         italic: bool,
         font_family: Option<&str>,
+        weight: f32,
     ) -> parley::Layout<()> {
         let mut builder =
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(parley::StyleProperty::FontSize(size_px));
         builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        if weight != 400.0 {
+            builder.push_default(parley::StyleProperty::FontWeight(
+                parley::FontWeight::new(weight),
+            ));
+        }
         if italic {
             builder.push_default(parley::StyleProperty::FontStyle(
                 parley::FontStyle::Italic,
@@ -129,12 +137,18 @@ impl Typesetter {
         runs: &[(usize, usize, Color)],
         alignment: Alignment,
         line_height: f32,
+        weight: f32,
     ) -> parley::Layout<RunBrush> {
         let mut builder = self
             .runs_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(parley::StyleProperty::FontSize(size_px));
         builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        if weight != 400.0 {
+            builder.push_default(parley::StyleProperty::FontWeight(
+                parley::FontWeight::new(weight),
+            ));
+        }
         builder.push_default(parley::StyleProperty::Brush(RunBrush(default_color)));
         let len = text.len();
         for &(start, end, color) in runs {
@@ -238,6 +252,10 @@ pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layou
         block.line_height,
         block.italic,
         block.font_family.as_deref(),
+        // `TextBlock` no transporta peso (su API queda en normal); el peso de
+        // fuente fluye por el camino del compositor, que llama a `layout`
+        // directamente con el `weight` del `TextSpec`/`TextMeasure`.
+        400.0,
     )
 }
 

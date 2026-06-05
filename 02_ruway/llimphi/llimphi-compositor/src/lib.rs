@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
-use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, Stroke};
+use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, RoundedRectRadii, Stroke};
 use vello::peniko::{Color, Fill, Gradient, Image, Mix};
 
 mod render;
@@ -36,6 +36,11 @@ pub struct TextSpec {
     pub alignment: llimphi_text::Alignment,
     /// `true` = forzar variante italic en la fuente activa. Default false.
     pub italic: bool,
+    /// Peso de fuente CSS: 400 = normal, 700 = bold. parley elige la
+    /// variante más cercana de la familia activa (o la sintetiza). Se usa
+    /// tanto al **medir** como al **pintar**, así medida y dibujo coinciden.
+    /// Default 400.
+    pub weight: f32,
     /// CSS-style font-family string (acepta lista con fallbacks). `None`
     /// = la fuente default de parley.
     pub font_family: Option<String>,
@@ -234,6 +239,14 @@ pub struct View<Msg> {
     /// = no se reacciona al hover.
     pub hover_fill: Option<Color>,
     pub radius: f64,
+    /// Radio **por esquina** (top-left, top-right, bottom-right, bottom-left),
+    /// que sobreescribe a `radius` cuando está presente. Permite cards con
+    /// sólo las esquinas de arriba redondeadas, pestañas, bocadillos de chat,
+    /// etc. (CSS `border-radius` con 4 valores). `None` = usar el `radius`
+    /// uniforme. Ver [`View::radius_corners`]. La **sombra** sigue usando un
+    /// radio escalar (el blur nativo de vello no acepta radios por esquina);
+    /// el **borde** sí respeta las cuatro esquinas.
+    pub corner_radii: Option<RoundedRectRadii>,
     /// Sombra proyectada detrás del nodo (drop shadow). `None` = sin sombra
     /// (la mayoría de nodos). Ver [`Shadow`].
     pub shadow: Option<Shadow>,
@@ -379,6 +392,7 @@ pub struct TextMeasure {
     pub italic: bool,
     pub font_family: Option<String>,
     pub line_height: f32,
+    pub weight: f32,
 }
 
 pub struct MountedNode<Msg> {
@@ -386,6 +400,7 @@ pub struct MountedNode<Msg> {
     pub fill: Option<Color>,
     pub hover_fill: Option<Color>,
     pub radius: f64,
+    pub corner_radii: Option<RoundedRectRadii>,
     pub shadow: Option<Shadow>,
     pub fill_gradient: Option<Gradient>,
     pub border: Option<Border>,

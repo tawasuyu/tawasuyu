@@ -7,6 +7,7 @@ impl<Msg> View<Msg> {
             fill: None,
             hover_fill: None,
             radius: 0.0,
+            corner_radii: None,
             shadow: None,
             fill_gradient: None,
             border: None,
@@ -163,6 +164,18 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Radio **por esquina** (top-left, top-right, bottom-right, bottom-left,
+    /// en sentido horario desde arriba-izquierda) — CSS `border-radius` con
+    /// cuatro valores. Sobreescribe a [`Self::radius`] mientras esté presente.
+    /// Para cards con sólo las esquinas de arriba redondeadas, pestañas,
+    /// bocadillos de chat asimétricos, etc. El **borde** respeta las cuatro
+    /// esquinas; la **sombra** sigue usando el `radius` escalar (el blur
+    /// nativo de vello no acepta radios por esquina).
+    pub fn radius_corners(mut self, tl: f64, tr: f64, br: f64, bl: f64) -> Self {
+        self.corner_radii = Some(RoundedRectRadii::new(tl, tr, br, bl));
+        self
+    }
+
     /// Proyecta una sombra detrás del nodo (drop shadow), rasterizada con
     /// el blur gaussiano nativo de vello. Se pinta antes del relleno, así
     /// el fill opaco la tapa y la sombra asoma por el desenfoque/offset.
@@ -212,6 +225,7 @@ impl<Msg> View<Msg> {
             italic: false,
             font_family: None,
             line_height: 1.2,
+            weight: 400.0,
             runs: None,
         });
         self
@@ -232,6 +246,7 @@ impl<Msg> View<Msg> {
             italic: false,
             font_family: None,
             line_height: 1.2,
+            weight: 400.0,
             runs: None,
         });
         self
@@ -255,6 +270,7 @@ impl<Msg> View<Msg> {
             italic,
             font_family: None,
             line_height: 1.2,
+            weight: 400.0,
             runs: None,
         });
         self
@@ -280,6 +296,7 @@ impl<Msg> View<Msg> {
             italic,
             font_family,
             line_height: 1.2,
+            weight: 400.0,
             runs: None,
         });
         self
@@ -306,6 +323,7 @@ impl<Msg> View<Msg> {
             italic: false,
             font_family: None,
             line_height: 1.2,
+            weight: 400.0,
             runs: Some(runs),
         });
         self
@@ -320,6 +338,22 @@ impl<Msg> View<Msg> {
             t.line_height = mult;
         }
         self
+    }
+
+    /// Sobreescribe el peso de fuente del texto ya seteado (default 400 =
+    /// normal). Convención CSS: 400 normal, 500 medium, 600 semibold, 700
+    /// bold. parley elige la variante más cercana de la familia activa o la
+    /// sintetiza. No-op si el nodo no tiene texto. Afecta medida y pintado.
+    pub fn text_weight(mut self, weight: f32) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.weight = weight;
+        }
+        self
+    }
+
+    /// Atajo de [`Self::text_weight`] a 700 (bold). No-op sin texto.
+    pub fn bold(self) -> Self {
+        self.text_weight(700.0)
     }
 
     pub fn on_click(mut self, msg: Msg) -> Self {

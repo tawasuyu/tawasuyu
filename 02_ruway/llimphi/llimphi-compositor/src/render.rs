@@ -21,6 +21,7 @@ pub fn mount_recursive<Msg: Clone>(
         fill,
         hover_fill,
         radius,
+        corner_radii,
         shadow,
         fill_gradient,
         border,
@@ -54,6 +55,7 @@ pub fn mount_recursive<Msg: Clone>(
         fill,
         hover_fill,
         radius,
+        corner_radii,
         shadow,
         fill_gradient,
         border,
@@ -107,6 +109,7 @@ pub fn mount_recursive<Msg: Clone>(
                         italic: text.italic,
                         font_family: text.font_family.clone(),
                         line_height: text.line_height,
+                        weight: text.weight,
                     },
                 );
             }
@@ -133,19 +136,47 @@ pub fn measure_text_node(
         AvailableSpace::MaxContent => None,
         AvailableSpace::MinContent => Some(0.0),
     });
-    let block = llimphi_text::TextBlock {
-        text: &tm.content,
-        size_px: tm.size_px,
-        color: Color::BLACK,
-        origin: (0.0, 0.0),
+    // Camino directo a `layout` (no `TextBlock`) para transportar el `weight`:
+    // bold mide más ancho que normal, así taffy reserva el alto correcto.
+    let layout = ts.layout(
+        &tm.content,
+        tm.size_px,
         max_width,
-        alignment: tm.alignment,
-        line_height: tm.line_height,
-        italic: tm.italic,
-        font_family: tm.font_family.clone(),
-    };
-    let m = llimphi_text::measure(ts, &block);
+        tm.alignment,
+        tm.line_height,
+        tm.italic,
+        tm.font_family.as_deref(),
+        tm.weight,
+    );
+    let m = llimphi_text::measurement(&layout);
     llimphi_layout::taffy::Size { width: m.width, height: m.height }
+}
+
+/// Construye el `RoundedRect` del nodo respetando radio por esquina si lo
+/// hay (si no, el escalar uniforme), con un `inset` opcional restado al rect
+/// y a cada radio (lo usa el borde, que pinta media línea hacia adentro).
+fn node_rrect(
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    radius: f64,
+    corners: Option<RoundedRectRadii>,
+    inset: f64,
+) -> RoundedRect {
+    let radii = match corners {
+        Some(c) => RoundedRectRadii::new(
+            (c.top_left - inset).max(0.0),
+            (c.top_right - inset).max(0.0),
+            (c.bottom_right - inset).max(0.0),
+            (c.bottom_left - inset).max(0.0),
+        ),
+        None => {
+            let r = (radius - inset).max(0.0);
+            RoundedRectRadii::new(r, r, r, r)
+        }
+    };
+    RoundedRect::new(x0 + inset, y0 + inset, x1 - inset, y1 - inset, radii)
 }
 
 pub fn paint<Msg>(
@@ -247,12 +278,14 @@ pub fn paint<Msg>(
         } else {
             None
         };
-        let rr = RoundedRect::new(
+        let rr = node_rrect(
             r.x as f64,
             r.y as f64,
             (r.x + r.w) as f64,
             (r.y + r.h) as f64,
             node.radius,
+            node.corner_radii,
+            0.0,
         );
         if let Some(color) = hover_color {
             // Hover/drop gana sobre el gradiente y el fill base.
@@ -271,12 +304,14 @@ pub fn paint<Msg>(
         if let Some(b) = node.border.as_ref() {
             if b.width > 0.0 && b.color.components[3] > 0.0 && r.w > 0.0 && r.h > 0.0 {
                 let inset = b.width * 0.5;
-                let brr = RoundedRect::new(
-                    r.x as f64 + inset,
-                    r.y as f64 + inset,
-                    (r.x + r.w) as f64 - inset,
-                    (r.y + r.h) as f64 - inset,
-                    (node.radius - inset).max(0.0),
+                let brr = node_rrect(
+                    r.x as f64,
+                    r.y as f64,
+                    (r.x + r.w) as f64,
+                    (r.y + r.h) as f64,
+                    node.radius,
+                    node.corner_radii,
+                    inset,
                 );
                 scene.stroke(&Stroke::new(b.width), cur_xf, b.color, None, &brr);
             }
@@ -332,26 +367,24 @@ pub fn paint<Msg>(
                     runs,
                     text.alignment,
                     text.line_height,
+                    text.weight,
                 );
                 llimphi_text::draw_layout_runs(scene, &layout, (r.x as f64, r.y as f64));
             } else {
                 // Parley resuelve la alineación horizontal vía max_width +
                 // alignment. Para Center también centramos verticalmente; para
-                // Start/End/Justify anclamos arriba (párrafo/editor).
-                let block = llimphi_text::TextBlock {
-                    text: &text.content,
-                    size_px: text.size_px,
-                    color: text.color,
-                    origin: (r.x as f64, r.y as f64),
-                    max_width: Some(r.w),
-                    alignment: text.alignment,
-                    line_height: text.line_height,
-                    italic: text.italic,
-                    font_family: text.font_family.clone(),
-                };
-                // Shaping una sola vez: el `Layout` retornado se reusa para
-                // medir (cuando hay centrado vertical) y para pintar.
-                let layout = llimphi_text::layout_block(typesetter, &block);
+                // Start/End/Justify anclamos arriba (párrafo/editor). Camino
+                // directo a `layout` para transportar el `weight` del TextSpec.
+                let layout = typesetter.layout(
+                    &text.content,
+                    text.size_px,
+                    Some(r.w),
+                    text.alignment,
+                    text.line_height,
+                    text.italic,
+                    text.font_family.as_deref(),
+                    text.weight,
+                );
                 let origin =
                     if matches!(text.alignment, llimphi_text::Alignment::Center) {
                         let m = llimphi_text::measurement(&layout);
@@ -360,7 +393,7 @@ pub fn paint<Msg>(
                             r.y as f64 + ((r.h - m.height) as f64 * 0.5).max(0.0),
                         )
                     } else {
-                        block.origin
+                        (r.x as f64, r.y as f64)
                     };
                 llimphi_text::draw_layout_xf(
                     scene,

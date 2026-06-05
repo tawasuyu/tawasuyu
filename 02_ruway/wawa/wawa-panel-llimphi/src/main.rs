@@ -42,10 +42,10 @@ use wawa_config::{ConfigWatcher, WawaConfig};
 
 /// Refresco del monitor (Información).
 const TICK_MS: u64 = 1_000;
-/// Ancho del rail de dientes (la tira de pestañas que sobresale).
+/// Ancho del rail de pestañas (la tira que sobresale).
 const RAIL_W: f32 = 46.0;
-/// Ancho del panel del diente activo (a la izquierda).
-const PANEL_W: f32 = 340.0;
+/// Ancho del sidebar de items (a la izquierda).
+const SIDEBAR_W: f32 = 232.0;
 /// Alto del viewport del panel (para el scroll). Conservador respecto del alto
 /// de ventana inicial menos menubar/header/status; si la ventana es más alta
 /// queda algo de aire abajo. (Mejorable cuando el host trackee el resize.)
@@ -184,8 +184,11 @@ fn fmt_mem(used_kb: u64, total_kb: u64) -> String {
 // =====================================================================
 
 struct Model {
-    /// Diente activo: índice en [`dientes`].
-    selected: usize,
+    /// Pestaña activa: índice en [`pestanas`] (la app/categoría).
+    selected_pest: usize,
+    /// Item activo dentro de la pestaña: índice de sección en su schema (lo que
+    /// se abre en el canvas central).
+    selected_item: usize,
     cfg: WawaConfig,
     mirada: mirada_brain::Config,
     mirada_path: Option<PathBuf>,
@@ -202,8 +205,10 @@ struct Model {
 #[derive(Clone)]
 enum Msg {
     Tick,
-    /// Click en un diente del rail (índice).
-    NavSelect(u64),
+    /// Click en una pestaña del rail (app/categoría): cambia el sidebar.
+    SelectPestana(u64),
+    /// Click en un item del sidebar: abre su contenido en el canvas central.
+    SelectItem(u64),
     /// Mensaje del renderizador de config (foco/cambio/scroll).
     Allichay(AllichayMsg),
     /// Tecla al campo de texto en edición.
@@ -260,7 +265,8 @@ impl App for Panel {
         let pata = pata_config::load();
 
         Model {
-            selected: 0,
+            selected_pest: 0,
+            selected_item: 0,
             cfg,
             mirada,
             mirada_path,
@@ -279,10 +285,17 @@ impl App for Panel {
         let mut m = model;
         match msg {
             Msg::Tick => refresh_host(&mut m.host),
-            Msg::NavSelect(id) => {
-                let n = dientes(&m).len().max(1);
-                m.selected = (id as usize).min(n - 1);
-                m.allichay.select(m.selected);
+            Msg::SelectPestana(id) => {
+                let n = pestanas(&m).len().max(1);
+                m.selected_pest = (id as usize).min(n - 1);
+                // Al cambiar de pestaña, vuelve al primer item de su sidebar.
+                m.selected_item = 0;
+                m.allichay.select(0);
+                m.status.clear();
+            }
+            Msg::SelectItem(id) => {
+                m.selected_item = id as usize;
+                m.allichay.select(id as usize);
                 m.status.clear();
             }
             Msg::Allichay(AllichayMsg::SelectSection(_)) => {}
@@ -373,13 +386,13 @@ impl App for Panel {
 
     fn view(model: &Model) -> View<Msg> {
         let theme = theme_from_cfg(&model.cfg);
-        let dientes = dientes(model);
-        let sel = model.selected.min(dientes.len().saturating_sub(1));
+        let pestanas = pestanas(model);
+        let pest = model.selected_pest.min(pestanas.len().saturating_sub(1));
 
         let menu = app_menu();
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = build_header(&theme);
-        let body = build_body(&dientes, sel, model, &theme);
+        let body = build_body(&pestanas, pest, model, &theme);
         let status = build_status(model, &theme);
 
         View::new(Style {
@@ -420,32 +433,32 @@ fn main() {
 // =====================================================================
 
 /// Un diente del panel: su nombre, su icono y el esquema que lista en su panel.
-struct PanelDiente {
+struct PanelPestana {
     title: String,
     icon: String,
     schema: Schema,
 }
 
 /// Arma el rail completo: dientes-categoría del SO + dientes-de-app suscritas.
-fn dientes(m: &Model) -> Vec<PanelDiente> {
+fn pestanas(m: &Model) -> Vec<PanelPestana> {
     let t = rimay_localize::t;
     let mut out = vec![
-        PanelDiente {
+        PanelPestana {
             title: t("wawa-panel-cat-appearance"),
             icon: "🎨".into(),
             schema: wawa_appearance_schema(&m.cfg),
         },
-        PanelDiente {
+        PanelPestana {
             title: t("wawa-panel-cat-language"),
             icon: "🌐".into(),
             schema: wawa_language_schema(&m.cfg),
         },
-        PanelDiente {
+        PanelPestana {
             title: t("wawa-panel-cat-modules"),
             icon: "☸".into(),
             schema: wawa_modules_schema(&m.cfg),
         },
-        PanelDiente {
+        PanelPestana {
             title: "Información".into(),
             icon: "🖥".into(),
             schema: wawa_info_schema(&m.host),
@@ -461,7 +474,7 @@ fn dientes(m: &Model) -> Vec<PanelDiente> {
             "pata" => prefix_schema(m.pata.schema(), "pata"),
             _ => continue,
         };
-        out.push(PanelDiente {
+        out.push(PanelPestana {
             title: (*label).to_string(),
             icon: (*icon).to_string(),
             schema,
@@ -686,31 +699,47 @@ fn build_header(theme: &Theme) -> View<Msg> {
     app_header(rimay_localize::t("wawa-panel-title"), vec![], &palette)
 }
 
-/// El cuerpo del panel de control, al modo cosmos: el **panel** del diente
-/// activo es un pane a la izquierda; el **rail de dientes** es un overlay pegado
-/// al borde interno del centro, así las pestañas **sobresalen** del panel hacia
-/// el centro. El centro queda como área de resumen.
-fn build_body(dientes: &[PanelDiente], sel: usize, model: &Model, theme: &Theme) -> View<Msg> {
-    // Panel del diente activo (izquierda, ancho fijo).
-    let panel = match dientes.get(sel) {
-        Some(d) => schema_panel(&d.schema, &model.allichay, theme, VIEWPORT_H, Msg::Allichay),
-        None => View::new(Style::default()),
+/// El cuerpo, jerarquía de 3 niveles al modo cosmos:
+/// `[ sidebar: items de la pestaña activa ] [ pestañas que sobresalen ] [ canvas: contenido del item ]`.
+/// La **pestaña** (rail) elige app/categoría; su **sidebar** lista los items
+/// (secciones) con su iconito; clic en un item abre su contenido en el **canvas**.
+fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &Theme) -> View<Msg> {
+    let empty: &[Section] = &[];
+    let sections: &[Section] = pestanas.get(pest).map(|p| p.schema.sections.as_slice()).unwrap_or(empty);
+    let item = model.selected_item.min(sections.len().saturating_sub(1));
+
+    // Sidebar: rótulo de la pestaña + lista de items.
+    let sidebar = sidebar_view(pestanas.get(pest).map(|p| p.title.as_str()), sections, item, theme);
+
+    // Canvas: el contenido del item activo (su formulario). El rail de pestañas
+    // va superpuesto en el borde izquierdo del canvas, sobresaliendo del sidebar.
+    let canvas_content = match sections.get(item) {
+        Some(sec) => {
+            let one = Schema {
+                sections: vec![sec.clone()],
+            };
+            schema_panel(&one, &model.allichay, theme, VIEWPORT_H, Msg::Allichay)
+        }
+        None => resumen_view(theme),
     };
-    let panel_pane = View::new(Style {
+    let canvas = View::new(Style {
         flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
         size: Size {
-            width: length(PANEL_W),
+            width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
-        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(RAIL_W),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .children(vec![panel]);
+    .children(vec![canvas_content]);
 
-    // Centro: resumen + el rail de dientes superpuesto en su borde izquierdo
-    // (pegado al panel), de modo que las pestañas asomen sobre el centro.
-    let rail = rail_overlay(dientes, sel, theme);
+    let rail = rail_overlay(pestanas, pest, theme);
     let center = View::new(Style {
         position: Position::Relative,
         flex_grow: 1.0,
@@ -725,7 +754,7 @@ fn build_body(dientes: &[PanelDiente], sel: usize, model: &Model, theme: &Theme)
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![resumen_view(theme), rail]);
+    .children(vec![canvas, rail]);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -740,28 +769,167 @@ fn build_body(dientes: &[PanelDiente], sel: usize, model: &Model, theme: &Theme)
         },
         ..Default::default()
     })
-    .children(vec![panel_pane, center])
+    .children(vec![sidebar, center])
 }
 
-/// El rail de dientes como **overlay absoluto** pegado al borde izquierdo del
-/// centro (el patrón de cosmos `dock_rail_overlay`): las pestañas sobresalen del
-/// panel hacia el centro. Clic en una pestaña activa su panel.
-fn rail_overlay(dientes: &[PanelDiente], sel: usize, theme: &Theme) -> View<Msg> {
-    let items: Vec<DockRailItem> = dientes
+/// El sidebar de una pestaña: su rótulo + la lista de items (secciones), cada
+/// uno con su iconito. Clic en un item lo abre en el canvas.
+fn sidebar_view(title: Option<&str>, sections: &[Section], sel_item: usize, theme: &Theme) -> View<Msg> {
+    let mut kids: Vec<View<Msg>> = Vec::with_capacity(sections.len() + 1);
+    // Rótulo de la pestaña.
+    kids.push(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(34.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(
+            title.unwrap_or("").to_string(),
+            13.0,
+            theme.fg_muted,
+            Alignment::Start,
+        ),
+    );
+    for (i, sec) in sections.iter().enumerate() {
+        kids.push(item_row(i, &sec.icon, &sec.title, i == sel_item, theme));
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(SIDEBAR_W),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(kids)
+}
+
+/// Una fila de item del sidebar: iconito + rótulo; el activo lleva fondo
+/// resaltado + barra de acento a la izquierda. Clic → abre en el canvas.
+fn item_row(i: usize, icon: &str, label: &str, active: bool, theme: &Theme) -> View<Msg> {
+    let (bg, fg) = if active {
+        (theme.bg_selected, theme.fg_text)
+    } else {
+        (theme.bg_panel, theme.fg_muted)
+    };
+    let mut cells: Vec<View<Msg>> = Vec::with_capacity(3);
+    cells.push(
+        View::new(Style {
+            size: Size {
+                width: length(22.0_f32),
+                height: percent(1.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .text_aligned(
+            if icon.is_empty() { "·" } else { icon }.to_string(),
+            14.0,
+            fg,
+            Alignment::Center,
+        ),
+    );
+    cells.push(
+        View::new(Style {
+            size: Size {
+                width: Dimension::auto(),
+                height: percent(1.0_f32),
+            },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text_aligned(label.to_string(), 12.5, fg, Alignment::Start),
+    );
+    if active {
+        cells.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    right: auto(),
+                    top: length(6.0_f32),
+                    bottom: length(6.0_f32),
+                },
+                size: Size {
+                    width: length(3.0_f32),
+                    height: auto(),
+                },
+                ..Default::default()
+            })
+            .fill(theme.accent)
+            .radius(2.0),
+        );
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(32.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
+    .hover_fill(theme.bg_row_hover)
+    .radius(4.0)
+    .on_click(Msg::SelectItem(i as u64))
+    .children(cells)
+}
+
+/// El rail de **pestañas** como overlay absoluto pegado al borde izquierdo del
+/// canvas (patrón cosmos `dock_rail_overlay`): las pestañas sobresalen del
+/// sidebar hacia el canvas. Clic en una pestaña cambia el sidebar.
+fn rail_overlay(pestanas: &[PanelPestana], pest: usize, theme: &Theme) -> View<Msg> {
+    let items: Vec<DockRailItem> = pestanas
         .iter()
         .enumerate()
         .map(|(i, _)| DockRailItem {
             id: i as u64,
-            active: i == sel,
+            active: i == pest,
         })
         .collect();
-    let icons: Vec<String> = dientes.iter().map(|d| d.icon.clone()).collect();
+    let icons: Vec<String> = pestanas.iter().map(|p| p.icon.clone()).collect();
     let rail = dock_rail_view(
         &items,
         RAIL_W,
         &DockRailPalette::from_theme(theme),
         move |id, size, color| tooth_icon(icons.get(id as usize).cloned(), size, color),
-        Msg::NavSelect,
+        Msg::SelectPestana,
         |_| None,
     );
     View::new(Style {
@@ -781,8 +949,7 @@ fn rail_overlay(dientes: &[PanelDiente], sel: usize, theme: &Theme) -> View<Msg>
     .children(vec![rail])
 }
 
-/// El resumen del centro: nombre de la suite + pista. Padding izquierdo para no
-/// quedar bajo las pestañas que asoman.
+/// Resumen del canvas cuando la pestaña no tiene items: nombre de la suite + pista.
 fn resumen_view(theme: &Theme) -> View<Msg> {
     let title = View::new(Style {
         size: Size {
@@ -797,40 +964,18 @@ fn resumen_view(theme: &Theme) -> View<Msg> {
         theme.fg_text,
         Alignment::Center,
     );
-    let hint = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(18.0_f32),
-        },
-        ..Default::default()
-    })
-    .text_aligned(
-        rimay_localize::t("wawa-panel-status-hint"),
-        12.0,
-        theme.fg_muted,
-        Alignment::Center,
-    );
     View::new(Style {
         flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
         size: Size {
             width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
-        padding: Rect {
-            left: length(RAIL_W + 12.0_f32),
-            right: length(12.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
-        },
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(6.0_f32),
-        },
         ..Default::default()
     })
-    .children(vec![title, hint])
+    .children(vec![title])
 }
 
 /// Icono de un diente (emoji que la fuente tenga), color resuelto por el rail.
@@ -946,8 +1091,9 @@ fn handle_menu_command(model: Model, cmd: &str) -> Model {
     match cmd {
         "file.quit" => std::process::exit(0),
         "help.about" => {
-            m.selected = INFO_DIENTE;
-            m.allichay.select(INFO_DIENTE);
+            m.selected_pest = INFO_DIENTE;
+            m.selected_item = 0;
+            m.allichay.select(0);
             m.status.clear();
         }
         _ => {}

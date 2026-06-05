@@ -95,24 +95,79 @@ fn main() {
         |_id| (),
         |_| None,
     );
-    let panel = schema_panel::<(), _>(
-        &dientes[sel.min(dientes.len() - 1)].2,
-        &state,
-        &theme,
-        H as f32 - 40.0,
-        |_m: AllichayMsg| (),
-    );
-    // Layout cosmos: panel (izq, ancho fijo) + centro con el rail superpuesto en
-    // su borde izquierdo (las pestañas asoman del panel hacia el centro).
-    let panel_pane = View::<()>::new(Style {
+    // 3 niveles: sidebar (items = secciones de la pestaña activa) | pestañas que
+    // sobresalen | canvas (contenido del item activo = item 0).
+    let active = &dientes[sel.min(dientes.len() - 1)].2;
+    let item = 0usize;
+
+    // Sidebar: lista de items (secciones) con su iconito.
+    let mut sidebar_kids: Vec<View<()>> = Vec::new();
+    for (i, sec) in active.sections.iter().enumerate() {
+        let act = i == item;
+        let icon = if sec.icon.is_empty() { "·" } else { sec.icon.as_str() };
+        let fg = if act { theme.fg_text } else { theme.fg_muted };
+        let row = View::<()>::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0),
+                height: length(32.0),
+            },
+            ..Default::default()
+        })
+        .fill(if act { theme.bg_selected } else { theme.bg_panel })
+        .radius(4.0)
+        .children(vec![
+            View::<()>::new(Style {
+                size: Size {
+                    width: length(28.0),
+                    height: percent(1.0),
+                },
+                ..Default::default()
+            })
+            .text_aligned(icon.to_string(), 14.0, fg, Alignment::Center),
+            View::<()>::new(Style {
+                size: Size {
+                    width: percent(1.0),
+                    height: percent(1.0),
+                },
+                ..Default::default()
+            })
+            .text_aligned(sec.title.clone(), 12.5, fg, Alignment::Start),
+        ]);
+        sidebar_kids.push(row);
+    }
+    let sidebar = View::<()>::new(Style {
+        flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(340.0),
+            width: length(232.0),
             height: percent(1.0),
         },
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![panel]);
+    .children(sidebar_kids);
+
+    // Canvas: el contenido del item activo (una sección).
+    let one = Schema {
+        sections: vec![active.sections[item.min(active.sections.len() - 1)].clone()],
+    };
+    let canvas_content =
+        schema_panel::<(), _>(&one, &state, &theme, H as f32 - 40.0, |_m: AllichayMsg| ());
+    let canvas = View::<()>::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0),
+            height: percent(1.0),
+        },
+        padding: Rect {
+            top: length(0.0),
+            bottom: length(0.0),
+            left: length(46.0),
+            right: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![canvas_content]);
     let rail_overlay = View::<()>::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -138,7 +193,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![rail_overlay]);
+    .children(vec![canvas, rail_overlay]);
     let v = View::<()>::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -148,7 +203,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![panel_pane, center]);
+    .children(vec![sidebar, center]);
 
     // view → layout → scene (misma secuencia que el eventloop).
     let mut layout = LayoutTree::new();

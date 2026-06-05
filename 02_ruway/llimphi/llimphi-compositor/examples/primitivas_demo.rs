@@ -1,7 +1,8 @@
-//! Volcado headless de las primitivas nuevas del compositor (Tier 1 del
-//! roadmap PARIDAD-FLUTTER): **sombra · gradiente · borde**. Monta un árbol
-//! `View` con tarjetas que ejercitan cada una (y su combinación), lo pinta a
-//! una `vello::Scene` y lee la textura a PNG. Sirve para VERLAS sin ventana.
+//! Volcado headless de las primitivas nuevas del compositor (Tier 1+2 del
+//! roadmap PARIDAD-FLUTTER): **sombra · gradiente · borde · peso de fuente ·
+//! radio por esquina**. Monta un árbol `View` con tarjetas que ejercitan cada
+//! una (y su combinación), lo pinta a una `vello::Scene` y lee la textura a
+//! PNG. Sirve para VERLAS sin ventana.
 //!
 //! `cargo run -p llimphi-compositor --example primitivas_demo -- [out.png]`
 
@@ -19,7 +20,7 @@ use llimphi_raster::{vello, Renderer};
 use llimphi_text::{Alignment, Typesetter};
 use vello::kurbo::Point;
 
-const W: u32 = 920;
+const W: u32 = 1276;
 const H: u32 = 340;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -83,6 +84,50 @@ fn main() {
         white,
     );
 
+    // 5) Peso de fuente: la misma palabra en 400 (normal) y 700 (bold), para
+    //    contrastar el grosor del trazo en una sola tarjeta.
+    let line = |txt: &str, bold: bool| {
+        let v = View::<()>::new(Style {
+            size: Size { width: percent(0.9_f32), height: length(30.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned(txt.to_string(), 24.0, dark, Alignment::Center);
+        if bold { v.bold() } else { v }
+    };
+    let peso = View::<()>::new(Style {
+        size: Size { width: length(180.0_f32), height: length(150.0_f32) },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .radius(16.0)
+    .fill(panel)
+    .border(1.0, theme.accent)
+    .children(vec![
+        line("Regular 400", false),
+        line("Bold 700", true),
+        View::<()>::new(Style {
+            size: Size { width: percent(0.9_f32), height: length(20.0_f32) },
+            ..Default::default()
+        })
+        .text_aligned("Peso", 14.0, dark, Alignment::Center),
+    ]);
+
+    // 6) Radio por esquina: esquinas asimétricas (arriba muy redondeadas,
+    //    abajo casi rectas) — el look de una pestaña / bocadillo de chat. El
+    //    borde sigue las cuatro esquinas.
+    let esquinas = card(
+        |v| {
+            v.fill_gradient(grad.clone())
+                .border(1.5, white)
+                .radius_corners(34.0, 34.0, 4.0, 4.0)
+        },
+        "Esquinas",
+        white,
+    );
+
     let root = View::<()>::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         flex_direction: FlexDirection::Row,
@@ -98,7 +143,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![sombra, gradiente, borde, combo]);
+    .children(vec![sombra, gradiente, borde, combo, peso, esquinas]);
 
     // view → layout → scene (misma secuencia que el eventloop).
     let mut layout = LayoutTree::new();
