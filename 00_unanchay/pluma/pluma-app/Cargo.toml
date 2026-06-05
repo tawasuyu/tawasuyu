@@ -33,6 +33,7 @@ llimphi-theme = { workspace = true }
 llimphi-widget-button = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-list = { workspace = true }
+llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
@@ -43,3 +44,6 @@ app-bus = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 arboard = { workspace = true }
+# Sólo para el subcomando `--dump <out.png>`: render headless de la vista.
+png = { workspace = true }
+pollster = { workspace = true }

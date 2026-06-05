@@ -92,6 +92,29 @@ pub(crate) fn ruta_sled() -> PathBuf {
     base.join("gioser").join("pluma-app").join("pluma.sled")
 }
 
+/// Ruta del archivo de presets (prompts reutilizables del diente Derivar-IA),
+/// junto al sled: `<...>/pluma-app/presets.txt` — un prompt por línea.
+pub(crate) fn ruta_presets() -> PathBuf {
+    ruta_sled().with_file_name("presets.txt")
+}
+
+/// Carga los presets persistidos (un prompt por línea, ignorando vacíos).
+pub(crate) fn cargar_presets() -> Vec<String> {
+    std::fs::read_to_string(ruta_presets())
+        .map(|s| {
+            s.lines()
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persiste los presets (best-effort; un fallo de IO no es fatal).
+pub(crate) fn guardar_presets(presets: &[String]) {
+    let _ = std::fs::write(ruta_presets(), presets.join("\n"));
+}
+
 pub(crate) fn ahora_unix() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()

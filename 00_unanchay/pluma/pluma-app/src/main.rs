@@ -33,13 +33,14 @@
 //! (las tres columnas). Acá queda el `impl App` y el ruteo de teclado.
 
 mod clipboard;
+mod dump;
 mod init;
 mod model;
 mod update;
 mod util;
 mod view;
 
-use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey};
+use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, WheelDelta};
 use llimphi_ui::View;
 
 use crate::init::init_modelo;
@@ -48,6 +49,14 @@ use crate::update::actualizar;
 use crate::view::{vista, vista_overlay};
 
 fn main() {
+    // Subcomando oculto de evidencia: `pluma-app --dump <out.png> [diente]`.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--dump") {
+        let out = args.get(pos + 1).cloned().unwrap_or_else(|| "pluma.png".into());
+        let diente = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(1);
+        dump::run(&out, diente);
+        return;
+    }
     llimphi_ui::run::<Pluma>();
 }
 
@@ -75,10 +84,10 @@ impl App for Pluma {
         // Rail hospedado: si delega, publica sus secciones como dientes en pata.
         if m.delegated {
             let teeth = vec![
-                pata_host::HostedTooth::new(0, "folder", "Documentos"),
-                pata_host::HostedTooth::new(1, "tools", "LLM"),
-                pata_host::HostedTooth::new(2, "files", "Buscar"),
-                pata_host::HostedTooth::new(3, "tools", "Diff"),
+                pata_host::HostedTooth::new(0, "files", "Archivo"),
+                pata_host::HostedTooth::new(1, "folder", "Lienzos"),
+                pata_host::HostedTooth::new(2, "tools", "Derivar"),
+                pata_host::HostedTooth::new(3, "tools", "Modelo"),
             ];
             let h = handle.clone();
             m._host = pata_host::HostClient::connect("gioser.pluma", "Pluma", teeth, move |id| {
@@ -125,6 +134,16 @@ impl App for Pluma {
                 return Some(Msg::DefocusPath);
             }
             return Some(Msg::PathInputKey(event.clone()));
+        }
+        // Ídem para el input de prompt del diente Derivar.
+        if model.preset_focused {
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::DefocusPreset);
+            }
+            if matches!(&event.key, Key::Named(NamedKey::Enter)) {
+                return Some(Msg::CrearAlterno);
+            }
+            return Some(Msg::PresetInputKey(event.clone()));
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
         let shift = event.modifiers.shift;
@@ -188,6 +207,26 @@ impl App for Pluma {
             }
         }
         Some(Msg::EditorKey(event.clone()))
+    }
+
+    /// Rueda → scroll horizontal del multilienzo. Touchpad con eje X directo,
+    /// o Shift+rueda-Y (común en Linux). Rueda-Y sin Shift se ignora (cada
+    /// editor scrollea su propio eje vertical). 30 px/línea, igual que el demo.
+    fn on_wheel(
+        _model: &Self::Model,
+        delta: WheelDelta,
+        _cursor: (f32, f32),
+        modifiers: Modifiers,
+    ) -> Option<Self::Msg> {
+        const PX_POR_LINEA: f32 = 30.0;
+        let dx_lineas = if delta.x.abs() > 0.0 {
+            delta.x
+        } else if modifiers.shift {
+            delta.y
+        } else {
+            return None;
+        };
+        Some(Msg::ScrollHoriz(-dx_lineas * PX_POR_LINEA))
     }
 
     fn view(model: &Model) -> View<Msg> {

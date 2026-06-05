@@ -33,8 +33,17 @@ pub(crate) const BACKENDS: [BackendKind; 6] = [
 #[derive(Clone, Debug)]
 pub(crate) enum Msg {
     EditorKey(KeyEvent),
-    EditorPointer(PointerEvent),
+    /// Click/drag dentro de la columna `usize` del multilienzo. Si esa
+    /// columna no es el cuerpo activo, primero le pasa el foco.
+    MultiPointer(usize, PointerEvent),
+    /// Abre un cuerpo como activo (lo agrega a la selección si no estaba).
     AbrirDoc(Uuid),
+    /// Agrega/saca un cuerpo de la selección visible del multilienzo.
+    ToggleSeleccion(Uuid),
+    /// Selecciona el diente del rail (0=Archivo,1=Lienzos,2=Derivar,3=LLM).
+    SelectDiente(usize),
+    /// Scroll horizontal del multilienzo, en píxeles (positivo = derecha).
+    ScrollHoriz(f32),
     NuevoDoc,
     Guardar,
     PathInputKey(KeyEvent),
@@ -47,9 +56,11 @@ pub(crate) enum Msg {
     FindSiguiente,
     FindAnterior,
     FindClose,
+    /// Togglea el modo "sólo activo" (una columna) vs "todos los
+    /// seleccionados" (multilienzo completo) — antes era Diff.
     DiffToggle,
-    /// Rail hospedado: pata reenvió un clic en un diente prestado (0=Documentos,
-    /// 1=LLM, 2=Buscar, 3=Diff). Togglea esa sección.
+    /// Rail hospedado: pata reenvió un clic en un diente prestado — mapea
+    /// directo a `SelectDiente`.
     HostActivate(u32),
     MoverAtomArriba,
     MoverAtomAbajo,
@@ -62,6 +73,19 @@ pub(crate) enum Msg {
     PedirTraducir(String),
     PedirTono(String),
     PedirResumir(Option<u32>),
+    // --- Diente Derivar-IA: lienzo alterno desde prompt + presets ---
+    /// Teclas hacia el input de prompt del diente Derivar.
+    PresetInputKey(KeyEvent),
+    FocusPreset,
+    DefocusPreset,
+    /// Deriva un lienzo alterno reescribiendo el activo con el prompt del input.
+    CrearAlterno,
+    /// Guarda el prompt actual del input como preset reutilizable.
+    GuardarPreset,
+    /// Re-corre el preset `usize` (lo reescribe sobre el activo).
+    UsarPreset(usize),
+    /// Borra el preset `usize` de la lista.
+    BorrarPreset(usize),
     LlmListo {
         hija: Cuerpo,
         atoms_nuevos: Vec<NarrativeAtom>,
@@ -69,8 +93,8 @@ pub(crate) enum Msg {
         transformacion: Transformacion,
     },
     LlmError(String),
-    ResizeIzq(f32),
-    ResizeDer(f32),
+    /// Arrastra el divisor entre el panel del diente y el centro.
+    ResizePanel(f32),
 
     // --- Menú principal + menú de edición contextual ---
     /// Abre/cierra un dropdown del menú principal (índice del menú raíz).
@@ -101,12 +125,36 @@ pub(crate) struct Model {
     pub(crate) atoms: HashMap<Uuid, NarrativeAtom>,
     pub(crate) cartas: Vec<CartaHebras>,
     pub(crate) transformaciones: Vec<Transformacion>,
-    /// `id` del `Cuerpo` activo (el que se ve en `ide`). `None` sólo si
-    /// la lista de cuerpos está vacía — el init siembra uno para evitarlo.
+    /// `id` del `Cuerpo` activo (el editable en vivo, `ide`). `None` sólo
+    /// si la lista de cuerpos está vacía — el init siembra uno para evitarlo.
     pub(crate) activo: Option<Uuid>,
     pub(crate) ide: CuerpoIde,
+    /// Cuerpos visibles en el multilienzo, en orden de izquierda a derecha.
+    /// Siempre contiene al `activo`. El activo se pinta con `ide` (vivo);
+    /// el resto con su entrada en `ides_ro` (snapshot read-only).
+    pub(crate) seleccionados: Vec<Uuid>,
+    /// Editores read-only de los cuerpos seleccionados que no son el activo.
+    /// Se reconstruyen al cambiar selección/activo/atoms.
+    pub(crate) ides_ro: HashMap<Uuid, CuerpoIde>,
+    /// Si `true`, el centro muestra sólo el cuerpo activo (una columna);
+    /// si `false`, todo el multilienzo de `seleccionados`. Togglea con Ctrl+D.
+    pub(crate) solo_activo: bool,
+    /// Desplazamiento horizontal del multilienzo, en píxeles. `>= 0`.
+    pub(crate) scroll_x: f32,
+    /// Diente activo del rail: 0=Archivo · 1=Lienzos · 2=Derivar · 3=LLM.
+    pub(crate) diente_activo: usize,
+    /// Ancho del panel del diente activo, en px (resizable con el divisor).
+    pub(crate) panel_w: f32,
     pub(crate) clipboard: ArboardClipboard,
     pub(crate) drag_accum: (f32, f32),
+
+    // --- Diente Derivar-IA ---
+    /// Input del prompt para derivar un lienzo alterno.
+    pub(crate) preset_input: TextInputState,
+    /// Si el input de prompt tiene foco (las teclas van ahí).
+    pub(crate) preset_focused: bool,
+    /// Prompts guardados reutilizables. Persisten en `presets.txt` junto al sled.
+    pub(crate) presets: Vec<String>,
 
     pub(crate) chat: Arc<dyn ChatClient>,
     pub(crate) backend_idx: usize,
@@ -129,16 +177,6 @@ pub(crate) struct Model {
     pub(crate) find_matches: Vec<(usize, usize)>,
     pub(crate) find_idx: usize,
 
-    /// Cuando es `true` y el cuerpo activo es una hija, el centro
-    /// muestra la madre y la hija lado a lado con las hebras pintadas
-    /// (read-only). Cuando el activo es Original o no se encuentra la
-    /// madre, el flag igual existe pero la vista cae al cuerpo_ide
-    /// normal con un cartel.
-    pub(crate) diff_visible: bool,
-
-    pub(crate) side_izq_w: f32,
-    pub(crate) side_der_w: f32,
-
     /// Índice del menú raíz cuyo dropdown está abierto (`None` = cerrado).
     pub(crate) menu_open: Option<usize>,
     /// Fila resaltada por teclado en el menú principal (`usize::MAX` = ninguna).
@@ -153,15 +191,11 @@ pub(crate) struct Model {
     /// Animación de aparición del menú de edición (0→1).
     pub(crate) edit_anim: llimphi_motion::Tween<f32>,
 
-    // --- Rail hospedado (sidebar delegado a pata) ---
-    /// `true` si pluma delega su sidebar a pata (`PLUMA_DELEGATE_SIDEBAR`): sus
-    /// secciones aparecen como dientes en el rail de pata cuando tiene foco, y las
-    /// columnas laterales se pueden colapsar (editor a pantalla completa).
+    // --- Rail hospedado (dientes delegados a pata) ---
+    /// `true` si pluma delega su rail a pata (`PLUMA_DELEGATE_SIDEBAR`): sus
+    /// dientes aparecen en el rail de pata cuando tiene foco y pluma no dibuja
+    /// su propio rail interno (sólo el panel del diente activo + el centro).
     pub(crate) delegated: bool,
-    /// Visibilidad de la columna de Documentos (sólo aplica en modo delegado).
-    pub(crate) side_izq_visible: bool,
-    /// Visibilidad de la columna LLM (sólo aplica en modo delegado).
-    pub(crate) side_der_visible: bool,
     /// Cliente del rail hospedado; sólo se retiene (las activaciones llegan por
     /// callback). `_` evita el lint de campo sin leer.
     pub(crate) _host: Option<pata_host::HostClient>,

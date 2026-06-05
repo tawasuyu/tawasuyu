@@ -14,7 +14,9 @@ use pluma_cuerpo::{Cuerpo, Intencion};
 use pluma_editor_cuerpo::CambioAtom;
 use pluma_llm::{build_client, LlmConfig};
 use pluma_transform::{TipoTransformacion, Transformacion};
-use pluma_transform_llm::{EjecutorResumirLlm, EjecutorTonoLlm, EjecutorTraducirLlm};
+use pluma_transform_llm::{
+    EjecutorReescribirLlm, EjecutorResumirLlm, EjecutorTonoLlm, EjecutorTraducirLlm,
+};
 use uuid::Uuid;
 
 use crate::model::{Model, Msg, BACKENDS, METRICS, VISIBLE_LINES};
@@ -25,7 +27,13 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         Msg::EditorKey(ev) => {
             let _ = model.ide.apply_key_with_clipboard(&ev, &mut model.clipboard);
         }
-        Msg::EditorPointer(ev) => {
+        Msg::MultiPointer(col, ev) => {
+            // Click en una columna que no es el activo → primero le da el foco.
+            if let Some(&id) = model.seleccionados.get(col) {
+                if model.activo != Some(id) {
+                    cambiar_activo(&mut model, id);
+                }
+            }
             let scroll = model.ide.state.scroll_offset;
             match ev {
                 PointerEvent::Click { x, y } => {
@@ -50,6 +58,15 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         }
         Msg::AbrirDoc(id) => {
             cambiar_activo(&mut model, id);
+        }
+        Msg::ToggleSeleccion(id) => {
+            toggle_seleccion(&mut model, id);
+        }
+        Msg::SelectDiente(i) => {
+            model.diente_activo = i;
+        }
+        Msg::ScrollHoriz(dx) => {
+            model.scroll_x = (model.scroll_x + dx).max(0.0);
         }
         Msg::NuevoDoc => {
             crear_doc_nuevo(&mut model);
@@ -109,25 +126,12 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             model.find_visible = false;
         }
         Msg::DiffToggle => {
-            model.diff_visible = !model.diff_visible;
+            model.solo_activo = !model.solo_activo;
         }
-        // Rail hospedado: pata reenvió un diente. 0/1 colapsan las columnas
-        // (editor a pantalla completa), 2/3 togglean Buscar/Diff (su misma lógica).
-        Msg::HostActivate(id) => match id {
-            0 => model.side_izq_visible = !model.side_izq_visible,
-            1 => model.side_der_visible = !model.side_der_visible,
-            2 => {
-                model.find_visible = !model.find_visible;
-                if model.find_visible {
-                    recomputar_matches(&mut model);
-                    if !model.find_matches.is_empty() {
-                        saltar_a_match(&mut model);
-                    }
-                }
-            }
-            3 => model.diff_visible = !model.diff_visible,
-            _ => {}
-        },
+        // Rail hospedado: pata reenvió un diente → selecciona ese diente.
+        Msg::HostActivate(id) => {
+            model.diente_activo = id as usize;
+        }
         Msg::MoverAtomArriba => {
             mover_atom_caret(&mut model, -1);
         }
@@ -178,13 +182,46 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             model.ultimo_error = Some(s);
             model.en_curso = false;
         }
-        Msg::ResizeIzq(dx) => {
-            model.side_izq_w = (model.side_izq_w + dx).clamp(160.0, 420.0);
+        Msg::ResizePanel(dx) => {
+            model.panel_w = (model.panel_w + dx).clamp(180.0, 460.0);
         }
-        Msg::ResizeDer(dx) => {
-            // El divisor está del lado izquierdo de la columna derecha:
-            // dx>0 = divisor a la derecha = panel der encoge.
-            model.side_der_w = (model.side_der_w - dx).clamp(220.0, 520.0);
+
+        // --- Diente Derivar-IA ---
+        Msg::PresetInputKey(ev) => {
+            model.preset_input.apply_key(&ev);
+        }
+        Msg::FocusPreset => {
+            model.preset_focused = true;
+        }
+        Msg::DefocusPreset => {
+            model.preset_focused = false;
+        }
+        Msg::CrearAlterno => {
+            let prompt = model.preset_input.text().trim().to_string();
+            if !prompt.is_empty() {
+                lanzar(&mut model, handle, TrabajoLlm::Reescribir(prompt));
+            } else {
+                model.ultimo_status = "escribí un prompt para derivar".into();
+            }
+        }
+        Msg::GuardarPreset => {
+            let prompt = model.preset_input.text().trim().to_string();
+            if !prompt.is_empty() && !model.presets.contains(&prompt) {
+                model.presets.push(prompt);
+                crate::util::guardar_presets(&model.presets);
+                model.ultimo_status = format!("preset guardado ({})", model.presets.len());
+            }
+        }
+        Msg::UsarPreset(i) => {
+            if let Some(prompt) = model.presets.get(i).cloned() {
+                lanzar(&mut model, handle, TrabajoLlm::Reescribir(prompt));
+            }
+        }
+        Msg::BorrarPreset(i) => {
+            if i < model.presets.len() {
+                model.presets.remove(i);
+                crate::util::guardar_presets(&model.presets);
+            }
         }
 
         // --- Menú principal + menú de edición contextual ---
@@ -309,7 +346,7 @@ pub(crate) fn menu_principal(model: &Model) -> app_bus::AppMenu {
         )
         .menu(
             Menu::new("Multilienzo")
-                .item(MenuItem::new("Diff madre ↔ hija", "mult.diff").shortcut("Ctrl+D"))
+                .item(MenuItem::new("Sólo activo / todos", "mult.diff").shortcut("Ctrl+D"))
                 .item(MenuItem::new("Togglear fusión (zona)", "mult.fusion").shortcut("Ctrl+J"))
                 .item(MenuItem::new("Zona siguiente", "mult.zona_sig").separated())
                 .item(MenuItem::new("Zona anterior", "mult.zona_ant")),
@@ -386,10 +423,57 @@ fn cambiar_activo(model: &mut Model, id: Uuid) {
         None => return,
     };
     model.activo = Some(id);
+    // El activo siempre está en la selección visible del multilienzo.
+    if !model.seleccionados.contains(&id) {
+        model.seleccionados.push(id);
+    }
     let idx: HashMap<Uuid, &NarrativeAtom> =
         model.atoms.iter().map(|(k, v)| (*k, v)).collect();
     model.ide.recargar(&cuerpo, &idx);
     model.ultimo_status = format!("doc: {}", cuerpo.metadatos.nombre_legible);
+    reconstruir_ides_ro(model);
+}
+
+/// Agrega/saca un cuerpo de la selección visible. Nunca deja la selección
+/// vacía ni saca el activo sin reasignarlo: al sacar el activo, pasa el
+/// foco al primer cuerpo que quede.
+fn toggle_seleccion(model: &mut Model, id: Uuid) {
+    if let Some(pos) = model.seleccionados.iter().position(|x| *x == id) {
+        if model.seleccionados.len() == 1 {
+            return; // no dejar el multilienzo sin columnas
+        }
+        model.seleccionados.remove(pos);
+        if model.activo == Some(id) {
+            // Reasignar foco al primer cuerpo restante.
+            if let Some(&otro) = model.seleccionados.first() {
+                model.activo = None; // forzar recarga en cambiar_activo
+                cambiar_activo(model, otro);
+                return;
+            }
+        }
+    } else if model.cuerpos.iter().any(|c| c.id == id) {
+        model.seleccionados.push(id);
+    }
+    reconstruir_ides_ro(model);
+}
+
+/// Reconstruye los editores read-only de los cuerpos seleccionados que no
+/// son el activo (el activo vive en `model.ide`, editable). Descarta los
+/// que ya no están seleccionados.
+fn reconstruir_ides_ro(model: &mut Model) {
+    use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
+    let idx: HashMap<Uuid, &NarrativeAtom> =
+        model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+    let mut nuevos: HashMap<Uuid, CuerpoIde> = HashMap::new();
+    for &id in &model.seleccionados {
+        if model.activo == Some(id) {
+            continue;
+        }
+        if let Some(cuerpo) = model.cuerpos.iter().find(|c| c.id == id) {
+            nuevos.insert(id, CuerpoIde::from_cuerpo(cuerpo, &idx));
+        }
+    }
+    model.ides_ro = nuevos;
 }
 
 fn crear_doc_nuevo(model: &mut Model) {
@@ -896,6 +980,8 @@ pub(crate) enum TrabajoLlm {
     Traducir(String),
     Tono(String),
     Resumir(Option<u32>),
+    /// Reescritura libre dictada por un prompt humano (diente Derivar-IA).
+    Reescribir(String),
 }
 
 fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
@@ -980,6 +1066,19 @@ fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
                         TipoTransformacion::Resumir {
                             palabras_objetivo: palabras,
                         },
+                        "ui",
+                        ahora,
+                    );
+                    ej.aplicar_con_atoms(&t, &madre, &idx, ahora)
+                        .await
+                        .map(|p| (p, t))
+                }
+                TrabajoLlm::Reescribir(prompt) => {
+                    let ej = EjecutorReescribirLlm::from_arc(chat, prompt.clone());
+                    let t = Transformacion::nueva(
+                        madre.id,
+                        Uuid::new_v4(),
+                        TipoTransformacion::Reescribir { prompt },
                         "ui",
                         ahora,
                     );

@@ -75,6 +75,10 @@ pub(crate) fn init_modelo() -> Model {
 
     let (chat, backend_idx) = inicializar_backend();
 
+    // La selección arranca con el activo solo; el usuario suma lienzos
+    // desde el diente Lienzos para armar el multilienzo.
+    let seleccionados: Vec<Uuid> = activo.into_iter().collect();
+
     Model {
         store,
         cuerpos,
@@ -83,8 +87,17 @@ pub(crate) fn init_modelo() -> Model {
         transformaciones,
         activo,
         ide,
+        seleccionados,
+        ides_ro: HashMap::new(),
+        solo_activo: false,
+        scroll_x: 0.0,
+        diente_activo: 1, // arranca en Lienzos (el tree)
+        panel_w: 280.0,
         clipboard: ArboardClipboard::new(),
         drag_accum: (0.0, 0.0),
+        preset_input: TextInputState::new(),
+        preset_focused: false,
+        presets: crate::util::cargar_presets(),
         chat,
         backend_idx,
         en_curso: false,
@@ -96,21 +109,14 @@ pub(crate) fn init_modelo() -> Model {
         find_visible: false,
         find_matches: Vec::new(),
         find_idx: 0,
-        diff_visible: false,
-        side_izq_w: 280.0,
-        side_der_w: 340.0,
         menu_open: None,
         menu_active: usize::MAX,
         menu_anim: llimphi_motion::Tween::idle(1.0),
         edit_menu: None,
         edit_active: usize::MAX,
         edit_anim: llimphi_motion::Tween::idle(1.0),
-        // Rail hospedado: leemos el opt-in acá; el HostClient se conecta en `init`
-        // (necesita el Handle). Las columnas arrancan visibles aunque se delegue —
-        // el usuario las colapsa desde el rail de pata.
+        // Rail hospedado: opt-in por env; el HostClient se conecta en `init`.
         delegated: std::env::var_os("PLUMA_DELEGATE_SIDEBAR").is_some(),
-        side_izq_visible: true,
-        side_der_visible: true,
         _host: None,
     }
 }
