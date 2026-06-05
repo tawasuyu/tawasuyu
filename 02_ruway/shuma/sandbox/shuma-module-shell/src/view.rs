@@ -1,4 +1,6 @@
 use super::*;
+use llimphi_ui::llimphi_layout::taffy::prelude::auto;
+use llimphi_ui::llimphi_layout::taffy::style::Position;
 
 pub fn view<HostMsg: Clone + 'static>(
     state: &State,
@@ -1232,6 +1234,71 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
         }
     };
 
+    // Barra de scroll arrastrable, sobre la geometría canónica de
+    // `llimphi-widget-scroll` (su `thumb_geometry` es público justo para
+    // callers que pintan su propia barra dentro de su layout). Sólo cuando
+    // hay overflow y ya medimos el viewport. Da el eje "arrastre" del scroll
+    // (la rueda ya entra por `on_wheel` del chasis) + indicador visible.
+    let mut pane_children = vec![inner];
+    if overflow > 0.5 && viewport_h > 1.0 {
+        // `scroll_px` mide px desde el fondo; `thumb_geometry` quiere offset
+        // desde el tope. offset_top=0 (thumb arriba) ⇔ scroll_px=overflow.
+        let offset_top = overflow - state.scroll_px.clamp(0.0, overflow);
+        let (thumb_h, thumb_y, offset_per_px) =
+            llimphi_widget_scroll::thumb_geometry(offset_top, content_h, viewport_h);
+        let pal = llimphi_widget_scroll::ScrollPalette::from_theme(theme);
+        let bar_w = pal.bar_width;
+        // Track tenue de fondo, a lo alto del viewport.
+        pane_children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: auto(),
+                    right: length(1.0_f32),
+                    top: length(0.0_f32),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(bar_w),
+                    height: length(viewport_h),
+                },
+                ..Default::default()
+            })
+            .fill(pal.track)
+            .radius((bar_w / 2.0) as f64),
+        );
+        // Thumb arrastrable. Arrastrar hacia abajo (dy>0) lleva al fondo:
+        // el offset-desde-el-tope sube, así que `scroll_px` (desde el fondo)
+        // baja → `Scroll(-dy * offset_per_px)`.
+        let lift_drag = (*lift).clone();
+        pane_children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: auto(),
+                    right: length(1.0_f32),
+                    top: length(thumb_y),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(bar_w),
+                    height: length(thumb_h),
+                },
+                ..Default::default()
+            })
+            .fill(pal.thumb)
+            .hover_fill(pal.thumb_hover)
+            .radius((bar_w / 2.0) as f64)
+            .draggable(move |_phase, _dx, dy| {
+                if dy == 0.0 {
+                    None
+                } else {
+                    Some(lift_drag(Msg::Scroll(-dy * offset_per_px)))
+                }
+            }),
+        );
+    }
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -1258,7 +1325,7 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     .radius(3.0)
     .clip(true)
     .paint_with(painter)
-    .children(vec![inner])
+    .children(pane_children)
 }
 
 /// Color del badge de estado a partir del texto de la notice de cierre
