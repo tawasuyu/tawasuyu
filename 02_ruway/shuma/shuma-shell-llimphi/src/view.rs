@@ -35,6 +35,7 @@ fn cfg_trigger_y(is_draft: bool, kind: DropKind) -> f32 {
     match kind {
         DropKind::Isolation => iso_y,
         DropKind::Distro => iso_y + TRIGGER_H + 36.0,
+        DropKind::Container => iso_y + (TRIGGER_H + 36.0) * 2.0,
     }
 }
 
@@ -45,20 +46,46 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
     let is_draft = session.kind == SessionKind::Draft;
     let pal = SelectPalette::from_theme(&model.theme);
 
-    let (items, selected_idx) = match kind {
-        DropKind::Isolation => (iso_items(), iso_index(session.isolation)),
-        DropKind::Distro => (distro_items(), distro_index(session.distro)),
+    let (items, selected_vec): (Vec<SelectItem>, Vec<usize>) = match kind {
+        DropKind::Isolation => (iso_items(), vec![iso_index(session.isolation)]),
+        DropKind::Distro => (distro_items(), vec![distro_index(session.distro)]),
+        DropKind::Container => {
+            // Contenedores existentes + la opción de crear uno nuevo al final.
+            let mut its: Vec<SelectItem> = model
+                .containers
+                .iter()
+                .map(|c| SelectItem::new(c.clone()))
+                .collect();
+            its.push(SelectItem::new(format!(
+                "+ Crear nuevo ({})",
+                session.distro.label()
+            )));
+            let sel = session
+                .container
+                .as_ref()
+                .and_then(|c| model.containers.iter().position(|x| x == c))
+                .map(|i| vec![i])
+                .unwrap_or_default();
+            (its, sel)
+        }
     };
     let visible: Vec<usize> = (0..items.len()).collect();
-    let selected = [selected_idx];
     let anchor = (12.0, cfg_trigger_y(is_draft, kind) + TRIGGER_H + 4.0);
     let width = (model.session_w - 24.0).max(140.0);
 
+    let n_containers = model.containers.len();
     let on_pick: std::sync::Arc<dyn Fn(usize) -> Msg + Send + Sync> = match kind {
         DropKind::Isolation => {
             std::sync::Arc::new(|i| Msg::SetIsolation(Isolation::ALL[i.min(2)]))
         }
         DropKind::Distro => std::sync::Arc::new(|i| Msg::SetDistro(Distro::ALL[i.min(3)])),
+        DropKind::Container => std::sync::Arc::new(move |i| {
+            if i < n_containers {
+                Msg::SubscribeContainer(i)
+            } else {
+                Msg::CreateContainer
+            }
+        }),
     };
 
     Some(select_menu_view(SelectMenuSpec {
@@ -68,7 +95,7 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
         phase: SelectPhase::Ready(&items),
         visible: &visible,
         active: usize::MAX,
-        selected: &selected,
+        selected: &selected_vec,
         query: "",
         searchable: false,
         empty_text: "",
@@ -274,7 +301,7 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         Msg::ToggleDropdown(DropKind::Isolation),
     ));
 
-    // La distro sólo importa para contenedor → su dropdown sale sólo entonces.
+    // La distro y la suscripción sólo importan para contenedor.
     if session.isolation == Isolation::Container {
         children.push(panel_label("Distro", theme));
         let distros = distro_items();
@@ -285,6 +312,21 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
             None,
             &pal,
             Msg::ToggleDropdown(DropKind::Distro),
+        ));
+
+        // Suscribir: conectar a un contenedor existente o crear uno nuevo.
+        children.push(panel_label("Contenedor", theme));
+        let sub = session
+            .container
+            .as_ref()
+            .map(|c| SelectItem::new(c.clone()));
+        children.push(select_trigger_view(
+            sub.as_ref(),
+            "Suscribir a un contenedor…",
+            model.dropdown_open == Some(DropKind::Container),
+            None,
+            &pal,
+            Msg::ToggleDropdown(DropKind::Container),
         ));
     }
 

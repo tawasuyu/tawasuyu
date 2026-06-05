@@ -139,6 +139,38 @@ fn main() {
     llimphi_ui::run::<Shell>();
 }
 
+/// Lista los contenedores locales (`docker ps -a`) en un hilo y entrega los
+/// nombres por `Msg::ContainersLoaded`. Vacío si docker no está o falla.
+fn spawn_list_containers(handle: &Handle<Msg>) {
+    handle.spawn(|| {
+        let names = std::process::Command::new("docker")
+            .args(["ps", "-a", "--format", "{{.Names}}"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Msg::ContainersLoaded(names)
+    });
+}
+
+/// Crea un contenedor `name` de la `image` dada (corre detached con `sleep
+/// infinity`) en un hilo; al volver, re-lista. No-op de UI si docker falla.
+fn spawn_create_container(handle: &Handle<Msg>, image: &'static str, name: String) {
+    handle.spawn(move || {
+        let _ = std::process::Command::new("docker")
+            .args(["run", "-d", "--name", &name, image, "sleep", "infinity"])
+            .output();
+        Msg::RefreshContainers
+    });
+}
+
 /// Si la sesión activa es la draft y se acaba de configurar, la promueve a
 /// sesión propia (número + kind según aislamiento + nombre) e inserta una draft
 /// nueva al frente para que siga siendo el punto de entrada.
@@ -250,6 +282,15 @@ impl Distro {
             Distro::Arch => "Arch",
         }
     }
+    /// Imagen OCI para crear el contenedor.
+    fn image(self) -> &'static str {
+        match self {
+            Distro::Ubuntu => "ubuntu:latest",
+            Distro::Debian => "debian:latest",
+            Distro::Alpine => "alpine:latest",
+            Distro::Arch => "archlinux:latest",
+        }
+    }
 }
 
 /// Cuál dropdown de la config de sesión está abierto (overlay del select).
@@ -257,6 +298,8 @@ impl Distro {
 enum DropKind {
     Isolation,
     Distro,
+    /// Suscribir a un contenedor existente / crear uno nuevo.
+    Container,
 }
 
 /// El tipo de una sesión — define el icono de su diente (rail izquierdo).
@@ -397,6 +440,9 @@ struct Session {
     /// Config del aislamiento (la misma que tendrán todas las sesiones).
     isolation: Isolation,
     distro: Distro,
+    /// Contenedor suscrito (sólo aislamiento Container). El exec real del shell
+    /// dentro de él es deuda (necesita `Source::Container` en shuma-module).
+    container: Option<String>,
     /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
     /// (El enforcement real del aislamiento contenedor/remoto es deuda; hoy el
     /// shell corre con este `source`.)
@@ -418,6 +464,7 @@ impl Session {
             number,
             isolation: Isolation::Local,
             distro: Distro::Ubuntu,
+            container: None,
             source,
         }
     }
@@ -517,6 +564,8 @@ struct Model {
     session_panel_open: bool,
     /// Dropdown de config abierto (overlay del select), o `None`.
     dropdown_open: Option<DropKind>,
+    /// Contenedores locales descubiertos (`docker ps -a`) — para suscribir.
+    containers: Vec<String>,
 
     // Anchos resizables de los paneles laterales (px).
     session_w: f32,
@@ -593,6 +642,14 @@ enum Msg {
     SetDistro(Distro),
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
+    /// Re-listar los contenedores locales (`docker ps -a`).
+    RefreshContainers,
+    /// Resultado del listado de contenedores.
+    ContainersLoaded(Vec<String>),
+    /// Suscribir la sesión activa al contenedor `idx` de la lista.
+    SubscribeContainer(usize),
+    /// Crear un contenedor nuevo con la distro de la sesión y suscribirla.
+    CreateContainer,
     /// Reordenar dientes por drag: mover la sesión `from` a la posición `to`.
     /// La draft (0) queda fija.
     ReorderSession(usize, usize),
@@ -706,6 +763,7 @@ impl App for Shell {
             // Y el panel de la draft abierto a la izquierda (su config).
             session_panel_open: true,
             dropdown_open: None,
+            containers: Vec::new(),
             session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
@@ -822,6 +880,10 @@ impl App for Shell {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.apply_isolation();
                 }
+                // Al entrar en Container, listamos los contenedores locales.
+                if iso == Isolation::Container {
+                    spawn_list_containers(handle);
+                }
             }
             Msg::SetDistro(d) => {
                 m.dropdown_open = None;
@@ -829,6 +891,31 @@ impl App for Shell {
                     s.distro = d;
                 }
                 promote_if_draft(&mut m);
+            }
+            Msg::RefreshContainers => spawn_list_containers(handle),
+            Msg::ContainersLoaded(v) => m.containers = v,
+            Msg::SubscribeContainer(i) => {
+                m.dropdown_open = None;
+                if let Some(name) = m.containers.get(i).cloned() {
+                    if let Some(s) = m.sessions.get_mut(m.active_session) {
+                        s.container = Some(name);
+                    }
+                }
+            }
+            Msg::CreateContainer => {
+                m.dropdown_open = None;
+                // Crea un contenedor de la distro de la sesión y re-lista. (El
+                // exec del shell dentro de él es deuda — falta Source::Container.)
+                let (distro, n) = m
+                    .sessions
+                    .get(m.active_session)
+                    .map(|s| (s.distro, s.number.unwrap_or(0)))
+                    .unwrap_or((Distro::Ubuntu, 0));
+                let name = format!("shuma-{}-{n}", distro.label().to_lowercase());
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.container = Some(name.clone());
+                }
+                spawn_create_container(handle, distro.image(), name);
             }
             Msg::CloseSession(idx) => {
                 // La draft (0) no se cierra; las demás se descartan.
