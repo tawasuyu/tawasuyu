@@ -141,11 +141,32 @@ un árbol de semántica paralelo al `View` (rol, label, estado, acciones por nod
 UIA/AT-SPI/VoiceOver. Imprescindible para "competente" en serio; se difiere, no se
 omite. Ver explicación extendida abajo.
 
-### 🔴 Tier 8 — arquitectura de render / performance
+### 🟡 Tier 8 — arquitectura de render / performance
 Cada frame reconstruye todo el árbol `View` y vello rerasteriza la escena
-completa. Falta: `RepaintBoundary` (sub-escenas cacheadas / capas retenidas) +
-damage/dirty-region en el present. No urge (vello es rápido), pero separa "fluido
-a 5k nodos" de "a 50k".
+completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k".
+
+- **Caché de shaping de texto ✅** (`llimphi-text`, 2026-06-05). `Typesetter::layout`
+  cachea el `parley::Layout` por sus parámetros (caché generacional LRU-aprox); el
+  texto que no cambió no se re-shapea. Medición y pintado comparten el chokepoint,
+  así que cubre el reuso intra-frame (medir→pintar) y entre frames (scroll/tipeo).
+  Evidencia (`examples/bench_cache`): 89 µs/frame → 6 µs/frame en UI típica (14×),
+  63× con texto estable. API sin cambios; transparente para todas las apps.
+- **Retención de frame entero (conservadora) — próximo, diferido.** Plan elegido:
+  el `view()` Elm es puro sobre el modelo y el modelo sólo muta en `update()`.
+  Contador de generación en el `State` del eventloop, bumpeado en cada `A::update`
+  (~25 call-sites). En `RedrawRequested`, si la generación, la posición del cursor
+  (hover), el tamaño no cambiaron y no hay anim/ripple/ghost/drag activos → saltar
+  rebuild+mount+layout+paint y re-presentar la `Scene` retenida. Cero riesgo de
+  stale (no cachea por-subárbol). Mata redraws redundantes/espurios.
+- **`RepaintBoundary` (sub-escenas locales retenidas) — más adelante.** El win
+  marginal baja una vez que el caché de shaping ya elimina el costo caro del paint;
+  reservado para subárboles grandes y estáticos (página de pluma, chart de
+  tullpu/cosmos). Requiere gateo estricto (sólo subárboles paint-puro: sin
+  hover/anim/ripple/gpu ni ancestros transformados, porque ese estado lo maneja el
+  runtime y no la `version` de la app → frame stale) + verificación con PNG-diff
+  headless (cache vs paint fresco = pixel-idénticos). Captura en coords locales
+  (`paint_range` con `base_xf = translate(-origin)`) + replay con `scene.append`,
+  calcando el mecanismo ya probado de los ghosts de animación de salida.
 
 ## Orden de ejecución sugerido
 
