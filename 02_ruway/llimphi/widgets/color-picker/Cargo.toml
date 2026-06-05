@@ -11,3 +11,4 @@ description = "llimphi-widget-color-picker — selector de color RGBA: swatch ac
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-slider = { workspace = true }
+llimphi-widget-text-input = { workspace = true }

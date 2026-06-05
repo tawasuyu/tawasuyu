@@ -211,6 +211,16 @@ impl App for Demo {
                     m.state.focus_cell(&path, f.value.clone(), row, col);
                 }
             }
+            Msg::Allichay(AllichayMsg::FocusHex(path)) => {
+                let seed = m
+                    .cfg
+                    .schema()
+                    .find_field(&path)
+                    .and_then(|f| f.value.as_color())
+                    .map(llimphi_module_allichay::color_hex)
+                    .unwrap_or_default();
+                m.state.focus_hex(&path, &seed);
+            }
             Msg::Allichay(AllichayMsg::Change(path, value)) => {
                 println!("cambio: {path} = {value:?}");
                 if let Err(e) = m.cfg.apply(&path, value) {

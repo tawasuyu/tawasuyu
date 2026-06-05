@@ -35,7 +35,14 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, KeyEvent, View};
 use llimphi_theme::Theme;
 
-use llimphi_widget_color_picker::{color_picker_view, color_picker_height, ColorPickerPalette, DEFAULT_SWATCHES};
+use llimphi_widget_color_picker::{
+    color_picker_height, color_picker_view, parse_hex, rgba_to_hex, ColorPickerPalette, HexField,
+    DEFAULT_SWATCHES,
+};
+
+/// Re-exportado para que los hosts siembren el buffer del campo hex sin duplicar
+/// el formato `#RRGGBB` (lo usan al manejar [`AllichayMsg::FocusHex`]).
+pub use llimphi_widget_color_picker::rgba_to_hex as color_hex;
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
@@ -72,6 +79,9 @@ pub enum AllichayMsg {
     /// El host siembra el buffer con [`AllichayState::focus_cell`] pasándole el
     /// [`FieldValue`] actual del campo.
     FocusCell(FieldPath, usize, usize),
+    /// Se enfocó el campo **hex** de un [`Control::ColorPicker`] en `path`. El
+    /// host siembra el buffer con [`AllichayState::focus_hex`].
+    FocusHex(FieldPath),
     /// Un campo cambió de valor. El host lo aplica a su config y persiste.
     Change(FieldPath, FieldValue),
     /// El panel se desplazó: nuevo offset absoluto (ya clampeado).
@@ -98,6 +108,10 @@ pub struct AllichayState {
     /// su valor base (la lista/tabla completa, fija durante la edición) y la
     /// coordenada. `None` cuando se edita un campo de texto escalar.
     edit_cell: Option<EditCell>,
+    /// `true` cuando lo focado es el campo **hex** de un `ColorPicker` (la clave
+    /// focada es el `FieldPath` del campo Color). Mutuamente excluyente con
+    /// `edit_cell` y con la edición de texto escalar.
+    edit_hex: bool,
     /// Desplazamiento vertical (px) del panel activo, si su contenido excede el
     /// viewport. Se reinicia al cambiar de diente.
     scroll: f32,
@@ -157,6 +171,19 @@ impl AllichayState {
         self.inputs.insert(key.clone(), st);
         self.focused = Some(key);
         self.edit_cell = None;
+        self.edit_hex = false;
+    }
+
+    /// Enfoca el campo hex de un `ColorPicker`. `seed` es el hex actual
+    /// (`#RRGGBB`). La clave focada es el `FieldPath` del campo Color.
+    pub fn focus_hex(&mut self, path: &FieldPath, seed: &str) {
+        let key = path.to_string();
+        let mut st = TextInputState::new();
+        st.set_text(seed);
+        self.inputs.insert(key.clone(), st);
+        self.focused = Some(key);
+        self.edit_cell = None;
+        self.edit_hex = true;
     }
 
     /// Enfoca la celda `(row, col)` de un agregado. El host le pasa el
@@ -179,6 +206,7 @@ impl AllichayState {
             row,
             col,
         });
+        self.edit_hex = false;
     }
 
     /// Quita el foco de texto (sin descartar nada — el valor ya viajó por
@@ -186,6 +214,7 @@ impl AllichayState {
     pub fn blur(&mut self) {
         self.focused = None;
         self.edit_cell = None;
+        self.edit_hex = false;
         self.inputs.clear();
     }
 
@@ -205,6 +234,11 @@ impl AllichayState {
         self.focused.as_deref() == Some(cell_key(path, row, col).as_str())
     }
 
+    /// `true` si el campo hex de `path` (un `ColorPicker`) está en edición.
+    pub fn is_editing_hex(&self, path: &FieldPath) -> bool {
+        self.edit_hex && self.focused.as_deref() == Some(path.to_string().as_str())
+    }
+
     /// Enruta una tecla al campo/celda de texto focado. Devuelve el cambio
     /// resultante (`FieldPath`, [`FieldValue`]) si el contenido cambió, para que
     /// el host lo aplique y persista. Para un campo escalar es un
@@ -217,13 +251,17 @@ impl AllichayState {
             return None;
         }
         let text = st.text();
-        match &self.edit_cell {
-            None => Some((FieldPath::from(key.as_str()), FieldValue::Text(text))),
-            Some(c) => Some((
-                c.path.clone(),
-                c.base.clone().with_cell(c.row, c.col, &text),
-            )),
+        if let Some(c) = &self.edit_cell {
+            return Some((c.path.clone(), c.base.clone().with_cell(c.row, c.col, &text)));
         }
+        if self.edit_hex {
+            // El buffer es un hex; sólo emitimos cuando parsea a un color válido
+            // (mientras se escribe a medias no se aplica, pero el buffer se
+            // conserva). El alfa actual no está acá → 255; el slider A lo ajusta.
+            let path = FieldPath::from(key.as_str());
+            return parse_hex(&text, 255).map(|rgba| (path, FieldValue::Color(rgba)));
+        }
+        Some((FieldPath::from(key.as_str()), FieldValue::Text(text)))
     }
 
     /// Acceso interno al buffer de un campo escalar focado para pintarlo.
@@ -499,7 +537,7 @@ fn field_height(field: &Field) -> f32 {
             }
         }
         Control::TextInput => 34.0,
-        Control::ColorPicker => color_picker_height(),
+        Control::ColorPicker => color_picker_height(true),
         Control::List { .. } => table_height(field.value.row_count(), false),
         Control::Table { .. } => table_height(field.value.row_count(), true),
         Control::Display => 8.0, // fila compacta sin label arriba
@@ -653,7 +691,7 @@ where
             slider_control(field, path, *min, *max, *step, theme, on_msg)
         }
         Control::Dropdown { options } => dropdown_control(field, path, options, theme, on_msg),
-        Control::ColorPicker => color_control(field, path, theme, on_msg),
+        Control::ColorPicker => color_control(field, path, state, theme, on_msg),
         Control::TextInput => text_control(field, path, state, theme, on_msg),
         Control::List { item_label } => {
             list_control(field, path, item_label, state, theme, on_msg)
@@ -885,18 +923,33 @@ fn radio_row<Msg: Clone + 'static>(
 }
 
 /// Delega en el widget agnóstico `llimphi-widget-color-picker`, traduciendo su
-/// `[u8;4]` a `AllichayMsg::Change(path, Color(..))`.
-fn color_control<Msg, F>(field: &Field, path: FieldPath, theme: &Theme, on_msg: F) -> View<Msg>
+/// `[u8;4]` a `AllichayMsg::Change(path, Color(..))`. El campo hex usa el foco
+/// del estado ([`AllichayState::is_editing_hex`]/`input`); el tecleo lo enruta
+/// el host a `apply_key`, que parsea el hex a Color.
+fn color_control<Msg, F>(
+    field: &Field,
+    path: FieldPath,
+    state: &AllichayState,
+    theme: &Theme,
+    on_msg: F,
+) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
 {
     let cur = field.value.as_color().unwrap_or([0, 0, 0, 255]);
+    let hex = HexField {
+        focused: state.is_editing_hex(&path),
+        state: state.input(&path),
+        on_focus: on_msg(AllichayMsg::FocusHex(path.clone())),
+    };
+    let change_path = path;
     color_picker_view(
         cur,
         DEFAULT_SWATCHES,
         &ColorPickerPalette::from_theme(theme),
-        move |rgba| on_msg(AllichayMsg::Change(path.clone(), FieldValue::Color(rgba))),
+        Some(hex),
+        move |rgba| on_msg(AllichayMsg::Change(change_path.clone(), FieldValue::Color(rgba))),
     )
 }
 

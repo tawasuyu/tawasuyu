@@ -23,13 +23,15 @@
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
-    AlignItems, FlexWrap, Rect,
+    FlexWrap, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_slider::{slider_view, SliderPalette};
+use llimphi_widget_text_input::{text_input_view, TextInputPalette, TextInputState};
 
-/// Paleta del color-picker: la del slider RGBA + los bordes de los chips.
+/// Paleta del color-picker: la del slider RGBA + los bordes de los chips + la
+/// del campo hex.
 #[derive(Debug, Clone, Copy)]
 pub struct ColorPickerPalette {
     /// Paleta de los sliders RGBA.
@@ -38,6 +40,10 @@ pub struct ColorPickerPalette {
     pub chip_border: Color,
     /// Borde del chip activo (el que coincide con el color actual).
     pub chip_border_active: Color,
+    /// Paleta del input de texto del campo hex.
+    pub hex_input: TextInputPalette,
+    /// Color del rótulo "#" del campo hex.
+    pub hex_label: Color,
 }
 
 impl Default for ColorPickerPalette {
@@ -53,7 +59,45 @@ impl ColorPickerPalette {
             slider: SliderPalette::from_theme(t),
             chip_border: t.border,
             chip_border_active: t.accent,
+            hex_input: TextInputPalette::from_theme(t),
+            hex_label: t.fg_muted,
         }
+    }
+}
+
+/// Estado de edición del campo **hex** del picker, que el caller posee (igual
+/// que [`text_input_view`]): si está focado, el buffer prestado, y el mensaje al
+/// clickearlo. El caller enruta las teclas a su `TextInputState` y reconstruye
+/// el color con [`parse_hex`].
+pub struct HexField<'a, Msg> {
+    /// Si el campo hex recibe teclas ahora.
+    pub focused: bool,
+    /// Buffer prestado por el caller mientras se edita.
+    pub state: Option<&'a TextInputState>,
+    /// Mensaje al clickear el campo (el caller arranca a editarlo).
+    pub on_focus: Msg,
+}
+
+/// `#RRGGBB` del color (descarta el alfa, que se edita con el slider A).
+pub fn rgba_to_hex(rgba: [u8; 4]) -> String {
+    format!("#{:02X}{:02X}{:02X}", rgba[0], rgba[1], rgba[2])
+}
+
+/// Parsea una cadena hex a RGBA. Acepta `#` opcional y 3/6/8 dígitos
+/// (`RGB`/`RRGGBB`/`RRGGBBAA`). Sin alfa explícito conserva `cur_alpha`. `None`
+/// si no es un hex válido (p. ej. mientras se escribe a medias).
+pub fn parse_hex(s: &str, cur_alpha: u8) -> Option<[u8; 4]> {
+    let h = s.trim().trim_start_matches('#');
+    let byte = |i: usize| u8::from_str_radix(&h[i..i + 2], 16).ok();
+    match h.len() {
+        3 => {
+            // RGB corto: cada dígito se duplica.
+            let d = |i: usize| u8::from_str_radix(&h[i..i + 1], 16).ok().map(|v| v * 17);
+            Some([d(0)?, d(1)?, d(2)?, cur_alpha])
+        }
+        6 => Some([byte(0)?, byte(2)?, byte(4)?, cur_alpha]),
+        8 => Some([byte(0)?, byte(2)?, byte(4)?, byte(6)?]),
+        _ => None,
     }
 }
 
@@ -78,27 +122,35 @@ pub const DEFAULT_SWATCHES: &[[u8; 3]] = &[
 const HUE_BAR_H: f32 = 16.0;
 
 /// Alto fijo del picker (px): swatch + paleta (hasta 2 filas) + barra de tono +
-/// 4 sliders. Útil para que un contenedor con scroll estime el alto del control.
-pub fn color_picker_height() -> f32 {
-    16.0 + 54.0 + (HUE_BAR_H + 6.0) + 4.0 * 24.0
+/// 4 sliders (+ campo hex si `with_hex`). Para estimar el alto en un contenedor
+/// con scroll.
+pub fn color_picker_height(with_hex: bool) -> f32 {
+    let hex = if with_hex { 38.0 } else { 0.0 };
+    16.0 + 54.0 + (HUE_BAR_H + 6.0) + 4.0 * 24.0 + hex
 }
 
 /// Compone el selector completo. `rgba` es el color actual; `swatches` la paleta
 /// de chips (p. ej. [`DEFAULT_SWATCHES`]); `on_change` recibe el color nuevo.
+/// Si `hex` es `Some`, agrega un campo de texto `#RRGGBB` editable al pie (su
+/// foco lo posee el caller — ver [`HexField`]). `None` = sin campo hex.
 pub fn color_picker_view<Msg, F>(
     rgba: [u8; 4],
     swatches: &[[u8; 3]],
     palette: &ColorPickerPalette,
+    hex: Option<HexField<Msg>>,
     on_change: F,
 ) -> View<Msg>
 where
     Msg: Clone + Send + Sync + 'static,
     F: Fn([u8; 4]) -> Msg + Clone + Send + Sync + 'static,
 {
-    let mut rows: Vec<View<Msg>> = Vec::with_capacity(7);
+    let mut rows: Vec<View<Msg>> = Vec::with_capacity(8);
     rows.push(swatch_view(rgba));
     rows.push(swatch_palette(rgba, swatches, palette, &on_change));
     rows.push(hue_bar(rgba, palette, on_change.clone()));
+    if let Some(hex) = hex {
+        rows.push(hex_row(rgba, hex, palette));
+    }
     for (ci, name) in [(0usize, "R"), (1, "G"), (2, "B"), (3, "A")] {
         let f = on_change.clone();
         rows.push(slider_view(
@@ -132,6 +184,38 @@ where
         ..Default::default()
     })
     .children(rows)
+}
+
+/// La fila del campo hex `#RRGGBB`: un input de ancho fijo. Cuando está focado
+/// usa el buffer prestado; si no, muestra el hex del color actual.
+fn hex_row<Msg: Clone + 'static>(
+    rgba: [u8; 4],
+    hex: HexField<Msg>,
+    palette: &ColorPickerPalette,
+) -> View<Msg> {
+    let input = match (hex.focused, hex.state) {
+        (true, Some(st)) => text_input_view(st, "", true, &palette.hex_input, hex.on_focus),
+        _ => {
+            let mut tmp = TextInputState::new();
+            tmp.set_text(rgba_to_hex(rgba));
+            text_input_view(&tmp, "", false, &palette.hex_input, hex.on_focus)
+        }
+    };
+    let _ = palette.hex_label; // reservado por si se agrega un rótulo "#" aparte
+    View::new(Style {
+        size: Size {
+            width: length(120.0_f32),
+            height: length(34.0_f32),
+        },
+        margin: Rect {
+            left: length(0.0_f32),
+            right: length(0.0_f32),
+            top: length(3.0_f32),
+            bottom: length(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![input])
 }
 
 /// El swatch (muestra) del color actual.
@@ -360,5 +444,18 @@ mod tests {
     fn tono_rojo_es_cero_grados() {
         let (h, _, _) = rgb_to_hsv([255, 0, 0]);
         assert!(h < 0.5 || h > 359.5);
+    }
+
+    #[test]
+    fn hex_roundtrip_y_parse() {
+        assert_eq!(rgba_to_hex([92, 143, 235, 255]), "#5C8FEB");
+        assert_eq!(parse_hex("#5C8FEB", 255), Some([92, 143, 235, 255]));
+        assert_eq!(parse_hex("5c8feb", 200), Some([92, 143, 235, 200])); // sin #, conserva alfa
+        assert_eq!(parse_hex("#FFF", 255), Some([255, 255, 255, 255])); // corto
+        assert_eq!(parse_hex("#5C8FEB80", 255), Some([92, 143, 235, 128])); // con alfa
+        assert_eq!(parse_hex("#5C8", 255), Some([0x55, 0xCC, 0x88, 255])); // corto RGB
+        assert_eq!(parse_hex("#5C8F", 255), None); // 4 dígitos: inválido
+        assert_eq!(parse_hex("zz", 255), None);
+        assert_eq!(parse_hex("#5C8FE", 255), None); // a medias
     }
 }

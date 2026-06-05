@@ -356,6 +356,13 @@ impl App for Panel {
                     m.allichay.focus_cell(&path, value, row, col);
                 }
             }
+            Msg::Allichay(AllichayMsg::FocusHex(path)) => {
+                let seed = current_field_value(&m, &path)
+                    .and_then(|v| v.as_color())
+                    .map(llimphi_module_allichay::color_hex)
+                    .unwrap_or_default();
+                m.allichay.focus_hex(&path, &seed);
+            }
             Msg::Allichay(AllichayMsg::Change(path, value)) => route_change(&mut m, &path, value),
             Msg::Allichay(AllichayMsg::ScrollTo(offset)) => m.allichay.set_scroll(offset),
             Msg::AllichayKey(event) => {
