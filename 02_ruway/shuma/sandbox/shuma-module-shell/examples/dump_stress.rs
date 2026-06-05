@@ -42,23 +42,15 @@ fn main() {
     push(&mut state, OutputLine::notice("✔ exit 0"), block);
     state.expanded_stages.insert((block, 0));
 
-    // (2) Output GIGANTE de UN comando (ls -alR): el Prompt va al principio y,
-    // con MAX_VISIBLE=400, la ventana visible son sólo líneas Stdout SIN el
-    // Prompt → output_pane lo ruteaba por render_output_line (líneas planas, sin
-    // editor IDE → sin select ni copy). Reproduce el bug de C.
-    let big = 2u64;
-    push(&mut state, OutputLine::prompt("$ ls -alR /"), big);
-    for i in 0..600 {
-        push(
-            &mut state,
-            OutputLine::stdout(&format!("-rw-r--r-- 1 user group {:>7} archivo_{i}.rs", i * 13)),
-            big,
-        );
+    // (2) Output largo: muchos comandos cortos para llenar y empujar al input.
+    for b in 2u64..=14 {
+        push(&mut state, OutputLine::prompt(&format!("$ cmd-{b}")), b);
+        push(&mut state, OutputLine::stdout(&format!("salida del comando {b}")), b);
+        push(&mut state, OutputLine::notice("✔ exit 0"), b);
+        state.block_started.insert(b, 0);
     }
-    push(&mut state, OutputLine::notice("✔ exit 0"), big);
-    state.block_seq = big;
-    state.current_block = big;
-    state.block_started.insert(big, 0);
+    state.block_seq = 14;
+    state.current_block = 14;
     state.block_started.insert(block, 0);
 
     // (1) Input que termina en espacio — ¿se ve el espacio / avanza el caret?
