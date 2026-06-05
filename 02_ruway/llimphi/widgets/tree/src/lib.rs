@@ -300,6 +300,9 @@ fn tree_row_view<Msg: Clone + 'static>(
             ..Default::default()
         })
         .text_aligned(row.label, 12.0, palette.fg_text, Alignment::Start)
+        // Nombres largos (archivos, nodos) terminan en `…` en vez de cortarse
+        // a media letra contra el `clip` del contenedor.
+        .ellipsis(1)
         .on_click(row.on_select)
     };
     row_children.push(label);

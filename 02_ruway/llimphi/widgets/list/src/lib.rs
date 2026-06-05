@@ -197,5 +197,7 @@ fn row_view<Msg: Clone + 'static>(row: ListRow<Msg>, height: f32, palette: &List
     })
     .fill(bg)
     .text_aligned(row.label, 12.0, palette.fg_text, Alignment::Start)
+    // Labels largos terminan en `…` (single-line) en vez de cortarse seco.
+    .ellipsis(1)
     .on_click(row.on_click)
 }
