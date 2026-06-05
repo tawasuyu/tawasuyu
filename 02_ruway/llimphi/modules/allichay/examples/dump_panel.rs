@@ -10,7 +10,7 @@ use std::fs::File;
 use std::io::BufWriter;
 
 use allichay::{Configurable, Field, Schema, Section};
-use llimphi_module_allichay::{schema_panel, AllichayMsg, AllichayState};
+use llimphi_module_allichay::{schema_panel, settings_overlay, AllichayMsg, AllichayState};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_ui::llimphi_text::Alignment;
 
@@ -275,6 +275,32 @@ fn main() {
     })
     .fill(theme.bg_app)
     .children(vec![sidebar, center]);
+
+    // Modo "overlay": pasá `overlay` como arg para ver `settings_overlay`
+    // (el modal embebible) sobre el panel como fondo de app.
+    let v = if std::env::args().any(|a| a == "overlay") {
+        let modal = settings_overlay::<(), _>(
+            "Configuración",
+            "Cerrar",
+            active,
+            &state,
+            &theme,
+            (W as f32, H as f32),
+            |_m: AllichayMsg| (),
+            (),
+        );
+        View::<()>::new(Style {
+            position: Position::Relative,
+            size: Size {
+                width: percent(1.0),
+                height: percent(1.0),
+            },
+            ..Default::default()
+        })
+        .children(vec![v, modal])
+    } else {
+        v
+    };
 
     // view → layout → scene (misma secuencia que el eventloop).
     let mut layout = LayoutTree::new();

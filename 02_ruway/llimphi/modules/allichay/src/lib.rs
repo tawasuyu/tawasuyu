@@ -44,6 +44,7 @@ use llimphi_widget_color_picker::{
 /// el formato `#RRGGBB` (lo usan al manejar [`AllichayMsg::FocusHex`]).
 pub use llimphi_widget_color_picker::rgba_to_hex as color_hex;
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use llimphi_widget_segmented::{segmented_view, SegmentedPalette};
 use llimphi_widget_slider::{slider_view, SliderPalette};
@@ -317,6 +318,40 @@ where
         ..Default::default()
     })
     .children(vec![rail, panel])
+}
+
+/// Pinta la configuración como un **modal centrado** (scrim + card), para
+/// **embeber** el panel dentro de una app con ventana propia (media, nada…): la
+/// app guarda un [`AllichayState`], abre el overlay con una tecla y lo pinta en
+/// su `view_overlay`, enrutando los [`AllichayMsg`] como siempre. Reusa
+/// `llimphi-widget-modal` (scrim + card + título + botón Cerrar) con
+/// [`allichay_view`] como cuerpo. `on_dismiss` se emite al clickear el scrim o
+/// el botón Cerrar (la app maneja Esc en su `on_key`).
+#[allow(clippy::too_many_arguments)]
+pub fn settings_overlay<Msg, F>(
+    title: impl Into<String>,
+    close_label: impl Into<String>,
+    schema: &Schema,
+    state: &AllichayState,
+    theme: &Theme,
+    viewport: (f32, f32),
+    on_msg: F,
+    on_dismiss: Msg,
+) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let body = allichay_view(schema, state, theme, on_msg);
+    modal_view(ModalSpec {
+        title: title.into(),
+        body,
+        buttons: vec![ModalButton::cancel(close_label, on_dismiss.clone())],
+        size: (640.0, 460.0),
+        viewport,
+        on_dismiss,
+        palette: ModalPalette::from_theme(theme),
+    })
 }
 
 /// Rail de **dientes** (el widget `dock-rail`): una sección = un diente. El
