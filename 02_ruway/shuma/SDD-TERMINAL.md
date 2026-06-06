@@ -207,9 +207,23 @@ vt100); se mueve a la superficie como `BlockKind`.
   `Item::Lines(0, len)` (delega en `block_surface`, sin duplicar render). 26 tests.
   **Verificado headless** (`examples/dump_blocks.rs`): 6 comandos, un flood de
   500 k líneas, un bloque colapsado, stderr tintado, anclado al fondo → ~40 filas
-  materializadas. Falta: enganchar al `output_pane` del shell detrás del flag
-  `SHUMA_TERMINAL_SURFACE` (mapear `OutputLine`/`block_command`/`expanded_stages`
-  → `Item`s; A/B con el viejo) — la integración, no más capacidades del widget.
+  materializadas.
+  - **Integración al shell ✅ (2026-06-05).** `output_pane_surface` en
+    `shuma-module-shell/src/view.rs` mapea el modelo del shell
+    (`OutputLine`/bloques/`collapsed`/`block_command`) a `Item`s: cada comando =
+    un header chrome (`surface_header`: chevron + `$ cmd` + badge, click→colapso)
+    + su cuerpo (rango en un `Scrollback`), reusando
+    `body_lines_for_block`/`body_color_runs`/`CmdStatus`. Conversión de scroll
+    `scroll_px` (desde el fondo) ↔ `scroll_y` (desde arriba); rueda/arrastre del
+    widget → `Msg::Scroll(-delta)`. Detrás del flag **`SHUMA_TERMINAL_SURFACE`**
+    (env, leído una vez); el `output_pane` viejo queda intacto para A/B y
+    rollback. **Verificado** (`examples/dump_surface.rs`, viewport sembrado +
+    scroll al fondo): flood de 3 000 líneas virtualizado, bloque colapsado,
+    stderr tintado, anclado al fondo, sin negro, en la composición real del
+    `view()`. 94 tests del shell pasan; `output_pane` sin cambios.
+  - Deuda de paridad (no crítica): filas de etapa (tee) y chip de reprocess del
+    header todavía no están en el chrome de la superficie; numeración global
+    continua (no por-bloque). Se cierran antes de la migración (Fase 5).
 - **Fase 3 — Selección + find sobre el stream.** Extraer el núcleo de selección del
   `text-editor` a compartido; selección global; copy; Ctrl+F.
 - **Fase 4 — GPU directo grilla.** Atlas de glifos + celdas instanciadas para el modo

@@ -15,6 +15,9 @@ pub fn view<HostMsg: Clone + 'static>(
         tui_panel::<HostMsg>(state, theme, lift.clone())
     } else if is_tui_active(state) {
         pty_lines_panel::<HostMsg>(state, theme)
+    } else if terminal_surface_enabled() {
+        // Experimental, detrás de SHUMA_TERMINAL_SURFACE (A/B con el viejo).
+        output_pane_surface::<HostMsg>(state, theme, &lift)
     } else {
         output_pane::<HostMsg>(state, theme, &lift)
     };
@@ -1524,6 +1527,313 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
     .clip(true)
     .paint_with(painter)
     .children(pane_children)
+}
+
+// ── Camino experimental: superficie de terminal virtualizada (Fase 2 del SDD) ──
+//
+// Detrás del flag `SHUMA_TERMINAL_SURFACE` (A/B con el `output_pane` de arriba,
+// que queda intacto para rollback inmediato). Mapea el modelo del shell
+// (`OutputLine` + bloques + `collapsed` + `block_command`) al modelo de bloques
+// de `llimphi-widget-terminal`: cada comando = un header (chrome) + su cuerpo
+// (rango de líneas en un `Scrollback`); colapsar = no emitir el cuerpo. El
+// scroll del widget vive en la superficie (no en un `transform`), evitando de
+// raíz el bug clip+transform; convertimos `scroll_px` (px desde el fondo, el
+// modelo del shell) ↔ `scroll_y` (px desde arriba, el del widget).
+
+/// Alto fijo del header de comando en la superficie (px).
+const SURFACE_HEADER_H: f32 = 22.0;
+
+/// `true` si el usuario pidió la superficie nueva (env `SHUMA_TERMINAL_SURFACE`).
+/// Se lee una sola vez por proceso.
+pub(crate) fn terminal_surface_enabled() -> bool {
+    use std::sync::OnceLock;
+    static EN: OnceLock<bool> = OnceLock::new();
+    *EN.get_or_init(|| std::env::var_os("SHUMA_TERMINAL_SURFACE").is_some())
+}
+
+/// Header de un comando como **chrome** de la superficie: chevron + `$ comando`
+/// + badge de estado (icono + "hace N"). Click → pliega/despliega el bloque.
+fn surface_header<HostMsg: Clone + 'static>(
+    block: u64,
+    header_text: &str,
+    status: Option<CmdStatus>,
+    expandable: bool,
+    collapsed: bool,
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    let chevron = if collapsed {
+        llimphi_icons::Icon::ChevronRight
+    } else {
+        llimphi_icons::Icon::ChevronDown
+    };
+    let marker = View::new(Style {
+        size: Size { width: length(14.0_f32), height: length(14.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(if expandable {
+        vec![llimphi_icons::icon_view(chevron, theme.fg_muted, 1.6)]
+    } else {
+        Vec::new()
+    });
+
+    let cmd_color = if expandable || status == Some(CmdStatus::Running) {
+        theme.accent
+    } else {
+        theme.fg_muted
+    };
+    let cmd = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(header_text.to_string(), 12.0, cmd_color, Alignment::Start)
+    .mono()
+    .max_lines(1);
+
+    let mut children = vec![marker, cmd];
+    if let Some(st) = status {
+        let (icon, color) = st.icon_color(theme);
+        children.push(
+            View::new(Style {
+                size: Size { width: length(12.0_f32), height: length(12.0_f32) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .children(vec![llimphi_icons::icon_view(icon, color, 1.8)]),
+        );
+        let when = relative_time(
+            state.block_started.get(&block).copied().unwrap_or(0),
+            now_unix_secs(),
+        );
+        children.push(
+            View::new(Style {
+                size: Size { width: length(96.0_f32), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .text_aligned(when, 10.0, theme.fg_muted, Alignment::End)
+            .mono(),
+        );
+    }
+
+    let mut v = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(SURFACE_HEADER_H) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(6.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel);
+    if expandable {
+        v = v.on_click(lift(Msg::ToggleBlock(block)));
+    }
+    v.children(children)
+}
+
+/// `output_pane` reimplementado sobre `llimphi-widget-terminal::block_surface`.
+/// Mismo modelo de datos, virtualización real (sólo se materializa lo visible).
+pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    use llimphi_widget_terminal::{
+        block_surface, blocks_height, Item, LineStyle, Scrollback, TermMetrics, TermPalette,
+    };
+
+    // Agrupar por bloque preservando el orden de primera aparición (igual que
+    // el camino viejo). Con superficie no hace falta capar a 400: el widget
+    // virtualiza, así que pasamos todo el buffer vigente.
+    let mut order: Vec<u64> = Vec::new();
+    let mut groups: std::collections::HashMap<u64, Vec<&OutputLine>> =
+        std::collections::HashMap::new();
+    for line in &state.output {
+        if !groups.contains_key(&line.block) {
+            order.push(line.block);
+        }
+        groups.entry(line.block).or_default().push(line);
+    }
+
+    let row_h = ROW_H;
+    let metrics = TermMetrics {
+        font_size: 12.0,
+        line_height: row_h,
+        char_width: 12.0 * 0.6,
+    };
+    let mut palette = TermPalette::from_theme(theme);
+    // La superficie entera es el panel hundido; los cuerpos se leen sobre él.
+    palette.bg = theme.sunken();
+
+    // Store de scrollback + items + estilo por línea (alineado al índice del
+    // store, que crece en lockstep con `push_line`).
+    let mut store = Scrollback::new(0);
+    let mut items: Vec<Item<HostMsg>> = Vec::new();
+    let mut styles: Vec<(bool, Vec<(usize, usize, llimphi_ui::llimphi_raster::peniko::Color)>)> =
+        Vec::new();
+
+    for id in &order {
+        let g = &groups[id];
+        if *id != 0 {
+            // Bloque-comando: header (chrome) + cuerpo (si no está colapsado).
+            let collapsed = state.collapsed.contains(id);
+            let has_prompt = g
+                .first()
+                .map(|l| l.kind == OutputKind::Prompt)
+                .unwrap_or(false);
+            let header_text = if has_prompt {
+                g[0].text.clone()
+            } else {
+                state
+                    .block_command
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| "$ … (salida recortada)".to_string())
+            };
+            // Estado: última notice de cierre del bloque, o "corriendo".
+            let mut status = g
+                .iter()
+                .filter(|l| l.stage.is_none())
+                .filter_map(|l| CmdStatus::from_notice(&l.text))
+                .last();
+            let still_running = status.is_none()
+                && ((state.current_block == *id && state.is_running())
+                    || state.bg_jobs.iter().any(|j| {
+                        j.lock()
+                            .map(|gg| gg.block == *id && !gg.handle.is_finished())
+                            .unwrap_or(false)
+                    }));
+            if still_running {
+                status = Some(CmdStatus::Running);
+            }
+
+            let lines = body_lines_for_block(state, *id);
+            let kinds = body_kinds_for_block(state, *id);
+            let runs = body_color_runs(state, *id, theme);
+            let has_stages = g.iter().any(|l| l.stage.is_some());
+            let expandable = !lines.is_empty() || has_stages;
+
+            items.push(Item::chrome(
+                SURFACE_HEADER_H,
+                surface_header(*id, &header_text, status, expandable, collapsed, state, theme, lift),
+            ));
+
+            if !collapsed && !lines.is_empty() {
+                let start = store.len();
+                for (i, line) in lines.iter().enumerate() {
+                    let is_err = matches!(kinds.get(i), Some(OutputKind::Stderr));
+                    styles.push((is_err, runs.get(i).cloned().unwrap_or_default()));
+                    store.push_line(line);
+                }
+                items.push(Item::lines(start, store.len()));
+            }
+        } else {
+            // Líneas sueltas (notices iniciales sin bloque dueño) — cuerpo sin
+            // header, coloreadas por su decoración semántica.
+            let start = store.len();
+            for &line in g.iter() {
+                let is_err = line.kind == OutputKind::Stderr;
+                let line_runs: Vec<_> = if is_err {
+                    vec![(0usize, line.text.len(), theme.fg_destructive)]
+                } else {
+                    shuma_line::decorate_line(&line.text, &state.cwd)
+                        .into_iter()
+                        .filter(|d| d.start < d.end && d.end <= line.text.len())
+                        .map(|d| (d.start, d.end, decoration_color(&d.kind, theme)))
+                        .collect()
+                };
+                styles.push((is_err, line_runs));
+                store.push_line(&line.text);
+            }
+            if store.len() > start {
+                items.push(Item::lines(start, store.len()));
+            }
+        }
+    }
+
+    // Scroll: convertir el modelo del shell (`scroll_px` desde el fondo) al del
+    // widget (`scroll_y` desde arriba). El viewport lo midió el painter el frame
+    // anterior; publicamos el overflow para que `Msg::Scroll` clampe.
+    let measured = state.out_viewport_h.lock().map(|g| *g).unwrap_or(0.0);
+    let content_h = blocks_height(&items, row_h);
+    let viewport_h = if measured >= 1.0 { measured } else { 600.0 };
+    let overflow = (content_h - viewport_h).max(0.0);
+    if let Ok(mut g) = state.out_overflow.lock() {
+        *g = overflow;
+    }
+    let scroll_y = (overflow - state.scroll_px).clamp(0.0, overflow);
+
+    // Estilo por línea: stderr → tinte rojo tenue; runs ya traen el coloreo
+    // semántico (paths/urls/stderr-rojo) calculado arriba.
+    let err_bg = {
+        let c = theme.fg_destructive.to_rgba8();
+        llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(c.r, c.g, c.b, 36)
+    };
+    let line_style = move |idx: usize, _text: &str| match styles.get(idx) {
+        Some((is_err, runs)) => LineStyle {
+            fg: None,
+            runs: runs.clone(),
+            bg: if *is_err { Some(err_bg) } else { None },
+        },
+        None => LineStyle::default(),
+    };
+
+    // La rueda y el arrastre de la barra del widget llegan acá como delta a
+    // sumar a `scroll_y` (desde arriba); el shell lo guarda como `scroll_px`
+    // (desde el fondo), así que invertimos el signo.
+    let lift_scroll = (*lift).clone();
+    let on_scroll = move |delta: f32| lift_scroll(Msg::Scroll(-delta));
+
+    let surface = block_surface::<HostMsg, _, _>(
+        &store,
+        items,
+        scroll_y,
+        viewport_h,
+        metrics,
+        &palette,
+        line_style,
+        on_scroll,
+        None,
+    );
+
+    // Nodo flex que toma el espacio sobrante (entre header e input) y mide su
+    // alto real para el próximo frame (el widget recibe un alto fijo = el
+    // medido; el painter de medición vive acá, en el nodo flex-rellenado).
+    let slot = Arc::clone(&state.out_viewport_h);
+    let painter = move |_scene: &mut vello::Scene,
+                        _ts: &mut llimphi_ui::llimphi_text::Typesetter,
+                        rect: llimphi_ui::PaintRect| {
+        if let Ok(mut g) = slot.lock() {
+            *g = rect.h;
+        }
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_basis: length(0.0_f32),
+        flex_grow: 1.0,
+        min_size: Size {
+            width: Dimension::auto(),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.sunken())
+    .radius(3.0)
+    .clip(true)
+    .paint_with(painter)
+    .children(vec![surface])
 }
 
 /// Color del badge de estado a partir del texto de la notice de cierre
