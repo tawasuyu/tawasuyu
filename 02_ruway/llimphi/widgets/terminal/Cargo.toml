@@ -19,3 +19,7 @@ pollster = { workspace = true }
 [[example]]
 name = "dump_terminal"
 path = "examples/dump_terminal.rs"
+
+[[example]]
+name = "dump_blocks"
+path = "examples/dump_blocks.rs"

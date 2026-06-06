@@ -11,17 +11,25 @@
 //! dependencias de UI: el núcleo agnóstico vive aparte de quien lo pinta
 //! (Regla 2).
 //!
-//! **Fase 1 (esto):** las **Capas 1–2** — [`view::line_surface`], la superficie
-//! modo línea **virtualizada**: materializa sólo las filas visibles bajo un
-//! `scroll_y` propio del widget (costo de render **constante** a scrollback
-//! ilimitado), con numeración global y color por runs. El corazón
-//! ([`view::visible_window`]) es puro y testeable sin GPU.
+//! **Fase 1:** modo línea — [`view::line_surface`] materializa sólo las filas
+//! visibles bajo un `scroll_y` propio del widget (costo de render **constante**
+//! a scrollback ilimitado), numeración global y color por runs.
+//!
+//! **Fase 2 (esto):** la **Capa 1** — el modelo de **bloques** ([`blocks`]):
+//! el stream es una secuencia de [`blocks::Item`]s (chrome de alto fijo que el
+//! caller pinta + rangos de líneas del store), virtualizados sobre alturas
+//! mixtas con búsqueda binaria; colapsar un bloque = no emitir su body. Mapea
+//! el `output_pane` del shell (header/badge/etapas/colapso) sin que el widget
+//! sepa de comandos (Regla 2). El modo línea de la Fase 1 es el caso de un solo
+//! `Item::Lines`.
 
 #![forbid(unsafe_code)]
 
+pub mod blocks;
 pub mod store;
 pub mod view;
 
+pub use blocks::{block_surface, blocks_height, blocks_scroll_to_bottom, Item};
 pub use store::Scrollback;
 pub use view::{
     content_height, line_surface, scroll_to_bottom, visible_window, LineStyle, TermMetrics,

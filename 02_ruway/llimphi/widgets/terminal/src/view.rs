@@ -1,35 +1,31 @@
-//! Render virtualizado modo línea (Capas 1–2 del SDD-TERMINAL).
+//! Tipos de la superficie + render virtualizado **modo línea** (Capas 1–2).
+//!
+//! Acá viven los tipos compartidos ([`TermMetrics`], [`TermPalette`],
+//! [`LineStyle`]) y la matemática pura de la ventana visible de **filas
+//! uniformes** ([`visible_window`]). El render modo línea, [`line_surface`], es
+//! el caso particular —un solo bloque de líneas que cubre todo el store— del
+//! modelo de bloques general de [`crate::blocks`] (Fase 2): delega en
+//! [`crate::blocks::block_surface`] para no duplicar la maquinaria de
+//! virtualización ni los builders de fila.
 //!
 //! La apuesta del SDD: scrollback **ilimitado** a costo de render
-//! **constante**. Esto lo logra [`line_surface`] materializando **sólo** las
-//! filas que caen dentro del viewport — un `ls -alR` de 1 M de líneas pinta
-//! ~40 Views (las visibles) + la barra, no un millón. El scroll vive en el
-//! **propio widget** (un `scroll_y` en px que el caller guarda en su Model),
-//! NO en un `transform` del panel sobre contenido alto (esa fue la fuente del
-//! bug clip+transform que ya costó — ver SDD §"Anti-features").
+//! **constante** — sólo se materializan las filas que caen en el viewport. El
+//! scroll vive en el **propio widget** (un `scroll_y` en px que el caller
+//! guarda en su Model), NO en un `transform` del panel sobre contenido alto
+//! (esa fue la fuente del bug clip+transform que ya costó — SDD §"Anti-features").
 //!
-//! El widget es agnóstico de shuma: no sabe de comandos. El color y el tinte
-//! de cada renglón los **inyecta el caller** vía el callback `line_style`
-//! (Regla 2: núcleo agnóstico, frontend lo pinta). La numeración del gutter es
-//! la **global 1-based** del store ([`Scrollback::line_number`]), estable
-//! aunque el frente se recorte.
+//! El widget es agnóstico de shuma: el color/tinte de cada renglón los **inyecta
+//! el caller** vía `line_style` (Regla 2). La numeración del gutter es la global
+//! 1-based del store, estable aunque el frente se recorte.
 
 use std::sync::{Arc, Mutex};
 
-use llimphi_ui::llimphi_layout::taffy::prelude::{
-    auto, length, percent, FlexDirection, Position, Rect, Size, Style,
-};
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::{DragPhase, PaintRect, View};
-use llimphi_widget_scroll::{max_offset, thumb_geometry, DEFAULT_LINE_PX};
+use llimphi_ui::View;
+use llimphi_widget_scroll::max_offset;
 
+use crate::blocks::{block_surface, Item};
 use crate::store::Scrollback;
-
-/// Ancho de la barra de scroll, en px.
-const BAR_WIDTH: f32 = 10.0;
-/// Alto mínimo del thumb, en px (para que no desaparezca con scrollback enorme).
-const MIN_THUMB: f32 = 28.0;
 
 /// Métricas de la superficie — todo derivado del `font_size`. Asume fuente
 /// monoespaciada (la mono embebida de `llimphi-text`): `char_width` es el
@@ -128,7 +124,7 @@ impl LineStyle {
 }
 
 /// La ventana de filas visibles dado el scroll y el viewport. Resultado puro y
-/// testeable: el corazón de la virtualización (qué materializar).
+/// testeable: el corazón de la virtualización de **filas uniformes**.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VisibleWindow {
     /// Primera fila a materializar (índice 0-based **vigente** en el store).
@@ -161,12 +157,12 @@ pub fn scroll_to_bottom(total_rows: usize, viewport_h: f32, row_h: f32) -> f32 {
     max_offset(content_height(total_rows, row_h), viewport_h)
 }
 
-/// Calcula la ventana de filas a materializar. **Puro** — sin GPU, sin Views.
+/// Calcula la ventana de filas a materializar para un stream **de filas
+/// uniformes** (sin bloques). **Puro** — sin GPU, sin Views.
 ///
 /// `scroll_y` se clampea a `[0, max_offset]` acá mismo (defensa en
-/// profundidad; el caller igual debería clamparlo en su `update`). La ventana
-/// incluye una fila de guarda extra al fondo para cubrir el renglón
-/// parcialmente visible del borde inferior.
+/// profundidad). La ventana incluye una fila de guarda extra al fondo para
+/// cubrir el renglón parcialmente visible del borde inferior.
 pub fn visible_window(
     total_rows: usize,
     scroll_y: f32,
@@ -198,32 +194,15 @@ pub fn visible_window(
     }
 }
 
-/// Ancho del gutter (px) para acomodar el número global más grande posible
-/// (`total_pushed`), con un padding fijo a cada lado. Se fija por el total
-/// histórico (no por lo visible) para que el gutter no salte al scrollear.
-fn gutter_width(store: &Scrollback, metrics: TermMetrics) -> f32 {
-    let max_num = store.total_pushed().max(1);
-    let digits = (max_num as f64).log10().floor() as usize + 1;
-    // 4 px de padding izquierdo + dígitos + 6 px de respiro a la derecha.
-    metrics.char_width * digits as f32 + 10.0
-}
-
-/// Superficie de terminal **modo línea, virtualizada**.
+/// Superficie de terminal **modo línea, virtualizada** — el caso de **un solo
+/// bloque** de líneas que cubre todo el store. Delega en
+/// [`crate::blocks::block_surface`].
 ///
-/// Materializa sólo las filas de `[v0, v1)` visibles bajo `scroll_y` (px) en un
-/// viewport de alto `viewport_h`. Costo de render **constante** respecto del
-/// scrollback. El scroll es del propio widget: `on_scroll(delta_px)` se invoca
-/// con el delta a sumar a `scroll_y` (rueda y arrastre de la barra); el caller
-/// acumula y clampea con [`llimphi_widget_scroll::clamp_offset`] en su `update`.
-///
-/// `line_style(idx, texto)` da el color/tinte de cada renglón visible (`idx` es
-/// el índice 0-based vigente en el store) — así shuma inyecta su semántica sin
-/// que la superficie sepa de comandos.
-///
-/// `measure`, si se provee, es un `Arc<Mutex<f32>>` que el widget **escribe**
-/// con el alto real medido del viewport en cada paint — el caller lo guarda en
-/// su Model y lo usa como `viewport_h` el próximo frame (el patrón de medición
-/// del shell). En el primer frame `viewport_h` puede ser una estimación.
+/// `on_scroll(delta_px)` se invoca con el delta a sumar a `scroll_y` (rueda y
+/// arrastre de la barra); el caller acumula y clampea con
+/// [`llimphi_widget_scroll::clamp_offset`] en su `update`. `line_style(idx,
+/// texto)` da el color/tinte de cada renglón visible. `measure`, si se provee,
+/// recibe el alto real del viewport en cada paint (patrón de medición del shell).
 #[allow(clippy::too_many_arguments)]
 pub fn line_surface<Msg, S, F>(
     store: &Scrollback,
@@ -240,246 +219,17 @@ where
     S: Fn(usize, &str) -> LineStyle,
     F: Fn(f32) -> Msg + Send + Sync + 'static,
 {
-    let total_rows = store.len();
-    let row_h = metrics.line_height;
-    let gw = gutter_width(store, metrics);
-    let win = visible_window(total_rows, scroll_y, viewport_h, row_h);
-
-    // Filas visibles: dos columnas (gutter | contenido) con hijos absolutos
-    // ubicados por su índice LOCAL dentro de la ventana. Sólo `win.count()`
-    // nodos, no `total_rows` — el corazón de la virtualización.
-    let mut gutter_children: Vec<View<Msg>> = Vec::with_capacity(win.count());
-    let mut body_children: Vec<View<Msg>> = Vec::with_capacity(win.count() * 2);
-
-    for idx in win.first..win.last {
-        let local = (idx - win.first) as f32;
-        let y = local * row_h;
-        let text = store.line(idx).unwrap_or("");
-        let style = line_style(idx, text);
-
-        // Número global 1-based, alineado a la derecha del gutter.
-        gutter_children.push(
-            View::new(Style {
-                position: Position::Absolute,
-                inset: Rect {
-                    left: length(0.0_f32),
-                    top: length(y),
-                    right: length(6.0_f32),
-                    bottom: auto(),
-                },
-                size: Size {
-                    width: length(gw - 6.0),
-                    height: length(row_h),
-                },
-                ..Default::default()
-            })
-            .text_aligned(
-                store.line_number(idx).to_string(),
-                metrics.font_size * 0.85,
-                palette.fg_line_number,
-                Alignment::End,
-            )
-            .mono(),
-        );
-
-        // Tinte de fondo del renglón (stderr, etc.) — debajo del texto.
-        if let Some(bg) = style.bg {
-            body_children.push(
-                View::new(Style {
-                    position: Position::Absolute,
-                    inset: Rect {
-                        left: length(0.0_f32),
-                        top: length(y),
-                        right: length(0.0_f32),
-                        bottom: auto(),
-                    },
-                    size: Size {
-                        width: percent(1.0_f32),
-                        height: length(row_h),
-                    },
-                    ..Default::default()
-                })
-                .fill(bg),
-            );
-        }
-
-        // Texto del renglón, multicolor por runs (clampeados al largo real).
-        let fg = style.fg.unwrap_or(palette.fg_text);
-        let runs = clamp_runs(style.runs, text.len());
-        body_children.push(
-            View::new(Style {
-                position: Position::Absolute,
-                inset: Rect {
-                    left: length(4.0_f32),
-                    top: length(y),
-                    right: auto(),
-                    bottom: auto(),
-                },
-                size: Size {
-                    width: length(4000.0_f32),
-                    height: length(row_h),
-                },
-                ..Default::default()
-            })
-            .text_runs(text.to_string(), metrics.font_size, fg, runs, Alignment::Start)
-            .mono(),
-        );
-    }
-
-    let gutter = View::new(Style {
-        size: Size {
-            width: length(gw),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(palette.bg_gutter)
-    .children(gutter_children);
-
-    let body = View::new(Style {
-        flex_grow: 1.0,
-        size: Size {
-            width: auto(),
-            height: percent(1.0_f32),
-        },
-        ..Default::default()
-    })
-    .fill(palette.bg)
-    .children(body_children);
-
-    // La fila [gutter | contenido], de alto = filas materializadas.
-    let rows = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(win.count() as f32 * row_h),
-        },
-        ..Default::default()
-    })
-    .children(vec![gutter, body]);
-
-    // La columna de filas se sube `partial_px` para el scroll sub-renglón. El
-    // viewport recorta el sobrante (la fila de guarda del fondo).
-    let rows_wrap = View::new(Style {
-        position: Position::Absolute,
-        inset: Rect {
-            top: length(-(win.partial_px as f32)),
-            left: length(0.0_f32),
-            right: length(0.0_f32),
-            bottom: auto(),
-        },
-        ..Default::default()
-    })
-    .children(vec![rows]);
-
-    let mut children = vec![rows_wrap];
-    let on_wheel = Arc::new(on_scroll);
-
-    // Barra de scroll: sólo si hay overflow. Es del widget (no traslada
-    // contenido alto), dimensionada con el alto TOTAL virtual.
-    let content_h = content_height(total_rows, row_h);
-    if max_offset(content_h, viewport_h) > 0.0 {
-        children.push(scrollbar(scroll_y, content_h, viewport_h, palette, &on_wheel));
-    }
-
-    // Viewport: alto fijo, contenido recortado, rueda local. Position::Relative
-    // para contener los hijos absolutos. El painter de medición captura el alto
-    // real para el próximo frame (patrón del shell).
-    let on_wheel_view = Arc::clone(&on_wheel);
-    let mut viewport = View::new(Style {
-        position: Position::Relative,
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(viewport_h),
-        },
-        ..Default::default()
-    })
-    .fill(palette.bg)
-    .clip(true)
-    .on_scroll(move |_dx, dy| Some((on_wheel_view)(dy * DEFAULT_LINE_PX)))
-    .children(children);
-
-    if let Some(slot) = measure {
-        viewport = viewport.paint_with(move |_scene, _ts, rect: PaintRect| {
-            if let Ok(mut g) = slot.lock() {
-                *g = rect.h;
-            }
-        });
-    }
-
-    viewport
-}
-
-/// Barra de scroll vertical del widget: track + thumb arrastrable. Reusa la
-/// geometría de `llimphi-widget-scroll` (`thumb_geometry`) pero dimensionada
-/// con el alto TOTAL virtual — el thumb refleja la posición dentro del
-/// scrollback completo, no del fragmento materializado.
-fn scrollbar<Msg, F>(
-    scroll_y: f32,
-    content_h: f32,
-    viewport_h: f32,
-    palette: &TermPalette,
-    on_scroll: &Arc<F>,
-) -> View<Msg>
-where
-    Msg: Clone + 'static,
-    F: Fn(f32) -> Msg + Send + Sync + 'static,
-{
-    let (thumb_h, thumb_y, offset_per_px) = thumb_geometry(scroll_y, content_h, viewport_h);
-    let thumb_h = thumb_h.max(MIN_THUMB.min(viewport_h));
-
-    let on_thumb = Arc::clone(on_scroll);
-    let thumb = View::new(Style {
-        position: Position::Absolute,
-        inset: Rect {
-            top: length(thumb_y),
-            right: length(0.0_f32),
-            left: auto(),
-            bottom: auto(),
-        },
-        size: Size {
-            width: length(BAR_WIDTH),
-            height: length(thumb_h),
-        },
-        ..Default::default()
-    })
-    .fill(palette.bar_thumb)
-    .hover_fill(palette.bar_thumb_hover)
-    .radius((BAR_WIDTH * 0.5) as f64)
-    .draggable(move |phase, _dx, dy| match phase {
-        DragPhase::Move => Some((on_thumb)(dy * offset_per_px)),
-        DragPhase::End => None,
-    });
-
-    View::new(Style {
-        position: Position::Absolute,
-        inset: Rect {
-            top: length(0.0_f32),
-            right: length(0.0_f32),
-            bottom: length(0.0_f32),
-            left: auto(),
-        },
-        size: Size {
-            width: length(BAR_WIDTH),
-            height: auto(),
-        },
-        ..Default::default()
-    })
-    .fill(palette.bar_track)
-    .children(vec![thumb])
-}
-
-/// Clampa los runs de color al `[0, len]` del texto, descartando los vacíos o
-/// fuera de rango — defensa contra runs stale del caller (el texto de un id
-/// pudo cambiar de largo).
-fn clamp_runs(runs: Vec<(usize, usize, Color)>, len: usize) -> Vec<(usize, usize, Color)> {
-    runs.into_iter()
-        .filter_map(|(s, e, c)| {
-            let s = s.min(len);
-            let e = e.min(len);
-            (s < e).then_some((s, e, c))
-        })
-        .collect()
+    block_surface(
+        store,
+        vec![Item::lines(0, store.len())],
+        scroll_y,
+        viewport_h,
+        metrics,
+        palette,
+        line_style,
+        on_scroll,
+        measure,
+    )
 }
 
 #[cfg(test)]
@@ -525,7 +275,6 @@ mod tests {
         let total = 500;
         let w = visible_window(total, 1e9, 600.0, ROW);
         assert_eq!(w.last, total);
-        // El máximo offset deja exactamente las últimas filas a la vista.
         let bottom = scroll_to_bottom(total, 600.0, ROW);
         let w2 = visible_window(total, bottom, 600.0, ROW);
         assert_eq!(w2.last, total);
@@ -546,27 +295,5 @@ mod tests {
         let a = visible_window(1_000, 9000.0, 600.0, ROW).count();
         let b = visible_window(10_000_000, 9000.0, 600.0, ROW).count();
         assert_eq!(a, b);
-    }
-
-    #[test]
-    fn clamp_runs_drops_out_of_range() {
-        let c = Color::from_rgb8(1, 2, 3);
-        let runs = vec![(0, 5, c), (3, 100, c), (50, 60, c), (4, 4, c)];
-        let out = clamp_runs(runs, 10);
-        // (0,5) queda; (3,100)→(3,10); (50,60) fuera → descartado; (4,4) vacío.
-        assert_eq!(out, vec![(0, 5, c), (3, 10, c)]);
-    }
-
-    #[test]
-    fn gutter_grows_with_line_count() {
-        let m = TermMetrics::for_font_size(13.0);
-        let mut s = Scrollback::new(0);
-        s.push_line("a");
-        let narrow = gutter_width(&s, m);
-        for _ in 0..100_000 {
-            s.push_line("x");
-        }
-        let wide = gutter_width(&s, m);
-        assert!(wide > narrow, "el gutter debe crecer con números más largos");
     }
 }

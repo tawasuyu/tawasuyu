@@ -195,8 +195,21 @@ vt100); se mueve a la superficie como `BlockKind`.
   fondo → **38 filas materializadas** (999963..1000000), sin negro, alineado,
   costo constante (independiente del scrollback). Falta: enganchar al shell
   (Fase 2 trae bloques/chrome y el flag `SHUMA_TERMINAL_SURFACE`).
-- **Fase 2 — Bloques + chrome.** Múltiples bloques con header/badge/colapso
-  virtualizados. Reemplaza `output_pane` entero detrás de un flag; A/B con el viejo.
+- **Fase 2 — Bloques + chrome. ✅ (2026-06-05)** Capa 1 en
+  `llimphi-widget-terminal::blocks`: el stream es una secuencia de `Item`s —
+  `Chrome{height, view}` (header/badge/etapa de alto fijo que el caller pinta) o
+  `Lines{start, end}` (rango del store en modo línea). `block_surface` virtualiza
+  sobre **alturas mixtas**: `item_tops` + `visible_items` (búsqueda binaria,
+  O(log n) en bloques) localizan los items que tocan el viewport, y dentro de un
+  `Lines` enorme `visible_rows_in_item` materializa sólo las sub-filas visibles —
+  costo constante aunque un body tenga 500 k líneas. **Colapsar** = no emitir el
+  `Lines`. El modo línea de la Fase 1 quedó **unificado** como el caso de un solo
+  `Item::Lines(0, len)` (delega en `block_surface`, sin duplicar render). 26 tests.
+  **Verificado headless** (`examples/dump_blocks.rs`): 6 comandos, un flood de
+  500 k líneas, un bloque colapsado, stderr tintado, anclado al fondo → ~40 filas
+  materializadas. Falta: enganchar al `output_pane` del shell detrás del flag
+  `SHUMA_TERMINAL_SURFACE` (mapear `OutputLine`/`block_command`/`expanded_stages`
+  → `Item`s; A/B con el viejo) — la integración, no más capacidades del widget.
 - **Fase 3 — Selección + find sobre el stream.** Extraer el núcleo de selección del
   `text-editor` a compartido; selección global; copy; Ctrl+F.
 - **Fase 4 — GPU directo grilla.** Atlas de glifos + celdas instanciadas para el modo
