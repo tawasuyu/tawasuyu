@@ -82,6 +82,38 @@ Regla dura del repo: **núcleo agnóstico, frontend lo pinta** (Regla 2). Por es
 - **shuma** maneja el modelo de comando (header/badge/stages/reprocess) como
   *decoración de bloque* que inyecta al widget; el widget virtualiza y pinta.
 
+## Principio rector: **un control, los paneles son datos** (no al revés)
+
+La inversión que hace funcionar todo lo de abajo. En el diseño viejo cada panel
+(card de comando) **era un control** con su propio scroll/estado (`text_editor` por
+comando) y un contenedor los **trasladaba a todos** con un `transform`. Acá es al
+revés: hay **un solo control** (la superficie) y los paneles son **items de datos**
+(`Item::Chrome` / `Item::Lines`) que el control coloca y virtualiza. Las ventajas
+—por las que se eligió esta forma, no por estética—:
+
+1. **Costo de render desacoplado del contenido.** Un único scroller virtualiza: el
+   costo es ∝ la ventana visible, **no** ∝ la cantidad de paneles ni de líneas. El
+   modelo "un control por panel" pagaba por *cada* panel siempre — la pared de ~500.
+2. **Un scroll, un sistema de coordenadas.** Sin transforms anidados → mata de raíz
+   la clase de bug clip+transform (negro al anclar, desalineación gutter). Y habilita
+   la **selección/find sobre todo el stream** (Capa 4) en un único espacio
+   `(fila global, columna)`, no card-por-card.
+3. **Estado mínimo.** Los paneles son datos planos rearmados desde el modelo cada
+   frame; no hay estado de widget por-panel que sincronizar o que se filtre.
+   Colapsar/reordenar/insertar = cambiar la lista de items.
+4. **La composición GPU encaja (Capa 3).** Como la superficie es dueña de todo el
+   paint, compone **una** pasada GPU-directo (celdas de grilla) + **una** pasada vello
+   (líneas/chrome) en una sola escena. Con controles independientes por panel, esa
+   pasada única sería imposible.
+
+Precio aceptado (no es gratis): el caller arma el chrome de **todos** los bloques por
+frame (O(n_bloques); el control descarta los no visibles) y los paneles pierden estado
+local salvo que se modele como dato. Para este dominio —líneas ilimitadas, bloques
+acotados a lo que un humano tipea— es claramente conveniente: lo verdaderamente
+ilimitado (las líneas) se virtualiza de raíz; los bloques están acotados por
+naturaleza. Si algún día importara, el paso es **chrome lazy** (`Fn() -> View` por
+item en vez del `View` ya construido).
+
 ## Capa 0 — Store de scrollback
 
 - **Append-only.** Cada línea (o chunk de bytes del PTY) se appendea. Nunca se
