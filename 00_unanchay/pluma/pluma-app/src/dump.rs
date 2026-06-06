@@ -120,6 +120,7 @@ fn modelo_sintetico(diente: usize) -> Model {
     drop(idx);
 
     let seleccionados = vec![es.id, qu.id, en.id];
+    let orden_lienzos = vec![es.id, qu.id, en.id];
     let activo = Some(es.id);
 
     let chat = build_client(&LlmConfig {
@@ -137,6 +138,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         activo,
         ide,
         seleccionados,
+        orden_lienzos,
         ides_ro,
         solo_activo: false,
         scroll_x: 0.0,

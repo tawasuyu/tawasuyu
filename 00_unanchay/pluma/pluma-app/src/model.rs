@@ -59,6 +59,10 @@ pub(crate) enum Msg {
     AbrirDoc(Uuid),
     /// Agrega/saca un cuerpo de la selección visible del multilienzo.
     ToggleSeleccion(Uuid),
+    /// Reordena el tree de lienzos: mueve el lienzo en la posición `desde` a la
+    /// posición `hasta` de `orden_lienzos` (drag&drop de filas). El orden del
+    /// tree manda el orden de las columnas.
+    ReordenarLienzo(usize, usize),
     /// Selecciona el diente del rail (0=Archivo,1=Lienzos,2=Derivar,3=LLM).
     SelectDiente(usize),
     /// Ctrl+Tab / Ctrl+Shift+Tab: mueve el foco al lienzo siguiente/anterior
@@ -160,10 +164,14 @@ pub(crate) struct Model {
     /// si la lista de cuerpos está vacía — el init siembra uno para evitarlo.
     pub(crate) activo: Option<Uuid>,
     pub(crate) ide: CuerpoIde,
-    /// Cuerpos visibles en el multilienzo, en orden de izquierda a derecha.
-    /// Siempre contiene al `activo`. El activo se pinta con `ide` (vivo);
-    /// el resto con su entrada en `ides_ro` (snapshot read-only).
+    /// Conjunto de cuerpos visibles en el multilienzo (membresía). Siempre
+    /// contiene al `activo`. El ORDEN de columnas lo da `orden_lienzos`, no
+    /// este vector.
     pub(crate) seleccionados: Vec<Uuid>,
+    /// Orden maestro de todos los cuerpos en el tree de lienzos (reordenable por
+    /// drag). Manda tanto el orden del tree como el de las columnas (filtrado
+    /// por `seleccionados`).
+    pub(crate) orden_lienzos: Vec<Uuid>,
     /// Editores read-only de los cuerpos seleccionados que no son el activo.
     /// Se reconstruyen al cambiar selección/activo/atoms.
     pub(crate) ides_ro: HashMap<Uuid, CuerpoIde>,

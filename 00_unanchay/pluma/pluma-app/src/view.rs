@@ -325,32 +325,13 @@ fn panel_archivo(model: &Model, theme: &Theme) -> View<Msg> {
 /// múltiple. Filas top-aligned, sin centrado ni márgenes verticales, glifos
 /// con cobertura de fuente.
 fn panel_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
-    let mut originales: Vec<&Cuerpo> = Vec::new();
-    let mut derivadas: Vec<&Cuerpo> = Vec::new();
-    for c in &model.cuerpos {
-        if c.metadatos.intencion.es_derivada() {
-            derivadas.push(c);
-        } else {
-            originales.push(c);
-        }
-    }
-
+    // El tree se pinta en el orden maestro `orden_lienzos` (reordenable por
+    // drag). Cada fila lleva su índice para el payload del arrastre.
     let mut filas: Vec<View<Msg>> = Vec::new();
-    for orig in &originales {
-        filas.push(fila_lienzo(model, orig, false, theme));
-        for d in &derivadas {
-            if d.metadatos.derivado_de == Some(orig.id) {
-                filas.push(fila_lienzo(model, d, true, theme));
-            }
-        }
-    }
-    // Derivadas huérfanas (madre fuera de lista) al final.
-    for d in &derivadas {
-        let madre_presente = originales
-            .iter()
-            .any(|o| Some(o.id) == d.metadatos.derivado_de);
-        if !madre_presente {
-            filas.push(fila_lienzo(model, d, true, theme));
+    for (idx, id) in model.orden_lienzos.iter().enumerate() {
+        if let Some(c) = model.cuerpos.iter().find(|c| c.id == *id) {
+            let derivada = c.metadatos.intencion.es_derivada();
+            filas.push(fila_lienzo(model, c, derivada, idx, theme));
         }
     }
 
@@ -377,7 +358,7 @@ fn panel_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "click abre · cuadrito suma al multilienzo".to_string(),
+        "click abre · cuadrito suma · arrastrá el grip para reordenar".to_string(),
         9.5,
         theme.fg_muted,
         Alignment::Start,
@@ -386,12 +367,45 @@ fn panel_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
     columna(vec![lista, pista])
 }
 
-/// Una fila del tree: [checkbox] [nombre · intención]. El checkbox suma/saca
-/// del multilienzo; el nombre abre (activa) el lienzo. Texto a una sola línea
-/// con elipsis (no se parte al angostar el panel).
-fn fila_lienzo(model: &Model, c: &Cuerpo, derivada: bool, theme: &Theme) -> View<Msg> {
+/// Una fila del tree: [grip ⠿] [checkbox] [nombre · intención]. El grip se
+/// arrastra para reordenar; el checkbox suma/saca del multilienzo; el nombre
+/// abre (activa) el lienzo. Texto a una sola línea con elipsis. `idx` es la
+/// posición en `orden_lienzos` (payload del drag).
+fn fila_lienzo(model: &Model, c: &Cuerpo, derivada: bool, idx: usize, theme: &Theme) -> View<Msg> {
     let en_sel = model.seleccionados.contains(&c.id);
     let es_activo = model.activo == Some(c.id);
+
+    // Grip arrastrable (drag source, payload = idx): seis puntitos pintados.
+    // `draggable` con handler que no produce Msg — sólo transporta el payload.
+    let grip_color = theme.fg_muted;
+    let grip = View::new(Style {
+        size: Size {
+            width: length(14.0_f32),
+            height: length(20.0_f32),
+        },
+        ..Default::default()
+    })
+    .draggable(|_phase, _dx, _dy| None::<Msg>)
+    .drag_payload(idx as u64)
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let cx0 = rect.x as f64 + 5.0;
+        let cx1 = rect.x as f64 + 9.0;
+        let cy0 = rect.y as f64 + rect.h as f64 / 2.0 - 4.0;
+        for r in 0..3 {
+            let cy = cy0 + r as f64 * 4.0;
+            for cx in [cx0, cx1] {
+                scene.fill(
+                    Fill::NonZero,
+                    Affine::IDENTITY,
+                    grip_color,
+                    None,
+                    &Circle::new((cx, cy), 1.1),
+                );
+            }
+        }
+    });
 
     // Checkbox pintado con `paint_with` → toda la celda (20×20) es clickeable
     // (no un cuadrito chico imposible de acertar), y nunca tofu. Caja con
@@ -483,7 +497,10 @@ fn fila_lienzo(model: &Model, c: &Cuerpo, derivada: bool, theme: &Theme) -> View
     })
     .fill(fondo)
     .radius(4.0)
-    .children(vec![checkbox, nombre])
+    // Drop target: soltar otra fila acá la reordena a esta posición.
+    .on_drop(move |payload| Some(Msg::ReordenarLienzo(payload as usize, idx)))
+    .drop_hover_fill(theme.accent)
+    .children(vec![grip, checkbox, nombre])
 }
 
 /// Diente Derivar-IA: input de prompt + botones (derivar/guardar preset) +
@@ -644,7 +661,13 @@ fn seccion_hijas(model: &Model, theme: &Theme) -> View<Msg> {
 
     let mut filas: Vec<View<Msg>> = vec![encabezado(&format!("hijas ({})", hijas.len()), theme)];
     for h in &hijas {
-        filas.push(fila_lienzo(model, h, true, theme));
+        // El idx para el drag es la posición real en el orden maestro.
+        let idx = model
+            .orden_lienzos
+            .iter()
+            .position(|x| *x == h.id)
+            .unwrap_or(0);
+        filas.push(fila_lienzo(model, h, true, idx, theme));
     }
     filas.push(divider(theme));
     filas.push(seccion_historial(model, theme));
@@ -730,12 +753,18 @@ fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
     let palette_lienzo = MultPalette::from_theme(theme);
     let paleta_hebras = PaletaHebras::default();
 
-    // Lista de cuerpos a mostrar, alineada con sus ides (activo = vivo,
-    // resto = read-only). En modo "sólo activo" se recorta a una columna.
+    // Lista de cuerpos a mostrar, EN EL ORDEN DEL TREE (`orden_lienzos`),
+    // filtrada por los seleccionados. En modo "sólo activo" se recorta a una
+    // columna. Así reordenar el tree reordena las columnas.
     let ids: Vec<Uuid> = if model.solo_activo {
         model.activo.into_iter().collect()
     } else {
-        model.seleccionados.clone()
+        model
+            .orden_lienzos
+            .iter()
+            .copied()
+            .filter(|id| model.seleccionados.contains(id))
+            .collect()
     };
 
     let mut cuerpos_sel: Vec<&Cuerpo> = Vec::new();

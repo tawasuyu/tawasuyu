@@ -79,6 +79,24 @@ pub(crate) fn init_modelo() -> Model {
     // desde el diente Lienzos para armar el multilienzo.
     let seleccionados: Vec<Uuid> = activo.into_iter().collect();
 
+    // Orden inicial del tree: cada original seguido de sus derivadas; las
+    // huérfanas al final. El usuario lo reordena por drag.
+    let mut orden_lienzos: Vec<Uuid> = Vec::with_capacity(cuerpos.len());
+    for o in cuerpos.iter().filter(|c| !c.metadatos.intencion.es_derivada()) {
+        orden_lienzos.push(o.id);
+        for d in cuerpos
+            .iter()
+            .filter(|c| c.metadatos.intencion.es_derivada() && c.metadatos.derivado_de == Some(o.id))
+        {
+            orden_lienzos.push(d.id);
+        }
+    }
+    for c in &cuerpos {
+        if !orden_lienzos.contains(&c.id) {
+            orden_lienzos.push(c.id);
+        }
+    }
+
     Model {
         store,
         cuerpos,
@@ -88,6 +106,7 @@ pub(crate) fn init_modelo() -> Model {
         activo,
         ide,
         seleccionados,
+        orden_lienzos,
         ides_ro: HashMap::new(),
         solo_activo: false,
         scroll_x: 0.0,

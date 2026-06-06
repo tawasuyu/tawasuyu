@@ -61,6 +61,14 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         Msg::ToggleSeleccion(id) => {
             toggle_seleccion(&mut model, id);
         }
+        Msg::ReordenarLienzo(desde, hasta) => {
+            let n = model.orden_lienzos.len();
+            if desde < n && hasta < n && desde != hasta {
+                let id = model.orden_lienzos.remove(desde);
+                let ins = hasta.min(model.orden_lienzos.len());
+                model.orden_lienzos.insert(ins, id);
+            }
+        }
         Msg::SelectDiente(i) => {
             model.diente_activo = i;
         }
@@ -312,6 +320,14 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
     // Nivela el scroll vertical de los lienzos read-only al del foco, para que
     // las secciones queden alineadas y no se pierdan de vista.
     nivelar_scroll(&mut model);
+    // Cualquier cuerpo nuevo (creado/derivado/importado) entra al orden del tree.
+    let faltan: Vec<Uuid> = model
+        .cuerpos
+        .iter()
+        .map(|c| c.id)
+        .filter(|id| !model.orden_lienzos.contains(id))
+        .collect();
+    model.orden_lienzos.extend(faltan);
     model
 }
 
