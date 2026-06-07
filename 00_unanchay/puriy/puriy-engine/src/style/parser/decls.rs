@@ -726,7 +726,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "border-color" => parse_color(value).map(DeclKind::BorderColor),
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
         // Fase 7.727 — `-webkit-border-radius` alias vendor de `border-radius`.
-        "border-radius" | "-webkit-border-radius" => {
+        // Fase 7.764 — `-moz-border-radius` alias vendor legacy.
+        "border-radius" | "-webkit-border-radius" | "-moz-border-radius" => {
             parse_length_px(value).map(DeclKind::BorderRadius)
         }
         "z-index" => {
@@ -742,7 +743,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "counter-reset" => Some(DeclKind::CounterReset(parse_counter_list(value, 0))),
         "counter-increment" => Some(DeclKind::CounterIncrement(parse_counter_list(value, 1))),
         // Fase 7.726 — `-webkit-box-shadow` alias vendor de `box-shadow`.
-        "box-shadow" | "-webkit-box-shadow" => {
+        // Fase 7.765 — `-moz-box-shadow` alias vendor legacy.
+        "box-shadow" | "-webkit-box-shadow" | "-moz-box-shadow" => {
             Some(DeclKind::BoxShadows(parse_box_shadows(value)))
         }
         // `text-decoration` (shorthand) se expande en `parse_declarations`.
@@ -798,8 +800,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "column-gap" | "-webkit-column-gap" => {
             parse_length_px(value).map(DeclKind::ColumnGap)
         }
-        // Fase 7.728 — `-webkit-box-sizing` alias vendor de `box-sizing`.
-        "box-sizing" | "-webkit-box-sizing" => {
+        // Fase 7.728 — `-webkit-box-sizing` / Fase 7.763 — `-moz-box-sizing` alias vendor de `box-sizing`.
+        "box-sizing" | "-webkit-box-sizing" | "-moz-box-sizing" => {
             parse_box_sizing(value).map(DeclKind::BoxSizing)
         }
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
@@ -3613,8 +3615,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
-        // Fase 7.722 — `-webkit-transform` alias vendor de `transform`.
-        "transform" | "-webkit-transform" => {
+        // Fase 7.722 — `-webkit-transform` / Fase 7.766 — `-moz-transform` alias vendor de `transform`.
+        "transform" | "-webkit-transform" | "-moz-transform" => {
             parse_transforms(value).map(DeclKind::Transforms)
         }
         "grid-template-columns" => {
@@ -3624,7 +3626,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.723-7.724 — `-webkit-animation` / `-webkit-transition` alias
         // vendor de los shorthands `animation` / `transition`.
         "animation" | "-webkit-animation" => parse_animation(value),
-        "transition" | "-webkit-transition" => parse_transition(value),
+        // Fase 7.767 — `-moz-transition` alias vendor del shorthand `transition`.
+        "transition" | "-webkit-transition" | "-moz-transition" => parse_transition(value),
         // `grid-gap` (legacy) = `gap`.
         "grid-gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "grid-row-gap" => parse_length_px(value).map(DeclKind::RowGap),
