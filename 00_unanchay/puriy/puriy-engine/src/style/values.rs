@@ -1090,6 +1090,23 @@ pub struct ComputedStyle {
     /// `play-during` (Fase 7.573). CSS 2.1 aural: sonido de fondo durante
     /// el elemento. `None` = `auto`. NO hereda. Plumb.
     pub play_during: Option<String>,
+    /// `text-decoration-skip` (Fase 7.574). CSS Text Decor 4: qué partes
+    /// salta la línea de decoración (shorthand legacy). Parse opaco —
+    /// `None` = `auto`. HEREDA. Plumb.
+    pub text_decoration_skip: Option<String>,
+    /// `text-decoration-skip-box` (Fase 7.575). Si la decoración salta el
+    /// margen de la caja. Default `None`. HEREDA. Plumb.
+    pub text_decoration_skip_box: TextDecorationSkipBox,
+    /// `text-decoration-skip-self` (Fase 7.576). Si el elemento salta su
+    /// propia decoración heredada. Parse opaco — `None` = `auto`. HEREDA.
+    /// Plumb.
+    pub text_decoration_skip_self: Option<String>,
+    /// `text-decoration-skip-spaces` (Fase 7.577). Si se saltan los
+    /// espacios. Parse opaco — `None` = `start end`. HEREDA. Plumb.
+    pub text_decoration_skip_spaces: Option<String>,
+    /// `text-decoration-skip-inset` (Fase 7.578). Si la decoración se
+    /// recorta hacia adentro. Default `None`. HEREDA. Plumb.
+    pub text_decoration_skip_inset: TextDecorationSkipInset,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2989,6 +3006,22 @@ pub enum Speak {
     SpellOut,
 }
 
+/// `text-decoration-skip-box` (CSS Text Decor 4). Default `None`. Fase 7.575.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecorationSkipBox {
+    #[default]
+    None,
+    All,
+}
+
+/// `text-decoration-skip-inset` (CSS Text Decor 4). Default `None`. Fase 7.578.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextDecorationSkipInset {
+    #[default]
+    None,
+    Auto,
+}
+
 /// `hyphenate-limit-last` (CSS Text 4). Default `None`. Fase 7.560.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HyphenateLimitLast {
@@ -4315,6 +4348,11 @@ impl Default for ComputedStyle {
             volume: None,
             speak: Speak::Normal,
             play_during: None,
+            text_decoration_skip: None,
+            text_decoration_skip_box: TextDecorationSkipBox::None,
+            text_decoration_skip_self: None,
+            text_decoration_skip_spaces: None,
+            text_decoration_skip_inset: TextDecorationSkipInset::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

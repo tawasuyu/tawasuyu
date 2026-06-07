@@ -2072,6 +2072,50 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::PlayDuring(Some(v.to_string())))
             }
         }
+        // Fase 7.574 — `text-decoration-skip` (CSS Text Decor 4, shorthand
+        // legacy). Parse opaco; `auto` → None.
+        "text-decoration-skip" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::TextDecorationSkip(None))
+            } else {
+                Some(DeclKind::TextDecorationSkip(Some(v.to_string())))
+            }
+        }
+        // Fase 7.575 — `text-decoration-skip-box` (CSS Text Decor 4).
+        "text-decoration-skip-box" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::TextDecorationSkipBox(TextDecorationSkipBox::None)),
+            "all" => Some(DeclKind::TextDecorationSkipBox(TextDecorationSkipBox::All)),
+            _ => None,
+        },
+        // Fase 7.576 — `text-decoration-skip-self` (CSS Text Decor 4).
+        "text-decoration-skip-self" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::TextDecorationSkipSelf(None))
+            } else {
+                Some(DeclKind::TextDecorationSkipSelf(Some(v.to_string())))
+            }
+        }
+        // Fase 7.577 — `text-decoration-skip-spaces` (CSS Text Decor 4).
+        // `start end` (default) → None.
+        "text-decoration-skip-spaces" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("start end") {
+                Some(DeclKind::TextDecorationSkipSpaces(None))
+            } else {
+                Some(DeclKind::TextDecorationSkipSpaces(Some(v.to_string())))
+            }
+        }
+        // Fase 7.578 — `text-decoration-skip-inset` (CSS Text Decor 4).
+        "text-decoration-skip-inset" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::TextDecorationSkipInset(TextDecorationSkipInset::None)),
+            "auto" => Some(DeclKind::TextDecorationSkipInset(TextDecorationSkipInset::Auto)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

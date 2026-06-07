@@ -695,6 +695,17 @@ pub(crate) enum DeclKind {
     Speak(Speak),
     /// `play-during` (Fase 7.573). `None` = `auto`. NO hereda. Plumb.
     PlayDuring(Option<String>),
+    /// `text-decoration-skip` (Fase 7.574). `None` = `auto`. HEREDA. Plumb.
+    TextDecorationSkip(Option<String>),
+    /// `text-decoration-skip-box` (Fase 7.575). HEREDA. Plumb.
+    TextDecorationSkipBox(TextDecorationSkipBox),
+    /// `text-decoration-skip-self` (Fase 7.576). `None` = `auto`. HEREDA. Plumb.
+    TextDecorationSkipSelf(Option<String>),
+    /// `text-decoration-skip-spaces` (Fase 7.577). `None` = `start end`.
+    /// HEREDA. Plumb.
+    TextDecorationSkipSpaces(Option<String>),
+    /// `text-decoration-skip-inset` (Fase 7.578). HEREDA. Plumb.
+    TextDecorationSkipInset(TextDecorationSkipInset),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1206,6 +1217,11 @@ impl Decl {
             DeclKind::Volume(v) => s.volume = v.clone(),
             DeclKind::Speak(v) => s.speak = *v,
             DeclKind::PlayDuring(v) => s.play_during = v.clone(),
+            DeclKind::TextDecorationSkip(v) => s.text_decoration_skip = v.clone(),
+            DeclKind::TextDecorationSkipBox(v) => s.text_decoration_skip_box = *v,
+            DeclKind::TextDecorationSkipSelf(v) => s.text_decoration_skip_self = v.clone(),
+            DeclKind::TextDecorationSkipSpaces(v) => s.text_decoration_skip_spaces = v.clone(),
+            DeclKind::TextDecorationSkipInset(v) => s.text_decoration_skip_inset = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
