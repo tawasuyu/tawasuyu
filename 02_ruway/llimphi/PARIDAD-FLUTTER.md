@@ -72,8 +72,8 @@ fingen el borde con un rect-padre inset).
 - ✅ Peso/bold → `weight: f32` en `TextSpec` + `.text_weight(...)`/`.bold()`. Fluye por medida y pintado (camino directo a `Typesetter::layout`, no `TextBlock`).
 - ✅ Overflow/ellipsis (`maxLines` + `…`) → `.ellipsis(n)`/`.max_lines(n)` + `Typesetter::layout_clamped`. Clampa medida y pintado; recorta graphemes hasta caber. Cubre single-line y N líneas.
 - ✅ Decoración: subrayado / tachado → `.underline()` / `.strikethrough()` en `View` + `underline`/`strikethrough` en `TextSpec`/`TextMeasure`. parley emite `StyleProperty::{Underline,Strikethrough}` por bloque; el pintado (`draw_layout_*`) recorre los runs y emite el rect en `baseline - offset` con `underline_size`/`strikethrough_size` del font metric. Brush = mismo color que el texto (`Layout<()>` toma el `color` externo; `Layout<RunBrush>` el brush del run). `ShapeKey` separa las claves del caché de shaping. Funciona junto con `weight`, `italic`, `ellipsis` y multicolor.
-- Spans inline mixtos (tamaño/peso/familia/link por rango, no sólo color) → `RichText` real.
-- Texto seleccionable fuera del editor (selección + copiar).
+- ✅ **Spans inline mixtos (RichText)** → `View::text_spans(content, size_px, default_color, spans, alignment)` + `View::with_spans(spans)` adjuntable. Cada `TextSpan { start, end, style }` sobreescribe en su rango de bytes uno o más de `size_px`/`weight`/`italic`/`font_family`/`color`/`underline`/`strikethrough` (todos `Option`). Bloque 13. Medición y pintado pasan por `Typesetter::layout_spans` (`Layout<RunBrush>` con wrap), así taffy reserva el alto del span más alto en su línea (un heading inline de 24 px dentro de un párrafo de 16 px agranda esa línea). El caché de `layout` no aplica al camino spans en v1 — RichText típico cambia frame-a-frame; el caller que necesite caché puede memoizar el `Vec<TextSpan>` y pasarlo igual. Demo `--example rich_text_demo`.
+- Texto seleccionable fuera del editor (selección + copiar). **Único pendiente de Tier 2.**
 
 ### 🟡 Tier 3 — animación declarativa (brecha de arquitectura)
 Hay `Tween` + `animate()`, pero cada animación se cablea a mano (tween en Model +
@@ -232,9 +232,9 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     clave con los dos bools para no mezclar layouts con vs sin decoración en
     el caché. Test: `underline_y_strikethrough_se_propagan_al_layout` verifica
     que el `Style` del run las marca cuando los flags están y no las marca
-    cuando no están. Tier 2 queda sólo con **spans inline mixtos** (RichText
-    real) y **texto seleccionable fuera del editor**. **AccessKit (Tier 7)**
-    completo desde iter 3/3 (2026-06-07).
+    cuando no están. Tier 2 queda sólo con **texto seleccionable fuera del
+    editor** (los spans inline mixtos se cierran en el Bloque 13).
+    **AccessKit (Tier 7)** completo desde iter 3/3 (2026-06-07).
 11. ✅ **Bloque 11 = backdrop blur (cierra Tier 1)** — `View::backdrop_blur(sigma)`
     + `MountedNode::backdrop_blur: Option<f32>` + `collect_backdrop_blurs(mounted,
     computed)` en el compositor. En `llimphi-hal` un nuevo `BlurCompositor` aplica
@@ -273,6 +273,25 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     Demo `--example image_fit_demo` (cinco fichas: las cuatro políticas
     sobre la misma imagen sintética 4:3 + un cuadrado con `radius=100`
     que queda como avatar circular).
+13. ✅ **Bloque 13 = RichText spans (avanza Tier 2)** — `View::text_spans(
+    content, size_px, default_color, spans, alignment)` + `View::with_spans(
+    spans)` adjuntable + nuevos tipos `TextSpan { start, end, style }` y
+    `TextSpanStyle { size_px, weight, italic, font_family, color, underline,
+    strikethrough }` en `llimphi-text` (cada campo `Option`). `TextSpec` y
+    `TextMeasure` ganan un campo `spans: Option<Vec<TextSpan>>`; el render
+    despacha a `Typesetter::layout_spans` cuando hay spans (`Layout<RunBrush>`
+    con `max_width = r.w` y wrap). parley aplica los siete `StyleProperty`
+    por rango sobre el mismo builder, así un solo shaping cubre el párrafo
+    entero con bold/italic/color/underline/strikethrough/tamaño/familia
+    mezclados — el caso markdown clásico. La medida (`measure_text_node`)
+    también usa `layout_spans` cuando hay spans, así taffy reserva el alto
+    del span más alto en su línea (un heading inline de 24 px crece esa
+    línea aunque el bloque sea de 16 px). Sin caché en v1 (el RichText
+    típico cambia frame-a-frame; sumar la clave del span-set sería caro).
+    Demo `--example rich_text_demo` (un solo nodo, seis overrides: bold,
+    italic, link azul subrayado, heading inline verde grande, tachado
+    rojo, fragmento en mono morado). Tier 2 queda sólo con texto
+    seleccionable fuera del editor.
 
 ## Tier 7 — detalle (accesibilidad)
 

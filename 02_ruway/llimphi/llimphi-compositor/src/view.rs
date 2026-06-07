@@ -661,6 +661,7 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            spans: None,
         });
         self
     }
@@ -686,6 +687,7 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            spans: None,
         });
         self
     }
@@ -714,6 +716,7 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            spans: None,
         });
         self
     }
@@ -744,6 +747,7 @@ impl<Msg> View<Msg> {
             runs: None,
             underline: false,
             strikethrough: false,
+            spans: None,
         });
         self
     }
@@ -775,7 +779,56 @@ impl<Msg> View<Msg> {
             runs: Some(runs),
             underline: false,
             strikethrough: false,
+            spans: None,
         });
+        self
+    }
+
+    /// Texto **RichText** (Bloque 13 de PARIDAD-FLUTTER, cierra Tier 2):
+    /// `content` se pinta con los defaults del bloque (`size_px`,
+    /// `default_color`, alignment, weight 400, no italic, line-height 1.2,
+    /// fuente default) y cada [`llimphi_text::TextSpan`] sobreescribe en su
+    /// rango de bytes uno o más de
+    /// `size_px`/`weight`/`italic`/`font_family`/`color`/`underline`/
+    /// `strikethrough`. Soporta wrap (el ancho lo fija el layout taffy del
+    /// nodo); apto para párrafos con un `<b>`/`<i>`/`<code>`/`<small>`
+    /// inline, links subrayados, headings dentro del mismo flujo, render
+    /// barato de markdown.
+    pub fn text_spans(
+        mut self,
+        content: impl Into<String>,
+        size_px: f32,
+        default_color: Color,
+        spans: Vec<llimphi_text::TextSpan>,
+        alignment: llimphi_text::Alignment,
+    ) -> Self {
+        self.text = Some(TextSpec {
+            content: content.into(),
+            size_px,
+            color: default_color,
+            alignment,
+            italic: false,
+            font_family: None,
+            line_height: 1.2,
+            weight: 400.0,
+            max_lines: None,
+            ellipsis: false,
+            runs: None,
+            underline: false,
+            strikethrough: false,
+            spans: Some(spans),
+        });
+        self
+    }
+
+    /// Adjunta o reemplaza los [`TextSpec::spans`] del texto ya seteado
+    /// (RichText). Permite construir el texto con los builders uniformes
+    /// (`.text_aligned(...).bold().underline()`) y luego inyectar overrides
+    /// inline. No-op si el nodo no tiene texto.
+    pub fn with_spans(mut self, spans: Vec<llimphi_text::TextSpan>) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.spans = Some(spans);
+        }
         self
     }
 

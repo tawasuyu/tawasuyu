@@ -83,6 +83,15 @@ pub struct TextSpec {
     /// strikethrough metric — útil para listas to-do, items removidos en un
     /// diff, precios viejos.
     pub strikethrough: bool,
+    /// **Spans inline mixtos** (RichText): overrides de
+    /// tamaño/peso/italic/familia/color/underline/strikethrough por rango
+    /// de bytes (parley convention). `None` = texto uniforme (camino
+    /// `layout_clamped`); `Some([])` se trata como `None`. Cuando hay
+    /// spans, el runtime usa `Typesetter::layout_spans` (Layout<RunBrush>
+    /// con `max_width`/wrap) + `draw_layout_runs_xf`; los campos del
+    /// `TextSpec` son **defaults a nivel bloque** que cada span puede
+    /// sobreescribir. Tier 2 final de PARIDAD-FLUTTER (Bloque 13).
+    pub spans: Option<Vec<llimphi_text::TextSpan>>,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -555,6 +564,12 @@ pub struct TextMeasure {
     pub underline: bool,
     /// Idem [`TextSpec::strikethrough`]. Mismo razonamiento que `underline`.
     pub strikethrough: bool,
+    /// Idem [`TextSpec::spans`]. La medida usa el mismo
+    /// `Typesetter::layout_spans` que el pintado, así taffy reserva el alto
+    /// real considerando overrides de `size_px` por span (un `<h1>` inline
+    /// dentro de un párrafo agranda esa línea). `None`/`vacío` = medir con
+    /// `layout_clamped` (camino uniforme).
+    pub spans: Option<Vec<llimphi_text::TextSpan>>,
 }
 
 /// Cómo encajar una imagen en el rect del nodo (CSS `object-fit` /

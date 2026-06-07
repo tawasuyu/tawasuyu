@@ -438,6 +438,116 @@ impl Typesetter {
         layout.align(None, alignment.into(), parley::AlignmentOptions::default());
         layout
     }
+
+    /// Construye un layout **RichText**: defaults a nivel bloque + un
+    /// arreglo de [`TextSpan`] que sobreescriben tamaño/peso/italic/familia/
+    /// color/decoración **por rango de bytes**. A diferencia de
+    /// [`Self::layout_runs`] (sólo color, sin wrap), este camino:
+    ///
+    /// - permite `max_width` (envuelve a párrafo);
+    /// - aplica los siete `StyleProperty` por rango;
+    /// - usa el mismo `runs_cx` (`RunBrush`), así puede convivir con el
+    ///   pintado multicolor.
+    ///
+    /// **Sin caché** en v1 (a diferencia de `layout`/`layout_clamped`): el
+    /// RichText típico cambia frame-a-frame (cursor de editor, hover de
+    /// link), y la clave de caché de un span-set arbitrario es pesada.
+    /// Reusa todo el shaping interno de parley, que ya es rápido para
+    /// párrafos de la magnitud de una UI.
+    #[allow(clippy::too_many_arguments)]
+    pub fn layout_spans(
+        &mut self,
+        text: &str,
+        size_px: f32,
+        default_color: Color,
+        weight: f32,
+        line_height: f32,
+        italic: bool,
+        font_family: Option<&str>,
+        underline: bool,
+        strikethrough: bool,
+        spans: &[TextSpan],
+        max_width: Option<f32>,
+        alignment: Alignment,
+    ) -> parley::Layout<RunBrush> {
+        let mut builder = self
+            .runs_cx
+            .ranged_builder(&mut self.font_cx, text, 1.0, true);
+        builder.push_default(parley::StyleProperty::FontSize(size_px));
+        builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        if weight != 400.0 {
+            builder.push_default(parley::StyleProperty::FontWeight(
+                parley::FontWeight::new(weight),
+            ));
+        }
+        if italic {
+            builder.push_default(parley::StyleProperty::FontStyle(
+                parley::FontStyle::Italic,
+            ));
+        }
+        if let Some(ff) = font_family {
+            builder.push_default(parley::StyleProperty::FontStack(
+                parley::FontStack::Source(std::borrow::Cow::Borrowed(ff)),
+            ));
+        }
+        builder.push_default(parley::StyleProperty::Brush(RunBrush(default_color)));
+        if underline {
+            builder.push_default(parley::StyleProperty::Underline(true));
+        }
+        if strikethrough {
+            builder.push_default(parley::StyleProperty::Strikethrough(true));
+        }
+        let len = text.len();
+        for span in spans {
+            if span.start >= span.end || span.end > len {
+                continue;
+            }
+            let range = span.start..span.end;
+            let s = &span.style;
+            if let Some(v) = s.size_px {
+                builder.push(parley::StyleProperty::FontSize(v), range.clone());
+            }
+            if let Some(v) = s.weight {
+                builder.push(
+                    parley::StyleProperty::FontWeight(parley::FontWeight::new(v)),
+                    range.clone(),
+                );
+            }
+            if let Some(v) = s.italic {
+                let style = if v {
+                    parley::FontStyle::Italic
+                } else {
+                    parley::FontStyle::Normal
+                };
+                builder.push(parley::StyleProperty::FontStyle(style), range.clone());
+            }
+            if let Some(ff) = s.font_family.as_deref() {
+                builder.push(
+                    parley::StyleProperty::FontStack(parley::FontStack::Source(
+                        std::borrow::Cow::Owned(ff.to_string()),
+                    )),
+                    range.clone(),
+                );
+            }
+            if let Some(c) = s.color {
+                builder.push(parley::StyleProperty::Brush(RunBrush(c)), range.clone());
+            }
+            if let Some(v) = s.underline {
+                builder.push(parley::StyleProperty::Underline(v), range.clone());
+            }
+            if let Some(v) = s.strikethrough {
+                builder.push(parley::StyleProperty::Strikethrough(v), range.clone());
+            }
+        }
+        let mut layout = builder.build(text);
+        layout.break_all_lines(max_width);
+        layout.align(
+            max_width,
+            alignment.into(),
+            parley::AlignmentOptions::default(),
+        );
+        layout
+    }
 }
 
 /// Brush por-run para texto multicolor. Newtype sobre [`Color`] porque
@@ -450,6 +560,47 @@ pub struct RunBrush(pub Color);
 impl Default for RunBrush {
     fn default() -> Self {
         RunBrush(Color::from_rgba8(0, 0, 0, 255))
+    }
+}
+
+/// Overrides de estilo aplicables a un **rango de bytes** dentro de un
+/// bloque de texto, para `Typesetter::layout_spans` (RichText). Cada
+/// campo es opcional: `None` hereda del default del bloque. La granularidad
+/// es por bytes (convención de parley), igual que el `runs` multicolor.
+#[derive(Default, Clone, Debug, PartialEq)]
+pub struct TextSpanStyle {
+    /// Tamaño de fuente (CSS `font-size`). El reshape recalcula el alto
+    /// de la línea afectada.
+    pub size_px: Option<f32>,
+    /// Peso de fuente (400 = normal, 700 = bold).
+    pub weight: Option<f32>,
+    /// Italic on/off.
+    pub italic: Option<bool>,
+    /// Family CSS-like ("Helvetica, sans-serif"). Útil para `code` inline
+    /// (forzar monospace en una palabra).
+    pub font_family: Option<String>,
+    /// Color del texto (gana sobre el `default_color` del bloque).
+    pub color: Option<Color>,
+    /// Subrayado on/off.
+    pub underline: Option<bool>,
+    /// Tachado on/off.
+    pub strikethrough: Option<bool>,
+}
+
+/// Un span de RichText: rango de bytes `[start, end)` + overrides de
+/// estilo (`style`). Los rangos pueden superponerse — parley aplica los
+/// `StyleProperty` en orden de inserción, así el caller debería pushar de
+/// menor a mayor especificidad.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TextSpan {
+    pub start: usize,
+    pub end: usize,
+    pub style: TextSpanStyle,
+}
+
+impl TextSpan {
+    pub fn new(start: usize, end: usize, style: TextSpanStyle) -> Self {
+        Self { start, end, style }
     }
 }
 

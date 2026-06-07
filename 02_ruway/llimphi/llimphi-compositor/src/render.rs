@@ -143,6 +143,7 @@ pub fn mount_recursive<Msg: Clone>(
                         ellipsis: text.ellipsis,
                         underline: text.underline,
                         strikethrough: text.strikethrough,
+                        spans: text.spans.clone(),
                     },
                 );
             }
@@ -169,6 +170,35 @@ pub fn measure_text_node(
         AvailableSpace::MaxContent => None,
         AvailableSpace::MinContent => Some(0.0),
     });
+    // RichText: si hay spans, mediar con `layout_spans` para que taffy
+    // reserve el alto considerando overrides de tamaño por rango (un span
+    // con `size_px = 24` dentro de un párrafo de 14 px agranda esa línea).
+    // El clamp `max_lines`/`ellipsis` no se aplica al camino spans en v1
+    // (RichText típico no clampea — los headings y links viven el bloque
+    // completo); el caller que necesite clamp con spans puede recortar el
+    // texto antes de pasarlo.
+    if let Some(spans) = tm.spans.as_ref() {
+        if !spans.is_empty() {
+            let layout = ts.layout_spans(
+                &tm.content,
+                tm.size_px,
+                vello::peniko::Color::from_rgba8(0, 0, 0, 255),
+                tm.weight,
+                tm.line_height,
+                tm.italic,
+                tm.font_family.as_deref(),
+                tm.underline,
+                tm.strikethrough,
+                spans,
+                max_width,
+                tm.alignment,
+            );
+            return llimphi_layout::taffy::Size {
+                width: layout.width(),
+                height: layout.height(),
+            };
+        }
+    }
     // Camino directo a `layout_clamped` (no `TextBlock`) para transportar
     // `weight` (bold mide más ancho) y `max_lines` (taffy reserva el alto de
     // N líneas, no el del texto completo). Sin clamp, equivale a `layout`.
@@ -506,7 +536,48 @@ pub fn paint_range<Msg>(
             );
         }
         if let Some(text) = node.text.as_ref() {
-            if let Some(runs) = text.runs.as_ref() {
+            let has_spans = text
+                .spans
+                .as_ref()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if has_spans {
+                // RichText (Bloque 13): defaults a nivel bloque + spans
+                // sobreescriben size/weight/italic/family/color/underline/
+                // strikethrough por rango de bytes. Respeta `max_width = r.w`
+                // (wrap a párrafo) y la alignment del bloque; para Center
+                // también centramos verticalmente como en el camino uniforme.
+                let spans = text.spans.as_ref().unwrap();
+                let layout = typesetter.layout_spans(
+                    &text.content,
+                    text.size_px,
+                    text.color,
+                    text.weight,
+                    text.line_height,
+                    text.italic,
+                    text.font_family.as_deref(),
+                    text.underline,
+                    text.strikethrough,
+                    spans,
+                    Some(r.w),
+                    text.alignment,
+                );
+                let origin =
+                    if matches!(text.alignment, llimphi_text::Alignment::Center) {
+                        let lh = layout.height() as f64;
+                        (
+                            r.x as f64,
+                            r.y as f64 + ((r.h as f64 - lh) * 0.5).max(0.0),
+                        )
+                    } else {
+                        (r.x as f64, r.y as f64)
+                    };
+                llimphi_text::draw_layout_runs_xf(
+                    scene,
+                    &layout,
+                    cur_xf * Affine::translate(origin),
+                );
+            } else if let Some(runs) = text.runs.as_ref() {
                 // Texto multicolor (syntax highlighting): una sola pasada de
                 // shaping con color por rango, anclado arriba-izquierda. Cae
                 // por el flujo normal (clip/alpha se cierran como siempre).
