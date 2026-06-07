@@ -540,7 +540,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         // `auto | <column-width> || <column-count>`. Emite los 2
         // longhands `ColumnWidth` y `ColumnCount`. `auto` único setea
         // ambos a auto.
-        if prop.eq_ignore_ascii_case("columns") {
+        // Fase 7.690 — `-webkit-columns` alias vendor del shorthand `columns`.
+        if prop.eq_ignore_ascii_case("columns")
+            || prop.eq_ignore_ascii_case("-webkit-columns")
+        {
             if let Some((w, n)) = parse_columns_shorthand(value) {
                 out.push(Decl { kind: DeclKind::ColumnWidth(w), important });
                 out.push(Decl { kind: DeclKind::ColumnCount(n), important });
@@ -576,12 +579,18 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             continue;
         }
         // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
-        if prop.eq_ignore_ascii_case("column-rule") {
+        // Fase 7.691 — `-webkit-column-rule` alias vendor del shorthand.
+        if prop.eq_ignore_ascii_case("column-rule")
+            || prop.eq_ignore_ascii_case("-webkit-column-rule")
+        {
             out.extend(parse_column_rule_shorthand(value, important));
             continue;
         }
         // `column-rule-style: dotted` → activa + fija el patrón.
-        if prop.eq_ignore_ascii_case("column-rule-style") {
+        // Fase 7.692 — `-webkit-column-rule-style` alias vendor.
+        if prop.eq_ignore_ascii_case("column-rule-style")
+            || prop.eq_ignore_ascii_case("-webkit-column-rule-style")
+        {
             if let Some(on) = parse_border_style(value) {
                 out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(on), important });
                 if let Some(ls) = parse_border_line_style(value) {
