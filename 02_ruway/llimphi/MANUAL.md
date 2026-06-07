@@ -700,6 +700,13 @@ con `on_pointer_enter/leave`.
 **skeleton** — placeholder con shimmer. `skeleton_view`, `skeleton_box_view(w,h,..)`,
 `skeleton_line_view(w,..)`. Requiere redraws periódicos.
 
+**carousel** — pager paginado de N páginas. `carousel_view(CarouselSpec {
+pages, current, wrap: CarouselWrap::{Wrap, Clamp}, show_arrows, palette,
+on_change: Fn(usize) -> Msg })`. Dots indicadores abajo (clickeables para saltar
+a la página i) + flechas opcionales `‹` / `›` a los costados. v1 sin swipe;
+para v2 sumar swipe horizontal usando `draggable_velocity` + `fling_step` para
+snap-on-release.
+
 **fitted-box** — escala un subárbol al slot del padre. `fitted_box((iw, ih),
 BoxFit::{Contain, Cover, Fill, None, ScaleDown}, || inner_view())` aplica un
 transform afín al inner (medido por el seam `LayoutBuilder`) para que entre en

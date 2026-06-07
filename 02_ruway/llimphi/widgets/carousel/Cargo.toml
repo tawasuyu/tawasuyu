@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-carousel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-carousel — pager paginado de N páginas con dots indicadores y flechas opcionales a los lados. El caller maneja solo `current_index`; cada cambio dispara `on_change(i)`. Útil para onboarding, galerías, slideshows."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

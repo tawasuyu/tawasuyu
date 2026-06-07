@@ -428,6 +428,17 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     testeable. 6 tests sobre el algoritmo (contain bandas, cover
     recorta, fill estira, none centra, scale_down no agranda, entradas
     inválidas → identidad).
+19. ✅ **Bloque 19 = carousel/pager v1 (de la wishlist)** — 2026-06-07.
+    `llimphi-widget-carousel` con `CarouselSpec { pages, current, wrap:
+    CarouselWrap::{Wrap, Clamp}, show_arrows, palette, on_change:
+    Fn(usize) -> Msg }`. Renderiza sólo la página `current` (`mem::replace`
+    para no clonar `View<Msg>`); dots clickeables abajo (uno por página,
+    el de current con `palette.dot_active`); flechas opcionales `‹` / `›`
+    superpuestas a los lados. Helpers puros `wrap_index(current, total,
+    delta)`, `clamp_index(...)`, `navigate(..., wrap)` para los extremos
+    — 3 tests. v1 sin swipe: la nav va por dots y flechas. Para v2,
+    snap-on-release usando `draggable_velocity` (Bloque 16) +
+    `fling_step` — el seam ya está, sumarlo es composición.
 
 ## Tier 7 — detalle (accesibilidad)
 
