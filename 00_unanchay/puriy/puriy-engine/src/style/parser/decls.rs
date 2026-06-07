@@ -3195,6 +3195,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitMarqueeStyle(Some(v.to_string())))
             }
         }
+        // Fase 7.755 — `-webkit-overflow-scrolling`. `auto` → None.
+        "-webkit-overflow-scrolling" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitOverflowScrolling(None))
+            } else {
+                Some(DeclKind::WebkitOverflowScrolling(Some(v.to_string())))
+            }
+        }
+        // Fase 7.756 — `-webkit-line-grid`. `none` → None.
+        "-webkit-line-grid" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitLineGrid(None))
+            } else {
+                Some(DeclKind::WebkitLineGrid(Some(v.to_string())))
+            }
+        }
+        // Fase 7.757 — `-webkit-cursor-visibility`. `auto` → None.
+        "-webkit-cursor-visibility" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitCursorVisibility(None))
+            } else {
+                Some(DeclKind::WebkitCursorVisibility(Some(v.to_string())))
+            }
+        }
+        // Fase 7.758 — `-webkit-border-fit`. `border` → None.
+        "-webkit-border-fit" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("border") {
+                Some(DeclKind::WebkitBorderFit(None))
+            } else {
+                Some(DeclKind::WebkitBorderFit(Some(v.to_string())))
+            }
+        }
+        // Fase 7.759 — `-webkit-color-correction`. `default` → None.
+        "-webkit-color-correction" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("default") {
+                Some(DeclKind::WebkitColorCorrection(None))
+            } else {
+                Some(DeclKind::WebkitColorCorrection(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

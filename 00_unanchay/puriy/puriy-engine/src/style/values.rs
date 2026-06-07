@@ -1423,6 +1423,21 @@ pub struct ComputedStyle {
     /// `-webkit-marquee-style` (Fase 7.754). Modo del marquee (scroll/slide/alternate).
     /// Parse opaco — `None` = `scroll`. NO hereda. Plumb.
     pub webkit_marquee_style: Option<String>,
+    /// `-webkit-overflow-scrolling` (Fase 7.755). Inercia de scroll táctil legacy.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_overflow_scrolling: Option<String>,
+    /// `-webkit-line-grid` (Fase 7.756). Grilla de línea base nombrada.
+    /// Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_line_grid: Option<String>,
+    /// `-webkit-cursor-visibility` (Fase 7.757). Auto-ocultado del cursor.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_cursor_visibility: Option<String>,
+    /// `-webkit-border-fit` (Fase 7.758). Ajuste del borde al contenido.
+    /// Parse opaco — `None` = `border`. NO hereda. Plumb.
+    pub webkit_border_fit: Option<String>,
+    /// `-webkit-color-correction` (Fase 7.759). Corrección de color (default/sRGB).
+    /// Parse opaco — `None` = `default`. HEREDA. Plumb.
+    pub webkit_color_correction: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4825,6 +4840,11 @@ impl Default for ComputedStyle {
             webkit_marquee_repetition: None,
             webkit_marquee_speed: None,
             webkit_marquee_style: None,
+            webkit_overflow_scrolling: None,
+            webkit_line_grid: None,
+            webkit_cursor_visibility: None,
+            webkit_border_fit: None,
+            webkit_color_correction: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

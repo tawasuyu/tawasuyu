@@ -912,6 +912,16 @@ pub(crate) enum DeclKind {
     WebkitMarqueeSpeed(Option<String>),
     /// `-webkit-marquee-style` (Fase 7.754). `None` = `scroll`. NO hereda. Plumb.
     WebkitMarqueeStyle(Option<String>),
+    /// `-webkit-overflow-scrolling` (Fase 7.755). `None` = `auto`. NO hereda. Plumb.
+    WebkitOverflowScrolling(Option<String>),
+    /// `-webkit-line-grid` (Fase 7.756). `None` = `none`. NO hereda. Plumb.
+    WebkitLineGrid(Option<String>),
+    /// `-webkit-cursor-visibility` (Fase 7.757). `None` = `auto`. NO hereda. Plumb.
+    WebkitCursorVisibility(Option<String>),
+    /// `-webkit-border-fit` (Fase 7.758). `None` = `border`. NO hereda. Plumb.
+    WebkitBorderFit(Option<String>),
+    /// `-webkit-color-correction` (Fase 7.759). `None` = `default`. HEREDA. Plumb.
+    WebkitColorCorrection(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1530,6 +1540,11 @@ impl Decl {
             DeclKind::WebkitMarqueeRepetition(v) => s.webkit_marquee_repetition = v.clone(),
             DeclKind::WebkitMarqueeSpeed(v) => s.webkit_marquee_speed = v.clone(),
             DeclKind::WebkitMarqueeStyle(v) => s.webkit_marquee_style = v.clone(),
+            DeclKind::WebkitOverflowScrolling(v) => s.webkit_overflow_scrolling = v.clone(),
+            DeclKind::WebkitLineGrid(v) => s.webkit_line_grid = v.clone(),
+            DeclKind::WebkitCursorVisibility(v) => s.webkit_cursor_visibility = v.clone(),
+            DeclKind::WebkitBorderFit(v) => s.webkit_border_fit = v.clone(),
+            DeclKind::WebkitColorCorrection(v) => s.webkit_color_correction = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
