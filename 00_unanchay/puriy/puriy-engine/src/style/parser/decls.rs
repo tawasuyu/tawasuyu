@@ -550,8 +550,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         // longhands `ColumnWidth` y `ColumnCount`. `auto` único setea
         // ambos a auto.
         // Fase 7.690 — `-webkit-columns` alias vendor del shorthand `columns`.
+        // Fase 7.795 — `-moz-columns` alias vendor del shorthand `columns`.
         if prop.eq_ignore_ascii_case("columns")
             || prop.eq_ignore_ascii_case("-webkit-columns")
+            || prop.eq_ignore_ascii_case("-moz-columns")
         {
             if let Some((w, n)) = parse_columns_shorthand(value) {
                 out.push(Decl { kind: DeclKind::ColumnWidth(w), important });
@@ -780,7 +782,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "list-style" => None,
         // Fase 7.710-7.711 — la familia `-webkit-flex-*` es el alias vendor
         // (de facto, era prefijado en la era Flexbox 2012) de `flex-*`.
-        "flex-direction" | "-webkit-flex-direction" => {
+        // Fase 7.798 — `-ms-flex-direction` (IE10, valores idénticos a estándar).
+        "flex-direction" | "-webkit-flex-direction" | "-ms-flex-direction" => {
             parse_flex_direction(value).map(DeclKind::FlexDirection)
         }
         "flex-wrap" | "-webkit-flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
@@ -3299,7 +3302,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // `column-rule-style` y `column-rule` van por `parse_declarations`.
-        "column-fill" => parse_column_fill(value).map(DeclKind::ColumnFill),
+        // Fase 7.796 — `-moz-column-fill` alias vendor legacy.
+        "column-fill" | "-moz-column-fill" => parse_column_fill(value).map(DeclKind::ColumnFill),
         // Fase 7.779 — `-moz-column-span` alias vendor legacy.
         "column-span" | "-webkit-column-span" | "-moz-column-span" => {
             parse_column_span(value).map(DeclKind::ColumnSpan)
@@ -3382,8 +3386,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // `text-emphasis` shorthand: ver `parse_declarations`.
         // Fase 7.749 — alias `-webkit-ruby-position` → estándar.
         "ruby-position" | "-webkit-ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
-        // Fase 7.662 — `-webkit-transform-origin` / Fase 7.772 — `-moz-transform-origin` alias vendor del shorthand.
-        "transform-origin" | "-webkit-transform-origin" | "-moz-transform-origin" => {
+        // Fase 7.662/7.772/7.797 — `-webkit-`/`-moz-`/`-ms-transform-origin` alias vendor del shorthand.
+        "transform-origin" | "-webkit-transform-origin" | "-moz-transform-origin" | "-ms-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
         }
         // Fase 7.740 — alias `-webkit-transform-style` → estándar.
@@ -3416,8 +3420,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "overflow-clip-margin" => {
             parse_overflow_clip_margin(value).map(DeclKind::OverflowClipMargin)
         }
-        // Fase 7.762 — alias `-webkit-text-align-last` → estándar.
-        "text-align-last" | "-webkit-text-align-last" => {
+        // Fase 7.762 — `-webkit-text-align-last` / Fase 7.799 — `-moz-text-align-last`.
+        "text-align-last" | "-webkit-text-align-last" | "-moz-text-align-last" => {
             parse_text_align_last(value).map(DeclKind::TextAlignLast)
         }
         "text-wrap" => parse_text_wrap(value).map(DeclKind::TextWrap),
