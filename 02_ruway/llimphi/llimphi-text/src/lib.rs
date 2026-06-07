@@ -56,6 +56,11 @@ struct ShapeKey {
     italic: bool,
     font_family: Option<String>,
     weight_bits: u32,
+    /// Underline activo. parley emite `Decoration` por run cuando este flag
+    /// está, así que el layout difiere y el caché tiene que separarlos.
+    underline: bool,
+    /// Strikethrough activo. Idem `underline`.
+    strikethrough: bool,
 }
 
 fn align_tag(a: Alignment) -> u8 {
@@ -231,7 +236,10 @@ impl Typesetter {
     /// `line_height` (multiplicador del font_size), `max_width` (line
     /// break), `alignment` y `weight` (peso de fuente CSS: 400 normal,
     /// 700 bold). `italic`=true selecciona la variante italic/oblique de
-    /// la fuente activa (vía `parley::FontStyle`).
+    /// la fuente activa (vía `parley::FontStyle`). `underline`/`strikethrough`
+    /// activan la decoración global del bloque — parley deja la metadata
+    /// (offset + grosor) en cada `Run` y el pintado (`draw_layout_*`) emite
+    /// el rect correspondiente sobre la línea base.
     #[allow(clippy::too_many_arguments)]
     pub fn layout(
         &mut self,
@@ -243,6 +251,8 @@ impl Typesetter {
         italic: bool,
         font_family: Option<&str>,
         weight: f32,
+        underline: bool,
+        strikethrough: bool,
     ) -> parley::Layout<()> {
         // Caché de shaping: clave por todos los parámetros que determinan el
         // layout. En el hit clonamos el `parley::Layout` (memcpy de vectores,
@@ -258,6 +268,8 @@ impl Typesetter {
             italic,
             font_family: font_family.map(str::to_string),
             weight_bits: weight.to_bits(),
+            underline,
+            strikethrough,
         };
         if let Some(hit) = self.cache.get(&key) {
             self.cache_hits += 1;
@@ -285,6 +297,12 @@ impl Typesetter {
             builder.push_default(parley::StyleProperty::FontStack(
                 parley::FontStack::Source(std::borrow::Cow::Borrowed(ff)),
             ));
+        }
+        if underline {
+            builder.push_default(parley::StyleProperty::Underline(true));
+        }
+        if strikethrough {
+            builder.push_default(parley::StyleProperty::Strikethrough(true));
         }
         let mut layout = builder.build(text);
         layout.break_all_lines(max_width);
@@ -322,9 +340,12 @@ impl Typesetter {
         weight: f32,
         max_lines: Option<usize>,
         ellipsis: bool,
+        underline: bool,
+        strikethrough: bool,
     ) -> parley::Layout<()> {
         let full = self.layout(
             text, size_px, max_width, alignment, line_height, italic, font_family, weight,
+            underline, strikethrough,
         );
         let limit = match max_lines {
             Some(n) if n >= 1 => n,
@@ -347,6 +368,7 @@ impl Typesetter {
         if !ellipsis {
             return self.layout(
                 base, size_px, max_width, alignment, line_height, italic, font_family, weight,
+                underline, strikethrough,
             );
         }
         // Recortá graphemes del final hasta que `base…` vuelva a caber en
@@ -357,7 +379,7 @@ impl Typesetter {
             let candidate = format!("{s}…");
             let lay = self.layout(
                 &candidate, size_px, max_width, alignment, line_height, italic, font_family,
-                weight,
+                weight, underline, strikethrough,
             );
             if s.is_empty() || lay.lines().count() <= limit {
                 return lay;
@@ -375,6 +397,7 @@ impl Typesetter {
     /// la convención de parley). Pensado para syntax highlighting: shapear
     /// la línea entera una vez con un color por token, en vez de un layout
     /// por token. Sin wrap (`max_width = None`); el caller posiciona la línea.
+    #[allow(clippy::too_many_arguments)]
     pub fn layout_runs(
         &mut self,
         text: &str,
@@ -384,6 +407,8 @@ impl Typesetter {
         alignment: Alignment,
         line_height: f32,
         weight: f32,
+        underline: bool,
+        strikethrough: bool,
     ) -> parley::Layout<RunBrush> {
         let mut builder = self
             .runs_cx
@@ -396,6 +421,12 @@ impl Typesetter {
             ));
         }
         builder.push_default(parley::StyleProperty::Brush(RunBrush(default_color)));
+        if underline {
+            builder.push_default(parley::StyleProperty::Underline(true));
+        }
+        if strikethrough {
+            builder.push_default(parley::StyleProperty::Strikethrough(true));
+        }
         let len = text.len();
         for &(start, end, color) in runs {
             if start < end && end <= len {
@@ -502,6 +533,10 @@ pub fn layout_block(ts: &mut Typesetter, block: &TextBlock<'_>) -> parley::Layou
         // fuente fluye por el camino del compositor, que llama a `layout`
         // directamente con el `weight` del `TextSpec`/`TextMeasure`.
         400.0,
+        // Decoración tampoco viaja por `TextBlock`: la activa el compositor
+        // por nodo según `TextSpec::{underline,strikethrough}`.
+        false,
+        false,
     )
 }
 
@@ -570,8 +605,43 @@ pub fn draw_layout_brush_xf(
                             y: g.y,
                         }),
                     );
+                paint_decoration(scene, &glyph_run, brush, transform);
             }
         }
+    }
+}
+
+/// Pinta las decoraciones (`underline`/`strikethrough`) del run si las trae
+/// del shaping. El offset que devuelve parley sigue la convención OpenType
+/// (positivo = sobre la línea base en font-space, eje Y arriba); en
+/// coordenadas de pantalla (Y abajo) el rect va a `baseline - offset`. El
+/// `transform` es el mismo que se usa para los glifos, así la decoración
+/// hereda el scroll/rotación/zoom del subárbol.
+fn paint_decoration<B: parley::Brush>(
+    scene: &mut vello::Scene,
+    glyph_run: &parley::GlyphRun<'_, B>,
+    brush: &Brush,
+    transform: vello::kurbo::Affine,
+) {
+    let style = glyph_run.style();
+    let run = glyph_run.run();
+    let metrics = run.metrics();
+    let x = glyph_run.offset() as f64;
+    let baseline = glyph_run.baseline() as f64;
+    let advance = glyph_run.advance() as f64;
+    if let Some(dec) = &style.underline {
+        let offset = dec.offset.unwrap_or(metrics.underline_offset) as f64;
+        let size = dec.size.unwrap_or(metrics.underline_size) as f64;
+        let y0 = baseline - offset;
+        let rect = vello::kurbo::Rect::new(x, y0, x + advance, y0 + size);
+        scene.fill(peniko::Fill::NonZero, transform, brush, None, &rect);
+    }
+    if let Some(dec) = &style.strikethrough {
+        let offset = dec.offset.unwrap_or(metrics.strikethrough_offset) as f64;
+        let size = dec.size.unwrap_or(metrics.strikethrough_size) as f64;
+        let y0 = baseline - offset;
+        let rect = vello::kurbo::Rect::new(x, y0, x + advance, y0 + size);
+        scene.fill(peniko::Fill::NonZero, transform, brush, None, &rect);
     }
 }
 
@@ -619,6 +689,7 @@ pub fn draw_layout_runs_xf(
                             y: g.y,
                         }),
                     );
+                paint_decoration(scene, &glyph_run, &brush, transform);
             }
         }
     }
@@ -658,6 +729,8 @@ mod tests {
             400.0,
             max_lines,
             ellipsis,
+            false,
+            false,
         )
         .lines()
         .count()
@@ -682,6 +755,7 @@ mod tests {
         // "Hola" cabe en una línea: pedir 3 no debe inventar truncado.
         let lay = ts.layout_clamped(
             "Hola", 14.0, Some(200.0), Alignment::Start, 1.2, false, None, 400.0, Some(3), true,
+            false, false,
         );
         assert_eq!(lay.lines().count(), 1);
     }
@@ -692,7 +766,7 @@ mod tests {
     fn cache_es_transparente_y_pega() {
         let mut ts = Typesetter::new();
         let m1 = {
-            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0);
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
             (l.width(), l.height(), l.lines().count())
         };
         let s1 = ts.cache_stats();
@@ -700,7 +774,7 @@ mod tests {
         assert_eq!(s1.hits, 0);
         // Misma llamada exacta: debe ser hit y dar la misma geometría.
         let m2 = {
-            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0);
+            let l = ts.layout(LARGO, 14.0, Some(120.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
             (l.width(), l.height(), l.lines().count())
         };
         let s2 = ts.cache_stats();
@@ -708,7 +782,7 @@ mod tests {
         assert_eq!(s2.misses, 1, "no hubo nuevo miss");
         assert_eq!(m1, m2, "el layout cacheado es idéntico al fresco");
         // Cambiar un parámetro (ancho) es una clave distinta: miss nuevo.
-        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0);
+        let _ = ts.layout(LARGO, 14.0, Some(80.0), Alignment::Start, 1.2, false, None, 400.0, false, false);
         assert_eq!(ts.cache_stats().misses, 2, "otro ancho = otra clave");
     }
 
@@ -717,12 +791,60 @@ mod tests {
     #[test]
     fn font_context_mut_invalida_el_cache() {
         let mut ts = Typesetter::new();
-        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0);
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
         assert_eq!(ts.cache_stats().entries, 1);
         let _ = ts.font_context_mut();
         assert_eq!(ts.cache_stats().entries, 0, "el caché quedó vacío");
-        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0);
+        let _ = ts.layout("hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false);
         assert_eq!(ts.cache_stats().misses, 2, "post-invalidación = miss");
+    }
+
+    /// Decoración (underline / strikethrough): el flag de entrada debe
+    /// llegar al `parley::Layout` como `style.underline`/`style.strikethrough`
+    /// presentes en cada run, y el caché debe distinguir su clave (mismo
+    /// texto con vs sin decoración = entradas separadas).
+    #[test]
+    fn underline_y_strikethrough_se_propagan_al_layout() {
+        let mut ts = Typesetter::new();
+        let with_dec = ts.layout(
+            "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, true, true,
+        );
+        // Caminamos los runs del layout y verificamos que cada GlyphRun trae
+        // ambas decoraciones marcadas (no usamos `is_some` directo porque
+        // `Layout::lines/items` exige iterar para llegar al Style).
+        let mut visto_u = false;
+        let mut visto_s = false;
+        for line in with_dec.lines() {
+            for item in line.items() {
+                if let parley::PositionedLayoutItem::GlyphRun(gr) = item {
+                    if gr.style().underline.is_some() {
+                        visto_u = true;
+                    }
+                    if gr.style().strikethrough.is_some() {
+                        visto_s = true;
+                    }
+                }
+            }
+        }
+        assert!(visto_u, "underline=true ⇒ Decoration en al menos un run");
+        assert!(visto_s, "strikethrough=true ⇒ Decoration en al menos un run");
+
+        // Sin decoración el layout no las trae.
+        let plain = ts.layout(
+            "Hola", 14.0, None, Alignment::Start, 1.2, false, None, 400.0, false, false,
+        );
+        for line in plain.lines() {
+            for item in line.items() {
+                if let parley::PositionedLayoutItem::GlyphRun(gr) = item {
+                    assert!(gr.style().underline.is_none(), "sin underline=true ⇒ None");
+                    assert!(gr.style().strikethrough.is_none(), "sin strikethrough=true ⇒ None");
+                }
+            }
+        }
+
+        // Caché: dos misses (uno por cada variante), no se pisan.
+        let s = ts.cache_stats();
+        assert!(s.misses >= 2, "claves distintas por decoración ⇒ misses separados");
     }
 
     /// Mecánica generacional: al pasar `cap`, `hot` rota a `cold`; un ítem
@@ -739,6 +861,8 @@ mod tests {
             italic: false,
             font_family: None,
             weight_bits: 0,
+            underline: false,
+            strikethrough: false,
         };
         // Layouts vacíos como valores (sólo nos importa la presencia de claves).
         let dummy = parley::Layout::<()>::default;

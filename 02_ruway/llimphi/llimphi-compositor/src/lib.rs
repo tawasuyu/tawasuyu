@@ -74,6 +74,15 @@ pub struct TextSpec {
     /// `Typesetter::layout_runs` + `draw_layout_runs`, y `color` actúa como
     /// color por defecto de lo no cubierto por ningún run.
     pub runs: Option<Vec<(usize, usize, Color)>>,
+    /// Subrayado activo. El runtime pinta la línea bajo la línea base usando
+    /// las métricas (`underline_offset`, `underline_size`) que parley deriva
+    /// de la fuente — así un texto a 12pt y otro a 24pt tienen un subrayado
+    /// proporcional sin que el caller calcule nada.
+    pub underline: bool,
+    /// Tachado activo. Mismo régimen que [`Self::underline`] pero sobre el
+    /// strikethrough metric — útil para listas to-do, items removidos en un
+    /// diff, precios viejos.
+    pub strikethrough: bool,
 }
 
 /// Fase de un drag activo. `Move` se emite por cada `CursorMoved` con el
@@ -528,6 +537,13 @@ pub struct TextMeasure {
     pub weight: f32,
     pub max_lines: Option<usize>,
     pub ellipsis: bool,
+    /// Idem [`TextSpec::underline`]. Se replica en la medida porque parley
+    /// no cambia de ancho con decoración (no toca el shaping); pero la clave
+    /// del caché de shaping sí cambia, y queremos que medida y pintado
+    /// peguen la misma entrada del caché.
+    pub underline: bool,
+    /// Idem [`TextSpec::strikethrough`]. Mismo razonamiento que `underline`.
+    pub strikethrough: bool,
 }
 
 /// Forma del puntero del mouse. Subconjunto práctico, llimphi-native (el

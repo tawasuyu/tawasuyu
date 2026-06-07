@@ -157,7 +157,7 @@ pub fn paint(scene: &mut vello::Scene, ts: &mut Typesetter, rect: PaintRect, t: 
 
         let x = rect.x + col as f32 * CELL_W;
         let y = rect.y + first_r as f32 * CELL_H;
-        let layout = ts.layout_runs(&s, FONT_PX, dark, &runs, Alignment::Start, line_height, 400.0);
+        let layout = ts.layout_runs(&s, FONT_PX, dark, &runs, Alignment::Start, line_height, 400.0, false, false);
         llimphi_text::draw_layout_runs(scene, &layout, (x as f64, y as f64));
     }
 }

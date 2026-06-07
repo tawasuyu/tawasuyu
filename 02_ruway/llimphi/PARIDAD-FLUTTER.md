@@ -71,8 +71,8 @@ fingen el borde con un rect-padre inset).
 
 - ✅ Peso/bold → `weight: f32` en `TextSpec` + `.text_weight(...)`/`.bold()`. Fluye por medida y pintado (camino directo a `Typesetter::layout`, no `TextBlock`).
 - ✅ Overflow/ellipsis (`maxLines` + `…`) → `.ellipsis(n)`/`.max_lines(n)` + `Typesetter::layout_clamped`. Clampa medida y pintado; recorta graphemes hasta caber. Cubre single-line y N líneas.
+- ✅ Decoración: subrayado / tachado → `.underline()` / `.strikethrough()` en `View` + `underline`/`strikethrough` en `TextSpec`/`TextMeasure`. parley emite `StyleProperty::{Underline,Strikethrough}` por bloque; el pintado (`draw_layout_*`) recorre los runs y emite el rect en `baseline - offset` con `underline_size`/`strikethrough_size` del font metric. Brush = mismo color que el texto (`Layout<()>` toma el `color` externo; `Layout<RunBrush>` el brush del run). `ShapeKey` separa las claves del caché de shaping. Funciona junto con `weight`, `italic`, `ellipsis` y multicolor.
 - Spans inline mixtos (tamaño/peso/familia/link por rango, no sólo color) → `RichText` real.
-- Decoración: subrayado / tachado.
 - Texto seleccionable fuera del editor (selección + copiar).
 
 ### 🟡 Tier 3 — animación declarativa (brecha de arquitectura)
@@ -213,8 +213,21 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
    `collect_builder_constraints` → `expand_layout_builders` sobre un `view()`
    fresco. Coste cero sin builders. Funciones puras testables en
    `llimphi-compositor/src/layout_builder.rs`. Demo `--example layout_builder_demo`.
-   Límite v1: sin anidamiento. **Queda sólo AccessKit (Tier 7)** — necesita
-   lector de pantalla real, no verificable headless en este entorno.
+   Límite v1: sin anidamiento.
+10. ✅ **Bloque 10 = decoración inline de texto (Tier 2)** —
+    `.underline()` / `.strikethrough()` en `View` (campos `underline`/`strikethrough`
+    en `TextSpec` y `TextMeasure`). `Typesetter::{layout,layout_clamped,layout_runs}`
+    aceptan los flags y empujan `StyleProperty::{Underline,Strikethrough}`. El
+    pintado (`paint_decoration` en `draw_layout_brush_xf` y `draw_layout_runs_xf`)
+    recorre los runs y, si parley registró la decoración, emite un rect en
+    `baseline - offset` con `underline_size`/`strikethrough_size` del font
+    metric — el grosor es proporcional al `size_px`. `ShapeKey` extiende su
+    clave con los dos bools para no mezclar layouts con vs sin decoración en
+    el caché. Test: `underline_y_strikethrough_se_propagan_al_layout` verifica
+    que el `Style` del run las marca cuando los flags están y no las marca
+    cuando no están. Tier 2 queda sólo con **spans inline mixtos** (RichText
+    real) y **texto seleccionable fuera del editor**. **AccessKit (Tier 7)**
+    completo desde iter 3/3 (2026-06-07).
 
 ## Tier 7 — detalle (accesibilidad)
 

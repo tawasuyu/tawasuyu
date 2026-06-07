@@ -4689,6 +4689,8 @@ mod tests {
             false,
             Some("DejaVu Sans"),
             400.0,
+            false,
+            false,
         );
         let local = llimphi_ui::PaintRect {
             x: 0.0,

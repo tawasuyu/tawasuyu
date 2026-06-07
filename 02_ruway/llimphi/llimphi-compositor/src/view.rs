@@ -635,6 +635,8 @@ impl<Msg> View<Msg> {
             max_lines: None,
             ellipsis: false,
             runs: None,
+            underline: false,
+            strikethrough: false,
         });
         self
     }
@@ -658,6 +660,8 @@ impl<Msg> View<Msg> {
             max_lines: None,
             ellipsis: false,
             runs: None,
+            underline: false,
+            strikethrough: false,
         });
         self
     }
@@ -684,6 +688,8 @@ impl<Msg> View<Msg> {
             max_lines: None,
             ellipsis: false,
             runs: None,
+            underline: false,
+            strikethrough: false,
         });
         self
     }
@@ -712,6 +718,8 @@ impl<Msg> View<Msg> {
             max_lines: None,
             ellipsis: false,
             runs: None,
+            underline: false,
+            strikethrough: false,
         });
         self
     }
@@ -741,6 +749,8 @@ impl<Msg> View<Msg> {
             max_lines: None,
             ellipsis: false,
             runs: Some(runs),
+            underline: false,
+            strikethrough: false,
         });
         self
     }
@@ -804,6 +814,28 @@ impl<Msg> View<Msg> {
         if let Some(t) = self.text.as_mut() {
             t.max_lines = Some(n.max(1));
             t.ellipsis = true;
+        }
+        self
+    }
+
+    /// Activa subrayado del texto (CSS `text-decoration: underline` / Flutter
+    /// `TextDecoration.underline`). parley registra la decoración por run y el
+    /// runtime pinta la línea bajo la base usando `underline_offset` y
+    /// `underline_size` del font metric — proporcional al tamaño de fuente
+    /// elegido. No-op sin texto.
+    pub fn underline(mut self) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.underline = true;
+        }
+        self
+    }
+
+    /// Activa tachado del texto (CSS `text-decoration: line-through` /
+    /// Flutter `TextDecoration.lineThrough`). Mismo régimen que [`Self::underline`]
+    /// pero usando el strikethrough metric. No-op sin texto.
+    pub fn strikethrough(mut self) -> Self {
+        if let Some(t) = self.text.as_mut() {
+            t.strikethrough = true;
         }
         self
     }

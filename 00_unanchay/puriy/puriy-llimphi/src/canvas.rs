@@ -737,6 +737,8 @@ pub(crate) fn paint_canvas_cmds(
                     false,
                     None,
                     400.0,
+                    false,
+                    false,
                 );
                 // textAlign: ajusta x. Baseline alphabetic ⇒ subimos ~0.8em.
                 let tw = layout.width() as f64;

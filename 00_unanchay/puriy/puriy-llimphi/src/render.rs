@@ -529,6 +529,8 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                     italic_c,
                     ff.as_deref(),
                     400.0,
+                    false,
+                    false,
                 );
                 // Gradiente en coords LOCALES (0,0)-(w,h): `draw_layout_brush_xf`
                 // lo lleva al origen del texto con la afín, alineándolo.

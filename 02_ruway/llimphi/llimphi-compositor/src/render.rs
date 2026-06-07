@@ -137,6 +137,8 @@ pub fn mount_recursive<Msg: Clone>(
                         weight: text.weight,
                         max_lines: text.max_lines,
                         ellipsis: text.ellipsis,
+                        underline: text.underline,
+                        strikethrough: text.strikethrough,
                     },
                 );
             }
@@ -177,6 +179,8 @@ pub fn measure_text_node(
         tm.weight,
         tm.max_lines,
         tm.ellipsis,
+        tm.underline,
+        tm.strikethrough,
     );
     let m = llimphi_text::measurement(&layout);
     llimphi_layout::taffy::Size { width: m.width, height: m.height }
@@ -436,6 +440,8 @@ pub fn paint_range<Msg>(
                     text.alignment,
                     text.line_height,
                     text.weight,
+                    text.underline,
+                    text.strikethrough,
                 );
                 // `cur_xf *` para que el texto multicolor herede la
                 // transformación del subárbol (scroll/rotación del padre), igual
@@ -463,6 +469,8 @@ pub fn paint_range<Msg>(
                     text.weight,
                     text.max_lines,
                     text.ellipsis,
+                    text.underline,
+                    text.strikethrough,
                 );
                 let origin =
                     if matches!(text.alignment, llimphi_text::Alignment::Center) {
