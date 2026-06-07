@@ -37,6 +37,7 @@ impl<Msg> View<Msg> {
             focusable: None,
             alpha: None,
             anim: None,
+            hero: None,
             transform: None,
             tooltip: None,
             cursor: None,
@@ -195,6 +196,33 @@ impl<Msg> View<Msg> {
     /// guardó en su `Model`.
     pub fn focusable(mut self, id: u64) -> Self {
         self.focusable = Some(id);
+        self
+    }
+
+    /// Marca este nodo como **hero shared-element** con la `key` indicada.
+    /// Cuando la misma `key` aparece en un rect distinto en el frame siguiente
+    /// (entre rutas, paneles, layouts), el runtime interpola `transform` para
+    /// "volar" del rect anterior al actual durante `duration`. La `key` debe
+    /// ser estable y única dentro del frame; idéntica semántica a la `key`
+    /// de [`Self::animated`]. Para easing distinto al ease-out cúbico default,
+    /// ver [`Self::hero_curve`].
+    pub fn hero(mut self, key: u64, duration: std::time::Duration) -> Self {
+        self.hero = Some(Hero {
+            key,
+            duration,
+            easing: ease_out_cubic,
+        });
+        self
+    }
+
+    /// Como [`Self::hero`] pero con easing explícito.
+    pub fn hero_curve(
+        mut self,
+        key: u64,
+        duration: std::time::Duration,
+        easing: fn(f32) -> f32,
+    ) -> Self {
+        self.hero = Some(Hero { key, duration, easing });
         self
     }
 

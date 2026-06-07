@@ -23,11 +23,13 @@ use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, RoundedRectRad
 use vello::peniko::{Color, Fill, Gradient, Image, Mix};
 
 mod anim;
+mod hero;
 mod layout_builder;
 mod render;
 mod ripple;
 mod view;
 pub use anim::{ease_out_cubic, Anim, AnimRegistry};
+pub use hero::{Hero, HeroRegistry};
 pub use layout_builder::{collect_builder_constraints, expand_layout_builders, has_layout_builder};
 pub use render::*;
 pub use ripple::{Ripple, RippleRegistry};
@@ -438,6 +440,12 @@ pub struct View<Msg> {
     /// rebuilds. Ver [`Anim`] y [`View::animated`]. Lo consume el runtime vía
     /// [`AnimRegistry::reconcile`] (DESPUÉS de layout, ANTES de paint).
     pub anim: Option<Anim>,
+    /// **Hero shared-element**: marca este nodo como una identidad estable
+    /// entre frames. Si la misma `key` aparece en otra posición en un frame
+    /// siguiente, el runtime interpola `transform` para "volar" del rect
+    /// anterior al actual durante la `duration` declarada. Ver
+    /// [`Hero`] y [`HeroRegistry`]. `None` = sin hero (la abrumadora mayoría).
+    pub hero: Option<Hero>,
     /// Transformación afín 2D aplicada a este nodo y todo su subtree
     /// **alrededor del centro de su propio rect** (convención CSS
     /// `transform-origin: 50% 50%`). El runtime resuelve el centro en
@@ -598,6 +606,10 @@ pub struct MountedNode<Msg> {
     pub focusable: Option<u64>,
     pub alpha: Option<f32>,
     pub anim: Option<Anim>,
+    /// Marca de hero shared-element (ver [`View::hero`]). El runtime lo lee
+    /// en [`HeroRegistry::reconcile`] para enlazar identidad entre frames y
+    /// escribir `transform` con la afín "fly" cuando el rect cambia.
+    pub hero: Option<Hero>,
     /// Transformación afín 2D del nodo (alrededor del centro de su rect).
     /// Ver [`View::transform`]. `paint` la compone con la del padre.
     pub transform: Option<Affine>,

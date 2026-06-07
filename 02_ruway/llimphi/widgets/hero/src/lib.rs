@@ -1,18 +1,16 @@
-//! `llimphi-widget-hero` — entrada con firma "hero".
+//! `llimphi-widget-hero` — shared-element transitions estilo Flutter Hero.
 //!
-//! En Flutter, `Hero` anima un elemento compartido entre rutas (la
-//! misma key en la página origen y destino → el runtime interpola
-//! rect+contenido). Implementar eso fielmente requiere un `HeroRegistry`
-//! retenido entre frames con captura de rect anterior + transform
-//! interpolado — territorio de runtime, no de widget.
+//! El runtime de Llimphi tiene un [`HeroRegistry`](llimphi_ui::llimphi_compositor::HeroRegistry)
+//! retenido entre frames: si la misma `key` aparece en un rect distinto entre
+//! dos frames consecutivos, el runtime interpola `transform` para que el nodo
+//! "vuele" del rect anterior al actual. Este widget es el envoltorio canónico
+//! que marca al `child` como hero con la `key` indicada — la app no necesita
+//! tocar `View::hero` a mano si compone con esto.
 //!
-//! Lo que sí podemos dar como widget hoy: la **firma cinética de
-//! aterrizaje** que Flutter Hero deja al final del trayecto — un fade-in
-//! suave con cuerpo (DRAMATIC). Compone `View::animated_enter` con la
-//! duración correcta y el wrapping mínimo. Para hacer dos elementos
-//! compartidos, el caller usa la misma `key` y deja que `animated_enter`/
-//! `animated_exit` los enlace en tiempo (el "fly" real no se anima, pero
-//! la sensación de "aparece como protagonista" sí).
+//! Mantenemos las firmas previas (`hero_view`, `hero_quick`) para no romper
+//! callers. Antes envolvían sólo con `animated_inout` (fade); ahora componen
+//! `hero` + `animated_inout` para que un caller que reusa la misma `key` entre
+//! rutas obtenga el fly real **y** el fade de aterrizaje juntos.
 
 #![forbid(unsafe_code)]
 
@@ -20,8 +18,10 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::View;
 use llimphi_theme::motion;
 
-/// Envuelve `child` con la firma hero: anim de entrada+salida en
-/// `motion::DRAMATIC` (480 ms). `key` debe ser estable entre frames.
+/// Envuelve `child` como hero: si la misma `key` aparece en otro rect en un
+/// frame siguiente, el runtime interpola `transform` para volar entre las dos
+/// posiciones; el fade-in/out de `animated_inout` cubre el aterrizaje
+/// (`motion::DRAMATIC`, 480 ms). `key` debe ser estable entre rebuilds.
 pub fn hero_view<Msg: Clone + 'static>(key: u64, child: View<Msg>) -> View<Msg> {
     View::new(Style {
         size: Size {
@@ -31,6 +31,7 @@ pub fn hero_view<Msg: Clone + 'static>(key: u64, child: View<Msg>) -> View<Msg> 
         ..Default::default()
     })
     .children(vec![child])
+    .hero(key, motion::DRAMATIC)
     .animated_inout(key, motion::DRAMATIC)
 }
 
@@ -46,5 +47,6 @@ pub fn hero_quick<Msg: Clone + 'static>(key: u64, child: View<Msg>) -> View<Msg>
         ..Default::default()
     })
     .children(vec![child])
+    .hero(key, motion::SLOW)
     .animated_inout(key, motion::SLOW)
 }

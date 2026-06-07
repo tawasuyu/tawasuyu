@@ -213,6 +213,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             focused: None,
             last_title: None,
             anim_registry: llimphi_compositor::AnimRegistry::new(),
+            hero_registry: llimphi_compositor::HeroRegistry::new(),
             ripple_registry: llimphi_compositor::RippleRegistry::new(),
             last_tap: None,
             pending_long_press: None,
@@ -1079,7 +1080,14 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // interpola fill/radius de los nodos con `anim`. Si alguna sigue
                 // viva pedimos otro frame al final (ticker autodetenido).
                 let now = std::time::Instant::now();
-                let animating = state.anim_registry.reconcile(&mut mounted, now);
+                let anim_active = state.anim_registry.reconcile(&mut mounted, now);
+                // Heroes (`View::hero`): si la misma key cambió de rect entre
+                // frames, escribe en `transform` la afín que "vuela" del rect
+                // anterior al actual. Independiente del anim_registry — sólo
+                // toca `transform`, que el paint ya respeta. Coste cero sin
+                // nodos hero.
+                let hero_active = state.hero_registry.reconcile(&mut mounted, &computed, now);
+                let animating = anim_active || hero_active;
                 // Mount + layout del overlay en un árbol aparte. Lo
                 // computamos con el mismo tamaño de viewport para que
                 // un scrim a percent(1.0) cubra toda la pantalla.

@@ -546,6 +546,11 @@ struct RuntimeState<A: App> {
     /// el runtime pide otro frame (ticker autodetenido). Ver
     /// [`llimphi_compositor::AnimRegistry`].
     anim_registry: llimphi_compositor::AnimRegistry,
+    /// Registro de **heroes / shared-element transitions** (`View::hero`),
+    /// vivo entre frames. Detecta cambio de rect de una misma `key` entre
+    /// frames y escribe `transform` para "volar" del rect anterior al actual.
+    /// Ver [`llimphi_compositor::HeroRegistry`].
+    hero_registry: llimphi_compositor::HeroRegistry,
     /// Registro de **ripples/InkWell** (`View::ripple`), vivo entre frames. El
     /// press dispara una salpicadura; cada redraw la pinta sobre el contenido y,
     /// mientras alguna siga viva, pide otro frame (ticker autodetenido). Ver
