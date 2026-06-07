@@ -1,0 +1,13 @@
+[package]
+name = "llimphi-widget-calendar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-calendar — vista mensual del calendario (grilla 7×6) con navegación entre meses, día seleccionado y día actual resaltados. Base del date-picker; útil también solo para agendas, planning y ERP."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+chrono = { workspace = true }

@@ -391,6 +391,29 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     overflow=hidden, scroll anidado **con sobrante parcial**
     (hoy es "consume todo o nada por eje" — no se reparte un mismo evento
     entre child y padre), builder de lista sticky llave-en-mano.
+17. ✅ **Bloque 17 = calendar widget (backlog ERP)** — 2026-06-07.
+    `llimphi-widget-calendar` con `CalendarSpec { view_year, view_month,
+    selected: Option<NaiveDate>, today: Option<NaiveDate>, week_start,
+    palette, on_select, on_view_change }`. Header con flechas `‹` / `›`
+    que disparan `on_view_change` (helper `shift_month(year, month,
+    delta)` con wrap de año), título "Mes Año" en español; fila de
+    iniciales (`L M M J V S D` ó `D L M M J V S` según `WeekStart`);
+    **grilla siempre 6×7** (no reflowea al cambiar de mes, evitando
+    saltos visuales al navegar). El widget es **puro y sin reloj**: el
+    caller inyecta `today` — facilita test, captura headless y deja la
+    decisión "qué es hoy" al modelo. Funciones puras públicas
+    `days_in_month(year, month) -> u32`, `first_weekday(year, month) ->
+    Option<Weekday>`, `first_weekday_index(year, month, start) -> u32`,
+    `month_grid(year, month, start) -> [[Option<u32>; 7]; 6]`. Día
+    seleccionado pintado con `palette.selected_bg`/`selected_fg`; día
+    "hoy" con `border(1, accent)`. Base del date-picker (componer con
+    `view_overlay` + un `field`/`button` disparador — sale por
+    composición). 6 tests sobre los puros: `days_in_month_meses_estandar`
+    (bisiesto incluido), `first_weekday_index_monday_y_sunday_start`,
+    `month_grid_enero_2026_monday_start`,
+    `month_grid_febrero_2026_28_dias_domingo_inicio`,
+    `shift_month_wrappea_anios`, `week_start_index_consistente`. Cierra
+    el item "Pickers concretos: fecha/hora" del backlog ERP.
 
 ## Tier 7 — detalle (accesibilidad)
 

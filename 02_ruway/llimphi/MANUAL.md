@@ -700,6 +700,14 @@ con `on_pointer_enter/leave`.
 **skeleton** — placeholder con shimmer. `skeleton_view`, `skeleton_box_view(w,h,..)`,
 `skeleton_line_view(w,..)`. Requiere redraws periódicos.
 
+**calendar** — vista mensual 6×7 (`calendar_view(CalendarSpec { view_year,
+view_month, selected, today, week_start, palette, on_select: Fn(NaiveDate)->Msg,
+on_view_change: Fn(year, month)->Msg })`). Header con `< Mes Año >` para navegar
+entre meses, fila de iniciales (`L M M J V S D` ó `D L M M J V S` según
+`WeekStart`), grilla siempre de 6 filas (no reflowea al cambiar de mes). El
+caller le inyecta `today` — el widget no toca el reloj. Base del date-picker:
+combinar con `view_overlay` + un `field`/`button` disparador.
+
 **banner** — tira de status. `banner_view(BannerKind::{Info,Success,Warning,Error}, message)`.
 
 ### Contenedores y layout
