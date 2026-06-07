@@ -798,6 +798,16 @@ pub(crate) enum DeclKind {
     WebkitHighlight(Option<String>),
     /// `-webkit-box-reflect` (Fase 7.628). `None` = `none`. NO hereda. Plumb.
     WebkitBoxReflect(Option<String>),
+    /// `-webkit-mask-composite` (Fase 7.644). `None` = `add`. NO hereda. Plumb.
+    WebkitMaskComposite(Option<String>),
+    /// `-webkit-mask-position-x` (Fase 7.645). `None` = `center`. NO hereda. Plumb.
+    WebkitMaskPositionX(Option<String>),
+    /// `-webkit-mask-position-y` (Fase 7.646). `None` = `center`. NO hereda. Plumb.
+    WebkitMaskPositionY(Option<String>),
+    /// `-webkit-mask-repeat-x` (Fase 7.647). `None` = `repeat`. NO hereda. Plumb.
+    WebkitMaskRepeatX(Option<String>),
+    /// `-webkit-mask-repeat-y` (Fase 7.648). `None` = `repeat`. NO hereda. Plumb.
+    WebkitMaskRepeatY(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1359,6 +1369,11 @@ impl Decl {
             DeclKind::WebkitAppRegion(v) => s.webkit_app_region = v.clone(),
             DeclKind::WebkitHighlight(v) => s.webkit_highlight = v.clone(),
             DeclKind::WebkitBoxReflect(v) => s.webkit_box_reflect = v.clone(),
+            DeclKind::WebkitMaskComposite(v) => s.webkit_mask_composite = v.clone(),
+            DeclKind::WebkitMaskPositionX(v) => s.webkit_mask_position_x = v.clone(),
+            DeclKind::WebkitMaskPositionY(v) => s.webkit_mask_position_y = v.clone(),
+            DeclKind::WebkitMaskRepeatX(v) => s.webkit_mask_repeat_x = v.clone(),
+            DeclKind::WebkitMaskRepeatY(v) => s.webkit_mask_repeat_y = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

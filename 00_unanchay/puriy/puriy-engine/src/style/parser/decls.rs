@@ -2557,6 +2557,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBoxReflect(Some(v.to_string())))
             }
         }
+        // Fase 7.644 — `-webkit-mask-composite`. `add` → None.
+        "-webkit-mask-composite" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("add") {
+                Some(DeclKind::WebkitMaskComposite(None))
+            } else {
+                Some(DeclKind::WebkitMaskComposite(Some(v.to_string())))
+            }
+        }
+        // Fase 7.645 — `-webkit-mask-position-x`. `center` → None.
+        "-webkit-mask-position-x" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::WebkitMaskPositionX(None))
+            } else {
+                Some(DeclKind::WebkitMaskPositionX(Some(v.to_string())))
+            }
+        }
+        // Fase 7.646 — `-webkit-mask-position-y`. `center` → None.
+        "-webkit-mask-position-y" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::WebkitMaskPositionY(None))
+            } else {
+                Some(DeclKind::WebkitMaskPositionY(Some(v.to_string())))
+            }
+        }
+        // Fase 7.647 — `-webkit-mask-repeat-x`. `repeat` → None.
+        "-webkit-mask-repeat-x" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("repeat") {
+                Some(DeclKind::WebkitMaskRepeatX(None))
+            } else {
+                Some(DeclKind::WebkitMaskRepeatX(Some(v.to_string())))
+            }
+        }
+        // Fase 7.648 — `-webkit-mask-repeat-y`. `repeat` → None.
+        "-webkit-mask-repeat-y" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("repeat") {
+                Some(DeclKind::WebkitMaskRepeatY(None))
+            } else {
+                Some(DeclKind::WebkitMaskRepeatY(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

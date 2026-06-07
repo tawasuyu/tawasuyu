@@ -1250,6 +1250,22 @@ pub struct ComputedStyle {
     /// (dirección + offset + máscara). Parse opaco — `None` = `none`. NO
     /// hereda. Plumb.
     pub webkit_box_reflect: Option<String>,
+    /// `-webkit-mask-composite` (Fase 7.644). Modo de composición de las
+    /// capas de máscara (add/subtract/intersect/exclude). Parse opaco —
+    /// `None` = `add`. NO hereda. Plumb.
+    pub webkit_mask_composite: Option<String>,
+    /// `-webkit-mask-position-x` (Fase 7.645). Longhand horizontal de la
+    /// posición de máscara. Parse opaco — `None` = `center`. NO hereda. Plumb.
+    pub webkit_mask_position_x: Option<String>,
+    /// `-webkit-mask-position-y` (Fase 7.646). Longhand vertical de la
+    /// posición de máscara. Parse opaco — `None` = `center`. NO hereda. Plumb.
+    pub webkit_mask_position_y: Option<String>,
+    /// `-webkit-mask-repeat-x` (Fase 7.647). Longhand horizontal del repeat
+    /// de máscara. Parse opaco — `None` = `repeat`. NO hereda. Plumb.
+    pub webkit_mask_repeat_x: Option<String>,
+    /// `-webkit-mask-repeat-y` (Fase 7.648). Longhand vertical del repeat
+    /// de máscara. Parse opaco — `None` = `repeat`. NO hereda. Plumb.
+    pub webkit_mask_repeat_y: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4595,6 +4611,11 @@ impl Default for ComputedStyle {
             webkit_app_region: None,
             webkit_highlight: None,
             webkit_box_reflect: None,
+            webkit_mask_composite: None,
+            webkit_mask_position_x: None,
+            webkit_mask_position_y: None,
+            webkit_mask_repeat_x: None,
+            webkit_mask_repeat_y: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
