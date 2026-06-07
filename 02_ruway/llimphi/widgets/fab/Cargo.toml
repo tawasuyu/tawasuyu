@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-fab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-fab — Floating Action Button: botón circular elevado (sombra E3), color de acento, hover lift sutil. Para la acción primaria de una página (compose, nuevo, +)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

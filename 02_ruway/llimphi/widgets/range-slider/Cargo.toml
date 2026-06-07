@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-range-slider"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-range-slider — slider con dos thumbs para definir un rango [lo, hi] sobre un track. Para filtros (precio entre $X y $Y), ecualizadores y rangos temporales."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

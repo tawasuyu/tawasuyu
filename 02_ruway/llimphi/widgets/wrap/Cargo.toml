@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-wrap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-wrap — contenedor flex que envuelve a la siguiente línea (FlexWrap::Wrap) con gap horizontal+vertical. Para chips, tags, galerías fluidas, toolbars que respiran."
+
+[dependencies]
+llimphi-ui = { workspace = true }

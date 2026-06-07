@@ -275,6 +275,14 @@ members = [
     "02_ruway/llimphi/widgets/terminal",
     "02_ruway/llimphi/widgets/transport",
     "02_ruway/llimphi/widgets/waveform",
+    "02_ruway/llimphi/widgets/chip",
+    "02_ruway/llimphi/widgets/fab",
+    "02_ruway/llimphi/widgets/wrap",
+    "02_ruway/llimphi/widgets/range-slider",
+    "02_ruway/llimphi/widgets/rating",
+    "02_ruway/llimphi/widgets/gauge",
+    "02_ruway/llimphi/widgets/scaffold",
+    "02_ruway/llimphi/widgets/hero",
     "02_ruway/llimphi/modules/allichay",
     "02_ruway/llimphi/modules/command-palette",
     "02_ruway/llimphi/modules/diff-viewer",
@@ -719,6 +727,16 @@ llimphi-widget-field = { path = "02_ruway/llimphi/widgets/field" }
 # Firma visual transversal (gradient sutil + hairline accent).
 llimphi-widget-panel = { path = "02_ruway/llimphi/widgets/panel" }
 llimphi-widget-panes = { path = "02_ruway/llimphi/widgets/panes" }
+# Widgets Flutter-like — composición sobre primitivas Tier 1/3 ya
+# expuestas (sombra, gradient, animated, ripple).
+llimphi-widget-chip = { path = "02_ruway/llimphi/widgets/chip" }
+llimphi-widget-fab = { path = "02_ruway/llimphi/widgets/fab" }
+llimphi-widget-wrap = { path = "02_ruway/llimphi/widgets/wrap" }
+llimphi-widget-range-slider = { path = "02_ruway/llimphi/widgets/range-slider" }
+llimphi-widget-rating = { path = "02_ruway/llimphi/widgets/rating" }
+llimphi-widget-gauge = { path = "02_ruway/llimphi/widgets/gauge" }
+llimphi-widget-scaffold = { path = "02_ruway/llimphi/widgets/scaffold" }
+llimphi-widget-hero = { path = "02_ruway/llimphi/widgets/hero" }
 llimphi-workspace = { path = "02_ruway/llimphi/llimphi-workspace" }
 # Abstracción Selector — host (paths) + wawa (khipus).
 llimphi-module-selector = { path = "02_ruway/llimphi/modules/selector" }

@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-hero"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-hero — entrada dramática con curva de overshoot para elementos destacados (modal, dialog, página recién montada). NO es shared-element transition real (esa requiere un registry retenido en el runtime); es la firma cinética que Flutter Hero usa al aterrizar."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

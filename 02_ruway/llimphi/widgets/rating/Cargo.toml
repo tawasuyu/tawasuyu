@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-rating"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-rating — N estrellas clicables (típicamente 5) que reflejan un valor y emiten on_change al elegir otro nivel. Para reseñas, encuestas, quality flags."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
