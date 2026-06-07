@@ -706,6 +706,18 @@ pub(crate) enum DeclKind {
     TextDecorationSkipSpaces(Option<String>),
     /// `text-decoration-skip-inset` (Fase 7.578). HEREDA. Plumb.
     TextDecorationSkipInset(TextDecorationSkipInset),
+    /// `-webkit-text-stroke-width` (Fase 7.579). px. HEREDA. Plumb.
+    WebkitTextStrokeWidth(f32),
+    /// `-webkit-text-stroke-color` (Fase 7.580). `None` = `currentColor`.
+    /// HEREDA. Plumb.
+    WebkitTextStrokeColor(Option<String>),
+    /// `-webkit-text-fill-color` (Fase 7.581). `None` = `currentColor`.
+    /// HEREDA. Plumb.
+    WebkitTextFillColor(Option<String>),
+    /// `font-smooth` (Fase 7.582). `None` = `auto`. HEREDA. Plumb.
+    FontSmooth(Option<String>),
+    /// `text-group-align` (Fase 7.583). NO hereda. Plumb.
+    TextGroupAlign(TextGroupAlign),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1222,6 +1234,11 @@ impl Decl {
             DeclKind::TextDecorationSkipSelf(v) => s.text_decoration_skip_self = v.clone(),
             DeclKind::TextDecorationSkipSpaces(v) => s.text_decoration_skip_spaces = v.clone(),
             DeclKind::TextDecorationSkipInset(v) => s.text_decoration_skip_inset = *v,
+            DeclKind::WebkitTextStrokeWidth(v) => s.webkit_text_stroke_width = *v,
+            DeclKind::WebkitTextStrokeColor(v) => s.webkit_text_stroke_color = v.clone(),
+            DeclKind::WebkitTextFillColor(v) => s.webkit_text_fill_color = v.clone(),
+            DeclKind::FontSmooth(v) => s.font_smooth = v.clone(),
+            DeclKind::TextGroupAlign(v) => s.text_group_align = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

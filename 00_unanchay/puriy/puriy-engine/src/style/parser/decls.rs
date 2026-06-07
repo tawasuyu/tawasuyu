@@ -2116,6 +2116,60 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "auto" => Some(DeclKind::TextDecorationSkipInset(TextDecorationSkipInset::Auto)),
             _ => None,
         },
+        // Fase 7.579 — `-webkit-text-stroke-width`. px o número desnudo;
+        // keywords thin/medium/thick → 1/3/5.
+        "-webkit-text-stroke-width" => {
+            let v = value.trim().to_ascii_lowercase();
+            match v.as_str() {
+                "thin" => Some(DeclKind::WebkitTextStrokeWidth(1.0)),
+                "medium" => Some(DeclKind::WebkitTextStrokeWidth(3.0)),
+                "thick" => Some(DeclKind::WebkitTextStrokeWidth(5.0)),
+                _ => {
+                    let num = v.strip_suffix("px").unwrap_or(&v);
+                    num.parse::<f32>().ok().map(DeclKind::WebkitTextStrokeWidth)
+                }
+            }
+        }
+        // Fase 7.580-7.581 — `-webkit-text-{stroke,fill}-color`. Parse opaco;
+        // `currentcolor` → None.
+        "-webkit-text-stroke-color" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("currentcolor") {
+                Some(DeclKind::WebkitTextStrokeColor(None))
+            } else {
+                Some(DeclKind::WebkitTextStrokeColor(Some(v.to_string())))
+            }
+        }
+        "-webkit-text-fill-color" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("currentcolor") {
+                Some(DeclKind::WebkitTextFillColor(None))
+            } else {
+                Some(DeclKind::WebkitTextFillColor(Some(v.to_string())))
+            }
+        }
+        // Fase 7.582 — `font-smooth` (no estándar). Parse opaco; `auto` → None.
+        "font-smooth" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::FontSmooth(None))
+            } else {
+                Some(DeclKind::FontSmooth(Some(v.to_string())))
+            }
+        }
+        // Fase 7.583 — `text-group-align` (CSS Text 4).
+        "text-group-align" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::TextGroupAlign(TextGroupAlign::None)),
+            "start" => Some(DeclKind::TextGroupAlign(TextGroupAlign::Start)),
+            "end" => Some(DeclKind::TextGroupAlign(TextGroupAlign::End)),
+            "left" => Some(DeclKind::TextGroupAlign(TextGroupAlign::Left)),
+            "right" => Some(DeclKind::TextGroupAlign(TextGroupAlign::Right)),
+            "center" => Some(DeclKind::TextGroupAlign(TextGroupAlign::Center)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

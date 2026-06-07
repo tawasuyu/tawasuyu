@@ -1107,6 +1107,21 @@ pub struct ComputedStyle {
     /// `text-decoration-skip-inset` (Fase 7.578). Si la decoración se
     /// recorta hacia adentro. Default `None`. HEREDA. Plumb.
     pub text_decoration_skip_inset: TextDecorationSkipInset,
+    /// `-webkit-text-stroke-width` (Fase 7.579). Ancho del trazo del texto,
+    /// px. Default `0.0`. HEREDA. Plumb.
+    pub webkit_text_stroke_width: f32,
+    /// `-webkit-text-stroke-color` (Fase 7.580). Color del trazo. Parse
+    /// opaco — `None` = `currentColor`. HEREDA. Plumb.
+    pub webkit_text_stroke_color: Option<String>,
+    /// `-webkit-text-fill-color` (Fase 7.581). Color de relleno del texto.
+    /// Parse opaco — `None` = `currentColor`. HEREDA. Plumb.
+    pub webkit_text_fill_color: Option<String>,
+    /// `font-smooth` (Fase 7.582). Control no estándar del antialiasing de
+    /// fuentes. Parse opaco — `None` = `auto`. HEREDA. Plumb.
+    pub font_smooth: Option<String>,
+    /// `text-group-align` (Fase 7.583). CSS Text 4: alineación compartida
+    /// de un grupo de líneas. Default `None`. NO hereda. Plumb.
+    pub text_group_align: TextGroupAlign,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3022,6 +3037,18 @@ pub enum TextDecorationSkipInset {
     Auto,
 }
 
+/// `text-group-align` (CSS Text 4). Default `None`. Fase 7.583.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextGroupAlign {
+    #[default]
+    None,
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+}
+
 /// `hyphenate-limit-last` (CSS Text 4). Default `None`. Fase 7.560.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HyphenateLimitLast {
@@ -4353,6 +4380,11 @@ impl Default for ComputedStyle {
             text_decoration_skip_self: None,
             text_decoration_skip_spaces: None,
             text_decoration_skip_inset: TextDecorationSkipInset::None,
+            webkit_text_stroke_width: 0.0,
+            webkit_text_stroke_color: None,
+            webkit_text_fill_color: None,
+            font_smooth: None,
+            text_group_align: TextGroupAlign::None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
