@@ -11,6 +11,9 @@ description = "llimphi-widget-terminal — superficie de terminal infinita y vir
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+# Rasterizador de glifos para el atlas GPU del modo grilla (Fase 4 del
+# SDD-TERMINAL). Default features de fontdue alcanzan acá (std host).
+fontdue = "0.9"
 
 [dev-dependencies]
 png = { workspace = true }

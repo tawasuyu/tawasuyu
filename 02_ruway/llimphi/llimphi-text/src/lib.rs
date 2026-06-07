@@ -153,6 +153,12 @@ const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
 /// Se referencia por su nombre de familia con [`MONOSPACE`].
 const LIBERATION_MONO: &[u8] = include_bytes!("../assets/LiberationMono.ttf");
 
+/// Bytes de la fuente **monospace embebida** (Liberation Mono TTF). Pública
+/// para que otros crates (p. ej. `llimphi-widget-terminal`, que necesita
+/// rasterizar glifos para su atlas GPU) usen exactamente la misma fuente
+/// que el render normal, sin volver a embeber el archivo.
+pub const MONO_FONT_BYTES: &[u8] = LIBERATION_MONO;
+
 /// Nombre de familia de la fuente monoespaciada embebida. Pasalo como
 /// `font_family: Some(llimphi_text::MONOSPACE)` en un [`TextBlock`] (o el
 /// `font_family` de `layout`) para render de ancho fijo garantizado.

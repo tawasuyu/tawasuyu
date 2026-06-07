@@ -27,6 +27,7 @@
 
 pub mod blocks;
 pub mod find;
+pub mod glyph_atlas;
 pub mod select;
 pub mod store;
 pub mod view;
@@ -36,6 +37,7 @@ pub use blocks::{
     gutter_width, line_top_in_content, Item, ItemGeo, SelectionConfig,
 };
 pub use find::{find_matches, next_match, prev_match, FindMatch, FindOpts};
+pub use glyph_atlas::{DirtyRect, GlyphAtlas, GlyphSlot};
 pub use select::{point_at, point_at_geo, selection_rects, HighlightRect, Point, SelectionRange};
 pub use store::Scrollback;
 pub use view::{
