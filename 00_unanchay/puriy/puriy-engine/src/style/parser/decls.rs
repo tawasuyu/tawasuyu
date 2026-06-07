@@ -1626,7 +1626,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // crea la binding con defaults, los siguientes ajustan campos.
         // De una lista separada por coma sólo tomamos el primer item, igual
         // que el shorthand `animation:` ya hace en parser/sheet.rs.
-        "animation-name" => {
+        // Fase 7.735 — alias `-webkit-animation-name` → estándar.
+        "animation-name" | "-webkit-animation-name" => {
             let v = first_comma(value.trim());
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("none") {
@@ -1635,11 +1636,14 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::AnimationName(Some(v.to_string())))
             }
         }
-        "animation-duration" => parse_time_seconds(first_comma(value.trim()))
+        // Fase 7.736 — alias `-webkit-animation-duration` → estándar.
+        "animation-duration" | "-webkit-animation-duration" => parse_time_seconds(first_comma(value.trim()))
             .map(DeclKind::AnimationDuration),
-        "animation-timing-function" => parse_easing_keyword(first_comma(value.trim()))
+        // Fase 7.737 — alias `-webkit-animation-timing-function` → estándar.
+        "animation-timing-function" | "-webkit-animation-timing-function" => parse_easing_keyword(first_comma(value.trim()))
             .map(DeclKind::AnimationTimingFunction),
-        "animation-iteration-count" => {
+        // Fase 7.738 — alias `-webkit-animation-iteration-count` → estándar.
+        "animation-iteration-count" | "-webkit-animation-iteration-count" => {
             let t = first_comma(value.trim());
             if t.eq_ignore_ascii_case("infinite") {
                 Some(DeclKind::AnimationIterationCount(AnimationIterations::Infinite))
@@ -1650,7 +1654,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                     .map(|n| DeclKind::AnimationIterationCount(AnimationIterations::Count(n)))
             }
         }
-        "animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+        // Fase 7.739 — alias `-webkit-animation-fill-mode` → estándar.
+        "animation-fill-mode" | "-webkit-animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
             "none" => Some(DeclKind::AnimationFillMode(AnimationFillMode::None)),
             "forwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Forwards)),
             "backwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Backwards)),
