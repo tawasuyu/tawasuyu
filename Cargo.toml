@@ -283,6 +283,7 @@ members = [
     "02_ruway/llimphi/widgets/calendar",
     "02_ruway/llimphi/widgets/fitted-box",
     "02_ruway/llimphi/widgets/carousel",
+    "02_ruway/llimphi/llimphi-image",
     "02_ruway/llimphi/widgets/rating",
     "02_ruway/llimphi/widgets/gauge",
     "02_ruway/llimphi/widgets/scaffold",

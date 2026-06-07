@@ -583,6 +583,19 @@ GpuBatch::new(&pipelines)
 ```
 Re-exporta `vello` y `peniko` (`Color`, `Image`, `Fill`, etc.).
 
+### `llimphi-image` — decode pipeline
+```rust
+decode_bytes(&[u8]) -> Result<peniko::Image, DecodeError>
+load_path(&Path, max_bytes: u64) -> Result<peniko::Image, DecodeError>
+from_rgba8(rgba: Vec<u8>, w: u32, h: u32) -> peniko::Image
+```
+Encapsula el patrón `image::ImageReader + to_rgba8 + Blob + Image::new` que cada
+app que decodifica imágenes tenía duplicado. `max_bytes` aplica al tamaño del
+archivo en disco (no a la imagen decodificada, que en RGBA8 puede ser mucho
+mayor — un PNG 4K ocupa ~64 MB descomprimido); `0` deshabilita el cap.
+Re-exporta `peniko::{Blob, Image, ImageFormat}`. Formatos según las features
+del crate `image` upstream del workspace (hoy: PNG, JPEG, WEBP).
+
 ### `llimphi-text` — shaping
 ```rust
 Typesetter::new()                          // una por proceso (FontContext es caro)

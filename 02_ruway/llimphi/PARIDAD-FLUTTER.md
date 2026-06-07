@@ -139,8 +139,10 @@ Antes: sólo `scroll_y` vertical. Ahora (todo stateless, offset en el Model):
   necesitan un padre con `clip(true)`. Demo `--example image_fit_demo`
   (Contain · Cover · Fill · None + un cuadrado con radius=100 que queda como
   avatar circular).
-- Falta: decode pipeline (hoy el caller decodifica con el crate `image` antes
-  de pasar el `peniko::Image`) e imágenes de red con caché.
+- ✅ Decode pipeline (`llimphi-image`, Bloque 20) — `decode_bytes(&[u8])`,
+  `load_path(&Path, max_bytes)`, `from_rgba8(rgba, w, h)`. Re-exporta
+  `peniko::{Blob, Image, ImageFormat}`.
+- Falta: imágenes de red con caché (descarga + decode + cache por URL).
 
 ### 🔴 Tier 7 — accesibilidad (la brecha categórica más grande)
 **Cero hoy.** No hay árbol de semántica ni lectores de pantalla. A desarrollar:
@@ -439,6 +441,21 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     — 3 tests. v1 sin swipe: la nav va por dots y flechas. Para v2,
     snap-on-release usando `draggable_velocity` (Bloque 16) +
     `fling_step` — el seam ya está, sumarlo es composición.
+20. ✅ **Bloque 20 = decode pipeline (Tier 6, cierra item de v1)** —
+    2026-06-07. Nuevo crate `llimphi-image` con `decode_bytes(&[u8])`,
+    `load_path(&Path, max_bytes)`, `from_rgba8(rgba, w, h)`. Encapsula el
+    patrón `image::ImageReader + to_rgba8 + Blob + Image::new` que cada
+    caller que muestra imágenes tenía duplicado (nahual-image-viewer,
+    mirada wallpaper, viewer de galería). `max_bytes` aplica al tamaño
+    del archivo en disco — `0` deshabilita el cap (las apps no quieren
+    leer un .iso de 4 GB pensando que es una imagen, pero la imagen
+    decodificada en RGBA8 puede ser mucho mayor que el archivo). Enum
+    `DecodeError::{Io, TooBig{size,max}, UnsupportedFormat, Decode(String)}`
+    clasificado (`TooBig ≠ Decode`) para que el caller muestre
+    diferenciado. 5 tests (PNG válido `2×2`, bytes inválidos →
+    `UnsupportedFormat`, cap → `TooBig`, IO error, `from_rgba8` arma
+    dimensiones correctas). Falta para una v2: caché de imágenes de red
+    por URL — fuera de alcance del decode local.
 
 ## Tier 7 — detalle (accesibilidad)
 

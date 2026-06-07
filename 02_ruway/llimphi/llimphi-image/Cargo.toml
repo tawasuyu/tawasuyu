@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-image"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-image — helper para decodificar bytes/path a `peniko::Image` listo para `View::image()`. Reemplaza el patrón duplicado (image::ImageReader + to_rgba8 + Blob + Image::new) que hoy aparece en cada app que muestra imágenes."
+
+[dependencies]
+llimphi-raster = { path = "../llimphi-raster" }
+image = { workspace = true }
