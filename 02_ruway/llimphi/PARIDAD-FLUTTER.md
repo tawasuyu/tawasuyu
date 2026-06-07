@@ -292,6 +292,23 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     italic, link azul subrayado, heading inline verde grande, tachado
     rojo, fragmento en mono morado). Tier 2 queda sólo con texto
     seleccionable fuera del editor.
+14. ✅ **Bloque 14 = reorderable list (avanza Tier 5/wishlist)** —
+    `reorderable_list_view(spec)` + `ReorderableListSpec { rows,
+    caption, row_height, palette, on_reorder }` + `ReorderableListRow {
+    label, selected, on_click }` en `llimphi-widget-list`. Cada fila
+    exhibe un gripper `⋮⋮` al borde izquierdo (`fg_muted`, cursor
+    `Grab`) que es `draggable` con `payload = idx`; la **fila entera**
+    recibe `on_drop` + `drop_hover_fill = palette.bg_drop_hover` (accent
+    al 40 %). El handler `on_reorder(from, to)` cae al caller (típico:
+    `let item = m.remove(from); let dest = if to > from { to - 1 } else
+    { to }; m.insert(dest, item);` para "mover" — el widget no impone
+    semántica swap vs insert). El primitive `Cursor::Grab` y la nueva
+    paleta `bg_drop_hover` se derivan automáticamente del `Theme`.
+    Composición pura sobre `draggable`/`drag_payload`/`on_drop`/
+    `drop_hover_fill` de `llimphi-ui` — mismo idiom que el `tiled` que
+    reordena paneles. Demo `--example reorderable_list_demo` (lista de
+    tareas con drag-handle + click-to-toggle, prueba que `on_click` no
+    pelea con el drag).
 
 ## Tier 7 — detalle (accesibilidad)
 
@@ -387,7 +404,7 @@ cuatro seams de arriba, no abre uno nuevo.
 | **Chips** (filter/choice/input, removibles) | `FilterChip`/`InputChip` · `AssistChip` | No | Selección múltiple compacta, tag-input. Composición sobre button+badge. |
 | **Range slider** (dos thumbs) | `RangeSlider` | No | Variante del `slider` que ya existe (filtros de rango, ecualizador en media). |
 | **Shimmer** (skeleton animado) | `Shimmer` · `redacted` animado | Anim | El `skeleton` existe estático; falta el barrido de gradiente. Tween de offset sobre gradiente (Tier 1 ya da gradientes). |
-| **Reorderable list** (drag de ítems) | `ReorderableListView` | No | Drag&drop ya existe (`on_drop`); `tiled` reordena paneles pero no ítems de lista. Útil para playlists/kanban/prioridades. |
+| ✅ **Reorderable list** (drag de ítems) | `ReorderableListView` | No | Bloque 14: `reorderable_list_view` + `ReorderableListSpec` en `llimphi-widget-list`. Cada fila exhibe gripper `⋮⋮` a la izquierda, `draggable` con `payload = idx`; la fila entera recibe `on_drop` + `drop_hover_fill`. Handler `on_reorder(from, to)` cae al caller. Composición pura sobre primitives existentes (idéntico idiom a `tiled` que reordena paneles). Demo `--example reorderable_list_demo`. |
 | **Wrap / flow layout** | `Wrap` · Compose `FlowRow` | No (verificar flex-wrap de taffy) | Ítems que saltan de línea (chips, tags, galería fluida). Probablemente sale de `flex-wrap` de taffy — verificar antes de widget nuevo. |
 | **FittedBox / scale-to-fit** | `FittedBox` | Seam (LayoutBuilder) | Escala un subárbol arbitrario para caber. Pariente de autotextsize pero para cualquier `View`; depende del seam de size-aware. |
 | **Calendar / agenda view** | `CalendarView` · agenda | No | Grilla de mes + vista de agenda. Scheduling de ERP; compone date-picker + grid. |
