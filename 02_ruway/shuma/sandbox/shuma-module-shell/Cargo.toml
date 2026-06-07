@@ -31,3 +31,4 @@ arboard = { workspace = true }
 [dev-dependencies]
 png = { workspace = true }
 pollster = { workspace = true }
+tempfile = { workspace = true }

@@ -319,6 +319,26 @@ pub struct FindState {
     pub case_insensitive: bool,
 }
 
+/// Cache de las últimas N líneas spilleadas, refrescable cuando cambia el
+/// `spilled_count` del `surf_history`. El `output_pane_surface` la lee en
+/// cada render para prepend-ear esas líneas al view (Fase 5.11). Cap fijo
+/// para acotar memoria + tiempo de refresh.
+#[derive(Debug, Default, Clone)]
+pub struct SurfSpilledCache {
+    /// Líneas spilleadas en orden cronológico (las más recientes que caben).
+    /// La 0 corresponde a `global_id = first_id`; la última a `first_id +
+    /// lines.len() - 1`. Cap a [`MAX_SPILLED_VISIBLE`].
+    pub lines: Vec<String>,
+    /// Global id de la primera línea cacheada (la más vieja del cache).
+    pub first_id: u64,
+    /// `spilled_count` al momento del último refresh — para detectar staleness.
+    pub cached_at: usize,
+}
+
+/// Tope de líneas spilleadas visibles directamente al frente del view.
+/// Más allá → `:scrollback open`. ~30 KB para líneas típicas de 150 chars.
+pub const MAX_SPILLED_VISIBLE: usize = 200;
+
 /// Snapshot del layout del cuerpo de output bajo `SHUMA_TERMINAL_SURFACE=1`.
 /// Lo escribe `output_pane_surface` al final del render; lo lee el handler
 /// del drag de selección para resolver `(lx, ly)` a [`Point`] del store.
@@ -497,6 +517,10 @@ pub struct State {
     /// historial; el view no la usa todavía (TODO: integrar para servir
     /// scrolls al-pasado-spillado).
     pub surf_history: Arc<Mutex<llimphi_widget_terminal::Scrollback>>,
+    /// Cache de las últimas líneas spilled visibles directamente al frente
+    /// del view (Fase 5.11). Refrescada lazy desde `surf_history.read_spilled`
+    /// cuando el `spilled_count` cambia.
+    pub surf_spilled_visible: Arc<Mutex<SurfSpilledCache>>,
     /// Recursos GPU del modo grilla (atlas + pipeline + textura). `None`
     /// hasta que el primer `gpu_paint_with` los inicialice. Mantenidos en
     /// `Arc<Mutex<>>` para que la closure de paint (Send+Sync+'static)
@@ -630,6 +654,7 @@ impl State {
             // explícito de la config). Errores I/O al armar el spill se
             // ignoran silenciosamente: el history funciona sin él.
             surf_history: Arc::new(Mutex::new(build_surf_history(&config))),
+            surf_spilled_visible: Arc::new(Mutex::new(SurfSpilledCache::default())),
             gpu_grid: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
@@ -696,6 +721,9 @@ impl State {
         // el spill antes. La semántica espeja el `clear` de un terminal.
         if let Ok(mut h) = self.surf_history.lock() {
             h.clear();
+        }
+        if let Ok(mut c) = self.surf_spilled_visible.lock() {
+            *c = SurfSpilledCache::default();
         }
     }
 
@@ -1033,6 +1061,46 @@ fn build_surf_history(config: &shuma_config::Config) -> llimphi_widget_terminal:
         // Sin spill si falló crear el archivo — no es fatal, el shell sigue.
     }
     sb
+}
+
+/// Refresca el cache de líneas spilled visibles si `spilled_count` cambió
+/// desde el último refresh. Lee las últimas [`MAX_SPILLED_VISIBLE`] líneas
+/// del archive vía `Scrollback::read_spilled`. Si el read falla por I/O,
+/// la entrada queda como `<I/O error>` (no propaga el error — el view
+/// sigue mostrando el resto). Sincrono: el costo del refresh es N reads
+/// del archivo, una sola vez por cambio de spill (no por frame).
+pub(crate) fn refresh_surf_spilled_visible(
+    history: &Arc<Mutex<llimphi_widget_terminal::Scrollback>>,
+    cache: &Arc<Mutex<SurfSpilledCache>>,
+) {
+    // Snapshot del estado del history sin retener el lock durante el I/O.
+    let (spilled_count, hist_clone) = {
+        let Ok(h) = history.lock() else { return };
+        (h.spilled_count(), h.clone())
+    };
+    {
+        let Ok(c) = cache.lock() else { return };
+        if c.cached_at == spilled_count {
+            return; // no hubo append al spill desde el último refresh
+        }
+    }
+    // Refresh: leer las últimas N spilled.
+    let n = spilled_count.min(MAX_SPILLED_VISIBLE);
+    let first_id = (spilled_count - n) as u64;
+    let mut lines = Vec::with_capacity(n);
+    for i in 0..n {
+        let id = first_id + i as u64;
+        match hist_clone.read_spilled(id) {
+            Ok(Some(text)) => lines.push(text),
+            Ok(None) => lines.push(String::new()),
+            Err(_) => lines.push("<I/O error reading spill>".into()),
+        }
+    }
+    if let Ok(mut c) = cache.lock() {
+        c.lines = lines;
+        c.first_id = first_id;
+        c.cached_at = spilled_count;
+    }
 }
 
 /// Appendea el texto de `line` a la `Scrollback` persistente sólo si es una
@@ -2782,6 +2850,59 @@ mod tests {
         let h = s.surf_history.lock().unwrap();
         assert_eq!(h.len(), 1);
         assert_eq!(h.line(0), Some("final"));
+    }
+
+    #[test]
+    fn refresh_spilled_visible_carga_tail_del_archive() {
+        use llimphi_widget_terminal::{Scrollback, SpillStore};
+        // History con cap chico + spill → muchas líneas terminan en disco.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut sb = Scrollback::new(20);
+        let spill = SpillStore::create(dir.path().join("test.spill")).expect("spill");
+        sb.enable_spill(spill);
+        let history = Arc::new(Mutex::new(sb));
+        let cache = Arc::new(Mutex::new(SurfSpilledCache::default()));
+
+        // Cache vacío + history vacía → refresh no carga nada.
+        refresh_surf_spilled_visible(&history, &cache);
+        assert!(cache.lock().unwrap().lines.is_empty());
+
+        // Push muchas líneas hasta forzar spill.
+        for i in 0..50 {
+            history.lock().unwrap().push_line(&format!("L{i:04}"));
+        }
+        let spilled = history.lock().unwrap().spilled_count();
+        assert!(spilled > 0, "el cap forzó spill");
+
+        // Refresh carga las últimas N (clamped a MAX_SPILLED_VISIBLE).
+        refresh_surf_spilled_visible(&history, &cache);
+        let c = cache.lock().unwrap();
+        let expected_n = spilled.min(MAX_SPILLED_VISIBLE);
+        assert_eq!(c.lines.len(), expected_n);
+        assert_eq!(c.cached_at, spilled);
+        // Última línea del cache = última línea que entró al spill.
+        let last_spilled_id = spilled as u64 - 1;
+        let expected_last = format!("L{:04}", last_spilled_id);
+        assert_eq!(c.lines.last(), Some(&expected_last));
+    }
+
+    #[test]
+    fn refresh_spilled_visible_no_recarga_si_no_cambio() {
+        use llimphi_widget_terminal::{Scrollback, SpillStore};
+        let dir = tempfile::tempdir().unwrap();
+        let mut sb = Scrollback::new(20);
+        let spill = SpillStore::create(dir.path().join("test.spill")).unwrap();
+        sb.enable_spill(spill);
+        let history = Arc::new(Mutex::new(sb));
+        for i in 0..30 {
+            history.lock().unwrap().push_line(&format!("L{i:04}"));
+        }
+        let cache = Arc::new(Mutex::new(SurfSpilledCache::default()));
+        refresh_surf_spilled_visible(&history, &cache);
+        let first_count = cache.lock().unwrap().cached_at;
+        // Sin nuevas pushes el cached_at no debe cambiar tras un segundo refresh.
+        refresh_surf_spilled_visible(&history, &cache);
+        assert_eq!(cache.lock().unwrap().cached_at, first_count);
     }
 
     #[test]

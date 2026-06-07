@@ -1863,6 +1863,38 @@ pub(crate) fn terminal_surface_enabled() -> bool {
 
 /// Header de un comando como **chrome** de la superficie: chevron + `$ comando`
 /// + badge de estado (icono + "hace N"). Click → pliega/despliega el bloque.
+/// Chrome header del bloque de líneas spilleadas: rotula "Archivado de
+/// spill (N visibles · M total)" y avisa al usuario que el resto se ve
+/// con `:scrollback open`. Sin click handler (informativo).
+fn spilled_archive_header<HostMsg: Clone + 'static>(
+    visible: usize,
+    total: usize,
+    theme: &Theme,
+) -> View<HostMsg> {
+    let label = if total > visible {
+        format!(
+            "≡ Archivado de spill ({visible} visibles · {total} total · `:scrollback open` para todo)"
+        )
+    } else {
+        format!("≡ Archivado de spill ({total} líneas)")
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(SURFACE_HEADER_H) },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .text_aligned(label, 11.0, theme.fg_muted, Alignment::Start)
+    .mono()
+}
+
 /// `has_stdout` (param 6) gatea el chip de reprocess (sin stdout, no hay
 /// nada que reprocesar).
 fn surface_header<HostMsg: Clone + 'static>(
@@ -2017,12 +2049,51 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     // La superficie entera es el panel hundido; los cuerpos se leen sobre él.
     palette.bg = theme.sunken();
 
+    // Refresh del cache de spilled visibles (Fase 5.11): lee desde el spill
+    // file sólo si `spilled_count` cambió desde el último frame. El cache
+    // es up-to-`MAX_SPILLED_VISIBLE` líneas; el view las prepende al store.
+    crate::refresh_surf_spilled_visible(&state.surf_history, &state.surf_spilled_visible);
+    let spilled_cache_lines: Vec<String> = state
+        .surf_spilled_visible
+        .lock()
+        .map(|c| c.lines.clone())
+        .unwrap_or_default();
+    let total_spilled = state
+        .surf_history
+        .lock()
+        .map(|h| h.spilled_count())
+        .unwrap_or(0);
+
     // Store de scrollback + items + estilo por línea (alineado al índice del
     // store, que crece en lockstep con `push_line`).
     let mut store = Scrollback::new(0);
     let mut items: Vec<Item<HostMsg>> = Vec::new();
     let mut styles: Vec<(bool, Vec<(usize, usize, llimphi_ui::llimphi_raster::peniko::Color)>)> =
         Vec::new();
+
+    // Prepend de las líneas spilleadas: arrancan en `store[0..]`. Tinte
+    // discreto (fg_muted) para marcarlas visualmente como archive y un
+    // chrome header antes con cuántas hay en total. Si el spill tiene más
+    // que `MAX_SPILLED_VISIBLE`, el header lo avisa (el usuario abre el
+    // resto con `:scrollback open`).
+    if !spilled_cache_lines.is_empty() {
+        items.push(Item::chrome(
+            SURFACE_HEADER_H,
+            spilled_archive_header::<HostMsg>(
+                spilled_cache_lines.len(),
+                total_spilled,
+                theme,
+            ),
+        ));
+        let start = store.len();
+        for text in &spilled_cache_lines {
+            // Las spilled van en `fg_muted` para diferenciarlas del live.
+            let muted = theme.fg_muted;
+            styles.push((false, vec![(0usize, text.len(), muted)]));
+            store.push_line(text);
+        }
+        items.push(Item::lines(start, store.len()));
+    }
 
     for id in &order {
         let g = &groups[id];
