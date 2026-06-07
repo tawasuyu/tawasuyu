@@ -174,7 +174,15 @@ ControlSettings(
   envelope min/max + línea central + relleno tenue. `media-app` queda con
   ~25 LOC de cableado (paleta + closure sobre el slot del probe). 4 tests
   del widget + cargo check workspace verde.
-- **Futuro (no bloqueante)**: extraer transport como `llimphi-widget-transport`
-  — requiere abstraer el dominio de `MediaCommand` (hoy cada `BarItem` conoce
-  las variantes del enum). Patrón posible: trait `TransportAction` + closure
-  por botón.
+- **E.3 ✅ — transport extraído a widget reusable** (2026-06-07). 17
+  botones de transporte (play/pause/prev/next/seek/volume/mute/repeat/
+  shuffle/speed/snapshot/record/eq) pasaron a `llimphi-widget-transport`.
+  El widget expone `TransportButton` con estado por variante
+  (`PlayPause { playing }`, `Mute { muted }`, `Record { recording }`,
+  etc.) y un `TransportAction` semántico que el caller traduce a su
+  comando de dominio (`MediaCommand` en `media-app`). El icono, el
+  color activo y el rojo de REC los elige el widget. Iconos por
+  `llimphi-icons`. `media-app::bar_item_view` queda con un `to_cmd`
+  de 14 líneas + un `tbtn` helper + 17 ramas one-liner por variante.
+  Paridad pixel via un `transport_palette()` con los colores hardcoded
+  que ya usaba la app. 7 tests del widget verde, workspace clean.

@@ -820,6 +820,36 @@ nodegraph_view(&nodes, &wires, &palette, &metrics,
 **timeline** — scrub clickeable. `timeline_view(progress: f32, &palette,
 on_seek: Fn(f32 [0..1])->Option<Msg>)`.
 
+**transport** — botones de **transporte de reproductor** (play/pause/prev/
+next/seek/volume/mute/repeat/shuffle/speed/snapshot/record/eq). Stateless:
+el caller arma un `TransportButton` por cada botón con el flag que define su
+estado activo (p.ej. `PlayPause { playing }`, `Mute { muted }`,
+`Record { recording }`), lo pasa al widget, y recibe el `TransportAction`
+semántico en un closure cuando el usuario clickea. El widget elige el icono
+(de `llimphi-icons`), el color activo, el rojo de REC y arma la acción
+(p.ej. `SeekBack { secs }` → `TransportAction::SeekBy(-secs)`). Quien
+traduce `TransportAction` al comando del dominio (`MediaCommand`, etc.) es
+la app.
+```rust
+TransportPalette { bg, bg_active, bg_hover, fg, fg_active, fg_record,
+                   btn_w, btn_h, radius, icon_stroke, gap }
+TransportPalette::from_theme(&Theme)
+TransportAction::{TogglePlay, Stop, Prev, Next, SeekBy(i64), VolumeBy(f32),
+                  ToggleMute, CycleRepeat, ToggleShuffle, SpeedStep(i32),
+                  SpeedReset, Snapshot, ToggleRecord, ToggleEqualizer}
+TransportButton::{PlayPause{playing}, Stop, Prev, Next,
+                  SeekBack{secs}, SeekForward{secs},
+                  VolumeDown{step}, VolumeUp{step},
+                  Mute{muted}, Repeat{active}, Shuffle{active},
+                  SpeedDown, SpeedUp, SpeedReset{is_default},
+                  Snapshot, Record{recording}, Equalizer{enabled}}
+transport_button_view(button, &palette, on_action: Fn(TransportAction)->Msg) -> View<Msg>
+```
+Para una fila, el caller mapea su `Vec<TransportButton>` con
+`.iter().map(|b| transport_button_view(*b, &pal, on_action.clone()))` y los
+pone como children de una `View` con `flex_direction: Row` y `gap:
+palette.gap`. Consumidor de referencia: `02_ruway/media/media-app::bar_item_view`.
+
 **waveform** — visor de **forma de onda en vivo**. Stateless y agnóstico de
 cpal/AudioProbe: el caller pasa un closure `Fn(&mut Vec<f32>) -> u16` que
 rellena un buffer con los últimos samples intercalados y devuelve cuántos
@@ -1212,7 +1242,7 @@ navigator · nodegraph · panel · panes · progress · segmented · select ·
 shortcuts-help · skeleton · slider · splash · splitter · stat-card · status-bar ·
 switch · table · tabs · terminal · text-area · text-editor · text-editor-core ·
 text-editor-lsp · text-input · theme-switcher · tiled · timeline · toast ·
-tooltip · tree · waveform · wawa-mark.
+tooltip · transport · tree · waveform · wawa-mark.
 
 **Módulos** (`modules/`): bookmarks · command-palette · diff-viewer · fif ·
 file-picker · mini-map · plugin-host · selector · shuma-term · symbol-outline.

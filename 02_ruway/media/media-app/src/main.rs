@@ -100,6 +100,9 @@ use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
 use llimphi_widget_timeline::{timeline_view, TimelinePalette};
+use llimphi_widget_transport::{
+    transport_button_view, TransportAction, TransportButton, TransportPalette,
+};
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_tabs::{tabs_view, TabsPalette, TabsSpec};
 use llimphi_widget_menubar::{
@@ -3958,6 +3961,26 @@ fn bar_label(text: String, width: f32, color: Color) -> View<Msg> {
 /// desacoplada y consistente con el resto de la suite). `active` tinta el
 /// fondo/ícono (toggle encendido, reproduciendo, grabando…). `Record` va
 /// rojo por convención.
+/// Paleta de `llimphi-widget-transport` con los colores exactos que ya
+/// tenía la barra de media-app (azul oscuro/claro + rojo REC). Match
+/// pixel con la antigua implementación inline para no cambiar la
+/// estética en la migración.
+fn transport_palette() -> TransportPalette {
+    TransportPalette {
+        bg: Color::from_rgba8(44, 52, 66, 255),
+        bg_active: Color::from_rgba8(46, 84, 110, 255),
+        bg_hover: Color::from_rgba8(70, 92, 120, 255),
+        fg: Color::from_rgba8(214, 224, 240, 255),
+        fg_active: Color::from_rgba8(150, 215, 245, 255),
+        fg_record: Color::from_rgba8(232, 86, 86, 255),
+        btn_w: 40.0,
+        btn_h: 34.0,
+        radius: 8.0,
+        icon_stroke: 2.0,
+        gap: 6.0,
+    }
+}
+
 fn icon_button(icon: Icon, active: bool, msg: Msg) -> View<Msg> {
     let bg = if active {
         Color::from_rgba8(46, 84, 110, 255)
@@ -3995,30 +4018,50 @@ fn bar_item_view(item: BarItem) -> View<Msg> {
     let step = settings().seek_step_secs;
     let vstep = settings().volume_step;
     let snap = playback_snapshot();
-    // Botón-ícono que despacha un MediaCommand.
-    let icmd = |icon: Icon, active: bool, c: MediaCommand| icon_button(icon, active, Msg::Command(c));
-    match item {
-        BarItem::PlayPause => {
-            let paused = pause().is_paused();
-            let icon = if paused { Icon::Play } else { Icon::Pause };
-            icon_button(icon, !paused, Msg::Command(TogglePause))
+    // Botones de transport puro delegan en `llimphi-widget-transport`. El
+    // widget elige el icono, el estado activo, el rojo de REC y arma la
+    // `TransportAction` — acá sólo traducimos al `MediaCommand` que la
+    // app despacha.
+    let to_cmd = |a: TransportAction| -> Msg {
+        match a {
+            TransportAction::TogglePlay => Msg::Command(TogglePause),
+            TransportAction::Stop => Msg::Command(SeekTo { fraction: 0.0 }),
+            TransportAction::Prev => Msg::Command(PrevTrack),
+            TransportAction::Next => Msg::Command(NextTrack),
+            TransportAction::SeekBy(secs) => Msg::Command(SeekBy { secs }),
+            TransportAction::VolumeBy(delta) => Msg::Command(VolumeBy { delta }),
+            TransportAction::ToggleMute => Msg::Command(ToggleMute),
+            TransportAction::CycleRepeat => Msg::Command(CycleRepeat),
+            TransportAction::ToggleShuffle => Msg::Command(ToggleShuffle),
+            TransportAction::SpeedStep(dir) => Msg::Command(SpeedStep { dir }),
+            TransportAction::SpeedReset => Msg::Command(SetSpeed { mult: 1.0 }),
+            TransportAction::Snapshot => Msg::Command(Snapshot),
+            TransportAction::ToggleRecord => Msg::Command(ToggleRecord),
+            TransportAction::ToggleEqualizer => Msg::Command(EqToggle),
         }
-        BarItem::Stop => icmd(Icon::Stop, false, SeekTo { fraction: 0.0 }),
-        BarItem::Prev => icmd(Icon::SkipBack, false, PrevTrack),
-        BarItem::Next => icmd(Icon::SkipForward, false, NextTrack),
-        BarItem::SeekBack => icmd(Icon::Rewind, false, SeekBy { secs: -step }),
-        BarItem::SeekForward => icmd(Icon::FastForward, false, SeekBy { secs: step }),
-        BarItem::VolumeDown => icmd(Icon::Minus, false, VolumeBy { delta: -vstep }),
-        BarItem::VolumeUp => icmd(Icon::Plus, false, VolumeBy { delta: vstep }),
-        BarItem::Mute => icmd(Icon::VolumeMute, volume().get() <= 1e-4, ToggleMute),
-        BarItem::Repeat => icmd(Icon::Repeat, snap.repeat_label != "rep-", CycleRepeat),
-        BarItem::Shuffle => icmd(Icon::Shuffle, snap.shuffle_on, ToggleShuffle),
-        BarItem::SpeedDown => icmd(Icon::ChevronDown, false, SpeedStep { dir: -1 }),
-        BarItem::SpeedUp => icmd(Icon::ChevronUp, false, SpeedStep { dir: 1 }),
-        BarItem::SpeedReset => icmd(Icon::Gauge, (snap.speed - 1.0).abs() < 1e-3, SetSpeed { mult: 1.0 }),
-        BarItem::Snapshot => icmd(Icon::Camera, false, Snapshot),
-        BarItem::Record => icon_button(Icon::Record, recorder().is_recording(), Msg::Command(ToggleRecord)),
-        BarItem::Equalizer => icmd(Icon::Equalizer, eq().is_enabled(), EqToggle),
+    };
+    let tpal = transport_palette();
+    let tbtn = |b: TransportButton| transport_button_view(b, &tpal, to_cmd);
+    match item {
+        BarItem::PlayPause => tbtn(TransportButton::PlayPause { playing: !pause().is_paused() }),
+        BarItem::Stop => tbtn(TransportButton::Stop),
+        BarItem::Prev => tbtn(TransportButton::Prev),
+        BarItem::Next => tbtn(TransportButton::Next),
+        BarItem::SeekBack => tbtn(TransportButton::SeekBack { secs: step }),
+        BarItem::SeekForward => tbtn(TransportButton::SeekForward { secs: step }),
+        BarItem::VolumeDown => tbtn(TransportButton::VolumeDown { step: vstep }),
+        BarItem::VolumeUp => tbtn(TransportButton::VolumeUp { step: vstep }),
+        BarItem::Mute => tbtn(TransportButton::Mute { muted: volume().get() <= 1e-4 }),
+        BarItem::Repeat => tbtn(TransportButton::Repeat { active: snap.repeat_label != "rep-" }),
+        BarItem::Shuffle => tbtn(TransportButton::Shuffle { active: snap.shuffle_on }),
+        BarItem::SpeedDown => tbtn(TransportButton::SpeedDown),
+        BarItem::SpeedUp => tbtn(TransportButton::SpeedUp),
+        BarItem::SpeedReset => tbtn(TransportButton::SpeedReset {
+            is_default: (snap.speed - 1.0).abs() < 1e-3,
+        }),
+        BarItem::Snapshot => tbtn(TransportButton::Snapshot),
+        BarItem::Record => tbtn(TransportButton::Record { recording: recorder().is_recording() }),
+        BarItem::Equalizer => tbtn(TransportButton::Equalizer { enabled: eq().is_enabled() }),
         BarItem::Settings => icon_button(Icon::Settings, false, Msg::ToggleSettings),
         BarItem::Timeline => View::new(Style {
             size: Size {
