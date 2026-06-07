@@ -486,6 +486,17 @@ pub struct State {
     /// como **triple-click** y selecciona la línea entera (paridad con la
     /// UX de xterm/gnome-terminal: tap, tap-tap, tap-tap-tap-tap).
     pub surf_last_dblclick_ms: u64,
+    /// Scrollback **persistente** del cuerpo de output (Fase 5.7 del
+    /// SDD-TERMINAL). Es independiente del store que `output_pane_surface`
+    /// reconstruye por frame para el view (esa sigue siendo la fuente de
+    /// verdad del render). Esta acumula CADA línea de body que pasa por
+    /// `push_output` desde el arranque, con cap por memoria + spill
+    /// opcional. Cuando el cap se excede, las líneas viejas se vuelcan al
+    /// spill file y siguen recuperables por `read_spilled(global_id)`.
+    /// Sin spill activo, igual sirve para mostrar el tamaño total del
+    /// historial; el view no la usa todavía (TODO: integrar para servir
+    /// scrolls al-pasado-spillado).
+    pub surf_history: Arc<Mutex<llimphi_widget_terminal::Scrollback>>,
     /// Recursos GPU del modo grilla (atlas + pipeline + textura). `None`
     /// hasta que el primer `gpu_paint_with` los inicialice. Mantenidos en
     /// `Arc<Mutex<>>` para que la closure de paint (Send+Sync+'static)
@@ -613,6 +624,12 @@ impl State {
             find: None,
             surf_menu: None,
             surf_last_dblclick_ms: 0,
+            // 4 MiB de cap es generoso para una sesión interactiva (~100k
+            // líneas de 40 bytes). El usuario puede subirlo con
+            // `enable_spill` o reemplazar el `Scrollback` entero.
+            surf_history: Arc::new(Mutex::new(
+                llimphi_widget_terminal::Scrollback::new(4 * 1024 * 1024),
+            )),
             gpu_grid: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
@@ -639,6 +656,10 @@ impl State {
                 .insert(self.current_block, line.text.clone());
         }
         line.block = self.current_block;
+        // History persistente (Fase 5.7): toda línea de body se archiva en
+        // `surf_history`, con cap por memoria + spill opcional. Filtra los
+        // que NO son body (igual que `body_lines_for_block`).
+        push_to_surf_history(&self.surf_history, &line);
         push_line(&mut self.output, line);
     }
 
@@ -656,6 +677,7 @@ impl State {
     /// card y no en la del comando que el usuario tipeó mientras tanto.
     pub(crate) fn push_in_block(&mut self, block: u64, mut line: OutputLine) {
         line.block = block;
+        push_to_surf_history(&self.surf_history, &line);
         push_line(&mut self.output, line);
     }
 
@@ -669,6 +691,12 @@ impl State {
         self.scroll_px = 0.0;
         self.surf_scroll_anchor = 0.0;
         self.surf_scroll_velocity = 0.0;
+        // El builtin `clear` resetea también la history persistente; si el
+        // usuario quería conservar lo previo, debió correr `:save` o leer
+        // el spill antes. La semántica espeja el `clear` de un terminal.
+        if let Ok(mut h) = self.surf_history.lock() {
+            h.clear();
+        }
     }
 
     /// Cantidad de líneas en el buffer — alimenta el monitor.
@@ -981,6 +1009,29 @@ mod view;
 pub use mouse_xterm::{XBtn, XPhase};
 pub use update::*;
 pub use view::*;
+
+/// Appendea el texto de `line` a la `Scrollback` persistente sólo si es una
+/// línea de **body** (no Prompt, no salida de etapa intermedia, no notice
+/// de cierre `✔/✘/⏹`). Espeja el filtro de `body_lines_for_block` para
+/// que el history acumule sólo lo que el view ve como cuerpo. Errores del
+/// lock se ignoran (poison defensivo).
+fn push_to_surf_history(
+    history: &Arc<Mutex<llimphi_widget_terminal::Scrollback>>,
+    line: &OutputLine,
+) {
+    if line.kind == OutputKind::Prompt {
+        return;
+    }
+    if line.stage.is_some() {
+        return;
+    }
+    if view::is_status_line(&line.text) {
+        return;
+    }
+    if let Ok(mut h) = history.lock() {
+        h.push_line(&line.text);
+    }
+}
 
 pub fn contributions(_state: &State) -> ModuleContributions {
     ModuleContributions {
@@ -2669,6 +2720,54 @@ mod tests {
         let sel = s.surf_selection.expect("selección de palabra");
         assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 5));
         assert_eq!(sel.head, llimphi_widget_terminal::Point::new(0, 10));
+    }
+
+    #[test]
+    fn surf_history_acumula_lineas_de_body_entre_frames() {
+        // El cuerpo `surf_history` persiste a lo largo de la sesión —
+        // a diferencia del Scrollback per-frame que arma el view. Acá
+        // simulamos varios push_output y verificamos que la history
+        // refleja sólo las líneas de body (no Prompts ni notices).
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ ls"));
+        s.push_output(OutputLine::stdout("uno"));
+        s.push_output(OutputLine::stderr("err1"));
+        s.push_output(OutputLine::notice("✔ exit 0"));
+        s.push_output(OutputLine::stdout("dos"));
+        let h = s.surf_history.lock().unwrap();
+        // Prompts y notices NO van; stdout + stderr SÍ.
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.line(0), Some("uno"));
+        assert_eq!(h.line(1), Some("err1"));
+        assert_eq!(h.line(2), Some("dos"));
+    }
+
+    #[test]
+    fn surf_history_excluye_lineas_de_etapa_de_pipe() {
+        // Las stage_lines (capturas de tee de etapas intermedias) tampoco
+        // van a la history (espeja el filtro de `body_lines_for_block`).
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ ls | wc"));
+        // Línea intermedia con stage=Some(_) — no va.
+        let mut staged = OutputLine::stdout("intermedia");
+        staged.stage = Some(0);
+        s.push_output(staged);
+        // Línea de body normal — sí va.
+        s.push_output(OutputLine::stdout("final"));
+        let h = s.surf_history.lock().unwrap();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h.line(0), Some("final"));
+    }
+
+    #[test]
+    fn clear_output_tambien_resetea_history() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::stdout("a"));
+        s.push_output(OutputLine::stdout("b"));
+        assert_eq!(s.surf_history.lock().unwrap().len(), 2);
+        s.clear_output();
+        assert_eq!(s.surf_history.lock().unwrap().len(), 0);
+        assert_eq!(s.surf_history.lock().unwrap().dropped(), 0);
     }
 
     #[test]
