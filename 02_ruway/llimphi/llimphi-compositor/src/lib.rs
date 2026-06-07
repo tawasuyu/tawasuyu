@@ -27,12 +27,14 @@ mod hero;
 mod layout_builder;
 mod render;
 mod ripple;
+mod semantics;
 mod view;
 pub use anim::{ease_out_cubic, Anim, AnimRegistry};
 pub use hero::{Hero, HeroRegistry};
 pub use layout_builder::{collect_builder_constraints, expand_layout_builders, has_layout_builder};
 pub use render::*;
 pub use ripple::{Ripple, RippleRegistry};
+pub use semantics::{Role, SemanticsFlags, SemanticsSpec};
 
 /// Texto a pintar dentro de un nodo. Alineación por defecto `Center`
 /// (horizontal y vertical), apta para labels de botón. Para layouts tipo
@@ -440,6 +442,12 @@ pub struct View<Msg> {
     /// rebuilds. Ver [`Anim`] y [`View::animated`]. Lo consume el runtime vía
     /// [`AnimRegistry::reconcile`] (DESPUÉS de layout, ANTES de paint).
     pub anim: Option<Anim>,
+    /// **Semántica accesible** del nodo (rol, label, value, flags ARIA). El
+    /// runtime la traduce a un árbol AccessKit por frame para alimentar
+    /// lectores de pantalla (NVDA/VoiceOver/Orca/TalkBack). `None` = no
+    /// declarada (el lector lee el texto plano si lo hay, sin rol específico).
+    /// Ver [`SemanticsSpec`].
+    pub semantics: Option<SemanticsSpec>,
     /// **Hero shared-element**: marca este nodo como una identidad estable
     /// entre frames. Si la misma `key` aparece en otra posición en un frame
     /// siguiente, el runtime interpola `transform` para "volar" del rect
@@ -606,6 +614,9 @@ pub struct MountedNode<Msg> {
     pub focusable: Option<u64>,
     pub alpha: Option<f32>,
     pub anim: Option<Anim>,
+    /// Semántica accesible del nodo (ver [`View::semantics`]). El runtime la
+    /// lee en cada paint para reconstruir el árbol AccessKit del frame.
+    pub semantics: Option<SemanticsSpec>,
     /// Marca de hero shared-element (ver [`View::hero`]). El runtime lo lee
     /// en [`HeroRegistry::reconcile`] para enlazar identidad entre frames y
     /// escribir `transform` con la afín "fly" cuando el rect cambia.

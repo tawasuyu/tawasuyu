@@ -37,6 +37,7 @@ impl<Msg> View<Msg> {
             focusable: None,
             alpha: None,
             anim: None,
+            semantics: None,
             hero: None,
             transform: None,
             tooltip: None,
@@ -111,6 +112,106 @@ impl<Msg> View<Msg> {
     /// localizar el nodo bajo el cursor con el hit-test de hover.
     pub fn tooltip(mut self, text: impl Into<String>) -> Self {
         self.tooltip = Some(text.into());
+        self
+    }
+
+    /// Declara la **semántica accesible** completa del nodo de una vez. Usar
+    /// cuando ya tenés un [`SemanticsSpec`] armado (p. ej. construido por un
+    /// widget); para los casos puntuales preferí los atajos
+    /// [`Self::role`]/[`Self::aria_label`]/etc.
+    pub fn semantics(mut self, spec: SemanticsSpec) -> Self {
+        self.semantics = Some(spec);
+        self
+    }
+
+    /// Fija el **rol** semántico del nodo. Si ya había semántica declarada,
+    /// preserva label/value/flags y sólo sobreescribe el rol; si no, crea una
+    /// `SemanticsSpec` con sólo el rol.
+    pub fn role(mut self, role: Role) -> Self {
+        self.semantics = Some(match self.semantics.take() {
+            Some(mut s) => {
+                s.role = Some(role);
+                s
+            }
+            None => SemanticsSpec::role(role),
+        });
+        self
+    }
+
+    /// Fija el **label accesible** ("nombre" que el lector enuncia). Hace falta
+    /// cuando el contenido visible del nodo no alcanza (p. ej. un botón con
+    /// sólo un ícono). Preserva el resto de la `SemanticsSpec` si existía.
+    pub fn aria_label(mut self, label: impl Into<std::sync::Arc<str>>) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.label = Some(label.into());
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Fija la **descripción** (contexto adicional que el lector enuncia tras
+    /// el label, típicamente con un atajo). Para info que ayuda pero no es el
+    /// nombre principal — no abusar (los lectores perciben ruido).
+    pub fn aria_description(mut self, desc: impl Into<std::sync::Arc<str>>) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.description = Some(desc.into());
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Fija el **valor** (texto del input, valor del slider/spinner). Lo que
+    /// el lector lee después del label: "Volumen, 70".
+    pub fn aria_value(mut self, value: impl Into<std::sync::Arc<str>>) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.value = Some(value.into());
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Estado `checked` (checkbox/radio).
+    pub fn aria_checked(mut self, v: bool) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.flags.checked = Some(v);
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Estado `pressed` (toggle button).
+    pub fn aria_pressed(mut self, v: bool) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.flags.pressed = Some(v);
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Estado `expanded` (acordeón, menú abierto, tree row expandida).
+    pub fn aria_expanded(mut self, v: bool) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.flags.expanded = Some(v);
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Estado `disabled` — el control no responde a input.
+    pub fn aria_disabled(mut self, v: bool) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.flags.disabled = Some(v);
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Estado `readonly` — el control es visible/seleccionable pero no editable.
+    pub fn aria_readonly(mut self, v: bool) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.flags.readonly = Some(v);
+        self.semantics = Some(s);
+        self
+    }
+
+    /// Estado `required` (campo de formulario obligatorio).
+    pub fn aria_required(mut self, v: bool) -> Self {
+        let mut s = self.semantics.take().unwrap_or_default();
+        s.flags.required = Some(v);
+        self.semantics = Some(s);
         self
     }
 
@@ -832,5 +933,56 @@ impl<Msg> View<Msg> {
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
+    }
+}
+
+#[cfg(test)]
+mod semantics_tests {
+    use super::*;
+    use llimphi_layout::Style;
+
+    #[test]
+    fn aria_label_sobre_role_preserva_role() {
+        let v = View::<()>::new(Style::default())
+            .role(Role::Button)
+            .aria_label("Guardar");
+        let s = v.semantics.expect("semantics");
+        assert_eq!(s.role, Some(Role::Button));
+        assert_eq!(s.label.as_deref(), Some("Guardar"));
+    }
+
+    #[test]
+    fn role_sobre_aria_label_preserva_label() {
+        // Orden invertido: el segundo setter no debe pisar lo del primero.
+        let v = View::<()>::new(Style::default())
+            .aria_label("Buscar")
+            .role(Role::TextInput);
+        let s = v.semantics.expect("semantics");
+        assert_eq!(s.role, Some(Role::TextInput));
+        assert_eq!(s.label.as_deref(), Some("Buscar"));
+    }
+
+    #[test]
+    fn flags_independientes_no_se_pisan() {
+        let v = View::<()>::new(Style::default())
+            .role(Role::Checkbox)
+            .aria_checked(true)
+            .aria_required(true);
+        let s = v.semantics.expect("semantics");
+        assert_eq!(s.flags.checked, Some(true));
+        assert_eq!(s.flags.required, Some(true));
+        assert!(s.flags.disabled.is_none(), "no se setea lo que no se pidió");
+    }
+
+    #[test]
+    fn semantics_spec_completo_reemplaza_lo_acumulado() {
+        // `.semantics(spec)` es el setter "todo o nada"; debe sobrescribir.
+        let v = View::<()>::new(Style::default())
+            .role(Role::Button)
+            .aria_label("Vieja")
+            .semantics(SemanticsSpec::role(Role::Link).with_label("Nueva"));
+        let s = v.semantics.expect("semantics");
+        assert_eq!(s.role, Some(Role::Link));
+        assert_eq!(s.label.as_deref(), Some("Nueva"));
     }
 }
