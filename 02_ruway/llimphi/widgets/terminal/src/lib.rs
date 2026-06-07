@@ -26,6 +26,7 @@
 #![forbid(unsafe_code)]
 
 pub mod blocks;
+pub mod cell_pipeline;
 pub mod find;
 pub mod glyph_atlas;
 pub mod select;
@@ -37,6 +38,9 @@ pub use blocks::{
     gutter_width, line_top_in_content, Item, ItemGeo, SelectionConfig,
 };
 pub use find::{find_matches, next_match, prev_match, FindMatch, FindOpts};
+pub use cell_pipeline::{
+    instances_to_bytes, pack_rgba, CellInstance, CellUniforms, CELL_WGSL,
+};
 pub use glyph_atlas::{DirtyRect, GlyphAtlas, GlyphSlot};
 pub use select::{point_at, point_at_geo, selection_rects, HighlightRect, Point, SelectionRange};
 pub use store::Scrollback;
