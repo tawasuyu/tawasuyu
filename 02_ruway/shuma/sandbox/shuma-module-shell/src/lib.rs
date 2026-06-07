@@ -291,6 +291,20 @@ pub struct VimSel {
     pub active: bool,
 }
 
+/// Estado de la barra de búsqueda Ctrl+F sobre el cuerpo de output.
+/// La barra es focus-grabbing: mientras está abierta, las teclas van a
+/// `query`, no al input del shell. El `current` index navega ciclicamente
+/// con `FindNext`/`FindPrev`; al cambiar, el `update` re-arma
+/// `surf_selection` como la span del match actual (paridad de pintado y
+/// copy con la selección por mouse).
+#[derive(Debug, Clone, Default)]
+pub struct FindState {
+    pub query: String,
+    pub matches: Vec<llimphi_widget_terminal::FindMatch>,
+    pub current: Option<usize>,
+    pub case_insensitive: bool,
+}
+
 /// Snapshot del layout del cuerpo de output bajo `SHUMA_TERMINAL_SURFACE=1`.
 /// Lo escribe `output_pane_surface` al final del render; lo lee el handler
 /// del drag de selección para resolver `(lx, ly)` a [`Point`] del store.
@@ -429,6 +443,11 @@ pub struct State {
     /// del drag para hit-testear `(lx, ly)` contra el render previo, sin
     /// re-armar los items.
     pub surf_layout: Arc<Mutex<Option<SurfLayout>>>,
+    /// Estado de la barra de búsqueda (Ctrl+F) sobre el cuerpo de output.
+    /// `None` = barra cerrada. Cuando hay matches, el `current` se refleja
+    /// como `surf_selection` para que se vea resaltado con el mismo overlay
+    /// y se pueda copiar con el clipboard ya cableado.
+    pub find: Option<FindState>,
     /// Selección viva en el cuerpo (IDE-text) de una card: `(block,
     /// cursor)`. El cuerpo de cada comando se pinta con
     /// `llimphi-widget-text-editor` read-only (numeración + selección +
@@ -546,6 +565,7 @@ impl State {
             surf_selecting: false,
             surf_drag_acc: (0.0, 0.0),
             surf_layout: Arc::new(Mutex::new(None)),
+            find: None,
             body_sel: None,
             body_menu: None,
             body_drag_accum: (0.0, 0.0),
@@ -861,6 +881,26 @@ pub enum Msg {
     /// output. No-op si no hay selección. Reusa el clipboard global del
     /// proceso (vía `arboard`).
     SurfCopySelection,
+    /// Abre la barra de búsqueda (Ctrl+F). Si ya estaba abierta, re-foca el
+    /// input vacío (paridad con browsers/editores). Si no hay layout
+    /// publicado todavía, abre igual — el primer keystroke recomputará.
+    FindOpen,
+    /// Cierra la barra de búsqueda (Esc). Limpia `find` y la selección
+    /// derivada de un match. No toca `surf_selection` si vino de un drag
+    /// del mouse y no de un match (la heurística: si `find` existía y
+    /// tenía un `current`, era nuestro highlight; lo limpiamos).
+    FindClose,
+    /// Agrega un char a la query de búsqueda y re-busca.
+    FindChar(char),
+    /// Borra el último char de la query y re-busca.
+    FindBackspace,
+    /// Avanza al siguiente match (Enter / F3 / botón).
+    FindNext,
+    /// Retrocede al match previo (Shift+Enter / Shift+F3 / botón).
+    FindPrev,
+    /// Togglea case-insensitive (botón `Aa` o atajo). Re-busca con la
+    /// nueva política.
+    FindToggleCase,
 }
 
 mod mouse_xterm;
@@ -2317,6 +2357,127 @@ mod tests {
             phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
         });
         assert!(s.surf_selection.is_none(), "click sin drag → sin selección");
+    }
+
+    /// Layout sintético con texto que el find puede matchear.
+    fn synth_surf_layout_with(lines: &[&str]) -> SurfLayout {
+        let metrics = llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 8.0,
+        };
+        let mut store = llimphi_widget_terminal::Scrollback::new(0);
+        for l in lines {
+            store.push_line(l);
+        }
+        let len = store.len();
+        SurfLayout {
+            items_geo: vec![llimphi_widget_terminal::ItemGeo::Lines(0, len)],
+            scroll_y: 0.0,
+            viewport_h: 200.0,
+            metrics,
+            gutter_w: 30.0,
+            store: Arc::new(store),
+        }
+    }
+
+    #[test]
+    fn find_open_inicializa_estado_vacio() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::FindOpen);
+        let f = s.find.expect("find abierto");
+        assert!(f.query.is_empty());
+        assert!(f.matches.is_empty());
+        assert!(f.current.is_none());
+        assert!(!f.case_insensitive);
+    }
+
+    #[test]
+    fn find_char_recomputa_y_resalta_el_primer_match() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout_with(&[
+            "foo bar baz",
+            "qux foo quux",
+            "nada que ver",
+        ]));
+        s = update(s, Msg::FindOpen);
+        s = update(s, Msg::FindChar('f'));
+        s = update(s, Msg::FindChar('o'));
+        s = update(s, Msg::FindChar('o'));
+        let f = s.find.as_ref().expect("find abierto");
+        assert_eq!(f.matches.len(), 2);
+        assert_eq!(f.current, Some(0));
+        // La selección debe reflejar el primer match (línea 0, col 0..3).
+        let sel = s.surf_selection.expect("highlight");
+        assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 0));
+        assert_eq!(sel.head, llimphi_widget_terminal::Point::new(0, 3));
+    }
+
+    #[test]
+    fn find_next_y_prev_son_ciclicos() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() =
+            Some(synth_surf_layout_with(&["aa", "aa", "aa"]));
+        s = update(s, Msg::FindOpen);
+        s = update(s, Msg::FindChar('a'));
+        // 6 matches (2 por línea, no superpuestos).
+        assert_eq!(s.find.as_ref().unwrap().matches.len(), 6);
+        s = update(s, Msg::FindNext);
+        assert_eq!(s.find.as_ref().unwrap().current, Some(1));
+        // Prev desde 0 envuelve al último (5).
+        s = update(s, Msg::FindPrev);
+        s = update(s, Msg::FindPrev);
+        assert_eq!(s.find.as_ref().unwrap().current, Some(5));
+    }
+
+    #[test]
+    fn find_toggle_case_re_busca_con_la_nueva_politica() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout_with(&[
+            "Hola", "HOLA", "hola",
+        ]));
+        s = update(s, Msg::FindOpen);
+        s = update(s, Msg::FindChar('h'));
+        s = update(s, Msg::FindChar('o'));
+        s = update(s, Msg::FindChar('l'));
+        s = update(s, Msg::FindChar('a'));
+        // Case sensitive: sólo matchea "hola" (línea 2).
+        assert_eq!(s.find.as_ref().unwrap().matches.len(), 1);
+        s = update(s, Msg::FindToggleCase);
+        // Case insensitive: matchea las 3.
+        assert_eq!(s.find.as_ref().unwrap().matches.len(), 3);
+    }
+
+    #[test]
+    fn find_close_limpia_estado_y_selection_del_match() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout_with(&["foo"]));
+        s = update(s, Msg::FindOpen);
+        s = update(s, Msg::FindChar('f'));
+        s = update(s, Msg::FindChar('o'));
+        s = update(s, Msg::FindChar('o'));
+        assert!(s.surf_selection.is_some());
+        s = update(s, Msg::FindClose);
+        assert!(s.find.is_none());
+        assert!(s.surf_selection.is_none(), "Esc no deja selección residual del match");
+    }
+
+    #[test]
+    fn find_backspace_re_busca_con_la_query_acortada() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() =
+            Some(synth_surf_layout_with(&["foo", "foobar"]));
+        s = update(s, Msg::FindOpen);
+        for c in "foobar".chars() {
+            s = update(s, Msg::FindChar(c));
+        }
+        assert_eq!(s.find.as_ref().unwrap().matches.len(), 1); // "foobar" matchea sólo línea 1
+        s = update(s, Msg::FindBackspace);
+        s = update(s, Msg::FindBackspace);
+        s = update(s, Msg::FindBackspace);
+        // Query = "foo" → 2 matches.
+        assert_eq!(s.find.as_ref().unwrap().query, "foo");
+        assert_eq!(s.find.as_ref().unwrap().matches.len(), 2);
     }
 
     #[test]
