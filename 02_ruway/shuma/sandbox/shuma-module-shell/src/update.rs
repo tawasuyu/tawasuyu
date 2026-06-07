@@ -388,6 +388,15 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::SurfDoubleClick { lx, ly, rect_w, rect_h } => {
             s = apply_surf_double_click(s, lx, ly, rect_w, rect_h);
         }
+        Msg::SurfOpenMenu { x, y } => {
+            s.surf_menu = Some((x, y));
+        }
+        Msg::SurfMenuDismiss => {
+            s.surf_menu = None;
+        }
+        Msg::SurfMenuPick(idx) => {
+            s = apply_surf_menu_pick(s, idx);
+        }
         Msg::FindOpen => {
             s.find = Some(FindState::default());
         }
@@ -740,6 +749,49 @@ pub(crate) fn apply_surf_double_click(
         anchor: Point::new(hit.line, start_byte),
         head: Point::new(hit.line, end_byte),
     });
+    s
+}
+
+/// Aplica el item elegido del menú contextual del surface y lo cierra.
+/// 0 = Copiar selección · 1 = Copiar todo el scrollback · 2 = Seleccionar todo.
+pub(crate) fn apply_surf_menu_pick(mut s: State, idx: usize) -> State {
+    use llimphi_widget_terminal::{Point, SelectionRange};
+    let snap = match s.surf_layout.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(snap) = snap else {
+        s.surf_menu = None;
+        return s;
+    };
+    match idx {
+        0 => copy_surf_selection(&s),
+        1 => {
+            // Copia todo el scrollback vigente (líneas spilled NO incluidas —
+            // serían lookups async; el menú "todo" copia lo en memoria).
+            let n = snap.store.len();
+            if n > 0 {
+                let text = snap.store.slice_text(0, n);
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let _ = cb.set_text(text);
+                }
+            }
+        }
+        2 => {
+            // Selección desde (0,0) hasta el final de la última línea.
+            let n = snap.store.len();
+            if n > 0 {
+                let last = n - 1;
+                let last_len = snap.store.line(last).map(|t| t.len()).unwrap_or(0);
+                s.surf_selection = Some(SelectionRange {
+                    anchor: Point::new(0, 0),
+                    head: Point::new(last, last_len),
+                });
+            }
+        }
+        _ => {}
+    }
+    s.surf_menu = None;
     s
 }
 

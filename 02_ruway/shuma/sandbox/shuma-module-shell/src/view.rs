@@ -2245,6 +2245,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             *g = rect.h;
         }
     };
+    let lift_menu = (*lift).clone();
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -2263,6 +2264,10 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     .radius(3.0)
     .clip(true)
     .paint_with(painter)
+    // Right-click sobre el contenedor de la surface abre el menú contextual.
+    // El hit-test innermost-wins le da prioridad a hijos con sus propios
+    // handlers (p. ej. la barra de find).
+    .on_right_click_at(move |x, y, _w, _h| Some(lift_menu(Msg::SurfOpenMenu { x, y })))
     .children({
         // Barra de find encima de la superficie, sólo si está abierta. Es
         // focus-grabbing (la dispatch ya rutea las teclas a `handle_find_key`).
@@ -2271,8 +2276,62 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             kids.push(find_bar_view::<HostMsg>(f, theme, lift));
         }
         kids.push(surface);
+        // El menú contextual va como overlay arriba de todo.
+        if let Some(menu) = surf_context_menu(state, theme, lift) {
+            kids.push(menu);
+        }
         kids
     })
+}
+
+/// Menú contextual del surface (click derecho): Copiar selección · Copiar
+/// todo · Seleccionar todo. `None` si no está abierto.
+pub(crate) fn surf_context_menu<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Option<View<HostMsg>> {
+    use llimphi_widget_context_menu::{
+        context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
+    };
+    let (x, y) = state.surf_menu?;
+    let mut copiar = ContextMenuItem::action("Copiar").with_shortcut("Ctrl+C");
+    if state.surf_selection.as_ref().map_or(true, |s| s.is_empty()) {
+        copiar = copiar.disabled();
+    }
+    let items = vec![
+        copiar,
+        ContextMenuItem::action("Copiar todo"),
+        ContextMenuItem::action("Seleccionar todo"),
+    ];
+    let lift_pick = lift.clone();
+    let menu = context_menu_view(ContextMenuSpec {
+        anchor: (x, y),
+        viewport: (1280.0, 800.0),
+        header: None,
+        items,
+        active: usize::MAX,
+        on_pick: std::sync::Arc::new(move |i| lift_pick(Msg::SurfMenuPick(i))),
+        on_dismiss: lift(Msg::SurfMenuDismiss),
+        palette: ContextMenuPalette::from_theme(theme),
+    });
+    Some(
+        View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(0.0_f32),
+                top: length(0.0_f32),
+                right: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![menu]),
+    )
 }
 
 /// Barra de búsqueda Ctrl+F: lupa + query (cursor) + contador `M/N` + chip

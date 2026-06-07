@@ -476,6 +476,11 @@ pub struct State {
     /// como `surf_selection` para que se vea resaltado con el mismo overlay
     /// y se pueda copiar con el clipboard ya cableado.
     pub find: Option<FindState>,
+    /// Menú contextual del cuerpo de output **en modo superficie**:
+    /// `(x, y)` en coords del nodo raíz del shell. `None` = cerrado.
+    /// Distinto del `body_menu` del legacy (que carga un `block`); el
+    /// surface menu opera sobre el scrollback entero.
+    pub surf_menu: Option<(f32, f32)>,
     /// Recursos GPU del modo grilla (atlas + pipeline + textura). `None`
     /// hasta que el primer `gpu_paint_with` los inicialice. Mantenidos en
     /// `Arc<Mutex<>>` para que la closure de paint (Send+Sync+'static)
@@ -601,6 +606,7 @@ impl State {
             surf_drag_acc: (0.0, 0.0),
             surf_layout: Arc::new(Mutex::new(None)),
             find: None,
+            surf_menu: None,
             gpu_grid: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
@@ -930,6 +936,16 @@ pub enum Msg {
         rect_w: f32,
         rect_h: f32,
     },
+    /// Right-click sobre el cuerpo de output en modo superficie: abre el
+    /// menú contextual en `(x, y)` (coords del nodo raíz del shell). Las
+    /// acciones operan sobre el scrollback entero (no por-bloque como el
+    /// `BodyMenu` del legacy) — Copiar selección, Copiar todo, Seleccionar
+    /// todo.
+    SurfOpenMenu { x: f32, y: f32 },
+    /// Elegir un item del menú contextual del surface (0-based).
+    SurfMenuPick(usize),
+    /// Cerrar el menú contextual del surface (scrim / Esc).
+    SurfMenuDismiss,
     /// Abre la barra de búsqueda (Ctrl+F). Si ya estaba abierta, re-foca el
     /// input vacío (paridad con browsers/editores). Si no hay layout
     /// publicado todavía, abre igual — el primer keystroke recomputará.
@@ -2686,6 +2702,44 @@ mod tests {
             assert_eq!(sel.anchor.col, 0);
             assert_eq!(sel.head.col, 4);
         }
+    }
+
+    #[test]
+    fn surf_open_y_dismiss_menu_actualiza_estado() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::SurfOpenMenu { x: 100.0, y: 50.0 });
+        assert_eq!(s.surf_menu, Some((100.0, 50.0)));
+        s = update(s, Msg::SurfMenuDismiss);
+        assert!(s.surf_menu.is_none());
+    }
+
+    #[test]
+    fn surf_menu_pick_seleccionar_todo_arma_rango_full() {
+        // Item 2 = Seleccionar todo. Pone surf_selection desde (0,0) hasta
+        // el fin de la última línea del scrollback.
+        let mut s = State::new(Source::Local);
+        let metrics = llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0, line_height: 16.0, char_width: 8.0,
+        };
+        let mut store = llimphi_widget_terminal::Scrollback::new(0);
+        store.push_line("hola");
+        store.push_line("mundo");
+        store.push_line("xxx");
+        *s.surf_layout.lock().unwrap() = Some(SurfLayout {
+            items_geo: vec![llimphi_widget_terminal::ItemGeo::Lines(0, 3)],
+            scroll_y: 0.0,
+            viewport_h: 200.0,
+            metrics,
+            gutter_w: 30.0,
+            store: Arc::new(store),
+        });
+        s = update(s, Msg::SurfOpenMenu { x: 50.0, y: 50.0 });
+        s = update(s, Msg::SurfMenuPick(2));
+        let sel = s.surf_selection.expect("select all");
+        assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 0));
+        // Última línea = "xxx" (3 bytes).
+        assert_eq!(sel.head, llimphi_widget_terminal::Point::new(2, 3));
+        assert!(s.surf_menu.is_none(), "el pick cierra el menú");
     }
 
     #[test]
