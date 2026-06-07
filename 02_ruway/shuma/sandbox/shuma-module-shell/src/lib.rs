@@ -291,6 +291,20 @@ pub struct VimSel {
     pub active: bool,
 }
 
+/// Recursos GPU del modo grilla (Fase 4 del SDD-TERMINAL). Se inicializan
+/// lazy la primera vez que el `gpu_paint_with` del `generic_grid_panel`
+/// recibe un device, y persisten entre frames (re-crear el pipeline cada
+/// frame sería absurdo — el WGSL no cambia). El atlas crece y la textura
+/// se re-aloca cuando aparece un glifo nuevo que no entra.
+pub struct GpuGridResources {
+    pub pipeline: llimphi_widget_terminal::CellPipeline,
+    pub atlas: llimphi_widget_terminal::GlyphAtlas,
+    pub atlas_texture: llimphi_ui::llimphi_hal::wgpu::Texture,
+    pub atlas_view: llimphi_ui::llimphi_hal::wgpu::TextureView,
+    /// Tamaño del atlas para detectar grow → re-crear textura.
+    pub atlas_size: (u32, u32),
+}
+
 /// Estado de la barra de búsqueda Ctrl+F sobre el cuerpo de output.
 /// La barra es focus-grabbing: mientras está abierta, las teclas van a
 /// `query`, no al input del shell. El `current` index navega ciclicamente
@@ -448,6 +462,11 @@ pub struct State {
     /// como `surf_selection` para que se vea resaltado con el mismo overlay
     /// y se pueda copiar con el clipboard ya cableado.
     pub find: Option<FindState>,
+    /// Recursos GPU del modo grilla (atlas + pipeline + textura). `None`
+    /// hasta que el primer `gpu_paint_with` los inicialice. Mantenidos en
+    /// `Arc<Mutex<>>` para que la closure de paint (Send+Sync+'static)
+    /// pueda accederlos.
+    pub gpu_grid: Arc<Mutex<Option<GpuGridResources>>>,
     /// Selección viva en el cuerpo (IDE-text) de una card: `(block,
     /// cursor)`. El cuerpo de cada comando se pinta con
     /// `llimphi-widget-text-editor` read-only (numeración + selección +
@@ -566,6 +585,7 @@ impl State {
             surf_drag_acc: (0.0, 0.0),
             surf_layout: Arc::new(Mutex::new(None)),
             find: None,
+            gpu_grid: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
             body_drag_accum: (0.0, 0.0),

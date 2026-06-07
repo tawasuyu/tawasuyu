@@ -509,7 +509,13 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
             lift,
         );
     }
-    generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot, lift)
+    generic_grid_panel::<HostMsg>(
+        snapshot,
+        theme,
+        rect_slot,
+        Arc::clone(&state.gpu_grid),
+        lift,
+    )
 }
 
 /// Render de grilla vt100 cruda — el camino histórico para htop/less/man.
@@ -523,10 +529,22 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
     snapshot: Option<TuiSnapshot>,
     theme: &Theme,
     rect_slot: Arc<Mutex<(f32, f32)>>,
+    gpu_grid: Arc<Mutex<Option<crate::GpuGridResources>>>,
     lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 ) -> View<HostMsg> {
     let theme_clone = *theme;
+    // Lectura única del env: si `SHUMA_GPU_GRID=1`, el render del texto va
+    // por el `CellPipeline` (atlas + quads instanciados) en vez del path
+    // vello. El vello sigue dibujando el fondo + el cursor para mantener
+    // los handlers de mouse y la geometría del rect publish.
+    let use_gpu = std::env::var("SHUMA_GPU_GRID")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    // El snapshot lo comparten paint_with (rect/cursor/bg) y gpu_paint_with
+    // (cells). Arc para que cada closure capture su propia handle.
+    let snapshot = Arc::new(snapshot);
 
+    let snapshot_paint = Arc::clone(&snapshot);
     let painter = move |scene: &mut vello::Scene,
                         ts: &mut llimphi_ui::llimphi_text::Typesetter,
                         rect: llimphi_ui::PaintRect| {
@@ -538,7 +556,7 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
         if let Ok(mut g) = rect_slot.lock() {
             *g = (rect.w, rect.h);
         }
-        let Some(snap) = &snapshot else { return };
+        let Some(snap) = snapshot_paint.as_ref() else { return };
         // Tamaño de la celda derivado del rect disponible. Monoespacio,
         // ancho/alto fijos por celda. Si el panel es chico el grid
         // se recorta abajo/derecha (no scrolleamos por ahora).
@@ -551,24 +569,35 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
         let origin_x = rect.x as f64 + pad;
         let origin_y = rect.y as f64 + pad;
 
-        // Backgrounds primero (en bloques rect), texto encima.
-        for (r, row) in snap.cells.iter().enumerate() {
-            for (c, cell) in row.iter().enumerate() {
-                let bg = vt_color(cell.bg, theme_clone, true);
-                if bg.components[3] > 0.0 {
-                    let x0 = origin_x + c as f64 * cell_w;
-                    let y0 = origin_y + r as f64 * cell_h;
-                    let rect = KurboRect::new(x0, y0, x0 + cell_w, y0 + cell_h);
-                    scene.fill(
-                        Fill::NonZero,
-                        vello::kurbo::Affine::IDENTITY,
-                        bg,
-                        None,
-                        &rect,
-                    );
+        // Modo GPU: las celdas (bg + glifos) las dibuja el `gpu_paint_with`
+        // de abajo via `CellPipeline`. El vello sigue acá sólo por el cursor
+        // (el shader del cell pipeline no lo pinta) y por publicar el rect.
+        if use_gpu {
+            // Skip bg + text — los pinta el pipeline GPU debajo.
+            // (Sigo al cursor más abajo, después del bloque de text/bg que
+            // este `if` salta con un `return` del closure ... no, el cursor
+            // viene en el mismo closure, así que sólo skipeo bg+text.)
+        } else {
+            // Backgrounds primero (en bloques rect), texto encima.
+            for (r, row) in snap.cells.iter().enumerate() {
+                for (c, cell) in row.iter().enumerate() {
+                    let bg = vt_color(cell.bg, theme_clone, true);
+                    if bg.components[3] > 0.0 {
+                        let x0 = origin_x + c as f64 * cell_w;
+                        let y0 = origin_y + r as f64 * cell_h;
+                        let rect = KurboRect::new(x0, y0, x0 + cell_w, y0 + cell_h);
+                        scene.fill(
+                            Fill::NonZero,
+                            vello::kurbo::Affine::IDENTITY,
+                            bg,
+                            None,
+                            &rect,
+                        );
+                    }
                 }
             }
         }
+        if !use_gpu {
         // Texto por celda. Para reducir shaping, agrupamos runs con
         // mismo color contiguo en la misma fila.
         for (r, row) in snap.cells.iter().enumerate() {
@@ -602,7 +631,9 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
                 c = end;
             }
         }
-        // Cursor: barra vertical en (cursor_r, cursor_c).
+        }
+        // Cursor: barra vertical en (cursor_r, cursor_c). Lo sigue dibujando
+        // el path vello en ambos modos — el `CellPipeline` no lo emite.
         if !snap.hide_cursor {
             let x0 = origin_x + snap.cursor_c as f64 * cell_w;
             let y0 = origin_y + snap.cursor_r as f64 * cell_h;
@@ -620,6 +651,139 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
     let lift_click = lift.clone();
     let lift_right = lift.clone();
     let lift_wheel = lift.clone();
+    // Closure GPU: si `use_gpu`, dibuja todas las celdas con el
+    // `CellPipeline`. Lazy-init del pipeline + atlas + textura en el primer
+    // frame; los resources persisten en `state.gpu_grid`. No-op si el
+    // modo GPU está apagado o no hay snapshot.
+    let snapshot_gpu = Arc::clone(&snapshot);
+    let gpu_grid_for_paint = Arc::clone(&gpu_grid);
+    let theme_for_gpu = theme_clone;
+    let gpu_painter = move |device: &llimphi_ui::llimphi_hal::wgpu::Device,
+                            queue: &llimphi_ui::llimphi_hal::wgpu::Queue,
+                            encoder: &mut llimphi_ui::llimphi_hal::wgpu::CommandEncoder,
+                            target_view: &llimphi_ui::llimphi_hal::wgpu::TextureView,
+                            rect: llimphi_ui::PaintRect,
+                            viewport: (u32, u32)| {
+        if !use_gpu {
+            return;
+        }
+        let Some(snap) = snapshot_gpu.as_ref() else { return };
+        let mut guard = match gpu_grid_for_paint.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        // Lazy-init: la primera vez compilamos el pipeline + armamos atlas
+        // 32×8 (256 glifos iniciales, alcanza para ASCII + box-drawing).
+        if guard.is_none() {
+            let Some(atlas) = llimphi_widget_terminal::GlyphAtlas::new(
+                llimphi_ui::llimphi_text::MONO_FONT_BYTES,
+                14.0,
+                32,
+                8,
+            ) else {
+                return;
+            };
+            // El color_format del target lo sabemos del `Hal` que arma
+            // la intermediate (Rgba8Unorm por defecto). Asumir Rgba8Unorm;
+            // si el host cambia, recompilar pipeline una vez al detectar.
+            let pipeline = llimphi_widget_terminal::CellPipeline::new(
+                device,
+                llimphi_ui::llimphi_hal::wgpu::TextureFormat::Rgba8Unorm,
+            );
+            let atlas_size = atlas.size();
+            let (atlas_texture, atlas_view) =
+                llimphi_widget_terminal::CellPipeline::create_atlas_texture(
+                    device,
+                    queue,
+                    atlas.pixels(),
+                    atlas_size,
+                );
+            *guard = Some(crate::GpuGridResources {
+                pipeline,
+                atlas,
+                atlas_texture,
+                atlas_view,
+                atlas_size,
+            });
+        }
+        let res = guard.as_mut().unwrap();
+        // Build instances ANTES de chequear dirty (rasteriza glifos nuevos).
+        let cells = build_cell_instances(snap, &mut res.atlas, theme_for_gpu, rect);
+        // Si el atlas creció, re-crear textura.
+        let new_size = res.atlas.size();
+        if new_size != res.atlas_size {
+            let (tex, view) = llimphi_widget_terminal::CellPipeline::create_atlas_texture(
+                device,
+                queue,
+                res.atlas.pixels(),
+                new_size,
+            );
+            res.atlas_texture = tex;
+            res.atlas_view = view;
+            res.atlas_size = new_size;
+        } else if let Some(dirty) = res.atlas.take_dirty() {
+            // Subir sólo el rect que cambió. Stride completo del atlas.
+            let pixels = res.atlas.pixels();
+            let row_w = res.atlas_size.0 as usize;
+            let mut sub = Vec::with_capacity((dirty.w * dirty.h) as usize);
+            for y in 0..dirty.h {
+                let src_y = (dirty.y + y) as usize;
+                let start = src_y * row_w + dirty.x as usize;
+                let end = start + dirty.w as usize;
+                sub.extend_from_slice(&pixels[start..end]);
+            }
+            queue.write_texture(
+                llimphi_ui::llimphi_hal::wgpu::TexelCopyTextureInfo {
+                    texture: &res.atlas_texture,
+                    mip_level: 0,
+                    origin: llimphi_ui::llimphi_hal::wgpu::Origin3d {
+                        x: dirty.x,
+                        y: dirty.y,
+                        z: 0,
+                    },
+                    aspect: llimphi_ui::llimphi_hal::wgpu::TextureAspect::All,
+                },
+                &sub,
+                llimphi_ui::llimphi_hal::wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(dirty.w),
+                    rows_per_image: Some(dirty.h),
+                },
+                llimphi_ui::llimphi_hal::wgpu::Extent3d {
+                    width: dirty.w,
+                    height: dirty.h,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        let (acw, ach) = res.atlas.cell_size();
+        let snap_cols = snap.cols.max(1) as f32;
+        let snap_rows = snap.rows.max(1) as f32;
+        let pad = 6.0_f32;
+        let render_cell_w = ((rect.w - pad * 2.0).max(1.0) / snap_cols).max(1.0);
+        let render_cell_h = ((rect.h - pad * 2.0).max(1.0) / snap_rows).max(1.0);
+        let _ = (acw, ach); // los pasamos como atlas_w/atlas_h
+        let uniforms = llimphi_widget_terminal::CellUniforms {
+            viewport_w: viewport.0 as f32,
+            viewport_h: viewport.1 as f32,
+            cell_w: render_cell_w,
+            cell_h: render_cell_h,
+            atlas_w: res.atlas_size.0 as f32,
+            atlas_h: res.atlas_size.1 as f32,
+            _pad0: 0.0,
+            _pad1: 0.0,
+        };
+        res.pipeline.draw(
+            device,
+            queue,
+            encoder,
+            target_view,
+            &res.atlas_view,
+            &cells,
+            uniforms,
+        );
+    };
+
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -631,6 +795,7 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
     .fill(theme.bg_panel)
     .radius(3.0)
     .paint_with(painter)
+    .gpu_paint_with(gpu_painter)
     // Click izquierdo → press+release del botón 0 en la celda (col,row)
     // que cubra (lx,ly). El handler de update lo encodea sólo si el
     // programa habilitó mouse, sino no-op silencioso.
@@ -961,6 +1126,86 @@ pub(crate) fn vt_color(
         vt100::Color::Rgb(r, g, b) => Color::from_rgba8(r, g, b, 255),
         vt100::Color::Idx(i) => ansi_idx_to_color(i),
     }
+}
+
+/// Empaca un `peniko::Color` a un u32 RGBA8 little-endian listo para el
+/// `CellInstance` del pipeline GPU (Fase 4 del SDD-TERMINAL). Espeja
+/// `llimphi_widget_terminal::pack_rgba` pero parte del color del runtime
+/// (componentes f32 0..1).
+pub(crate) fn pack_peniko(c: llimphi_ui::llimphi_raster::peniko::Color) -> u32 {
+    let r = (c.components[0].clamp(0.0, 1.0) * 255.0) as u8;
+    let g = (c.components[1].clamp(0.0, 1.0) * 255.0) as u8;
+    let b = (c.components[2].clamp(0.0, 1.0) * 255.0) as u8;
+    let a = (c.components[3].clamp(0.0, 1.0) * 255.0) as u8;
+    llimphi_widget_terminal::pack_rgba(r, g, b, a)
+}
+
+/// Construye las `CellInstance`s a dibujar para un snapshot vt100 sobre el
+/// rect del panel del TUI (Fase 4 del SDD-TERMINAL). Itera fila×col, mira
+/// el char + colores fg/bg, rasteriza el glifo si todavía no está en el
+/// atlas y arma un instance por celda. Las celdas con char vacío o sólo
+/// espacio Y bg default se saltan (el fondo del panel cubre).
+///
+/// `render_cell_w`/`render_cell_h` son el tamaño de celda en el viewport
+/// (deriva del rect / cols×rows); pueden diferir del cell size natural del
+/// atlas — la diferencia se absorbe en el shader (el sampler lineal estira
+/// el glifo al cell de salida).
+pub(crate) fn build_cell_instances(
+    snap: &TuiSnapshot,
+    atlas: &mut llimphi_widget_terminal::GlyphAtlas,
+    theme: Theme,
+    rect: llimphi_ui::PaintRect,
+) -> Vec<llimphi_widget_terminal::CellInstance> {
+    use llimphi_widget_terminal::CellInstance;
+    if snap.rows == 0 || snap.cols == 0 {
+        return Vec::new();
+    }
+    let pad = 6.0_f32;
+    let avail_w = (rect.w - pad * 2.0).max(0.0);
+    let avail_h = (rect.h - pad * 2.0).max(0.0);
+    let render_cell_w = (avail_w / snap.cols as f32).max(1.0);
+    let render_cell_h = (avail_h / snap.rows as f32).max(1.0);
+    let origin_x = rect.x + pad;
+    let origin_y = rect.y + pad;
+    let (atlas_cell_w, atlas_cell_h) = atlas.cell_size();
+
+    let mut out: Vec<CellInstance> = Vec::with_capacity((snap.rows * snap.cols) as usize);
+    for (r, row) in snap.cells.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            let bg = vt_color(cell.bg, theme, true);
+            let fg = vt_color(cell.fg, theme, false);
+            let ch = cell.ch.chars().next().unwrap_or(' ');
+            let is_blank = ch == ' ' || ch == '\0';
+            // Salta celdas vacías con fondo default — el panel ya pinta su
+            // bg, no hay nada que cubrir ni que pintar.
+            if is_blank && bg.components[3] <= 0.001 {
+                continue;
+            }
+            // Pide el slot del glifo. Si el atlas está lleno, intenta
+            // crecer una vez; si tampoco entra (raro), salta el char.
+            let slot = match atlas.glyph_for(ch) {
+                Some(s) => s,
+                None => {
+                    atlas.grow();
+                    match atlas.glyph_for(ch) {
+                        Some(s) => s,
+                        None => continue,
+                    }
+                }
+            };
+            out.push(CellInstance {
+                cell_x: origin_x + c as f32 * render_cell_w,
+                cell_y: origin_y + r as f32 * render_cell_h,
+                uv_x: slot.px as f32,
+                uv_y: slot.py as f32,
+                uv_w: atlas_cell_w as f32,
+                uv_h: atlas_cell_h as f32,
+                fg_rgba: pack_peniko(fg),
+                bg_rgba: pack_peniko(bg),
+            });
+        }
+    }
+    out
 }
 
 /// Mapeo 256 → RGB usando la paleta xterm estándar. Cubre los 16
@@ -3369,4 +3614,121 @@ pub(crate) fn pretty_path(p: &std::path::Path) -> String {
         }
     }
     full
+}
+
+#[cfg(test)]
+mod gpu_grid_tests {
+    use super::*;
+
+    fn snap_of(cells: &[&[(char, vt100::Color, vt100::Color)]]) -> TuiSnapshot {
+        let rows = cells.len() as u16;
+        let cols = cells.first().map(|r| r.len()).unwrap_or(0) as u16;
+        let mut grid: Vec<Vec<TuiCell>> = Vec::with_capacity(rows as usize);
+        for row in cells {
+            grid.push(
+                row.iter()
+                    .map(|(ch, fg, bg)| TuiCell {
+                        ch: ch.to_string(),
+                        fg: *fg,
+                        bg: *bg,
+                    })
+                    .collect(),
+            );
+        }
+        TuiSnapshot {
+            cells: grid,
+            rows,
+            cols,
+            cursor_r: 0,
+            cursor_c: 0,
+            hide_cursor: true,
+        }
+    }
+
+    fn atlas() -> llimphi_widget_terminal::GlyphAtlas {
+        llimphi_widget_terminal::GlyphAtlas::new(
+            llimphi_ui::llimphi_text::MONO_FONT_BYTES,
+            14.0,
+            16,
+            4,
+        )
+        .expect("atlas")
+    }
+
+    fn rect_400_200() -> llimphi_ui::PaintRect {
+        llimphi_ui::PaintRect {
+            x: 0.0,
+            y: 0.0,
+            w: 400.0,
+            h: 200.0,
+        }
+    }
+
+    #[test]
+    fn build_skip_blanks_con_bg_default() {
+        let snap = snap_of(&[&[
+            (' ', vt100::Color::Default, vt100::Color::Default),
+            (' ', vt100::Color::Default, vt100::Color::Default),
+        ]]);
+        let mut a = atlas();
+        let theme = llimphi_theme::Theme::dark();
+        let cells = build_cell_instances(&snap, &mut a, theme, rect_400_200());
+        assert!(cells.is_empty(), "celdas vacías con bg default no van");
+    }
+
+    #[test]
+    fn build_emite_un_instance_por_celda_con_contenido() {
+        let snap = snap_of(&[
+            &[
+                ('h', vt100::Color::Default, vt100::Color::Default),
+                ('i', vt100::Color::Default, vt100::Color::Default),
+            ],
+            &[
+                (' ', vt100::Color::Default, vt100::Color::Default),
+                ('!', vt100::Color::Default, vt100::Color::Default),
+            ],
+        ]);
+        let mut a = atlas();
+        let theme = llimphi_theme::Theme::dark();
+        let cells = build_cell_instances(&snap, &mut a, theme, rect_400_200());
+        // Tres chars no-blank (h, i, !), el ' ' con bg default se salta.
+        assert_eq!(cells.len(), 3);
+        // El primer instance debe arrancar en (pad, pad).
+        assert_eq!(cells[0].cell_x, 6.0);
+        assert_eq!(cells[0].cell_y, 6.0);
+    }
+
+    #[test]
+    fn build_no_skip_si_bg_explicito() {
+        // Una celda con ' ' pero bg explícito (Idx) SÍ se emite (el bg
+        // tiene que pintarse aunque el char sea blank).
+        let snap = snap_of(&[&[
+            (' ', vt100::Color::Default, vt100::Color::Idx(1)),
+            (' ', vt100::Color::Default, vt100::Color::Default),
+        ]]);
+        let mut a = atlas();
+        let theme = llimphi_theme::Theme::dark();
+        let cells = build_cell_instances(&snap, &mut a, theme, rect_400_200());
+        // Sólo el primero (bg explícito); el segundo (bg default) se salta.
+        assert_eq!(cells.len(), 1);
+    }
+
+    #[test]
+    fn build_uv_y_color_son_consistentes() {
+        let snap = snap_of(&[&[('A', vt100::Color::Default, vt100::Color::Default)]]);
+        let mut a = atlas();
+        let theme = llimphi_theme::Theme::dark();
+        let cells = build_cell_instances(&snap, &mut a, theme, rect_400_200());
+        assert_eq!(cells.len(), 1);
+        let (acw, ach) = a.cell_size();
+        // UV apunta al slot 0 (primer glifo rasterizado).
+        assert_eq!(cells[0].uv_x, 0.0);
+        assert_eq!(cells[0].uv_y, 0.0);
+        assert_eq!(cells[0].uv_w, acw as f32);
+        assert_eq!(cells[0].uv_h, ach as f32);
+        // fg y bg no son 0 (fg = theme.fg_text, bg = default → alpha 0
+        // pero los componentes no se chequean — basta con que el instance
+        // se haya armado sin pánico).
+        assert_ne!(cells[0].fg_rgba, 0);
+    }
 }
