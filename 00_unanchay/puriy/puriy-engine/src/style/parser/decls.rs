@@ -887,13 +887,16 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "align-self" | "-webkit-align-self" => {
             parse_align_self(value).map(DeclKind::AlignSelf)
         }
-        "flex-grow" | "-webkit-flex-grow" => {
+        // Fase 7.803 — `-ms-flex-positive` (IE10) → `flex-grow` (número idéntico).
+        "flex-grow" | "-webkit-flex-grow" | "-ms-flex-positive" => {
             value.trim().parse::<f32>().ok().map(DeclKind::FlexGrow)
         }
-        "flex-shrink" | "-webkit-flex-shrink" => {
+        // Fase 7.804 — `-ms-flex-negative` (IE10) → `flex-shrink` (número idéntico).
+        "flex-shrink" | "-webkit-flex-shrink" | "-ms-flex-negative" => {
             value.trim().parse::<f32>().ok().map(DeclKind::FlexShrink)
         }
-        "flex-basis" | "-webkit-flex-basis" => {
+        // Fase 7.805 — `-ms-flex-preferred-size` (IE10) → `flex-basis` (length idéntico).
+        "flex-basis" | "-webkit-flex-basis" | "-ms-flex-preferred-size" => {
             parse_length_or_pct(value).map(DeclKind::FlexBasis)
         }
         // `flex` y `outline` son shorthands múltiples — se expanden en
@@ -2737,7 +2740,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.649 — `-webkit-margin-start` (alias legacy de
         // margin-inline-start). `0` → None.
-        "-webkit-margin-start" => {
+        // Fase 7.806 — `-moz-margin-start` alias vendor (Gecko, mismo semántico).
+        "-webkit-margin-start" | "-moz-margin-start" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "0" {
@@ -2746,8 +2750,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitMarginStart(Some(v.to_string())))
             }
         }
-        // Fase 7.650 — `-webkit-margin-end`. `0` → None.
-        "-webkit-margin-end" => {
+        // Fase 7.650 — `-webkit-margin-end` / Fase 7.807 — `-moz-margin-end`. `0` → None.
+        "-webkit-margin-end" | "-moz-margin-end" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "0" {
