@@ -1826,6 +1826,27 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                 ),
             ));
 
+            // Chrome de etapas (tee): chips clickeables + capturas desplegadas
+            // por etapa. Paridad con el `command_card` viejo. Vacío si el
+            // bloque no tiene etapas o si está colapsado. Reusa el helper del
+            // path viejo (`stage_capture_rows`) y lo envuelve como un chrome
+            // de alto medido por el helper, opaco para la virtualización.
+            if !collapsed && has_stages {
+                let stage_lines: Vec<&OutputLine> =
+                    g.iter().filter(|l| l.stage.is_some()).copied().collect();
+                let (views, h) =
+                    stage_capture_rows(&header_text, &stage_lines, *id, state, theme, lift);
+                if !views.is_empty() && h > 0.0 {
+                    let chrome_view = View::new(Style {
+                        flex_direction: FlexDirection::Column,
+                        size: Size { width: percent(1.0_f32), height: length(h) },
+                        ..Default::default()
+                    })
+                    .children(views);
+                    items.push(Item::chrome(h, chrome_view));
+                }
+            }
+
             if !collapsed && !lines.is_empty() {
                 let start = store.len();
                 for (i, line) in lines.iter().enumerate() {
