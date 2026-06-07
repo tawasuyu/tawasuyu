@@ -2922,6 +2922,66 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitRegionBreakInside(Some(v.to_string())))
             }
         }
+        // Fase 7.698 — `-webkit-border-before-color`. `currentcolor` → None.
+        "-webkit-border-before-color" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("currentcolor") {
+                Some(DeclKind::WebkitBorderBeforeColor(None))
+            } else {
+                Some(DeclKind::WebkitBorderBeforeColor(Some(v.to_string())))
+            }
+        }
+        // Fase 7.699 — `-webkit-border-before-style`. `none` → None.
+        "-webkit-border-before-style" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBorderBeforeStyle(None))
+            } else {
+                Some(DeclKind::WebkitBorderBeforeStyle(Some(v.to_string())))
+            }
+        }
+        // Fase 7.700 — `-webkit-border-before-width`. `medium` → None.
+        "-webkit-border-before-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::WebkitBorderBeforeWidth(None))
+            } else {
+                Some(DeclKind::WebkitBorderBeforeWidth(Some(v.to_string())))
+            }
+        }
+        // Fase 7.701 — `-webkit-border-after-color`. `currentcolor` → None.
+        "-webkit-border-after-color" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("currentcolor") {
+                Some(DeclKind::WebkitBorderAfterColor(None))
+            } else {
+                Some(DeclKind::WebkitBorderAfterColor(Some(v.to_string())))
+            }
+        }
+        // Fase 7.702 — `-webkit-border-after-style`. `none` → None.
+        "-webkit-border-after-style" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBorderAfterStyle(None))
+            } else {
+                Some(DeclKind::WebkitBorderAfterStyle(Some(v.to_string())))
+            }
+        }
+        // Fase 7.703 — `-webkit-border-after-width`. `medium` → None.
+        "-webkit-border-after-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::WebkitBorderAfterWidth(None))
+            } else {
+                Some(DeclKind::WebkitBorderAfterWidth(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

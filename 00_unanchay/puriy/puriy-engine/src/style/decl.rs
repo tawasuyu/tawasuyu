@@ -868,6 +868,18 @@ pub(crate) enum DeclKind {
     WebkitRegionBreakAfter(Option<String>),
     /// `-webkit-region-break-inside` (Fase 7.683). `None` = `auto`. NO hereda. Plumb.
     WebkitRegionBreakInside(Option<String>),
+    /// `-webkit-border-before-color` (Fase 7.698). `None` = `currentcolor`. NO hereda. Plumb.
+    WebkitBorderBeforeColor(Option<String>),
+    /// `-webkit-border-before-style` (Fase 7.699). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderBeforeStyle(Option<String>),
+    /// `-webkit-border-before-width` (Fase 7.700). `None` = `medium`. NO hereda. Plumb.
+    WebkitBorderBeforeWidth(Option<String>),
+    /// `-webkit-border-after-color` (Fase 7.701). `None` = `currentcolor`. NO hereda. Plumb.
+    WebkitBorderAfterColor(Option<String>),
+    /// `-webkit-border-after-style` (Fase 7.702). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderAfterStyle(Option<String>),
+    /// `-webkit-border-after-width` (Fase 7.703). `None` = `medium`. NO hereda. Plumb.
+    WebkitBorderAfterWidth(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1464,6 +1476,12 @@ impl Decl {
             DeclKind::WebkitRegionBreakBefore(v) => s.webkit_region_break_before = v.clone(),
             DeclKind::WebkitRegionBreakAfter(v) => s.webkit_region_break_after = v.clone(),
             DeclKind::WebkitRegionBreakInside(v) => s.webkit_region_break_inside = v.clone(),
+            DeclKind::WebkitBorderBeforeColor(v) => s.webkit_border_before_color = v.clone(),
+            DeclKind::WebkitBorderBeforeStyle(v) => s.webkit_border_before_style = v.clone(),
+            DeclKind::WebkitBorderBeforeWidth(v) => s.webkit_border_before_width = v.clone(),
+            DeclKind::WebkitBorderAfterColor(v) => s.webkit_border_after_color = v.clone(),
+            DeclKind::WebkitBorderAfterStyle(v) => s.webkit_border_after_style = v.clone(),
+            DeclKind::WebkitBorderAfterWidth(v) => s.webkit_border_after_width = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
