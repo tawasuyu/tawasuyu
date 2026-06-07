@@ -3274,7 +3274,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "column-width" | "-webkit-column-width" | "-moz-column-width" => {
             parse_length_or_pct(value).map(DeclKind::ColumnWidth)
         }
-        "column-rule-width" | "-webkit-column-rule-width" => {
+        // Fase 7.777 — `-moz-column-rule-width` alias vendor legacy.
+        "column-rule-width" | "-webkit-column-rule-width" | "-moz-column-rule-width" => {
             parse_length_px(value).map(DeclKind::ColumnRuleWidth)
         }
         "column-rule-color" | "-webkit-column-rule-color" => {
@@ -3372,17 +3373,18 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
         }
         // Fase 7.740 — alias `-webkit-transform-style` → estándar.
-        "transform-style" | "-webkit-transform-style" => {
+        // Fase 7.775 — `-moz-transform-style` alias vendor legacy.
+        "transform-style" | "-webkit-transform-style" | "-moz-transform-style" => {
             parse_transform_style(value).map(DeclKind::TransformStyle)
         }
-        // Fase 7.741 — alias `-webkit-perspective` → estándar.
-        "perspective" | "-webkit-perspective" => parse_perspective(value).map(DeclKind::Perspective),
-        // Fase 7.663 — `-webkit-perspective-origin` alias vendor del shorthand.
-        "perspective-origin" | "-webkit-perspective-origin" => {
+        // Fase 7.741 — `-webkit-perspective` / Fase 7.773 — `-moz-perspective`.
+        "perspective" | "-webkit-perspective" | "-moz-perspective" => parse_perspective(value).map(DeclKind::Perspective),
+        // Fase 7.663 — `-webkit-perspective-origin` / Fase 7.776 — `-moz-perspective-origin`.
+        "perspective-origin" | "-webkit-perspective-origin" | "-moz-perspective-origin" => {
             parse_perspective_origin(value).map(DeclKind::PerspectiveOrigin)
         }
-        // Fase 7.742 — alias `-webkit-backface-visibility` → estándar.
-        "backface-visibility" | "-webkit-backface-visibility" => {
+        // Fase 7.742 — `-webkit-backface-visibility` / Fase 7.774 — `-moz-backface-visibility`.
+        "backface-visibility" | "-webkit-backface-visibility" | "-moz-backface-visibility" => {
             parse_backface_visibility(value).map(DeclKind::BackfaceVisibility)
         }
         "scrollbar-width" => {
