@@ -84,6 +84,22 @@ pub enum Msg {
     ClipboardPick(String),
     /// Click en el reloj: despliega/repliega el panel para fijar fecha/hora.
     ClockPanel,
+    /// Click izquierdo sobre el medidor de CPU (o el de cores): despliega/
+    /// repliega su ventanita de interacción.
+    CpuPanel,
+    /// Click izquierdo sobre el medidor de RAM: despliega/repliega su ventanita.
+    RamPanel,
+    /// Click izquierdo sobre el medidor de volumen: despliega/repliega su
+    /// ventanita (slider vertical + mute).
+    VolumePanel,
+    /// Click izquierdo sobre el medidor de brillo: despliega/repliega su
+    /// ventanita (slider vertical).
+    BrightnessPanel,
+    /// Ajustar el volumen a una fracción exacta `0..1` desde la ventanita
+    /// (click sobre la franja del slider). El sampler refleja en el próximo tick.
+    VolumeSet(f32),
+    /// Ajustar el brillo a una fracción exacta `0..1` desde la ventanita.
+    BrightnessSet(f32),
     /// Ajusta un campo del borrador de fecha/hora `(campo 0..=4, delta)`:
     /// 0=año 1=mes 2=día 3=hora 4=minuto.
     ClockAdjust(u8, i32),
@@ -461,6 +477,17 @@ pub struct Model {
     pub clock_open: bool,
     /// Borrador de fecha/hora que el panel del reloj edita.
     pub clock_draft: ClockDraft,
+    /// `true` cuando la ventanita de CPU está desplegada.
+    pub cpu_open: bool,
+    /// `true` cuando la ventanita de RAM está desplegada.
+    pub ram_open: bool,
+    /// `true` cuando la ventanita de volumen está desplegada.
+    pub volume_open: bool,
+    /// `true` cuando la ventanita de brillo está desplegada.
+    pub brightness_open: bool,
+    /// Último snapshot del sistema — cacheado para alimentar las ventanitas
+    /// (porcentajes en vivo, lista de cores) sin volver a llamar al sampler.
+    pub last_ctx: pata_core::widget::WidgetCtx,
     /// La bandeja del sistema, corriendo en su propio hilo. `None` si la config no
     /// declara ningún widget `tray`.
     pub tray: Option<TrayHandle>,
@@ -638,6 +665,11 @@ impl App for PataApp {
             clip_open: false,
             clock_open: false,
             clock_draft: ClockDraft::default(),
+            cpu_open: false,
+            ram_open: false,
+            volume_open: false,
+            brightness_open: false,
+            last_ctx: pata_core::widget::WidgetCtx::default(),
             tray,
             weather,
             weather_now: None,
@@ -677,6 +709,7 @@ impl App for PataApp {
             Msg::Tick => {
                 let ctx = model.sampler.sample();
                 model.tick_widgets(&ctx);
+                model.last_ctx = ctx;
                 model.clipboard = crate::sampler::leer_clipboard();
                 push_clip_history(&mut model.clip_history, &model.clipboard);
                 if let Some(h) = &model.weather {
@@ -746,6 +779,48 @@ impl App for PataApp {
                     sampler::nudge_brightness(dy > 0.0);
                 }
             }
+            Msg::CpuPanel => {
+                model.cpu_open = !model.cpu_open;
+                if model.cpu_open {
+                    model.ram_open = false;
+                    model.volume_open = false;
+                    model.brightness_open = false;
+                    model.clip_open = false;
+                    model.clock_open = false;
+                }
+            }
+            Msg::RamPanel => {
+                model.ram_open = !model.ram_open;
+                if model.ram_open {
+                    model.cpu_open = false;
+                    model.volume_open = false;
+                    model.brightness_open = false;
+                    model.clip_open = false;
+                    model.clock_open = false;
+                }
+            }
+            Msg::VolumePanel => {
+                model.volume_open = !model.volume_open;
+                if model.volume_open {
+                    model.cpu_open = false;
+                    model.ram_open = false;
+                    model.brightness_open = false;
+                    model.clip_open = false;
+                    model.clock_open = false;
+                }
+            }
+            Msg::BrightnessPanel => {
+                model.brightness_open = !model.brightness_open;
+                if model.brightness_open {
+                    model.cpu_open = false;
+                    model.ram_open = false;
+                    model.volume_open = false;
+                    model.clip_open = false;
+                    model.clock_open = false;
+                }
+            }
+            Msg::VolumeSet(frac) => sampler::set_volume(frac),
+            Msg::BrightnessSet(frac) => sampler::set_brightness(frac),
             Msg::StartToggle => {
                 model.menu_open = !model.menu_open;
                 if !model.menu_open {
@@ -897,6 +972,22 @@ impl App for PataApp {
             let bar_h = bar_thickness_for(&model.cfg, "clock");
             return Some(render::clock_overlay(&model.clock_draft, bar_h, &model.theme));
         }
+        if model.cpu_open {
+            let bar_h = bar_thickness_for(&model.cfg, "cpu_meter");
+            return Some(render::cpu_overlay(&model.last_ctx, bar_h, &model.theme));
+        }
+        if model.ram_open {
+            let bar_h = bar_thickness_for(&model.cfg, "ram_meter");
+            return Some(render::ram_overlay(&model.last_ctx, bar_h, &model.theme));
+        }
+        if model.volume_open {
+            let bar_h = bar_thickness_for(&model.cfg, "volume");
+            return Some(render::volume_overlay(&model.last_ctx, bar_h, &model.theme));
+        }
+        if model.brightness_open {
+            let bar_h = bar_thickness_for(&model.cfg, "brightness");
+            return Some(render::brightness_overlay(&model.last_ctx, bar_h, &model.theme));
+        }
         None
     }
 
@@ -946,6 +1037,26 @@ impl App for PataApp {
         if model.clock_open {
             if let Key::Named(NamedKey::Escape) = &event.key {
                 return Some(Msg::ClockPanel);
+            }
+        }
+        if model.cpu_open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::CpuPanel);
+            }
+        }
+        if model.ram_open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::RamPanel);
+            }
+        }
+        if model.volume_open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::VolumePanel);
+            }
+        }
+        if model.brightness_open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::BrightnessPanel);
             }
         }
         // 3) Con el menú "Abrir con…" abierto, Esc lo cierra primero.

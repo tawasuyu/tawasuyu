@@ -21,6 +21,11 @@ use alloc::vec::Vec;
 
 use crate::config::WidgetSpec;
 
+/// Tope de núcleos que un [`WidgetCtx`] reporta a la vez. 64 cubre cualquier
+/// máquina de escritorio (y muchas de servidor) sin tocar la asignación dinámica
+/// — el core es `no_std` y el ctx queda `Copy`.
+pub const MAX_CORES: usize = 64;
+
 /// Lectura del reloj descompuesta. El host la rellena desde su fuente de tiempo
 /// (en Linux, la zona horaria de `general.timezone`); el core sólo la formatea.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -45,7 +50,7 @@ pub struct ClockReading {
 /// lo muestrea (vía sysfs/PulseAudio en Linux, vía el kernel en wawa) y lo pasa
 /// por valor: el core no toca el SO. Todos los campos arrancan en cero, así que
 /// un frontend puede llenar sólo lo que le importe.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WidgetCtx {
     /// Hora actual ya descompuesta.
     pub clock: ClockReading,
@@ -80,6 +85,96 @@ pub struct WidgetCtx {
     /// (desde el menos significativo) marca el escritorio `i + 1`. Cubre hasta 16
     /// escritorios — de sobra para los 9 de mirada.
     pub workspace_occupied: u16,
+    /// Uso por núcleo lógico, fracción `0.0..=1.0`. Sólo los primeros
+    /// `cpu_cores_n` son válidos; el resto queda en cero. Lo llena el host
+    /// (en Linux, leyendo todas las líneas `cpuN` de `/proc/stat`); el widget
+    /// [`CpuCores`] lo proyecta como un racimo de mini-medidores.
+    pub cpu_cores: [f32; MAX_CORES],
+    /// Cantidad de núcleos lógicos detectados (`0..=MAX_CORES`). Si es 0 el
+    /// widget [`CpuCores`] cae a [`WidgetView::Empty`].
+    pub cpu_cores_n: u8,
+}
+
+impl Default for WidgetCtx {
+    fn default() -> Self {
+        Self {
+            clock: ClockReading::default(),
+            cpu: 0.0,
+            ram: 0.0,
+            ram_used_mb: 0,
+            ram_total_mb: 0,
+            volume: 0.0,
+            muted: false,
+            brightness: 0.0,
+            sun_longitude_deg: 0.0,
+            moon_phase: 0.0,
+            active_workspace: 0,
+            workspace_count: 0,
+            workspace_occupied: 0,
+            cpu_cores: [0.0_f32; MAX_CORES],
+            cpu_cores_n: 0,
+        }
+    }
+}
+
+/// Tamaño visual de un medidor. El frontend mapea cada nivel a su grilla
+/// (ancho/alto de la barra y tamaño del texto); con `Small` además es razonable
+/// pasar a `MeterOrient::Vertical` para que entre en una barra angosta o un
+/// dock columnar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeterSize {
+    /// Chico: barra mínima, leyenda corta o ausente. Ideal para `Vertical`.
+    Small,
+    /// Tamaño actual del marco (el default histórico).
+    #[default]
+    Medium,
+    /// Grande: barra ancha y leyenda con cuerpo más grande — para paneles
+    /// flotantes o docks con espacio de sobra.
+    Large,
+}
+
+impl MeterSize {
+    /// Parsea `"small"`/`"sm"` / `"medium"`/`"md"` / `"large"`/`"lg"` (insensible
+    /// a mayúsculas), o `None` si no cuadra — el spec cae al default.
+    pub fn from_str(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("small") || s.eq_ignore_ascii_case("sm") {
+            Some(Self::Small)
+        } else if s.eq_ignore_ascii_case("medium") || s.eq_ignore_ascii_case("md") {
+            Some(Self::Medium)
+        } else if s.eq_ignore_ascii_case("large") || s.eq_ignore_ascii_case("lg") {
+            Some(Self::Large)
+        } else {
+            None
+        }
+    }
+}
+
+/// Eje del medidor. `Horizontal` (default) pinta la barra de izquierda a
+/// derecha; `Vertical` la levanta de abajo hacia arriba — el modo natural para
+/// una barra/sidebar columnar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeterOrient {
+    /// Barra acostada (default).
+    #[default]
+    Horizontal,
+    /// Barra parada — sube con el valor.
+    Vertical,
+}
+
+impl MeterOrient {
+    /// Parsea `"horizontal"`/`"h"`/`"row"` o `"vertical"`/`"v"`/`"col"`/
+    /// `"column"` (insensible a mayúsculas).
+    pub fn from_str(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("horizontal") || s.eq_ignore_ascii_case("h") || s.eq_ignore_ascii_case("row") {
+            Some(Self::Horizontal)
+        } else if s.eq_ignore_ascii_case("vertical") || s.eq_ignore_ascii_case("v") || s.eq_ignore_ascii_case("col") || s.eq_ignore_ascii_case("column") {
+            Some(Self::Vertical)
+        } else {
+            None
+        }
+    }
 }
 
 /// El view-model que un widget emite: describe qué pintar sin atarse a ningún
@@ -99,6 +194,26 @@ pub enum WidgetView {
         fraction: f32,
         /// Leyenda ya formateada (`"42%"`, `"3.2G"`, `"muted"`).
         caption: String,
+        /// Tamaño visual sugerido (mapeado a px por el frontend).
+        size: MeterSize,
+        /// Eje de la barra (horizontal/vertical).
+        orient: MeterOrient,
+    },
+    /// Un racimo de medidores —típicamente un mini-medidor por núcleo de CPU—
+    /// que el frontend pinta como un mosaico/columna (estilo systemmonitor de
+    /// KDE). El `fractions` viene en orden estable; `caption` es el agregado
+    /// (p. ej. `"42% (8)"`).
+    Cores {
+        /// Etiqueta corta del racimo, o `None`.
+        label: Option<String>,
+        /// Fracción `0..1` por núcleo, en el orden del sistema.
+        fractions: Vec<f32>,
+        /// Leyenda agregada (promedio + cantidad), ya formateada.
+        caption: String,
+        /// Tamaño visual sugerido.
+        size: MeterSize,
+        /// Eje del racimo (filas vs. columnas de mini-barras).
+        orient: MeterOrient,
     },
     /// Un selector de escritorios virtuales: una celda por escritorio, la activa
     /// resaltada y las ocupadas con un realce tenue. El frontend pinta la fila y
@@ -188,6 +303,19 @@ impl MeterSource {
     }
 }
 
+/// Lee `size`/`orientation` del spec, con defaults razonables: si la
+/// `orientation` no se nombra pero el tamaño es `Small`, asumimos `Vertical`
+/// (entra en una barra angosta sin caption). El resto cae a horizontal/medium.
+fn size_orient_de(spec: &WidgetSpec) -> (MeterSize, MeterOrient) {
+    let size = MeterSize::from_str(spec.str_prop("size", "")).unwrap_or_default();
+    let orient_explicit = MeterOrient::from_str(spec.str_prop("orientation", ""));
+    let orient = orient_explicit.unwrap_or(match size {
+        MeterSize::Small => MeterOrient::Vertical,
+        _ => MeterOrient::Horizontal,
+    });
+    (size, orient)
+}
+
 /// Medidor genérico: lee una fracción `0..1` del [`WidgetCtx`] según su
 /// [`MeterSource`] y arma una leyenda. Cubre cpu/ram/volumen/brillo con la
 /// misma lógica; el frontend decide si lo pinta como barra, arco o ícono.
@@ -197,12 +325,18 @@ pub struct Meter {
     label: Option<String>,
     fraction: f32,
     caption: String,
+    size: MeterSize,
+    orient: MeterOrient,
 }
 
 impl Meter {
     /// Construye un medidor de `source` leyendo del spec:
     /// - `label` (string): override de la etiqueta corta;
-    /// - `show_label` (bool, default `true`): si es `false`, oculta la etiqueta.
+    /// - `show_label` (bool, default `true`): si es `false`, oculta la etiqueta;
+    /// - `size` (string, default `"medium"`): `"small"` / `"medium"` / `"large"`;
+    /// - `orientation` (string): `"horizontal"` (default) o `"vertical"`. Si no
+    ///   se nombra y `size = "small"`, asumimos vertical — un medidor chico
+    ///   horizontal pierde la leyenda al cuantizar.
     pub fn from_spec(source: MeterSource, spec: &WidgetSpec) -> Self {
         let label = if spec.bool_prop("show_label", true) {
             Some(
@@ -212,11 +346,14 @@ impl Meter {
         } else {
             None
         };
+        let (size, orient) = size_orient_de(spec);
         Self {
             source,
             label,
             fraction: 0.0,
             caption: String::new(),
+            size,
+            orient,
         }
     }
 }
@@ -252,6 +389,84 @@ impl Widget for Meter {
             label: self.label.clone(),
             fraction: self.fraction.clamp(0.0, 1.0),
             caption: self.caption.clone(),
+            size: self.size,
+            orient: self.orient,
+        }
+    }
+}
+
+/// Medidor multinúcleo (`cpu_cores` / `cpu_cores_meter`): pinta una mini-barra
+/// por core lógico, en el orden del sistema. Toma el snapshot por core que el
+/// host muestrea en `ctx.cpu_cores[..ctx.cpu_cores_n]` y agrega el promedio en
+/// la leyenda (`"42% (8)"`). Es el equivalente del *System Load Viewer* de KDE.
+///
+/// Props:
+/// - `label` (string, default `"CPU"`), `show_label` (bool, default `true`).
+/// - `size` (string, default `"medium"`), `orientation` (string, default
+///   `"horizontal"` / `"vertical"` si size = small).
+/// - `max` (número entero, default 0 = todos): tope de cores a pintar; los
+///   sobrantes se ignoran (útil para barras muy estrechas).
+#[derive(Debug, Clone)]
+pub struct CpuCores {
+    label: Option<String>,
+    fractions: Vec<f32>,
+    caption: String,
+    size: MeterSize,
+    orient: MeterOrient,
+    max: usize,
+}
+
+impl CpuCores {
+    /// Construye un racimo desde el spec — ver doc del struct.
+    pub fn from_spec(spec: &WidgetSpec) -> Self {
+        let label = if spec.bool_prop("show_label", true) {
+            Some(spec.str_prop("label", "CPU").to_string())
+        } else {
+            None
+        };
+        let (size, orient) = size_orient_de(spec);
+        let max = spec.num_prop("max", 0.0).max(0.0) as usize;
+        Self {
+            label,
+            fractions: Vec::new(),
+            caption: String::new(),
+            size,
+            orient,
+            max,
+        }
+    }
+}
+
+impl Widget for CpuCores {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        let n = (ctx.cpu_cores_n as usize).min(MAX_CORES);
+        let n = if self.max > 0 { n.min(self.max) } else { n };
+        self.fractions.clear();
+        let mut acc = 0.0_f32;
+        for i in 0..n {
+            let f = ctx.cpu_cores[i].clamp(0.0, 1.0);
+            self.fractions.push(f);
+            acc += f;
+        }
+        if n == 0 {
+            self.caption = String::new();
+        } else {
+            let prom = acc / n as f32;
+            self.caption = format!("{} ({})", porcentaje(prom), n);
+        }
+    }
+
+    fn view(&self) -> WidgetView {
+        if self.fractions.is_empty() {
+            WidgetView::Empty
+        } else {
+            WidgetView::Cores {
+                label: self.label.clone(),
+                fractions: self.fractions.clone(),
+                caption: self.caption.clone(),
+                size: self.size,
+                orient: self.orient,
+            }
         }
     }
 }
@@ -453,6 +668,7 @@ pub fn build(spec: &WidgetSpec) -> Box<dyn Widget> {
     match spec.kind.as_str() {
         "clock" => Box::new(Clock::from_spec(spec)),
         "cpu_meter" => Box::new(Meter::from_spec(MeterSource::Cpu, spec)),
+        "cpu_cores" | "cpu_cores_meter" => Box::new(CpuCores::from_spec(spec)),
         "ram_meter" => Box::new(Meter::from_spec(MeterSource::Ram, spec)),
         "volume" => Box::new(Meter::from_spec(MeterSource::Volume, spec)),
         "brightness" => Box::new(Meter::from_spec(MeterSource::Brightness, spec)),
@@ -603,8 +819,87 @@ mod tests {
                 label: Some("CPU".to_string()),
                 fraction: 0.42,
                 caption: "42%".to_string(),
+                size: MeterSize::Medium,
+                orient: MeterOrient::Horizontal,
             }
         );
+    }
+
+    #[test]
+    fn meter_lee_size_orient_y_small_implica_vertical() {
+        // Small sin orientación explícita → vertical (cabe en una barra angosta).
+        let spec = WidgetSpec::new("cpu_meter").with("size", Prop::Str("small".into()));
+        let mut m = Meter::from_spec(MeterSource::Cpu, &spec);
+        m.tick(&ctx());
+        match m.view() {
+            WidgetView::Meter { size, orient, .. } => {
+                assert_eq!(size, MeterSize::Small);
+                assert_eq!(orient, MeterOrient::Vertical);
+            }
+            v => panic!("esperaba Meter, vino {v:?}"),
+        }
+        // Override explícito de orientation gana sobre la heurística.
+        let spec = WidgetSpec::new("cpu_meter")
+            .with("size", Prop::Str("small".into()))
+            .with("orientation", Prop::Str("horizontal".into()));
+        let mut m = Meter::from_spec(MeterSource::Cpu, &spec);
+        m.tick(&ctx());
+        match m.view() {
+            WidgetView::Meter { orient, .. } => assert_eq!(orient, MeterOrient::Horizontal),
+            v => panic!("esperaba Meter, vino {v:?}"),
+        }
+        // Large sin orientación → horizontal.
+        let spec = WidgetSpec::new("cpu_meter").with("size", Prop::Str("LARGE".into()));
+        let m = Meter::from_spec(MeterSource::Cpu, &spec);
+        assert_eq!(
+            (m.size, m.orient),
+            (MeterSize::Large, MeterOrient::Horizontal)
+        );
+    }
+
+    #[test]
+    fn cpu_cores_pinta_un_mini_medidor_por_core() {
+        let mut c = ctx();
+        c.cpu_cores_n = 4;
+        c.cpu_cores[0] = 0.10;
+        c.cpu_cores[1] = 0.50;
+        c.cpu_cores[2] = 0.30;
+        c.cpu_cores[3] = 0.90;
+        let mut w = CpuCores::from_spec(&WidgetSpec::new("cpu_cores"));
+        w.tick(&c);
+        match w.view() {
+            WidgetView::Cores { fractions, caption, label, .. } => {
+                assert_eq!(fractions, vec![0.10, 0.50, 0.30, 0.90]);
+                assert_eq!(caption, "45% (4)");
+                assert_eq!(label, Some("CPU".to_string()));
+            }
+            v => panic!("esperaba Cores, vino {v:?}"),
+        }
+    }
+
+    #[test]
+    fn cpu_cores_sin_datos_es_empty() {
+        let w = CpuCores::from_spec(&WidgetSpec::new("cpu_cores"));
+        assert_eq!(w.view(), WidgetView::Empty);
+    }
+
+    #[test]
+    fn cpu_cores_respeta_max_tope() {
+        let mut c = ctx();
+        c.cpu_cores_n = 8;
+        for i in 0..8 {
+            c.cpu_cores[i] = 0.5;
+        }
+        let spec = WidgetSpec::new("cpu_cores").with("max", Prop::Int(4));
+        let mut w = CpuCores::from_spec(&spec);
+        w.tick(&c);
+        match w.view() {
+            WidgetView::Cores { fractions, caption, .. } => {
+                assert_eq!(fractions.len(), 4);
+                assert_eq!(caption, "50% (4)");
+            }
+            v => panic!("esperaba Cores, vino {v:?}"),
+        }
     }
 
     #[test]
@@ -759,6 +1054,14 @@ mod tests {
         assert!(matches!(widgets[0].view(), WidgetView::Text(_)));
         for w in &widgets[1..] {
             assert!(matches!(w.view(), WidgetView::Meter { .. }));
+        }
+    }
+
+    #[test]
+    fn build_despacha_cpu_cores() {
+        for kind in ["cpu_cores", "cpu_cores_meter"] {
+            let w = build(&WidgetSpec::new(kind));
+            assert_eq!(w.view(), WidgetView::Empty); // sin ctx
         }
     }
 }

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, Timelike, Utc};
 
-use pata_core::widget::{ClockReading, WidgetCtx};
+use pata_core::widget::{ClockReading, WidgetCtx, MAX_CORES};
 
 /// Duración del mes sinódico (de luna nueva a luna nueva), en días.
 const MES_SINODICO: f64 = 29.530588853;
@@ -25,6 +25,10 @@ const LUNA_NUEVA_REF_JD: f64 = 2451550.1;
 pub struct Sampler {
     /// `(total, idle)` de la lectura anterior de `/proc/stat`, o `None` al inicio.
     cpu_prev: Option<(u64, u64)>,
+    /// `(total, idle)` por core de la lectura anterior — paralelo a
+    /// `ctx.cpu_cores`. Cada slot guarda `None` hasta el primer tick que vio
+    /// ese core. Tope `MAX_CORES`.
+    cpu_cores_prev: Vec<Option<(u64, u64)>>,
     /// Si `true`, el reloj se arma en UTC en vez de la hora local (de
     /// `general.timezone = "UTC"`). Paridad con el `TzMode` de mirada-launcher.
     utc: bool,
@@ -48,9 +52,14 @@ impl Sampler {
         let (volume, muted) = sample_volume().unwrap_or((0.0, false));
         let (active_workspace, workspace_count, workspace_occupied) =
             sample_workspaces().unwrap_or((0, 0, 0));
+        // /proc/stat se lee una sola vez por tick: el agregado (línea `cpu`) y
+        // el detalle por core (líneas `cpuN`) salen del mismo texto.
+        let stat = std::fs::read_to_string("/proc/stat").ok();
+        let cpu = self.sample_cpu_from(stat.as_deref());
+        let (cpu_cores, cpu_cores_n) = self.sample_cpu_cores_from(stat.as_deref());
         WidgetCtx {
             clock: sample_clock(self.utc),
-            cpu: self.sample_cpu(),
+            cpu,
             ram,
             ram_used_mb,
             ram_total_mb,
@@ -62,13 +71,19 @@ impl Sampler {
             active_workspace,
             workspace_count,
             workspace_occupied,
+            cpu_cores,
+            cpu_cores_n,
         }
     }
 
     /// Uso de CPU `0..1` como `1 - idle_delta/total_delta`. La primera vez no
     /// hay delta, así que devuelve 0 y guarda la base para el siguiente tick.
-    fn sample_cpu(&mut self) -> f32 {
-        let Some((total, idle)) = read_proc_stat() else {
+    /// Toma el texto de `/proc/stat` ya leído (o `None` si no se pudo leer).
+    fn sample_cpu_from(&mut self, stat: Option<&str>) -> f32 {
+        let Some(text) = stat else {
+            return 0.0;
+        };
+        let Some((total, idle)) = parse_proc_stat(text) else {
             return 0.0;
         };
         let usage = match self.cpu_prev {
@@ -85,6 +100,39 @@ impl Sampler {
         };
         self.cpu_prev = Some((total, idle));
         usage
+    }
+
+    /// Uso por core `0..1` desde las líneas `cpuN` de `/proc/stat`. Devuelve
+    /// `([f32; MAX_CORES], n)`. El primer tick visto por cada core es 0 (sin
+    /// delta). Si la lectura falla, devuelve `(zeros, 0)`.
+    fn sample_cpu_cores_from(&mut self, stat: Option<&str>) -> ([f32; MAX_CORES], u8) {
+        let mut out = [0.0_f32; MAX_CORES];
+        let Some(text) = stat else {
+            return (out, 0);
+        };
+        let lecturas = parse_proc_stat_per_core(text);
+        let n = lecturas.len().min(MAX_CORES);
+        if self.cpu_cores_prev.len() < n {
+            self.cpu_cores_prev.resize(n, None);
+        }
+        for i in 0..n {
+            let (total, idle) = lecturas[i];
+            let usage = match self.cpu_cores_prev[i] {
+                Some((pt, pi)) => {
+                    let dt = total.saturating_sub(pt);
+                    let di = idle.saturating_sub(pi);
+                    if dt > 0 {
+                        (1.0 - di as f32 / dt as f32).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                }
+                None => 0.0,
+            };
+            self.cpu_cores_prev[i] = Some((total, idle));
+            out[i] = usage;
+        }
+        (out, n as u8)
     }
 }
 
@@ -149,19 +197,40 @@ fn parse_meminfo(text: &str) -> Option<(u64, u64)> {
     Some((total?, avail?))
 }
 
-/// `(total_jiffies, idle_jiffies)` de la primera línea `cpu` de `/proc/stat`.
-/// `idle` incluye `iowait` (4º campo). `None` si no se puede leer.
-fn read_proc_stat() -> Option<(u64, u64)> {
-    let text = std::fs::read_to_string("/proc/stat").ok()?;
-    parse_proc_stat(&text)
-}
-
 /// Extrae `(total, idle+iowait)` en jiffies de la primera línea `cpu` de
 /// `/proc/stat`.
 fn parse_proc_stat(text: &str) -> Option<(u64, u64)> {
     let line = text.lines().next()?;
+    parse_cpu_line(line, "cpu")
+}
+
+/// `(total, idle+iowait)` en jiffies de las líneas `cpuN` de `/proc/stat`, en
+/// orden de aparición (el kernel las emite por id ascendente). La línea `cpu`
+/// agregada se ignora. Si una línea no parsea, se omite (no aborta la lista).
+fn parse_proc_stat_per_core(text: &str) -> Vec<(u64, u64)> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let Some(head) = line.split_whitespace().next() else {
+            continue;
+        };
+        // `cpu` (agregado) lo cubre `parse_proc_stat`; acá sólo los por-core.
+        if head == "cpu" {
+            continue;
+        }
+        if !head.starts_with("cpu") {
+            break; // las líneas `cpuN` van consecutivas al principio del archivo
+        }
+        if let Some(r) = parse_cpu_line(line, head) {
+            out.push(r);
+        }
+    }
+    out
+}
+
+/// Parsea una línea cualquiera `cpu*` (`cpu` o `cpuN`) a `(total, idle+iowait)`.
+fn parse_cpu_line(line: &str, expected_head: &str) -> Option<(u64, u64)> {
     let mut parts = line.split_whitespace();
-    if parts.next()? != "cpu" {
+    if parts.next()? != expected_head {
         return None;
     }
     let vals: Vec<u64> = parts.filter_map(|p| p.parse::<u64>().ok()).collect();
@@ -169,7 +238,6 @@ fn parse_proc_stat(text: &str) -> Option<(u64, u64)> {
         return None;
     }
     let total: u64 = vals.iter().sum();
-    // idle = idle (índice 3) + iowait (índice 4, si está).
     let idle = vals[3] + vals.get(4).copied().unwrap_or(0);
     Some((total, idle))
 }
@@ -297,6 +365,33 @@ mod tests {
     }
 
     #[test]
+    fn parse_proc_stat_per_core_omite_el_agregado() {
+        let txt = "cpu  100 0 50 800 50 0 0 0\n\
+                   cpu0 60 0 30 400 10 0 0 0\n\
+                   cpu1 40 0 20 400 40 0 0 0\n\
+                   intr 1 2 3\n";
+        let cores = parse_proc_stat_per_core(txt);
+        assert_eq!(cores.len(), 2);
+        // cpu0: total = 60+0+30+400+10 = 500, idle = 400+10 = 410
+        assert_eq!(cores[0], (500, 410));
+        // cpu1: total = 40+0+20+400+40 = 500, idle = 400+40 = 440
+        assert_eq!(cores[1], (500, 440));
+    }
+
+    #[test]
+    fn sampler_cores_arranca_en_cero_y_da_delta_en_segundo_tick() {
+        let mut s = Sampler::new();
+        let t1 = "cpu  100 0 50 800 50\ncpu0 50 0 25 400 25\n";
+        let (cores1, n1) = s.sample_cpu_cores_from(Some(t1));
+        assert_eq!(n1, 1);
+        assert_eq!(cores1[0], 0.0); // primer tick: sin delta
+        // Segundo tick: total+100 idle+50 → dt=100, di=50 → 1-0.5 = 0.5
+        let t2 = "cpu  200 0 100 850 100\ncpu0 100 0 50 425 75\n";
+        let (cores2, _) = s.sample_cpu_cores_from(Some(t2));
+        assert!((cores2[0] - 0.5).abs() < 1e-6, "esperaba 0.5, vino {}", cores2[0]);
+    }
+
+    #[test]
     fn sampler_nuevo_no_tiene_lectura_previa_de_cpu() {
         // El primer tick no puede calcular delta (sin base): arranca en None.
         assert_eq!(Sampler::new().cpu_prev, None);
@@ -360,6 +455,29 @@ pub fn nudge_volume(up: bool) {
         "wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- || pactl set-sink-volume @DEFAULT_SINK@ -5%"
     };
     crate::spawn_cmd(cmd);
+}
+
+/// Fija el volumen del sink por defecto a `frac` (`0..1`). Lo usa el slider de
+/// la ventanita de volumen (click sobre la franja vertical). PipeWire acepta el
+/// valor como fracción absoluta (`set-volume 0.42`); PulseAudio espera porcentaje
+/// (`set-sink-volume 42%`). Desacoplado, como [`nudge_volume`].
+pub fn set_volume(frac: f32) {
+    let f = frac.clamp(0.0, 1.0);
+    let pct = (f * 100.0 + 0.5) as u32;
+    crate::spawn_cmd(&format!(
+        "wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ {f:.3} \
+         || pactl set-sink-volume @DEFAULT_SINK@ {pct}%"
+    ));
+}
+
+/// Fija el brillo de la pantalla a `frac` (`0..1`). `brightnessctl` toma
+/// porcentaje absoluto; el fallback `light` lo mismo. Tope inferior 1% para no
+/// apagar la pantalla del todo.
+pub fn set_brightness(frac: f32) {
+    let pct = ((frac.clamp(0.0, 1.0) * 100.0 + 0.5) as u32).max(1);
+    crate::spawn_cmd(&format!(
+        "brightnessctl set {pct}% || light -S {pct}"
+    ));
 }
 
 /// Togglea el mute del sink por defecto (PipeWire `wpctl`, fallback PulseAudio

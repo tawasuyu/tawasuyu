@@ -24,7 +24,7 @@ use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
 use app_bus::AppEntry;
 use pata_core::config::{FloatingCard, Surface, SurfaceKind};
 use pata_core::layout::Rect;
-use pata_core::widget::{Widget, WidgetView};
+use pata_core::widget::{MeterOrient, MeterSize, Widget, WidgetCtx, WidgetView};
 
 use crate::shuma::{self, ShumaState};
 use crate::toplevel::WindowEntry;
@@ -85,6 +85,11 @@ pub fn widget_tooltip(v: &WidgetView) -> Option<String> {
             let s = s.trim().to_string();
             (!s.is_empty()).then_some(s)
         }
+        WidgetView::Cores { label, caption, fractions, .. } => {
+            let l = label.as_deref().unwrap_or("CPU").trim();
+            let n = fractions.len();
+            Some(format!("{l} {caption} · {n} cores"))
+        }
         WidgetView::Workspaces { active, count, .. } => Some(format!("Escritorio {active}/{count}")),
         WidgetView::Placeholder(kind) => Some(kind.clone()),
     }
@@ -138,12 +143,21 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             label,
             fraction,
             caption,
+            size,
+            orient,
         } => {
             let stops = match kind {
                 Some(k) => meter_stops(k),
                 None => (theme.accent, aclarar(theme.accent, 0.5)),
             };
-            meter_view(label.as_deref(), *fraction, caption, theme, stops)
+            meter_view(label.as_deref(), *fraction, caption, *size, *orient, theme, stops)
+        }
+        WidgetView::Cores { label, fractions, caption, size, orient } => {
+            let stops = match kind {
+                Some(k) => meter_stops(k),
+                None => meter_stops("cpu_cores"),
+            };
+            cores_view(label.as_deref(), fractions, caption, *size, *orient, theme, stops)
         }
         WidgetView::Workspaces { active, count, occupied } => {
             // Para tarjetas flotantes (que no rastrean kind/dir): fila horizontal
@@ -247,6 +261,7 @@ fn meter_stops(kind: &str) -> (Color, Color) {
 fn default_cells(kind: &str) -> u32 {
     match kind {
         "cpu_meter" | "ram_meter" | "volume" | "brightness" => 3,
+        "cpu_cores" | "cpu_cores_meter" => 5,
         "clock" => 2,
         "astro" => 4,
         "weather" => 3,
@@ -282,13 +297,17 @@ fn cuantizar(v: View<Msg>, cell: f32, cells: u32, kind: &str, dir: FlexDirection
 }
 
 /// Cablea la interacción de un widget de core según su `kind`. Los kinds con
-/// interacción propia (volumen, brillo, reloj) la traen acá; el resto cae al
-/// `exec` configurable (click → lanzar comando), si lo hay.
+/// interacción propia (volumen, brillo, reloj, cpu, ram, cores) la traen acá;
+/// el resto cae al `exec` configurable (click → lanzar comando), si lo hay.
+/// Para los medidores de sistema, el click izquierdo abre su ventanita (estilo
+/// applet de KDE); la rueda/derecho mantienen el atajo waybar.
 fn interaccion_widget(v: View<Msg>, kind: &str, exec: Option<&str>) -> View<Msg> {
     match kind {
         "volume" => volume_interactivo(v, exec),
-        "brightness" => brightness_interactivo(v),
+        "brightness" => brightness_interactivo(v, exec),
         "clock" => clock_interactivo(v),
+        "cpu_meter" | "cpu_cores" | "cpu_cores_meter" => cpu_interactivo(v, exec),
+        "ram_meter" => ram_interactivo(v, exec),
         _ => match exec {
             Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
             None => v,
@@ -297,23 +316,47 @@ fn interaccion_widget(v: View<Msg>, kind: &str, exec: Option<&str>) -> View<Msg>
 }
 
 /// Volumen interactivo (idioma waybar): la **rueda** sube/baja el volumen del
-/// sink, el **click** abre el mezclador (`exec`, la "ventana correspondiente") o
-/// —sin `exec`— togglea el mute, y el **click derecho** togglea el mute. El
-/// medidor refleja el cambio en el próximo tick.
+/// sink, el **click** abre la ventanita (slider + mute), el **click derecho**
+/// togglea el mute. Si la config trae `exec`, el click lanza ese comando en
+/// vez de abrir la ventanita (override estilo waybar). El medidor refleja el
+/// cambio en el próximo tick.
 fn volume_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
     let v = v
         .on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::VolumeWheel(dy)))
         .on_right_click(Msg::VolumeMute);
     match exec {
         Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
-        None => v.on_click(Msg::VolumeMute),
+        None => v.on_click(Msg::VolumePanel),
     }
 }
 
-/// Brillo interactivo: la **rueda** sube/baja la luminosidad de la pantalla. El
-/// medidor refleja el cambio en el próximo tick.
-fn brightness_interactivo(v: View<Msg>) -> View<Msg> {
-    v.on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::BrightnessWheel(dy)))
+/// Brillo interactivo: la **rueda** sube/baja la luminosidad de la pantalla;
+/// el **click** abre la ventanita (slider). Si la config trae `exec`, el
+/// click lanza ese comando en vez de la ventanita.
+fn brightness_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
+    let v = v.on_scroll(|_dx, dy| (dy != 0.0).then_some(Msg::BrightnessWheel(dy)));
+    match exec {
+        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
+        None => v.on_click(Msg::BrightnessPanel),
+    }
+}
+
+/// CPU interactivo: el **click** abre la ventanita (lista de cores + agregado).
+/// `exec` override estilo waybar (p. ej. lanzar `htop`).
+fn cpu_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
+    match exec {
+        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
+        None => v.on_click(Msg::CpuPanel),
+    }
+}
+
+/// RAM interactiva: el **click** abre la ventanita (usado/total + swap si hay).
+/// `exec` override estilo waybar (p. ej. `gnome-system-monitor`).
+fn ram_interactivo(v: View<Msg>, exec: Option<&str>) -> View<Msg> {
+    match exec {
+        Some(cmd) => v.on_click(Msg::Spawn(cmd.to_string())),
+        None => v.on_click(Msg::RamPanel),
+    }
 }
 
 /// Reloj interactivo: el click abre el panel para fijar la fecha/hora del
@@ -322,24 +365,58 @@ fn clock_interactivo(v: View<Msg>) -> View<Msg> {
     v.on_click(Msg::ClockPanel)
 }
 
-/// Un medidor: etiqueta opcional + barrita proporcional + leyenda. La barra de
-/// relleno lleva un **gradiente** horizontal del acento (izquierda) a un acento
-/// aclarado (derecha), pintado a mano con `paint_with` (Llimphi no tiene fill de
-/// brush, sólo color sólido).
-fn meter_view(
-    label: Option<&str>,
-    fraction: f32,
-    caption: &str,
-    theme: &Theme,
-    stops: (Color, Color),
-) -> View<Msg> {
-    let frac = fraction.clamp(0.0, 1.0);
+/// Dimensiones de barra para cada combinación `(size, orient)`. Para barras
+/// horizontales: `(ancho_barra, grosor)`; para verticales: `(grosor, alto)`.
+/// El frontend traduce; la regla del repo (modelo agnóstico) no se rompe — el
+/// `WidgetView` lleva las intenciones (size/orient), acá las convertimos a px.
+fn barra_dims(size: MeterSize, orient: MeterOrient) -> (f32, f32) {
+    match (size, orient) {
+        (MeterSize::Small, MeterOrient::Horizontal) => (28.0, 4.0),
+        (MeterSize::Medium, MeterOrient::Horizontal) => (BARRA_W, 6.0),
+        (MeterSize::Large, MeterOrient::Horizontal) => (78.0, 8.0),
+        (MeterSize::Small, MeterOrient::Vertical) => (4.0, 18.0),
+        (MeterSize::Medium, MeterOrient::Vertical) => (6.0, 28.0),
+        (MeterSize::Large, MeterOrient::Vertical) => (8.0, 48.0),
+    }
+}
+
+/// Cuerpo de fuente para la leyenda según el tamaño del medidor. `Small` no
+/// pinta leyenda al lado (no le entra); cae a 0 y el llamador la omite.
+fn caption_px(size: MeterSize) -> f32 {
+    match size {
+        MeterSize::Small => 0.0,
+        MeterSize::Medium => 12.0,
+        MeterSize::Large => 14.0,
+    }
+}
+
+/// Cuerpo de fuente para la etiqueta corta.
+fn label_px(size: MeterSize) -> f32 {
+    match size {
+        MeterSize::Small => 10.0,
+        MeterSize::Medium => 12.0,
+        MeterSize::Large => 13.0,
+    }
+}
+
+/// Una barrita proporcional con gradiente, en `orient` y tamaño dados.
+/// Compartida por `meter_view` y `cores_view`.
+fn barrita(frac: f32, ancho: f32, grosor: f32, orient: MeterOrient, theme: &Theme, stops: (Color, Color)) -> View<Msg> {
+    let frac = frac.clamp(0.0, 1.0);
     let (c0, c1) = stops;
+    let (size_pista, size_relleno) = match orient {
+        MeterOrient::Horizontal => (
+            Size { width: length(ancho), height: length(grosor) },
+            Size { width: length(ancho * frac), height: length(grosor) },
+        ),
+        MeterOrient::Vertical => (
+            // En vertical, "ancho" es el alto total y "grosor" es la columna.
+            Size { width: length(grosor), height: length(ancho) },
+            Size { width: length(grosor), height: length(ancho * frac) },
+        ),
+    };
     let relleno = View::new(Style {
-        size: Size {
-            width: length(BARRA_W * frac),
-            height: length(6.0_f32),
-        },
+        size: size_relleno,
         ..Default::default()
     })
     .paint_with(move |scene, _ts, rect| {
@@ -351,88 +428,269 @@ fn meter_view(
         let (x0, y0) = (rect.x as f64, rect.y as f64);
         let (x1, y1) = ((rect.x + rect.w) as f64, (rect.y + rect.h) as f64);
         let rr = RoundedRect::new(x0, y0, x1, y1, 2.0);
-        // El gradiente abarca **toda** la barra (no sólo el relleno): así un
-        // valor bajo muestra el tramo verde y uno alto llega al rojo —el color
-        // indica el nivel, no sólo el largo—. El relleno recorta su porción.
-        let x_full = x0 + BARRA_W as f64;
-        let g = Gradient::new_linear(Point::new(x0, y0), Point::new(x_full, y0))
-            .with_stops([c0, c1].as_slice());
+        // El gradiente abarca toda la barra (no sólo el relleno) en el eje
+        // mayor: valor bajo = tramo verde; valor alto = llega al rojo.
+        let (p_ini, p_fin) = match orient {
+            MeterOrient::Horizontal => {
+                let x_full = x0 + ancho as f64;
+                (Point::new(x0, y0), Point::new(x_full, y0))
+            }
+            MeterOrient::Vertical => {
+                // El extremo bajo (verde) abajo, el alto (rojo) arriba.
+                let y_top = y1 - ancho as f64;
+                (Point::new(x0, y1), Point::new(x0, y_top))
+            }
+        };
+        let g = Gradient::new_linear(p_ini, p_fin).with_stops([c0, c1].as_slice());
         scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
     });
-    let barra = View::new(Style {
-        size: Size {
-            width: length(BARRA_W),
-            height: length(6.0_f32),
+    // El relleno vertical sale desde abajo: la pista es columna; el hijo va
+    // anclado abajo gracias a `JustifyContent::FlexEnd`.
+    let pista_style = Style {
+        size: size_pista,
+        flex_direction: match orient {
+            MeterOrient::Horizontal => FlexDirection::Row,
+            MeterOrient::Vertical => FlexDirection::Column,
         },
+        align_items: Some(AlignItems::FlexStart),
+        justify_content: Some(match orient {
+            MeterOrient::Horizontal => JustifyContent::FlexStart,
+            MeterOrient::Vertical => JustifyContent::FlexEnd,
+        }),
         ..Default::default()
-    })
-    .fill(theme.bg_panel)
-    .radius(2.0)
-    .children(vec![relleno]);
+    };
+    View::new(pista_style)
+        .fill(theme.bg_panel)
+        .radius(2.0)
+        .children(vec![relleno])
+}
+
+/// Un medidor: etiqueta opcional + barrita proporcional + leyenda. La barra de
+/// relleno lleva un **gradiente** del acento (extremo verde) al acento
+/// aclarado (extremo rojo), pintado a mano con `paint_with`. `size` y `orient`
+/// vienen del view-model (config) y modulan dimensiones y eje.
+fn meter_view(
+    label: Option<&str>,
+    fraction: f32,
+    caption: &str,
+    size: MeterSize,
+    orient: MeterOrient,
+    theme: &Theme,
+    stops: (Color, Color),
+) -> View<Msg> {
+    let (ancho, grosor) = barra_dims(size, orient);
+    let barra = barrita(fraction, ancho, grosor, orient, theme, stops);
+    let cap_px = caption_px(size);
+    let lab_px = label_px(size);
+
+    // En `Small` no entra leyenda al lado de la barra: la barra sola es la
+    // lectura (tooltip en hover trae la leyenda completa). En vertical, los
+    // hijos van en columna y la barra ocupa el centro.
+    let dir = match orient {
+        MeterOrient::Horizontal => FlexDirection::Row,
+        MeterOrient::Vertical => FlexDirection::Column,
+    };
 
     let mut hijos: Vec<View<Msg>> = Vec::new();
     if let Some(l) = label {
-        hijos.push(etiqueta(l, theme));
+        if lab_px > 0.0 && size != MeterSize::Small {
+            hijos.push(etiqueta_dim(l, lab_px, orient, theme));
+        }
     }
     hijos.push(barra);
-    if !caption.is_empty() {
-        // Ancho FIJO: la leyenda cambia de dígitos cada tick ("7%"→"42%"→
-        // "100%") y, con ancho automático, eso reflota toda la barra. Una caja
-        // fija mantiene el layout quieto.
-        hijos.push(caption_fija(caption, theme));
+    if cap_px > 0.0 && !caption.is_empty() {
+        hijos.push(caption_dim(caption, cap_px, size, orient, theme));
     }
 
+    let (h_chip, gap_main) = match orient {
+        MeterOrient::Horizontal => (22.0_f32, 8.0_f32),
+        MeterOrient::Vertical => (auto_h(size), 3.0_f32),
+    };
+    let pad_main = match size {
+        MeterSize::Small => 2.0_f32,
+        MeterSize::Medium => 8.0_f32,
+        MeterSize::Large => 10.0_f32,
+    };
+
+    let size_outer = match orient {
+        MeterOrient::Horizontal => Size { width: auto(), height: length(h_chip) },
+        MeterOrient::Vertical => Size { width: auto(), height: length(h_chip) },
+    };
+
     View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: auto(),
-            height: length(22.0_f32),
-        },
+        flex_direction: dir,
+        size: size_outer,
         padding: TaffyRect {
-            left: length(8.0_f32),
-            right: length(8.0_f32),
-            top: length(0.0_f32),
-            bottom: length(0.0_f32),
+            left: length(pad_main),
+            right: length(pad_main),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         gap: Size {
-            width: length(8.0_f32),
-            height: length(0.0_f32),
+            width: length(gap_main),
+            height: length(gap_main),
         },
         ..Default::default()
     })
     .children(hijos)
 }
 
-/// La leyenda de un medidor en una caja de **ancho fijo**: como el texto cambia
-/// de dígitos a cada tick, una caja fija evita que el medidor (y con él toda la
-/// barra) se reacomode. Cabe la más ancha (`"10.5/15.5G"` de la RAM).
-fn caption_fija(t: &str, theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: length(CAPTION_W),
-            height: length(22.0_f32),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::FlexStart),
-        ..Default::default()
-    })
-    .text(t.to_string(), 12.0, theme.fg_muted)
+/// Alto del chip de un medidor vertical, según tamaño (cubre el alto de la
+/// barra + padding + caption si la hay).
+fn auto_h(size: MeterSize) -> f32 {
+    match size {
+        MeterSize::Small => 24.0,
+        MeterSize::Medium => 44.0,
+        MeterSize::Large => 70.0,
+    }
 }
 
-/// Un texto corto en color tenue (etiqueta o leyenda de un medidor).
-fn etiqueta(t: &str, theme: &Theme) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: auto(),
-            height: length(22.0_f32),
+/// Un racimo de mini-medidores (typically uno por core). En horizontal pinta
+/// columnas verticales (estilo systemmonitor de KDE) — cada core como una
+/// columnita que sube con la carga. En vertical, gira a filas horizontales que
+/// se apilan. La leyenda agregada va al lado/abajo.
+fn cores_view(
+    label: Option<&str>,
+    fractions: &[f32],
+    caption: &str,
+    size: MeterSize,
+    orient: MeterOrient,
+    theme: &Theme,
+    stops: (Color, Color),
+) -> View<Msg> {
+    // Para el racimo, el "orient" del view-model decide cómo se acomoda el
+    // contenedor exterior; las mini-barras van en el eje perpendicular para
+    // formar el grid. Default: contenedor horizontal → mini-barras verticales.
+    let (mini_w, mini_h) = match size {
+        MeterSize::Small => (3.0, 14.0),
+        MeterSize::Medium => (5.0, 22.0),
+        MeterSize::Large => (7.0, 32.0),
+    };
+    let mini_orient_relleno = if orient == MeterOrient::Horizontal {
+        MeterOrient::Vertical
+    } else {
+        MeterOrient::Horizontal
+    };
+    let (mini_largo, mini_grosor) = if mini_orient_relleno == MeterOrient::Vertical {
+        (mini_h, mini_w)
+    } else {
+        (mini_h, mini_w) // mismo perfil, sólo cambia el eje del flex
+    };
+    let mini_gap = if size == MeterSize::Small { 1.0_f32 } else { 2.0_f32 };
+
+    let minis: Vec<View<Msg>> = fractions
+        .iter()
+        .map(|f| barrita(*f, mini_largo, mini_grosor, mini_orient_relleno, theme, stops))
+        .collect();
+
+    let racimo_dir = if orient == MeterOrient::Horizontal {
+        FlexDirection::Row
+    } else {
+        FlexDirection::Column
+    };
+    let racimo = View::new(Style {
+        flex_direction: racimo_dir,
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(mini_gap),
+            height: length(mini_gap),
         },
+        ..Default::default()
+    })
+    .children(minis);
+
+    let lab_px = label_px(size);
+    let cap_px = caption_px(size);
+    let mut hijos: Vec<View<Msg>> = Vec::new();
+    if let Some(l) = label {
+        if size != MeterSize::Small {
+            hijos.push(etiqueta_dim(l, lab_px, orient, theme));
+        }
+    }
+    hijos.push(racimo);
+    if cap_px > 0.0 && !caption.is_empty() && size != MeterSize::Small {
+        hijos.push(caption_dim(caption, cap_px, size, orient, theme));
+    }
+
+    let dir_outer = if orient == MeterOrient::Horizontal {
+        FlexDirection::Row
+    } else {
+        FlexDirection::Column
+    };
+    let h_outer = match (size, orient) {
+        (MeterSize::Small, _) => 22.0_f32,
+        (MeterSize::Medium, MeterOrient::Horizontal) => 26.0,
+        (MeterSize::Medium, MeterOrient::Vertical) => 44.0,
+        (MeterSize::Large, MeterOrient::Horizontal) => 36.0,
+        (MeterSize::Large, MeterOrient::Vertical) => 70.0,
+    };
+    View::new(Style {
+        flex_direction: dir_outer,
+        size: Size { width: auto(), height: length(h_outer) },
+        padding: TaffyRect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(2.0_f32),
+            bottom: length(2.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(6.0_f32),
+            height: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(hijos)
+}
+
+/// La leyenda de un medidor en una caja de **tamaño fijo**: como el texto
+/// cambia de dígitos a cada tick, una caja fija evita que el medidor (y con él
+/// toda la barra) se reacomode. El ancho/alto sale del `size` + `orient` —
+/// la `Medium horizontal` cabe `"10.5/15.5G"` de la RAM; la vertical se reduce.
+fn caption_dim(t: &str, font_px: f32, size: MeterSize, orient: MeterOrient, theme: &Theme) -> View<Msg> {
+    let (w, h) = match (size, orient) {
+        (_, MeterOrient::Horizontal) => match size {
+            MeterSize::Small => (length(36.0_f32), length(22.0_f32)),
+            MeterSize::Medium => (length(CAPTION_W), length(22.0_f32)),
+            MeterSize::Large => (length(86.0_f32), length(26.0_f32)),
+        },
+        (_, MeterOrient::Vertical) => match size {
+            MeterSize::Small => (auto(), length(12.0_f32)),
+            MeterSize::Medium => (auto(), length(14.0_f32)),
+            MeterSize::Large => (auto(), length(16.0_f32)),
+        },
+    };
+    View::new(Style {
+        size: Size { width: w, height: h },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text(t.to_string(), 12.0, theme.fg_muted)
+    .text(t.to_string(), font_px, theme.fg_muted)
+}
+
+/// Un texto corto en color tenue (etiqueta de un medidor). Default 12 px; se
+/// puede pedir otro cuerpo desde la versión `_dim`.
+#[allow(dead_code)]
+fn etiqueta(t: &str, theme: &Theme) -> View<Msg> {
+    etiqueta_dim(t, 12.0, MeterOrient::Horizontal, theme)
+}
+
+fn etiqueta_dim(t: &str, font_px: f32, orient: MeterOrient, theme: &Theme) -> View<Msg> {
+    let (w, h) = match orient {
+        MeterOrient::Horizontal => (auto(), length(22.0_f32)),
+        MeterOrient::Vertical => (auto(), length(14.0_f32)),
+    };
+    View::new(Style {
+        size: Size { width: w, height: h },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(t.to_string(), font_px, theme.fg_muted)
 }
 
 /// El **interior** de una tarjeta flotante (estilo conky): título opcional +
@@ -1700,6 +1958,335 @@ pub fn clock_overlay(draft: &crate::ClockDraft, bar_h: f32, theme: &Theme) -> Vi
     .children(vec![scrim])
 }
 
+// =============================================================================
+// Ventanitas de interacción de los medidores (CPU / RAM / volumen / brillo).
+// Cada una es una "applet window" estilo KDE: un panel chico con la lectura
+// detallada (lista de cores, slider arrastrable, leyenda) que se despliega al
+// click en el medidor de la barra y se cierra al click fuera o con Esc.
+// =============================================================================
+
+/// Ancho común de las ventanitas de medidor (px).
+const METER_PANEL_W: f32 = 320.0;
+/// Alto del slider vertical en las ventanitas de volumen/brillo (px).
+const SLIDER_H: f32 = 140.0;
+/// Ancho de la pista del slider (px).
+const SLIDER_W: f32 = 18.0;
+
+/// Header común: una etiqueta tenue arriba de la ventanita.
+fn header_panel(t: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexStart),
+        ..Default::default()
+    })
+    .text(t.to_string(), 12.0, theme.fg_muted)
+}
+
+/// Envuelve un panel como caja redondeada con el `bg_panel` del tema.
+fn panel_box(hijos: Vec<View<Msg>>, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(METER_PANEL_W), height: auto() },
+        flex_direction: FlexDirection::Column,
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .children(hijos)
+}
+
+/// Una fila "etiqueta · valor" en una ventanita (estilo "key: value").
+fn fila_kv(k: &str, v: &str, theme: &Theme) -> View<Msg> {
+    let key = View::new(Style {
+        size: Size { width: auto(), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(k.to_string(), 12.0, theme.fg_muted);
+    let mut val_style = Style {
+        size: Size { width: auto(), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexEnd),
+        ..Default::default()
+    };
+    val_style.flex_grow = 1.0;
+    let val = View::new(val_style).text(v.to_string(), 12.0, theme.fg_text);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![key, val])
+}
+
+/// Envuelve un panel en un scrim a pantalla completa, posicionado bajo la barra
+/// (`bar_h` desde arriba). `click_msg` es el toggle del panel (cierra al click
+/// fuera). Compartido por las 4 ventanitas y por el reloj/portapapeles.
+fn overlay_con_scrim(panel: View<Msg>, click_msg: Msg, bar_h: f32, theme: &Theme) -> View<Msg> {
+    let scrim = View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .alpha(0.45)
+    .on_click(click_msg)
+    .children(vec![panel]);
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(bar_h),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size { width: percent(1.0_f32), height: auto() },
+        ..Default::default()
+    })
+    .children(vec![scrim])
+}
+
+/// La ventanita de CPU: agregado + una fila por core, cada una con su mini-barra.
+/// La leyenda muestra el promedio. Estilo "System Load Viewer" de KDE.
+pub fn cpu_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+    let n = (ctx.cpu_cores_n as usize).min(pata_core::widget::MAX_CORES);
+    let header = header_panel("CPU — uso por núcleo", theme);
+    let total = fila_kv("Promedio", &format!("{:.0}%", ctx.cpu * 100.0), theme);
+    let stops = meter_stops("cpu_meter");
+
+    let mut filas: Vec<View<Msg>> = Vec::with_capacity(n + 2);
+    if n == 0 {
+        filas.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text("(sin datos por núcleo — el sampler aún no respondió)".to_string(), 12.0, theme.fg_muted),
+        );
+    } else {
+        for i in 0..n {
+            let f = ctx.cpu_cores[i].clamp(0.0, 1.0);
+            let etq = View::new(Style {
+                size: Size { width: length(36.0_f32), height: length(20.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text(format!("#{i}"), 11.0, theme.fg_muted);
+            let mut barra_style = Style {
+                size: Size { width: auto(), height: length(20.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            };
+            barra_style.flex_grow = 1.0;
+            let barra = View::new(barra_style)
+                .children(vec![barrita(f, 220.0, 6.0, MeterOrient::Horizontal, theme, stops)]);
+            let pct = View::new(Style {
+                size: Size { width: length(40.0_f32), height: length(20.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::FlexEnd),
+                ..Default::default()
+            })
+            .text(format!("{:.0}%", f * 100.0), 11.0, theme.fg_text);
+            filas.push(
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![etq, barra, pct]),
+            );
+        }
+    }
+
+    let lista = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        gap: Size { width: length(0.0_f32), height: length(2.0_f32) },
+        ..Default::default()
+    })
+    .children(filas);
+
+    panel_box(vec![header, total, lista], theme)
+}
+
+/// Overlay (winit) de la ventanita de CPU: scrim que cierra + panel arriba-izq.
+pub fn cpu_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
+    overlay_con_scrim(cpu_panel(ctx, theme), Msg::CpuPanel, bar_h, theme)
+}
+
+/// La ventanita de RAM: total + usado + libre, con la barrita arriba.
+pub fn ram_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+    let header = header_panel("Memoria — uso del sistema", theme);
+    let stops = meter_stops("ram_meter");
+    let barra_grande = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(14.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexStart),
+        ..Default::default()
+    })
+    .children(vec![barrita(ctx.ram, 280.0, 10.0, MeterOrient::Horizontal, theme, stops)]);
+
+    let total_g = ctx.ram_total_mb as f32 / 1024.0;
+    let usado_g = ctx.ram_used_mb as f32 / 1024.0;
+    let libre_g = (total_g - usado_g).max(0.0);
+    let pct = (ctx.ram * 100.0 + 0.5) as i32;
+
+    let kv = vec![
+        fila_kv("Total", &format!("{total_g:.1} GiB"), theme),
+        fila_kv("Usado", &format!("{usado_g:.1} GiB · {pct}%"), theme),
+        fila_kv("Libre", &format!("{libre_g:.1} GiB"), theme),
+    ];
+    let mut hijos = vec![header, barra_grande];
+    hijos.extend(kv);
+    panel_box(hijos, theme)
+}
+
+/// Overlay (winit) de la ventanita de RAM.
+pub fn ram_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
+    overlay_con_scrim(ram_panel(ctx, theme), Msg::RamPanel, bar_h, theme)
+}
+
+/// Slider vertical clickeable: pista + relleno desde abajo. Al click sobre la
+/// pista, dispara `on_set(frac)` con la fracción `0..1` derivada de `y`. Lo
+/// usan las ventanitas de volumen y brillo. La `y` viene local al nodo, y `h`
+/// es el alto actual del nodo (el `on_click_at` lo entrega).
+fn slider_vertical(
+    frac: f32,
+    theme: &Theme,
+    stops: (Color, Color),
+    on_set: fn(f32) -> Msg,
+) -> View<Msg> {
+    let h = SLIDER_H;
+    let pista = barrita(frac, h, SLIDER_W, MeterOrient::Vertical, theme, stops);
+    View::new(Style {
+        size: Size { width: length(SLIDER_W), height: length(h) },
+        ..Default::default()
+    })
+    .on_click_at(move |_x, y, _w, h| {
+        if h <= 0.0 {
+            return None;
+        }
+        let f = ((h - y) / h).clamp(0.0, 1.0);
+        Some(on_set(f))
+    })
+    .children(vec![pista])
+}
+
+/// La ventanita de volumen: slider vertical + botón mute + porcentaje.
+pub fn volume_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+    let header = header_panel("Volumen — sink por defecto", theme);
+    let stops = meter_stops("volume");
+    let slider = slider_vertical(ctx.volume, theme, stops, Msg::VolumeSet);
+    let pct = if ctx.muted {
+        "Silenciado".to_string()
+    } else {
+        format!("{:.0}%", ctx.volume * 100.0)
+    };
+    let valor = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: auto(), height: auto() },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        View::new(Style {
+            size: Size { width: auto(), height: length(20.0_f32) },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(pct, 14.0, theme.fg_text),
+        boton_panel(
+            if ctx.muted { "Activar" } else { "Silenciar" },
+            Msg::VolumeMute,
+            theme,
+            None,
+        ),
+    ]);
+
+    let row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        gap: Size { width: length(16.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![slider, valor]);
+    panel_box(vec![header, row], theme)
+}
+
+/// Overlay (winit) de la ventanita de volumen.
+pub fn volume_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
+    overlay_con_scrim(volume_panel(ctx, theme), Msg::VolumePanel, bar_h, theme)
+}
+
+/// La ventanita de brillo: slider vertical + porcentaje.
+pub fn brightness_panel(ctx: &WidgetCtx, theme: &Theme) -> View<Msg> {
+    let header = header_panel("Brillo — pantalla", theme);
+    let stops = meter_stops("brightness");
+    let slider = slider_vertical(ctx.brightness, theme, stops, Msg::BrightnessSet);
+    let pct = format!("{:.0}%", ctx.brightness * 100.0);
+    let valor = View::new(Style {
+        size: Size { width: auto(), height: length(20.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(pct, 14.0, theme.fg_text);
+    let row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::SpaceBetween),
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        gap: Size { width: length(16.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![slider, valor]);
+    panel_box(vec![header, row], theme)
+}
+
+/// Overlay (winit) de la ventanita de brillo.
+pub fn brightness_overlay(ctx: &WidgetCtx, bar_h: f32, theme: &Theme) -> View<Msg> {
+    overlay_con_scrim(brightness_panel(ctx, theme), Msg::BrightnessPanel, bar_h, theme)
+}
+
 /// El panel del reloj para **layer-shell**: barra arriba + panel llenando lo que
 /// la surface creció. Espeja [`clipboard_menu_view`].
 #[allow(clippy::too_many_arguments)]
@@ -2074,7 +2661,7 @@ pub fn bar_view(
 #[cfg(test)]
 mod tests {
     use super::widget_tooltip;
-    use pata_core::widget::WidgetView;
+    use pata_core::widget::{MeterOrient, MeterSize, WidgetView};
 
     #[test]
     fn tooltip_de_un_medidor_junta_etiqueta_y_leyenda() {
@@ -2082,6 +2669,8 @@ mod tests {
             label: Some("CPU".into()),
             fraction: 0.42,
             caption: "42%".into(),
+            size: MeterSize::Medium,
+            orient: MeterOrient::Horizontal,
         };
         assert_eq!(widget_tooltip(&v).as_deref(), Some("CPU 42%"));
     }
@@ -2091,5 +2680,17 @@ mod tests {
         assert_eq!(widget_tooltip(&WidgetView::Text("14:05".into())).as_deref(), Some("14:05"));
         assert_eq!(widget_tooltip(&WidgetView::Text("  ".into())), None);
         assert_eq!(widget_tooltip(&WidgetView::Empty), None);
+    }
+
+    #[test]
+    fn tooltip_de_cores_incluye_la_cantidad() {
+        let v = WidgetView::Cores {
+            label: Some("CPU".into()),
+            fractions: vec![0.1, 0.2, 0.3, 0.4],
+            caption: "25% (4)".into(),
+            size: MeterSize::Medium,
+            orient: MeterOrient::Horizontal,
+        };
+        assert_eq!(widget_tooltip(&v).as_deref(), Some("CPU 25% (4) · 4 cores"));
     }
 }

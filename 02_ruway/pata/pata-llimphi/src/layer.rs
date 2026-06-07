@@ -1408,11 +1408,13 @@ impl LayerApp {
                 }
             }
             Msg::VolumeMute => crate::sampler::toggle_mute(),
+            Msg::VolumeSet(f) => crate::sampler::set_volume(f),
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy > 0.0);
                 }
             }
+            Msg::BrightnessSet(f) => crate::sampler::set_brightness(f),
             Msg::ClipboardMenu => self.toggle_menu(MenuKind::Clipboard),
             Msg::ClipboardPick(text) => {
                 crate::sampler::copiar_clipboard(&text);

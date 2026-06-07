@@ -131,7 +131,7 @@ fn print_slot(nombre: &str, widgets: &[WidgetSpec], con_view: bool) {
 /// Un [`WidgetCtx`] de muestra para que `--widgets` enseñe el view-model sin
 /// muestrear el sistema real (eso es trabajo del frontend, no del inspector).
 fn ctx_muestra() -> WidgetCtx {
-    WidgetCtx {
+    let mut ctx = WidgetCtx {
         clock: ClockReading {
             year: 2026,
             month: 6,
@@ -153,7 +153,17 @@ fn ctx_muestra() -> WidgetCtx {
         active_workspace: 2,
         workspace_count: 4,
         workspace_occupied: 0b0101, // escritorios 1 y 3 con ventanas
+        ..WidgetCtx::default()
+    };
+    // 8 cores de muestra con cargas escalonadas para ilustrar el racimo.
+    ctx.cpu_cores_n = 8;
+    for (i, v) in [0.15_f32, 0.30, 0.45, 0.60, 0.75, 0.50, 0.20, 0.85]
+        .iter()
+        .enumerate()
+    {
+        ctx.cpu_cores[i] = *v;
     }
+    ctx
 }
 
 /// Renderiza un [`WidgetView`] como una línea legible para el inspector.
@@ -165,9 +175,21 @@ fn render_view(v: &WidgetView) -> String {
             label,
             fraction,
             caption,
+            size,
+            orient,
         } => {
             let etiqueta = label.as_deref().unwrap_or("—");
-            format!("meter [{etiqueta}] {:.0}% «{caption}»", fraction * 100.0)
+            format!(
+                "meter [{etiqueta}] {:.0}% «{caption}» {size:?}/{orient:?}",
+                fraction * 100.0
+            )
+        }
+        WidgetView::Cores { label, fractions, caption, size, orient } => {
+            let etiqueta = label.as_deref().unwrap_or("—");
+            format!(
+                "cores [{etiqueta}] n={} avg={caption} {size:?}/{orient:?}",
+                fractions.len()
+            )
         }
         WidgetView::Workspaces { active, count, occupied } => {
             format!("workspaces {active}/{count} ocupados={occupied:#b}")

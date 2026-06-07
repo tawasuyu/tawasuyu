@@ -209,6 +209,11 @@ fn dibujar_texto(lienzo: &mut Lienzo, x: usize, base_y: usize, s: &str, fondo: C
     }
 }
 
+/// Ancho de una mini-barra del racimo `Cores` en la barra del kernel (px).
+const MINI_W: usize = 6;
+/// Separación entre mini-barras del racimo (px).
+const MINI_GAP: usize = 2;
+
 /// Ancho en px que ocupará un view-model al pintarse.
 fn medir_vista(v: &WidgetView) -> usize {
     match v {
@@ -220,6 +225,15 @@ fn medir_vista(v: &WidgetView) -> usize {
                 w += medir_texto(l) + GAP;
             }
             w += BARRA_W + GAP + medir_texto(caption);
+            w
+        }
+        WidgetView::Cores { label, fractions, caption, .. } => {
+            let mut w = 0;
+            if let Some(l) = label {
+                w += medir_texto(l) + GAP;
+            }
+            let n = fractions.len();
+            w += n * MINI_W + MINI_GAP * n.saturating_sub(1) + GAP + medir_texto(caption);
             w
         }
         WidgetView::Workspaces { count, .. } => {
@@ -256,7 +270,7 @@ fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, region: RegionPan
             dibujar_texto(lienzo, x, base_y, t, fondo, Color::TEXTO);
             medir_texto(t)
         }
-        WidgetView::Meter { label, fraction, caption } => {
+        WidgetView::Meter { label, fraction, caption, .. } => {
             let mut cur = x;
             if let Some(l) = label {
                 dibujar_texto(lienzo, cur, base_y, l, fondo, Color::TEXTO);
@@ -269,6 +283,33 @@ fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, region: RegionPan
             let relleno = (BARRA_W as f32 * fraction.clamp(0.0, 1.0)) as usize;
             lienzo.rellenar_rect(cur, barra_y, relleno, BARRA_H, Color::FOCO);
             cur += BARRA_W + GAP;
+            dibujar_texto(lienzo, cur, base_y, caption, fondo, Color::TEXTO);
+            cur += medir_texto(caption);
+            cur - x
+        }
+        WidgetView::Cores { label, fractions, caption, .. } => {
+            // Una fila de mini-barras verticales (estilo systemmonitor de KDE):
+            // cada núcleo es una columnita que sube según su carga. El kernel no
+            // tiene gradiente; alterna `FOCO` para el relleno y `SIN_FOCO` para
+            // la pista. La leyenda agregada va al final.
+            let mut cur = x;
+            if let Some(l) = label {
+                dibujar_texto(lienzo, cur, base_y, l, fondo, Color::TEXTO);
+                cur += medir_texto(l) + GAP;
+            }
+            let alto_max = region.alto.saturating_sub(8);
+            let cy = region.y + 4;
+            for (i, f) in fractions.iter().enumerate() {
+                if i > 0 {
+                    cur += MINI_GAP;
+                }
+                lienzo.rellenar_rect(cur, cy, MINI_W, alto_max, Color::SIN_FOCO);
+                let alto_relleno = (alto_max as f32 * f.clamp(0.0, 1.0)) as usize;
+                let y_relleno = cy + alto_max.saturating_sub(alto_relleno);
+                lienzo.rellenar_rect(cur, y_relleno, MINI_W, alto_relleno, Color::FOCO);
+                cur += MINI_W;
+            }
+            cur += GAP;
             dibujar_texto(lienzo, cur, base_y, caption, fondo, Color::TEXTO);
             cur += medir_texto(caption);
             cur - x
