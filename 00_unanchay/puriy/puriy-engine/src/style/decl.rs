@@ -788,6 +788,16 @@ pub(crate) enum DeclKind {
     WebkitNbspMode(Option<String>),
     /// `-webkit-locale` (Fase 7.623). `None` = `auto`. HEREDA. Plumb.
     WebkitLocale(Option<String>),
+    /// `-webkit-column-axis` (Fase 7.624). `None` = `auto`. NO hereda. Plumb.
+    WebkitColumnAxis(Option<String>),
+    /// `-webkit-column-progression` (Fase 7.625). `None` = `normal`. NO hereda. Plumb.
+    WebkitColumnProgression(Option<String>),
+    /// `-webkit-app-region` (Fase 7.626). `None` = `none`. NO hereda. Plumb.
+    WebkitAppRegion(Option<String>),
+    /// `-webkit-highlight` (Fase 7.627). `None` = `none`. HEREDA. Plumb.
+    WebkitHighlight(Option<String>),
+    /// `-webkit-box-reflect` (Fase 7.628). `None` = `none`. NO hereda. Plumb.
+    WebkitBoxReflect(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1344,6 +1354,11 @@ impl Decl {
             DeclKind::WebkitTextSecurity(v) => s.webkit_text_security = v.clone(),
             DeclKind::WebkitNbspMode(v) => s.webkit_nbsp_mode = v.clone(),
             DeclKind::WebkitLocale(v) => s.webkit_locale = v.clone(),
+            DeclKind::WebkitColumnAxis(v) => s.webkit_column_axis = v.clone(),
+            DeclKind::WebkitColumnProgression(v) => s.webkit_column_progression = v.clone(),
+            DeclKind::WebkitAppRegion(v) => s.webkit_app_region = v.clone(),
+            DeclKind::WebkitHighlight(v) => s.webkit_highlight = v.clone(),
+            DeclKind::WebkitBoxReflect(v) => s.webkit_box_reflect = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

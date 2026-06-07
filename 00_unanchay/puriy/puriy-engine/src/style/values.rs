@@ -1231,6 +1231,25 @@ pub struct ComputedStyle {
     /// `-webkit-locale` (Fase 7.623). Locale para reglas dependientes del
     /// idioma. Parse opaco — `None` = `auto`. HEREDA. Plumb.
     pub webkit_locale: Option<String>,
+    /// `-webkit-column-axis` (Fase 7.624). Eje de flujo de columnas
+    /// (horizontal/vertical/auto). Parse opaco — `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub webkit_column_axis: Option<String>,
+    /// `-webkit-column-progression` (Fase 7.625). Sentido de avance de las
+    /// columnas (normal/reverse). Parse opaco — `None` = `normal`. NO
+    /// hereda. Plumb.
+    pub webkit_column_progression: Option<String>,
+    /// `-webkit-app-region` (Fase 7.626). Chrome/Electron: zona arrastrable
+    /// de la ventana (drag/no-drag). Parse opaco — `None` = `none`. NO
+    /// hereda. Plumb.
+    pub webkit_app_region: Option<String>,
+    /// `-webkit-highlight` (Fase 7.627). Nombre de highlight personalizado.
+    /// Parse opaco — `None` = `none`. HEREDA. Plumb.
+    pub webkit_highlight: Option<String>,
+    /// `-webkit-box-reflect` (Fase 7.628). Reflejo del elemento
+    /// (dirección + offset + máscara). Parse opaco — `None` = `none`. NO
+    /// hereda. Plumb.
+    pub webkit_box_reflect: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4571,6 +4590,11 @@ impl Default for ComputedStyle {
             webkit_text_security: None,
             webkit_nbsp_mode: None,
             webkit_locale: None,
+            webkit_column_axis: None,
+            webkit_column_progression: None,
+            webkit_app_region: None,
+            webkit_highlight: None,
+            webkit_box_reflect: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

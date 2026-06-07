@@ -2492,6 +2492,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitLocale(Some(v.to_string())))
             }
         }
+        // Fase 7.624 — `-webkit-column-axis`. `auto` → None.
+        "-webkit-column-axis" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitColumnAxis(None))
+            } else {
+                Some(DeclKind::WebkitColumnAxis(Some(v.to_string())))
+            }
+        }
+        // Fase 7.625 — `-webkit-column-progression`. `normal` → None.
+        "-webkit-column-progression" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::WebkitColumnProgression(None))
+            } else {
+                Some(DeclKind::WebkitColumnProgression(Some(v.to_string())))
+            }
+        }
+        // Fase 7.626 — `-webkit-app-region` (Chrome/Electron). `none` → None.
+        "-webkit-app-region" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitAppRegion(None))
+            } else {
+                Some(DeclKind::WebkitAppRegion(Some(v.to_string())))
+            }
+        }
+        // Fase 7.627 — `-webkit-highlight`. `none` → None.
+        "-webkit-highlight" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitHighlight(None))
+            } else {
+                Some(DeclKind::WebkitHighlight(Some(v.to_string())))
+            }
+        }
+        // Fase 7.628 — `-webkit-box-reflect`. `none` → None.
+        "-webkit-box-reflect" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBoxReflect(None))
+            } else {
+                Some(DeclKind::WebkitBoxReflect(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
