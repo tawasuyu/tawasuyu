@@ -734,6 +734,7 @@ mod pruebas {
             100,
             Language::Plain,
             |_, _| (),
+            |_| None::<()>,
         );
         let _ = v;
     }
