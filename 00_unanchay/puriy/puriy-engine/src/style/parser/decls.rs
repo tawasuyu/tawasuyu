@@ -836,7 +836,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "white-space" => parse_white_space(value).map(DeclKind::WhiteSpace),
         "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
         // Fase 7.729 — `-webkit-opacity` alias vendor legacy de `opacity`.
-        "opacity" | "-webkit-opacity" => parse_opacity(value).map(DeclKind::Opacity),
+        // Fase 7.790 — `-moz-opacity` alias vendor legacy (pre-opacity Gecko).
+        "opacity" | "-webkit-opacity" | "-moz-opacity" => parse_opacity(value).map(DeclKind::Opacity),
         // Fase 7.719 — `-webkit-align-self` alias vendor de `align-self`.
         "align-self" | "-webkit-align-self" => {
             parse_align_self(value).map(DeclKind::AlignSelf)
@@ -1050,7 +1051,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_hyphenate_limit_chars(value).map(DeclKind::HyphenateLimitChars)
         }
         // Fase 7.431 — `text-size-adjust` (CSS Text Inline 3). HEREDA. Plumb.
-        "text-size-adjust" | "-webkit-text-size-adjust" => {
+        // Fase 7.791 — `-moz-text-size-adjust` / Fase 7.792 — `-ms-text-size-adjust` alias vendor.
+        "text-size-adjust" | "-webkit-text-size-adjust" | "-moz-text-size-adjust" | "-ms-text-size-adjust" => {
             parse_text_size_adjust(value).map(DeclKind::TextSizeAdjust)
         }
         // Fase 7.432 — `line-height-step` (CSS Text 4 draft). HEREDA. Plumb.
@@ -3262,7 +3264,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
-        "touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
+        // Fase 7.793 — `-ms-touch-action` alias vendor (IE10).
+        "touch-action" | "-ms-touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
         "clip-path" | "-webkit-clip-path" => Some(DeclKind::ClipPath(parse_clip_path(value))),
         "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),
         // `mask` shorthand: hoy sólo el subset image (igual que mask-image).
@@ -3630,8 +3633,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
-        // Fase 7.722 — `-webkit-transform` / Fase 7.766 — `-moz-transform` alias vendor de `transform`.
-        "transform" | "-webkit-transform" | "-moz-transform" => {
+        // Fase 7.722/7.766/7.794 — `-webkit-`/`-moz-`/`-ms-transform` alias vendor de `transform`.
+        "transform" | "-webkit-transform" | "-moz-transform" | "-ms-transform" => {
             parse_transforms(value).map(DeclKind::Transforms)
         }
         "grid-template-columns" => {
