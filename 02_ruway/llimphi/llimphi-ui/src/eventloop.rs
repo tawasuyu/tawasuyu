@@ -188,6 +188,19 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         if A::ime_allowed() {
             window.set_ime_allowed(true);
         }
+        // Adapter AccessKit: lo creamos ANTES del primer redraw, conectado al
+        // EventLoopProxy del runtime. El adapter emitirá `accesskit_winit::Event`
+        // (Initial tree requested, ActionRequested, deactivated) — nuestro
+        // `From<accesskit_winit::Event> for UserEvent<Msg>` los rutea como
+        // `UserEvent::A11y(...)` para que entren por el mismo `user_event`.
+        let a11y_proxy: EventLoopProxy<UserEvent<A::Msg>> =
+            match &self.handle.inner {
+                HandleInner::Real(p) => p.clone(),
+                HandleInner::Test => unreachable!("resumed sin event loop real"),
+            };
+        let a11y_adapter =
+            accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, a11y_proxy);
+        let a11y_tree_id = accesskit::TreeId(uuid::Uuid::new_v4());
         let hal = pollster::block_on(Hal::new(None)).expect("hal");
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
@@ -218,6 +231,8 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             last_tap: None,
             pending_long_press: None,
             retained: None,
+            a11y_adapter,
+            a11y_tree_id,
         });
         // Sincroniza el factor de escala inicial (el de la ventana recién
         // creada) ANTES del primer render: así una app que dependa del DPI
@@ -252,6 +267,9 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     self.secondaries.remove(pos);
                 }
             }
+            UserEvent::A11y(ev) => {
+                self.handle_a11y_event(ev);
+            }
         }
     }
 
@@ -270,6 +288,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         let Some(state) = self.state.as_mut() else {
             return;
         };
+        // Cada window_event debe pasar primero por el adapter AccessKit para
+        // que las tecnologías asistivas se enteren del estado real de la
+        // ventana (focus_change del SO, cursor moves, etc.). El adapter
+        // no consume el evento — lo despacha aparte vía el EventLoopProxy.
+        state.a11y_adapter.process_event(&state.window, &event);
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
@@ -1330,6 +1353,10 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     drop_hover_idx,
                     overlay: overlay_built,
                 });
+                // AccessKit: tras un paint exitoso, empujamos el árbol al
+                // adapter. `update_if_active` se salta el closure si no hay
+                // tecnología asistiva escuchando — coste cero en ese caso.
+                push_a11y_tree::<A>(state);
             }
             _ => {}
         }
@@ -1372,7 +1399,104 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
 // Path APARTE del de la primaria: comparten modelo (vive en `self.state`) y
 // `Hal`/`Renderer`, pero cada secundaria lleva su surface + caches. Sin
 // overlay ni foco (la config no los necesita); se puede ampliar luego.
+/// Empuja al adapter AccessKit el árbol del último frame pintado. Llamar tras
+/// guardar `state.last_render`. `update_if_active` no construye el árbol si no
+/// hay tecnología asistiva activa (coste cero en ese caso). Pública sólo
+/// dentro del crate; las tests no la necesitan.
+fn push_a11y_tree<A: App>(state: &mut RuntimeState<A>) {
+    let Some(cache) = state.last_render.as_ref() else {
+        return;
+    };
+    // El foco que tenemos es un id opaco u64 (`focusable`); el árbol AccessKit
+    // necesita el índice del MountedNode. Resolvemos buscando.
+    let focused_idx = state.focused.and_then(|fid| {
+        cache
+            .mounted
+            .nodes
+            .iter()
+            .position(|n| n.focusable == Some(fid))
+    });
+    let app_name = A::window_title(state.model.as_ref().expect("model"))
+        .unwrap_or_else(|| String::from("Llimphi"));
+    let tree_id = state.a11y_tree_id;
+    state.a11y_adapter.update_if_active(|| {
+        crate::a11y::build_tree(&cache.mounted, &cache.computed, focused_idx, &app_name, tree_id)
+    });
+}
+
 impl<A: App> Runtime<A> {
+    /// Recibe un `accesskit_winit::Event` (ruteado vía `EventLoopProxy` como
+    /// `UserEvent::A11y(...)`) y reacciona:
+    /// - `InitialTreeRequested`: el lector pidió el árbol inicial → empujamos
+    ///   uno desde `last_render` si lo hay, o pedimos un redraw que lo creará.
+    /// - `ActionRequested(req)`: el lector quiere ejecutar una acción sobre un
+    ///   `NodeId`. v1 soporta `Action::Focus` (mueve `state.focused` + dispara
+    ///   `App::on_focus`) y `Action::Click` (ejecuta el `on_click` del nodo).
+    /// - `AccessibilityDeactivated`: nada que hacer; el siguiente paint dejará
+    ///   de construir trees (el `update_if_active` se autoinhibe).
+    fn handle_a11y_event(&mut self, ev: accesskit_winit::Event) {
+        use accesskit_winit::WindowEvent as AkWinEvent;
+        let Some(state) = self.state.as_mut() else { return };
+        match ev.window_event {
+            AkWinEvent::InitialTreeRequested => {
+                // Si ya pintamos un frame, ese mounted sirve para el árbol
+                // inicial. Si no, forzamos un redraw — el path normal llamará
+                // a `push_a11y_tree::<A>` al final.
+                if state.last_render.is_some() {
+                    push_a11y_tree::<A>(state);
+                } else {
+                    state.window.request_redraw();
+                }
+            }
+            AkWinEvent::ActionRequested(req) => {
+                let Some(idx) = crate::a11y::mounted_idx_for(req.target_node) else {
+                    return;
+                };
+                let Some(cache) = state.last_render.as_ref() else {
+                    return;
+                };
+                let Some(node) = cache.mounted.nodes.get(idx) else {
+                    return;
+                };
+                match req.action {
+                    accesskit::Action::Focus => {
+                        // Si el nodo es focusable, movemos el foco a su id
+                        // opaco; si no, lo limpiamos. La app recibe la
+                        // transición vía `App::on_focus`.
+                        let new_focus = node.focusable;
+                        state.focused = new_focus;
+                        let model = state.model.as_ref().expect("model");
+                        if let Some(msg) = A::on_focus(model, new_focus) {
+                            let m = state.model.take().expect("model");
+                            state.model = Some(A::update(m, msg, &self.handle));
+                        }
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
+                    accesskit::Action::Click => {
+                        // Sólo soportamos `on_click` (Msg directo) en v1. Los
+                        // handlers `*_at` necesitan una posición sintética
+                        // coherente que no tenemos — los ignoramos.
+                        if let Some(msg) = node.on_click.clone() {
+                            let m = state.model.take().expect("model");
+                            state.model = Some(A::update(m, msg, &self.handle));
+                            state.last_render = None;
+                            state.window.request_redraw();
+                        }
+                    }
+                    _ => {
+                        // Otras acciones (Expand/Collapse/Increment/Decrement/
+                        // SetValue/ScrollIntoView/etc.) se sumarán cuando un
+                        // widget concreto lo pida — el modelo `SemanticsSpec`
+                        // ya tiene los flags relevantes; solo falta cablear el
+                        // efecto inverso (acción → mutación de Model).
+                    }
+                }
+            }
+            AkWinEvent::AccessibilityDeactivated => {}
+        }
+    }
+
     /// Aplica un Msg al modelo (que vive en la primaria) e invalida + repinta
     /// TODAS las ventanas. Es el camino de cualquier evento de una secundaria,
     /// así un cambio hecho en la config se refleja al toque en el reproductor

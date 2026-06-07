@@ -648,6 +648,11 @@ winit = "0.30"
 raw-window-handle = "0.6"
 pollster = "0.4"
 vello = "0.5"
+# Árbol de accesibilidad para lectores de pantalla (NVDA/VoiceOver/Orca/TalkBack).
+# Lo consume el runtime de Llimphi (iter 2/3 del plan AccessKit); el modelo
+# `SemanticsSpec` del compositor es independiente de estas crates.
+accesskit = "0.24"
+accesskit_winit = "0.33"
 taffy = "0.9"
 # parley = shaping completo (bidi, ligatures, fallback CJK/emoji vía fontique, line break).
 parley = "0.4"

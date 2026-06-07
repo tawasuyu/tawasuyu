@@ -14,6 +14,15 @@ llimphi-text = { path = "../llimphi-text" }
 # El compositor declarativo (winit-free): View, mount, paint, hit-test.
 llimphi-compositor = { path = "../llimphi-compositor" }
 pollster = { workspace = true }
+# Árbol de accesibilidad por frame (NVDA/VoiceOver/Orca/TalkBack). Lo
+# alimentamos desde `View::semantics` + el árbol Mounted. `accesskit_winit`
+# es el adapter que conecta el árbol a la API nativa del SO vía winit.
+accesskit = { workspace = true }
+accesskit_winit = { workspace = true }
+# `accesskit::TreeId` envuelve un `uuid::Uuid` — generamos uno por proceso
+# para identificar el árbol entre actualizaciones (el lector lo necesita
+# para distinguir nuestra app de otras ventanas AccessKit del SO).
+uuid = { version = "1", features = ["v4"] }
 
 [[example]]
 name = "counter"

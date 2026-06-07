@@ -12,6 +12,8 @@
 
 use std::sync::Arc;
 
+pub mod a11y;
+
 use llimphi_hal::winit::application::ApplicationHandler;
 use llimphi_hal::winit::dpi::{LogicalSize, PhysicalPosition};
 use llimphi_hal::winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -237,6 +239,19 @@ pub enum UserEvent<Msg> {
     },
     /// Pide cerrar la ventana secundaria con esa `key`. No afecta a la primaria.
     CloseWindow { key: u64 },
+    /// Evento del adapter AccessKit: el lector de pantalla solicitó el árbol
+    /// inicial, pidió ejecutar una acción (focus, click, etc.) o se desactivó.
+    /// El adapter usa el `EventLoopProxy` para enviarlos al hilo del runtime.
+    A11y(accesskit_winit::Event),
+}
+
+/// Permite que `accesskit_winit::Adapter::with_event_loop_proxy` mande sus
+/// eventos sobre nuestro `EventLoopProxy<UserEvent<Msg>>` sin que el caller
+/// los rutee a mano.
+impl<Msg> From<accesskit_winit::Event> for UserEvent<Msg> {
+    fn from(e: accesskit_winit::Event) -> Self {
+        UserEvent::A11y(e)
+    }
 }
 
 /// Asa al runtime de Llimphi. Clonable y enviable entre hilos: la usás para
@@ -551,6 +566,15 @@ struct RuntimeState<A: App> {
     /// frames y escribe `transform` para "volar" del rect anterior al actual.
     /// Ver [`llimphi_compositor::HeroRegistry`].
     hero_registry: llimphi_compositor::HeroRegistry,
+    /// Adapter [AccessKit](https://accesskit.dev) — empuja un árbol de
+    /// accesibilidad al SO en cada paint para alimentar lectores de pantalla.
+    /// Sólo se inicializa si el SO tiene una tecnología asistiva activa; el
+    /// `update_if_active` evita construir el árbol cuando nadie escucha.
+    a11y_adapter: accesskit_winit::Adapter,
+    /// Identidad estable del árbol de accesibilidad entre `TreeUpdate`s. Se
+    /// genera una vez al crear el runtime y se reutiliza en cada update — los
+    /// lectores la usan para distinguir nuestra ventana de otras del SO.
+    a11y_tree_id: accesskit::TreeId,
     /// Registro de **ripples/InkWell** (`View::ripple`), vivo entre frames. El
     /// press dispara una salpicadura; cada redraw la pinta sobre el contenido y,
     /// mientras alguna siga viva, pide otro frame (ticker autodetenido). Ver
