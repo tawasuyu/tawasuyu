@@ -558,6 +558,29 @@ struct RuntimeState<A: App> {
     /// Long-press armado (ver [`PendingLongPress`]). El runtime lo vence por
     /// tiempo en `about_to_wait` y lo cancela en movimiento/release.
     pending_long_press: Option<PendingLongPress<A::Msg>>,
+    /// **Retención de frame entero**. Tras un paint exitoso, guardamos las
+    /// dimensiones del viewport y los flags de animación del frame. Si en el
+    /// próximo `RedrawRequested` ningún sitio invalidó `last_render` (la
+    /// invariante existente del runtime), el modelo + view + layout son
+    /// idénticos al frame anterior: no hace falta rehacer mount/layout/paint,
+    /// alcanza con re-presentar `state.scene` tal cual quedó. Mata redraws
+    /// espurios (expose del compositor, refocus, ticker en el último frame de
+    /// una anim ya asentada). Si el frame retenido estaba animando o ripplando,
+    /// el ticker NECESITA avanzarlo → no hay retención (cache miss). Tampoco
+    /// hay retención con overlay o drag activos (camino conservador). Ver el
+    /// hit-check en `RedrawRequested`.
+    retained: Option<RetainedScene>,
+}
+
+/// Metadata del frame retenido — qué pintó la `state.scene` para validar que
+/// re-presentarla sin re-pintar es seguro.
+#[derive(Clone, Copy)]
+struct RetainedScene {
+    w: u32,
+    h: u32,
+    animating: bool,
+    rippling: bool,
+    has_overlay: bool,
 }
 
 struct RenderCache<Msg> {

@@ -216,6 +216,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             ripple_registry: llimphi_compositor::RippleRegistry::new(),
             last_tap: None,
             pending_long_press: None,
+            retained: None,
         });
         // Sincroniza el factor de escala inicial (el de la ventana recién
         // creada) ANTES del primer render: así una app que dependa del DPI
@@ -400,6 +401,10 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     state.hovered = new_hovered;
                     if hovered_changed {
                         state.window.set_cursor(to_winit_cursor(new_cursor));
+                        // Invalidar el cache de paint retenido: el `hover_fill`
+                        // del nodo viejo está pintado en `state.scene` y el del
+                        // nuevo no — un cache hit re-presentaría el frame stale.
+                        state.last_render = None;
                         state.window.request_redraw();
                     }
                     if let Some(msg) = enter_msg {
@@ -676,6 +681,10 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     state
                         .ripple_registry
                         .trigger(rp.key, lx, ly, rp.color, rp.duration, now);
+                    // El ripple se pinta sobre la scene; invalidamos el cache
+                    // de paint para que el próximo redraw lo dibuje (sin esto,
+                    // un cache hit re-presentaría el frame sin la salpicadura).
+                    state.last_render = None;
                     state.window.request_redraw();
                 }
                 // Tupla: (drag_fn, drag_at_fn, payload, on_click_msg,
@@ -961,6 +970,49 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 }
             }
             WindowEvent::RedrawRequested => {
+                // **Retención de frame entero**. Si:
+                //  (a) hay scene retenida del frame anterior (`retained`),
+                //  (b) `last_render` SIGUE siendo `Some` — la invariante del
+                //      runtime es que cualquier handler que muta visualmente
+                //      pone `last_render = None`, así que `Some` ⇒ nadie tocó
+                //      nada que afecte la pintura,
+                //  (c) el frame retenido NO estaba animando ni ripplando
+                //      (si lo estaba, el ticker NECESITA avanzarlo),
+                //  (d) no hay overlay, drag, ni long-press en curso (camino
+                //      conservador: esos casos suelen estar acoplados a
+                //      cambios visuales que no atraviesan `last_render`),
+                //  (e) el viewport sigue del mismo tamaño,
+                // entonces `state.scene` ya tiene EXACTAMENTE lo que hay que
+                // mostrar. Saltamos mount + layout + paint y solo hacemos un
+                // render+present de la scene retenida. Cubre redraws espurios
+                // (expose del compositor, refocus, el último frame de una anim
+                // ya asentada). Si algo falla en el acquire, caemos al camino
+                // completo (no es un error, sólo un viewport efímero).
+                let cache_hit = state.last_render.is_some()
+                    && state.drag.is_none()
+                    && state.pending_long_press.is_none()
+                    && state.retained.as_ref().is_some_and(|r| {
+                        !r.animating
+                            && !r.rippling
+                            && !r.has_overlay
+                            && (r.w, r.h) == state.surface.size()
+                    });
+                if cache_hit {
+                    match state.surface.acquire() {
+                        Ok(frame) => {
+                            if state
+                                .renderer
+                                .render(&state.hal, &state.scene, &frame, palette::css::BLACK)
+                                .is_ok()
+                            {
+                                state.surface.present(frame, &state.hal);
+                                return;
+                            }
+                            // render falló → cae al camino completo
+                        }
+                        Err(_) => { /* surface efímera → camino completo */ }
+                    }
+                }
                 // Título dinámico (App::window_title): si cambió respecto del
                 // último aplicado, se lo pasamos a winit. Barato: una
                 // comparación de String por frame, set_title sólo en el cambio.
@@ -1256,6 +1308,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 if animating || rippling {
                     state.window.request_redraw();
                 }
+                state.retained = Some(RetainedScene {
+                    w,
+                    h,
+                    animating,
+                    rippling,
+                    has_overlay: overlay_built.is_some(),
+                });
                 state.last_render = Some(RenderCache {
                     mounted,
                     computed,
