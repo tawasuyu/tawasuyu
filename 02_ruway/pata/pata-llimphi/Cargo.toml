@@ -41,6 +41,9 @@ llimphi-widget-scroll = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-navigator = { workspace = true }
 llimphi-widget-segmented = { workspace = true }
+# Wrap + chip para el grid de íconos del menú activities GNOME.
+llimphi-widget-wrap = { workspace = true }
+llimphi-widget-chip = { workspace = true }
 # Protocolo de query de nouser (list_monads / resolve_monad) — fuente
 # autoritativa de qué archivos componen una Mónada. Importamos sólo los wire
 # types + cliente blocking, sin arrastrar el engine (notify/sled/blake3).

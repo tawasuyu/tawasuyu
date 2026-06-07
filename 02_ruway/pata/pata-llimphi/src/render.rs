@@ -32,6 +32,8 @@ use crate::tray::{TrayIcon, TrayItem};
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 mod sidebar;
+mod start_menus;
+pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 
 /// Largo máximo de la etiqueta de una ventana en el `window_list` antes de
@@ -1239,8 +1241,13 @@ fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) -> View<Msg
         .fill(theme.bg_panel)
         .radius(6.0)
         .hover_fill(theme.bg_button_hover)
-        .tooltip(if exec.is_some() { "Lanzar" } else { "Menú de inicio" })
+        .tooltip(if exec.is_some() {
+            "Lanzar"
+        } else {
+            "Menú de inicio (clic-der: cambiar estilo)"
+        })
         .on_click(click)
+        .on_right_click(Msg::StartStyleCycle)
         .text(label.to_string(), 14.0, theme.accent)
 }
 

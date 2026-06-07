@@ -112,6 +112,9 @@ pub enum Msg {
     BrightnessWheel(f32),
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
+    /// Cicla al próximo estilo de menú (Classic → XP → GNOME → Classic).
+    /// Right-click sobre el botón de inicio.
+    StartStyleCycle,
     /// Carácter al buscador del menú de inicio.
     StartChar(char),
     /// Backspace en el buscador del menú de inicio.
@@ -463,6 +466,9 @@ pub struct Model {
     pub menu_query: String,
     /// Desplazamiento de la lista del menú (px).
     pub menu_scroll: f32,
+    /// Estilo visual del menú de inicio (alternable con right-click sobre
+    /// el botón). Default `Classic`. Ver [`MenuStyle`].
+    pub menu_style: MenuStyle,
     /// Muestreador del sistema (con estado para el delta de CPU).
     pub sampler: Sampler,
     /// Texto del portapapeles (una línea), para el widget `clipboard`. Se
@@ -605,6 +611,43 @@ impl Model {
     }
 }
 
+/// Estilos del menú de inicio. El default `Classic` es el panel a la
+/// izquierda con buscador + lista filtrable (el que la app trae desde
+/// el inicio). `XP` evoca el menú de Windows XP — banda superior con
+/// usuario, dos columnas (pinned + programs), footer "Apagar". `Gnome`
+/// imita Activities — overlay full-screen con grid de tiles y buscador
+/// centrado. El usuario alterna estilos con click-derecho sobre el
+/// botón de inicio (`Msg::StartStyleCycle`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MenuStyle {
+    /// Panel sobrio a la izquierda — el estilo default de pata.
+    Classic,
+    /// Windows XP — banda azul superior con usuario, dos columnas
+    /// (pinned a la izquierda, "todos los programas" a la derecha),
+    /// franja inferior con "Cerrar sesión" / "Apagar".
+    Xp,
+    /// GNOME Activities — overlay full-screen con grid de tiles
+    /// centrado y buscador grande arriba. Sin chrome, full-bleed.
+    Gnome,
+}
+
+impl Default for MenuStyle {
+    fn default() -> Self {
+        MenuStyle::Classic
+    }
+}
+
+impl MenuStyle {
+    /// Próximo estilo en la rotación (right-click ciclo).
+    pub fn next(self) -> Self {
+        match self {
+            MenuStyle::Classic => MenuStyle::Xp,
+            MenuStyle::Xp => MenuStyle::Gnome,
+            MenuStyle::Gnome => MenuStyle::Classic,
+        }
+    }
+}
+
 /// Tamaño inicial de la ventana. Cuando mirada acople las superficies (Fase 8)
 /// esto lo fijará el compositor; por ahora cubrimos un 1080p.
 const PANTALLA: (i32, i32) = (1920, 1080);
@@ -659,6 +702,7 @@ impl App for PataApp {
             menu_open: false,
             menu_query: String::new(),
             menu_scroll: 0.0,
+            menu_style: MenuStyle::default(),
             sampler,
             clipboard,
             clip_history: Vec::new(),
@@ -828,6 +872,9 @@ impl App for PataApp {
                     model.menu_scroll = 0.0;
                 }
             }
+            Msg::StartStyleCycle => {
+                model.menu_style = model.menu_style.next();
+            }
             Msg::StartChar(c) => {
                 if !c.is_control() {
                     model.menu_query.push(c);
@@ -951,14 +998,32 @@ impl App for PataApp {
         }
         if model.menu_open {
             let bar_h = bar_thickness_for(&model.cfg, "start_button");
-            return Some(render::start_menu_overlay(
-                model.registry.all(),
-                &model.menu_query,
-                model.menu_scroll,
-                bar_h,
-                model.screen.1 as f32,
-                &model.theme,
-            ));
+            let screen_size = (model.screen.0 as f32, model.screen.1 as f32);
+            return Some(match model.menu_style {
+                MenuStyle::Classic => render::start_menu_overlay(
+                    model.registry.all(),
+                    &model.menu_query,
+                    model.menu_scroll,
+                    bar_h,
+                    screen_size.1,
+                    &model.theme,
+                ),
+                MenuStyle::Xp => render::start_menu_xp_overlay(
+                    model.registry.all(),
+                    &model.menu_query,
+                    model.menu_scroll,
+                    bar_h,
+                    screen_size,
+                    &model.theme,
+                ),
+                MenuStyle::Gnome => render::start_menu_gnome_overlay(
+                    model.registry.all(),
+                    &model.menu_query,
+                    bar_h,
+                    screen_size,
+                    &model.theme,
+                ),
+            });
         }
         if model.clip_open {
             let bar_h = bar_thickness_for(&model.cfg, "clipboard");
