@@ -228,6 +228,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             focused: None,
             last_title: None,
             anim_registry: llimphi_compositor::AnimRegistry::new(),
+            size_anim_registry: llimphi_compositor::SizeAnimRegistry::new(),
             hero_registry: llimphi_compositor::HeroRegistry::new(),
             ripple_registry: llimphi_compositor::RippleRegistry::new(),
             last_tap: None,
@@ -1076,10 +1077,21 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // LayoutBuilder: resuelve los constructores diferidos en dos
                 // pasadas (coste cero si no hay ninguno). Necesita el typesetter
                 // para medir, así que va antes de tomar `model_ref` para el overlay.
-                let view = resolve_layout_builders::<A>(
+                let mut view = resolve_layout_builders::<A>(
                     state.model.as_ref().expect("model"),
                     (w as f32, h as f32),
                     &mut state.typesetter,
+                );
+                // Animaciones implícitas de **tamaño** (`View::animated_size`):
+                // reconcila el `View` tree y parcha `style.size` ANTES del
+                // mount/layout. Así siblings/hijos reflowean suave (la
+                // animación se ve en el layout cascade, no sólo en el rect del
+                // nodo aislado). Coste cero sin nodos `animated_size`.
+                let frame_now = std::time::Instant::now();
+                let size_animating = llimphi_compositor::reconcile_size_anim(
+                    &mut view,
+                    &mut state.size_anim_registry,
+                    frame_now,
                 );
                 let model_ref = state.model.as_ref().expect("model");
                 let overlay_view = A::view_overlay(model_ref);
@@ -1104,7 +1116,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // con el estado retenido DESPUÉS del layout y ANTES del paint —
                 // interpola fill/radius de los nodos con `anim`. Si alguna sigue
                 // viva pedimos otro frame al final (ticker autodetenido).
-                let now = std::time::Instant::now();
+                let now = frame_now;
                 let anim_active = state.anim_registry.reconcile(&mut mounted, now);
                 // Heroes (`View::hero`): si la misma key cambió de rect entre
                 // frames, escribe en `transform` la afín que "vuela" del rect
@@ -1112,7 +1124,12 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // toca `transform`, que el paint ya respeta. Coste cero sin
                 // nodos hero.
                 let hero_active = state.hero_registry.reconcile(&mut mounted, &computed, now);
-                let animating = anim_active || hero_active;
+                // `size_animating` viene del reconcile previo al mount; lo
+                // ORrijimos al `animating` global para que se pida el
+                // próximo frame y el `retained.animating == true` invalide
+                // la cache de retención (la siguiente pasada reconstruye con
+                // el size interpolado).
+                let animating = anim_active || hero_active || size_animating;
                 // Mount + layout del overlay en un árbol aparte. Lo
                 // computamos con el mismo tamaño de viewport para que
                 // un scrim a percent(1.0) cubra toda la pantalla.

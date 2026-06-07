@@ -83,7 +83,8 @@ Hay `Tween` + `animate()`, pero cada animación se cablea a mano (tween en Model
   + `AnimRegistry` (estado retenido en el runtime, keyado por `key` estable). El
   runtime reconcilia el árbol entre layout y paint, interpola `fill`/`radius` y
   pide otro frame mientras alguna anima (ticker autodetenido, sin `spawn_periodic`).
-  Falta extender a más props (alpha, border, size→requiere re-layout) y `AnimatedOpacity`.
+  Falta extender a más props (border) y `AnimatedOpacity`. **Size → ✅ cerrado en
+  Bloque 15** (animateContentSize, ver abajo).
 - ✅ Ticker central: el redraw se reencola solo mientras haya animación viva; se
   detiene al asentarse. Reemplaza N `spawn_periodic` para las implícitas.
 - Curvas: hoy 3 easings (`linear`, `ease_out_cubic`, `ease_in_out_cubic`) + spring physics.
@@ -309,6 +310,34 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     reordena paneles. Demo `--example reorderable_list_demo` (lista de
     tareas con drag-handle + click-to-toggle, prueba que `on_click` no
     pelea con el drag).
+15. ✅ **Bloque 15 = animateContentSize (cierra hueco de Tier 3)** —
+    `View::animated_size(key, dur)` + `View::animated_size_curve(...)`,
+    nuevo tipo público `SizeAnim { key, duration, easing }` y
+    `SizeAnimRegistry` en `llimphi-compositor`. Función pública
+    `reconcile_size_anim(view, reg, now) -> bool` que **camina el
+    `View` tree** y, para cada nodo con `animated_size`, lee
+    `(style.size.width, style.size.height)` y, si ambos son
+    `Dimension::Length(_)`, reconcila contra el registry — si cambió
+    el target arranca un tween (`from = valor interpolado actual`,
+    `to = nuevo target`), y parcha `style.size` con el valor
+    interpolado **antes** del mount/layout. Así el layout cascade ve
+    el size animado y siblings/hijos reflowean suave sin doble pasada
+    de layout por frame (una pasada con el tamaño correcto). El
+    runtime (`llimphi-ui::eventloop`) lo invoca tras
+    `resolve_layout_builders` y ANTES de `mount`, OReando el
+    `size_animating` al `animating` global para que se pida el próximo
+    frame y se invalide la cache de retención. `RuntimeState` gana
+    `size_anim_registry: SizeAnimRegistry`. Las keys no vistas un
+    frame se descartan (mismo GC que `AnimRegistry`). Límite v1: sólo
+    nodos con ambos lados `Length`. El caller que quiera animar un
+    nodo flex puede envolver el contenido en un wrap con `length(...)`
+    fijo y mover el flex al padre. Tests: 5 nuevos casos en
+    `anim::tests` (primera-no-anima vía `Duration::ZERO` en `settled`,
+    cambio-interpola, terminación-asienta, non-length-no-anima, GC).
+    Demo `--example animated_size_demo` (filmstrip de 5 frames @ 60
+    ms: card 80×40 → 320×120 en 200 ms con ease-out cúbico; sibling
+    se desplaza por el `gap` del row a medida que el card crece —
+    evidencia del reflow del cascade).
 
 ## Tier 7 — detalle (accesibilidad)
 
@@ -409,7 +438,7 @@ cuatro seams de arriba, no abre uno nuevo.
 | **FittedBox / scale-to-fit** | `FittedBox` | Seam (LayoutBuilder) | Escala un subárbol arbitrario para caber. Pariente de autotextsize pero para cualquier `View`; depende del seam de size-aware. |
 | **Calendar / agenda view** | `CalendarView` · agenda | No | Grilla de mes + vista de agenda. Scheduling de ERP; compone date-picker + grid. |
 | **Rating** (estrellas) · **Gauge** (radial) | `RatingBar` · SwiftUI `Gauge` | No | Pequeños, sobre `paint_with`. Gauge útil para dashboards/cosmos/nakui. |
-| **animateContentSize** | Compose `animateContentSize()` | Anim (re-layout) | Animar el alto/ancho al cambiar contenido. Ya anotado como extensión del Bloque 4 que requiere re-layout en el frame. |
+| ✅ **animateContentSize** | Compose `animateContentSize()` / Flutter `AnimatedSize` | Anim (re-layout) | **Bloque 15**: `View::animated_size(key, dur)` + `SizeAnimRegistry` + `reconcile_size_anim`. El reconciler camina el `View` tree y parcha `style.size` **antes** de mount/compute — el layout cascade ve el size interpolado y siblings reflowean suave. Sin re-layout doble por frame: una sola pasada con el tamaño correcto. Límite v1: ambos lados `Dimension::Length(_)` (Percent/Auto se montan tal cual). Demo `--example animated_size_demo`. |
 | **Markdown render** | `flutter_markdown` | No (depende de RichText) | Render de markdown a `View`; espera spans inline mixtos del Tier 2. Probable territorio de pluma, no widget genérico. |
 
 ### Mirado y descartado (no encaja hoy)

@@ -29,7 +29,9 @@ mod render;
 mod ripple;
 mod semantics;
 mod view;
-pub use anim::{ease_out_cubic, Anim, AnimRegistry};
+pub use anim::{
+    ease_out_cubic, reconcile_size_anim, Anim, AnimRegistry, SizeAnim, SizeAnimRegistry,
+};
 pub use hero::{Hero, HeroRegistry};
 pub use layout_builder::{collect_builder_constraints, expand_layout_builders, has_layout_builder};
 pub use render::*;
@@ -467,6 +469,17 @@ pub struct View<Msg> {
     /// rebuilds. Ver [`Anim`] y [`View::animated`]. Lo consume el runtime vía
     /// [`AnimRegistry::reconcile`] (DESPUÉS de layout, ANTES de paint).
     pub anim: Option<Anim>,
+    /// **Animación implícita de tamaño** (Flutter `AnimatedSize` /
+    /// Compose `animateContentSize()`). `None` = sin animación. La key
+    /// debe ser estable entre rebuilds. A diferencia de [`Self::anim`]
+    /// (props de paint, reconcilia DESPUÉS de layout), el tamaño tiene
+    /// que estar firme **antes** del layout — siblings/hijos dependen
+    /// del rect del nodo. El runtime llama
+    /// [`reconcile_size_anim`] sobre el `View` tree **antes** de
+    /// `mount` y parcha `style.size` con el valor interpolado. Sólo se
+    /// activa si ambos `style.size.width` y `style.size.height` son
+    /// `Dimension::Length(_)`. Ver [`SizeAnim`] y [`View::animated_size`].
+    pub animated_size: Option<SizeAnim>,
     /// **Semántica accesible** del nodo (rol, label, value, flags ARIA). El
     /// runtime la traduce a un árbol AccessKit por frame para alimentar
     /// lectores de pantalla (NVDA/VoiceOver/Orca/TalkBack). `None` = no
@@ -694,6 +707,10 @@ pub struct MountedNode<Msg> {
     pub focusable: Option<u64>,
     pub alpha: Option<f32>,
     pub anim: Option<Anim>,
+    /// Animación implícita de tamaño (ver [`View::animated_size`]). El
+    /// runtime ya parchó `style.size` antes del layout — este campo se
+    /// guarda principalmente para inspección/tests.
+    pub animated_size: Option<SizeAnim>,
     /// Semántica accesible del nodo (ver [`View::semantics`]). El runtime la
     /// lee en cada paint para reconstruir el árbol AccessKit del frame.
     pub semantics: Option<SemanticsSpec>,

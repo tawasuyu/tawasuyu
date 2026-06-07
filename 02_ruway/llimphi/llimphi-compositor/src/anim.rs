@@ -84,6 +84,187 @@ pub fn ease_out_cubic(t: f32) -> f32 {
     1.0 - u * u * u
 }
 
+/// Declara que el **tamaño** de este nodo (CSS `width`/`height` /
+/// Flutter `AnimatedSize`/Compose `animateContentSize()`) se anima de
+/// forma implícita cuando cambia entre frames. Bloque 15 de
+/// PARIDAD-FLUTTER (extensión faltante del Bloque 4).
+///
+/// A diferencia de [`Anim`] (que interpola props de **paint** después
+/// del layout: fill/radius/alpha/transform), el tamaño tiene que estar
+/// fijo **antes** del layout — siblings y hijos dependen del rect del
+/// nodo. Por eso este registro vive aparte y el reconciler camina el
+/// `View` tree **antes** de `mount`, parchando `style.size` con el
+/// valor interpolado.
+///
+/// **Límite v1**: sólo anima cuando `style.size.width` y
+/// `style.size.height` son ambas `Dimension::Length(_)`. Si una es
+/// `Percent`/`Auto`, el nodo se monta tal cual sin animación (no hay
+/// "tamaño en píxeles" estable para interpolar). El caller que quiera
+/// animar un nodo flex debe declarar `length(...)` explícito.
+#[derive(Clone, Copy, Debug)]
+pub struct SizeAnim {
+    pub key: u64,
+    pub duration: Duration,
+    pub easing: fn(f32) -> f32,
+}
+
+#[derive(Clone, Copy)]
+struct SizeAnimEntry {
+    from: (f32, f32),
+    to: (f32, f32),
+    start: Instant,
+    duration: Duration,
+    easing: fn(f32) -> f32,
+}
+
+impl SizeAnimEntry {
+    /// Entrada "asentada" (from == to): no anima. Igual que
+    /// `AnimEntry::settled`, usamos `duration: ZERO` para que `done(now)`
+    /// devuelva `true` desde el frame 0 — así la primera aparición no
+    /// pide más frames. Cuando llegue un target nuevo el reconciler
+    /// sobreescribe `duration` con el de `SizeAnim`.
+    fn settled(target: (f32, f32), now: Instant, _dur: Duration, easing: fn(f32) -> f32) -> Self {
+        Self {
+            from: target,
+            to: target,
+            start: now,
+            duration: Duration::ZERO,
+            easing,
+        }
+    }
+
+    fn t(&self, now: Instant) -> f32 {
+        if self.duration.is_zero() {
+            return 1.0;
+        }
+        let elapsed = now.saturating_duration_since(self.start).as_secs_f32();
+        let raw = (elapsed / self.duration.as_secs_f32()).clamp(0.0, 1.0);
+        (self.easing)(raw)
+    }
+
+    fn value(&self, now: Instant) -> (f32, f32) {
+        let t = self.t(now);
+        let (fw, fh) = self.from;
+        let (tw, th) = self.to;
+        (fw + (tw - fw) * t, fh + (th - fh) * t)
+    }
+
+    fn done(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.start) >= self.duration
+    }
+}
+
+/// Registro de animaciones implícitas de **tamaño**, vivo entre
+/// frames. El runtime mantiene una instancia y llama
+/// [`reconcile_size_anim`] en cada redraw **antes** del mount/layout.
+#[derive(Default)]
+pub struct SizeAnimRegistry {
+    entries: HashMap<u64, SizeAnimEntry>,
+}
+
+impl SizeAnimRegistry {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Para tests: hay animación viva para esa key.
+    pub fn is_animating(&self, key: u64, now: Instant) -> bool {
+        self.entries.get(&key).map(|e| !e.done(now)).unwrap_or(false)
+    }
+}
+
+/// Lee `(width, height)` en píxeles si **ambos** son
+/// `Dimension::Length(_)`. Devuelve `None` si alguno es `Auto`,
+/// `Percent`, etc. — esos nodos no se animan en v1. (taffy 0.9 esconde
+/// las variantes detrás de un `CompactLength`; chequeamos por tag.)
+fn try_extract_length_size(
+    style: &llimphi_layout::Style,
+) -> Option<(f32, f32)> {
+    use llimphi_layout::taffy::CompactLength;
+    let w = style.size.width;
+    let h = style.size.height;
+    if w.tag() == CompactLength::LENGTH_TAG && h.tag() == CompactLength::LENGTH_TAG {
+        Some((w.value(), h.value()))
+    } else {
+        None
+    }
+}
+
+fn patch_length_size(style: &mut llimphi_layout::Style, size: (f32, f32)) {
+    use llimphi_layout::taffy::Dimension;
+    style.size.width = Dimension::length(size.0);
+    style.size.height = Dimension::length(size.1);
+}
+
+/// Recorre el `View` tree y, para cada nodo con [`SizeAnim`], reconcila
+/// su `style.size` con el registry: si cambió el objetivo, arranca un
+/// tween; si está animando, parcha `style.size` con el valor
+/// interpolado. Devuelve `true` si alguna animación de tamaño sigue
+/// viva → el runtime debe pedir otro redraw.
+///
+/// **Cuándo llamarlo**: el runtime lo invoca tras `A::view(model)` y
+/// **antes** de `mount`/`compute`, así el layout cascade ve el tamaño
+/// interpolado en vez del objetivo crudo (siblings y hijos reflowean
+/// suave).
+///
+/// Las keys no vistas este frame se descartan al final — un nodo que se
+/// va deja de animar (mismo comportamiento que [`AnimRegistry::reconcile`]).
+pub fn reconcile_size_anim<Msg>(
+    view: &mut crate::View<Msg>,
+    reg: &mut SizeAnimRegistry,
+    now: Instant,
+) -> bool {
+    let mut seen: Vec<u64> = Vec::new();
+    let animating = reconcile_size_anim_inner(view, reg, now, &mut seen);
+    if reg.entries.len() != seen.len() {
+        reg.entries.retain(|k, _| seen.contains(k));
+    }
+    animating
+}
+
+fn reconcile_size_anim_inner<Msg>(
+    view: &mut crate::View<Msg>,
+    reg: &mut SizeAnimRegistry,
+    now: Instant,
+    seen: &mut Vec<u64>,
+) -> bool {
+    let mut animating = false;
+    if let Some(sa) = view.animated_size {
+        if let Some(target) = try_extract_length_size(&view.style) {
+            seen.push(sa.key);
+            let entry = reg
+                .entries
+                .entry(sa.key)
+                .or_insert_with(|| SizeAnimEntry::settled(target, now, sa.duration, sa.easing));
+            if entry.to != target {
+                // Cambió el objetivo: congelá el valor actual como nuevo
+                // origen y rearrancá el reloj — mismo patrón que el
+                // `AnimRegistry` de props.
+                entry.from = entry.value(now);
+                entry.to = target;
+                entry.start = now;
+                entry.duration = sa.duration;
+                entry.easing = sa.easing;
+            }
+            let interp = if entry.done(now) { entry.to } else { entry.value(now) };
+            patch_length_size(&mut view.style, interp);
+            if !entry.done(now) {
+                animating = true;
+            }
+        }
+    }
+    for child in view.children.iter_mut() {
+        if reconcile_size_anim_inner(child, reg, now, seen) {
+            animating = true;
+        }
+    }
+    animating
+}
+
 /// Foto de las props animables de un nodo en un frame. `alpha == None` ≡ nodo
 /// opaco (1.0): es la convención de `View::alpha` y la usa el lerp para mezclar
 /// hacia/desde "sin alpha explícito" sin tratarlo como un salto. Lo mismo para
@@ -692,6 +873,98 @@ mod tests {
         let mut layout = LayoutTree::new();
         let mut m2 = mount(&mut layout, v);
         reg.reconcile(&mut m2, now);
+        assert_eq!(reg.entries.len(), 0);
+    }
+
+    // ─── Bloque 15: tests de SizeAnim / animateContentSize ───
+
+    fn sized_view(key: u64, w: f32, h: f32, dur_ms: u64) -> View<()> {
+        use llimphi_layout::taffy::prelude::{length, Size};
+        let mut style = Style::default();
+        style.size = Size { width: length(w), height: length(h) };
+        View::<()>::new(style).animated_size(key, Duration::from_millis(dur_ms))
+    }
+
+    #[test]
+    fn size_anim_primera_aparicion_no_anima() {
+        let mut reg = SizeAnimRegistry::new();
+        let mut v = sized_view(1, 100.0, 80.0, 200);
+        let now = Instant::now();
+        let animating = reconcile_size_anim(&mut v, &mut reg, now);
+        assert!(!animating, "primera vez: sin animación");
+        // El style.size queda intacto (length(100, 80)).
+        let (w, h) = (v.style.size.width.value(), v.style.size.height.value());
+        assert_eq!((w, h), (100.0, 80.0));
+    }
+
+    #[test]
+    fn size_anim_cambia_target_interpola() {
+        let mut reg = SizeAnimRegistry::new();
+        let t0 = Instant::now();
+        // Frame 1: target = 100×80, se asienta.
+        let mut v = sized_view(1, 100.0, 80.0, 200);
+        reconcile_size_anim(&mut v, &mut reg, t0);
+        // Frame 2: target nuevo = 200×160. En el frame que se detecta el
+        // cambio arranca el reloj — todavía pinta cerca del origen.
+        let mut v = sized_view(1, 200.0, 160.0, 200);
+        let animating = reconcile_size_anim(&mut v, &mut reg, t0);
+        assert!(animating, "cambio de target: pide frames");
+        let (w, h) = (v.style.size.width.value(), v.style.size.height.value());
+        assert!(w < 200.0 && w >= 100.0, "ancho intermedio: {w}");
+        assert!(h < 160.0 && h >= 80.0, "alto intermedio: {h}");
+        // Frame 3: 100 ms (mitad del tween).
+        let mut v = sized_view(1, 200.0, 160.0, 200);
+        let animating = reconcile_size_anim(&mut v, &mut reg, t0 + Duration::from_millis(100));
+        assert!(animating, "a mitad del tween sigue animando");
+        let (w, h) = (v.style.size.width.value(), v.style.size.height.value());
+        assert!(w > 100.0 && w < 200.0, "ancho mitad-tween: {w}");
+        assert!(h > 80.0 && h < 160.0, "alto mitad-tween: {h}");
+    }
+
+    #[test]
+    fn size_anim_termina_y_se_detiene() {
+        let mut reg = SizeAnimRegistry::new();
+        let t0 = Instant::now();
+        let mut v = sized_view(1, 100.0, 80.0, 200);
+        reconcile_size_anim(&mut v, &mut reg, t0);
+        let mut v = sized_view(1, 200.0, 160.0, 200);
+        reconcile_size_anim(&mut v, &mut reg, t0); // arranca
+        // Pasada la duración: aterriza exacto en el objetivo y no pide más.
+        let mut v = sized_view(1, 200.0, 160.0, 200);
+        let animating = reconcile_size_anim(&mut v, &mut reg, t0 + Duration::from_millis(400));
+        assert!(!animating);
+        assert_eq!(
+            (v.style.size.width.value(), v.style.size.height.value()),
+            (200.0, 160.0),
+        );
+    }
+
+    #[test]
+    fn size_anim_no_animable_si_tamano_no_es_length() {
+        // Si el caller declara percent o auto, el reconciler lo deja pasar
+        // sin tracking — no hay valor en píxeles estable para interpolar.
+        use llimphi_layout::taffy::prelude::{percent, Dimension, Size};
+        let mut reg = SizeAnimRegistry::new();
+        let mut style = Style::default();
+        style.size = Size { width: percent(0.5), height: Dimension::auto() };
+        let mut v = View::<()>::new(style).animated_size(1, Duration::from_millis(200));
+        let animating = reconcile_size_anim(&mut v, &mut reg, Instant::now());
+        assert!(!animating);
+        // El size no se tocó: width sigue siendo percent (no LENGTH_TAG).
+        use llimphi_layout::taffy::CompactLength;
+        assert_ne!(v.style.size.width.tag(), CompactLength::LENGTH_TAG);
+    }
+
+    #[test]
+    fn size_anim_descarta_keys_no_vistas() {
+        let mut reg = SizeAnimRegistry::new();
+        let now = Instant::now();
+        let mut v = sized_view(42, 50.0, 50.0, 200);
+        reconcile_size_anim(&mut v, &mut reg, now);
+        assert_eq!(reg.entries.len(), 1);
+        // Frame sin animated_size: la entrada se descarta.
+        let mut v: View<()> = View::<()>::new(Style::default());
+        reconcile_size_anim(&mut v, &mut reg, now);
         assert_eq!(reg.entries.len(), 0);
     }
 }

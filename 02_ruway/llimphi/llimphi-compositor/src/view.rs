@@ -38,6 +38,7 @@ impl<Msg> View<Msg> {
             focusable: None,
             alpha: None,
             anim: None,
+            animated_size: None,
             semantics: None,
             hero: None,
             transform: None,
@@ -396,6 +397,40 @@ impl<Msg> View<Msg> {
             exit: false,
             enter_from_xf: None,
         });
+        self
+    }
+
+    /// Anima de forma **implícita** el **tamaño** de este nodo (Flutter
+    /// `AnimatedSize` / Compose `animateContentSize()`). Cuando
+    /// `style.size` cambia entre frames, el runtime interpola en
+    /// `duration` con ease-out cúbico en vez de saltar — siblings y
+    /// hijos reflowean suave porque el reconciler parcha `style.size`
+    /// **antes** del layout. `key` debe ser estable entre rebuilds.
+    /// Para otra curva, [`Self::animated_size_curve`]. Bloque 15.
+    ///
+    /// **Límite v1**: ambos `style.size.width` y `style.size.height`
+    /// tienen que ser `Dimension::Length(_)`. Si una es `Percent`/`Auto`,
+    /// el nodo se monta tal cual sin animación (no hay valor en píxeles
+    /// estable para interpolar). El caller que necesite animar un nodo
+    /// flex puede envolver el contenido en un wrap con `length(...)`
+    /// fijo y mover el flex al padre.
+    pub fn animated_size(mut self, key: u64, duration: std::time::Duration) -> Self {
+        self.animated_size = Some(SizeAnim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+        });
+        self
+    }
+
+    /// Como [`Self::animated_size`] pero con curva de easing custom.
+    pub fn animated_size_curve(
+        mut self,
+        key: u64,
+        duration: std::time::Duration,
+        easing: fn(f32) -> f32,
+    ) -> Self {
+        self.animated_size = Some(SizeAnim { key, duration, easing });
         self
     }
 

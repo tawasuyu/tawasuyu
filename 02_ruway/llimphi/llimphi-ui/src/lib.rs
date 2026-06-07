@@ -567,6 +567,13 @@ struct RuntimeState<A: App> {
     /// el runtime pide otro frame (ticker autodetenido). Ver
     /// [`llimphi_compositor::AnimRegistry`].
     anim_registry: llimphi_compositor::AnimRegistry,
+    /// Registro de animaciones implícitas de **tamaño**
+    /// (`View::animated_size`, Flutter `AnimatedSize`), vivo entre frames.
+    /// A diferencia de [`Self::anim_registry`] que reconcilia props de
+    /// paint DESPUÉS del layout, este reconcilia `style.size`
+    /// **antes** del mount/compute, así siblings/hijos reflowean suave.
+    /// Ver [`llimphi_compositor::SizeAnimRegistry`].
+    size_anim_registry: llimphi_compositor::SizeAnimRegistry,
     /// Registro de **heroes / shared-element transitions** (`View::hero`),
     /// vivo entre frames. Detecta cambio de rect de una misma `key` entre
     /// frames y escribe `transform` para "volar" del rect anterior al actual.
