@@ -1200,6 +1200,21 @@ pub struct ComputedStyle {
     /// `zoom` (Fase 7.608). Factor de escala no estándar (en vías de
     /// estandarización). Parse opaco — `None` = `normal`. NO hereda. Plumb.
     pub zoom: Option<String>,
+    /// `column-break-before` (Fase 7.614). CSS Multicol legacy (alias viejo
+    /// de `break-before`). Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub column_break_before: Option<String>,
+    /// `column-break-after` (Fase 7.615). Análogo. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub column_break_after: Option<String>,
+    /// `column-break-inside` (Fase 7.616). Análogo. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub column_break_inside: Option<String>,
+    /// `user-modify` (Fase 7.617). No estándar: si el usuario puede editar
+    /// el contenido. Parse opaco — `None` = `read-only`. HEREDA. Plumb.
+    pub user_modify: Option<String>,
+    /// `-webkit-touch-callout` (Fase 7.618). iOS: muestra/oculta el callout
+    /// al mantener pulsado. Parse opaco — `None` = `default`. HEREDA. Plumb.
+    pub webkit_touch_callout: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4530,6 +4545,11 @@ impl Default for ComputedStyle {
             moz_osx_font_smoothing: None,
             webkit_tap_highlight_color: None,
             zoom: None,
+            column_break_before: None,
+            column_break_after: None,
+            column_break_inside: None,
+            user_modify: None,
+            webkit_touch_callout: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

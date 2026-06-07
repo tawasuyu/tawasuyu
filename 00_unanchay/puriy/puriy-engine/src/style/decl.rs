@@ -768,6 +768,16 @@ pub(crate) enum DeclKind {
     WebkitTapHighlightColor(Option<String>),
     /// `zoom` (Fase 7.608). `None` = `normal`. NO hereda. Plumb.
     Zoom(Option<String>),
+    /// `column-break-before` (Fase 7.614). `None` = `auto`. NO hereda. Plumb.
+    ColumnBreakBefore(Option<String>),
+    /// `column-break-after` (Fase 7.615). `None` = `auto`. NO hereda. Plumb.
+    ColumnBreakAfter(Option<String>),
+    /// `column-break-inside` (Fase 7.616). `None` = `auto`. NO hereda. Plumb.
+    ColumnBreakInside(Option<String>),
+    /// `user-modify` (Fase 7.617). `None` = `read-only`. HEREDA. Plumb.
+    UserModify(Option<String>),
+    /// `-webkit-touch-callout` (Fase 7.618). `None` = `default`. HEREDA. Plumb.
+    WebkitTouchCallout(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1314,6 +1324,11 @@ impl Decl {
             DeclKind::MozOsxFontSmoothing(v) => s.moz_osx_font_smoothing = v.clone(),
             DeclKind::WebkitTapHighlightColor(v) => s.webkit_tap_highlight_color = v.clone(),
             DeclKind::Zoom(v) => s.zoom = v.clone(),
+            DeclKind::ColumnBreakBefore(v) => s.column_break_before = v.clone(),
+            DeclKind::ColumnBreakAfter(v) => s.column_break_after = v.clone(),
+            DeclKind::ColumnBreakInside(v) => s.column_break_inside = v.clone(),
+            DeclKind::UserModify(v) => s.user_modify = v.clone(),
+            DeclKind::WebkitTouchCallout(v) => s.webkit_touch_callout = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

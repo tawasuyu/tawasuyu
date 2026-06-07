@@ -2393,6 +2393,55 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::Zoom(Some(v.to_string())))
             }
         }
+        // Fase 7.614-7.616 — `column-break-{before,after,inside}` (Multicol
+        // legacy). Parse opaco; `auto` → None.
+        "column-break-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::ColumnBreakBefore(None))
+            } else {
+                Some(DeclKind::ColumnBreakBefore(Some(v.to_string())))
+            }
+        }
+        "column-break-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::ColumnBreakAfter(None))
+            } else {
+                Some(DeclKind::ColumnBreakAfter(Some(v.to_string())))
+            }
+        }
+        "column-break-inside" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::ColumnBreakInside(None))
+            } else {
+                Some(DeclKind::ColumnBreakInside(Some(v.to_string())))
+            }
+        }
+        // Fase 7.617 — `user-modify` (+ alias `-webkit-user-modify`). `read-only` → None.
+        "user-modify" | "-webkit-user-modify" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("read-only") {
+                Some(DeclKind::UserModify(None))
+            } else {
+                Some(DeclKind::UserModify(Some(v.to_string())))
+            }
+        }
+        // Fase 7.618 — `-webkit-touch-callout` (iOS). `default` → None.
+        "-webkit-touch-callout" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("default") {
+                Some(DeclKind::WebkitTouchCallout(None))
+            } else {
+                Some(DeclKind::WebkitTouchCallout(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
