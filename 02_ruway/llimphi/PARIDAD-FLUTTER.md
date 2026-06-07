@@ -414,6 +414,20 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     `month_grid_febrero_2026_28_dias_domingo_inicio`,
     `shift_month_wrappea_anios`, `week_start_index_consistente`. Cierra
     el item "Pickers concretos: fecha/hora" del backlog ERP.
+18. ✅ **Bloque 18 = FittedBox (cierra el item "FittedBox / scale-to-fit"
+    de la cosecha)** — 2026-06-07. `llimphi-widget-fitted-box` con
+    `fitted_box((iw, ih), BoxFit, || inner_view())`. Cinco políticas:
+    `Contain` (preserva aspect, deja bandas), `Cover` (preserva aspect,
+    recorta), `Fill` (estira, no preserva), `None` (1:1 centrado, recorta
+    si sobra), `ScaleDown` (sólo achica). Composición pura sobre el seam
+    `LayoutBuilder` del compositor: el builder recibe el slot real, llama
+    a `compute_fit(slot, inner, fit) -> (sx, sy, dx, dy)`, y aplica el
+    `Affine::translate * scale_non_uniform` al subárbol inner envuelto en
+    un wrap absoluto a tamaño natural. El padre tiene `clip(true)` para
+    que ningún píxel se salga del slot. `compute_fit` es pública y
+    testeable. 6 tests sobre el algoritmo (contain bandas, cover
+    recorta, fill estira, none centra, scale_down no agranda, entradas
+    inválidas → identidad).
 
 ## Tier 7 — detalle (accesibilidad)
 

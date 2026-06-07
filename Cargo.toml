@@ -281,6 +281,7 @@ members = [
     "02_ruway/llimphi/widgets/wrap",
     "02_ruway/llimphi/widgets/range-slider",
     "02_ruway/llimphi/widgets/calendar",
+    "02_ruway/llimphi/widgets/fitted-box",
     "02_ruway/llimphi/widgets/rating",
     "02_ruway/llimphi/widgets/gauge",
     "02_ruway/llimphi/widgets/scaffold",
@@ -743,6 +744,7 @@ llimphi-widget-fab = { path = "02_ruway/llimphi/widgets/fab" }
 llimphi-widget-wrap = { path = "02_ruway/llimphi/widgets/wrap" }
 llimphi-widget-range-slider = { path = "02_ruway/llimphi/widgets/range-slider" }
 llimphi-widget-calendar = { path = "02_ruway/llimphi/widgets/calendar" }
+llimphi-widget-fitted-box = { path = "02_ruway/llimphi/widgets/fitted-box" }
 llimphi-widget-rating = { path = "02_ruway/llimphi/widgets/rating" }
 llimphi-widget-gauge = { path = "02_ruway/llimphi/widgets/gauge" }
 llimphi-widget-scaffold = { path = "02_ruway/llimphi/widgets/scaffold" }

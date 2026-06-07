@@ -700,6 +700,14 @@ con `on_pointer_enter/leave`.
 **skeleton** — placeholder con shimmer. `skeleton_view`, `skeleton_box_view(w,h,..)`,
 `skeleton_line_view(w,..)`. Requiere redraws periódicos.
 
+**fitted-box** — escala un subárbol al slot del padre. `fitted_box((iw, ih),
+BoxFit::{Contain, Cover, Fill, None, ScaleDown}, || inner_view())` aplica un
+transform afín al inner (medido por el seam `LayoutBuilder`) para que entre en
+el slot real, centrado, preservando aspect salvo `Fill`. Útil para imágenes,
+canvases `paint_with` y texto grande que deben caber en celdas chicas sin que el
+caller los re-mida. La función pura `compute_fit(slot, inner, fit) ->
+(sx, sy, dx, dy)` es testeable.
+
 **calendar** — vista mensual 6×7 (`calendar_view(CalendarSpec { view_year,
 view_month, selected, today, week_start, palette, on_select: Fn(NaiveDate)->Msg,
 on_view_change: Fn(year, month)->Msg })`). Header con `< Mes Año >` para navegar

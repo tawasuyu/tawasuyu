@@ -1,0 +1,11 @@
+[package]
+name = "llimphi-widget-fitted-box"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-fitted-box — escala un subárbol arbitrario para que entre en el slot del padre, con políticas BoxFit::{Contain, Cover, Fill, None, ScaleDown}. Análogo a `FittedBox` de Flutter. Compone sobre el seam LayoutBuilder."
+
+[dependencies]
+llimphi-ui = { workspace = true }
