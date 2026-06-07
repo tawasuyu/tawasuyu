@@ -719,7 +719,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "border-color" => parse_color(value).map(DeclKind::BorderColor),
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
-        "border-radius" => parse_length_px(value).map(DeclKind::BorderRadius),
+        // Fase 7.727 — `-webkit-border-radius` alias vendor de `border-radius`.
+        "border-radius" | "-webkit-border-radius" => {
+            parse_length_px(value).map(DeclKind::BorderRadius)
+        }
         "z-index" => {
             // `auto` → 0; sino int. Negativos OK.
             let v = value.trim();
@@ -732,7 +735,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "content" => Some(DeclKind::Content(parse_content_value(value))),
         "counter-reset" => Some(DeclKind::CounterReset(parse_counter_list(value, 0))),
         "counter-increment" => Some(DeclKind::CounterIncrement(parse_counter_list(value, 1))),
-        "box-shadow" => Some(DeclKind::BoxShadows(parse_box_shadows(value))),
+        // Fase 7.726 — `-webkit-box-shadow` alias vendor de `box-shadow`.
+        "box-shadow" | "-webkit-box-shadow" => {
+            Some(DeclKind::BoxShadows(parse_box_shadows(value)))
+        }
         // `text-decoration` (shorthand) se expande en `parse_declarations`.
         "text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
@@ -786,7 +792,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "column-gap" | "-webkit-column-gap" => {
             parse_length_px(value).map(DeclKind::ColumnGap)
         }
-        "box-sizing" => parse_box_sizing(value).map(DeclKind::BoxSizing),
+        // Fase 7.728 — `-webkit-box-sizing` alias vendor de `box-sizing`.
+        "box-sizing" | "-webkit-box-sizing" => {
+            parse_box_sizing(value).map(DeclKind::BoxSizing)
+        }
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
         "min-height" => parse_length_or_pct(value).map(DeclKind::MinHeight),
         "max-height" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
@@ -815,7 +824,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "white-space" => parse_white_space(value).map(DeclKind::WhiteSpace),
         "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
-        "opacity" => parse_opacity(value).map(DeclKind::Opacity),
+        // Fase 7.729 — `-webkit-opacity` alias vendor legacy de `opacity`.
+        "opacity" | "-webkit-opacity" => parse_opacity(value).map(DeclKind::Opacity),
         // Fase 7.719 — `-webkit-align-self` alias vendor de `align-self`.
         "align-self" | "-webkit-align-self" => {
             parse_align_self(value).map(DeclKind::AlignSelf)
@@ -917,7 +927,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             Some(DeclKind::FontLanguageOverride(parse_font_language_override(value)))
         }
         "text-rendering" => parse_text_rendering(value).map(DeclKind::TextRendering),
-        "filter" => Some(DeclKind::Filter(parse_filter_list(value))),
+        // Fase 7.725 — `-webkit-filter` alias vendor de `filter`.
+        "filter" | "-webkit-filter" => Some(DeclKind::Filter(parse_filter_list(value))),
         "backdrop-filter" | "-webkit-backdrop-filter" => {
             Some(DeclKind::BackdropFilter(parse_filter_list(value)))
         }
