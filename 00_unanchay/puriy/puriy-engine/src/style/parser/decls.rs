@@ -910,7 +910,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
         "outline-offset" => parse_length_px(value).map(DeclKind::OutlineOffset),
         "background-image" => parse_background_image(value),
-        "background-size" => parse_background_size(value),
+        // Fase 7.811 — `-webkit-background-size` / `-moz-background-size` alias vendor legacy.
+        "background-size" | "-webkit-background-size" | "-moz-background-size" => parse_background_size(value),
         "background-position" => parse_background_position(value),
         "background-repeat" => parse_background_repeat(value),
         "background-origin" => parse_background_origin(value),
@@ -2569,7 +2570,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.617 — `user-modify` (+ alias `-webkit-user-modify`). `read-only` → None.
-        "user-modify" | "-webkit-user-modify" => {
+        // Fase 7.810 — `-moz-user-modify` alias vendor (Gecko, mismo semántico).
+        "user-modify" | "-webkit-user-modify" | "-moz-user-modify" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("read-only") {
@@ -7302,10 +7304,12 @@ pub(crate) fn match_border_side_prop(prop: &str, suffix: &str) -> Option<BorderE
 /// es el block; el segundo, el inline (spec CSS Backgrounds 4).
 pub(crate) fn match_border_corner_prop(prop: &str) -> Option<BorderCorner> {
     match prop.to_ascii_lowercase().as_str() {
-        "border-top-left-radius" => Some(BorderCorner::TopLeft),
-        "border-top-right-radius" => Some(BorderCorner::TopRight),
-        "border-bottom-right-radius" => Some(BorderCorner::BottomRight),
-        "border-bottom-left-radius" => Some(BorderCorner::BottomLeft),
+        // Fase 7.812-7.815 — nombres viejos de esquina de Gecko `-moz-border-radius-<corner>`
+        // (sin guiones entre palabras del corner) → mismas esquinas estándar.
+        "border-top-left-radius" | "-moz-border-radius-topleft" => Some(BorderCorner::TopLeft),
+        "border-top-right-radius" | "-moz-border-radius-topright" => Some(BorderCorner::TopRight),
+        "border-bottom-right-radius" | "-moz-border-radius-bottomright" => Some(BorderCorner::BottomRight),
+        "border-bottom-left-radius" | "-moz-border-radius-bottomleft" => Some(BorderCorner::BottomLeft),
         // Fase 7.409 — `border-start-start-radius` = block-start + inline-start = top-left.
         "border-start-start-radius" => Some(BorderCorner::TopLeft),
         // Fase 7.410 — `border-start-end-radius` = block-start + inline-end = top-right.
