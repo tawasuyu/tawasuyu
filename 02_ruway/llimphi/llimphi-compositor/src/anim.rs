@@ -21,7 +21,8 @@
 //!
 //! La **primera** aparición de una key no anima (igual que Flutter): sólo los
 //! **cambios** posteriores se interpolan. Props soportadas hoy: `fill` (color),
-//! `radius` y `alpha` (opacidad). Es ampliable agregando campos a
+//! `radius`, `alpha` (opacidad) y `transform` (afín 2D — scale/rotate/translate
+//! alrededor del centro del rect). Es ampliable agregando campos a
 //! [`AnimSnapshot`].
 //!
 //! **Animación de contenido (entrada y salida).** Aparte de los cambios de
@@ -67,6 +68,12 @@ pub struct Anim {
     /// mientras vive) — usar en pocos nodos (toasts, modales, paneles), no en
     /// cada fila de una lista grande.
     pub exit: bool,
+    /// Transformación afín desde la que arrancar la **entrada** (`enter`). Por
+    /// ej. `Some(Affine::scale(0.6))` da el "pop" del FAB; `Some(Affine::
+    /// translate((0.0, 60.0)))` da slide-in vertical. Llega al target del nodo
+    /// (`node.transform` o identidad) en `duration`. Sin efecto si `enter` es
+    /// `false`. Combinable con el fade de entrada por defecto.
+    pub enter_from_xf: Option<Affine>,
 }
 
 /// Ease-out cúbico, el default razonable para transiciones implícitas
@@ -79,12 +86,15 @@ pub fn ease_out_cubic(t: f32) -> f32 {
 
 /// Foto de las props animables de un nodo en un frame. `alpha == None` ≡ nodo
 /// opaco (1.0): es la convención de `View::alpha` y la usa el lerp para mezclar
-/// hacia/desde "sin alpha explícito" sin tratarlo como un salto.
+/// hacia/desde "sin alpha explícito" sin tratarlo como un salto. Lo mismo para
+/// `transform == None` ≡ identidad, así "sin transform" → "con transform" anima
+/// desde la identidad (estilo CSS `transform: none` → `transform: scale(1.5)`).
 #[derive(Clone, Copy, PartialEq)]
 struct AnimSnapshot {
     fill: Option<Color>,
     radius: f64,
     alpha: Option<f32>,
+    transform: Option<Affine>,
 }
 
 #[inline]
@@ -107,6 +117,25 @@ fn lerp_color(a: Color, b: Color, t: f32) -> Color {
     }
 }
 
+/// Lerp componente-a-componente de las 6 coefs del afín (m00, m10, m01, m11,
+/// m02, m12). Es lo mismo que Flutter `MatrixTween`: no preserva una rotación
+/// pura entre matrices muy distintas, pero alcanza para las animaciones UI
+/// típicas (scale/translate/rotaciones chicas, slide-in, pop, hero).
+#[inline]
+fn lerp_affine(a: Affine, b: Affine, t: f32) -> Affine {
+    let p = a.as_coeffs();
+    let q = b.as_coeffs();
+    let ft = t as f64;
+    Affine::new([
+        p[0] + (q[0] - p[0]) * ft,
+        p[1] + (q[1] - p[1]) * ft,
+        p[2] + (q[2] - p[2]) * ft,
+        p[3] + (q[3] - p[3]) * ft,
+        p[4] + (q[4] - p[4]) * ft,
+        p[5] + (q[5] - p[5]) * ft,
+    ])
+}
+
 impl AnimSnapshot {
     /// Interpola entre `self` (origen) y `to` (objetivo). El color sólo se
     /// mezcla si ambos lados tienen fill sólido; si uno es `None` (gradiente o
@@ -127,10 +156,23 @@ impl AnimSnapshot {
                 Some(from + (dst - from) * t)
             }
         };
+        // `None` ≡ identidad: idem. Un lado sin transform se mezcla contra
+        // `Affine::IDENTITY` en vez de saltar, así "sin xf" → `scale(1.5)`
+        // arranca desde scale(1) (Flutter/CSS hacen lo mismo). None↔None se
+        // mantiene None (sin push_layer afín en paint).
+        let transform = match (self.transform, to.transform) {
+            (None, None) => None,
+            (a, b) => {
+                let from = a.unwrap_or(Affine::IDENTITY);
+                let dst = b.unwrap_or(Affine::IDENTITY);
+                Some(lerp_affine(from, dst, t))
+            }
+        };
         AnimSnapshot {
             fill,
             radius: lerp_f64(self.radius, to.radius, t),
             alpha,
+            transform,
         }
     }
 }
@@ -249,12 +291,18 @@ impl AnimRegistry {
                 fill: node.fill,
                 radius: node.radius,
                 alpha: node.alpha,
+                transform: node.transform,
             };
             let entry = self.entries.entry(anim.key).or_insert_with(|| {
                 // Primera aparición. Con `enter`, arranca un tween de opacidad
-                // 0 → objetivo (fade-in); si no, se asienta instantánea.
+                // 0 → objetivo (fade-in); si además hay `enter_from_xf`, también
+                // arranca de esa transform → target.transform (scale-in/slide-in).
                 if anim.enter {
-                    let from = AnimSnapshot { alpha: Some(0.0), ..target };
+                    let from = AnimSnapshot {
+                        alpha: Some(0.0),
+                        transform: anim.enter_from_xf.or(target.transform),
+                        ..target
+                    };
                     AnimEntry {
                         from,
                         to: target,
@@ -276,11 +324,13 @@ impl AnimRegistry {
                 entry.easing = anim.easing;
             }
             // Al terminar aterriza EXACTO en el objetivo (incluido `alpha:
-            // None`, que evita una capa de opacidad residual frame a frame).
+            // None` / `transform: None`, que evita capa de opacidad residual o
+            // un push_layer afín espurio frame a frame).
             let v = if entry.done(now) { entry.to } else { entry.value(now) };
             node.fill = v.fill;
             node.radius = v.radius;
             node.alpha = v.alpha;
+            node.transform = v.transform;
             if !entry.done(now) {
                 animating = true;
             }
@@ -532,6 +582,84 @@ mod tests {
         let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(100));
         assert!(!animating, "al reaparecer no queda fantasma");
         assert!(!reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(100), 100.0, 100.0));
+    }
+
+    /// Monta un nodo con un transform afín explícito + anim(key=1).
+    fn one_xf(xf: Affine) -> Mounted<()> {
+        let v = View::<()>::new(Style::default())
+            .transform(xf)
+            .animated(1, Duration::from_millis(200));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    /// Monta un nodo sin transform pero con anim_enter_from (scale 0.5 → 1.0).
+    fn one_pop_in() -> Mounted<()> {
+        let v = View::<()>::new(Style::default())
+            .fill(rgba(1, 2, 3))
+            .animated_enter_from(2, Duration::from_millis(200), Affine::scale(0.5));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    #[test]
+    fn cambio_de_transform_interpola_y_pide_frames() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        // Frame 1: identidad → se asienta sin animar.
+        let mut m = one_xf(Affine::IDENTITY);
+        assert!(!reg.reconcile(&mut m, t0), "primera aparición no anima");
+        // Frame 2: la view ahora pide scale(2.0) → arranca tween.
+        let mut m = one_xf(Affine::scale(2.0));
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(50));
+        assert!(animating, "al cambiar la xf debe pedir frames");
+        // Frame 3: a mitad, el m00 está entre 1.0 y 2.0.
+        let mut m = one_xf(Affine::scale(2.0));
+        reg.reconcile(&mut m, t0 + Duration::from_millis(150));
+        let c = m.nodes[0].transform.expect("transform").as_coeffs();
+        assert!(c[0] > 1.0 && c[0] < 2.0, "m00 intermedio: {}", c[0]);
+        assert!(c[3] > 1.0 && c[3] < 2.0, "m11 intermedio: {}", c[3]);
+    }
+
+    #[test]
+    fn transform_al_terminar_llega_exacto() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        let mut m = one_xf(Affine::IDENTITY);
+        reg.reconcile(&mut m, t0);
+        let mut m = one_xf(Affine::translate((10.0, 20.0)));
+        reg.reconcile(&mut m, t0 + Duration::from_millis(50));
+        // Pasada la duración: aterriza exacto en la xf objetivo.
+        let mut m = one_xf(Affine::translate((10.0, 20.0)));
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(400));
+        assert!(!animating);
+        let c = m.nodes[0].transform.expect("xf").as_coeffs();
+        assert!((c[4] - 10.0).abs() < 1e-9, "tx exacto: {}", c[4]);
+        assert!((c[5] - 20.0).abs() < 1e-9, "ty exacto: {}", c[5]);
+    }
+
+    #[test]
+    fn pop_in_arranca_desde_la_xf_inicial_y_aterriza_sin_xf() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        // Frame 1: el nodo no declara `.transform` pero sí `enter_from`. La
+        // PRIMERA aparición arranca CON xf = scale(0.5) (lo que pide el caller)
+        // y debe pedir frames.
+        let mut m = one_pop_in();
+        let animating = reg.reconcile(&mut m, t0);
+        assert!(animating, "pop-in anima desde el primer frame");
+        let c = m.nodes[0].transform.expect("xf inicial").as_coeffs();
+        assert!((c[0] - 0.5).abs() < 1e-9, "arranca en scale 0.5: {}", c[0]);
+        // Frame intermedio: el m00 ya creció hacia 1.0.
+        let mut m = one_pop_in();
+        reg.reconcile(&mut m, t0 + Duration::from_millis(100));
+        let c = m.nodes[0].transform.expect("xf medio").as_coeffs();
+        assert!(c[0] > 0.5 && c[0] < 1.0, "scale intermedio: {}", c[0]);
+        // Frame final: aterriza en None (sin xf residual), igual que alpha.
+        let mut m = one_pop_in();
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(400));
+        assert!(!animating, "asentado");
+        assert_eq!(m.nodes[0].transform, None, "sin xf residual al asentarse");
     }
 
     #[test]

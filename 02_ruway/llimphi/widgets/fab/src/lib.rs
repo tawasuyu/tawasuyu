@@ -5,7 +5,9 @@
 //! Material/Flutter: rest sobre sombra E3, círculo del color `accent`,
 //! glyph blanco centrado, sombra que **respira** al hover (sube a E5).
 //!
-//! La firma cinética viene del tween de fill+shadow vía `View::animated`.
+//! La firma cinética viene del tween de fill+shadow vía `View::animated`,
+//! con `animated_pop_in` para que la **entrada** del FAB sea el "pop" canónico
+//! de Material (scale 0.6 → 1.0 + fade-in) en vez de aparecer de golpe.
 
 #![forbid(unsafe_code)]
 
@@ -85,7 +87,7 @@ pub fn fab_view<Msg: Clone + 'static>(
     .fill(palette.bg)
     .radius((s as f64) * 0.5)
     .shadow(shadow)
-    .animated(key, motion::FAST)
+    .animated_pop_in(key, motion::FAST)
     .text_aligned(
         glyph.into(),
         (s * 0.42).round(),
@@ -131,7 +133,7 @@ pub fn fab_extended<Msg: Clone + 'static>(
     .fill(palette.bg)
     .radius((h as f64) * 0.5)
     .shadow(shadow)
-    .animated(key, motion::FAST)
+    .animated_pop_in(key, motion::FAST)
     .text_aligned(label.into(), 14.0, palette.fg, Alignment::Center)
     .on_click(on_click)
     .cursor(llimphi_ui::Cursor::Pointer)

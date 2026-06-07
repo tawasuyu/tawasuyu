@@ -235,7 +235,14 @@ impl<Msg> View<Msg> {
     /// key. La primera aparición no anima; sólo los cambios posteriores. Para
     /// otra curva, [`Self::animated_curve`].
     pub fn animated(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: false, exit: false });
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: false,
+            exit: false,
+            enter_from_xf: None,
+        });
         self
     }
 
@@ -248,8 +255,49 @@ impl<Msg> View<Msg> {
     /// (sólo la primera aparición anima). Para animar también la salida, ver
     /// [`Self::animated_inout`].
     pub fn animated_enter(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: true, exit: false });
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: true,
+            exit: false,
+            enter_from_xf: None,
+        });
         self
+    }
+
+    /// Como [`Self::animated_enter`] pero además arranca la entrada desde una
+    /// **transformación afín** específica hacia la del nodo (o la identidad si
+    /// no setea `.transform`). Habilita scale-in / slide-in / rotate-in
+    /// implícitos: el caller declara la pose inicial, el runtime interpola.
+    /// Ejemplos:
+    ///   - `Affine::scale(0.6)` → "pop" (FAB de Material, modales).
+    ///   - `Affine::translate((0.0, 60.0))` → slide-in vertical (snackbars).
+    ///   - `Affine::translate((-w, 0.0))` → slide-in lateral (drawers).
+    /// Combina con el fade-in de entrada (`alpha 0 → opaque`). Sin animación
+    /// de salida; para entrada+salida con pose, ver
+    /// [`Self::animated_inout_from`].
+    pub fn animated_enter_from(
+        mut self,
+        key: u64,
+        duration: std::time::Duration,
+        from_xf: Affine,
+    ) -> Self {
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: true,
+            exit: false,
+            enter_from_xf: Some(from_xf),
+        });
+        self
+    }
+
+    /// Atajo Material: scale-in desde 0.6 (entrada "pop" del FAB). Combina con
+    /// fade-in. Equivalente a `.animated_enter_from(key, dur, Affine::scale(0.6))`.
+    pub fn animated_pop_in(self, key: u64, duration: std::time::Duration) -> Self {
+        self.animated_enter_from(key, duration, Affine::scale(0.6))
     }
 
     /// **Anima la salida** (fade-out): cuando esta `key` desaparece del árbol,
@@ -259,7 +307,14 @@ impl<Msg> View<Msg> {
     /// [`Self::animated_inout`]). Tiene coste por frame mientras el nodo vive
     /// (captura su subárbol); usar con moderación (toasts, modales, paneles).
     pub fn animated_exit(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: false, exit: true });
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: false,
+            exit: true,
+            enter_from_xf: None,
+        });
         self
     }
 
@@ -268,7 +323,35 @@ impl<Msg> View<Msg> {
     /// contenido" para un nodo que aparece y desaparece (un toast, un panel que
     /// se abre y cierra, un resultado que entra y se va).
     pub fn animated_inout(mut self, key: u64, duration: std::time::Duration) -> Self {
-        self.anim = Some(Anim { key, duration, easing: ease_out_cubic, enter: true, exit: true });
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: true,
+            exit: true,
+            enter_from_xf: None,
+        });
+        self
+    }
+
+    /// Como [`Self::animated_inout`] pero arranca la entrada desde la
+    /// transformación afín `from_xf` (igual semántica que
+    /// [`Self::animated_enter_from`]). La salida sigue siendo el fade-out
+    /// estándar (la subescena retenida no transforma).
+    pub fn animated_inout_from(
+        mut self,
+        key: u64,
+        duration: std::time::Duration,
+        from_xf: Affine,
+    ) -> Self {
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: true,
+            exit: true,
+            enter_from_xf: Some(from_xf),
+        });
         self
     }
 
@@ -280,7 +363,14 @@ impl<Msg> View<Msg> {
         duration: std::time::Duration,
         easing: fn(f32) -> f32,
     ) -> Self {
-        self.anim = Some(Anim { key, duration, easing, enter: false, exit: false });
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing,
+            enter: false,
+            exit: false,
+            enter_from_xf: None,
+        });
         self
     }
 
