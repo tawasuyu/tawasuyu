@@ -2710,6 +2710,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitLogicalHeight(Some(v.to_string())))
             }
         }
+        // Fase 7.664 — `-webkit-transform-origin-x`. `50%`/`center` → None.
+        "-webkit-transform-origin-x" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "50%" || v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::WebkitTransformOriginX(None))
+            } else {
+                Some(DeclKind::WebkitTransformOriginX(Some(v.to_string())))
+            }
+        }
+        // Fase 7.665 — `-webkit-transform-origin-y`. `50%`/`center` → None.
+        "-webkit-transform-origin-y" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "50%" || v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::WebkitTransformOriginY(None))
+            } else {
+                Some(DeclKind::WebkitTransformOriginY(Some(v.to_string())))
+            }
+        }
+        // Fase 7.666 — `-webkit-transform-origin-z`. `0` → None.
+        "-webkit-transform-origin-z" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitTransformOriginZ(None))
+            } else {
+                Some(DeclKind::WebkitTransformOriginZ(Some(v.to_string())))
+            }
+        }
+        // Fase 7.667 — `-webkit-perspective-origin-x`. `50%`/`center` → None.
+        "-webkit-perspective-origin-x" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "50%" || v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::WebkitPerspectiveOriginX(None))
+            } else {
+                Some(DeclKind::WebkitPerspectiveOriginX(Some(v.to_string())))
+            }
+        }
+        // Fase 7.668 — `-webkit-perspective-origin-y`. `50%`/`center` → None.
+        "-webkit-perspective-origin-y" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "50%" || v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::WebkitPerspectiveOriginY(None))
+            } else {
+                Some(DeclKind::WebkitPerspectiveOriginY(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

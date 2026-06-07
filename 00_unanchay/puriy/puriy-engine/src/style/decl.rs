@@ -828,6 +828,16 @@ pub(crate) enum DeclKind {
     WebkitLogicalWidth(Option<String>),
     /// `-webkit-logical-height` (Fase 7.658). `None` = `auto`. NO hereda. Plumb.
     WebkitLogicalHeight(Option<String>),
+    /// `-webkit-transform-origin-x` (Fase 7.664). `None` = `50%`. NO hereda. Plumb.
+    WebkitTransformOriginX(Option<String>),
+    /// `-webkit-transform-origin-y` (Fase 7.665). `None` = `50%`. NO hereda. Plumb.
+    WebkitTransformOriginY(Option<String>),
+    /// `-webkit-transform-origin-z` (Fase 7.666). `None` = `0`. NO hereda. Plumb.
+    WebkitTransformOriginZ(Option<String>),
+    /// `-webkit-perspective-origin-x` (Fase 7.667). `None` = `50%`. NO hereda. Plumb.
+    WebkitPerspectiveOriginX(Option<String>),
+    /// `-webkit-perspective-origin-y` (Fase 7.668). `None` = `50%`. NO hereda. Plumb.
+    WebkitPerspectiveOriginY(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1404,6 +1414,11 @@ impl Decl {
             DeclKind::WebkitPaddingAfter(v) => s.webkit_padding_after = v.clone(),
             DeclKind::WebkitLogicalWidth(v) => s.webkit_logical_width = v.clone(),
             DeclKind::WebkitLogicalHeight(v) => s.webkit_logical_height = v.clone(),
+            DeclKind::WebkitTransformOriginX(v) => s.webkit_transform_origin_x = v.clone(),
+            DeclKind::WebkitTransformOriginY(v) => s.webkit_transform_origin_y = v.clone(),
+            DeclKind::WebkitTransformOriginZ(v) => s.webkit_transform_origin_z = v.clone(),
+            DeclKind::WebkitPerspectiveOriginX(v) => s.webkit_perspective_origin_x = v.clone(),
+            DeclKind::WebkitPerspectiveOriginY(v) => s.webkit_perspective_origin_y = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
