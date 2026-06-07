@@ -351,6 +351,12 @@ pub fn update(state: State, msg: Msg) -> State {
                 }
             }
         }
+        Msg::TuiMouseClick { button, lx, ly, rect_w, rect_h } => {
+            forward_tui_click_to_pty(&s, button, lx, ly, rect_w, rect_h);
+        }
+        Msg::TuiMouseWheel { dy, lx, ly, rect_w, rect_h } => {
+            forward_tui_wheel_to_pty(&s, dy, lx, ly, rect_w, rect_h);
+        }
     }
     s
 }
@@ -518,32 +524,6 @@ pub(crate) fn accept_completion(mut s: State) -> State {
     }
     s.completion_index = 0;
     s
-}
-
-/// Prefijo común más largo de un slice de strings — usado en completion
-/// cuando hay múltiples candidatos.
-pub(crate) fn common_prefix(items: &[String]) -> String {
-    let Some(first) = items.first() else {
-        return String::new();
-    };
-    let mut end = first.len();
-    for s in &items[1..] {
-        let bytes = s.as_bytes();
-        let fbytes = first.as_bytes();
-        let mut i = 0;
-        while i < end && i < bytes.len() && bytes[i] == fbytes[i] {
-            i += 1;
-        }
-        end = i;
-        if end == 0 {
-            break;
-        }
-    }
-    // Asegurarse de cortar en límite de carácter UTF-8.
-    while end > 0 && !first.is_char_boundary(end) {
-        end -= 1;
-    }
-    first[..end].to_string()
 }
 
 /// Navega el historial por Up/Down.
@@ -1014,6 +994,101 @@ pub(crate) fn forward_paste_to_pty(s: &State) {
         text.into_bytes()
     };
     guard.handle.write_input(payload);
+}
+
+/// Convierte un click sobre el panel TUI en bytes xterm-mouse y los manda
+/// al PTY del run activo. No-op si el programa no habilitó mouse
+/// (`MouseProtocolMode::None`) o no hay TUI. Para modos que reportan
+/// release (VT200/ButtonMotion/AnyMotion), encadena Press + Release en una
+/// sola escritura — los TUIs (vim/htop/btop) los procesan en ese orden.
+pub(crate) fn forward_tui_click_to_pty(
+    s: &State,
+    button: u8,
+    lx: f32,
+    ly: f32,
+    rect_w: f32,
+    rect_h: f32,
+) {
+    use crate::mouse_xterm::{encode, local_to_cell, XBtn, XPhase};
+    let Some(arc) = s.running.as_ref() else {
+        return;
+    };
+    let guard = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let Some(tui) = guard.tui.as_ref() else {
+        return;
+    };
+    let screen = tui.parser.screen();
+    let mode = screen.mouse_protocol_mode();
+    if matches!(mode, vt100::MouseProtocolMode::None) {
+        return;
+    }
+    let encoding = screen.mouse_protocol_encoding();
+    let btn = match button {
+        0 => XBtn::Left,
+        1 => XBtn::Middle,
+        2 => XBtn::Right,
+        _ => return,
+    };
+    let (col, row) = local_to_cell(lx, ly, rect_w, rect_h, tui.cols, tui.rows);
+    let mut payload: Vec<u8> = Vec::new();
+    if let Some(b) = encode(mode, encoding, btn, XPhase::Press, col, row) {
+        payload.extend_from_slice(&b);
+    }
+    if let Some(b) = encode(mode, encoding, btn, XPhase::Release, col, row) {
+        payload.extend_from_slice(&b);
+    }
+    if !payload.is_empty() {
+        guard.handle.write_input(payload);
+    }
+}
+
+/// Convierte un tick de rueda sobre el panel TUI en eventos xterm-mouse
+/// (button 4 = arriba, button 5 = abajo) y los manda al PTY. Emite tantos
+/// "press" como ticks lógicos (ceil de `|dy|`) — la rueda no tiene release
+/// en xterm. No-op si el programa no habilitó mouse o no hay TUI.
+pub(crate) fn forward_tui_wheel_to_pty(
+    s: &State,
+    dy: f32,
+    lx: f32,
+    ly: f32,
+    rect_w: f32,
+    rect_h: f32,
+) {
+    use crate::mouse_xterm::{encode, local_to_cell, XBtn, XPhase};
+    let Some(arc) = s.running.as_ref() else {
+        return;
+    };
+    let guard = match arc.lock() {
+        Ok(g) => g,
+        Err(p) => p.into_inner(),
+    };
+    let Some(tui) = guard.tui.as_ref() else {
+        return;
+    };
+    let screen = tui.parser.screen();
+    let mode = screen.mouse_protocol_mode();
+    if matches!(mode, vt100::MouseProtocolMode::None) {
+        return;
+    }
+    let encoding = screen.mouse_protocol_encoding();
+    let btn = if dy > 0.0 { XBtn::WheelUp } else { XBtn::WheelDown };
+    let ticks = dy.abs().ceil() as u32;
+    if ticks == 0 {
+        return;
+    }
+    let (col, row) = local_to_cell(lx, ly, rect_w, rect_h, tui.cols, tui.rows);
+    let mut payload: Vec<u8> = Vec::new();
+    for _ in 0..ticks.min(8) {
+        if let Some(b) = encode(mode, encoding, btn, XPhase::Press, col, row) {
+            payload.extend_from_slice(&b);
+        }
+    }
+    if !payload.is_empty() {
+        guard.handle.write_input(payload);
+    }
 }
 
 /// Manda los bytes de la tecla al PTY del run activo. No-op si no hay

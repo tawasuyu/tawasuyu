@@ -778,11 +778,37 @@ pub enum Msg {
     BodyMenuPick(usize),
     /// Cerrar el menú contextual del output (scrim / Esc).
     BodyMenuDismiss,
+    /// Click sobre el panel de un TUI bajo PTY (htop/less/btop/…). Si el
+    /// programa habilitó mouse (`vt100::MouseProtocolMode != None`), encodea
+    /// el click en xterm-mouse y lo escribe al stdin del PTY. `button` es 0
+    /// (izquierdo), 1 (medio), 2 (derecho). `lx`/`ly` son coords relativas
+    /// al rect del panel; `rect_w`/`rect_h` el tamaño del rect (para
+    /// convertir a celdas).
+    TuiMouseClick {
+        button: u8,
+        lx: f32,
+        ly: f32,
+        rect_w: f32,
+        rect_h: f32,
+    },
+    /// Rueda sobre el panel TUI. `dy` positivo = arriba (botón 4); negativo
+    /// = abajo (botón 5). Se emite un evento de mouse por cada "tick" de
+    /// rueda lógica. Las coords se usan para reportar dónde estaba el
+    /// cursor (algunos TUIs lo respetan).
+    TuiMouseWheel {
+        dy: f32,
+        lx: f32,
+        ly: f32,
+        rect_w: f32,
+        rect_h: f32,
+    },
 }
 
+mod mouse_xterm;
 mod update;
 mod view;
 
+pub use mouse_xterm::{XBtn, XPhase};
 pub use update::*;
 pub use view::*;
 
@@ -1028,14 +1054,6 @@ mod tests {
         let candidate = comp.candidates.first().cloned().unwrap_or_default();
         s.input.apply_completion(&comp, &candidate);
         assert_eq!(s.input.text(), "echo");
-    }
-
-    #[test]
-    fn common_prefix_returns_longest_shared_start() {
-        let xs: Vec<String> = vec!["cargo".into(), "cargo-edit".into(), "cargot".into()];
-        assert_eq!(common_prefix(&xs), "cargo");
-        let ys: Vec<String> = vec!["abc".into(), "xyz".into()];
-        assert_eq!(common_prefix(&ys), "");
     }
 
     #[test]

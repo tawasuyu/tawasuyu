@@ -509,14 +509,21 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
             lift,
         );
     }
-    generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot)
+    generic_grid_panel::<HostMsg>(snapshot, theme, rect_slot, lift)
 }
 
 /// Render de grilla vt100 cruda — el camino histórico para htop/less/man.
+///
+/// El panel acepta clicks y rueda para programas que habilitaron mouse
+/// (htop, btop, less, fzf, …): los handlers emiten `TuiMouseClick` /
+/// `TuiMouseWheel` que el `update` convierte en bytes xterm-mouse contra
+/// el `mouse_protocol_mode` actual del `vt100::Screen` (no-op si el
+/// programa no lo pidió).
 pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
     snapshot: Option<TuiSnapshot>,
     theme: &Theme,
     rect_slot: Arc<Mutex<(f32, f32)>>,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 ) -> View<HostMsg> {
     let theme_clone = *theme;
 
@@ -610,6 +617,9 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
         }
     };
 
+    let lift_click = lift.clone();
+    let lift_right = lift.clone();
+    let lift_wheel = lift.clone();
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -621,6 +631,49 @@ pub(crate) fn generic_grid_panel<HostMsg: Clone + 'static>(
     .fill(theme.bg_panel)
     .radius(3.0)
     .paint_with(painter)
+    // Click izquierdo → press+release del botón 0 en la celda (col,row)
+    // que cubra (lx,ly). El handler de update lo encodea sólo si el
+    // programa habilitó mouse, sino no-op silencioso.
+    .on_click_at(move |lx, ly, rect_w, rect_h| {
+        Some(lift_click(Msg::TuiMouseClick {
+            button: 0,
+            lx,
+            ly,
+            rect_w,
+            rect_h,
+        }))
+    })
+    // Click derecho → botón 2. Algunos TUIs (htop) lo usan para abrir
+    // menús contextuales propios.
+    .on_right_click_at(move |lx, ly, rect_w, rect_h| {
+        Some(lift_right(Msg::TuiMouseClick {
+            button: 2,
+            lx,
+            ly,
+            rect_w,
+            rect_h,
+        }))
+    })
+    // Rueda → botones 4/5 si el programa habilitó mouse. Si no, devolver
+    // None deja que el chasis siga procesando la rueda como scroll del
+    // output (los TUIs ocupan toda el área del panel, así que sólo cae
+    // a global cuando el programa no quiere mouse).
+    .on_scroll(move |_dx, dy| {
+        if dy.abs() < f32::EPSILON {
+            return None;
+        }
+        Some(lift_wheel(Msg::TuiMouseWheel {
+            dy,
+            lx: 0.0,
+            ly: 0.0,
+            // El runtime no nos da las dims del rect en `on_scroll`; el
+            // update sólo las usa para clampear las coords al grid, y
+            // como acá lx/ly son (0,0) — esquina superior-izquierda —
+            // basta con `1x1` (cae a (1,1) tras local_to_cell).
+            rect_w: 1.0,
+            rect_h: 1.0,
+        }))
+    })
 }
 
 /// Skin de vim: reconstruye cada fila del `Screen` como una línea de
