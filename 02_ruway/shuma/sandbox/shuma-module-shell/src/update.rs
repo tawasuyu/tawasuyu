@@ -1833,6 +1833,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":cont" => return apply_jobs_signal(s, rest, JobSignal::Cont),
             ":limit" => return apply_capture_limit(s, rest),
             ":spill" => return apply_spill(s, rest),
+            ":scrollback" => return apply_scrollback(s, rest),
             ":save" => return save_group(s, rest),
             ":groups" => return apply_groups_list(s),
             _ => {}
@@ -2003,6 +2004,64 @@ pub(crate) fn apply_spill(mut s: State, rest: &str) -> State {
         (false, _) => "spill desactivado",
     };
     s.push_output(OutputLine::notice(note));
+    s
+}
+
+/// `:scrollback` (sin args): muestra el estado del scrollback persistente —
+/// líneas en memoria + spilleadas + path del spill file. `:scrollback open`
+/// abre el spill file con `$EDITOR` (o cae a `xdg-open`) para que el
+/// usuario inspeccione el archive sin salir del shell.
+pub(crate) fn apply_scrollback(mut s: State, rest: &str) -> State {
+    let arg = rest.trim();
+    let snap = match s.surf_history.lock() {
+        Ok(g) => (g.len(), g.spilled_count(), g.spill_path()),
+        Err(p) => {
+            let g = p.into_inner();
+            (g.len(), g.spilled_count(), g.spill_path())
+        }
+    };
+    let (in_mem, in_spill, spill_path) = snap;
+    match arg {
+        "open" => {
+            let Some(path) = spill_path else {
+                s.push_output(OutputLine::notice(
+                    ":scrollback open — el spill no está activo (ver [scrollback].spill = true en shumarc.toml)",
+                ));
+                return s;
+            };
+            let path_s = path.display().to_string();
+            // Preferimos $EDITOR para inspección textual; si no, xdg-open.
+            if let Ok(editor) = std::env::var("EDITOR") {
+                spawn_detached(&editor, &[path_s.as_str()]);
+            } else {
+                spawn_detached("xdg-open", &[path_s.as_str()]);
+            }
+            s.push_output(OutputLine::notice(format!("abriendo {path_s}…")));
+        }
+        "" => {
+            // Estado: líneas en memoria + en spill + path.
+            s.push_output(OutputLine::notice(format!(
+                "scrollback: {in_mem} líneas en memoria, {in_spill} archivadas"
+            )));
+            if let Some(p) = spill_path {
+                s.push_output(OutputLine::notice(format!(
+                    "spill: {} ({:?})",
+                    p.display(),
+                    p.metadata().ok().map(|m| m.len()).unwrap_or(0)
+                )));
+                s.push_output(OutputLine::notice(
+                    "abrí con `:scrollback open` o `cat`-éalo desde otra shell",
+                ));
+            } else {
+                s.push_output(OutputLine::notice(
+                    "spill no activo — activá con [scrollback].spill = true en shumarc.toml",
+                ));
+            }
+        }
+        _ => {
+            s.push_output(OutputLine::notice("uso: :scrollback [open]"));
+        }
+    }
     s
 }
 

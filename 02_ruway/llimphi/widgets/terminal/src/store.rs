@@ -193,6 +193,15 @@ impl Scrollback {
         }
     }
 
+    /// Path del archivo de spill, si está activo. Lo expone el shell con
+    /// `:scrollback` para que el usuario pueda abrirlo / `cat`-earlo /
+    /// buscar grep en él. `None` si no hay spill.
+    pub fn spill_path(&self) -> Option<std::path::PathBuf> {
+        self.spill
+            .as_ref()
+            .and_then(|s| s.lock().ok().map(|g| g.path().to_path_buf()))
+    }
+
     /// Lee una línea spilleada por su id global. Lookup O(1) en el índice
     /// del spill + un `seek` + `read` en el archivo. Devuelve `None` si
     /// `global_id >= spilled_count` o no hay spill. La línea sigue contando

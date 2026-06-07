@@ -2796,6 +2796,32 @@ mod tests {
     }
 
     #[test]
+    fn scrollback_builtin_reporta_estado_en_notice() {
+        // Sin spill activo (default del Config), `:scrollback` reporta
+        // sólo líneas en memoria y avisa que el spill no está activo.
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::stdout("a"));
+        s.push_output(OutputLine::stdout("b"));
+        s.push_output(OutputLine::stdout("c"));
+        s.input.set_text(":scrollback");
+        s = update(s, Msg::Key(KeyEvent {
+            key: Key::Named(NamedKey::Enter),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: llimphi_ui::Modifiers::default(),
+            repeat: false,
+        }));
+        // El último notice debe mencionar el conteo.
+        let last_notice = s.output.iter().rev()
+            .find(|l| l.kind == OutputKind::Notice)
+            .expect("notice");
+        assert!(
+            last_notice.text.contains("scrollback") || last_notice.text.contains("spill"),
+            "notice menciona scrollback/spill: {}", last_notice.text
+        );
+    }
+
+    #[test]
     fn dos_double_clicks_seguidos_seleccionan_la_linea_entera() {
         // tap-tap = word. tap-tap-tap-tap (dos pares) dentro de 350 ms =
         // line (paridad xterm triple-click). El handler usa el timestamp
