@@ -1170,6 +1170,21 @@ pub struct ComputedStyle {
     /// `nav-right` (Fase 7.598). Análogo a `nav-up`. `None` = `auto`. NO
     /// hereda. Plumb.
     pub nav_right: Option<String>,
+    /// `-webkit-box-orient` (Fase 7.599). Flexbox viejo: eje del box.
+    /// Parse opaco — `None` = `inline-axis`. NO hereda. Plumb.
+    pub webkit_box_orient: Option<String>,
+    /// `-webkit-box-direction` (Fase 7.600). Sentido del eje. Parse opaco —
+    /// `None` = `normal`. NO hereda. Plumb.
+    pub webkit_box_direction: Option<String>,
+    /// `-webkit-box-align` (Fase 7.601). Alineación transversal. Parse
+    /// opaco — `None` = `stretch`. NO hereda. Plumb.
+    pub webkit_box_align: Option<String>,
+    /// `-webkit-box-pack` (Fase 7.602). Alineación principal. Parse opaco —
+    /// `None` = `start`. NO hereda. Plumb.
+    pub webkit_box_pack: Option<String>,
+    /// `-webkit-box-flex` (Fase 7.603). Factor de crecimiento. Default
+    /// `0.0`. NO hereda. Plumb.
+    pub webkit_box_flex: f32,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4490,6 +4505,11 @@ impl Default for ComputedStyle {
             nav_down: None,
             nav_left: None,
             nav_right: None,
+            webkit_box_orient: None,
+            webkit_box_direction: None,
+            webkit_box_align: None,
+            webkit_box_pack: None,
+            webkit_box_flex: 0.0,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

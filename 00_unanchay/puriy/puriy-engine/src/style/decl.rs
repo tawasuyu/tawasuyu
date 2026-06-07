@@ -748,6 +748,16 @@ pub(crate) enum DeclKind {
     NavLeft(Option<String>),
     /// `nav-right` (Fase 7.598). `None` = `auto`. NO hereda. Plumb.
     NavRight(Option<String>),
+    /// `-webkit-box-orient` (Fase 7.599). `None` = `inline-axis`. NO hereda. Plumb.
+    WebkitBoxOrient(Option<String>),
+    /// `-webkit-box-direction` (Fase 7.600). `None` = `normal`. NO hereda. Plumb.
+    WebkitBoxDirection(Option<String>),
+    /// `-webkit-box-align` (Fase 7.601). `None` = `stretch`. NO hereda. Plumb.
+    WebkitBoxAlign(Option<String>),
+    /// `-webkit-box-pack` (Fase 7.602). `None` = `start`. NO hereda. Plumb.
+    WebkitBoxPack(Option<String>),
+    /// `-webkit-box-flex` (Fase 7.603). NO hereda. Plumb.
+    WebkitBoxFlex(f32),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1284,6 +1294,11 @@ impl Decl {
             DeclKind::NavDown(v) => s.nav_down = v.clone(),
             DeclKind::NavLeft(v) => s.nav_left = v.clone(),
             DeclKind::NavRight(v) => s.nav_right = v.clone(),
+            DeclKind::WebkitBoxOrient(v) => s.webkit_box_orient = v.clone(),
+            DeclKind::WebkitBoxDirection(v) => s.webkit_box_direction = v.clone(),
+            DeclKind::WebkitBoxAlign(v) => s.webkit_box_align = v.clone(),
+            DeclKind::WebkitBoxPack(v) => s.webkit_box_pack = v.clone(),
+            DeclKind::WebkitBoxFlex(v) => s.webkit_box_flex = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

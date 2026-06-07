@@ -2301,6 +2301,50 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::NavRight(Some(v.to_string())))
             }
         }
+        // Fase 7.599-7.602 — `-webkit-box-{orient,direction,align,pack}`
+        // (flexbox viejo). Parse opaco; sentinel default → None.
+        "-webkit-box-orient" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("inline-axis") {
+                Some(DeclKind::WebkitBoxOrient(None))
+            } else {
+                Some(DeclKind::WebkitBoxOrient(Some(v.to_string())))
+            }
+        }
+        "-webkit-box-direction" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::WebkitBoxDirection(None))
+            } else {
+                Some(DeclKind::WebkitBoxDirection(Some(v.to_string())))
+            }
+        }
+        "-webkit-box-align" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("stretch") {
+                Some(DeclKind::WebkitBoxAlign(None))
+            } else {
+                Some(DeclKind::WebkitBoxAlign(Some(v.to_string())))
+            }
+        }
+        "-webkit-box-pack" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("start") {
+                Some(DeclKind::WebkitBoxPack(None))
+            } else {
+                Some(DeclKind::WebkitBoxPack(Some(v.to_string())))
+            }
+        }
+        // Fase 7.603 — `-webkit-box-flex` (flexbox viejo). Número desnudo.
+        "-webkit-box-flex" => value
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(DeclKind::WebkitBoxFlex),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
