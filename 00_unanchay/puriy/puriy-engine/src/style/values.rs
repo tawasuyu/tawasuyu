@@ -1342,6 +1342,21 @@ pub struct ComputedStyle {
     /// eje horizontal de `border-spacing`. Parse opaco — `None` = `0`.
     /// HEREDA (como border-spacing). Plumb.
     pub webkit_border_horizontal_spacing: Option<String>,
+    /// `-webkit-flow-into` (Fase 7.679). CSS Regions (spec abandonado): manda
+    /// el elemento a un named flow. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_flow_into: Option<String>,
+    /// `-webkit-flow-from` (Fase 7.680). CSS Regions: la región consume un
+    /// named flow. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_flow_from: Option<String>,
+    /// `-webkit-region-break-before` (Fase 7.681). Quiebre de región antes.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_region_break_before: Option<String>,
+    /// `-webkit-region-break-after` (Fase 7.682). Quiebre de región después.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_region_break_after: Option<String>,
+    /// `-webkit-region-break-inside` (Fase 7.683). Quiebre de región adentro.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_region_break_inside: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4717,6 +4732,11 @@ impl Default for ComputedStyle {
             webkit_border_start: None,
             webkit_border_end: None,
             webkit_border_horizontal_spacing: None,
+            webkit_flow_into: None,
+            webkit_flow_from: None,
+            webkit_region_break_before: None,
+            webkit_region_break_after: None,
+            webkit_region_break_inside: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

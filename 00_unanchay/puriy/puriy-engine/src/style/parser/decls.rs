@@ -2860,6 +2860,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBorderHorizontalSpacing(Some(v.to_string())))
             }
         }
+        // Fase 7.679 — `-webkit-flow-into` (CSS Regions). `none` → None.
+        "-webkit-flow-into" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitFlowInto(None))
+            } else {
+                Some(DeclKind::WebkitFlowInto(Some(v.to_string())))
+            }
+        }
+        // Fase 7.680 — `-webkit-flow-from` (CSS Regions). `none` → None.
+        "-webkit-flow-from" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitFlowFrom(None))
+            } else {
+                Some(DeclKind::WebkitFlowFrom(Some(v.to_string())))
+            }
+        }
+        // Fase 7.681 — `-webkit-region-break-before`. `auto` → None.
+        "-webkit-region-break-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitRegionBreakBefore(None))
+            } else {
+                Some(DeclKind::WebkitRegionBreakBefore(Some(v.to_string())))
+            }
+        }
+        // Fase 7.682 — `-webkit-region-break-after`. `auto` → None.
+        "-webkit-region-break-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitRegionBreakAfter(None))
+            } else {
+                Some(DeclKind::WebkitRegionBreakAfter(Some(v.to_string())))
+            }
+        }
+        // Fase 7.683 — `-webkit-region-break-inside`. `auto` → None.
+        "-webkit-region-break-inside" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitRegionBreakInside(None))
+            } else {
+                Some(DeclKind::WebkitRegionBreakInside(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
