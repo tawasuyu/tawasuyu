@@ -2397,7 +2397,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.599-7.602 — `-webkit-box-{orient,direction,align,pack}`
         // (flexbox viejo). Parse opaco; sentinel default → None.
-        "-webkit-box-orient" => {
+        // Fase 7.784 — `-moz-box-orient` (XUL flexbox, mismo semántico que -webkit-).
+        "-webkit-box-orient" | "-moz-box-orient" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("inline-axis") {
@@ -2406,7 +2407,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBoxOrient(Some(v.to_string())))
             }
         }
-        "-webkit-box-direction" => {
+        // Fase 7.785 — `-moz-box-direction`.
+        "-webkit-box-direction" | "-moz-box-direction" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("normal") {
@@ -2415,7 +2417,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBoxDirection(Some(v.to_string())))
             }
         }
-        "-webkit-box-align" => {
+        // Fase 7.786 — `-moz-box-align`.
+        "-webkit-box-align" | "-moz-box-align" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("stretch") {
@@ -2424,7 +2427,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBoxAlign(Some(v.to_string())))
             }
         }
-        "-webkit-box-pack" => {
+        // Fase 7.787 — `-moz-box-pack`.
+        "-webkit-box-pack" | "-moz-box-pack" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("start") {
@@ -2433,14 +2437,14 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBoxPack(Some(v.to_string())))
             }
         }
-        // Fase 7.603 — `-webkit-box-flex` (flexbox viejo). Número desnudo.
-        "-webkit-box-flex" => value
+        // Fase 7.603 — `-webkit-box-flex` / Fase 7.788 — `-moz-box-flex` (flexbox viejo). Número desnudo.
+        "-webkit-box-flex" | "-moz-box-flex" => value
             .trim()
             .parse::<f32>()
             .ok()
             .map(DeclKind::WebkitBoxFlex),
-        // Fase 7.604 — `-webkit-box-ordinal-group` (flexbox viejo). `1` → None.
-        "-webkit-box-ordinal-group" => {
+        // Fase 7.604 — `-webkit-box-ordinal-group` / Fase 7.789 — `-moz-box-ordinal-group` (flexbox viejo). `1` → None.
+        "-webkit-box-ordinal-group" | "-moz-box-ordinal-group" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "1" {
