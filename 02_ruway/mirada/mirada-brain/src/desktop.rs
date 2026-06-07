@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
-use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId};
+use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId, WindowPlacement};
 
 use crate::action::{Direction, DesktopAction, WORKSPACE_COUNT};
 use crate::config::Config;
@@ -862,6 +862,30 @@ impl Desktop {
     /// Cuántas ventanas hay en cada escritorio virtual.
     pub fn workspace_loads(&self) -> Vec<usize> {
         self.workspaces.iter().map(Workspace::len).collect()
+    }
+
+    /// La geometría teselada de **cada** escritorio, calculada contra `rect`
+    /// (normalmente el [`work_rect`](Output::work_rect) de la salida primaria),
+    /// para pintar miniaturas sin cambiar de escritorio. Es lo que consume la
+    /// **vista espacial** (el "Prezi" de mirada): un mosaico por escritorio con
+    /// sus ventanas a escala. Cada `Vec` respeta el modo de teselado propio de
+    /// su escritorio y marca el foco de ese escritorio. `out[i]` = escritorio
+    /// `i` (0-based, casa con [`workspace_loads`](Desktop::workspace_loads)).
+    pub fn workspace_layouts(&self, rect: Rect) -> Vec<Vec<WindowPlacement>> {
+        self.workspaces
+            .iter()
+            .map(|ws| placements(ws, rect))
+            .collect()
+    }
+
+    /// El rectángulo de referencia para la vista espacial: el área teselable de
+    /// la salida enfocada, o el rect dado por defecto si no hay salidas (modo
+    /// simulación). Da la relación de aspecto correcta a las miniaturas.
+    pub fn overview_rect(&self, fallback: Rect) -> Rect {
+        self.outputs
+            .get(self.focused_output)
+            .map(Output::work_rect)
+            .unwrap_or(fallback)
     }
 
     /// Una vista de todas las ventanas conocidas, en todos los

@@ -208,6 +208,35 @@ impl Configurable for Config {
                             .collect(),
                     )),
             )
+            .section(
+                Section::new("vista_espacial", "Vista espacial")
+                    .icon("🗺")
+                    .help("El zoom-out tipo Prezi para saltar entre escritorios")
+                    .field(Field::toggle(
+                        "overview_enabled",
+                        "Habilitar vista espacial",
+                        self.overview_enabled,
+                    ))
+                    .field(Field::slider_int(
+                        "overview_columns",
+                        "Columnas (0 = automático)",
+                        self.overview_columns as i64,
+                        0,
+                        8,
+                    ))
+                    .field(Field::slider_int(
+                        "overview_anim_ms",
+                        "Vuelo de cámara (ms)",
+                        self.overview_anim_ms as i64,
+                        0,
+                        800,
+                    ))
+                    .field(Field::toggle(
+                        "overview_show_titles",
+                        "Mostrar títulos en las miniaturas",
+                        self.overview_show_titles,
+                    )),
+            )
     }
 
     fn apply(&mut self, path: &FieldPath, value: FieldValue) -> Result<(), AllichayError> {
@@ -366,6 +395,26 @@ impl Configurable for Config {
                         .collect();
                 }
             }
+            "overview_enabled" => {
+                if let Some(b) = value.as_bool() {
+                    self.overview_enabled = b;
+                }
+            }
+            "overview_columns" => {
+                if let Some(v) = value.as_int() {
+                    self.overview_columns = v.clamp(0, 8) as u32;
+                }
+            }
+            "overview_anim_ms" => {
+                if let Some(v) = value.as_int() {
+                    self.overview_anim_ms = v.clamp(0, 800) as u32;
+                }
+            }
+            "overview_show_titles" => {
+                if let Some(b) = value.as_bool() {
+                    self.overview_show_titles = b;
+                }
+            }
             _ => return Err(unknown()),
         }
         Ok(())
@@ -383,7 +432,15 @@ mod tests {
         let ids: Vec<&str> = schema.sections.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(
             ids,
-            vec!["teselado", "decoracion", "fondo", "terminal", "monitores", "menu"]
+            vec![
+                "teselado",
+                "decoracion",
+                "fondo",
+                "terminal",
+                "monitores",
+                "menu",
+                "vista_espacial"
+            ]
         );
     }
 

@@ -145,6 +145,33 @@ pub struct Config {
     /// escritorio compuesto. Lo que no se indique cae al valor global.
     /// Vacío = orden de discovery, wallpaper global para todas.
     pub outputs: Vec<OutputOverride>,
+    /// **Vista espacial** (el "Prezi" de mirada): habilita el zoom-out que
+    /// muestra todos los escritorios como mosaicos para saltar entre ellos.
+    /// `false` la deshabilita (la tecla/menú no hace nada).
+    #[serde(default = "default_true")]
+    pub overview_enabled: bool,
+    /// Columnas de la grilla de mosaicos en la vista espacial. `0` = automático
+    /// (≈ raíz cuadrada del número de escritorios; 9 → 3×3).
+    #[serde(default)]
+    pub overview_columns: u32,
+    /// Duración en milisegundos del vuelo de cámara al abrir la vista espacial y
+    /// al aterrizar en un escritorio. `0` = sin animación (salto seco).
+    #[serde(default = "default_overview_anim_ms")]
+    pub overview_anim_ms: u32,
+    /// Mostrar el título de cada ventana sobre su miniatura en la vista
+    /// espacial. `false` = sólo el rectángulo (mosaicos más limpios).
+    #[serde(default = "default_true")]
+    pub overview_show_titles: bool,
+}
+
+/// Default de los toggles que arrancan en `true` (serde necesita una fn).
+fn default_true() -> bool {
+    true
+}
+
+/// Default de [`Config::overview_anim_ms`]: un vuelo de cámara ágil.
+fn default_overview_anim_ms() -> u32 {
+    260
 }
 
 /// Ajustes específicos de una salida (monitor) — se aplican sólo a la salida
@@ -291,6 +318,10 @@ impl Default for Config {
             zone_presets: Vec::new(),
             output_direction: "horizontal".to_string(),
             outputs: Vec::new(),
+            overview_enabled: true,
+            overview_columns: 0,
+            overview_anim_ms: 260,
+            overview_show_titles: true,
         }
     }
 }
@@ -320,6 +351,18 @@ impl Config {
             border_normal: self.border_normal,
             titlebar_height: self.titlebar_height.max(0),
         }
+    }
+
+    /// Columnas de la grilla de la **vista espacial** para `count` escritorios:
+    /// el override [`overview_columns`](Self::overview_columns) si es `> 0`
+    /// (acotado a `count`), o el automático ≈ raíz cuadrada redondeada hacia
+    /// arriba (9 escritorios → 3 columnas). Nunca devuelve `0`.
+    pub fn overview_grid_columns(&self, count: usize) -> usize {
+        let count = count.max(1);
+        if self.overview_columns > 0 {
+            return (self.overview_columns as usize).min(count);
+        }
+        ((count as f32).sqrt().ceil() as usize).max(1)
     }
 
     /// La dirección de disposición de las salidas en el escritorio compuesto.
