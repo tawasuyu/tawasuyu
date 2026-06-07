@@ -1139,6 +1139,21 @@ pub struct ComputedStyle {
     /// preferido de scroll del overflow (scrollbar/panner/move/marquee).
     /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
     pub overflow_style: Option<String>,
+    /// `marquee-style` (Fase 7.589). CSS Marquee: modo de desplazamiento
+    /// (scroll/slide/alternate). Default `Scroll`. NO hereda. Plumb.
+    pub marquee_style: MarqueeStyle,
+    /// `marquee-direction` (Fase 7.590). Sentido del desplazamiento.
+    /// Default `Forward`. NO hereda. Plumb.
+    pub marquee_direction: MarqueeDirection,
+    /// `marquee-speed` (Fase 7.591). Velocidad. Default `Normal`. NO
+    /// hereda. Plumb.
+    pub marquee_speed: MarqueeSpeed,
+    /// `marquee-loop` (Fase 7.592). Nº de repeticiones. `None` = `infinite`.
+    /// NO hereda. Plumb.
+    pub marquee_loop: Option<i32>,
+    /// `marquee-increment` (Fase 7.593). Distancia por paso. Parse opaco —
+    /// `None` = `6px`. NO hereda. Plumb.
+    pub marquee_increment: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3082,6 +3097,32 @@ pub enum RegionFragment {
     Break,
 }
 
+/// `marquee-style` (CSS Marquee). Default `Scroll`. Fase 7.589.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarqueeStyle {
+    #[default]
+    Scroll,
+    Slide,
+    Alternate,
+}
+
+/// `marquee-direction` (CSS Marquee). Default `Forward`. Fase 7.590.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarqueeDirection {
+    #[default]
+    Forward,
+    Reverse,
+}
+
+/// `marquee-speed` (CSS Marquee). Default `Normal`. Fase 7.591.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarqueeSpeed {
+    Slow,
+    #[default]
+    Normal,
+    Fast,
+}
+
 /// `hyphenate-limit-last` (CSS Text 4). Default `None`. Fase 7.560.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HyphenateLimitLast {
@@ -4423,6 +4464,11 @@ impl Default for ComputedStyle {
             max_lines: None,
             region_fragment: RegionFragment::Auto,
             overflow_style: None,
+            marquee_style: MarqueeStyle::Scroll,
+            marquee_direction: MarqueeDirection::Forward,
+            marquee_speed: MarqueeSpeed::Normal,
+            marquee_loop: None,
+            marquee_increment: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

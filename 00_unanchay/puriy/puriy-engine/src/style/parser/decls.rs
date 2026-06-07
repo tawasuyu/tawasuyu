@@ -2214,6 +2214,46 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::OverflowStyle(Some(v.to_string())))
             }
         }
+        // Fase 7.589 — `marquee-style` (CSS Marquee).
+        "marquee-style" => match value.trim().to_ascii_lowercase().as_str() {
+            "scroll" => Some(DeclKind::MarqueeStyle(MarqueeStyle::Scroll)),
+            "slide" => Some(DeclKind::MarqueeStyle(MarqueeStyle::Slide)),
+            "alternate" => Some(DeclKind::MarqueeStyle(MarqueeStyle::Alternate)),
+            _ => None,
+        },
+        // Fase 7.590 — `marquee-direction` (CSS Marquee).
+        "marquee-direction" => match value.trim().to_ascii_lowercase().as_str() {
+            "forward" => Some(DeclKind::MarqueeDirection(MarqueeDirection::Forward)),
+            "reverse" => Some(DeclKind::MarqueeDirection(MarqueeDirection::Reverse)),
+            _ => None,
+        },
+        // Fase 7.591 — `marquee-speed` (CSS Marquee).
+        "marquee-speed" => match value.trim().to_ascii_lowercase().as_str() {
+            "slow" => Some(DeclKind::MarqueeSpeed(MarqueeSpeed::Slow)),
+            "normal" => Some(DeclKind::MarqueeSpeed(MarqueeSpeed::Normal)),
+            "fast" => Some(DeclKind::MarqueeSpeed(MarqueeSpeed::Fast)),
+            _ => None,
+        },
+        // Fase 7.592 — `marquee-loop` (CSS Marquee). `infinite` → None.
+        "marquee-loop" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("infinite") {
+                Some(DeclKind::MarqueeLoop(None))
+            } else {
+                v.parse::<i32>().ok().map(|n| DeclKind::MarqueeLoop(Some(n)))
+            }
+        }
+        // Fase 7.593 — `marquee-increment` (CSS Marquee). `6px` (default) → None.
+        "marquee-increment" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("6px") {
+                Some(DeclKind::MarqueeIncrement(None))
+            } else {
+                Some(DeclKind::MarqueeIncrement(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

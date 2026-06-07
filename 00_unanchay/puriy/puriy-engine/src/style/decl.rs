@@ -728,6 +728,16 @@ pub(crate) enum DeclKind {
     RegionFragment(RegionFragment),
     /// `overflow-style` (Fase 7.588). `None` = `auto`. NO hereda. Plumb.
     OverflowStyle(Option<String>),
+    /// `marquee-style` (Fase 7.589). NO hereda. Plumb.
+    MarqueeStyle(MarqueeStyle),
+    /// `marquee-direction` (Fase 7.590). NO hereda. Plumb.
+    MarqueeDirection(MarqueeDirection),
+    /// `marquee-speed` (Fase 7.591). NO hereda. Plumb.
+    MarqueeSpeed(MarqueeSpeed),
+    /// `marquee-loop` (Fase 7.592). `None` = `infinite`. NO hereda. Plumb.
+    MarqueeLoop(Option<i32>),
+    /// `marquee-increment` (Fase 7.593). `None` = `6px`. NO hereda. Plumb.
+    MarqueeIncrement(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1254,6 +1264,11 @@ impl Decl {
             DeclKind::MaxLines(v) => s.max_lines = *v,
             DeclKind::RegionFragment(v) => s.region_fragment = *v,
             DeclKind::OverflowStyle(v) => s.overflow_style = v.clone(),
+            DeclKind::MarqueeStyle(v) => s.marquee_style = *v,
+            DeclKind::MarqueeDirection(v) => s.marquee_direction = *v,
+            DeclKind::MarqueeSpeed(v) => s.marquee_speed = *v,
+            DeclKind::MarqueeLoop(v) => s.marquee_loop = *v,
+            DeclKind::MarqueeIncrement(v) => s.marquee_increment = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
