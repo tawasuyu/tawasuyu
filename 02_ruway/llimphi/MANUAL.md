@@ -816,6 +816,68 @@ syntax_palette_dark(&theme) -> SyntaxPalette   // en lib.rs del widget
 definition, references, rename, formatting, signature help, document symbols.
 `RustAnalyzerClient::start(workspace_root)`; `NoopLspClient` para tests.
 
+**terminal** — superficie de **scrollback infinita virtualizada** (modo línea /
+bloques / grilla GPU). Reemplaza al `output_pane` clásico: el costo de render
+es **constante** a scrollback ilimitado — sólo se materializa la ventana visible
+— bajo un `scroll_y` **propio del widget** (no `transform` del padre, la
+anti-feature del SDD). Núcleo agnóstico, el caller arma el modelo y el widget
+pinta (Regla 2). Diseño completo: `02_ruway/shuma/SDD-TERMINAL.md`. Consumidor
+de referencia: `shuma-module-shell::output_pane_surface`.
+- **Store** (`Scrollback::new(limit_bytes)`): append-only por línea con índice
+  de offsets O(1), cap por memoria con recorte de frente, `line_id` global
+  **estable** que sobrevive al recorte (`index_of_id`), `push_line`,
+  `slice_text`, `clear`. `dropped()` / `total_pushed()` para el `numbering`
+  global.
+- **Spill a disco** (`SpillStore::create(path)` + `Scrollback::enable_spill(spill)`):
+  cada línea recortada del frente se appendea al archive; lookup O(1) con
+  `read_spilled(global_id)` + helpers `has_spill`/`spilled_count`/`spill_path`
+  para que el host exponga UX (chip de status, builtin `:scrollback open`,
+  prepend del archive al view).
+- **Modo línea** (`line_surface(store, scroll_y, viewport_h, metrics, &palette,
+  line_style: Fn(usize, &str) -> LineStyle, on_scroll: Fn(f32) -> Msg, measure:
+  Option<Arc<Mutex<f32>>>)`): materializa sólo la ventana visible; scroll
+  sub-renglón (`partial_px`), numeración global 1-based, color base + runs +
+  tinte de fondo inyectados por el caller en `LineStyle`. Helpers puros:
+  `visible_window`, `content_height`, `scroll_to_bottom`. `measure` opcional
+  publica el `viewport_h` real medido al host (regla del SDD: verificar con
+  viewport real).
+- **Modo bloques** (`block_surface(store, items: Vec<Item<Msg>>, ...)`): el
+  stream es una secuencia de `Item::chrome(height, view)` (header/badge/etapa
+  de alto fijo que el caller pinta) + `Item::lines(start, end)` (rango del
+  store). Virtualiza sobre alturas mixtas con búsqueda binaria (O(log n) en
+  bloques) — dentro de un `Lines` enorme sólo se materializan las sub-filas
+  visibles. Colapsar = no emitir el `Lines`. Helpers: `blocks_height`,
+  `blocks_scroll_to_bottom`, `gutter_width(&store, metrics)`,
+  `line_top_in_content(&items_geo, row_h, target_line)`.
+- **Selección + copy** (`block_surface_with_selection` + `SelectionConfig { range:
+  Option<&SelectionRange>, on_drag: Fn(DragPhase, lx0, ly0, dx, dy) -> Option<Msg>,
+  on_double_click: Fn(lx, ly, w, h) -> Option<Msg> }`): el widget pinta el
+  overlay translúcido y dispara callbacks; el caller mantiene el rango
+  (`SelectionRange { anchor: Point, head: Point }`, `Point { line, col }` con
+  `col` en **bytes** UTF-8) en su Model y resuelve clicks con `point_at(items,
+  scroll_y, viewport_h, metrics, gutter_w, store, lx, ly)` —o su variante
+  `Copy`-stashable `point_at_geo(&[ItemGeo], ...)` para resolver el frame
+  anterior. `selection_rects` para overlays custom.
+- **Find** (`find_matches(&store, query, FindOpts { case_insensitive })`):
+  búsqueda sobre el scrollback **completo** (no sólo el viewport), O(total_bytes);
+  `FindMatch { line, start, end }` con `start`/`end` en bytes UTF-8 slice-safe.
+  Nav: `next_match(&matches, current)` / `prev_match`. El caller resuelve el
+  `line` a su `scroll_y` con `line_top_in_content`.
+- **Grilla GPU** (modo TUI, Fase 4): `CellPipeline::new(device, format)` +
+  `GlyphAtlas` rasterizan cada celda con **quads instanciados** y atlas de
+  glifos (precedente: `atlas` de wawa, Fontdue) — una sola draw call por
+  viewport, escala a 200×80 sin penalty. Tipos: `CellInstance { cell_x/y,
+  uv_x/y/w/h, fg_rgba, bg_rgba }` (POD 32 B), `CellUniforms`, `pack_rgba`,
+  `instances_to_bytes`, `CELL_WGSL`, `CellPipeline::create_atlas_texture`.
+  Wireado al widget contenedor vía `gpu_paint_with`. Activo en shuma con
+  `SHUMA_GPU_GRID=1`.
+
+Headless dumps:
+```bash
+cargo run -p llimphi-widget-terminal --example dump_terminal   # modo línea, 1M renglones
+cargo run -p llimphi-widget-terminal --example dump_blocks     # bloques + flood 500k
+```
+
 **clipboard** — portapapeles del sistema vía `arboard`. `SystemClipboard::new()`,
 `is_available()`, impl `Clipboard`. No-op silencioso si no hay display (CI headless).
 
@@ -1063,9 +1125,9 @@ fn view_overlay(m) -> Option<View<Msg>> { if m.open { Some(menu) } else { None }
 banner · breadcrumb · button · card · clipboard · context-menu · edit-menu ·
 empty · field · gallery · grid · list · menubar · modal · navigator · nodegraph ·
 panel · panes · progress · segmented · shortcuts-help · skeleton · slider · splash ·
-splitter · stat-card · status-bar · switch · tabs · text-area · text-editor ·
-text-editor-core · text-editor-lsp · text-input · theme-switcher · tiled ·
-timeline · toast · tooltip · tree · wawa-mark.
+splitter · stat-card · status-bar · switch · tabs · terminal · text-area ·
+text-editor · text-editor-core · text-editor-lsp · text-input · theme-switcher ·
+tiled · timeline · toast · tooltip · tree · wawa-mark.
 
 **Módulos** (`modules/`): bookmarks · command-palette · diff-viewer · fif ·
 file-picker · mini-map · plugin-host · selector · shuma-term · symbol-outline.
