@@ -386,7 +386,20 @@ pub fn update(state: State, msg: Msg) -> State {
             copy_surf_selection(&s);
         }
         Msg::SurfDoubleClick { lx, ly, rect_w, rect_h } => {
-            s = apply_surf_double_click(s, lx, ly, rect_w, rect_h);
+            // Auto-detect de triple-click: si llega otro double-click
+            // dentro de ~350 ms del previo, lo tratamos como triple
+            // (select-line). Paridad con xterm: tap-tap = word,
+            // tap-tap-tap-tap = line. La ventana de 350 ms cubre clicks
+            // humanos sin pisar interacciones reales.
+            const TRIPLE_WINDOW_MS: u64 = 350;
+            let now = now_unix_millis();
+            let recent = now.saturating_sub(s.surf_last_dblclick_ms) < TRIPLE_WINDOW_MS;
+            s.surf_last_dblclick_ms = now;
+            if recent {
+                s = apply_surf_triple_click(s, lx, ly);
+            } else {
+                s = apply_surf_double_click(s, lx, ly, rect_w, rect_h);
+            }
         }
         Msg::SurfOpenMenu { x, y } => {
             s.surf_menu = Some((x, y));
@@ -748,6 +761,42 @@ pub(crate) fn apply_surf_double_click(
     s.surf_selection = Some(SelectionRange {
         anchor: Point::new(hit.line, start_byte),
         head: Point::new(hit.line, end_byte),
+    });
+    s
+}
+
+/// Triple-click sobre el cuerpo de output: selecciona la línea entera bajo
+/// el punto (paridad con xterm/gnome-terminal). Reusa `point_at_geo` para
+/// localizar la línea y arma `SelectionRange` de (line, 0) a (line,
+/// text.len()). No-op silencioso si el click cae en chrome o fuera del
+/// store.
+pub(crate) fn apply_surf_triple_click(mut s: State, lx: f32, ly: f32) -> State {
+    use llimphi_widget_terminal::{point_at_geo, Point, SelectionRange};
+    let snap = match s.surf_layout.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(snap) = snap else {
+        return s;
+    };
+    let Some(hit) = point_at_geo(
+        &snap.items_geo,
+        snap.scroll_y,
+        snap.viewport_h,
+        snap.metrics,
+        snap.gutter_w,
+        &snap.store,
+        lx,
+        ly,
+    ) else {
+        return s;
+    };
+    let Some(text) = snap.store.line(hit.line) else {
+        return s;
+    };
+    s.surf_selection = Some(SelectionRange {
+        anchor: Point::new(hit.line, 0),
+        head: Point::new(hit.line, text.len()),
     });
     s
 }

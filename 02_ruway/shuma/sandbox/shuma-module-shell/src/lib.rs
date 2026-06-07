@@ -481,6 +481,11 @@ pub struct State {
     /// Distinto del `body_menu` del legacy (que carga un `block`); el
     /// surface menu opera sobre el scrollback entero.
     pub surf_menu: Option<(f32, f32)>,
+    /// Timestamp (ms unix) del último `SurfDoubleClick`. Si llega otro
+    /// double-click dentro de la ventana (~350 ms), el handler lo trata
+    /// como **triple-click** y selecciona la línea entera (paridad con la
+    /// UX de xterm/gnome-terminal: tap, tap-tap, tap-tap-tap-tap).
+    pub surf_last_dblclick_ms: u64,
     /// Recursos GPU del modo grilla (atlas + pipeline + textura). `None`
     /// hasta que el primer `gpu_paint_with` los inicialice. Mantenidos en
     /// `Arc<Mutex<>>` para que la closure de paint (Send+Sync+'static)
@@ -607,6 +612,7 @@ impl State {
             surf_layout: Arc::new(Mutex::new(None)),
             find: None,
             surf_menu: None,
+            surf_last_dblclick_ms: 0,
             gpu_grid: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
@@ -2663,6 +2669,35 @@ mod tests {
         let sel = s.surf_selection.expect("selección de palabra");
         assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 5));
         assert_eq!(sel.head, llimphi_widget_terminal::Point::new(0, 10));
+    }
+
+    #[test]
+    fn dos_double_clicks_seguidos_seleccionan_la_linea_entera() {
+        // tap-tap = word. tap-tap-tap-tap (dos pares) dentro de 350 ms =
+        // line (paridad xterm triple-click). El handler usa el timestamp
+        // ms entre los dos SurfDoubleClick.
+        let mut s = State::new(Source::Local);
+        let metrics = llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0, line_height: 16.0, char_width: 8.0,
+        };
+        let mut store = llimphi_widget_terminal::Scrollback::new(0);
+        store.push_line("hola mundo querido");
+        *s.surf_layout.lock().unwrap() = Some(SurfLayout {
+            items_geo: vec![llimphi_widget_terminal::ItemGeo::Lines(0, 1)],
+            scroll_y: 0.0,
+            viewport_h: 200.0,
+            metrics,
+            gutter_w: 30.0,
+            store: Arc::new(store),
+        });
+        // Primer double-click: selecciona "hola" (palabra).
+        s = update(s, Msg::SurfDoubleClick { lx: 50.0, ly: 4.0, rect_w: 400.0, rect_h: 200.0 });
+        // Segundo double-click "inmediato": ahora selecciona toda la línea.
+        s = update(s, Msg::SurfDoubleClick { lx: 50.0, ly: 4.0, rect_w: 400.0, rect_h: 200.0 });
+        let sel = s.surf_selection.expect("line select");
+        assert_eq!(sel.anchor.line, 0);
+        assert_eq!(sel.anchor.col, 0);
+        assert_eq!(sel.head.col, "hola mundo querido".len());
     }
 
     #[test]
