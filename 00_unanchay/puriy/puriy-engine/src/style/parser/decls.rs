@@ -2170,6 +2170,50 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "center" => Some(DeclKind::TextGroupAlign(TextGroupAlign::Center)),
             _ => None,
         },
+        // Fase 7.584 — `continue` (CSS Overflow 4).
+        "continue" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::Continue(Continue::Auto)),
+            "discard" => Some(DeclKind::Continue(Continue::Discard)),
+            _ => None,
+        },
+        // Fase 7.585 — `block-ellipsis` (CSS Overflow 4). Parse opaco;
+        // `none` → None (también `auto` se conserva como string).
+        "block-ellipsis" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::BlockEllipsis(None))
+            } else {
+                Some(DeclKind::BlockEllipsis(Some(v.to_string())))
+            }
+        }
+        // Fase 7.586 — `max-lines` (CSS Overflow 4). `none` → None.
+        "max-lines" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::MaxLines(None))
+            } else {
+                v.parse::<u32>().ok().map(|n| DeclKind::MaxLines(Some(n)))
+            }
+        }
+        // Fase 7.587 — `region-fragment` (CSS Regions 1).
+        "region-fragment" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::RegionFragment(RegionFragment::Auto)),
+            "break" => Some(DeclKind::RegionFragment(RegionFragment::Break)),
+            _ => None,
+        },
+        // Fase 7.588 — `overflow-style` (CSS Marquee/Basic UI legacy).
+        // Parse opaco; `auto` → None.
+        "overflow-style" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::OverflowStyle(None))
+            } else {
+                Some(DeclKind::OverflowStyle(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

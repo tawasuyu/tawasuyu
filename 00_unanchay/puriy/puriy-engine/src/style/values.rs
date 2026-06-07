@@ -1122,6 +1122,23 @@ pub struct ComputedStyle {
     /// `text-group-align` (Fase 7.583). CSS Text 4: alineación compartida
     /// de un grupo de líneas. Default `None`. NO hereda. Plumb.
     pub text_group_align: TextGroupAlign,
+    /// `continue` (Fase 7.584). CSS Overflow 4: qué pasa con el contenido
+    /// que no cabe (fragmenta vs descarta). Default `Auto`. NO hereda.
+    /// Reservado en Rust → campo `continue_`. Plumb.
+    pub continue_: Continue,
+    /// `block-ellipsis` (Fase 7.585). CSS Overflow 4: cadena que marca el
+    /// truncado por bloque. Parse opaco — `None` = `none`. HEREDA. Plumb.
+    pub block_ellipsis: Option<String>,
+    /// `max-lines` (Fase 7.586). CSS Overflow 4: máx. de líneas antes de
+    /// fragmentar/recortar. `None` = `none`. NO hereda. Plumb.
+    pub max_lines: Option<u32>,
+    /// `region-fragment` (Fase 7.587). CSS Regions 1: cómo se rompe la
+    /// última región. Default `Auto`. NO hereda. Plumb.
+    pub region_fragment: RegionFragment,
+    /// `overflow-style` (Fase 7.588). CSS Marquee/Basic UI legacy: mecanismo
+    /// preferido de scroll del overflow (scrollbar/panner/move/marquee).
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub overflow_style: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -3049,6 +3066,22 @@ pub enum TextGroupAlign {
     Center,
 }
 
+/// `continue` (CSS Overflow 4). Default `Auto`. Fase 7.584.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Continue {
+    #[default]
+    Auto,
+    Discard,
+}
+
+/// `region-fragment` (CSS Regions 1). Default `Auto`. Fase 7.587.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegionFragment {
+    #[default]
+    Auto,
+    Break,
+}
+
 /// `hyphenate-limit-last` (CSS Text 4). Default `None`. Fase 7.560.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HyphenateLimitLast {
@@ -4385,6 +4418,11 @@ impl Default for ComputedStyle {
             webkit_text_fill_color: None,
             font_smooth: None,
             text_group_align: TextGroupAlign::None,
+            continue_: Continue::Auto,
+            block_ellipsis: None,
+            max_lines: None,
+            region_fragment: RegionFragment::Auto,
+            overflow_style: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

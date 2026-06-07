@@ -718,6 +718,16 @@ pub(crate) enum DeclKind {
     FontSmooth(Option<String>),
     /// `text-group-align` (Fase 7.583). NO hereda. Plumb.
     TextGroupAlign(TextGroupAlign),
+    /// `continue` (Fase 7.584). NO hereda. Plumb.
+    Continue(Continue),
+    /// `block-ellipsis` (Fase 7.585). `None` = `none`. HEREDA. Plumb.
+    BlockEllipsis(Option<String>),
+    /// `max-lines` (Fase 7.586). `None` = `none`. NO hereda. Plumb.
+    MaxLines(Option<u32>),
+    /// `region-fragment` (Fase 7.587). NO hereda. Plumb.
+    RegionFragment(RegionFragment),
+    /// `overflow-style` (Fase 7.588). `None` = `auto`. NO hereda. Plumb.
+    OverflowStyle(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1239,6 +1249,11 @@ impl Decl {
             DeclKind::WebkitTextFillColor(v) => s.webkit_text_fill_color = v.clone(),
             DeclKind::FontSmooth(v) => s.font_smooth = v.clone(),
             DeclKind::TextGroupAlign(v) => s.text_group_align = *v,
+            DeclKind::Continue(v) => s.continue_ = *v,
+            DeclKind::BlockEllipsis(v) => s.block_ellipsis = v.clone(),
+            DeclKind::MaxLines(v) => s.max_lines = *v,
+            DeclKind::RegionFragment(v) => s.region_fragment = *v,
+            DeclKind::OverflowStyle(v) => s.overflow_style = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
