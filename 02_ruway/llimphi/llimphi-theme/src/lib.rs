@@ -63,16 +63,21 @@ pub fn stable_color(seed: &str) -> Color {
 // future variante por preset lo requiera.
 
 /// Duraciones canónicas (segundo nivel: rítmico, no nervioso, no
-/// soporífero). Los widgets eligen `FAST` para microinteracciones
-/// (hover, focus), `NORMAL` para transiciones principales (toast entrar,
-/// modal abrir) y `SLOW` para énfasis o entradas dramáticas (splash de
-/// boot).
+/// soporífero). Los widgets eligen `MICRO` para tintes de hover/focus
+/// que sólo necesitan suavizar el "salto", `FAST` para microinteracciones
+/// completas (chip que pulsa), `NORMAL` para transiciones principales
+/// (toast entrar, modal abrir), `SLOW` para énfasis o entradas dramáticas
+/// (splash de boot, hero shared-element).
 pub mod motion {
     use super::Duration;
 
+    /// Tintes hover/focus — apenas perceptible, sólo elimina el "clack".
+    pub const MICRO: Duration = Duration::from_millis(50);
     pub const FAST: Duration = Duration::from_millis(80);
     pub const NORMAL: Duration = Duration::from_millis(160);
     pub const SLOW: Duration = Duration::from_millis(320);
+    /// Entradas dramáticas (splash, hero shared-element).
+    pub const DRAMATIC: Duration = Duration::from_millis(480);
 
     /// Easing estándar — cubic-out. Energía inicial, asentamiento suave.
     /// La gran mayoría de transiciones de salida / aparición.
@@ -95,12 +100,58 @@ pub mod motion {
         }
     }
 
+    /// Easing fuerte — quint-out. Arranca más rápido que cubic-out y
+    /// asienta más suave. Para elementos que aparecen "lanzados" (toast,
+    /// FAB).
+    #[inline]
+    pub fn ease_out_quint(t: f32) -> f32 {
+        let inv = 1.0 - t.clamp(0.0, 1.0);
+        1.0 - inv * inv * inv * inv * inv
+    }
+
+    /// Overshoot suave — back-out con `c1=1.70158` (Material/Penner
+    /// estándar). El valor pasa de 0 al objetivo, lo sobrepasa ~10 % y
+    /// vuelve. Para entradas que necesitan "ping" (modal, snackbar,
+    /// elemento nuevo en una lista). No usar para hover — la oscilación
+    /// se percibe nerviosa.
+    #[inline]
+    pub fn ease_out_back(t: f32) -> f32 {
+        let t = t.clamp(0.0, 1.0);
+        const C1: f32 = 1.701_58;
+        const C3: f32 = C1 + 1.0;
+        let u = t - 1.0;
+        1.0 + C3 * u * u * u + C1 * u * u
+    }
+
     /// Lineal — no es elegante pero a veces es lo correcto (barra de
     /// progreso, valores numéricos crudos).
     #[inline]
     pub fn linear(t: f32) -> f32 {
         t.clamp(0.0, 1.0)
     }
+}
+
+/// Tokens de **elevación** — sombras escalonadas. Como `Shadow` vive en
+/// `llimphi-compositor` (y `llimphi-theme` no depende de él para
+/// quedarse leaf), cada nivel se expone como `(alpha_u8, blur_px,
+/// dy_px)`. Los widgets construyen su `Shadow` puenteándolo:
+/// `Shadow { color: Color::from_rgba8(0,0,0, a), blur, dy, dx: 0.0, spread: 0.0 }`.
+/// Escala perceptual logarítmica: cada nivel ~×2 de blur.
+pub mod elevation {
+    /// `(alpha 0–255, blur px, dy px)`. dy ≈ blur·0.4 (sombra natural,
+    /// fuente de luz un poco arriba).
+    pub type Elev = (u8, f64, f64);
+
+    /// E1 — chip levantado del fondo (hover button, badge).
+    pub const E1: Elev = (44, 4.0, 1.5);
+    /// E2 — card/tile flotante sobre el panel (default cards).
+    pub const E2: Elev = (60, 10.0, 4.0);
+    /// E3 — superficie destacada (menú contextual, dropdown).
+    pub const E3: Elev = (84, 18.0, 8.0);
+    /// E4 — overlay sobre la app (modal, dialog).
+    pub const E4: Elev = (110, 32.0, 14.0);
+    /// E5 — sello de identidad (FAB, hero, picker activo).
+    pub const E5: Elev = (140, 48.0, 22.0);
 }
 
 /// Valores de opacidad alfa (0–255) para capas semánticas. Usar siempre
