@@ -410,7 +410,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
-        if prop.eq_ignore_ascii_case("flex") {
+        // Fase 7.720 — `-webkit-flex` alias vendor del shorthand `flex`.
+        if prop.eq_ignore_ascii_case("flex")
+            || prop.eq_ignore_ascii_case("-webkit-flex")
+        {
             out.extend(parse_flex_shorthand(value, important));
             continue;
         }
@@ -452,7 +455,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(decls);
             continue;
         }
-        if prop.eq_ignore_ascii_case("flex-flow") {
+        // Fase 7.721 — `-webkit-flex-flow` alias vendor del shorthand.
+        if prop.eq_ignore_ascii_case("flex-flow")
+            || prop.eq_ignore_ascii_case("-webkit-flex-flow")
+        {
             out.extend(parse_flex_flow_shorthand(value, important));
             continue;
         }
@@ -3424,13 +3430,18 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
-        "transform" => parse_transforms(value).map(DeclKind::Transforms),
+        // Fase 7.722 — `-webkit-transform` alias vendor de `transform`.
+        "transform" | "-webkit-transform" => {
+            parse_transforms(value).map(DeclKind::Transforms)
+        }
         "grid-template-columns" => {
             parse_grid_template(value).map(DeclKind::GridTemplateColumns)
         }
         "grid-template-rows" => parse_grid_template(value).map(DeclKind::GridTemplateRows),
-        "animation" => parse_animation(value),
-        "transition" => parse_transition(value),
+        // Fase 7.723-7.724 — `-webkit-animation` / `-webkit-transition` alias
+        // vendor de los shorthands `animation` / `transition`.
+        "animation" | "-webkit-animation" => parse_animation(value),
+        "transition" | "-webkit-transition" => parse_transition(value),
         // `grid-gap` (legacy) = `gap`.
         "grid-gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "grid-row-gap" => parse_length_px(value).map(DeclKind::RowGap),
