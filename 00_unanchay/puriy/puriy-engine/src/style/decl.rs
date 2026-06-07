@@ -818,6 +818,16 @@ pub(crate) enum DeclKind {
     WebkitMarginAfter(Option<String>),
     /// `-webkit-padding-start` (Fase 7.653). `None` = `0`. NO hereda. Plumb.
     WebkitPaddingStart(Option<String>),
+    /// `-webkit-padding-end` (Fase 7.654). `None` = `0`. NO hereda. Plumb.
+    WebkitPaddingEnd(Option<String>),
+    /// `-webkit-padding-before` (Fase 7.655). `None` = `0`. NO hereda. Plumb.
+    WebkitPaddingBefore(Option<String>),
+    /// `-webkit-padding-after` (Fase 7.656). `None` = `0`. NO hereda. Plumb.
+    WebkitPaddingAfter(Option<String>),
+    /// `-webkit-logical-width` (Fase 7.657). `None` = `auto`. NO hereda. Plumb.
+    WebkitLogicalWidth(Option<String>),
+    /// `-webkit-logical-height` (Fase 7.658). `None` = `auto`. NO hereda. Plumb.
+    WebkitLogicalHeight(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1389,6 +1399,11 @@ impl Decl {
             DeclKind::WebkitMarginBefore(v) => s.webkit_margin_before = v.clone(),
             DeclKind::WebkitMarginAfter(v) => s.webkit_margin_after = v.clone(),
             DeclKind::WebkitPaddingStart(v) => s.webkit_padding_start = v.clone(),
+            DeclKind::WebkitPaddingEnd(v) => s.webkit_padding_end = v.clone(),
+            DeclKind::WebkitPaddingBefore(v) => s.webkit_padding_before = v.clone(),
+            DeclKind::WebkitPaddingAfter(v) => s.webkit_padding_after = v.clone(),
+            DeclKind::WebkitLogicalWidth(v) => s.webkit_logical_width = v.clone(),
+            DeclKind::WebkitLogicalHeight(v) => s.webkit_logical_height = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

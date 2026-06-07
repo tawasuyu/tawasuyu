@@ -1281,6 +1281,21 @@ pub struct ComputedStyle {
     /// `-webkit-padding-start` (Fase 7.653). Alias legacy de
     /// `padding-inline-start`. Parse opaco — `None` = `0`. NO hereda. Plumb.
     pub webkit_padding_start: Option<String>,
+    /// `-webkit-padding-end` (Fase 7.654). Alias legacy de
+    /// `padding-inline-end`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_padding_end: Option<String>,
+    /// `-webkit-padding-before` (Fase 7.655). Alias legacy de
+    /// `padding-block-start`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_padding_before: Option<String>,
+    /// `-webkit-padding-after` (Fase 7.656). Alias legacy de
+    /// `padding-block-end`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_padding_after: Option<String>,
+    /// `-webkit-logical-width` (Fase 7.657). Alias legacy de `inline-size`.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_logical_width: Option<String>,
+    /// `-webkit-logical-height` (Fase 7.658). Alias legacy de `block-size`.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_logical_height: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4636,6 +4651,11 @@ impl Default for ComputedStyle {
             webkit_margin_before: None,
             webkit_margin_after: None,
             webkit_padding_start: None,
+            webkit_padding_end: None,
+            webkit_padding_before: None,
+            webkit_padding_after: None,
+            webkit_logical_width: None,
+            webkit_logical_height: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

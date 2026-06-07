@@ -2658,6 +2658,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitPaddingStart(Some(v.to_string())))
             }
         }
+        // Fase 7.654 — `-webkit-padding-end`. `0` → None.
+        "-webkit-padding-end" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitPaddingEnd(None))
+            } else {
+                Some(DeclKind::WebkitPaddingEnd(Some(v.to_string())))
+            }
+        }
+        // Fase 7.655 — `-webkit-padding-before` (block-start). `0` → None.
+        "-webkit-padding-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitPaddingBefore(None))
+            } else {
+                Some(DeclKind::WebkitPaddingBefore(Some(v.to_string())))
+            }
+        }
+        // Fase 7.656 — `-webkit-padding-after` (block-end). `0` → None.
+        "-webkit-padding-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitPaddingAfter(None))
+            } else {
+                Some(DeclKind::WebkitPaddingAfter(Some(v.to_string())))
+            }
+        }
+        // Fase 7.657 — `-webkit-logical-width` (inline-size). `auto` → None.
+        "-webkit-logical-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitLogicalWidth(None))
+            } else {
+                Some(DeclKind::WebkitLogicalWidth(Some(v.to_string())))
+            }
+        }
+        // Fase 7.658 — `-webkit-logical-height` (block-size). `auto` → None.
+        "-webkit-logical-height" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitLogicalHeight(None))
+            } else {
+                Some(DeclKind::WebkitLogicalHeight(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
