@@ -844,7 +844,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_hyphens(value).map(DeclKind::Hyphens)
         }
         "resize" => parse_resize(value).map(DeclKind::Resize),
-        "writing-mode" => parse_writing_mode(value).map(DeclKind::WritingMode),
+        // Fase 7.629 — `-webkit-writing-mode` es el alias vendor (de facto)
+        // de `writing-mode`: enruta al mismo parser/almacén.
+        "writing-mode" | "-webkit-writing-mode" => {
+            parse_writing_mode(value).map(DeclKind::WritingMode)
+        }
         "direction" => parse_direction(value).map(DeclKind::Direction),
         "unicode-bidi" => parse_unicode_bidi(value).map(DeclKind::UnicodeBidi),
         "font-stretch" => parse_font_stretch(value).map(DeclKind::FontStretch),
@@ -874,7 +878,11 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "backdrop-filter" | "-webkit-backdrop-filter" => {
             Some(DeclKind::BackdropFilter(parse_filter_list(value)))
         }
-        "text-orientation" => parse_text_orientation(value).map(DeclKind::TextOrientation),
+        // Fase 7.630 — `-webkit-text-orientation` alias vendor de
+        // `text-orientation`.
+        "text-orientation" | "-webkit-text-orientation" => {
+            parse_text_orientation(value).map(DeclKind::TextOrientation)
+        }
         "overscroll-behavior-x" => {
             parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorX)
         }
@@ -965,9 +973,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.429 — `hyphenate-character` (CSS Text 4). `auto` o un
         // string entre comillas. HEREDA. Plumb (no rompemos palabras).
-        "hyphenate-character" => Some(DeclKind::HyphenateCharacter(
-            parse_hyphenate_character(value),
-        )),
+        // Fase 7.632 — `-webkit-hyphenate-character` alias vendor.
+        "hyphenate-character" | "-webkit-hyphenate-character" => {
+            Some(DeclKind::HyphenateCharacter(parse_hyphenate_character(value)))
+        }
         // Fase 7.430 — `hyphenate-limit-chars`. `auto | <int>{1,3}`. HEREDA.
         "hyphenate-limit-chars" => {
             parse_hyphenate_limit_chars(value).map(DeclKind::HyphenateLimitChars)
@@ -1041,7 +1050,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_alpha_value(value).map(DeclKind::ShapeImageThreshold)
         }
         // Fase 7.447 — `text-combine-upright` (CSS Writing Modes 3). NO hereda.
-        "text-combine-upright" => {
+        // Fase 7.633 — `-webkit-text-combine` es el nombre legacy WebKit.
+        "text-combine-upright" | "-webkit-text-combine" => {
             parse_text_combine_upright(value).map(DeclKind::TextCombineUpright)
         }
         // Fase 7.448 — `ruby-align` (CSS Ruby 1). HEREDA.
@@ -2667,7 +2677,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_text_align_last(value).map(DeclKind::TextAlignLast)
         }
         "text-wrap" => parse_text_wrap(value).map(DeclKind::TextWrap),
-        "line-break" => parse_line_break(value).map(DeclKind::LineBreak),
+        // Fase 7.631 — `-webkit-line-break` alias vendor de `line-break`.
+        "line-break" | "-webkit-line-break" => {
+            parse_line_break(value).map(DeclKind::LineBreak)
+        }
         "hanging-punctuation" => {
             parse_hanging_punctuation(value).map(DeclKind::HangingPunctuation)
         }
