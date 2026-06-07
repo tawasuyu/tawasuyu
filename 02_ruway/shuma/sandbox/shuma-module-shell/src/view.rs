@@ -2203,9 +2203,22 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             }))
         },
     );
+    // Doble-click → select-word, paridad con terminales clásicas.
+    let lift_dbl = (*lift).clone();
+    let on_double_click = std::sync::Arc::new(
+        move |lx, ly, rect_w, rect_h| -> Option<HostMsg> {
+            Some(lift_dbl(Msg::SurfDoubleClick {
+                lx,
+                ly,
+                rect_w,
+                rect_h,
+            }))
+        },
+    );
     let sel_cfg = SelectionConfig {
         range: state.surf_selection.as_ref(),
         on_drag: Some(on_drag),
+        on_double_click: Some(on_double_click),
     };
 
     let surface = block_surface_with_selection::<HostMsg, _, _>(

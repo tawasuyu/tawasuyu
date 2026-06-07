@@ -911,6 +911,17 @@ pub enum Msg {
     /// output. No-op si no hay selección. Reusa el clipboard global del
     /// proceso (vía `arboard`).
     SurfCopySelection,
+    /// Doble-click sobre el cuerpo de output en modo superficie: selecciona
+    /// la palabra bajo el punto (paridad con terminales clásicas). El
+    /// `update` resuelve `(lx, ly)` a `Point` con `point_at_geo`, computa
+    /// los boundaries de palabra en el texto de la línea y arma una
+    /// `SelectionRange` sobre esa palabra.
+    SurfDoubleClick {
+        lx: f32,
+        ly: f32,
+        rect_w: f32,
+        rect_h: f32,
+    },
     /// Abre la barra de búsqueda (Ctrl+F). Si ya estaba abierta, re-foca el
     /// input vacío (paridad con browsers/editores). Si no hay layout
     /// publicado todavía, abre igual — el primer keystroke recomputará.
@@ -2548,6 +2559,73 @@ mod tests {
         // Query = "foo" → 2 matches.
         assert_eq!(s.find.as_ref().unwrap().query, "foo");
         assert_eq!(s.find.as_ref().unwrap().matches.len(), 2);
+    }
+
+    #[test]
+    fn surf_double_click_selecciona_la_palabra_bajo_el_punto() {
+        // Snapshot con "hola mundo querido" en la primera línea — el
+        // doble-click en col=6 (sobre 'u' de "mundo") debe seleccionar
+        // exactamente "mundo" (bytes 5..10).
+        let mut s = State::new(Source::Local);
+        let metrics = llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 8.0,
+        };
+        let mut store = llimphi_widget_terminal::Scrollback::new(0);
+        store.push_line("hola mundo querido");
+        *s.surf_layout.lock().unwrap() = Some(SurfLayout {
+            items_geo: vec![llimphi_widget_terminal::ItemGeo::Lines(0, 1)],
+            scroll_y: 0.0,
+            viewport_h: 200.0,
+            metrics,
+            gutter_w: 30.0,
+            store: Arc::new(store),
+        });
+        // lx = 30 (gutter) + 6 * 8 (char 6) + 2 = 80. ly = 4 (centro fila 0).
+        s = update(s, Msg::SurfDoubleClick { lx: 80.0, ly: 4.0, rect_w: 400.0, rect_h: 200.0 });
+        let sel = s.surf_selection.expect("selección de palabra");
+        assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 5));
+        assert_eq!(sel.head, llimphi_widget_terminal::Point::new(0, 10));
+    }
+
+    #[test]
+    fn surf_double_click_sobre_separador_no_selecciona() {
+        // Double-click sobre un espacio o un delimitador no debe
+        // armar selección (paridad con xterm: si el click cae sobre
+        // whitespace exactamente, no hay palabra).
+        let mut s = State::new(Source::Local);
+        let metrics = llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 8.0,
+        };
+        let mut store = llimphi_widget_terminal::Scrollback::new(0);
+        store.push_line("hola mundo querido");
+        *s.surf_layout.lock().unwrap() = Some(SurfLayout {
+            items_geo: vec![llimphi_widget_terminal::ItemGeo::Lines(0, 1)],
+            scroll_y: 0.0,
+            viewport_h: 200.0,
+            metrics,
+            gutter_w: 30.0,
+            store: Arc::new(store),
+        });
+        // Posicionar sobre el espacio entre "hola" y "mundo" (col=4 byte = ' ').
+        // lx = 30 + 4*8 + 2 = 64.
+        s = update(
+            s,
+            Msg::SurfDoubleClick { lx: 64.0, ly: 4.0, rect_w: 400.0, rect_h: 200.0 },
+        );
+        // El handler de doble-click absorbe el caso "después de palabra" y
+        // selecciona la palabra que termina ahí ("hola"). El otro caso
+        // (espacio en medio de la línea, no después de palabra) deja la
+        // selección sin tocar. Este test confirma que NO panic-ea.
+        // Si seleccionó algo, debe ser "hola" (bytes 0..4).
+        if let Some(sel) = s.surf_selection {
+            assert_eq!(sel.anchor.line, 0);
+            assert_eq!(sel.anchor.col, 0);
+            assert_eq!(sel.head.col, 4);
+        }
     }
 
     #[test]

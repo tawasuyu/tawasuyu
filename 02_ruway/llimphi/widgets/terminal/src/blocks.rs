@@ -202,6 +202,10 @@ pub struct SelectionConfig<'a, Msg> {
     /// `draggable_at` (gana sobre el `on_click` global del padre). `None`
     /// = la superficie no es seleccionable por mouse (sólo pinta).
     pub on_drag: Option<Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>>,
+    /// Handler de doble-click. Recibe `(lx, ly, rect_w, rect_h)` del
+    /// viewport. El caller lo resuelve a una palabra y la selecciona —
+    /// paridad con la UX clásica de terminal (double-click select-word).
+    pub on_double_click: Option<Arc<dyn Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync>>,
 }
 
 impl<Msg> Default for SelectionConfig<'_, Msg> {
@@ -209,6 +213,7 @@ impl<Msg> Default for SelectionConfig<'_, Msg> {
         Self {
             range: None,
             on_drag: None,
+            on_double_click: None,
         }
     }
 }
@@ -219,6 +224,7 @@ impl<'a, Msg> SelectionConfig<'a, Msg> {
         Self {
             range: Some(range),
             on_drag: None,
+            on_double_click: None,
         }
     }
 }
@@ -363,6 +369,14 @@ where
     if let Some(on_drag) = selection.on_drag {
         viewport = viewport.draggable_at(move |phase, dx, dy, lx0, ly0| {
             (on_drag)(phase, lx0, ly0, dx, dy)
+        });
+    }
+    // Doble-click: paridad con terminales clásicas (select-word). El caller
+    // resuelve `(lx, ly)` a `Point` con `point_at_geo` + computa los
+    // boundaries de palabra y emite un `Msg` que actualiza `surf_selection`.
+    if let Some(on_double) = selection.on_double_click {
+        viewport = viewport.on_double_tap_at(move |lx, ly, rect_w, rect_h| {
+            (on_double)(lx, ly, rect_w, rect_h)
         });
     }
 

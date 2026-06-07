@@ -402,6 +402,9 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::SurfCopySelection => {
             copy_surf_selection(&s);
         }
+        Msg::SurfDoubleClick { lx, ly, rect_w, rect_h } => {
+            s = apply_surf_double_click(s, lx, ly, rect_w, rect_h);
+        }
         Msg::FindOpen => {
             s.find = Some(FindState::default());
         }
@@ -639,6 +642,68 @@ fn copy_surf_selection(s: &State) {
     if let Ok(mut cb) = arboard::Clipboard::new() {
         let _ = cb.set_text(text);
     }
+}
+
+/// Doble-click sobre el cuerpo de output: selecciona la palabra bajo el
+/// punto (paridad con xterm/gnome-terminal). Resuelve `(lx, ly)` a `Point`
+/// con `point_at_geo`, computa los boundaries de palabra en char-indices y
+/// los convierte a offsets de byte UTF-8 para armar el `SelectionRange`.
+pub(crate) fn apply_surf_double_click(
+    mut s: State,
+    lx: f32,
+    ly: f32,
+    _rect_w: f32,
+    _rect_h: f32,
+) -> State {
+    use llimphi_widget_terminal::{point_at_geo, Point, SelectionRange};
+    let snap = match s.surf_layout.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(snap) = snap else {
+        return s;
+    };
+    let Some(hit) = point_at_geo(
+        &snap.items_geo,
+        snap.scroll_y,
+        snap.viewport_h,
+        snap.metrics,
+        snap.gutter_w,
+        &snap.store,
+        lx,
+        ly,
+    ) else {
+        return s;
+    };
+    let Some(text) = snap.store.line(hit.line) else {
+        return s;
+    };
+    // El click se entrega en byte_col; `word_range_at` opera en char-indices.
+    // Convertir byte → char.
+    let char_col = text[..hit.col.min(text.len())].chars().count();
+    let (start_char, end_char) = word_range_at(text, char_col);
+    if end_char <= start_char {
+        return s;
+    }
+    // Char-indices → byte offsets.
+    let mut chars_seen = 0usize;
+    let mut start_byte = text.len();
+    let mut end_byte = text.len();
+    for (b, _) in text.char_indices() {
+        if chars_seen == start_char {
+            start_byte = b;
+        }
+        if chars_seen == end_char {
+            end_byte = b;
+            break;
+        }
+        chars_seen += 1;
+    }
+    s.surf_selection = Some(SelectionRange {
+        anchor: Point::new(hit.line, start_byte),
+        head: Point::new(hit.line, end_byte),
+    });
+    s
 }
 
 /// Acciona el click sobre una decoración del output. Ninguna acción
