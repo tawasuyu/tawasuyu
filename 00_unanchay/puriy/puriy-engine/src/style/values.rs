@@ -1266,6 +1266,21 @@ pub struct ComputedStyle {
     /// `-webkit-mask-repeat-y` (Fase 7.648). Longhand vertical del repeat
     /// de máscara. Parse opaco — `None` = `repeat`. NO hereda. Plumb.
     pub webkit_mask_repeat_y: Option<String>,
+    /// `-webkit-margin-start` (Fase 7.649). Alias legacy de
+    /// `margin-inline-start`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_margin_start: Option<String>,
+    /// `-webkit-margin-end` (Fase 7.650). Alias legacy de
+    /// `margin-inline-end`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_margin_end: Option<String>,
+    /// `-webkit-margin-before` (Fase 7.651). Alias legacy de
+    /// `margin-block-start`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_margin_before: Option<String>,
+    /// `-webkit-margin-after` (Fase 7.652). Alias legacy de
+    /// `margin-block-end`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_margin_after: Option<String>,
+    /// `-webkit-padding-start` (Fase 7.653). Alias legacy de
+    /// `padding-inline-start`. Parse opaco — `None` = `0`. NO hereda. Plumb.
+    pub webkit_padding_start: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4616,6 +4631,11 @@ impl Default for ComputedStyle {
             webkit_mask_position_y: None,
             webkit_mask_repeat_x: None,
             webkit_mask_repeat_y: None,
+            webkit_margin_start: None,
+            webkit_margin_end: None,
+            webkit_margin_before: None,
+            webkit_margin_after: None,
+            webkit_padding_start: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

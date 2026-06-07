@@ -2607,6 +2607,57 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitMaskRepeatY(Some(v.to_string())))
             }
         }
+        // Fase 7.649 — `-webkit-margin-start` (alias legacy de
+        // margin-inline-start). `0` → None.
+        "-webkit-margin-start" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitMarginStart(None))
+            } else {
+                Some(DeclKind::WebkitMarginStart(Some(v.to_string())))
+            }
+        }
+        // Fase 7.650 — `-webkit-margin-end`. `0` → None.
+        "-webkit-margin-end" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitMarginEnd(None))
+            } else {
+                Some(DeclKind::WebkitMarginEnd(Some(v.to_string())))
+            }
+        }
+        // Fase 7.651 — `-webkit-margin-before` (block-start). `0` → None.
+        "-webkit-margin-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitMarginBefore(None))
+            } else {
+                Some(DeclKind::WebkitMarginBefore(Some(v.to_string())))
+            }
+        }
+        // Fase 7.652 — `-webkit-margin-after` (block-end). `0` → None.
+        "-webkit-margin-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitMarginAfter(None))
+            } else {
+                Some(DeclKind::WebkitMarginAfter(Some(v.to_string())))
+            }
+        }
+        // Fase 7.653 — `-webkit-padding-start`. `0` → None.
+        "-webkit-padding-start" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitPaddingStart(None))
+            } else {
+                Some(DeclKind::WebkitPaddingStart(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

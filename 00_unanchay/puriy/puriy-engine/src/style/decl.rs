@@ -808,6 +808,16 @@ pub(crate) enum DeclKind {
     WebkitMaskRepeatX(Option<String>),
     /// `-webkit-mask-repeat-y` (Fase 7.648). `None` = `repeat`. NO hereda. Plumb.
     WebkitMaskRepeatY(Option<String>),
+    /// `-webkit-margin-start` (Fase 7.649). `None` = `0`. NO hereda. Plumb.
+    WebkitMarginStart(Option<String>),
+    /// `-webkit-margin-end` (Fase 7.650). `None` = `0`. NO hereda. Plumb.
+    WebkitMarginEnd(Option<String>),
+    /// `-webkit-margin-before` (Fase 7.651). `None` = `0`. NO hereda. Plumb.
+    WebkitMarginBefore(Option<String>),
+    /// `-webkit-margin-after` (Fase 7.652). `None` = `0`. NO hereda. Plumb.
+    WebkitMarginAfter(Option<String>),
+    /// `-webkit-padding-start` (Fase 7.653). `None` = `0`. NO hereda. Plumb.
+    WebkitPaddingStart(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1374,6 +1384,11 @@ impl Decl {
             DeclKind::WebkitMaskPositionY(v) => s.webkit_mask_position_y = v.clone(),
             DeclKind::WebkitMaskRepeatX(v) => s.webkit_mask_repeat_x = v.clone(),
             DeclKind::WebkitMaskRepeatY(v) => s.webkit_mask_repeat_y = v.clone(),
+            DeclKind::WebkitMarginStart(v) => s.webkit_margin_start = v.clone(),
+            DeclKind::WebkitMarginEnd(v) => s.webkit_margin_end = v.clone(),
+            DeclKind::WebkitMarginBefore(v) => s.webkit_margin_before = v.clone(),
+            DeclKind::WebkitMarginAfter(v) => s.webkit_margin_after = v.clone(),
+            DeclKind::WebkitPaddingStart(v) => s.webkit_padding_start = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
