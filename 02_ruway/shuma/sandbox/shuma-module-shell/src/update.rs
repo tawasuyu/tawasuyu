@@ -2058,9 +2058,81 @@ pub(crate) fn apply_scrollback(mut s: State, rest: &str) -> State {
                 ));
             }
         }
-        _ => {
-            s.push_output(OutputLine::notice("uso: :scrollback [open]"));
+        a if a.starts_with("grep ") => {
+            let pattern = a[5..].trim();
+            if pattern.is_empty() {
+                s.push_output(OutputLine::notice("uso: :scrollback grep <patrón>"));
+                return s;
+            }
+            s = apply_scrollback_grep(s, pattern);
         }
+        _ => {
+            s.push_output(OutputLine::notice("uso: :scrollback [open | grep <patrón>]"));
+        }
+    }
+    s
+}
+
+/// Busca un substring literal en TODO el archive del scrollback — tanto
+/// las líneas en memoria como las del spill file. Útil cuando el usuario
+/// sabe que algo apareció hace mucho y ya está fuera del cache visible.
+/// Reporta los hits como notices con su `global_id` 1-based.
+/// Case-sensitive (literal); el usuario usa el `:scrollback open` + el
+/// search de `$EDITOR` para casos más complejos.
+fn apply_scrollback_grep(mut s: State, pattern: &str) -> State {
+    let hist = match s.surf_history.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let mut hits: Vec<(u64, String)> = Vec::new();
+    let total_spilled = hist.spilled_count();
+    // Spilled: leer una por una. Lentos en archives enormes; el caller
+    // que necesite más velocidad usa el editor con su grep.
+    for id in 0..total_spilled as u64 {
+        if let Ok(Some(text)) = hist.read_spilled(id) {
+            if text.contains(pattern) {
+                hits.push((id, text));
+            }
+        }
+        // Cap defensivo: nunca más de 1000 hits para no saturar el output.
+        if hits.len() >= 1000 {
+            break;
+        }
+    }
+    // In-memory: las líneas vigentes (índices 0..len → global ids
+    // dropped+0..dropped+len).
+    let in_mem = hist.len();
+    let dropped = hist.dropped();
+    for i in 0..in_mem {
+        if hits.len() >= 1000 {
+            break;
+        }
+        if let Some(text) = hist.line(i) {
+            if text.contains(pattern) {
+                hits.push((dropped + i as u64, text.to_string()));
+            }
+        }
+    }
+    if hits.is_empty() {
+        s.push_output(OutputLine::notice(format!(
+            "grep: sin hits para `{pattern}` ({} líneas revisadas)",
+            total_spilled + in_mem
+        )));
+        return s;
+    }
+    s.push_output(OutputLine::notice(format!(
+        "grep: {} hit{} para `{pattern}`",
+        hits.len(),
+        if hits.len() == 1 { "" } else { "s" }
+    )));
+    for (id, text) in hits.iter().take(50) {
+        s.push_output(OutputLine::notice(format!("  [{}] {}", id + 1, text)));
+    }
+    if hits.len() > 50 {
+        s.push_output(OutputLine::notice(format!(
+            "  … y {} más (cap del builtin a 50 visibles)",
+            hits.len() - 50
+        )));
     }
     s
 }

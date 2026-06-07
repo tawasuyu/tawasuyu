@@ -2887,6 +2887,49 @@ mod tests {
     }
 
     #[test]
+    fn scrollback_grep_busca_en_memoria_y_spill() {
+        // History con cap chico + spill: muchas líneas en disco + algunas
+        // en memoria. `:scrollback grep <pat>` debe encontrar hits en
+        // ambas mitades y reportarlos por notice.
+        let mut s = State::new(Source::Local);
+        // Forzar enable_spill (la State::new default no lo activa).
+        let dir = tempfile::tempdir().unwrap();
+        let mut sb = llimphi_widget_terminal::Scrollback::new(20);
+        let spill = llimphi_widget_terminal::SpillStore::create(
+            dir.path().join("test.spill"),
+        )
+        .unwrap();
+        sb.enable_spill(spill);
+        *s.surf_history.lock().unwrap() = sb;
+        // Push lines: some "foo", some "bar". Cap chico → muchas spilled.
+        for i in 0..50 {
+            let line = if i % 5 == 0 {
+                format!("foo_line_{i}")
+            } else {
+                format!("bar_line_{i}")
+            };
+            s.push_output(OutputLine::stdout(&line));
+        }
+        // Sanity: hay spilleadas.
+        let total_spilled = s.surf_history.lock().unwrap().spilled_count();
+        assert!(total_spilled > 0);
+        // grep "foo": debe encontrar las 10 ocurrencias (i = 0, 5, 10, ...).
+        s.input.set_text(":scrollback grep foo");
+        s = update(s, Msg::Key(KeyEvent {
+            key: Key::Named(NamedKey::Enter),
+            state: KeyState::Pressed,
+            text: None,
+            modifiers: llimphi_ui::Modifiers::default(),
+            repeat: false,
+        }));
+        // El último Notice header reporta el total de hits.
+        let summary = s.output.iter().rev()
+            .find(|l| l.kind == OutputKind::Notice && l.text.starts_with("grep:"))
+            .expect("grep summary");
+        assert!(summary.text.contains("10 hits"), "summary: {}", summary.text);
+    }
+
+    #[test]
     fn refresh_spilled_visible_no_recarga_si_no_cambio() {
         use llimphi_widget_terminal::{Scrollback, SpillStore};
         let dir = tempfile::tempdir().unwrap();
