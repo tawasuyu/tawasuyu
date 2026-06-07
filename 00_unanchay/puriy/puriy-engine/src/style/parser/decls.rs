@@ -796,8 +796,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "justify-self" => parse_justify_self(value).map(DeclKind::JustifySelf),
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
-        // Fase 7.689 — `-webkit-column-gap` alias vendor de `column-gap`.
-        "column-gap" | "-webkit-column-gap" => {
+        // Fase 7.689 — `-webkit-column-gap` / Fase 7.770 — `-moz-column-gap` alias vendor de `column-gap`.
+        "column-gap" | "-webkit-column-gap" | "-moz-column-gap" => {
             parse_length_px(value).map(DeclKind::ColumnGap)
         }
         // Fase 7.728 — `-webkit-box-sizing` / Fase 7.763 — `-moz-box-sizing` alias vendor de `box-sizing`.
@@ -3266,10 +3266,12 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "contain" => parse_contain(value).map(DeclKind::Contain),
         // Fase 7.684-7.688 — la familia `-webkit-column-*` es el alias vendor
         // (de facto) de `column-*`: enruta al mismo parser/almacén.
-        "column-count" | "-webkit-column-count" => {
+        // Fase 7.768 — `-moz-column-count` alias vendor legacy.
+        "column-count" | "-webkit-column-count" | "-moz-column-count" => {
             Some(DeclKind::ColumnCount(parse_column_count(value)))
         }
-        "column-width" | "-webkit-column-width" => {
+        // Fase 7.769 — `-moz-column-width` alias vendor legacy.
+        "column-width" | "-webkit-column-width" | "-moz-column-width" => {
             parse_length_or_pct(value).map(DeclKind::ColumnWidth)
         }
         "column-rule-width" | "-webkit-column-rule-width" => {
@@ -3365,8 +3367,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // `text-emphasis` shorthand: ver `parse_declarations`.
         // Fase 7.749 — alias `-webkit-ruby-position` → estándar.
         "ruby-position" | "-webkit-ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
-        // Fase 7.662 — `-webkit-transform-origin` alias vendor del shorthand.
-        "transform-origin" | "-webkit-transform-origin" => {
+        // Fase 7.662 — `-webkit-transform-origin` / Fase 7.772 — `-moz-transform-origin` alias vendor del shorthand.
+        "transform-origin" | "-webkit-transform-origin" | "-moz-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
         }
         // Fase 7.740 — alias `-webkit-transform-style` → estándar.
@@ -3625,7 +3627,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "grid-template-rows" => parse_grid_template(value).map(DeclKind::GridTemplateRows),
         // Fase 7.723-7.724 — `-webkit-animation` / `-webkit-transition` alias
         // vendor de los shorthands `animation` / `transition`.
-        "animation" | "-webkit-animation" => parse_animation(value),
+        // Fase 7.771 — `-moz-animation` alias vendor del shorthand `animation`.
+        "animation" | "-webkit-animation" | "-moz-animation" => parse_animation(value),
         // Fase 7.767 — `-moz-transition` alias vendor del shorthand `transition`.
         "transition" | "-webkit-transition" | "-moz-transition" => parse_transition(value),
         // `grid-gap` (legacy) = `gap`.
