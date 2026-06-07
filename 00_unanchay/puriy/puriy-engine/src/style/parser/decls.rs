@@ -528,7 +528,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         }
         // `text-emphasis` shorthand (Fase 7.312): `<style> || <color>`. `none`
         // setea style=None y NO toca el color. Orden libre.
-        if prop.eq_ignore_ascii_case("text-emphasis") {
+        // Fase 7.744 — alias `-webkit-text-emphasis` → estándar (shorthand).
+        if prop.eq_ignore_ascii_case("text-emphasis")
+            || prop.eq_ignore_ascii_case("-webkit-text-emphasis")
+        {
             out.extend(parse_text_emphasis_shorthand(value, important));
             continue;
         }
@@ -2151,7 +2154,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.574 — `text-decoration-skip` (CSS Text Decor 4, shorthand
         // legacy). Parse opaco; `auto` → None.
-        "text-decoration-skip" => {
+        // Fase 7.743 — alias `-webkit-text-decoration-skip` → estándar.
+        "text-decoration-skip" | "-webkit-text-decoration-skip" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("auto") {
@@ -3254,15 +3258,18 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "transform-origin" | "-webkit-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
         }
-        "transform-style" => {
+        // Fase 7.740 — alias `-webkit-transform-style` → estándar.
+        "transform-style" | "-webkit-transform-style" => {
             parse_transform_style(value).map(DeclKind::TransformStyle)
         }
-        "perspective" => parse_perspective(value).map(DeclKind::Perspective),
+        // Fase 7.741 — alias `-webkit-perspective` → estándar.
+        "perspective" | "-webkit-perspective" => parse_perspective(value).map(DeclKind::Perspective),
         // Fase 7.663 — `-webkit-perspective-origin` alias vendor del shorthand.
         "perspective-origin" | "-webkit-perspective-origin" => {
             parse_perspective_origin(value).map(DeclKind::PerspectiveOrigin)
         }
-        "backface-visibility" => {
+        // Fase 7.742 — alias `-webkit-backface-visibility` → estándar.
+        "backface-visibility" | "-webkit-backface-visibility" => {
             parse_backface_visibility(value).map(DeclKind::BackfaceVisibility)
         }
         "scrollbar-width" => {
