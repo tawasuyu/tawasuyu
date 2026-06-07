@@ -405,7 +405,7 @@ where
 /// (`total_pushed`), con un padding fijo. Se fija por el total histórico (no por
 /// lo visible) para que el gutter no salte al scrollear, y es **el mismo** para
 /// todos los bloques (los números alinean entre cards).
-pub(crate) fn gutter_width(store: &Scrollback, metrics: TermMetrics) -> f32 {
+pub fn gutter_width(store: &Scrollback, metrics: TermMetrics) -> f32 {
     let max_num = store.total_pushed().max(1);
     let digits = (max_num as f64).log10().floor() as usize + 1;
     metrics.char_width * digits as f32 + 10.0

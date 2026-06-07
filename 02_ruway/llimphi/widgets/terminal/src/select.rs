@@ -22,7 +22,9 @@
 //! Sin dependencias de UI ni de wgpu — puro, testeable a mano. Las pintadas y
 //! el cableado de mouse vienen en commits siguientes (Fase 3 continúa).
 
+use crate::blocks::Item;
 use crate::store::Scrollback;
+use crate::view::TermMetrics;
 
 /// Un punto en el scrollback — un par `(idx_línea, col_byte)`. El índice es
 /// vigente en el store (post-recortes); la columna es offset **en bytes** del
@@ -156,6 +158,95 @@ fn clamp_char_boundary(text: &str, col: usize) -> usize {
         c -= 1;
     }
     c
+}
+
+/// Un rectángulo de highlight para pintar — coords **relativas al viewport**
+/// del `block_surface` (origen = esquina superior-izquierda del rect del
+/// widget, ya descontado `scroll_y`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HighlightRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Calcula los rectángulos de highlight que pinta una selección sobre la
+/// ventana visible de un `block_surface`. **Puro**: no depende de wgpu ni
+/// de Views — devuelve geometría que el painter del widget consume con
+/// `scene.fill`. El caller pasa `gutter_w` (típicamente vía
+/// [`crate::blocks::gutter_width`]) y las métricas de la superficie.
+///
+/// Sólo emite rects para líneas que (a) caen dentro de un `Item::Lines` del
+/// stream y (b) intersectan el viewport. Items `Chrome` no entran (el chrome
+/// es opaco y el caller decide su propio highlight si lo necesita).
+///
+/// Las columnas en `SelectionRange` son **bytes UTF-8**; el rect se calcula
+/// en **columnas visuales** (chars contados, mono = 1 cell por char). CJK
+/// ancho doble queda fuera del MVP — emite rects de 1 cell por char.
+pub fn selection_rects<Msg>(
+    items: &[Item<Msg>],
+    scroll_y: f32,
+    viewport_h: f32,
+    metrics: TermMetrics,
+    gutter_w: f32,
+    store: &Scrollback,
+    sel: &SelectionRange,
+) -> Vec<HighlightRect> {
+    if sel.is_empty() || viewport_h <= 0.0 || metrics.line_height <= 0.0 {
+        return Vec::new();
+    }
+    let (s, e) = sel.normalized();
+    let row_h = metrics.line_height;
+    let char_w = metrics.char_width.max(0.5);
+    let mut out: Vec<HighlightRect> = Vec::new();
+
+    let mut item_top = 0.0_f32;
+    for it in items {
+        let item_h = it.height(row_h);
+        let item_bottom = item_top + item_h;
+        // Skip items totalmente fuera del viewport.
+        if item_bottom <= scroll_y || item_top >= scroll_y + viewport_h {
+            item_top = item_bottom;
+            continue;
+        }
+        if let Item::Lines { start, end } = it {
+            let nrows = end.saturating_sub(*start);
+            if nrows == 0 {
+                item_top = item_bottom;
+                continue;
+            }
+            // Sub-filas dentro del item que tocan el viewport (locales 0-based).
+            let off = scroll_y;
+            let k0 = (((off - item_top) / row_h).floor().max(0.0) as usize).min(nrows);
+            let k1 = (((off + viewport_h - item_top) / row_h).ceil().max(0.0) as usize).min(nrows);
+            for k in k0..k1 {
+                let idx = start + k;
+                if !sel.touches_line(idx) {
+                    continue;
+                }
+                let Some(text) = store.line(idx) else { continue };
+                let Some((a, b)) = sel.col_range_on(idx, text.len()) else { continue };
+                // Snap a límites UTF-8 (defensa; col_range_on ya clampa a len).
+                let a_safe = clamp_char_boundary(text, a);
+                let b_safe = clamp_char_boundary(text, b);
+                if a_safe >= b_safe {
+                    continue;
+                }
+                let vis_a = text[..a_safe].chars().count() as f32;
+                let vis_b = text[..b_safe].chars().count() as f32;
+                let row_y = item_top + k as f32 * row_h - scroll_y;
+                out.push(HighlightRect {
+                    x: gutter_w + vis_a * char_w,
+                    y: row_y,
+                    w: (vis_b - vis_a) * char_w,
+                    h: row_h,
+                });
+            }
+        }
+        item_top = item_bottom;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -297,6 +388,123 @@ mod tests {
             head: Point::new(2, 5),
         };
         assert_eq!(sel.slice_text(&store), "");
+    }
+
+    fn rects<Msg>(
+        items: &[Item<Msg>],
+        scroll_y: f32,
+        viewport_h: f32,
+        gutter_w: f32,
+        store: &Scrollback,
+        sel: &SelectionRange,
+    ) -> Vec<HighlightRect> {
+        let metrics = TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 8.0,
+        };
+        selection_rects(items, scroll_y, viewport_h, metrics, gutter_w, store, sel)
+    }
+
+    #[test]
+    fn rects_de_seleccion_vacia_son_vacio() {
+        let store = store_of(&["abc"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
+        let sel = SelectionRange::collapsed(Point::new(0, 1));
+        assert_eq!(rects(&items, 0.0, 100.0, 30.0, &store, &sel), Vec::new());
+    }
+
+    #[test]
+    fn rect_single_line_ubica_x_y_w_correctos() {
+        // Línea 0 entera (3 chars). chars 0..3 → x = gutter + 0, w = 3 * char_w.
+        let store = store_of(&["abc"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
+        let sel = SelectionRange {
+            anchor: Point::new(0, 0),
+            head: Point::new(0, 3),
+        };
+        let r = rects(&items, 0.0, 100.0, 30.0, &store, &sel);
+        assert_eq!(r.len(), 1);
+        let h = r[0];
+        assert_eq!(h.x, 30.0);
+        assert_eq!(h.y, 0.0);
+        assert_eq!(h.w, 24.0); // 3 * 8.0
+        assert_eq!(h.h, 16.0);
+    }
+
+    #[test]
+    fn rect_multi_line_emite_uno_por_renglon() {
+        // 3 líneas, selección abarca las 3 (primera/última recortadas).
+        let store = store_of(&["alpha", "beta", "gamma"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 3)];
+        let sel = SelectionRange {
+            anchor: Point::new(0, 2), // "pha"
+            head: Point::new(2, 3),   // "gam"
+        };
+        let r = rects(&items, 0.0, 100.0, 30.0, &store, &sel);
+        assert_eq!(r.len(), 3);
+        // Línea 0: chars 2..5 → x = 30 + 2*8 = 46, w = 3*8 = 24
+        assert_eq!(r[0].x, 46.0);
+        assert_eq!(r[0].w, 24.0);
+        // Línea 1 entera: "beta" (4 chars).
+        assert_eq!(r[1].x, 30.0);
+        assert_eq!(r[1].w, 32.0);
+        // Línea 2: chars 0..3 → "gam".
+        assert_eq!(r[2].x, 30.0);
+        assert_eq!(r[2].w, 24.0);
+    }
+
+    #[test]
+    fn rects_descartan_lineas_fuera_del_viewport() {
+        // 100 líneas, viewport 32 px (=2 filas), scroll a la mitad → sólo 2-3 rects.
+        let lines: Vec<&str> = (0..100).map(|_| "row").collect();
+        let store = store_of(&lines);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 100)];
+        // Selección sobre TODAS las líneas, pero sólo 2-3 entran al viewport.
+        let sel = SelectionRange {
+            anchor: Point::new(0, 0),
+            head: Point::new(99, 3),
+        };
+        // scroll a la fila 50 (50 * 16 = 800 px). Viewport de 32 px → filas
+        // 50, 51 (+ guarda).
+        let r = rects(&items, 800.0, 32.0, 30.0, &store, &sel);
+        assert!(r.len() <= 3 && !r.is_empty(),
+            "esperado ~2-3 rects, no {} (todas las líneas)", r.len());
+    }
+
+    #[test]
+    fn rects_saltan_items_chrome() {
+        // Item 0 = chrome (alto 20), item 1 = 2 líneas. Selección sobre las dos
+        // líneas. El chrome no debe aportar rects.
+        let store = store_of(&["aa", "bb"]);
+        let chrome_view: llimphi_ui::View<()> = llimphi_ui::View::new(Default::default());
+        let items: Vec<Item<()>> = vec![Item::chrome(20.0, chrome_view), Item::lines(0, 2)];
+        let sel = SelectionRange {
+            anchor: Point::new(0, 0),
+            head: Point::new(1, 2),
+        };
+        let r = rects(&items, 0.0, 100.0, 30.0, &store, &sel);
+        assert_eq!(r.len(), 2);
+        // El primer rect arranca DESPUÉS del chrome (y = 20).
+        assert_eq!(r[0].y, 20.0);
+        // El segundo está una fila más abajo (20 + 16 = 36).
+        assert_eq!(r[1].y, 36.0);
+    }
+
+    #[test]
+    fn rects_usan_visual_cols_no_bytes_para_utf8() {
+        // "héllo" — 'é' es 2 bytes, pero 1 char visual. Selección de col 0 a
+        // col 3 (byte) → snap a 3 (después de "hé"), 2 chars visuales.
+        let store = store_of(&["héllo"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
+        let sel = SelectionRange {
+            anchor: Point::new(0, 0),
+            head: Point::new(0, 3),
+        };
+        let r = rects(&items, 0.0, 100.0, 30.0, &store, &sel);
+        assert_eq!(r.len(), 1);
+        // 2 chars visuales × 8 px = 16.
+        assert_eq!(r[0].w, 16.0);
     }
 
     #[test]
