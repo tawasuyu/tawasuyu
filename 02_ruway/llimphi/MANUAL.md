@@ -650,11 +650,34 @@ auto-submit). `text_area_view(&state, placeholder, focused, body_height, &palett
 on_change: Fn(DragPhase, delta_value) -> Option<Msg>)`. El delta viene en
 unidades, no píxeles.
 
+**color-picker** — selector RGBA: swatch actual + paleta de chips + barra
+de hue + sliders R/G/B/A (+ campo `#RRGGBB` opcional). Agnóstico, emite
+`[u8; 4]`. `color_picker_view(rgba: [u8;4], swatches: &[[u8;3]] (p.ej.
+DEFAULT_SWATCHES), &ColorPickerPalette, hex: Option<HexField { focused,
+state: Option<&TextInputState>, on_focus }>, on_change: Fn([u8;4]) -> Msg)`.
+Helpers puros: `rgba_to_hex`, `parse_hex(s, cur_alpha)` (acepta 3/6/8
+dígitos, `#` opcional), `color_picker_height(with_hex)` para pre-calcular
+el alto.
+
 **switch** — `switch_view(progress: f32 [0..1], on_toggle: Msg, &palette)`. La
 app guarda el `bool` y opcionalmente anima `progress` con un `Tween`.
 
 **segmented** — N opciones exclusivas. `segmented_view(&[&str], selected: usize,
 make_msg: Fn(usize)->Msg, &palette)`.
+
+**select** — combobox/dropdown moderno (disparador cerrado + menú flotante en
+`view_overlay`). Soporta **ítems ricos** (`SelectItem { label, sublabel, icon
+(glifo unicode), badge: SelectBadge, enabled }`), **selección múltiple**
+(`selected: &[usize]` con check ✓), **búsqueda** in-menu y **fases async**
+(`SelectPhase::{Loading, Error(&str), Ready(&[SelectItem])}`) para listas que
+vienen de `Handle::spawn`. El cerrado se pinta con `select_trigger_view(selected:
+Option<&SelectItem>, placeholder, open, width, &palette, on_toggle: Msg)`; el
+menú con `select_menu_view(SelectMenuSpec { anchor, viewport, width, phase,
+visible: &[orig_idx], active, selected, query, searchable, empty_text, appear,
+on_pick: Fn(orig_idx)->Msg, on_hover, on_dismiss, on_retry, palette })`. La app
+mantiene `query`/`active`/`visible`/`selected` en el Model. Helpers puros para
+el filtro: `filter(items, query) -> Vec<orig_idx>`, `step_active(items, visible,
+current, ±1)` para nav, `resolve(visible, pos) -> Option<orig_idx>`.
 
 **progress** — `linear_progress_view(progress, track, fill, height)` y
 `radial_progress_view(progress, track, fill, stroke_ratio)`. Sin eventos.
@@ -713,6 +736,29 @@ layout.split(target, new, axis) / .without(target) / .resize(&path, delta) / .le
 panes_view(&layout, focused: PaneId, leaf: FnMut(PaneId)->View, on_resize: Fn(Vec<Side>,DragPhase,delta)->Option<Msg>,
            on_focus: Fn(PaneId)->Msg, &palette)
 ```
+
+**dock-rail** — rail vertical de **dientes** para sidebars acoplables. Cada
+diente es una pestaña: **barra de acento de 3px pegada al borde interno**
+(encendida cuando está activo) + icono centrado. Apilados en una franja
+flotante que **sobresale del panel** hacia el centro — el patrón canónico
+de cosmos (`01_yachay/cosmos/cosmos-app-llimphi/src/chrome.rs`:
+`dock_rail_overlay` / `dock_panel_for`). Cada item se identifica por un `u64`
+opaco; el caller mantiene el orden, qué está activo, y el mapping
+`u64 ↔ DominioPropio` (típicamente vía `enum::{to_u64,from_u64}`). Cada
+diente es **arrastrable** (su id como payload) y el rail entero es **drop
+target** → mover un diente de un sidebar a otro soltándolo sobre el rail
+opuesto. Render-only, agnóstico del `Msg`.
+```rust
+DockRailItem { id: u64, active: bool }
+dock_rail_view(&items, width: f32, &DockRailPalette,
+    make_icon: Fn(id, size_px, color) -> View<Msg>,
+    on_activate: Fn(id) -> Msg,                  // dispara en el press, no pelea con el drag
+    on_drop:     Fn(payload_id) -> Option<Msg>)  // None = el rail no acepta drops
+```
+Layout canónico: el rail va como **overlay absoluto** pegado al borde interno
+del centro (los dientes sobresalen sobre la rueda/canvas), y el panel del
+item activo va al costado como un pane en el área resizable. NO es una lista
+con rótulo: leer cosmos antes de inventar UX (lección 2026-06-05).
 
 **grid** — grilla 2D virtualizada. `ventana_visible(total, vp_w, vp_h, scroll_fila,
 &metrics) -> VisibleWindow` para virtualizar, luego `grid_view(GridSpec { cells:
@@ -773,6 +819,27 @@ nodegraph_view(&nodes, &wires, &palette, &metrics,
 
 **timeline** — scrub clickeable. `timeline_view(progress: f32, &palette,
 on_seek: Fn(f32 [0..1])->Option<Msg>)`.
+
+**table** — tabla **editable** de celdas-texto: filas/columnas + agregar/quitar
+fila + foco por celda. Stateless — la app posee el foco y el buffer de la
+celda en edición; el resto se pinta desde `&rows`. Pensado para datos planos
+editables (paramétricos, scratchpad, listas curables); no es la `list`/`tree`
+virtualizada read-only ni un grid de hoja de cálculo.
+```rust
+table_view(&[String], headers,                          // [] = sin header
+    &[Vec<String>] rows,
+    focused: Option<(row, col)>,
+    focused_state: Option<&TextInputState>,             // buffer prestado de la celda en edición
+    add_label: &str, &TablePalette,
+    on_focus_cell: Fn(row, col) -> Msg,                 // clic en celda
+    on_remove_row: Fn(row) -> Msg,
+    on_add_row:    Fn() -> Msg)
+list_view(&[String], items, focused_row, focused_state, // sola columna sin header
+    add_label, &palette, on_focus_cell: Fn(row)->Msg, on_remove_row, on_add_row)
+table_height(n_rows, has_header) -> f32                 // pre-calcular alto del bloque
+```
+La variante `list_view` no se confunde con la `list` virtualizada de §13:
+ésta es **una sola columna editable** que delega en `table_view([], ..)`.
 
 **text-editor** — editor IDE (capa visual sobre el core agnóstico). La app guarda
 `EditorState`:
@@ -1122,12 +1189,13 @@ fn view_overlay(m) -> Option<View<Msg>> { if m.open { Some(menu) } else { None }
 `llimphi-gpu-bench`.
 
 **Widgets** (`widgets/`, dep `llimphi-widget-<n>`): app-header · avatar · badge ·
-banner · breadcrumb · button · card · clipboard · context-menu · edit-menu ·
-empty · field · gallery · grid · list · menubar · modal · navigator · nodegraph ·
-panel · panes · progress · segmented · shortcuts-help · skeleton · slider · splash ·
-splitter · stat-card · status-bar · switch · tabs · terminal · text-area ·
-text-editor · text-editor-core · text-editor-lsp · text-input · theme-switcher ·
-tiled · timeline · toast · tooltip · tree · wawa-mark.
+banner · breadcrumb · button · card · clipboard · color-picker · context-menu ·
+dock-rail · edit-menu · empty · field · gallery · grid · list · menubar · modal ·
+navigator · nodegraph · panel · panes · progress · segmented · select ·
+shortcuts-help · skeleton · slider · splash · splitter · stat-card · status-bar ·
+switch · table · tabs · terminal · text-area · text-editor · text-editor-core ·
+text-editor-lsp · text-input · theme-switcher · tiled · timeline · toast ·
+tooltip · tree · wawa-mark.
 
 **Módulos** (`modules/`): bookmarks · command-palette · diff-viewer · fif ·
 file-picker · mini-map · plugin-host · selector · shuma-term · symbol-outline.
