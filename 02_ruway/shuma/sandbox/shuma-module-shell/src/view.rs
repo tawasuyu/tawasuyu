@@ -1606,12 +1606,15 @@ pub(crate) fn terminal_surface_enabled() -> bool {
 
 /// Header de un comando como **chrome** de la superficie: chevron + `$ comando`
 /// + badge de estado (icono + "hace N"). Click → pliega/despliega el bloque.
+/// `has_stdout` (param 6) gatea el chip de reprocess (sin stdout, no hay
+/// nada que reprocesar).
 fn surface_header<HostMsg: Clone + 'static>(
     block: u64,
     header_text: &str,
     status: Option<CmdStatus>,
     expandable: bool,
     collapsed: bool,
+    has_stdout: bool,
     state: &State,
     theme: &Theme,
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
@@ -1647,6 +1650,37 @@ fn surface_header<HostMsg: Clone + 'static>(
     .max_lines(1);
 
     let mut children = vec![marker, cmd];
+    // Chip de reprocess: alimenta el stdout de este bloque al stdin del
+    // próximo comando (paridad con el `command_card` del path viejo). Clic
+    // arma/desarma; el hit-test innermost-wins le da prioridad sobre el
+    // header (que pliega el bloque).
+    if has_stdout {
+        let armed = state.reprocess_source == Some(block);
+        let (fill, fg) = if armed {
+            (theme.accent, theme.bg_panel)
+        } else {
+            (theme.bg_input, theme.fg_muted)
+        };
+        children.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(fill)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::SetReprocess(block)))
+            .text_aligned("» stdin".to_string(), 10.0, fg, Alignment::Start)
+            .mono(),
+        );
+    }
     if let Some(st) = status {
         let (icon, color) = st.icon_color(theme);
         children.push(
@@ -1772,11 +1806,24 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             let kinds = body_kinds_for_block(state, *id);
             let runs = body_color_runs(state, *id, theme);
             let has_stages = g.iter().any(|l| l.stage.is_some());
+            let has_stdout = g
+                .iter()
+                .any(|l| l.kind == OutputKind::Stdout && l.stage.is_none());
             let expandable = !lines.is_empty() || has_stages;
 
             items.push(Item::chrome(
                 SURFACE_HEADER_H,
-                surface_header(*id, &header_text, status, expandable, collapsed, state, theme, lift),
+                surface_header(
+                    *id,
+                    &header_text,
+                    status,
+                    expandable,
+                    collapsed,
+                    has_stdout,
+                    state,
+                    theme,
+                    lift,
+                ),
             ));
 
             if !collapsed && !lines.is_empty() {
