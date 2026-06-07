@@ -685,6 +685,16 @@ pub(crate) enum DeclKind {
     Richness(f32),
     /// `stress` (Fase 7.568). 0–100. HEREDA. Plumb.
     Stress(f32),
+    /// `pitch` (Fase 7.569). `None` = `medium`. HEREDA. Plumb.
+    Pitch(Option<String>),
+    /// `speech-rate` (Fase 7.570). `None` = `medium`. HEREDA. Plumb.
+    SpeechRate(Option<String>),
+    /// `volume` (Fase 7.571). `None` = `medium`. HEREDA. Plumb.
+    Volume(Option<String>),
+    /// `speak` (Fase 7.572). HEREDA. Plumb.
+    Speak(Speak),
+    /// `play-during` (Fase 7.573). `None` = `auto`. NO hereda. Plumb.
+    PlayDuring(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1191,6 +1201,11 @@ impl Decl {
             DeclKind::Elevation(v) => s.elevation = v.clone(),
             DeclKind::Richness(v) => s.richness = *v,
             DeclKind::Stress(v) => s.stress = *v,
+            DeclKind::Pitch(v) => s.pitch = v.clone(),
+            DeclKind::SpeechRate(v) => s.speech_rate = v.clone(),
+            DeclKind::Volume(v) => s.volume = v.clone(),
+            DeclKind::Speak(v) => s.speak = *v,
+            DeclKind::PlayDuring(v) => s.play_during = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -2026,6 +2026,52 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             .parse::<f32>()
             .ok()
             .map(|n| DeclKind::Stress(n.clamp(0.0, 100.0))),
+        // Fase 7.569-7.571 — `pitch`/`speech-rate`/`volume` (CSS 2.1 aural).
+        // Parse opaco; `medium` → None.
+        "pitch" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::Pitch(None))
+            } else {
+                Some(DeclKind::Pitch(Some(v.to_string())))
+            }
+        }
+        "speech-rate" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::SpeechRate(None))
+            } else {
+                Some(DeclKind::SpeechRate(Some(v.to_string())))
+            }
+        }
+        "volume" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("medium") {
+                Some(DeclKind::Volume(None))
+            } else {
+                Some(DeclKind::Volume(Some(v.to_string())))
+            }
+        }
+        // Fase 7.572 — `speak` (CSS 2.1 aural). Distinto de `speak-as`.
+        "speak" => match value.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(DeclKind::Speak(Speak::Normal)),
+            "none" => Some(DeclKind::Speak(Speak::None)),
+            "spell-out" => Some(DeclKind::Speak(Speak::SpellOut)),
+            _ => None,
+        },
+        // Fase 7.573 — `play-during` (CSS 2.1 aural). Parse opaco; `auto` → None.
+        "play-during" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::PlayDuring(None))
+            } else {
+                Some(DeclKind::PlayDuring(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

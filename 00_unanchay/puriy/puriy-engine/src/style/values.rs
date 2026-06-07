@@ -1075,6 +1075,21 @@ pub struct ComputedStyle {
     /// `stress` (Fase 7.568). CSS 2.1 aural: énfasis de la entonación
     /// (0–100). Default `50.0`. HEREDA. Plumb.
     pub stress: f32,
+    /// `pitch` (Fase 7.569). CSS 2.1 aural: tono medio de la voz. `None` =
+    /// `medium`. HEREDA. Plumb.
+    pub pitch: Option<String>,
+    /// `speech-rate` (Fase 7.570). CSS 2.1 aural: velocidad del habla.
+    /// `None` = `medium`. HEREDA. Plumb.
+    pub speech_rate: Option<String>,
+    /// `volume` (Fase 7.571). CSS 2.1 aural: volumen medio. `None` =
+    /// `medium`. HEREDA. Plumb.
+    pub volume: Option<String>,
+    /// `speak` (Fase 7.572). CSS 2.1 aural: si el contenido se renderiza
+    /// auditivamente y cómo. Default `Normal`. HEREDA. Plumb.
+    pub speak: Speak,
+    /// `play-during` (Fase 7.573). CSS 2.1 aural: sonido de fondo durante
+    /// el elemento. `None` = `auto`. NO hereda. Plumb.
+    pub play_during: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2964,6 +2979,16 @@ pub enum ScrollInitialTarget {
     Nearest,
 }
 
+/// `speak` (CSS 2.1 aural). Default `Normal`. Fase 7.572. Distinto de
+/// `speak-as` (CSS Speech 1), que ya vive en `SpeakAs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Speak {
+    #[default]
+    Normal,
+    None,
+    SpellOut,
+}
+
 /// `hyphenate-limit-last` (CSS Text 4). Default `None`. Fase 7.560.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HyphenateLimitLast {
@@ -4285,6 +4310,11 @@ impl Default for ComputedStyle {
             elevation: None,
             richness: 50.0,
             stress: 50.0,
+            pitch: None,
+            speech_rate: None,
+            volume: None,
+            speak: Speak::Normal,
+            play_during: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
