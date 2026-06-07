@@ -1154,6 +1154,22 @@ pub struct ComputedStyle {
     /// `marquee-increment` (Fase 7.593). Distancia por paso. Parse opaco —
     /// `None` = `6px`. NO hereda. Plumb.
     pub marquee_increment: Option<String>,
+    /// `nav-index` (Fase 7.594). CSS UI 3 legacy: orden de navegación
+    /// secuencial. Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub nav_index: Option<String>,
+    /// `nav-up` (Fase 7.595). CSS UI 3 legacy (nombre viejo de
+    /// `navigation-up`): target al navegar hacia arriba. `None` = `auto`.
+    /// NO hereda. Plumb.
+    pub nav_up: Option<String>,
+    /// `nav-down` (Fase 7.596). Análogo a `nav-up`. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub nav_down: Option<String>,
+    /// `nav-left` (Fase 7.597). Análogo a `nav-up`. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub nav_left: Option<String>,
+    /// `nav-right` (Fase 7.598). Análogo a `nav-up`. `None` = `auto`. NO
+    /// hereda. Plumb.
+    pub nav_right: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4469,6 +4485,11 @@ impl Default for ComputedStyle {
             marquee_speed: MarqueeSpeed::Normal,
             marquee_loop: None,
             marquee_increment: None,
+            nav_index: None,
+            nav_up: None,
+            nav_down: None,
+            nav_left: None,
+            nav_right: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

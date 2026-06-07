@@ -738,6 +738,16 @@ pub(crate) enum DeclKind {
     MarqueeLoop(Option<i32>),
     /// `marquee-increment` (Fase 7.593). `None` = `6px`. NO hereda. Plumb.
     MarqueeIncrement(Option<String>),
+    /// `nav-index` (Fase 7.594). `None` = `auto`. NO hereda. Plumb.
+    NavIndex(Option<String>),
+    /// `nav-up` (Fase 7.595). `None` = `auto`. NO hereda. Plumb.
+    NavUp(Option<String>),
+    /// `nav-down` (Fase 7.596). `None` = `auto`. NO hereda. Plumb.
+    NavDown(Option<String>),
+    /// `nav-left` (Fase 7.597). `None` = `auto`. NO hereda. Plumb.
+    NavLeft(Option<String>),
+    /// `nav-right` (Fase 7.598). `None` = `auto`. NO hereda. Plumb.
+    NavRight(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1269,6 +1279,11 @@ impl Decl {
             DeclKind::MarqueeSpeed(v) => s.marquee_speed = *v,
             DeclKind::MarqueeLoop(v) => s.marquee_loop = *v,
             DeclKind::MarqueeIncrement(v) => s.marquee_increment = v.clone(),
+            DeclKind::NavIndex(v) => s.nav_index = v.clone(),
+            DeclKind::NavUp(v) => s.nav_up = v.clone(),
+            DeclKind::NavDown(v) => s.nav_down = v.clone(),
+            DeclKind::NavLeft(v) => s.nav_left = v.clone(),
+            DeclKind::NavRight(v) => s.nav_right = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

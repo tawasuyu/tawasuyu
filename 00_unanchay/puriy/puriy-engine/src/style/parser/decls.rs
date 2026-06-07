@@ -2254,6 +2254,53 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::MarqueeIncrement(Some(v.to_string())))
             }
         }
+        // Fase 7.594-7.598 — familia `nav-*` (CSS UI 3 legacy). Parse opaco;
+        // `auto` → None.
+        "nav-index" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavIndex(None))
+            } else {
+                Some(DeclKind::NavIndex(Some(v.to_string())))
+            }
+        }
+        "nav-up" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavUp(None))
+            } else {
+                Some(DeclKind::NavUp(Some(v.to_string())))
+            }
+        }
+        "nav-down" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavDown(None))
+            } else {
+                Some(DeclKind::NavDown(Some(v.to_string())))
+            }
+        }
+        "nav-left" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavLeft(None))
+            } else {
+                Some(DeclKind::NavLeft(Some(v.to_string())))
+            }
+        }
+        "nav-right" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::NavRight(None))
+            } else {
+                Some(DeclKind::NavRight(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
