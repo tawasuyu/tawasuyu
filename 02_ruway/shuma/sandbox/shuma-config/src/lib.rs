@@ -100,6 +100,38 @@ impl Default for PromptConfig {
     }
 }
 
+/// Configuración del scrollback del surface (Fase 5.7+ del SDD-TERMINAL).
+/// `limit_mb` cap en memoria, `spill` activa el archivo de archive para
+/// líneas que se recortan del frente. `spill_path` vacío = elegido
+/// automáticamente bajo `$XDG_RUNTIME_DIR/shuma-<pid>.spill`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrollbackConfig {
+    /// Cap del scrollback en MiB. `0` = sin cap (peligroso para sesiones
+    /// largas — la memoria crece sin tope).
+    #[serde(default = "default_scrollback_mb")]
+    pub limit_mb: usize,
+    /// Si las líneas recortadas se archivan a un spill file en disco.
+    #[serde(default)]
+    pub spill: bool,
+    /// Path del spill file. Vacío = elegido automáticamente.
+    #[serde(default)]
+    pub spill_path: String,
+}
+
+fn default_scrollback_mb() -> usize {
+    4
+}
+
+impl Default for ScrollbackConfig {
+    fn default() -> Self {
+        Self {
+            limit_mb: default_scrollback_mb(),
+            spill: false,
+            spill_path: String::new(),
+        }
+    }
+}
+
 /// Configuración completa cargada del `.shumarc.toml`.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -115,6 +147,8 @@ pub struct Config {
     pub history: HistoryConfig,
     #[serde(default)]
     pub capture: CaptureConfig,
+    #[serde(default)]
+    pub scrollback: ScrollbackConfig,
 }
 
 impl Config {

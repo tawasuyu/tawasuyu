@@ -624,12 +624,12 @@ impl State {
             find: None,
             surf_menu: None,
             surf_last_dblclick_ms: 0,
-            // 4 MiB de cap es generoso para una sesión interactiva (~100k
-            // líneas de 40 bytes). El usuario puede subirlo con
-            // `enable_spill` o reemplazar el `Scrollback` entero.
-            surf_history: Arc::new(Mutex::new(
-                llimphi_widget_terminal::Scrollback::new(4 * 1024 * 1024),
-            )),
+            // Scrollback persistente: cap por `config.scrollback.limit_mb`,
+            // spill opcional (si `config.scrollback.spill = true`) a un
+            // archivo en `$XDG_RUNTIME_DIR/shuma-<pid>.spill` (o el path
+            // explícito de la config). Errores I/O al armar el spill se
+            // ignoran silenciosamente: el history funciona sin él.
+            surf_history: Arc::new(Mutex::new(build_surf_history(&config))),
             gpu_grid: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
@@ -1009,6 +1009,31 @@ mod view;
 pub use mouse_xterm::{XBtn, XPhase};
 pub use update::*;
 pub use view::*;
+
+/// Arma el `Scrollback` persistente desde la config: cap en MiB +
+/// (opcional) spill a un archivo en `$XDG_RUNTIME_DIR/shuma-<pid>.spill`
+/// (o el path explícito de la config). Errores al armar el spill se
+/// degradan a "sin spill" (el history funciona igual, sólo pierde el
+/// archivo de archive).
+fn build_surf_history(config: &shuma_config::Config) -> llimphi_widget_terminal::Scrollback {
+    let limit_bytes = config.scrollback.limit_mb.saturating_mul(1024 * 1024);
+    let mut sb = llimphi_widget_terminal::Scrollback::new(limit_bytes);
+    if config.scrollback.spill {
+        let path = if !config.scrollback.spill_path.is_empty() {
+            PathBuf::from(&config.scrollback.spill_path)
+        } else {
+            let dir = std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .unwrap_or_else(|| std::env::temp_dir());
+            dir.join(format!("shuma-{}.spill", std::process::id()))
+        };
+        if let Ok(spill) = llimphi_widget_terminal::SpillStore::create(&path) {
+            sb.enable_spill(spill);
+        }
+        // Sin spill si falló crear el archivo — no es fatal, el shell sigue.
+    }
+    sb
+}
 
 /// Appendea el texto de `line` a la `Scrollback` persistente sólo si es una
 /// línea de **body** (no Prompt, no salida de etapa intermedia, no notice
