@@ -3219,12 +3219,16 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "marker-end" => parse_marker_ref(value).map(DeclKind::MarkerEnd),
         "mask-type" => parse_mask_type(value).map(DeclKind::MaskType),
         "mask-mode" => parse_mask_mode(value).map(DeclKind::MaskMode),
-        "mask-clip" => parse_mask_clip(value).map(DeclKind::MaskClip),
+        // Fase 7.693-7.697 — la familia `-webkit-mask-*` (longhands) es el
+        // alias vendor (de facto) de `mask-*`: mismo parser/almacén.
+        "mask-clip" | "-webkit-mask-clip" => parse_mask_clip(value).map(DeclKind::MaskClip),
         "mask-composite" => {
             parse_mask_composite(value).map(DeclKind::MaskComposite)
         }
-        "mask-origin" => parse_mask_origin(value).map(DeclKind::MaskOrigin),
-        "mask-repeat" => {
+        "mask-origin" | "-webkit-mask-origin" => {
+            parse_mask_origin(value).map(DeclKind::MaskOrigin)
+        }
+        "mask-repeat" | "-webkit-mask-repeat" => {
             // Reusa `parse_background_repeat` (devuelve `DeclKind::BackgroundRepeat`);
             // extraemos el valor y lo reemitimos como `MaskRepeat`.
             match parse_background_repeat(value) {
@@ -3234,13 +3238,13 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 _ => None,
             }
         }
-        "mask-position" => match parse_background_position(value) {
+        "mask-position" | "-webkit-mask-position" => match parse_background_position(value) {
             Some(DeclKind::BackgroundPosition(p)) => {
                 Some(DeclKind::MaskPosition(p))
             }
             _ => None,
         },
-        "mask-size" => match parse_background_size(value) {
+        "mask-size" | "-webkit-mask-size" => match parse_background_size(value) {
             Some(DeclKind::BackgroundSize(sz)) => {
                 Some(DeclKind::MaskSize(sz))
             }
