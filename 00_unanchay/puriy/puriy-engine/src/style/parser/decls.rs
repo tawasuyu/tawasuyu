@@ -919,8 +919,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "appearance" | "-webkit-appearance" | "-moz-appearance" => {
             parse_appearance(value).map(DeclKind::Appearance)
         }
-        "font-kerning" => parse_font_kerning(value).map(DeclKind::FontKerning),
-        "font-feature-settings" => {
+        // Fase 7.745 — alias `-webkit-font-kerning` → estándar.
+        "font-kerning" | "-webkit-font-kerning" => parse_font_kerning(value).map(DeclKind::FontKerning),
+        // Fase 7.746 — alias `-webkit-font-feature-settings` → estándar.
+        "font-feature-settings" | "-webkit-font-feature-settings" => {
             Some(DeclKind::FontFeatureSettings(parse_font_feature_settings(value)))
         }
         "font-variation-settings" => {
@@ -1709,7 +1711,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         },
         // Fase 7.525 — `initial-letter` shorthand (CSS Inline 3). HEREDA.
         // Parse opaco hasta que un layout de drop-cap lo necesite.
-        "initial-letter" => {
+        // Fase 7.747 — alias `-webkit-initial-letter` → estándar.
+        "initial-letter" | "-webkit-initial-letter" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("normal") {
@@ -3210,7 +3213,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         "text-justify" => parse_text_justify(value).map(DeclKind::TextJustify),
         // `color-adjust` es alias legacy de `print-color-adjust`.
-        "print-color-adjust" | "color-adjust" => {
+        // Fase 7.748 — alias `-webkit-print-color-adjust` → estándar.
+        "print-color-adjust" | "color-adjust" | "-webkit-print-color-adjust" => {
             parse_print_color_adjust(value).map(DeclKind::PrintColorAdjust)
         }
         "forced-color-adjust" => {
@@ -3253,7 +3257,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_text_emphasis_position(value).map(DeclKind::TextEmphasisPosition)
         }
         // `text-emphasis` shorthand: ver `parse_declarations`.
-        "ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
+        // Fase 7.749 — alias `-webkit-ruby-position` → estándar.
+        "ruby-position" | "-webkit-ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
         // Fase 7.662 — `-webkit-transform-origin` alias vendor del shorthand.
         "transform-origin" | "-webkit-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
