@@ -261,8 +261,22 @@ fn decode(buf: &[u8]) -> Option<Vec<(String, Vec<u8>, u64)>> {
 mod tests {
     use super::*;
 
+    /// Los tests que tocan el caché GLOBAL (`clear`/`get`/`put`) compiten por el
+    /// mismo `OnceLock<Mutex<CacheInner>>` de proceso: el `clear()` de uno pisa el
+    /// estado de otro si corren en paralelo. Este mutex los serializa. Recuperamos
+    /// el lock envenenado (`into_inner`) para que un test que haga panic con el
+    /// guard tomado no tumbe a los demás con un fallo espurio de poison.
+    static GLOBAL_CACHE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    fn lock_global_cache() -> std::sync::MutexGuard<'static, ()> {
+        GLOBAL_CACHE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn get_miss_y_put_round_trip() {
+        let _guard = lock_global_cache();
         clear();
         assert!(get("https://x.test/a").is_none());
         put("https://x.test/a", b"hola".to_vec());
@@ -300,6 +314,7 @@ mod tests {
 
     #[test]
     fn ttl_expirada_se_trata_como_miss() {
+        let _guard = lock_global_cache();
         clear();
         // Insertar con expiración 0 = ya vencida.
         put_with_expiry("https://stale.test/", b"old".to_vec(), 0);
@@ -315,6 +330,7 @@ mod tests {
 
     #[test]
     fn eviccion_cuando_supera_cap() {
+        let _guard = lock_global_cache();
         clear();
         // Llenamos con 65 MB en 13 entradas de 5 MB.
         let big = vec![0u8; 5 * 1024 * 1024];
