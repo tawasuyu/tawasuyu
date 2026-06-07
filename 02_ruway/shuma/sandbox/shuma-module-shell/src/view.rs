@@ -2287,6 +2287,12 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         if let Some(f) = &state.find {
             kids.push(find_bar_view::<HostMsg>(f, theme, lift));
         }
+        // Status del spill: chip que muestra "N líneas archivadas" cuando
+        // el history persistente ya recortó al disco. Sólo visible si
+        // spill está activo y hay contenido archivado.
+        if let Some(status) = spill_status_view::<HostMsg>(state, theme) {
+            kids.push(status);
+        }
         kids.push(surface);
         // El menú contextual va como overlay arriba de todo.
         if let Some(menu) = surf_context_menu(state, theme, lift) {
@@ -2294,6 +2300,42 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         }
         kids
     })
+}
+
+/// Chip de status del spill del scrollback: "≡ N líneas archivadas en
+/// <path>". Sólo aparece si `state.surf_history.spilled_count() > 0`
+/// (es decir, el archivo de spill tiene contenido — la sesión llenó el
+/// cap en memoria y siguió volcando a disco). `None` mientras esté vacío.
+fn spill_status_view<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+) -> Option<View<HostMsg>> {
+    let count = state.surf_history.lock().ok().map(|h| h.spilled_count()).unwrap_or(0);
+    if count == 0 {
+        return None;
+    }
+    Some(
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(2.0_f32),
+                bottom: length(2.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .text_aligned(
+            format!("≡ {count} líneas archivadas en spill"),
+            10.0,
+            theme.fg_muted,
+            Alignment::Start,
+        )
+        .mono(),
+    )
 }
 
 /// Menú contextual del surface (click derecho): Copiar selección · Copiar
