@@ -36,8 +36,8 @@
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect};
 use llimphi_ui::llimphi_raster::peniko::{color::AlphaColor, Color, Fill, Gradient};
-use llimphi_ui::{PaintRect, View};
-use llimphi_theme::{alpha, radius, Theme};
+use llimphi_ui::{PaintRect, Shadow, View};
+use llimphi_theme::{alpha, elevation, radius, Theme};
 
 /// Token bundle de la firma visual.
 #[derive(Debug, Clone, Copy)]
@@ -182,6 +182,27 @@ pub fn panel_view<Msg: Clone + 'static>(
     .radius(style.radius)
     .clip(true)
     .children(children)
+}
+
+/// Variante elevada: agrega una sombra del nivel `elev` (token de
+/// [`llimphi_theme::elevation`]) al `panel_view`. Para dropdowns,
+/// popovers y dashboards que necesitan separación clara del fondo.
+/// Pasar `elevation::E2` para cards, `E3` para menús contextuales,
+/// `E4` para modales.
+pub fn panel_elevated_view<Msg: Clone + 'static>(
+    children: Vec<View<Msg>>,
+    style: PanelStyle,
+    elev: elevation::Elev,
+) -> View<Msg> {
+    let (a, blur, dy) = elev;
+    let shadow = Shadow {
+        color: Color::from_rgba8(0, 0, 0, a),
+        blur,
+        dx: 0.0,
+        dy,
+        spread: 0.0,
+    };
+    panel_view(children, style).shadow(shadow)
 }
 
 // =====================================================================

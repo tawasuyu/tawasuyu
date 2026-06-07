@@ -27,9 +27,9 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::View;
+use llimphi_ui::{Shadow, View};
 use llimphi_icons::{icon_view, Icon};
-use llimphi_theme::radius;
+use llimphi_theme::{elevation, motion, radius};
 
 /// Severidad del toast — define color e icono.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +187,19 @@ fn single_toast_view<Msg: Clone + 'static>(toast: &Toast, on_dismiss: Msg) -> Vi
     })
     .text_aligned(toast.text.clone(), 12.0, fg, Alignment::Start);
 
+    // Sombra E3 + entrada/salida animada (key estable = id del toast):
+    // el toast aparece con fade-in suave y, al expirar/dismiss, su
+    // subescena se reproduce con fade-out — sin necesidad de tween
+    // manual en la app.
+    let (alpha, blur, dy) = elevation::E3;
+    let shadow = Shadow {
+        color: Color::from_rgba8(0, 0, 0, alpha),
+        blur,
+        dx: 0.0,
+        dy,
+        spread: 0.0,
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -211,6 +224,8 @@ fn single_toast_view<Msg: Clone + 'static>(toast: &Toast, on_dismiss: Msg) -> Vi
     })
     .fill(bg)
     .radius(radius::MD)
+    .shadow(shadow)
+    .animated_inout(toast.id, motion::NORMAL)
     .clip(true)
     .on_click(on_dismiss)
     .children(vec![rail, icon_cell, text])

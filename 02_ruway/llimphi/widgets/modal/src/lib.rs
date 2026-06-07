@@ -23,8 +23,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
-use llimphi_ui::View;
-use llimphi_theme::{alpha, radius, Theme};
+use llimphi_ui::{Shadow, View};
+use llimphi_theme::{alpha, elevation, motion, radius, Theme};
 use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 /// Paleta del modal.
@@ -212,6 +212,21 @@ pub fn modal_view<Msg: Clone + 'static>(spec: ModalSpec<Msg>) -> View<Msg> {
     })
     .children(btn_children);
 
+    // Sombra E4 + entrada animada (ease_out_cubic, FAST). El `key`
+    // estable se deriva del puntero a `spec.title` — alcanza para que
+    // una sola firma de modal viva en el frame. Si la app necesita
+    // múltiples modales animados independientemente, pasar un `key`
+    // propio (todavía no expuesto en la API — se agrega cuando aparezca
+    // ese caller).
+    let (sh_a, sh_blur, sh_dy) = elevation::E4;
+    let modal_shadow = Shadow {
+        color: Color::from_rgba8(0, 0, 0, sh_a),
+        blur: sh_blur,
+        dx: 0.0,
+        dy: sh_dy,
+        spread: 0.0,
+    };
+    let panel_key: u64 = 0x4d4f44414c00_u64 ^ (w as u64) ^ ((h as u64) << 8);
     let panel = View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -229,6 +244,8 @@ pub fn modal_view<Msg: Clone + 'static>(spec: ModalSpec<Msg>) -> View<Msg> {
     })
     .paint_with(panel_signature_painter(palette.panel))
     .radius(palette.panel.radius)
+    .shadow(modal_shadow)
+    .animated_enter(panel_key, motion::FAST)
     .clip(true)
     .children(vec![header, separator, body_wrap, buttons_row]);
 

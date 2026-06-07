@@ -15,7 +15,8 @@ use llimphi_ui::llimphi_layout::taffy::{
     Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::View;
+use llimphi_ui::{Shadow, View};
+use llimphi_theme::elevation;
 use llimphi_widget_panel::{panel_signature_painter, PanelStyle};
 
 #[derive(Debug, Clone, Copy)]
@@ -143,4 +144,27 @@ pub fn card_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .children(vec![accent_strip, body])
+}
+
+/// Variante elevada — la misma forma de `card_view` pero con sombra
+/// del nivel `elev` (token de [`llimphi_theme::elevation`]). Default
+/// pensado: `elevation::E2` (card flotante sobre el panel). El accent
+/// strip — si está presente — queda detrás de la sombra; el visual
+/// dominante es el body. Útil para dashboards y entries destacadas
+/// que necesitan separación clara del fondo del panel.
+pub fn card_elevated_view<Msg: Clone + 'static>(
+    children: Vec<View<Msg>>,
+    opts: CardOptions,
+    palette: &CardPalette,
+    elev: elevation::Elev,
+) -> View<Msg> {
+    let (a, blur, dy) = elev;
+    let shadow = Shadow {
+        color: Color::from_rgba8(0, 0, 0, a),
+        blur,
+        dx: 0.0,
+        dy,
+        spread: 0.0,
+    };
+    card_view(children, opts, palette).shadow(shadow)
 }
