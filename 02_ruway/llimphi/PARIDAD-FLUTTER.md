@@ -338,6 +338,59 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     ms: card 80×40 → 320×120 en 200 ms con ease-out cúbico; sibling
     se desplaza por el `gap` del row a medida que el card crece —
     evidencia del reflow del cascade).
+16. ✅ **Bloque 16 = cierre parcial de Tier 5 (scroll anidado + auto-hide
+    + fling-desde-drag)** — 2026-06-07.
+    - **Scroll anidado.** Nueva `hit_test_scroll_chain` (render.rs) que
+      devuelve TODOS los nodos con `on_scroll` que contienen el punto,
+      ordenados front→back (recorrido pre-orden idéntico a `hit_test_pred`
+      pero acumulando + reverse al final). El runtime
+      (`llimphi-ui::eventloop`) itera la cadena en `MouseWheel` (main y
+      secondary) y se queda con el primer handler que devuelva `Some`. El
+      widget `scroll_y`/`scroll_xy` devuelve `None` cuando el delta
+      empuja hacia un extremo donde ya está topado (`offset <= 0` con
+      `dy<0`, `offset >= max_offset` con `dy>0`) — el evento "pasa" al
+      ancestro scrollable más cercano (lista dentro de panel, lista
+      anidada en sliver). Retrocompatible: handlers que siempre retornan
+      `Some` siguen consumiendo igual que antes. Test
+      `hit_test_scroll_chain_devuelve_front_to_back`.
+    - **Scrollbar tenue (auto-hide visual ligero).** `ScrollPalette`
+      gana `thumb_idle_alpha: f32` (default `DEFAULT_THUMB_IDLE_ALPHA =
+      0.55`). El widget multiplica el alpha del `palette.thumb` por ese
+      factor para el fill en reposo; el `hover_fill` (`palette.thumb_hover`)
+      queda intacto, así pasar el cursor sobre la barra recupera el alpha
+      completo. Reproduce el patrón Chromium/Edge/Safari "thumb tenue
+      siempre visible, brillante al hover". Para preservar el look
+      anterior, `ScrollPalette::default().opaque()` lo lleva a `1.0`.
+      Auto-hide real (thumb invisible→aparece al scroll→fade-out tras N
+      ms) queda como Bloque futuro porque exige un registro retenido en
+      el runtime (estilo `AnimRegistry`/`RippleRegistry`) y reset por
+      evento. Cambio visual menor en todas las apps que usan
+      `ScrollPalette::default()` — visualmente más sutil, mismas
+      affordances.
+    - **Fling-desde-drag (captura de velocidad).** Nuevo tipo
+      `DragVelocityFn<Msg> = Fn(DragPhase, dx, dy, vx, vy) ->
+      Option<Msg>` (compositor) + nuevo campo `drag_velocity` en `View`
+      y `MountedNode` + setter `View::draggable_velocity(F)`. El runtime
+      extiende `DragHandlerKind` con la variante `Velocity` (gana sobre
+      `Delta`/`DeltaAt`) y `DragState` con un buffer móvil
+      `samples: VecDeque<(Instant, dx, dy)>` recortado a
+      `VELOCITY_MAX_SAMPLES = 8`. En `DragPhase::Move` se agrega el
+      sample (`vx == vy == 0` en el handler durante Move). En
+      `DragPhase::End` se invoca `compute_drag_velocity(samples, now)`,
+      que filtra samples dentro de `VELOCITY_WINDOW = 100 ms` y devuelve
+      `(suma_dx / dt, suma_dy / dt)` en px/s — el caller recibe
+      `Msg::Fling { vx, vy }` y arranca un ticker que decae con
+      `fling_step` hasta asentar. Cubierto por
+      `velocidad_de_drag_promedia_dentro_de_la_ventana` (4 casos: ventana
+      normal, buffer vacío, todas viejas, eje `y`). Aplica al main y al
+      secondary del eventloop.
+
+    Lo que NO cubre este bloque (queda para v2 de Tier 5): scrollbar
+    auto-hide REAL con timer (registro retenido en runtime),
+    pull-to-refresh (patrón móvil), scrollbar siempre invisible en
+    overflow=hidden, scroll anidado **con sobrante parcial**
+    (hoy es "consume todo o nada por eje" — no se reparte un mismo evento
+    entre child y padre), builder de lista sticky llave-en-mano.
 
 ## Tier 7 — detalle (accesibilidad)
 

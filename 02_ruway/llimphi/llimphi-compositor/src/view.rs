@@ -25,6 +25,7 @@ impl<Msg> View<Msg> {
             on_middle_click: None,
             drag: None,
             drag_at: None,
+            drag_velocity: None,
             drag_payload: None,
             on_drop: None,
             drop_hover_fill: None,
@@ -592,6 +593,24 @@ impl<Msg> View<Msg> {
         F: Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.drag_at = Some(Arc::new(handler));
+        self
+    }
+
+    /// Como [`Self::draggable`] pero el handler recibe además la **velocidad
+    /// del drag al soltarlo** (`vx`, `vy` en px/s) en la fase
+    /// `DragPhase::End` — `Fn(DragPhase, dx, dy, vx, vy) -> Option<Msg>`. El
+    /// runtime mide el desplazamiento sobre los últimos ~100 ms y lo divide
+    /// por el tiempo transcurrido. Durante `DragPhase::Move`, `vx == vy == 0`
+    /// (la velocidad sólo se calcula al final). **Gana sobre `draggable` y
+    /// `draggable_at`** si conviven en el mismo nodo — un nodo elige un
+    /// único sabor de drag. Habilita **fling-desde-drag**: el caller emite
+    /// `Msg::Fling { vx, vy }` en End y arranca un ticker que decae la
+    /// velocidad con [`fling_step`] hasta asentar.
+    pub fn draggable_velocity<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.drag_velocity = Some(Arc::new(handler));
         self
     }
 

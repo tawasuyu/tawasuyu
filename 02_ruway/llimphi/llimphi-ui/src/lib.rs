@@ -647,12 +647,16 @@ struct OverlayCache<Msg> {
     hover_idx: Option<usize>,
 }
 
-/// Dos sabores de handler de drag activo: el simple `(phase, dx, dy)`
-/// o la variante que conserva la posición local del press original
-/// `(phase, dx, dy, lx0, ly0)`. El runtime elige uno al iniciar el drag.
+/// Tres sabores de handler de drag activo: el simple `(phase, dx, dy)`;
+/// la variante que conserva la posición local del press original
+/// `(phase, dx, dy, lx0, ly0)`; o el handler **con velocidad** que recibe
+/// también `(vx, vy)` al `DragPhase::End` (medida sobre los últimos
+/// [`VELOCITY_WINDOW`] de movimiento). El runtime elige uno al iniciar el
+/// drag — un nodo es uno u otro.
 enum DragHandlerKind<Msg> {
     Delta(DragFn<Msg>),
     DeltaAt(DragAtFn<Msg>, f32, f32),
+    Velocity(DragVelocityFn<Msg>),
 }
 
 /// Un handler de gesto "tipo click" (doble-tap / long-press) ya **resuelto**
@@ -720,6 +724,48 @@ struct DragState<Msg> {
     /// origen no declaró ninguno (drag de resize/scroll/etc.). Los drop
     /// targets sólo reaccionan cuando hay payload.
     payload: Option<u64>,
+    /// Buffer móvil de (timestamp, dx, dy) por cada `CursorMoved` durante
+    /// el drag, recortado a [`VELOCITY_MAX_SAMPLES`]. Sólo se usa cuando el
+    /// handler es [`DragHandlerKind::Velocity`] — en los otros sabores
+    /// queda vacío. Al `DragPhase::End` el runtime computa la velocidad
+    /// sobre la ventana [`VELOCITY_WINDOW`].
+    samples: std::collections::VecDeque<(std::time::Instant, f64, f64)>,
+}
+
+/// Ventana temporal sobre la que se mide la velocidad de un drag al
+/// soltarlo. Movimientos más viejos no cuentan — sólo importa el último
+/// flick. ~100 ms es el valor que usa Android para fling.
+const VELOCITY_WINDOW: std::time::Duration = std::time::Duration::from_millis(100);
+/// Tope superior de muestras retenidas en el buffer móvil de velocidad —
+/// con eventos típicos de 60–120 Hz, ocho muestras cubren la ventana
+/// holgadamente. Más allá es ruido y costo.
+const VELOCITY_MAX_SAMPLES: usize = 8;
+
+/// Velocidad (px/s) calculada sobre los últimos [`VELOCITY_WINDOW`] de
+/// movimiento. Toma sólo las muestras dentro de la ventana, suma los
+/// deltas y divide por el tiempo transcurrido desde la primera muestra
+/// retenida hasta `now`. Función pura para testear sin event loop.
+fn compute_drag_velocity(
+    samples: &std::collections::VecDeque<(std::time::Instant, f64, f64)>,
+    now: std::time::Instant,
+) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0);
+    }
+    let cutoff = now.checked_sub(VELOCITY_WINDOW).unwrap_or(now);
+    let recent: Vec<&(std::time::Instant, f64, f64)> =
+        samples.iter().filter(|(t, _, _)| *t >= cutoff).collect();
+    if recent.is_empty() {
+        return (0.0, 0.0);
+    }
+    let t0 = recent[0].0;
+    let dt = now.duration_since(t0).as_secs_f32();
+    if dt < 0.001 {
+        return (0.0, 0.0);
+    }
+    let sum_dx: f64 = recent.iter().map(|(_, dx, _)| *dx).sum();
+    let sum_dy: f64 = recent.iter().map(|(_, _, dy)| *dy).sum();
+    ((sum_dx as f32) / dt, (sum_dy as f32) / dt)
 }
 
 /// Punto de entrada: corre el bucle Elm hasta que el usuario cierre la
@@ -744,6 +790,37 @@ pub fn run<A: App>() {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn velocidad_de_drag_promedia_dentro_de_la_ventana() {
+        use std::collections::VecDeque;
+        let now = Instant::now();
+        // Cuatro muestras dentro de la ventana (últimos 80 ms): 4 px en x cada
+        // 20 ms ⇒ 16 px en 80 ms ⇒ 200 px/s.
+        let mut samples: VecDeque<(Instant, f64, f64)> = VecDeque::new();
+        samples.push_back((now - Duration::from_millis(80), 4.0, 0.0));
+        samples.push_back((now - Duration::from_millis(60), 4.0, 0.0));
+        samples.push_back((now - Duration::from_millis(40), 4.0, 0.0));
+        samples.push_back((now - Duration::from_millis(20), 4.0, 0.0));
+        let (vx, vy) = compute_drag_velocity(&samples, now);
+        assert!((vx - 200.0).abs() < 1.0, "vx={vx}");
+        assert!(vy.abs() < 1e-3);
+        // Buffer vacío → (0,0).
+        let empty: VecDeque<(Instant, f64, f64)> = VecDeque::new();
+        assert_eq!(compute_drag_velocity(&empty, now), (0.0, 0.0));
+        // Muestras todas más viejas que VELOCITY_WINDOW → (0,0) (no hay
+        // movimiento reciente para fling).
+        let mut old: VecDeque<(Instant, f64, f64)> = VecDeque::new();
+        old.push_back((now - Duration::from_millis(500), 10.0, 10.0));
+        assert_eq!(compute_drag_velocity(&old, now), (0.0, 0.0));
+        // Eje y positivo (scroll vertical típico): 5 px cada 25 ms ⇒ 200 px/s.
+        let mut vy_samples: VecDeque<(Instant, f64, f64)> = VecDeque::new();
+        vy_samples.push_back((now - Duration::from_millis(75), 0.0, 5.0));
+        vy_samples.push_back((now - Duration::from_millis(50), 0.0, 5.0));
+        vy_samples.push_back((now - Duration::from_millis(25), 0.0, 5.0));
+        let (_, vy) = compute_drag_velocity(&vy_samples, now);
+        assert!((vy - 200.0).abs() < 1.0, "vy={vy}");
+    }
 
     #[test]
     fn double_tap_ventana_y_distancia() {

@@ -37,6 +37,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_middle_click,
         drag,
         drag_at,
+        drag_velocity,
         drag_payload,
         on_drop,
         drop_hover_fill,
@@ -85,6 +86,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_middle_click,
         drag,
         drag_at,
+        drag_velocity,
         drag_payload,
         on_drop,
         drop_hover_fill,
@@ -815,6 +817,7 @@ pub fn hit_test_click<Msg>(
             || n.on_click_at.is_some()
             || n.drag.is_some()
             || n.drag_at.is_some()
+            || n.drag_velocity.is_some()
     })
 }
 
@@ -893,6 +896,86 @@ pub fn hit_test_scroll<Msg>(
     y: f32,
 ) -> Option<usize> {
     hit_test_pred(mounted, computed, x, y, |n| n.on_scroll.is_some())
+}
+
+/// Cadena de **scroll anidado**: devuelve todos los nodos con `on_scroll`
+/// que contienen el punto, ordenados **front→back** (el primero es el más
+/// al frente, igual que [`hit_test_scroll`]; los siguientes son sus
+/// ancestros scrollables). El runtime itera la cadena al recibir la rueda
+/// y se queda con el primer handler que devuelva `Some`: si un scroll
+/// interno está en el extremo del eje y devuelve `None`, el evento "pasa"
+/// al ancestro scrollable más cercano (lista dentro de panel, etc.).
+/// Recorrido idéntico al de [`hit_test_pred`] pero acumulando todos los
+/// hits en vez de pisar.
+pub fn hit_test_scroll_chain<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Vec<usize> {
+    let mut chain: Vec<usize> = Vec::new();
+    let mut clip_stack: Vec<usize> = Vec::new();
+    let mut xf_stack: Vec<(usize, Affine)> = Vec::new();
+    let mut cur_xf = Affine::IDENTITY;
+    let mut idx = 0;
+    while idx < mounted.nodes.len() {
+        while let Some(&end) = clip_stack.last() {
+            if idx >= end {
+                clip_stack.pop();
+            } else {
+                break;
+            }
+        }
+        while let Some(&(end, prev)) = xf_stack.last() {
+            if idx >= end {
+                cur_xf = prev;
+                xf_stack.pop();
+            } else {
+                break;
+            }
+        }
+        let node = &mounted.nodes[idx];
+        let Some(r) = computed.get(node.id) else {
+            idx += 1;
+            continue;
+        };
+        if let Some(local) = node.transform {
+            let cx = (r.x + r.w * 0.5) as f64;
+            let cy = (r.y + r.h * 0.5) as f64;
+            let centered =
+                Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy));
+            xf_stack.push((node.subtree_end, cur_xf));
+            cur_xf *= centered;
+        }
+        let (lx, ly) = if xf_stack.is_empty() {
+            (x as f64, y as f64)
+        } else if cur_xf.determinant().abs() < 1e-9 {
+            idx = node.subtree_end;
+            continue;
+        } else {
+            let p = cur_xf.inverse() * Point::new(x as f64, y as f64);
+            (p.x, p.y)
+        };
+        let inside = lx >= r.x as f64
+            && lx < (r.x + r.w) as f64
+            && ly >= r.y as f64
+            && ly < (r.y + r.h) as f64;
+        if node.clip {
+            if !inside {
+                idx = node.subtree_end;
+                continue;
+            }
+            clip_stack.push(node.subtree_end);
+        }
+        if inside && node.on_scroll.is_some() {
+            chain.push(idx);
+        }
+        idx += 1;
+    }
+    // El recorrido es pre-orden, así que los ancestros aparecen primero y
+    // los hijos después. Para front→back necesitamos el orden inverso.
+    chain.reverse();
+    chain
 }
 
 /// Hit-test específico para gestos de **escala** (pinch-to-zoom): el nodo más
@@ -1154,6 +1237,39 @@ mod tests {
         assert_eq!(hit_test_scale(&m, &c, 150.0, 25.0), Some(0));
         // Fuera del canvas → None.
         assert_eq!(hit_test_scale(&m, &c, 350.0, 350.0), None);
+    }
+
+    #[test]
+    fn hit_test_scroll_chain_devuelve_front_to_back() {
+        use crate::hit_test_scroll_chain;
+        // Padre scrollable 200×200 con un hijo scrollable 100×100 (arriba-izq).
+        // Bajo el hijo: chain = [hijo, padre]. Bajo el padre pero fuera del
+        // hijo: chain = [padre]. Fuera de ambos: chain vacío.
+        let hijo = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(100.0) },
+            ..Default::default()
+        })
+        .on_scroll(|_dx, _dy| None::<()>);
+        let padre = View::<()>::new(Style {
+            size: Size { width: length(200.0), height: length(200.0) },
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .on_scroll(|_dx, _dy| None::<()>)
+        .children(vec![hijo]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, padre);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        // Sobre el hijo (0..100,0..100) → chain = [hijo=1, padre=0].
+        let ch = hit_test_scroll_chain(&m, &c, 50.0, 50.0);
+        assert_eq!(ch, vec![1, 0]);
+        // Sobre el padre fuera del hijo (x>100) → chain = [padre=0].
+        let ch = hit_test_scroll_chain(&m, &c, 150.0, 50.0);
+        assert_eq!(ch, vec![0]);
+        // Fuera del padre → chain vacío.
+        let ch = hit_test_scroll_chain(&m, &c, 350.0, 350.0);
+        assert!(ch.is_empty());
     }
 
     #[test]

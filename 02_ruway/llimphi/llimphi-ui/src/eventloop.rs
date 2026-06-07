@@ -352,6 +352,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             DragHandlerKind::DeltaAt(h, lx0, ly0) => {
                                 h(DragPhase::Move, dx, dy, *lx0, *ly0)
                             }
+                            DragHandlerKind::Velocity(h) => {
+                                // Durante Move, vx=vy=0 — la velocidad sólo
+                                // tiene sentido al End. Acá registramos el
+                                // sample para esa medición.
+                                let now = std::time::Instant::now();
+                                drag.samples.push_back((now, dx as f64, dy as f64));
+                                while drag.samples.len() > VELOCITY_MAX_SAMPLES {
+                                    drag.samples.pop_front();
+                                }
+                                h(DragPhase::Move, dx, dy, 0.0, 0.0)
+                            }
                         };
                         if let Some(msg) = msg_opt {
                             let model = state.model.take().expect("model");
@@ -557,31 +568,44 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         return;
                     }
                 }
-                // Primero: ¿hay un nodo con `on_scroll` bajo el cursor? Si
-                // consume el evento (`Some`), no cae al `on_wheel` global.
+                // Primero: ¿hay nodos con `on_scroll` bajo el cursor? Se
+                // arma la **cadena** (front→back) y se invoca cada handler
+                // en orden; el primero que devuelva `Some` consume el
+                // evento. Un scroll interno que llegó al extremo de su eje
+                // puede devolver `None` para dejar el sobrante al ancestro
+                // scrollable más cercano (scroll anidado). Si todos
+                // devuelven `None`, cae al `on_wheel` global.
                 // El overlay tiene prioridad, igual que con clicks. Se
-                // extrae el handler en un scope para soltar el borrow del
-                // cache antes de mutar el modelo.
-                let scroll_handler: Option<ScrollFn<A::Msg>> =
+                // extraen los handlers en un scope para soltar el borrow
+                // del cache antes de mutar el modelo.
+                let scroll_chain: Vec<ScrollFn<A::Msg>> =
                     if let Some(cache) = state.last_render.as_ref() {
                         let (m, c) = match cache.overlay.as_ref() {
                             Some(ov) => (&ov.mounted, &ov.computed),
                             None => (&cache.mounted, &cache.computed),
                         };
-                        hit_test_scroll(m, c, cursor.0, cursor.1)
-                            .and_then(|i| m.nodes[i].on_scroll.clone())
+                        hit_test_scroll_chain(m, c, cursor.0, cursor.1)
+                            .into_iter()
+                            .filter_map(|i| m.nodes[i].on_scroll.clone())
+                            .collect()
                     } else {
-                        None
+                        Vec::new()
                     };
-                let msg = match scroll_handler {
-                    Some(h) => h(wd.x, wd.y),
-                    None => A::on_wheel(
+                let mut msg: Option<A::Msg> = None;
+                for h in &scroll_chain {
+                    if let Some(m) = h(wd.x, wd.y) {
+                        msg = Some(m);
+                        break;
+                    }
+                }
+                if msg.is_none() {
+                    msg = A::on_wheel(
                         state.model.as_ref().expect("model"),
                         wd,
                         cursor,
                         state.modifiers,
-                    ),
-                };
+                    );
+                }
                 if let Some(msg) = msg {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
@@ -714,11 +738,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     state.last_render = None;
                     state.window.request_redraw();
                 }
-                // Tupla: (drag_fn, drag_at_fn, payload, on_click_msg,
-                //         on_click_at_handler, rect: (x, y, w, h))
+                // Tupla: (drag_fn, drag_at_fn, drag_velocity_fn, payload,
+                //         on_click_msg, on_click_at_handler,
+                //         rect: (x, y, w, h))
                 type HitInfo<M> = (
                     Option<DragFn<M>>,
                     Option<DragAtFn<M>>,
+                    Option<DragVelocityFn<M>>,
                     Option<u64>,
                     Option<M>,
                     Option<ClickAtFn<M>>,
@@ -731,6 +757,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         (
                             node.drag.clone(),
                             node.drag_at.clone(),
+                            node.drag_velocity.clone(),
                             node.drag_payload,
                             node.on_click.clone(),
                             node.on_click_at.clone(),
@@ -795,16 +822,25 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         lookup_hit(&mounted, &computed)
                     }
                 };
-                // drag_at + on_click_at COEXISTEN: el press dispara
-                // on_click_at (si está) y arranca un drag rastreado con la
-                // posición inicial. Diseño pensado para canvas elements
-                // que necesitan select-on-press + move-on-drag.
-                //
-                // En cambio, `drag` simple (sin _at) mantiene la semántica
-                // antigua: gana exclusivo sobre on_click.
-                if let Some((_, Some(handler_at), payload, _, click_at, Some((ox, oy, rw, rh)))) =
+                // Prioridad: drag_velocity > drag_at + on_click_at > drag >
+                // on_click_at > on_click. `drag_velocity` gana exclusivo
+                // (no convive con on_click_at) — el caller que lo elige
+                // suele querer un fling físico puro (lienzos pan-and-fling).
+                if let Some((_, _, Some(handler_v), payload, _, _, _)) = &idx_and_action {
+                    state.drag = Some(DragState {
+                        handler: DragHandlerKind::Velocity(handler_v.clone()),
+                        last_cursor: cursor,
+                        payload: *payload,
+                        samples: std::collections::VecDeque::with_capacity(VELOCITY_MAX_SAMPLES),
+                    });
+                    state.window.request_redraw();
+                } else if let Some((_, Some(handler_at), _, payload, _, click_at, Some((ox, oy, rw, rh)))) =
                     &idx_and_action
                 {
+                    // drag_at + on_click_at COEXISTEN: el press dispara
+                    // on_click_at (si está) y arranca un drag rastreado con
+                    // la posición inicial. Diseño pensado para canvas
+                    // elements que necesitan select-on-press + move-on-drag.
                     let lx0 = cursor.x as f32 - ox;
                     let ly0 = cursor.y as f32 - oy;
                     // Disparar on_click_at en el press (si también está).
@@ -819,13 +855,17 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         handler: DragHandlerKind::DeltaAt(handler_at.clone(), lx0, ly0),
                         last_cursor: cursor,
                         payload: *payload,
+                        samples: std::collections::VecDeque::new(),
                     });
                     state.window.request_redraw();
-                } else if let Some((Some(handler), _, payload, _, _, _)) = &idx_and_action {
+                } else if let Some((Some(handler), _, _, payload, _, _, _)) = &idx_and_action {
+                    // `drag` simple (sin _at, sin velocity) mantiene la
+                    // semántica antigua: gana exclusivo sobre on_click.
                     state.drag = Some(DragState {
                         handler: DragHandlerKind::Delta(handler.clone()),
                         last_cursor: cursor,
                         payload: *payload,
+                        samples: std::collections::VecDeque::new(),
                     });
                     // Si hay payload, repintar para que el drop target
                     // bajo cursor (si lo hay) se ilumine de entrada.
@@ -843,7 +883,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                             }
                         }
                     }
-                } else if let Some((_, _, _, _, Some(handler), Some((ox, oy, rw, rh)))) =
+                } else if let Some((_, _, _, _, _, Some(handler), Some((ox, oy, rw, rh)))) =
                     &idx_and_action
                 {
                     // on_click_at gana sobre on_click si ambos existen.
@@ -855,7 +895,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.last_render = None;
                         state.window.request_redraw();
                     }
-                } else if let Some((_, _, _, Some(msg), _, _)) = idx_and_action {
+                } else if let Some((_, _, _, _, Some(msg), _, _)) = idx_and_action {
                     let model = state.model.take().expect("model");
                     state.model = Some(A::update(model, msg, &self.handle));
                     state.last_render = None;
@@ -984,6 +1024,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         DragHandlerKind::Delta(h) => h(DragPhase::End, 0.0, 0.0),
                         DragHandlerKind::DeltaAt(h, lx0, ly0) => {
                             h(DragPhase::End, 0.0, 0.0, *lx0, *ly0)
+                        }
+                        DragHandlerKind::Velocity(h) => {
+                            let (vx, vy) =
+                                compute_drag_velocity(&drag.samples, std::time::Instant::now());
+                            h(DragPhase::End, 0.0, 0.0, vx, vy)
                         }
                     };
                     if let Some(msg) = end_msg {
@@ -1755,6 +1800,14 @@ impl<A: App> Runtime<A> {
                                 DragHandlerKind::DeltaAt(h, lx0, ly0) => {
                                     h(DragPhase::Move, dx, dy, *lx0, *ly0)
                                 }
+                                DragHandlerKind::Velocity(h) => {
+                                    let now = std::time::Instant::now();
+                                    drag.samples.push_back((now, dx as f64, dy as f64));
+                                    while drag.samples.len() > VELOCITY_MAX_SAMPLES {
+                                        drag.samples.pop_front();
+                                    }
+                                    h(DragPhase::Move, dx, dy, 0.0, 0.0)
+                                }
                             };
                         }
                         redraw = true;
@@ -1782,6 +1835,7 @@ impl<A: App> Runtime<A> {
                 type SecHit<M> = (
                     Option<DragFn<M>>,
                     Option<DragAtFn<M>>,
+                    Option<DragVelocityFn<M>>,
                     Option<u64>,
                     Option<M>,
                     Option<ClickAtFn<M>>,
@@ -1798,6 +1852,7 @@ impl<A: App> Runtime<A> {
                                 (
                                     node.drag.clone(),
                                     node.drag_at.clone(),
+                                    node.drag_velocity.clone(),
                                     node.drag_payload,
                                     node.on_click.clone(),
                                     node.on_click_at.clone(),
@@ -1807,10 +1862,19 @@ impl<A: App> Runtime<A> {
                         )
                     })
                 };
-                // Misma prioridad que la primaria: drag_at + on_click_at, luego
-                // drag simple, luego on_click_at, luego on_click.
+                // Misma prioridad que la primaria: drag_velocity > drag_at +
+                // on_click_at > drag simple > on_click_at > on_click.
                 match hit {
-                    Some((_, Some(handler_at), payload, _, click_at, Some((ox, oy, rw, rh)))) => {
+                    Some((_, _, Some(handler_v), payload, _, _, _)) => {
+                        self.secondaries[idx].drag = Some(DragState {
+                            handler: DragHandlerKind::Velocity(handler_v),
+                            last_cursor: cursor,
+                            payload,
+                            samples: std::collections::VecDeque::with_capacity(VELOCITY_MAX_SAMPLES),
+                        });
+                        self.render_secondary(idx);
+                    }
+                    Some((_, Some(handler_at), _, payload, _, click_at, Some((ox, oy, rw, rh)))) => {
                         let lx0 = cursor.x as f32 - ox;
                         let ly0 = cursor.y as f32 - oy;
                         if let Some(h) = click_at {
@@ -1822,25 +1886,27 @@ impl<A: App> Runtime<A> {
                             handler: DragHandlerKind::DeltaAt(handler_at, lx0, ly0),
                             last_cursor: cursor,
                             payload,
+                            samples: std::collections::VecDeque::new(),
                         });
                         self.render_secondary(idx);
                     }
-                    Some((Some(handler), _, payload, _, _, _)) => {
+                    Some((Some(handler), _, _, payload, _, _, _)) => {
                         self.secondaries[idx].drag = Some(DragState {
                             handler: DragHandlerKind::Delta(handler),
                             last_cursor: cursor,
                             payload,
+                            samples: std::collections::VecDeque::new(),
                         });
                         self.render_secondary(idx);
                     }
-                    Some((_, _, _, _, Some(handler), Some((ox, oy, rw, rh)))) => {
+                    Some((_, _, _, _, _, Some(handler), Some((ox, oy, rw, rh)))) => {
                         let lx = cursor.x as f32 - ox;
                         let ly = cursor.y as f32 - oy;
                         if let Some(msg) = handler(lx, ly, rw, rh) {
                             self.dispatch_and_render_secondary(idx, msg);
                         }
                     }
-                    Some((_, _, _, Some(msg), _, _)) => {
+                    Some((_, _, _, _, Some(msg), _, _)) => {
                         self.dispatch_and_render_secondary(idx, msg);
                     }
                     _ => {}
@@ -1869,6 +1935,11 @@ impl<A: App> Runtime<A> {
                     let end_msg = match &drag.handler {
                         DragHandlerKind::Delta(h) => h(DragPhase::End, 0.0, 0.0),
                         DragHandlerKind::DeltaAt(h, lx0, ly0) => h(DragPhase::End, 0.0, 0.0, *lx0, *ly0),
+                        DragHandlerKind::Velocity(h) => {
+                            let (vx, vy) =
+                                compute_drag_velocity(&drag.samples, std::time::Instant::now());
+                            h(DragPhase::End, 0.0, 0.0, vx, vy)
+                        }
                     };
                     if let Some(msg) = end_msg {
                         self.dispatch_model(msg);
@@ -1885,14 +1956,31 @@ impl<A: App> Runtime<A> {
                     },
                 };
                 let cursor = self.secondaries[idx].cursor;
-                let handler = {
+                let chain: Vec<ScrollFn<A::Msg>> = {
                     let sec = &self.secondaries[idx];
-                    sec.last_render.as_ref().and_then(|c| {
-                        hit_test_scroll(&c.mounted, &c.computed, cursor.x as f32, cursor.y as f32)
-                            .and_then(|i| c.mounted.nodes[i].on_scroll.clone())
-                    })
+                    sec.last_render
+                        .as_ref()
+                        .map(|c| {
+                            hit_test_scroll_chain(
+                                &c.mounted,
+                                &c.computed,
+                                cursor.x as f32,
+                                cursor.y as f32,
+                            )
+                            .into_iter()
+                            .filter_map(|i| c.mounted.nodes[i].on_scroll.clone())
+                            .collect()
+                        })
+                        .unwrap_or_default()
                 };
-                if let Some(msg) = handler.and_then(|h| h(wd.x, wd.y)) {
+                let mut msg: Option<A::Msg> = None;
+                for h in &chain {
+                    if let Some(m) = h(wd.x, wd.y) {
+                        msg = Some(m);
+                        break;
+                    }
+                }
+                if let Some(msg) = msg {
                     self.dispatch_and_render_secondary(idx, msg);
                 }
             }

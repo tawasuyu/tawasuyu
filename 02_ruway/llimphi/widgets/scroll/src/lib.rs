@@ -65,6 +65,12 @@ pub const DEFAULT_LINE_PX: f32 = 48.0;
 /// Ancho de la barra de scroll en px.
 pub const DEFAULT_BAR_WIDTH: f32 = 10.0;
 
+/// Factor de alpha por defecto para el thumb en reposo — tenue moderno
+/// estilo Chromium/Edge/Safari: visible pero discreto. Al hover sobre la
+/// barra recupera alpha completo. `1.0` reproduce el comportamiento
+/// histórico (thumb siempre opaco).
+pub const DEFAULT_THUMB_IDLE_ALPHA: f32 = 0.55;
+
 /// Colores de la barra de scroll.
 #[derive(Debug, Clone, Copy)]
 pub struct ScrollPalette {
@@ -77,6 +83,12 @@ pub struct ScrollPalette {
     /// Ancho de la barra y px por línea de rueda.
     pub bar_width: f32,
     pub line_px: f32,
+    /// Multiplicador de alpha aplicado al `thumb` en reposo. `1.0` deja
+    /// el color sin tocar (comportamiento legacy); `≤ 0.0` esconde el
+    /// thumb del todo en reposo. El `hover_fill` no se ve afectado: al
+    /// pasar el cursor sobre la barra el thumb recupera el alpha completo
+    /// del `thumb_hover`.
+    pub thumb_idle_alpha: f32,
 }
 
 impl Default for ScrollPalette {
@@ -93,7 +105,16 @@ impl ScrollPalette {
             thumb_hover: t.accent,
             bar_width: DEFAULT_BAR_WIDTH,
             line_px: DEFAULT_LINE_PX,
+            thumb_idle_alpha: DEFAULT_THUMB_IDLE_ALPHA,
         }
+    }
+
+    /// Devuelve la `ScrollPalette` con el comportamiento histórico (thumb
+    /// opaco en reposo, sin auto-hide visual). Para apps que dependen del
+    /// look anterior al cambio del 2026-06-07.
+    pub fn opaque(mut self) -> Self {
+        self.thumb_idle_alpha = 1.0;
+        self
     }
 }
 
@@ -322,7 +343,7 @@ where
             },
             ..Default::default()
         })
-        .fill(palette.thumb)
+        .fill(palette.thumb.multiply_alpha(palette.thumb_idle_alpha.clamp(0.0, 1.0)))
         .hover_fill(palette.thumb_hover)
         .radius((palette.bar_width * 0.5) as f64)
         .draggable(move |phase, _dx, dy| match phase {
@@ -355,8 +376,16 @@ where
     // Viewport: alto fijo, ancho del padre, contenido recortado, rueda
     // local. Position::Relative para ser el bloque contenedor de los
     // hijos absolutos.
+    //
+    // **Scroll anidado**: si el delta del eje vertical es hacia un extremo
+    // donde ya estamos topados (offset = 0 con dy<0, u offset = max con
+    // dy>0), devolvemos `None` para que el runtime propague el evento al
+    // ancestro scrollable más cercano (lista dentro de panel, etc.).
     let line_px = palette.line_px;
     let on_wheel = on_scroll;
+    let max_off = max_offset(content_len, viewport_len);
+    let at_top = offset <= 0.0;
+    let at_bottom = offset >= max_off;
     View::new(Style {
         position: Position::Relative,
         size: Size {
@@ -366,7 +395,13 @@ where
         ..Default::default()
     })
     .clip(true)
-    .on_scroll(move |_dx, dy| Some((on_wheel)(dy * line_px)))
+    .on_scroll(move |_dx, dy| {
+        let delta = dy * line_px;
+        if (delta < 0.0 && at_top) || (delta > 0.0 && at_bottom) {
+            return None;
+        }
+        Some((on_wheel)(delta))
+    })
     .children(children)
 }
 
@@ -424,7 +459,7 @@ where
             size: Size { width: length(palette.bar_width), height: length(thumb_h) },
             ..Default::default()
         })
-        .fill(palette.thumb)
+        .fill(palette.thumb.multiply_alpha(palette.thumb_idle_alpha.clamp(0.0, 1.0)))
         .hover_fill(palette.thumb_hover)
         .radius((palette.bar_width * 0.5) as f64)
         .draggable(move |phase, _dx, dy| match phase {
@@ -452,7 +487,7 @@ where
             size: Size { width: length(thumb_w), height: length(palette.bar_width) },
             ..Default::default()
         })
-        .fill(palette.thumb)
+        .fill(palette.thumb.multiply_alpha(palette.thumb_idle_alpha.clamp(0.0, 1.0)))
         .hover_fill(palette.thumb_hover)
         .radius((palette.bar_width * 0.5) as f64)
         .draggable(move |phase, dx, _dy| match phase {
@@ -470,8 +505,18 @@ where
         children.push(track);
     }
 
+    // Scroll anidado 2D: si el delta NETO está bloqueado en ambos ejes
+    // (cada componente cae en un extremo del eje correspondiente),
+    // devolvemos `None` para propagar al ancestro scrollable. Si al menos
+    // un eje aún tiene recorrido, el evento se consume entero (como antes).
     let line_px = palette.line_px;
     let on_wheel = on_scroll;
+    let max_ox = max_offset(cw, vw);
+    let max_oy = max_offset(ch, vh);
+    let at_left = ox <= 0.0;
+    let at_right = ox >= max_ox;
+    let at_top = oy <= 0.0;
+    let at_bottom = oy >= max_oy;
     View::new(Style {
         position: Position::Relative,
         size: Size { width: length(vw), height: length(vh) },
@@ -480,7 +525,20 @@ where
     .clip(true)
     // Rueda: dy = eje vertical; dx = eje horizontal (ratones/touchpads 2D, o
     // Shift+rueda en algunos backends). Ambos en px-línea.
-    .on_scroll(move |dx, dy| Some((on_wheel)(dx * line_px, dy * line_px)))
+    .on_scroll(move |dx, dy| {
+        let ddx = dx * line_px;
+        let ddy = dy * line_px;
+        let x_blocked = (ddx < 0.0 && at_left)
+            || (ddx > 0.0 && at_right)
+            || ddx == 0.0;
+        let y_blocked = (ddy < 0.0 && at_top)
+            || (ddy > 0.0 && at_bottom)
+            || ddy == 0.0;
+        if x_blocked && y_blocked {
+            return None;
+        }
+        Some((on_wheel)(ddx, ddy))
+    })
     .children(children)
 }
 

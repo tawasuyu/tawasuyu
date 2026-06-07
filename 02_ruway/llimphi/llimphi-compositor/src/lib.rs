@@ -143,6 +143,18 @@ pub type ScrollFn<Msg> = Arc<dyn Fn(f32, f32) -> Option<Msg> + Send + Sync>;
 /// Recibe `(phase, dx, dy, initial_lx, initial_ly)`.
 pub type DragAtFn<Msg> = Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
 
+/// Variante de [`DragFn`] que recibe la **velocidad del drag al soltarlo**
+/// (`vx`, `vy` en px/s). El runtime mide el desplazamiento sobre los
+/// últimos ~100 ms de movimiento (ventana móvil de hasta ocho samples)
+/// y la pasa en `DragPhase::End`. Durante `DragPhase::Move` ambas son
+/// `0.0` — la velocidad sólo es significativa al final. Permite
+/// **fling-desde-drag**: el caller arranca un ticker con esa velocidad y
+/// la decae con [`fling_step`](https://docs.rs/) hasta asentar. Reemplaza
+/// la estimación manual que antes tenía que llevar el caller con
+/// `Instant::now()` por su cuenta.
+pub type DragVelocityFn<Msg> =
+    Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Fase de un **gesto continuo** (pinch-to-zoom de momento; rotación a futuro).
 /// El runtime emite `Begin` al iniciar el gesto, `Update` por cada cambio
 /// incremental y `End` al terminar. El camino de Ctrl+rueda (universal, sin
@@ -395,6 +407,12 @@ pub struct View<Msg> {
     /// Variante de drag que recibe la posición inicial del press relativa
     /// al rect del nodo. Gana sobre `drag` si ambos están presentes.
     pub drag_at: Option<DragAtFn<Msg>>,
+    /// Variante de drag que recibe la **velocidad** al soltar (`vx`, `vy`
+    /// en px/s) además del delta puntual. Gana sobre `drag`/`drag_at`
+    /// cuando está presente — un nodo elige un único sabor de drag. Habilita
+    /// fling-desde-drag (el caller arranca un ticker con esa velocidad y la
+    /// decae con [`fling_step`]).
+    pub drag_velocity: Option<DragVelocityFn<Msg>>,
     /// Payload `u64` que viaja con el drag iniciado sobre este nodo. Lo
     /// recibe el handler [`Self::on_drop`] del drop target. Sin payload,
     /// el drag funciona igual pero ningún drop target reacciona.
@@ -688,6 +706,7 @@ pub struct MountedNode<Msg> {
     pub on_middle_click: Option<Msg>,
     pub drag: Option<DragFn<Msg>>,
     pub drag_at: Option<DragAtFn<Msg>>,
+    pub drag_velocity: Option<DragVelocityFn<Msg>>,
     pub drag_payload: Option<u64>,
     pub on_drop: Option<DropFn<Msg>>,
     pub drop_hover_fill: Option<Color>,
