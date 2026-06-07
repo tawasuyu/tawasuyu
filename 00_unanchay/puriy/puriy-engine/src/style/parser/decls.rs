@@ -761,9 +761,17 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_flex_direction(value).map(DeclKind::FlexDirection)
         }
         "flex-wrap" | "-webkit-flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
-        "justify-content" => parse_justify_content(value).map(DeclKind::JustifyContent),
-        "align-items" => parse_align_items(value).map(DeclKind::AlignItems),
-        "align-content" => parse_align_content(value).map(DeclKind::AlignContent),
+        // Fase 7.716-7.718 — alias vendor Flexbox 2012 de la familia de
+        // alineación (-webkit-justify-content / -align-items / -align-content).
+        "justify-content" | "-webkit-justify-content" => {
+            parse_justify_content(value).map(DeclKind::JustifyContent)
+        }
+        "align-items" | "-webkit-align-items" => {
+            parse_align_items(value).map(DeclKind::AlignItems)
+        }
+        "align-content" | "-webkit-align-content" => {
+            parse_align_content(value).map(DeclKind::AlignContent)
+        }
         "justify-items" => parse_justify_items(value).map(DeclKind::JustifyItems),
         "justify-self" => parse_justify_self(value).map(DeclKind::JustifySelf),
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
@@ -802,7 +810,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "white-space" => parse_white_space(value).map(DeclKind::WhiteSpace),
         "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
         "opacity" => parse_opacity(value).map(DeclKind::Opacity),
-        "align-self" => parse_align_self(value).map(DeclKind::AlignSelf),
+        // Fase 7.719 — `-webkit-align-self` alias vendor de `align-self`.
+        "align-self" | "-webkit-align-self" => {
+            parse_align_self(value).map(DeclKind::AlignSelf)
+        }
         "flex-grow" | "-webkit-flex-grow" => {
             value.trim().parse::<f32>().ok().map(DeclKind::FlexGrow)
         }
@@ -1263,7 +1274,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "rx" => parse_length_or_pct(value).map(DeclKind::Rx),
         "ry" => parse_length_or_pct(value).map(DeclKind::Ry),
         // Fase 7.479 — `order` (CSS Flexbox/Grid). `<integer>`. Default 0.
-        "order" => value.trim().parse::<i32>().ok().map(DeclKind::Order),
+        // Fase 7.715 — `-webkit-order` alias vendor de `order`.
+        "order" | "-webkit-order" => {
+            value.trim().parse::<i32>().ok().map(DeclKind::Order)
+        }
         // Fase 7.480 — `path-length` (SVG2). `none | <number>`. NO hereda.
         "path-length" => {
             let v = value.trim();
