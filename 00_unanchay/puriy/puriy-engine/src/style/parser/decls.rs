@@ -839,7 +839,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "overflow-wrap" | "word-wrap" => {
             parse_overflow_wrap(value).map(DeclKind::OverflowWrap)
         }
-        "word-break" => parse_word_break(value).map(DeclKind::WordBreak),
+        // Fase 7.639 — `-epub-word-break` (perfil EPUB) alias de `word-break`.
+        "word-break" | "-epub-word-break" => {
+            parse_word_break(value).map(DeclKind::WordBreak)
+        }
         "hyphens" | "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" => {
             parse_hyphens(value).map(DeclKind::Hyphens)
         }
@@ -1052,7 +1055,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.447 — `text-combine-upright` (CSS Writing Modes 3). NO hereda.
         // Fase 7.633 — `-webkit-text-combine` es el nombre legacy WebKit.
-        "text-combine-upright" | "-webkit-text-combine" => {
+        // Fase 7.641 — `-epub-text-combine` (EPUB) al mismo destino.
+        "text-combine-upright" | "-webkit-text-combine" | "-epub-text-combine" => {
             parse_text_combine_upright(value).map(DeclKind::TextCombineUpright)
         }
         // Fase 7.448 — `ruby-align` (CSS Ruby 1). HEREDA.
@@ -2587,7 +2591,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "table-layout" => parse_table_layout(value).map(DeclKind::TableLayout),
         "border-collapse" => parse_border_collapse(value).map(DeclKind::BorderCollapse),
         "border-spacing" => parse_border_spacing(value).map(|(h, v)| DeclKind::BorderSpacing { h, v }),
-        "caption-side" => parse_caption_side(value).map(DeclKind::CaptionSide),
+        // Fase 7.640 — `-epub-caption-side` (EPUB) alias de `caption-side`.
+        "caption-side" | "-epub-caption-side" => {
+            parse_caption_side(value).map(DeclKind::CaptionSide)
+        }
         "empty-cells" => parse_empty_cells(value).map(DeclKind::EmptyCells),
         // `break-before` / `break-after` (CSS Fragmentation 3) + alias
         // legacy `page-break-before` / `page-break-after` (CSS 2.1, subset
@@ -2633,10 +2640,14 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.634-7.636 — la familia `-webkit-text-emphasis-*` es el alias
         // vendor (de facto) de `text-emphasis-*`: mismo parser/almacén.
-        "text-emphasis-style" | "-webkit-text-emphasis-style" => {
+        // Fase 7.642-7.643 — los `-epub-text-emphasis-{style,color}` (EPUB) al
+        // mismo destino que los estándar/webkit.
+        "text-emphasis-style" | "-webkit-text-emphasis-style"
+        | "-epub-text-emphasis-style" => {
             parse_text_emphasis_style(value).map(DeclKind::TextEmphasisStyle)
         }
-        "text-emphasis-color" | "-webkit-text-emphasis-color" => {
+        "text-emphasis-color" | "-webkit-text-emphasis-color"
+        | "-epub-text-emphasis-color" => {
             if is_current_color(value) {
                 Some(DeclKind::TextEmphasisColor(None))
             } else {
