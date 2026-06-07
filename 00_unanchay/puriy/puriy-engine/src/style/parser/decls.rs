@@ -3145,6 +3145,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitMaskSourceType(Some(v.to_string())))
             }
         }
+        // Fase 7.750 — `-webkit-marquee-direction`. `auto` → None.
+        "-webkit-marquee-direction" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitMarqueeDirection(None))
+            } else {
+                Some(DeclKind::WebkitMarqueeDirection(Some(v.to_string())))
+            }
+        }
+        // Fase 7.751 — `-webkit-marquee-increment`. `6px` → None.
+        "-webkit-marquee-increment" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("6px") {
+                Some(DeclKind::WebkitMarqueeIncrement(None))
+            } else {
+                Some(DeclKind::WebkitMarqueeIncrement(Some(v.to_string())))
+            }
+        }
+        // Fase 7.752 — `-webkit-marquee-repetition`. `infinite` → None.
+        "-webkit-marquee-repetition" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("infinite") {
+                Some(DeclKind::WebkitMarqueeRepetition(None))
+            } else {
+                Some(DeclKind::WebkitMarqueeRepetition(Some(v.to_string())))
+            }
+        }
+        // Fase 7.753 — `-webkit-marquee-speed`. `normal` → None.
+        "-webkit-marquee-speed" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::WebkitMarqueeSpeed(None))
+            } else {
+                Some(DeclKind::WebkitMarqueeSpeed(Some(v.to_string())))
+            }
+        }
+        // Fase 7.754 — `-webkit-marquee-style`. `scroll` → None.
+        "-webkit-marquee-style" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("scroll") {
+                Some(DeclKind::WebkitMarqueeStyle(None))
+            } else {
+                Some(DeclKind::WebkitMarqueeStyle(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

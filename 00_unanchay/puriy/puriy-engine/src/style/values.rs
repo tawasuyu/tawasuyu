@@ -1408,6 +1408,21 @@ pub struct ComputedStyle {
     /// `-webkit-mask-source-type` (Fase 7.734). Interpretación de la máscara
     /// (alpha/luminance). Parse opaco — `None` = `alpha`. NO hereda. Plumb.
     pub webkit_mask_source_type: Option<String>,
+    /// `-webkit-marquee-direction` (Fase 7.750). Eje/sentido del marquee legacy.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_marquee_direction: Option<String>,
+    /// `-webkit-marquee-increment` (Fase 7.751). Salto por iteración del marquee.
+    /// Parse opaco — `None` = `6px`. NO hereda. Plumb.
+    pub webkit_marquee_increment: Option<String>,
+    /// `-webkit-marquee-repetition` (Fase 7.752). Repeticiones del marquee.
+    /// Parse opaco — `None` = `infinite`. NO hereda. Plumb.
+    pub webkit_marquee_repetition: Option<String>,
+    /// `-webkit-marquee-speed` (Fase 7.753). Velocidad del marquee.
+    /// Parse opaco — `None` = `normal`. NO hereda. Plumb.
+    pub webkit_marquee_speed: Option<String>,
+    /// `-webkit-marquee-style` (Fase 7.754). Modo del marquee (scroll/slide/alternate).
+    /// Parse opaco — `None` = `scroll`. NO hereda. Plumb.
+    pub webkit_marquee_style: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4805,6 +4820,11 @@ impl Default for ComputedStyle {
             webkit_margin_collapse: None,
             webkit_border_vertical_spacing: None,
             webkit_mask_source_type: None,
+            webkit_marquee_direction: None,
+            webkit_marquee_increment: None,
+            webkit_marquee_repetition: None,
+            webkit_marquee_speed: None,
+            webkit_marquee_style: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

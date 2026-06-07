@@ -902,6 +902,16 @@ pub(crate) enum DeclKind {
     WebkitBorderVerticalSpacing(Option<String>),
     /// `-webkit-mask-source-type` (Fase 7.734). `None` = `alpha`. NO hereda. Plumb.
     WebkitMaskSourceType(Option<String>),
+    /// `-webkit-marquee-direction` (Fase 7.750). `None` = `auto`. NO hereda. Plumb.
+    WebkitMarqueeDirection(Option<String>),
+    /// `-webkit-marquee-increment` (Fase 7.751). `None` = `6px`. NO hereda. Plumb.
+    WebkitMarqueeIncrement(Option<String>),
+    /// `-webkit-marquee-repetition` (Fase 7.752). `None` = `infinite`. NO hereda. Plumb.
+    WebkitMarqueeRepetition(Option<String>),
+    /// `-webkit-marquee-speed` (Fase 7.753). `None` = `normal`. NO hereda. Plumb.
+    WebkitMarqueeSpeed(Option<String>),
+    /// `-webkit-marquee-style` (Fase 7.754). `None` = `scroll`. NO hereda. Plumb.
+    WebkitMarqueeStyle(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1515,6 +1525,11 @@ impl Decl {
             DeclKind::WebkitMarginCollapse(v) => s.webkit_margin_collapse = v.clone(),
             DeclKind::WebkitBorderVerticalSpacing(v) => s.webkit_border_vertical_spacing = v.clone(),
             DeclKind::WebkitMaskSourceType(v) => s.webkit_mask_source_type = v.clone(),
+            DeclKind::WebkitMarqueeDirection(v) => s.webkit_marquee_direction = v.clone(),
+            DeclKind::WebkitMarqueeIncrement(v) => s.webkit_marquee_increment = v.clone(),
+            DeclKind::WebkitMarqueeRepetition(v) => s.webkit_marquee_repetition = v.clone(),
+            DeclKind::WebkitMarqueeSpeed(v) => s.webkit_marquee_speed = v.clone(),
+            DeclKind::WebkitMarqueeStyle(v) => s.webkit_marquee_style = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
