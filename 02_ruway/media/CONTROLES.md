@@ -166,5 +166,15 @@ ControlSettings(
   saber de tiempo ni duración. `media-app::timeline_strip` ahora sólo calcula la
   fracción del player vivo y mapea el click a `SeekTo`. Reusable por cualquier app
   Llimphi con reproducción (`nahual-video-viewer-llimphi`, decks, etc.).
-- **Futuro (no bloqueante)**: extraer también transport/waveform como
-  `llimphi-widget-{transport,waveform}` siguiendo el mismo molde.
+- **E.2 ✅ — waveform extraído a widget reusable** (2026-06-07). El visor
+  de onda en vivo de `media-app::waveform_panel` (~150 LOC inline) pasó a
+  `llimphi-widget-waveform` siguiendo el molde de timeline: stateless,
+  paint-only, agnóstico de cpal/AudioProbe. El widget toma un closure
+  `Fn(&mut Vec<f32>) -> u16` (samples intercalados + canales) y pinta
+  envelope min/max + línea central + relleno tenue. `media-app` queda con
+  ~25 LOC de cableado (paleta + closure sobre el slot del probe). 4 tests
+  del widget + cargo check workspace verde.
+- **Futuro (no bloqueante)**: extraer transport como `llimphi-widget-transport`
+  — requiere abstraer el dominio de `MediaCommand` (hoy cada `BarItem` conoce
+  las variantes del enum). Patrón posible: trait `TransportAction` + closure
+  por botón.

@@ -4186,156 +4186,39 @@ fn fulltrack_waveform_view() -> View<Msg> {
     })
 }
 
+/// Visor de waveform en vivo — delegación al widget transversal.
+///
+/// Antes este panel era ~150 LOC inline (envelope min/max + stroke + fill +
+/// línea central). Hoy `llimphi-widget-waveform` cubre todo eso; acá sólo
+/// armamos la paleta con los colores que ya usaba la app (verde menta sobre
+/// fondo casi-negro) y el closure que samplea el `AudioProbe`. Si el slot
+/// del probe está vacío, el closure devuelve `0` canales y el widget pinta
+/// sólo la línea central — mismo fallback "visor vivo, sin señal" que antes.
 fn waveform_panel<Msg: 'static>() -> View<Msg> {
     let probe = audio_probe_slot().get().cloned().flatten();
-    let scratch: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
-    let stroke_color = Color::from_rgba8(120, 220, 170, 255);
-    let center_color = Color::from_rgba8(80, 92, 110, 255);
-    let off_label = probe.is_none();
-
-    View::new(Style {
-        size: Size {
-            width: auto(),
-            height: percent(1.0_f32),
+    let palette = llimphi_widget_waveform::WaveformPalette {
+        bg: Color::from_rgba8(14, 16, 22, 255),
+        center: Color::from_rgba8(80, 92, 110, 255),
+        stroke: Color::from_rgba8(120, 220, 170, 255),
+        fill: Color::from_rgba8(120, 220, 170, 70),
+        radius: 8.0,
+        pad_x: 12.0,
+        pad_y: 8.0,
+        stroke_w: 1.2,
+    };
+    llimphi_widget_waveform::waveform_view(
+        move |out| match probe.as_ref() {
+            Some(p) => {
+                let (_sr, channels) = p.snapshot(out);
+                channels
+            }
+            None => {
+                out.clear();
+                0
+            }
         },
-        flex_grow: 1.0,
-        ..Default::default()
-    })
-    .fill(Color::from_rgba8(14, 16, 22, 255))
-    .radius(8.0)
-    .paint_with(move |scene, ts, rect| {
-        if rect.w <= 4.0 || rect.h <= 4.0 {
-            return;
-        }
-        let pad_x: f32 = 12.0;
-        let pad_y: f32 = 8.0;
-        let inner_x = rect.x + pad_x;
-        let inner_y = rect.y + pad_y;
-        let inner_w = (rect.w - 2.0 * pad_x).max(1.0);
-        let inner_h = (rect.h - 2.0 * pad_y).max(1.0);
-        let mid_y = inner_y + inner_h * 0.5;
-
-        // Línea central — siempre presente, hace de "ground" del visor.
-        let mut center = BezPath::new();
-        center.move_to((inner_x as f64, mid_y as f64));
-        center.line_to(((inner_x + inner_w) as f64, mid_y as f64));
-        scene.stroke(
-            &Stroke::new(1.0),
-            Affine::IDENTITY,
-            center_color,
-            None,
-            &center,
-        );
-
-        if off_label {
-            // Sin probe: leyenda mínima para que se sepa que el visor
-            // está vivo aunque no haya señal.
-            let _ = ts;
-            return;
-        }
-        let Some(probe) = probe.as_ref() else {
-            return;
-        };
-
-        let mut snap = scratch.lock();
-        let (_sr, channels) = probe.snapshot(&mut snap);
-        let channels = channels.max(1) as usize;
-        let total_frames = snap.len() / channels;
-        if total_frames < 2 {
-            return;
-        }
-
-        // Envelope min/max por columna: por cada bucket de frames
-        // guardamos el mínimo y el máximo del mono fold y dibujamos
-        // la forma como un polígono cerrado (relleno tenue + stroke).
-        // Da mucho más "cuerpo" que la línea pico-sólo.
-        let cols = inner_w.max(2.0) as usize;
-        let cols = cols.min(total_frames);
-        let frames_per_col = total_frames / cols.max(1);
-        if frames_per_col == 0 {
-            return;
-        }
-        let amp = inner_h * 0.5;
-
-        let mut top = BezPath::new();
-        let mut bot = BezPath::new();
-        let mut envelope = BezPath::new();
-        for col in 0..cols {
-            let f0 = col * frames_per_col;
-            let f1 = ((col + 1) * frames_per_col).min(total_frames);
-            let mut vmin = f32::INFINITY;
-            let mut vmax = f32::NEG_INFINITY;
-            for f in f0..f1 {
-                let mut acc = 0.0_f32;
-                for ch in 0..channels {
-                    acc += snap[f * channels + ch];
-                }
-                let v = (acc / channels as f32).clamp(-1.0, 1.0);
-                if v < vmin {
-                    vmin = v;
-                }
-                if v > vmax {
-                    vmax = v;
-                }
-            }
-            let x = inner_x + (col as f32 / (cols as f32 - 1.0).max(1.0)) * inner_w;
-            let y_top = mid_y - vmax * amp;
-            let y_bot = mid_y - vmin * amp;
-            if col == 0 {
-                top.move_to((x as f64, y_top as f64));
-                bot.move_to((x as f64, y_bot as f64));
-                envelope.move_to((x as f64, y_top as f64));
-            } else {
-                top.line_to((x as f64, y_top as f64));
-                bot.line_to((x as f64, y_bot as f64));
-                envelope.line_to((x as f64, y_top as f64));
-            }
-        }
-        // Cierre del polígono envelope: vuelve por la línea de
-        // mínimos en sentido inverso.
-        for col in (0..cols).rev() {
-            let f0 = col * frames_per_col;
-            let f1 = ((col + 1) * frames_per_col).min(total_frames);
-            let mut vmin = f32::INFINITY;
-            for f in f0..f1 {
-                let mut acc = 0.0_f32;
-                for ch in 0..channels {
-                    acc += snap[f * channels + ch];
-                }
-                let v = (acc / channels as f32).clamp(-1.0, 1.0);
-                if v < vmin {
-                    vmin = v;
-                }
-            }
-            let x = inner_x + (col as f32 / (cols as f32 - 1.0).max(1.0)) * inner_w;
-            let y_bot = mid_y - vmin * amp;
-            envelope.line_to((x as f64, y_bot as f64));
-        }
-        envelope.close_path();
-
-        let fill_color = Color::from_rgba8(120, 220, 170, 70);
-        scene.fill(
-            Fill::NonZero,
-            Affine::IDENTITY,
-            fill_color,
-            None,
-            &envelope,
-        );
-        scene.stroke(
-            &Stroke::new(1.2),
-            Affine::IDENTITY,
-            stroke_color,
-            None,
-            &top,
-        );
-        scene.stroke(
-            &Stroke::new(1.2),
-            Affine::IDENTITY,
-            stroke_color,
-            None,
-            &bot,
-        );
-    })
+        &palette,
+    )
 }
 
 /// Botón compacto del row del título: tamaño fijo, hover azulado y

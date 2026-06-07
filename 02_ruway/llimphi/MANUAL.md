@@ -820,6 +820,23 @@ nodegraph_view(&nodes, &wires, &palette, &metrics,
 **timeline** — scrub clickeable. `timeline_view(progress: f32, &palette,
 on_seek: Fn(f32 [0..1])->Option<Msg>)`.
 
+**waveform** — visor de **forma de onda en vivo**. Stateless y agnóstico de
+cpal/AudioProbe: el caller pasa un closure `Fn(&mut Vec<f32>) -> u16` que
+rellena un buffer con los últimos samples intercalados y devuelve cuántos
+**canales** trae; el widget hace el fold a mono y dibuja un **envelope
+min/max por columna** (polígono cerrado con relleno tenue + stroke top/bot)
+sobre una línea central que siempre está como "ground" — paint-only, sin
+mouse. Si el closure devuelve `0` canales, el widget pinta sólo la línea
+central ("visor vivo, sin señal").
+```rust
+WaveformPalette { bg, center, stroke, fill, radius, pad_x, pad_y, stroke_w }
+WaveformPalette::from_theme(&Theme)  // bg=bg_panel_alt, stroke=accent, fill=accent@α70
+waveform_view(source: Fn(&mut Vec<f32>) -> u16 + Send + Sync + 'static,
+              palette: &WaveformPalette) -> View<Msg>
+```
+Consumidor de referencia: `02_ruway/media/media-app::waveform_panel` (cablea
+un `AudioProbe::snapshot`).
+
 **table** — tabla **editable** de celdas-texto: filas/columnas + agregar/quitar
 fila + foco por celda. Stateless — la app posee el foco y el buffer de la
 celda en edición; el resto se pinta desde `&rows`. Pensado para datos planos
@@ -1195,7 +1212,7 @@ navigator · nodegraph · panel · panes · progress · segmented · select ·
 shortcuts-help · skeleton · slider · splash · splitter · stat-card · status-bar ·
 switch · table · tabs · terminal · text-area · text-editor · text-editor-core ·
 text-editor-lsp · text-input · theme-switcher · tiled · timeline · toast ·
-tooltip · tree · wawa-mark.
+tooltip · tree · waveform · wawa-mark.
 
 **Módulos** (`modules/`): bookmarks · command-palette · diff-viewer · fif ·
 file-picker · mini-map · plugin-host · selector · shuma-term · symbol-outline.

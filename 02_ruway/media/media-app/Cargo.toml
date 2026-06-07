@@ -20,6 +20,7 @@ llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 llimphi-widget-shortcuts-help = { workspace = true }
 llimphi-widget-timeline = { workspace = true }
+llimphi-widget-waveform = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
 llimphi-module-command-palette = { workspace = true }

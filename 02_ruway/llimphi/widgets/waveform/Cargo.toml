@@ -1,0 +1,12 @@
+[package]
+name = "llimphi-widget-waveform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-waveform — visor de forma de onda en vivo (envelope min/max relleno + línea central + contorno). Stateless y agnóstico: el caller pasa un closure que rellena un buffer de samples y devuelve la cantidad de canales (fold a mono interno)."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }

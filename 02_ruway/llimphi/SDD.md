@@ -112,7 +112,7 @@ Apps actualmente en GPUI que deben portarse:
 ### Pendiente
 - Runtime sobre framebuffer de `wawa` (`WawaFramebufferSurface`) reusando el compositor winit-free — habilitado por el split pero aún no escrito.
 - Backend GPU directo: sin MSAA/AA fino, sin texto, una sola `line_width` por flush; falta primer caller real denso (cosmos starfield) que mida una falla concreta antes de extender shaders.
-- Widgets `llimphi-widget-{transport, waveform}` aún por extraer (la nota de media los deja como futuro no bloqueante).
+- Widgets `llimphi-widget-{transport, waveform}`: `waveform` ✅ extraído (2026-06-07) — visor de envelope min/max stateless y agnóstico, consumido por `media-app::waveform_panel` (~150 LOC inline pasaron a ~25 LOC de cableado). `transport` queda como futuro no bloqueante (controles play/pause/prev/next configurables vía `BarItem`; la extracción requiere abstraer el dominio de `MediaCommand`).
 - Investigación abierta: cuelgue/deadlock de apps Llimphi tras click/scroll (hipótesis `get_current_texture` Wayland FIFO) — pendiente reproducir+backtrace.
 
 ## Estado — bitácora histórica
