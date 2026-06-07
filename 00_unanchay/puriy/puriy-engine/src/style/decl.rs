@@ -880,6 +880,18 @@ pub(crate) enum DeclKind {
     WebkitBorderAfterStyle(Option<String>),
     /// `-webkit-border-after-width` (Fase 7.703). `None` = `medium`. NO hereda. Plumb.
     WebkitBorderAfterWidth(Option<String>),
+    /// `-webkit-border-start-color` (Fase 7.704). `None` = `currentcolor`. NO hereda. Plumb.
+    WebkitBorderStartColor(Option<String>),
+    /// `-webkit-border-start-style` (Fase 7.705). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderStartStyle(Option<String>),
+    /// `-webkit-border-start-width` (Fase 7.706). `None` = `medium`. NO hereda. Plumb.
+    WebkitBorderStartWidth(Option<String>),
+    /// `-webkit-border-end-color` (Fase 7.707). `None` = `currentcolor`. NO hereda. Plumb.
+    WebkitBorderEndColor(Option<String>),
+    /// `-webkit-border-end-style` (Fase 7.708). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderEndStyle(Option<String>),
+    /// `-webkit-border-end-width` (Fase 7.709). `None` = `medium`. NO hereda. Plumb.
+    WebkitBorderEndWidth(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1482,6 +1494,12 @@ impl Decl {
             DeclKind::WebkitBorderAfterColor(v) => s.webkit_border_after_color = v.clone(),
             DeclKind::WebkitBorderAfterStyle(v) => s.webkit_border_after_style = v.clone(),
             DeclKind::WebkitBorderAfterWidth(v) => s.webkit_border_after_width = v.clone(),
+            DeclKind::WebkitBorderStartColor(v) => s.webkit_border_start_color = v.clone(),
+            DeclKind::WebkitBorderStartStyle(v) => s.webkit_border_start_style = v.clone(),
+            DeclKind::WebkitBorderStartWidth(v) => s.webkit_border_start_width = v.clone(),
+            DeclKind::WebkitBorderEndColor(v) => s.webkit_border_end_color = v.clone(),
+            DeclKind::WebkitBorderEndStyle(v) => s.webkit_border_end_style = v.clone(),
+            DeclKind::WebkitBorderEndWidth(v) => s.webkit_border_end_width = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

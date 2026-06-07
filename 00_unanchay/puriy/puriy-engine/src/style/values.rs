@@ -1375,6 +1375,24 @@ pub struct ComputedStyle {
     /// `-webkit-border-after-width` (Fase 7.703). Longhand legacy de
     /// `border-block-end-width`. Parse opaco — `None` = `medium`. NO hereda. Plumb.
     pub webkit_border_after_width: Option<String>,
+    /// `-webkit-border-start-color` (Fase 7.704). Longhand legacy de
+    /// `border-inline-start-color`. Parse opaco — `None` = `currentcolor`. NO hereda. Plumb.
+    pub webkit_border_start_color: Option<String>,
+    /// `-webkit-border-start-style` (Fase 7.705). Longhand legacy de
+    /// `border-inline-start-style`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_border_start_style: Option<String>,
+    /// `-webkit-border-start-width` (Fase 7.706). Longhand legacy de
+    /// `border-inline-start-width`. Parse opaco — `None` = `medium`. NO hereda. Plumb.
+    pub webkit_border_start_width: Option<String>,
+    /// `-webkit-border-end-color` (Fase 7.707). Longhand legacy de
+    /// `border-inline-end-color`. Parse opaco — `None` = `currentcolor`. NO hereda. Plumb.
+    pub webkit_border_end_color: Option<String>,
+    /// `-webkit-border-end-style` (Fase 7.708). Longhand legacy de
+    /// `border-inline-end-style`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_border_end_style: Option<String>,
+    /// `-webkit-border-end-width` (Fase 7.709). Longhand legacy de
+    /// `border-inline-end-width`. Parse opaco — `None` = `medium`. NO hereda. Plumb.
+    pub webkit_border_end_width: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4761,6 +4779,12 @@ impl Default for ComputedStyle {
             webkit_border_after_color: None,
             webkit_border_after_style: None,
             webkit_border_after_width: None,
+            webkit_border_start_color: None,
+            webkit_border_start_style: None,
+            webkit_border_start_width: None,
+            webkit_border_end_color: None,
+            webkit_border_end_style: None,
+            webkit_border_end_width: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
