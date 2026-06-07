@@ -310,6 +310,17 @@ deja el shell funcionando (flag de migración hasta la Fase 5).
 
 ## Estado
 
-Diseño. Sin implementar. Pendiente de arranque por fases (Fase 0 primero). Decisión de
-construir tomada con el usuario 2026-06-05; el control nuevo se justifica por el techo
-arquitectónico de ~500 líneas y por la eficiencia GPU-directo en grilla/TUI.
+**Implementado al 2026-06-07.** Fases 0-5 ✅ (foundation, virtualización, bloques, selección + copy + find, GPU grid behind `SHUMA_GPU_GRID=1`, pulido y migración con default flippeado a surface). La superficie es **el path por defecto**; el legacy queda accesible con `SHUMA_TERMINAL_LEGACY=1` mientras la paridad final cierra.
+
+**Cerrado en Fase 5**:
+- Anclaje estable bajo append (no más jiggle al recibir output mientras se lee historia).
+- Doble-click select-word + triple-click select-line.
+- Scroll inercial (touchpad/wheel decay).
+- Menú contextual right-click (Copiar / Copiar todo / Seleccionar todo).
+- Spill a disco: configurable vía `[scrollback]` en `shumarc.toml`, archive automático al recortar el frente, chip de status en UI, builtin `:scrollback open` para abrirlo con `$EDITOR`.
+
+**Pendiente** (post-Fase 5):
+- Integrar líneas spilled al view (servirlas cuando el usuario scrollea way up — requiere extender el virtualizador para id < dropped via spill async/cache). Hoy el archive se ve mediante `:scrollback open` (fuera del shell).
+- Borrar el `output_pane` viejo + per-command-editor cuando el opt-out `SHUMA_TERMINAL_LEGACY` quede sin uso reportado. Conservador hasta verificar paridad en uso real.
+
+Decisión de construir tomada con el usuario 2026-06-05; ejecución completa de Fase 0 a 5.10 entre 2026-06-06 y 2026-06-07. El control nuevo se justifica por el techo arquitectónico de ~500 líneas del path viejo y por la eficiencia GPU-directo en grilla/TUI.
