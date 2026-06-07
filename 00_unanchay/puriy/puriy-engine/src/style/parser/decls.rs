@@ -755,8 +755,12 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // `list-style` shorthand: ruteado por `parse_declarations` para
         // emitir varias longhands en orden libre. Acá NO se dispatcha.
         "list-style" => None,
-        "flex-direction" => parse_flex_direction(value).map(DeclKind::FlexDirection),
-        "flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
+        // Fase 7.710-7.711 — la familia `-webkit-flex-*` es el alias vendor
+        // (de facto, era prefijado en la era Flexbox 2012) de `flex-*`.
+        "flex-direction" | "-webkit-flex-direction" => {
+            parse_flex_direction(value).map(DeclKind::FlexDirection)
+        }
+        "flex-wrap" | "-webkit-flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
         "justify-content" => parse_justify_content(value).map(DeclKind::JustifyContent),
         "align-items" => parse_align_items(value).map(DeclKind::AlignItems),
         "align-content" => parse_align_content(value).map(DeclKind::AlignContent),
@@ -799,9 +803,15 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
         "opacity" => parse_opacity(value).map(DeclKind::Opacity),
         "align-self" => parse_align_self(value).map(DeclKind::AlignSelf),
-        "flex-grow" => value.trim().parse::<f32>().ok().map(DeclKind::FlexGrow),
-        "flex-shrink" => value.trim().parse::<f32>().ok().map(DeclKind::FlexShrink),
-        "flex-basis" => parse_length_or_pct(value).map(DeclKind::FlexBasis),
+        "flex-grow" | "-webkit-flex-grow" => {
+            value.trim().parse::<f32>().ok().map(DeclKind::FlexGrow)
+        }
+        "flex-shrink" | "-webkit-flex-shrink" => {
+            value.trim().parse::<f32>().ok().map(DeclKind::FlexShrink)
+        }
+        "flex-basis" | "-webkit-flex-basis" => {
+            parse_length_or_pct(value).map(DeclKind::FlexBasis)
+        }
         // `flex` y `outline` son shorthands múltiples — se expanden en
         // `parse_declarations` antes de llegar acá.
         "flex" | "outline" => None,
