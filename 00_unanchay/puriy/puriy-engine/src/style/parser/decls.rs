@@ -1936,6 +1936,54 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::CornerShape(Some(v.to_string())))
             }
         }
+        // Fase 7.559 — `hyphenate-limit-lines` (CSS Text 4). `no-limit` → None.
+        "hyphenate-limit-lines" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("no-limit") {
+                Some(DeclKind::HyphenateLimitLines(None))
+            } else {
+                v.parse::<u32>().ok().map(|n| DeclKind::HyphenateLimitLines(Some(n)))
+            }
+        }
+        // Fase 7.560 — `hyphenate-limit-last` (CSS Text 4).
+        "hyphenate-limit-last" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::HyphenateLimitLast(HyphenateLimitLast::None)),
+            "always" => Some(DeclKind::HyphenateLimitLast(HyphenateLimitLast::Always)),
+            "column" => Some(DeclKind::HyphenateLimitLast(HyphenateLimitLast::Column)),
+            "page" => Some(DeclKind::HyphenateLimitLast(HyphenateLimitLast::Page)),
+            "spread" => Some(DeclKind::HyphenateLimitLast(HyphenateLimitLast::Spread)),
+            _ => None,
+        },
+        // Fase 7.561 — `hyphenate-limit-zone` (CSS Text 4). `0` → None.
+        "hyphenate-limit-zone" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::HyphenateLimitZone(None))
+            } else {
+                Some(DeclKind::HyphenateLimitZone(Some(v.to_string())))
+            }
+        }
+        // Fase 7.562 — `interest-target` (interest invokers). Parse opaco.
+        "interest-target" => {
+            let v = value.trim();
+            if v.is_empty() || v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::InterestTarget(None))
+            } else {
+                Some(DeclKind::InterestTarget(Some(v.to_string())))
+            }
+        }
+        // Fase 7.563 — `interest-delay-start`. `normal` → None.
+        "interest-delay-start" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::InterestDelayStart(None))
+            } else {
+                Some(DeclKind::InterestDelayStart(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

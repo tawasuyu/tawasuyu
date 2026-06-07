@@ -665,6 +665,16 @@ pub(crate) enum DeclKind {
     ScrollInitialTarget(ScrollInitialTarget),
     /// `corner-shape` (Fase 7.558). `None` = `round`. NO hereda. Plumb.
     CornerShape(Option<String>),
+    /// `hyphenate-limit-lines` (Fase 7.559). `None` = `no-limit`. HEREDA. Plumb.
+    HyphenateLimitLines(Option<u32>),
+    /// `hyphenate-limit-last` (Fase 7.560). HEREDA. Plumb.
+    HyphenateLimitLast(HyphenateLimitLast),
+    /// `hyphenate-limit-zone` (Fase 7.561). `None` = `0`. HEREDA. Plumb.
+    HyphenateLimitZone(Option<String>),
+    /// `interest-target` (Fase 7.562). `None` = sin target. NO hereda. Plumb.
+    InterestTarget(Option<String>),
+    /// `interest-delay-start` (Fase 7.563). `None` = `normal`. NO hereda. Plumb.
+    InterestDelayStart(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1161,6 +1171,11 @@ impl Decl {
             DeclKind::ScrollMarkerGroup(v) => s.scroll_marker_group = *v,
             DeclKind::ScrollInitialTarget(v) => s.scroll_initial_target = *v,
             DeclKind::CornerShape(v) => s.corner_shape = v.clone(),
+            DeclKind::HyphenateLimitLines(v) => s.hyphenate_limit_lines = *v,
+            DeclKind::HyphenateLimitLast(v) => s.hyphenate_limit_last = *v,
+            DeclKind::HyphenateLimitZone(v) => s.hyphenate_limit_zone = v.clone(),
+            DeclKind::InterestTarget(v) => s.interest_target = v.clone(),
+            DeclKind::InterestDelayStart(v) => s.interest_delay_start = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

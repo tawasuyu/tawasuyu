@@ -1044,6 +1044,22 @@ pub struct ComputedStyle {
     /// redondeadas (round/bevel/notch/scoop/squircle…). Parse opaco —
     /// `None` = `round`. NO hereda. Plumb.
     pub corner_shape: Option<String>,
+    /// `hyphenate-limit-lines` (Fase 7.559). CSS Text 4: máx. de líneas
+    /// consecutivas terminadas en guion. `None` = `no-limit`. HEREDA. Plumb.
+    pub hyphenate_limit_lines: Option<u32>,
+    /// `hyphenate-limit-last` (Fase 7.560). CSS Text 4: restringe el guion
+    /// en la última línea de un bloque/columna/página. Default `None`.
+    /// HEREDA. Plumb.
+    pub hyphenate_limit_last: HyphenateLimitLast,
+    /// `hyphenate-limit-zone` (Fase 7.561). CSS Text 4: ancho máx. de la
+    /// zona sin justificar antes de guionar. `None` = `0`. HEREDA. Plumb.
+    pub hyphenate_limit_zone: Option<String>,
+    /// `interest-target` (Fase 7.562). HTML/CSS interest invokers: id del
+    /// elemento que recibe el interés. `None` = sin target. NO hereda. Plumb.
+    pub interest_target: Option<String>,
+    /// `interest-delay-start` (Fase 7.563). Retardo antes de mostrar el
+    /// interés. `None` = `normal`. NO hereda. Plumb.
+    pub interest_delay_start: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2933,6 +2949,17 @@ pub enum ScrollInitialTarget {
     Nearest,
 }
 
+/// `hyphenate-limit-last` (CSS Text 4). Default `None`. Fase 7.560.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HyphenateLimitLast {
+    #[default]
+    None,
+    Always,
+    Column,
+    Page,
+    Spread,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -4233,6 +4260,11 @@ impl Default for ComputedStyle {
             scroll_marker_group: ScrollMarkerGroup::None,
             scroll_initial_target: ScrollInitialTarget::None,
             corner_shape: None,
+            hyphenate_limit_lines: None,
+            hyphenate_limit_last: HyphenateLimitLast::None,
+            hyphenate_limit_zone: None,
+            interest_target: None,
+            interest_delay_start: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
