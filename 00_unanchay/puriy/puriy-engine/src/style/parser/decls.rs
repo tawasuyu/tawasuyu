@@ -2781,7 +2781,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.653 — `-webkit-padding-start`. `0` → None.
-        "-webkit-padding-start" => {
+        // Fase 7.808 — `-moz-padding-start` alias vendor (Gecko, mismo semántico).
+        "-webkit-padding-start" | "-moz-padding-start" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "0" {
@@ -2790,8 +2791,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitPaddingStart(Some(v.to_string())))
             }
         }
-        // Fase 7.654 — `-webkit-padding-end`. `0` → None.
-        "-webkit-padding-end" => {
+        // Fase 7.654 — `-webkit-padding-end` / Fase 7.809 — `-moz-padding-end`. `0` → None.
+        "-webkit-padding-end" | "-moz-padding-end" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "0" {
