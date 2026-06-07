@@ -1011,6 +1011,21 @@ pub struct ComputedStyle {
     /// se recorta el contenido cuando hay overflow. Default `PaddingBox`.
     /// NO hereda. Plumb.
     pub overflow_clip_box: OverflowClipBox,
+    /// `mask-border-source` (Fase 7.549). CSS Masking 1: imagen-fuente del
+    /// borde-máscara. `None` = `none`. NO hereda. Plumb.
+    pub mask_border_source: Option<String>,
+    /// `mask-border-slice` (Fase 7.550). Recorte de la fuente en 9 zonas.
+    /// `None` = `0`. NO hereda. Plumb.
+    pub mask_border_slice: Option<String>,
+    /// `mask-border-width` (Fase 7.551). Ancho de las zonas del borde.
+    /// `None` = `auto`. NO hereda. Plumb.
+    pub mask_border_width: Option<String>,
+    /// `mask-border-outset` (Fase 7.552). Cuánto sobresale el borde de la
+    /// caja. `None` = `0`. NO hereda. Plumb.
+    pub mask_border_outset: Option<String>,
+    /// `mask-border-repeat` (Fase 7.553). Cómo se ajustan los bordes/centro.
+    /// Default `Stretch`. NO hereda. Plumb.
+    pub mask_border_repeat: MaskBorderRepeat,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2856,6 +2871,17 @@ pub enum OverflowClipBox {
     ContentBox,
 }
 
+/// `mask-border-repeat` (CSS Masking 1). Cómo se escala/repite la imagen del
+/// borde-máscara. Default `Stretch`. Fase 7.553.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskBorderRepeat {
+    #[default]
+    Stretch,
+    Repeat,
+    Round,
+    Space,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -4146,6 +4172,11 @@ impl Default for ComputedStyle {
             navigation_right: None,
             counter_increment_style: None,
             overflow_clip_box: OverflowClipBox::PaddingBox,
+            mask_border_source: None,
+            mask_border_slice: None,
+            mask_border_width: None,
+            mask_border_outset: None,
+            mask_border_repeat: MaskBorderRepeat::Stretch,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

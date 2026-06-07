@@ -645,6 +645,16 @@ pub(crate) enum DeclKind {
     CounterIncrementStyle(Option<String>),
     /// `overflow-clip-box` (Fase 7.548). NO hereda. Plumb.
     OverflowClipBox(OverflowClipBox),
+    /// `mask-border-source` (Fase 7.549). `None` = `none`. NO hereda. Plumb.
+    MaskBorderSource(Option<String>),
+    /// `mask-border-slice` (Fase 7.550). `None` = `0`. NO hereda. Plumb.
+    MaskBorderSlice(Option<String>),
+    /// `mask-border-width` (Fase 7.551). `None` = `auto`. NO hereda. Plumb.
+    MaskBorderWidth(Option<String>),
+    /// `mask-border-outset` (Fase 7.552). `None` = `0`. NO hereda. Plumb.
+    MaskBorderOutset(Option<String>),
+    /// `mask-border-repeat` (Fase 7.553). NO hereda. Plumb.
+    MaskBorderRepeat(MaskBorderRepeat),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1131,6 +1141,11 @@ impl Decl {
             DeclKind::NavigationRight(v) => s.navigation_right = v.clone(),
             DeclKind::CounterIncrementStyle(v) => s.counter_increment_style = v.clone(),
             DeclKind::OverflowClipBox(v) => s.overflow_clip_box = *v,
+            DeclKind::MaskBorderSource(v) => s.mask_border_source = v.clone(),
+            DeclKind::MaskBorderSlice(v) => s.mask_border_slice = v.clone(),
+            DeclKind::MaskBorderWidth(v) => s.mask_border_width = v.clone(),
+            DeclKind::MaskBorderOutset(v) => s.mask_border_outset = v.clone(),
+            DeclKind::MaskBorderRepeat(v) => s.mask_border_repeat = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

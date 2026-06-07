@@ -1854,6 +1854,52 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "content-box" => Some(DeclKind::OverflowClipBox(OverflowClipBox::ContentBox)),
             _ => None,
         },
+        // Fase 7.549-7.552 — familia `mask-border-*` (CSS Masking 1). Parse
+        // opaco; el sentinel reservado va a `None`.
+        "mask-border-source" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::MaskBorderSource(None))
+            } else {
+                Some(DeclKind::MaskBorderSource(Some(v.to_string())))
+            }
+        }
+        "mask-border-slice" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::MaskBorderSlice(None))
+            } else {
+                Some(DeclKind::MaskBorderSlice(Some(v.to_string())))
+            }
+        }
+        "mask-border-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::MaskBorderWidth(None))
+            } else {
+                Some(DeclKind::MaskBorderWidth(Some(v.to_string())))
+            }
+        }
+        "mask-border-outset" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::MaskBorderOutset(None))
+            } else {
+                Some(DeclKind::MaskBorderOutset(Some(v.to_string())))
+            }
+        }
+        // Fase 7.553 — `mask-border-repeat` (CSS Masking 1).
+        "mask-border-repeat" => match value.trim().to_ascii_lowercase().as_str() {
+            "stretch" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Stretch)),
+            "repeat" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Repeat)),
+            "round" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Round)),
+            "space" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Space)),
+            _ => None,
+        },
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
