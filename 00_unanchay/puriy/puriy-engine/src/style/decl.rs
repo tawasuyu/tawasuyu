@@ -675,6 +675,16 @@ pub(crate) enum DeclKind {
     InterestTarget(Option<String>),
     /// `interest-delay-start` (Fase 7.563). `None` = `normal`. NO hereda. Plumb.
     InterestDelayStart(Option<String>),
+    /// `interest-delay-end` (Fase 7.564). `None` = `normal`. NO hereda. Plumb.
+    InterestDelayEnd(Option<String>),
+    /// `azimuth` (Fase 7.565). `None` = `center`. HEREDA. Plumb.
+    Azimuth(Option<String>),
+    /// `elevation` (Fase 7.566). `None` = `level`. HEREDA. Plumb.
+    Elevation(Option<String>),
+    /// `richness` (Fase 7.567). 0–100. HEREDA. Plumb.
+    Richness(f32),
+    /// `stress` (Fase 7.568). 0–100. HEREDA. Plumb.
+    Stress(f32),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1176,6 +1186,11 @@ impl Decl {
             DeclKind::HyphenateLimitZone(v) => s.hyphenate_limit_zone = v.clone(),
             DeclKind::InterestTarget(v) => s.interest_target = v.clone(),
             DeclKind::InterestDelayStart(v) => s.interest_delay_start = v.clone(),
+            DeclKind::InterestDelayEnd(v) => s.interest_delay_end = v.clone(),
+            DeclKind::Azimuth(v) => s.azimuth = v.clone(),
+            DeclKind::Elevation(v) => s.elevation = v.clone(),
+            DeclKind::Richness(v) => s.richness = *v,
+            DeclKind::Stress(v) => s.stress = *v,
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

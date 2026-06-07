@@ -1060,6 +1060,21 @@ pub struct ComputedStyle {
     /// `interest-delay-start` (Fase 7.563). Retardo antes de mostrar el
     /// interés. `None` = `normal`. NO hereda. Plumb.
     pub interest_delay_start: Option<String>,
+    /// `interest-delay-end` (Fase 7.564). Retardo antes de ocultar el
+    /// interés. `None` = `normal`. NO hereda. Plumb.
+    pub interest_delay_end: Option<String>,
+    /// `azimuth` (Fase 7.565). CSS 2.1 aural: posición horizontal de la
+    /// fuente sonora. `None` = `center`. HEREDA. Plumb.
+    pub azimuth: Option<String>,
+    /// `elevation` (Fase 7.566). CSS 2.1 aural: posición vertical de la
+    /// fuente sonora. `None` = `level`. HEREDA. Plumb.
+    pub elevation: Option<String>,
+    /// `richness` (Fase 7.567). CSS 2.1 aural: brillo/riqueza de la voz
+    /// (0–100). Default `50.0`. HEREDA. Plumb.
+    pub richness: f32,
+    /// `stress` (Fase 7.568). CSS 2.1 aural: énfasis de la entonación
+    /// (0–100). Default `50.0`. HEREDA. Plumb.
+    pub stress: f32,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4265,6 +4280,11 @@ impl Default for ComputedStyle {
             hyphenate_limit_zone: None,
             interest_target: None,
             interest_delay_start: None,
+            interest_delay_end: None,
+            azimuth: None,
+            elevation: None,
+            richness: 50.0,
+            stress: 50.0,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

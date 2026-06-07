@@ -1984,6 +1984,48 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::InterestDelayStart(Some(v.to_string())))
             }
         }
+        // Fase 7.564 — `interest-delay-end`. `normal` → None.
+        "interest-delay-end" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::InterestDelayEnd(None))
+            } else {
+                Some(DeclKind::InterestDelayEnd(Some(v.to_string())))
+            }
+        }
+        // Fase 7.565 — `azimuth` (CSS 2.1 aural). Parse opaco; `center` → None.
+        "azimuth" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("center") {
+                Some(DeclKind::Azimuth(None))
+            } else {
+                Some(DeclKind::Azimuth(Some(v.to_string())))
+            }
+        }
+        // Fase 7.566 — `elevation` (CSS 2.1 aural). Parse opaco; `level` → None.
+        "elevation" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("level") {
+                Some(DeclKind::Elevation(None))
+            } else {
+                Some(DeclKind::Elevation(Some(v.to_string())))
+            }
+        }
+        // Fase 7.567 — `richness` (CSS 2.1 aural). Número 0–100, clamp.
+        "richness" => value
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|n| DeclKind::Richness(n.clamp(0.0, 100.0))),
+        // Fase 7.568 — `stress` (CSS 2.1 aural). Número 0–100, clamp.
+        "stress" => value
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|n| DeclKind::Stress(n.clamp(0.0, 100.0))),
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
