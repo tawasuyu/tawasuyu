@@ -61,6 +61,8 @@ use mirada_brain::{
 };
 use mirada_link::BrainLink;
 
+use mirada_app_llimphi::overview::{overview_view, Camera};
+
 /// Pantalla virtual del modo simulación — coincide con el lienzo.
 const SCREEN_W: i32 = 1280;
 const SCREEN_H: i32 = 720;
@@ -72,9 +74,29 @@ const APPS: &[&str] = &[
     "shuma", "pluma_app", "revista", "cosmobiología", "matilda", "pluma_notebook_app", "barra",
 ];
 
+/// Estado de la **vista espacial** (el "Prezi" de mirada): el zoom-out que
+/// muestra todos los escritorios como mosaicos para saltar entre ellos. Vive
+/// sólo mientras la vista está abierta (`Model::overview = Some`).
+struct OverviewState {
+    /// Cámara: progreso `0..1`. `1` = grilla completa visible; `0` = la celda
+    /// [`focus`](Self::focus) llena la pantalla. Al **abrir** va `0 → 1`
+    /// (zoom-out desde el escritorio activo); al **elegir** un destino va
+    /// `valor → 0` con `focus = destino` (zoom-in que aterriza en él).
+    zoom: Tween<f32>,
+    /// La celda sobre la que se centra la cámara (origen del zoom).
+    focus: usize,
+    /// Destino elegido por click/tecla: cuando el zoom-in termina, se hace
+    /// `SwitchWorkspace(destino)` y se cierra la vista. `None` mientras la
+    /// vista está abierta sin elección.
+    landing: Option<usize>,
+}
+
 struct Model {
     theme: Theme,
     desktop: Desktop,
+    /// Vista espacial abierta, o `None` (el escritorio normal). Ver
+    /// [`OverviewState`].
+    overview: Option<OverviewState>,
     /// Geometría vigente — lo que se pinta. Es la última `Place` emitida.
     placements: Vec<WindowPlacement>,
     /// Contador de ids para las ventanas sintéticas.
@@ -110,6 +132,13 @@ enum Msg {
     Key(KeyEvent),
     /// Click en un pip de escritorio.
     SwitchWorkspace(usize),
+    /// Abre/cierra la vista espacial (tecla `e`, menú Ver, o cerrar con Esc).
+    ToggleOverview,
+    /// Re-render durante el vuelo de cámara de la vista espacial; al terminar
+    /// el aterrizaje, salta al escritorio destino y cierra la vista.
+    OverviewTick,
+    /// Elige un escritorio en la vista espacial: arranca el zoom-in hacia él.
+    OverviewPick(usize),
     /// Click en una ventana del lienzo.
     FocusWindow(WindowId),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
@@ -174,10 +203,16 @@ impl App for Mirada {
 
         let mut desktop = Desktop::with_keymap(keymap);
         desktop.set_rules(load_user_rules());
+        // Carga la config del usuario (~/.config/mirada/config.ron) para que
+        // los ajustes del panel de control —incl. la vista espacial— manden.
+        if let Some(p) = mirada_brain::Config::default_path() {
+            desktop.set_config(mirada_brain::Config::load_or_default(&p));
+        }
 
         let mut model = Model {
             theme: Theme::dark(),
             desktop,
+            overview: None,
             placements: Vec::new(),
             next_id: 1,
             link,
@@ -217,6 +252,34 @@ impl App for Mirada {
         if e.state != KeyState::Pressed {
             return None;
         }
+        // Con la vista espacial abierta, es modal: Esc/`e` la cierran, un
+        // dígito 1..9 aterriza en ese escritorio, y el resto se traga.
+        if model.overview.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::ToggleOverview),
+                Key::Character(s) => {
+                    let s = s.to_lowercase();
+                    if s == "e" {
+                        return Some(Msg::ToggleOverview);
+                    }
+                    match s.bytes().next() {
+                        Some(c) if c.is_ascii_digit() && c != b'0' => {
+                            Some(Msg::OverviewPick((c - b'1') as usize))
+                        }
+                        _ => None,
+                    }
+                }
+                _ => None,
+            };
+        }
+        // `e` (fuera de un menú) abre la vista espacial.
+        if model.menu_open.is_none() {
+            if let Key::Character(s) = &e.key {
+                if s.eq_ignore_ascii_case("e") {
+                    return Some(Msg::ToggleOverview);
+                }
+            }
+        }
         // Con el menú principal abierto las flechas navegan: ←/→ cambian de
         // menú raíz (con wrap), ↑/↓ mueven la fila activa, Enter ejecuta y
         // Esc cierra. Consume la tecla.
@@ -242,6 +305,18 @@ impl App for Mirada {
             Msg::Key(ev) => handle_key(&mut m, &ev),
             Msg::SwitchWorkspace(i) => act(&mut m, DesktopAction::SwitchWorkspace(i)),
             Msg::FocusWindow(id) => act(&mut m, DesktopAction::FocusWindow(id)),
+            Msg::ToggleOverview => toggle_overview(&mut m, handle),
+            Msg::OverviewPick(target) => overview_pick(&mut m, target, handle),
+            Msg::OverviewTick => {
+                // Si el aterrizaje terminó, salta al destino y cierra la vista.
+                let landing = m.overview.as_ref().and_then(|ov| {
+                    ov.landing.filter(|_| ov.zoom.done())
+                });
+                if let Some(target) = landing {
+                    m.overview = None;
+                    act(&mut m, DesktopAction::SwitchWorkspace(target));
+                }
+            }
             Msg::MenuOpen(which) => {
                 m.menu_open = which;
                 // Abrir un menú raíz cierra cualquier contextual.
@@ -264,7 +339,7 @@ impl App for Mirada {
                     let menu = app_menu(&m);
                     if let Some(cmd) = menubar_command_at(&menu, mi, m.menu_active) {
                         m.menu_open = None;
-                        handle_menu_command(&mut m, &cmd);
+                        dispatch_menu_cmd(&mut m, &cmd, handle);
                     }
                 }
             }
@@ -283,7 +358,7 @@ impl App for Mirada {
             }
             Msg::MenuCommand(cmd) => {
                 m.menu_open = None;
-                handle_menu_command(&mut m, &cmd);
+                dispatch_menu_cmd(&mut m, &cmd, handle);
             }
             Msg::Act(action) => {
                 m.menu_open = None;
@@ -313,8 +388,20 @@ impl App for Mirada {
         // --- Barra superior: identidad + escritorios + modo ----------
         let bar = top_bar(model, theme, mode, &loads, active, focused, on_accent, bar_bg);
 
-        // --- Lienzo: el escritorio teselado, a escala ----------------
-        let canvas = canvas_view(model, theme, on_accent, win_bg, canvas_bg);
+        // --- Lienzo: el escritorio teselado, o la vista espacial -----
+        let canvas = match &model.overview {
+            Some(ov) => overview_view(
+                &model.desktop,
+                theme,
+                on_accent,
+                win_bg,
+                canvas_bg,
+                Camera { zoom: ov.zoom.value(), focus: ov.focus },
+                (SCREEN_W, SCREEN_H),
+                Msg::OverviewPick,
+            ),
+            None => canvas_view(model, theme, on_accent, win_bg, canvas_bg),
+        };
 
         // --- Pie de estado ------------------------------------------
         let status = View::new(Style {
@@ -538,6 +625,57 @@ fn dispatch(m: &mut Model, cmds: Vec<BrainCommand>) {
     }
 }
 
+// ─── Vista espacial (Prezi) ─────────────────────────────────────────
+
+/// Duración del vuelo de cámara de la vista espacial, según la config.
+fn overview_anim(m: &Model) -> Duration {
+    Duration::from_millis(m.desktop.config().overview_anim_ms as u64)
+}
+
+/// Abre la vista espacial (zoom-out desde el escritorio activo) o la cierra si
+/// ya estaba abierta. No hace nada si la config la deshabilita.
+fn toggle_overview(m: &mut Model, handle: &Handle<Msg>) {
+    if m.overview.is_some() {
+        m.overview = None;
+        return;
+    }
+    if !m.desktop.config().overview_enabled {
+        return;
+    }
+    let dur = overview_anim(m);
+    m.overview = Some(OverviewState {
+        zoom: Tween::new(0.0, 1.0, dur, motion::ease_out_cubic),
+        focus: m.desktop.active_index(),
+        landing: None,
+    });
+    animate(handle, dur, || Msg::OverviewTick);
+}
+
+/// Elige un escritorio en la vista espacial: arranca el zoom-in hacia su celda.
+/// Al terminar (en [`Msg::OverviewTick`]) salta a ese escritorio y cierra.
+fn overview_pick(m: &mut Model, target: usize, handle: &Handle<Msg>) {
+    if target >= m.desktop.workspace_loads().len() {
+        return;
+    }
+    let dur = overview_anim(m);
+    if let Some(ov) = m.overview.as_mut() {
+        let cur = ov.zoom.value();
+        ov.zoom = Tween::new(cur, 0.0, dur, motion::ease_in_out_cubic);
+        ov.focus = target;
+        ov.landing = Some(target);
+    }
+    animate(handle, dur, || Msg::OverviewTick);
+}
+
+/// Despacha un comando del menú principal, interceptando los que necesitan el
+/// `Handle` (animaciones) antes de delegar en [`handle_menu_command`].
+fn dispatch_menu_cmd(m: &mut Model, cmd: &str, handle: &Handle<Msg>) {
+    match cmd {
+        "view.overview" => toggle_overview(m, handle),
+        _ => handle_menu_command(m, cmd),
+    }
+}
+
 /// Mapea una tecla a una acción de escritorio. La firma cambia respecto
 /// del original GPUI: ahora muta `Model` directamente porque el bucle
 /// Llimphi es Elm puro.
@@ -725,7 +863,8 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(layout_item(t("mirada-layout-spiral"), "layout.spiral", LayoutMode::Spiral))
                 .item(MenuItem::new(t("mirada-layout-shrink"), "view.shrink").shortcut("h").separated())
                 .item(MenuItem::new(t("mirada-layout-grow"), "view.grow").shortcut("l"))
-                .item(MenuItem::new(t("mirada-output-next"), "view.output_next").shortcut("o").separated()),
+                .item(MenuItem::new(t("mirada-output-next"), "view.output_next").shortcut("o").separated())
+                .item(MenuItem::new(t("mirada-view-overview"), "view.overview").shortcut("e")),
         )
         .menu(
             Menu::new(t("mirada-menu-window"))

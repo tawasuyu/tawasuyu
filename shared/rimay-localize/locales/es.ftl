@@ -534,6 +534,7 @@ mirada-layout-spiral = Espiral
 mirada-layout-shrink = Achicar maestra
 mirada-layout-grow = Agrandar maestra
 mirada-output-next = Siguiente monitor
+mirada-view-overview = Vista espacial
 mirada-status-body-connected = Cuerpo conectado
 mirada-status-simulation = simulación — sin Cuerpo
 mirada-status-keymap-reloaded = keymap recargado

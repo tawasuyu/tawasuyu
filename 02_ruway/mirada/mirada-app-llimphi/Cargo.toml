@@ -23,3 +23,11 @@ llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
+
+[dev-dependencies]
+png = { workspace = true }
+pollster = { workspace = true }
+
+[[example]]
+name = "dump_overview"
+path = "examples/dump_overview.rs"

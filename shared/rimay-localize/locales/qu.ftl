@@ -535,6 +535,7 @@ mirada-layout-spiral = Muyuq
 mirada-layout-shrink = Mamata huchuychariña
 mirada-layout-grow = Mamata hatunychariña
 mirada-output-next = Qatiq qhawana
+mirada-view-overview = Pacha qhawana
 mirada-status-body-connected = Cuerpo huñisqa
 mirada-status-simulation = simulación — Cuerpo illaq
 mirada-status-keymap-reloaded = keymap kutichisqa

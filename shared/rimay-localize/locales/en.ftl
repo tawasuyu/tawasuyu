@@ -531,6 +531,7 @@ mirada-layout-spiral = Spiral
 mirada-layout-shrink = Shrink master
 mirada-layout-grow = Grow master
 mirada-output-next = Next monitor
+mirada-view-overview = Spatial view
 mirada-status-body-connected = Body connected
 mirada-status-simulation = simulation — no Body
 mirada-status-keymap-reloaded = keymap reloaded
