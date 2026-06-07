@@ -75,6 +75,10 @@ pub struct TermPalette {
     pub bar_thumb: Color,
     /// Thumb de la barra al pasar el cursor.
     pub bar_thumb_hover: Color,
+    /// Fondo translúcido del highlight de selección (overlay por renglón
+    /// sobre los rangos seleccionados). Caller elige el alpha; el widget lo
+    /// pinta literal sobre el texto sin tintarlo.
+    pub bg_selection: Color,
 }
 
 impl Default for TermPalette {
@@ -85,6 +89,10 @@ impl Default for TermPalette {
 
 impl TermPalette {
     pub fn from_theme(t: &llimphi_theme::Theme) -> Self {
+        // Selección: accent del tema con alpha bajo (~30%) — el texto se lee
+        // y el rango queda evidente sin tapar el color del texto.
+        let acc = t.accent.to_rgba8();
+        let bg_selection = Color::from_rgba8(acc.r, acc.g, acc.b, 80);
         Self {
             bg: t.bg_input,
             bg_gutter: t.bg_panel,
@@ -93,6 +101,7 @@ impl TermPalette {
             bar_track: t.bg_panel_alt,
             bar_thumb: t.border,
             bar_thumb_hover: t.accent,
+            bg_selection,
         }
     }
 }

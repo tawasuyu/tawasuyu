@@ -30,7 +30,9 @@ pub mod select;
 pub mod store;
 pub mod view;
 
-pub use blocks::{block_surface, blocks_height, blocks_scroll_to_bottom, Item};
+pub use blocks::{
+    block_surface, block_surface_with_selection, blocks_height, blocks_scroll_to_bottom, gutter_width, Item,
+};
 pub use select::{selection_rects, HighlightRect, Point, SelectionRange};
 pub use store::Scrollback;
 pub use view::{

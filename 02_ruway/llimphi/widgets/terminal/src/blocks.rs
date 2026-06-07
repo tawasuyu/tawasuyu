@@ -27,6 +27,7 @@ use llimphi_ui::{DragPhase, PaintRect, View};
 use llimphi_widget_scroll::{max_offset, thumb_geometry, DEFAULT_LINE_PX};
 
 use crate::store::Scrollback;
+use crate::select::{selection_rects, SelectionRange};
 use crate::view::{LineStyle, TermMetrics, TermPalette};
 
 /// Ancho de la barra de scroll, en px.
@@ -143,12 +144,49 @@ where
     S: Fn(usize, &str) -> LineStyle,
     F: Fn(f32) -> Msg + Send + Sync + 'static,
 {
+    block_surface_with_selection(
+        store, items, scroll_y, viewport_h, metrics, palette, line_style, on_scroll, measure, None,
+    )
+}
+
+/// Como [`block_surface`], pero con una selección opcional que se pinta como
+/// overlay translúcido sobre los rangos seleccionados (`palette.bg_selection`).
+/// Los rects se computan con [`selection_rects`] y se materializan por encima
+/// de las filas de texto, debajo del scrollbar.
+#[allow(clippy::too_many_arguments)]
+pub fn block_surface_with_selection<Msg, S, F>(
+    store: &Scrollback,
+    items: Vec<Item<Msg>>,
+    scroll_y: f32,
+    viewport_h: f32,
+    metrics: TermMetrics,
+    palette: &TermPalette,
+    line_style: S,
+    on_scroll: F,
+    measure: Option<Arc<Mutex<f32>>>,
+    selection: Option<&SelectionRange>,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    S: Fn(usize, &str) -> LineStyle,
+    F: Fn(f32) -> Msg + Send + Sync + 'static,
+{
     let row_h = metrics.line_height;
     let gw = gutter_width(store, metrics);
     let heights: Vec<f32> = items.iter().map(|it| it.height(row_h)).collect();
     let (tops, total) = item_tops(&heights);
     let off = scroll_y.clamp(0.0, max_offset(total, viewport_h));
     let (first, last) = visible_items(&tops, total, off, viewport_h);
+
+    // Highlight de selección: precomputado contra `&items` antes de consumirlos
+    // en la iteración. La pintada va DESPUÉS del texto para que se vea encima
+    // (alpha de la paleta) y ANTES del scrollbar.
+    let sel_rects = match selection {
+        Some(sel) if !sel.is_empty() => {
+            selection_rects(&items, off, viewport_h, metrics, gw, store, sel)
+        }
+        _ => Vec::new(),
+    };
 
     // Hijos absolutos en coords de viewport (content - off). Sólo los items
     // visibles y, dentro de un Lines, sólo sus sub-filas visibles.
@@ -211,6 +249,13 @@ where
         }
     }
 
+    // Overlay del highlight de selección — encima del texto, debajo del
+    // scrollbar. Translúcido (alpha en `palette.bg_selection`) para no tapar
+    // los glifos.
+    for r in &sel_rects {
+        children.push(selection_overlay_rect::<Msg>(*r, palette.bg_selection));
+    }
+
     let on_wheel = Arc::new(on_scroll);
     if max_offset(total, viewport_h) > 0.0 {
         children.push(scrollbar(off, total, viewport_h, palette, &on_wheel));
@@ -262,6 +307,30 @@ fn gutter_bg<Msg: Clone + 'static>(y: f32, h: f32, gw: f32, palette: &TermPalett
         ..Default::default()
     })
     .fill(palette.bg_gutter)
+}
+
+/// Rect translúcido del overlay de selección — coords ya en viewport
+/// (scroll descontado por `selection_rects`). Va sobre el texto, sin
+/// recolorearlo (alpha del color del caller).
+fn selection_overlay_rect<Msg: Clone + 'static>(
+    r: crate::select::HighlightRect,
+    bg: Color,
+) -> View<Msg> {
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(r.y),
+            left: length(r.x),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(r.w),
+            height: length(r.h),
+        },
+        ..Default::default()
+    })
+    .fill(bg)
 }
 
 /// Tinte de fondo de un renglón (stderr, etc.), del gutter hacia la derecha.

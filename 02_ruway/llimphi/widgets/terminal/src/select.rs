@@ -196,7 +196,6 @@ pub fn selection_rects<Msg>(
     if sel.is_empty() || viewport_h <= 0.0 || metrics.line_height <= 0.0 {
         return Vec::new();
     }
-    let (s, e) = sel.normalized();
     let row_h = metrics.line_height;
     let char_w = metrics.char_width.max(0.5);
     let mut out: Vec<HighlightRect> = Vec::new();
