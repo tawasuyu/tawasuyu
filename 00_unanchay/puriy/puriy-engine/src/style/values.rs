@@ -1026,6 +1026,24 @@ pub struct ComputedStyle {
     /// `mask-border-repeat` (Fase 7.553). Cómo se ajustan los bordes/centro.
     /// Default `Stretch`. NO hereda. Plumb.
     pub mask_border_repeat: MaskBorderRepeat,
+    /// `mask-border-mode` (Fase 7.554). CSS Masking 1: si la fuente se
+    /// interpreta por luminancia o por alpha. Default `Alpha`. NO hereda.
+    /// Plumb.
+    pub mask_border_mode: MaskBorderMode,
+    /// `caret-animation` (Fase 7.555). CSS UI 4: si el caret parpadea
+    /// (`auto`) o queda fijo (`manual`). Default `Auto`. HEREDA. Plumb.
+    pub caret_animation: CaretAnimation,
+    /// `scroll-marker-group` (Fase 7.556). CSS Overflow 5: dónde se ubica
+    /// el grupo de marcadores de scroll. Default `None`. NO hereda. Plumb.
+    pub scroll_marker_group: ScrollMarkerGroup,
+    /// `scroll-initial-target` (Fase 7.557). CSS Overflow 5: si el elemento
+    /// es el target inicial de scroll del contenedor. Default `None`. NO
+    /// hereda. Plumb.
+    pub scroll_initial_target: ScrollInitialTarget,
+    /// `corner-shape` (Fase 7.558). CSS Borders 4: forma de las esquinas
+    /// redondeadas (round/bevel/notch/scoop/squircle…). Parse opaco —
+    /// `None` = `round`. NO hereda. Plumb.
+    pub corner_shape: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -2882,6 +2900,39 @@ pub enum MaskBorderRepeat {
     Space,
 }
 
+/// `mask-border-mode` (CSS Masking 1). Default `Alpha`. Fase 7.554.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskBorderMode {
+    Luminance,
+    #[default]
+    Alpha,
+}
+
+/// `caret-animation` (CSS UI 4). Default `Auto` (parpadea). Fase 7.555.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaretAnimation {
+    #[default]
+    Auto,
+    Manual,
+}
+
+/// `scroll-marker-group` (CSS Overflow 5). Default `None`. Fase 7.556.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollMarkerGroup {
+    #[default]
+    None,
+    Before,
+    After,
+}
+
+/// `scroll-initial-target` (CSS Overflow 5). Default `None`. Fase 7.557.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollInitialTarget {
+    #[default]
+    None,
+    Nearest,
+}
+
 /// `offset-rotate` (CSS Motion Path 1). Default `auto` (la dirección del
 /// path orienta el elemento). `reverse` = `auto + 180deg`. NO hereda.
 /// Fase 7.449.
@@ -4177,6 +4228,11 @@ impl Default for ComputedStyle {
             mask_border_width: None,
             mask_border_outset: None,
             mask_border_repeat: MaskBorderRepeat::Stretch,
+            mask_border_mode: MaskBorderMode::Alpha,
+            caret_animation: CaretAnimation::Auto,
+            scroll_marker_group: ScrollMarkerGroup::None,
+            scroll_initial_target: ScrollInitialTarget::None,
+            corner_shape: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

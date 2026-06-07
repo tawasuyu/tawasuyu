@@ -655,6 +655,16 @@ pub(crate) enum DeclKind {
     MaskBorderOutset(Option<String>),
     /// `mask-border-repeat` (Fase 7.553). NO hereda. Plumb.
     MaskBorderRepeat(MaskBorderRepeat),
+    /// `mask-border-mode` (Fase 7.554). NO hereda. Plumb.
+    MaskBorderMode(MaskBorderMode),
+    /// `caret-animation` (Fase 7.555). HEREDA. Plumb.
+    CaretAnimation(CaretAnimation),
+    /// `scroll-marker-group` (Fase 7.556). NO hereda. Plumb.
+    ScrollMarkerGroup(ScrollMarkerGroup),
+    /// `scroll-initial-target` (Fase 7.557). NO hereda. Plumb.
+    ScrollInitialTarget(ScrollInitialTarget),
+    /// `corner-shape` (Fase 7.558). `None` = `round`. NO hereda. Plumb.
+    CornerShape(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1146,6 +1156,11 @@ impl Decl {
             DeclKind::MaskBorderWidth(v) => s.mask_border_width = v.clone(),
             DeclKind::MaskBorderOutset(v) => s.mask_border_outset = v.clone(),
             DeclKind::MaskBorderRepeat(v) => s.mask_border_repeat = *v,
+            DeclKind::MaskBorderMode(v) => s.mask_border_mode = *v,
+            DeclKind::CaretAnimation(v) => s.caret_animation = *v,
+            DeclKind::ScrollMarkerGroup(v) => s.scroll_marker_group = *v,
+            DeclKind::ScrollInitialTarget(v) => s.scroll_initial_target = *v,
+            DeclKind::CornerShape(v) => s.corner_shape = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

@@ -1900,6 +1900,42 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             "space" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Space)),
             _ => None,
         },
+        // Fase 7.554 — `mask-border-mode` (CSS Masking 1).
+        "mask-border-mode" => match value.trim().to_ascii_lowercase().as_str() {
+            "luminance" => Some(DeclKind::MaskBorderMode(MaskBorderMode::Luminance)),
+            "alpha" => Some(DeclKind::MaskBorderMode(MaskBorderMode::Alpha)),
+            _ => None,
+        },
+        // Fase 7.555 — `caret-animation` (CSS UI 4).
+        "caret-animation" => match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(DeclKind::CaretAnimation(CaretAnimation::Auto)),
+            "manual" => Some(DeclKind::CaretAnimation(CaretAnimation::Manual)),
+            _ => None,
+        },
+        // Fase 7.556 — `scroll-marker-group` (CSS Overflow 5).
+        "scroll-marker-group" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::ScrollMarkerGroup(ScrollMarkerGroup::None)),
+            "before" => Some(DeclKind::ScrollMarkerGroup(ScrollMarkerGroup::Before)),
+            "after" => Some(DeclKind::ScrollMarkerGroup(ScrollMarkerGroup::After)),
+            _ => None,
+        },
+        // Fase 7.557 — `scroll-initial-target` (CSS Overflow 5).
+        "scroll-initial-target" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::ScrollInitialTarget(ScrollInitialTarget::None)),
+            "nearest" => Some(DeclKind::ScrollInitialTarget(ScrollInitialTarget::Nearest)),
+            _ => None,
+        },
+        // Fase 7.558 — `corner-shape` (CSS Borders 4). Parse opaco —
+        // `round` reservado a None.
+        "corner-shape" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("round") {
+                Some(DeclKind::CornerShape(None))
+            } else {
+                Some(DeclKind::CornerShape(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
