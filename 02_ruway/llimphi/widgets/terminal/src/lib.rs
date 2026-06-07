@@ -43,7 +43,7 @@ pub use cell_pipeline::{
 };
 pub use glyph_atlas::{DirtyRect, GlyphAtlas, GlyphSlot};
 pub use select::{point_at, point_at_geo, selection_rects, HighlightRect, Point, SelectionRange};
-pub use store::Scrollback;
+pub use store::{Scrollback, SpillStore};
 pub use view::{
     content_height, line_surface, scroll_to_bottom, visible_window, LineStyle, TermMetrics,
     TermPalette, VisibleWindow,

@@ -19,6 +19,98 @@
 /// líneas. "Infinito" en la práctica = "acotado por una memoria que elegís".
 pub const DEFAULT_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
+/// Persistencia opcional de las líneas que el cap recorta del frente: en vez
+/// de tirarlas, las appendea a un archivo y guarda `(offset, len)` por línea
+/// para lookup random posterior. Es lo que habilita "scrollback infinito"
+/// (Fase 5 del SDD-TERMINAL) cuando el shell corre por horas y la memoria
+/// no alcanza para todo el output histórico.
+///
+/// Diseño:
+///
+/// - **Archivo append-only**: cada línea se escribe verbatim (sin separador
+///   intermedio — la longitud está en el índice). Crecimiento monótono.
+/// - **Índice en memoria** `(offset, len)` por línea, indexado por
+///   `global_id` (el mismo id estable del `Scrollback`). Random access O(1).
+/// - **UTF-8 in/out**: el caller pasa `&str`, el read devuelve `String`. Si
+///   el archivo se corrompe (improbable mientras nadie más lo toque), el
+///   read devuelve `InvalidData`.
+#[derive(Debug)]
+pub struct SpillStore {
+    file: std::fs::File,
+    /// `(offset_in_file, byte_len)` por línea spilleada, indexada por
+    /// posición en este Vec (no por `global_id` — restamos `base_id` al
+    /// indexar si en el futuro permitimos descartar también las viejas).
+    entries: Vec<(u64, u32)>,
+    path: std::path::PathBuf,
+}
+
+impl SpillStore {
+    /// Crea o abre un spill file en `path`. Si el archivo existe, lo trunca
+    /// (el caller decide si quiere persistencia inter-sesión, generalmente
+    /// no — el shell tipicamente arranca con un spill nuevo). Devuelve
+    /// `Err` si no se puede crear (permisos, disco lleno).
+    pub fn create(path: impl Into<std::path::PathBuf>) -> std::io::Result<Self> {
+        let path = path.into();
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)?;
+        Ok(Self {
+            file,
+            entries: Vec::new(),
+            path,
+        })
+    }
+
+    /// Append de una línea al spill. Devuelve el índice (`entries.len()-1`)
+    /// donde queda registrada. NO inserta separador — el largo está en el
+    /// índice. Errores: `WriteZero`/`Interrupted` y otros transientes se
+    /// devuelven; el caller puede decidir reintentar o ignorar.
+    pub fn append(&mut self, text: &str) -> std::io::Result<usize> {
+        use std::io::{Seek, SeekFrom, Write};
+        let offset = self.file.seek(SeekFrom::End(0))?;
+        self.file.write_all(text.as_bytes())?;
+        // Flush por seguridad — el shell puede crashear y queremos el
+        // archivo legible. Cost ~µs en SSD; aceptable.
+        self.file.flush()?;
+        self.entries.push((offset, text.len() as u32));
+        Ok(self.entries.len() - 1)
+    }
+
+    /// Lee la línea spilleada con índice `i` (0-based dentro del spill, NO
+    /// el `global_id`). `None` si fuera de rango.
+    pub fn read(&mut self, i: usize) -> std::io::Result<Option<String>> {
+        use std::io::{Read, Seek, SeekFrom};
+        let Some(&(off, len)) = self.entries.get(i) else {
+            return Ok(None);
+        };
+        self.file.seek(SeekFrom::Start(off))?;
+        let mut buf = vec![0u8; len as usize];
+        self.file.read_exact(&mut buf)?;
+        String::from_utf8(buf).map(Some).map_err(|e| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+        })
+    }
+
+    /// Cantidad de líneas spilleadas hasta ahora.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// `true` si todavía no spilleó ninguna línea.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Path del archivo del spill (informativo). El caller lo puede usar
+    /// para mostrarlo en una notice tipo "salida volcada a /tmp/...".
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
 /// Store de scrollback append-only con índice de líneas y cap por memoria.
 ///
 /// Invariantes:
@@ -26,7 +118,7 @@ pub const DEFAULT_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 ///   creciente; `starts[len()] == buf.len()`.
 /// - `len() == starts.len() - 1`.
 /// - `line(i)` ⊆ `buf` para todo `i < len()`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Scrollback {
     /// Texto de todas las líneas vigentes, concatenado sin separadores.
     buf: String,
@@ -39,6 +131,27 @@ pub struct Scrollback {
     dropped: u64,
     /// Cap de memoria del texto (`buf.len()`), en bytes.
     limit_bytes: usize,
+    /// Spill opcional: cuando se setea, las líneas que `enforce_limit` saca
+    /// del frente NO se pierden — se appendean al spill y quedan
+    /// recuperables vía `read_spilled` (Fase 5 del SDD-TERMINAL). El
+    /// `Arc<Mutex<>>` deja que el `Scrollback` sea Clone aunque
+    /// `SpillStore` no lo sea (file handles no son Clone).
+    spill: Option<std::sync::Arc<std::sync::Mutex<SpillStore>>>,
+}
+
+impl Clone for Scrollback {
+    fn clone(&self) -> Self {
+        // Clone share el spill (Arc) — las dos instancias appendean al MISMO
+        // archivo, lo que es lo único razonable: el spill es la verdad
+        // sobre las líneas viejas, no hay forma de "clonar el archivo".
+        Self {
+            buf: self.buf.clone(),
+            starts: self.starts.clone(),
+            dropped: self.dropped,
+            limit_bytes: self.limit_bytes,
+            spill: self.spill.clone(),
+        }
+    }
 }
 
 impl Default for Scrollback {
@@ -56,7 +169,44 @@ impl Scrollback {
             starts: vec![0],
             dropped: 0,
             limit_bytes,
+            spill: None,
         }
+    }
+
+    /// Habilita el spill: las líneas que se recorten del frente se
+    /// appendean a `spill` en vez de descartarse. El caller construye el
+    /// `SpillStore` con `SpillStore::create(path)`.
+    pub fn enable_spill(&mut self, spill: SpillStore) {
+        self.spill = Some(std::sync::Arc::new(std::sync::Mutex::new(spill)));
+    }
+
+    /// `true` si este scrollback tiene spill activo.
+    pub fn has_spill(&self) -> bool {
+        self.spill.is_some()
+    }
+
+    /// Cantidad de líneas spilleadas hasta ahora (`0` si no hay spill).
+    pub fn spilled_count(&self) -> usize {
+        match self.spill.as_ref() {
+            Some(s) => s.lock().map(|g| g.len()).unwrap_or(0),
+            None => 0,
+        }
+    }
+
+    /// Lee una línea spilleada por su id global. Lookup O(1) en el índice
+    /// del spill + un `seek` + `read` en el archivo. Devuelve `None` si
+    /// `global_id >= spilled_count` o no hay spill. La línea sigue contando
+    /// con `dropped`/`total_pushed` originales (el id global persiste).
+    pub fn read_spilled(&self, global_id: u64) -> std::io::Result<Option<String>> {
+        let Some(spill) = self.spill.as_ref() else { return Ok(None) };
+        let mut guard = match spill.lock() {
+            Ok(g) => g,
+            Err(p) => p.into_inner(),
+        };
+        // El spill indexa por orden de append, que coincide con el
+        // global_id 0-based (la primera dropped es la 0ª, la segunda la
+        // 1ª, etc.).
+        guard.read(global_id as usize)
     }
 
     /// Appendea **un renglón lógico** (sin `'\n'`; si lo trae, se guarda
@@ -87,6 +237,26 @@ impl Scrollback {
             return;
         }
         let cut = self.starts[k];
+        // Antes de borrar las líneas del frente, las spillamos a disco si
+        // hay spill configurado. El append es por línea (cada una con su
+        // longitud en el índice), así el read random por `global_id`
+        // sigue trivial.
+        if let Some(spill) = self.spill.as_ref() {
+            let mut guard = match spill.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            for i in 0..k {
+                let lo = self.starts[i];
+                let hi = self.starts[i + 1];
+                // Errores de I/O se ignoran silenciosamente: el spill es
+                // mejor-esfuerzo; perder una línea spilleada por disco
+                // lleno no debe colgar el shell. El caller que quiera
+                // chequear que el spill esté vivo puede mirar `spilled_count`
+                // vs `dropped` y avisar al usuario.
+                let _ = guard.append(&self.buf[lo..hi]);
+            }
+        }
         self.buf.drain(0..cut);
         self.starts.drain(0..k);
         for s in &mut self.starts {
@@ -336,6 +506,86 @@ mod tests {
         assert_eq!(s.line(0), Some("café ☕"));
         assert_eq!(s.line(1), Some("niño ñ"));
         assert_eq!(s.slice_text(0, 2), "café ☕\nniño ñ");
+    }
+
+    #[test]
+    fn spill_archiva_lineas_recortadas_y_las_lee_random() {
+        // Setup: store con cap chico + spill a un archivo temporal. Tras
+        // muchas appends, las líneas viejas viven en el spill y se leen
+        // de vuelta por su id global.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("spill.log");
+        let spill = SpillStore::create(&path).expect("spill create");
+        let mut s = Scrollback::new(20);
+        s.enable_spill(spill);
+        assert!(s.has_spill());
+
+        for i in 0..50 {
+            s.push_line(&format!("L{i:04}"));
+        }
+        // Hubo recorte → spill tiene entries.
+        assert!(s.dropped() > 0);
+        assert_eq!(s.spilled_count() as u64, s.dropped(), "todas las dropped van al spill");
+        // Una línea concreta del spill — la 5ª (id=5) → "L0005".
+        let read = s.read_spilled(5).expect("read").expect("entry");
+        assert_eq!(read, "L0005");
+        // La primera (id=0).
+        let first = s.read_spilled(0).expect("read").expect("entry");
+        assert_eq!(first, "L0000");
+        // Una línea fuera de rango (un id futuro).
+        let none = s.read_spilled(99999).expect("read");
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn sin_spill_read_spilled_es_none() {
+        let mut s = Scrollback::new(20);
+        for i in 0..50 {
+            s.push_line(&format!("L{i:04}"));
+        }
+        // Hubo recorte pero no hay spill → no se puede recuperar.
+        assert!(s.dropped() > 0);
+        assert_eq!(s.spilled_count(), 0);
+        assert!(s.read_spilled(0).expect("read").is_none());
+    }
+
+    #[test]
+    fn spill_sobrevive_a_clones_del_scrollback() {
+        // `Scrollback` es Clone (Pata clona el state del shell); el spill
+        // se comparte por Arc, así las dos instancias appendean al MISMO
+        // archivo. Acá comprobamos que el spilled_count se ve desde ambos.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("spill.log");
+        let spill = SpillStore::create(&path).unwrap();
+        let mut a = Scrollback::new(20);
+        a.enable_spill(spill);
+        for i in 0..30 {
+            a.push_line(&format!("L{i:04}"));
+        }
+        let b = a.clone();
+        // El clon ve el mismo spilled_count.
+        assert_eq!(a.spilled_count(), b.spilled_count());
+        // Y puede leer las mismas líneas.
+        let from_a = a.read_spilled(2).unwrap().unwrap();
+        let from_b = b.read_spilled(2).unwrap().unwrap();
+        assert_eq!(from_a, from_b);
+    }
+
+    #[test]
+    fn spill_almacena_utf8_intacto() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("spill.log");
+        let spill = SpillStore::create(&path).unwrap();
+        let mut s = Scrollback::new(15);
+        s.enable_spill(spill);
+        s.push_line("café ☕");
+        s.push_line("niño ñ");
+        s.push_line("hello world"); // empuja las anteriores a spill
+        assert!(s.dropped() > 0);
+        let cafe = s.read_spilled(0).unwrap().unwrap();
+        assert_eq!(cafe, "café ☕");
+        let nino = s.read_spilled(1).unwrap().unwrap();
+        assert_eq!(nino, "niño ñ");
     }
 
     #[test]

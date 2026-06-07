@@ -21,6 +21,7 @@ fontdue = "0.9"
 [dev-dependencies]
 png = { workspace = true }
 pollster = { workspace = true }
+tempfile = { workspace = true }
 
 [[example]]
 name = "dump_terminal"
