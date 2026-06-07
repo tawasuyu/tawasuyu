@@ -1,9 +1,9 @@
 //! Pipeline GPU para la grilla de celdas del modo TUI (Fase 4 del SDD-TERMINAL).
 //!
-//! Define las **estructuras POD** (instance + uniforms) y el **shader WGSL**
-//! del render. La compilación wgpu y el dibujo viven en `CellPipeline::new`
-//! / `::draw` (un commit siguiente puede agregarlos, una vez que el atlas y
-//! estas estructuras estén validadas headless).
+//! Define las **estructuras POD** (instance + uniforms), el **shader WGSL**
+//! y el **pipeline wgpu** (`CellPipeline`) que las consume. El wireado al
+//! `generic_grid_panel` vía `gpu_paint_with` va en el commit siguiente —
+//! acá ya se valida que el shader compila en un device headless.
 //!
 //! ## Layouts
 //!
@@ -190,6 +190,283 @@ fn fs_cell(in: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>(rgb, a);
 }
 "#;
+
+use llimphi_hal::wgpu;
+
+/// Pipeline wgpu del cell renderer — compila el shader y arma el bind
+/// group layout. Una sola instancia por proceso (o por `color_format`); el
+/// `draw` la consume con un atlas + instancias frescas por frame.
+///
+/// El atlas se sube aparte (su propio `wgpu::Texture` con format
+/// `R8Unorm`), y entra al bind group por la `binding=1`. Reusar el mismo
+/// atlas entre frames es OK — sólo se actualiza con `Queue::write_texture`
+/// cuando aparecen glifos nuevos (el `GlyphAtlas::take_dirty` lo señala).
+pub struct CellPipeline {
+    pub pipeline: wgpu::RenderPipeline,
+    pub bind_layout: wgpu::BindGroupLayout,
+    pub sampler: wgpu::Sampler,
+}
+
+impl CellPipeline {
+    /// Compila el shader WGSL y construye el pipeline para escribir al
+    /// `color_format` dado (típicamente `Rgba8Unorm`, el de la intermedia
+    /// del `WinitSurface`).
+    pub fn new(device: &wgpu::Device, color_format: wgpu::TextureFormat) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("llimphi-widget-terminal-cell-shader"),
+            source: wgpu::ShaderSource::Wgsl(CELL_WGSL.into()),
+        });
+
+        let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("llimphi-widget-terminal-cell-bgl"),
+            entries: &[
+                // 0: uniforms (32 B).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                // 1: atlas texture (R8Unorm).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // 2: sampler.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("llimphi-widget-terminal-cell-pl"),
+            bind_group_layouts: &[&bind_layout],
+            push_constant_ranges: &[],
+        });
+
+        let color_targets = [Some(wgpu::ColorTargetState {
+            format: color_format,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        })];
+
+        // Instance buffer: 32 B / instancia, 4 attributes (vec2 + vec4 + u32 + u32).
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("llimphi-widget-terminal-cell-pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_cell"),
+                compilation_options: Default::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: CellInstance::SIZE as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[
+                        // cell_xy
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        // uv_rect (vec4: uv_x, uv_y, uv_w, uv_h)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        // fg_rgba
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32,
+                            offset: 24,
+                            shader_location: 2,
+                        },
+                        // bg_rgba
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Uint32,
+                            offset: 28,
+                            shader_location: 3,
+                        },
+                    ],
+                }],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_cell"),
+                compilation_options: Default::default(),
+                targets: &color_targets,
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("llimphi-widget-terminal-cell-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        Self {
+            pipeline,
+            bind_layout,
+            sampler,
+        }
+    }
+
+    /// Helper: crea una textura `R8Unorm` del tamaño del atlas, sube los
+    /// bytes y devuelve `(textura, view)`. El caller la mantiene viva
+    /// entre frames y la pasa a `draw`. Sólo re-crear si las dimensiones
+    /// del atlas cambian (p. ej. tras `GlyphAtlas::grow`).
+    pub fn create_atlas_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        atlas_pixels: &[u8],
+        atlas_size: (u32, u32),
+    ) -> (wgpu::Texture, wgpu::TextureView) {
+        let (w, h) = atlas_size;
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("llimphi-widget-terminal-atlas"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            atlas_pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        (tex, view)
+    }
+
+    /// Dibuja las celdas en `target_view`. **No** limpia el target (load:
+    /// Load) — el caller decide la pasada previa (vello + selección). El
+    /// blending alpha mezcla los glifos sobre lo que ya hay (la
+    /// "pre-pasada vello" del SDD).
+    pub fn draw(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target_view: &wgpu::TextureView,
+        atlas_view: &wgpu::TextureView,
+        cells: &[CellInstance],
+        uniforms: CellUniforms,
+    ) {
+        if cells.is_empty() {
+            return;
+        }
+        // Uniforms.
+        let u_bytes = uniforms.as_bytes();
+        let u_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-widget-terminal-cell-u"),
+            size: CellUniforms::SIZE as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&u_buf, 0, &u_bytes);
+
+        // Instance buffer.
+        let inst_bytes = instances_to_bytes(cells);
+        let inst_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-widget-terminal-cell-inst"),
+            size: inst_bytes.len() as u64,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&inst_buf, 0, &inst_bytes);
+
+        // Bind group: uniforms + atlas + sampler.
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("llimphi-widget-terminal-cell-bg"),
+            layout: &self.bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: u_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(atlas_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("llimphi-widget-terminal-cell-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target_view,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, &bind_group, &[]);
+        pass.set_vertex_buffer(0, inst_buf.slice(..));
+        pass.draw(0..4, 0..cells.len() as u32);
+    }
+}
 
 #[cfg(test)]
 mod tests {

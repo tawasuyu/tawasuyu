@@ -39,7 +39,7 @@ pub use blocks::{
 };
 pub use find::{find_matches, next_match, prev_match, FindMatch, FindOpts};
 pub use cell_pipeline::{
-    instances_to_bytes, pack_rgba, CellInstance, CellUniforms, CELL_WGSL,
+    instances_to_bytes, pack_rgba, CellInstance, CellPipeline, CellUniforms, CELL_WGSL,
 };
 pub use glyph_atlas::{DirtyRect, GlyphAtlas, GlyphSlot};
 pub use select::{point_at, point_at_geo, selection_rects, HighlightRect, Point, SelectionRange};

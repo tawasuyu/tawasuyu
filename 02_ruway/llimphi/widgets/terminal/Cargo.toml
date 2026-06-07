@@ -11,6 +11,9 @@ description = "llimphi-widget-terminal — superficie de terminal infinita y vir
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-scroll = { workspace = true }
+# Acceso a `wgpu` (re-exportado por `llimphi-hal`) para el pipeline GPU
+# del cell renderer (Fase 4 del SDD-TERMINAL).
+llimphi-hal = { path = "../../llimphi-hal" }
 # Rasterizador de glifos para el atlas GPU del modo grilla (Fase 4 del
 # SDD-TERMINAL). Default features de fontdue alcanzan acá (std host).
 fontdue = "0.9"
