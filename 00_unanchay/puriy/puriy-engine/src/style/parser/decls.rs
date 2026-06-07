@@ -589,16 +589,19 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         }
         // `column-rule` shorthand (Fase 7.280): mismo shape que `outline`.
         // Fase 7.691 — `-webkit-column-rule` alias vendor del shorthand.
+        // Fase 7.783 — `-moz-column-rule` alias vendor del shorthand.
         if prop.eq_ignore_ascii_case("column-rule")
             || prop.eq_ignore_ascii_case("-webkit-column-rule")
+            || prop.eq_ignore_ascii_case("-moz-column-rule")
         {
             out.extend(parse_column_rule_shorthand(value, important));
             continue;
         }
         // `column-rule-style: dotted` → activa + fija el patrón.
-        // Fase 7.692 — `-webkit-column-rule-style` alias vendor.
+        // Fase 7.692 — `-webkit-column-rule-style` / Fase 7.782 — `-moz-column-rule-style` alias vendor.
         if prop.eq_ignore_ascii_case("column-rule-style")
             || prop.eq_ignore_ascii_case("-webkit-column-rule-style")
+            || prop.eq_ignore_ascii_case("-moz-column-rule-style")
         {
             if let Some(on) = parse_border_style(value) {
                 out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(on), important });
@@ -927,7 +930,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.745 — alias `-webkit-font-kerning` → estándar.
         "font-kerning" | "-webkit-font-kerning" => parse_font_kerning(value).map(DeclKind::FontKerning),
         // Fase 7.746 — alias `-webkit-font-feature-settings` → estándar.
-        "font-feature-settings" | "-webkit-font-feature-settings" => {
+        // Fase 7.781 — `-moz-font-feature-settings` alias vendor legacy.
+        "font-feature-settings" | "-webkit-font-feature-settings" | "-moz-font-feature-settings" => {
             Some(DeclKind::FontFeatureSettings(parse_font_feature_settings(value)))
         }
         "font-variation-settings" => {
@@ -1576,7 +1580,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             else { Some(DeclKind::BorderImageOutset(Some(v.to_string()))) }
         }
         // Fase 7.507 — `border-image` shorthand. Parse opaco.
-        "border-image" | "-webkit-border-image" => {
+        // Fase 7.780 — `-moz-border-image` alias vendor legacy.
+        "border-image" | "-webkit-border-image" | "-moz-border-image" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("none") {
@@ -3278,7 +3283,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "column-rule-width" | "-webkit-column-rule-width" | "-moz-column-rule-width" => {
             parse_length_px(value).map(DeclKind::ColumnRuleWidth)
         }
-        "column-rule-color" | "-webkit-column-rule-color" => {
+        // Fase 7.778 — `-moz-column-rule-color` alias vendor legacy.
+        "column-rule-color" | "-webkit-column-rule-color" | "-moz-column-rule-color" => {
             if is_current_color(value) {
                 Some(DeclKind::ColumnRuleColor(None))
             } else {
@@ -3287,7 +3293,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // `column-rule-style` y `column-rule` van por `parse_declarations`.
         "column-fill" => parse_column_fill(value).map(DeclKind::ColumnFill),
-        "column-span" | "-webkit-column-span" => {
+        // Fase 7.779 — `-moz-column-span` alias vendor legacy.
+        "column-span" | "-webkit-column-span" | "-moz-column-span" => {
             parse_column_span(value).map(DeclKind::ColumnSpan)
         }
         // `page-break-inside` (legacy CSS 2.1) = `break-inside` (subset).
