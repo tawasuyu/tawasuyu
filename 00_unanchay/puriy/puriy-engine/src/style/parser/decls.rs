@@ -2442,6 +2442,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitTouchCallout(Some(v.to_string())))
             }
         }
+        // Fase 7.619 — `-webkit-user-drag`. `auto` → None.
+        "-webkit-user-drag" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitUserDrag(None))
+            } else {
+                Some(DeclKind::WebkitUserDrag(Some(v.to_string())))
+            }
+        }
+        // Fase 7.620 — `-webkit-rtl-ordering`. `logical` → None.
+        "-webkit-rtl-ordering" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("logical") {
+                Some(DeclKind::WebkitRtlOrdering(None))
+            } else {
+                Some(DeclKind::WebkitRtlOrdering(Some(v.to_string())))
+            }
+        }
+        // Fase 7.621 — `-webkit-text-security`. `none` → None.
+        "-webkit-text-security" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitTextSecurity(None))
+            } else {
+                Some(DeclKind::WebkitTextSecurity(Some(v.to_string())))
+            }
+        }
+        // Fase 7.622 — `-webkit-nbsp-mode`. `normal` → None.
+        "-webkit-nbsp-mode" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::WebkitNbspMode(None))
+            } else {
+                Some(DeclKind::WebkitNbspMode(Some(v.to_string())))
+            }
+        }
+        // Fase 7.623 — `-webkit-locale`. `auto` → None.
+        "-webkit-locale" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitLocale(None))
+            } else {
+                Some(DeclKind::WebkitLocale(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

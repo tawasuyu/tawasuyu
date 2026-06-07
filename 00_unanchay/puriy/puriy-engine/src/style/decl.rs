@@ -778,6 +778,16 @@ pub(crate) enum DeclKind {
     UserModify(Option<String>),
     /// `-webkit-touch-callout` (Fase 7.618). `None` = `default`. HEREDA. Plumb.
     WebkitTouchCallout(Option<String>),
+    /// `-webkit-user-drag` (Fase 7.619). `None` = `auto`. NO hereda. Plumb.
+    WebkitUserDrag(Option<String>),
+    /// `-webkit-rtl-ordering` (Fase 7.620). `None` = `logical`. HEREDA. Plumb.
+    WebkitRtlOrdering(Option<String>),
+    /// `-webkit-text-security` (Fase 7.621). `None` = `none`. HEREDA. Plumb.
+    WebkitTextSecurity(Option<String>),
+    /// `-webkit-nbsp-mode` (Fase 7.622). `None` = `normal`. HEREDA. Plumb.
+    WebkitNbspMode(Option<String>),
+    /// `-webkit-locale` (Fase 7.623). `None` = `auto`. HEREDA. Plumb.
+    WebkitLocale(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1329,6 +1339,11 @@ impl Decl {
             DeclKind::ColumnBreakInside(v) => s.column_break_inside = v.clone(),
             DeclKind::UserModify(v) => s.user_modify = v.clone(),
             DeclKind::WebkitTouchCallout(v) => s.webkit_touch_callout = v.clone(),
+            DeclKind::WebkitUserDrag(v) => s.webkit_user_drag = v.clone(),
+            DeclKind::WebkitRtlOrdering(v) => s.webkit_rtl_ordering = v.clone(),
+            DeclKind::WebkitTextSecurity(v) => s.webkit_text_security = v.clone(),
+            DeclKind::WebkitNbspMode(v) => s.webkit_nbsp_mode = v.clone(),
+            DeclKind::WebkitLocale(v) => s.webkit_locale = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

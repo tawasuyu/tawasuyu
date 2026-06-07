@@ -1215,6 +1215,22 @@ pub struct ComputedStyle {
     /// `-webkit-touch-callout` (Fase 7.618). iOS: muestra/oculta el callout
     /// al mantener pulsado. Parse opaco — `None` = `default`. HEREDA. Plumb.
     pub webkit_touch_callout: Option<String>,
+    /// `-webkit-user-drag` (Fase 7.619). Si el elemento es arrastrable.
+    /// Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_user_drag: Option<String>,
+    /// `-webkit-rtl-ordering` (Fase 7.620). Orden lógico vs visual en RTL.
+    /// Parse opaco — `None` = `logical`. HEREDA. Plumb.
+    pub webkit_rtl_ordering: Option<String>,
+    /// `-webkit-text-security` (Fase 7.621). Glifo que enmascara el texto
+    /// (disc/circle/square/none). Parse opaco — `None` = `none`. HEREDA.
+    /// Plumb.
+    pub webkit_text_security: Option<String>,
+    /// `-webkit-nbsp-mode` (Fase 7.622). Tratamiento de los espacios
+    /// duros. Parse opaco — `None` = `normal`. HEREDA. Plumb.
+    pub webkit_nbsp_mode: Option<String>,
+    /// `-webkit-locale` (Fase 7.623). Locale para reglas dependientes del
+    /// idioma. Parse opaco — `None` = `auto`. HEREDA. Plumb.
+    pub webkit_locale: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4550,6 +4566,11 @@ impl Default for ComputedStyle {
             column_break_inside: None,
             user_modify: None,
             webkit_touch_callout: None,
+            webkit_user_drag: None,
+            webkit_rtl_ordering: None,
+            webkit_text_security: None,
+            webkit_nbsp_mode: None,
+            webkit_locale: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
