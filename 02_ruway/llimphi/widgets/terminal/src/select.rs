@@ -160,6 +160,79 @@ fn clamp_char_boundary(text: &str, col: usize) -> usize {
     c
 }
 
+/// Convierte coords `(lx, ly)` del viewport del `block_surface` a un
+/// [`Point`] del store (línea + columna en bytes UTF-8). **Puro**: replica
+/// la geometría del render (mismo `item_tops` + `visible_rows_in_item` que
+/// la pintada) para que el caret/anchor caigan exactamente donde el usuario
+/// hizo click. `(lx, ly)` son **relativas al viewport** (origen = esquina
+/// superior-izquierda del rect del widget). Devuelve `None` si `ly` cae en
+/// un item `Chrome` (los chrome no son seleccionables) o fuera del stream.
+///
+/// La conversión visual_col → byte_col cuenta chars del texto: para mono
+/// asume 1 cell por char (CJK doble queda fuera del MVP). Si el click cae
+/// más allá del fin del texto, snapea al fin.
+pub fn point_at<Msg>(
+    items: &[Item<Msg>],
+    scroll_y: f32,
+    viewport_h: f32,
+    metrics: TermMetrics,
+    gutter_w: f32,
+    store: &Scrollback,
+    lx: f32,
+    ly: f32,
+) -> Option<Point> {
+    if viewport_h <= 0.0 || metrics.line_height <= 0.0 {
+        return None;
+    }
+    let row_h = metrics.line_height;
+    let char_w = metrics.char_width.max(0.5);
+    let content_y = scroll_y + ly.max(0.0);
+
+    let mut item_top = 0.0_f32;
+    for it in items {
+        let item_h = it.height(row_h);
+        let item_bottom = item_top + item_h;
+        if content_y >= item_top && content_y < item_bottom {
+            // El click cae en este item.
+            match it {
+                Item::Chrome { .. } => return None, // chrome no se selecciona
+                Item::Lines { start, end } => {
+                    let nrows = end.saturating_sub(*start);
+                    if nrows == 0 {
+                        return None;
+                    }
+                    let k = (((content_y - item_top) / row_h).floor() as usize).min(nrows - 1);
+                    let line = start + k;
+                    let text = store.line(line).unwrap_or("");
+                    // Visual col bajo el cursor (0-based, snap a celda más cercana
+                    // hacia abajo); fuera del gutter → 0; fuera del texto → fin.
+                    let vis_x = (lx - gutter_w).max(0.0);
+                    let vis_col = (vis_x / char_w).floor() as usize;
+                    // Convertir visual col → byte col contando chars.
+                    let byte_col = visual_to_byte_col(text, vis_col);
+                    return Some(Point::new(line, byte_col));
+                }
+            }
+        }
+        item_top = item_bottom;
+    }
+    None
+}
+
+/// Convierte una columna visual (índice de char, 0-based) en una columna
+/// de bytes dentro de `text`. Si la visual cae más allá del último char,
+/// devuelve `text.len()`. Pensado para hit-test de mouse en mono.
+fn visual_to_byte_col(text: &str, vis_col: usize) -> usize {
+    let mut chars_seen = 0;
+    for (b, _c) in text.char_indices() {
+        if chars_seen == vis_col {
+            return b;
+        }
+        chars_seen += 1;
+    }
+    text.len()
+}
+
 /// Un rectángulo de highlight para pintar — coords **relativas al viewport**
 /// del `block_surface` (origen = esquina superior-izquierda del rect del
 /// widget, ya descontado `scroll_y`).
@@ -403,6 +476,81 @@ mod tests {
             char_width: 8.0,
         };
         selection_rects(items, scroll_y, viewport_h, metrics, gutter_w, store, sel)
+    }
+
+    fn point(
+        items: &[Item<()>],
+        scroll_y: f32,
+        gutter_w: f32,
+        store: &Scrollback,
+        lx: f32,
+        ly: f32,
+    ) -> Option<Point> {
+        let metrics = TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 8.0,
+        };
+        point_at(items, scroll_y, 100.0, metrics, gutter_w, store, lx, ly)
+    }
+
+    #[test]
+    fn point_at_resuelve_linea_y_columna_para_un_click_simple() {
+        let store = store_of(&["abcdef", "ghijkl"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 2)];
+        // Click en línea 1 (y = 20 → fila 1 con row_h=16), col visual = (50-30)/8 = 2.
+        let p = point(&items, 0.0, 30.0, &store, 50.0, 20.0).unwrap();
+        assert_eq!(p, Point::new(1, 2));
+    }
+
+    #[test]
+    fn point_at_clampea_click_fuera_del_texto_al_fin_de_linea() {
+        // Línea de 4 chars, click muy a la derecha → snap al fin (col 4).
+        let store = store_of(&["abcd"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
+        let p = point(&items, 0.0, 30.0, &store, 1000.0, 5.0).unwrap();
+        assert_eq!(p, Point::new(0, 4));
+    }
+
+    #[test]
+    fn point_at_en_el_gutter_cae_a_col_0() {
+        // Click dentro del gutter (lx < gutter_w) → col visual = 0 → byte col = 0.
+        let store = store_of(&["xyz"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
+        let p = point(&items, 0.0, 30.0, &store, 10.0, 5.0).unwrap();
+        assert_eq!(p, Point::new(0, 0));
+    }
+
+    #[test]
+    fn point_at_devuelve_none_para_chrome_o_fuera() {
+        // Item 0 = chrome (alto 24); item 1 = 2 líneas. Click en y=10 cae en chrome.
+        let store = store_of(&["aa", "bb"]);
+        let chrome_view: llimphi_ui::View<()> = llimphi_ui::View::new(Default::default());
+        let items: Vec<Item<()>> = vec![Item::chrome(24.0, chrome_view), Item::lines(0, 2)];
+        assert_eq!(point(&items, 0.0, 30.0, &store, 50.0, 10.0), None);
+        // y > total: fuera del stream → None.
+        assert_eq!(point(&items, 0.0, 30.0, &store, 50.0, 1000.0), None);
+    }
+
+    #[test]
+    fn point_at_respeta_scroll_y() {
+        // 100 líneas; con scroll_y = 800, el click en y=8 cae en la línea
+        // floor((800+8)/16) = 50.
+        let lines: Vec<&str> = (0..100).map(|_| "ab").collect();
+        let store = store_of(&lines);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 100)];
+        let p = point(&items, 800.0, 30.0, &store, 30.0, 8.0).unwrap();
+        assert_eq!(p, Point::new(50, 0));
+    }
+
+    #[test]
+    fn point_at_convierte_visual_a_byte_para_utf8() {
+        // "héllo": vis 0='h', vis 1='é' (2 bytes), vis 2='l' (byte 3), vis 3='l' (byte 4).
+        let store = store_of(&["héllo"]);
+        let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
+        // Click en vis col 2 (lx = 30 + 2*8 = 46) → byte col 3.
+        let p = point(&items, 0.0, 30.0, &store, 46.0, 5.0).unwrap();
+        assert_eq!(p, Point::new(0, 3));
     }
 
     #[test]

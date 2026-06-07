@@ -145,14 +145,58 @@ where
     F: Fn(f32) -> Msg + Send + Sync + 'static,
 {
     block_surface_with_selection(
-        store, items, scroll_y, viewport_h, metrics, palette, line_style, on_scroll, measure, None,
+        store,
+        items,
+        scroll_y,
+        viewport_h,
+        metrics,
+        palette,
+        line_style,
+        on_scroll,
+        measure,
+        SelectionConfig::default(),
     )
 }
 
-/// Como [`block_surface`], pero con una selección opcional que se pinta como
-/// overlay translúcido sobre los rangos seleccionados (`palette.bg_selection`).
-/// Los rects se computan con [`selection_rects`] y se materializan por encima
-/// de las filas de texto, debajo del scrollbar.
+/// Configura el cableado de selección sobre el `block_surface`. Empaqueta el
+/// rango actual (para pintar el overlay) y un handler de drag (para que el
+/// caller traduzca cada `(DragPhase, lx0, ly0, dx, dy)` del viewport en
+/// `Msg`s que actualicen su estado de selección).
+///
+/// Diseño en dos partes para mantener el control puro (Regla 2): el widget
+/// no toca el modelo, sólo pinta el rango que el caller le pasa y dispara
+/// callbacks; el caller arma la `SelectionRange` con [`crate::point_at`] y
+/// las acumula en su `Model`.
+pub struct SelectionConfig<'a, Msg> {
+    /// Rango vigente — si está, se pinta como overlay translúcido.
+    pub range: Option<&'a SelectionRange>,
+    /// Handler de drag del cuerpo de la superficie. Se ata al viewport con
+    /// `draggable_at` (gana sobre el `on_click` global del padre). `None`
+    /// = la superficie no es seleccionable por mouse (sólo pinta).
+    pub on_drag: Option<Arc<dyn Fn(DragPhase, f32, f32, f32, f32) -> Option<Msg> + Send + Sync>>,
+}
+
+impl<Msg> Default for SelectionConfig<'_, Msg> {
+    fn default() -> Self {
+        Self {
+            range: None,
+            on_drag: None,
+        }
+    }
+}
+
+impl<'a, Msg> SelectionConfig<'a, Msg> {
+    /// Sólo pinta el rango (sin cableado de mouse).
+    pub fn painted(range: &'a SelectionRange) -> Self {
+        Self {
+            range: Some(range),
+            on_drag: None,
+        }
+    }
+}
+
+/// Como [`block_surface`], pero acepta una [`SelectionConfig`] para pintar el
+/// overlay de selección y/o cablear el drag del mouse al `Msg` del caller.
 #[allow(clippy::too_many_arguments)]
 pub fn block_surface_with_selection<Msg, S, F>(
     store: &Scrollback,
@@ -164,7 +208,7 @@ pub fn block_surface_with_selection<Msg, S, F>(
     line_style: S,
     on_scroll: F,
     measure: Option<Arc<Mutex<f32>>>,
-    selection: Option<&SelectionRange>,
+    selection: SelectionConfig<'_, Msg>,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
@@ -181,7 +225,7 @@ where
     // Highlight de selección: precomputado contra `&items` antes de consumirlos
     // en la iteración. La pintada va DESPUÉS del texto para que se vea encima
     // (alpha de la paleta) y ANTES del scrollbar.
-    let sel_rects = match selection {
+    let sel_rects = match selection.range {
         Some(sel) if !sel.is_empty() => {
             selection_rects(&items, off, viewport_h, metrics, gw, store, sel)
         }
@@ -282,6 +326,15 @@ where
             if let Ok(mut g) = slot.lock() {
                 *g = rect.h;
             }
+        });
+    }
+
+    // Drag-to-select: forwardea cada `(DragPhase, lx0, ly0, dx, dy)` del
+    // viewport al handler del caller. El caller mantiene el `SelectionRange`
+    // en su `Model` y usa `crate::point_at` para mapear (lx, ly) → `Point`.
+    if let Some(on_drag) = selection.on_drag {
+        viewport = viewport.draggable_at(move |phase, dx, dy, lx0, ly0| {
+            (on_drag)(phase, lx0, ly0, dx, dy)
         });
     }
 
