@@ -755,7 +755,10 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "justify-self" => parse_justify_self(value).map(DeclKind::JustifySelf),
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
-        "column-gap" => parse_length_px(value).map(DeclKind::ColumnGap),
+        // Fase 7.689 — `-webkit-column-gap` alias vendor de `column-gap`.
+        "column-gap" | "-webkit-column-gap" => {
+            parse_length_px(value).map(DeclKind::ColumnGap)
+        }
         "box-sizing" => parse_box_sizing(value).map(DeclKind::BoxSizing),
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
         "min-height" => parse_length_or_pct(value).map(DeclKind::MinHeight),
@@ -2924,10 +2927,18 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_content_visibility(value).map(DeclKind::ContentVisibility)
         }
         "contain" => parse_contain(value).map(DeclKind::Contain),
-        "column-count" => Some(DeclKind::ColumnCount(parse_column_count(value))),
-        "column-width" => parse_length_or_pct(value).map(DeclKind::ColumnWidth),
-        "column-rule-width" => parse_length_px(value).map(DeclKind::ColumnRuleWidth),
-        "column-rule-color" => {
+        // Fase 7.684-7.688 — la familia `-webkit-column-*` es el alias vendor
+        // (de facto) de `column-*`: enruta al mismo parser/almacén.
+        "column-count" | "-webkit-column-count" => {
+            Some(DeclKind::ColumnCount(parse_column_count(value)))
+        }
+        "column-width" | "-webkit-column-width" => {
+            parse_length_or_pct(value).map(DeclKind::ColumnWidth)
+        }
+        "column-rule-width" | "-webkit-column-rule-width" => {
+            parse_length_px(value).map(DeclKind::ColumnRuleWidth)
+        }
+        "column-rule-color" | "-webkit-column-rule-color" => {
             if is_current_color(value) {
                 Some(DeclKind::ColumnRuleColor(None))
             } else {
@@ -2936,7 +2947,9 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // `column-rule-style` y `column-rule` van por `parse_declarations`.
         "column-fill" => parse_column_fill(value).map(DeclKind::ColumnFill),
-        "column-span" => parse_column_span(value).map(DeclKind::ColumnSpan),
+        "column-span" | "-webkit-column-span" => {
+            parse_column_span(value).map(DeclKind::ColumnSpan)
+        }
         // `page-break-inside` (legacy CSS 2.1) = `break-inside` (subset).
         "break-inside" | "page-break-inside" => {
             parse_break_inside(value).map(DeclKind::BreakInside)
