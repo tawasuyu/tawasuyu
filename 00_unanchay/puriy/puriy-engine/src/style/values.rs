@@ -1311,6 +1311,21 @@ pub struct ComputedStyle {
     /// `-webkit-perspective-origin-y` (Fase 7.668). Longhand vertical del
     /// origen de perspectiva. Parse opaco — `None` = `50%`. NO hereda. Plumb.
     pub webkit_perspective_origin_y: Option<String>,
+    /// `-webkit-min-logical-width` (Fase 7.669). Alias legacy de
+    /// `min-inline-size`. Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_min_logical_width: Option<String>,
+    /// `-webkit-max-logical-width` (Fase 7.670). Alias legacy de
+    /// `max-inline-size`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_max_logical_width: Option<String>,
+    /// `-webkit-min-logical-height` (Fase 7.671). Alias legacy de
+    /// `min-block-size`. Parse opaco — `None` = `auto`. NO hereda. Plumb.
+    pub webkit_min_logical_height: Option<String>,
+    /// `-webkit-max-logical-height` (Fase 7.672). Alias legacy de
+    /// `max-block-size`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_max_logical_height: Option<String>,
+    /// `-webkit-background-composite` (Fase 7.673). Modo de composición de las
+    /// capas de fondo. Parse opaco — `None` = `source-over`. NO hereda. Plumb.
+    pub webkit_background_composite: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4676,6 +4691,11 @@ impl Default for ComputedStyle {
             webkit_transform_origin_z: None,
             webkit_perspective_origin_x: None,
             webkit_perspective_origin_y: None,
+            webkit_min_logical_width: None,
+            webkit_max_logical_width: None,
+            webkit_min_logical_height: None,
+            webkit_max_logical_height: None,
+            webkit_background_composite: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

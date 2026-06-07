@@ -2760,6 +2760,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitPerspectiveOriginY(Some(v.to_string())))
             }
         }
+        // Fase 7.669 — `-webkit-min-logical-width` (min-inline-size). `auto` → None.
+        "-webkit-min-logical-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitMinLogicalWidth(None))
+            } else {
+                Some(DeclKind::WebkitMinLogicalWidth(Some(v.to_string())))
+            }
+        }
+        // Fase 7.670 — `-webkit-max-logical-width` (max-inline-size). `none` → None.
+        "-webkit-max-logical-width" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitMaxLogicalWidth(None))
+            } else {
+                Some(DeclKind::WebkitMaxLogicalWidth(Some(v.to_string())))
+            }
+        }
+        // Fase 7.671 — `-webkit-min-logical-height` (min-block-size). `auto` → None.
+        "-webkit-min-logical-height" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitMinLogicalHeight(None))
+            } else {
+                Some(DeclKind::WebkitMinLogicalHeight(Some(v.to_string())))
+            }
+        }
+        // Fase 7.672 — `-webkit-max-logical-height` (max-block-size). `none` → None.
+        "-webkit-max-logical-height" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitMaxLogicalHeight(None))
+            } else {
+                Some(DeclKind::WebkitMaxLogicalHeight(Some(v.to_string())))
+            }
+        }
+        // Fase 7.673 — `-webkit-background-composite`. `source-over` → None.
+        "-webkit-background-composite" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("source-over") {
+                Some(DeclKind::WebkitBackgroundComposite(None))
+            } else {
+                Some(DeclKind::WebkitBackgroundComposite(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
