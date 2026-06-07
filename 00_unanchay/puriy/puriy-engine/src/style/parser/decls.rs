@@ -1030,7 +1030,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "grid-auto-rows" => parse_grid_template(value).map(DeclKind::GridAutoRows),
         // Fase 7.444 — `shape-outside` (CSS Shapes 1). Parse opaco (igual que
         // offset-path) — guardamos el valor crudo. NO hereda.
-        "shape-outside" => {
+        // Fase 7.659 — `-webkit-shape-outside` alias vendor de `shape-outside`.
+        "shape-outside" | "-webkit-shape-outside" => {
             let raw = value.trim();
             if raw.is_empty() || raw.eq_ignore_ascii_case("none") {
                 Some(DeclKind::ShapeOutside(None))
@@ -1039,8 +1040,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.445 — `shape-margin` (CSS Shapes 1). `<length-or-pct>`
-        // no-negativo. NO hereda.
-        "shape-margin" => {
+        // no-negativo. NO hereda. Fase 7.660 — `-webkit-shape-margin` alias.
+        "shape-margin" | "-webkit-shape-margin" => {
             let v = parse_length_or_pct(value)?;
             match v {
                 LengthVal::Px(n) if n < 0.0 => None,
@@ -1050,7 +1051,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // Fase 7.446 — `shape-image-threshold` (CSS Shapes 1). Alpha [0..1].
         // Acepta también porcentaje (50% → 0.5). NO hereda.
-        "shape-image-threshold" => {
+        // Fase 7.661 — `-webkit-shape-image-threshold` alias vendor.
+        "shape-image-threshold" | "-webkit-shape-image-threshold" => {
             parse_alpha_value(value).map(DeclKind::ShapeImageThreshold)
         }
         // Fase 7.447 — `text-combine-upright` (CSS Writing Modes 3). NO hereda.
@@ -2810,14 +2812,16 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         }
         // `text-emphasis` shorthand: ver `parse_declarations`.
         "ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
-        "transform-origin" => {
+        // Fase 7.662 — `-webkit-transform-origin` alias vendor del shorthand.
+        "transform-origin" | "-webkit-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
         }
         "transform-style" => {
             parse_transform_style(value).map(DeclKind::TransformStyle)
         }
         "perspective" => parse_perspective(value).map(DeclKind::Perspective),
-        "perspective-origin" => {
+        // Fase 7.663 — `-webkit-perspective-origin` alias vendor del shorthand.
+        "perspective-origin" | "-webkit-perspective-origin" => {
             parse_perspective_origin(value).map(DeclKind::PerspectiveOrigin)
         }
         "backface-visibility" => {
