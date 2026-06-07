@@ -608,7 +608,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
-        if prop.eq_ignore_ascii_case("text-decoration") {
+        // Fase 7.760 — alias `-webkit-text-decoration` → estándar (shorthand legacy).
+        if prop.eq_ignore_ascii_case("text-decoration")
+            || prop.eq_ignore_ascii_case("-webkit-text-decoration")
+        {
             out.extend(parse_text_decoration_shorthand(value, important));
             continue;
         }
@@ -3308,7 +3311,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "color-scheme" => parse_color_scheme(value).map(DeclKind::ColorScheme),
         "counter-set" => Some(DeclKind::CounterSet(parse_counter_list(value, 0))),
         "quotes" => Some(DeclKind::Quotes(parse_quotes(value))),
-        "text-underline-position" => {
+        // Fase 7.761 — alias `-webkit-text-underline-position` → estándar.
+        "text-underline-position" | "-webkit-text-underline-position" => {
             parse_text_underline_position(value).map(DeclKind::TextUnderlinePosition)
         }
         "text-justify" => parse_text_justify(value).map(DeclKind::TextJustify),
@@ -3392,7 +3396,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "overflow-clip-margin" => {
             parse_overflow_clip_margin(value).map(DeclKind::OverflowClipMargin)
         }
-        "text-align-last" => {
+        // Fase 7.762 — alias `-webkit-text-align-last` → estándar.
+        "text-align-last" | "-webkit-text-align-last" => {
             parse_text_align_last(value).map(DeclKind::TextAlignLast)
         }
         "text-wrap" => parse_text_wrap(value).map(DeclKind::TextWrap),
