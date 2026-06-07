@@ -33,7 +33,7 @@ pub mod view;
 
 pub use blocks::{
     block_surface, block_surface_with_selection, blocks_height, blocks_scroll_to_bottom,
-    gutter_width, Item, ItemGeo, SelectionConfig,
+    gutter_width, line_top_in_content, Item, ItemGeo, SelectionConfig,
 };
 pub use find::{find_matches, next_match, prev_match, FindMatch, FindOpts};
 pub use select::{point_at, point_at_geo, selection_rects, HighlightRect, Point, SelectionRange};

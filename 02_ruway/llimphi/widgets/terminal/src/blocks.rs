@@ -555,6 +555,26 @@ where
 /// (`total_pushed`), con un padding fijo. Se fija por el total histórico (no por
 /// lo visible) para que el gutter no salte al scrollear, y es **el mismo** para
 /// todos los bloques (los números alinean entre cards).
+/// `y` (content coords) del renglón global `target_line` recorrido en el
+/// stream de `items`. Devuelve `None` si la línea no cae en ningún
+/// `Item::Lines`. **Puro** — base del auto-scroll al match de find: el
+/// caller compone `scroll_y = top - margin` y lo clampa al overflow.
+pub fn line_top_in_content(items_geo: &[ItemGeo], row_h: f32, target_line: usize) -> Option<f32> {
+    let mut top = 0.0_f32;
+    for it in items_geo {
+        match it {
+            ItemGeo::Chrome(h) => top += *h,
+            ItemGeo::Lines(start, end) => {
+                if target_line >= *start && target_line < *end {
+                    return Some(top + (target_line - start) as f32 * row_h);
+                }
+                top += (end.saturating_sub(*start)) as f32 * row_h;
+            }
+        }
+    }
+    None
+}
+
 pub fn gutter_width(store: &Scrollback, metrics: TermMetrics) -> f32 {
     let max_num = store.total_pushed().max(1);
     let digits = (max_num as f64).log10().floor() as usize + 1;
@@ -665,6 +685,31 @@ mod tests {
         let runs = vec![(0, 5, c), (3, 100, c), (50, 60, c), (4, 4, c)];
         let out = clamp_runs(runs, 10);
         assert_eq!(out, vec![(0, 5, c), (3, 10, c)]);
+    }
+
+    #[test]
+    fn line_top_camina_chrome_y_lineas() {
+        // [Chrome(22), Lines(0..3), Chrome(10), Lines(0..2)]: target=0 → top=22;
+        // target=2 → top=22+2*16=54; target=3 (en el segundo bloque, offset
+        // chrome 10 + 3 filas anteriores * 16) → no aplica porque target=3 está
+        // FUERA del primer Lines y el segundo es de 0..2 (otro rango). Test
+        // ajustado: target=0 cae en el PRIMER Lines (que es 0..3).
+        let items: Vec<ItemGeo> = vec![
+            ItemGeo::Chrome(22.0),
+            ItemGeo::Lines(0, 3),
+            ItemGeo::Chrome(10.0),
+            ItemGeo::Lines(10, 12),
+        ];
+        // target_line=0 → primer Lines, k=0 → top = 22 + 0*16 = 22.
+        assert_eq!(line_top_in_content(&items, 16.0, 0), Some(22.0));
+        // target_line=2 → primer Lines, k=2 → top = 22 + 2*16 = 54.
+        assert_eq!(line_top_in_content(&items, 16.0, 2), Some(54.0));
+        // target_line=10 → segundo Lines, k=0 → top = 22 + 48 + 10 + 0 = 80.
+        assert_eq!(line_top_in_content(&items, 16.0, 10), Some(80.0));
+        // target_line=11 → segundo Lines, k=1 → top = 80 + 16 = 96.
+        assert_eq!(line_top_in_content(&items, 16.0, 11), Some(96.0));
+        // target fuera del store → None.
+        assert_eq!(line_top_in_content(&items, 16.0, 99), None);
     }
 
     #[test]

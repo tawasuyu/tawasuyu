@@ -1995,7 +1995,129 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     .radius(3.0)
     .clip(true)
     .paint_with(painter)
-    .children(vec![surface])
+    .children({
+        // Barra de find encima de la superficie, sólo si está abierta. Es
+        // focus-grabbing (la dispatch ya rutea las teclas a `handle_find_key`).
+        let mut kids: Vec<View<HostMsg>> = Vec::new();
+        if let Some(f) = &state.find {
+            kids.push(find_bar_view::<HostMsg>(f, theme, lift));
+        }
+        kids.push(surface);
+        kids
+    })
+}
+
+/// Barra de búsqueda Ctrl+F: lupa + query (cursor) + contador `M/N` + chip
+/// `Aa` (toggle case) + flechas + ✕. Compacta, encima de la superficie de
+/// output. Los clics emiten los `Msg::Find*` ya cableados.
+fn find_bar_view<HostMsg: Clone + 'static>(
+    f: &crate::FindState,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    let lup = View::new(Style {
+        size: Size { width: length(14.0_f32), height: length(14.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![llimphi_icons::icon_view(
+        llimphi_icons::Icon::Search,
+        theme.fg_muted,
+        1.6,
+    )]);
+
+    // Query con cursor titilante simulado por sufijo "▏" — paridad simple
+    // con el cabezal del shell sin meter blink (innecesario en una barra).
+    let mut shown = f.query.clone();
+    shown.push('▏');
+    let query_view = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: Dimension::auto(), height: length(20.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(shown, 13.0, theme.fg_text, Alignment::Start)
+    .mono();
+
+    // Contador `M/N`. Sin matches: "0/0" muted, sin destacar.
+    let total = f.matches.len();
+    let cur = f.current.map(|i| i + 1).unwrap_or(0);
+    let counter_color = if total == 0 && !f.query.is_empty() {
+        theme.fg_destructive
+    } else {
+        theme.fg_muted
+    };
+    let counter = View::new(Style {
+        size: Size { width: length(54.0_f32), height: length(20.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(format!("{cur}/{total}"), 11.0, counter_color, Alignment::End)
+    .mono();
+
+    let case_chip = {
+        let (fill, fg) = if f.case_insensitive {
+            (theme.accent, theme.bg_panel)
+        } else {
+            (theme.bg_input, theme.fg_muted)
+        };
+        View::new(Style {
+            size: Size { width: length(24.0_f32), height: length(20.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .fill(fill)
+        .radius(3.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(Msg::FindToggleCase))
+        .text_aligned("Aa".to_string(), 11.0, fg, Alignment::Center)
+        .mono()
+    };
+
+    let arrow = |icon, msg: Msg| {
+        View::new(Style {
+            size: Size { width: length(20.0_f32), height: length(20.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .fill(theme.bg_input)
+        .radius(3.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(msg))
+        .children(vec![llimphi_icons::icon_view(icon, theme.fg_muted, 1.6)])
+    };
+    let prev_btn = arrow(llimphi_icons::Icon::ChevronUp, Msg::FindPrev);
+    let next_btn = arrow(llimphi_icons::Icon::ChevronDown, Msg::FindNext);
+    let close_btn = View::new(Style {
+        size: Size { width: length(20.0_f32), height: length(20.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .radius(3.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::FindClose))
+    .children(vec![llimphi_icons::icon_view(
+        llimphi_icons::Icon::X,
+        theme.fg_muted,
+        1.6,
+    )]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(4.0_f32),
+            bottom: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![lup, query_view, counter, case_chip, prev_btn, next_btn, close_btn])
 }
 
 /// Color del badge de estado a partir del texto de la notice de cierre

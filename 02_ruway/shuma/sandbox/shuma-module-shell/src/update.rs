@@ -105,9 +105,23 @@ pub fn update(state: State, msg: Msg) -> State {
             // Cualquier tecla del input reancla el parpadeo del caret (queda
             // sólido un instante y luego titila) — el input se siente vivo.
             s.input_edit_at_ms = now_unix_millis();
+            // Si la barra de find del cuerpo de output está abierta, las
+            // teclas van ahí (focus-grabbing). Esc cierra, Enter avanza,
+            // Shift+Enter retrocede, Backspace borra, chars editan la query.
+            if s.find.is_some() {
+                return handle_find_key(s, &ev);
+            }
             // Si el overlay de búsqueda está abierto, las teclas van ahí.
             if s.history_search.is_some() {
                 return handle_search_key(s, &ev);
+            }
+            // Ctrl+F: abre la barra de find del cuerpo de output (sólo en
+            // modo superficie; la barra se ignora en el camino viejo).
+            if ev.modifiers.ctrl
+                && matches!(&ev.key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
+            {
+                s.find = Some(FindState::default());
+                return s;
             }
             // Ctrl-A: seleccionar toda la línea del input.
             if ev.modifiers.ctrl
@@ -419,7 +433,7 @@ fn apply_find_edit(mut s: State, mutate: impl FnOnce(&mut String)) -> State {
 /// edición). Si la nueva query no matchea nada, `current = None` y la
 /// selección se limpia.
 fn recompute_find(mut s: State) -> State {
-    use llimphi_widget_terminal::{find_matches, FindOpts, Point, SelectionRange};
+    use llimphi_widget_terminal::{find_matches, FindOpts};
     let Some(f) = s.find.as_mut() else {
         return s;
     };
@@ -443,39 +457,65 @@ fn recompute_find(mut s: State) -> State {
     if f.matches.is_empty() {
         f.current = None;
         s.surf_selection = None;
+        s
     } else {
-        let i = 0;
-        f.current = Some(i);
-        let m = f.matches[i];
-        s.surf_selection = Some(SelectionRange {
-            anchor: Point::new(m.line, m.start),
-            head: Point::new(m.line, m.end),
-        });
+        f.current = Some(0);
+        apply_current_match(s, &snap)
     }
-    s
 }
 
 /// Avanza/retrocede el match actual (cíclico) y refleja como selección.
 fn step_find(mut s: State, forward: bool) -> State {
-    use llimphi_widget_terminal::{next_match, prev_match, Point, SelectionRange};
+    use llimphi_widget_terminal::{next_match, prev_match};
+    let snap = match s.surf_layout.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(snap) = snap else {
+        return s;
+    };
     let Some(f) = s.find.as_mut() else {
         return s;
     };
     if f.matches.is_empty() {
         return s;
     }
-    let new_current = if forward {
+    f.current = if forward {
         next_match(&f.matches, f.current)
     } else {
         prev_match(&f.matches, f.current)
     };
-    f.current = new_current;
-    if let Some(i) = new_current {
-        let m = f.matches[i];
-        s.surf_selection = Some(SelectionRange {
-            anchor: Point::new(m.line, m.start),
-            head: Point::new(m.line, m.end),
-        });
+    apply_current_match(s, &snap)
+}
+
+/// Refleja el match `current` de `find` como `surf_selection` y ajusta
+/// `scroll_px` para traerlo a la vista (centrado en el viewport, clampeado
+/// al overflow). Toma `snap` aparte para no doble-lockear `surf_layout`.
+fn apply_current_match(mut s: State, snap: &crate::SurfLayout) -> State {
+    use llimphi_widget_terminal::{line_top_in_content, Point, SelectionRange};
+    let Some(f) = s.find.as_ref() else {
+        return s;
+    };
+    let Some(i) = f.current else {
+        return s;
+    };
+    let Some(m) = f.matches.get(i).copied() else {
+        return s;
+    };
+    // Selección = el span del match (mismo painter del overlay; ya
+    // copiable con SurfCopySelection).
+    s.surf_selection = Some(SelectionRange {
+        anchor: Point::new(m.line, m.start),
+        head: Point::new(m.line, m.end),
+    });
+    // Auto-scroll: lleva la línea del match a la mitad del viewport.
+    if let Some(line_top) = line_top_in_content(&snap.items_geo, snap.metrics.line_height, m.line) {
+        let centered = (line_top - snap.viewport_h * 0.5).max(0.0);
+        // Convertir scroll_y (desde arriba) a scroll_px (desde abajo) — el
+        // modelo del shell usa esta convención para anclar al fondo en
+        // ausencia de scroll manual.
+        let overflow = s.out_overflow.lock().map(|g| *g).unwrap_or(0.0);
+        s.scroll_px = (overflow - centered).clamp(0.0, overflow);
     }
     s
 }
@@ -810,6 +850,37 @@ pub(crate) fn handle_search_key(mut s: State, ev: &KeyEvent) -> State {
     }
     s.history_search = Some(search);
     s
+}
+
+/// Maneja teclas mientras la barra de find del cuerpo de output está
+/// abierta (Ctrl+F). Esc cierra; Enter avanza (Shift+Enter retrocede);
+/// Backspace borra; cualquier char visible se concatena a la query y
+/// re-busca. F3/Shift+F3 son atajos alternativos para next/prev.
+pub(crate) fn handle_find_key(s: State, ev: &KeyEvent) -> State {
+    if s.find.is_none() {
+        return s;
+    }
+    match &ev.key {
+        Key::Named(NamedKey::Escape) => update(s, Msg::FindClose),
+        Key::Named(NamedKey::Enter) | Key::Named(NamedKey::F3) => {
+            let msg = if ev.modifiers.shift { Msg::FindPrev } else { Msg::FindNext };
+            update(s, msg)
+        }
+        Key::Named(NamedKey::Backspace) => update(s, Msg::FindBackspace),
+        _ => {
+            if let Some(text) = &ev.text {
+                let mut s = s;
+                for c in text.chars() {
+                    if !c.is_control() {
+                        s = update(s, Msg::FindChar(c));
+                    }
+                }
+                s
+            } else {
+                s
+            }
+        }
+    }
 }
 
 /// `true` si hay un `ActiveRun` con PTY vivo. Las teclas van al stdin del
