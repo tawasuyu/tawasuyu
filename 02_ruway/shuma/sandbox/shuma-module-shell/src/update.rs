@@ -357,8 +357,115 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::TuiMouseWheel { dy, lx, ly, rect_w, rect_h } => {
             forward_tui_wheel_to_pty(&s, dy, lx, ly, rect_w, rect_h);
         }
+        Msg::SurfSelectDrag { phase, dx, dy, ax, ay } => {
+            s = apply_surf_select_drag(s, phase, dx, dy, ax, ay);
+        }
+        Msg::SurfClearSelection => {
+            s.surf_selection = None;
+            s.surf_selecting = false;
+        }
+        Msg::SurfCopySelection => {
+            copy_surf_selection(&s);
+        }
     }
     s
+}
+
+/// Actualiza la selección viva del cuerpo de output en modo superficie. El
+/// primer Move arranca (`anchor = head = point_at(ax, ay)`); los siguientes
+/// extienden (`head = point_at(acc)`); End deja la selección fijada pero
+/// `surf_selecting = false` para que un próximo Move arranque limpio.
+fn apply_surf_select_drag(
+    mut s: State,
+    phase: llimphi_ui::DragPhase,
+    dx: f32,
+    dy: f32,
+    ax: f32,
+    ay: f32,
+) -> State {
+    use llimphi_ui::DragPhase;
+    use llimphi_widget_terminal::{point_at_geo, SelectionRange};
+    // Snapshot del layout publicado por la `view` el frame previo. Sin él
+    // no podemos resolver `(lx, ly)` a `Point` — es no-op silencioso.
+    let snap = match s.surf_layout.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(snap) = snap else {
+        return s;
+    };
+    match phase {
+        DragPhase::Move => {
+            if !s.surf_selecting {
+                // Primer evento del drag: ancla en (ax, ay).
+                s.surf_selecting = true;
+                s.surf_drag_acc = (ax, ay);
+                let p = point_at_geo(
+                    &snap.items_geo,
+                    snap.scroll_y,
+                    snap.viewport_h,
+                    snap.metrics,
+                    snap.gutter_w,
+                    &snap.store,
+                    ax,
+                    ay,
+                );
+                s.surf_selection = p.map(SelectionRange::collapsed);
+            } else {
+                // Extender: acumulamos delta sobre la posición previa.
+                s.surf_drag_acc.0 += dx;
+                s.surf_drag_acc.1 += dy;
+                let p = point_at_geo(
+                    &snap.items_geo,
+                    snap.scroll_y,
+                    snap.viewport_h,
+                    snap.metrics,
+                    snap.gutter_w,
+                    &snap.store,
+                    s.surf_drag_acc.0,
+                    s.surf_drag_acc.1,
+                );
+                if let (Some(sel), Some(p)) = (s.surf_selection.as_mut(), p) {
+                    sel.head = p;
+                }
+            }
+        }
+        DragPhase::End => {
+            s.surf_selecting = false;
+            // Si el drag fue tan corto que la selección quedó colapsada,
+            // limpiamos — un click sin arrastre no debería dejar una
+            // selección vacía visible (es la misma UX que xterm/gnome-term).
+            if let Some(sel) = s.surf_selection {
+                if sel.is_empty() {
+                    s.surf_selection = None;
+                }
+            }
+        }
+    }
+    s
+}
+
+/// Copia al clipboard el texto de la selección viva (paridad con el
+/// `:copy` del modo card y con el Ctrl+C de xterm). No-op silencioso si no
+/// hay selección o el clipboard no está disponible.
+fn copy_surf_selection(s: &State) {
+    let Some(sel) = s.surf_selection.as_ref() else {
+        return;
+    };
+    let snap = match s.surf_layout.lock() {
+        Ok(g) => g.clone(),
+        Err(p) => p.into_inner().clone(),
+    };
+    let Some(snap) = snap else {
+        return;
+    };
+    let text = sel.slice_text(&snap.store);
+    if text.is_empty() {
+        return;
+    }
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(text);
+    }
 }
 
 /// Acciona el click sobre una decoración del output. Ninguna acción

@@ -22,7 +22,7 @@
 //! Sin dependencias de UI ni de wgpu — puro, testeable a mano. Las pintadas y
 //! el cableado de mouse vienen en commits siguientes (Fase 3 continúa).
 
-use crate::blocks::Item;
+use crate::blocks::{Item, ItemGeo};
 use crate::store::Scrollback;
 use crate::view::TermMetrics;
 
@@ -181,6 +181,26 @@ pub fn point_at<Msg>(
     lx: f32,
     ly: f32,
 ) -> Option<Point> {
+    // Wrapper sobre `point_at_geo` que extrae la geometría liviana de cada
+    // item. Práctico para callers que aún tienen el `Vec<Item>` a mano.
+    let geo: Vec<ItemGeo> = items.iter().map(|it| it.geo()).collect();
+    point_at_geo(&geo, scroll_y, viewport_h, metrics, gutter_w, store, lx, ly)
+}
+
+/// Como [`point_at`] pero contra `&[ItemGeo]` — lo que el caller puede
+/// stashear de un frame a otro (es `Copy`, no carga `View`s). Útil para que
+/// el `update` resuelva clicks contra el layout del render previo sin
+/// re-armar los items.
+pub fn point_at_geo(
+    items: &[ItemGeo],
+    scroll_y: f32,
+    viewport_h: f32,
+    metrics: TermMetrics,
+    gutter_w: f32,
+    store: &Scrollback,
+    lx: f32,
+    ly: f32,
+) -> Option<Point> {
     if viewport_h <= 0.0 || metrics.line_height <= 0.0 {
         return None;
     }
@@ -193,10 +213,9 @@ pub fn point_at<Msg>(
         let item_h = it.height(row_h);
         let item_bottom = item_top + item_h;
         if content_y >= item_top && content_y < item_bottom {
-            // El click cae en este item.
             match it {
-                Item::Chrome { .. } => return None, // chrome no se selecciona
-                Item::Lines { start, end } => {
+                ItemGeo::Chrome(_) => return None,
+                ItemGeo::Lines(start, end) => {
                     let nrows = end.saturating_sub(*start);
                     if nrows == 0 {
                         return None;
@@ -204,11 +223,8 @@ pub fn point_at<Msg>(
                     let k = (((content_y - item_top) / row_h).floor() as usize).min(nrows - 1);
                     let line = start + k;
                     let text = store.line(line).unwrap_or("");
-                    // Visual col bajo el cursor (0-based, snap a celda más cercana
-                    // hacia abajo); fuera del gutter → 0; fuera del texto → fin.
                     let vis_x = (lx - gutter_w).max(0.0);
                     let vis_col = (vis_x / char_w).floor() as usize;
-                    // Convertir visual col → byte col contando chars.
                     let byte_col = visual_to_byte_col(text, vis_col);
                     return Some(Point::new(line, byte_col));
                 }

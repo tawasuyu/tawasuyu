@@ -291,6 +291,21 @@ pub struct VimSel {
     pub active: bool,
 }
 
+/// Snapshot del layout del cuerpo de output bajo `SHUMA_TERMINAL_SURFACE=1`.
+/// Lo escribe `output_pane_surface` al final del render; lo lee el handler
+/// del drag de selección para resolver `(lx, ly)` a [`Point`] del store.
+/// **Liviano**: `items_geo` es `Vec<ItemGeo>` (`Copy`), `store` es un Arc
+/// para que el clone post-frame no copie todas las líneas.
+#[derive(Clone)]
+pub struct SurfLayout {
+    pub items_geo: Vec<llimphi_widget_terminal::ItemGeo>,
+    pub scroll_y: f32,
+    pub viewport_h: f32,
+    pub metrics: llimphi_widget_terminal::TermMetrics,
+    pub gutter_w: f32,
+    pub store: Arc<llimphi_widget_terminal::Scrollback>,
+}
+
 #[derive(Clone)]
 pub struct State {
     pub source: Source,
@@ -393,6 +408,27 @@ pub struct State {
     /// publica la `view` y lo usa `Msg::Scroll` para clampar `scroll_px`
     /// sin recalcular la geometría en el handler.
     pub out_overflow: Arc<Mutex<f32>>,
+    /// Selección viva del **stream del scrollback** (modo superficie,
+    /// `SHUMA_TERMINAL_SURFACE=1`). Spans una o más líneas y se traduce a
+    /// texto vía [`llimphi_widget_terminal::SelectionRange::slice_text`].
+    /// `None` = sin selección. La pinta el `block_surface_with_selection` y
+    /// la mutan los handlers de drag (`SurfSelect{Press,Drag,End}`).
+    pub surf_selection: Option<llimphi_widget_terminal::SelectionRange>,
+    /// `true` mientras hay un drag de selección activo (entre el primer Move
+    /// y el End). Separado de `surf_selection` para distinguir "tengo una
+    /// selección viva" de "estoy dragueando ahora" — el primero persiste
+    /// post-release para que el usuario copie.
+    pub surf_selecting: bool,
+    /// Acumulador del drag (`lx0 + Σdx`, `ly0 + Σdy`). El `draggable_at` del
+    /// widget entrega deltas; este campo trackea la posición absoluta
+    /// dentro del viewport para resolverla a [`Point`] con `point_at_geo`.
+    pub surf_drag_acc: (f32, f32),
+    /// Snapshot del layout del último frame de `output_pane_surface` —
+    /// items en versión liviana (`ItemGeo`), métricas, gutter_w, scroll_y,
+    /// viewport_h y una copia barata del `Scrollback`. Lo lee el handler
+    /// del drag para hit-testear `(lx, ly)` contra el render previo, sin
+    /// re-armar los items.
+    pub surf_layout: Arc<Mutex<Option<SurfLayout>>>,
     /// Selección viva en el cuerpo (IDE-text) de una card: `(block,
     /// cursor)`. El cuerpo de cada comando se pinta con
     /// `llimphi-widget-text-editor` read-only (numeración + selección +
@@ -506,6 +542,10 @@ impl State {
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
+            surf_selection: None,
+            surf_selecting: false,
+            surf_drag_acc: (0.0, 0.0),
+            surf_layout: Arc::new(Mutex::new(None)),
             body_sel: None,
             body_menu: None,
             body_drag_accum: (0.0, 0.0),
@@ -802,6 +842,25 @@ pub enum Msg {
         rect_w: f32,
         rect_h: f32,
     },
+    /// Drag del mouse sobre el cuerpo de output en modo **superficie**
+    /// (`SHUMA_TERMINAL_SURFACE=1`). El primer Move arranca/colapsa la
+    /// selección al `(lx0, ly0)`; los siguientes la extienden; el End la
+    /// deja fijada para que el usuario copie. `dx`/`dy` son deltas desde el
+    /// evento previo (el `update` los acumula sobre `(ax, ay)`).
+    SurfSelectDrag {
+        phase: llimphi_ui::DragPhase,
+        dx: f32,
+        dy: f32,
+        ax: f32,
+        ay: f32,
+    },
+    /// Limpia la selección viva del cuerpo de output (lo dispara una tecla,
+    /// un click en blanco, etc.). No-op si ya está vacía.
+    SurfClearSelection,
+    /// Copia al clipboard el texto de la selección viva del cuerpo de
+    /// output. No-op si no hay selección. Reusa el clipboard global del
+    /// proceso (vía `arboard`).
+    SurfCopySelection,
 }
 
 mod mouse_xterm;
@@ -2165,5 +2224,115 @@ mod tests {
         s.clear_output();
         assert!(s.output.is_empty());
         assert!(s.collapsed.is_empty(), "clear limpia también los colapsos");
+    }
+
+    /// El SurfLayout snapshot que poblaríamos en `output_pane_surface` —
+    /// versión sintética para tests de la state machine, sin pasar por el
+    /// render. Cubre 3 líneas mono de 6 chars cada una.
+    fn synth_surf_layout() -> SurfLayout {
+        let metrics = llimphi_widget_terminal::TermMetrics {
+            font_size: 12.0,
+            line_height: 16.0,
+            char_width: 8.0,
+        };
+        let mut store = llimphi_widget_terminal::Scrollback::new(0);
+        store.push_line("abcdef");
+        store.push_line("ghijkl");
+        store.push_line("mnopqr");
+        SurfLayout {
+            items_geo: vec![llimphi_widget_terminal::ItemGeo::Lines(0, 3)],
+            scroll_y: 0.0,
+            viewport_h: 200.0,
+            metrics,
+            gutter_w: 30.0,
+            store: Arc::new(store),
+        }
+    }
+
+    #[test]
+    fn surf_select_drag_move_arranca_y_extiende_la_seleccion() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
+        // Primer Move: anchor en línea 0 col 2 (ax=46 = 30+2*8, ay=4).
+        s = update(
+            s,
+            Msg::SurfSelectDrag {
+                phase: llimphi_ui::DragPhase::Move,
+                dx: 0.0,
+                dy: 0.0,
+                ax: 46.0,
+                ay: 4.0,
+            },
+        );
+        assert!(s.surf_selecting);
+        let sel = s.surf_selection.expect("anchor set");
+        assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 2));
+        assert_eq!(sel.head, llimphi_widget_terminal::Point::new(0, 2));
+        // Move siguiente: delta de (+32, +32) → acc = (78, 36) → fila 2, col 6.
+        s = update(
+            s,
+            Msg::SurfSelectDrag {
+                phase: llimphi_ui::DragPhase::Move,
+                dx: 32.0,
+                dy: 32.0,
+                ax: 46.0,
+                ay: 4.0,
+            },
+        );
+        let sel = s.surf_selection.expect("extended");
+        assert_eq!(sel.anchor, llimphi_widget_terminal::Point::new(0, 2));
+        assert_eq!(sel.head, llimphi_widget_terminal::Point::new(2, 6));
+    }
+
+    #[test]
+    fn surf_select_drag_end_libera_pero_mantiene_seleccion_para_copy() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
+        // Drag completo (Press → Move → End) cubriendo varios chars.
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::Move, dx: 16.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        assert!(!s.surf_selecting, "End libera el flag");
+        assert!(s.surf_selection.is_some(), "pero la selección queda para copy");
+    }
+
+    #[test]
+    fn surf_select_drag_end_sin_drag_real_limpia_la_seleccion_colapsada() {
+        // Un Press+End sin Move intermedio = click corto. La selección queda
+        // colapsada (anchor == head); el End la limpia para no dejar
+        // afford visual sin sentido.
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        // Ahora un End sin Mover.
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        assert!(s.surf_selection.is_none(), "click sin drag → sin selección");
+    }
+
+    #[test]
+    fn surf_clear_selection_resetea_estado() {
+        let mut s = State::new(Source::Local);
+        *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
+        // Arranca un drag.
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        s = update(s, Msg::SurfSelectDrag {
+            phase: llimphi_ui::DragPhase::Move, dx: 16.0, dy: 0.0, ax: 46.0, ay: 4.0,
+        });
+        assert!(s.surf_selection.is_some());
+        s = update(s, Msg::SurfClearSelection);
+        assert!(s.surf_selection.is_none());
+        assert!(!s.surf_selecting);
     }
 }

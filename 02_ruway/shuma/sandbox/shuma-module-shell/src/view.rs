@@ -1734,7 +1734,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
 ) -> View<HostMsg> {
     use llimphi_widget_terminal::{
-        block_surface, blocks_height, Item, LineStyle, Scrollback, TermMetrics, TermPalette,
+        blocks_height, Item, LineStyle, Scrollback, TermMetrics, TermPalette,
     };
 
     // Agrupar por bloque preservando el orden de primera aparición (igual que
@@ -1913,7 +1913,47 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     let lift_scroll = (*lift).clone();
     let on_scroll = move |delta: f32| lift_scroll(Msg::Scroll(-delta));
 
-    let surface = block_surface::<HostMsg, _, _>(
+    use llimphi_widget_terminal::{
+        block_surface_with_selection, gutter_width, SelectionConfig,
+    };
+
+    // Snapshot del layout para que el `update` resuelva clicks contra la
+    // geometría real del frame anterior, sin re-armar los items.
+    let items_geo: Vec<llimphi_widget_terminal::ItemGeo> =
+        items.iter().map(|it| it.geo()).collect();
+    let gw = gutter_width(&store, metrics);
+    if let Ok(mut g) = state.surf_layout.lock() {
+        *g = Some(crate::SurfLayout {
+            items_geo,
+            scroll_y,
+            viewport_h,
+            metrics,
+            gutter_w: gw,
+            store: std::sync::Arc::new(store.clone()),
+        });
+    }
+
+    // Handler de drag de selección: forwardea cada `(phase, lx0, ly0, dx, dy)`
+    // del viewport al `update` como `Msg::SurfSelectDrag`. El `update` mantiene
+    // el acumulador y resuelve la posición a `Point` con `point_at_geo`.
+    let lift_drag = (*lift).clone();
+    let on_drag = std::sync::Arc::new(
+        move |phase, lx0, ly0, dx, dy| -> Option<HostMsg> {
+            Some(lift_drag(Msg::SurfSelectDrag {
+                phase,
+                dx,
+                dy,
+                ax: lx0,
+                ay: ly0,
+            }))
+        },
+    );
+    let sel_cfg = SelectionConfig {
+        range: state.surf_selection.as_ref(),
+        on_drag: Some(on_drag),
+    };
+
+    let surface = block_surface_with_selection::<HostMsg, _, _>(
         &store,
         items,
         scroll_y,
@@ -1923,6 +1963,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         line_style,
         on_scroll,
         None,
+        sel_cfg,
     );
 
     // Nodo flex que toma el espacio sobrante (entre header e input) y mide su

@@ -63,6 +63,34 @@ impl<Msg> Item<Msg> {
             Self::Lines { start, end } => end.saturating_sub(*start) as f32 * row_h,
         }
     }
+
+    /// Geometría liviana (sin la `View` del chrome) para hit-tests fuera del
+    /// render. Es `Copy`, así que se puede stashear en un `Mutex` para que el
+    /// `update` resuelva clicks contra el layout del frame anterior.
+    pub fn geo(&self) -> ItemGeo {
+        match self {
+            Self::Chrome { height, .. } => ItemGeo::Chrome(*height),
+            Self::Lines { start, end } => ItemGeo::Lines(*start, *end),
+        }
+    }
+}
+
+/// Variante liviana y `Copy` de [`Item`] sin la `View` — sólo lo necesario
+/// para resolver hit-tests por (lx, ly). Se obtiene con [`Item::geo`].
+#[derive(Debug, Clone, Copy)]
+pub enum ItemGeo {
+    Chrome(f32),
+    Lines(usize, usize),
+}
+
+impl ItemGeo {
+    /// Alto del item en px, mismo cálculo que [`Item::height`].
+    pub fn height(&self, row_h: f32) -> f32 {
+        match self {
+            Self::Chrome(h) => *h,
+            Self::Lines(s, e) => e.saturating_sub(*s) as f32 * row_h,
+        }
+    }
 }
 
 /// Tops acumulados (content coords) de cada item dados sus altos, y el alto
