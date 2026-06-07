@@ -1841,12 +1841,24 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
 /// Alto fijo del header de comando en la superficie (px).
 const SURFACE_HEADER_H: f32 = 22.0;
 
-/// `true` si el usuario pidió la superficie nueva (env `SHUMA_TERMINAL_SURFACE`).
-/// Se lee una sola vez por proceso.
+/// `true` si el output va por la **superficie nueva** (modo por defecto
+/// tras Fase 5.6). Se lee una sola vez por proceso vía `OnceLock`.
+///
+/// Política:
+/// - **Default**: superficie ON. Todas las features de Fase 1-5 (store
+///   virtualizado, anclaje estable, selección + copy + find, scroll
+///   inercial, GPU grid opt-in, spill a disco opt-in) están activas.
+/// - **Opt-OUT explícito**: setear `SHUMA_TERMINAL_LEGACY=1` (o cualquier
+///   valor) vuelve al `output_pane` viejo + per-command IDE editor (rama
+///   con `BodyPointer`, `BodyDoubleClick`, multi-cursor del text-editor).
+///   Es el botón de pánico para usuarios que necesiten esas features
+///   específicas hasta cerrar paridad.
+/// - **Opt-IN histórico**: `SHUMA_TERMINAL_SURFACE=1` (sin LEGACY) sigue
+///   funcionando como antes — no-op si ya es default.
 pub(crate) fn terminal_surface_enabled() -> bool {
     use std::sync::OnceLock;
     static EN: OnceLock<bool> = OnceLock::new();
-    *EN.get_or_init(|| std::env::var_os("SHUMA_TERMINAL_SURFACE").is_some())
+    *EN.get_or_init(|| std::env::var_os("SHUMA_TERMINAL_LEGACY").is_none())
 }
 
 /// Header de un comando como **chrome** de la superficie: chevron + `$ comando`
