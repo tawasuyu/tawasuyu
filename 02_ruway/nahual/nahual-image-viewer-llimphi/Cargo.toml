@@ -11,7 +11,7 @@ description = "nahual-image-viewer-llimphi — visor de imágenes (PNG/JPEG) sob
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
-image = { workspace = true }
+llimphi-image = { path = "../../llimphi/llimphi-image" }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 
 [[example]]

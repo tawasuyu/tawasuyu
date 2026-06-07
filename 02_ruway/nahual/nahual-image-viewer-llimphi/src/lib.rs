@@ -1,28 +1,26 @@
 //! `nahual-image-viewer-llimphi` — visor de imágenes sobre Llimphi.
 //!
 //! Reemplazo Llimphi del `nahual-image-viewer` GPUI. Crate fino: la
-//! lógica de carga vive en [`load_image`] (size cap + decode → Rgba8),
-//! el render en [`image_viewer_view`].
+//! lógica de carga vive en [`load_image`] (size cap + decode → Rgba8 vía
+//! `llimphi-image`), el render en [`image_viewer_view`].
 //!
 //! La carga es sync: para imágenes >2 MB conviene envolver
 //! `load_image` en `Handle::spawn` y reentrar con un Msg al terminar.
 //!
-//! Formatos soportados: PNG y JPEG (features `image/png` + `image/jpeg`).
-//! Para WebP/AVIF/etc., habilitar la feature correspondiente del crate
-//! `image` desde la app consumidora.
+//! Formatos soportados: PNG, JPEG y WEBP (los que active el workspace
+//! del crate `image` upstream — ver `llimphi-image`).
 
 #![forbid(unsafe_code)]
 
-use std::fs;
 use std::path::Path;
 
-use image::ImageReader;
+use llimphi_image::{load_path, DecodeError, Image};
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
-use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat, Mix};
+use llimphi_ui::llimphi_raster::peniko::Mix;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, GesturePhase, View};
@@ -53,38 +51,22 @@ impl Default for ImagePreviewState {
     }
 }
 
-/// Lee, decodifica y arma el `peniko::Image`. Sync.
+/// Lee, decodifica y arma el `peniko::Image`. Sync. Delega en
+/// [`llimphi_image::load_path`] — el cap de tamaño aplica al archivo en
+/// disco (no a la imagen decodificada en RGBA8, que puede ser mucho
+/// mayor: un PNG 4K son ~64 MB descomprimidos).
 pub fn load_image(path: &Path, max_bytes: u64) -> ImagePreviewState {
-    match fs::metadata(path) {
-        Ok(meta) if meta.len() > max_bytes => return ImagePreviewState::TooBig(meta.len()),
-        Err(e) => return ImagePreviewState::Error(e.to_string()),
-        _ => {}
-    }
-    let reader = match ImageReader::open(path) {
-        Ok(r) => r,
-        Err(e) => return ImagePreviewState::Error(e.to_string()),
-    };
-    let reader = match reader.with_guessed_format() {
-        Ok(r) => r,
-        Err(e) => return ImagePreviewState::Error(e.to_string()),
-    };
-    // `format()` es `None` si el formato detectado no está habilitado
-    // por feature. Reportamos diferenciado de error de IO.
-    if reader.format().is_none() {
-        return ImagePreviewState::Unsupported(rimay_localize::t("nahual-image-unsupported"));
-    }
-    let img = match reader.decode() {
-        Ok(i) => i,
-        Err(e) => return ImagePreviewState::Error(e.to_string()),
-    };
-    let rgba = img.to_rgba8();
-    let (w, h) = (rgba.width(), rgba.height());
-    let blob = Blob::from(rgba.into_raw());
-    let peniko_image = Image::new(blob, ImageFormat::Rgba8, w, h);
-    ImagePreviewState::Image {
-        image: peniko_image,
-        width: w,
-        height: h,
+    match load_path(path, max_bytes) {
+        Ok(image) => {
+            let (width, height) = (image.width, image.height);
+            ImagePreviewState::Image { image, width, height }
+        }
+        Err(DecodeError::TooBig { size_bytes, .. }) => ImagePreviewState::TooBig(size_bytes),
+        Err(DecodeError::UnsupportedFormat) => {
+            ImagePreviewState::Unsupported(rimay_localize::t("nahual-image-unsupported"))
+        }
+        Err(DecodeError::Io(e)) => ImagePreviewState::Error(e.to_string()),
+        Err(DecodeError::Decode(s)) => ImagePreviewState::Error(s),
     }
 }
 
