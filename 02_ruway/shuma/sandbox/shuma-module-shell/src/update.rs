@@ -255,31 +255,10 @@ pub fn update(state: State, msg: Msg) -> State {
             }
         }
         Msg::Scroll(delta) => {
-            // `out_overflow` lo publicó la última `view`; clampa sin que
-            // el handler tenga que recomputar la geometría.
-            let overflow = s.out_overflow.lock().map(|g| *g).unwrap_or(0.0);
-            // Re-baseline a la `scroll_y` intencionada del usuario contra
-            // el `overflow` actual (Fase 5: anclaje estable bajo append).
-            // Si su anchor era de hace 3 frames y desde entonces llegaron
-            // líneas nuevas, su `scroll_y` real es mayor que `overflow_old
-            // - scroll_px`; lo re-calculamos contra el `overflow` vigente.
-            let prev_anchor = if s.surf_scroll_anchor > 0.5 {
-                s.surf_scroll_anchor
-            } else {
-                overflow
-            };
-            let curr_scroll_y = (prev_anchor - s.scroll_px).clamp(0.0, overflow);
-            // `delta > 0` = rueda arriba = ver historial (scroll_y baja).
-            let new_scroll_y = (curr_scroll_y - delta).clamp(0.0, overflow);
-            // Si el usuario alcanzó el fondo, re-pin al bottom (scroll_px=0).
-            // Threshold de 0.5 absorbe ruido sub-pixel.
-            if new_scroll_y >= overflow - 0.5 {
-                s.scroll_px = 0.0;
-                s.surf_scroll_anchor = 0.0;
-            } else {
-                s.scroll_px = overflow - new_scroll_y;
-                s.surf_scroll_anchor = overflow;
-            }
+            s = apply_scroll_delta(s, delta);
+            // Captura la última velocidad para el scroll inercial: el Tick
+            // sigue aplicando el delta con decay hasta epsilon (Fase 5.2).
+            s.surf_scroll_velocity = delta;
         }
         Msg::RunLine(line) => {
             s.input.set_text(line);
@@ -327,6 +306,10 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::Tick => {
             s = drain_run(s);
+            // Scroll inercial: si quedó velocidad de la última entrada del
+            // usuario, aplicar un paso y decaer por fricción (Fase 5.2 del
+            // SDD-TERMINAL). Hitting bottom (re-pin) detiene la inercia.
+            s = step_scroll_inertia(s);
         }
         Msg::Cancel => {
             if s.running.is_some() {
@@ -551,6 +534,60 @@ fn apply_current_match(mut s: State, snap: &crate::SurfLayout) -> State {
 /// primer Move arranca (`anchor = head = point_at(ax, ay)`); los siguientes
 /// extienden (`head = point_at(acc)`); End deja la selección fijada pero
 /// `surf_selecting = false` para que un próximo Move arranque limpio.
+/// Aplica un delta de scroll a la superficie, manteniendo el invariante de
+/// anclaje (Fase 5.0). Devuelve `s` con `scroll_px` / `surf_scroll_anchor`
+/// actualizados. NO toca `surf_scroll_velocity` — eso lo hacen los callers
+/// (`Msg::Scroll` la captura, `step_scroll_inertia` la decae).
+fn apply_scroll_delta(mut s: State, delta: f32) -> State {
+    let overflow = s.out_overflow.lock().map(|g| *g).unwrap_or(0.0);
+    // Re-baseline a la `scroll_y` intencionada del usuario contra el
+    // `overflow` actual (Fase 5: anclaje estable bajo append).
+    let prev_anchor = if s.surf_scroll_anchor > 0.5 {
+        s.surf_scroll_anchor
+    } else {
+        overflow
+    };
+    let curr_scroll_y = (prev_anchor - s.scroll_px).clamp(0.0, overflow);
+    // `delta > 0` = rueda arriba = ver historial (scroll_y baja).
+    let new_scroll_y = (curr_scroll_y - delta).clamp(0.0, overflow);
+    // Si el usuario alcanzó el fondo, re-pin al bottom (scroll_px=0).
+    // Threshold de 0.5 absorbe ruido sub-pixel.
+    if new_scroll_y >= overflow - 0.5 {
+        s.scroll_px = 0.0;
+        s.surf_scroll_anchor = 0.0;
+    } else {
+        s.scroll_px = overflow - new_scroll_y;
+        s.surf_scroll_anchor = overflow;
+    }
+    s
+}
+
+/// Aplica un paso de scroll inercial: si la velocidad supera el umbral,
+/// scrollea por ella y decae por fricción. Si tocó el fondo (re-pin), la
+/// inercia se detiene (evita el "fantasma" de seguir scrolleando contra
+/// el límite). Lo llama el handler de `Msg::Tick` por frame.
+fn step_scroll_inertia(mut s: State) -> State {
+    /// Magnitud bajo la cual consideramos que el scroll está quieto, en px.
+    const EPSILON: f32 = 0.5;
+    /// Factor de fricción aplicado por tick (~100 ms). 0.82 → la inercia
+    /// decae a ~10% en ~12 ticks (~1.2 s). Tuneable.
+    const FRICTION: f32 = 0.82;
+    if s.surf_scroll_velocity.abs() <= EPSILON {
+        s.surf_scroll_velocity = 0.0;
+        return s;
+    }
+    let v = s.surf_scroll_velocity;
+    s = apply_scroll_delta(s, v);
+    // Si el delta nos dejó pinned al fondo, parar la inercia para no
+    // simular un "rebote" contra el borde.
+    if s.scroll_px <= f32::EPSILON {
+        s.surf_scroll_velocity = 0.0;
+    } else {
+        s.surf_scroll_velocity *= FRICTION;
+    }
+    s
+}
+
 fn apply_surf_select_drag(
     mut s: State,
     phase: llimphi_ui::DragPhase,

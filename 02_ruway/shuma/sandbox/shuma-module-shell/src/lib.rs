@@ -444,6 +444,12 @@ pub struct State {
     /// `overflow` crezca por append — paridad con la UX que la gente espera
     /// (Fase 5 del SDD-TERMINAL). `0.0` mientras esté pinned al fondo.
     pub surf_scroll_anchor: f32,
+    /// Velocidad de scroll inercial (px por Tick) — la última entrada de
+    /// rueda/scrollbar la captura, y el Tick decae el valor por fricción
+    /// para que el scroll continúe brevemente después de soltar el wheel,
+    /// estilo touchpad (Fase 5 del SDD-TERMINAL). `0.0` mientras el scroll
+    /// está quieto.
+    pub surf_scroll_velocity: f32,
     /// Selección viva del **stream del scrollback** (modo superficie,
     /// `SHUMA_TERMINAL_SURFACE=1`). Spans una o más líneas y se traduce a
     /// texto vía [`llimphi_widget_terminal::SelectionRange::slice_text`].
@@ -589,6 +595,7 @@ impl State {
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
             surf_scroll_anchor: 0.0,
+            surf_scroll_velocity: 0.0,
             surf_selection: None,
             surf_selecting: false,
             surf_drag_acc: (0.0, 0.0),
@@ -649,6 +656,7 @@ impl State {
         self.reprocess_source = None;
         self.scroll_px = 0.0;
         self.surf_scroll_anchor = 0.0;
+        self.surf_scroll_velocity = 0.0;
     }
 
     /// Cantidad de líneas en el buffer — alimenta el monitor.
@@ -2312,6 +2320,58 @@ mod tests {
         s = update(s, Msg::Scroll(10.0));
         assert_eq!(s.scroll_px, 100.0);
         assert_eq!(s.surf_scroll_anchor, 150.0);
+    }
+
+    #[test]
+    fn scroll_captura_velocidad_para_inercia() {
+        // El último delta del usuario queda en `surf_scroll_velocity` para
+        // que el próximo Tick lo aplique con decay (Fase 5.2).
+        let mut s = State::new(Source::Local);
+        *s.out_overflow.lock().unwrap() = 100.0;
+        s = update(s, Msg::Scroll(30.0));
+        assert_eq!(s.surf_scroll_velocity, 30.0);
+        s = update(s, Msg::Scroll(15.0));
+        assert_eq!(s.surf_scroll_velocity, 15.0, "se reemplaza por el último");
+    }
+
+    #[test]
+    fn tick_aplica_inercia_y_decae() {
+        // Con velocidad seteada, Tick scrollea por ella y la reduce por
+        // fricción 0.82. Eventualmente cae bajo epsilon y se anula.
+        let mut s = State::new(Source::Local);
+        *s.out_overflow.lock().unwrap() = 1000.0;
+        s = update(s, Msg::Scroll(40.0));
+        let v0 = s.surf_scroll_velocity;
+        let px0 = s.scroll_px;
+        // Primer Tick: scrollea 40 más → scroll_px sube por ese delta;
+        // velocidad cae por fricción.
+        s = update(s, Msg::Tick);
+        assert!(s.scroll_px > px0, "el tick aplica el delta");
+        assert!(
+            s.surf_scroll_velocity.abs() < v0.abs(),
+            "la velocidad decae"
+        );
+        // Tras ~30 ticks la velocidad ya cayó bajo epsilon (0.5).
+        for _ in 0..30 {
+            s = update(s, Msg::Tick);
+        }
+        assert_eq!(s.surf_scroll_velocity, 0.0, "termina en 0");
+    }
+
+    #[test]
+    fn inercia_se_detiene_al_tocar_el_fondo() {
+        // Si la inercia lleva al usuario contra el fondo (re-pin), la
+        // velocidad se anula inmediatamente (sin "rebote" simulado).
+        let mut s = State::new(Source::Local);
+        *s.out_overflow.lock().unwrap() = 100.0;
+        // Subir un poco para tener margen.
+        s = update(s, Msg::Scroll(50.0));
+        assert!(s.scroll_px > 0.0);
+        // Inyectar velocidad hacia abajo (negativa = scroll down → bottom).
+        s.surf_scroll_velocity = -500.0;
+        s = update(s, Msg::Tick);
+        assert_eq!(s.scroll_px, 0.0, "alcanzó el fondo");
+        assert_eq!(s.surf_scroll_velocity, 0.0, "inercia se detiene en el límite");
     }
 
     #[test]
