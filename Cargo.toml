@@ -216,6 +216,7 @@ members = [
     "02_ruway/llimphi/llimphi-ui",
     "02_ruway/llimphi/llimphi-motion",
     "02_ruway/llimphi/llimphi-icons",
+    "02_ruway/llimphi/llimphi-svg",
     "02_ruway/llimphi/llimphi-gallery",
     "02_ruway/llimphi/llimphi-gpu-bench",
     "02_ruway/llimphi/android/clear-screen-android",
@@ -658,6 +659,8 @@ llimphi-theme = { path = "02_ruway/llimphi/llimphi-theme" }
 llimphi-motion = { path = "02_ruway/llimphi/llimphi-motion" }
 # Iconos vectoriales (BezPath en grid 24×24) compartidos por todas las apps.
 llimphi-icons = { path = "02_ruway/llimphi/llimphi-icons" }
+# Puente fino vello_svg → Llimphi para SVG arbitrario (íconos .desktop, logos).
+llimphi-svg = { path = "02_ruway/llimphi/llimphi-svg" }
 # Widgets reusables sobre llimphi-ui — uno por crate.
 llimphi-widget-app-header = { path = "02_ruway/llimphi/widgets/app-header" }
 llimphi-widget-banner = { path = "02_ruway/llimphi/widgets/banner" }

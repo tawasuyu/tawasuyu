@@ -1421,24 +1421,31 @@ pub fn start_menu_body(
     .children(vec![panel])
 }
 
-/// Una fila del menú de inicio: ícono (glyph) + label, clickeable.
+/// Una fila del menú de inicio: ícono (glyph o SVG real) + label, clickeable.
 fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
-    // El ícono de una app gioser es un glyph (1 char); el de un `.desktop` es un
-    // nombre freedesktop (palabra) que no sabemos resolver a imagen acá → cae a
-    // un glyph genérico para que la fila quede prolija.
-    let icono = a
-        .icon
-        .as_deref()
+    // Tres caminos según lo que diga `a.icon`:
+    //  - `≤2 chars` → glyph/emoji (apps gioser), texto centrado.
+    //  - nombre freedesktop o path → intentamos resolver a un `.svg` (themes
+    //    XDG → SvgAsset cacheado). Si encaja, pintamos el SVG real.
+    //  - nada/ninguno encaja → fallback al glyph genérico `▸`.
+    let icon_raw = a.icon.as_deref();
+    let glyph_or_default: String = icon_raw
         .filter(|s| s.chars().count() <= 2)
         .unwrap_or("▸")
         .to_string();
-    let badge = View::new(Style {
+    let svg_asset = icon_raw
+        .filter(|s| s.chars().count() > 2)
+        .and_then(crate::app_icons::get_or_load);
+    let badge_base = View::new(Style {
         size: Size { width: length(22.0_f32), height: length(22.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
-    })
-    .text(icono, 14.0, theme.accent);
+    });
+    let badge = match svg_asset {
+        Some(asset) => badge_base.children(vec![asset.view::<Msg>()]),
+        None => badge_base.text(glyph_or_default, 14.0, theme.accent),
+    };
     let nombre = View::new(Style {
         size: Size { width: auto(), height: length(28.0_f32) },
         align_items: Some(AlignItems::Center),

@@ -19,6 +19,7 @@
 //! layout resolvió. Cuando el compositor `mirada` reconozca superficies `pata`
 //! (Fase 8), cada una será su propia ventana acoplada.
 
+pub mod app_icons;
 pub mod cava;
 pub mod keys;
 pub mod layer;
