@@ -1185,6 +1185,21 @@ pub struct ComputedStyle {
     /// `-webkit-box-flex` (Fase 7.603). Factor de crecimiento. Default
     /// `0.0`. NO hereda. Plumb.
     pub webkit_box_flex: f32,
+    /// `-webkit-box-ordinal-group` (Fase 7.604). Orden visual del ítem en
+    /// el box viejo. `None` = `1`. NO hereda. Plumb.
+    pub webkit_box_ordinal_group: Option<u32>,
+    /// `-webkit-font-smoothing` (Fase 7.605). Antialiasing no estándar
+    /// (WebKit). Parse opaco — `None` = `auto`. HEREDA. Plumb.
+    pub webkit_font_smoothing: Option<String>,
+    /// `-moz-osx-font-smoothing` (Fase 7.606). Antialiasing no estándar
+    /// (Gecko/macOS). Parse opaco — `None` = `auto`. HEREDA. Plumb.
+    pub moz_osx_font_smoothing: Option<String>,
+    /// `-webkit-tap-highlight-color` (Fase 7.607). Color del flash al tocar
+    /// en móviles. Parse opaco. NO hereda. Plumb.
+    pub webkit_tap_highlight_color: Option<String>,
+    /// `zoom` (Fase 7.608). Factor de escala no estándar (en vías de
+    /// estandarización). Parse opaco — `None` = `normal`. NO hereda. Plumb.
+    pub zoom: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4510,6 +4525,11 @@ impl Default for ComputedStyle {
             webkit_box_align: None,
             webkit_box_pack: None,
             webkit_box_flex: 0.0,
+            webkit_box_ordinal_group: None,
+            webkit_font_smoothing: None,
+            moz_osx_font_smoothing: None,
+            webkit_tap_highlight_color: None,
+            zoom: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

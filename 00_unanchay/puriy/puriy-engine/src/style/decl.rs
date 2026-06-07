@@ -758,6 +758,16 @@ pub(crate) enum DeclKind {
     WebkitBoxPack(Option<String>),
     /// `-webkit-box-flex` (Fase 7.603). NO hereda. Plumb.
     WebkitBoxFlex(f32),
+    /// `-webkit-box-ordinal-group` (Fase 7.604). `None` = `1`. NO hereda. Plumb.
+    WebkitBoxOrdinalGroup(Option<u32>),
+    /// `-webkit-font-smoothing` (Fase 7.605). `None` = `auto`. HEREDA. Plumb.
+    WebkitFontSmoothing(Option<String>),
+    /// `-moz-osx-font-smoothing` (Fase 7.606). `None` = `auto`. HEREDA. Plumb.
+    MozOsxFontSmoothing(Option<String>),
+    /// `-webkit-tap-highlight-color` (Fase 7.607). NO hereda. Plumb.
+    WebkitTapHighlightColor(Option<String>),
+    /// `zoom` (Fase 7.608). `None` = `normal`. NO hereda. Plumb.
+    Zoom(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1299,6 +1309,11 @@ impl Decl {
             DeclKind::WebkitBoxAlign(v) => s.webkit_box_align = v.clone(),
             DeclKind::WebkitBoxPack(v) => s.webkit_box_pack = v.clone(),
             DeclKind::WebkitBoxFlex(v) => s.webkit_box_flex = *v,
+            DeclKind::WebkitBoxOrdinalGroup(v) => s.webkit_box_ordinal_group = *v,
+            DeclKind::WebkitFontSmoothing(v) => s.webkit_font_smoothing = v.clone(),
+            DeclKind::MozOsxFontSmoothing(v) => s.moz_osx_font_smoothing = v.clone(),
+            DeclKind::WebkitTapHighlightColor(v) => s.webkit_tap_highlight_color = v.clone(),
+            DeclKind::Zoom(v) => s.zoom = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

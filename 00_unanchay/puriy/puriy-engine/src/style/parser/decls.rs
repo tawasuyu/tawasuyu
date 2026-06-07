@@ -2345,6 +2345,52 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             .parse::<f32>()
             .ok()
             .map(DeclKind::WebkitBoxFlex),
+        // Fase 7.604 — `-webkit-box-ordinal-group` (flexbox viejo). `1` → None.
+        "-webkit-box-ordinal-group" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "1" {
+                Some(DeclKind::WebkitBoxOrdinalGroup(None))
+            } else {
+                v.parse::<u32>().ok().map(|n| DeclKind::WebkitBoxOrdinalGroup(Some(n)))
+            }
+        }
+        // Fase 7.605-7.606 — `-webkit-font-smoothing` / `-moz-osx-font-smoothing`
+        // (no estándar). Parse opaco; `auto` → None.
+        "-webkit-font-smoothing" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::WebkitFontSmoothing(None))
+            } else {
+                Some(DeclKind::WebkitFontSmoothing(Some(v.to_string())))
+            }
+        }
+        "-moz-osx-font-smoothing" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::MozOsxFontSmoothing(None))
+            } else {
+                Some(DeclKind::MozOsxFontSmoothing(Some(v.to_string())))
+            }
+        }
+        // Fase 7.607 — `-webkit-tap-highlight-color`. Parse opaco.
+        "-webkit-tap-highlight-color" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else { Some(DeclKind::WebkitTapHighlightColor(Some(v.to_string()))) }
+        }
+        // Fase 7.608 — `zoom`. Parse opaco; `normal` → None.
+        "zoom" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::Zoom(None))
+            } else {
+                Some(DeclKind::Zoom(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.
