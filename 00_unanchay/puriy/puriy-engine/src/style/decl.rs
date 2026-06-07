@@ -848,6 +848,16 @@ pub(crate) enum DeclKind {
     WebkitMaxLogicalHeight(Option<String>),
     /// `-webkit-background-composite` (Fase 7.673). `None` = `source-over`. NO hereda. Plumb.
     WebkitBackgroundComposite(Option<String>),
+    /// `-webkit-border-before` (Fase 7.674). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderBefore(Option<String>),
+    /// `-webkit-border-after` (Fase 7.675). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderAfter(Option<String>),
+    /// `-webkit-border-start` (Fase 7.676). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderStart(Option<String>),
+    /// `-webkit-border-end` (Fase 7.677). `None` = `none`. NO hereda. Plumb.
+    WebkitBorderEnd(Option<String>),
+    /// `-webkit-border-horizontal-spacing` (Fase 7.678). `None` = `0`. HEREDA. Plumb.
+    WebkitBorderHorizontalSpacing(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1434,6 +1444,11 @@ impl Decl {
             DeclKind::WebkitMinLogicalHeight(v) => s.webkit_min_logical_height = v.clone(),
             DeclKind::WebkitMaxLogicalHeight(v) => s.webkit_max_logical_height = v.clone(),
             DeclKind::WebkitBackgroundComposite(v) => s.webkit_background_composite = v.clone(),
+            DeclKind::WebkitBorderBefore(v) => s.webkit_border_before = v.clone(),
+            DeclKind::WebkitBorderAfter(v) => s.webkit_border_after = v.clone(),
+            DeclKind::WebkitBorderStart(v) => s.webkit_border_start = v.clone(),
+            DeclKind::WebkitBorderEnd(v) => s.webkit_border_end = v.clone(),
+            DeclKind::WebkitBorderHorizontalSpacing(v) => s.webkit_border_horizontal_spacing = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,

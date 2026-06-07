@@ -2810,6 +2810,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBackgroundComposite(Some(v.to_string())))
             }
         }
+        // Fase 7.674 — `-webkit-border-before` (border-block-start). `none` → None.
+        "-webkit-border-before" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBorderBefore(None))
+            } else {
+                Some(DeclKind::WebkitBorderBefore(Some(v.to_string())))
+            }
+        }
+        // Fase 7.675 — `-webkit-border-after` (border-block-end). `none` → None.
+        "-webkit-border-after" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBorderAfter(None))
+            } else {
+                Some(DeclKind::WebkitBorderAfter(Some(v.to_string())))
+            }
+        }
+        // Fase 7.676 — `-webkit-border-start` (border-inline-start). `none` → None.
+        "-webkit-border-start" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBorderStart(None))
+            } else {
+                Some(DeclKind::WebkitBorderStart(Some(v.to_string())))
+            }
+        }
+        // Fase 7.677 — `-webkit-border-end` (border-inline-end). `none` → None.
+        "-webkit-border-end" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::WebkitBorderEnd(None))
+            } else {
+                Some(DeclKind::WebkitBorderEnd(Some(v.to_string())))
+            }
+        }
+        // Fase 7.678 — `-webkit-border-horizontal-spacing`. `0` → None.
+        "-webkit-border-horizontal-spacing" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitBorderHorizontalSpacing(None))
+            } else {
+                Some(DeclKind::WebkitBorderHorizontalSpacing(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

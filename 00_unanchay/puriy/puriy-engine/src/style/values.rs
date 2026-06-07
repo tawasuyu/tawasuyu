@@ -1326,6 +1326,22 @@ pub struct ComputedStyle {
     /// `-webkit-background-composite` (Fase 7.673). Modo de composición de las
     /// capas de fondo. Parse opaco — `None` = `source-over`. NO hereda. Plumb.
     pub webkit_background_composite: Option<String>,
+    /// `-webkit-border-before` (Fase 7.674). Shorthand legacy de
+    /// `border-block-start`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_border_before: Option<String>,
+    /// `-webkit-border-after` (Fase 7.675). Shorthand legacy de
+    /// `border-block-end`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_border_after: Option<String>,
+    /// `-webkit-border-start` (Fase 7.676). Shorthand legacy de
+    /// `border-inline-start`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_border_start: Option<String>,
+    /// `-webkit-border-end` (Fase 7.677). Shorthand legacy de
+    /// `border-inline-end`. Parse opaco — `None` = `none`. NO hereda. Plumb.
+    pub webkit_border_end: Option<String>,
+    /// `-webkit-border-horizontal-spacing` (Fase 7.678). Longhand legacy del
+    /// eje horizontal de `border-spacing`. Parse opaco — `None` = `0`.
+    /// HEREDA (como border-spacing). Plumb.
+    pub webkit_border_horizontal_spacing: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4696,6 +4712,11 @@ impl Default for ComputedStyle {
             webkit_min_logical_height: None,
             webkit_max_logical_height: None,
             webkit_background_composite: None,
+            webkit_border_before: None,
+            webkit_border_after: None,
+            webkit_border_start: None,
+            webkit_border_end: None,
+            webkit_border_horizontal_spacing: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,
