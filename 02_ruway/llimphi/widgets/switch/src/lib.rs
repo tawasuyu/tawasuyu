@@ -135,6 +135,11 @@ pub fn switch_view<Msg: Clone + 'static>(
             .with_stops([top, bot].as_slice());
         scene.fill(Fill::NonZero, Affine::IDENTITY, &g, None, &rr);
     })
+    // Semántica: track switch (Checkbox con `pressed` para que el lector
+    // diga "interruptor on/off" en vez de "casilla marcada"). Sin un rol
+    // dedicado en accesskit; Button + pressed cubre la intención.
+    .role(llimphi_ui::Role::Button)
+    .aria_pressed(p >= 0.5)
     .on_click(on_toggle)
     .children(vec![thumb])
 }

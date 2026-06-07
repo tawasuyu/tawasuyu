@@ -78,6 +78,8 @@ pub fn fab_view<Msg: Clone + 'static>(
         dy,
         spread: 0.0,
     };
+    let glyph: String = glyph.into();
+    let aria = glyph.clone();
     View::new(Style {
         size: Size { width: length(s), height: length(s) },
         align_items: Some(AlignItems::Center),
@@ -89,11 +91,16 @@ pub fn fab_view<Msg: Clone + 'static>(
     .shadow(shadow)
     .animated_pop_in(key, motion::FAST)
     .text_aligned(
-        glyph.into(),
+        glyph,
         (s * 0.42).round(),
         palette.fg,
         Alignment::Center,
     )
+    // El glyph (+, ✎, etc.) no siempre es un buen nombre para el lector — el
+    // caller suele querer overridear con `.aria_label("Crear nota")`. Lo dejamos
+    // como fallback igual: mejor decir "más" que nada.
+    .role(llimphi_ui::Role::Button)
+    .aria_label(aria)
     .on_click(on_click)
     .cursor(llimphi_ui::Cursor::Pointer)
 }
@@ -106,6 +113,7 @@ pub fn fab_extended<Msg: Clone + 'static>(
     palette: &FabPalette,
     on_click: Msg,
 ) -> View<Msg> {
+    let label: String = label.into();
     let h = 48.0_f32;
     let (a, blur, dy) = elevation::E3;
     let shadow = Shadow {
@@ -134,7 +142,9 @@ pub fn fab_extended<Msg: Clone + 'static>(
     .radius((h as f64) * 0.5)
     .shadow(shadow)
     .animated_pop_in(key, motion::FAST)
-    .text_aligned(label.into(), 14.0, palette.fg, Alignment::Center)
+    .text_aligned(label.clone(), 14.0, palette.fg, Alignment::Center)
+    .role(llimphi_ui::Role::Button)
+    .aria_label(label)
     .on_click(on_click)
     .cursor(llimphi_ui::Cursor::Pointer)
 }

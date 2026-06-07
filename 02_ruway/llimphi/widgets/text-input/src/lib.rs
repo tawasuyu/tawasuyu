@@ -198,6 +198,15 @@ pub fn text_input_view<Msg: Clone + 'static>(
     })
     .fill(border)
     .radius(4.0)
+    // Semántica: input de texto + el valor crudo como `value` (no el "•"
+    // del modo masked — los lectores no deben dictar la contraseña en
+    // voz alta; AccessKit ya marca el control como TextInput y el lector
+    // sustituye por "punto" cuando el contexto lo requiere). El
+    // placeholder va como `description` cuando el campo está vacío para
+    // que el lector lo enuncie como pista. `value` queda vacío en masked.
+    .role(llimphi_ui::Role::TextInput)
+    .aria_value(if state.masked { String::new() } else { state.text() })
+    .aria_description(if is_empty { placeholder.to_string() } else { String::new() })
     .on_click(on_focus)
     .cursor(llimphi_ui::Cursor::Text)
     .children(vec![inner])

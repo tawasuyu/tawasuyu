@@ -108,6 +108,8 @@ where
     Msg: Clone + Send + Sync + 'static,
     F: Fn(DragPhase, f32) -> Option<Msg> + Send + Sync + 'static,
 {
+    let label: String = label.into();
+    let aria_label = label.clone();
     let range = (max - min).max(f32::EPSILON);
     let ratio = ((value - min) / range).clamp(0.0, 1.0);
     let track_width = palette.track_width.max(1.0);
@@ -129,7 +131,7 @@ where
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(label.into(), 12.0, palette.fg_label, Alignment::Start);
+    .text_aligned(label, 12.0, palette.fg_label, Alignment::Start);
 
     // Track draggable: fill = track bg, hijo = porción rellena (accent).
     let filled_radius = palette.radius;
@@ -200,6 +202,7 @@ where
 
     // Bloque del valor.
     let value_text = format_value(value);
+    let aria_value = value_text.clone();
     let value_view = View::new(Style {
         size: Size {
             width: length(palette.value_width),
@@ -224,6 +227,11 @@ where
         },
         ..Default::default()
     })
+    // Semántica: rol Slider + label + value (texto formateado). El lector
+    // dice "<label>, deslizador, <valor>" — exactamente lo esperado.
+    .role(llimphi_ui::Role::Slider)
+    .aria_label(aria_label)
+    .aria_value(aria_value)
     .children(vec![label_view, track_cell, value_view])
 }
 

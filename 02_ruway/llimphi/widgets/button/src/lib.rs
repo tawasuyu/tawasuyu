@@ -112,6 +112,11 @@ pub fn button_styled<Msg: Clone + 'static>(
     palette: &ButtonPalette,
     on_click: Msg,
 ) -> View<Msg> {
+    let label: String = label.into();
+    // Semántica accesible: rol Button + el texto visible como nombre. Si el
+    // caller le pasó un label vacío (botones puramente icónicos), igual sale
+    // como Button — lo correcto es agregarle un aria_label propio desde fuera.
+    let aria = label.clone();
     // Gloss superior: gradient blanco alpha 28 → 0 sobre la mitad de
     // arriba. `paint_with` corre entre el fill (que respeta hover_fill)
     // y el texto, así que la luz se suma al color de base sin sustituirlo
@@ -142,7 +147,9 @@ pub fn button_styled<Msg: Clone + 'static>(
                 .with_stops([top, bot].as_slice());
             scene.fill(Fill::NonZero, Affine::IDENTITY, &gradient, None, &rr);
         })
-        .text_aligned(label.into(), 13.0, palette.fg, text_alignment)
+        .text_aligned(label, 13.0, palette.fg, text_alignment)
+        .role(llimphi_ui::Role::Button)
+        .aria_label(aria)
         .on_click(on_click)
         .cursor(llimphi_ui::Cursor::Pointer)
 }

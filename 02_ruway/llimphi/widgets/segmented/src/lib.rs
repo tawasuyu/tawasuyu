@@ -113,6 +113,11 @@ fn segment_view<Msg: Clone + 'static>(
     })
     .radius(seg_radius)
     .text_aligned(label.to_string(), 11.5, fg, Alignment::Center)
+    // Semántica: rol Tab + label + pressed=is_active. AccessKit anuncia
+    // "Pestaña <label>, presionada / sin presionar".
+    .role(llimphi_ui::Role::Tab)
+    .aria_label(label.to_string())
+    .aria_pressed(is_active)
     .on_click(msg);
 
     if let Some(c) = bg {

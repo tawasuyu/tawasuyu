@@ -614,6 +614,12 @@ fn item_view<Msg: Clone + 'static>(
         ..Default::default()
     })
     .radius(ITEM_RADIUS as f64)
+    // Semántica del ítem: rol MenuItem + label visible. `disabled` se
+    // refleja del `enabled` invertido. AccessKit lo expone como
+    // navegable por TTS dentro del menú.
+    .role(llimphi_ui::Role::MenuItem)
+    .aria_label(item.label.clone())
+    .aria_disabled(!item.enabled)
     .children(row_children);
 
     // Fondo: píldora suave en activo (teclado). El hover lo aporta

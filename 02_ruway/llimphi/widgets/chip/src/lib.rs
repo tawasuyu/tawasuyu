@@ -87,11 +87,13 @@ pub fn chip_view<Msg: Clone + 'static>(
     let bg = if selected { palette.bg_selected } else { palette.bg_idle };
     let fg = if selected { palette.fg_selected } else { palette.fg_idle };
 
+    let label: String = label.into();
+    let aria = label.clone();
     let mut children = vec![View::new(Style {
         size: Size { width: auto(), height: auto() },
         ..Default::default()
     })
-    .text_aligned(label.into(), 12.0, fg, Alignment::Center)];
+    .text_aligned(label, 12.0, fg, Alignment::Center)];
 
     if let (ChipKind::Input, Some(rm)) = (kind, on_remove) {
         // ×: glifo pequeño a la derecha con on_click propio. No es
@@ -136,6 +138,12 @@ pub fn chip_view<Msg: Clone + 'static>(
     .border(1.0, palette.border)
     .animated(key, motion::MICRO)
     .children(children)
+    // Filter chips se reportan como botones de toggle (pressed = selected);
+    // los input/assist chips son botones plain. AccessKit anuncia el estado
+    // de toggle al lector, así "está seleccionado / no seleccionado" sale solo.
+    .role(llimphi_ui::Role::Button)
+    .aria_label(aria)
+    .aria_pressed(selected)
     .on_click(on_click)
     .cursor(llimphi_ui::Cursor::Pointer)
 }

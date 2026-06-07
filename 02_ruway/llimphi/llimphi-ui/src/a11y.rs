@@ -100,6 +100,15 @@ pub fn build_tree<Msg>(
         // más claro.
         if let Some(spec) = &mn.semantics {
             apply_semantics(&mut node, spec);
+            // Si declaró rol pero no label y hay texto plano en el nodo,
+            // caemos al texto: cubre widgets como `app-header` que setean
+            // `.role(Heading)` sobre un nodo con `text_aligned("Título", …)`
+            // sin duplicar el string en `.aria_label(...)`.
+            if spec.label.is_none() {
+                if let Some(t) = &mn.text {
+                    node.set_label(t.content.clone());
+                }
+            }
         } else if let Some(t) = &mn.text {
             node.set_label(t.content.clone());
         }

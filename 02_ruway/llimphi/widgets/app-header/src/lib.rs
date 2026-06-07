@@ -80,7 +80,11 @@ pub fn app_header<Msg: Clone + 'static>(
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text_aligned(label.into(), 14.0, palette.fg_text, Alignment::Start);
+    .text_aligned(label.into(), 14.0, palette.fg_text, Alignment::Start)
+    // Semántica: el label del header es el **título** de la app/ventana —
+    // rol Heading para que el lector lo enuncie como tal y los usuarios
+    // puedan saltar entre headings con sus atajos.
+    .role(llimphi_ui::Role::Heading);
 
     let actions_view = View::new(Style {
         flex_direction: FlexDirection::Row,
