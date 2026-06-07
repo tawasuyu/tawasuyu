@@ -258,7 +258,28 @@ pub fn update(state: State, msg: Msg) -> State {
             // `out_overflow` lo publicó la última `view`; clampa sin que
             // el handler tenga que recomputar la geometría.
             let overflow = s.out_overflow.lock().map(|g| *g).unwrap_or(0.0);
-            s.scroll_px = (s.scroll_px + delta).clamp(0.0, overflow);
+            // Re-baseline a la `scroll_y` intencionada del usuario contra
+            // el `overflow` actual (Fase 5: anclaje estable bajo append).
+            // Si su anchor era de hace 3 frames y desde entonces llegaron
+            // líneas nuevas, su `scroll_y` real es mayor que `overflow_old
+            // - scroll_px`; lo re-calculamos contra el `overflow` vigente.
+            let prev_anchor = if s.surf_scroll_anchor > 0.5 {
+                s.surf_scroll_anchor
+            } else {
+                overflow
+            };
+            let curr_scroll_y = (prev_anchor - s.scroll_px).clamp(0.0, overflow);
+            // `delta > 0` = rueda arriba = ver historial (scroll_y baja).
+            let new_scroll_y = (curr_scroll_y - delta).clamp(0.0, overflow);
+            // Si el usuario alcanzó el fondo, re-pin al bottom (scroll_px=0).
+            // Threshold de 0.5 absorbe ruido sub-pixel.
+            if new_scroll_y >= overflow - 0.5 {
+                s.scroll_px = 0.0;
+                s.surf_scroll_anchor = 0.0;
+            } else {
+                s.scroll_px = overflow - new_scroll_y;
+                s.surf_scroll_anchor = overflow;
+            }
         }
         Msg::RunLine(line) => {
             s.input.set_text(line);
@@ -516,6 +537,9 @@ fn apply_current_match(mut s: State, snap: &crate::SurfLayout) -> State {
         // ausencia de scroll manual.
         let overflow = s.out_overflow.lock().map(|g| *g).unwrap_or(0.0);
         s.scroll_px = (overflow - centered).clamp(0.0, overflow);
+        // Anchor del scroll para que el find sobreviva appends sucesivos
+        // (Fase 5: anclaje estable). Si quedó pinned al fondo, anchor=0.
+        s.surf_scroll_anchor = if s.scroll_px > 0.5 { overflow } else { 0.0 };
     }
     s
 }

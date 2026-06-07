@@ -436,6 +436,14 @@ pub struct State {
     /// publica la `view` y lo usa `Msg::Scroll` para clampar `scroll_px`
     /// sin recalcular la geometría en el handler.
     pub out_overflow: Arc<Mutex<f32>>,
+    /// `overflow` vigente al momento en que el usuario fijó `scroll_px` por
+    /// última vez (rueda / scrollbar / auto-scroll de find). Lo usa el
+    /// render del surface para **anclar la vista del usuario al contenido**
+    /// cuando llegan líneas nuevas: si el usuario está scrolled-up
+    /// (`scroll_px > 0`), su `scroll_y` permanece donde lo dejó aunque el
+    /// `overflow` crezca por append — paridad con la UX que la gente espera
+    /// (Fase 5 del SDD-TERMINAL). `0.0` mientras esté pinned al fondo.
+    pub surf_scroll_anchor: f32,
     /// Selección viva del **stream del scrollback** (modo superficie,
     /// `SHUMA_TERMINAL_SURFACE=1`). Spans una o más líneas y se traduce a
     /// texto vía [`llimphi_widget_terminal::SelectionRange::slice_text`].
@@ -580,6 +588,7 @@ impl State {
             scroll_px: 0.0,
             out_viewport_h: Arc::new(Mutex::new(0.0)),
             out_overflow: Arc::new(Mutex::new(0.0)),
+            surf_scroll_anchor: 0.0,
             surf_selection: None,
             surf_selecting: false,
             surf_drag_acc: (0.0, 0.0),
@@ -639,6 +648,7 @@ impl State {
         self.expanded_stages.clear();
         self.reprocess_source = None;
         self.scroll_px = 0.0;
+        self.surf_scroll_anchor = 0.0;
     }
 
     /// Cantidad de líneas en el buffer — alimenta el monitor.
@@ -2265,6 +2275,46 @@ mod tests {
         assert_eq!(s.scroll_px, 100.0);
         s = update(s, Msg::Scroll(-500.0)); // de vuelta al fondo
         assert_eq!(s.scroll_px, 0.0);
+    }
+
+    #[test]
+    fn scroll_setea_anchor_para_estabilidad_bajo_append() {
+        // Al hacer scroll up, el anchor capta el overflow vigente para
+        // que appends posteriores no muevan la vista del usuario (Fase 5
+        // del SDD-TERMINAL).
+        let mut s = State::new(Source::Local);
+        *s.out_overflow.lock().unwrap() = 100.0;
+        s = update(s, Msg::Scroll(40.0));
+        assert_eq!(s.scroll_px, 40.0);
+        // anchor capturó el overflow al momento del scroll.
+        assert_eq!(s.surf_scroll_anchor, 100.0);
+        // Simular un append: el overflow crece pero scroll_px NO cambia.
+        // La fórmula del view interpretará scroll_y contra el anchor viejo.
+        *s.out_overflow.lock().unwrap() = 150.0;
+        // El usuario no scrolleó; scroll_px sigue siendo 40 y anchor 100,
+        // así que scroll_y intencionado = 100 - 40 = 60 (mismo de antes).
+        assert_eq!(s.scroll_px, 40.0);
+        assert_eq!(s.surf_scroll_anchor, 100.0);
+        // Próximo scroll del usuario re-baseliza al nuevo overflow.
+        // curr_scroll_y = (100 - 40) = 60. delta=10 → new = 50.
+        // scroll_px = 150 - 50 = 100. anchor = 150.
+        s = update(s, Msg::Scroll(10.0));
+        assert_eq!(s.scroll_px, 100.0);
+        assert_eq!(s.surf_scroll_anchor, 150.0);
+    }
+
+    #[test]
+    fn scroll_re_pin_al_fondo_resetea_anchor() {
+        // Si el scroll del usuario alcanza el fondo (scroll_y >= overflow),
+        // re-pin: scroll_px=0 y anchor=0. Próximos appends siguen pegados
+        // al fondo (UX terminal clásica).
+        let mut s = State::new(Source::Local);
+        *s.out_overflow.lock().unwrap() = 100.0;
+        s = update(s, Msg::Scroll(40.0));
+        assert_eq!(s.surf_scroll_anchor, 100.0);
+        s = update(s, Msg::Scroll(-500.0));
+        assert_eq!(s.scroll_px, 0.0);
+        assert_eq!(s.surf_scroll_anchor, 0.0, "re-pin limpia el anchor");
     }
 
     #[test]

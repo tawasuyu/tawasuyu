@@ -2135,7 +2135,17 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     if let Ok(mut g) = state.out_overflow.lock() {
         *g = overflow;
     }
-    let scroll_y = (overflow - state.scroll_px).clamp(0.0, overflow);
+    // Anclaje estable bajo append (Fase 5 del SDD-TERMINAL): si el usuario
+    // está scrolled-up (`scroll_px > 0`), su `scroll_y` se interpreta
+    // contra el `surf_scroll_anchor` (el overflow al momento de su última
+    // entrada de scroll), NO contra el `overflow` vigente. Append → el
+    // overflow crece, pero la fila que el usuario tenía a la vista
+    // permanece en la misma `y` del viewport.
+    let scroll_y = if state.scroll_px <= 0.5 {
+        overflow // pinned al fondo
+    } else {
+        (state.surf_scroll_anchor - state.scroll_px).clamp(0.0, overflow)
+    };
 
     // Estilo por línea: stderr → tinte rojo tenue; runs ya traen el coloreo
     // semántico (paths/urls/stderr-rojo) calculado arriba.
