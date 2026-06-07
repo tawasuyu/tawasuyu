@@ -655,8 +655,11 @@ mod tests {
         // Carga el módulo demo `tesoro` y verifica que el grafo de
         // morfismos sale del manifest: 5 nodos y las aristas de flujo
         // de datos (escritura→lectura del mismo token canónico).
+        // El módulo de demo `tesoro` se quedó en `nakui-ui-llimphi/examples/`
+        // tras el refactor del backend (commit 7a23989a). Cruzamos por el
+        // workspace via `../nakui-ui-llimphi/...` desde el manifest dir.
         let module_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("examples/nakui-modules/tesoro/nakui");
+            .join("../nakui-ui-llimphi/examples/nakui-modules/tesoro/nakui");
         let exec = Executor::load_module(&module_dir).expect("tesoro carga");
         let mut execs: BTreeMap<String, Arc<Executor>> = BTreeMap::new();
         execs.insert("tesoro".into(), Arc::new(exec));

@@ -12,3 +12,7 @@ nakui-core = { path = "../nakui-core" }
 nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
 serde_json = { workspace = true }
 uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+# Los tests del backend abren WAL/snapshot en un tempdir.
+tempfile = { workspace = true }
