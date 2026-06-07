@@ -3083,6 +3083,56 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::WebkitBorderEndWidth(Some(v.to_string())))
             }
         }
+        // Fase 7.730 — `-webkit-margin-top-collapse`. `collapse` → None.
+        "-webkit-margin-top-collapse" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("collapse") {
+                Some(DeclKind::WebkitMarginTopCollapse(None))
+            } else {
+                Some(DeclKind::WebkitMarginTopCollapse(Some(v.to_string())))
+            }
+        }
+        // Fase 7.731 — `-webkit-margin-bottom-collapse`. `collapse` → None.
+        "-webkit-margin-bottom-collapse" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("collapse") {
+                Some(DeclKind::WebkitMarginBottomCollapse(None))
+            } else {
+                Some(DeclKind::WebkitMarginBottomCollapse(Some(v.to_string())))
+            }
+        }
+        // Fase 7.732 — `-webkit-margin-collapse` (shorthand). `collapse` → None.
+        "-webkit-margin-collapse" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("collapse") {
+                Some(DeclKind::WebkitMarginCollapse(None))
+            } else {
+                Some(DeclKind::WebkitMarginCollapse(Some(v.to_string())))
+            }
+        }
+        // Fase 7.733 — `-webkit-border-vertical-spacing`. `0` → None.
+        "-webkit-border-vertical-spacing" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v == "0" {
+                Some(DeclKind::WebkitBorderVerticalSpacing(None))
+            } else {
+                Some(DeclKind::WebkitBorderVerticalSpacing(Some(v.to_string())))
+            }
+        }
+        // Fase 7.734 — `-webkit-mask-source-type`. `alpha` → None.
+        "-webkit-mask-source-type" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("alpha") {
+                Some(DeclKind::WebkitMaskSourceType(None))
+            } else {
+                Some(DeclKind::WebkitMaskSourceType(Some(v.to_string())))
+            }
+        }
         // `scroll-margin-block` (Fase 7.417), `scroll-margin-inline` (Fase
         // 7.420), `scroll-padding-block` (Fase 7.423), `scroll-padding-inline`
         // (Fase 7.426) shorthands: ver `parse_declarations`.

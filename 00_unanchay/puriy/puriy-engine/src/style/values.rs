@@ -1393,6 +1393,21 @@ pub struct ComputedStyle {
     /// `-webkit-border-end-width` (Fase 7.709). Longhand legacy de
     /// `border-inline-end-width`. Parse opaco — `None` = `medium`. NO hereda. Plumb.
     pub webkit_border_end_width: Option<String>,
+    /// `-webkit-margin-top-collapse` (Fase 7.730). Control no estándar del
+    /// colapso del margen superior. Parse opaco — `None` = `collapse`. NO hereda. Plumb.
+    pub webkit_margin_top_collapse: Option<String>,
+    /// `-webkit-margin-bottom-collapse` (Fase 7.731). Ídem margen inferior.
+    /// Parse opaco — `None` = `collapse`. NO hereda. Plumb.
+    pub webkit_margin_bottom_collapse: Option<String>,
+    /// `-webkit-margin-collapse` (Fase 7.732). Shorthand de top/bottom-collapse.
+    /// Parse opaco — `None` = `collapse`. NO hereda. Plumb.
+    pub webkit_margin_collapse: Option<String>,
+    /// `-webkit-border-vertical-spacing` (Fase 7.733). Longhand legacy del eje
+    /// vertical de `border-spacing`. Parse opaco — `None` = `0`. HEREDA. Plumb.
+    pub webkit_border_vertical_spacing: Option<String>,
+    /// `-webkit-mask-source-type` (Fase 7.734). Interpretación de la máscara
+    /// (alpha/luminance). Parse opaco — `None` = `alpha`. NO hereda. Plumb.
+    pub webkit_mask_source_type: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
     /// en orden. Vacío = identidad.
@@ -4785,6 +4800,11 @@ impl Default for ComputedStyle {
             webkit_border_end_color: None,
             webkit_border_end_style: None,
             webkit_border_end_width: None,
+            webkit_margin_top_collapse: None,
+            webkit_margin_bottom_collapse: None,
+            webkit_margin_collapse: None,
+            webkit_border_vertical_spacing: None,
+            webkit_mask_source_type: None,
             text_indent: 0.0,
             word_spacing: 0.0,
             letter_spacing: 0.0,

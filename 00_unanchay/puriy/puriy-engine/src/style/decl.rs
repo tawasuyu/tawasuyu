@@ -892,6 +892,16 @@ pub(crate) enum DeclKind {
     WebkitBorderEndStyle(Option<String>),
     /// `-webkit-border-end-width` (Fase 7.709). `None` = `medium`. NO hereda. Plumb.
     WebkitBorderEndWidth(Option<String>),
+    /// `-webkit-margin-top-collapse` (Fase 7.730). `None` = `collapse`. NO hereda. Plumb.
+    WebkitMarginTopCollapse(Option<String>),
+    /// `-webkit-margin-bottom-collapse` (Fase 7.731). `None` = `collapse`. NO hereda. Plumb.
+    WebkitMarginBottomCollapse(Option<String>),
+    /// `-webkit-margin-collapse` (Fase 7.732). `None` = `collapse`. NO hereda. Plumb.
+    WebkitMarginCollapse(Option<String>),
+    /// `-webkit-border-vertical-spacing` (Fase 7.733). `None` = `0`. HEREDA. Plumb.
+    WebkitBorderVerticalSpacing(Option<String>),
+    /// `-webkit-mask-source-type` (Fase 7.734). `None` = `alpha`. NO hereda. Plumb.
+    WebkitMaskSourceType(Option<String>),
     TextIndent(f32),
     WordSpacing(f32),
     LetterSpacing(f32),
@@ -1500,6 +1510,11 @@ impl Decl {
             DeclKind::WebkitBorderEndColor(v) => s.webkit_border_end_color = v.clone(),
             DeclKind::WebkitBorderEndStyle(v) => s.webkit_border_end_style = v.clone(),
             DeclKind::WebkitBorderEndWidth(v) => s.webkit_border_end_width = v.clone(),
+            DeclKind::WebkitMarginTopCollapse(v) => s.webkit_margin_top_collapse = v.clone(),
+            DeclKind::WebkitMarginBottomCollapse(v) => s.webkit_margin_bottom_collapse = v.clone(),
+            DeclKind::WebkitMarginCollapse(v) => s.webkit_margin_collapse = v.clone(),
+            DeclKind::WebkitBorderVerticalSpacing(v) => s.webkit_border_vertical_spacing = v.clone(),
+            DeclKind::WebkitMaskSourceType(v) => s.webkit_mask_source_type = v.clone(),
             DeclKind::TextIndent(v) => s.text_indent = *v,
             DeclKind::WordSpacing(v) => s.word_spacing = *v,
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
