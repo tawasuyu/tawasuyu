@@ -766,6 +766,393 @@ fn fs(in: VsOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Gaussian backdrop blur sobre la intermediate (la textura donde vello pinta
+/// la UI). El compositor empuja dos render passes separables (horizontal +
+/// vertical) restringidas por scissor al rect del nodo `.backdrop_blur(sigma)`,
+/// usando una textura scratch interna del mismo tamaño que la intermediate.
+///
+/// **Pipeline**: vs = triángulo grande full-screen (clip-space), fs = suma
+/// ponderada de N samples a lo largo de `direction`, pesos Gauss `exp(-i²/2σ²)`.
+/// El bind group lleva la textura source + sampler bilinear + UBO con
+/// `(direction, pixel_size, sigma, radius)`. El scissor recorta el output al
+/// rect del nodo; el resto del target queda intacto (LoadOp::Load).
+///
+/// **Coste**: una pasada por dirección por nodo blur, ~`2*radius+1` taps por
+/// pixel del rect. Para `sigma=8` (radius=24), ~49 taps/pixel — barato si el
+/// rect es pequeño (chrome), pesado si es full-screen. v1: sin cap dinámico,
+/// se asume que el caller no abusa.
+///
+/// **Limitaciones v1**:
+/// - Un scratch full-screen alocado por compositor; resize sigue al `Surface`.
+/// - `radius` cap en 32 — sigmas > ~10 se ven menos suaves (clip de cola).
+/// - Bordes del rect: clamp-to-edge (sampler) → los pixeles fuera del rect
+///   que se muestrean en la cola del Gauss salen como espejo del borde. En
+///   un viewport razonable la diferencia es invisible; documentado.
+pub struct BlurCompositor {
+    pipeline: wgpu::RenderPipeline,
+    sampler: wgpu::Sampler,
+    bind_layout: wgpu::BindGroupLayout,
+    ubo_h: wgpu::Buffer,
+    ubo_v: wgpu::Buffer,
+    scratch: Option<BlurScratch>,
+}
+
+struct BlurScratch {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    width: u32,
+    height: u32,
+}
+
+/// Layout en GPU del UBO del blur. Debe coincidir con el `BlurParams` del WGSL.
+/// Padding explícito al final para llegar a múltiplo de 16 bytes (alignment
+/// estándar de uniformes en wgpu).
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BlurUniforms {
+    direction: [f32; 2],
+    pixel_size: [f32; 2],
+    sigma: f32,
+    radius: f32,
+    _pad: [f32; 2],
+}
+
+const BLUR_UBO_SIZE: u64 = std::mem::size_of::<BlurUniforms>() as u64;
+const BLUR_MAX_RADIUS: f32 = 32.0;
+
+impl BlurCompositor {
+    pub fn new(device: &wgpu::Device) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("llimphi-blur-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_WGSL.into()),
+        });
+        let bind_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("llimphi-blur-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("llimphi-blur-pl"),
+            bind_group_layouts: &[&bind_layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("llimphi-blur-pipe"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: INTERMEDIATE_FORMAT,
+                    // El blur OVERWRITE el rect; no necesita alpha-over. El
+                    // resultado del Gauss es opaco si los pixeles muestreados
+                    // lo son (la intermediate tiene UI + background opaco).
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("llimphi-blur-sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let ubo_h = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-blur-ubo-h"),
+            size: BLUR_UBO_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ubo_v = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-blur-ubo-v"),
+            size: BLUR_UBO_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        BlurCompositor {
+            pipeline,
+            sampler,
+            bind_layout,
+            ubo_h,
+            ubo_v,
+            scratch: None,
+        }
+    }
+
+    /// Aplica un blur Gaussiano sobre `target` en el rect dado (coords pixel
+    /// del viewport). Si el rect cae fuera del viewport, no hace nada. Usa
+    /// un scratch interno del mismo tamaño que el viewport — se aloca lazy y
+    /// se reusa entre frames; se recrea si el viewport cambió.
+    ///
+    /// `sigma` controla el ancho del kernel. ~`σ=4` da "frosted glass" suave,
+    /// `σ=16` un blur fuerte. El radius efectivo se cap a [`BLUR_MAX_RADIUS`].
+    pub fn blur(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        target: &wgpu::TextureView,
+        viewport: (u32, u32),
+        rect: (f32, f32, f32, f32),
+        sigma: f32,
+    ) {
+        let (vw, vh) = viewport;
+        if vw == 0 || vh == 0 || sigma <= 0.0 {
+            return;
+        }
+        let (rx, ry, rw, rh) = rect;
+        // Clamp scissor al viewport (un rect fuera del viewport pifia el
+        // RenderPass).
+        let x0 = rx.max(0.0) as u32;
+        let y0 = ry.max(0.0) as u32;
+        let x1 = (rx + rw).min(vw as f32).max(0.0) as u32;
+        let y1 = (ry + rh).min(vh as f32).max(0.0) as u32;
+        if x1 <= x0 || y1 <= y0 {
+            return;
+        }
+        let scissor = (x0, y0, x1 - x0, y1 - y0);
+
+        // Scratch del tamaño del viewport. Si cambió, recrear.
+        let need_new = match &self.scratch {
+            Some(s) => s.width != vw || s.height != vh,
+            None => true,
+        };
+        if need_new {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("llimphi-blur-scratch"),
+                size: wgpu::Extent3d {
+                    width: vw,
+                    height: vh,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: INTERMEDIATE_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            self.scratch = Some(BlurScratch {
+                _texture: texture,
+                view,
+                width: vw,
+                height: vh,
+            });
+        }
+        let scratch_view = &self.scratch.as_ref().expect("scratch creado arriba").view;
+
+        let radius = (sigma * 3.0).ceil().min(BLUR_MAX_RADIUS);
+        let pixel_size = [1.0 / vw as f32, 1.0 / vh as f32];
+        let ubo_h_data = BlurUniforms {
+            direction: [1.0, 0.0],
+            pixel_size,
+            sigma,
+            radius,
+            _pad: [0.0, 0.0],
+        };
+        let ubo_v_data = BlurUniforms {
+            direction: [0.0, 1.0],
+            pixel_size,
+            sigma,
+            radius,
+            _pad: [0.0, 0.0],
+        };
+        queue.write_buffer(&self.ubo_h, 0, bytemuck_cast(&ubo_h_data));
+        queue.write_buffer(&self.ubo_v, 0, bytemuck_cast(&ubo_v_data));
+
+        // Pass 1: target → scratch (horizontal).
+        let bg_h = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("llimphi-blur-bg-h"),
+            layout: &self.bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(target),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.ubo_h.as_entire_binding(),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("llimphi-blur-pass-h"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: scratch_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // No nos importa qué hay fuera del scissor: el segundo
+                        // pase sólo lee dentro del scissor también.
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bg_h, &[]);
+            pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+            pass.draw(0..3, 0..1);
+        }
+
+        // Pass 2: scratch → target (vertical), preservando lo fuera del scissor.
+        let bg_v = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("llimphi-blur-bg-v"),
+            layout: &self.bind_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(scratch_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.ubo_v.as_entire_binding(),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("llimphi-blur-pass-v"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.pipeline);
+            pass.set_bind_group(0, &bg_v, &[]);
+            pass.set_scissor_rect(scissor.0, scissor.1, scissor.2, scissor.3);
+            pass.draw(0..3, 0..1);
+        }
+    }
+}
+
+/// "bytemuck" minimal sin dep: convierte `&T` a `&[u8]`. Sólo para POD repr(C)
+/// — usado para escribir los UBOs del blur con `queue.write_buffer`.
+fn bytemuck_cast<T: Copy>(v: &T) -> &[u8] {
+    unsafe {
+        std::slice::from_raw_parts(
+            v as *const T as *const u8,
+            std::mem::size_of::<T>(),
+        )
+    }
+}
+
+/// Separable Gaussian, una dirección por pase. El vs es el mismo triángulo
+/// grande del overlay; el fs samplea `2*radius+1` taps a lo largo de
+/// `direction*pixel_size`. Pesos `exp(-i²/2σ²)` normalizados por la suma —
+/// independiente del radius por si quedó cortada la cola.
+const BLUR_WGSL: &str = r#"
+struct VsOut {
+    @builtin(position) pos: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs(@builtin(vertex_index) vi: u32) -> VsOut {
+    var corners = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    let xy = corners[vi];
+    var out: VsOut;
+    out.pos = vec4<f32>(xy, 0.0, 1.0);
+    out.uv = vec2<f32>((xy.x + 1.0) * 0.5, (1.0 - xy.y) * 0.5);
+    return out;
+}
+
+struct BlurParams {
+    direction: vec2<f32>,
+    pixel_size: vec2<f32>,
+    sigma: f32,
+    radius: f32,
+    _pad: vec2<f32>,
+};
+
+@group(0) @binding(0) var src_tex: texture_2d<f32>;
+@group(0) @binding(1) var src_samp: sampler;
+@group(0) @binding(2) var<uniform> params: BlurParams;
+
+@fragment
+fn fs(in: VsOut) -> @location(0) vec4<f32> {
+    let dir = params.direction * params.pixel_size;
+    let r = i32(params.radius);
+    let two_sigma_sq = 2.0 * params.sigma * params.sigma;
+    var acc = vec4<f32>(0.0);
+    var weight_sum = 0.0;
+    for (var i = -r; i <= r; i = i + 1) {
+        let fi = f32(i);
+        let w = exp(-(fi * fi) / two_sigma_sq);
+        acc = acc + textureSample(src_tex, src_samp, in.uv + dir * fi) * w;
+        weight_sum = weight_sum + w;
+    }
+    return acc / weight_sum;
+}
+"#;
+
 impl Surface for WinitSurface {
     fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)

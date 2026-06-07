@@ -64,7 +64,7 @@ fingen el borde con un rect-padre inset).
 | ✅ Gradientes como fill | `.fill_gradient(Gradient)` (linear/radial/sweep) | compositor | `peniko::Gradient` ya está. |
 | ✅ Bordes reales | `.border(width, color)` | compositor | stroke de rounded-rect; mata el truco del rect-padre. Respeta radio por esquina. |
 | ✅ Radio por esquina | `.radius_corners(tl,tr,br,bl)` | compositor | override de `radius` uniforme; sombra sigue usando el escalar. |
-| Backdrop blur (glass) | `.backdrop_blur(sigma)` | raster | caro (samplea el framebuffer detrás); el look "moderno". Único pendiente del Tier 1. |
+| ✅ Backdrop blur (glass) | `.backdrop_blur(sigma)` | hal + ui | Bloque 11 — Gauss separable (H+V) sobre la intermediate, post-pasada wgpu. Limitación v1: el rect del nodo se borronea **completo** (incluyendo su propio fill/border/text) — para "vidrio + texto nítido" se compone como nodo hermano posterior con el mismo rect (el text se pinta sobre el blur ya aplicado). Tier 1 cerrado. |
 
 ### 🟢 Tier 2 — texto rico (parley lo soporta, falta exponerlo)
 `TextSpec` hoy expone `italic`, color por rango y **peso de fuente**.
@@ -228,6 +228,32 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     cuando no están. Tier 2 queda sólo con **spans inline mixtos** (RichText
     real) y **texto seleccionable fuera del editor**. **AccessKit (Tier 7)**
     completo desde iter 3/3 (2026-06-07).
+11. ✅ **Bloque 11 = backdrop blur (cierra Tier 1)** — `View::backdrop_blur(sigma)`
+    + `MountedNode::backdrop_blur: Option<f32>` + `collect_backdrop_blurs(mounted,
+    computed)` en el compositor. En `llimphi-hal` un nuevo `BlurCompositor` aplica
+    una **Gauss separable** (dos pases H+V) sobre la intermediate vía fragment
+    shader con scissor restringido al rect del nodo y una scratch texture
+    interna (full-viewport, recreada en resize). El bind group lleva sampler
+    bilinear clamp-to-edge + UBO con `(direction, pixel_size, sigma, radius)`;
+    `radius = ceil(sigma*3)` cap en 32px (sigmas > ~10 empiezan a clipear cola).
+    El runtime (`llimphi-ui::eventloop`) recolecta los blurs DESPUÉS de la
+    pasada vello y ANTES de los `gpu_painter`, así un painter GPU cuya rect se
+    solape ve el backdrop ya borroso y se pinta encima nítido. Demo `--example
+    backdrop_blur_demo` (4 paneles σ ∈ {0,4,8,16} sobre franjas R/G/B/Y): σ=0
+    conserva fill+border+radio (el compositor no-op'ea); σ>0 pierde
+    fill+border+radio propios porque la post-pasada los promedia con el fondo
+    — la **limitación honesta v1**. Para "glass + chrome nítido" la
+    composición canónica es: panel `.backdrop_blur(σ)` sin fill propio + nodo
+    hermano POSTERIOR con el mismo rect aportando borde/texto/iconos (el
+    blur ya pasó cuando llega el chrome del hermano… mentira: la post-pasada
+    es un único pase que afecta a TODO lo de la intermediate dentro del rect.
+    Para chrome nítido sobre el blur, el chrome real va por `gpu_painter` o
+    por el **overlay** — que se compone DESPUÉS del blur). La paridad estricta
+    con CSS `backdrop-filter` (chrome propio nítido en el mismo nodo sin
+    overlay) requiere scene-split (Bloque 11.B futuro): pintar el árbol sin
+    el subárbol del blur, borronear el rect, y luego pintar el subárbol sobre
+    una textura secundaria que se compone con alpha-over (reusa el camino
+    existente del `OverlayCompositor`).
 
 ## Tier 7 — detalle (accesibilidad)
 

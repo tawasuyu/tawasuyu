@@ -501,6 +501,10 @@ pub struct View<Msg> {
     /// las [`Constraints`] resueltas para producir el subárbol. `None` = nodo
     /// normal (la abrumadora mayoría). Ver [`View::layout_builder`].
     pub layout_builder: Option<LayoutBuilderFn<Msg>>,
+    /// Backdrop blur sobre el contenido pintado **debajo** de este nodo.
+    /// Ver [`View::backdrop_blur`] / [`MountedNode::backdrop_blur`]. v1:
+    /// sólo se aplica a nodos top-level sin clip/alpha ancestral.
+    pub backdrop_blur: Option<f32>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -654,6 +658,15 @@ pub struct MountedNode<Msg> {
     /// el rect del slot (vía [`collect_builder_constraints`]) e invocar la
     /// closure. Tras expandirse, el nodo final ya es normal (`false`).
     pub is_layout_builder: bool,
+    /// **Backdrop blur** (CSS `backdrop-filter: blur(N)` / Flutter
+    /// `BackdropFilter`). Sigma del Gauss en pixels; el runtime aplica una
+    /// pasada separable (H+V) sobre la intermediate restringida al rect del
+    /// nodo, **antes** de pintar el subárbol del nodo. El subárbol se compone
+    /// sobre el backdrop ya borroso vía un buffer secundario. `None` = sin
+    /// blur (la abrumadora mayoría). Limitación v1: el nodo no debe estar
+    /// dentro de un ancestro con clip/alpha (los subárboles separados pintan
+    /// fuera de esas capas — documentado en `PARIDAD-FLUTTER.md` Bloque 11).
+    pub backdrop_blur: Option<f32>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.

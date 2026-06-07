@@ -44,8 +44,31 @@ impl<Msg> View<Msg> {
             cursor: None,
             ripple: None,
             layout_builder: None,
+            backdrop_blur: None,
             children: Vec::new(),
         }
+    }
+
+    /// Aplica un **backdrop blur** Gaussiano al contenido pintado **debajo**
+    /// de este nodo, restringido al rect del nodo (CSS `backdrop-filter:
+    /// blur(N)` / Flutter `BackdropFilter`). El runtime descompone el árbol
+    /// en "fondo + subárbol del nodo", renderiza el fondo a la intermediate,
+    /// borronea el rect con un Gauss separable, y compone el subárbol del
+    /// nodo sobre el backdrop borroso vía un buffer secundario. Útil para
+    /// chrome translúcido: sidebars/topbars con "vidrio esmerilado".
+    ///
+    /// `sigma` (pixels) controla el ancho del kernel — `4.0` "frosted glass"
+    /// suave; `8.0`–`16.0` un blur fuerte; >`20` se ve apagado. v1 capa el
+    /// radius efectivo a 32 pixels (sigma > 10 empieza a clipear cola).
+    ///
+    /// **Limitación v1**: sólo nodos top-level (children directos del root o
+    /// de un agrupador sin `clip`/`alpha`) renderizan correctamente — un
+    /// nodo dentro de una capa clippeada se pinta SIN clip en su pase, por
+    /// el reset de layer-stack al cambiar de scene. Documentado en
+    /// `PARIDAD-FLUTTER.md` Bloque 11.
+    pub fn backdrop_blur(mut self, sigma: f32) -> Self {
+        self.backdrop_blur = Some(sigma.max(0.0));
+        self
     }
 
     /// Construye los hijos de este nodo **de forma diferida**, en función del

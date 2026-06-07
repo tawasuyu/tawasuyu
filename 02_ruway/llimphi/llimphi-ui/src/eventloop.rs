@@ -205,6 +205,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
         let surface = WinitSurface::new(&hal, window.clone()).expect("surface");
         let renderer = Renderer::new(&hal).expect("renderer");
         let overlay_compositor = llimphi_hal::OverlayCompositor::new(&hal.device);
+        let blur_compositor = llimphi_hal::BlurCompositor::new(&hal.device);
         let typesetter = llimphi_text::Typesetter::new();
         window.request_redraw();
         self.state = Some(RuntimeState {
@@ -214,6 +215,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             renderer,
             scene: vello::Scene::new(),
             overlay_compositor,
+            blur_compositor,
             model: Some(A::init(&self.handle)),
             cursor: PhysicalPosition::new(0.0, 0.0),
             modifiers: Modifiers::default(),
@@ -1286,15 +1288,37 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     },
                 );
                 let viewport = frame.size();
-                let mut any_gpu = paint_gpu(
-                    &mounted,
-                    &computed,
-                    &state.hal.device,
-                    &state.hal.queue,
-                    &mut gpu_encoder,
-                    frame.view(),
-                    viewport,
-                );
+                // Backdrop blur (Bloque 11): post-pasada Gauss separable sobre
+                // la intermediate, restringida al rect de cada nodo
+                // `.backdrop_blur(sigma)`. Sucede TRAS la rasterización vello
+                // y ANTES de los `gpu_painter`/composite — los painters GPU
+                // que se solapen con el blur ven el rect ya borroneado y se
+                // dibujan encima nítidos. Coste cero sin nodos blur (loop
+                // vacío + bandera `blurred` queda false).
+                let backdrop_blurs =
+                    llimphi_compositor::collect_backdrop_blurs(&mounted, &computed);
+                let blurred = !backdrop_blurs.is_empty();
+                for b in &backdrop_blurs {
+                    state.blur_compositor.blur(
+                        &state.hal.device,
+                        &state.hal.queue,
+                        &mut gpu_encoder,
+                        frame.view(),
+                        viewport,
+                        b.rect,
+                        b.sigma,
+                    );
+                }
+                let mut any_gpu = blurred
+                    | paint_gpu(
+                        &mounted,
+                        &computed,
+                        &state.hal.device,
+                        &state.hal.queue,
+                        &mut gpu_encoder,
+                        frame.view(),
+                        viewport,
+                    );
                 if let Some(ov) = overlay_built.as_ref() {
                     // En el camino composite, los painters gpu del overlay van
                     // sobre SU textura; si no, sobre la intermedia.

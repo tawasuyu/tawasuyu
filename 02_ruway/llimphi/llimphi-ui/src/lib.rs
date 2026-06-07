@@ -523,6 +523,12 @@ struct RuntimeState<A: App> {
     /// Sólo entra en juego cuando el árbol principal tiene painters gpu y hay
     /// un overlay activo; resuelve el z-order (menús por encima del video).
     overlay_compositor: llimphi_hal::OverlayCompositor,
+    /// Backdrop blur post-pasada: para cada nodo con `.backdrop_blur(sigma)`,
+    /// el runtime aplica un Gauss separable (H+V) sobre la intermediate
+    /// restringido al rect del nodo, **después** de la rasterización vello y
+    /// **antes** de los `gpu_painter`. El compositor mantiene su scratch
+    /// interno; coste cero cuando no hay nodos blur.
+    blur_compositor: llimphi_hal::BlurCompositor,
     model: Option<A::Model>,
     cursor: PhysicalPosition<f64>,
     modifiers: Modifiers,

@@ -58,6 +58,7 @@ pub fn mount_recursive<Msg: Clone>(
         cursor,
         ripple,
         layout_builder,
+        backdrop_blur,
         children,
     } = v;
     let parent_idx = out.len();
@@ -106,6 +107,7 @@ pub fn mount_recursive<Msg: Clone>(
         // expandir (caller no pasó por el runtime), se monta como hoja y este
         // flag permite que el runtime lo detecte y resuelva.
         is_layout_builder: layout_builder.is_some(),
+        backdrop_blur,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -232,6 +234,55 @@ pub fn paint<Msg>(
         mounted.nodes.len(),
         Affine::IDENTITY,
     );
+}
+
+/// Recolecta los nodos con [`MountedNode::backdrop_blur`] activo del árbol
+/// montado, junto con el sigma y el rect absoluto al cual restringir el
+/// blur. El runtime (`llimphi-ui::eventloop`) los aplica como post-pasada
+/// **después** de la rasterización vello, sobre la intermediate.
+///
+/// La búsqueda **salta el subárbol** al encontrar un blur — sin anidamiento
+/// en v1: un blur dentro de otro blur sería redundante (el padre ya borrona
+/// el rect que cubre al hijo).
+///
+/// **Limitación v1 (post-pasada)**: el blur ocurre tras vello, así que el
+/// fill/text/imagen del nodo blur y sus descendientes — pintados antes en
+/// la misma rasterización — quedan **borroneados** también. Útil para
+/// paneles "vidrio sobre fondo" sin contenido propio (el contenido nítido
+/// se compone como nodo hermano posterior con el mismo rect). La paridad
+/// completa con CSS `backdrop-filter` requiere scene-split (Bloque 11.B
+/// del roadmap).
+pub fn collect_backdrop_blurs<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+) -> Vec<BackdropBlur> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < mounted.nodes.len() {
+        let node = &mounted.nodes[idx];
+        if let Some(sigma) = node.backdrop_blur {
+            if let Some(r) = computed.get(node.id) {
+                out.push(BackdropBlur {
+                    sigma,
+                    rect: (r.x, r.y, r.w, r.h),
+                });
+                idx = node.subtree_end;
+                continue;
+            }
+        }
+        idx += 1;
+    }
+    out
+}
+
+/// Datos de un backdrop blur listos para que el runtime lo aplique sobre
+/// la intermediate vía `llimphi_hal::BlurCompositor::blur`.
+#[derive(Debug, Clone, Copy)]
+pub struct BackdropBlur {
+    /// Sigma del Gauss en pixels lógicos.
+    pub sigma: f32,
+    /// Rect absoluto `(x, y, w, h)` del nodo, en pixels lógicos del viewport.
+    pub rect: (f32, f32, f32, f32),
 }
 
 /// Pinta el rango de nodos `[start, end)` de `mounted` en `scene`, partiendo de
