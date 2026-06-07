@@ -613,6 +613,41 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // Fase 7.800 — shorthand `-webkit-text-stroke`: `<width> || <color>`, orden
+        // libre. Reparte en los longhands `-webkit-text-stroke-width/color` (Fase
+        // 7.579-7.580). El primer token reconocible como ancho fija el ancho; el
+        // resto (reensamblado con espacios) es el color, así `2px rgb(0, 0, 0)`
+        // no se rompe al partir por espacios.
+        if prop.eq_ignore_ascii_case("-webkit-text-stroke") {
+            let mut width: Option<f32> = None;
+            let mut color_parts: Vec<&str> = Vec::new();
+            for tok in value.split_whitespace() {
+                let low = tok.to_ascii_lowercase();
+                let as_width = match low.as_str() {
+                    "thin" => Some(1.0),
+                    "medium" => Some(3.0),
+                    "thick" => Some(5.0),
+                    _ => low.strip_suffix("px").unwrap_or(&low).parse::<f32>().ok(),
+                };
+                if width.is_none() && as_width.is_some() {
+                    width = as_width;
+                } else {
+                    color_parts.push(tok);
+                }
+            }
+            if let Some(w) = width {
+                out.push(Decl { kind: DeclKind::WebkitTextStrokeWidth(w), important });
+            }
+            if !color_parts.is_empty() {
+                let c = color_parts.join(" ");
+                if c.eq_ignore_ascii_case("currentcolor") {
+                    out.push(Decl { kind: DeclKind::WebkitTextStrokeColor(None), important });
+                } else {
+                    out.push(Decl { kind: DeclKind::WebkitTextStrokeColor(Some(c)), important });
+                }
+            }
+            continue;
+        }
         // Fase 7.760 — alias `-webkit-text-decoration` → estándar (shorthand legacy).
         if prop.eq_ignore_ascii_case("text-decoration")
             || prop.eq_ignore_ascii_case("-webkit-text-decoration")
@@ -787,6 +822,13 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             parse_flex_direction(value).map(DeclKind::FlexDirection)
         }
         "flex-wrap" | "-webkit-flex-wrap" => parse_flex_wrap(value).map(DeclKind::FlexWrap),
+        // Fase 7.801 — `-ms-flex-wrap` (IE10). Divergencia de valor: IE usaba
+        // `none` donde el estándar usa `nowrap`; lo normalizamos antes de parsear.
+        "-ms-flex-wrap" => {
+            let v = value.trim();
+            let norm = if v.eq_ignore_ascii_case("none") { "nowrap" } else { v };
+            parse_flex_wrap(norm).map(DeclKind::FlexWrap)
+        }
         // Fase 7.716-7.718 — alias vendor Flexbox 2012 de la familia de
         // alineación (-webkit-justify-content / -align-items / -align-content).
         "justify-content" | "-webkit-justify-content" => {
@@ -1310,8 +1352,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "rx" => parse_length_or_pct(value).map(DeclKind::Rx),
         "ry" => parse_length_or_pct(value).map(DeclKind::Ry),
         // Fase 7.479 — `order` (CSS Flexbox/Grid). `<integer>`. Default 0.
-        // Fase 7.715 — `-webkit-order` alias vendor de `order`.
-        "order" | "-webkit-order" => {
+        // Fase 7.715 — `-webkit-order` / Fase 7.802 — `-ms-flex-order` (IE10) alias de `order`.
+        "order" | "-webkit-order" | "-ms-flex-order" => {
             value.trim().parse::<i32>().ok().map(DeclKind::Order)
         }
         // Fase 7.480 — `path-length` (SVG2). `none | <number>`. NO hereda.
