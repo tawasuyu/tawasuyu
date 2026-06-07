@@ -1856,7 +1856,9 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         },
         // Fase 7.549-7.552 — familia `mask-border-*` (CSS Masking 1). Parse
         // opaco; el sentinel reservado va a `None`.
-        "mask-border-source" => {
+        // Fase 7.609-7.613 — `-webkit-mask-box-image-*` son los alias vendor
+        // (de facto) de `mask-border-*`: enrutan al mismo handler/almacén.
+        "mask-border-source" | "-webkit-mask-box-image-source" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("none") {
@@ -1865,7 +1867,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::MaskBorderSource(Some(v.to_string())))
             }
         }
-        "mask-border-slice" => {
+        "mask-border-slice" | "-webkit-mask-box-image-slice" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "0" {
@@ -1874,7 +1876,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::MaskBorderSlice(Some(v.to_string())))
             }
         }
-        "mask-border-width" => {
+        "mask-border-width" | "-webkit-mask-box-image-width" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("auto") {
@@ -1883,7 +1885,7 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::MaskBorderWidth(Some(v.to_string())))
             }
         }
-        "mask-border-outset" => {
+        "mask-border-outset" | "-webkit-mask-box-image-outset" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v == "0" {
@@ -1892,8 +1894,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::MaskBorderOutset(Some(v.to_string())))
             }
         }
-        // Fase 7.553 — `mask-border-repeat` (CSS Masking 1).
-        "mask-border-repeat" => match value.trim().to_ascii_lowercase().as_str() {
+        // Fase 7.553 — `mask-border-repeat` (CSS Masking 1); Fase 7.613 alias.
+        "mask-border-repeat" | "-webkit-mask-box-image-repeat" => match value.trim().to_ascii_lowercase().as_str() {
             "stretch" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Stretch)),
             "repeat" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Repeat)),
             "round" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Round)),
