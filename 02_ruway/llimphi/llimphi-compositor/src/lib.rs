@@ -336,10 +336,17 @@ pub struct View<Msg> {
     pub border: Option<Border>,
     pub text: Option<TextSpec>,
     /// Imagen a pintar dentro del rect del nodo. Se centra y escala
-    /// preservando aspect ratio (`min(rect.w/img.w, rect.h/img.h)`).
-    /// El alfa por píxel de la imagen y el `Image::alpha` global se
-    /// respetan; el `fill` (si lo hay) se pinta debajo como background.
+    /// según [`Self::image_fit`] (default `Contain` = preservar
+    /// aspect ratio cabiendo). El alfa por píxel de la imagen y el
+    /// `Image::alpha` global se respetan; el `fill` (si lo hay) se
+    /// pinta debajo como background. El clip al `node_rrect` respeta
+    /// `radius`/`corner_radii`, así avatares y cards con esquinas
+    /// redondeadas funcionan sin envolver en un padre `clip(true)`.
     pub image: Option<Image>,
+    /// Política de encaje de [`Self::image`] en el rect del nodo
+    /// (CSS `object-fit`). `None` = `Contain` (el default histórico).
+    /// Ver [`ImageFit`] y [`View::image_fit`].
+    pub image_fit: Option<ImageFit>,
     /// Callback de pintura custom. Si está presente, el runtime lo
     /// invoca durante el paint del nodo con el `Scene` vivo + el rect
     /// absoluto. Pensado para "canvas elements" (dominium, pluma,
@@ -550,6 +557,41 @@ pub struct TextMeasure {
     pub strikethrough: bool,
 }
 
+/// Cómo encajar una imagen en el rect del nodo (CSS `object-fit` /
+/// Flutter `BoxFit`). El runtime calcula la escala y el origen
+/// correspondientes a esta política y siempre recorta al
+/// `node_rrect` del nodo, así el clip respeta `radius` /
+/// `corner_radii`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageFit {
+    /// Preservar aspect ratio, **caber** dentro del rect (escala =
+    /// `min(sx, sy)`). Deja banda en el eje menos restrictivo.
+    /// CSS `object-fit: contain` / Flutter `BoxFit.contain`. **Default
+    /// histórico** — lo que hacía `View::image()` antes del Bloque 12.
+    Contain,
+    /// Preservar aspect ratio, **cubrir** todo el rect (escala =
+    /// `max(sx, sy)`). Recorta el sobrante en el eje menos
+    /// restrictivo (el clip al `node_rrect` lo absorbe). CSS
+    /// `object-fit: cover` / Flutter `BoxFit.cover` — ideal para
+    /// avatares y hero images.
+    Cover,
+    /// Estirar la imagen para ocupar el rect, **sin** preservar
+    /// aspect ratio (`sx`/`sy` independientes). CSS `object-fit:
+    /// fill` / Flutter `BoxFit.fill`.
+    Fill,
+    /// **No** escalar la imagen — pintarla a su tamaño original,
+    /// centrada en el rect. Si la imagen excede el rect, el clip al
+    /// `node_rrect` la recorta. CSS `object-fit: none` / Flutter
+    /// `BoxFit.none`.
+    None,
+}
+
+impl Default for ImageFit {
+    fn default() -> Self {
+        ImageFit::Contain
+    }
+}
+
 /// Forma del puntero del mouse. Subconjunto práctico, llimphi-native (el
 /// compositor no depende de winit). El runtime (`llimphi-ui`) mapea 1:1 a
 /// `winit::window::CursorIcon`. Nombres alineados con CSS/winit.
@@ -606,6 +648,9 @@ pub struct MountedNode<Msg> {
     pub border: Option<Border>,
     pub text: Option<TextSpec>,
     pub image: Option<Image>,
+    /// Política de encaje de [`Self::image`] (ver [`ImageFit`]). `None`
+    /// = `Contain`.
+    pub image_fit: Option<ImageFit>,
     pub painter: Option<PaintFn>,
     pub gpu_painter: Option<GpuPaintFn>,
     pub on_click: Option<Msg>,

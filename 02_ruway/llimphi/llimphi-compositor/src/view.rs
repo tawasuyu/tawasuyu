@@ -13,6 +13,7 @@ impl<Msg> View<Msg> {
             border: None,
             text: None,
             image: None,
+            image_fit: None,
             painter: None,
             gpu_painter: None,
             on_pointer_enter: None,
@@ -925,13 +926,24 @@ impl<Msg> View<Msg> {
         self
     }
 
-    /// Pinta `image` dentro del rect del nodo, centrada y escalada
-    /// preservando aspect ratio. Re-exporta `peniko::Image` vía
-    /// `llimphi_raster::peniko::Image` — el caller decodifica los
-    /// bytes con el crate `image` (u otro) y construye el `Image`
-    /// con `Blob<u8>` + `ImageFormat::Rgba8`.
+    /// Pinta `image` dentro del rect del nodo. El encaje default es
+    /// [`ImageFit::Contain`] (preservar aspect ratio cabiendo);
+    /// usar [`Self::image_fit`] para `Cover`/`Fill`/`None`. El clip
+    /// respeta `radius`/`corner_radii`, así avatares y cards
+    /// redondeadas funcionan sin envolver en `clip(true)`. Re-exporta
+    /// `peniko::Image` vía `llimphi_raster::peniko::Image` — el
+    /// caller decodifica los bytes con el crate `image` (u otro) y
+    /// construye el `Image` con `Blob<u8>` + `ImageFormat::Rgba8`.
     pub fn image(mut self, image: Image) -> Self {
         self.image = Some(image);
+        self
+    }
+
+    /// Política de encaje de la imagen (CSS `object-fit` / Flutter
+    /// `BoxFit`). Solo aplica si hay [`Self::image`] seteada. Ver
+    /// [`ImageFit`].
+    pub fn image_fit(mut self, fit: ImageFit) -> Self {
+        self.image_fit = Some(fit);
         self
     }
 

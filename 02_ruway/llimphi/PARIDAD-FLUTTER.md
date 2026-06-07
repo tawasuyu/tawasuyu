@@ -130,9 +130,16 @@ Antes: sólo `scroll_y` vertical. Ahora (todo stateless, offset en el Model):
   el caller estima la velocidad; un seam de "drag con velocidad" lo haría directo.
 
 ### 🟠 Tier 6 — assets / media
-- SVG: hoy sólo `llimphi-icons` a mano. Falta parser (existe `vello_svg`).
-- Imágenes: `.image()` sólo centra preservando aspecto. Falta `fit:{cover,contain,fill}`,
-  clip redondeado sobre imagen, decode pipeline, imágenes de red con caché.
+- ✅ SVG (`llimphi-svg` vía `vello_svg`, Bloque 3 del backlog post-elegance).
+- ✅ Imágenes: `fit:{Contain,Cover,Fill,None}` + clip redondeado nativo (Bloque 12).
+  `View::image_fit(ImageFit::...)`; `Contain` sigue siendo el default. El paint
+  envuelve la imagen en `push_layer(Mix::Clip, node_rrect)` (antes era un
+  `KurboRect` plano), así avatares y cards con `radius`/`corner_radii` ya no
+  necesitan un padre con `clip(true)`. Demo `--example image_fit_demo`
+  (Contain · Cover · Fill · None + un cuadrado con radius=100 que queda como
+  avatar circular).
+- Falta: decode pipeline (hoy el caller decodifica con el crate `image` antes
+  de pasar el `peniko::Image`) e imágenes de red con caché.
 
 ### 🔴 Tier 7 — accesibilidad (la brecha categórica más grande)
 **Cero hoy.** No hay árbol de semántica ni lectores de pantalla. A desarrollar:
@@ -254,6 +261,18 @@ completa. No urge (vello es rápido), pero separa "fluido a 5k nodos" de "a 50k"
     el subárbol del blur, borronear el rect, y luego pintar el subárbol sobre
     una textura secundaria que se compone con alpha-over (reusa el camino
     existente del `OverlayCompositor`).
+12. ✅ **Bloque 12 = `ImageFit` (avanza Tier 6)** — `View::image_fit(ImageFit)`
+    + `MountedNode::image_fit: Option<ImageFit>` (default `Contain`,
+    preservando el comportamiento histórico de `View::image()`). Cuatro
+    políticas: `Contain` (preserva aspect, cabe), `Cover` (preserva
+    aspect, cubre + recorta), `Fill` (estira, no preserva), `None` (1:1
+    centrada, recorta lo que sobra). El paint del nodo con imagen ahora
+    envuelve el `draw_image` en `push_layer(Mix::Clip, node_rrect)` (antes
+    `KurboRect` plano), así avatares y cards con `radius`/`corner_radii`
+    se recortan a la silueta sin necesidad de un padre `clip(true)`.
+    Demo `--example image_fit_demo` (cinco fichas: las cuatro políticas
+    sobre la misma imagen sintética 4:3 + un cuadrado con `radius=100`
+    que queda como avatar circular).
 
 ## Tier 7 — detalle (accesibilidad)
 
