@@ -846,7 +846,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "resize" => parse_resize(value).map(DeclKind::Resize),
         // Fase 7.629 — `-webkit-writing-mode` es el alias vendor (de facto)
         // de `writing-mode`: enruta al mismo parser/almacén.
-        "writing-mode" | "-webkit-writing-mode" => {
+        // Fase 7.637 — `-epub-writing-mode` (perfil EPUB) al mismo destino.
+        "writing-mode" | "-webkit-writing-mode" | "-epub-writing-mode" => {
             parse_writing_mode(value).map(DeclKind::WritingMode)
         }
         "direction" => parse_direction(value).map(DeclKind::Direction),
@@ -879,8 +880,8 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
             Some(DeclKind::BackdropFilter(parse_filter_list(value)))
         }
         // Fase 7.630 — `-webkit-text-orientation` alias vendor de
-        // `text-orientation`.
-        "text-orientation" | "-webkit-text-orientation" => {
+        // `text-orientation`. Fase 7.638 — `-epub-text-orientation` (EPUB).
+        "text-orientation" | "-webkit-text-orientation" | "-epub-text-orientation" => {
             parse_text_orientation(value).map(DeclKind::TextOrientation)
         }
         "overscroll-behavior-x" => {
@@ -2630,17 +2631,19 @@ pub(crate) fn decl_kind_from_pair(prop: &str, value: &str) -> Option<DeclKind> {
         "font-variant-position" => {
             parse_font_variant_position(value).map(DeclKind::FontVariantPosition)
         }
-        "text-emphasis-style" => {
+        // Fase 7.634-7.636 — la familia `-webkit-text-emphasis-*` es el alias
+        // vendor (de facto) de `text-emphasis-*`: mismo parser/almacén.
+        "text-emphasis-style" | "-webkit-text-emphasis-style" => {
             parse_text_emphasis_style(value).map(DeclKind::TextEmphasisStyle)
         }
-        "text-emphasis-color" => {
+        "text-emphasis-color" | "-webkit-text-emphasis-color" => {
             if is_current_color(value) {
                 Some(DeclKind::TextEmphasisColor(None))
             } else {
                 parse_color(value).map(|c| DeclKind::TextEmphasisColor(Some(c)))
             }
         }
-        "text-emphasis-position" => {
+        "text-emphasis-position" | "-webkit-text-emphasis-position" => {
             parse_text_emphasis_position(value).map(DeclKind::TextEmphasisPosition)
         }
         // `text-emphasis` shorthand: ver `parse_declarations`.
