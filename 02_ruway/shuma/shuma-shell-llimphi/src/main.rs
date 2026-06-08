@@ -137,7 +137,50 @@ fn default_shell_source() -> Source {
 
 fn main() {
     rimay_localize::init();
+    // Cablea `SUDO_ASKPASS` para que `sudo -A <cmd>` abra el popup Llimphi
+    // en lugar de quedar colgado pidiendo pass en stdin del PTY. La env se
+    // exporta en el proceso padre — los PTYs spawneados por shuma-exec la
+    // heredan, igual que `TERM`.
+    if std::env::var_os("SUDO_ASKPASS").is_none() {
+        if let Some(path) = resolve_askpass_path() {
+            // En edition 2021 `set_var` es safe; corre antes de spawnear
+            // ningún hilo. Los PTYs heredan la env.
+            std::env::set_var("SUDO_ASKPASS", path);
+        }
+    }
     llimphi_ui::run::<Shell>();
+}
+
+/// Resuelve el path del binario `shuma-askpass`. Orden:
+/// 1. `SHUMA_ASKPASS` override explícito.
+/// 2. Hermano del binario actual (`current_exe().parent()/shuma-askpass`).
+/// 3. Lookup en `$PATH` (`which`-like manual, solo nombre).
+/// Devuelve `None` si no lo encuentra — `sudo -A` queda como antes.
+fn resolve_askpass_path() -> Option<std::path::PathBuf> {
+    if let Ok(p) = std::env::var("SHUMA_ASKPASS") {
+        let pb = std::path::PathBuf::from(p);
+        if pb.exists() {
+            return Some(pb);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let sibling = dir.join("shuma-askpass");
+            if sibling.exists() {
+                return Some(sibling);
+            }
+        }
+    }
+    // Fallback: $PATH lookup mínimo — buscamos `shuma-askpass` en cada dir.
+    if let Some(path_env) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            let cand = dir.join("shuma-askpass");
+            if cand.exists() {
+                return Some(cand);
+            }
+        }
+    }
+    None
 }
 
 /// Lista los contenedores locales (`podman ps -a`) en un hilo y entrega los

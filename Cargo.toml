@@ -402,6 +402,7 @@ members = [
     "02_ruway/shuma/sandbox/shuma-session",
     "02_ruway/shuma/sandbox/shuma-shell-render",
     "02_ruway/shuma/sandbox/shuma-sysmon",
+    "02_ruway/shuma/shuma-askpass",
     "02_ruway/shuma/shuma-cli",
     "02_ruway/shuma/shuma-shell-llimphi",
     "02_ruway/supay/supay-app-llimphi",

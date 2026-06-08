@@ -1,0 +1,18 @@
+[package]
+name = "shuma-askpass"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "Mini-ventana Llimphi compatible con SUDO_ASKPASS: lee una pass en un input masked y la escribe a stdout al confirmar (exit 0). Esc / cierre = exit 1."
+
+[[bin]]
+name = "shuma-askpass"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }

@@ -2536,6 +2536,38 @@ pub(crate) fn simple_pipe_stages(line: &str) -> Option<Vec<StageSpec>> {
 /// TUI (o el usuario lo prefijó con `:tui`), abre un PTY; si es un pipe
 /// simple, lo corre directo con captura por etapa; si no, va por el shell
 /// normal (streaming Stdout/Stderr).
+/// Inserta `-A` después de `sudo` cuando el usuario no lo puso, para que
+/// sudo dispare `SUDO_ASKPASS` (popup) en vez de quedar colgado leyendo
+/// stdin del PTY. Respeta `-A`, `-S`, `--askpass`, `--stdin` ya presentes.
+/// Sólo toca la primera ocurrencia al principio del line — pipes / `&&` /
+/// `;` van por su cuenta (el shell del PTY los maneja).
+fn inject_askpass(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let lead_len = line.len() - trimmed.len();
+    let Some(rest_after_sudo) = trimmed.strip_prefix("sudo") else {
+        return line.to_string();
+    };
+    // Exigir que `sudo` sea palabra completa (siguiente char espacio / EOL).
+    let next = rest_after_sudo.chars().next();
+    if !matches!(next, None | Some(' ') | Some('\t')) {
+        return line.to_string();
+    }
+    // Heurística simple: si los tokens del comando contienen -A/-S/--askpass/
+    // --stdin antes de cualquier `;|&` o salto de pipe, dejarlo como está.
+    for tok in rest_after_sudo.split_whitespace() {
+        if tok == "-A" || tok == "-S" || tok == "--askpass" || tok == "--stdin" {
+            return line.to_string();
+        }
+        // Llegamos a un argumento que no es flag → dejamos de buscar (es
+        // el comando ejecutado por sudo y sus flags son suyos).
+        if !tok.starts_with('-') {
+            break;
+        }
+    }
+    let lead = &line[..lead_len];
+    format!("{lead}sudo -A{rest_after_sudo}")
+}
+
 /// Envuelve `spec` en una invocación `{engine} exec` contra `name`. La idea:
 /// el comando que pidió el usuario corre **dentro del contenedor**, pero el
 /// proceso hijo que ve `shuma-exec` sigue siendo local — así reusamos la
@@ -2622,6 +2654,10 @@ fn shell_quote(s: &str) -> String {
 }
 
 pub(crate) fn build_spec(line: &str, cwd: &str) -> (CommandSpec, Option<TuiSession>) {
+    // sudo sin `-A`/`-S` quedaría colgado pidiendo pass en stdin del PTY —
+    // inyectamos `-A` para que use `SUDO_ASKPASS` (popup Llimphi).
+    let line_owned = inject_askpass(line);
+    let line = line_owned.as_str();
     // Prefijo explícito `:tui <comando>`.
     let (cmd_line, force_tui) = match line.strip_prefix(":tui ") {
         Some(rest) => (rest.trim(), true),
