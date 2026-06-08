@@ -400,12 +400,13 @@ impl Config {
         top.center = vec![WidgetSpec::new("window_list")];
         top.end = vec![
             WidgetSpec::new("astro"),
+            WidgetSpec::new("moon"),
             WidgetSpec::new("clipboard"),
-            WidgetSpec::new("volume"),
-            WidgetSpec::new("brightness"),
+            WidgetSpec::new("volume").with("size", Prop::Str("small".to_string())),
+            WidgetSpec::new("brightness").with("size", Prop::Str("small".to_string())),
             WidgetSpec::new("tray"),
-            WidgetSpec::new("ram_meter"),
-            WidgetSpec::new("cpu_meter"),
+            WidgetSpec::new("ram_meter").with("size", Prop::Str("small".to_string())),
+            WidgetSpec::new("cpu_meter").with("size", Prop::Str("small".to_string())),
         ];
 
         let mut shell = Surface::bar(Anchor::Bottom);

@@ -82,6 +82,8 @@ pub fn widget_tooltip(v: &WidgetView) -> Option<String> {
         WidgetView::Empty => None,
         WidgetView::Text(t) if t.trim().is_empty() => None,
         WidgetView::Text(t) => Some(t.clone()),
+        WidgetView::TextRich { tooltip, .. } if tooltip.trim().is_empty() => None,
+        WidgetView::TextRich { tooltip, .. } => Some(tooltip.clone()),
         WidgetView::Meter { label, caption, .. } => {
             let l = label.as_deref().unwrap_or("").trim();
             let c = caption.trim();
@@ -143,6 +145,7 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             ..Default::default()
         }),
         WidgetView::Text(t) => chip(theme).text(t.clone(), 13.0, theme.fg_text),
+        WidgetView::TextRich { text, .. } => chip(theme).text(text.clone(), 16.0, theme.fg_text),
         WidgetView::Meter {
             label,
             fraction,
@@ -154,7 +157,8 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
                 Some(k) => meter_stops(k),
                 None => (theme.accent, aclarar(theme.accent, 0.5)),
             };
-            meter_view(label.as_deref(), *fraction, caption, *size, *orient, theme, stops)
+            let m = meter_view(label.as_deref(), *fraction, caption, *size, *orient, theme, stops);
+            con_icono_de_kind(m, kind, theme)
         }
         WidgetView::Cores { label, fractions, caption, size, orient } => {
             let stops = match kind {
@@ -173,6 +177,50 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             .radius(6.0)
             .text(kind.clone(), 12.0, theme.fg_muted),
     }
+}
+
+/// Glifo de cabecera con color propio por widget — el "iconito colorido" que
+/// el usuario reconoce de un saque (parlante naranja para volumen, sol amarillo
+/// para brillo, etc.). Devuelve `None` para kinds que no llevan icono.
+fn kind_icon(kind: &str) -> Option<(&'static str, Color)> {
+    match kind {
+        "volume" => Some(("♪", Color::from_rgba8(255, 152, 64, 255))),
+        "brightness" => Some(("☀", Color::from_rgba8(255, 214, 90, 255))),
+        "ram_meter" => Some(("▦", Color::from_rgba8(178, 132, 240, 255))),
+        "cpu_meter" => Some(("◉", Color::from_rgba8(96, 200, 232, 255))),
+        "cpu_cores" | "cpu_cores_meter" => Some(("◉", Color::from_rgba8(96, 200, 232, 255))),
+        _ => None,
+    }
+}
+
+/// Antepone al chip un glifo coloreado por kind, si corresponde, manteniendo
+/// el medidor como cuerpo del chip. Para medidores verticales el icono va
+/// arriba; para horizontales, a la izquierda.
+fn con_icono_de_kind(meter: View<Msg>, kind: Option<&str>, _theme: &Theme) -> View<Msg> {
+    let Some(k) = kind else { return meter };
+    let Some((glifo, color)) = kind_icon(k) else { return meter };
+    let icono = View::new(Style {
+        size: Size {
+            width: length(16.0_f32),
+            height: length(16.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(glifo.to_string(), 13.0, color);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: auto(), height: auto() },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(2.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![icono, meter])
 }
 
 /// Un contenedor compacto, centrado, con padding horizontal — la base de
@@ -267,7 +315,8 @@ fn default_cells(kind: &str) -> u32 {
         "cpu_meter" | "ram_meter" | "volume" | "brightness" => 3,
         "cpu_cores" | "cpu_cores_meter" => 5,
         "clock" => 2,
-        "astro" => 4,
+        "astro" => 1,
+        "moon" => 1,
         "weather" => 3,
         "cava" => 3,
         _ => 1,
@@ -1418,7 +1467,7 @@ pub fn start_menu_body(
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .alpha(0.45)
+    .alpha(0.0)
     .on_click(Msg::StartToggle)
     .children(vec![panel])
 }
@@ -1750,7 +1799,7 @@ pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .alpha(0.45)
+    .alpha(0.0)
     .on_click(Msg::ClipboardMenu)
     .children(vec![clipboard_panel(history, theme)]);
     View::new(Style {
@@ -1954,7 +2003,7 @@ pub fn clock_overlay(draft: &crate::ClockDraft, bar_h: f32, theme: &Theme) -> Vi
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .alpha(0.45)
+    .alpha(0.0)
     .on_click(Msg::ClockPanel)
     .children(vec![clock_panel(draft, theme)]);
     View::new(Style {
@@ -2067,7 +2116,7 @@ fn overlay_con_scrim(panel: View<Msg>, click_msg: Msg, bar_h: f32, theme: &Theme
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .alpha(0.45)
+    .alpha(0.0)
     .on_click(click_msg)
     .children(vec![panel]);
     View::new(Style {

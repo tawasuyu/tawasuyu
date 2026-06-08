@@ -93,38 +93,37 @@ impl ShumaState {
     }
 }
 
-/// El cabezal clicable que va en la barra: prompt + placeholder. Un click
-/// despliega el drawer (`Msg::ShumaToggle`). El input vivo es del shell
-/// hospedado (dentro del drawer), así que el cabezal sólo muestra el rótulo.
+/// El cabezal de la barra: **el input vivo del shell**. No es un placeholder ni
+/// un cabezal-rótulo — es el mismísimo `shell_input_view` del shell hospedado,
+/// llevado a la barra. Tipeás acá, las teclas las recibe el shell, Enter ejecuta.
+/// Click en el chip → despliega el drawer (para ver la salida); el shell además
+/// recibe `FocusInput` por su propio `on_click` interno.
 pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
+    let input = shuma_module_shell::input_view(&state.inner, theme, Msg::ShumaShell);
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
-            width: length(220.0_f32),
-            height: length(24.0_f32),
+            width: length(380.0_f32),
+            height: auto(),
         },
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
         padding: TaffyRect {
-            left: length(10.0_f32),
-            right: length(10.0_f32),
+            left: length(0.0_f32),
+            right: length(0.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::FlexStart),
         gap: Size {
-            width: length(6.0_f32),
+            width: length(0.0_f32),
             height: length(0.0_f32),
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
-    .radius(6.0)
-    .hover_fill(theme.bg_button_hover)
     .on_click(Msg::ShumaToggle)
-    .children(vec![
-        chip_text(&state.prompt, 13.0, theme.accent),
-        chip_text(&state.placeholder, 13.0, theme.fg_muted),
-    ])
+    .children(vec![input])
 }
 
 /// El drawer desplegado (path **winit**): scrim que cierra al click + panel
@@ -188,21 +187,9 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
 /// El **cuerpo** del drawer (sin scrim ni posición absoluta), para el backend
 /// `wlr-layer-shell`: ahí la propia layer surface ya *es* el panel del Quake (la
 /// barra crece hacia arriba), así que no hace falta scrim ni animación. Es el
-/// shell real hospedado, llenando el contenedor que le da el caller.
+/// shell real hospedado, **sin el input** — el input ya vive en la barra (ver
+/// [`headline_view`]). Llena el contenedor que le da el caller.
 pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
-    shuma_module_shell::view(&state.inner, theme, Msg::ShumaShell)
+    shuma_module_shell::body_view(&state.inner, theme, Msg::ShumaShell)
 }
 
-/// Un texto suelto, centrado verticalmente (para el cabezal).
-fn chip_text(t: &str, size: f32, color: llimphi_theme::Color) -> View<Msg> {
-    View::new(Style {
-        size: Size {
-            width: auto(),
-            height: length(size + 6.0),
-        },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .text(t.to_string(), size, color)
-}

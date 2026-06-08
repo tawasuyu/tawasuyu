@@ -779,9 +779,16 @@ impl App for PataApp {
                 }
             }
             Msg::ShumaShell(m) => {
-                // Todo el contenido del drawer es el shell real: le reenviamos el
-                // evento y guardamos el `State` devuelto (update puro).
+                // Click sobre el input vivo de la barra dispara FocusInput; en
+                // ese caso, además, despleguemos el drawer para que la salida
+                // sea visible. Idempotente: si el drawer ya está abierto, no
+                // hace nada extra.
+                let focusing = matches!(m, shuma_module_shell::Msg::FocusInput);
                 model.shuma.inner = shuma_module_shell::update(model.shuma.inner.clone(), m);
+                if focusing && model.shuma.present && !model.shuma.open {
+                    model.shuma.open = true;
+                    model.animar_shuma(1.0, handle);
+                }
             }
             Msg::ShumaAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),

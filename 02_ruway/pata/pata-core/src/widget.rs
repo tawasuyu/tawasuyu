@@ -185,6 +185,15 @@ pub enum WidgetView {
     Empty,
     /// Una línea de texto: el reloj, una etiqueta.
     Text(String),
+    /// Texto compacto con tooltip aparte: lo que va en el chip vs. lo que va
+    /// en el tooltip son distintos. El glifo del signo zodiacal va en `text`
+    /// (chip apretado) y nombre + grado + fase lunar en `tooltip`.
+    TextRich {
+        /// Lo que se pinta en el chip de la barra (tipicamente un glifo).
+        text: String,
+        /// Lectura completa que se muestra al posar el cursor.
+        tooltip: String,
+    },
     /// Un medidor: `fraction` en `0.0..=1.0`, una `caption` ya formateada y una
     /// `label` opcional (el nombre corto, p. ej. `"CPU"`).
     Meter {
@@ -501,69 +510,106 @@ const FASES_LUNA: [(&str, &str); 8] = [
     ("Menguante", "🌘"),
 ];
 
-/// Widget astral: la posición zodiacal del Sol (signo + grado) y, opcionalmente,
-/// la fase lunar — el aporte que distingue al marco de tawasuyu. La efeméride la
-/// resuelve el host y la entrega en el [`WidgetCtx`]; este widget sólo mapea
-/// grados a signo y fracción a fase, con aritmética entera (`core` no tiene
-/// `floor`/`round` de punto flotante).
+/// Widget astral del Sol: el glifo del signo zodiacal en el chip y, en el
+/// tooltip, nombre + grado dentro del signo. La fase lunar tiene su propio
+/// widget (ver [`Moon`]) — antes la mezclaba este; ahora la separación es
+/// limpia: un dibujito por chip. La efeméride la resuelve el host y la entrega
+/// en el [`WidgetCtx`]; este widget sólo mapea grados a signo, con aritmética
+/// entera (`core` no tiene `floor`/`round` de punto flotante).
 ///
 /// Props:
-/// - `degree` (bool, default `true`): muestra el grado dentro del signo.
-/// - `moon` (bool, default `true`): añade el glifo de la fase lunar.
-/// - `name` (bool, default `true`): muestra el nombre del signo (si no, sólo el
-///   glifo).
+/// - `degree` (bool, default `true`): incluye el grado en el tooltip.
+/// - `name` (bool, default `true`): incluye el nombre del signo en el tooltip.
 #[derive(Debug, Clone)]
 pub struct Astro {
     show_degree: bool,
-    show_moon: bool,
     show_name: bool,
-    text: String,
+    glyph: String,
+    tooltip: String,
 }
 
 impl Astro {
-    /// Construye desde el spec leyendo `degree` / `moon` / `name`.
+    /// Construye desde el spec leyendo `degree` / `name`.
     pub fn from_spec(spec: &WidgetSpec) -> Self {
         Self {
             show_degree: spec.bool_prop("degree", true),
-            show_moon: spec.bool_prop("moon", true),
             show_name: spec.bool_prop("name", true),
-            text: String::new(),
+            glyph: String::new(),
+            tooltip: String::new(),
         }
     }
 }
 
 impl Widget for Astro {
     fn tick(&mut self, ctx: &WidgetCtx) {
-        // Grados enteros normalizados a 0..360 sin usar floor (no_std).
         let lon = ((ctx.sun_longitude_deg as i32) % 360 + 360) % 360;
         let (nombre, glifo) = SIGNOS[(lon / 30) as usize % 12];
         let grado = lon % 30;
 
-        let mut s = String::new();
-        s.push_str(glifo);
+        self.glyph = glifo.to_string();
+        let mut tip = String::new();
         if self.show_name {
-            s.push(' ');
-            s.push_str(nombre);
+            tip.push_str(nombre);
         }
         if self.show_degree {
-            s.push_str(&format!(" {grado}°"));
+            if !tip.is_empty() {
+                tip.push(' ');
+            }
+            tip.push_str(&format!("{grado}°"));
         }
-        if self.show_moon {
-            // Índice 0..7: redondeo entero de moon_phase*8 (la fracción es ≥0).
-            let frac = ctx.moon_phase.clamp(0.0, 1.0);
-            let idx = ((frac * 8.0 + 0.5) as usize) % 8;
-            let (_, luna) = FASES_LUNA[idx];
-            s.push_str(" · ");
-            s.push_str(luna);
+        if tip.is_empty() {
+            tip.push_str(glifo);
         }
-        self.text = s;
+        self.tooltip = tip;
     }
 
     fn view(&self) -> WidgetView {
-        if self.text.is_empty() {
+        if self.glyph.is_empty() {
             WidgetView::Empty
         } else {
-            WidgetView::Text(self.text.clone())
+            WidgetView::TextRich {
+                text: self.glyph.clone(),
+                tooltip: self.tooltip.clone(),
+            }
+        }
+    }
+}
+
+/// Widget del ciclo lunar: muestra **sólo el glifo de la fase actual** en el
+/// chip y el nombre de la fase en el tooltip. Antes vivía mezclado dentro de
+/// [`Astro`]; al separarse se ve claramente y no compite con el signo solar.
+/// La fase la entrega el host vía [`WidgetCtx::moon_phase`] (`0..1`, donde
+/// `0`/`1` son luna nueva y `0.5` luna llena).
+#[derive(Debug, Clone, Default)]
+pub struct Moon {
+    glyph: String,
+    tooltip: String,
+}
+
+impl Moon {
+    /// Construye con los defaults (no tiene props aún).
+    pub fn from_spec(_spec: &WidgetSpec) -> Self {
+        Self::default()
+    }
+}
+
+impl Widget for Moon {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        let frac = ctx.moon_phase.clamp(0.0, 1.0);
+        let idx = ((frac * 8.0 + 0.5) as usize) % 8;
+        let (nombre, glifo) = FASES_LUNA[idx];
+        self.glyph = glifo.to_string();
+        self.tooltip = nombre.to_string();
+    }
+
+    fn view(&self) -> WidgetView {
+        if self.glyph.is_empty() {
+            WidgetView::Empty
+        } else {
+            WidgetView::TextRich {
+                text: self.glyph.clone(),
+                tooltip: self.tooltip.clone(),
+            }
         }
     }
 }
@@ -673,6 +719,7 @@ pub fn build(spec: &WidgetSpec) -> Box<dyn Widget> {
         "volume" => Box::new(Meter::from_spec(MeterSource::Volume, spec)),
         "brightness" => Box::new(Meter::from_spec(MeterSource::Brightness, spec)),
         "astro" => Box::new(Astro::from_spec(spec)),
+        "moon" => Box::new(Moon::from_spec(spec)),
         "start_button" => Box::new(StartButton::from_spec(spec)),
         "workspaces" | "workspace_switcher" => Box::new(WorkspaceSwitcher::from_spec(spec)),
         _ => Box::new(Placeholder::new(&spec.kind)),
@@ -996,35 +1043,66 @@ mod tests {
         let mut ctx = ctx();
         // 132° → 132/30 = 4 → Leo; 132 % 30 = 12°.
         ctx.sun_longitude_deg = 132.0;
-        ctx.moon_phase = 0.0; // nueva
+        ctx.moon_phase = 0.0; // nueva (ya no afecta a Astro)
         let mut a = Astro::from_spec(&WidgetSpec::new("astro"));
         a.tick(&ctx);
-        assert_eq!(a.view(), WidgetView::Text("♌ Leo 12° · 🌑".to_string()));
+        assert_eq!(
+            a.view(),
+            WidgetView::TextRich {
+                text: "♌".to_string(),
+                tooltip: "Leo 12°".to_string(),
+            }
+        );
     }
 
     #[test]
-    fn astro_normaliza_longitud_negativa_y_redondea_luna() {
+    fn astro_normaliza_longitud_negativa() {
         let mut ctx = ctx();
         // -30° normaliza a 330° → Piscis (330/30 = 11), grado 0.
         ctx.sun_longitude_deg = -30.0;
-        ctx.moon_phase = 0.5; // llena → idx 4
         let mut a = Astro::from_spec(&WidgetSpec::new("astro"));
         a.tick(&ctx);
-        assert_eq!(a.view(), WidgetView::Text("♓ Piscis 0° · 🌕".to_string()));
+        assert_eq!(
+            a.view(),
+            WidgetView::TextRich {
+                text: "♓".to_string(),
+                tooltip: "Piscis 0°".to_string(),
+            }
+        );
     }
 
     #[test]
-    fn astro_respeta_props_degree_moon_name() {
+    fn astro_respeta_props_degree_name() {
         let mut ctx = ctx();
         ctx.sun_longitude_deg = 5.0; // Aries 5°
         let spec = WidgetSpec::new("astro")
             .with("degree", Prop::Bool(false))
-            .with("moon", Prop::Bool(false))
             .with("name", Prop::Bool(false));
         let mut a = Astro::from_spec(&spec);
         a.tick(&ctx);
-        // Sólo el glifo del signo.
-        assert_eq!(a.view(), WidgetView::Text("♈".to_string()));
+        // Sin nombre ni grado, el tooltip cae al glifo (sin info útil).
+        assert_eq!(
+            a.view(),
+            WidgetView::TextRich {
+                text: "♈".to_string(),
+                tooltip: "♈".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn moon_mapea_fase_a_glifo_con_tooltip() {
+        let mut ctx = ctx();
+        ctx.moon_phase = 0.5; // llena → idx 4
+        let mut m = Moon::from_spec(&WidgetSpec::new("moon"));
+        m.tick(&ctx);
+        assert_eq!(
+            m.view(),
+            WidgetView::TextRich {
+                text: "🌕".to_string(),
+                tooltip: "Llena".to_string(),
+            }
+        );
     }
 
     #[test]

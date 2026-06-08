@@ -1398,7 +1398,11 @@ impl LayerApp {
             // scroll, selección del cuerpo IDE-text…) llega envuelta por el `lift`
             // del `view`: la reenviamos a `shuma_module_shell::update`.
             Msg::ShumaShell(m) => {
+                let focusing = matches!(m, shuma_module_shell::Msg::FocusInput);
                 self.shuma.inner = shuma_module_shell::update(self.shuma.inner.clone(), m);
+                if focusing && !self.shuma.open {
+                    self.set_shuma_open(true);
+                }
                 self.marcar_shuma_dirty();
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),
@@ -1409,12 +1413,22 @@ impl LayerApp {
             }
             Msg::VolumeMute => crate::sampler::toggle_mute(),
             Msg::VolumeSet(f) => crate::sampler::set_volume(f),
+            // Click izquierdo en VOL: no hay popup nativo en el path layer-shell
+            // todavía, así que lanzamos el mezclador clásico — `pavucontrol` o
+            // su versión Qt (en distros sin GTK). Cubre lo que pide el usuario
+            // sin meter una surface popup nueva en este turno.
+            Msg::VolumePanel => crate::spawn_cmd("pavucontrol || pavucontrol-qt"),
             Msg::BrightnessWheel(dy) => {
                 if dy != 0.0 {
                     crate::sampler::nudge_brightness(dy > 0.0);
                 }
             }
             Msg::BrightnessSet(f) => crate::sampler::set_brightness(f),
+            // Click en BRI: `brightnessctl --device $(brightnessctl -l ...)`
+            // no tiene UI; reusamos el slider del shell con pavucontrol-style
+            // siendo el camino largo. Por ahora un no-op silencioso es menos
+            // dañino que dejar el slider GTK del brillo a medias.
+            Msg::BrightnessPanel => {}
             Msg::ClipboardMenu => self.toggle_menu(MenuKind::Clipboard),
             Msg::ClipboardPick(text) => {
                 crate::sampler::copiar_clipboard(&text);
@@ -1715,9 +1729,24 @@ impl KeyboardHandler for LayerApp {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        // Foco de teclado perdido: el popup que lo tenía (menú inicio con
+        // buscador, drawer de shuma) se guarda automáticamente — no obligamos
+        // al usuario a apretar Escape ni click afuera.
+        let pi = self.panel_de(surface);
+        if let Some(pi) = pi {
+            if self.menu_panel == Some(pi)
+                && self.menu_open
+                && self.menu_kind == MenuKind::Apps
+            {
+                self.set_menu_open(false);
+            }
+            if self.shuma_panel == Some(pi) && self.shuma.open {
+                self.set_shuma_open(false);
+            }
+        }
     }
 
     fn press_key(
