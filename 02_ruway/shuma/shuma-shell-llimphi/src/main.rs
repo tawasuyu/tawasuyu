@@ -172,31 +172,6 @@ fn spawn_create_container(handle: &Handle<Msg>, image: &'static str, name: Strin
     });
 }
 
-/// Si la sesión activa es la draft y se acaba de configurar, la promueve a
-/// sesión propia (número + kind según aislamiento + nombre) e inserta una draft
-/// nueva al frente para que siga siendo el punto de entrada.
-fn promote_if_draft(m: &mut Model) {
-    let is_draft = matches!(m.sessions.get(m.active_session), Some(s) if s.kind == SessionKind::Draft);
-    if !is_draft {
-        return;
-    }
-    let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;
-    if let Some(s) = m.sessions.get_mut(m.active_session) {
-        s.number = Some(n);
-        s.kind = match s.isolation {
-            Isolation::Remote => SessionKind::Remote,
-            Isolation::Local => SessionKind::Local,
-        };
-        s.name = match s.isolation {
-            Isolation::Local => format!("local {n}"),
-            Isolation::Remote => format!("remota {n}"),
-        };
-    }
-    // Nace un draft nuevo al frente; la sesión promovida se corre un índice.
-    m.sessions.insert(0, Session::draft());
-    m.active_session += 1;
-}
-
 // ─── Tipos de módulos conocidos por este binario ───────────────────
 
 /// Qué `Kind` puede ocupar cada slot. Una variante por módulo
@@ -318,6 +293,13 @@ enum RemoteField {
     Host,
     User,
     Port,
+}
+
+/// Campo del form de **creación de sesión nueva** (canvas grande) con foco.
+/// Local/Remote reusan host/user/port de la sesión; acá solo va el mount.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingField {
+    Mount,
 }
 
 /// Cuál dropdown de la config de sesión está abierto (overlay del select).
@@ -480,6 +462,15 @@ struct Session {
     host: TextInputState,
     user: TextInputState,
     port: TextInputState,
+    /// `true` mientras la sesión está siendo configurada en el form grande
+    /// (canvas) y todavía no se materializó su shell. Al `ConfirmNewSession`
+    /// pasa a `false` y arranca el shell con el `source` resuelto.
+    pending: bool,
+    /// Path único a montar dentro del contenedor (MVP — Vec viene después).
+    /// Solo se usa con `Isolation::Local` + container ≠ None.
+    mount: TextInputState,
+    /// Cuál campo del form de creación tiene foco (`None` = ninguno).
+    pending_focus: Option<PendingField>,
     /// El origen de ejecución del shell + matilda (Local / Daemon / Remote).
     /// (El enforcement real del aislamiento contenedor/remoto es deuda; hoy el
     /// shell corre con este `source`.)
@@ -503,6 +494,9 @@ impl Session {
             distro: Distro::Ubuntu,
             container: None,
             container_open: false,
+            pending: false,
+            mount: TextInputState::new(),
+            pending_focus: None,
             // Local arranca conectado; remoto en espera hasta conectar.
             conn: ConnState::Connected,
             host: TextInputState::new(),
@@ -516,10 +510,26 @@ impl Session {
         }
     }
 
-    /// La sesión por defecto: local, sin configurar, sin número. No toca nada.
-    /// Tiene los campos de config a sus defaults; al tocarlos pasa a sesión propia.
+    /// La sesión por defecto: local, sin número. **Es utilizable directo** —
+    /// arranca con shell vivo (Source::Local / Daemon según env). El form
+    /// grande de creación se dispara con el botón `+`, no editando esta.
     fn draft() -> Self {
         Self::build("draft".to_string(), SessionKind::Draft, None, default_shell_source())
+    }
+
+    /// Sesión nueva en modo **configuración** — el canvas muestra el form
+    /// grande (aislamiento / distro / mount / container). El shell se
+    /// construye recién en `ConfirmNewSession`. Mientras `pending`, el shell
+    /// interno es un placeholder Local que nadie ve.
+    fn new_pending(n: u32) -> Self {
+        let mut s = Self::build(
+            format!("local {n}"),
+            SessionKind::Local,
+            Some(n),
+            Source::Local,
+        );
+        s.pending = true;
+        s
     }
 
     /// `true` si la sesión está moviendo datos ahora (comando corriendo) — para
@@ -666,7 +676,7 @@ fn save_sessions(m: &Model) {
     let cfgs: Vec<SessionConfig> = m
         .sessions
         .iter()
-        .filter(|s| s.kind != SessionKind::Draft)
+        .filter(|s| s.kind != SessionKind::Draft && !s.pending)
         .map(|s| s.to_config())
         .collect();
     if let Ok(json) = serde_json::to_string_pretty(&cfgs) {
@@ -884,6 +894,19 @@ enum Msg {
     ConnectRemote,
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
+    /// Click en el botón `+` del rail: crea una sesión `pending` y la activa,
+    /// para que el canvas muestre el form grande de creación.
+    OpenNewSessionForm,
+    /// Confirma la sesión pending activa: arma su `Source` real, monta el
+    /// shell y persiste. Sale del modo pending.
+    ConfirmNewSession,
+    /// Descarta la sesión pending activa (sin crear nada).
+    CancelNewSession,
+    /// Foco a un campo del form de creación (mount, etc.). Click sobre el
+    /// input lo dispara.
+    FocusPendingField(PendingField),
+    /// Tecla a un campo del form de creación cuando el foco lo apunta.
+    PendingKey(KeyEvent),
     /// Re-listar los contenedores locales (`docker ps -a`).
     RefreshContainers,
     /// Resultado del listado de contenedores.
@@ -1124,17 +1147,23 @@ impl App for Shell {
                 m.dropdown_open = if m.dropdown_open == Some(kind) { None } else { Some(kind) };
             }
             Msg::DismissDropdown => m.dropdown_open = None,
-            // Config del aislamiento. Sobre la draft, configurarla la promueve
-            // a sesión propia (y nace un draft nuevo); sobre una real, edita.
+            // Config del aislamiento. Cambia el aislamiento de la sesión activa
+            // y reconstruye su shell con el `Source` correspondiente. La draft
+            // ya no se promueve al tocarla — crear sesiones nuevas pasa por el
+            // botón `+` (`Msg::OpenNewSessionForm`).
             Msg::SetIsolation(iso) => {
                 m.dropdown_open = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.isolation = iso;
-                }
-                promote_if_draft(&mut m);
-                // El cambio de aislamiento reconstruye el shell con su source.
-                if let Some(s) = m.sessions.get_mut(m.active_session) {
-                    s.apply_isolation();
+                    // Sesiones pending no tienen shell todavía — sólo actualizan el form.
+                    if !s.pending {
+                        s.apply_isolation();
+                    } else {
+                        s.conn = match iso {
+                            Isolation::Local => ConnState::Connected,
+                            Isolation::Remote => ConnState::Pending,
+                        };
+                    }
                 }
                 save_sessions(&m);
             }
@@ -1155,7 +1184,6 @@ impl App for Shell {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.distro = d;
                 }
-                promote_if_draft(&mut m);
                 save_sessions(&m);
             }
             Msg::FocusField(f) => {
@@ -1226,6 +1254,74 @@ impl App for Shell {
                 }
                 save_sessions(&m);
                 save_chrome(&m);
+            }
+            Msg::OpenNewSessionForm => {
+                // Numero la nueva por la cantidad de sesiones reales + 1.
+                let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;
+                let mut s = Session::new_pending(n);
+                s.pending_focus = Some(PendingField::Mount);
+                m.sessions.push(s);
+                m.active_session = m.sessions.len() - 1;
+                m.session_panel_open = false; // el form grande absorbe la config
+                save_chrome(&m);
+            }
+            Msg::ConfirmNewSession => {
+                // Resuelve el Source real y monta el shell. Container queda en
+                // `container: Some(name)` — el cableo a `podman exec` es la
+                // siguiente iteración (task #2). Sin container, queda Local
+                // sobre la máquina anfitriona.
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    if s.pending {
+                        s.pending = false;
+                        s.pending_focus = None;
+                        s.apply_isolation();
+                        if s.isolation == Isolation::Remote {
+                            // Si el form remoto tiene host+user, conectar.
+                            if !s.host.text().trim().is_empty() && !s.user.text().trim().is_empty() {
+                                s.connect_remote();
+                            }
+                        }
+                        m.session_panel_open = true;
+                    }
+                }
+                save_sessions(&m);
+                save_chrome(&m);
+            }
+            Msg::CancelNewSession => {
+                if let Some(s) = m.sessions.get(m.active_session) {
+                    if s.pending {
+                        let idx = m.active_session;
+                        m.sessions.remove(idx);
+                        m.active_session = m.active_session.min(m.sessions.len().saturating_sub(1));
+                    }
+                }
+                save_chrome(&m);
+            }
+            Msg::FocusPendingField(f) => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.pending_focus = Some(f);
+                }
+                m.dropdown_open = None;
+            }
+            Msg::PendingKey(e) => {
+                let Some(s) = m.sessions.get_mut(m.active_session) else {
+                    return m;
+                };
+                let Some(f) = s.pending_focus else { return m };
+                match &e.key {
+                    llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                        s.pending_focus = None;
+                    }
+                    llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                        // Enter en el form = confirmar la sesión (siguiente tick).
+                        handle.dispatch(Msg::ConfirmNewSession);
+                    }
+                    _ => match f {
+                        PendingField::Mount => {
+                            let _ = s.mount.apply_key(&e);
+                        }
+                    },
+                }
             }
             Msg::ReorderSession(from, to) => {
                 // La draft (0) queda fija; el resto se reordena.

@@ -279,20 +279,26 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
     let idx = model.active_session;
     let es_draft = session.kind == SessionKind::Draft;
 
-    let titulo = if es_draft { "Borrador".to_string() } else { session.name.clone() };
+    // Mientras se configura una sesión nueva (pending) el form vive en el
+    // canvas grande; el panel sólo recuerda al usuario que está en config.
+    if session.pending {
+        let children: Vec<View<Msg>> = vec![
+            panel_title("Sesión nueva", theme),
+            panel_note(
+                "Configurá los datos en el canvas. Enter confirma, Esc cancela.",
+                theme,
+            ),
+        ];
+        return panel_frame(children, theme);
+    }
+
+    let titulo = if es_draft { "local · scratch".to_string() } else { session.name.clone() };
 
     let pal = SelectPalette::from_theme(theme);
     let mut children: Vec<View<Msg>> = vec![panel_title(&titulo, theme)];
 
     // Estado de conexión de la sesión (en espera / conectado / desconectado).
     children.push(conn_pill(session.conn, theme));
-
-    if es_draft {
-        children.push(panel_note(
-            "Trabajás sin guardar. Al configurar abajo, nace una sesión propia.",
-            theme,
-        ));
-    }
 
     // Aislamiento base: dropdown Local / Remoto.
     children.push(panel_label("Aislamiento", theme));
@@ -523,7 +529,7 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
 
-    let teeth: Vec<View<Msg>> = model
+    let mut teeth: Vec<View<Msg>> = model
         .sessions
         .iter()
         .enumerate()
@@ -568,7 +574,44 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             tooth
         })
         .collect();
-    // Sin botón «+»: la sesión nace al configurar la draft desde su panel.
+    // Botón `+` al final del rail: dispara el form grande en el canvas.
+    let plus_icon = View::new(Style {
+        size: Size { width: length(20.0_f32), height: length(20.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(|scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Line, Point, Stroke};
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = (rect.w.min(rect.h) as f64 * 0.32).max(4.0);
+        let stroke = Stroke::new(1.8);
+        let color = llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0x90, 0x98, 0xa6);
+        scene.stroke(
+            &stroke,
+            Affine::IDENTITY,
+            color,
+            None,
+            &Line::new(Point::new(cx - r, cy), Point::new(cx + r, cy)),
+        );
+        scene.stroke(
+            &stroke,
+            Affine::IDENTITY,
+            color,
+            None,
+            &Line::new(Point::new(cx, cy - r), Point::new(cx, cy + r)),
+        );
+    });
+    let plus = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+        justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::OpenNewSessionForm)
+    .children(vec![plus_icon]);
+    teeth.push(plus);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -601,14 +644,11 @@ fn session_tooth_icon(kind: SessionKind, active_data: bool, size: f32, color: Co
         let r = (rect.w.min(rect.h) as f64 * 0.34).max(2.0);
         let stroke = Stroke::new((r * 0.22).max(1.2));
         match kind {
-            // Draft: cuadro punteado (vacío, no toca nada).
+            // Draft: cuadro lleno como Local — es local funcional. La diferencia
+            // visible está en la insignia (sin número = scratch, con número = real).
             SessionKind::Draft => {
-                let sq = RoundedRect::new(cx - r, cy - r, cx + r, cy + r, 2.0);
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &sq);
-                let mut pencil = BezPath::new();
-                pencil.move_to(Point::new(cx - r * 0.4, cy + r * 0.4));
-                pencil.line_to(Point::new(cx + r * 0.4, cy - r * 0.4));
-                scene.stroke(&stroke, Affine::IDENTITY, color, None, &pencil);
+                let sq = RoundedRect::new(cx - r, cy - r, cx + r, cy + r, 2.5);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &sq);
             }
             // Local: cuadro lleno (caja local).
             SessionKind::Local => {
@@ -1034,6 +1074,9 @@ pub(crate) fn tab_content(model: &Model, theme: &Theme) -> View<Msg> {
     let Some(session) = model.active() else {
         return placeholder(theme, &rimay_localize::t("shuma-empty-no-tabs"));
     };
+    if session.pending {
+        return new_session_form(model, session, theme);
+    }
     let idx = model.active_session;
     match &session.shell.state {
         ModuleState::Shell(state) => shuma_module_shell::view::<Msg>(state, theme, move |m| {
@@ -1041,6 +1084,166 @@ pub(crate) fn tab_content(model: &Model, theme: &Theme) -> View<Msg> {
         }),
         _ => placeholder(theme, ""),
     }
+}
+
+/// Form grande de creación de sesión, ocupa el canvas mientras `session.pending`.
+/// Aislamiento (Local/Remote) + Distro + Mount + opción de container. Confirma
+/// con Enter / botón "Crear". Cancela con Esc / "Cancelar".
+fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    use llimphi_widget_text_input::{text_input_view, TextInputPalette};
+    let pal = SelectPalette::from_theme(theme);
+    let tpal = TextInputPalette::from_theme(theme);
+
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("Nueva sesión · {}", session.name),
+        18.0,
+        theme.fg_text,
+        Alignment::Start,
+    );
+    let sub = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        "Elegí dónde corre el shell. Enter confirma · Esc cancela.".to_string(),
+        12.0,
+        theme.fg_muted,
+        Alignment::Start,
+    );
+
+    // Aislamiento
+    let iso_label = panel_label("Aislamiento", theme);
+    let isos = iso_items();
+    let iso_trigger = select_trigger_view(
+        isos.get(iso_index(session.isolation)),
+        "Elegí el aislamiento…",
+        model.dropdown_open == Some(DropKind::Isolation),
+        None,
+        &pal,
+        Msg::ToggleDropdown(DropKind::Isolation),
+    );
+
+    // Form remoto opcional (host/usuario/puerto) cuando aislamiento = Remote.
+    let mut children: Vec<View<Msg>> = vec![titulo, sub, iso_label, iso_trigger];
+    if session.isolation == Isolation::Remote {
+        children.push(panel_label("Host", theme));
+        children.push(text_input_view(
+            &session.host,
+            "ejemplo.com",
+            model.focused_field == Some(RemoteField::Host),
+            &tpal,
+            Msg::FocusField(RemoteField::Host),
+        ));
+        children.push(panel_label("Usuario", theme));
+        children.push(text_input_view(
+            &session.user,
+            "usuario",
+            model.focused_field == Some(RemoteField::User),
+            &tpal,
+            Msg::FocusField(RemoteField::User),
+        ));
+        children.push(panel_label("Puerto", theme));
+        children.push(text_input_view(
+            &session.port,
+            "22",
+            model.focused_field == Some(RemoteField::Port),
+            &tpal,
+            Msg::FocusField(RemoteField::Port),
+        ));
+    }
+
+    // Contenedor opcional: distro + nombre.
+    children.push(panel_label("Distro (contenedor opcional)", theme));
+    let distros = distro_items();
+    children.push(select_trigger_view(
+        distros.get(distro_index(session.distro)),
+        "Elegí la distro…",
+        model.dropdown_open == Some(DropKind::Distro),
+        None,
+        &pal,
+        Msg::ToggleDropdown(DropKind::Distro),
+    ));
+    children.push(panel_label("Directorio a montar (opcional)", theme));
+    children.push(text_input_view(
+        &session.mount,
+        "/ruta/del/host",
+        session.pending_focus == Some(PendingField::Mount),
+        &tpal,
+        Msg::FocusPendingField(PendingField::Mount),
+    ));
+
+    // Botones: Cancelar | Crear.
+    let cancelar = View::new(Style {
+        size: Size { width: length(120.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .hover_fill(theme.bg_button_hover)
+    .radius(5.0)
+    .text_aligned("Cancelar".to_string(), 12.0, theme.fg_text, Alignment::Center)
+    .on_click(Msg::CancelNewSession);
+    let crear = View::new(Style {
+        size: Size { width: length(120.0_f32), height: length(34.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .hover_fill(theme.accent)
+    .radius(5.0)
+    .text_aligned("Crear".to_string(), 12.0, theme.bg_app, Alignment::Center)
+    .on_click(Msg::ConfirmNewSession);
+    let botones = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(16.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![cancelar, crear]);
+    children.push(botones);
+
+    // Frame del form: ancho cómodo, alineado a la izquierda con padding generoso.
+    let form = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+        },
+        padding: Rect { left: length(24.0_f32), right: length(24.0_f32), top: length(24.0_f32), bottom: length(24.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(8.0)
+    .children(children);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect { left: length(24.0_f32), right: length(24.0_f32), top: length(24.0_f32), bottom: length(24.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![View::new(Style {
+        size: Size {
+            width: length(520.0_f32),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![form])])
 }
 
 /// Lista de hosts del inventario de la sesión: nombre · dirección · tags.

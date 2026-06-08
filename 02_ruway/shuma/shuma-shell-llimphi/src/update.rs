@@ -468,7 +468,22 @@ pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Optio
             ));
         }
     }
-    // 2) Las teclas van al shell de la sesión activa (es el canvas principal).
+    // 2) Si la sesión activa está en form de creación (pending), las teclas
+    // van al form, no al shell oculto.
+    if let Some(s) = model.sessions.get(model.active_session) {
+        if s.pending {
+            // Escape sin foco de campo cancela toda la creación.
+            if matches!(
+                &e.key,
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape)
+            ) && s.pending_focus.is_none()
+            {
+                return Some(Msg::CancelNewSession);
+            }
+            return Some(Msg::PendingKey(e.clone()));
+        }
+    }
+    // 3) Las teclas van al shell de la sesión activa (es el canvas principal).
     Some(Msg::Module(
         Slot::Session(model.active_session, Which::Shell),
         ModuleMsg::Shell(shuma_module_shell::Msg::Key(e.clone())),
