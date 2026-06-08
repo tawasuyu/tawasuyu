@@ -39,7 +39,7 @@ Se construyen primero; todo lo demás se cuelga de ellas.
 
 ---
 
-## Fase 1 — Persistencia de sesión  ← EN CURSO
+## Fase 1 — Persistencia de sesión  ✅ HECHA
 
 **Qué.** Que el escritorio recuerde su forma entre arranques: el modo/ratio/
 nmaster/gap de cada escritorio virtual, qué escritorio mostraba cada salida y
@@ -66,31 +66,31 @@ concretas — respawn por `app_id` — es Fase 1.bis, ver abajo.)
 round-trip RON; al reiniciar el Cerebro contra un Cuerpo vivo, los modos por
 escritorio y el mapa salida→escritorio se recuperan.
 
-### Fase 1.bis — Restaurar ventanas por `app_id` (después)
-Persistir, por escritorio, los `app_id` que vivían ahí y, al arrancar,
-respawnearlos (o re-ubicar los que reaparezcan) en su sitio. Solapa con
-`Rules`; se diseña reusando ese mecanismo.
+### Fase 1.bis — Restaurar ventanas por `app_id`  ✅ HECHA
+`DesktopState.window_homes` recuerda, por `app_id`, en qué escritorio vivía cada
+ventana; al **reaparecer** (reabrir la app o reconectar el Cuerpo) vuelve ahí.
+No respawnea: sólo enruta lo que se reabre. El hogar se consume una vez (no fija
+las ventanas posteriores) y las `Rules` mandan sobre él. (Respawn automático por
+`app_id` queda fuera: `app_id` ≠ ejecutable, es frágil.)
 
 ---
 
 ## Fase 2 — `LayoutNode` recursivo (árbol fractal)
 
-**Qué.** Un nodo del layout puede ser una app **o** un sub-escritorio con sus
-propias reglas de teselado. Es el primitivo del que cuelgan el zoom-Z y las
-sub-pantallas con sus propias drop-zones.
+**Primitivo  ✅ HECHO** (`mirada-layout/src/tree.rs`):
+`enum LayoutNode { Leaf(WindowId), Space(Box<SpaceNode>) }` +
+`SpaceNode { params, children }`. `SpaceNode::resolve(screen)` **aplana** el
+árbol a `Vec<(WindowId, Rect)>` en píxeles absolutos — el `mirada-protocol` no
+cambia (el Cuerpo sigue recibiendo una lista plana). Es additivo: no toca el
+`Workspace` plano. Tests de geometría prueban que un árbol de un nivel resuelve
+**idéntico** a `Workspace::layout` en los 7 modos, más el anidamiento. Compila
+`no_std` (sólo `alloc`).
 
-**Cómo (boceto).**
-- En `mirada-layout`, junto a `Workspace`, un
-  `enum LayoutNode { Leaf(WindowId), Space(Box<Workspace>) }` (nombre por
-  decidir), de modo que `Workspace::windows` pase a contener nodos. La
-  resolución (`layout`/`tile`) aplana el árbol a `Vec<(WindowId, Rect)>` en
-  píxeles absolutos — el `mirada-protocol` no cambia (el Cuerpo sigue recibiendo
-  una lista plana de `WindowPlacement`).
-- Cuidar la compatibilidad serde (variantes nuevas al final) y los 7 modos de
-  teselado dentro de cada nivel.
-- Refactor contenido pero transversal: toca `Workspace`, `tile`, `placements`,
-  y los accesores del `Desktop`. Se hace con tests de geometría que prueben que
-  el aplanado de un árbol de 1 nivel coincide con el layout plano actual.
+**Integración (siguiente paso, = empieza el zoom-Z):** que el `Desktop` use el
+árbol en sus escritorios y exponga "entrar/salir" de un sub-espacio. Toca
+`Workspace`/`placements`/accesores del `Desktop`; se hace con cuidado para no
+romper el camino plano (que es un árbol de un nivel). El `mirada-protocol` no
+cambia.
 
 **Encima de Fase 2** (orden de ROI):
 

@@ -8,6 +8,7 @@
 //! - [`geometry`] — el [`Rect`] y el reparto exacto de píxeles.
 //! - [`layout`] — los modos de teselado y la función [`tile`].
 //! - [`workspace`] — el [`Workspace`]: ventanas, foco y modo.
+//! - [`tree`] — el árbol fractal: espacios que anidan espacios ([`SpaceNode`]).
 //!
 //! Todo es determinista y testeable sin un servidor gráfico: la misma
 //! pantalla y las mismas ventanas dan siempre la misma distribución.
@@ -23,9 +24,11 @@ extern crate alloc;
 pub mod geometry;
 pub mod layout;
 pub mod outputs;
+pub mod tree;
 pub mod workspace;
 
 pub use geometry::Rect;
 pub use layout::{tile, wallpaper_dst_rect, LayoutMode, LayoutParams, WallpaperFit, ZoneFrac};
 pub use outputs::{disponer, disponer_logico, envolvente, Disposicion, Salida, ESCALA_100};
+pub use tree::{LayoutNode, SpaceNode};
 pub use workspace::{Workspace, WindowId};
