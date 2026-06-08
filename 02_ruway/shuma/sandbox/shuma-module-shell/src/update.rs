@@ -260,6 +260,30 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.section_collapsed.insert(key);
             }
         }
+        Msg::SortSectionColumn { block, section, col } => {
+            let key = (block, section);
+            // Cicla: ninguno → asc(col) → desc(col) → ninguno;
+            // si se clickeó otra columna, arranca asc en esa.
+            let next = match s.section_sort.get(&key).copied() {
+                None => Some((col, true)),
+                Some((prev_col, asc)) if prev_col == col => {
+                    if asc {
+                        Some((col, false))
+                    } else {
+                        None
+                    }
+                }
+                Some(_) => Some((col, true)),
+            };
+            match next {
+                Some(v) => {
+                    s.section_sort.insert(key, v);
+                }
+                None => {
+                    s.section_sort.remove(&key);
+                }
+            }
+        }
         Msg::Scroll(delta) => {
             s = apply_scroll_delta(s, delta);
             // Captura la última velocidad para el scroll inercial: el Tick

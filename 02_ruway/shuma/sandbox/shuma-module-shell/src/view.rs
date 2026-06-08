@@ -1845,6 +1845,168 @@ const SURFACE_HEADER_H: f32 = 22.0;
 /// Un pelo más bajo que `SURFACE_HEADER_H` para destacar la jerarquía.
 const SECTION_HEADER_H: f32 = 20.0;
 
+/// Alto del header de columnas de una tabla de sección (px).
+const SECTION_TABLE_HEADER_H: f32 = 22.0;
+/// Alto de una fila de tabla de sección (px).
+const SECTION_TABLE_ROW_H: f32 = 20.0;
+
+/// Alto total de una tabla con `n_rows` filas.
+pub(crate) fn section_table_height(n_rows: usize) -> f32 {
+    SECTION_TABLE_HEADER_H + n_rows as f32 * SECTION_TABLE_ROW_H
+}
+
+/// Pinta una sub-sección como tabla con headers clickeables (ordenar
+/// asc/desc/sin orden) + filas mono striped. Las filas se ordenan según
+/// `sort = (col, ascending)`; si `None`, orden natural del output.
+pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
+    block: u64,
+    section: usize,
+    columns: &[String],
+    rows: &[Vec<String>],
+    sort: Option<(usize, bool)>,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    // Anchos heurísticos por columna — mejor sería medir, pero
+    // `ls -l` tiene anchos típicos predecibles.
+    fn col_width(idx: usize, n: usize, name: &str) -> f32 {
+        match name {
+            "permisos" => 100.0,
+            "links" => 50.0,
+            "owner" | "group" => 80.0,
+            "size" => 80.0,
+            "fecha" => 100.0,
+            _ if idx == n - 1 => 0.0, // última = flex
+            _ => 90.0,
+        }
+    }
+    let n = columns.len();
+    // Header row.
+    let mut header_children: Vec<View<HostMsg>> = Vec::with_capacity(n);
+    for (col, name) in columns.iter().enumerate() {
+        let arrow = match sort {
+            Some((c, true)) if c == col => " ▲",
+            Some((c, false)) if c == col => " ▼",
+            _ => "",
+        };
+        let w = col_width(col, n, name);
+        let mut style = Style {
+            size: Size { width: length(w.max(40.0)), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        };
+        if w == 0.0 {
+            style.size.width = Dimension::auto();
+            style.flex_grow = 1.0;
+        }
+        header_children.push(
+            View::new(style)
+                .hover_fill(theme.bg_row_hover)
+                .on_click(lift(Msg::SortSectionColumn { block, section, col }))
+                .text_aligned(
+                    format!("{name}{arrow}"),
+                    11.0,
+                    theme.fg_placeholder,
+                    Alignment::Start,
+                )
+                .mono(),
+        );
+    }
+    let header = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(SECTION_TABLE_HEADER_H) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(header_children);
+
+    // Rows. Aplica orden si lo hay (clon para no mutar el state).
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    if let Some((col, asc)) = sort {
+        order.sort_by(|&a, &b| {
+            let ax = rows[a].get(col).map(|s| s.as_str()).unwrap_or("");
+            let bx = rows[b].get(col).map(|s| s.as_str()).unwrap_or("");
+            // Si parecen números, orden numérico; si no, lexicográfico.
+            let cmp = match (ax.parse::<u64>().ok(), bx.parse::<u64>().ok()) {
+                (Some(an), Some(bn)) => an.cmp(&bn),
+                _ => ax.cmp(bx),
+            };
+            if asc { cmp } else { cmp.reverse() }
+        });
+    }
+    let mut row_views: Vec<View<HostMsg>> = Vec::with_capacity(order.len());
+    for (vis_idx, &ri) in order.iter().enumerate() {
+        let row = &rows[ri];
+        let stripe = if vis_idx % 2 == 0 {
+            theme.bg_panel
+        } else {
+            Color::from_rgba8(0, 0, 0, 0) // transparente
+        };
+        let mut cells: Vec<View<HostMsg>> = Vec::with_capacity(n);
+        for col in 0..n {
+            let name = columns.get(col).map(|s| s.as_str()).unwrap_or("");
+            let w = col_width(col, n, name);
+            let mut style = Style {
+                size: Size { width: length(w.max(40.0)), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                padding: Rect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            };
+            if w == 0.0 {
+                style.size.width = Dimension::auto();
+                style.flex_grow = 1.0;
+            }
+            cells.push(
+                View::new(style)
+                    .text_aligned(
+                        row.get(col).cloned().unwrap_or_default(),
+                        11.0,
+                        theme.fg_text,
+                        Alignment::Start,
+                    )
+                    .mono()
+                    .max_lines(1),
+            );
+        }
+        row_views.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(SECTION_TABLE_ROW_H) },
+                ..Default::default()
+            })
+            .fill(stripe)
+            .hover_fill(theme.bg_row_hover)
+            .children(cells),
+        );
+    }
+
+    let mut all = vec![header];
+    all.extend(row_views);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(section_table_height(rows.len())),
+        },
+        ..Default::default()
+    })
+    .children(all)
+}
+
 /// Header clickeable de una sub-sección. Pinta chevron + título + el conteo
 /// de líneas; click emite `Msg::ToggleSection`.
 fn section_header<HostMsg: Clone + 'static>(
@@ -2258,38 +2420,40 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                 if let Some(sections) =
                     crate::sections::detect_sections(&cmd_for_sections, &lines)
                 {
-                    // Mapa línea-original → índice global en `lines` para
-                    // recuperar el styling (stderr / decoraciones). Como las
-                    // líneas pueden repetirse, usamos un cursor secuencial.
-                    let mut cursor: usize = 0;
                     for (sidx, sec) in sections.iter().enumerate() {
                         let sec_col = state.section_collapsed.contains(&(*id, sidx));
-                        let line_count = sec.lines.len();
-                        items.push(Item::chrome(
-                            SECTION_HEADER_H,
-                            section_header(*id, sidx, &sec.title, line_count, sec_col, theme, lift),
-                        ));
-                        // Avanzar cursor hasta saltarse el header (`title:`)
-                        // y el blank entre dirs. El detector come blanks y
-                        // headers, así que en `lines` quedan en orden.
-                        while cursor < lines.len()
-                            && (lines[cursor].trim().is_empty()
-                                || lines[cursor].trim_end().trim_end_matches(':') == sec.title)
-                        {
-                            cursor += 1;
+                        let item_count = sec.kind.count();
+                        // Header (oculto si la sección no tiene título — caso
+                        // `ls -l` simple sin árbol).
+                        if !sec.title.is_empty() {
+                            items.push(Item::chrome(
+                                SECTION_HEADER_H,
+                                section_header(
+                                    *id, sidx, &sec.title, item_count, sec_col, theme, lift,
+                                ),
+                            ));
                         }
-                        if !sec_col && line_count > 0 {
-                            let start = store.len();
-                            for line in &sec.lines {
-                                let i = cursor.min(lines.len().saturating_sub(1));
-                                let is_err = matches!(kinds.get(i), Some(OutputKind::Stderr));
-                                styles.push((is_err, runs.get(i).cloned().unwrap_or_default()));
-                                store.push_line(line);
-                                cursor += 1;
+                        if !sec_col {
+                            match &sec.kind {
+                                crate::sections::SectionKind::Lines(secl) => {
+                                    let start = store.len();
+                                    for line in secl {
+                                        styles.push((false, Vec::new()));
+                                        store.push_line(line);
+                                    }
+                                    items.push(Item::lines(start, store.len()));
+                                }
+                                crate::sections::SectionKind::Table { columns, rows } => {
+                                    let sort = state.section_sort.get(&(*id, sidx)).copied();
+                                    let h = section_table_height(rows.len());
+                                    items.push(Item::chrome(
+                                        h,
+                                        section_table_view(
+                                            *id, sidx, columns, rows, sort, theme, lift,
+                                        ),
+                                    ));
+                                }
                             }
-                            items.push(Item::lines(start, store.len()));
-                        } else {
-                            cursor = cursor.saturating_add(line_count);
                         }
                     }
                 } else {

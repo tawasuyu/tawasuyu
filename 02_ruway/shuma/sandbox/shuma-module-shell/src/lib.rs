@@ -42,7 +42,7 @@ use shuma_intent::SessionGraph;
 use shuma_line::{LineState, TokenKind};
 use shuma_module::{ModuleContributions, ShortcutSpec, Source};
 use shuma_remote_exec::RemoteRunHandle;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -418,6 +418,11 @@ pub struct State {
     /// El `usize` es el índice de la sección que devolvió
     /// [`sections::detect_sections`] para el comando del bloque.
     pub section_collapsed: HashSet<(u64, usize)>,
+    /// Estado de orden de las sub-secciones tipo tabla: por `(block, sec_idx)`
+    /// guarda `(col, ascending)`. Sin entry = orden natural (el del output).
+    /// Click en un header de columna togglea (col, true) → (col, false) →
+    /// remove.
+    pub section_sort: HashMap<(u64, usize), (usize, bool)>,
     /// Etapas de pipe desplegadas — `(block, stage)`. Click en un chip de
     /// etapa alterna la pertenencia; al estar presente se muestran sus
     /// líneas capturadas en vivo (tee) bajo la fila de etapas.
@@ -630,6 +635,7 @@ impl State {
             current_block: 0,
             collapsed: HashSet::new(),
             section_collapsed: HashSet::new(),
+            section_sort: HashMap::new(),
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
@@ -914,6 +920,13 @@ pub enum Msg {
     /// `block` (índice `idx` según `sections::detect_sections`). Click en
     /// el header de la sección lo dispara.
     ToggleSection { block: u64, idx: usize },
+    /// Click en un header de columna de una sub-sección tipo tabla. Cicla:
+    /// sin orden → asc(col) → desc(col) → sin orden.
+    SortSectionColumn {
+        block: u64,
+        section: usize,
+        col: usize,
+    },
     /// Rueda del mouse sobre el panel de output. `delta` ya viene en px
     /// (positivo = rodar hacia arriba / ver historial). Ajusta `scroll_px`.
     Scroll(f32),
