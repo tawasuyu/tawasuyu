@@ -49,10 +49,13 @@ use std::sync::{Arc, Mutex};
 /// `id` canónico del módulo. El shumarc lo referencia para activarlo.
 pub const ID: &str = "shell";
 
-/// Tope de líneas guardadas en el buffer de output — análogo al
-/// `cap_log` de matilda. Suficiente para varios runs sin que el panel
-/// crezca sin límite.
-pub const MAX_OUTPUT_LINES: usize = 500;
+/// Tope de líneas guardadas en el buffer de output activo. El scrollback
+/// real vive en `State.surf_history` (con spill a disco configurable);
+/// este buffer es el que alimenta `body_lines_for_block` y los detectores
+/// (`sections::detect_sections`). 500 cortaba `ls -alR` antes de que el
+/// detector viera el primer header de directorio. 50k cubre comandos
+/// gordos sin pasarse en RAM (~10 MB para líneas de 200 bytes promedio).
+pub const MAX_OUTPUT_LINES: usize = 50_000;
 
 /// Tipo de cada línea del buffer — define el color que la `view` usa.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -901,6 +904,10 @@ pub enum Msg {
     /// al REPL. Cierra los overlays de búsqueda y deja el cursor justo
     /// después del texto insertado.
     InsertAtCursor(String),
+    /// Empuja un mensaje `Notice` al output sin abrir un bloque nuevo —
+    /// para que el chasis (o cualquier consumidor) comunique fallas
+    /// (podman, askpass, ...) en la vista del shell.
+    PushNotice(String),
     /// Pega el clipboard al PTY del TUI activo — click derecho o botón
     /// del medio sobre el panel de vim (paste estilo terminal).
     VimPaste,

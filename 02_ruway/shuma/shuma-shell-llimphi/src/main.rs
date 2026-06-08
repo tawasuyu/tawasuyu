@@ -141,14 +141,40 @@ fn main() {
     // en lugar de quedar colgado pidiendo pass en stdin del PTY. La env se
     // exporta en el proceso padre — los PTYs spawneados por shuma-exec la
     // heredan, igual que `TERM`.
-    if std::env::var_os("SUDO_ASKPASS").is_none() {
-        if let Some(path) = resolve_askpass_path() {
-            // En edition 2021 `set_var` es safe; corre antes de spawnear
-            // ningún hilo. Los PTYs heredan la env.
-            std::env::set_var("SUDO_ASKPASS", path);
+    // Cablear el askpass para sudo + ssh + cualquier consumidor del
+    // protocolo. El binario `shuma-askpass` lee la pass en una ventana
+    // Llimphi y la imprime a stdout.
+    if let Some(path) = resolve_askpass_path() {
+        // En edition 2021 `set_var` es safe; corre antes de spawnear
+        // ningún hilo. Los PTYs heredan la env vía shuma-exec.
+        if std::env::var_os("SUDO_ASKPASS").is_none() {
+            std::env::set_var("SUDO_ASKPASS", &path);
+        }
+        if std::env::var_os("SSH_ASKPASS").is_none() {
+            std::env::set_var("SSH_ASKPASS", &path);
+        }
+        // OpenSSH 8.4+: `force` hace que ssh use SSH_ASKPASS aunque
+        // haya tty (sin esto sólo lo usaría si DISPLAY está set y no
+        // hay tty). En versiones viejas se ignora silenciosamente.
+        if std::env::var_os("SSH_ASKPASS_REQUIRE").is_none() {
+            std::env::set_var("SSH_ASKPASS_REQUIRE", "force");
         }
     }
     llimphi_ui::run::<Shell>();
+}
+
+/// `true` si el binario `podman` está disponible en `PATH`. Lookup mínimo
+/// (no spawn) — devuelve `false` si nadie en `$PATH` matchea.
+fn podman_disponible() -> bool {
+    let Some(path_env) = std::env::var_os("PATH") else {
+        return false;
+    };
+    for dir in std::env::split_paths(&path_env) {
+        if dir.join("podman").exists() {
+            return true;
+        }
+    }
+    false
 }
 
 /// Resuelve el path del binario `shuma-askpass`. Orden:
@@ -1334,6 +1360,23 @@ impl App for Shell {
             }
             Msg::CreateContainer => {
                 m.dropdown_open = None;
+                // Si podman no está instalado, no tiene sentido seguir —
+                // mostramos error en lugar de spawnear y dejar la sesión
+                // colgada en Pending.
+                if !podman_disponible() {
+                    if let Some(s) = m.sessions.get_mut(m.active_session) {
+                        s.conn = ConnState::Disconnected;
+                        let slot = Slot::Session(m.active_session, Which::Shell);
+                        m = apply_module_msg(
+                            m,
+                            slot,
+                            ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(
+                                "✘ podman no encontrado en PATH — instalá podman o desactivá 'Aislar en contenedor'".into(),
+                            )),
+                        );
+                    }
+                    return m;
+                }
                 let (distro, n, mount) = m
                     .sessions
                     .get(m.active_session)
@@ -1344,6 +1387,11 @@ impl App for Shell {
                     s.container = Some(name.clone());
                     s.use_container = true;
                     s.conn = ConnState::Pending; // hasta que `ContainerCreated`
+                    // Aplica isolation YA — el shell se reconstruye con
+                    // Source::Container apuntando al name. Los primeros
+                    // comandos pueden fallar si podman aún no creó el
+                    // container; al llegar `ContainerCreated` ya está vivo.
+                    s.apply_isolation();
                 }
                 let mount_opt = if mount.trim().is_empty() { None } else { Some(mount) };
                 spawn_create_container(handle, distro.image(), name, mount_opt);
@@ -1374,10 +1422,10 @@ impl App for Shell {
                 save_sessions(&m);
             }
             Msg::ContainerFailed(name) => {
-                // La sesión que esperaba este contenedor queda en
-                // `Disconnected` con `container = None`. La UI lo refleja
-                // con el punto rojo del `conn_pill`; ver un toast/error
-                // explícito es siguiente iteración.
+                // Rebajamos a Local: si dejábamos `use_container=true` con
+                // `container=Some(name)`, el shell seguiría disparando
+                // `podman exec` que falla por cada comando — peor que
+                // simplemente caer a Local con una notice clara.
                 let idx = m
                     .sessions
                     .iter()
@@ -1387,7 +1435,16 @@ impl App for Shell {
                         s.conn = ConnState::Disconnected;
                         s.container = None;
                         s.use_container = false;
+                        s.apply_isolation(); // shell vuelve a Source::Local
                     }
+                    let slot = Slot::Session(i, Which::Shell);
+                    m = apply_module_msg(
+                        m,
+                        slot,
+                        ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(format!(
+                            "✘ podman run falló para {name} — caí a shell local. Revisá podman / imagen / permisos."
+                        ))),
+                    );
                 }
                 save_sessions(&m);
             }
@@ -1417,18 +1474,31 @@ impl App for Shell {
                 // contra Source::Container (los primeros comandos pueden
                 // fallar si el container aún no está listo — re-tipear funciona).
                 let mut to_create: Option<(&'static str, String, Option<String>)> = None;
+                let mut notice: Option<String> = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     if s.pending {
                         s.pending = false;
                         s.pending_focus = None;
                         if s.use_container {
-                            let n = s.number.unwrap_or(0);
-                            let name = format!("shuma-{}-{n}", s.distro.label().to_lowercase());
-                            s.container = Some(name.clone());
-                            s.conn = ConnState::Pending;
-                            let mount = s.mount.text();
-                            let mount_opt = if mount.trim().is_empty() { None } else { Some(mount) };
-                            to_create = Some((s.distro.image(), name, mount_opt));
+                            if !podman_disponible() {
+                                s.use_container = false;
+                                s.container = None;
+                                notice = Some(
+                                    "✘ podman no encontrado en PATH — la sesión arrancó como shell local. Instalá podman o desactivá 'Aislar en contenedor'.".into(),
+                                );
+                            } else {
+                                let n = s.number.unwrap_or(0);
+                                let name = format!(
+                                    "shuma-{}-{n}",
+                                    s.distro.label().to_lowercase()
+                                );
+                                s.container = Some(name.clone());
+                                s.conn = ConnState::Pending;
+                                let mount = s.mount.text();
+                                let mount_opt =
+                                    if mount.trim().is_empty() { None } else { Some(mount) };
+                                to_create = Some((s.distro.image(), name, mount_opt));
+                            }
                         }
                         s.apply_isolation();
                         if s.isolation == Isolation::Remote {
@@ -1439,6 +1509,14 @@ impl App for Shell {
                         }
                         m.session_panel_open = true;
                     }
+                }
+                if let Some(text) = notice {
+                    let slot = Slot::Session(m.active_session, Which::Shell);
+                    m = apply_module_msg(
+                        m,
+                        slot,
+                        ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(text)),
+                    );
                 }
                 if let Some((image, name, mount)) = to_create {
                     spawn_create_container(handle, image, name, mount);

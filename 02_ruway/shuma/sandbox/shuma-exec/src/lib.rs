@@ -898,8 +898,16 @@ fn spawn_pty_thread(
         cmd.arg(a);
     }
     cmd.cwd(cwd);
+    // `CommandBuilder` de portable_pty arranca con env vacío — hay que
+    // heredar manualmente PATH/HOME/USER/SUDO_ASKPASS/SSH_ASKPASS/etc.
+    // Sin esto, `sudo -A` no encuentra el askpass y `which` falla.
+    for (k, v) in std::env::vars_os() {
+        cmd.env(k, v);
+    }
     // Heurística estándar: TUIs leen `TERM` para decidir capacidad de
-    // colores y movimiento. xterm-256color es el lcm más amplio.
+    // colores y movimiento. xterm-256color es el lcm más amplio. Se
+    // sobreescribe el TERM heredado por si el caller corre desde una
+    // shell sin TERM (cron, systemd-run, etc.).
     cmd.env("TERM", "xterm-256color");
     let mut child = match pair.slave.spawn_command(cmd) {
         Ok(c) => c,

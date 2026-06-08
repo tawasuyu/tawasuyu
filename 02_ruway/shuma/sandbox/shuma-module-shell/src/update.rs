@@ -254,6 +254,9 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.collapsed.insert(id);
             }
         }
+        Msg::PushNotice(text) => {
+            s.push_output(OutputLine::notice(text));
+        }
         Msg::ToggleSection { block, idx } => {
             let key = (block, idx);
             if !s.section_collapsed.remove(&key) {

@@ -560,16 +560,22 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             })
             .fill(fill)
             .hover_fill(theme.bg_row_hover)
-            .on_click(Msg::SelectSession(i))
             .children(vec![icon, num]);
             if i > 0 {
+                // El nodo es draggable → en Released, `draggable_at`
+                // toma precedencia sobre `on_click` y el click nunca
+                // dispara. `on_click_at` (en press) sí coexiste; ignoro
+                // las coords y devuelvo el Msg de selección.
                 tooth = tooth
+                    .on_click_at(move |_, _, _, _| Some(Msg::SelectSession(i)))
                     .draggable_at(|phase, _, _, _, _| match phase {
                         DragPhase::Move | DragPhase::End => None,
                     })
                     .drag_payload(i as u64)
                     .on_drop(move |payload| Some(Msg::ReorderSession(payload as usize, i)))
                     .drop_hover_fill(theme.bg_row_hover);
+            } else {
+                tooth = tooth.on_click(Msg::SelectSession(i));
             }
             tooth
         })
