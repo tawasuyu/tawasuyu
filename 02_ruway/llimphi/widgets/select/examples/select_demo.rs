@@ -381,7 +381,7 @@ fn start_load(mut model: Model, handle: &Handle<Msg>) -> Model {
             Msg::AsyncLoaded(
                 gen,
                 Ok(vec![
-                    SelectItem::new("gioser")
+                    SelectItem::new("tawasuyu")
                         .icon("\u{2756}")
                         .with_sublabel("rust · 210 crates")
                         .badge(SelectBadge::count(42, BadgeKind::Info)),

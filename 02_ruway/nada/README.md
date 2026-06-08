@@ -2,7 +2,7 @@
 
 > File editor over Llimphi. Test bench of the framework.
 
-`nada` (internal name; formerly `gioser-edit`) is the monorepo's text editor: file tree on the left, editor with syntax highlight + LSP on the right, command palette, find-in-files, mini-map, bookmarks, diff viewer, embedded terminal, JSON sessions. Each feature is a Llimphi module — `nada` assembles; it doesn't invent.
+`nada` (internal name; formerly `tawasuyu-edit`) is the monorepo's text editor: file tree on the left, editor with syntax highlight + LSP on the right, command palette, find-in-files, mini-map, bookmarks, diff viewer, embedded terminal, JSON sessions. Each feature is a Llimphi module — `nada` assembles; it doesn't invent.
 
 ## Install
 

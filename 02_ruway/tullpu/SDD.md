@@ -45,7 +45,7 @@ Un editor de imágenes donde **la pila de capas ES un DAG content-addressed** y 
 
 El insight central: **es el mismo patrón que `pluma` ya inventó para texto** (haz de cuerpos, ver `PLAN.md` §11). En pluma, una traducción/resumen es un *cuerpo hijo* derivado de un *cuerpo madre* por una `Transformacion`; si la madre cambia, la hija queda *stale* y la UI pinta la hebra punteada con botón "regenerar". En tullpu, un inpaint/upscale/segmentación es una *capa hija* derivada de una *capa madre* por la misma maquinaria. Reuso conceptual total, distinta carga útil (píxeles en vez de párrafos).
 
-## Por qué encaja en gioser sin fricción
+## Por qué encaja en tawasuyu sin fricción
 
 - **Capas = DAG.** Una pila de capas con sus modos de fusión es literalmente un grafo dirigido. Se mapea sobre `format::Objeto{datos, hijos}` (BLAKE3 + postcard) sin modelo nuevo.
 - **Dedup automática.** Dos capas con contenido idéntico (o dos versiones de un proyecto que comparten un fondo) comparten hash y se almacenan una sola vez en `almacen.rs`.

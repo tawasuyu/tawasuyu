@@ -826,7 +826,7 @@ impl App for NakuiSheetApp {
         let items = menu_items(&model.wb, model.clipboard_origin.is_some(), model.freeze_rows > 0 || model.freeze_cols > 0);
         let mut palette = ContextMenuPalette::from_theme(&model.theme);
         // El theme dark-sheet vive en `palette` (módulo local). El
-        // accent es naranja gioser; eso ya viene del theme. Aclaramos
+        // accent es naranja tawasuyu; eso ya viene del theme. Aclaramos
         // los slots para que el menú pegue con el panel negro y la
         // grilla sutil:
         palette.bg_panel = self::palette::BG_PANEL;

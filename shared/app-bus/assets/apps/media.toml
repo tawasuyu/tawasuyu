@@ -1,6 +1,6 @@
 # Reproductor multimedia de la suite (02_ruway/media).
 #
-# Copiá este archivo a ~/.config/gioser/apps/media.toml para que los launchers
+# Copiá este archivo a ~/.config/tawasuyu/apps/media.toml para que los launchers
 # (el menú de inicio de pata, el spotlight) y el "abrir con" del navegador lo
 # descubran. El binario `media-app` debe estar en el PATH (cargo install) o poné
 # su ruta absoluta en `exec`.

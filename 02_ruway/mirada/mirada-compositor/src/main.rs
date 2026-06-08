@@ -148,7 +148,7 @@ impl ShellAnchor {
 }
 
 /// Config del acople del shell, resuelta una vez desde el entorno:
-/// - `MIRADA_SHELL_APP_ID` — identidad de la ventana-marco (default `gioser.pata`).
+/// - `MIRADA_SHELL_APP_ID` — identidad de la ventana-marco (default `tawasuyu.pata`).
 /// - `MIRADA_SHELL_ANCHOR` — borde (`top`/`bottom`/`left`/`right`, default `bottom`).
 /// - `MIRADA_SHELL_THICKNESS` — grosor en px (default `40`).
 /// - `MIRADA_SHELL_AUTOHIDE` — `1`/`true` para autoesconder el dock: nunca
@@ -170,7 +170,7 @@ fn shell_dock() -> &'static ShellDock {
     static DOCK: std::sync::OnceLock<ShellDock> = std::sync::OnceLock::new();
     DOCK.get_or_init(|| {
         let app_id =
-            std::env::var("MIRADA_SHELL_APP_ID").unwrap_or_else(|_| "gioser.pata".to_string());
+            std::env::var("MIRADA_SHELL_APP_ID").unwrap_or_else(|_| "tawasuyu.pata".to_string());
         let anchor = std::env::var("MIRADA_SHELL_ANCHOR")
             .map(|s| ShellAnchor::parse(&s))
             .unwrap_or(ShellAnchor::Bottom);

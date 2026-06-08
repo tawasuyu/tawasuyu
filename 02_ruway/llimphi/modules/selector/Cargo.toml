@@ -5,6 +5,6 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "llimphi-module-selector — trait Selector con dos backends: HostSelector (paths del FS via std::fs) y WawaSelector (khipus por hash, sello digital). Una sola API 'abrir/guardar' que funciona en cualquier entorno gioser."
+description = "llimphi-module-selector — trait Selector con dos backends: HostSelector (paths del FS via std::fs) y WawaSelector (khipus por hash, sello digital). Una sola API 'abrir/guardar' que funciona en cualquier entorno tawasuyu."
 
 [dependencies]

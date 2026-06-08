@@ -34,7 +34,7 @@ use tracing::{debug, error, info, warn};
 /// Path canónico del service socket. Usa `XDG_RUNTIME_DIR` si está
 /// (por usuario, no persistente), sino cae a `/tmp/cosmos_app.sock`.
 pub fn default_service_socket() -> PathBuf {
-    if let Some(rt) = directories::ProjectDirs::from("net", "gioser", "cosmos_app") {
+    if let Some(rt) = directories::ProjectDirs::from("net", "tawasuyu", "cosmos_app") {
         // ProjectDirs no expone runtime_dir directo en todas las
         // plataformas — usamos cache_dir como fallback estable.
         let mut p = rt.cache_dir().to_path_buf();

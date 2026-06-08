@@ -4,7 +4,7 @@
 
 > Archivo editor Llimphi pataman. Framework yachachiq banku.
 
-`nada` (ñawpaq sutin `gioser-edit`) monorepupa qillqa editor: lloq'epi file tree, pa˜api editor syntax highlight + LSP, comando palette, find-in-files, mini-mapa, bookmarks, diff viewer, terminal apañasqa, JSON sesiones. Sapanka feature Llimphi módulo — `nada` huñun; mana inventawan.
+`nada` (ñawpaq sutin `tawasuyu-edit`) monorepupa qillqa editor: lloq'epi file tree, pa˜api editor syntax highlight + LSP, comando palette, find-in-files, mini-mapa, bookmarks, diff viewer, terminal apañasqa, JSON sesiones. Sapanka feature Llimphi módulo — `nada` huñun; mana inventawan.
 
 ## Churay
 

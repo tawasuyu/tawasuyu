@@ -268,7 +268,7 @@ impl Default for AppMenuBar {
 
 /// La superficie completa del launcher: las barras, los docks, las
 /// flotantes y (opcional) la barra de menú global. Esto es lo que se
-/// describe en `~/.config/gioser/launcher.toml` y se monta idéntico en
+/// describe en `~/.config/tawasuyu/launcher.toml` y se monta idéntico en
 /// host, shuma o wawa.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Surface {
@@ -376,7 +376,7 @@ mod tests {
 
     #[test]
     fn parse_surface_desde_toml() {
-        // El mismo schema que describiría ~/.config/gioser/launcher.toml.
+        // El mismo schema que describiría ~/.config/tawasuyu/launcher.toml.
         let src = r#"
             [[bars]]
             edge = "top"

@@ -1019,7 +1019,7 @@ impl App for Cosmos {
     /// El `app_id` Wayland: pata lo usa para correlacionar foco ↔ dientes en el
     /// rail hospedado, así que el `HostClient` registra con este mismo string.
     fn app_id() -> Option<&'static str> {
-        Some("gioser.cosmos")
+        Some("tawasuyu.cosmos")
     }
 
     fn initial_size() -> (u32, u32) {
@@ -1105,7 +1105,7 @@ impl App for Cosmos {
                 .map(|i| dock_item_tooth(*i))
                 .collect();
             let h = handle.clone();
-            pata_host::HostClient::connect("gioser.cosmos", "Cosmos", teeth, move |id| {
+            pata_host::HostClient::connect("tawasuyu.cosmos", "Cosmos", teeth, move |id| {
                 h.dispatch(Msg::HostActivate(id))
             })
         } else {

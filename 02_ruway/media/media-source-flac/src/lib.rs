@@ -1,6 +1,6 @@
 //! media-source-flac — decoder FLAC (vía symphonia) como [`AudioSource`].
 //!
-//! FLAC es el **lossless** patent-free del tier nativo de gioser: par
+//! FLAC es el **lossless** patent-free del tier nativo de tawasuyu: par
 //! del Opus (lossy) del lado audio, igual que AV1 lo es del video. El
 //! decoder + demuxer de symphonia es puro-Rust, sin C ni patentes —
 //! compila a WASM y corre en wawa.

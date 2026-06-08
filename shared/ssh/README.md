@@ -1,6 +1,6 @@
-# ssh — cliente SSH mínimo para gioser
+# ssh — cliente SSH mínimo para tawasuyu
 
-Envoltura de `russh` reducida a lo que gioser necesita: **transporte cifrado +
+Envoltura de `russh` reducida a lo que tawasuyu necesita: **transporte cifrado +
 autenticación + un canal de ejecución de comandos**. No pretende cubrir todo
 OpenSSH; la shell interactiva real la cubrirá `shuma`
 (ver `project_shuma_shell_roadmap`).

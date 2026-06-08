@@ -1,8 +1,8 @@
-# Ejemplo de ~/.config/gioser/launcher.toml — la Surface del launcher.
+# Ejemplo de ~/.config/tawasuyu/launcher.toml — la Surface del launcher.
 #
-# Copiá esto a ~/.config/gioser/launcher.toml y editalo. Si el archivo no
-# existe, gioser-launcher usa Surface::desktop_default() y llena el dock con
-# las apps descubiertas en ~/.config/gioser/apps/*.toml.
+# Copiá esto a ~/.config/tawasuyu/launcher.toml y editalo. Si el archivo no
+# existe, tawasuyu-launcher usa Surface::desktop_default() y llena el dock con
+# las apps descubiertas en ~/.config/tawasuyu/apps/*.toml.
 #
 # El mismo schema (launcher-core::Surface) se monta idéntico en host, shuma
 # y wawa — sólo cambia quién lo renderiza y quién ejecuta el lanzamiento.
@@ -37,7 +37,7 @@ kind = "volume"
 # --- Dock con tear-off ---
 # Cada entry referencia una app del registro (app-bus) por app_id. label e
 # icon son overrides opcionales; si faltan, se toman del AppRegistry.
-# Si `entries` queda vacío, gioser-launcher lo auto-llena con lo descubierto.
+# Si `entries` queda vacío, tawasuyu-launcher lo auto-llena con lo descubierto.
 [[docks]]
 id = "principal"
 edge = "bottom"

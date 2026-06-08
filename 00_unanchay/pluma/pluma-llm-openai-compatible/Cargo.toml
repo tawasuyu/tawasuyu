@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "pluma — backend de pluma-llm-core contra cualquier servicio con la shape OpenAI Chat Completions (`/chat/completions`). Cubre DeepSeek, Ollama en modo OpenAI-compat, Groq, Together, vLLM, y cualquier proxy compatible. Presets explícitos para los dos casos típicos en gioser: DeepSeek remoto y Ollama local."
+description = "pluma — backend de pluma-llm-core contra cualquier servicio con la shape OpenAI Chat Completions (`/chat/completions`). Cubre DeepSeek, Ollama en modo OpenAI-compat, Groq, Together, vLLM, y cualquier proxy compatible. Presets explícitos para los dos casos típicos en tawasuyu: DeepSeek remoto y Ollama local."
 
 [dependencies]
 async-trait = { workspace = true }

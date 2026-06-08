@@ -1,6 +1,6 @@
 //! media-source-av1 — decode **AV1 nativo** (puro-Rust) del dominio media.
 //!
-//! AV1 + Opus son el formato de medios NATIVO de gioser (PLAN.md
+//! AV1 + Opus son el formato de medios NATIVO de tawasuyu (PLAN.md
 //! §6.quinquies): sin C, sin patentes, compila a WASM, corre igual en
 //! wawa. Este crate cubre el video AV1 sobre contenedor **IVF** en tres
 //! capas puro-Rust + una de decode:
@@ -19,7 +19,7 @@
 //!
 //! ## Audio nativo (pendiente)
 //!
-//! El audio nativo de gioser es **Opus**, pero no hay decoder Opus
+//! El audio nativo de tawasuyu es **Opus**, pero no hay decoder Opus
 //! puro-Rust maduro hoy (symphonia trae mp3/vorbis/flac/aac pero NO
 //! Opus). Hasta que lo haya, el audio de un contenedor AV1+Opus se saca
 //! por `shared/foreign-av`. Este crate cubre sólo el video.

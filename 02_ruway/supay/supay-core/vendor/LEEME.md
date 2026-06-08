@@ -1,7 +1,7 @@
 # vendor/ — código C externo
 
 Este directorio aloja **doomgeneric** vendoreado. No está versionado
-porque no queremos arrastrar ~10k LOC C dentro de gioser; el `build.rs`
+porque no queremos arrastrar ~10k LOC C dentro de tawasuyu; el `build.rs`
 del crate lo busca acá y, si lo encuentra, lo compila.
 
 ## Cómo proveerlo

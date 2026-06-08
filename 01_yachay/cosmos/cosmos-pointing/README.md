@@ -4,7 +4,7 @@ Telescope pointing model fitting and correction.
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-pointing)](https://crates.io/crates/cosmos-pointing)
 [![Documentation](https://docs.rs/cosmos-pointing/badge.svg)](https://docs.rs/cosmos-pointing)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-pointing)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-pointing)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Build, fit, and apply telescope pointing models using standard equatorial and harmonic terms. Interactive REPL with TPOINT-compatible workflow: load observations, fit models via least-squares, analyze residuals with plots, and export corrections. No runtime FFI.
 
@@ -103,4 +103,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

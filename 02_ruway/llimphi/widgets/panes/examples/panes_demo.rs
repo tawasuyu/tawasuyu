@@ -1,4 +1,4 @@
-//! Demo de `llimphi-widget-panes` — "tmux de componentes gioser".
+//! Demo de `llimphi-widget-panes` — "tmux de componentes tawasuyu".
 //!
 //! Dos tipos de panel heterogéneos (Contador y Notas) conviviendo en un
 //! mismo árbol BSP que se parte horizontal/vertical, se cierra, se enfoca
@@ -54,7 +54,7 @@ impl App for Demo {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "panes — tmux de componentes gioser"
+        "panes — tmux de componentes tawasuyu"
     }
 
     fn init(_: &Handle<Msg>) -> Model {

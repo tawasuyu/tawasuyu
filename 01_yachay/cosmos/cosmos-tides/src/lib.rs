@@ -3,7 +3,7 @@
 //! Calcula el **potencial generador de marea** (la pieza astronómica)
 //! sobre una ubicación de la Tierra a un instante TDB. No resuelve la
 //! respuesta hidrodinámica de la cuenca local (esa requiere
-//! modelado FEM tipo OSU/FES, fuera del alcance de gioser-suite).
+//! modelado FEM tipo OSU/FES, fuera del alcance de tawasuyu-suite).
 //! Sirve para curvas indicativas, comparación cualitativa
 //! entre días/lugares, animaciones educativas, y como input al motor
 //! ECS de dominium si alguien quiere simular fluidos a alto nivel.

@@ -11,7 +11,7 @@
 //!   └─────────────┴───────────────────────────┴───────────────┘
 //! ```
 //!
-//! Persistencia automática en `~/.cache/gioser/pluma-app/pluma.sled`
+//! Persistencia automática en `~/.cache/tawasuyu/pluma-app/pluma.sled`
 //! vía [`PlumaStore`]. Al primer arranque siembra un documento vacío
 //! para que la ventana no esté muerta. Tras ese punto, todo doc/atom/
 //! transformación/carta vive en sled.
@@ -72,7 +72,7 @@ impl App for Pluma {
 
     /// `app_id` Wayland: pata lo usa para correlacionar foco ↔ dientes hospedados.
     fn app_id() -> Option<&'static str> {
-        Some("gioser.pluma")
+        Some("tawasuyu.pluma")
     }
 
     fn initial_size() -> (u32, u32) {
@@ -90,7 +90,7 @@ impl App for Pluma {
                 pata_host::HostedTooth::new(3, "tools", "Modelo"),
             ];
             let h = handle.clone();
-            m._host = pata_host::HostClient::connect("gioser.pluma", "Pluma", teeth, move |id| {
+            m._host = pata_host::HostClient::connect("tawasuyu.pluma", "Pluma", teeth, move |id| {
                 h.dispatch(Msg::HostActivate(id))
             });
         }

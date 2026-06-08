@@ -19,7 +19,7 @@
 
 ## El problema
 
-Casi **todas** las apps GUI de gioser (Llimphi) **se cuelgan**. NO es la laptop:
+Casi **todas** las apps GUI de tawasuyu (Llimphi) **se cuelgan**. NO es la laptop:
 pasa en más de una máquina.
 
 Síntoma confirmado por el usuario:

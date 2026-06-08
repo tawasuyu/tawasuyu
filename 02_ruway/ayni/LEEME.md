@@ -8,7 +8,7 @@
 Chat humano↔humano **local-first** y soberano. No hay servidor, no hay número
 de teléfono, no hay empresa que pueda morir y llevarse tus conversaciones: sos
 dueño de tus bytes. Las innovaciones no son features añadidas — salen del
-sustrato de gioser (BLAKE3 + DAG direccionado por contenido, identidad `agora`
+sustrato de tawasuyu (BLAKE3 + DAG direccionado por contenido, identidad `agora`
 Ed25519, transporte `chasqui`/`minga`/`akasha`).
 
 No es "otro wasap": es la conversación tratada como un grafo criptográfico

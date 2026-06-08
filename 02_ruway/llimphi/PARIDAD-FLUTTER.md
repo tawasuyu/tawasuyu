@@ -561,10 +561,10 @@ cuatro seams de arriba, no abre uno nuevo.
 
 ### Mirado y descartado (no encaja hoy)
 
-- Widgets adaptativos plataforma (Cupertino vs Material): N/A, gioser tiene su
+- Widgets adaptativos plataforma (Cupertino vs Material): N/A, tawasuyu tiene su
   theme semántico propio.
 - `RefreshIndicator` pull-to-refresh, `Dismissible` swipe-to-action: patrones
-  móviles; gioser es desktop-first (relevante sólo para `android`/`wawa`, diferir).
+  móviles; tawasuyu es desktop-first (relevante sólo para `android`/`wawa`, diferir).
 - `InheritedWidget`/`PreferenceKey` (contexto que baja/sube por el árbol): el
   bucle Elm pasa todo explícito a propósito; sólo haría falta si algún valor
   *derivado del layout* (tamaño medido) tuviera que burbujear hacia un ancestro.

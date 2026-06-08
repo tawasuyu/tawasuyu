@@ -19,7 +19,7 @@ pub(crate) struct Session {
 /// Path donde leemos/escribimos la sesion. None si el SO no expone
 /// un config dir conocido (raro).
 pub(crate) fn session_path() -> Option<PathBuf> {
-    let dirs = directories::ProjectDirs::from("net", "gioser", "nada")?;
+    let dirs = directories::ProjectDirs::from("net", "tawasuyu", "nada")?;
     let dir = dirs.config_dir().to_path_buf();
     let _ = fs::create_dir_all(&dir);
     Some(dir.join("session.json"))

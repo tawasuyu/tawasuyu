@@ -1,10 +1,10 @@
 //! media-mux-webm — muxer **WebM/Matroska nativo** que empaqueta los
-//! formatos nativos de gioser en un solo contenedor.
+//! formatos nativos de tawasuyu en un solo contenedor.
 //!
 //! La **contraparte** de [`media_source_webm`]: ese crate *demuxea* un
 //! `.webm` AV1+Opus en sus tracks; este lo *produce*. Cierra el ciclo de
 //! producción del camino nativo (PLAN.md §6.quinquies) **sin tocar
-//! ffmpeg**: gioser encodea AV1 ([`media_encode_av1`]), muxea acá, y el
+//! ffmpeg**: tawasuyu encodea AV1 ([`media_encode_av1`]), muxea acá, y el
 //! mismo `.webm` se reproduce 100% puro-Rust por el demuxer nativo.
 //!
 //! El contenedor WebM es un subconjunto acotado de EBML (Matroska); como
@@ -170,8 +170,8 @@ fn build_ebml_header() -> Vec<u8> {
 fn build_info(duration_ms: f64) -> Vec<u8> {
     let mut body = Vec::new();
     body.extend(elem_uint(ID_TIMESTAMP_SCALE, TS_SCALE_NS));
-    body.extend(elem(ID_MUXING_APP, b"gioser/media-mux-webm"));
-    body.extend(elem(ID_WRITING_APP, b"gioser/media-mux-webm"));
+    body.extend(elem(ID_MUXING_APP, b"tawasuyu/media-mux-webm"));
+    body.extend(elem(ID_WRITING_APP, b"tawasuyu/media-mux-webm"));
     body.extend(elem_f64(ID_DURATION, duration_ms));
     elem(ID_INFO, &body)
 }

@@ -8,7 +8,7 @@
 
 ## Tesis
 
-Soberanía total sobre el píxel. Renderizar las geometrías exactas del simulador cósmico (`cosmos`), el compositor (`mirada`), las apps de escritorio (`nahual`) y el visor (`pluma`) sin cajas negras de Apple/Google/navegadores. Reemplazo total de **GPUI** en la pila gioser.
+Soberanía total sobre el píxel. Renderizar las geometrías exactas del simulador cósmico (`cosmos`), el compositor (`mirada`), las apps de escritorio (`nahual`) y el visor (`pluma`) sin cajas negras de Apple/Google/navegadores. Reemplazo total de **GPUI** en la pila tawasuyu.
 
 ## Anatomía — 4 capas estrictas (S₀ → S₂)
 
@@ -74,7 +74,7 @@ El mayor problema de las interfaces (y por qué falló el paradigma OOP en esto)
 
 ## Veredicto arquitectónico
 
-No es una biblioteca genérica. Es un **motor de combate**. `wgpu + vello + taffy + DAG monádico` da un frontend capaz de competir en rendimiento con los mejores editores del mundo, diseñado como **traje a medida** para las topologías de gioser. Sin abstracciones de navegadores, sin cajas negras de Apple/Google.
+No es una biblioteca genérica. Es un **motor de combate**. `wgpu + vello + taffy + DAG monádico` da un frontend capaz de competir en rendimiento con los mejores editores del mundo, diseñado como **traje a medida** para las topologías de tawasuyu. Sin abstracciones de navegadores, sin cajas negras de Apple/Google.
 
 ## Pila exacta (sin negociación)
 
@@ -152,7 +152,7 @@ El techo aparece cuando una app necesita rendir **>1 M primitivos por
 frame**. En ese régimen el overhead de construir `BezPath`, ensamblar
 buffers para los shaders internos de vello y hacer una pasada compute
 por cada batch domina sobre el tiempo de raster real. Casos concretos
-en gioser:
+en tawasuyu:
 
 | App | Carga potencial | Trigger probable |
 |---|---|---|

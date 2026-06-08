@@ -5,7 +5,7 @@
 > en Wawa.
 
 `pata` (quechua: *borde, repisa, andén*) es la capa de chrome del escritorio
-gioser. No es el compositor (`mirada`) ni el shell (`shuma`): es el marco
+tawasuyu. No es el compositor (`mirada`) ni el shell (`shuma`): es el marco
 configurable que rodea a las ventanas. Desde un archivo desplegás **barras**,
 **paneles** y un **dock**, y dentro acomodás widgets — botón inicio, lista de
 ventanas abiertas, clipboard / volumen / brillo, tray, reloj, un widget

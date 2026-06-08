@@ -1,0 +1,32 @@
+[package]
+name = "tawasuyu-canvas-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+tawasuyu-geom    = { path = "../tawasuyu-geom" }
+tawasuyu-physics = { path = "../tawasuyu-physics" }
+tawasuyu-palette = { path = "../tawasuyu-palette" }
+tawasuyu-shaders = { path = "../tawasuyu-shaders" }
+wasm-bindgen.workspace = true
+js-sys.workspace = true
+glam.workspace = true
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    "Window",
+    "Document",
+    "HtmlCanvasElement",
+    "WebGl2RenderingContext",
+    "WebGlShader",
+    "WebGlProgram",
+    "WebGlBuffer",
+    "WebGlUniformLocation",
+    "WebGlVertexArrayObject",
+    "console",
+]
+

@@ -18,7 +18,7 @@ members = ["wawa-boot"]
 # protocolo Akasha Over Ether (Fase 20) vive en `wawa-fs/` por razones
 # históricas (el crate adentro se llama `akasha`) y también queda excluido:
 # lo enlaza el kernel bare-metal como dependencia path. `format` se trasladó
-# a `shared/format/` en gioser y ya no vive aquí — el kernel y boot lo
+# a `shared/format/` en tawasuyu y ya no vive aquí — el kernel y boot lo
 # referencian con `../../../shared/format`.
 exclude = ["wawa-kernel", "apps", "wawa-fs", "gop-probe"]
 

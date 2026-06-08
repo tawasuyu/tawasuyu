@@ -4,7 +4,7 @@
 //! Unifica los dos recorders sueltos del dominio —
 //! [`media_recorder_av1`](https://docs.rs) (frames → `.ivf`) y
 //! `media-recorder-wav` (audio → `.wav`) — en el **contenedor nativo** de
-//! gioser. En vez de dos archivos separados, tee'a el video por
+//! tawasuyu. En vez de dos archivos separados, tee'a el video por
 //! [`media_encode_av1`] y el audio por [`media_encode_opus`], acumula los
 //! paquetes y al [`stop`](WebmRecorder::stop) los muxea juntos con
 //! [`media_mux_webm`] — **sin un solo byte de ffmpeg**.

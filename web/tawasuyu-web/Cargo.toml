@@ -1,0 +1,49 @@
+[package]
+name = "tawasuyu-web"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pluma-md-reader-web = { path = "../../00_unanchay/pluma/pluma-md-reader-web" }
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+
+# getrandom 0.4 entra al árbol vía uuid (uuid-rng-internal). En
+# wasm32-unknown-unknown exige la feature `wasm_js` para usar el backend
+# WebCrypto; sin ella la build aborta con compile_error!. La declaramos
+# acá con target-cfg para que la feature se unifique sólo en builds wasm.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+
+[dependencies.web-sys]
+workspace = true
+features = [
+    "Window",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "Node",
+    "NodeList",
+    "DomTokenList",
+    "Event",
+    "EventTarget",
+    "MouseEvent",
+    "CustomEvent",
+    "CustomEventInit",
+    "Storage",
+    "Navigator",
+    "Performance",
+    "Screen",
+    "Request",
+    "RequestInit",
+    "Response",
+    "console",
+]

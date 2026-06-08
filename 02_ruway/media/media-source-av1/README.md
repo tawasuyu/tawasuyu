@@ -2,7 +2,7 @@
 
 Decode **AV1 nativo** del dominio `media` — puro-Rust, sin C, sin
 patentes, compila a WASM. AV1 (+ Opus) es el formato de medios **nativo**
-de gioser (PLAN.md §6.quinquies): los códecs ajenos entran por
+de tawasuyu (PLAN.md §6.quinquies): los códecs ajenos entran por
 `shared/foreign-av` (puente ffmpeg), que además transcodifica a AV1 al
 importar.
 
@@ -51,7 +51,7 @@ cargo run -p media-source-av1 --example av1_decode --release -- clip.ivf
 
 ## Audio: par nativo
 
-Este crate cubre sólo el video. El audio nativo de gioser es **Opus**
+Este crate cubre sólo el video. El audio nativo de tawasuyu es **Opus**
 (`media-source-opus`, puro-Rust vía opus-wave); el lossless es **FLAC**
 (`media-source-flac`, vía symphonia). Un `.webm` AV1+Opus se reproduce
 100% nativo uniendo `media-source-av1` + `media-source-opus` por

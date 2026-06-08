@@ -1,11 +1,11 @@
-# Plan maestro gioser
+# Plan maestro tawasuyu
 
 > Estado al **2026-05-26**: monorepo nacido, 4 cuadrantes consolidados, ~210 crates compilando, **GPUI extinto** — todas las apps pasaron a Llimphi.
 
 ## 0. Cartografía
 
 ```
-gioser/
+tawasuyu/
 ├── 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
 ├── 01_yachay/     CONOCER   — cosmos · dominium · nakui
 ├── 02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi
@@ -16,9 +16,9 @@ gioser/
 
 ## 1. Lo hecho (2026-05-25 / 2026-05-26)
 
-1. **Migración estructural**: brahman (188 crates) + eternal (12) + dominium (1) → gioser, 214 crates en workspace + 13 en wawa excluido. Historia git preservada (336 commits + 478 brahman + 56 eternal).
+1. **Migración estructural**: brahman (188 crates) + eternal (12) + dominium (1) → tawasuyu, 214 crates en workspace + 13 en wawa excluido. Historia git preservada (336 commits + 478 brahman + 56 eternal).
 2. **Rename semántico**: 344 cambios en Cargo.tomls + 1668 en .rs. Nombres antiguos (`fana-*`, `charka-*`, `cosmobiologia-*`, `eternal-*`, `brahman-*`, `agorapura-*`, `barra-*`, `revista-*`, `yachay-core`, `verbo-*`, `badu-*`, `formato`) reemplazados por los canónicos.
-3. **Landing sobria**: plano cartesiano SVG estático + visor pluma (`web/gioser-web`, 38 LOC).
+3. **Landing sobria**: plano cartesiano SVG estático + visor pluma (`web/tawasuyu-web`, 38 LOC).
 4. **Llimphi**: 5 crates (`hal/raster/layout/text/ui`) verdes en hardware. Texto vía parley (shaping completo, fallback CJK/emoji vía fontique). Bucle Elm con hit-test funcional.
 5. `cargo check --workspace` pasa.
 6. **Canal de release wawa** (2026-05-26): `format::Canal` + `RaizFirmada` + `mensaje_a_firmar`, `akasha::MensajeAkasha::AnunciarCanal` (cuarta variante). Kernel ingesta el DAG y traza; verificación de firma + re-anclaje quedan para userspace (app `mudanza`, pendiente). 8/8 tests format, 7/7 tests akasha. Distribución/actualización en wawa: paquete = objeto, versión = hash, repo = canal firmado por agora, update = re-anclar superbloque (atómico), rollback = re-anclar raíz vieja del log.
@@ -50,7 +50,7 @@ gioser/
    - **Persistencia cerrada** (2026-05-26 sigue). `pluma-store` extendido con módulo `multilienzo`: `PlumaStore` abre un sólo `sled::Db` con cuatro trees nominales (atoms, cuerpos, transformaciones, cartas) que cubren todo el estado del haz. Cartas indexadas por `cuerpo_a||cuerpo_b` (32 bytes) con búsqueda bidireccional opcional. Cartas sin par anotado se rechazan al persistir — el dato del par ES la clave. Backend sled+bincode preexistente; `GraphStore` legacy queda intacto. 10/10 tests (8 nuevos + 2 viejos), incluyendo close/reopen.
    - **Validación Gemini real**: smoke (`pluma-llm-gemini --example smoke`) contra `api.anthropic.com`... contra `generativelanguage.googleapis.com` confirmó que el adapter mapea correctamente la shape `contents/parts/systemInstruction` ↔ `ChatRequest/ChatResponse`. Una request de 28+2 tokens fue suficiente para validar end-to-end.
    - **Tres piezas finales del día**:
-     - **`multilienzo_store_demo`** (ejemplo): primer arranque genera con LLM y persiste en `~/.cache/gioser/pluma-multilienzo/pluma.sled`; siguientes arranques cargan instantáneo. `MULTILIENZO_RESET=1` limpia. Cierra el loop "lo que generaste ayer sigue ahí hoy".
+     - **`multilienzo_store_demo`** (ejemplo): primer arranque genera con LLM y persiste en `~/.cache/tawasuyu/pluma-multilienzo/pluma.sled`; siguientes arranques cargan instantáneo. `MULTILIENZO_RESET=1` limpia. Cierra el loop "lo que generaste ayer sigue ahí hoy".
      - **`multilienzo_dinamico_demo`** (ejemplo): toolbar con 4 botones (`→qu`, `→en`, `tono formal`, `resumir 30p`). Click → `handle.spawn(...)` thread con runtime tokio efímero → ejecutor LLM transparente → `Msg::LlmListo` repinta con columna nueva. `model.en_curso` deshabilita botones durante el trabajo (un job a la vez). Vista LLM-aware sobre la vista multilienzo.
      - **`pluma-notebook-kernel-llm`** (7/7 tests): `LlmKernel` implementa `pluma_notebook_exec::Kernel`. Lenguajes `llm-prompt | llm-traducir-{lang} | llm-tono-{etiqueta} | llm-resumir[-N] | llm-reescribir`. Conecta el notebook (DAG reactivo de celdas) con el LLM transparente: una celda traduce, su dependiente la resume; al editar la madre, el notebook reactivo re-corre el cono y todo se regenera con el LLM activo.
      - **`multilienzo_completo_demo`** (ejemplo): la "app" del multilienzo. Toolbar LLM dinámica como `multilienzo_dinamico_demo` + persistencia automática como `multilienzo_store_demo`, todo en un solo binario. Cada transformación se persiste (atom + cuerpo + transformación + carta + flush) ANTES de actualizar el modelo, así una caída del proceso entre los dos pasos no deja estado a medias. Status bar en vivo mostrando `N cuerpos · M cartas`.
@@ -213,7 +213,7 @@ Ver §11 abajo para la propuesta detallada.
 
 ## 6.quinquies Hito — Multimedia (video · audio · editor de imágenes)
 
-**Visión** (2026-05-29): desplegar multimedia en gioser siguiendo las mismas tres capas que todo el resto — **códec/puente → representación nativa (DAG BLAKE3) → frontend Llimphi intercambiable**. Lo único genuinamente nuevo del motor es **un primitivo** (`llimphi-surface`); el resto es reuso de patrones existentes.
+**Visión** (2026-05-29): desplegar multimedia en tawasuyu siguiendo las mismas tres capas que todo el resto — **códec/puente → representación nativa (DAG BLAKE3) → frontend Llimphi intercambiable**. Lo único genuinamente nuevo del motor es **un primitivo** (`llimphi-surface`); el resto es reuso de patrones existentes.
 
 ### El reemplazo de ffmpeg = el split nativo/foreign
 
@@ -224,7 +224,7 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 | **Nativo** (Rust puro, compila a WASM, patent-free) | AV1, VP9, Opus, Vorbis, FLAC | `rav1d` (decode AV1, port de dav1d), `rav1e` (encode AV1), `symphonia` (audio + demux MP4/MKV/Ogg/WebM), `muxide` (mux MP4 salida) | Sin C, sin patentes, corre igual en wawa. La limpieza de patentes mapea sobre "nativo". |
 | **Foreign** (patentado, sin decoder Rust puro existente) | H.264, H.265, AAC | `shared/foreign-av` — feature-flag opcional sobre `ffmpeg-next`/`gstreamer-rs`, o Vulkan Video (GStreamer 1.28 ya envía AV1/VP9 por Vulkan, ene-2026) | Aislado del core como `foreign-docx`; idealmente transcodifica a AV1 al importar. |
 
-**Decisión**: AV1/Opus son el **formato de medios nativo** de gioser; H.264/H.265 entran por puente opcional. (`OxiMedia`, reconstrucción pura de ffmpeg royalty-free, v0.1.7 mar-2026 — a vigilar, demasiado joven para apostar el core hoy.)
+**Decisión**: AV1/Opus son el **formato de medios nativo** de tawasuyu; H.264/H.265 entran por puente opcional. (`OxiMedia`, reconstrucción pura de ffmpeg royalty-free, v0.1.7 mar-2026 — a vigilar, demasiado joven para apostar el core hoy.)
 
 ### Las dos piezas nuevas
 
@@ -253,11 +253,11 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 6. **`pixel-verbo-daemon`** ✅ (en tullpu) **+ visión en `pluma-llm`** ✅ — `ChatMessage` lleva `images: Vec<ChatImage>` (base64, retrocompat por `serde(default)`); backends Anthropic (bloques `image`/`source`) y Gemini (`inlineData`) los emiten. Capa IA.
 7. ✅ **`shared/foreign-psd`** — import Photoshop (post-tullpu, §6.ter).
 
-8. ✅ **`media-encode-av1`** — encode AV1 nativo (rav1e, puro-Rust, sin nasm) desde frames RGBA → IVF. Contraparte exacta de `media-source-av1`: gioser **produce** su video nativo sin ffmpeg. Conversión RGBA→YUV420 inversa de la del decoder (BT.601 full range). Round-trip verificado end-to-end (encode → IVF → decode con rav1d → color preservado, sin ffmpeg en ningún extremo). `media-source-vorbis`/`-flac`/`-opus` completan el trío de audio abierto y `media-core` lee SRT **+ WebVTT** (subtítulo nativo de la web, par del stack WebM+AV1+Opus). H.264/H.265/AAC siguen sólo por puente: la barrera es **patente** (pools Via LA / Access Advance gravan las técnicas del bitstream, da igual el lenguaje), no esfuerzo ni licencia de fuente — por eso AV1/Opus, royalty-free de diseño, son lo único que gioser encodea en código propio.
+8. ✅ **`media-encode-av1`** — encode AV1 nativo (rav1e, puro-Rust, sin nasm) desde frames RGBA → IVF. Contraparte exacta de `media-source-av1`: tawasuyu **produce** su video nativo sin ffmpeg. Conversión RGBA→YUV420 inversa de la del decoder (BT.601 full range). Round-trip verificado end-to-end (encode → IVF → decode con rav1d → color preservado, sin ffmpeg en ningún extremo). `media-source-vorbis`/`-flac`/`-opus` completan el trío de audio abierto y `media-core` lee SRT **+ WebVTT** (subtítulo nativo de la web, par del stack WebM+AV1+Opus). H.264/H.265/AAC siguen sólo por puente: la barrera es **patente** (pools Via LA / Access Advance gravan las técnicas del bitstream, da igual el lenguaje), no esfuerzo ni licencia de fuente — por eso AV1/Opus, royalty-free de diseño, son lo único que tawasuyu encodea en código propio.
 
-9. ✅ **`media-mux-webm`** — mux WebM/Matroska nativo (**EBML escrito a mano, sin deps**) desde paquetes AV1 (+ Opus opcional) → `.webm`. Contraparte exacta de `media-source-webm` (demux): ese crate desarma el contenedor, este lo arma. Mismo criterio que el muxer IVF de `media-encode-av1` — gioser es dueño del formato que produce. Estrategia de tamaños conocidos (sin "unknown size") → archivo seekable; mezcla video+audio en un eje común de timestamps (ms) con clusters acotados por el rango i16 del `SimpleBlock`. Round-trip end-to-end verificado: encode AV1 (rav1e) → mux → demux nativo (`media-source-webm` + `matroska-demuxer`) → decode (rav1d) → dimensiones y nº de frames preservados, **sin ffmpeg en ningún extremo**. Con esto el camino nativo de video cierra el ciclo encode→mux→demux→decode completo.
+9. ✅ **`media-mux-webm`** — mux WebM/Matroska nativo (**EBML escrito a mano, sin deps**) desde paquetes AV1 (+ Opus opcional) → `.webm`. Contraparte exacta de `media-source-webm` (demux): ese crate desarma el contenedor, este lo arma. Mismo criterio que el muxer IVF de `media-encode-av1` — tawasuyu es dueño del formato que produce. Estrategia de tamaños conocidos (sin "unknown size") → archivo seekable; mezcla video+audio en un eje común de timestamps (ms) con clusters acotados por el rango i16 del `SimpleBlock`. Round-trip end-to-end verificado: encode AV1 (rav1e) → mux → demux nativo (`media-source-webm` + `matroska-demuxer`) → decode (rav1d) → dimensiones y nº de frames preservados, **sin ffmpeg en ningún extremo**. Con esto el camino nativo de video cierra el ciclo encode→mux→demux→decode completo.
 
-10. ✅ **`media-encode-opus`** — encode Opus nativo (puro-Rust, `opus-wave` — el mismo port de libopus SILK+CELT que el decoder de `media-source-opus`) desde PCM f32 intercalado → paquetes Opus + cabecera `OpusHead` (RFC 7845 §5.1). Contraparte exacta de `media-source-opus`: gioser **produce** su audio nativo. Trocea el PCM en frames (2.5–60 ms, default 20 ms), rellena con silencio el resto parcial, y la conveniencia `encode_to_opus_track` devuelve `(head, packets, samples_per_packet)` — exactamente el `OpusTrack` que pide `media-mux-webm`. **Cierra el stack abierto completo**: el test `webm_av1_mas_opus_propio_round_trip` encodea AV1 (rav1e) + Opus (opus-wave), muxea a `.webm` (media-mux-webm), y el demuxer nativo (media-source-webm) reproduce ambos tracks — un `.webm` AV1+Opus **100% gioser**, producido y consumido sin un solo byte de C ni ffmpeg. Lo único que queda sólo-por-puente es la familia patentada (H.264/H.265/AAC) — barrera de patente, no de esfuerzo.
+10. ✅ **`media-encode-opus`** — encode Opus nativo (puro-Rust, `opus-wave` — el mismo port de libopus SILK+CELT que el decoder de `media-source-opus`) desde PCM f32 intercalado → paquetes Opus + cabecera `OpusHead` (RFC 7845 §5.1). Contraparte exacta de `media-source-opus`: tawasuyu **produce** su audio nativo. Trocea el PCM en frames (2.5–60 ms, default 20 ms), rellena con silencio el resto parcial, y la conveniencia `encode_to_opus_track` devuelve `(head, packets, samples_per_packet)` — exactamente el `OpusTrack` que pide `media-mux-webm`. **Cierra el stack abierto completo**: el test `webm_av1_mas_opus_propio_round_trip` encodea AV1 (rav1e) + Opus (opus-wave), muxea a `.webm` (media-mux-webm), y el demuxer nativo (media-source-webm) reproduce ambos tracks — un `.webm` AV1+Opus **100% tawasuyu**, producido y consumido sin un solo byte de C ni ffmpeg. Lo único que queda sólo-por-puente es la familia patentada (H.264/H.265/AAC) — barrera de patente, no de esfuerzo.
 
 11. ✅ **`media-recorder-webm`** — recorder **unificado** que junta los dos recorders sueltos (`media-recorder-av1` video→IVF, `media-recorder-wav` audio→WAV) en el contenedor nativo: tee'a el video por `media-encode-av1` y el audio por `media-encode-opus`, acumula los paquetes y al `stop()` los muxea juntos con `media-mux-webm` → un único `.webm` AV1+Opus, sin ffmpeg. Mismo patrón de composición que los otros recorders: handle clonable `Arc<Mutex>` + dos wrappers transparentes (`RecordedFrameSource` sobre el `FrameSource`, `RecordedAudioSource` sobre el `AudioSource`). El encoder Opus se crea perezosamente al primer bloque de audio (captura sr/canales); como pide frames exactos, el audio entrante se acumula y se drena por frames completos, con relleno de silencio del resto parcial recién en `stop()`. Audio con sample-rate no-Opus (8/12/16/24/48 kHz) **degrada limpio a video-solo** (se cuenta, no rompe el pipeline). Round-trip verificado: grabación (frames + tono sintéticos) → `.webm` → demux+decode nativo de ambos tracks, más el caso de degradación a video-solo con rate 44.1 kHz.
 
@@ -274,7 +274,7 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 
 ## 6.sexies Hito — Pluma: presentaciones espaciales (deck-recorrido, tipo Prezi)
 
-**Visión** (2026-05-30): hoy una presentación en gioser es lineal — `pluma-deck-core` es una **máquina de drag/snap horizontal** (strip 1D de páginas) que `pluma-deck-web` pega al DOM. Falta el modelo **espacial tipo Prezi**: un **lienzo infinito** donde los marcos viven en coordenadas de mundo (posición + tamaño + rotación) y la presentación es un **recorrido** — una ruta ordenada que la cámara vuela animando zoom/pan/giro de marco en marco. El zoom narrativo (alejarse para ver el mapa completo, acercarse a un detalle) es la unidad expresiva, no la diapositiva.
+**Visión** (2026-05-30): hoy una presentación en tawasuyu es lineal — `pluma-deck-core` es una **máquina de drag/snap horizontal** (strip 1D de páginas) que `pluma-deck-web` pega al DOM. Falta el modelo **espacial tipo Prezi**: un **lienzo infinito** donde los marcos viven en coordenadas de mundo (posición + tamaño + rotación) y la presentación es un **recorrido** — una ruta ordenada que la cámara vuela animando zoom/pan/giro de marco en marco. El zoom narrativo (alejarse para ver el mapa completo, acercarse a un detalle) es la unidad expresiva, no la diapositiva.
 
 **Decisión** (2026-05-30): **no crate nuevo** — se extiende `pluma-deck-core` con un segundo modo `Recorrido` (lienzo 2D) junto al `DeckState` (strip 1D) existente. El strip lineal queda como **caso degenerado** del recorrido (marcos del mismo tamaño en fila, zoom=1, sin giro). Respeta regla #1 (un dominio = un crate raíz) y regla #2 (core agnóstico, frontend intercambiable).
 
@@ -303,7 +303,7 @@ El ecosistema Rust 2026 se parte limpio en dos y **mapea exacto sobre la regla d
 
 **Qué falta (Recorrido)**: (1) espejar la ruta visible en web/HTML exportado (SVG); (2) editar el **contenido** de un marco in-place (texto/imagen) y reordenar pasos por UI (la op `mover_paso` ya existe); (3) export PDF (HTML ya está) + notas de orador; (4) puente `Recorrido` ↔ `pluma-store` para guardar decks junto al documento.
 
-**Relación con foreign-pptx** (§6.ter): `.pptx` importa al modo lineal (`pluma-deck`); el modo `Recorrido` es el ciudadano nativo sin equivalente office — es donde gioser supera a PowerPoint, no donde lo imita.
+**Relación con foreign-pptx** (§6.ter): `.pptx` importa al modo lineal (`pluma-deck`); el modo `Recorrido` es el ciudadano nativo sin equivalente office — es donde tawasuyu supera a PowerPoint, no donde lo imita.
 
 **Deuda técnica anotada** (2026-05-30): (a) ✅ **tamaño de `main.rs`** — `tullpu-app-llimphi/src/main.rs` era 4276 LOC (casi todo tests); se extrajo el módulo `#[cfg(test)]` (~3600 LOC, 170 tests) a `src/pruebas.rs`, dejando `main.rs` en **675 LOC** — ya no viola regla #1. El resto ya estaba modularizado (`model`/`view`/`ops`/`viewport`/`hotkeys`/`carga`/`compose`/`historial`/`blend`). (b) ⏳ **adopción de `Camara` diferida**: reemplazar `factor_zoom`/`pan` inline de tullpu por `pluma-deck-core::Camara` NO es un swap mecánico — el zoom de tullpu es **fit-relativo** (`factor_zoom: f32` sobre fit-contain, `factor=1.0` ⇒ encaja sin importar el tamaño de ventana, y re-fitea al redimensionar), mientras `Camara` es **absoluto** (`zoom` = world→px). Unificarlos exige decidir el modelo (probablemente extender `Camara` con un modo "fit-relativo" o que tullpu guarde `factor` y derive `Camara` por frame) y revalidar los ~11 tests de viewport. Refactor de dominio aparte (`02_ruway/tullpu`, SDD propio), no bloquea el feature Prezi.
 
@@ -333,7 +333,7 @@ Un documento ya no es *una* secuencia lineal de párrafos: es **un haz de cuerpo
 
 ### 11.2 Casos de uso primarios
 
-1. **Traducción paralela** es ↔ en ↔ qu (gioser ya tiene rimay-localize y embeddings rimay/iniy locales).
+1. **Traducción paralela** es ↔ en ↔ qu (tawasuyu ya tiene rimay-localize y embeddings rimay/iniy locales).
 2. **Versiones / borradores** alineados — diff de revisiones párrafo a párrafo, no línea a línea.
 3. **Tono / audiencia** — formal, casual, técnico, infantil sobre el mismo contenido.
 4. **Resumen ↔ expansión** — abstract alineado con artículo completo.
@@ -348,7 +348,7 @@ Un documento ya no es *una* secuencia lineal de párrafos: es **un haz de cuerpo
 - **`OrigenAlineamiento`** = `Manual { autor, ts } | Embeddings { algoritmo, modelo, ts } | DerivadoDe { transformacion: Uuid_transform }`.
 - **`Transformacion`** (nuevo) = `{ id, kind, params, madre: Uuid_cuerpo, hija: Uuid_cuerpo }`. `kind ∈ { Traducir(Lengua), Tono(Tono), Resumir{palabras}, Reescribir{prompt}, Identidad, Custom(Rhai) }`. Si la madre cambia, la hija queda *stale*; un comando regenera puntualmente por párrafo.
 
-### 11.4 Innovaciones que añade gioser sobre la idea base
+### 11.4 Innovaciones que añade tawasuyu sobre la idea base
 
 - **Alineación dinámica por embeddings** (rimay/iniy): al crear un cuerpo, no asume 1:1. Mapea por similitud semántica; un párrafo del original puede mapear a 2 párrafos de la traducción, o a ninguno. La **saturación** de la hebra refleja la fuerza de la correspondencia.
 - **Hebras con estado**: color sólido = fresca, color desaturado con patrón punteado = stale (la madre cambió desde la última regeneración), gris = manual sin embeddings que la respalden.

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "Monitor de procesos de gioser sobre Llimphi: observa las unidades vivas por el contrato sandokan-core::Engine (Linux) y el censo de apps WASM instaladas (Wawa). Tarjetas vivas con sparkline de CPU; detener/matar por el mismo Engine. Frontend de shared/sandokan/SDD.md §6."
+description = "Monitor de procesos de tawasuyu sobre Llimphi: observa las unidades vivas por el contrato sandokan-core::Engine (Linux) y el censo de apps WASM instaladas (Wawa). Tarjetas vivas con sparkline de CPU; detener/matar por el mismo Engine. Frontend de shared/sandokan/SDD.md §6."
 
 [[bin]]
 name = "sandokan-monitor"

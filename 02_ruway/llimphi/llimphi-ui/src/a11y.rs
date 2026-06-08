@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn build_tree_arma_raiz_y_un_node_por_mounted() {
         let (m, c) = arbol_simple();
-        let tree = build_tree(&m, &c, None, "gioser-test", TreeId(uuid::Uuid::nil()));
+        let tree = build_tree(&m, &c, None, "tawasuyu-test", TreeId(uuid::Uuid::nil()));
         // root + 3 nodos (raíz View, boton, texto).
         assert_eq!(tree.nodes.len(), 1 + m.nodes.len());
         assert_eq!(tree.nodes[0].0, ROOT_NODE_ID);

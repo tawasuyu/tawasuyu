@@ -41,7 +41,7 @@ media-core::control            (agnóstico, serde)
 
 media-app                       (frontend Llimphi)
   settings_slot()  — OnceLock<ControlSettings> cargado al arrancar
-  carga RON desde  $XDG_CONFIG_HOME/gioser/media/controles.ron
+  carga RON desde  $XDG_CONFIG_HOME/tawasuyu/media/controles.ron
                    (si no existe, escribe el default para que el usuario lo edite)
   Msg::Command(MediaCommand)  — único punto de despacho de acciones
   apply_command(cmd)          — ejecuta sobre pause()/volume()/playlist/recorder

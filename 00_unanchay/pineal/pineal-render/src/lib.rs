@@ -7,7 +7,7 @@
 //! Backends activos:
 //!
 //! - **Llimphi/vello** ([`llimphi_backend::SceneCanvas`]) — canónico
-//!   para apps gioser; pinta dentro de un `paint_with` del `View<Msg>`
+//!   para apps tawasuyu; pinta dentro de un `paint_with` del `View<Msg>`
 //!   declarativo.
 //! - **PlanRecorder** ([`recorder::PlanRecorder`]) — graba cada llamada
 //!   como `RenderCmd`. Consumido por `pineal-export` para emitir SVG,

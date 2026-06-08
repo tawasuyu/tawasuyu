@@ -121,7 +121,7 @@ impl PacketFeed {
 
 /// Fuente de frames AV1 nativa: alimenta rav1d con temporal units (de un
 /// IVF o de memoria) y decodifica. Es la implementación del formato de
-/// video NATIVO de gioser (sin ffmpeg, sin C, sin patentes).
+/// video NATIVO de tawasuyu (sin ffmpeg, sin C, sin patentes).
 pub struct Av1VideoSource {
     feed: PacketFeed,
     width: u32,
@@ -330,7 +330,7 @@ impl Drop for Av1VideoSource {
 // SAFETY: el contexto de rav1d y la `Dav1dData` en vuelo contienen
 // `NonNull` (de ahí que el auto-Send no aplique), pero rav1d es seguro de
 // mover entre hilos mientras no se use concurrentemente — su estado
-// interno está tras locks. En gioser la fuente vive siempre tras el
+// interno está tras locks. En tawasuyu la fuente vive siempre tras el
 // `Mutex` del pipeline (un solo hilo la toca a la vez), así que moverla
 // entre hilos es correcto.
 unsafe impl Send for Av1VideoSource {}

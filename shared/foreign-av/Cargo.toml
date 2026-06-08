@@ -1,5 +1,5 @@
 # =============================================================================
-#  gioser :: foreign-av — puente audio/video ajeno ↔ FrameSource/AudioSource
+#  tawasuyu :: foreign-av — puente audio/video ajeno ↔ FrameSource/AudioSource
 # -----------------------------------------------------------------------------
 #  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
 #  nunca al núcleo de las apps. Este crate es la ÚNICA pieza del workspace que
@@ -9,7 +9,7 @@
 #  `media` lo ve como una fuente más.
 #
 #  La política nativo/foreign del hito Multimedia (PLAN.md §6.quinquies): AV1 +
-#  Opus son el formato NATIVO de gioser (decode puro-Rust en `media-source-av1`);
+#  Opus son el formato NATIVO de tawasuyu (decode puro-Rust en `media-source-av1`);
 #  los códecs patentados (H.264/H.265/AAC) entran por ESTE puente, idealmente
 #  transcodificados a AV1 al importar (`transcode_a_av1`).
 #

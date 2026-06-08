@@ -2,7 +2,7 @@
 
 FLAC nativo (puro-Rust, vía `symphonia`) → `AudioSource + Seekable`.
 
-FLAC es el **lossless** del tier nativo de gioser: par sin pérdida del
+FLAC es el **lossless** del tier nativo de tawasuyu: par sin pérdida del
 Opus (lossy), igual que AV1 es el par de video. Decoder + demuxer
 puro-Rust, sin C ni patentes — compila a WASM y corre en wawa.
 

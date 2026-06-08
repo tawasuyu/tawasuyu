@@ -4,7 +4,7 @@ Astronomical time scales and sidereal time calculations.
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-time)](https://crates.io/crates/cosmos-time)
 [![Documentation](https://docs.rs/cosmos-time/badge.svg)](https://docs.rs/cosmos-time)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-time)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-time)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Pure Rust implementation of 8 astronomical time scales (UTC, TAI, TT, UT1, GPS, TDB, TCB, TCG) with nanosecond-precision Julian Date handling, leap second support, and IAU-standard sidereal time calculations. No runtime FFI.
 
@@ -69,4 +69,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

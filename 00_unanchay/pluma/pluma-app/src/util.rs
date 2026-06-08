@@ -89,7 +89,7 @@ pub(crate) fn ruta_sled() -> PathBuf {
                 .map(|h| PathBuf::from(h).join(".cache"))
                 .unwrap_or_else(|_| PathBuf::from(".cache"))
         });
-    base.join("gioser").join("pluma-app").join("pluma.sled")
+    base.join("tawasuyu").join("pluma-app").join("pluma.sled")
 }
 
 /// Ruta del archivo de presets (prompts reutilizables del diente Derivar-IA),

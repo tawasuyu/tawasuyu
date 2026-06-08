@@ -1,7 +1,7 @@
 //! media-encode-av1 — encoder AV1 (vía `rav1e`) desde frames RGBA →
 //! contenedor IVF. La **contraparte** de [`media_source_av1`]: ese crate
 //! *decodea* AV1 nativo, este lo *produce*. Cierra el ciclo encode↔decode
-//! del formato de video nativo de gioser (PLAN.md §6.quinquies) **sin
+//! del formato de video nativo de tawasuyu (PLAN.md §6.quinquies) **sin
 //! tocar ffmpeg**.
 //!
 //! `rav1e` es el encoder de referencia AV1 en Rust puro (Xiph/AOMedia);

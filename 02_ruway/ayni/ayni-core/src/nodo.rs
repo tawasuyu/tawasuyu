@@ -33,7 +33,7 @@ pub const VERSION_NODO: u32 = 1;
 
 /// Una REFERENCIA VIVA a un objeto del grafo soberano —no una copia muerta—.
 ///
-/// Todo en gioser se direcciona por contenido (BLAKE3): un documento de pluma,
+/// Todo en tawasuyu se direcciona por contenido (BLAKE3): un documento de pluma,
 /// una nota de khipu, una carta de cosmos, un archivo. Adjuntar uno a un mensaje
 /// es citar su `hash`, no duplicar sus bytes. El mismo hash en el grafo de la app
 /// de origen y en esta referencia apuntan AL MISMO objeto: editar en origen

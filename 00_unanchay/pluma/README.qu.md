@@ -16,7 +16,7 @@ cargo run --release -p pluma-app
 cargo run --release -p pluma-notebook-app
 
 # web reader (WASM)
-./scripts/build-gioser-web.sh
+./scripts/build-tawasuyu-web.sh
 ```
 
 ## Tinkuy

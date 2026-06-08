@@ -1,6 +1,6 @@
 //! `llimphi-workspace` — chasis genérico estilo tmux.
 //!
-//! Paso 2 de la visión "montar cualquier componente de gioser en un layout
+//! Paso 2 de la visión "montar cualquier componente de tawasuyu en un layout
 //! intercambiable con splits resizables". Donde [`llimphi_widget_panes`]
 //! aporta el **árbol** (estructura + render + drag), este crate aporta la
 //! **máquina de estados** (qué panel está enfocado, cómo se parte/cierra,

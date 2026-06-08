@@ -472,7 +472,7 @@ struct Sesion {
 
 impl Sesion {
     fn abrir() -> CliResult<Self> {
-        let data_dir = directories::ProjectDirs::from("net", "gioser", "agora")
+        let data_dir = directories::ProjectDirs::from("net", "tawasuyu", "agora")
             .ok_or(Error::DirNoResuelto)?
             .data_dir()
             .to_path_buf();

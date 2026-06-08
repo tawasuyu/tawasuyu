@@ -2,7 +2,7 @@
 
 **Muxer WebM/Matroska nativo** — la contraparte de producción de
 `media-source-webm`. Ese crate *demuxea* un `.webm` AV1+Opus en sus tracks;
-este lo *produce*. Con él, gioser cierra el ciclo completo del camino
+este lo *produce*. Con él, tawasuyu cierra el ciclo completo del camino
 nativo **sin tocar ffmpeg en ningún extremo**:
 
 ```
@@ -20,7 +20,7 @@ frames RGBA ─ media-encode-av1 (rav1e) ─→ paquetes AV1
 El contenedor WebM es un subconjunto acotado de **EBML** (Matroska): una
 gramática de elementos `ID + VINT(tamaño) + payload`. Igual que el muxer
 IVF de `media-encode-av1` se escribió byte a byte, acá serializamos el
-árbol EBML sin depender de ninguna librería de mux — gioser es dueño del
+árbol EBML sin depender de ninguna librería de mux — tawasuyu es dueño del
 formato que produce. Las únicas deps son de **dev** (round-trip).
 
 ## Estrategia

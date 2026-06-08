@@ -1,4 +1,4 @@
-# gioser — la suite completa
+# tawasuyu — la suite completa
 
 > Documento dirigido a cualquier humano: desde alguien que nunca abrió una terminal
 > hasta alguien que firma kernels. La idea es que se entienda **qué es**, **cómo
@@ -7,7 +7,7 @@
 
 ---
 
-## 1. El escenario — por qué existe gioser
+## 1. El escenario — por qué existe tawasuyu
 
 Hoy, casi todo lo que usás en una computadora pasa por una capa controlada por
 tres o cuatro corporaciones:
@@ -25,7 +25,7 @@ qué se almacena, qué se transmite y bajo qué condiciones**. No hay malicia
 necesariamente: hay arquitectura. Si la pila te pertenece, mandás vos. Si la
 pila pertenece a otro, el otro manda — aunque la máquina sea tuya.
 
-**gioser es un intento de devolver la pila completa al usuario.** Desde el
+**tawasuyu es un intento de devolver la pila completa al usuario.** Desde el
 arranque del hardware hasta el píxel que dibuja una letra, todo el camino se
 escribe en una sola casa, en un solo lenguaje (Rust), bajo un solo principio:
 *el filesystem es la arquitectura, y la arquitectura sigue el ciclo de la
@@ -41,11 +41,11 @@ porque todo se diseñó junto.
 
 ## 2. La cartografía — cómo está organizado
 
-gioser se estructura en **cuatro cuadrantes** que corresponden, en quechua,
+tawasuyu se estructura en **cuatro cuadrantes** que corresponden, en quechua,
 a las cuatro fases del ciclo de la información:
 
 ```
-gioser/
+tawasuyu/
 ├── 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
 ├── 01_yachay/     CONOCER   — cosmos · dominium · nakui · iniy
 ├── 02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay
@@ -114,7 +114,7 @@ entender o generar texto. Sin enviar nada a servidores externos.
 compilador-traductor con lexer, parser, IR, codegen y runtime que entiende
 subconjuntos de COBOL (con planes de extender a CICS y dialectos SQL). El
 objetivo: permitir que sistemas bancarios y gubernamentales escritos en
-COBOL hace 40 años corran dentro de gioser sin tener que reescribirlos a
+COBOL hace 40 años corran dentro de tawasuyu sin tener que reescribirlos a
 mano. Hay un patrimonio enorme de software crítico en COBOL que la
 industria abandonó; chaka lo recupera.
 
@@ -231,7 +231,7 @@ cada widget consume `Palette::from_theme(&theme)`.
 `greeter` (ya en Llimphi), `bar-core`/`bar-web`, `ctl`, `app`. Es el
 escritorio entero, hecho a mano. El usuario inicia sesión vía `greeter`
 (usa `auth-core` intacto), elige espacios desde `launcher`, abre apps
-desde `portal`. Sin GNOME, sin KDE, sin XFCE: gioser tiene su propio
+desde `portal`. Sin GNOME, sin KDE, sin XFCE: tawasuyu tiene su propio
 escritorio.
 
 **shuma** — Runtime de *espacios*. Sandbox + baremetal (matilda
@@ -255,7 +255,7 @@ widgets propios (`app-header`, `banner`, `card`, `stat-card`,
 incas que llevaban mensajes a lo largo del Tahuantinsuyo. Subcrates:
 `core`, `broker`, `broker-explorer`, `card`, `explorer`, `nous`,
 `nous-mock`, `nous-real`. Es la capa de mensajería interna entre dominios
-de gioser — equivalente a Kafka/RabbitMQ pero monádico (los mensajes
+de tawasuyu — equivalente a Kafka/RabbitMQ pero monádico (los mensajes
 componen como funciones, no como colas).
 
 **takiy** — Composición musical. Por ahora `takiy-core`. La meta: una app
@@ -275,7 +275,7 @@ oficina hasta un shooter clásico.
 ### `03_ukupacha` — Raíz
 
 **arje** — Init system. `init`, `runtime`, `compat`, `card`. El proceso 1
-de gioser: levanta el sistema, monta el rootfs, lanza mirada, conecta con
+de tawasuyu: levanta el sistema, monta el rootfs, lanza mirada, conecta con
 mesa para la GPU. End-to-end en hardware real es uno de los hitos
 pendientes.
 
@@ -312,7 +312,7 @@ wawa** — desde una máquina huésped corriente.
 **agora** — Identidad federada. `agora-core`, `agora-graph`, `agora-store`,
 `agora-app`. Sin Google, sin Apple, sin Microsoft, sin cuenta de empresa.
 Identidad criptográfica propia, opcionalmente federada con otros nodos
-gioser (o no — uno puede vivir aislado).
+tawasuyu (o no — uno puede vivir aislado).
 
 **minga** — VFS P2P (peer-to-peer). `minga-core`, `minga-dht`, `minga-p2p`,
 `minga-store`, `minga-vfs`, `minga-cli`, `minga-explorer`. *Minga* es el
@@ -338,10 +338,10 @@ Librerías que cruzan cuadrantes:
 
 ## 4. Las tecnologías involucradas
 
-gioser no inventa todo desde cero: se apoya en lo mejor que existe en el
+tawasuyu no inventa todo desde cero: se apoya en lo mejor que existe en el
 ecosistema Rust, y rellena los huecos.
 
-| Capa | Tecnología | Rol en gioser |
+| Capa | Tecnología | Rol en tawasuyu |
 |---|---|---|
 | Lenguaje | **Rust** | Único lenguaje del workspace. Seguridad de memoria sin recolector. |
 | GPU | **wgpu** | Vulkan portable, control fino sobre el silicio. |
@@ -372,7 +372,7 @@ cosa bien.
 
 ## 5. El logro técnico
 
-Visto en frío, lo que gioser logra es:
+Visto en frío, lo que tawasuyu logra es:
 
 1. **Verticalidad real, no marketing.** Una sola pila va desde el
    framebuffer (`llimphi-hal`) hasta la interpretación astrológica
@@ -401,7 +401,7 @@ Visto en frío, lo que gioser logra es:
 
 6. **Subjetividad como tipo de dato.** iniy modela creencia y dirección
    subjetiva como ciudadanos de primera clase. La mayoría de los sistemas
-   no distinguen entre “es verdad” y “alguien lo cree”. gioser sí.
+   no distinguen entre “es verdad” y “alguien lo cree”. tawasuyu sí.
 
 7. **ERP, navegador web, simulador, juego, compositor, kernel — todos en
    el mismo workspace, todos verdes en `cargo check --workspace`.** Más de
@@ -411,7 +411,7 @@ Visto en frío, lo que gioser logra es:
 8. **Reescritura simultánea de GPUI.** GPUI (el toolkit de Zed) era una
    dependencia clave. Se está desenchufando crate a crate (mirada-greeter,
    pluma-editor, dominium-canvas, cosmos-canvas, nakui-explorer, nahual-shell
-   ya migrados). Salir de un toolkit de UI vivo es brutal — y gioser lo
+   ya migrados). Salir de un toolkit de UI vivo es brutal — y tawasuyu lo
    hace en producción.
 
 ---
@@ -420,11 +420,11 @@ Visto en frío, lo que gioser logra es:
 
 Una pieza de software puede parecer neutra. No lo es. Cada decisión técnica
 materializa una posición sobre cómo viven los humanos. Estas son las
-consecuencias previsibles si gioser se usa en serio:
+consecuencias previsibles si tawasuyu se usa en serio:
 
 ### 6.1. Autonomía digital del individuo y la organización
 
-Una persona con gioser corriendo en su hardware **no le debe nada a una
+Una persona con tawasuyu corriendo en su hardware **no le debe nada a una
 plataforma** para hacer su trabajo cotidiano. Su identidad (agora), sus
 documentos (pluma, khipu), su contabilidad (nakui), sus archivos (minga),
 su navegación (puriy), su escritorio (mirada) y su computación (wawa) no
@@ -446,7 +446,7 @@ sino por arquitectura.
 Hay billones de dólares y décadas de lógica de negocio escritas en COBOL
 ejecutándose en bancos, gobiernos, aseguradoras. Cuando esos sistemas se
 retiran, *la lógica se pierde* o se reescribe a mano con errores. chaka
-permite correr ese código adentro de gioser sin reescritura. Es
+permite correr ese código adentro de tawasuyu sin reescritura. Es
 **arqueología de software activa**, no museo.
 
 ### 6.4. Un cuarto motor web
@@ -477,7 +477,7 @@ licencias.
 ### 6.7. Una computadora que vuelve a ser una computadora
 
 Quizá lo más profundo. Hoy, una *computadora personal* dejó de ser
-personal: es un terminal que se conecta a servicios. gioser propone
+personal: es un terminal que se conecta a servicios. tawasuyu propone
 revertir eso. Tu máquina vuelve a ser una máquina **que ejecuta tu
 software con tus datos bajo tus reglas**. No es nostalgia: es una
 infraestructura para que la vida digital deje de ser, por defecto,
@@ -498,7 +498,7 @@ misma**: la informática no es solo Silicon Valley.
 
 ## 7. Estado al 2026-05-25
 
-- ~220 crates en el workspace gioser, verde en `cargo check --workspace`.
+- ~220 crates en el workspace tawasuyu, verde en `cargo check --workspace`.
 - 13 crates más en wawa (kernel, target distinto, excluido del workspace).
 - Llimphi: 5 crates (`hal/raster/layout/text/ui`) verdes en hardware.
   Texto con shaping completo. Bucle Elm con hit-test funcional. 12
@@ -542,6 +542,6 @@ determinista.
   subjetividad, y revaloración de lenguas no-coloniales como
   infraestructura semántica.
 
-El nombre **gioser** (de *geocentric organizer*) refleja el principio
+El nombre **tawasuyu** (de *geocentric organizer*) refleja el principio
 fundacional: la computación parte del lugar concreto donde el usuario
 está parado, no del centro de datos de otro.

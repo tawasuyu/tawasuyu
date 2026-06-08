@@ -1,6 +1,6 @@
 # mirada
 
-> Gioser's display stack: compositor + portal + greeter + launcher.
+> Tawasuyu's display stack: compositor + portal + greeter + launcher.
 
 `mirada` (Spanish *look, gaze*) delivers what the user sees on boot: the Wayland compositor, the XDG portal (file pickers, screenshare), the login greeter and a minimal launcher. All UI runs on Llimphi; the `bar-*` crates provide swappable status bars.
 

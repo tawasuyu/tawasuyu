@@ -52,7 +52,7 @@ fn main() {
             Section::new("wawa::apariencia", "Apariencia")
                 .icon("🎨")
                 .field(Field::toggle("oscuro", "Modo oscuro", true))
-                .field(Field::dropdown("acento", "Acento", "gioser", vec![eo("gioser", "gioser"), eo("yachay", "yachay")])),
+                .field(Field::dropdown("acento", "Acento", "tawasuyu", vec![eo("tawasuyu", "tawasuyu"), eo("yachay", "yachay")])),
         )
         .section(
             Section::new("wawa::idioma", "Idioma")

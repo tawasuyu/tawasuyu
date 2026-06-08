@@ -5,7 +5,7 @@
 //!   - Primer arranque: cuerpo `es` sintético + traducción a `qu` vía
 //!     LLM (transparente: el backend lo decide `pluma_llm::from_env`)
 //!     + cuerpo `en` (resumen manual). Persiste todo en
-//!     `~/.cache/gioser/pluma-multilienzo/`.
+//!     `~/.cache/tawasuyu/pluma-multilienzo/`.
 //!   - Arranques siguientes: lee la store, salta el LLM por completo.
 //!     Lo que ves en pantalla son los mismos cuerpos y hebras de la
 //!     primera vez.
@@ -291,15 +291,15 @@ fn cargar_de_store(store: &PlumaStore) -> Model {
     }
 }
 
-/// Cache dir: `$XDG_CACHE_HOME/gioser/pluma-multilienzo` o
-/// `$HOME/.cache/gioser/pluma-multilienzo`.
+/// Cache dir: `$XDG_CACHE_HOME/tawasuyu/pluma-multilienzo` o
+/// `$HOME/.cache/tawasuyu/pluma-multilienzo`.
 fn cache_dir() -> PathBuf {
     let base = std::env::var("XDG_CACHE_HOME")
         .ok()
         .map(PathBuf::from)
         .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".cache")))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    base.join("gioser").join("pluma-multilienzo")
+    base.join("tawasuyu").join("pluma-multilienzo")
 }
 
 fn construir_chat() -> std::sync::Arc<dyn ChatClient> {

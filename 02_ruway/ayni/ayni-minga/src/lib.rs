@@ -1,7 +1,7 @@
 // =============================================================================
 //  ayni :: ayni-minga — EnlaceMinga, transporte P2P sobre libp2p
 // -----------------------------------------------------------------------------
-//  Envuelve `card_net::BrahmanNet` (el nodo libp2p de gioser) tras el trait
+//  Envuelve `card_net::BrahmanNet` (el nodo libp2p de tawasuyu) tras el trait
 //  `Transporte` de `ayni-sync`. Un hilo dedicado corre un runtime tokio que:
 //    * escucha streams entrantes del protocolo `/ayni/transporte/1.0.0`,
 //    * abre streams salientes al `conectar` a un peer,

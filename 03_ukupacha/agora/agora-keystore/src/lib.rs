@@ -206,7 +206,7 @@ impl Keystore {
     /// Abre el keystore en `~/.local/share/agora/keys/` (XDG en Linux,
     /// equivalente en macOS/Windows vía `directories`).
     pub fn open_default() -> Result<Self> {
-        let proj = directories::ProjectDirs::from("net", "gioser", "agora")
+        let proj = directories::ProjectDirs::from("net", "tawasuyu", "agora")
             .ok_or(Error::DirNoResuelto)?;
         let dir = proj.data_dir().join("keys");
         Self::open(dir)

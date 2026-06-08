@@ -56,7 +56,7 @@ cargo test -p format                # 20/20 tests incluyendo vanguard
 ## 1. Layout del monorepo
 
 ```
-/mnt/vvv/gioser/
+/mnt/vvv/tawasuyu/
 ├── shared/format/                       # nucleo no_std del format en disco
 ├── 02_ruway/
 │   ├── mirada/mirada-layout/            # teselado puro, no_std, no smithay

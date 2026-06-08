@@ -2,7 +2,7 @@
 
 Ergonomic public façade over the `eternal-*` astronomy crates.
 
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-sky)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-sky)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Hides the orchestration of time scales, ephemeris kernels, IAU rotations, and topocentric reductions behind three high-level types: `Instant`, `Observer`, and `EphemerisSession`. Every number forwards to the same validated routines that gate the regression harness of the lower layers — precision is identical; the only thing added is ergonomics.
 

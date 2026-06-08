@@ -4,7 +4,7 @@ Planetary and lunar ephemerides for astronomical calculations.
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-ephemeris)](https://crates.io/crates/cosmos-ephemeris)
 [![Documentation](https://docs.rs/cosmos-ephemeris/badge.svg)](https://docs.rs/cosmos-ephemeris)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-ephemeris)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-ephemeris)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Pure Rust implementation of VSOP2013 planetary theory and ELP/MPP02
 lunar theory, plus JPL SPK kernel support for high-precision
@@ -210,4 +210,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

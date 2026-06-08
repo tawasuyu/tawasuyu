@@ -1,4 +1,4 @@
-//! `khipu-share` — compartir notas por la red soberana de gioser sin
+//! `khipu-share` — compartir notas por la red soberana de tawasuyu sin
 //! perder su gravedad local.
 //!
 //! Lo que viaja es el **contenido** de la nota (título, cuerpo, etiquetas),

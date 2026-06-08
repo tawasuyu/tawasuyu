@@ -8,7 +8,7 @@
 //!
 //! Es la única forma realista hoy de abrir MP4, WebM, MKV, MOV, FLV,
 //! etc. con códecs patentados (H.264, H.265, AAC) o VP9 — que no tienen
-//! decoders puro-Rust maduros. El formato NATIVO de gioser es AV1+Opus
+//! decoders puro-Rust maduros. El formato NATIVO de tawasuyu es AV1+Opus
 //! (decode puro-Rust en `media-source-av1`); por eso este puente ofrece
 //! además [`transcode_a_av1`]: ingerir lo ajeno transcodificándolo al
 //! formato nativo de una vez, igual que `foreign-docx` normaliza al
@@ -1073,7 +1073,7 @@ fn clamp_pos(pos: Duration, dur: Duration) -> Duration {
 
 /// Transcodifica cualquier entrada que ffmpeg entienda a un MKV con
 /// video **AV1** (`libsvtav1`) y audio **Opus** (`libopus`) — el formato
-/// de medios nativo de gioser (PLAN.md §6.quinquies). Es el camino
+/// de medios nativo de tawasuyu (PLAN.md §6.quinquies). Es el camino
 /// "ingerir lo ajeno y normalizar de una vez": tras correrlo, el archivo
 /// resultante se reproduce con el decoder puro-Rust de `media-source-av1`
 /// sin volver a tocar ffmpeg.

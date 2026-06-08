@@ -1,5 +1,5 @@
 # =============================================================================
-#  gioser :: foreign-ytdlp — puente al binario `yt-dlp` (R2 de PARIDAD.md)
+#  tawasuyu :: foreign-ytdlp — puente al binario `yt-dlp` (R2 de PARIDAD.md)
 # -----------------------------------------------------------------------------
 #  CLAUDE.md regla #4: los protocolos/servicios ajenos entran por puentes
 #  `shared/foreign-*`, nunca al núcleo de las apps. Este crate es la ÚNICA pieza

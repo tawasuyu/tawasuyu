@@ -1,4 +1,4 @@
-//! `llimphi-icons` — set canónico de iconos vectoriales para apps gioser.
+//! `llimphi-icons` — set canónico de iconos vectoriales para apps tawasuyu.
 //!
 //! Cada icono es una función pura que devuelve un `BezPath` definido en
 //! un grid lógico de **24×24 unidades**. El renderer escala al rect que
@@ -16,7 +16,7 @@
 //!   no "marca registrada". Cada uno debe ser reconocible al primer
 //!   vistazo aún en 12×12.
 //! - **Set acotado**: suficientes para cubrir el grueso de acciones y
-//!   tipos que aparecen en cualquier UI gioser. Si una app necesita uno
+//!   tipos que aparecen en cualquier UI tawasuyu. Si una app necesita uno
 //!   más, lo agrega aquí (no en su propio crate) — la consistencia
 //!   visual importa más que el aislamiento.
 //!

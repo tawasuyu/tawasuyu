@@ -1,5 +1,5 @@
 //! media-source-webm — demux **Matroska/WebM nativo** que une los
-//! decoders nativos de gioser.
+//! decoders nativos de tawasuyu.
 //!
 //! Cierra el último eslabón del camino nativo (PLAN.md §6.quinquies): un
 //! `.webm`/`.mkv` con video **AV1** + audio **Opus** se reproduce 100%

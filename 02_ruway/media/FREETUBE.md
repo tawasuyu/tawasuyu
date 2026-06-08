@@ -1,4 +1,4 @@
-# FreeTube — features y cómo mapean a gioser
+# FreeTube — features y cómo mapean a tawasuyu
 
 > Estado: **plan vivo / exploratorio**. FreeTube no es un reproductor de
 > archivos sino un **cliente de plataforma de video** (YouTube) con foco en
@@ -57,19 +57,19 @@ Google, sin anuncios y con tracking reducido**. Dos backends intercambiables:
 - **Reproductor externo** (abrir en mpv/VLC) y **descarga** de video (yt-dlp).
 - Enlaces "abrir en YouTube/Invidious".
 
-## Cómo mapea a gioser
+## Cómo mapea a tawasuyu
 
 FreeTube sería un **frontend Llimphi nuevo** que compone piezas existentes en
 vez de reimplementar un reproductor. Encaja casi natural con la filosofía del
 repo (local-first, soberano, direccionado por contenido):
 
-| Feature FreeTube | Pieza gioser |
+| Feature FreeTube | Pieza tawasuyu |
 |---|---|
 | Reproducir el stream | `media` (`FrameSource`/`AudioSource`, decoders nativos + `foreign-av`) — **R1/R2 de `PARIDAD.md` ✅** (URL + yt-dlp vía `shared/foreign-ytdlp`) |
 | Backend YouTube/Invidious | **nuevo puente `shared/foreign-youtube`** (regla #4: formato/protocolo ajeno por puente) — Innertube/Invidious client |
 | Suscripciones/historial/playlists locales | almacenamiento local direccionado por contenido (BLAKE3 + DAG + postcard), **sin cuenta** — ya es el modelo nativo |
 | Perfiles + identidad | **`agora`** (identidad Ed25519 + grafo de confianza): perfiles soberanos, y un modelo de recomendación/feed federado sobre el grafo en vez de un DB central |
-| SponsorBlock (saltar segmentos) | feature genérica de **segmentos** sobre el timeline de `media` (ya hay `SeekTo` + `llimphi-widget-timeline`); el catálogo de segmentos puede venir de SponsorBlock o de la red gioser |
+| SponsorBlock (saltar segmentos) | feature genérica de **segmentos** sobre el timeline de `media` (ya hay `SeekTo` + `llimphi-widget-timeline`); el catálogo de segmentos puede venir de SponsorBlock o de la red tawasuyu |
 | DeArrow / Return Dislike | overlays de metadata opcionales sobre las tarjetas de video |
 | Búsqueda/trending/canales/comentarios | vistas Llimphi sobre el puente; subtítulos ya los entiende `media` (SRT/WebVTT) |
 | Proxy/Tor | a nivel del puente de red |

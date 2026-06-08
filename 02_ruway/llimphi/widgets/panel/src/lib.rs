@@ -1,4 +1,4 @@
-//! `llimphi-widget-panel` — firma visual transversal de los paneles gioser.
+//! `llimphi-widget-panel` — firma visual transversal de los paneles tawasuyu.
 //!
 //! Aporta dos detalles que aplicados consistentemente vuelven al sistema
 //! reconocible sin que se note "diseñado":

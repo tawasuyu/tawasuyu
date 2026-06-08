@@ -502,7 +502,7 @@ const FASES_LUNA: [(&str, &str); 8] = [
 ];
 
 /// Widget astral: la posición zodiacal del Sol (signo + grado) y, opcionalmente,
-/// la fase lunar — el aporte que distingue al marco de gioser. La efeméride la
+/// la fase lunar — el aporte que distingue al marco de tawasuyu. La efeméride la
 /// resuelve el host y la entrega en el [`WidgetCtx`]; este widget sólo mapea
 /// grados a signo y fracción a fase, con aritmética entera (`core` no tiene
 /// `floor`/`round` de punto flotante).

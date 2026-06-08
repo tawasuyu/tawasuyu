@@ -166,7 +166,7 @@ recibe texto limpio. Encabezados preservan jerarquía vía prefijo `# `,
 ### 2.4 Completo — toolbar dinámica CON persistencia + focus + búsqueda
 
 El más cercano a "app real": botones LLM como en 2.3, pero CADA
-transformación se persiste en `~/.cache/gioser/pluma-multilienzo-completo/`
+transformación se persiste en `~/.cache/tawasuyu/pluma-multilienzo-completo/`
 antes de mostrarse. Cierra el demo, volvé a abrirlo: cuerpos y hebras
 siguen ahí + podés seguir generando.
 
@@ -201,7 +201,7 @@ todas alineadas por hebras Derivadas 1↔1.
 
 ### 2.5 Persistente — sobrevive entre corridas
 
-Primera vez: genera y guarda en `~/.cache/gioser/pluma-multilienzo/`.
+Primera vez: genera y guarda en `~/.cache/tawasuyu/pluma-multilienzo/`.
 Siguientes: lee y muestra instantáneo, sin red.
 
 ```bash

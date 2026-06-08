@@ -1,4 +1,4 @@
-# Inventario de apps gioser — % de avance y qué falta
+# Inventario de apps tawasuyu — % de avance y qué falta
 
 > Estado al **2026-05-31**. Recalculado contra **núcleo funcional usable hoy**, no
 > contra la visión total (ese era el error del inventario anterior: una app que ya

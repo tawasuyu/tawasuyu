@@ -206,7 +206,7 @@ Demo: `cargo run -p agora-net-brahman --example convergencia_minga` — un solo 
 
 ### Notas de implementación
 
-- **Compresión: criterio del 3 vs 19.** Zstd nivel 3 da ~2–3× sobre postcard de código fuente real (probado con repo del workspace gioser). Subir a 19+ exprime un 20–30 % extra a costa de 5–10× tiempo CPU — no vale para un caso "dump completo del repo a USB" donde el cuello suele ser el disco, no el CPU.
+- **Compresión: criterio del 3 vs 19.** Zstd nivel 3 da ~2–3× sobre postcard de código fuente real (probado con repo del workspace tawasuyu). Subir a 19+ exprime un 20–30 % extra a costa de 5–10× tiempo CPU — no vale para un caso "dump completo del repo a USB" donde el cuello suele ser el disco, no el CPU.
 - **Token: por qué Bearer y no Basic.** Bearer mantiene compat directa con curl/HTTP clients que ya hablan OAuth-style; no obliga al usuario a base64-ear nada. La comparación constant-time es una formalidad — el atacante con timing oracle sobre la red local ya tiene acceso al filesystem del daemon.
 - **`--since` sin filtro abre la puerta a `--since` en `log`/`roots`.** No se implementó: el formato `Vec<LogEntry>` ya viene ordenado por timestamp, así que un caller puede filtrar; el ahorro mínimo no justifica duplicar el parser.
 

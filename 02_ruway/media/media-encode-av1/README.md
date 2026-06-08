@@ -3,7 +3,7 @@
 Encoder **AV1 nativo** (puro-Rust, vía [`rav1e`](https://crates.io/crates/rav1e))
 desde frames RGBA → contenedor **IVF**. Es la **contraparte exacta** de
 `media-source-av1`: ese crate *decodea* AV1; éste lo *produce*. Cierra el
-ciclo encode↔decode del formato de video nativo de gioser (`PLAN.md`
+ciclo encode↔decode del formato de video nativo de tawasuyu (`PLAN.md`
 §6.quinquies) **sin tocar ffmpeg en ningún extremo**.
 
 `rav1e` es el encoder de referencia AV1 en Rust (Xiph/AOMedia). Con
@@ -16,7 +16,7 @@ No es restricción de esfuerzo ni de licencia de fuente: es **patentes**.
 H.264/H.265/AAC están cubiertos por pools (Via LA / Access Advance) que
 gravan las *técnicas del bitstream*, da igual el lenguaje en que las
 implementes. AV1/Opus se diseñaron royalty-free a propósito — por eso son
-el formato nativo y son los únicos que gioser *produce* en código propio.
+el formato nativo y son los únicos que tawasuyu *produce* en código propio.
 H.264 entra/sale por el puente `shared/foreign-av` (ffmpeg), y se
 transcodifica a AV1 al importar.
 

@@ -28,7 +28,7 @@ use llimphi_raster::{vello, Renderer};
 
 const TAG: &str = "llimphi-vello";
 
-// Paleta gioser (mismos hex que la web/Llimphi-theme).
+// Paleta tawasuyu (mismos hex que la web/Llimphi-theme).
 const COSMOS_NIGHT: Color = Color::from_rgba8(0x0E, 0x10, 0x16, 255);
 const ACCENT_CYAN: Color = Color::from_rgba8(0xA6, 0xD8, 0xFF, 255);
 const ACCENT_AMBER: Color = Color::from_rgba8(0xE8, 0xC9, 0x7A, 255);

@@ -488,13 +488,13 @@ members = [
     "shared/ssh",
     "shared/wawa-config",
     "shared/wawa-config-llimphi",
-    "web/gioser-canvas-web",
-    "web/gioser-geom",
-    "web/gioser-graph-web",
-    "web/gioser-palette",
-    "web/gioser-physics",
-    "web/gioser-shaders",
-    "web/gioser-web",
+    "web/tawasuyu-canvas-web",
+    "web/tawasuyu-geom",
+    "web/tawasuyu-graph-web",
+    "web/tawasuyu-palette",
+    "web/tawasuyu-physics",
+    "web/tawasuyu-shaders",
+    "web/tawasuyu-web",
 ]
 
 # `wawa/` se excluye del workspace global porque corre en target
@@ -510,7 +510,7 @@ rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 authors = ["Sergio <gerencia@jlsoltech.com>"]
 publish = false
-repository = "https://gitea.gioser.net/sergio/gioser"
+repository = "https://git.gioser.net/tawasuyu/tawasuyu"
 
 [workspace.dependencies]
 # === Configuración declarativa (vocabulario de esquemas) ===
@@ -791,7 +791,7 @@ hex = "0.4"
 portable-pty = "0.9"
 vt100 = "0.16"
 
-# === WASM web (gioser) ===
+# === WASM web (tawasuyu) ===
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
@@ -947,7 +947,7 @@ hound = "3.5"
 symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "vorbis", "ogg"] }
 
 # === media-source-opus (decoder Opus NATIVO puro-Rust) ===
-# Opus es el formato de audio nativo de gioser (par del video AV1). ogg
+# Opus es el formato de audio nativo de tawasuyu (par del video AV1). ogg
 # demuxea las páginas Ogg; opus-wave es un port puro-Rust de libopus
 # (SILK+CELT, sin C ni FFI) — par del rav1d del lado video.
 ogg = "0.9"

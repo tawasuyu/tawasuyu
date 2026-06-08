@@ -866,7 +866,7 @@ pub fn demo_model() -> Model {
         t
     };
     let tabs = vec![
-        mk(0, "https://gioser.net", "gioser · suite soberana"),
+        mk(0, "https://tawasuyu.net", "tawasuyu · suite soberana"),
         mk(0, "https://example.com", "Example Domain"),
         mk(0, "about:blank", ""),
         mk(1, "https://docs.rs/serde", "serde — Rust"),
@@ -925,7 +925,7 @@ impl App for Puriy {
     }
 
     fn app_id() -> Option<&'static str> {
-        Some("net.gioser.puriy")
+        Some("net.tawasuyu.puriy")
     }
 
     fn initial_size() -> (u32, u32) {
@@ -5455,12 +5455,12 @@ mod tests {
     #[test]
     fn collect_element_snapshots_pobla_attributes_completo() {
         let tree = parse(
-            r#"<body><a id="nav" href="https://gioser.net" aria-current="page" data-track="hero" rel="noopener">x</a></body>"#,
+            r#"<body><a id="nav" href="https://tawasuyu.net" aria-current="page" data-track="hero" rel="noopener">x</a></body>"#,
         );
         let snaps = collect_element_snapshots(&tree);
         let s = snaps.iter().find(|s| s.id == "nav").expect("found");
         // attributes incluye TODOS los attrs (data-*, aria-*, href, rel, id).
-        assert!(s.attributes.iter().any(|(k, v)| k == "href" && v == "https://gioser.net"));
+        assert!(s.attributes.iter().any(|(k, v)| k == "href" && v == "https://tawasuyu.net"));
         assert!(s.attributes.iter().any(|(k, v)| k == "aria-current" && v == "page"));
         assert!(s.attributes.iter().any(|(k, v)| k == "data-track" && v == "hero"));
         assert!(s.attributes.iter().any(|(k, v)| k == "rel" && v == "noopener"));

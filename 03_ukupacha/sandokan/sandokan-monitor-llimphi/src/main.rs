@@ -1,4 +1,4 @@
-//! `sandokan-monitor` — el monitor de procesos de gioser sobre Llimphi.
+//! `sandokan-monitor` — el monitor de procesos de tawasuyu sobre Llimphi.
 //!
 //! Dos mundos, una sola fachada:
 //!

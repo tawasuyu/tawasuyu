@@ -4,7 +4,7 @@ HEALPix-indexed star catalog combining Gaia DR3 and Hipparcos. Memory-mapped for
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-catalog)](https://crates.io/crates/cosmos-catalog)
 [![Documentation](https://docs.rs/cosmos-catalog/badge.svg)](https://docs.rs/cosmos-catalog)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-catalog)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-catalog)](https://gitea.tawasuyu.net/sergio/eternal)
 
 ## Installation
 
@@ -143,4 +143,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

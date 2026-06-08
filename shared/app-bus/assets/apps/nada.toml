@@ -2,7 +2,7 @@
 # Llimphi sobre archivos reales. Acepta una ruta (archivo o directorio) como
 # argumento.
 #
-# Copiá este archivo a ~/.config/gioser/apps/nada.toml. El binario `nada` debe
+# Copiá este archivo a ~/.config/tawasuyu/apps/nada.toml. El binario `nada` debe
 # estar en el PATH (cargo install -p nada) o poné su ruta absoluta en `exec`.
 
 id = "nada"

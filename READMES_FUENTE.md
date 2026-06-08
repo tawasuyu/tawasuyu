@@ -50,7 +50,7 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 ```
 
 **Qué tiene que explicar el README raíz (semilla, ordená/recortá):**
-- Qué es gioser y la tesis: **una sola suite vertical, no apps sueltas.**
+- Qué es tawasuyu y la tesis: **una sola suite vertical, no apps sueltas.**
 - El **ciclo de la información** como esqueleto físico: cuatro cuadrantes =
   cuatro fases (PERCIBIR → CONOCER → HACER → RAÍZ). Mover un dominio de cuadrante
   cambia su naturaleza; no son carpetas administrativas.
@@ -297,7 +297,7 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 #### nada
 ```
 # una línea: editor de archivos sobre Llimphi: file tree + editor con LSP + clipboard
-#            real + sesiones. Banco de pruebas del framework. (Antes `gioser-edit`.)
+#            real + sesiones. Banco de pruebas del framework. (Antes `tawasuyu-edit`.)
 ```
 - subcrates: crate único (raíz) — _plan de split A/B documentado (3.5k LOC)_
 - ✍️ resaltar / omitir / estado:
@@ -313,7 +313,7 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 #### paloma  ✅ = el dominio Correo
 ```
 # una línea: cliente de correo nativo (IMAP/SMTP/JMAP). El reemplazo de Gmail en
-#            gioser: núcleo agnóstico + frontend Llimphi, identidad/firma por agora.
+#            tawasuyu: núcleo agnóstico + frontend Llimphi, identidad/firma por agora.
 ```
 - subcrates: paloma-core · paloma-net · paloma-store · paloma-app · paloma-llimphi
 - ✍️ resaltar / omitir / estado: _(confirmar madurez real de la implementación)_
@@ -469,7 +469,7 @@ Estas reglas las hereda cada README. Sobreescribí por nodo cuando haga falta.
 # una línea: landing sobria sobre WASM (wasm-bindgen). No es producto, es cartel.
 #            Única pieza del workspace que cruza el puente JS.
 ```
-- crate: `web/gioser-web`  · build: `./scripts/build-gioser-web.sh {dev|release}`
+- crate: `web/tawasuyu-web`  · build: `./scripts/build-tawasuyu-web.sh {dev|release}`
 - ✍️ resaltar / omitir / estado:
 
 ---

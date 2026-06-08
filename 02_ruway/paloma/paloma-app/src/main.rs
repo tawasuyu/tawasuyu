@@ -89,7 +89,7 @@ fn config_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("PALOMA_CONFIG") {
         return Some(PathBuf::from(p));
     }
-    ProjectDirs::from("org", "gioser", "paloma").map(|d| d.config_dir().join("cuenta.json"))
+    ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().join("cuenta.json"))
 }
 
 /// Contraseñas IMAP/SMTP desde entorno. `PALOMA_PASSWORD` cubre ambas; las
@@ -116,7 +116,7 @@ struct NetSession {
 /// Directorio de caché en disco (`~/.cache/paloma` en Linux). `None` si la
 /// plataforma no expone ProjectDirs.
 fn cache_dir() -> Option<PathBuf> {
-    ProjectDirs::from("org", "gioser", "paloma").map(|d| d.cache_dir().to_path_buf())
+    ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.cache_dir().to_path_buf())
 }
 
 /// Intenta armar el `NetBackend` real. Devuelve `Err(motivo)` legible si falta

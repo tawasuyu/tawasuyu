@@ -1,4 +1,4 @@
-# auth — autenticación del escritorio gioser
+# auth — autenticación del escritorio tawasuyu
 
 Dominio de autenticación: ¿esta credencial es válida en esta máquina? Hoy un
 solo subcrate, **`auth-core`** (`brahman-auth`).

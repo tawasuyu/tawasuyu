@@ -36,7 +36,7 @@ pub struct ModalPalette {
     /// lo que pidió el caller. Esto focaliza al modal sin "encerrarlo".
     pub scrim: Color,
     /// Firma visual del panel — gradient sutil + hairline accent en el
-    /// top edge. La que vuelve consistente el "look gioser" en todos
+    /// top edge. La que vuelve consistente el "look tawasuyu" en todos
     /// los modales y overlays.
     pub panel: PanelStyle,
     pub border: Color,

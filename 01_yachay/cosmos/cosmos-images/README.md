@@ -4,7 +4,7 @@ Pure Rust astronomical image format library (FITS and XISF support).
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-images)](https://crates.io/crates/cosmos-images)
 [![Documentation](https://docs.rs/cosmos-images/badge.svg)](https://docs.rs/cosmos-images)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-images)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-images)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Read, write, and process FITS, XISF, and SER scientific image formats with compression support (Gzip, Rice), binary/ASCII tables, and Bayer demosaicing. No runtime FFI.
 
@@ -77,4 +77,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

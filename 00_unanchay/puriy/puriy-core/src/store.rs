@@ -70,11 +70,11 @@ mod tests {
 
     fn profile_ejemplo() -> Profile {
         let mut p = Profile::nuevo("sergio");
-        let tab = p.session.open("https://gioser.net", 100);
-        p.session.set_title(tab, "gioser").unwrap();
-        p.history.record("https://gioser.net", "gioser", 100);
+        let tab = p.session.open("https://tawasuyu.net", 100);
+        p.session.set_title(tab, "tawasuyu").unwrap();
+        p.history.record("https://tawasuyu.net", "tawasuyu", 100);
         p.history.record("https://docs.rs", "docs.rs", 110);
-        p.bookmarks.add("https://gioser.net", "gioser", None, 100);
+        p.bookmarks.add("https://tawasuyu.net", "tawasuyu", None, 100);
         p.bookmarks.add("https://docs.rs", "docs", Some("dev".into()), 110);
         p
     }

@@ -1771,7 +1771,7 @@ mod tests {
 
     #[test]
     fn box_node_attributes_contiene_todos_los_attrs_html() {
-        let html = r#"<html><body><a id="x" href="https://gioser.net" aria-current="page" data-track="hero" rel="noopener">x</a></body></html>"#;
+        let html = r#"<html><body><a id="x" href="https://tawasuyu.net" aria-current="page" data-track="hero" rel="noopener">x</a></body></html>"#;
         let doc = Engine::new().load_html("about:t", html);
         let mut found: Option<Vec<(String, String)>> = None;
         doc.box_tree.walk(|b| {
@@ -1781,7 +1781,7 @@ mod tests {
         });
         let attrs = found.expect("a#x existe");
         // Todos los attrs aparecen, lowercase names, values literales.
-        assert!(attrs.iter().any(|(k, v)| k == "href" && v == "https://gioser.net"));
+        assert!(attrs.iter().any(|(k, v)| k == "href" && v == "https://tawasuyu.net"));
         assert!(attrs.iter().any(|(k, v)| k == "aria-current" && v == "page"));
         assert!(attrs.iter().any(|(k, v)| k == "data-track" && v == "hero"));
         assert!(attrs.iter().any(|(k, v)| k == "rel" && v == "noopener"));

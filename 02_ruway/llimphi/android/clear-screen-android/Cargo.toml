@@ -34,7 +34,7 @@ android_logger = "0.14"
 # Metadata para xbuild / cargo-apk — define el manifiesto Android que se
 # inyecta en el APK final.
 [package.metadata.android]
-package = "net.gioser.llimphi.clearscreen"
+package = "net.tawasuyu.llimphi.clearscreen"
 build_targets = ["aarch64-linux-android", "x86_64-linux-android"]
 min_sdk_version = 24
 target_sdk_version = 34

@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tawasuyu · escritorio</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===================== escritorio ===================== -->
+<div id="desktop">
+
+  <header id="topbar">
+    <div class="topbar-left">
+      <!-- En desktop con sidebar abierta, .brand es texto; en mobile pasa
+           a botón hamburguesa via CSS (cambia el cursor + listener). -->
+      <button class="brand" id="brand-toggle" type="button" aria-label="alternar barra lateral">
+        <!-- chakana inline: cuerpo monocromo (currentColor) + centro
+             circular del color del fondo, dando efecto de "luz" central. -->
+        <svg class="brand-chakana" viewBox="-3 -3 6 6" aria-hidden="true">
+          <path d="
+            M -0.5 -2.5
+            L  0.5 -2.5  L  0.5 -2.0  L  1.0 -2.0  L  1.0 -1.5
+            L  1.5 -1.5  L  1.5 -1.0  L  2.0 -1.0  L  2.0 -0.5
+            L  2.5 -0.5  L  2.5  0.5  L  2.0  0.5  L  2.0  1.0
+            L  1.5  1.0  L  1.5  1.5  L  1.0  1.5  L  1.0  2.0
+            L  0.5  2.0  L  0.5  2.5  L -0.5  2.5  L -0.5  2.0
+            L -1.0  2.0  L -1.0  1.5  L -1.5  1.5  L -1.5  1.0
+            L -2.0  1.0  L -2.0  0.5  L -2.5  0.5  L -2.5 -0.5
+            L -2.0 -0.5  L -2.0 -1.0  L -1.5 -1.0  L -1.5 -1.5
+            L -1.0 -1.5  L -1.0 -2.0  L -0.5 -2.0  Z" fill="currentColor"/>
+          <circle cx="0" cy="0" r="0.7" class="brand-chakana-core"/>
+        </svg>
+        <span>tawasuyu</span>
+      </button>
+      <!-- Indicadores de ventanas abiertas (antes vivían en la taskbar). -->
+      <div id="taskbar-items" role="tablist" aria-label="ventanas abiertas"></div>
+    </div>
+    <div class="topbar-right">
+      <span id="clock" class="topbar-clock">--:--</span>
+    </div>
+  </header>
+
+  <main id="portada">
+
+    <!-- panel izquierdo: árbol por cuadrante hasta nivel app (no crate).
+         El <h3> de cada cuadrante abre la README del cuadrante; cada
+         <li> abre la README de la app correspondiente. -->
+    <aside id="sidebar">
+      <div class="sidebar-section" data-mod="sistema">
+        <h3 class="sec-head"><span class="doc" data-doc="/README.md" data-title="tawasuyu" data-theme="tawasuyu">sistema</span></h3>
+        <ul>
+          <li><span class="doc" data-doc="/README.md" data-title="tawasuyu · README" data-theme="tawasuyu">tawasuyu</span></li>
+          <li><span class="doc" data-doc="/PLAN.md" data-title="tawasuyu · PLAN" data-theme="tawasuyu">PLAN</span></li>
+          <li><span class="doc" data-doc="/docs/SUITE.md" data-title="suite" data-theme="tawasuyu">suite</span></li>
+          <li><span class="doc" data-doc="/docs/MODULES.md" data-title="módulos" data-theme="tawasuyu">módulos</span></li>
+          <li><span class="doc is-panel" data-panel="1" data-title="panel · tawasuyu" data-theme="tawasuyu">panel</span></li>
+          <li><a class="doc" href="https://git.gioser.net/tawasuyu/tawasuyu" target="_blank" rel="noopener">gitea ↗</a></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section" data-mod="unanchay">
+        <h3 class="sec-head"><span class="doc" data-doc="/00_unanchay/README.md" data-title="00 unanchay · percibir" data-theme="unanchay">00 unanchay · percibir</span></h3>
+        <ul>
+          <li><span class="doc" data-doc="/00_unanchay/chaka/README.md"  data-title="chaka"  data-theme="unanchay">chaka</span></li>
+          <li><span class="doc" data-doc="/00_unanchay/khipu/README.md"  data-title="khipu"  data-theme="unanchay">khipu</span></li>
+          <li><span class="doc" data-doc="/00_unanchay/pineal/README.md" data-title="pineal" data-theme="unanchay">pineal</span></li>
+          <li><span class="doc" data-doc="/00_unanchay/pluma/README.md"  data-title="pluma"  data-theme="aire">pluma</span></li>
+          <li><span class="doc" data-doc="/00_unanchay/puriy/README.md"  data-title="puriy"  data-theme="unanchay">puriy</span></li>
+          <li><span class="doc" data-doc="/00_unanchay/rimay/README.md"  data-title="rimay"  data-theme="unanchay">rimay</span></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section" data-mod="yachay">
+        <h3 class="sec-head"><span class="doc" data-doc="/01_yachay/README.md" data-title="01 yachay · conocer" data-theme="yachay">01 yachay · conocer</span></h3>
+        <ul>
+          <li><span class="doc" data-doc="/01_yachay/cosmos/README.md"   data-title="cosmos"   data-theme="yachay">cosmos</span></li>
+          <li><span class="doc" data-doc="/01_yachay/dominium/README.md" data-title="dominium" data-theme="yachay">dominium</span></li>
+          <li><span class="doc" data-doc="/01_yachay/iniy/README.md"     data-title="iniy"     data-theme="yachay">iniy</span></li>
+          <li><span class="doc" data-doc="/01_yachay/nakui/README.md"    data-title="nakui"    data-theme="yachay">nakui</span></li>
+          <li><span class="doc" data-doc="/01_yachay/tinkuy/README.md"   data-title="tinkuy"   data-theme="yachay">tinkuy</span></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section" data-mod="ruway">
+        <h3 class="sec-head"><span class="doc" data-doc="/02_ruway/README.md" data-title="02 ruway · hacer" data-theme="ruway">02 ruway · hacer</span></h3>
+        <ul>
+          <li><span class="doc" data-doc="/02_ruway/chasqui/README.md" data-title="chasqui" data-theme="ruway">chasqui</span></li>
+          <li><span class="doc" data-doc="/02_ruway/llimphi/README.md" data-title="llimphi" data-theme="ruway">llimphi</span></li>
+          <li><span class="doc" data-doc="/02_ruway/mirada/README.md"  data-title="mirada"  data-theme="ruway">mirada</span></li>
+          <li><span class="doc" data-doc="/02_ruway/nada/README.md"    data-title="nada"    data-theme="ruway">nada</span></li>
+          <li><span class="doc" data-doc="/02_ruway/nahual/README.md"  data-title="nahual"  data-theme="ruway">nahual</span></li>
+          <li><span class="doc" data-doc="/02_ruway/shuma/README.md"   data-title="shuma"   data-theme="ruway">shuma</span></li>
+          <li><span class="doc" data-doc="/02_ruway/supay/README.md"   data-title="supay"   data-theme="ruway">supay</span></li>
+          <li><span class="doc" data-doc="/02_ruway/takiy/README.md"   data-title="takiy"   data-theme="fuego">takiy</span></li>
+          <li><span class="doc" data-doc="/02_ruway/wawa/README.md"    data-title="wawa (user)" data-theme="ruway">wawa</span></li>
+        </ul>
+      </div>
+
+      <div class="sidebar-section" data-mod="ukupacha">
+        <h3 class="sec-head"><span class="doc" data-doc="/03_ukupacha/README.md" data-title="03 ukupacha · raíz" data-theme="ukupacha">03 ukupacha · raíz</span></h3>
+        <ul>
+          <li><span class="doc" data-doc="/03_ukupacha/agora/README.md"         data-title="agora"         data-theme="agua">agora</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/arje/README.md"          data-title="arje"          data-theme="ukupacha">arje</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/minga/README.md"         data-title="minga"         data-theme="tierra">minga</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/wawa/README.md"          data-title="wawa (root)"   data-theme="ukupacha">wawa</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/wawa-explorer/README.md" data-title="wawa-explorer" data-theme="ukupacha">wawa-explorer</span></li>
+        </ul>
+      </div>
+    </aside>
+
+    <!-- centro: plano cartesiano de cuadrantes -->
+    <section id="plano-wrap">
+      <svg id="plano" viewBox="-100 -100 200 200" preserveAspectRatio="xMidYMid meet">
+        <defs>
+          <!-- flechas de los ejes; userSpaceOnUse para no escalar con stroke -->
+          <marker id="axisArrow" viewBox="0 0 10 10" refX="9" refY="5"
+                  markerUnits="userSpaceOnUse" markerWidth="5" markerHeight="5"
+                  orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" />
+          </marker>
+        </defs>
+
+        <!-- Ejes con flechas en ambos extremos -->
+        <line class="axis" x1="-95" y1="0" x2="95" y2="0"
+              marker-start="url(#axisArrow)" marker-end="url(#axisArrow)"/>
+        <line class="axis" x1="0" y1="-95" x2="0" y2="95"
+              marker-start="url(#axisArrow)" marker-end="url(#axisArrow)"/>
+
+        <!--
+          Rayitas en posiciones Fibonacci: 1, 2, 3, 5, 8, 13, 21, 34, 55, 89.
+          La separación entre rayitas consecutivas tiende a φ (razón áurea):
+          la línea recta "esconde" la espiral. Chiste matemático en el ritmo.
+        -->
+        <g class="ticks" data-fibonacci="1,2,3,5,8,13,21,34,55,89">
+          <!-- eje x -->
+          <line x1="1"  y1="-1.5" x2="1"  y2="1.5"/>
+          <line x1="2"  y1="-1.5" x2="2"  y2="1.5"/>
+          <line x1="3"  y1="-1.5" x2="3"  y2="1.5"/>
+          <line x1="5"  y1="-1.5" x2="5"  y2="1.5"/>
+          <line x1="8"  y1="-2"   x2="8"  y2="2"/>
+          <line x1="13" y1="-2"   x2="13" y2="2"/>
+          <line x1="21" y1="-2"   x2="21" y2="2"/>
+          <line x1="34" y1="-2.5" x2="34" y2="2.5"/>
+          <line x1="55" y1="-2.5" x2="55" y2="2.5"/>
+          <line x1="89" y1="-3"   x2="89" y2="3"/>
+          <line x1="-1"  y1="-1.5" x2="-1"  y2="1.5"/>
+          <line x1="-2"  y1="-1.5" x2="-2"  y2="1.5"/>
+          <line x1="-3"  y1="-1.5" x2="-3"  y2="1.5"/>
+          <line x1="-5"  y1="-1.5" x2="-5"  y2="1.5"/>
+          <line x1="-8"  y1="-2"   x2="-8"  y2="2"/>
+          <line x1="-13" y1="-2"   x2="-13" y2="2"/>
+          <line x1="-21" y1="-2"   x2="-21" y2="2"/>
+          <line x1="-34" y1="-2.5" x2="-34" y2="2.5"/>
+          <line x1="-55" y1="-2.5" x2="-55" y2="2.5"/>
+          <line x1="-89" y1="-3"   x2="-89" y2="3"/>
+          <!-- eje y -->
+          <line x1="-1.5" y1="1"  x2="1.5" y2="1"/>
+          <line x1="-1.5" y1="2"  x2="1.5" y2="2"/>
+          <line x1="-1.5" y1="3"  x2="1.5" y2="3"/>
+          <line x1="-1.5" y1="5"  x2="1.5" y2="5"/>
+          <line x1="-2"   y1="8"  x2="2"   y2="8"/>
+          <line x1="-2"   y1="13" x2="2"   y2="13"/>
+          <line x1="-2"   y1="21" x2="2"   y2="21"/>
+          <line x1="-2.5" y1="34" x2="2.5" y2="34"/>
+          <line x1="-2.5" y1="55" x2="2.5" y2="55"/>
+          <line x1="-3"   y1="89" x2="3"   y2="89"/>
+          <line x1="-1.5" y1="-1"  x2="1.5" y2="-1"/>
+          <line x1="-1.5" y1="-2"  x2="1.5" y2="-2"/>
+          <line x1="-1.5" y1="-3"  x2="1.5" y2="-3"/>
+          <line x1="-1.5" y1="-5"  x2="1.5" y2="-5"/>
+          <line x1="-2"   y1="-8"  x2="2"   y2="-8"/>
+          <line x1="-2"   y1="-13" x2="2"   y2="-13"/>
+          <line x1="-2"   y1="-21" x2="2"   y2="-21"/>
+          <line x1="-2.5" y1="-34" x2="2.5" y2="-34"/>
+          <line x1="-2.5" y1="-55" x2="2.5" y2="-55"/>
+          <line x1="-3"   y1="-89" x2="3"   y2="-89"/>
+        </g>
+        <text class="axis-label" x="92" y="-5">x</text>
+        <text class="axis-label" x="5"  y="-92">y</text>
+
+        <!--
+          Chakana al centro — pequeña, casi invisible. La cruz es del color
+          opuesto al texto (negra en oscuro, blanca en claro: se funde con
+          el fondo); el círculo central es del color del texto (blanco en
+          oscuro, negro en claro: hace de luz brillante). Sin click handler
+          por ahora; sólo decorativa.
+
+          Geometría: chakana clásica de 2 escalones con thickness t=0.5,
+          centrada en el origen. Centro 3x3, brazos extienden a ±2.5.
+        -->
+        <g class="chakana" aria-hidden="true">
+          <!-- glow exterior del centro (radial fade) -->
+          <circle class="chakana-glow" cx="0" cy="0" r="1.4"/>
+          <!-- cuerpo escalonado de la chakana (un único path cerrado) -->
+          <path class="chakana-body" d="
+            M -0.5 -2.5
+            L  0.5 -2.5  L  0.5 -2.0  L  1.0 -2.0  L  1.0 -1.5
+            L  1.5 -1.5  L  1.5 -1.0  L  2.0 -1.0  L  2.0 -0.5
+            L  2.5 -0.5  L  2.5  0.5  L  2.0  0.5  L  2.0  1.0
+            L  1.5  1.0  L  1.5  1.5  L  1.0  1.5  L  1.0  2.0
+            L  0.5  2.0  L  0.5  2.5  L -0.5  2.5  L -0.5  2.0
+            L -1.0  2.0  L -1.0  1.5  L -1.5  1.5  L -1.5  1.0
+            L -2.0  1.0  L -2.0  0.5  L -2.5  0.5  L -2.5 -0.5
+            L -2.0 -0.5  L -2.0 -1.0  L -1.5 -1.0  L -1.5 -1.5
+            L -1.0 -1.5  L -1.0 -2.0  L -0.5 -2.0  Z"/>
+          <!-- luz central -->
+          <circle class="chakana-core" cx="0" cy="0" r="0.55"/>
+        </g>
+
+        <!-- φ escondida: la pista del chiste, casi invisible cerca del origen -->
+        <text class="axis-phi" x="3.2" y="-3.2">φ</text>
+
+        <!-- Cuadrante II: 00_unanchay PERCIBIR -->
+        <g class="quad" data-cuad="00_unanchay" data-theme="unanchay" transform="translate(-50,-50)"
+           data-doc="/00_unanchay/README.md" data-title="00 unanchay · percibir">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id"   x="0" y="-30">0x00</text>
+          <text class="quad-name" x="0" y="-14">UNANCHAY</text>
+          <text class="quad-verb" x="0" y="0">percibir</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="14" data-doc="/web/tawasuyu-web/md/aire.md" data-title="pluma" data-theme="aire">pluma</text>
+            <text class="dom" x="0" y="22" data-doc="/web/tawasuyu-web/md/sombra.md" data-title="khipu" data-theme="unanchay">khipu</text>
+            <text class="dom" x="0" y="30" data-doc="/00_unanchay/puriy/SDD.md" data-title="puriy" data-theme="unanchay">rimay · chaka · pineal</text>
+          </g>
+        </g>
+
+        <!-- Cuadrante I: 01_yachay CONOCER -->
+        <g class="quad" data-cuad="01_yachay" data-theme="yachay" transform="translate(50,-50)"
+           data-doc="/01_yachay/README.md" data-title="01 yachay · conocer">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id"   x="0" y="-30">0x01</text>
+          <text class="quad-name" x="0" y="-14">YACHAY</text>
+          <text class="quad-verb" x="0" y="0">conocer</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="14" data-doc="/01_yachay/cosmos/cosmos-core/README.md" data-title="cosmos" data-theme="yachay">cosmos</text>
+            <text class="dom" x="0" y="22" data-doc="/01_yachay/dominium/SDD.md" data-title="dominium" data-theme="yachay">dominium</text>
+            <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/cosmos.md" data-title="nakui" data-theme="cosmos">nakui</text>
+          </g>
+        </g>
+
+        <!-- Cuadrante III: 03_ukupacha RAIZ -->
+        <g class="quad" data-cuad="03_ukupacha" data-theme="ukupacha" transform="translate(-50,50)"
+           data-doc="/03_ukupacha/README.md" data-title="03 ukupacha · raíz">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id"   x="0" y="-30">0x03</text>
+          <text class="quad-name" x="0" y="-14">UKUPACHA</text>
+          <text class="quad-verb" x="0" y="0">raíz</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="14" data-doc="/03_ukupacha/arje/seeds/README.md" data-title="arje · wawa" data-theme="ukupacha">arje · wawa</text>
+            <text class="dom" x="0" y="22" data-doc="/web/tawasuyu-web/md/agua.md" data-title="agora" data-theme="agua">agora</text>
+            <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/tierra.md" data-title="minga" data-theme="tierra">minga</text>
+          </g>
+        </g>
+
+        <!-- Cuadrante IV: 02_ruway HACER -->
+        <g class="quad" data-cuad="02_ruway" data-theme="ruway" transform="translate(50,50)"
+           data-doc="/02_ruway/README.md" data-title="02 ruway · hacer">
+          <rect x="-40" y="-40" width="80" height="80"/>
+          <text class="quad-id"   x="0" y="-30">0x02</text>
+          <text class="quad-name" x="0" y="-14">RUWAY</text>
+          <text class="quad-verb" x="0" y="0">hacer</text>
+          <g class="domains" text-anchor="middle">
+            <text class="dom" x="0" y="14" data-doc="/02_ruway/mirada/mirada-compositor/README.md" data-title="mirada · nahual" data-theme="ruway">mirada · nahual</text>
+            <text class="dom" x="0" y="22" data-doc="/02_ruway/llimphi/SDD.md" data-title="shuma · chasqui" data-theme="ruway">shuma · chasqui</text>
+            <text class="dom" x="0" y="30" data-doc="/web/tawasuyu-web/md/fuego.md" data-title="takiy" data-theme="fuego">takiy</text>
+          </g>
+        </g>
+      </svg>
+    </section>
+
+  </main>
+
+  <!-- capa de ventanas (las ventanas se inyectan acá). Sin taskbar: ahora
+       va de topbar hasta el borde inferior (CSS lo cubre). -->
+  <div id="windows-layer"></div>
+
+</div>
+
+<!-- ===================== JS: sistema de ventanas ===================== -->
+<script type="module">
+  import init, { cargar_md, mount_panel, aplicar_preferencias } from './pkg/tawasuyu_web.js';
+
+  // Estado: { id, title, url, theme, x, y, w, h, z, minimized, el, taskEl }
+  const ventanas = new Map();
+  let zTop = 100;
+  let seq = 0;
+
+  const layer = document.getElementById('windows-layer');
+  const taskItems = document.getElementById('taskbar-items');
+
+  function traerAlFrente(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    zTop += 1;
+    v.z = zTop;
+    v.el.style.zIndex = zTop;
+    document.querySelectorAll('.window').forEach(w => w.classList.remove('focused'));
+    v.el.classList.add('focused');
+    document.querySelectorAll('.task-item').forEach(t => t.classList.remove('active'));
+    v.taskEl.classList.add('active');
+  }
+
+  function minimizar(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    v.minimized = true;
+    v.el.style.display = 'none';
+    v.taskEl.classList.remove('active');
+  }
+
+  function restaurar(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    v.minimized = false;
+    v.el.style.display = 'flex';
+    traerAlFrente(id);
+  }
+
+  function cerrar(id) {
+    const v = ventanas.get(id);
+    if (!v) return;
+    v.el.remove();
+    v.taskEl.remove();
+    ventanas.delete(id);
+  }
+
+  // ===== URL routing =====
+  // Cada archivo abierto cambia el hash; back/forward re-abre o re-foca.
+  function pushHash(url) {
+    const target = '#' + url;
+    if (window.location.hash !== target) {
+      window.history.pushState({ doc: url }, '', target);
+    }
+  }
+
+  function aplicarHash() {
+    const h = window.location.hash;
+    if (!h.startsWith('#/')) return;
+    const url = h.slice(1); // mantenemos el `/` inicial
+    for (const v of ventanas.values()) {
+      if (v.url === url) {
+        if (v.minimized) restaurar(v.id);
+        else traerAlFrente(v.id);
+        return;
+      }
+    }
+    // No abierta: derivar título/tema del DOM si existe el trigger.
+    const el = document.querySelector(`[data-doc="${url}"]`);
+    const title = (el && el.dataset.title) || url;
+    const theme = (el && el.dataset.theme) || 'tawasuyu';
+    abrirVentana(url, title, theme, /* fromHash */ true);
+  }
+  window.addEventListener('popstate',   aplicarHash);
+  window.addEventListener('hashchange', aplicarHash);
+
+  // ===== lang resolution =====
+  // Convención: README.md = inglés (default), LEEME.md = español,
+  // README.qu.md = quechua (sólo en cuadrante + app, no en crates).
+  // El URL canónico de la sidebar siempre apunta a README.md; la
+  // función `langCandidates` decide cuál archivo se sirve según la
+  // preferencia del usuario, con fallback en cadena hacia los otros
+  // idiomas si el preferido no existe.
+  function getLang() {
+    let stored;
+    try { stored = localStorage.getItem('tawasuyu.lang'); } catch (e) {}
+    if (stored === 'en' || stored === 'es' || stored === 'qu') return stored;
+    // primer arranque: usar idioma del navegador o inglés
+    const nav = ((navigator.language || navigator.userLanguage || 'en') + '').toLowerCase();
+    if (nav.startsWith('es')) return 'es';
+    if (nav.startsWith('qu')) return 'qu';
+    return 'en';
+  }
+  function langCandidates(url) {
+    const lang = getLang();
+    // Sólo `/path/README.md` recibe variantes de idioma. Otros .md
+    // (PLAN.md, SUITE.md, GUIA.md, etc.) pasan tal cual.
+    const m = url.match(/^(.*)\/README\.md$/);
+    if (!m) return [url];
+    const base = m[1];
+    const en = `${base}/README.md`;
+    const es = `${base}/LEEME.md`;
+    const qu = `${base}/README.qu.md`;
+    if (lang === 'es') return [es, en, qu];
+    if (lang === 'qu') return [qu, es, en];
+    return [en, es, qu]; // en default
+  }
+
+  // Persistir lang inicial si no estaba seteada (para que el panel arranque sincronizado)
+  try {
+    if (!localStorage.getItem('tawasuyu.lang')) {
+      localStorage.setItem('tawasuyu.lang', getLang());
+    }
+  } catch (e) {}
+
+  // Hijack de localStorage.setItem para emitir evento cuando cambia el lang.
+  // Esto permite que el panel (que escribe en localStorage) dispare reload
+  // de los artículos abiertos sin acoplarse al panel directamente.
+  (function() {
+    const _set = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(k, v) {
+      _set.apply(this, arguments);
+      if (k === 'tawasuyu.lang') {
+        document.dispatchEvent(new CustomEvent('tawasuyu:lang-change', { detail: v }));
+      }
+    };
+  })();
+
+  // Reload de artículos abiertos cuando el lang cambia en vivo.
+  document.addEventListener('tawasuyu:lang-change', () => {
+    for (const v of ventanas.values()) {
+      if (!v.url || v.url.startsWith('__')) continue; // skip panel
+      const contId = `${v.id}-content`;
+      cargarMdSeguro(contId, v.url, v.theme);
+    }
+  });
+
+  // Fetch + sniff: rechaza HTML (SPA-fallback) y resuelve lang.
+  async function cargarMdSeguro(contId, url, theme) {
+    const cands = langCandidates(url);
+    let resolved = null;
+    let lastErr = null;
+    for (const cand of cands) {
+      try {
+        const resp = await fetch(cand);
+        if (!resp.ok) { lastErr = `HTTP ${resp.status}`; continue; }
+        const text = await resp.text();
+        const head = text.slice(0, 500).trimStart().toLowerCase();
+        if (head.startsWith('<!doctype html') || head.startsWith('<html')) {
+          lastErr = 'HTML en vez de markdown (¿server con SPA-fallback?)';
+          continue;
+        }
+        resolved = cand;
+        break;
+      } catch (e) { lastErr = String(e); }
+    }
+    if (!resolved) {
+      mostrarErrorDoc(contId, url, lastErr || 'no resuelve');
+      return;
+    }
+    cargar_md(contId, resolved, theme || 'tawasuyu');
+  }
+
+  function mostrarErrorDoc(contId, url, msg) {
+    const cont = document.getElementById(contId);
+    if (!cont) return;
+    const safeUrl = url.replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const safeMsg = String(msg).replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    cont.innerHTML =
+      `<h1>No se pudo cargar el documento</h1>` +
+      `<p><code>${safeUrl}</code></p>` +
+      `<p>${safeMsg}</p>`;
+  }
+
+  function abrirVentana(url, title, theme, fromHash) {
+    // Si ya hay una ventana con la misma URL, restaurarla.
+    for (const [vid, v] of ventanas.entries()) {
+      if (v.url === url) {
+        if (v.minimized) restaurar(vid);
+        else traerAlFrente(vid);
+        if (!fromHash) pushHash(url);
+        return;
+      }
+    }
+
+    const id = `win-${++seq}`;
+    const contId = `${id}-content`;
+
+    // Artículos abren ya maximizados dentro de #windows-layer (que está
+    // acotado entre topbar y taskbar via CSS). Sin drag / resize / max.
+    const el = document.createElement('section');
+    el.className = 'window focused maximized';
+    el.dataset.theme = theme || 'tawasuyu';
+    zTop += 1;
+    el.style.zIndex = zTop;
+
+    // Sin titlebar — los artículos no llevan "barra de Windows" propia.
+    // Botones flotantes en la esquina superior derecha:
+    //   ←  back: cierra (lo quita de la barra) + history.back para volver
+    //          a la URL anterior si la había.
+    //   ─  minimizar: sigue en la barra, oculta.
+    //   ×  cerrar: lo quita sin tocar la URL.
+    el.innerHTML = `
+      <div class="win-body">
+        <article id="${contId}" class="pluma-host"></article>
+      </div>
+      <div class="win-actions" data-win-title="${title.replace(/"/g, '&quot;')}">
+        <button class="win-btn win-back"  type="button" aria-label="atrás"      title="atrás">←</button>
+        <button class="win-btn win-min"   type="button" aria-label="minimizar"  title="minimizar">─</button>
+        <button class="win-btn win-close" type="button" aria-label="cerrar"     title="cerrar (Esc)">×</button>
+      </div>
+    `;
+    layer.appendChild(el);
+
+    // taskbar item
+    const taskEl = document.createElement('button');
+    taskEl.type = 'button';
+    taskEl.className = 'task-item active';
+    taskEl.dataset.theme = theme || 'tawasuyu';
+    taskEl.innerHTML = `<span class="task-dot"></span><span class="task-label"></span>`;
+    taskEl.querySelector('.task-label').textContent = title;
+    taskEl.addEventListener('click', () => {
+      const v = ventanas.get(id);
+      if (!v) return;
+      if (v.minimized) restaurar(id);
+      else if (v.el.classList.contains('focused')) minimizar(id);
+      else traerAlFrente(id);
+    });
+    taskItems.appendChild(taskEl);
+
+    const v = { id, title, url, theme, z: zTop, minimized: false, el, taskEl };
+    ventanas.set(id, v);
+
+    el.addEventListener('mousedown', () => traerAlFrente(id));
+    el.querySelector('.win-min').addEventListener('click',  (e) => { e.stopPropagation(); minimizar(id); });
+    el.querySelector('.win-close').addEventListener('click',(e) => { e.stopPropagation(); cerrar(id); });
+    el.querySelector('.win-back').addEventListener('click', (e) => {
+      e.stopPropagation();
+      cerrar(id);
+      // Si había navegación previa, volver a ella; quita el artículo de la barra.
+      if (window.history.length > 1) window.history.back();
+    });
+
+    // En mobile (≤ 800px) auto-cerramos la sidebar para que el artículo
+    // ocupe todo el ancho. En desktop la sidebar sigue abierta y el
+    // artículo respeta su ancho (lo arregla el CSS de #windows-layer).
+    if (window.matchMedia('(max-width: 800px)').matches) {
+      document.body.classList.remove('sidebar-open');
+    }
+
+    cargarMdSeguro(contId, url, theme || 'tawasuyu');
+    if (!fromHash) pushHash(url);
+    return id;
+  }
+
+  // Esc cierra la ventana enfocada (si es un artículo).
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const focused = document.querySelector('.window.focused');
+    if (!focused) return;
+    for (const [vid, v] of ventanas.entries()) {
+      if (v.el === focused) { cerrar(vid); break; }
+    }
+  });
+
+  // ===== ventana especial: panel de control =====
+  // Reutiliza el chrome (titlebar/drag/resize/taskbar) y reemplaza el
+  // body por un contenedor donde Rust monta el panel.
+  function abrirPanel(title, theme) {
+    const url = '__panel__'; // pseudo-url para dedup en abrirVentana()
+    for (const [vid, v] of ventanas.entries()) {
+      if (v.url === url) {
+        if (v.minimized) restaurar(vid);
+        else traerAlFrente(vid);
+        return;
+      }
+    }
+    const id = `win-${++seq}`;
+    const contId = `${id}-content`;
+    const offset = (ventanas.size % 8) * 28;
+    const x = 100 + offset;
+    const y = 70 + offset;
+
+    const el = document.createElement('section');
+    el.className = 'window focused';
+    el.dataset.theme = theme || 'tawasuyu';
+    el.style.left = x + 'px';
+    el.style.top  = y + 'px';
+    el.style.width = '780px';
+    el.style.height = '520px';
+    zTop += 1;
+    el.style.zIndex = zTop;
+    el.innerHTML = `
+      <header class="win-titlebar" data-drag="1">
+        <span class="win-icon">◧</span>
+        <span class="win-title"></span>
+        <span class="win-spacer"></span>
+        <button class="win-btn win-min"   type="button" aria-label="minimizar">─</button>
+        <button class="win-btn win-max"   type="button" aria-label="maximizar">▢</button>
+        <button class="win-btn win-close" type="button" aria-label="cerrar">×</button>
+      </header>
+      <div class="win-body">
+        <div id="${contId}" class="panel-host" style="height:100%"></div>
+      </div>
+      <div class="win-resize" data-resize="1"></div>
+    `;
+    el.querySelector('.win-title').textContent = title;
+    layer.appendChild(el);
+
+    const taskEl = document.createElement('button');
+    taskEl.type = 'button';
+    taskEl.className = 'task-item active';
+    taskEl.dataset.theme = theme || 'tawasuyu';
+    taskEl.innerHTML = `<span class="task-dot"></span><span class="task-label"></span>`;
+    taskEl.querySelector('.task-label').textContent = title;
+    taskEl.addEventListener('click', () => {
+      const v = ventanas.get(id);
+      if (!v) return;
+      if (v.minimized) restaurar(id);
+      else if (v.el.classList.contains('focused')) minimizar(id);
+      else traerAlFrente(id);
+    });
+    taskItems.appendChild(taskEl);
+
+    const v = { id, title, url, theme, x, y, z: zTop, minimized: false, el, taskEl };
+    ventanas.set(id, v);
+
+    el.addEventListener('mousedown', () => traerAlFrente(id));
+    el.querySelector('.win-min').addEventListener('click',  (e) => { e.stopPropagation(); minimizar(id); });
+    el.querySelector('.win-close').addEventListener('click',(e) => { e.stopPropagation(); cerrar(id); });
+    el.querySelector('.win-max').addEventListener('click',  (e) => { e.stopPropagation(); el.classList.toggle('maximized'); });
+
+    // drag (mismo patrón que abrirVentana, sin duplicar handlers globales:
+    // los mousemove/up de abrirVentana ya están registrados a nivel document
+    // y aplican sobre cualquier `drag`/`resizing` activo — pero como cada
+    // ventana usa closures locales, agregamos los suyos también aquí).
+    const tb = el.querySelector('.win-titlebar');
+    let drag = null;
+    tb.addEventListener('mousedown', (e) => {
+      if (e.target.closest('.win-btn')) return;
+      if (el.classList.contains('maximized')) return;
+      drag = { dx: e.clientX - el.offsetLeft, dy: e.clientY - el.offsetTop };
+      e.preventDefault();
+    });
+    tb.addEventListener('dblclick', (e) => {
+      if (e.target.closest('.win-btn')) return;
+      el.classList.toggle('maximized');
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const nx = Math.max(0, Math.min(window.innerWidth  - 100, e.clientX - drag.dx));
+      const ny = Math.max(0, Math.min(window.innerHeight - 80,  e.clientY - drag.dy));
+      el.style.left = nx + 'px';
+      el.style.top  = ny + 'px';
+    });
+    document.addEventListener('mouseup', () => { drag = null; resizing = null; });
+
+    const grip = el.querySelector('.win-resize');
+    let resizing = null;
+    grip.addEventListener('mousedown', (e) => {
+      resizing = { sx: e.clientX, sy: e.clientY, sw: el.offsetWidth, sh: el.offsetHeight };
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!resizing) return;
+      const nw = Math.max(520, resizing.sw + (e.clientX - resizing.sx));
+      const nh = Math.max(360, resizing.sh + (e.clientY - resizing.sy));
+      el.style.width  = nw + 'px';
+      el.style.height = nh + 'px';
+    });
+
+    // Montar el panel Rust adentro del contenedor.
+    try { mount_panel(contId); }
+    catch (e) { console.error('mount_panel failed', e); }
+    return id;
+  }
+
+  // Click en cualquier <g class="quad">: si fue sobre un .dom usa el
+  // data-doc de ese texto; si fue sobre el rect/fondo usa el del quad.
+  function bindQuadTriggers() {
+    document.querySelectorAll('svg#plano g.quad:not([data-bound])').forEach(g => {
+      g.setAttribute('data-bound', '1');
+      g.style.cursor = 'pointer';
+      g.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const tgt = ev.target;
+        let url, title, theme;
+        if (tgt.classList && tgt.classList.contains('dom')) {
+          url   = tgt.dataset.doc;
+          title = tgt.dataset.title;
+          theme = tgt.dataset.theme;
+        } else {
+          url   = g.dataset.doc;
+          title = g.dataset.title;
+          theme = g.dataset.theme;
+        }
+        if (!url) return;
+        abrirVentana(url, title || url, theme || 'tawasuyu');
+      });
+    });
+  }
+
+  // wire-up: cualquier elemento [data-doc] o [data-panel] abre ventana
+  function bindDocTriggers(root) {
+    root.querySelectorAll('[data-doc]:not([data-bound])').forEach(el => {
+      // los .dom y los quads se manejan por bindQuadTriggers
+      if (el.closest && el.closest('svg#plano')) {
+        el.setAttribute('data-bound', '1');
+        return;
+      }
+      el.setAttribute('data-bound', '1');
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const url   = el.dataset.doc;
+        const title = el.dataset.title || url;
+        const theme = el.dataset.theme || 'tawasuyu';
+        abrirVentana(url, title, theme);
+      });
+    });
+    root.querySelectorAll('[data-panel]:not([data-bound])').forEach(el => {
+      el.setAttribute('data-bound', '1');
+      el.addEventListener('click', (e) => {
+        e.preventDefault();
+        const title = el.dataset.title || 'panel';
+        const theme = el.dataset.theme || 'tawasuyu';
+        abrirPanel(title, theme);
+      });
+    });
+  }
+
+  // El panel inyecta cards con [data-doc]: cuando termina de montar,
+  // dispara `tawasuyu:rebind` con detail = container para que los
+  // enganchemos al sistema de ventanas (sin duplicar listeners).
+  document.addEventListener('tawasuyu:rebind', (e) => {
+    const target = e.detail || document;
+    if (target && target.querySelectorAll) bindDocTriggers(target);
+  });
+
+  // reloj de la taskbar
+  function tickClock() {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2,'0');
+    const mm = String(d.getMinutes()).padStart(2,'0');
+    document.getElementById('clock').textContent = `${hh}:${mm}`;
+  }
+
+  // Toggle del sidebar — desktop usa `sidebar-collapsed` (oculta una
+  // sidebar que vive abierta), mobile usa `sidebar-open` (muestra una
+  // sidebar que vive cerrada). El brand decide cuál según el viewport.
+  function bindSidebarToggle() {
+    const btn = document.getElementById('brand-toggle');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+      const isMobile = window.matchMedia('(max-width: 800px)').matches;
+      const cls = isMobile ? 'sidebar-open' : 'sidebar-collapsed';
+      document.body.classList.toggle(cls);
+    });
+  }
+
+  init().then(() => {
+    // Aplicar preferencias persistidas antes de mostrar nada interactivo,
+    // así theme/accent/módulos arrancan respetando lo que ya configuró.
+    try { aplicar_preferencias(); } catch (e) { console.error('aplicar_preferencias', e); }
+    bindSidebarToggle();
+    bindQuadTriggers();
+    bindDocTriggers(document);
+    tickClock();
+    setInterval(tickClock, 30_000);
+    // Si la página arranca con un hash (ej. shared link), abrir.
+    if (window.location.hash.startsWith('#/')) aplicarHash();
+  });
+</script>
+</body>
+</html>

@@ -3,7 +3,7 @@
 // -----------------------------------------------------------------------------
 //  Ayni (reciprocidad andina) es chat persona-a-persona local-first: dueño de
 //  tus bytes, sin servidor, sobrevive a que muera cualquier empresa. Su tesis
-//  no son features añadidas sino el SUSTRATO de gioser llevado a la
+//  no son features añadidas sino el SUSTRATO de tawasuyu llevado a la
 //  conversación: BLAKE3 + DAG direccionado por contenido (de `format`),
 //  identidad agora Ed25519, transporte por chasqui/minga/akasha.
 //

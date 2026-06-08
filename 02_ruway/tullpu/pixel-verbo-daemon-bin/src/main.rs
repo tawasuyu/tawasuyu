@@ -39,7 +39,7 @@ enum ProveedorKind {
 #[derive(Debug, Parser)]
 #[command(
     name = "pixel-verbo-daemon",
-    about = "Daemon de modelos de píxel de la suite gioser — sirve un Proveedor por socket Unix.",
+    about = "Daemon de modelos de píxel de la suite tawasuyu — sirve un Proveedor por socket Unix.",
     version
 )]
 struct Cli {

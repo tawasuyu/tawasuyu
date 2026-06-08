@@ -1,5 +1,5 @@
 # =============================================================================
-#  gioser :: foreign-fs — puente de sistemas de archivos ajenos al grafo
+#  tawasuyu :: foreign-fs — puente de sistemas de archivos ajenos al grafo
 # -----------------------------------------------------------------------------
 #  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
 #  nunca al núcleo de las apps. Este crate LEE un sistema de archivos extranjero
@@ -22,7 +22,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MPL-2.0"
 authors = ["Sergio <gerencia@jlsoltech.com>"]
-description = "gioser :: puente de sistemas de archivos ajenos (FAT) al grafo de objetos"
+description = "tawasuyu :: puente de sistemas de archivos ajenos (FAT) al grafo de objetos"
 
 [lib]
 bench = false

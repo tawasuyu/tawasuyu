@@ -1,6 +1,6 @@
 //! Resolución de íconos para entradas del menú de inicio.
 //!
-//! Las apps gioser declaran su ícono como un glyph corto (`✱`, `pluma`, etc.).
+//! Las apps tawasuyu declaran su ícono como un glyph corto (`✱`, `pluma`, etc.).
 //! Las apps `.desktop` externas declaran un **nombre freedesktop** (`firefox`,
 //! `org.gnome.Files`) que no es renderizable por sí solo: hay que ubicarlo en
 //! algún tema XDG y cargar el archivo `.svg` resultante. Sin eso, pata cae al
@@ -128,7 +128,7 @@ mod tests {
     fn nombre_inexistente_se_cachea_negativo() {
         // Un nombre que casi seguro no existe en el sistema; el cache lo guarda
         // como `None` para no re-walkear.
-        let n = "icono-que-no-existe-xyz123-gioser-test";
+        let n = "icono-que-no-existe-xyz123-tawasuyu-test";
         assert!(get_or_load(n).is_none());
         // Segunda llamada usa el cache (sigue dando None y no panic).
         assert!(get_or_load(n).is_none());

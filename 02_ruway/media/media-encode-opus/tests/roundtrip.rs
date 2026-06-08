@@ -103,7 +103,7 @@ fn webm_av1_mas_opus_propio_round_trip() {
     let path = std::env::temp_dir().join("media_webm_av1_opus_propio.webm");
     mux_webm_file(&path, &cfg, &video, Some(&audio)).unwrap();
 
-    // Demux + decode nativo de AMBOS tracks: el .webm es 100% gioser.
+    // Demux + decode nativo de AMBOS tracks: el .webm es 100% tawasuyu.
     let mut media = WebmMedia::open(&path).unwrap();
     assert_eq!((media.width, media.height), (W, H));
 

@@ -1,7 +1,7 @@
 # rimay-localize — localización (i18n) declarativa
 
 Catálogos de cadenas por idioma + una API de lookup minimalista para las apps de
-gioser. Los catálogos son **datos** (JSON) cargables en tiempo de ejecución; el
+tawasuyu. Los catálogos son **datos** (JSON) cargables en tiempo de ejecución; el
 código pide una clave y un idioma y obtiene la cadena, con interpolación de
 placeholders `{nombre}`.
 
@@ -31,4 +31,4 @@ transversal (no es parte del núcleo de `rimay`).
 
 ## Lugar en el repo
 
-`shared/rimay-localize` — utilidad i18n transversal para apps gioser.
+`shared/rimay-localize` — utilidad i18n transversal para apps tawasuyu.

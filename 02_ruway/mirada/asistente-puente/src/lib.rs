@@ -29,7 +29,7 @@ use serde::Deserialize;
 /// El prompt de sistema que el puente le envia al LLM. Lista las acciones
 /// posibles, exige JSON estricto y advierte sobre el modelo de seguridad
 /// (la IA propone, el humano firma).
-pub const PROMPT_SISTEMA_WAWA: &str = "Eres el asistente de un nodo wawa (sistema operativo bare-metal de la suite gioser). \
+pub const PROMPT_SISTEMA_WAWA: &str = "Eres el asistente de un nodo wawa (sistema operativo bare-metal de la suite tawasuyu). \
 El usuario del nodo te describe lo que quiere hacer y tú respondes EXCLUSIVAMENTE con un \
 objeto JSON con esta forma exacta:\n\
 \n\

@@ -8,7 +8,7 @@
 
 ## 0. El problema que resuelve
 
-El escritorio de gioser tenía el concepto de "launcher" **triplicado y mal
+El escritorio de tawasuyu tenía el concepto de "launcher" **triplicado y mal
 delimitado**: `mirada-launcher-llimphi` (la barra), `shuma-shell-llimphi` (un
 chasis con tabs) y `shuma-module-launcher` (un módulo lista-de-apps) competían
 por el mismo rol sin una frontera clara. Correr cualquiera bajo el compositor
@@ -132,7 +132,7 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
   sistema (chrono + `/proc/stat` + `/proc/meminfo` + `/sys/class/backlight`) en
   un `WidgetCtx`; `render` traduce cada `WidgetView` a `View<Msg>` (texto,
   medidor con barra, placeholder tenue) y coloca las superficies en los rects
-  que el layout resolvió (posición absoluta). `PataApp` (app-id `gioser.pata`)
+  que el layout resolvió (posición absoluta). `PataApp` (app-id `tawasuyu.pata`)
   carga config vía `pata-config`, `tick`ea a 1 Hz y pinta. Por ahora una sola
   ventana; mirada acopla por superficie en la Fase 8.
 - **Fase 6 (parcial)** — widgets nuevos:
@@ -171,7 +171,7 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     sustituto paralelo con el nombre del original" que prohíbe el CLAUDE.md.
 - **Fase 8 ✅** — `mirada-compositor` reconoce el marco `pata`:
   - Identidad: el viejo `SHELL_APP_ID = "carmen.shell"` → `is_shell_app_id`, que
-    matchea `gioser.pata` (la identidad que anuncia `pata-llimphi`) o el alias
+    matchea `tawasuyu.pata` (la identidad que anuncia `pata-llimphi`) o el alias
     legacy `carmen.shell`, override por `MIRADA_SHELL_APP_ID`.
   - Anclaje/grosor configurables (`MIRADA_SHELL_ANCHOR` / `MIRADA_SHELL_THICKNESS`,
     defaults bottom/40), ya no una franja fija de 40px al pie. Geometría en
@@ -472,7 +472,7 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     apertura —es WM puro—; spawnear el proceso es la vía, como en
     `chasqui-explorer`.) Manifiestos de ejemplo de apps reales de la suite en
     `shared/app-bus/assets/apps/` (`media.toml` para video/audio, `nada.toml` para
-    texto/código); se copian a `~/.config/gioser/apps/`. La decisión de ruteo
+    texto/código); se copian a `~/.config/tawasuyu/apps/`. La decisión de ruteo
     (`open::handler_for`) es pura y testeada; el formato de manifiesto tiene
     canario en `app-bus`.
   - **11d-extra ✅** — menú "Abrir con…" para elegir el handler. El right-click
@@ -515,18 +515,18 @@ los superó a ambos. Evidencia del render: `cargo run -p shuma-module-shell
     pata: es control remoto del canvas de la app. El hit-test del pointer ya cae a
     `on_click_at`, que estos dientes usan.
   - **Integración cosmos** (opt-in `COSMOS_DELEGATE_SIDEBAR`): `app_id()=
-    "gioser.cosmos"`; publica sus `DockItem`s como dientes; `Msg::HostActivate`
+    "tawasuyu.cosmos"`; publica sus `DockItem`s como dientes; `Msg::HostActivate`
     togglea el panel correspondiente sobre su canvas; en modo delegado no pinta sus
     rails (`dock_rail_overlay`→None) y un panel aparece sólo si su lado está
     expandido → sin nada activo, puro canvas.
   - **Requisitos runtime**: pata corriendo en layer-shell con un sidebar en la
     config; cosmos lanzado con `COSMOS_DELEGATE_SIDEBAR=1`. Sin verificar headless.
   - **media y pluma también delegan** (reusan el mismo `pata-host`):
-    - **media** (`MEDIA_DELEGATE_SIDEBAR`, `app_id="gioser.media"`): dientes
+    - **media** (`MEDIA_DELEGATE_SIDEBAR`, `app_id="tawasuyu.media"`): dientes
       Config/Cola/Visualizadores/Ayuda; `Msg::HostActivate` despacha los Msgs de
       toggle existentes (Config/Cola/Ayuda son ventanas/overlay) o togglea el flag
       de visualizadores. media ya es canvas (no tiene rail propio que ocultar).
-    - **pluma** (`PLUMA_DELEGATE_SIDEBAR`, `app_id="gioser.pluma"`): dientes
+    - **pluma** (`PLUMA_DELEGATE_SIDEBAR`, `app_id="tawasuyu.pluma"`): dientes
       Documentos/LLM/Buscar/Diff. Cambio **aditivo**: en modo delegado las columnas
       laterales se vuelven colapsables (`side_izq_visible`/`side_der_visible`; cada
       lado oculto sale del árbol con su splitter) → editor a pantalla completa;

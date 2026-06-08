@@ -2,7 +2,7 @@
 #  ayni :: ayni-minga — transporte P2P sobre libp2p (minga)
 # -----------------------------------------------------------------------------
 #  Cierra el "sin servidor" de P3: `EnlaceMinga` implementa el MISMO trait
-#  `Transporte` que `EnlaceTcp`, pero sobre el nodo libp2p de gioser
+#  `Transporte` que `EnlaceTcp`, pero sobre el nodo libp2p de tawasuyu
 #  (`card_net::BrahmanNet`: TCP+Noise+yamux, Kademlia DHT, identify). La app no
 #  cambia al cambiar de transporte — sólo elige el enlace al arrancar.
 #

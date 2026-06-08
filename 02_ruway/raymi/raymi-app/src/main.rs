@@ -59,7 +59,7 @@ fn config_path() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("RAYMI_CONFIG") {
         return Some(PathBuf::from(p));
     }
-    ProjectDirs::from("org", "gioser", "paloma").map(|d| d.config_dir().join("cuenta.json"))
+    ProjectDirs::from("org", "tawasuyu", "paloma").map(|d| d.config_dir().join("cuenta.json"))
 }
 
 /// Contraseña desde entorno: `RAYMI_PASSWORD` o, compartida con el correo,
@@ -71,7 +71,7 @@ fn password() -> Option<String> {
 /// Directorio de caché en disco (`~/.cache/raymi` en Linux). Propio de raymi
 /// (no comparte caché con paloma; sí la cuenta).
 fn cache_dir() -> Option<PathBuf> {
-    ProjectDirs::from("org", "gioser", "raymi").map(|d| d.cache_dir().to_path_buf())
+    ProjectDirs::from("org", "tawasuyu", "raymi").map(|d| d.cache_dir().to_path_buf())
 }
 
 /// Lo que `try_net` entrega cuando hay backend real.

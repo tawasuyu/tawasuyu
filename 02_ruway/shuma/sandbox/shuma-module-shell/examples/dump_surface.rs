@@ -56,7 +56,7 @@ fn main() {
     cmd(
         &mut state,
         &mut blk,
-        "$ ls -la ~/gioser",
+        "$ ls -la ~/tawasuyu",
         &[
             OutputLine::stdout("total 248"),
             OutputLine::stdout("drwxr-xr-x  12 sergio sergio 4096 00_unanchay"),
@@ -86,7 +86,7 @@ fn main() {
         state.output.push(p);
         for i in 0..3000 {
             let mut l = OutputLine::stdout(&format!(
-                "/home/sergio/gioser/02_ruway/llimphi/widgets/terminal/src/archivo_{i:05}.rs"
+                "/home/sergio/tawasuyu/02_ruway/llimphi/widgets/terminal/src/archivo_{i:05}.rs"
             ));
             l.block = flood;
             state.output.push(l);

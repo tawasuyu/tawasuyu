@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "llimphi-widget-splash — splash de arranque gioser: cuatro cuadrantes (unanchay/yachay/ruway/ukupacha) animados con tween de entrada secuencial. Identidad visual del SO."
+description = "llimphi-widget-splash — splash de arranque tawasuyu: cuatro cuadrantes (unanchay/yachay/ruway/ukupacha) animados con tween de entrada secuencial. Identidad visual del SO."
 
 [dependencies]
 llimphi-ui = { workspace = true }

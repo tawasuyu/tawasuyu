@@ -2,7 +2,7 @@
 //!
 //! - Reusa `cosmos_app-engine` (VSOP2013 + LRU cache) nativo.
 //! - Comparte (por default) la misma `charts.db` SQLite que la app
-//!   desktop, vía `directories::ProjectDirs::from("net", "gioser",
+//!   desktop, vía `directories::ProjectDirs::from("net", "tawasuyu",
 //!   "cosmos_app")`. La idea es: levantar `cosmos_app-server`
 //!   en localhost y abrir el wheel desde el browser cuando no se está
 //!   con la app desktop.
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn default_db_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let dirs = directories::ProjectDirs::from("net", "gioser", "cosmos_app")
+    let dirs = directories::ProjectDirs::from("net", "tawasuyu", "cosmos_app")
         .ok_or("no se pudo determinar XDG data dir")?;
     Ok(dirs.data_dir().join("charts.db"))
 }

@@ -1,7 +1,7 @@
 # media-source-opus
 
 Decode **Opus nativo** del dominio `media` — puro-Rust, sin C, sin FFI,
-sin patentes. Opus es el formato de audio **nativo** de gioser (PLAN.md
+sin patentes. Opus es el formato de audio **nativo** de tawasuyu (PLAN.md
 §6.quinquies), par del video AV1 (`media-source-av1`).
 
 Abre un **Ogg Opus** (`.opus`/`.ogg`), demuxea con el crate `ogg`,

@@ -67,7 +67,7 @@ const LANGS: &[(&str, &str)] = &[("es-PE", "Español"), ("en-US", "English"), ("
 /// Acentos. El id persiste en `WawaConfig::accent`; el color lo resuelve
 /// `wawa_config::accent_rgb`.
 const ACCENTS: &[(&str, &str)] = &[
-    ("default", "gioser"),
+    ("default", "tawasuyu"),
     ("unanchay", "unanchay"),
     ("yachay", "yachay"),
     ("ruway", "ruway"),

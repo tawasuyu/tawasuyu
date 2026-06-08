@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Qué es gioser
+## Qué es tawasuyu
 
 Suite vertical en Rust (kernel propio, identidad, motor gráfico, navegador, ERP, shell, broker, simulador...) organizada como un solo Cargo workspace de ~210 crates. La arquitectura está embebida en el filesystem: cuatro cuadrantes (`00_unanchay`/`01_yachay`/`02_ruway`/`03_ukupacha`) corresponden a las cuatro fases del ciclo de la información (PERCIBIR / CONOCER / HACER / RAÍZ). Mover un dominio de cuadrante cambia su naturaleza — no son carpetas administrativas.
 
@@ -59,12 +59,12 @@ cargo run -p <crate> --example <demo> --release  # demos ejecutables (Llimphi)
 
 Muchas apps tienen `examples/*_demo.rs` que son la forma esperada de probar features sin levantar la suite completa (ej. `pluma-editor-llimphi` tiene `multilienzo_demo`, `multilienzo_llm_demo`, `multilienzo_completo_demo`, `cuerpo_ide_demo`, `editor_unico_demo`; `pluma-notebook-kernel-{dominium,cosmos,llm}` traen `notebook_*_demo`).
 
-### Landing web (`web/gioser-web`)
+### Landing web (`web/tawasuyu-web`)
 
 ```bash
-./scripts/build-gioser-web.sh dev       # cargo build + wasm-bindgen, ~10 s
-./scripts/build-gioser-web.sh release   # opt-level=3 + lto + strip, ~30 s
-# output queda en web/gioser-web/pkg/ (gioser_web.js + gioser_web_bg.wasm)
+./scripts/build-tawasuyu-web.sh dev       # cargo build + wasm-bindgen, ~10 s
+./scripts/build-tawasuyu-web.sh release   # opt-level=3 + lto + strip, ~30 s
+# output queda en web/tawasuyu-web/pkg/ (tawasuyu_web.js + tawasuyu_web_bg.wasm)
 ```
 
 Necesita `wasm-bindgen-cli` en la versión **exacta** de `Cargo.lock` (hoy 0.2.121; `grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | head` para confirmar) — si difiere, el JS no carga el `.wasm`. La landing es la única pieza del workspace que cruza el puente JS; no es producto, sólo cartel.
@@ -75,7 +75,7 @@ Necesita `wasm-bindgen-cli` en la versión **exacta** de `Cargo.lock` (hoy 0.2.1
 cargo run -p nada --release   # file tree + text-editor Llimphi sobre archivos reales del workspace
 ```
 
-Útil para ejercitar features del `llimphi-widget-text-editor` (selección, undo, brackets, clipboard) sin levantar una app de dominio. (Antes se llamaba `gioser-edit` — renombrado en 2026-05-27.)
+Útil para ejercitar features del `llimphi-widget-text-editor` (selección, undo, brackets, clipboard) sin levantar una app de dominio. (Antes se llamaba `tawasuyu-edit` — renombrado en 2026-05-27.)
 
 ### Núcleos `no_std` compartidos
 

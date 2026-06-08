@@ -137,8 +137,8 @@ pub fn canonical_theme_name(variant: &str) -> Option<&'static str> {
 
 /// Devuelve el color RGB de un acento por id. `default` retorna `None`
 /// para que el consumidor no toque el accent del theme base. La paleta
-/// es la misma del web (`gioser-web/styles.css`): tinte por cuadrante
-/// + accent gioser por default.
+/// es la misma del web (`tawasuyu-web/styles.css`): tinte por cuadrante
+/// + accent tawasuyu por default.
 ///
 /// Es un trio RGB (no un tipo de `peniko`) para no obligar a depender
 /// de `llimphi-raster` desde acá. Los consumidores Llimphi hacen:
@@ -153,7 +153,7 @@ pub fn canonical_theme_name(variant: &str) -> Option<&'static str> {
 pub fn accent_rgb(accent: &str) -> Option<[u8; 3]> {
     match accent {
         "default" => None,
-        "gioser" => Some([0x6E, 0x8C, 0xDC]),
+        "tawasuyu" => Some([0x6E, 0x8C, 0xDC]),
         "unanchay" => Some([0xB9, 0xC9, 0xE8]),
         "yachay" => Some([0xE8, 0xC9, 0x7A]),
         "ruway" => Some([0xE8, 0x9B, 0x6E]),
@@ -167,7 +167,7 @@ pub fn accent_rgb(accent: &str) -> Option<[u8; 3]> {
 pub const THEME_VARIANTS: &[&str] = &["dark", "light", "aurora", "sunset"];
 
 /// Lista de acentos reconocidos. `"default"` significa "no override".
-pub const ACCENTS: &[&str] = &["default", "gioser", "unanchay", "yachay", "ruway", "ukupacha"];
+pub const ACCENTS: &[&str] = &["default", "tawasuyu", "unanchay", "yachay", "ruway", "ukupacha"];
 
 /// Identificadores estables de los módulos del SO conocidos. Las apps
 /// son libres de leer/escribir otros, pero estos son los que el panel
@@ -205,7 +205,7 @@ pub struct WawaConfig {
     pub theme_variant: String,
 
     /// Acento. `"default"` deja el accent del theme; cualquier otro
-    /// id (gioser/unanchay/yachay/ruway/ukupacha) lo sobreescribe.
+    /// id (tawasuyu/unanchay/yachay/ruway/ukupacha) lo sobreescribe.
     #[serde(default = "default_accent")]
     pub accent: String,
 
@@ -653,7 +653,7 @@ mod tests {
     #[test]
     fn accent_rgb_default_is_none() {
         assert_eq!(accent_rgb("default"), None);
-        assert_eq!(accent_rgb("gioser"), Some([0x6E, 0x8C, 0xDC]));
+        assert_eq!(accent_rgb("tawasuyu"), Some([0x6E, 0x8C, 0xDC]));
         assert_eq!(accent_rgb("ukupacha"), Some([0x8F, 0xB5, 0x8C]));
         assert_eq!(accent_rgb("desconocido"), None);
     }

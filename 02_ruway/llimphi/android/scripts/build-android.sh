@@ -47,7 +47,7 @@ if [ ! -f "$LLIMPHI_PEM" ]; then
         -keyout "${LLIMPHI_PEM}.key" \
         -out    "${LLIMPHI_PEM}.cert" \
         -days 36500 -nodes \
-        -subj "/CN=llimphi-dev/O=gioser/C=AR" 2>/dev/null
+        -subj "/CN=llimphi-dev/O=tawasuyu/C=AR" 2>/dev/null
     cat "${LLIMPHI_PEM}.key" "${LLIMPHI_PEM}.cert" > "$LLIMPHI_PEM"
 fi
 

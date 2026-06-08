@@ -6,7 +6,7 @@
 
 ## 0. Mapa de los dos stacks
 
-gioser tiene **dos pilas paralelas de "lo más bajo"**, una por target:
+tawasuyu tiene **dos pilas paralelas de "lo más bajo"**, una por target:
 
 | Capa | Linux (`*-unknown-linux-gnu`) | wawa (`x86_64-unknown-none`) |
 |---|---|---|

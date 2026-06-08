@@ -112,8 +112,8 @@ Con dos subdominios apuntando al host:
 
 | DNS | Función |
 |-----|---------|
-| `cosmobiologia.gioser.net` | página web (HTML + WASM) |
-| `api.cosmobiologia.gioser.net` | endpoints `/api/*` (JSON / SVG) |
+| `cosmobiologia.tawasuyu.net` | página web (HTML + WASM) |
+| `api.cosmobiologia.tawasuyu.net` | endpoints `/api/*` (JSON / SVG) |
 
 Hoy el server sirve los dos roles en el mismo puerto — el split por
 subdominio lo hace el proxy, **sin cambiar nada del Rust**.
@@ -121,7 +121,7 @@ subdominio lo hace el proxy, **sin cambiar nada del Rust**.
 ### Caddyfile (recomendado — TLS automático con Let's Encrypt)
 
 ```Caddyfile
-cosmobiologia.gioser.net {
+cosmobiologia.tawasuyu.net {
     encode gzip zstd
     # Página web + estáticos + WASM
     @api path /api/*
@@ -135,7 +135,7 @@ cosmobiologia.gioser.net {
     }
 }
 
-api.cosmobiologia.gioser.net {
+api.cosmobiologia.tawasuyu.net {
     encode gzip zstd
     # Solo los endpoints /api/*; rechaza el resto.
     @api path /api/*
@@ -143,7 +143,7 @@ api.cosmobiologia.gioser.net {
         reverse_proxy 127.0.0.1:8787
     }
     handle {
-        respond "Use cosmobiologia.gioser.net para la página" 404
+        respond "Use cosmobiologia.tawasuyu.net para la página" 404
     }
 }
 ```
@@ -153,7 +153,7 @@ api.cosmobiologia.gioser.net {
 ```nginx
 # /etc/nginx/sites-available/cosmobiologia
 server {
-    server_name cosmobiologia.gioser.net;
+    server_name cosmobiologia.tawasuyu.net;
     listen 443 ssl http2;
     # ssl_certificate / ssl_certificate_key — vía certbot
     location / {
@@ -166,7 +166,7 @@ server {
 }
 
 server {
-    server_name api.cosmobiologia.gioser.net;
+    server_name api.cosmobiologia.tawasuyu.net;
     listen 443 ssl http2;
     location /api/ {
         proxy_pass http://127.0.0.1:8787;
@@ -184,8 +184,8 @@ server {
 A records (o AAAA si IPv6) hacia tu VPS:
 
 ```
-cosmobiologia.gioser.net.       A  <ip-del-VPS>
-api.cosmobiologia.gioser.net.   A  <ip-del-VPS>
+cosmobiologia.tawasuyu.net.       A  <ip-del-VPS>
+api.cosmobiologia.tawasuyu.net.   A  <ip-del-VPS>
 ```
 
 ---
@@ -203,7 +203,7 @@ puede hacer fetch contra `/api/*`. Eso es OK para:
 **No use CorsLayer::permissive en producción multi-usuario**. Para
 eso hay que:
 1. Agregar auth (sesiones / JWT / API key).
-2. Reemplazar con `CorsLayer::new().allow_origin(["https://cosmobiologia.gioser.net".parse().unwrap()])`.
+2. Reemplazar con `CorsLayer::new().allow_origin(["https://cosmobiologia.tawasuyu.net".parse().unwrap()])`.
 3. Volverte el `AllowCredentials::yes()` si vas a usar cookies.
 
 ---
@@ -216,7 +216,7 @@ querés en tu máquina local — abrís el browser y ves las mismas
 cartas que tenés en la app gpui.
 
 **Pero NO querés que el server público en
-`cosmobiologia.gioser.net` exponga TUS cartas privadas**. Para el
+`cosmobiologia.tawasuyu.net` exponga TUS cartas privadas**. Para el
 demo público:
 
 ```bash
@@ -251,14 +251,14 @@ sqlite3 /var/lib/cosmobiologia/charts.db ".backup /var/backups/cosmobiologia-$(d
 
 ```bash
 # Desde tu máquina:
-curl https://cosmobiologia.gioser.net/api/health
+curl https://cosmobiologia.tawasuyu.net/api/health
 # → {"status":"ok","service":"cosmos-server"}
 
-curl https://cosmobiologia.gioser.net/api/sky | jq .title
+curl https://cosmobiologia.tawasuyu.net/api/sky | jq .title
 # → "Cielo 2026-05-19 00:55 UTC"
 
 # Abrí la página:
-open https://cosmobiologia.gioser.net/
+open https://cosmobiologia.tawasuyu.net/
 # (deberías ver la rueda del cielo + sidebar con "Cielo ahora")
 ```
 

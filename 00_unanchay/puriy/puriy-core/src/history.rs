@@ -73,7 +73,7 @@ mod tests {
 
     fn hist_ejemplo() -> History {
         let mut h = History::new();
-        h.record("https://gioser.net", "gioser landing", 100);
+        h.record("https://tawasuyu.net", "tawasuyu landing", 100);
         h.record("https://docs.rs/serde", "serde docs", 200);
         h.record("https://example.com", "Example Domain", 300);
         h
@@ -83,7 +83,7 @@ mod tests {
     fn record_apila_en_orden() {
         let h = hist_ejemplo();
         assert_eq!(h.len(), 3);
-        assert_eq!(h.entries()[0].url, "https://gioser.net");
+        assert_eq!(h.entries()[0].url, "https://tawasuyu.net");
         assert_eq!(h.entries()[2].url, "https://example.com");
     }
 

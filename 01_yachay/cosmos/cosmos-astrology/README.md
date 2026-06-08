@@ -2,7 +2,7 @@
 
 The astrology-specific layer of the `eternal` workspace, built on the [`cosmos-sky`](../cosmos-sky/) façade.
 
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-astrology)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-astrology)](https://gitea.tawasuyu.net/sergio/eternal)
 
 A typed pipeline that turns *(when, where)* into a `NatalChart`: four angles, twelve house cusps in the chosen system, every requested body placed in its sign and house with retrograde flag — plus a full forecasting toolkit: aspects, returns, progressions, solar arc, the classical primary-direction trilogy (Placidus, Regiomontanus, Campanus), transits, stations, synastry, midpoint composites, Arabic Parts, Hellenistic profections, lunar phases, and eclipses-on-natal.
 

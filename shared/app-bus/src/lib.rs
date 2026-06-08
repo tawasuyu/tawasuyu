@@ -1,4 +1,4 @@
-//! `app-bus` — el cimiento del menú de aplicaciones de gioser.
+//! `app-bus` — el cimiento del menú de aplicaciones de tawasuyu.
 //!
 //! Hoy hay tres lanzadores que no comparten nada: `mirada-launcher`
 //! (TOML propio, `std::process`), `shuma-module-launcher` (otro TOML,
@@ -10,7 +10,7 @@
 //!
 //! 1. **Registro** ([`AppRegistry`] + [`AppEntry`]): qué apps hay, cómo se
 //!    lanzan ([`Launch`]) y qué mimes/lentes saben abrir (open-with).
-//!    Se descubre de `~/.config/gioser/apps/*.toml` (feature `std`).
+//!    Se descubre de `~/.config/tawasuyu/apps/*.toml` (feature `std`).
 //! 2. **Menú global** ([`AppMenu`]/[`Menu`]/[`MenuItem`]): el clásico
 //!    Archivo/Editar/Ayuda que la app *declara*. Cuando hay una barra de
 //!    launcher presente, ésta lo *adopta* y la app deja de pintarlo en su
@@ -42,7 +42,7 @@ use serde::{Deserialize, Serialize};
 // Registro de apps
 // =====================================================================
 
-/// Cómo se enciende una app. Los tres mundos de gioser:
+/// Cómo se enciende una app. Los tres mundos de tawasuyu:
 /// `Exec` (binario del host), `Action` (acción interna del chasis que la
 /// hospeda — p.ej. `focus:shell`) y `Wasm` (módulo en el almacén de wawa,
 /// direccionado por hash de bytecode).
@@ -205,10 +205,10 @@ pub fn parse_entry(toml_src: &str) -> Option<AppEntry> {
         .and_then(AppFile::into_entry)
 }
 
-/// Directorio canónico del registro: `~/.config/gioser/apps/`.
+/// Directorio canónico del registro: `~/.config/tawasuyu/apps/`.
 #[cfg(feature = "std")]
 pub fn apps_dir() -> Option<std::path::PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("gioser").join("apps"))
+    directories::BaseDirs::new().map(|b| b.config_dir().join("tawasuyu").join("apps"))
 }
 
 /// La tabla de apps. Inmutable tras descubrir — recargar = volver a
@@ -264,9 +264,9 @@ impl AppRegistry {
     }
 
     /// Como [`discover`](Self::discover) pero **fusionando** las apps de la suite
-    /// gioser (`~/.config/gioser/apps/*.toml`) con las `.desktop` del sistema
-    /// (XDG). Dedup por label en minúsculas: la entrada gioser gana sobre la del
-    /// sistema con el mismo nombre (así «Media» de gioser tapa un `media.desktop`
+    /// tawasuyu (`~/.config/tawasuyu/apps/*.toml`) con las `.desktop` del sistema
+    /// (XDG). Dedup por label en minúsculas: la entrada tawasuyu gana sobre la del
+    /// sistema con el mismo nombre (así «Media» de tawasuyu tapa un `media.desktop`
     /// del sistema). Orden alfabético por label. Es lo que un launcher "normal"
     /// (rofi/wofi) descubre, más la suite propia.
     pub fn discover_merged() -> Self {
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn manifiestos_de_ejemplo_parsean_y_resuelven_handlers() {
         // Los manifiestos de `assets/apps/` (las apps reales de la suite que se
-        // copian a ~/.config/gioser/apps/) deben parsear y declarar sus mimes.
+        // copian a ~/.config/tawasuyu/apps/) deben parsear y declarar sus mimes.
         // Canario del formato: si cambia el esquema, esto avisa.
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/apps");
         let reg = AppRegistry::from_dir(&dir);

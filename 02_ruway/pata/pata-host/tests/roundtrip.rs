@@ -39,18 +39,18 @@ fn registro_activacion_y_baja() {
 
     // --- Registro + activación ida y vuelta ---
     let (tx, rx) = mpsc::channel::<u32>();
-    let client = HostClient::connect("gioser.test", "Test", teeth.clone(), move |t| {
+    let client = HostClient::connect("tawasuyu.test", "Test", teeth.clone(), move |t| {
         let _ = tx.send(t);
     })
     .expect("client conecta");
 
-    let snap = esperar(Duration::from_secs(2), || server.snapshot("gioser.test"))
+    let snap = esperar(Duration::from_secs(2), || server.snapshot("tawasuyu.test"))
         .expect("el server registró la app");
     assert_eq!(snap.0, "Test");
     assert_eq!(snap.1, teeth);
     assert!(server.any_registered());
 
-    assert!(server.activate("gioser.test", 2));
+    assert!(server.activate("tawasuyu.test", 2));
     let got = rx.recv_timeout(Duration::from_secs(2)).expect("llega la activación");
     assert_eq!(got, 2);
 
@@ -60,7 +60,7 @@ fn registro_activacion_y_baja() {
     // --- Baja: soltar el cliente da de baja la app ---
     drop(client);
     let ido = esperar(Duration::from_secs(2), || {
-        server.snapshot("gioser.test").is_none().then_some(())
+        server.snapshot("tawasuyu.test").is_none().then_some(())
     });
     assert!(ido.is_some(), "la app debe darse de baja al soltar el cliente");
 

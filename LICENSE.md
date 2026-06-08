@@ -1,6 +1,6 @@
 # Licencia
 
-La mayor parte de **gioser** se publica con licencia dual, a tu elección:
+La mayor parte de **tawasuyu** se publica con licencia dual, a tu elección:
 
 - **Apache License 2.0** ([`LICENSE-APACHE`](LICENSE-APACHE)), o
 - **MIT** ([`LICENSE-MIT`](LICENSE-MIT)).

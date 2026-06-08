@@ -1,6 +1,6 @@
 //! `sandokan-monitor-core` — la **cara de sólo-lectura** del plano de control.
 //!
-//! El process monitor de gioser observa las unidades vivas por el **mismo
+//! El process monitor de tawasuyu observa las unidades vivas por el **mismo
 //! contrato** que las controla: [`sandokan_core::Engine`]. No mira `/proc` ni
 //! el card store crudo — eso volvería a tener dos fuentes de verdad (la del
 //! control y la de la observación), justo el duplicado que el SDD elimina.

@@ -1,7 +1,7 @@
 //! Round-trip nativo end-to-end: encode AV1 con `media-encode-av1` →
 //! escribe IVF → decode con `media-source-av1` (rav1d) → verifica que el
 //! color sobrevive. Prueba que el ciclo encode↔decode del formato nativo
-//! de gioser cierra **sin ffmpeg en ningún extremo**.
+//! de tawasuyu cierra **sin ffmpeg en ningún extremo**.
 
 use std::time::Duration;
 

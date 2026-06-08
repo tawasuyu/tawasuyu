@@ -3,7 +3,7 @@
 **Recorder unificado** del dominio: graba video **y** audio a un único
 `.webm` AV1+Opus nativo. Donde `media-recorder-av1` deja un `.ivf` de video
 y `media-recorder-wav` un `.wav` de audio en archivos separados, este los
-junta en el **contenedor nativo** de gioser — sin ffmpeg.
+junta en el **contenedor nativo** de tawasuyu — sin ffmpeg.
 
 ```
 FrameSource ─ RecordedFrameSource ─→ media-encode-av1 (rav1e) ─┐

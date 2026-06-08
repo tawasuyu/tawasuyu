@@ -1,9 +1,9 @@
-# gioser
+# tawasuyu
 
 Monorepo organizado por el ciclo de la información en 4 cuadrantes.
 
 ```
-gioser/
+tawasuyu/
 ├── 00_unanchay/   PERCIBIR  — pluma, khipu, rimay, chaka, pineal, puriy
 ├── 01_yachay/     CONOCER   — cosmos, dominium, nakui
 ├── 02_ruway/      HACER     — mirada, shuma, nahual, chasqui, takiy

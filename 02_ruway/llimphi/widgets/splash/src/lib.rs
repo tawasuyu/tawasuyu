@@ -1,4 +1,4 @@
-//! `llimphi-widget-splash` — splash de arranque gioser.
+//! `llimphi-widget-splash` — splash de arranque tawasuyu.
 //!
 //! Identidad visual del SO al boot: cuatro cuadrantes ordenados como
 //! una cruz andina, cada uno con su nombre quechua y color simbólico,
@@ -128,7 +128,7 @@ pub fn splash_view<Msg: Clone + 'static>(
     })
     .children(vec![r0, r1]);
 
-    // Título "gioser" debajo, también fade-in pero al final.
+    // Título "tawasuyu" debajo, también fade-in pero al final.
     let title_t = ((elapsed - 4.0 * stagger) / per_quad).clamp(0.0, 1.0);
     let title_alpha = motion::ease_out_cubic(title_t);
     let title = View::new(Style {
@@ -141,7 +141,7 @@ pub fn splash_view<Msg: Clone + 'static>(
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .text_aligned("gioser", 22.0, fg_text, Alignment::Center)
+    .text_aligned("tawasuyu", 22.0, fg_text, Alignment::Center)
     .alpha(title_alpha);
 
     View::new(Style {

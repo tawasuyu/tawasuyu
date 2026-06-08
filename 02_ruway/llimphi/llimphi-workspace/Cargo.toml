@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "llimphi-workspace — chasis genérico estilo tmux: hospeda N paneles en un árbol BSP (llimphi-widget-panes) con la máquina de estados (split/close/focus/resize) + chrome estándar. La capa sobre la que cualquier app de gioser se monta en un layout intercambiable."
+description = "llimphi-workspace — chasis genérico estilo tmux: hospeda N paneles en un árbol BSP (llimphi-widget-panes) con la máquina de estados (split/close/focus/resize) + chrome estándar. La capa sobre la que cualquier app de tawasuyu se monta en un layout intercambiable."
 
 [dependencies]
 llimphi-ui = { workspace = true }

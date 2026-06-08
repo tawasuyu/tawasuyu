@@ -3,7 +3,7 @@
 > The desktop frame: declarative bars, panels and a dock — widgets you place
 > anywhere, from one config file. The same model on Linux and on Wawa.
 
-`pata` (Quechua: *edge, ledge, terrace*) is the chrome layer of the gioser
+`pata` (Quechua: *edge, ledge, terrace*) is the chrome layer of the tawasuyu
 desktop. It is **not** the compositor (`mirada`) nor the shell (`shuma`): it is
 the configurable frame that surrounds the windows. From a config file you deploy
 **bars**, **panels** and a **dock**, and inside them arrange widgets — start

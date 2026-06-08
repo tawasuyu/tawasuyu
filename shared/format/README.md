@@ -1,4 +1,4 @@
-# format — el formato nativo de gioser
+# format — el formato nativo de tawasuyu
 
 Tipos canónicos del **DAG direccionado por contenido** (BLAKE3 + postcard),
 compartidos entre host y kernel `wawa`. `#![no_std]` — cruza la frontera al

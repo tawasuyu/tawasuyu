@@ -665,7 +665,7 @@ impl App for PataApp {
     }
 
     fn app_id() -> Option<&'static str> {
-        Some("gioser.pata")
+        Some("tawasuyu.pata")
     }
 
     fn initial_size() -> (u32, u32) {

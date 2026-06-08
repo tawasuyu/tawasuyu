@@ -1,7 +1,7 @@
 //! El demo "todo junto": toolbar LLM dinámica + persistencia automática.
 //!
 //! Cada transformación que disparás con un botón se persiste en
-//! `~/.cache/gioser/pluma-multilienzo-completo/` ANTES de que veas la
+//! `~/.cache/tawasuyu/pluma-multilienzo-completo/` ANTES de que veas la
 //! columna nueva. Cerrá el demo, volvé a abrirlo: todo lo que generaste
 //! sigue ahí, sin pegarle de nuevo al LLM.
 //!
@@ -935,7 +935,7 @@ fn cache_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".cache")))
         .unwrap_or_else(|| PathBuf::from("/tmp"));
-    base.join("gioser").join("pluma-multilienzo-completo")
+    base.join("tawasuyu").join("pluma-multilienzo-completo")
 }
 
 /// Construye el chat inicial y reporta el backend elegido. Si no hay

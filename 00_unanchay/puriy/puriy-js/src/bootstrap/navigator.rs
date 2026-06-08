@@ -7,7 +7,7 @@ pub(crate) const NAVIGATOR_BOOTSTRAP: &str = r#"
 // handler. El body se serializa con el mismo `__puriy_serialize_body`.
 globalThis.navigator = globalThis.navigator || {};
 if (globalThis.navigator.userAgent == null) {
-    globalThis.navigator.userAgent = 'Puriy/0.1 (gioser)';
+    globalThis.navigator.userAgent = 'Puriy/0.1 (tawasuyu)';
 }
 if (globalThis.navigator.onLine == null) {
     globalThis.navigator.onLine = true;

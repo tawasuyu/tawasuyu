@@ -1,7 +1,7 @@
 // =============================================================================
 //  uya-app::enlace — transporte P2P soberano sobre card-net (libp2p).
 // -----------------------------------------------------------------------------
-//  Envuelve `card_net::BrahmanNet` (el nodo libp2p de gioser, con relay/dcutr/
+//  Envuelve `card_net::BrahmanNet` (el nodo libp2p de tawasuyu, con relay/dcutr/
 //  autonat) — el mismo transporte que usan ayni/minga/agora. Reemplaza al TCP
 //  crudo anterior sin tocar `uya-core` ni la UI: el `Enlace` sigue siendo
 //  sincrónico hacia afuera (eventos por `std::mpsc`, comandos por canal).

@@ -338,14 +338,14 @@ fn spawn_controles_watcher(handle: &Handle<Msg>) {
 }
 
 /// Resuelve el path de un archivo de config de media bajo
-/// `$XDG_CONFIG_HOME/gioser/media/<name>` (o `~/.config/...` si XDG no
+/// `$XDG_CONFIG_HOME/tawasuyu/media/<name>` (o `~/.config/...` si XDG no
 /// está set). Lo comparten `controles.ron` (mapeo de entrada) y
 /// `layout.ron` (orden de paneles) — dos ejes, dos archivos.
 fn config_file(name: &str) -> Option<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-    Some(base.join("gioser").join("media").join(name))
+    Some(base.join("tawasuyu").join("media").join(name))
 }
 
 /// Path del archivo de controles (mapeo de entrada).
@@ -896,7 +896,7 @@ enum VideoKind {
     /// Video file decodificado por ffmpeg (mp4/webm/mkv/mov/avi/flv).
     Ffmpeg,
     /// Video AV1 sobre IVF decodificado NATIVO (puro-Rust, rav1d) —
-    /// el formato de video nativo de gioser, sin pasar por ffmpeg.
+    /// el formato de video nativo de tawasuyu, sin pasar por ffmpeg.
     Av1,
 }
 
@@ -2301,7 +2301,7 @@ fn media_host(handle: &Handle<Msg>) -> Option<pata_host::HostClient> {
         pata_host::HostedTooth::new(3, "tools", "Ayuda"),
     ];
     let h = handle.clone();
-    pata_host::HostClient::connect("gioser.media", "Media", teeth, move |id| {
+    pata_host::HostClient::connect("tawasuyu.media", "Media", teeth, move |id| {
         h.dispatch(Msg::HostActivate(id))
     })
 }
@@ -2318,7 +2318,7 @@ impl App for MediaApp {
 
     /// `app_id` Wayland: pata lo usa para correlacionar foco ↔ dientes hospedados.
     fn app_id() -> Option<&'static str> {
-        Some("gioser.media")
+        Some("tawasuyu.media")
     }
 
     /// Título dinámico de la ventana: el medio en reproducción aparece en la

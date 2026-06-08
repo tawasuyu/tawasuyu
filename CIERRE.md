@@ -1,6 +1,6 @@
 # Cierre del monorepo → suite publicable
 
-> Plan de trabajo por niveles para llevar gioser de "compila y se usa" a
+> Plan de trabajo por niveles para llevar tawasuyu de "compila y se usa" a
 > "publicable". Anclado en `INVENTARIO_APPS.md` (2026-05-31), `PLAN.md` y el
 > estado real del árbol al **2026-06-01**.
 >
@@ -35,7 +35,7 @@ público sin romperte legal o reproduciblemente. Es barato y desbloquea todo.
 | # | Tarea | Quién | Estado |
 |---|---|---|---|
 | 0.1 | **Archivos de licencia.** El default del workspace es `MIT OR Apache-2.0`; 6 crates de base (`format`, `forth-emisor`, `foreign-fs`, `wawa`/`wawa-kernel`/`wawa-fs`) overridean a `MPL-2.0`. | 🤖 | ✅ `LICENSE-{APACHE,MIT,MPL}` verbatim (SPDX) + `LICENSE.md` (commit `80224d36`) |
-| 0.2 | **Untracked sin commitear.** `crates/apps/` + `web/gioser-web/pkg/` eran artefactos; `nahual-svg-viewer-llimphi` lo está creando **otro agente** (stub). | 🤝 | ✅ `pkg/` y `/crates/` a `.gitignore`; svg-viewer se deja al otro agente |
+| 0.2 | **Untracked sin commitear.** `crates/apps/` + `web/tawasuyu-web/pkg/` eran artefactos; `nahual-svg-viewer-llimphi` lo está creando **otro agente** (stub). | 🤝 | ✅ `pkg/` y `/crates/` a `.gitignore`; svg-viewer se deja al otro agente |
 | 0.3 | **CI mínimo.** Workflow que corre `cargo check --workspace` + `check-shared-cores.sh`. Guardián de la regla dura #5 y de la simetría no_std. | 🤖 | ✅ `.github/workflows/ci.yml` |
 | 0.4 | **Política `publish`.** Sólo relevante para crates.io (eje opcional). Para el repo público en GitHub no hace falta. Si algún día se sube a crates.io: marcar bins/demos/sandboxes con `publish = false`. | 🤖 | ⏸️ diferido — no bloquea v1 |
 | 0.5 | **Decisión de alcance público.** | 🧑 | ✅ **TODO el workspace público** (2026-06-01). Sin recortes, nada oculto/experimental — ni mirada. |
@@ -249,7 +249,7 @@ cruza a "lista para mostrar".
   `02_ruway/tullpu`, `03_ukupacha/sandokan`, `shared/launcher-llimphi`,
   `shared/sandokan`. Todos los demás dominios ya tienen.
 - **5.2 — README raíz orientado a *visitante público*.** Hoy `LEEME.md`/`PLAN.md`
-  son notas internas. Falta la puerta de entrada: qué es gioser, cómo se
+  son notas internas. Falta la puerta de entrada: qué es tawasuyu, cómo se
   compila, qué se puede correr en 5 minutos (los `examples/*_demo.rs`).
 - **5.3 — `CONTRIBUTING.md` + convenciones** (commits en español, regla un
   dominio = un crate, cuadrantes). Mucho ya vive en `CLAUDE.md` → destilar la

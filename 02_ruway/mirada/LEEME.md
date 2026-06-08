@@ -1,6 +1,6 @@
 # mirada
 
-> La pila de display de gioser: compositor + portal + greeter + launcher.
+> La pila de display de tawasuyu: compositor + portal + greeter + launcher.
 
 `mirada` (mira → mirada → mirar) entrega lo que el usuario ve cuando arranca el sistema: el compositor Wayland, el portal XDG (file pickers, screenshare), el greeter de login y un launcher mínimo. Toda la UI corre en Llimphi; los crates `bar-*` proveen barras de estado intercambiables.
 

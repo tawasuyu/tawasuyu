@@ -1,7 +1,7 @@
 # launcher-llimphi
 
-Frontend Llimphi del **motor de launcher único** de gioser. Renderiza un
-`launcher-core::Surface` a `View<Msg>` y trae el binario `gioser-launcher`,
+Frontend Llimphi del **motor de launcher único** de tawasuyu. Renderiza un
+`launcher-core::Surface` a `View<Msg>` y trae el binario `tawasuyu-launcher`,
 el launcher real del escritorio.
 
 No es un launcher más al lado de `mirada-launcher` / `shuma-module-launcher`:
@@ -13,10 +13,10 @@ un `app_bus::Launcher` inyectado; acá vive sólo el render.
 ## Correr
 
 ```bash
-cargo run -p launcher-llimphi --bin gioser-launcher --release
+cargo run -p launcher-llimphi --bin tawasuyu-launcher --release
 ```
 
-La primera vez siembra `~/.config/gioser/apps/*.toml` con el set base de
+La primera vez siembra `~/.config/tawasuyu/apps/*.toml` con el set base de
 apps del repo (cosmos, nada, pluma, nahual, dominium, tinkuy, takiy, media,
 tullpu, supay) y las descubre vía `app_bus::AppRegistry`. El dock se llena
 con lo descubierto; click en un ítem lanza el binario (`ProcessLauncher`).
@@ -29,7 +29,7 @@ cargo run -p launcher-llimphi --example launcher_demo
 
 ## Configurar
 
-La superficie se describe en `~/.config/gioser/launcher.toml` (respeta
+La superficie se describe en `~/.config/tawasuyu/launcher.toml` (respeta
 `XDG_CONFIG_HOME`). Si no existe, cae a `Surface::desktop_default()` y
 auto-llena el dock. Ver `launcher.example.toml` en este crate para el
 schema completo. Mismo TOML/JSON sirve idéntico en host, shuma y wawa.
@@ -58,7 +58,7 @@ como tarjeta flotante; la × la cierra — `on_close` en el spec).
 
 ### Hecho
 - Render de `Surface` (barras/dock/menú global/flotantes) a `View<Msg>`.
-- Binario `gioser-launcher` real: siembra + discovery de apps (`AppRegistry`),
+- Binario `tawasuyu-launcher` real: siembra + discovery de apps (`AppRegistry`),
   carga de `launcher.toml`, lanzamiento por `ProcessLauncher`.
 - Módulos vivos del host (`clock`/`cpu`/`ram` desde `/proc`, tick 2 s) +
   dropdown del menú global vía `llimphi-widget-context-menu`.

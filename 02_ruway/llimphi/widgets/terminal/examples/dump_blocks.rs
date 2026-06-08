@@ -87,7 +87,7 @@ fn main() {
         &mut store,
         &mut stderr,
         &mut cmds,
-        "ls -la ~/gioser",
+        "ls -la ~/tawasuyu",
         0,
         false,
         &[
@@ -120,7 +120,7 @@ fn main() {
         let start = store.len();
         for i in 0..500_000 {
             store.push_line(&format!(
-                "/home/sergio/gioser/02_ruway/llimphi/widgets/terminal/src/archivo_{i:06}.rs"
+                "/home/sergio/tawasuyu/02_ruway/llimphi/widgets/terminal/src/archivo_{i:06}.rs"
             ));
         }
         cmds.push(Cmd {

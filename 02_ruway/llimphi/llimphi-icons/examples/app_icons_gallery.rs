@@ -1,4 +1,4 @@
-//! Galería de los iconos de marca de todas las apps de gioser.
+//! Galería de los iconos de marca de todas las apps de tawasuyu.
 //!
 //! Pinta los 29 [`AppIcon`] en una grilla, cada uno en su color de marca
 //! con su nombre debajo. Sirve para eyeballear de un vistazo que el set

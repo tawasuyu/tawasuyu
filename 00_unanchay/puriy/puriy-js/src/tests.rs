@@ -1931,13 +1931,13 @@
         let mut rt = JsRuntime::new().expect("rt");
         rt.set_document("t", "u", "b").expect("d");
         rt.set_elements(&[snap_with_attrs("x", "a", &[
-            ("href", "https://gioser.net"),
+            ("href", "https://tawasuyu.net"),
             ("aria-current", "page"),
             ("title", "ir a inicio"),
         ])])
         .expect("e");
         let v = rt.eval("document.getElementById('x').getAttribute('href')").expect("e");
-        assert_eq!(v, JsValue::String("https://gioser.net".into()));
+        assert_eq!(v, JsValue::String("https://tawasuyu.net".into()));
         let v = rt.eval("document.getElementById('x').getAttribute('aria-current')").expect("e");
         assert_eq!(v, JsValue::String("page".into()));
         // hasAttribute true para los presentes, false para los ausentes.
@@ -1951,7 +1951,7 @@
         );
         // Name uppercased en JS se normaliza a lowercase para matchear el store.
         let v = rt.eval("document.getElementById('x').getAttribute('HREF')").expect("e");
-        assert_eq!(v, JsValue::String("https://gioser.net".into()));
+        assert_eq!(v, JsValue::String("https://tawasuyu.net".into()));
     }
 
     #[test]

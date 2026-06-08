@@ -3,7 +3,7 @@
 //! Mismo resultado que `panes_demo` pero la app ya no reimplementa la
 //! máquina de estados: guarda un `Workspace` + un mapa de paneles, y deja
 //! que el chasis maneje split/cerrar/foco/resize y el chrome. Esto es el
-//! molde que después adopta cada app de gioser.
+//! molde que después adopta cada app de tawasuyu.
 //!
 //! Correr:  `cargo run -p llimphi-workspace --example workspace_demo --release`
 
@@ -48,7 +48,7 @@ impl App for Demo {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "workspace — chasis tmux de gioser"
+        "workspace — chasis tmux de tawasuyu"
     }
 
     fn init(_: &Handle<Msg>) -> Model {

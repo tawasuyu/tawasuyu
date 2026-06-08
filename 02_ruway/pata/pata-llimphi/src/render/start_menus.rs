@@ -488,7 +488,7 @@ fn xp_footer(_theme: &Theme) -> View<Msg> {
 
 fn usuario_legible() -> String {
     std::env::var("USER")
-        .unwrap_or_else(|_| "gioser".into())
+        .unwrap_or_else(|_| "tawasuyu".into())
 }
 
 fn usuario_inicial() -> String {

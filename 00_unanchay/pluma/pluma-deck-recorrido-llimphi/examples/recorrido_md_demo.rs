@@ -25,7 +25,7 @@ const PANEL_INICIAL: Rect = Rect { x: 0.0, y: 0.0, w: 1100.0, h: 720.0 };
 const MD_EJEMPLO: &str = "\
 # Presentaciones desde markdown
 
-gioser convierte un documento real en un recorrido espacial.
+tawasuyu convierte un documento real en un recorrido espacial.
 
 Cada encabezado abre un marco; los párrafos que le siguen son su cuerpo.
 

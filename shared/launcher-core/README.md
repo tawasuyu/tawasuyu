@@ -13,7 +13,7 @@ es un `kind` + props arbitrarios que el render interpreta.
 ## Qué expone
 
 - `Surface` — la superficie completa: `bars` + `docks` + `floating` + `app_menu`.
-  Se describe en `~/.config/gioser/launcher.toml`, idéntica en host/shuma/wawa.
+  Se describe en `~/.config/tawasuyu/launcher.toml`, idéntica en host/shuma/wawa.
 - `Bar` (anclada a un `Edge`, slots start/center/end), `Dock` (con `tear_off`),
   `FloatingCard` (tear-off materializado), `AppMenuBar` (menú global estilo mac).
 - `Module` (`kind` + `props: BTreeMap<String, Prop>`) con accesores tipados.

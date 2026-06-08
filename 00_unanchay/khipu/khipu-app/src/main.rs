@@ -1108,7 +1108,7 @@ impl App for KhipuApp {
     }
 
     fn app_id() -> Option<&'static str> {
-        Some("gioser.khipu")
+        Some("tawasuyu.khipu")
     }
 
     fn initial_size() -> (u32, u32) {
@@ -1470,7 +1470,7 @@ struct PersistedStateV1 {
 /// Directorio de datos de khipu (`$XDG_DATA_HOME/khipu/`), creándolo si
 /// hace falta. Raíz de `notes.bin`, `identidad.seed` y `compartido.khipu`.
 fn khipu_dir() -> Option<PathBuf> {
-    let dirs = ProjectDirs::from("org", "gioser", "khipu")?;
+    let dirs = ProjectDirs::from("org", "tawasuyu", "khipu")?;
     let dir = dirs.data_dir().to_path_buf();
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)

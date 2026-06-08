@@ -42,7 +42,7 @@ pub fn parse_calendar(text: &str, calendar: &str) -> Vec<Event> {
 /// `PUT`. Las fechas se emiten en UTC (`…Z`) o como `VALUE=DATE` si es día completo.
 pub fn write_event(ev: &Event) -> String {
     let mut s = String::new();
-    s.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//gioser//raymi//ES\r\nBEGIN:VEVENT\r\n");
+    s.push_str("BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//tawasuyu//raymi//ES\r\nBEGIN:VEVENT\r\n");
     s.push_str(&format!("UID:{}\r\n", ev.uid));
     if ev.all_day {
         s.push_str(&format!("DTSTART;VALUE=DATE:{}\r\n", fmt_date(ev.start)));

@@ -3,7 +3,7 @@
 //!
 //! ## Por qué
 //!
-//! Una app gioser que sólo conoce paths (`PathBuf`) se rompe en wawa,
+//! Una app tawasuyu que sólo conoce paths (`PathBuf`) se rompe en wawa,
 //! donde el almacenamiento es direccionado por contenido (BLAKE3 + DAG)
 //! y no existe el concepto de "carpeta /home/usuario". Pero la mayoría
 //! de las apps no necesitan saber la diferencia: sólo quieren preguntar
@@ -68,7 +68,7 @@ pub enum ItemHandle {
     WawaHash([u8; 32]),
 }
 
-/// Trait que abstrae el medio de almacenamiento. Una app gioser que
+/// Trait que abstrae el medio de almacenamiento. Una app tawasuyu que
 /// quiera funcionar tanto en host como en wawa toma un `&dyn Selector`
 /// en su modelo en lugar de un `PathBuf` concreto.
 pub trait Selector {

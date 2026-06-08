@@ -2,7 +2,7 @@
 
 # mirada
 
-> Gioser-pa display pacha: compositor + portal + greeter + launcher.
+> Tawasuyu-pa display pacha: compositor + portal + greeter + launcher.
 
 `mirada` (kastellano: *qhaway*) sistema haqarispa rikuna haywariy: Wayland compositor, XDG portal (file pickers, screenshare), login greeter + minimo launcher. Tukuy UI Llimphi patapi; `bar-*` cratekuna tikrana status barras.
 

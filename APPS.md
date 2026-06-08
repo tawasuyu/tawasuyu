@@ -1,4 +1,4 @@
-# APPS.md — catálogo de `cargo run` para probar todo gioser
+# APPS.md — catálogo de `cargo run` para probar todo tawasuyu
 
 Referencia exhaustiva de cada app, binario y demo ejecutable del workspace.
 Generado recorriendo `Cargo.toml` + `src/main.rs` + `[[bin]]` + `examples/*.rs`.

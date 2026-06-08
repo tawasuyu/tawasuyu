@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn wire_roundtrip_appmsg() {
         let m = AppMsg::Register {
-            app_id: "gioser.cosmos".into(),
+            app_id: "tawasuyu.cosmos".into(),
             title: "Cosmos".into(),
             teeth: vec![HostedTooth::new(1, "folder", "Árbol"), HostedTooth::new(2, "tools", "Herramientas")],
         };

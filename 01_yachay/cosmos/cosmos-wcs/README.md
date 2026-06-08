@@ -4,7 +4,7 @@ Pure Rust implementation of World Coordinate System (WCS) transformations.
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-wcs)](https://crates.io/crates/cosmos-wcs)
 [![Documentation](https://docs.rs/cosmos-wcs/badge.svg)](https://docs.rs/cosmos-wcs)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-wcs)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-wcs)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Convert between pixel coordinates and celestial coordinates (RA/Dec) for astronomical images. Supports all standard FITS WCS projections, distortion models (SIP, TPV, TNX), and the complete spherical rotation pipeline. No runtime FFI.
 
@@ -75,4 +75,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

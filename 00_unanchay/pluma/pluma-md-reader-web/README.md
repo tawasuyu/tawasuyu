@@ -4,7 +4,7 @@
 
 Takes a `<div>` container (`HtmlElement`) and injects the HTML produced by `pluma-md`. Does NOT inject styles — the host provides CSS and reacts to the `data-pluma-theme` the reader puts on the wrapper.
 
-This is the reader this site (`gioser-web`) uses.
+This is the reader this site (`tawasuyu-web`) uses.
 
 ## API
 
@@ -12,7 +12,7 @@ This is the reader this site (`gioser-web`) uses.
 use pluma_md_reader_web::Reader;
 
 let reader = Reader::new(container);
-reader.open_url("./README.md", "gioser").await?;
+reader.open_url("./README.md", "tawasuyu").await?;
 ```
 
 ## Deps

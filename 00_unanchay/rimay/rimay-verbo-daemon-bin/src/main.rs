@@ -47,7 +47,7 @@ enum ProviderKind {
 #[derive(Debug, Parser)]
 #[command(
     name = "verbo-daemon",
-    about = "Daemon de embeddings de la suite gioser — sirve un Provider por socket Unix.",
+    about = "Daemon de embeddings de la suite tawasuyu — sirve un Provider por socket Unix.",
     version,
 )]
 struct Cli {

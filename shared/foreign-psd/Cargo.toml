@@ -1,5 +1,5 @@
 # =============================================================================
-#  gioser :: foreign-psd — puente Photoshop ↔ grafo de capas tullpu
+#  tawasuyu :: foreign-psd — puente Photoshop ↔ grafo de capas tullpu
 # -----------------------------------------------------------------------------
 #  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
 #  nunca al núcleo de las apps. Este crate IMPORTA un `.psd` (Photoshop) al

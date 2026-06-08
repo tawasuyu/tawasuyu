@@ -1346,7 +1346,7 @@ pub fn start_menu_body(
         })
         .text(
             if query.is_empty() {
-                "sin apps (¿XDG_DATA_DIRS? ¿~/.config/gioser/apps/?)".to_string()
+                "sin apps (¿XDG_DATA_DIRS? ¿~/.config/tawasuyu/apps/?)".to_string()
             } else {
                 format!("sin resultados para «{query}»")
             },
@@ -1426,7 +1426,7 @@ pub fn start_menu_body(
 /// Una fila del menú de inicio: ícono (glyph o SVG real) + label, clickeable.
 fn app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
     // Tres caminos según lo que diga `a.icon`:
-    //  - `≤2 chars` → glyph/emoji (apps gioser), texto centrado.
+    //  - `≤2 chars` → glyph/emoji (apps tawasuyu), texto centrado.
     //  - nombre freedesktop o path → intentamos resolver a un `.svg` (themes
     //    XDG → SvgAsset cacheado). Si encaja, pintamos el SVG real.
     //  - nada/ninguno encaja → fallback al glyph genérico `▸`.

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "app-bus — registro único de aplicaciones de gioser + protocolo de menú global (Archivo/Editar/Ayuda) + bus de eventos foco/lanzamiento + trait Launcher. Lo consultan los launchers (mirada, shuma, wawa) en vez de reimplementar el despacho cada uno. Los datos + el trait son no_std; el descubrimiento (fs/TOML), el spawn de procesos y el Bus van detrás del feature `std`."
+description = "app-bus — registro único de aplicaciones de tawasuyu + protocolo de menú global (Archivo/Editar/Ayuda) + bus de eventos foco/lanzamiento + trait Launcher. Lo consultan los launchers (mirada, shuma, wawa) en vez de reimplementar el despacho cada uno. Los datos + el trait son no_std; el descubrimiento (fs/TOML), el spawn de procesos y el Bus van detrás del feature `std`."
 
 [features]
 default = ["std"]

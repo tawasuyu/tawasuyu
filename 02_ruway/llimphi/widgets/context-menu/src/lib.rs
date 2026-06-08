@@ -1,4 +1,4 @@
-//! `llimphi-widget-context-menu` — menú contextual con look gioser.
+//! `llimphi-widget-context-menu` — menú contextual con look tawasuyu.
 //!
 //! Distintivo y minimalista:
 //!

@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "rimay-localize — i18n del escritorio gioser sobre fluent. Catálogos .ftl embebidos por idioma, API global t!(id) con args opcionales, detección de locale del sistema con fallback a es-PE. Los *-core no contienen strings de UI: emiten IDs (MsgId) que las apps Llimphi resuelven aquí."
+description = "rimay-localize — i18n del escritorio tawasuyu sobre fluent. Catálogos .ftl embebidos por idioma, API global t!(id) con args opcionales, detección de locale del sistema con fallback a es-PE. Los *-core no contienen strings de UI: emiten IDs (MsgId) que las apps Llimphi resuelven aquí."
 
 [dependencies]
 fluent-bundle = { workspace = true }

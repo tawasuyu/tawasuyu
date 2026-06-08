@@ -1,4 +1,4 @@
-//! `rimay-localize` — i18n del escritorio gioser sobre Fluent.
+//! `rimay-localize` — i18n del escritorio tawasuyu sobre Fluent.
 //!
 //! Disciplina (PLAN.md §6.3):
 //!

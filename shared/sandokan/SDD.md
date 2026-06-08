@@ -1,12 +1,12 @@
-# SDD — Plano de control de gioser (sandokan)
+# SDD — Plano de control de tawasuyu (sandokan)
 
 > Estado: **2026-05-31**. Documento autoritativo del plano de control de
-> procesos/apps en gioser. Cuando difiera con CLAUDE.md o PLAN.md, manda este.
+> procesos/apps en tawasuyu. Cuando difiera con CLAUDE.md o PLAN.md, manda este.
 
 ## 0. Propósito
 
 Definir **un solo** plano de control —arrancar, parar, supervisar y observar
-unidades ejecutables— para los dos mundos de gioser:
+unidades ejecutables— para los dos mundos de tawasuyu:
 
 - **Linux (host)**: el init `arje` y todo lo que corre sobre él.
 - **Wawa (bare-metal)**: el kernel SASOS y sus apps WASM.

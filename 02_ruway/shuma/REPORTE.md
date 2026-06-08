@@ -193,7 +193,7 @@ Forma actual de la config:
 **Contrato dividido (D3):**
 
 - **`shumarc-modules.toml`** (TOML, project-local): topología de la UI del shell — qué módulo se monta en qué slot (TopBar/Main/BottomBar/Drawer), labels custom, Source (Local/Daemon/DaemonTcp/Remote). Esto es estructura de la app y vive con la app.
-- **`$XDG_CONFIG_HOME/wawa/config.json`** (JSON, perfil del usuario): preferencias visuales (`theme_variant`, `accent`), locale (`lang`), formato del reloj (`timefmt_24h`), bitmask de qué apps están on (`modules.{shuma, mirada, pluma, …}`). Esto es preferencia del usuario y es compartida por **todas** las apps Llimphi de gioser (pluma, dominium, cosmos, nada, nakui, shuma…).
+- **`$XDG_CONFIG_HOME/wawa/config.json`** (JSON, perfil del usuario): preferencias visuales (`theme_variant`, `accent`), locale (`lang`), formato del reloj (`timefmt_24h`), bitmask de qué apps están on (`modules.{shuma, mirada, pluma, …}`). Esto es preferencia del usuario y es compartida por **todas** las apps Llimphi de tawasuyu (pluma, dominium, cosmos, nada, nakui, shuma…).
 
 El toggle `modules.shuma = false` en el JSON wawa no apaga el binario corriendo (el chasis no se suicida); el efecto es que los launchers no listan a shuma como app activa. La supervisión del binario en sí es decisión del SO (wawa-init en el futuro arje, o systemd/manual hoy).
 
@@ -265,7 +265,7 @@ F3. Editor multi-línea: `shuma-line::continuation::needs_continuation` ya está
 
 - **El binario `shuma-shell` GPUI (3.7k LOC) ya no existe** — se borró en `b92b643`. Cualquier referencia a "shuma-shell" en docs viejas es a esa versión. Las features grandes (completion, decoración, historial) viven en sandbox/* sueltas, no en un shell ensamblado.
 - **`russh v0.54.5`** dispara warning de future-incompat — no bloquea, llega vía `matilda-linker`.
-- **`gpui extinto en gioser** (memoria del proyecto): nada nuevo sobre GPUI. Todo gráfico es Llimphi.
+- **`gpui extinto en tawasuyu** (memoria del proyecto): nada nuevo sobre GPUI. Todo gráfico es Llimphi.
 - **El módulo matilda en remoto SÍ ejecuta SSH real** (vía `matilda-linker`/`brahman-ssh-multiplex`); las pruebas reales necesitan un servidor con sshd alcanzable.
 - **`shuma-line::decorate` ya hace mucho** (paths clickeables, URLs, SHAs, grep refs) pero ningún consumidor lo usa hoy — fácil ganancia al cablearlo a `shuma-module-shell`.
 

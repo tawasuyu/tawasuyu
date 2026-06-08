@@ -3,7 +3,7 @@
 //!   frames RGBA → media-encode-av1 → media-mux-webm (.webm)
 //!                                   → media-source-webm (demux) → rav1d → RGBA
 //!
-//! Verifica que el `.webm` que produce gioser lo lee gioser: dimensiones,
+//! Verifica que el `.webm` que produce tawasuyu lo lee tawasuyu: dimensiones,
 //! número de frames y que el primer frame decodifica al tamaño correcto.
 
 use std::io::BufReader;

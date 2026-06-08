@@ -1,6 +1,6 @@
 # Manual de Llimphi
 
-> Motor gráfico soberano de gioser. `wgpu` + `vello` + `taffy` + `parley`,
+> Motor gráfico soberano de tawasuyu. `wgpu` + `vello` + `taffy` + `parley`,
 > bucle Elm `input → update → view → layout → raster → present`.
 > Reemplazo total de GPUI (extinto 2026-05-26): toda app gráfica de la suite
 > corre sobre Llimphi.

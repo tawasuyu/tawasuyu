@@ -1,6 +1,6 @@
 # media-source-webm
 
-Demux **Matroska/WebM nativo** que une los decoders nativos de gioser:
+Demux **Matroska/WebM nativo** que une los decoders nativos de tawasuyu:
 un `.webm`/`.mkv` con video **AV1** + audio **Opus** se reproduce 100%
 puro-Rust, sin tocar ffmpeg. Es el último eslabón del camino nativo
 (PLAN.md §6.quinquies).

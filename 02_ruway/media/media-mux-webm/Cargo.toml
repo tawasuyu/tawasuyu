@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "media/media-mux-webm — mux WebM/Matroska NATIVO (EBML escrito a mano, sin deps) desde paquetes AV1 + Opus → .webm. Contraparte de media-source-webm: gioser PRODUCE su contenedor nativo sin ffmpeg."
+description = "media/media-mux-webm — mux WebM/Matroska NATIVO (EBML escrito a mano, sin deps) desde paquetes AV1 + Opus → .webm. Contraparte de media-source-webm: tawasuyu PRODUCE su contenedor nativo sin ffmpeg."
 
 # Sin dependencias: el contenedor WebM es un subconjunto acotado de EBML y lo
 # escribimos byte a byte, mismo criterio que el muxer IVF de media-encode-av1.

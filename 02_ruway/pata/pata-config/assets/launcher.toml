@@ -33,7 +33,7 @@ cell = 24
 kind = "start_button"
 label = "⊞"
 # Sin `exec`, el clic abre el menú nativo de apps (descubiertas de
-# ~/.config/gioser/apps/*.toml). Para delegar a un lanzador externo en su lugar,
+# ~/.config/tawasuyu/apps/*.toml). Para delegar a un lanzador externo en su lugar,
 # fijá p. ej. `exec = "wofi --show drun"`.
 
 [[surfaces.start]]
@@ -114,7 +114,7 @@ kind = "ram_meter"
 #
 # Abrir un archivo (right-click) lo enruta a la app nativa que declare su mime, o
 # a `xdg-open` si ninguna lo hace. Para que las apps de la suite lo reciban, copiá
-# sus manifiestos a ~/.config/gioser/apps/ (hay ejemplos en
+# sus manifiestos a ~/.config/tawasuyu/apps/ (hay ejemplos en
 # shared/app-bus/assets/apps/: media.toml, nada.toml).
 [[surfaces]]
 kind = "sidebar"

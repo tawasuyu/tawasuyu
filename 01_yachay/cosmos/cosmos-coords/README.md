@@ -4,7 +4,7 @@ Type-safe astronomical coordinate transformations between reference frames.
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-coords)](https://crates.io/crates/cosmos-coords)
 [![Documentation](https://docs.rs/cosmos-coords/badge.svg)](https://docs.rs/cosmos-coords)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-coords)](https://gitea.gioser.net/sergio/eternal)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-coords)](https://gitea.tawasuyu.net/sergio/eternal)
 
 Pure Rust implementation of coordinate frame transformations with full aberration, light deflection, and Earth orientation support. Each frame is a distinct type to prevent accidental mixing. ICRS serves as the pivot for all transformations.
 
@@ -214,4 +214,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://gitea.gioser.net/sergio/eternal) for contribution guidelines.
+See the [repository](https://gitea.tawasuyu.net/sergio/eternal) for contribution guidelines.

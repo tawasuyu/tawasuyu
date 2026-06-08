@@ -1,6 +1,6 @@
 //! `llimphi-widget-panes` — árbol de paneles BSP estilo tmux.
 //!
-//! La pieza que faltaba para "montar cualquier componente de gioser en un
+//! La pieza que faltaba para "montar cualquier componente de tawasuyu en un
 //! layout intercambiable con splits resizables". El widget NO conoce los
 //! dominios: hospeda hojas opacas (`View<Msg>`) en un árbol binario que el
 //! usuario parte (horizontal/vertical), cierra, enfoca (click) y

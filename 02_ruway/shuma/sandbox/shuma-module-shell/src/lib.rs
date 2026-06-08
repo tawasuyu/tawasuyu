@@ -2163,9 +2163,9 @@ mod tests {
     fn partition_line_segments_a_line_with_a_url() {
         use shuma_line::{Decoration, DecorationKind};
         let theme = Theme::dark();
-        let text = "abrí https://gioser.net y mirá";
+        let text = "abrí https://tawasuyu.net y mirá";
         let url_start = text.find("https").unwrap();
-        let url_end = url_start + "https://gioser.net".len();
+        let url_end = url_start + "https://tawasuyu.net".len();
         let decs = vec![Decoration {
             start: url_start,
             end: url_end,

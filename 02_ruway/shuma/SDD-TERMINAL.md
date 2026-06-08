@@ -5,7 +5,7 @@
 
 ## Tesis
 
-El shell de gioser existe para **desplanar la terminal**: el output no es un volcado
+El shell de tawasuyu existe para **desplanar la terminal**: el output no es un volcado
 plano, es contenido vivo que se despliega en la ventana a medida que se genera. Hoy
 eso se logra con cards IDE (numeración, color, selección, badges) — pero el control
 **no escala**: capa a ~500 líneas y pinta *todo lo que hay*, no *lo que se ve*.

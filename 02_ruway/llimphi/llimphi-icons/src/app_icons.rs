@@ -1,4 +1,4 @@
-//! `app_icons` — iconos de marca, uno por dominio/app de gioser.
+//! `app_icons` — iconos de marca, uno por dominio/app de tawasuyu.
 //!
 //! A diferencia del set canónico de [`crate::Icon`] (glifos genéricos de
 //! acción: file, save, search…), acá vive **un glifo distintivo por app**.
@@ -31,7 +31,7 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Join, Stroke};
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::View;
 
-/// Una app de gioser con icono de marca. El identificador (`name`) coincide
+/// Una app de tawasuyu con icono de marca. El identificador (`name`) coincide
 /// con el `id` del `AppEntry` en `app-bus`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppIcon {

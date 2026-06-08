@@ -64,7 +64,7 @@ impl App for AgoraApp {
     }
 
     fn init(handle: &Handle<Msg>) -> Model {
-        let data_dir = directories::ProjectDirs::from("net", "gioser", "agora")
+        let data_dir = directories::ProjectDirs::from("net", "tawasuyu", "agora")
             .map(|p| p.data_dir().to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."));
         std::fs::create_dir_all(&data_dir).ok();

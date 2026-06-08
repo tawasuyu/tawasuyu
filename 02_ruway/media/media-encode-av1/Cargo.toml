@@ -5,14 +5,14 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "media/media-encode-av1 — encode AV1 NATIVO puro-Rust (rav1e) desde frames RGBA → contenedor IVF. Contraparte de media-source-av1: gioser PRODUCE su formato de video nativo sin ffmpeg."
+description = "media/media-encode-av1 — encode AV1 NATIVO puro-Rust (rav1e) desde frames RGBA → contenedor IVF. Contraparte de media-source-av1: tawasuyu PRODUCE su formato de video nativo sin ffmpeg."
 
 [dependencies]
 # rav1e: encoder AV1 de referencia en Rust (Xiph/AOMedia). `default-features
 # = false` saca el feature `asm` (que exige nasm en el host) → encode escalar
 # puro, mismo criterio que rav1d en media-source-av1. Contraparte exacta del
 # decoder: lo que este crate escupe, media-source-av1 lo reproduce sin tocar
-# ffmpeg — el formato nativo de gioser cierra el ciclo encode↔decode.
+# ffmpeg — el formato nativo de tawasuyu cierra el ciclo encode↔decode.
 rav1e = { version = "0.8", default-features = false }
 
 [dev-dependencies]

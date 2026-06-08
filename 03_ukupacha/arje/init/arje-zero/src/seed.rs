@@ -172,7 +172,7 @@ fn synthesize_dev_seed() -> EntityCard {
         }
     }
 
-    // El compositor Wayland gioser (`mirada-compositor --drm`) como Ente
+    // El compositor Wayland tawasuyu (`mirada-compositor --drm`) como Ente
     // supervisado por arje-zero. Si el binario no esta instalado en el
     // host, el fractal arranca sin compositor — util en CI o devs sin GPU.
     // Reemplaza al script `mirada-session` (queda como fallback legacy).

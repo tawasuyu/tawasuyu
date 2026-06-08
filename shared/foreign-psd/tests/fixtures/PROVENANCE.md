@@ -3,7 +3,7 @@
 Los archivos `.psd` de esta carpeta vienen del corpus de tests del crate
 [`psd`](https://github.com/chinedufn/psd) v0.3.5 (`tests/fixtures/`), publicado
 bajo licencia dual **MIT / Apache-2.0**, ambas compatibles con MPL-2.0 (la
-licencia de gioser). Se redistribuyen aquí sin modificación.
+licencia de tawasuyu). Se redistribuyen aquí sin modificación.
 
 | archivo                               | tamaño  | descripción                                              |
 | ------------------------------------- | ------- | -------------------------------------------------------- |

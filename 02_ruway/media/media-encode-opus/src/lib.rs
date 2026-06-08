@@ -3,7 +3,7 @@
 //!
 //! La **contraparte** de [`media_source_opus`]: ese crate *decodea* Opus
 //! nativo, este lo *produce*. Junto a `media-encode-av1` cierra la
-//! producción del stack abierto de gioser (PLAN.md §6.quinquies) — y es lo
+//! producción del stack abierto de tawasuyu (PLAN.md §6.quinquies) — y es lo
 //! que le faltaba a [`media_mux_webm`] para escribir un `.webm` AV1+Opus
 //! 100% propio, sin un solo byte de ffmpeg.
 //!
