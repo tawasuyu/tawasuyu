@@ -80,6 +80,20 @@ pub enum Source {
         #[serde(default)]
         label: Option<String>,
     },
+    /// Contenedor OCI corriendo en esta máquina. El shell ejecuta cada
+    /// comando vía `{engine} exec` contra `name`; el contenedor debe estar
+    /// vivo (lo crea/arranca quien instancia la sesión). El `cwd` que ve la
+    /// UI sigue siendo el del host — dentro del contenedor el comando corre
+    /// en su WORKDIR (o el `-w` con el que se creó).
+    Container {
+        /// "podman" o "docker" — el binario que vehiculiza el `exec`.
+        engine: String,
+        /// Nombre del contenedor (corriendo).
+        name: String,
+        /// Etiqueta amigable para la UI; default = `engine:name`.
+        #[serde(default)]
+        label: Option<String>,
+    },
 }
 
 fn default_ssh_port() -> u16 {
@@ -98,6 +112,8 @@ impl Source {
             Source::DaemonTcp { addr, .. } => format!("daemon@{addr}"),
             Source::Remote { label: Some(l), .. } => l.clone(),
             Source::Remote { host, user, .. } => format!("{user}@{host}"),
+            Source::Container { label: Some(l), .. } => l.clone(),
+            Source::Container { engine, name, .. } => format!("{engine}:{name}"),
         }
     }
 

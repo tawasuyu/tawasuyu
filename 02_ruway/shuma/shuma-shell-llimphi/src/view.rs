@@ -1086,6 +1086,79 @@ pub(crate) fn tab_content(model: &Model, theme: &Theme) -> View<Msg> {
     }
 }
 
+/// Checkbox "Aislar en contenedor" para el form de creación. Pinta un cuadrito
+/// `[x]`/`[ ]` + label, click togglea.
+fn container_toggle(on: bool, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    let accent = theme.accent;
+    let fg = theme.fg_text;
+    let bg = theme.bg_panel_alt;
+    let box_view = View::new(Style {
+        size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, RoundedRect, Stroke};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let rr = RoundedRect::new(
+            rect.x as f64 + 1.0,
+            rect.y as f64 + 1.0,
+            rect.x as f64 + rect.w as f64 - 1.0,
+            rect.y as f64 + rect.h as f64 - 1.0,
+            3.0,
+        );
+        if on {
+            scene.fill(Fill::NonZero, Affine::IDENTITY, accent, None, &rr);
+            // Tilde blanco.
+            let mut p = BezPath::new();
+            let cx = (rect.x + rect.w * 0.5) as f64;
+            let cy = (rect.y + rect.h * 0.5) as f64;
+            let r = (rect.w.min(rect.h) as f64) * 0.28;
+            p.move_to(Point::new(cx - r, cy));
+            p.line_to(Point::new(cx - r * 0.2, cy + r * 0.7));
+            p.line_to(Point::new(cx + r, cy - r * 0.6));
+            scene.stroke(
+                &Stroke::new(2.0),
+                Affine::IDENTITY,
+                llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0xff, 0xff, 0xff),
+                None,
+                &p,
+            );
+        } else {
+            scene.fill(Fill::NonZero, Affine::IDENTITY, bg, None, &rr);
+            scene.stroke(
+                &Stroke::new(1.2),
+                Affine::IDENTITY,
+                llimphi_ui::llimphi_raster::peniko::Color::from_rgb8(0x55, 0x5a, 0x66),
+                None,
+                &rr,
+            );
+        }
+    });
+    let label = View::new(Style {
+        size: Size {
+            width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+            height: length(20.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned("Aislar en contenedor (podman)".to_string(), 13.0, fg, Alignment::Start);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(10.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .on_click(Msg::ToggleUseContainer)
+    .hover_fill(theme.bg_row_hover)
+    .children(vec![box_view, label])
+}
+
 /// Form grande de creación de sesión, ocupa el canvas mientras `session.pending`.
 /// Aislamiento (Local/Remote) + Distro + Mount + opción de container. Confirma
 /// con Enter / botón "Crear". Cancela con Esc / "Cancelar".
@@ -1158,25 +1231,28 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
         ));
     }
 
-    // Contenedor opcional: distro + nombre.
-    children.push(panel_label("Distro (contenedor opcional)", theme));
-    let distros = distro_items();
-    children.push(select_trigger_view(
-        distros.get(distro_index(session.distro)),
-        "Elegí la distro…",
-        model.dropdown_open == Some(DropKind::Distro),
-        None,
-        &pal,
-        Msg::ToggleDropdown(DropKind::Distro),
-    ));
-    children.push(panel_label("Directorio a montar (opcional)", theme));
-    children.push(text_input_view(
-        &session.mount,
-        "/ruta/del/host",
-        session.pending_focus == Some(PendingField::Mount),
-        &tpal,
-        Msg::FocusPendingField(PendingField::Mount),
-    ));
+    // Toggle "Aislar en contenedor" (opt-in). Si on, mostrá distro + mount.
+    children.push(container_toggle(session.use_container, theme));
+    if session.use_container {
+        children.push(panel_label("Distro", theme));
+        let distros = distro_items();
+        children.push(select_trigger_view(
+            distros.get(distro_index(session.distro)),
+            "Elegí la distro…",
+            model.dropdown_open == Some(DropKind::Distro),
+            None,
+            &pal,
+            Msg::ToggleDropdown(DropKind::Distro),
+        ));
+        children.push(panel_label("Directorio a montar (opcional)", theme));
+        children.push(text_input_view(
+            &session.mount,
+            "/ruta/del/host",
+            session.pending_focus == Some(PendingField::Mount),
+            &tpal,
+            Msg::FocusPendingField(PendingField::Mount),
+        ));
+    }
 
     // Botones: Cancelar | Crear.
     let cancelar = View::new(Style {

@@ -140,11 +140,11 @@ fn main() {
     llimphi_ui::run::<Shell>();
 }
 
-/// Lista los contenedores locales (`docker ps -a`) en un hilo y entrega los
-/// nombres por `Msg::ContainersLoaded`. Vacío si docker no está o falla.
+/// Lista los contenedores locales (`podman ps -a`) en un hilo y entrega los
+/// nombres por `Msg::ContainersLoaded`. Vacío si podman no está o falla.
 fn spawn_list_containers(handle: &Handle<Msg>) {
     handle.spawn(|| {
-        let names = std::process::Command::new("docker")
+        let names = std::process::Command::new("podman")
             .args(["ps", "-a", "--format", "{{.Names}}"])
             .output()
             .ok()
@@ -161,14 +161,42 @@ fn spawn_list_containers(handle: &Handle<Msg>) {
     });
 }
 
-/// Crea un contenedor `name` de la `image` dada (corre detached con `sleep
-/// infinity`) en un hilo; al volver, re-lista. No-op de UI si docker falla.
-fn spawn_create_container(handle: &Handle<Msg>, image: &'static str, name: String) {
+/// Crea un contenedor `name` de la `image` dada (detached, `sleep infinity`)
+/// en un hilo; `mount` opcional se monta como `/work` adentro (RW). Al volver,
+/// emite `ContainerCreated(name)` para que la sesión active termine de
+/// montarse — esto permite usarlo como Source::Container apenas esté listo.
+fn spawn_create_container(
+    handle: &Handle<Msg>,
+    image: &'static str,
+    name: String,
+    mount: Option<String>,
+) {
     handle.spawn(move || {
-        let _ = std::process::Command::new("docker")
-            .args(["run", "-d", "--name", &name, image, "sleep", "infinity"])
-            .output();
-        Msg::RefreshContainers
+        let mut args: Vec<String> = vec![
+            "run".into(),
+            "-d".into(),
+            "--name".into(),
+            name.clone(),
+        ];
+        if let Some(m) = mount.as_ref().map(|m| m.trim()).filter(|m| !m.is_empty()) {
+            args.push("-v".into());
+            args.push(format!("{m}:/work"));
+            args.push("-w".into());
+            args.push("/work".into());
+        }
+        args.push(image.into());
+        args.push("sleep".into());
+        args.push("infinity".into());
+        let ok = std::process::Command::new("podman")
+            .args(&args)
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        if ok {
+            Msg::ContainerCreated(name)
+        } else {
+            Msg::ContainerFailed(name)
+        }
     });
 }
 
@@ -451,9 +479,13 @@ struct Session {
     /// Capa de contenedor OPCIONAL (encima de Local o Remoto). El colapsable
     /// del panel la crea/conecta.
     distro: Distro,
-    /// Contenedor suscrito (`None` = sin contenedor). El exec real del shell
-    /// dentro de él se cablea con `Source::Container` (shuma-module).
+    /// Contenedor suscrito (`None` = sin contenedor). Cuando `use_container`
+    /// está activo, el shell ejecuta dentro de él vía `Source::Container`.
     container: Option<String>,
+    /// `true` si esta sesión usa un contenedor (la capa OCI por encima del
+    /// aislamiento base). El form de creación lo togglea; `apply_isolation`
+    /// lo lee para resolver el `Source` real.
+    use_container: bool,
     /// Si el colapsable de contenedor está abierto en el panel.
     container_open: bool,
     /// Estado de conexión de la sesión (lo refleja el panel).
@@ -493,6 +525,7 @@ impl Session {
             isolation: Isolation::Local,
             distro: Distro::Ubuntu,
             container: None,
+            use_container: false,
             container_open: false,
             pending: false,
             mount: TextInputState::new(),
@@ -540,12 +573,25 @@ impl Session {
 
     /// Reconstruye el shell + matilda con el `source` que dicta el aislamiento
     /// elegido. Pierde el shell anterior a propósito: reconfigurar el aislamiento
-    /// = ambiente nuevo. (Container aún corre local — el exec en contenedor es
-    /// deuda; Remote usa el daemon de `default_shell_source`.)
+    /// = ambiente nuevo. Si `use_container` y `container = Some(name)`, el
+    /// shell corre **dentro** del contenedor vía `Source::Container`.
     fn apply_isolation(&mut self) {
-        let source = match self.isolation {
+        let base = match self.isolation {
             Isolation::Local => Source::Local,
             Isolation::Remote => default_shell_source(),
+        };
+        let source = if self.use_container {
+            if let Some(name) = self.container.clone() {
+                Source::Container {
+                    engine: "podman".into(),
+                    name,
+                    label: None,
+                }
+            } else {
+                base
+            }
+        } else {
+            base
         };
         // Local está listo; remoto queda en espera hasta conectar.
         self.conn = match self.isolation {
@@ -581,6 +627,8 @@ impl Session {
             isolation: self.isolation,
             distro: self.distro,
             container: self.container.clone(),
+            use_container: self.use_container,
+            mount: self.mount.text(),
             host: self.host.text(),
             user: self.user.text(),
             port: self.port.text(),
@@ -601,15 +649,15 @@ impl Session {
         s.isolation = c.isolation;
         s.distro = c.distro;
         s.container = c.container;
+        s.use_container = c.use_container;
+        s.mount.set_text(c.mount);
         s.host.set_text(c.host);
         s.user.set_text(c.user);
         if !c.port.is_empty() {
             s.port.set_text(c.port);
         }
-        s.conn = match c.isolation {
-            Isolation::Local => ConnState::Connected,
-            Isolation::Remote => ConnState::Pending,
-        };
+        // Aplica el aislamiento real (incluye Source::Container si toca).
+        s.apply_isolation();
         s
     }
 
@@ -654,6 +702,10 @@ struct SessionConfig {
     distro: Distro,
     #[serde(default)]
     container: Option<String>,
+    #[serde(default)]
+    use_container: bool,
+    #[serde(default)]
+    mount: String,
     #[serde(default)]
     host: String,
     #[serde(default)]
@@ -915,6 +967,14 @@ enum Msg {
     SubscribeContainer(usize),
     /// Crear un contenedor nuevo con la distro de la sesión y suscribirla.
     CreateContainer,
+    /// Toggle del checkbox "Aislar en contenedor" del form de creación.
+    ToggleUseContainer,
+    /// El thread de `podman run` terminó OK — la sesión que lo esperaba
+    /// queda lista (conectada) y, si era pending, ya tiene su shell montado.
+    ContainerCreated(String),
+    /// El thread de `podman run` falló (podman ausente / imagen / nombre).
+    /// Se notifica y la sesión queda en `Pending`.
+    ContainerFailed(String),
     /// Reordenar dientes por drag: mover la sesión `from` a la posición `to`.
     /// La draft (0) queda fija.
     ReorderSession(usize, usize),
@@ -1231,19 +1291,61 @@ impl App for Shell {
             }
             Msg::CreateContainer => {
                 m.dropdown_open = None;
-                // Crea un contenedor de la distro de la sesión y re-lista. (El
-                // exec del shell dentro de él es deuda — falta Source::Container.)
-                let (distro, n) = m
+                let (distro, n, mount) = m
                     .sessions
                     .get(m.active_session)
-                    .map(|s| (s.distro, s.number.unwrap_or(0)))
-                    .unwrap_or((Distro::Ubuntu, 0));
+                    .map(|s| (s.distro, s.number.unwrap_or(0), s.mount.text()))
+                    .unwrap_or((Distro::Ubuntu, 0, String::new()));
                 let name = format!("shuma-{}-{n}", distro.label().to_lowercase());
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.container = Some(name.clone());
-                    s.conn = ConnState::Connected;
+                    s.use_container = true;
+                    s.conn = ConnState::Pending; // hasta que `ContainerCreated`
                 }
-                spawn_create_container(handle, distro.image(), name);
+                let mount_opt = if mount.trim().is_empty() { None } else { Some(mount) };
+                spawn_create_container(handle, distro.image(), name, mount_opt);
+                save_sessions(&m);
+            }
+            Msg::ToggleUseContainer => {
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.use_container = !s.use_container;
+                }
+            }
+            Msg::ContainerCreated(name) => {
+                // Encontrar la sesión que está esperando este contenedor y
+                // montarle el shell con `Source::Container`.
+                let idx = m
+                    .sessions
+                    .iter()
+                    .position(|s| s.container.as_deref() == Some(name.as_str()));
+                if let Some(i) = idx {
+                    if let Some(s) = m.sessions.get_mut(i) {
+                        s.conn = ConnState::Connected;
+                        if s.use_container && !s.pending {
+                            s.apply_isolation();
+                        }
+                    }
+                }
+                // Re-listar para reflejar el nuevo contenedor en el dropdown.
+                spawn_list_containers(handle);
+                save_sessions(&m);
+            }
+            Msg::ContainerFailed(name) => {
+                // La sesión que esperaba este contenedor queda en
+                // `Disconnected` con `container = None`. La UI lo refleja
+                // con el punto rojo del `conn_pill`; ver un toast/error
+                // explícito es siguiente iteración.
+                let idx = m
+                    .sessions
+                    .iter()
+                    .position(|s| s.container.as_deref() == Some(name.as_str()));
+                if let Some(i) = idx {
+                    if let Some(s) = m.sessions.get_mut(i) {
+                        s.conn = ConnState::Disconnected;
+                        s.container = None;
+                        s.use_container = false;
+                    }
+                }
                 save_sessions(&m);
             }
             Msg::CloseSession(idx) => {
@@ -1266,14 +1368,25 @@ impl App for Shell {
                 save_chrome(&m);
             }
             Msg::ConfirmNewSession => {
-                // Resuelve el Source real y monta el shell. Container queda en
-                // `container: Some(name)` — el cableo a `podman exec` es la
-                // siguiente iteración (task #2). Sin container, queda Local
-                // sobre la máquina anfitriona.
+                // Resuelve el Source real y monta el shell. Si `use_container`,
+                // dispara el `podman run -d` en bg y queda `Pending` hasta que
+                // llegue `ContainerCreated`; mientras tanto el shell ya corre
+                // contra Source::Container (los primeros comandos pueden
+                // fallar si el container aún no está listo — re-tipear funciona).
+                let mut to_create: Option<(&'static str, String, Option<String>)> = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     if s.pending {
                         s.pending = false;
                         s.pending_focus = None;
+                        if s.use_container {
+                            let n = s.number.unwrap_or(0);
+                            let name = format!("shuma-{}-{n}", s.distro.label().to_lowercase());
+                            s.container = Some(name.clone());
+                            s.conn = ConnState::Pending;
+                            let mount = s.mount.text();
+                            let mount_opt = if mount.trim().is_empty() { None } else { Some(mount) };
+                            to_create = Some((s.distro.image(), name, mount_opt));
+                        }
                         s.apply_isolation();
                         if s.isolation == Isolation::Remote {
                             // Si el form remoto tiene host+user, conectar.
@@ -1283,6 +1396,9 @@ impl App for Shell {
                         }
                         m.session_panel_open = true;
                     }
+                }
+                if let Some((image, name, mount)) = to_create {
+                    spawn_create_container(handle, image, name, mount);
                 }
                 save_sessions(&m);
                 save_chrome(&m);

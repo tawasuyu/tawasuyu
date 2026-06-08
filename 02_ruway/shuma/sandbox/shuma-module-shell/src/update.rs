@@ -2451,6 +2451,19 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 block: run_block,
             }
         }
+        Source::Container { engine, name, .. } => {
+            // Envuelve el spec en `<engine> exec` contra el contenedor.
+            let wrapped = wrap_spec_for_container(spec.clone(), engine, name);
+            let handle = shuma_exec::run(&wrapped);
+            let killer = handle.killer();
+            ActiveRun {
+                handle: BackendHandle::Local(handle),
+                killer: Some(killer),
+                command: line,
+                tui,
+                block: run_block,
+            }
+        }
     };
     s.running = Some(Arc::new(Mutex::new(active)));
     s
@@ -2523,6 +2536,91 @@ pub(crate) fn simple_pipe_stages(line: &str) -> Option<Vec<StageSpec>> {
 /// TUI (o el usuario lo prefijó con `:tui`), abre un PTY; si es un pipe
 /// simple, lo corre directo con captura por etapa; si no, va por el shell
 /// normal (streaming Stdout/Stderr).
+/// Envuelve `spec` en una invocación `{engine} exec` contra `name`. La idea:
+/// el comando que pidió el usuario corre **dentro del contenedor**, pero el
+/// proceso hijo que ve `shuma-exec` sigue siendo local — así reusamos la
+/// misma maquinaria de PTY / capture / kill que `Source::Local`.
+///
+/// `cwd` del host **no** se traslada (puede no existir adentro). El engine
+/// arranca en el `WORKDIR` del contenedor, salvo que se haya creado con `-w`.
+fn wrap_spec_for_container(mut spec: CommandSpec, engine: &str, name: &str) -> CommandSpec {
+    let eng = engine.to_string();
+    let nm = name.to_string();
+    spec.exec = match spec.exec {
+        Exec::Shell { line, program } => {
+            // bash local que dispara `engine exec` con `program -c "line"`
+            // adentro. Mantenemos Exec::Shell para preservar captura por
+            // líneas (no PTY).
+            let inner = format!(
+                "{eng} exec -i {nm} {prog} -c {q}",
+                eng = shell_quote(&eng),
+                nm = shell_quote(&nm),
+                prog = shell_quote(&program),
+                q = shell_quote(&line),
+            );
+            Exec::Shell {
+                line: inner,
+                program: "bash".into(),
+            }
+        }
+        Exec::Pty { program, args, cols, rows } => {
+            // PTY local que ejecuta `engine exec -it name <program> <args...>`.
+            let mut new_args = vec!["exec".to_string(), "-it".into(), nm, program];
+            new_args.extend(args);
+            Exec::Pty {
+                program: eng,
+                args: new_args,
+                cols,
+                rows,
+            }
+        }
+        Exec::Direct { stages } => {
+            // Reconstruimos la pipe como una sola line bash y la disparamos
+            // dentro del contenedor; perdemos la captura de etapas (tee) —
+            // tradeoff aceptable para el MVP del cableo container.
+            let mut line = String::new();
+            for (i, st) in stages.iter().enumerate() {
+                if i > 0 {
+                    line.push_str(" | ");
+                }
+                line.push_str(&shell_quote(&st.program));
+                for a in &st.args {
+                    line.push(' ');
+                    line.push_str(&shell_quote(a));
+                }
+            }
+            let inner = format!(
+                "{eng} exec -i {nm} bash -c {q}",
+                eng = shell_quote(&eng),
+                nm = shell_quote(&nm),
+                q = shell_quote(&line),
+            );
+            Exec::Shell {
+                line: inner,
+                program: "bash".into(),
+            }
+        }
+    };
+    spec
+}
+
+/// Quote básico estilo Bourne para envolver en `'…'`. Sustituye `'` por
+/// `'\''`. Suficiente para inyectar paths/comandos del usuario al wrap del
+/// container; no pretende ser un parser POSIX completo.
+fn shell_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
+}
+
 pub(crate) fn build_spec(line: &str, cwd: &str) -> (CommandSpec, Option<TuiSession>) {
     // Prefijo explícito `:tui <comando>`.
     let (cmd_line, force_tui) = match line.strip_prefix(":tui ") {

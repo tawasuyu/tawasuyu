@@ -167,7 +167,7 @@ pub fn update(state: State, msg: Msg) -> State {
     let mut s = state;
     match msg {
         Msg::Discover => match &s.source {
-            Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+            Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
                 // Matilda no habla todavía con el daemon de shuma — corre
                 // siempre sobre el FS local cuando no es SSH.
                 let current = discover_inventory(&s.desired);
@@ -351,7 +351,7 @@ fn default_ssh_key() -> PathBuf {
 /// SSH, pero usa el mismo entrypoint para uniformidad).
 pub fn discover_remote_blocking(source: &Source, desired: &Inventory) -> Result<Inventory, String> {
     match source {
-        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
             Ok(discover_inventory(desired))
         }
         Source::Remote { .. } => {
@@ -383,7 +383,7 @@ pub fn dry_run_remote_blocking(
     let mut lines = Vec::new();
 
     let current = match source {
-        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
             discover_inventory(desired)
         }
         Source::Remote { .. } => {
@@ -449,7 +449,7 @@ pub fn apply_remote_blocking(
     let mut lines = Vec::new();
 
     match source {
-        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
             // Local lo maneja `Msg::Apply` sincrónicamente. Para
             // uniformidad damos un fallback síncrono sin tocar el UI.
             let current = discover_inventory(desired);
@@ -540,7 +540,7 @@ fn ssh_config_for(source: &Source) -> Result<SshConfig, String> {
             config.port = *port;
             Ok(config)
         }
-        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } => {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
             Err("ssh_config_for esperaba Source::Remote".into())
         }
     }
