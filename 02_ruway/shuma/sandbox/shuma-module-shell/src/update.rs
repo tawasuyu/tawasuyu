@@ -254,6 +254,12 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.collapsed.insert(id);
             }
         }
+        Msg::ToggleSection { block, idx } => {
+            let key = (block, idx);
+            if !s.section_collapsed.remove(&key) {
+                s.section_collapsed.insert(key);
+            }
+        }
         Msg::Scroll(delta) => {
             s = apply_scroll_delta(s, delta);
             // Captura la última velocidad para el scroll inercial: el Tick

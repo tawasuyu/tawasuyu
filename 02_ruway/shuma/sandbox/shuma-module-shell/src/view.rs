@@ -1841,6 +1841,70 @@ pub(crate) fn output_pane<HostMsg: Clone + 'static>(
 /// Alto fijo del header de comando en la superficie (px).
 const SURFACE_HEADER_H: f32 = 22.0;
 
+/// Alto del header de una sub-sección (sub-collapsable dentro de un block).
+/// Un pelo más bajo que `SURFACE_HEADER_H` para destacar la jerarquía.
+const SECTION_HEADER_H: f32 = 20.0;
+
+/// Header clickeable de una sub-sección. Pinta chevron + título + el conteo
+/// de líneas; click emite `Msg::ToggleSection`.
+fn section_header<HostMsg: Clone + 'static>(
+    block: u64,
+    idx: usize,
+    title: &str,
+    line_count: usize,
+    collapsed: bool,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    let chevron = if collapsed {
+        llimphi_icons::Icon::ChevronRight
+    } else {
+        llimphi_icons::Icon::ChevronDown
+    };
+    let marker = View::new(Style {
+        size: Size { width: length(12.0_f32), height: length(12.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![llimphi_icons::icon_view(chevron, theme.fg_muted, 1.6)]);
+    let title_v = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(14.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(title.to_string(), 11.0, theme.fg_text, Alignment::Start)
+    .mono()
+    .max_lines(1);
+    let count = View::new(Style {
+        size: Size { width: length(60.0_f32), height: length(14.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{line_count} líneas"),
+        10.0,
+        theme.fg_muted,
+        Alignment::End,
+    )
+    .mono();
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(SECTION_HEADER_H) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(18.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::ToggleSection { block, idx }))
+    .children(vec![marker, title_v, count])
+}
+
 /// `true` si el output va por la **superficie nueva** (modo por defecto
 /// tras Fase 5.6). Se lee una sola vez por proceso vía `OnceLock`.
 ///
@@ -2183,13 +2247,60 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
             }
 
             if !collapsed && !lines.is_empty() {
-                let start = store.len();
-                for (i, line) in lines.iter().enumerate() {
-                    let is_err = matches!(kinds.get(i), Some(OutputKind::Stderr));
-                    styles.push((is_err, runs.get(i).cloned().unwrap_or_default()));
-                    store.push_line(line);
+                // Detector de sub-secciones por comando: si reconoce el
+                // patrón (p. ej. `ls -R`), parte el output en grupos con
+                // su propio header colapsable.
+                let cmd_for_sections = state
+                    .block_command
+                    .get(id)
+                    .cloned()
+                    .unwrap_or_else(|| header_text.clone());
+                if let Some(sections) =
+                    crate::sections::detect_sections(&cmd_for_sections, &lines)
+                {
+                    // Mapa línea-original → índice global en `lines` para
+                    // recuperar el styling (stderr / decoraciones). Como las
+                    // líneas pueden repetirse, usamos un cursor secuencial.
+                    let mut cursor: usize = 0;
+                    for (sidx, sec) in sections.iter().enumerate() {
+                        let sec_col = state.section_collapsed.contains(&(*id, sidx));
+                        let line_count = sec.lines.len();
+                        items.push(Item::chrome(
+                            SECTION_HEADER_H,
+                            section_header(*id, sidx, &sec.title, line_count, sec_col, theme, lift),
+                        ));
+                        // Avanzar cursor hasta saltarse el header (`title:`)
+                        // y el blank entre dirs. El detector come blanks y
+                        // headers, así que en `lines` quedan en orden.
+                        while cursor < lines.len()
+                            && (lines[cursor].trim().is_empty()
+                                || lines[cursor].trim_end().trim_end_matches(':') == sec.title)
+                        {
+                            cursor += 1;
+                        }
+                        if !sec_col && line_count > 0 {
+                            let start = store.len();
+                            for line in &sec.lines {
+                                let i = cursor.min(lines.len().saturating_sub(1));
+                                let is_err = matches!(kinds.get(i), Some(OutputKind::Stderr));
+                                styles.push((is_err, runs.get(i).cloned().unwrap_or_default()));
+                                store.push_line(line);
+                                cursor += 1;
+                            }
+                            items.push(Item::lines(start, store.len()));
+                        } else {
+                            cursor = cursor.saturating_add(line_count);
+                        }
+                    }
+                } else {
+                    let start = store.len();
+                    for (i, line) in lines.iter().enumerate() {
+                        let is_err = matches!(kinds.get(i), Some(OutputKind::Stderr));
+                        styles.push((is_err, runs.get(i).cloned().unwrap_or_default()));
+                        store.push_line(line);
+                    }
+                    items.push(Item::lines(start, store.len()));
                 }
-                items.push(Item::lines(start, store.len()));
             }
         } else {
             // Líneas sueltas (notices iniciales sin bloque dueño) — cuerpo sin

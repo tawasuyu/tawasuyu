@@ -414,6 +414,10 @@ pub struct State {
     /// Bloques colapsados por el usuario (click en el header de la card).
     /// Se renderizan plegados, mostrando sólo el header + un resumen.
     pub collapsed: HashSet<u64>,
+    /// Sub-secciones colapsadas dentro de un bloque (`ls -R` por dir, etc.).
+    /// El `usize` es el índice de la sección que devolvió
+    /// [`sections::detect_sections`] para el comando del bloque.
+    pub section_collapsed: HashSet<(u64, usize)>,
     /// Etapas de pipe desplegadas — `(block, stage)`. Click en un chip de
     /// etapa alterna la pertenencia; al estar presente se muestran sus
     /// líneas capturadas en vivo (tee) bajo la fila de etapas.
@@ -625,6 +629,7 @@ impl State {
             block_seq: 0,
             current_block: 0,
             collapsed: HashSet::new(),
+            section_collapsed: HashSet::new(),
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
@@ -905,6 +910,10 @@ pub enum Msg {
     /// Alterna plegado/desplegado de la card de un comando. La dispara el
     /// click en el header de la card (chevron + comando).
     ToggleBlock(u64),
+    /// Alterna plegado/desplegado de una **sub-sección** dentro del bloque
+    /// `block` (índice `idx` según `sections::detect_sections`). Click en
+    /// el header de la sección lo dispara.
+    ToggleSection { block: u64, idx: usize },
     /// Rueda del mouse sobre el panel de output. `delta` ya viene en px
     /// (positivo = rodar hacia arriba / ver historial). Ajusta `scroll_px`.
     Scroll(f32),
@@ -1031,6 +1040,7 @@ pub enum Msg {
 }
 
 mod mouse_xterm;
+pub mod sections;
 mod update;
 mod view;
 
