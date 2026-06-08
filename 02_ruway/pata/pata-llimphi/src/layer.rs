@@ -626,7 +626,11 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         );
         layer.set_anchor(LayerAnchor::TOP | LayerAnchor::LEFT);
         layer.set_size(1, 1);
-        layer.set_margin(100_000, 0, 0, 0); // fuera de vista
+        // Margin neutro (0,0,0,0): la surface es 1×1 sin buffer y no se mapea
+        // hasta el primer tooltip. NO la empujamos a margin 100_000 porque
+        // entonces el primer show la haría "cruzar toda la pantalla" — y eso
+        // es exactamente lo que el usuario marcó como molestia.
+        layer.set_margin(0, 0, 0, 0);
         layer.set_exclusive_zone(0);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
         layer.commit();
@@ -896,10 +900,19 @@ impl LayerApp {
                 let w = (text.chars().count() as u32 * 8 + 16).clamp(24, 600);
                 let h = 24u32;
                 self.tooltip_text = Some(text);
+                // Dos pasos para que el tooltip **brote del widget**, no que
+                // viaje hasta él:
+                // 1) `set_margin` al nuevo widget mientras seguimos en 1×1 sin
+                //    buffer: la surface salta invisible al sitio (no hay píxel
+                //    que el compositor pueda animar) — efectivamente, "se
+                //    teletransporta" porque no tiene cuerpo todavía.
+                // 2) `set_size(w,h)` y `draw`: el contenido crece en su sitio.
+                //    Ahí sí el compositor anima un fade/grow corto.
                 {
                     let layer = &self.panels[tpi].layer;
-                    layer.set_size(w, h);
                     layer.set_margin(y, 0, 0, x);
+                    layer.commit();
+                    layer.set_size(w, h);
                     layer.commit();
                 }
                 self.panels[tpi].width = w;
@@ -911,8 +924,12 @@ impl LayerApp {
         }
     }
 
-    /// Oculta el tooltip: lo empuja fuera de vista (1×1 con margen enorme) y lo
-    /// re-pinta una vez ahí. No hace nada si ya está oculto.
+    /// Oculta el tooltip **en el sitio**: lo encoge a 1×1 sin moverlo. Si lo
+    /// empujáramos fuera con un margin enorme (como antes), el próximo `show`
+    /// haría al compositor animar el viaje desde off-screen hasta el widget —
+    /// el tooltip "cruzaba la pantalla" antes de aparecer. Quedándose donde
+    /// estaba, el próximo hover lo hace crecer en el mismo lugar o, si pasaste
+    /// a otro widget, animar un deslizamiento corto a lo largo de la barra.
     fn hide_tooltip(&mut self, qh: &QueueHandle<Self>) {
         let Some(tpi) = self.tooltip_pi else { return };
         if self.tooltip_text.is_none() {
@@ -922,7 +939,7 @@ impl LayerApp {
         {
             let layer = &self.panels[tpi].layer;
             layer.set_size(1, 1);
-            layer.set_margin(100_000, 0, 0, 0);
+            // Nada de set_margin — preservamos la última posición conocida.
             layer.commit();
         }
         self.panels[tpi].width = 1;
