@@ -9,6 +9,7 @@ use crate::action::{Direction, DesktopAction, WORKSPACE_COUNT};
 use crate::config::Config;
 use crate::keymap::Keymap;
 use crate::rules::Rules;
+use crate::session::{DesktopState, SESSION_VERSION};
 
 pub use crate::config::DROPTERM_APP_ID;
 
@@ -76,6 +77,10 @@ pub struct Desktop {
     /// Ventanas del scratchpad: se invocan flotando y se ocultan a
     /// voluntad; mientras están guardadas no viven en ningún escritorio.
     scratchpad: Vec<WindowId>,
+    /// Mapa salida→escritorio pendiente de aplicar, restaurado de una sesión
+    /// guardada: al restaurar en el arranque aún no hay salidas conectadas, así
+    /// que se aplica a medida que aparecen (por orden), en `OutputAdded`.
+    pending_output_workspaces: Vec<usize>,
 }
 
 impl Default for Desktop {
@@ -106,6 +111,7 @@ impl Desktop {
             rules: Rules::default(),
             config: Config::default(),
             scratchpad: Vec::new(),
+            pending_output_workspaces: Vec::new(),
         }
     }
 
@@ -130,6 +136,36 @@ impl Desktop {
     /// La config general vigente — para un HUD o un editor de ajustes.
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Captura la **forma** persistible del escritorio: los parámetros de
+    /// teselado de cada escritorio virtual, qué escritorio mostraba cada salida
+    /// y cuál tenía el foco. **No** incluye las ventanas vivas — sus ids son
+    /// efímeros (los clientes se reconectan con otros), así que sobrevive la
+    /// forma del escritorio, no la geometría por-ventana. Es la cara
+    /// serializable de [`session`](crate::session).
+    pub fn snapshot(&self) -> DesktopState {
+        DesktopState {
+            version: SESSION_VERSION,
+            workspaces: self.workspaces.iter().map(|w| *w.params()).collect(),
+            output_workspaces: self.outputs.iter().map(|o| o.workspace).collect(),
+            focused_output: self.focused_output,
+        }
+    }
+
+    /// Restaura un estado guardado por [`snapshot`](Desktop::snapshot):
+    /// re-aplica los parámetros de teselado a cada escritorio y deja el mapa
+    /// salida→escritorio en pendiente, para aplicarlo a medida que las salidas
+    /// se reconectan (al restaurar en el arranque aún no hay ninguna).
+    ///
+    /// Debe llamarse **después** de [`set_config`](Desktop::set_config): la
+    /// sesión guardada manda sobre los parámetros que la config siembra.
+    pub fn restore(&mut self, state: &DesktopState) {
+        for (ws, params) in self.workspaces.iter_mut().zip(&state.workspaces) {
+            ws.set_params(*params);
+        }
+        self.pending_output_workspaces = state.output_workspaces.clone();
+        self.focused_output = state.focused_output;
     }
 
     /// Recarga la config en caliente: re-siembra los parámetros de teselado
@@ -176,12 +212,21 @@ impl Desktop {
     pub fn on_event(&mut self, event: BodyEvent) -> Vec<BrainCommand> {
         match event {
             BodyEvent::OutputAdded { id, width, height } => {
-                // La salida nueva muestra el primer escritorio que no
-                // muestre ya otra salida.
                 let taken: Vec<usize> = self.outputs.iter().map(|o| o.workspace).collect();
-                let workspace = (0..self.workspaces.len())
-                    .find(|n| !taken.contains(n))
-                    .unwrap_or(0);
+                // Si hay una sesión restaurada, esta salida —por su orden de
+                // aparición— recupera el escritorio que mostraba; si no (o si ya
+                // lo muestra otra), cae al primero libre.
+                let appearing = self.outputs.len();
+                let workspace = self
+                    .pending_output_workspaces
+                    .get(appearing)
+                    .copied()
+                    .filter(|&n| n < self.workspaces.len() && !taken.contains(&n))
+                    .unwrap_or_else(|| {
+                        (0..self.workspaces.len())
+                            .find(|n| !taken.contains(n))
+                            .unwrap_or(0)
+                    });
                 self.outputs.push(Output {
                     id,
                     rect: Rect::new(0, 0, width, height),
@@ -1966,5 +2011,85 @@ mod tests {
         d.apply(DesktopAction::SendToScratchpad);
         let line = d.window_lines().into_iter().find(|l| l.id == 1).unwrap();
         assert_eq!(line.workspace, 0);
+    }
+
+    // --- Persistencia de sesión (snapshot/restore) ----------------------
+
+    #[test]
+    fn snapshot_captures_per_workspace_modes_and_the_output_map() {
+        let mut d = desktop_with_screen();
+        // Cambia el modo del escritorio activo y manda otra salida a otro.
+        d.apply(DesktopAction::SetLayout(LayoutMode::Grid));
+        let snap = d.snapshot();
+        assert_eq!(snap.version, crate::session::SESSION_VERSION);
+        assert_eq!(snap.workspaces.len(), WORKSPACE_COUNT);
+        assert_eq!(snap.workspaces[0].mode, LayoutMode::Grid);
+        // Una salida conectada, mostrando el escritorio 0.
+        assert_eq!(snap.output_workspaces, vec![0]);
+    }
+
+    #[test]
+    fn restore_reapplies_layout_params_to_each_workspace() {
+        let snap = {
+            let mut d = desktop_with_screen();
+            d.apply(DesktopAction::SetLayout(LayoutMode::Spiral));
+            d.apply(DesktopAction::IncMaster); // master_count 1 → 2
+            d.snapshot()
+        };
+        // Un escritorio nuevo, sin salidas todavía.
+        let mut d = Desktop::new();
+        d.restore(&snap);
+        // Los params del escritorio 0 se recuperaron.
+        assert_eq!(d.workspaces[0].params().mode, LayoutMode::Spiral);
+        assert_eq!(d.workspaces[0].params().master_count, 2);
+    }
+
+    #[test]
+    fn restore_places_each_output_on_its_remembered_workspace() {
+        // Sesión: dos salidas, la primera mostraba el escritorio 4, la segunda
+        // el 2.
+        let snap = DesktopState {
+            version: crate::session::SESSION_VERSION,
+            workspaces: vec![LayoutParams::default(); WORKSPACE_COUNT],
+            output_workspaces: vec![4, 2],
+            focused_output: 1,
+        };
+        let mut d = Desktop::new();
+        d.restore(&snap);
+        // Las salidas aparecen en orden y recuperan su escritorio.
+        d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+        d.on_event(BodyEvent::OutputAdded { id: 1, width: 1920, height: 1080 });
+        assert_eq!(d.outputs()[0].workspace, 4);
+        assert_eq!(d.outputs()[1].workspace, 2);
+        assert_eq!(d.focused_output(), 1);
+        assert_eq!(d.active_index(), 2); // la salida enfocada (1) muestra el 2
+    }
+
+    #[test]
+    fn restore_with_a_conflicting_map_falls_back_to_a_free_workspace() {
+        // Ambas salidas pretenden el mismo escritorio: la segunda no puede.
+        let snap = DesktopState {
+            version: crate::session::SESSION_VERSION,
+            workspaces: vec![LayoutParams::default(); WORKSPACE_COUNT],
+            output_workspaces: vec![3, 3],
+            focused_output: 0,
+        };
+        let mut d = Desktop::new();
+        d.restore(&snap);
+        d.on_event(BodyEvent::OutputAdded { id: 0, width: 1920, height: 1080 });
+        d.on_event(BodyEvent::OutputAdded { id: 1, width: 1920, height: 1080 });
+        assert_eq!(d.outputs()[0].workspace, 3);
+        // La segunda cayó al primer escritorio libre (no el 3, ya tomado).
+        assert_ne!(d.outputs()[1].workspace, 3);
+    }
+
+    #[test]
+    fn a_snapshot_round_trips_through_restore() {
+        let mut d = desktop_with_screen();
+        d.apply(DesktopAction::SetLayout(LayoutMode::CenteredMaster));
+        let snap = d.snapshot();
+        let mut d2 = Desktop::new();
+        d2.restore(&snap);
+        assert_eq!(d2.snapshot().workspaces, snap.workspaces);
     }
 }

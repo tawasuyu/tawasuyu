@@ -196,7 +196,7 @@ impl LayoutMode {
 }
 
 /// Parámetros del teselado.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct LayoutParams {
     pub mode: LayoutMode,

@@ -15,6 +15,7 @@
 //! - [`desktop`] — el [`Desktop`]: el estado y el bucle `evento → comandos`.
 //! - [`keymap`] — el [`Keymap`] configurable en RON, recargable en caliente.
 //! - [`rules`] — las [`Rules`] de ventana (escritorio/flotante por `app_id`).
+//! - [`session`] — la [`DesktopState`]: la forma del escritorio entre arranques.
 //! - [`ctl`] — el API de control externo (`mirada-ctl`, taskbars, scripts).
 
 #![forbid(unsafe_code)]
@@ -25,6 +26,7 @@ pub mod ctl;
 pub mod desktop;
 pub mod keymap;
 pub mod rules;
+pub mod session;
 /// `impl allichay::Configurable for Config` — vuelve la config editable por UI.
 pub mod settings;
 pub mod watch;
@@ -35,6 +37,7 @@ pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesSt
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use rules::{Rule, RuleOutcome, Rules};
+pub use session::{DesktopState, SESSION_VERSION};
 pub use watch::FileWatch;
 
 pub use mirada_layout::{

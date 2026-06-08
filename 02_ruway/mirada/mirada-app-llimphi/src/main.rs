@@ -122,6 +122,12 @@ struct Model {
     /// coordenadas de ventana. `None` cerrado. No hay edición de texto,
     /// así que el contextual sólo ofrece acciones de gestión de ventana.
     context_menu: Option<(f32, f32)>,
+    /// Ruta de la sesión persistida (`~/.local/share/mirada/session.ron`);
+    /// `None` si no se pudo determinar el directorio de datos.
+    session_path: Option<PathBuf>,
+    /// Última sesión guardada en disco — para escribir sólo cuando la forma
+    /// del escritorio cambia, no en cada tick.
+    last_session: Option<mirada_brain::DesktopState>,
 }
 
 #[derive(Clone)]
@@ -208,6 +214,15 @@ impl App for Mirada {
         if let Some(p) = mirada_brain::Config::default_path() {
             desktop.set_config(mirada_brain::Config::load_or_default(&p));
         }
+        // Restaura la última sesión (modos/ratio/nmaster por escritorio + qué
+        // escritorio mostraba cada salida). Después de `set_config`: la sesión
+        // guardada manda sobre los parámetros que la config siembra.
+        let session_path = mirada_brain::DesktopState::default_path();
+        if let Some(p) = &session_path {
+            if let Some(state) = mirada_brain::DesktopState::load_if_present(p) {
+                desktop.restore(&state);
+            }
+        }
 
         let mut model = Model {
             theme: Theme::dark(),
@@ -224,6 +239,8 @@ impl App for Mirada {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            session_path,
+            last_session: None,
         };
         if let Some(link) = model.link.as_mut() {
             let _ = link.send(&model.desktop.grab_keys());
@@ -525,6 +542,28 @@ fn tick(m: &mut Model) {
     for ev in events {
         feed(m, ev);
     }
+    save_session_if_changed(m);
+}
+
+/// Persiste la forma del escritorio cuando cambia. Sólo escribe si el snapshot
+/// difiere del último guardado (los cambios de layout son escasos, no por tick)
+/// y sólo con un Cuerpo conectado — en simulación no queremos pisar la sesión
+/// real con la pantalla de muestra.
+fn save_session_if_changed(m: &mut Model) {
+    if m.link.is_none() {
+        return;
+    }
+    let Some(path) = m.session_path.clone() else {
+        return;
+    };
+    let snap = m.desktop.snapshot();
+    if m.last_session.as_ref() == Some(&snap) {
+        return;
+    }
+    if let Err(e) = snap.save(&path) {
+        eprintln!("mirada · no pude guardar la sesión: {e}");
+    }
+    m.last_session = Some(snap);
 }
 
 fn open_window(m: &mut Model) {
