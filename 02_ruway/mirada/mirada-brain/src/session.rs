@@ -39,6 +39,14 @@ pub struct DesktopState {
     pub output_workspaces: Vec<usize>,
     /// Índice de la salida que tenía el foco.
     pub focused_output: usize,
+    /// Para cada `app_id`, el escritorio (índice 0-based) donde vivía su
+    /// ventana — para re-ubicar las que **reaparezcan** (al reabrir la app o al
+    /// reconectar el Cuerpo). **No** respawnea nada: sólo enruta lo que vuelve a
+    /// abrirse. Mapa plano: si una app tenía ventanas en varios escritorios,
+    /// gana el de índice mayor. `#[serde(default)]` para que las sesiones
+    /// viejas (sin este campo) sigan cargando.
+    #[serde(default)]
+    pub window_homes: Vec<(String, usize)>,
 }
 
 impl DesktopState {
@@ -121,6 +129,7 @@ mod tests {
             ],
             output_workspaces: vec![3, 0],
             focused_output: 1,
+            window_homes: vec![("org.foo.bar".into(), 3), ("zed".into(), 0)],
         }
     }
 
@@ -152,6 +161,15 @@ mod tests {
         s.save(&path).unwrap();
         assert_eq!(DesktopState::load_if_present(&path), Some(s));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_old_session_without_homes_still_loads() {
+        // Una sesión escrita antes de añadir `window_homes`: debe cargar con la
+        // lista vacía (gracias a `#[serde(default)]`), no fallar.
+        let ron = "(version: 1, workspaces: [], output_workspaces: [], focused_output: 0)";
+        let s = DesktopState::from_ron(ron).unwrap();
+        assert!(s.window_homes.is_empty());
     }
 
     #[test]

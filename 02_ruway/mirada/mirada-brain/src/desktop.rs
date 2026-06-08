@@ -81,6 +81,11 @@ pub struct Desktop {
     /// guardada: al restaurar en el arranque aún no hay salidas conectadas, así
     /// que se aplica a medida que aparecen (por orden), en `OutputAdded`.
     pending_output_workspaces: Vec<usize>,
+    /// `app_id` → escritorio donde vivía, restaurado de una sesión guardada.
+    /// Cuando una ventana de esa app **reaparece**, vuelve a ese escritorio; la
+    /// entrada se consume (se quita) en el primer acierto, así que sólo
+    /// restaura la primera ventana de cada app y no fija las posteriores.
+    restored_homes: HashMap<String, usize>,
 }
 
 impl Default for Desktop {
@@ -112,6 +117,7 @@ impl Desktop {
             config: Config::default(),
             scratchpad: Vec::new(),
             pending_output_workspaces: Vec::new(),
+            restored_homes: HashMap::new(),
         }
     }
 
@@ -150,7 +156,26 @@ impl Desktop {
             workspaces: self.workspaces.iter().map(|w| *w.params()).collect(),
             output_workspaces: self.outputs.iter().map(|o| o.workspace).collect(),
             focused_output: self.focused_output,
+            window_homes: self.window_homes(),
         }
+    }
+
+    /// Deriva el mapa `app_id`→escritorio de las ventanas vivas, para
+    /// persistirlo en la sesión: cada ventana de cada escritorio aporta el
+    /// hogar de su app. Orden estable (BTreeMap) y, si una app está en varios
+    /// escritorios, gana el de índice mayor.
+    fn window_homes(&self) -> Vec<(String, usize)> {
+        let mut homes: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        for (n, ws) in self.workspaces.iter().enumerate() {
+            for &id in ws.windows() {
+                if let Some(info) = self.windows.get(&id) {
+                    if !info.app_id.is_empty() {
+                        homes.insert(info.app_id.clone(), n);
+                    }
+                }
+            }
+        }
+        homes.into_iter().collect()
     }
 
     /// Restaura un estado guardado por [`snapshot`](Desktop::snapshot):
@@ -166,6 +191,7 @@ impl Desktop {
         }
         self.pending_output_workspaces = state.output_workspaces.clone();
         self.focused_output = state.focused_output;
+        self.restored_homes = state.window_homes.iter().cloned().collect();
     }
 
     /// Recarga la config en caliente: re-siembra los parámetros de teselado
@@ -278,10 +304,17 @@ impl Desktop {
                 let is_dropterm = app_id == DROPTERM_APP_ID;
                 // Las reglas pueden mandarla a otro escritorio o hacerla flotar.
                 let outcome = self.rules.resolve(&app_id, &title);
+                // Si ninguna regla fija escritorio y una sesión restaurada
+                // recuerda dónde vivía esta app, vuelve ahí (consumido una vez).
+                let home = self
+                    .restored_homes
+                    .remove(&app_id)
+                    .filter(|&n| n < self.workspaces.len());
                 self.windows.insert(id, WindowInfo { app_id, title });
                 let ws = outcome
                     .workspace
                     .filter(|&n| n < self.workspaces.len())
+                    .or(home)
                     .unwrap_or(self.active_index());
                 self.workspaces[ws].add(id);
                 if is_dropterm {
@@ -2053,6 +2086,7 @@ mod tests {
             workspaces: vec![LayoutParams::default(); WORKSPACE_COUNT],
             output_workspaces: vec![4, 2],
             focused_output: 1,
+            window_homes: Vec::new(),
         };
         let mut d = Desktop::new();
         d.restore(&snap);
@@ -2073,6 +2107,7 @@ mod tests {
             workspaces: vec![LayoutParams::default(); WORKSPACE_COUNT],
             output_workspaces: vec![3, 3],
             focused_output: 0,
+            window_homes: Vec::new(),
         };
         let mut d = Desktop::new();
         d.restore(&snap);
@@ -2081,6 +2116,66 @@ mod tests {
         assert_eq!(d.outputs()[0].workspace, 3);
         // La segunda cayó al primer escritorio libre (no el 3, ya tomado).
         assert_ne!(d.outputs()[1].workspace, 3);
+    }
+
+    #[test]
+    fn snapshot_remembers_which_workspace_each_app_lived_on() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1); // app1 nace en el escritorio 0…
+        d.apply(DesktopAction::SendToWorkspace(2)); // …y se va al índice 2
+        assert!(d.snapshot().window_homes.contains(&("app1".to_string(), 2)));
+    }
+
+    #[test]
+    fn a_reopened_window_returns_to_its_remembered_workspace() {
+        let snap = {
+            let mut d = desktop_with_screen();
+            open(&mut d, 1);
+            d.apply(DesktopAction::SendToWorkspace(2));
+            d.snapshot()
+        };
+        let mut d = desktop_with_screen();
+        d.restore(&snap);
+        // app1 reaparece: vuelve al escritorio índice 2, no al activo (0).
+        d.on_event(BodyEvent::WindowOpened { id: 1, app_id: "app1".into(), title: "x".into() });
+        assert_eq!(d.workspace_loads()[2], 1);
+        assert_eq!(d.workspace_loads()[0], 0);
+    }
+
+    #[test]
+    fn a_rule_beats_a_session_home() {
+        let snap = {
+            let mut d = desktop_with_screen();
+            open(&mut d, 1);
+            d.apply(DesktopAction::SendToWorkspace(2)); // hogar = índice 2
+            d.snapshot()
+        };
+        let mut d = desktop_with_screen();
+        // La regla manda app1 al escritorio 5 (índice 4) — pisa el hogar.
+        d.set_rules(Rules::from_ron(r#"( rules: [ (app_id: "app1", workspace: 5) ] )"#).unwrap());
+        d.restore(&snap);
+        d.on_event(BodyEvent::WindowOpened { id: 1, app_id: "app1".into(), title: "x".into() });
+        assert_eq!(d.workspace_loads()[4], 1); // donde dice la regla
+        assert_eq!(d.workspace_loads()[2], 0); // no en el hogar de la sesión
+    }
+
+    #[test]
+    fn a_session_home_is_consumed_after_the_first_window() {
+        let snap = {
+            let mut d = desktop_with_screen();
+            open(&mut d, 1);
+            d.apply(DesktopAction::SendToWorkspace(2));
+            d.snapshot()
+        };
+        let mut d = desktop_with_screen();
+        d.restore(&snap);
+        // Primera ventana de app1 → vuelve al hogar (índice 2).
+        d.on_event(BodyEvent::WindowOpened { id: 1, app_id: "app1".into(), title: "x".into() });
+        d.on_event(BodyEvent::WindowClosed { id: 1 });
+        // Segunda ventana de app1 → el hogar ya se consumió: va al activo (0).
+        d.on_event(BodyEvent::WindowOpened { id: 2, app_id: "app1".into(), title: "y".into() });
+        assert_eq!(d.workspace_loads()[0], 1);
+        assert_eq!(d.workspace_loads()[2], 0);
     }
 
     #[test]
