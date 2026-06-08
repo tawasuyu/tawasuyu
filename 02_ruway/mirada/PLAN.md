@@ -86,21 +86,30 @@ cambia (el Cuerpo sigue recibiendo una lista plana). Es additivo: no toca el
 **idéntico** a `Workspace::layout` en los 7 modos, más el anidamiento. Compila
 `no_std` (sólo `alloc`).
 
-**Integración (siguiente paso, = empieza el zoom-Z):** que el `Desktop` use el
-árbol en sus escritorios y exponga "entrar/salir" de un sub-espacio. Toca
-`Workspace`/`placements`/accesores del `Desktop`; se hace con cuidado para no
-romper el camino plano (que es un árbol de un nivel). El `mirada-protocol` no
-cambia.
+**Integración + zoom semántico  ✅ HECHA (primera rebanada):** el `Workspace`
+gana una capa de agrupación opcional (`grouping: Option<SpaceNode>` + `view_path`,
+ambos `#[serde(skip)]`), **additiva y apagada por defecto**: el camino plano es
+byte-idéntico al de siempre (los 67 tests previos siguen verdes). `layout()`
+reconcilia el árbol con `windows` (añade teseladas nuevas, poda las que se van) y,
+con zoom activo, resuelve el sub-espacio en vista a pantalla completa. Acciones
+nuevas: `GroupStack` (pliega la pila en un sub-espacio), `Ungroup`, `ZoomIn`,
+`ZoomOut` (`Super+a`/`Super+Shift+a`/`Super+i`/`Super+u`). El `mirada-protocol`
+no cambia: el Cuerpo sigue recibiendo una lista plana.
+
+Pendiente del zoom-Z (siguientes rebanadas): suspender frames de las capas
+profundas inactivas (necesita hint en el protocolo + soporte en el Cuerpo);
+agrupación dirigida por el grafo de actividad (constelaciones); navegación de
+zoom multinivel arbitraria en la UI; persistir la agrupación en la sesión.
 
 **Encima de Fase 2** (orden de ROI):
 
 | Idea | Estado | Nota |
 |---|---|---|
+| **Zoom semántico en Z** | ✅ 1ª rebanada | Agrupar la pila + entrar/salir del sub-espacio (absorbe la pantalla). Falta: suspender frames de capas profundas (Cuerpo), constelaciones, multinivel UI. |
 | **Capabilities por ventana** | BUILD | Gatear screencopy/export-dmabuf por `app_id` en el Cuerpo. El sandboxing *real* y honesto: somos quien otorga el protocolo. |
-| **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". |
+| **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". Solapa con suspender capas profundas del zoom-Z. |
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |
-| **Zoom semántico en Z** | BUILD | *Feature insignia.* Entrar/salir del árbol de procesos (no escritorios laterales). Capas profundas inactivas → el Cuerpo suspende sus frames. |
-| **Alt-Tab por grafo de actividad** | BUILD | Terminal lanzada desde el editor = "hija" (conocemos el linaje vía `Spawn`). Saltar entre constelaciones, no ventanas. |
+| **Alt-Tab por grafo de actividad** | BUILD | Terminal lanzada desde el editor = "hija" (conocemos el linaje vía `Spawn`). Saltar entre constelaciones, no ventanas. Las constelaciones alimentan la agrupación del zoom-Z. |
 | **Workspaces por rama de Git** | BUILD | `inotify` sobre `.git/HEAD` → swap de sesión guardada. SIGSTOP, **no** CRIU. Caso especial de Fase 1. |
 | **Remote vía waypipe** | BUILD | `Spawn` que envuelve `waypipe ssh host app`. Para el compositor es un cliente más. **No** inventar protocolo. |
 

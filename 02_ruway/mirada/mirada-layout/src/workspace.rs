@@ -1,5 +1,6 @@
 //! `Workspace` — un conjunto de ventanas, su foco y su modo de teselado.
 
+use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 // El macro `vec!` sólo lo usan los tests de este módulo.
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::geometry::Rect;
 use crate::layout::{tile, LayoutMode, LayoutParams};
+use crate::tree::{LayoutNode, SpaceNode};
 
 /// Identificador de una ventana (una superficie Wayland).
 pub type WindowId = u64;
@@ -30,6 +32,19 @@ pub struct Workspace {
     /// La ventana en pantalla completa, si hay alguna: cubre toda la
     /// salida y oculta al resto.
     fullscreen: Option<WindowId>,
+    /// Agrupación opcional en sub-espacios anidados (árbol fractal). `None` =
+    /// teselado plano: el caso por defecto y el de todo el código existente.
+    /// Es una capa de *arreglo* sobre `windows`, que sigue siendo la membresía
+    /// autoritativa: [`layout`](Workspace::layout) la reconcilia con `windows`
+    /// al resolver (añade las teseladas ausentes, poda las que ya no están). No
+    /// se persiste: se rehace a voluntad.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    grouping: Option<SpaceNode>,
+    /// Camino de zoom dentro de `grouping`: índices de los sub-espacios en los
+    /// que se ha "entrado". Vacío = se ve el espacio entero. Implica
+    /// `grouping.is_some()`.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    view_path: Vec<usize>,
 }
 
 impl Workspace {
@@ -41,6 +56,8 @@ impl Workspace {
             params,
             floating: BTreeMap::new(),
             fullscreen: None,
+            grouping: None,
+            view_path: Vec::new(),
         }
     }
 
@@ -227,15 +244,34 @@ impl Workspace {
     /// `screen`. Primero las teseladas en orden de teselado, luego las
     /// flotantes con su propio rectángulo — éstas van al final para que
     /// el Cuerpo las pinte encima.
+    ///
+    /// Con agrupación activa ([`group`](Workspace::group)) reparte a través del
+    /// árbol fractal: resuelve el sub-espacio en el que se ha hecho zoom
+    /// ([`zoom_in`](Workspace::zoom_in)) a pantalla completa, dejando fuera al
+    /// resto. Las flotantes siguen yendo al final, siempre encima.
     pub fn layout(&self, screen: Rect) -> Vec<(WindowId, Rect)> {
-        let tiled: Vec<WindowId> = self
-            .windows
-            .iter()
-            .copied()
-            .filter(|id| !self.floating.contains_key(id))
-            .collect();
-        let rects = tile(screen, tiled.len(), &self.params);
-        let mut out: Vec<(WindowId, Rect)> = tiled.into_iter().zip(rects).collect();
+        // Camino plano (por defecto): byte-idéntico al de siempre.
+        if self.grouping.is_none() && self.view_path.is_empty() {
+            let tiled: Vec<WindowId> = self
+                .windows
+                .iter()
+                .copied()
+                .filter(|id| !self.floating.contains_key(id))
+                .collect();
+            let rects = tile(screen, tiled.len(), &self.params);
+            let mut out: Vec<(WindowId, Rect)> = tiled.into_iter().zip(rects).collect();
+            for &id in &self.windows {
+                if let Some(&rect) = self.floating.get(&id) {
+                    out.push((id, rect));
+                }
+            }
+            return out;
+        }
+        // Camino agrupado: resolver el sub-espacio en vista a pantalla completa.
+        let root = self.root_tree();
+        let view = node_at_path(&root, &self.view_path).unwrap_or(&root);
+        let mut out = view.resolve(screen);
+        // Las flotantes nunca entran al árbol: van al final, encima de todo.
         for &id in &self.windows {
             if let Some(&rect) = self.floating.get(&id) {
                 out.push((id, rect));
@@ -243,6 +279,134 @@ impl Workspace {
         }
         out
     }
+
+    /// `true` si el escritorio está agrupado en sub-espacios.
+    pub fn is_grouped(&self) -> bool {
+        self.grouping.is_some()
+    }
+
+    /// Profundidad de zoom actual: `0` = se ve el espacio entero.
+    pub fn zoom_depth(&self) -> usize {
+        self.view_path.len()
+    }
+
+    /// Agrupa las ventanas dadas en un nuevo sub-espacio (con los parámetros de
+    /// teselado actuales): para el nivel superior ocupa un solo hueco del
+    /// teselado, y dentro reparte su propio espacio. Sólo agrupa ventanas
+    /// teseladas que existan; no hace nada con menos de dos. Es la base del
+    /// anidamiento fractal.
+    pub fn group(&mut self, ids: &[WindowId]) {
+        let members: Vec<WindowId> = ids
+            .iter()
+            .copied()
+            .filter(|id| self.windows.contains(id) && !self.floating.contains_key(id))
+            .collect();
+        if members.len() < 2 {
+            return;
+        }
+        let mut root = self.root_tree();
+        // Saca las hojas de los miembros del nivel superior y mételas en un
+        // nuevo sub-espacio al final.
+        root.children
+            .retain(|n| !matches!(n, LayoutNode::Leaf(id) if members.contains(id)));
+        let sub = SpaceNode {
+            params: self.params,
+            children: members.iter().map(|&id| LayoutNode::Leaf(id)).collect(),
+        };
+        root.children.push(LayoutNode::Space(Box::new(sub)));
+        self.grouping = Some(root);
+    }
+
+    /// Deshace toda la agrupación: vuelve al teselado plano y al nivel raíz.
+    pub fn ungroup(&mut self) {
+        self.grouping = None;
+        self.view_path.clear();
+    }
+
+    /// Entra ("zoom in") en el sub-espacio del nivel de vista actual que
+    /// contiene la ventana enfocada: ese sub-espacio pasa a ocupar toda la
+    /// pantalla. No hace nada si el foco no está dentro de ningún sub-espacio
+    /// (no hay dónde entrar).
+    pub fn zoom_in(&mut self) {
+        let Some(focused) = self.focused() else {
+            return;
+        };
+        let root = self.root_tree();
+        let Some(view) = node_at_path(&root, &self.view_path) else {
+            return;
+        };
+        for (i, child) in view.children.iter().enumerate() {
+            if let LayoutNode::Space(s) = child {
+                if collect_leaves(s).contains(&focused) {
+                    self.view_path.push(i);
+                    return;
+                }
+            }
+        }
+    }
+
+    /// Sale ("zoom out") un nivel hacia el espacio contenedor.
+    pub fn zoom_out(&mut self) {
+        self.view_path.pop();
+    }
+
+    /// El árbol de nivel superior, reconciliado con `windows`: parte de la
+    /// agrupación actual (o de un árbol plano si no hay), añade como hojas de
+    /// nivel superior las ventanas teseladas que no aparezcan ya en el árbol y
+    /// poda las hojas de ventanas que ya no existen o que ahora flotan. El nivel
+    /// superior usa siempre los parámetros de teselado del escritorio.
+    fn root_tree(&self) -> SpaceNode {
+        let mut root = self
+            .grouping
+            .clone()
+            .unwrap_or_else(|| SpaceNode::new(self.params));
+        root.params = self.params;
+        prune(&mut root, &self.windows, &self.floating);
+        let present = collect_leaves(&root);
+        for &id in &self.windows {
+            if !self.floating.contains_key(&id) && !present.contains(&id) {
+                root.children.push(LayoutNode::Leaf(id));
+            }
+        }
+        root
+    }
+}
+
+/// Todas las hojas (ids de ventana) de un sub-espacio, recursivamente.
+fn collect_leaves(node: &SpaceNode) -> Vec<WindowId> {
+    let mut out = Vec::new();
+    for c in &node.children {
+        match c {
+            LayoutNode::Leaf(id) => out.push(*id),
+            LayoutNode::Space(s) => out.extend(collect_leaves(s)),
+        }
+    }
+    out
+}
+
+/// Poda del árbol las hojas de ventanas ausentes (o que ahora flotan) y los
+/// sub-espacios que quedan vacíos tras la poda.
+fn prune(node: &mut SpaceNode, windows: &[WindowId], floating: &BTreeMap<WindowId, Rect>) {
+    node.children.retain_mut(|c| match c {
+        LayoutNode::Leaf(id) => windows.contains(id) && !floating.contains_key(id),
+        LayoutNode::Space(s) => {
+            prune(s, windows, floating);
+            !s.children.is_empty()
+        }
+    });
+}
+
+/// Navega un camino de índices de sub-espacio desde la raíz. `None` si el
+/// camino se sale del árbol o atraviesa una hoja.
+fn node_at_path<'a>(root: &'a SpaceNode, path: &[usize]) -> Option<&'a SpaceNode> {
+    let mut node = root;
+    for &i in path {
+        match node.children.get(i) {
+            Some(LayoutNode::Space(s)) => node = s,
+            _ => return None,
+        }
+    }
+    Some(node)
 }
 
 #[cfg(test)]
@@ -410,5 +574,140 @@ mod tests {
         w.remove(1);
         w.add(1); // mismo id, ventana nueva: ya no flota
         assert!(!w.is_floating(1));
+    }
+
+    // --- Agrupación en sub-espacios + zoom (árbol fractal) ---------------
+
+    fn cols() -> Workspace {
+        Workspace::new(LayoutParams { mode: LayoutMode::Columns, gap: 0, ..LayoutParams::default() })
+    }
+
+    #[test]
+    fn grouping_needs_at_least_two_real_windows() {
+        let mut w = cols();
+        w.add(1);
+        w.group(&[1]); // una sola → no agrupa
+        assert!(!w.is_grouped());
+        w.group(&[1, 99]); // 99 no existe → sigue siendo una válida
+        assert!(!w.is_grouped());
+    }
+
+    #[test]
+    fn a_group_occupies_a_single_slot_of_the_top_level() {
+        // Tres ventanas en columnas; agrupo la 2 y la 3 en un sub-espacio.
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        assert!(w.is_grouped());
+        // El nivel superior tiene dos huecos: la 1 y el grupo {2,3}.
+        let placed = w.layout(Rect::new(0, 0, 1200, 600));
+        assert_eq!(placed.len(), 3);
+        let r1 = placed.iter().find(|(id, _)| *id == 1).unwrap().1;
+        let r2 = placed.iter().find(|(id, _)| *id == 2).unwrap().1;
+        let r3 = placed.iter().find(|(id, _)| *id == 3).unwrap().1;
+        // La 1 ocupa la columna izquierda entera; 2 y 3 parten la derecha.
+        assert_eq!(r1, Rect::new(0, 0, 600, 600));
+        assert_eq!(r2, Rect::new(600, 0, 300, 600));
+        assert_eq!(r3, Rect::new(900, 0, 300, 600));
+    }
+
+    #[test]
+    fn zooming_into_a_group_makes_it_absorb_the_screen() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.focus_window(2); // el foco vive dentro del grupo
+        w.zoom_in();
+        assert_eq!(w.zoom_depth(), 1);
+        // Sólo se ven la 2 y la 3, repartiéndose toda la pantalla.
+        let placed = w.layout(Rect::new(0, 0, 1200, 600));
+        let ids: Vec<_> = placed.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![2, 3]);
+        assert_eq!(placed[0].1, Rect::new(0, 0, 600, 600));
+        assert_eq!(placed[1].1, Rect::new(600, 0, 600, 600));
+        // Salir restaura la vista del nivel superior.
+        w.zoom_out();
+        assert_eq!(w.zoom_depth(), 0);
+        assert_eq!(w.layout(Rect::new(0, 0, 1200, 600)).len(), 3);
+    }
+
+    #[test]
+    fn zoom_in_does_nothing_when_focus_is_a_top_level_leaf() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.focus_window(1); // la 1 es hoja de nivel superior, no un grupo
+        w.zoom_in();
+        assert_eq!(w.zoom_depth(), 0);
+    }
+
+    #[test]
+    fn a_new_window_after_grouping_appears_at_the_top_level() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.add(4); // nueva ventana: hoja de nivel superior
+        let placed = w.layout(Rect::new(0, 0, 1200, 600));
+        // Tres huecos arriba: 1, 4 y el grupo {2,3} → cuatro ventanas en total.
+        assert_eq!(placed.len(), 4);
+        assert!(placed.iter().any(|(id, _)| *id == 4));
+    }
+
+    #[test]
+    fn closing_a_grouped_window_prunes_it_from_the_tree() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.remove(3); // se va una del grupo
+        let placed = w.layout(Rect::new(0, 0, 1200, 600));
+        let ids: Vec<_> = placed.iter().map(|(id, _)| *id).collect();
+        assert_eq!(placed.len(), 2);
+        assert!(ids.contains(&1) && ids.contains(&2) && !ids.contains(&3));
+    }
+
+    #[test]
+    fn ungroup_returns_to_the_flat_layout() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.zoom_in();
+        w.ungroup();
+        assert!(!w.is_grouped());
+        assert_eq!(w.zoom_depth(), 0);
+        // Idéntico al teselado plano de tres columnas.
+        let flat = {
+            let mut f = cols();
+            for id in [1, 2, 3] {
+                f.add(id);
+            }
+            f.layout(Rect::new(0, 0, 1200, 600))
+        };
+        assert_eq!(w.layout(Rect::new(0, 0, 1200, 600)), flat);
+    }
+
+    #[test]
+    fn a_floating_window_stays_on_top_even_when_grouped() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        let fr = Rect::new(10, 10, 100, 100);
+        w.set_floating(1, Some(fr));
+        let placed = w.layout(Rect::new(0, 0, 1200, 600));
+        // La 1 flota: va al final con su rect; 2 y 3 forman el árbol.
+        assert_eq!(placed.last(), Some(&(1, fr)));
     }
 }

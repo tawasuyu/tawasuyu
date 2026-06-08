@@ -113,6 +113,17 @@ pub enum DesktopAction {
     /// Intercambia la ventana enfocada con la maestra (sólo esas dos; el
     /// resto del orden queda igual). El foco acompaña a la ventana.
     SwapMaster,
+    /// Pliega la pila (las ventanas teseladas que no son maestras) en un
+    /// sub-espacio anidado — el árbol fractal. Luego se puede entrar en él con
+    /// [`ZoomIn`](DesktopAction::ZoomIn).
+    GroupStack,
+    /// Deshace toda la agrupación del escritorio activo: vuelve al teselado plano.
+    Ungroup,
+    /// Entra ("zoom in") en el sub-espacio que contiene la ventana enfocada:
+    /// ese sub-espacio absorbe la pantalla y el resto se aparta.
+    ZoomIn,
+    /// Sale ("zoom out") un nivel hacia el espacio contenedor.
+    ZoomOut,
     /// Activa el escritorio virtual `n` (índice 0-based).
     SwitchWorkspace(usize),
     /// Manda la ventana enfocada al escritorio virtual `n` (queda donde está).
@@ -191,6 +202,10 @@ impl fmt::Display for DesktopAction {
             DesktopAction::DecMaster => f.write_str("dec-master"),
             DesktopAction::PromoteToMaster => f.write_str("promote-to-master"),
             DesktopAction::SwapMaster => f.write_str("swap-master"),
+            DesktopAction::GroupStack => f.write_str("group-stack"),
+            DesktopAction::Ungroup => f.write_str("ungroup"),
+            DesktopAction::ZoomIn => f.write_str("zoom-in"),
+            DesktopAction::ZoomOut => f.write_str("zoom-out"),
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
@@ -230,6 +245,10 @@ impl FromStr for DesktopAction {
             "dec-master" => Self::DecMaster,
             "promote-to-master" => Self::PromoteToMaster,
             "swap-master" => Self::SwapMaster,
+            "group-stack" => Self::GroupStack,
+            "ungroup" => Self::Ungroup,
+            "zoom-in" => Self::ZoomIn,
+            "zoom-out" => Self::ZoomOut,
             "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
             _ => {
@@ -337,6 +356,11 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+l".into(), DesktopAction::GrowMaster),
         ("Super+o".into(), DesktopAction::FocusOutputNext),
         ("Super+Return".into(), DesktopAction::PromoteToMaster),
+        // Árbol fractal: plegar la pila en un sub-espacio y entrar/salir de él.
+        ("Super+a".into(), DesktopAction::GroupStack),
+        ("Super+Shift+a".into(), DesktopAction::Ungroup),
+        ("Super+i".into(), DesktopAction::ZoomIn),
+        ("Super+u".into(), DesktopAction::ZoomOut),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
         ("Super+,".into(), DesktopAction::IncMaster),

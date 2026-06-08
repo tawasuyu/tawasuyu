@@ -658,6 +658,32 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            DesktopAction::GroupStack => {
+                let ws = &mut self.workspaces[active];
+                let nmaster = ws.params().master_count;
+                // La pila: las teseladas que no caben en el área maestra.
+                let stack: Vec<WindowId> = ws
+                    .windows()
+                    .iter()
+                    .copied()
+                    .filter(|&id| !ws.is_floating(id))
+                    .skip(nmaster)
+                    .collect();
+                ws.group(&stack);
+                self.relayout()
+            }
+            DesktopAction::Ungroup => {
+                self.workspaces[active].ungroup();
+                self.relayout()
+            }
+            DesktopAction::ZoomIn => {
+                self.workspaces[active].zoom_in();
+                self.relayout()
+            }
+            DesktopAction::ZoomOut => {
+                self.workspaces[active].zoom_out();
+                self.relayout()
+            }
             DesktopAction::SwitchWorkspace(n) => {
                 if n < self.workspaces.len() && n != active {
                     self.show_workspace(n);
@@ -2176,6 +2202,29 @@ mod tests {
         d.on_event(BodyEvent::WindowOpened { id: 2, app_id: "app1".into(), title: "y".into() });
         assert_eq!(d.workspace_loads()[0], 1);
         assert_eq!(d.workspace_loads()[2], 0);
+    }
+
+    #[test]
+    fn group_stack_then_zoom_makes_the_stack_absorb_the_screen() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id); // MasterStack, nmaster=1 → maestra 1, pila 2/3/4
+        }
+        // Pliega la pila (2,3,4) en un sub-espacio.
+        d.apply(DesktopAction::GroupStack);
+        assert!(d.active_workspace().is_grouped());
+        // Con el foco en la pila, entrar: sólo se ven 2,3,4.
+        d.apply(DesktopAction::FocusWindow(3));
+        let cmds = d.apply(DesktopAction::ZoomIn);
+        let ids: Vec<_> = places(&cmds).iter().map(|p| p.id).collect();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(&2) && ids.contains(&3) && ids.contains(&4));
+        assert!(!ids.contains(&1)); // la maestra queda fuera del zoom
+        // Salir y deshacer: vuelven las cuatro.
+        d.apply(DesktopAction::ZoomOut);
+        let cmds = d.apply(DesktopAction::Ungroup);
+        assert_eq!(places(&cmds).len(), 4);
+        assert!(!d.active_workspace().is_grouped());
     }
 
     #[test]
