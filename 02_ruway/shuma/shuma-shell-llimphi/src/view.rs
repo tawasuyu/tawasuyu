@@ -1250,14 +1250,29 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
             &pal,
             Msg::ToggleDropdown(DropKind::Distro),
         ));
-        children.push(panel_label("Directorio a montar (opcional)", theme));
+        children.push(panel_label(
+            "Directorio del HOST a montar (opcional)",
+            theme,
+        ));
         children.push(text_input_view(
             &session.mount,
-            "/ruta/del/host",
+            "/home/sergio/proyectos",
             session.pending_focus == Some(PendingField::Mount),
             &tpal,
             Msg::FocusPendingField(PendingField::Mount),
         ));
+        children.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(
+                "queda visible como /work dentro del contenedor".to_string(),
+                10.0,
+                theme.fg_muted,
+                llimphi_ui::llimphi_text::Alignment::Start,
+            ),
+        );
     }
 
     // Botones: Cancelar | Crear.

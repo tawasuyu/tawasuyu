@@ -1301,7 +1301,10 @@ mod tests {
     }
 
     #[test]
-    fn second_enter_queues_while_busy() {
+    fn second_enter_starts_bg_while_busy() {
+        // Cambió la política (2026-06-08): un Enter durante un run vivo
+        // arranca el nuevo en background paralelo en lugar de encolarlo.
+        // Evita que un comando colgado bloquee el shell.
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
         s.input.set_text("sleep 0.2");
@@ -1309,10 +1312,9 @@ mod tests {
         assert!(s.is_running());
         s.input.set_text("echo segunda");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
-        assert_eq!(s.queue.len(), 1, "segunda línea debe quedar en cola");
+        assert_eq!(s.queue.len(), 0, "ya no se encola, va a bg");
+        assert!(!s.bg_jobs.is_empty(), "el segundo run quedó como bg job");
         s = drain_until_idle(s);
-        // Tras drenar, la cola arrancó y ya cerró el segundo run.
-        assert_eq!(s.queue.len(), 0);
         let combined: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
         assert!(combined.iter().any(|t| t == "segunda"), "{combined:?}");
     }

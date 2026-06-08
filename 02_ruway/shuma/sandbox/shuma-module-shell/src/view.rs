@@ -2,6 +2,93 @@ use super::*;
 use llimphi_ui::llimphi_layout::taffy::prelude::auto;
 use llimphi_ui::llimphi_layout::taffy::style::Position;
 
+/// Vista pública del **input vivo** del shell, aislado del resto del shell. Lo
+/// usan los frontends que quieren hospedar la línea de entrada en su propio
+/// chasis (p. ej. la barra de pata: el cabezal de la barra ES este input, no un
+/// placeholder). Comparte estado con [`body_view`] — los dos pintan distintas
+/// partes del mismo `State` y se enrutan los `Msg` por el mismo `lift`.
+pub fn input_view<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    shell_input_view(state, theme, lift)
+}
+
+/// Vista pública del **cuerpo** del shell sin el input: header + panel
+/// principal (cards/PTY/TUI) + popups internos (completado, búsqueda de
+/// historial, menú contextual). La usa pata para el drawer mientras el input
+/// real vive en la barra.
+pub fn body_view<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    let header = shell_header(state, theme);
+    let main_panel: View<HostMsg> = if is_tui_fullscreen(state) {
+        tui_panel::<HostMsg>(state, theme, lift.clone())
+    } else if is_tui_active(state) {
+        pty_lines_panel::<HostMsg>(state, theme)
+    } else if terminal_surface_enabled() {
+        output_pane_surface::<HostMsg>(state, theme, &lift)
+    } else {
+        output_pane::<HostMsg>(state, theme, &lift)
+    };
+    let body: View<HostMsg> = if !state.groups.is_empty() && !is_tui_active(state) {
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: Dimension::auto(),
+            },
+            flex_basis: length(0.0_f32),
+            flex_grow: 1.0,
+            min_size: Size {
+                width: Dimension::auto(),
+                height: length(0.0_f32),
+            },
+            gap: Size {
+                width: length(8.0_f32),
+                height: length(0.0_f32),
+            },
+            align_items: Some(AlignItems::Stretch),
+            ..Default::default()
+        })
+        .children(vec![groups_panel::<HostMsg>(state, theme, &lift), main_panel])
+    } else {
+        main_panel
+    };
+
+    let mut children = vec![header, body];
+    if state.history_search.is_some() {
+        children.push(history_search_panel::<HostMsg>(state, theme));
+    }
+    if let Some(menu) = body_context_menu::<HostMsg>(state, theme, &lift) {
+        children.push(menu);
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(10.0_f32),
+            bottom: length(10.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(children)
+}
+
 pub fn view<HostMsg: Clone + 'static>(
     state: &State,
     theme: &Theme,
@@ -459,6 +546,11 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             width: percent(1.0_f32),
             height: length(container_h as f32),
         },
+        // El input nunca se reduce: cuando la ventana se achica, el
+        // body (con flex_grow=1) se shrinkea hasta `min_size.height=0`
+        // y el input mantiene su `container_h`. Sin esto, taffy podía
+        // shrink el input a 0 y se "perdía".
+        flex_shrink: 0.0,
         padding: Rect {
             left: length(1.0_f32),
             right: length(1.0_f32),
@@ -1850,9 +1942,18 @@ const SECTION_TABLE_HEADER_H: f32 = 22.0;
 /// Alto de una fila de tabla de sección (px).
 const SECTION_TABLE_ROW_H: f32 = 20.0;
 
-/// Alto total de una tabla con `n_rows` filas.
+/// Cap de filas renderizadas por sección-tabla. Más allá, agregamos una
+/// fila final "+N filas …" en lugar de pintar 5000 Views. Cuando el usuario
+/// ordena por una columna, la limitación sigue aplicando (ve los top-N
+/// según ese orden) — útil para tablas muy gordas tipo `ls -lR /usr`.
+pub(crate) const SECTION_TABLE_MAX_ROWS: usize = 200;
+
+/// Alto total de una tabla con `n_rows` filas (capeado por SECTION_TABLE_MAX_ROWS,
+/// +1 fila para el mensaje "+N filas …" cuando aplica).
 pub(crate) fn section_table_height(n_rows: usize) -> f32 {
-    SECTION_TABLE_HEADER_H + n_rows as f32 * SECTION_TABLE_ROW_H
+    let visible = n_rows.min(SECTION_TABLE_MAX_ROWS);
+    let truncado = if n_rows > SECTION_TABLE_MAX_ROWS { 1.0 } else { 0.0 };
+    SECTION_TABLE_HEADER_H + (visible as f32 + truncado) * SECTION_TABLE_ROW_H
 }
 
 /// Pinta una sub-sección como tabla con headers clickeables (ordenar
@@ -1942,8 +2043,11 @@ pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
             if asc { cmp } else { cmp.reverse() }
         });
     }
-    let mut row_views: Vec<View<HostMsg>> = Vec::with_capacity(order.len());
-    for (vis_idx, &ri) in order.iter().enumerate() {
+    let total_rows = order.len();
+    let visible_rows = total_rows.min(SECTION_TABLE_MAX_ROWS);
+    let truncated = total_rows > SECTION_TABLE_MAX_ROWS;
+    let mut row_views: Vec<View<HostMsg>> = Vec::with_capacity(visible_rows + 1);
+    for (vis_idx, &ri) in order.iter().take(visible_rows).enumerate() {
         let row = &rows[ri];
         let stripe = if vis_idx % 2 == 0 {
             theme.bg_panel
@@ -1993,6 +2097,31 @@ pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
             .children(cells),
         );
     }
+    // Mensaje de truncado: si la tabla tiene más filas que SECTION_TABLE_MAX_ROWS,
+    // mostramos una última fila informativa.
+    if truncated {
+        let extra = total_rows - visible_rows;
+        row_views.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(SECTION_TABLE_ROW_H) },
+                padding: Rect {
+                    left: length(8.0_f32),
+                    right: length(8.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(
+                format!("… +{extra} filas (sort por una columna para acotar)"),
+                10.0,
+                theme.fg_muted,
+                Alignment::Start,
+            )
+            .mono(),
+        );
+    }
 
     let mut all = vec![header];
     all.extend(row_views);
@@ -2007,8 +2136,29 @@ pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
     .children(all)
 }
 
+/// `true` si la sub-sección `idx` del bloque `block` debe arrancar colapsada
+/// por default. Heurística: dirs con profundidad ≥ 2 (al menos un `/`
+/// después del primero) — para que `ls -R` en un árbol grande no rinda
+/// miles de filas al toque. El usuario togglea con click; el set
+/// `section_collapsed` guarda el OVERRIDE del default (no el estado).
+pub(crate) fn section_default_collapsed(title: &str) -> bool {
+    // `./` y `.` siempre expandidos. `./algo` también (depth 1). `./a/b`
+    // ya cierra (depth 2).
+    let stripped = title.trim_start_matches("./");
+    stripped.matches('/').count() >= 1
+}
+
+/// Estado efectivo de plegado de una sub-sección: el default (heurística
+/// por profundidad) flippeado por el override del usuario.
+pub(crate) fn is_section_collapsed(state: &State, block: u64, idx: usize, title: &str) -> bool {
+    let default_col = section_default_collapsed(title);
+    let user_toggled = state.section_collapsed.contains(&(block, idx));
+    default_col ^ user_toggled
+}
+
 /// Header clickeable de una sub-sección. Pinta chevron + título + el conteo
-/// de líneas; click emite `Msg::ToggleSection`.
+/// de líneas; click emite `Msg::ToggleSection`. `idx` se usa como número
+/// visible ("1.", "2.", …) para navegar listas largas.
 fn section_header<HostMsg: Clone + 'static>(
     block: u64,
     idx: usize,
@@ -2034,7 +2184,12 @@ fn section_header<HostMsg: Clone + 'static>(
         flex_grow: 1.0,
         ..Default::default()
     })
-    .text_aligned(title.to_string(), 11.0, theme.fg_text, Alignment::Start)
+    .text_aligned(
+        format!("{}. {}", idx + 1, title),
+        11.0,
+        theme.fg_text,
+        Alignment::Start,
+    )
     .mono()
     .max_lines(1);
     let count = View::new(Style {
@@ -2421,7 +2576,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                     crate::sections::detect_sections(&cmd_for_sections, &lines)
                 {
                     for (sidx, sec) in sections.iter().enumerate() {
-                        let sec_col = state.section_collapsed.contains(&(*id, sidx));
+                        let sec_col = is_section_collapsed(state, *id, sidx, &sec.title);
                         let item_count = sec.kind.count();
                         // Header (oculto si la sección no tiene título — caso
                         // `ls -l` simple sin árbol).

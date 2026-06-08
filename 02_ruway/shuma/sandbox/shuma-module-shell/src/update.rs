@@ -1883,16 +1883,18 @@ pub(crate) fn run_submitted(mut s: State) -> State {
         return start_bg(s, cmd);
     }
 
-    // Comando externo foreground. Si ya hay uno corriendo, lo encolamos;
-    // si no, arrancamos ahora mismo.
+    // Comando externo foreground. Si ya hay uno corriendo, el nuevo
+    // arranca en background paralelo (job nuevo) — no encolar. Esto
+    // evita que un comando colgado (fastfetch, ssh, etc.) bloquee el
+    // shell. El usuario ve un notice "▶ job N en background" y puede
+    // seguir tipeando; `:jobs` los lista, `:kill N` los mata, `:fg N`
+    // los traería al foreground (TODO).
     if s.running.is_some() {
-        s.queue.push_back(exec_line);
-        // `»` (no ⌛): el reloj de arena U+231B no está ni en la mono embebida
-        // ni en el fallback DejaVu → daba tofu. `»` sí está en la mono.
-        s.push_output(OutputLine::notice(
-            "» en cola — esperando a que el comando actual termine",
-        ));
-        return s;
+        let cmd = exec_line.clone();
+        s.push_output(OutputLine::notice(format!(
+            "▶ corre en background (hay otro comando vivo) — {cmd}"
+        )));
+        return start_bg(s, exec_line);
     }
     start_run(s, exec_line)
 }
