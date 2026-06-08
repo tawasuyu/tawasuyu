@@ -4,7 +4,7 @@ Low-level astronomical calculations for coordinate transformations.
 
 [![Crates.io](https://img.shields.io/crates/v/cosmos-core)](https://crates.io/crates/cosmos-core)
 [![Documentation](https://docs.rs/cosmos-core/badge.svg)](https://docs.rs/cosmos-core)
-[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-core)](https://git.gioser.net/tawasuyu/tawasuyu)
+[![License: Apache 2.0](https://img.shields.io/crates/l/cosmos-core)](https://git.tawasuyu.net/tawasuyu/tawasuyu)
 
 Pure Rust implementation of IAU 2000/2006 standards for celestial mechanics: rotation matrices, nutation/precession models, angle handling, and geodetic conversions. No runtime FFI.
 
@@ -66,4 +66,4 @@ Zeballos with Claude (Anthropic).
 
 ## Contributing
 
-See the [repository](https://git.gioser.net/tawasuyu/tawasuyu) for contribution guidelines.
+See the [repository](https://git.tawasuyu.net/tawasuyu/tawasuyu) for contribution guidelines.

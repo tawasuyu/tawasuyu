@@ -934,7 +934,7 @@ fn render_about(lang: &str) -> String {
     <dl class="panel-about-kv">
       <dt data-i18n="ab.version">{lab_v}</dt><dd>{v}</dd>
       <dt data-i18n="ab.build">{lab_b}</dt><dd>{prof}</dd>
-      <dt data-i18n="ab.repo">{lab_r}</dt><dd><a href="https://git.gioser.net/tawasuyu/tawasuyu" target="_blank" rel="noopener">git.gioser.net/tawasuyu/tawasuyu</a></dd>
+      <dt data-i18n="ab.repo">{lab_r}</dt><dd><a href="https://git.tawasuyu.net/tawasuyu/tawasuyu" target="_blank" rel="noopener">git.tawasuyu.net/tawasuyu/tawasuyu</a></dd>
       <dt data-i18n="ab.license">{lab_l}</dt><dd>0BSD · MIT · Apache-2.0</dd>
     </dl>
   </div>

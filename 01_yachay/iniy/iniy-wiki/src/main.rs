@@ -84,7 +84,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     let mut store = Store::abrir(&cli.db)?;
     let cliente = reqwest::Client::builder()
-        .user_agent("iniy-wiki/0.1 (https://git.gioser.net/tawasuyu/tawasuyu)")
+        .user_agent("iniy-wiki/0.1 (https://git.tawasuyu.net/tawasuyu/tawasuyu)")
         .build()?;
     let api_url = format!("https://{}.wikipedia.org/w/api.php", cli.lang);
     let tags: Vec<String> = cli.tags

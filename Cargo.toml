@@ -510,7 +510,7 @@ rust-version = "1.80"
 license = "MIT OR Apache-2.0"
 authors = ["Sergio <gerencia@jlsoltech.com>"]
 publish = false
-repository = "https://git.gioser.net/tawasuyu/tawasuyu"
+repository = "https://git.tawasuyu.net/tawasuyu/tawasuyu"
 
 [workspace.dependencies]
 # === Configuración declarativa (vocabulario de esquemas) ===
