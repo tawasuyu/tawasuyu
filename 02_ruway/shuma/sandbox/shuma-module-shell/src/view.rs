@@ -1980,17 +1980,24 @@ fn surface_header<HostMsg: Clone + 'static>(
             })
             .children(vec![llimphi_icons::icon_view(icon, color, 1.8)]),
         );
-        let when = relative_time(
-            state.block_started.get(&block).copied().unwrap_or(0),
-            now_unix_secs(),
-        );
+        // Mientras corre, mostrar bytes recibidos en vivo en el slot del
+        // timestamp — feedback inmediato de que el stream está moviendo
+        // datos (más útil que "hace 0 s"). Al terminar, vuelve al "hace…".
+        let right_text = if st == CmdStatus::Running && state.current_block == block {
+            format_bytes_short(state.current_run_bytes)
+        } else {
+            relative_time(
+                state.block_started.get(&block).copied().unwrap_or(0),
+                now_unix_secs(),
+            )
+        };
         children.push(
             View::new(Style {
                 size: Size { width: length(96.0_f32), height: length(16.0_f32) },
                 flex_shrink: 0.0,
                 ..Default::default()
             })
-            .text_aligned(when, 10.0, theme.fg_muted, Alignment::End)
+            .text_aligned(right_text, 10.0, theme.fg_muted, Alignment::End)
             .mono(),
         );
     }
@@ -2621,6 +2628,24 @@ impl CmdStatus {
             CmdStatus::Cancelled => (Icon::Stop, theme.fg_destructive),
             CmdStatus::Running => (Icon::Play, theme.accent),
         }
+    }
+}
+
+/// Formato corto de bytes para el header de un run vivo: `B/KB/MB/GB`
+/// sin decimales — entra cómodo en 96 px de slot. "0 B" tras arrancar
+/// el run, "12 KB" mientras crece, "2 MB" para outputs gordos.
+pub(crate) fn format_bytes_short(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    if n < KB {
+        format!("{n} B")
+    } else if n < MB {
+        format!("{} KB", n / KB)
+    } else if n < GB {
+        format!("{} MB", n / MB)
+    } else {
+        format!("{} GB", n / GB)
     }
 }
 

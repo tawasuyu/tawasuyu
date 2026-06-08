@@ -474,7 +474,7 @@ fn spawn_reader<R: Read + AsFd + Send + 'static>(
         let mut buf = String::new();
         loop {
             buf.clear();
-            let n = match reader.read_line(&mut buf) {
+            let n = match read_line_loose(&mut reader, &mut buf) {
                 Ok(0) => break, // EOF
                 Ok(n) => n,
                 Err(_) => break,
@@ -504,6 +504,42 @@ fn spawn_reader<R: Read + AsFd + Send + 'static>(
             }
         }
     })
+}
+
+/// Como `BufRead::read_line`, pero corta también en `\r` (no solo `\n`).
+/// Pensado para que **progress bars** estilo `wget`/`pip install -v`/`curl`
+/// se muestren en vivo: esos escriben `\r` para sobreescribir la misma
+/// línea y nunca emiten `\n` hasta el final — con `read_line` clásico el
+/// usuario no ve nada hasta que el comando termina.
+///
+/// El `\n` posterior a un `\r` (`\r\n` clásico de Windows o de `git log`
+/// pasado por less) se ve como una línea vacía adicional — aceptable a
+/// cambio de tener feedback en vivo en TUIs no-PTY.
+fn read_line_loose<R: BufRead>(reader: &mut R, buf: &mut String) -> std::io::Result<usize> {
+    let mut bytes: Vec<u8> = Vec::with_capacity(128);
+    let mut total = 0;
+    loop {
+        let chunk = reader.fill_buf()?;
+        if chunk.is_empty() {
+            break; // EOF
+        }
+        if let Some(pos) = chunk.iter().position(|&b| b == b'\n' || b == b'\r') {
+            bytes.extend_from_slice(&chunk[..=pos]);
+            let consumed = pos + 1;
+            reader.consume(consumed);
+            total += consumed;
+            break;
+        } else {
+            bytes.extend_from_slice(chunk);
+            let n = chunk.len();
+            reader.consume(n);
+            total += n;
+        }
+    }
+    if !bytes.is_empty() {
+        buf.push_str(&String::from_utf8_lossy(&bytes));
+    }
+    Ok(total)
 }
 
 /// Resultado de lanzar los procesos: lo que el coordinador necesita.
