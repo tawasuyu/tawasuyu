@@ -406,7 +406,7 @@ fn bench_vello(
                 },
             )
             .expect("vello render");
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             samples.push(dt);
@@ -448,7 +448,7 @@ fn bench_directo(
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
         );
         hal.queue.submit(std::iter::once(encoder.finish()));
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             samples.push(dt);
@@ -501,7 +501,7 @@ fn bench_vello_persistent(
                 },
             )
             .expect("vello render");
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             samples.push(dt);
@@ -569,7 +569,7 @@ fn bench_directo_persistent(
     // Asegurar que toda la escritura previa esté en la GPU antes de
     // empezar a medir frames — si no, el primer frame paga el upload.
     hal.queue.submit(std::iter::empty::<wgpu::CommandBuffer>());
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
 
     let mut samples: Vec<f64> = Vec::with_capacity(MEASURED);
     for frame in 0..(WARMUP + MEASURED) {
@@ -585,6 +585,7 @@ fn bench_directo_persistent(
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
@@ -600,7 +601,7 @@ fn bench_directo_persistent(
             pass.draw(0..6, 0..n);
         }
         hal.queue.submit(std::iter::once(encoder.finish()));
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             samples.push(dt);
@@ -865,7 +866,7 @@ fn export_directo_png(
         wgpu::LoadOp::Clear(wgpu::Color::BLACK),
     );
     hal.queue.submit(std::iter::once(encoder.finish()));
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
     write_texture_png(hal, target, path)
 }
 
@@ -916,7 +917,7 @@ fn write_texture_png(hal: &Hal, target: &wgpu::Texture, path: &str) -> Result<()
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     let data = slice.get_mapped_range();
 

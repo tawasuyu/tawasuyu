@@ -11,7 +11,7 @@ use llimphi_ui::llimphi_layout::taffy::{
 use llimphi_ui::llimphi_raster::kurbo::{
     Affine, BezPath, Line, Point, Rect as KurboRect, Stroke,
 };
-use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Image, Mix};
+use llimphi_ui::llimphi_raster::peniko::{BlendMode, Color, Fill, ImageBrush as Image};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_button::{button_styled, button_view, ButtonPalette};
@@ -1430,12 +1430,12 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                 // ese caso, hacer zoom-a-cursor (el closure no muta
                 // estado de la app — sólo escribe la cache lateral).
                 lienzo_rect_set(r);
-                if img.width == 0 || img.height == 0 || r.w <= 0.0 || r.h <= 0.0 {
+                if img.image.width == 0 || img.image.height == 0 || r.w <= 0.0 || r.h <= 0.0 {
                     return;
                 }
                 let Some((s, off_x, off_y)) = transform_lienzo(
-                    img.width,
-                    img.height,
+                    img.image.width,
+                    img.image.height,
                     r.w,
                     r.h,
                     factor_zoom,
@@ -1455,7 +1455,7 @@ pub(crate) fn panel_lienzo(theme: &llimphi_theme::Theme, model: &Model) -> View<
                     (r.x + r.w) as f64,
                     (r.y + r.h) as f64,
                 );
-                scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node_rect);
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &node_rect);
                 scene.draw_image(&img, transform);
                 // Overlay de selección: rect en coords-imagen → coords
                 // de pantalla vía el mismo transform que la imagen.

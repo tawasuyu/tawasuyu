@@ -21,7 +21,7 @@ pub(crate) enum RenderKind {
     /// `scene.draw_image(image, xform)` — `path` y `color` se ignoran.
     /// Sprites texturizados desde el WAD.
     Sprite {
-        image: llimphi_ui::llimphi_raster::peniko::Image,
+        image: llimphi_ui::llimphi_raster::peniko::ImageBrush,
         xform: Affine,
     },
     /// Pared texturizada: fill del `path` con la `image` (Extend::Repeat
@@ -29,7 +29,7 @@ pub(crate) enum RenderKind {
     /// rellena el polígono samplando el image tileado en world coords.
     /// `color` se ignora.
     TexturedWall {
-        image: llimphi_ui::llimphi_raster::peniko::Image,
+        image: llimphi_ui::llimphi_raster::peniko::ImageBrush,
         brush_xform: Affine,
     },
     /// **Fase 3.43** — fill del `path` con un `Gradient` lineal vertical

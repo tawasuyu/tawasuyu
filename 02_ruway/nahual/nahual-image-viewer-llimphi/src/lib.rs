@@ -20,8 +20,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
-use llimphi_ui::llimphi_raster::peniko::Mix;
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::peniko::{BlendMode, Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, GesturePhase, View};
 
@@ -58,7 +57,7 @@ impl Default for ImagePreviewState {
 pub fn load_image(path: &Path, max_bytes: u64) -> ImagePreviewState {
     match load_path(path, max_bytes) {
         Ok(image) => {
-            let (width, height) = (image.width, image.height);
+            let (width, height) = (image.image.width, image.image.height);
             ImagePreviewState::Image { image, width, height }
         }
         Err(DecodeError::TooBig { size_bytes, .. }) => ImagePreviewState::TooBig(size_bytes),
@@ -342,11 +341,11 @@ where
     })
     .clip(true)
     .paint_with(move |scene, _ts, rect| {
-        if image.width == 0 || image.height == 0 || rect.w <= 0.0 || rect.h <= 0.0 {
+        if image.image.width == 0 || image.image.height == 0 || rect.w <= 0.0 || rect.h <= 0.0 {
             return;
         }
-        let iw = image.width as f64;
-        let ih = image.height as f64;
+        let iw = image.image.width as f64;
+        let ih = image.image.height as f64;
         // Escala base = aspect-fit; el zoom del usuario la multiplica.
         let s = (rect.w as f64 / iw).min(rect.h as f64 / ih) * vp.zoom as f64;
         let disp_w = iw * s;
@@ -360,7 +359,7 @@ where
             (rect.x + rect.w) as f64,
             (rect.y + rect.h) as f64,
         );
-        scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+        scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &clip);
         scene.draw_image(&image, Affine::translate((ox, oy)) * Affine::scale(s));
         scene.pop_layer();
     })

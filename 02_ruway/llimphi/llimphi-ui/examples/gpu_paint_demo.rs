@@ -177,6 +177,7 @@ fn draw_points(
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     // Load preserva el fondo vello ya pintado en este frame.
                     load: wgpu::LoadOp::Load,

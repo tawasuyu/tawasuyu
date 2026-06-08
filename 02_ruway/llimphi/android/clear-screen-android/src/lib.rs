@@ -95,7 +95,7 @@ impl App {
             force_fallback_adapter: false,
             compatible_surface: Some(&surface),
         }))
-        .ok_or_else(|| "request_adapter devolvió None — sin GPU compatible".to_string())?;
+        .map_err(|e| format!("request_adapter: {e}"))?;
         let info = adapter.get_info();
         log::info!(
             "[boot] adapter ok · backend={:?} name={:?} driver={:?}",
@@ -115,8 +115,9 @@ impl App {
                 required_features: wgpu::Features::empty(),
                 required_limits: limits,
                 memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::Off,
             },
-            None,
         ))
         .map_err(|e| format!("request_device: {e}"))?;
         log::info!("[boot] device + queue ok");
@@ -208,6 +209,7 @@ impl ApplicationHandler for App {
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: frame.view(),
                             resolve_target: None,
+                            depth_slice: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(LEAD_GRAY),
                                 store: wgpu::StoreOp::Store,

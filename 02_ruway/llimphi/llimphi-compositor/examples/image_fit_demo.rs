@@ -20,7 +20,9 @@ use llimphi_layout::taffy;
 use llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
 use llimphi_layout::taffy::{AlignItems, JustifyContent, Rect};
 use llimphi_layout::LayoutTree;
-use llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
+use llimphi_raster::peniko::{
+    Blob, Color, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use llimphi_raster::{vello, Renderer};
 use llimphi_text::{Alignment, Typesetter};
 
@@ -63,7 +65,13 @@ fn make_image() -> Image {
             px.extend_from_slice(&[r, g, b, 255]);
         }
     }
-    Image::new(Blob::new(Arc::new(px)), ImageFormat::Rgba8, IW, IH)
+    Image::new(ImageData {
+        data: Blob::new(Arc::new(px)),
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: IW,
+        height: IH,
+    })
 }
 
 /// Una "ficha" con la imagen arriba (cuadrada de 200×200) + un rótulo
@@ -261,7 +269,7 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
     let mut pixels = Vec::with_capacity((W * H * 4) as usize);

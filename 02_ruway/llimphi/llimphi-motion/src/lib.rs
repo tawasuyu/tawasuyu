@@ -227,7 +227,7 @@ mod tests {
     fn lerp_color_endpoints() {
         let a = Color::from_rgba8(0, 0, 0, 0);
         let b = Color::from_rgba8(255, 255, 255, 255);
-        let mid = a.lerp(b, 0.5);
+        let mid = <Color as Lerp>::lerp(a, b, 0.5);
         let [r, g, bl, al] = mid.components;
         assert!((r - 0.5).abs() < 1e-3);
         assert!((g - 0.5).abs() < 1e-3);

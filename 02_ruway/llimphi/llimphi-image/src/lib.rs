@@ -34,7 +34,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
-pub use llimphi_raster::peniko::{Blob, Image, ImageFormat};
+pub use llimphi_raster::peniko::{Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat};
 
 /// Errores que puede devolver el decode pipeline. Mantenemos el detalle
 /// upstream (`String` con el mensaje del crate `image` o de IO) para no
@@ -86,7 +86,13 @@ impl From<std::io::Error> for DecodeError {
 /// constructor de `peniko::Image` tampoco; queda al caller.
 pub fn from_rgba8(rgba: Vec<u8>, w: u32, h: u32) -> Image {
     let blob = Blob::new(Arc::new(rgba));
-    Image::new(blob, ImageFormat::Rgba8, w, h)
+    Image::new(ImageData {
+        data: blob,
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: w,
+        height: h,
+    })
 }
 
 /// Decodifica bytes a un `peniko::Image` listo para `View::image()`.
@@ -158,17 +164,17 @@ mod tests {
     #[test]
     fn from_rgba8_arma_image_con_dimensiones_correctas() {
         let img = from_rgba8(vec![0u8; 16], 2, 2); // 2x2x4 = 16 bytes
-        assert_eq!(img.width, 2);
-        assert_eq!(img.height, 2);
-        assert!(matches!(img.format, ImageFormat::Rgba8));
+        assert_eq!(img.image.width, 2);
+        assert_eq!(img.image.height, 2);
+        assert!(matches!(img.image.format, ImageFormat::Rgba8));
     }
 
     #[test]
     fn decode_bytes_png_basico() {
         let bytes = png_2x2_bytes();
         let img = decode_bytes(&bytes).expect("decode ok");
-        assert_eq!(img.width, 2);
-        assert_eq!(img.height, 2);
+        assert_eq!(img.image.width, 2);
+        assert_eq!(img.image.height, 2);
     }
 
     #[test]
@@ -201,8 +207,8 @@ mod tests {
         }
         // Cap 0 → deshabilitado, decodifica OK.
         let img = load_path(&path, 0).expect("decode ok sin cap");
-        assert_eq!(img.width, 2);
-        assert_eq!(img.height, 2);
+        assert_eq!(img.image.width, 2);
+        assert_eq!(img.image.height, 2);
         std::fs::remove_file(&path).ok();
     }
 

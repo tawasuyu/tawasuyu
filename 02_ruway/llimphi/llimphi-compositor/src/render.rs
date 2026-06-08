@@ -409,7 +409,7 @@ pub fn paint_range<Msg>(
                 (r.x + r.w) as f64,
                 (r.y + r.h) as f64,
             );
-            scene.push_layer(Mix::Normal, a, cur_xf, &rect);
+            scene.push_layer(Fill::NonZero, Mix::Normal, a, cur_xf, &rect);
             layer_stack.push(node.subtree_end);
         }
         // Sombra (drop shadow): se pinta ANTES del relleno para quedar
@@ -480,23 +480,23 @@ pub fn paint_range<Msg>(
             // Siempre clippeamos al `node_rrect` para respetar
             // `radius`/`corner_radii` (avatares + cards) y para que
             // `Cover`/`None` no derramen fuera del nodo.
-            if image.width > 0 && image.height > 0 && r.w > 0.0 && r.h > 0.0 {
-                let sx = r.w as f64 / image.width as f64;
-                let sy = r.h as f64 / image.height as f64;
+            if image.image.width > 0 && image.image.height > 0 && r.w > 0.0 && r.h > 0.0 {
+                let sx = r.w as f64 / image.image.width as f64;
+                let sy = r.h as f64 / image.image.height as f64;
                 let fit = node.image_fit.unwrap_or(ImageFit::Contain);
                 let transform = match fit {
                     ImageFit::Contain => {
                         let s = sx.min(sy);
-                        let disp_w = image.width as f64 * s;
-                        let disp_h = image.height as f64 * s;
+                        let disp_w = image.image.width as f64 * s;
+                        let disp_h = image.image.height as f64 * s;
                         let tx = r.x as f64 + (r.w as f64 - disp_w) * 0.5;
                         let ty = r.y as f64 + (r.h as f64 - disp_h) * 0.5;
                         Affine::translate((tx, ty)) * Affine::scale(s)
                     }
                     ImageFit::Cover => {
                         let s = sx.max(sy);
-                        let disp_w = image.width as f64 * s;
-                        let disp_h = image.height as f64 * s;
+                        let disp_w = image.image.width as f64 * s;
+                        let disp_h = image.image.height as f64 * s;
                         let tx = r.x as f64 + (r.w as f64 - disp_w) * 0.5;
                         let ty = r.y as f64 + (r.h as f64 - disp_h) * 0.5;
                         Affine::translate((tx, ty)) * Affine::scale(s)
@@ -506,8 +506,8 @@ pub fn paint_range<Msg>(
                             * Affine::scale_non_uniform(sx, sy)
                     }
                     ImageFit::None => {
-                        let disp_w = image.width as f64;
-                        let disp_h = image.height as f64;
+                        let disp_w = image.image.width as f64;
+                        let disp_h = image.image.height as f64;
                         let tx = r.x as f64 + (r.w as f64 - disp_w) * 0.5;
                         let ty = r.y as f64 + (r.h as f64 - disp_h) * 0.5;
                         Affine::translate((tx, ty))
@@ -522,7 +522,7 @@ pub fn paint_range<Msg>(
                     node.corner_radii,
                     0.0,
                 );
-                scene.push_layer(Mix::Clip, 1.0, cur_xf, &clip_rr);
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rr);
                 scene.draw_image(image, cur_xf * transform);
                 scene.pop_layer();
             }
@@ -650,7 +650,7 @@ pub fn paint_range<Msg>(
                 (r.x + r.w) as f64,
                 (r.y + r.h) as f64,
             );
-            scene.push_layer(Mix::Clip, 1.0, cur_xf, &clip_rect);
+            scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
             layer_stack.push(node.subtree_end);
         }
     }

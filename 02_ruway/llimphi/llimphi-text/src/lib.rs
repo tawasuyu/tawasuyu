@@ -280,7 +280,9 @@ impl Typesetter {
             self.layout_cx
                 .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(parley::StyleProperty::FontSize(size_px));
-        builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        builder.push_default(parley::StyleProperty::LineHeight(
+            parley::LineHeight::FontSizeRelative(line_height),
+        ));
         if weight != 400.0 {
             builder.push_default(parley::StyleProperty::FontWeight(
                 parley::FontWeight::new(weight),
@@ -414,7 +416,9 @@ impl Typesetter {
             .runs_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(parley::StyleProperty::FontSize(size_px));
-        builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        builder.push_default(parley::StyleProperty::LineHeight(
+            parley::LineHeight::FontSizeRelative(line_height),
+        ));
         if weight != 400.0 {
             builder.push_default(parley::StyleProperty::FontWeight(
                 parley::FontWeight::new(weight),
@@ -474,7 +478,9 @@ impl Typesetter {
             .runs_cx
             .ranged_builder(&mut self.font_cx, text, 1.0, true);
         builder.push_default(parley::StyleProperty::FontSize(size_px));
-        builder.push_default(parley::StyleProperty::LineHeight(line_height));
+        builder.push_default(parley::StyleProperty::LineHeight(
+            parley::LineHeight::FontSizeRelative(line_height),
+        ));
         if weight != 400.0 {
             builder.push_default(parley::StyleProperty::FontWeight(
                 parley::FontWeight::new(weight),
@@ -617,9 +623,9 @@ impl From<Alignment> for parley::Alignment {
     fn from(a: Alignment) -> Self {
         match a {
             Alignment::Start => parley::Alignment::Start,
-            Alignment::Center => parley::Alignment::Middle,
+            Alignment::Center => parley::Alignment::Center,
             Alignment::End => parley::Alignment::End,
-            Alignment::Justify => parley::Alignment::Justified,
+            Alignment::Justify => parley::Alignment::Justify,
         }
     }
 }

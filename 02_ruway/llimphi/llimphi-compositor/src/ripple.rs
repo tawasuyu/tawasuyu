@@ -29,7 +29,7 @@
 use std::time::{Duration, Instant};
 
 use vello::kurbo::{Affine, Circle};
-use vello::peniko::{Color, Fill, Mix};
+use vello::peniko::{BlendMode, Color, Fill};
 use vello::Scene;
 
 use crate::{ComputedLayout, Mounted};
@@ -188,7 +188,7 @@ impl RippleRegistry {
                 node.corner_radii,
                 0.0,
             );
-            scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &rrect);
+            scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &rrect);
             let circle = Circle::new((cx, cy), radius);
             scene.fill(Fill::NonZero, Affine::IDENTITY, col, None, &circle);
             scene.pop_layer();

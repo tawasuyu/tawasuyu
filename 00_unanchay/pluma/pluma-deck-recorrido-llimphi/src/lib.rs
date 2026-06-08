@@ -19,7 +19,9 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Rect as KurboRect, RoundedRect, Stroke};
-use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Fill, Image as PenikoImage, ImageFormat, Mix};
+use llimphi_ui::llimphi_raster::peniko::{
+    BlendMode, Blob, Color, Fill, ImageAlphaType, ImageBrush as PenikoImage, ImageData, ImageFormat,
+};
 use llimphi_ui::llimphi_text::{draw_layout_xf, layout_block, measurement, Alignment, TextBlock};
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
 use llimphi_ui::{PaintRect, View};
@@ -87,7 +89,7 @@ fn decodificar(bytes: &[u8]) -> Option<PenikoImage> {
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = (img.width(), img.height());
     let blob = Blob::from(img.into_raw());
-    Some(PenikoImage::new(blob, ImageFormat::Rgba8, w, h))
+    Some(PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: w, height: h }))
 }
 
 // ---- Pintura por marco ---------------------------------------------------
@@ -225,7 +227,7 @@ fn pintar(
         (rect.x + rect.w) as f64,
         (rect.y + rect.h) as f64,
     );
-    scene.push_layer(Mix::Clip, 1.0, Affine::IDENTITY, &node);
+    scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &node);
 
     // Camino narrativo por detrás de los marcos.
     pintar_ruta(scene, cam, panel, ruta);
@@ -309,7 +311,7 @@ fn pintar_ruta(scene: &mut Scene, cam: &Camara, panel: Rect, ruta: &[(f64, f64)]
 /// centrada y clipeada al marco (en su espacio transformado, así respeta el
 /// giro propio). `xf` es el mundo→pantalla del marco ya con su rotación.
 fn pintar_imagen(scene: &mut Scene, xf: Affine, rect: &Rect, img: &PenikoImage) {
-    let (iw, ih) = (img.width as f64, img.height as f64);
+    let (iw, ih) = (img.image.width as f64, img.image.height as f64);
     if iw <= 0.0 || ih <= 0.0 || rect.w <= 0.0 || rect.h <= 0.0 {
         return;
     }
@@ -319,7 +321,7 @@ fn pintar_imagen(scene: &mut Scene, xf: Affine, rect: &Rect, img: &PenikoImage) 
     let oy = rect.y + (rect.h - dh) * 0.5;
     let kr = KurboRect::new(rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
     // Clip al rect del marco en su propio espacio (xf incluye giro+zoom).
-    scene.push_layer(Mix::Clip, 1.0, xf, &kr);
+    scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, xf, &kr);
     let img_xf = xf * Affine::translate((ox, oy)) * Affine::scale(s);
     scene.draw_image(img, img_xf);
     scene.pop_layer();
@@ -388,7 +390,7 @@ fn pintar_texto(
 
     // Clip al rect del marco en su espacio local (gira con el marco).
     let clip = KurboRect::new(0.0, 0.0, w_px as f64, h_px as f64);
-    scene.push_layer(Mix::Clip, 1.0, local, &clip);
+    scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, local, &clip);
 
     if let Some(tt) = titulo.filter(|s| !s.is_empty()) {
         let size = ((22.0 * zoom) as f32).clamp(12.0, 46.0);

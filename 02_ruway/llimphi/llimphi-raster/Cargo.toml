@@ -9,7 +9,19 @@ publish.workspace = true
 [dependencies]
 llimphi-hal = { path = "../llimphi-hal" }
 vello = { workspace = true }
+# Renderer "hybrid" CPU+GPU sin compute shaders. Útil para targets sin
+# WebGPU completo (WebGL2, Adreno/Mali viejas) — alinea con el plan
+# Android del workspace. Opt-in vía la feature `hybrid`; el default
+# sigue siendo el renderer "wgpu" full-GPU de vello.
+vello_hybrid = { workspace = true, optional = true }
 pollster = { workspace = true }
+
+[features]
+default = []
+# Activa el renderer alternativo vello_hybrid (CPU+GPU, sin compute).
+# Re-exporta `vello_hybrid` desde el crate para que apps avanzadas
+# puedan instanciar `vello_hybrid::Renderer` cuando el target lo pida.
+hybrid = ["dep:vello_hybrid"]
 
 [[example]]
 name = "render_node"

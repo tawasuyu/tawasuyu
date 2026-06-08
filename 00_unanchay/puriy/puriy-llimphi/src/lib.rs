@@ -29,7 +29,7 @@ use llimphi_raster::kurbo::{
 };
 use llimphi_raster::peniko::{
     Blob, Color, ColorStop, ColorStops, Fill, Gradient, GradientKind,
-    Image as PenikoImage, ImageFormat,
+    ImageAlphaType, ImageBrush as PenikoImage, ImageData, ImageFormat,
 };
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
@@ -4363,13 +4363,13 @@ mod tests {
         let mut con_img = imgs.clone();
         con_img.insert(
             "u".into(),
-            PenikoImage::new(Blob::from(vec![255u8, 0, 0, 255]), ImageFormat::Rgba8, 1, 1),
+            PenikoImage::new(ImageData { data: Blob::from(vec![255u8, 0, 0, 255]), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 1, height: 1 }),
         );
         match canvas_brush(Some(&pat), 0.5, &con_img) {
             Brush::Image(im) => {
-                assert!(matches!(im.x_extend, Extend::Repeat));
-                assert!(matches!(im.y_extend, Extend::Repeat));
-                assert!((im.alpha - 0.5).abs() < 0.001, "alpha ~0.5, got {}", im.alpha);
+                assert!(matches!(im.sampler.x_extend, Extend::Repeat));
+                assert!(matches!(im.sampler.y_extend, Extend::Repeat));
+                assert!((im.sampler.alpha - 0.5).abs() < 0.001, "alpha ~0.5, got {}", im.sampler.alpha);
             }
             _ => panic!("debería ser patrón de imagen"),
         }
@@ -4378,8 +4378,8 @@ mod tests {
             serde_json::from_str(r##"{"_pattern":true,"src":"u","rep":"repeat-x"}"##).unwrap();
         match canvas_brush(Some(&pat_x), 1.0, &con_img) {
             Brush::Image(im) => {
-                assert!(matches!(im.x_extend, Extend::Repeat));
-                assert!(matches!(im.y_extend, Extend::Pad));
+                assert!(matches!(im.sampler.x_extend, Extend::Repeat));
+                assert!(matches!(im.sampler.y_extend, Extend::Pad));
             }
             _ => panic!("patrón repeat-x"),
         }
@@ -4529,7 +4529,7 @@ mod tests {
             .expect("drawImage en el frame");
         assert_eq!(di.get(1).and_then(|v| v.as_str()), Some(png_1x1));
         let img = t.canvas_images.get(png_1x1).expect("decodificada").as_ref();
-        assert_eq!(img.map(|i| (i.width, i.height)), Some((1, 1)));
+        assert_eq!(img.map(|i| (i.image.width, i.image.height)), Some((1, 1)));
     }
 
     #[test]
@@ -4583,7 +4583,7 @@ mod tests {
         assert_eq!(fr[5].get("rep").and_then(|v| v.as_str()), Some("repeat"));
         // decode_canvas_images recogió el src del patrón y lo decodificó.
         let img = t.canvas_images.get(png_1x1).expect("decodificada").as_ref();
-        assert_eq!(img.map(|i| (i.width, i.height)), Some((1, 1)));
+        assert_eq!(img.map(|i| (i.image.width, i.image.height)), Some((1, 1)));
         // El painter pinta el patrón (escena no-vacía).
         let mut images: std::collections::HashMap<String, PenikoImage> =
             std::collections::HashMap::new();
@@ -4598,12 +4598,7 @@ mod tests {
     #[test]
     fn background_image_size_position_repeat_pinta_y_tilea() {
         // Fase 7.204 — paint_background_image resuelve size/position/repeat.
-        let img = PenikoImage::new(
-            llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]),
-            llimphi_raster::peniko::ImageFormat::Rgba8,
-            2,
-            2,
-        );
+        let img = PenikoImage::new(ImageData { data: llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]), format: llimphi_raster::peniko::ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 2, height: 2 });
         let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
         let sz = BackgroundSize::Explicit { x: LengthVal::Px(60.0), y: LengthVal::Px(60.0) };
         let pos = BackgroundPosition { x: LengthVal::Px(0.0), y: LengthVal::Px(0.0) };
@@ -4641,12 +4636,7 @@ mod tests {
         // origin box, el tiling cubre el área de posicionamiento pero el
         // recorte limita el pintado. Verificamos que ambas rutas pintan y que
         // un clip box degenerado (ancho 0) no deja salir nada.
-        let img = PenikoImage::new(
-            llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]),
-            llimphi_raster::peniko::ImageFormat::Rgba8,
-            2,
-            2,
-        );
+        let img = PenikoImage::new(ImageData { data: llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]), format: llimphi_raster::peniko::ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 2, height: 2 });
         let area = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
         let sz = BackgroundSize::Explicit { x: LengthVal::Px(20.0), y: LengthVal::Px(20.0) };
         let pos = BackgroundPosition { x: LengthVal::Px(0.0), y: LengthVal::Px(0.0) };
@@ -4772,12 +4762,7 @@ mod tests {
         assert!(!g.encoding().is_empty(), "una capa de gradiente debería pintar");
 
         // Imagen + gradiente → más draws que el gradiente solo.
-        let img = PenikoImage::new(
-            llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]),
-            llimphi_raster::peniko::ImageFormat::Rgba8,
-            2,
-            2,
-        );
+        let img = PenikoImage::new(ImageData { data: llimphi_raster::peniko::Blob::from(vec![255u8; 2 * 2 * 4]), format: llimphi_raster::peniko::ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 2, height: 2 });
         let layers = vec![
             PreparedBgLayer::Image {
                 img,
@@ -4986,7 +4971,7 @@ mod tests {
         let mut scene = llimphi_raster::vello::Scene::new();
         let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
         let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
-        let img = PenikoImage::new(Blob::from(vec![255u8; 16]), ImageFormat::Rgba8, 2, 2);
+        let img = PenikoImage::new(ImageData { data: Blob::from(vec![255u8; 16]), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 2, height: 2 });
         let mut images = std::collections::HashMap::new();
         images.insert("u".to_string(), img);
         for cmds_src in [
@@ -5013,7 +4998,7 @@ mod tests {
         // snapshot del final) y la capa de blend agrega draw objects.
         let mut ts = llimphi_ui::llimphi_text::Typesetter::new();
         let rect = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 };
-        let img = PenikoImage::new(Blob::from(vec![255u8; 16]), ImageFormat::Rgba8, 2, 2);
+        let img = PenikoImage::new(ImageData { data: Blob::from(vec![255u8; 16]), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 2, height: 2 });
         let mut images = std::collections::HashMap::new();
         images.insert("u".to_string(), img);
         // Sin snapshot (compat hacia atrás): dibuja.
@@ -5197,7 +5182,7 @@ mod tests {
         decode_canvas_images(t);
         let got = t.canvas_images.get(png_1x1).expect("entrada decodificada");
         let img = got.as_ref().expect("la imagen 1×1 decodifica");
-        assert_eq!((img.width, img.height), (1, 1));
+        assert_eq!((img.image.width, img.image.height), (1, 1));
         // Segunda llamada no re-decodifica (idempotente: la clave ya existe).
         decode_canvas_images(t);
         assert_eq!(t.canvas_images.len(), 1);

@@ -514,8 +514,10 @@ pub(crate) fn gather_sprite(
 pub(crate) fn make_tinted_sprite_image_rgb(
     patch: &supay_wad::Patch,
     tint: [f32; 3],
-) -> llimphi_ui::llimphi_raster::peniko::Image {
-    use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+) -> llimphi_ui::llimphi_raster::peniko::ImageBrush {
+    use llimphi_ui::llimphi_raster::peniko::{
+        Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+    };
     let tr = tint[0].clamp(0.05, 1.0);
     let tg = tint[1].clamp(0.05, 1.0);
     let tb = tint[2].clamp(0.05, 1.0);
@@ -533,7 +535,7 @@ pub(crate) fn make_tinted_sprite_image_rgb(
         out
     };
     let blob = Blob::from(tinted);
-    Image::new(blob, ImageFormat::Rgba8, patch.width as u32, patch.height as u32)
+    Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: patch.width as u32, height: patch.height as u32 })
 }
 
 /// Calcula el ángulo de display 1..8 para un sprite direccional según

@@ -107,6 +107,7 @@ fn pipeline_compila_y_dibuja_sin_panico() {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &view,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                     store: wgpu::StoreOp::Store,
@@ -129,7 +130,7 @@ fn pipeline_compila_y_dibuja_sin_panico() {
     );
 
     hal.queue.submit(std::iter::once(encoder.finish()));
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
 #[test]
@@ -173,5 +174,5 @@ fn draw_con_cero_instancias_es_no_op() {
         },
     );
     hal.queue.submit(std::iter::once(encoder.finish()));
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
 }

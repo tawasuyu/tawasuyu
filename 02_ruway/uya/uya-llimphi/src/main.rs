@@ -23,7 +23,9 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{auto, length, percent, Size, St
 use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, FlexDirection, FlexWrap, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image as PenikoImage, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, Color, ImageAlphaType, ImageBrush as PenikoImage, ImageData, ImageFormat,
+};
 use llimphi_ui::{
     App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta,
 };
@@ -611,7 +613,13 @@ fn tile(
     let video = match (cam, cuadro) {
         (true, Some(c)) => {
             let blob = Blob::from((*c.rgba).clone());
-            let imagen = PenikoImage::new(blob, ImageFormat::Rgba8, c.ancho as u32, c.alto as u32);
+            let imagen = PenikoImage::new(ImageData {
+                data: blob,
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: c.ancho as u32,
+                height: c.alto as u32,
+            });
             View::new(estilo_video).fill(VIDEO_BG).radius(8.0).image(imagen)
         }
         (true, None) => View::new(estilo_video)

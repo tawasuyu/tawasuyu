@@ -4,7 +4,9 @@
 //!
 //! Behavior-preserving split de `main.rs` — sin cambios funcionales.
 
-use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use tullpu_core::{Hash, Lienzo};
 use tullpu_ops::regenerar_stale_con_ia;
 use tullpu_render::{componer, FuenteBuffers};
@@ -15,7 +17,7 @@ pub(crate) fn recomponer(l: &Lienzo, alm: &impl FuenteBuffers) -> Option<Image> 
     let img = componer(l, alm).ok()?;
     let (w, h) = (img.width(), img.height());
     let blob = Blob::from(img.into_raw());
-    Some(Image::new(blob, ImageFormat::Rgba8, w, h))
+    Some(Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: w, height: h }))
 }
 
 pub(crate) fn aplicar_y_recomponer(model: &mut Model) {
@@ -44,7 +46,7 @@ pub(crate) fn aplicar_y_recomponer(model: &mut Model) {
     model.histograma = model
         .imagen
         .as_ref()
-        .map(|img| histograma_rgb(img.data.data()));
+        .map(|img| histograma_rgb(img.image.data.data()));
     sincronizar_thumbs(model);
 }
 
@@ -103,12 +105,7 @@ pub(crate) fn thumbnail_de_mascara(
     let rgba = image::RgbaImage::from_raw(w, h, rgba)?;
     let thumb = image::imageops::thumbnail(&rgba, THUMB_LADO, THUMB_LADO);
     let (tw, th) = (thumb.width(), thumb.height());
-    Some(Image::new(
-        Blob::from(thumb.into_raw()),
-        ImageFormat::Rgba8,
-        tw,
-        th,
-    ))
+    Some(Image::new(ImageData { data: Blob::from(thumb.into_raw()), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: tw, height: th }))
 }
 
 /// Construye un thumbnail `peniko::Image` de lado máximo `THUMB_LADO`
@@ -125,12 +122,7 @@ pub(crate) fn thumbnail_de_buffer(
     let rgba = image::RgbaImage::from_raw(w, h, buf.to_vec())?;
     let thumb = image::imageops::thumbnail(&rgba, THUMB_LADO, THUMB_LADO);
     let (tw, th) = (thumb.width(), thumb.height());
-    Some(Image::new(
-        Blob::from(thumb.into_raw()),
-        ImageFormat::Rgba8,
-        tw,
-        th,
-    ))
+    Some(Image::new(ImageData { data: Blob::from(thumb.into_raw()), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: tw, height: th }))
 }
 
 /// Cuenta cuántos píxeles tiene cada valor 0..255 en cada canal RGB de

@@ -11,7 +11,7 @@ use llimphi_layout::taffy::prelude::{length, Size, Style};
 use llimphi_raster::kurbo::{Affine, Cap, Join, Point, Rect as KurboRect, RoundedRect, Stroke};
 use llimphi_raster::peniko::{
     BlendMode, Blob, Brush, Color, ColorStop, ColorStops, Compose, Extend, Fill, Gradient,
-    GradientKind, Image as PenikoImage, ImageFormat, Mix,
+    GradientKind, ImageAlphaType, ImageBrush as PenikoImage, ImageData, ImageFormat, Mix,
 };
 use llimphi_ui::View;
 
@@ -91,7 +91,7 @@ pub(crate) fn decode_canvas_images(t: &mut TabState) {
     for src in nuevos {
         let img = puriy_engine::fetch_image_src(base.as_ref(), &src).map(|d| {
             let blob = Blob::from(d.rgba);
-            PenikoImage::new(blob, ImageFormat::Rgba8, d.width, d.height)
+            PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: d.width, height: d.height })
         });
         t.canvas_images.insert(src, img);
     }
@@ -350,23 +350,23 @@ fn build_canvas_gradient(
         stops.push(ColorStop::from((off, Color::from_rgba8(col.r, col.g, col.b, a))));
     }
     let kind = match kind {
-        "linear" => GradientKind::Linear {
+        "linear" => GradientKind::Linear(llimphi_raster::peniko::LinearGradientPosition {
             start: Point::new(c(0), c(1)),
             end: Point::new(c(2), c(3)),
-        },
-        "radial" => GradientKind::Radial {
+        }),
+        "radial" => GradientKind::Radial(llimphi_raster::peniko::RadialGradientPosition {
             start_center: Point::new(c(0), c(1)),
             start_radius: c(2) as f32,
             end_center: Point::new(c(3), c(4)),
             end_radius: c(5) as f32,
-        },
+        }),
         "conic" => {
             let ang = c(0) as f32;
-            GradientKind::Sweep {
+            GradientKind::Sweep(llimphi_raster::peniko::SweepGradientPosition {
                 center: Point::new(c(1), c(2)),
                 start_angle: ang,
                 end_angle: ang + std::f32::consts::TAU,
-            }
+            })
         }
         _ => return None,
     };
@@ -631,7 +631,7 @@ pub(crate) fn paint_canvas_cmds(
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let comp = canvas_composite(st);
                 if let Some(bm) = comp {
-                    scene.push_layer(bm, 1.0, base, &whole);
+                    scene.push_layer(Fill::NonZero, bm, 1.0, base, &whole);
                 }
                 if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
                     let sxf = base * cur * Affine::translate((ox, oy));
@@ -650,7 +650,7 @@ pub(crate) fn paint_canvas_cmds(
                 let stroke = canvas_stroke(st, lw);
                 let comp = canvas_composite(st);
                 if let Some(bm) = comp {
-                    scene.push_layer(bm, 1.0, base, &whole);
+                    scene.push_layer(Fill::NonZero, bm, 1.0, base, &whole);
                 }
                 if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
                     let sxf = base * cur * Affine::translate((ox, oy));
@@ -666,7 +666,7 @@ pub(crate) fn paint_canvas_cmds(
                 // Recorta el dibujo posterior al path actual. La capa se cierra
                 // en el `restore` que cierra el `save` correspondiente (o al
                 // terminar el frame si no hubo save).
-                scene.push_layer(Mix::Clip, 1.0, base * cur, &path);
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, base * cur, &path);
                 match clip_stack.last_mut() {
                     Some(top) => *top += 1,
                     None => base_clips += 1,
@@ -678,7 +678,7 @@ pub(crate) fn paint_canvas_cmds(
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
                 let comp = canvas_composite(cmd.get(6));
                 if let Some(bm) = comp {
-                    scene.push_layer(bm, 1.0, base, &whole);
+                    scene.push_layer(Fill::NonZero, bm, 1.0, base, &whole);
                 }
                 // Sombra REAL blureada (gaussiana) — el caso estrella (cards,
                 // botones): rect desplazado por (ox,oy), std_dev = blur/2.
@@ -700,7 +700,7 @@ pub(crate) fn paint_canvas_cmds(
                 let r = KurboRect::new(a(1), a(2), a(1) + a(3), a(2) + a(4));
                 let comp = canvas_composite(st);
                 if let Some(bm) = comp {
-                    scene.push_layer(bm, 1.0, base, &whole);
+                    scene.push_layer(Fill::NonZero, bm, 1.0, base, &whole);
                 }
                 if let Some((col, _b, ox, oy)) = canvas_shadow(st, ga) {
                     let sxf = base * cur * Affine::translate((ox, oy));
@@ -723,7 +723,7 @@ pub(crate) fn paint_canvas_cmds(
                 let ga = style_field(st, "ga").unwrap_or(1.0);
                 let comp = canvas_composite(st);
                 if let Some(bm) = comp {
-                    scene.push_layer(bm, 1.0, base, &whole);
+                    scene.push_layer(Fill::NonZero, bm, 1.0, base, &whole);
                 }
                 let key = if op == "fillText" { "f" } else { "s" };
                 let color = canvas_color(style_color(st, key).as_ref(), ga);
@@ -767,7 +767,7 @@ pub(crate) fn paint_canvas_cmds(
                 // imagen entera (W×H decodificados).
                 let src = cmd.get(1).and_then(|v| v.as_str()).unwrap_or("");
                 let Some(img) = images.get(src) else { continue };
-                let (iw_i, ih_i) = (img.width as f64, img.height as f64);
+                let (iw_i, ih_i) = (img.image.width as f64, img.image.height as f64);
                 // Fase 7.201 — snapshot opcional al final (objeto). Las
                 // coordenadas son los números (filter_map descarta el snapshot).
                 let st = cmd.last().filter(|v| v.is_object());
@@ -787,7 +787,7 @@ pub(crate) fn paint_canvas_cmds(
                 // globalCompositeOperation: capa de blend sobre el canvas entero.
                 let comp = canvas_composite(st);
                 if let Some(bm) = comp {
-                    scene.push_layer(bm, 1.0, base, &whole);
+                    scene.push_layer(Fill::NonZero, bm, 1.0, base, &whole);
                 }
                 // Sombra (Fase 7.201): rect blureado de los límites dest en color
                 // de sombra, detrás de la imagen. MVP: ignora el alpha real de la
@@ -799,7 +799,7 @@ pub(crate) fn paint_canvas_cmds(
                 }
                 // Recorta al dest rect (necesario cuando el source es un
                 // sub-rect: draw_image pinta la imagen ENTERA, el clip la acota).
-                scene.push_layer(Mix::Clip, 1.0, base * cur, &dest);
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, base * cur, &dest);
                 // Mapea espacio-pixel de la imagen → dest: el source (sx,sy)
                 // cae en (dx,dy) y (sx+sw,sy+sh) en (dx+dw,dy+dh).
                 let m = Affine::translate((dx, dy))
@@ -832,7 +832,7 @@ pub(crate) fn paint_canvas_cmds(
                 if bytes.len() < (w as usize) * (h as usize) * 4 {
                     continue;
                 }
-                let img = PenikoImage::new(Blob::from(bytes), ImageFormat::Rgba8, w, h);
+                let img = PenikoImage::new(ImageData { data: Blob::from(bytes), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: w, height: h });
                 scene.draw_image(&img, base * Affine::translate((dx, dy)));
             }
             // clearRect parcial: no-op de render (el MVP no borra píxeles ya

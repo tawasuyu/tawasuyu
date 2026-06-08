@@ -14,5 +14,5 @@ tree-sitter-rust = { workspace = true }
 tree-sitter-python = { workspace = true }
 # peniko sólo aporta el tipo de color (peniko::Color) para SyntaxPalette;
 # es un crate de tipos sin GPU — no arrastra wgpu/vello. Versión alineada
-# con la que expone vello 0.5 (ver workspace root).
-peniko = "0.4"
+# con la que expone vello 0.7 (ver workspace root).
+peniko = "0.6"

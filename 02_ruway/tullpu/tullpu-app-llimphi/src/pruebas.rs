@@ -4,7 +4,9 @@
     use std::collections::HashMap;
     use std::path::{Path, PathBuf};
 
-    use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+    use llimphi_ui::llimphi_raster::peniko::{
+        Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+    };
     use llimphi_ui::{KeyState, Modifiers, PaintRect};
 
     use tullpu_core::{
@@ -767,7 +769,7 @@
         // Reemplazamos la imagen del modelo por una con buffer conocido.
         let buf = buffer_patron_4x4();
         let blob = Blob::from(buf);
-        model.imagen = Some(Image::new(blob, ImageFormat::Rgba8, 4, 4));
+        model.imagen = Some(Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 4, height: 4 }));
         // Click en píxel (2, 3) sobre rect 200×200 a zoom 1 → R=120, G=180.
         model = <Tullpu as App>::update(
             model,
@@ -783,7 +785,7 @@
         let mut model = modelo_minimo();
         let buf = buffer_patron_4x4();
         let blob = Blob::from(buf);
-        model.imagen = Some(Image::new(blob, ImageFormat::Rgba8, 4, 4));
+        model.imagen = Some(Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: 4, height: 4 }));
         model.color_picked = Some([1, 2, 3, 4]);
         // Click fuera del área de imagen (banda del pad).
         model = <Tullpu as App>::update(
@@ -5045,8 +5047,8 @@
         let mut alm = AlmacenEnMemoria::nuevo();
         let hash = alm.insertar(vec![128u8; (lado * lado) as usize]);
         let img = thumbnail_de_mascara(hash, lado, lado, &alm).expect("thumb");
-        assert_eq!((img.width, img.height), (lado, lado));
-        let data = img.data.data();
+        assert_eq!((img.image.width, img.image.height), (lado, lado));
+        let data = img.image.data.data();
         // Cada byte de la máscara se expande a gris medio opaco.
         for px in data.chunks_exact(4) {
             assert_eq!(px, &[128, 128, 128, 255]);

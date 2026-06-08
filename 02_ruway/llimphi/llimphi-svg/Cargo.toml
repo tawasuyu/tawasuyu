@@ -9,4 +9,4 @@ description = "llimphi-svg — puente fino vello_svg → Llimphi. Carga .svg arb
 
 [dependencies]
 llimphi-ui = { workspace = true }
-vello_svg = { version = "0.7.1", default-features = false }
+vello_svg = { version = "0.9", default-features = false }

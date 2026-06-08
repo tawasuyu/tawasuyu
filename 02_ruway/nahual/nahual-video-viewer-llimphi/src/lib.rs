@@ -29,7 +29,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::{Blob, Color, Image, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, Color, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use media_core::FrameSource;
@@ -240,7 +242,7 @@ impl VideoViewerState {
                 self.width = w;
                 self.height = h;
                 let blob = Blob::from(self.rgba.clone());
-                self.frame = Some(Image::new(blob, ImageFormat::Rgba8, w, h));
+                self.frame = Some(Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: w, height: h }));
                 self.position = self.position.saturating_add(dt);
                 true
             }

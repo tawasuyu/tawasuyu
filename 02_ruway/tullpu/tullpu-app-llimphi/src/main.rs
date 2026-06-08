@@ -332,8 +332,8 @@ impl App for Tullpu {
                 // offset).
                 if let (Some((rect, cx, cy)), Some(img)) = (ancla, model.imagen.as_ref()) {
                     let (pan_x_nuevo, pan_y_nuevo) = pan_para_zoom_a_cursor(
-                        img.width,
-                        img.height,
+                        img.image.width,
+                        img.image.height,
                         rect,
                         cx,
                         cy,
@@ -634,11 +634,11 @@ impl App for Tullpu {
             }
             Msg::RecogerColor { lx, ly, rw, rh } => {
                 if let Some(img) = model.imagen.as_ref() {
-                    let bytes = img.data.data();
+                    let bytes = img.image.data.data();
                     match recoger_color_en(
                         bytes,
-                        img.width,
-                        img.height,
+                        img.image.width,
+                        img.image.height,
                         lx,
                         ly,
                         rw,

@@ -234,7 +234,9 @@ pub(crate) fn gather_wall(
             // Per-strip rendering: subdividimos la pared en N strips a
             // lo largo del linedef. Cada strip se proyecta y resuelve
             // su propia affine — el error de perspectiva queda 1/N.
-            use llimphi_ui::llimphi_raster::peniko::{Blob, Extend, Image, ImageFormat};
+            use llimphi_ui::llimphi_raster::peniko::{
+                Blob, Extend, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+            };
             let strips = cfg.wall_strips.max(1);
             let slab_h = (z_top - z_bot).max(1e-3);
             // Offsets de textura del sidedef + convención de pegging
@@ -256,12 +258,7 @@ pub(crate) fn gather_wall(
                 tex.height as f32,
                 row_offset,
             );
-            let img = Image::new(
-                Blob::from(tex.rgba.clone()),
-                ImageFormat::Rgba8,
-                tex.width as u32,
-                tex.height as u32,
-            )
+            let img = Image::new(ImageData { data: Blob::from(tex.rgba.clone()), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: tex.width as u32, height: tex.height as u32 })
             .with_extend(Extend::Repeat);
             // Para cada strip: lerp world a lo largo de v1→v2, proyectar
             // y emitir quad con su propio affine. Reuso el `img` clonado

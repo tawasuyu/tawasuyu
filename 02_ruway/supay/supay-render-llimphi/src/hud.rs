@@ -37,7 +37,9 @@ pub(crate) fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnap
         let Some(tex) = atlas.wall_texture("SKY1") else {
             return false;
         };
-        use llimphi_ui::llimphi_raster::peniko::{Blob, Extend, Image, ImageFormat};
+        use llimphi_ui::llimphi_raster::peniko::{
+            Blob, Extend, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+        };
         let tex_w = tex.width as f64;
         let tex_h = tex.height as f64;
         let panorama_px = tex_w * 4.0; // 360° = 4 × tex.width
@@ -75,12 +77,7 @@ pub(crate) fn draw_backdrop(scene: &mut Scene, rect: PaintRect, snap: &SceneSnap
             -scroll_x / scale_x + rect.x as f64,
             sky_top_y,
         ]);
-        let img = Image::new(
-            Blob::from(tex.rgba.clone()),
-            ImageFormat::Rgba8,
-            tex.width as u32,
-            tex.height as u32,
-        )
+        let img = Image::new(ImageData { data: Blob::from(tex.rgba.clone()), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: tex.width as u32, height: tex.height as u32 })
         .with_x_extend(Extend::Repeat)
         .with_y_extend(Extend::Pad);
         scene.fill(Fill::NonZero, Affine::IDENTITY, &img, Some(xform), &sky_rect);
@@ -262,6 +259,7 @@ pub(crate) fn draw_player_overlays(scene: &mut Scene, rect: PaintRect, ov: &Play
     if invuln_active(ov, tick) {
         use llimphi_ui::llimphi_raster::peniko::{BlendMode, Compose, Mix};
         scene.push_layer(
+            Fill::NonZero,
             BlendMode::new(Mix::Difference, Compose::SrcOver),
             1.0,
             Affine::IDENTITY,

@@ -121,7 +121,7 @@ impl App {
             force_fallback_adapter: false,
             compatible_surface: Some(&surface),
         }))
-        .ok_or_else(|| "request_adapter → None".to_string())?;
+        .map_err(|e| format!("request_adapter: {e}"))?;
         let info = adapter.get_info();
         step(&format!("4/9 Adapter {:?} {}", info.backend, info.name));
 
@@ -132,8 +132,9 @@ impl App {
                 required_features: wgpu::Features::empty(),
                 required_limits: limits,
                 memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::Off,
             },
-            None,
         ))
         .map_err(|e| format!("request_device: {e}"))?;
         step("5/9 Device + Queue");

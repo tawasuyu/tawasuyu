@@ -145,10 +145,13 @@ impl Hal {
             ..Default::default()
         });
         let (instance, adapter) = match primary.request_adapter(&opts).await {
-            Some(a) => (primary, a),
-            None => {
+            Ok(a) => (primary, a),
+            Err(_) => {
                 let all = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
-                let a = all.request_adapter(&opts).await.ok_or(HalError::NoAdapter)?;
+                let a = all
+                    .request_adapter(&opts)
+                    .await
+                    .map_err(|_| HalError::NoAdapter)?;
                 (all, a)
             }
         };
@@ -158,15 +161,14 @@ impl Hal {
         // (texturas/buffers grandes) preservando los conteos mínimos.
         let limits = wgpu::Limits::default().using_resolution(adapter.limits());
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("llimphi-hal-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: limits,
-                    memory_hints: wgpu::MemoryHints::Performance,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("llimphi-hal-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .map_err(|e| HalError::RequestDevice(e.to_string()))?;
         Ok(Self {
@@ -220,8 +222,8 @@ impl Hal {
             })
             .await;
         let (instance, adapter, wgpu_surface) = match prim_adapter {
-            Some(a) => (primary, a, prim_surface),
-            None => {
+            Ok(a) => (primary, a, prim_surface),
+            Err(_) => {
                 let all = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
                 let surface = unsafe { all.create_surface_unsafe(make_target()) }
                     .map_err(|e| HalError::CreateSurface(e.to_string()))?;
@@ -232,21 +234,20 @@ impl Hal {
                         compatible_surface: Some(&surface),
                     })
                     .await
-                    .ok_or(HalError::NoAdapter)?;
+                    .map_err(|_| HalError::NoAdapter)?;
                 (all, a, surface)
             }
         };
         let limits = wgpu::Limits::default().using_resolution(adapter.limits());
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("llimphi-hal-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: limits,
-                    memory_hints: wgpu::MemoryHints::Performance,
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("llimphi-hal-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: limits,
+                memory_hints: wgpu::MemoryHints::Performance,
+                experimental_features: wgpu::ExperimentalFeatures::default(),
+                trace: wgpu::Trace::Off,
+            })
             .await
             .map_err(|e| HalError::RequestDevice(e.to_string()))?;
         let hal = Self {
@@ -719,6 +720,7 @@ impl OverlayCompositor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: target,
                 resolve_target: None,
+                depth_slice: None,
                 ops: wgpu::Operations {
                     load: wgpu::LoadOp::Load,
                     store: wgpu::StoreOp::Store,
@@ -1030,6 +1032,7 @@ impl BlurCompositor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: scratch_view,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         // No nos importa qué hay fuera del scissor: el segundo
                         // pase sólo lee dentro del scissor también.
@@ -1072,6 +1075,7 @@ impl BlurCompositor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,

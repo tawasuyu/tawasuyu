@@ -33,7 +33,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
@@ -330,7 +332,13 @@ impl App for Gallery {
             }
             Msg::ThumbListo(path, t) => {
                 m.plan.completar(&path);
-                let img = Image::new(Blob::from(t.rgba), ImageFormat::Rgba8, t.w, t.h);
+                let img = Image::new(ImageData {
+                    data: Blob::from(t.rgba),
+                    format: ImageFormat::Rgba8,
+                    alpha_type: ImageAlphaType::Alpha,
+                    width: t.w,
+                    height: t.h,
+                });
                 m.thumbs.insert(path, img);
                 // Encadenar: liberado un cupo, pedir el próximo lote.
                 bombear(&mut m, handle);

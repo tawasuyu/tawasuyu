@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use vello::kurbo::{Affine, Rect};
-use vello::peniko::{Color, Mix};
+use vello::peniko::{Color, Fill, Mix};
 use vello::Scene;
 
 use crate::Mounted;
@@ -595,7 +595,7 @@ impl AnimRegistry {
             if a <= 0.0 {
                 continue;
             }
-            scene.push_layer(Mix::Normal, a, Affine::IDENTITY, &clip);
+            scene.push_layer(Fill::NonZero, Mix::Normal, a, Affine::IDENTITY, &clip);
             scene.append(&g.scene, None);
             scene.pop_layer();
         }

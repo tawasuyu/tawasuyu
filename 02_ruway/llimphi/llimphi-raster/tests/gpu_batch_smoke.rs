@@ -97,7 +97,7 @@ fn batch_with_rects_lines_tris_does_not_panic() {
         wgpu::LoadOp::Clear(wgpu::Color::BLACK),
     );
     hal.queue.submit(std::iter::once(encoder.finish()));
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
 }
 
 #[test]
@@ -124,5 +124,5 @@ fn empty_batch_flush_is_no_op() {
         wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
     );
     hal.queue.submit(std::iter::once(encoder.finish()));
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
 }

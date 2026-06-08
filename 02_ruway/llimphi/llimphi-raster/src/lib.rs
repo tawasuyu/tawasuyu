@@ -10,6 +10,13 @@ use llimphi_hal::{Frame, Hal};
 pub use vello;
 pub use vello::kurbo;
 pub use vello::peniko;
+// Renderer "hybrid" CPU+GPU sin compute shaders (feature `hybrid`):
+// vello 0.7 trae `vello_hybrid::Renderer` como alternativa al `vello::Renderer`
+// estándar — sin compute, mejor compat WebGL2 + Adreno/Mali viejas. Lo
+// re-exportamos cuando la feature está activa para que apps avanzadas (web,
+// móvil entry-level) puedan instanciarlo sin agregar otra dep.
+#[cfg(feature = "hybrid")]
+pub use vello_hybrid;
 
 pub mod gpu;
 pub use gpu::{GpuBatch, GpuPipelines};

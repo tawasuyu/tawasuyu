@@ -162,7 +162,7 @@ fn leer_textura_png(hal: &Hal, target: &wgpu::Texture, w: u32, h: u32) -> Result
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     let data = slice.get_mapped_range();
 

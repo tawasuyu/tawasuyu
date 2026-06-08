@@ -334,14 +334,9 @@ pub(crate) fn gather_subsector_planes(
                 let n_v = world_xy.len();
                 if n_v >= 3 {
                     use llimphi_ui::llimphi_raster::peniko::{
-                        Blob, Extend, Image, ImageFormat,
+                        Blob, Extend, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
                     };
-                    let img = Image::new(
-                        Blob::from((*rgba).clone()),
-                        ImageFormat::Rgba8,
-                        supay_wad::FLAT_SIZE as u32,
-                        supay_wad::FLAT_SIZE as u32,
-                    )
+                    let img = Image::new(ImageData { data: Blob::from((*rgba).clone()), format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: supay_wad::FLAT_SIZE as u32, height: supay_wad::FLAT_SIZE as u32 })
                     .with_extend(Extend::Repeat);
                     let mut any_drawn = false;
                     for j in 1..n_v - 1 {

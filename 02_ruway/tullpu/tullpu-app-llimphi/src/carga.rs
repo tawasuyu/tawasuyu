@@ -241,7 +241,7 @@ pub(crate) fn inicializar() -> Model {
     model.histograma = model
         .imagen
         .as_ref()
-        .map(|img| histograma_rgb(img.data.data()));
+        .map(|img| histograma_rgb(img.image.data.data()));
     model
 }
 

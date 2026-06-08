@@ -643,15 +643,18 @@ tempfile = "3"
 
 # === Llimphi (motor gráfico soberano) ===
 # wgpu sobre Vulkan/Metal/DX12, winit para ventana en dev Linux.
-# raw-window-handle 0.6 alinea winit 0.30 con wgpu 24.
-# vello 0.5 = rasterizador vectorial sobre wgpu 24.
+# raw-window-handle 0.6 alinea winit 0.30 con wgpu 27.
+# vello 0.7 = rasterizador vectorial sobre wgpu 27 (renderer GPU "wgpu" + opt-in "hybrid" CPU+GPU).
 # taffy 0.9 = motor Flexbox/Grid puro Rust (ya pulled por transitivos, lo alineamos).
-# parley 0.2 = shaping/layout de texto compatible con peniko 0.4 (que vello 0.5 expone).
-wgpu = "24"
+# parley 0.6 = shaping/layout de texto compatible con peniko 0.6 (que vello 0.7 expone).
+wgpu = "27"
 winit = "0.30"
 raw-window-handle = "0.6"
 pollster = "0.4"
-vello = "0.5"
+vello = "0.7"
+# Renderer hybrid CPU+GPU sin compute shaders (mejor compat WebGL2/Adreno viejas).
+# Opt-in; el renderer "wgpu" sigue siendo el default.
+vello_hybrid = "0.0.9"
 # Árbol de accesibilidad para lectores de pantalla (NVDA/VoiceOver/Orca/TalkBack).
 # Lo consume el runtime de Llimphi (iter 2/3 del plan AccessKit); el modelo
 # `SemanticsSpec` del compositor es independiente de estas crates.
@@ -659,7 +662,7 @@ accesskit = "0.24"
 accesskit_winit = "0.33"
 taffy = "0.9"
 # parley = shaping completo (bidi, ligatures, fallback CJK/emoji vía fontique, line break).
-parley = "0.4"
+parley = "0.6"
 # Bucle Elm (input→update→view→layout→raster→present). Lo consumen las apps.
 llimphi-ui = { path = "02_ruway/llimphi/llimphi-ui" }
 # Paleta semántica compartida por las apps y los widgets.

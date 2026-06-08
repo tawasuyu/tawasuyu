@@ -162,7 +162,7 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);
     });
-    hal.device.poll(wgpu::Maintain::Wait);
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
     let mut pixels = Vec::with_capacity((W * H * 4) as usize);

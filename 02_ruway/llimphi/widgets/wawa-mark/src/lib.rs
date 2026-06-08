@@ -259,7 +259,7 @@ pub fn paint_mark(
     let core_r = (side * 0.018).max(1.2);
     let halo_r = core_r * 2.6;
     let halo_color = with_alpha(palette.core, 0.30);
-    scene.push_layer(Mix::Normal, 1.0, Affine::IDENTITY, &Circle::new(p2, halo_r));
+    scene.push_layer(Fill::NonZero, Mix::Normal, 1.0, Affine::IDENTITY, &Circle::new(p2, halo_r));
     scene.fill(
         Fill::NonZero,
         Affine::IDENTITY,

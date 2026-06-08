@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use llimphi_clipboard::SystemClipboard;
 use llimphi_module_file_picker::{PickerMsg, PickerState};
 use llimphi_motion::Tween;
-use llimphi_ui::llimphi_raster::peniko::Image;
+use llimphi_ui::llimphi_raster::peniko::ImageBrush as Image;
 use llimphi_ui::{KeyEvent, PaintRect};
 use llimphi_widget_edit_menu::EditAction;
 use llimphi_widget_text_input::TextInputState;

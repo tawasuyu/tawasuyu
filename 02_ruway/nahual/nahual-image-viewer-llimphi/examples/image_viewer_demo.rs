@@ -7,7 +7,9 @@
 use std::path::PathBuf;
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
-use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use llimphi_ui::{App, Handle, View};
 use nahual_image_viewer_llimphi::{
     image_viewer_view_zoom, load_image, ImagePreviewState, ImageViewerPalette, ImageViewport,
@@ -105,7 +107,13 @@ fn procedural_state() -> ImagePreviewState {
         }
     }
     let blob = Blob::from(pixels);
-    let image = Image::new(blob, ImageFormat::Rgba8, PROC_W, PROC_H);
+    let image = Image::new(ImageData {
+        data: blob,
+        format: ImageFormat::Rgba8,
+        alpha_type: ImageAlphaType::Alpha,
+        width: PROC_W,
+        height: PROC_H,
+    });
     ImagePreviewState::Image {
         image,
         width: PROC_W,

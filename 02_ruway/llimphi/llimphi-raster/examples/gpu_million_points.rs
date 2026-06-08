@@ -100,7 +100,7 @@ fn bench(hal: &Hal, pipelines: &GpuPipelines, view: &wgpu::TextureView, n: u32) 
             wgpu::LoadOp::Clear(wgpu::Color::BLACK),
         );
         hal.queue.submit(std::iter::once(encoder.finish()));
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP {
             samples.push(dt);

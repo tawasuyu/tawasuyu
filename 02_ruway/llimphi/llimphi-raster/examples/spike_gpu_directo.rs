@@ -191,7 +191,7 @@ fn bench_vello(
             .expect("vello render");
         // Bloquear hasta que la GPU termine este frame. Sin esto medimos
         // sólo el submit + queue building, no el trabajo real.
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP_FRAMES {
             samples.push(dt);
@@ -233,6 +233,7 @@ fn bench_directo(
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
@@ -248,7 +249,7 @@ fn bench_directo(
             pass.draw(0..6, 0..points.len() as u32);
         }
         hal.queue.submit(std::iter::once(encoder.finish()));
-        hal.device.poll(wgpu::Maintain::Wait);
+        hal.device.poll(wgpu::PollType::wait_indefinitely());
         let dt = t0.elapsed().as_secs_f64() * 1000.0;
         if frame >= WARMUP_FRAMES {
             samples.push(dt);

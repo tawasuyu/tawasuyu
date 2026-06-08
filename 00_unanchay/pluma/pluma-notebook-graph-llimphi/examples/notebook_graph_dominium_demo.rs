@@ -31,7 +31,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, Dimension, FlexDirection, Size, Style},
     Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::{Blob, Image as PenikoImage, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, ImageAlphaType, ImageBrush as PenikoImage, ImageData, ImageFormat,
+};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, View};
 use llimphi_widget_nodegraph::{NodegraphMetrics, NodegraphPalette};
@@ -414,7 +416,17 @@ fn decode_png(bytes: &[u8]) -> Option<(PenikoImage, u32, u32)> {
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = (img.width(), img.height());
     let blob = Blob::from(img.into_raw());
-    Some((PenikoImage::new(blob, ImageFormat::Rgba8, w, h), w, h))
+    Some((
+        PenikoImage::new(ImageData {
+            data: blob,
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: w,
+            height: h,
+        }),
+        w,
+        h,
+    ))
 }
 
 fn futures_block_on<F: std::future::Future>(fut: F) -> F::Output {

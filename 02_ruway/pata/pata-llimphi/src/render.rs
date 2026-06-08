@@ -16,7 +16,9 @@ use llimphi_ui::llimphi_layout::taffy::{
     },
     Rect as TaffyRect,
 };
-use llimphi_ui::llimphi_raster::peniko::{Blob, Image, ImageFormat};
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 use llimphi_widget_scroll::{clamp_offset, scroll_y, ScrollPalette};
@@ -2396,7 +2398,7 @@ fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) ->
 /// `peniko::Image` desde los bytes RGBA que el hilo del tray ya decodificó.
 fn tray_icon_node(icon: &TrayIcon) -> View<Msg> {
     let blob = Blob::from(icon.rgba.clone());
-    let img = Image::new(blob, ImageFormat::Rgba8, icon.width, icon.height);
+    let img = Image::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: icon.width, height: icon.height });
     View::new(Style {
         size: Size {
             width: length(TRAY_ICON_PX),

@@ -447,9 +447,9 @@ pub(crate) fn recortar_lienzo_a_visible(model: &mut Model) -> bool {
         model.estado = "no hay composite que medir".into();
         return false;
     };
-    let w = img.width;
-    let h = img.height;
-    let bytes = img.data.data();
+    let w = img.image.width;
+    let h = img.image.height;
+    let bytes = img.image.data.data();
     let Some((x0, y0, x1, y1)) = bbox_no_transparente(bytes, w, h) else {
         model.estado = "lienzo vacío, nada que recortar".into();
         return false;

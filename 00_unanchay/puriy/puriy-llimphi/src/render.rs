@@ -449,7 +449,7 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // contenedor). Llimphi escala preservando aspect ratio.
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
-        let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
+        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
         return match b.object_fit {
             Some(fit) => image_fit_view(b, peniko, fit, zoom),
             None => image_view(img.width, img.height, zoom).image(peniko),
@@ -885,8 +885,8 @@ pub(crate) fn image_fit_view(
     fit: puriy_engine::ObjectFit,
     zoom: f32,
 ) -> View<Msg> {
-    let iw = peniko.width.max(1) as f64;
-    let ih = peniko.height.max(1) as f64;
+    let iw = peniko.image.width.max(1) as f64;
+    let ih = peniko.image.height.max(1) as f64;
     let w_dim = length_to_taffy(b.width, zoom).unwrap_or_else(|| length(iw as f32 * zoom));
     let h_dim = length_to_taffy(b.height, zoom).unwrap_or_else(|| length(ih as f32 * zoom));
     let z = zoom as f64;
@@ -934,7 +934,7 @@ pub(crate) fn image_fit_view(
             (rect.y + rect.h) as f64,
             0.0,
         );
-        scene.push_layer(llimphi_raster::peniko::Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+        scene.push_layer(llimphi_raster::peniko::Fill::NonZero, llimphi_raster::peniko::BlendMode::default(), 1.0, Affine::IDENTITY, &clip);
         scene.draw_image(
             &peniko,
             Affine::translate((tx, ty)) * Affine::scale_non_uniform(sx, sy),
@@ -991,7 +991,7 @@ pub(crate) fn render_link_subtree(
     }
     if let Some(img) = &b.image {
         let blob = Blob::from(img.rgba.clone());
-        let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
+        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
         return match b.object_fit {
             Some(fit) => image_fit_view(b, peniko, fit, zoom).on_click(nav_msg(target)),
             None => image_view(img.width, img.height, zoom)
@@ -1670,7 +1670,7 @@ pub(crate) fn paint_background_image(
         (clip_rect.y + clip_rect.h) as f64,
         clip_radius,
     );
-    scene.push_layer(llimphi_raster::peniko::Mix::Clip, 1.0, Affine::IDENTITY, &clip);
+    scene.push_layer(llimphi_raster::peniko::Fill::NonZero, llimphi_raster::peniko::BlendMode::default(), 1.0, Affine::IDENTITY, &clip);
     let scale = Affine::scale_non_uniform(tw / iw, th / ih);
     for &x in &xs {
         for &y in &ys {
@@ -1867,7 +1867,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
     // `background-position` y `background-repeat` (Fase 7.204).
     let bg_image = b.background_image.as_ref().map(|img| {
         let blob = Blob::from(img.rgba.clone());
-        let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
+        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
         (peniko, img.width as f64, img.height as f64)
     });
     let bg_size = b.background_size;
@@ -1911,7 +1911,7 @@ pub(crate) fn apply_decorations(mut view: View<Msg>, b: &BoxNode, zoom: f32) -> 
         .filter_map(|l| {
             if let Some(img) = &l.image {
                 let blob = Blob::from(img.rgba.clone());
-                let peniko = PenikoImage::new(blob, ImageFormat::Rgba8, img.width, img.height);
+                let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
                 Some(PreparedBgLayer::Image {
                     img: peniko,
                     iw: img.width as f64,
@@ -2656,21 +2656,21 @@ pub(crate) fn build_linear_gradient_brush(
                 start.x + dx * len * (offset + span),
                 start.y + dy * len * (offset + span),
             );
-            GradientKind::Linear { start: s, end: e }
+            GradientKind::Linear(llimphi_raster::peniko::LinearGradientPosition { start: s, end: e })
         }
-        Base::Radial { center, radius } => GradientKind::Radial {
+        Base::Radial { center, radius } => GradientKind::Radial(llimphi_raster::peniko::RadialGradientPosition {
             start_center: center,
             start_radius: (radius * offset) as f32,
             end_center: center,
             end_radius: (radius * (offset + span)) as f32,
-        },
+        }),
         Base::Conic { center, base_start } => {
             let s = base_start + offset * std::f64::consts::TAU;
-            GradientKind::Sweep {
+            GradientKind::Sweep(llimphi_raster::peniko::SweepGradientPosition {
                 center,
                 start_angle: s as f32,
                 end_angle: (s + span * std::f64::consts::TAU) as f32,
-            }
+            })
         }
     };
 

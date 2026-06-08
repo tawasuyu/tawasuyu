@@ -95,6 +95,7 @@ impl ApplicationHandler for App {
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: frame.view(),
                             resolve_target: None,
+                            depth_slice: None,
                             ops: wgpu::Operations {
                                 load: wgpu::LoadOp::Clear(LEAD_GRAY),
                                 store: wgpu::StoreOp::Store,

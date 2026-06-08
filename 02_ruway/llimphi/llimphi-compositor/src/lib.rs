@@ -20,7 +20,7 @@ use std::sync::Arc;
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
 use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, RoundedRectRadii, Stroke};
-use vello::peniko::{Color, Fill, Gradient, Image, Mix};
+use vello::peniko::{BlendMode, Color, Fill, Gradient, ImageBrush as Image, Mix};
 
 mod anim;
 mod hero;
