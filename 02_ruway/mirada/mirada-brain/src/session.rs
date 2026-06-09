@@ -20,6 +20,27 @@ use serde::{Deserialize, Serialize};
 
 use mirada_layout::LayoutParams;
 
+/// Un nodo de la **forma** de una agrupación, anclado por `app_id` en vez de por
+/// [`WindowId`] (efímero). Espeja [`mirada_layout::LayoutNode`] cambiando la hoja
+/// de ventana por su `app_id`, lo único estable entre arranques.
+///
+/// [`WindowId`]: mirada_layout::WindowId
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NodeShape {
+    /// Una ventana, identificada por el `app_id` de su cliente.
+    Leaf(String),
+    /// Un sub-espacio anidado.
+    Space(SpaceShape),
+}
+
+/// La forma de un sub-espacio: sus parámetros de teselado + sus hijos por
+/// `app_id`. Es la cara persistible de [`mirada_layout::SpaceNode`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SpaceShape {
+    pub params: LayoutParams,
+    pub children: Vec<NodeShape>,
+}
+
 /// Versión del formato en disco de [`DesktopState`]. Se sube cuando el formato
 /// cambia de forma incompatible; una sesión de otra versión se ignora sin
 /// romper el arranque (ver [`DesktopState::from_ron`]).
@@ -47,6 +68,14 @@ pub struct DesktopState {
     /// viejas (sin este campo) sigan cargando.
     #[serde(default)]
     pub window_homes: Vec<(String, usize)>,
+    /// La **forma** de la agrupación (árbol fractal del zoom-Z) de cada
+    /// escritorio que estaba agrupado, anclada por `app_id`: `(índice de
+    /// escritorio, forma)`. Sólo aparecen los agrupados. Al restaurar se queda
+    /// pendiente y se **rematerializa** cuando todas las apps miembro reabren en
+    /// ese escritorio (los `WindowId` nuevos se mapean por `app_id`).
+    /// `#[serde(default)]` para que las sesiones viejas sigan cargando.
+    #[serde(default)]
+    pub groupings: Vec<(usize, SpaceShape)>,
 }
 
 impl DesktopState {
@@ -130,6 +159,19 @@ mod tests {
             output_workspaces: vec![3, 0],
             focused_output: 1,
             window_homes: vec![("org.foo.bar".into(), 3), ("zed".into(), 0)],
+            groupings: vec![(
+                0,
+                SpaceShape {
+                    params: LayoutParams::default(),
+                    children: vec![
+                        NodeShape::Leaf("org.foo.bar".into()),
+                        NodeShape::Space(SpaceShape {
+                            params: LayoutParams { mode: LayoutMode::Rows, ..LayoutParams::default() },
+                            children: vec![NodeShape::Leaf("zed".into()), NodeShape::Leaf("zed".into())],
+                        }),
+                    ],
+                },
+            )],
         }
     }
 

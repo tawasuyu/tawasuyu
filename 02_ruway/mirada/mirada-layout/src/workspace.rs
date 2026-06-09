@@ -305,6 +305,22 @@ impl Workspace {
         self.grouping.is_some()
     }
 
+    /// El árbol de agrupación actual, si lo hay — para **persistir su forma**
+    /// (el dueño la proyecta a `app_id` porque los [`WindowId`] son efímeros).
+    pub fn grouping(&self) -> Option<&SpaceNode> {
+        self.grouping.as_ref()
+    }
+
+    /// Fija (o quita, con `None`) el árbol de agrupación directamente — para
+    /// **restaurar** una agrupación guardada, ya reconstruida con los `WindowId`
+    /// vivos. Resetea el zoom al nivel superior. El `layout` reconcilia el árbol
+    /// con `windows` igual que con [`group`](Workspace::group), así que sobra/
+    /// falta una ventana no rompe nada.
+    pub fn set_grouping(&mut self, grouping: Option<SpaceNode>) {
+        self.grouping = grouping;
+        self.view_path.clear();
+    }
+
     /// Profundidad de zoom actual: `0` = se ve el espacio entero.
     pub fn zoom_depth(&self) -> usize {
         self.view_path.len()
@@ -762,6 +778,30 @@ mod tests {
             f.layout(Rect::new(0, 0, 1200, 600))
         };
         assert_eq!(w.layout(Rect::new(0, 0, 1200, 600)), flat);
+    }
+
+    #[test]
+    fn grouping_can_be_read_and_re_set_reproducing_the_layout() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        let screen = Rect::new(0, 0, 1200, 600);
+        let grouped = w.layout(screen);
+        // Leer el árbol y reinstalarlo en un escritorio fresco da el mismo layout.
+        let tree = w.grouping().cloned().unwrap();
+        let mut w2 = cols();
+        for id in [1, 2, 3] {
+            w2.add(id);
+        }
+        w2.set_grouping(Some(tree));
+        assert!(w2.is_grouped());
+        assert_eq!(w2.zoom_depth(), 0); // set_grouping resetea el zoom
+        assert_eq!(w2.layout(screen), grouped);
+        // Sin agrupación: grouping() es None.
+        w2.set_grouping(None);
+        assert!(w2.grouping().is_none());
     }
 
     #[test]

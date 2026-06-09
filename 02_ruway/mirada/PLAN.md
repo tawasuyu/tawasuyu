@@ -113,16 +113,24 @@ otra vez y entrar más profundo, a nivel arbitrario (`zoom_in`/`zoom_out` ya
 navegaban cualquier profundidad por `view_path`). La app pinta un chip `⧉ N` en
 la barra con la profundidad de zoom cuando hay agrupación.
 
-Pendiente del zoom-Z (siguientes rebanadas): agrupación dirigida por el grafo de
+**Agrupación persistente  ✅ HECHA (4ª rebanada):** la forma del árbol fractal
+sobrevive al reinicio. `DesktopState.groupings` guarda, por escritorio agrupado,
+la forma del árbol anclada por `app_id` (`SpaceShape`/`NodeShape`, espejo de
+`SpaceNode`/`LayoutNode` con `app_id` en las hojas). Al restaurar queda pendiente
+y se **rematerializa** cuando todas las apps miembro reabren en su escritorio
+(los `WindowId` nuevos se mapean por `app_id`, una ventana distinta por hoja). Si
+alguna hoja no tiene `app_id`, ese escritorio no se persiste (no se podría
+reconstruir fielmente). El zoom (view_path) arranca en el nivel superior.
+
+Pendiente del zoom-Z (siguiente rebanada): agrupación dirigida por el grafo de
 actividad (constelaciones — necesita que el Cuerpo reporte linaje/PID de los
-clientes); persistir la agrupación en la sesión (requiere anclarla por `app_id`,
-como los window_homes, porque los `WindowId` son efímeros).
+clientes).
 
 **Encima de Fase 2** (orden de ROI):
 
 | Idea | Estado | Nota |
 |---|---|---|
-| **Zoom semántico en Z** | ✅ 3ª rebanada | Agrupar la pila + entrar/salir (absorbe la pantalla) + **capas dormidas** (el Cuerpo corta sus frame callbacks) + **multinivel** (plegar dentro de un grupo, a profundidad arbitraria; chip ⧉N en la barra). Falta: constelaciones, persistir la agrupación. |
+| **Zoom semántico en Z** | ✅ 4ª rebanada | Agrupar + entrar/salir + **capas dormidas** (el Cuerpo corta sus frame callbacks) + **multinivel** (anidar a profundidad arbitraria; chip ⧉N) + **persistencia** (la forma del árbol sobrevive al reinicio, anclada por `app_id`). Falta: constelaciones. |
 | **Capabilities por ventana** | BUILD | Gatear screencopy/export-dmabuf por `app_id` en el Cuerpo. El sandboxing *real* y honesto: somos quien otorga el protocolo. |
 | **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". Solapa con suspender capas profundas del zoom-Z. |
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |

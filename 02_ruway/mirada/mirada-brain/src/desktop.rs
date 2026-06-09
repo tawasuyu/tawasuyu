@@ -2,14 +2,14 @@
 
 use std::collections::HashMap;
 
-use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
+use mirada_layout::{LayoutNode, LayoutParams, Rect, SpaceNode, WindowId, Workspace};
 use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId, WindowPlacement};
 
 use crate::action::{Direction, DesktopAction, WORKSPACE_COUNT};
 use crate::config::Config;
 use crate::keymap::Keymap;
 use crate::rules::Rules;
-use crate::session::{DesktopState, SESSION_VERSION};
+use crate::session::{DesktopState, NodeShape, SpaceShape, SESSION_VERSION};
 
 pub use crate::config::DROPTERM_APP_ID;
 
@@ -86,6 +86,12 @@ pub struct Desktop {
     /// entrada se consume (se quita) en el primer acierto, así que sólo
     /// restaura la primera ventana de cada app y no fija las posteriores.
     restored_homes: HashMap<String, usize>,
+    /// Agrupaciones (árbol fractal del zoom-Z) pendientes de rematerializar,
+    /// por índice de escritorio, restauradas de una sesión. Cada una se
+    /// reconstruye cuando todas sus apps miembro vuelven a estar abiertas en su
+    /// escritorio (mapeando los `WindowId` nuevos por `app_id`), y entonces se
+    /// quita de aquí. Si alguna app no reabre, queda pendiente sin efecto.
+    restored_groupings: HashMap<usize, SpaceShape>,
 }
 
 impl Default for Desktop {
@@ -118,6 +124,7 @@ impl Desktop {
             scratchpad: Vec::new(),
             pending_output_workspaces: Vec::new(),
             restored_homes: HashMap::new(),
+            restored_groupings: HashMap::new(),
         }
     }
 
@@ -157,7 +164,43 @@ impl Desktop {
             output_workspaces: self.outputs.iter().map(|o| o.workspace).collect(),
             focused_output: self.focused_output,
             window_homes: self.window_homes(),
+            groupings: self.grouping_shapes(),
         }
+    }
+
+    /// Proyecta la agrupación de cada escritorio agrupado a su **forma** anclada
+    /// por `app_id` (para persistirla; los `WindowId` son efímeros). Salta el
+    /// escritorio entero si alguna hoja no se puede resolver a un `app_id` no
+    /// vacío —mejor no persistir una forma que no se podrá reconstruir fielmente.
+    fn grouping_shapes(&self) -> Vec<(usize, SpaceShape)> {
+        let mut out = Vec::new();
+        for (n, ws) in self.workspaces.iter().enumerate() {
+            if let Some(node) = ws.grouping() {
+                if let Some(shape) = self.space_to_shape(node) {
+                    out.push((n, shape));
+                }
+            }
+        }
+        out
+    }
+
+    /// Un [`SpaceNode`] (hojas = `WindowId`) → [`SpaceShape`] (hojas = `app_id`).
+    /// `None` si alguna ventana es desconocida o no tiene `app_id`.
+    fn space_to_shape(&self, node: &SpaceNode) -> Option<SpaceShape> {
+        let mut children = Vec::with_capacity(node.children.len());
+        for child in &node.children {
+            children.push(match child {
+                LayoutNode::Leaf(id) => {
+                    let app_id = self.windows.get(id).map(|i| i.app_id.as_str())?;
+                    if app_id.is_empty() {
+                        return None;
+                    }
+                    NodeShape::Leaf(app_id.to_string())
+                }
+                LayoutNode::Space(s) => NodeShape::Space(self.space_to_shape(s)?),
+            });
+        }
+        Some(SpaceShape { params: node.params, children })
     }
 
     /// Deriva el mapa `app_id`→escritorio de las ventanas vivas, para
@@ -178,6 +221,47 @@ impl Desktop {
         homes.into_iter().collect()
     }
 
+    /// Intenta **rematerializar** la agrupación pendiente del escritorio `n`
+    /// (restaurada de una sesión): si cada hoja `app_id` de la forma encuentra una
+    /// ventana viva distinta en ese escritorio, reconstruye el árbol con los
+    /// `WindowId` actuales y lo instala; si falta alguna app, no hace nada y queda
+    /// pendiente para cuando reabra. Las flotantes no cuentan (no se agrupan).
+    fn try_restore_grouping(&mut self, n: usize) {
+        let Some(shape) = self.restored_groupings.get(&n).cloned() else {
+            return;
+        };
+        let ws = &self.workspaces[n];
+        let mut pool: Vec<(WindowId, String)> = ws
+            .windows()
+            .iter()
+            .filter(|&&id| !ws.is_floating(id))
+            .filter_map(|&id| self.windows.get(&id).map(|i| (id, i.app_id.clone())))
+            .collect();
+        if let Some(node) = Self::shape_to_space(&shape, &mut pool) {
+            self.workspaces[n].set_grouping(Some(node));
+            self.restored_groupings.remove(&n);
+        }
+    }
+
+    /// Una [`SpaceShape`] (hojas = `app_id`) → [`SpaceNode`] (hojas = `WindowId`),
+    /// consumiendo del `pool` una ventana distinta por hoja, en orden de árbol.
+    /// `None` si alguna hoja no encuentra ventana —entonces no se materializa nada.
+    fn shape_to_space(shape: &SpaceShape, pool: &mut Vec<(WindowId, String)>) -> Option<SpaceNode> {
+        let mut children = Vec::with_capacity(shape.children.len());
+        for child in &shape.children {
+            children.push(match child {
+                NodeShape::Leaf(app_id) => {
+                    let pos = pool.iter().position(|(_, a)| a == app_id)?;
+                    LayoutNode::Leaf(pool.remove(pos).0)
+                }
+                NodeShape::Space(s) => {
+                    LayoutNode::Space(Box::new(Self::shape_to_space(s, pool)?))
+                }
+            });
+        }
+        Some(SpaceNode { params: shape.params, children })
+    }
+
     /// Restaura un estado guardado por [`snapshot`](Desktop::snapshot):
     /// re-aplica los parámetros de teselado a cada escritorio y deja el mapa
     /// salida→escritorio en pendiente, para aplicarlo a medida que las salidas
@@ -192,6 +276,12 @@ impl Desktop {
         self.pending_output_workspaces = state.output_workspaces.clone();
         self.focused_output = state.focused_output;
         self.restored_homes = state.window_homes.iter().cloned().collect();
+        self.restored_groupings = state
+            .groupings
+            .iter()
+            .filter(|(n, _)| *n < self.workspaces.len())
+            .cloned()
+            .collect();
     }
 
     /// Recarga la config en caliente: re-siembra los parámetros de teselado
@@ -331,6 +421,9 @@ impl Desktop {
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     self.workspaces[ws].set_floating(id, Some(rect));
                 }
+                // Si este escritorio tenía una agrupación guardada esperando a sus
+                // apps, quizás esta ventana completa el cuadro.
+                self.try_restore_grouping(ws);
                 self.relayout()
             }
             BodyEvent::WindowClosed { id } => {
@@ -2109,6 +2202,7 @@ mod tests {
             output_workspaces: vec![4, 2],
             focused_output: 1,
             window_homes: Vec::new(),
+            groupings: Vec::new(),
         };
         let mut d = Desktop::new();
         d.restore(&snap);
@@ -2130,6 +2224,7 @@ mod tests {
             output_workspaces: vec![3, 3],
             focused_output: 0,
             window_homes: Vec::new(),
+            groupings: Vec::new(),
         };
         let mut d = Desktop::new();
         d.restore(&snap);
@@ -2263,5 +2358,92 @@ mod tests {
         let mut d2 = Desktop::new();
         d2.restore(&snap);
         assert_eq!(d2.snapshot().workspaces, snap.workspaces);
+    }
+
+    /// Reabre una ventana con un `app_id` explícito (los ids nuevos difieren de
+    /// los de la sesión previa, como pasa con clientes Wayland que reconectan).
+    fn open_app(d: &mut Desktop, id: WindowId, app_id: &str) -> Vec<BrainCommand> {
+        d.on_event(BodyEvent::WindowOpened {
+            id,
+            app_id: app_id.into(),
+            title: format!("win {id}"),
+        })
+    }
+
+    #[test]
+    fn a_grouping_is_captured_in_the_snapshot_by_app_id() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id); // app_id = app1..app4
+        }
+        d.apply(DesktopAction::GroupStack); // root: [app1] + grupo{app2,app3,app4}
+        let snap = d.snapshot();
+        assert_eq!(snap.groupings.len(), 1);
+        let (n, shape) = &snap.groupings[0];
+        assert_eq!(*n, 0);
+        // Tope: la maestra suelta + un sub-espacio con la pila.
+        assert_eq!(shape.children.len(), 2);
+        assert!(matches!(&shape.children[0], NodeShape::Leaf(a) if a == "app1"));
+        match &shape.children[1] {
+            NodeShape::Space(s) => {
+                let leaves: Vec<_> = s
+                    .children
+                    .iter()
+                    .map(|c| match c {
+                        NodeShape::Leaf(a) => a.as_str(),
+                        _ => "?",
+                    })
+                    .collect();
+                assert_eq!(leaves, vec!["app2", "app3", "app4"]);
+            }
+            _ => panic!("se esperaba un sub-espacio"),
+        }
+    }
+
+    #[test]
+    fn a_grouping_rematerializes_when_all_member_apps_reopen() {
+        // Sesión previa: cuatro apps, la pila plegada.
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id);
+        }
+        d.apply(DesktopAction::GroupStack);
+        let snap = d.snapshot();
+
+        // Arranque nuevo: restauro y reabro las apps con ids DISTINTOS.
+        let mut d2 = desktop_with_screen();
+        d2.restore(&snap);
+        assert!(!d2.active_workspace().is_grouped(), "sin ventanas, nada que agrupar");
+        open_app(&mut d2, 50, "app1");
+        open_app(&mut d2, 60, "app3");
+        open_app(&mut d2, 70, "app2");
+        // Falta app4: la agrupación sigue pendiente.
+        assert!(!d2.active_workspace().is_grouped());
+        open_app(&mut d2, 80, "app4");
+        // Completo el cuadro → se rematerializa.
+        assert!(d2.active_workspace().is_grouped());
+        // Y entrar al grupo muestra la pila (las tres no-maestras), no la 50.
+        d2.apply(DesktopAction::FocusWindow(60));
+        let cmds = d2.apply(DesktopAction::ZoomIn);
+        let visibles: Vec<_> = places(&cmds)
+            .iter()
+            .filter(|p| p.visible)
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(visibles.len(), 3);
+        assert!(visibles.contains(&60) && visibles.contains(&70) && visibles.contains(&80));
+        assert!(!visibles.contains(&50)); // app1 (maestra) queda fuera del zoom
+    }
+
+    #[test]
+    fn a_grouping_with_an_anonymous_window_is_not_persisted() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1); // app1
+        open_app(&mut d, 2, ""); // sin app_id: no se puede anclar
+        open(&mut d, 3); // app3
+        d.apply(DesktopAction::GroupStack);
+        assert!(d.active_workspace().is_grouped());
+        // No se persiste: una hoja no tiene `app_id` que sobreviva al reinicio.
+        assert!(d.snapshot().groupings.is_empty());
     }
 }
