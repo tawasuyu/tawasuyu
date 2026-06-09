@@ -870,6 +870,12 @@ impl App {
         // La ventana del shell (el marco pata) no se tesela: se acopla a un borde.
         let is_shell = is_shell_app_id(&app_id);
 
+        // PID del cliente (lo guardó el accept-loop en `ClientState`) para el
+        // linaje de las constelaciones — se lee ANTES de mover `surface` abajo.
+        let client_pid = surface
+            .client()
+            .and_then(|c| c.get_data::<ClientState>().and_then(|s| s.pid));
+
         self.windows.push(ManagedWindow {
             id,
             toplevel,
@@ -893,12 +899,9 @@ impl App {
             let title = if title.is_empty() { format!("ventana {id}") } else { title };
             let ev = self.body.open_surface(id, app_id, title);
             self.brain_feed(ev);
-            // Linaje de proceso para las constelaciones (best-effort): el PID lo
-            // guardó el accept-loop en `ClientState`; los ancestros salen de /proc.
-            let pid = surface
-                .client()
-                .and_then(|c| c.get_data::<ClientState>().and_then(|s| s.pid));
-            if let Some(pid) = pid.filter(|&p| p > 0) {
+            // Linaje de proceso para las constelaciones (best-effort): los
+            // ancestros salen de /proc a partir del PID del cliente.
+            if let Some(pid) = client_pid.filter(|&p| p > 0) {
                 let ancestors = process_ancestors(pid);
                 self.brain_feed(BodyEvent::WindowLineage {
                     id,
@@ -1490,6 +1493,18 @@ impl ClientState {
 impl ClientData for ClientState {
     fn initialized(&self, _id: ClientId) {}
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// El PID del cliente al otro extremo de un socket Unix, vía `SO_PEERCRED`.
+/// `None` si el kernel no lo expone (no debería pasar en sockets locales). Es la
+/// raíz del linaje de las *constelaciones*. Se llama en `pub(crate)` desde el
+/// backend DRM, que tiene su propio bucle de `accept`.
+pub(crate) fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<i32> {
+    use nix::sys::socket::{getsockopt, sockopt::PeerCredentials};
+    getsockopt(stream, PeerCredentials)
+        .ok()
+        .map(|c| c.pid())
+        .filter(|&p| p > 0)
 }
 
 /// La cadena de PIDs ancestros de un proceso (padre inmediato primero), leída de
@@ -2500,9 +2515,9 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if let Some(stream) = listener.accept()? {
-            // El PID del cliente, de las credenciales del socket — el linaje de
-            // las constelaciones (best-effort: `None` si no se pueden leer).
-            let pid = stream.peer_cred().ok().and_then(|c| c.pid());
+            // El PID del cliente, de las credenciales del socket (`SO_PEERCRED`) —
+            // el linaje de las constelaciones (best-effort: `None` si no se leen).
+            let pid = peer_pid(&stream);
             let client = display
                 .handle()
                 .insert_client(stream, Arc::new(ClientState::with_pid(pid)))

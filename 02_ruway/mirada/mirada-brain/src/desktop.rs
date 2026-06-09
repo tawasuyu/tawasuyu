@@ -796,6 +796,8 @@ impl Desktop {
                 self.workspaces[active].zoom_out();
                 self.relayout()
             }
+            DesktopAction::FocusConstellationNext => self.focus_constellation(true),
+            DesktopAction::FocusConstellationPrev => self.focus_constellation(false),
             DesktopAction::SwitchWorkspace(n) => {
                 if n < self.workspaces.len() && n != active {
                     self.show_workspace(n);
@@ -1020,6 +1022,32 @@ impl Desktop {
         match nearest_in_direction(from, &tiled, focused, dir) {
             Some(target) if self.workspaces[active].swap(focused, target) => self.relayout(),
             _ => Vec::new(),
+        }
+    }
+
+    /// Salta el foco a la constelación vecina (la siguiente con `forward`, la
+    /// anterior si no) del escritorio activo: el "alt-tab" por familia de
+    /// actividad. Enfoca el primer miembro de la constelación destino. No hace
+    /// nada si hay menos de dos constelaciones (nada entre lo que saltar).
+    fn focus_constellation(&mut self, forward: bool) -> Vec<BrainCommand> {
+        let active = self.active_index();
+        let Some(focused) = self.workspaces[active].focused() else {
+            return Vec::new();
+        };
+        let ids: Vec<WindowId> = self.workspaces[active].windows().to_vec();
+        let consts = self.activity.constellations(&ids);
+        if consts.len() < 2 {
+            return Vec::new();
+        }
+        let cur = consts.iter().position(|c| c.contains(&focused)).unwrap_or(0);
+        let n = consts.len();
+        let next = if forward { (cur + 1) % n } else { (cur + n - 1) % n };
+        match consts[next].first() {
+            Some(&target) => {
+                self.workspaces[active].focus_window(target);
+                self.relayout()
+            }
+            None => Vec::new(),
         }
     }
 
@@ -2423,6 +2451,42 @@ mod tests {
             .collect();
         assert_eq!(visibles.len(), 2);
         assert!(visibles.contains(&2) && visibles.contains(&3));
+    }
+
+    #[test]
+    fn focus_constellation_jumps_between_activity_families() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id);
+        }
+        // Dos familias: {1,2} (1 lanzó 2) y {3,4} (3 lanzó 4).
+        lineage(&mut d, 1, 100, vec![1]);
+        lineage(&mut d, 2, 110, vec![100, 1]);
+        lineage(&mut d, 3, 300, vec![1]);
+        lineage(&mut d, 4, 310, vec![300, 1]);
+        d.apply(DesktopAction::FocusWindow(2)); // foco en la familia {1,2}
+        d.apply(DesktopAction::FocusConstellationNext);
+        // Salta a la otra constelación, a su primer miembro (la 3).
+        assert_eq!(d.focused_window(), Some(3));
+        // Otra vez vuelve cíclicamente a {1,2} (primer miembro: la 1).
+        d.apply(DesktopAction::FocusConstellationNext);
+        assert_eq!(d.focused_window(), Some(1));
+        // Y hacia atrás otra vez a {3,4}.
+        d.apply(DesktopAction::FocusConstellationPrev);
+        assert_eq!(d.focused_window(), Some(3));
+    }
+
+    #[test]
+    fn focus_constellation_is_a_noop_with_a_single_family() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2] {
+            open(&mut d, id);
+        }
+        lineage(&mut d, 1, 100, vec![1]);
+        lineage(&mut d, 2, 110, vec![100, 1]); // ambas en la misma familia
+        d.apply(DesktopAction::FocusWindow(1));
+        d.apply(DesktopAction::FocusConstellationNext);
+        assert_eq!(d.focused_window(), Some(1)); // no hay otra a la que saltar
     }
 
     #[test]

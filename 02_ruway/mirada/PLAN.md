@@ -135,16 +135,17 @@ para no romper la simulación; best-effort (sin PID → no se emite, la ventana 
 propia constelación).
 
 **Zoom-Z completo.** Las cinco rebanadas están hechas: agrupar+entrar/salir,
-capas dormidas, multinivel, persistencia, constelaciones. Lo único que queda fuera
-del scope del compositor (alt-tab por constelación como navegación de foco) puede
-colgarse del `ActivityGraph` cuando se quiera.
+capas dormidas, multinivel, persistencia, constelaciones. Además, encima del mismo
+`ActivityGraph`, el **alt-tab por constelación** (`FocusConstellationNext/Prev`,
+`Super+Tab`/`Super+Shift+Tab`): salta el foco entre familias de actividad, no entre
+ventanas sueltas.
 
 **Encima de Fase 2** (orden de ROI):
 
 | Idea | Estado | Nota |
 |---|---|---|
 | **Zoom semántico en Z** | ✅ COMPLETO | Agrupar + entrar/salir + **capas dormidas** (el Cuerpo corta frames) + **multinivel** (anidar a profundidad arbitraria; chip ⧉N) + **persistencia** (la forma del árbol sobrevive al reinicio por `app_id`) + **constelaciones** (agrupar por linaje de proceso, `Super+Shift+c`). |
-| **Alt-Tab por grafo de actividad** | PARCIAL | El `ActivityGraph` (constelaciones) ya existe en `mirada-brain`. Falta sólo la acción de *navegar* el foco entre constelaciones. |
+| **Alt-Tab por grafo de actividad** | ✅ HECHO | `FocusConstellationNext/Prev` (`Super+Tab`/`Super+Shift+Tab`) salta el foco entre constelaciones del `ActivityGraph`, no entre ventanas. |
 | **Capabilities por ventana** | BUILD | Gatear screencopy/export-dmabuf por `app_id` en el Cuerpo. El sandboxing *real* y honesto: somos quien otorga el protocolo. |
 | **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". Solapa con suspender capas profundas del zoom-Z. |
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |

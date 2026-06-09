@@ -2376,7 +2376,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
                 while let Some(stream) = listener.accept()? {
                     eprintln!("mirada-compositor · cliente Wayland conectado.");
                     // PID del cliente para el linaje de las constelaciones.
-                    let pid = stream.peer_cred().ok().and_then(|c| c.pid());
+                    let pid = crate::peer_pid(&stream);
                     let _ = state
                         .display
                         .handle()

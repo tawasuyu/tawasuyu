@@ -129,6 +129,12 @@ pub enum DesktopAction {
     ZoomIn,
     /// Sale ("zoom out") un nivel hacia el espacio contenedor.
     ZoomOut,
+    /// Salta el foco a la **siguiente constelación** (familia de ventanas por
+    /// linaje de proceso) del escritorio activo — el "alt-tab" por actividad, no
+    /// por ventana suelta.
+    FocusConstellationNext,
+    /// Salta el foco a la constelación anterior.
+    FocusConstellationPrev,
     /// Activa el escritorio virtual `n` (índice 0-based).
     SwitchWorkspace(usize),
     /// Manda la ventana enfocada al escritorio virtual `n` (queda donde está).
@@ -212,6 +218,8 @@ impl fmt::Display for DesktopAction {
             DesktopAction::Ungroup => f.write_str("ungroup"),
             DesktopAction::ZoomIn => f.write_str("zoom-in"),
             DesktopAction::ZoomOut => f.write_str("zoom-out"),
+            DesktopAction::FocusConstellationNext => f.write_str("focus-constellation-next"),
+            DesktopAction::FocusConstellationPrev => f.write_str("focus-constellation-prev"),
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
@@ -256,6 +264,8 @@ impl FromStr for DesktopAction {
             "ungroup" => Self::Ungroup,
             "zoom-in" => Self::ZoomIn,
             "zoom-out" => Self::ZoomOut,
+            "focus-constellation-next" => Self::FocusConstellationNext,
+            "focus-constellation-prev" => Self::FocusConstellationPrev,
             "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
             _ => {
@@ -368,6 +378,9 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+Shift+a".into(), DesktopAction::Ungroup),
         // Plegar por constelación (familia de actividad) en vez de por pila.
         ("Super+Shift+c".into(), DesktopAction::GroupConstellation),
+        // Alt-tab por constelación: saltar entre familias de actividad.
+        ("Super+Tab".into(), DesktopAction::FocusConstellationNext),
+        ("Super+Shift+Tab".into(), DesktopAction::FocusConstellationPrev),
         ("Super+i".into(), DesktopAction::ZoomIn),
         ("Super+u".into(), DesktopAction::ZoomOut),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
