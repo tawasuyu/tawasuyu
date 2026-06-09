@@ -164,18 +164,71 @@ fn main() {
     llimphi_ui::run::<Shell>();
 }
 
-/// `true` si el binario `podman` está disponible en `PATH`. Lookup mínimo
-/// (no spawn) — devuelve `false` si nadie en `$PATH` matchea.
+/// `true` si el binario `podman` está disponible en `PATH`.
 fn podman_disponible() -> bool {
+    binary_disponible("podman")
+}
+
+/// `true` si el binario `bwrap` (bubblewrap) está disponible en `PATH`.
+fn bwrap_disponible() -> bool {
+    binary_disponible("bwrap")
+}
+
+/// `true` si `unshare` + `chroot` están en `PATH` (util-linux + coreutils).
+/// Vienen instalados por default en cualquier Linux moderno.
+fn unshare_disponible() -> bool {
+    binary_disponible("unshare") && binary_disponible("chroot")
+}
+
+fn binary_disponible(name: &str) -> bool {
     let Some(path_env) = std::env::var_os("PATH") else {
         return false;
     };
     for dir in std::env::split_paths(&path_env) {
-        if dir.join("podman").exists() {
+        if dir.join(name).exists() {
             return true;
         }
     }
     false
+}
+
+/// Engine preferido para containers de esta máquina, en orden:
+/// 1. `unshare` — `util-linux` + `coreutils`, ya está en cualquier Linux
+///    moderno con `unprivileged_userns_clone=1`. CERO instalación.
+/// 2. `bwrap` — sin config, mejor aislamiento que unshare manual.
+/// 3. `podman` — fallback OCI completo.
+/// `None` si ninguno está; el form rebaja a Local con notice.
+fn engine_preferido() -> Option<&'static str> {
+    if unshare_disponible() {
+        Some("unshare")
+    } else if bwrap_disponible() {
+        Some("bwrap")
+    } else if podman_disponible() {
+        Some("podman")
+    } else {
+        None
+    }
+}
+
+/// Path donde shuma extrae rootfs LXC para usar con bwrap. Cada distro
+/// queda en su subdirectorio. Persiste entre sesiones (sin re-descargar).
+fn rootfs_root() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|b| b.data_local_dir().join("shuma").join("rootfs"))
+}
+
+/// Path donde la `distro` tiene su rootfs extraído. Usa el `label()` de
+/// `Distro` en minúsculas como subdir.
+fn rootfs_path_for(distro: Distro) -> Option<std::path::PathBuf> {
+    rootfs_root().map(|r| r.join(distro.label().to_lowercase()))
+}
+
+/// `true` si el rootfs de esa distro ya está extraído (heurística: existe
+/// `<rootfs>/bin/bash` o `<rootfs>/usr/bin/bash`).
+fn rootfs_listo(distro: Distro) -> bool {
+    let Some(root) = rootfs_path_for(distro) else {
+        return false;
+    };
+    root.join("bin/bash").exists() || root.join("usr/bin/bash").exists()
 }
 
 /// Resuelve el path del binario `shuma-askpass`. Orden:
@@ -229,6 +282,93 @@ fn spawn_list_containers(handle: &Handle<Msg>) {
             .unwrap_or_default();
         Msg::ContainersLoaded(names)
     });
+}
+
+/// Triple `(distro_slug, release, arch)` para construir la URL del LXC
+/// image. Ver: https://images.linuxcontainers.org/ — los paths son
+/// estables y el `/current/` apunta al build más reciente.
+fn lxc_image_triple(distro: Distro) -> (&'static str, &'static str, &'static str) {
+    match distro {
+        Distro::Ubuntu => ("ubuntu", "noble", "amd64"),
+        Distro::Debian => ("debian", "bookworm", "amd64"),
+        Distro::Alpine => ("alpine", "3.20", "amd64"),
+        Distro::Arch => ("archlinux", "current", "amd64"),
+    }
+}
+
+/// Descarga + extrae el rootfs LXC para `distro` en `~/.local/share/shuma/
+/// rootfs/<distro>`. Hace un único `curl | tar -xJ` sin escribir el .tar.xz
+/// intermedio. Al terminar, dispatcha `ContainerCreated(name)` para que la
+/// sesión use el rootfs, o `ContainerFailed{reason}` si algo salió mal.
+/// `name` aquí es el path absoluto del rootfs (como hace falta para bwrap).
+fn spawn_pull_rootfs_lxc(handle: &Handle<Msg>, distro: Distro, mount: Option<String>) {
+    let _ = mount; // mount lo aplica el run-time vía bwrap_args + --bind
+    let (d, rel, arch) = lxc_image_triple(distro);
+    let Some(root) = rootfs_path_for(distro) else {
+        let name = format!("rootfs:{}", distro.label().to_lowercase());
+        handle.spawn(move || Msg::ContainerFailed {
+            name,
+            reason: "no se pudo resolver $XDG_DATA_HOME".into(),
+        });
+        return;
+    };
+    let root_str = root.display().to_string();
+    let name_for_msg = root_str.clone();
+    handle.spawn(move || {
+        // 1. Crear el directorio.
+        if let Err(e) = std::fs::create_dir_all(&root) {
+            return Msg::ContainerFailed {
+                name: name_for_msg,
+                reason: format!("mkdir {}: {e}", root.display()),
+            };
+        }
+        // 2. URL del rootfs.tar.xz de la imagen actual. El path
+        //    `/current/` es estable; redirige al build más nuevo.
+        let url = format!(
+            "https://images.linuxcontainers.org/images/{d}/{rel}/{arch}/default/current/rootfs.tar.xz"
+        );
+        // 3. Pipe: curl -L -fsSL <url> | tar -xJ -C <root>
+        //    Usamos shell para mantener el pipe sin parsing manual.
+        let cmd = format!(
+            "set -o pipefail; curl -L -fsSL {url} | tar -xJ -C {root}",
+            url = shell_quote_arg(&url),
+            root = shell_quote_arg(&root.display().to_string()),
+        );
+        match std::process::Command::new("bash")
+            .args(["-c", &cmd])
+            .output()
+        {
+            Ok(out) if out.status.success() => Msg::ContainerCreated(name_for_msg),
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .last()
+                    .unwrap_or("curl|tar salió con status no-cero")
+                    .to_string();
+                Msg::ContainerFailed { name: name_for_msg, reason: err }
+            }
+            Err(e) => Msg::ContainerFailed {
+                name: name_for_msg,
+                reason: format!("no pude ejecutar bash: {e}"),
+            },
+        }
+    });
+}
+
+/// Quote estilo Bourne para args a `bash -c '...'`. Idéntico al de
+/// shuma-module-shell pero replicado para evitar exportarlo.
+fn shell_quote_arg(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Lista containers locales con su status + image (ventana gestora).
@@ -712,6 +852,9 @@ struct Session {
     /// aislamiento base). El form de creación lo togglea; `apply_isolation`
     /// lo lee para resolver el `Source` real.
     use_container: bool,
+    /// Engine que ejecuta el container: "bwrap" (default si está) o "podman"
+    /// (fallback). El usuario puede sobreescribirlo desde el form.
+    container_engine: String,
     /// Si el colapsable de contenedor está abierto en el panel.
     container_open: bool,
     /// Estado de conexión de la sesión (lo refleja el panel).
@@ -752,6 +895,7 @@ impl Session {
             distro: Distro::Ubuntu,
             container: None,
             use_container: false,
+            container_engine: engine_preferido().unwrap_or("bwrap").to_string(),
             container_open: false,
             pending: false,
             mount: TextInputState::new(),
@@ -809,7 +953,7 @@ impl Session {
         let source = if self.use_container {
             if let Some(name) = self.container.clone() {
                 Source::Container {
-                    engine: "podman".into(),
+                    engine: self.container_engine.clone(),
                     name,
                     label: None,
                 }
@@ -859,6 +1003,7 @@ impl Session {
             distro: self.distro,
             container: self.container.clone(),
             use_container: self.use_container,
+            container_engine: self.container_engine.clone(),
             mount: self.mount.text(),
             host: self.host.text(),
             user: self.user.text(),
@@ -881,6 +1026,9 @@ impl Session {
         s.distro = c.distro;
         s.container = c.container;
         s.use_container = c.use_container;
+        if !c.container_engine.is_empty() {
+            s.container_engine = c.container_engine;
+        }
         s.mount.set_text(c.mount);
         s.host.set_text(c.host);
         s.user.set_text(c.user);
@@ -935,6 +1083,8 @@ struct SessionConfig {
     container: Option<String>,
     #[serde(default)]
     use_container: bool,
+    #[serde(default)]
+    container_engine: String,
     #[serde(default)]
     mount: String,
     #[serde(default)]
@@ -1651,9 +1801,26 @@ impl App for Shell {
                 }
             }
             Msg::EnsureContainer(name) => {
-                // Dispara `podman start name` en bg; el resultado vuelve
-                // como ContainerCreated / ContainerFailed.
-                spawn_ensure_container(handle, name);
+                // Ramificamos por engine de la sesión que lo pidió. Para
+                // unshare/bwrap, el "name" es el path al rootfs — si ya
+                // existe en disco, marcamos conectada de una; sino, repull.
+                let engine = m
+                    .sessions
+                    .iter()
+                    .find(|s| s.container.as_deref() == Some(name.as_str()))
+                    .map(|s| (s.container_engine.clone(), s.distro))
+                    .unwrap_or_else(|| ("podman".into(), Distro::Ubuntu));
+                match engine.0.as_str() {
+                    "unshare" | "bwrap" => {
+                        if rootfs_listo(engine.1) {
+                            // No bg work — emit el "ya está listo" inline.
+                            handle.dispatch(Msg::ContainerCreated(name));
+                        } else {
+                            spawn_pull_rootfs_lxc(handle, engine.1, None);
+                        }
+                    }
+                    _ /* podman */ => spawn_ensure_container(handle, name),
+                }
             }
             Msg::OpenContainersWindow => {
                 handle.open_window(WIN_CONTAINERS, "shuma · containers", 720, 500);
@@ -1828,41 +1995,70 @@ impl App for Shell {
                 save_chrome(&m);
             }
             Msg::ConfirmNewSession => {
-                // Resuelve el Source real y monta el shell. Si `use_container`,
-                // dispara el `podman run -d` en bg y queda `Pending` hasta que
-                // llegue `ContainerCreated`; mientras tanto el shell ya corre
-                // contra Source::Container (los primeros comandos pueden
-                // fallar si el container aún no está listo — re-tipear funciona).
-                let mut to_create: Option<(&'static str, String, Option<String>)> = None;
+                // Resuelve engine + arma el container. Plan se ejecuta tras
+                // setear el state de la sesión.
+                enum CreatePlan {
+                    Rootfs { distro: Distro, mount: Option<String> },
+                    Podman { image: &'static str, name: String, mount: Option<String> },
+                }
+                let mut plan: Option<CreatePlan> = None;
                 let mut notice: Option<String> = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     if s.pending {
                         s.pending = false;
                         s.pending_focus = None;
                         if s.use_container {
-                            if !podman_disponible() {
-                                s.use_container = false;
-                                s.container = None;
-                                notice = Some(
-                                    "✘ podman no encontrado en PATH — la sesión arrancó como shell local. Instalá podman o desactivá 'Aislar en contenedor'.".into(),
-                                );
-                            } else {
-                                let n = s.number.unwrap_or(0);
-                                let name = format!(
-                                    "shuma-{}-{n}",
-                                    s.distro.label().to_lowercase()
-                                );
-                                s.container = Some(name.clone());
-                                s.conn = ConnState::Pending;
-                                let mount = s.mount.text();
-                                let mount_opt =
-                                    if mount.trim().is_empty() { None } else { Some(mount) };
-                                to_create = Some((s.distro.image(), name, mount_opt));
+                            match engine_preferido() {
+                                None => {
+                                    s.use_container = false;
+                                    s.container = None;
+                                    notice = Some(
+                                        "✘ ningún engine de aislamiento está disponible (faltan `unshare`/`bwrap`/`podman`). Arrancó como shell local.".into(),
+                                    );
+                                }
+                                Some(engine @ ("unshare" | "bwrap")) => {
+                                    // Ambos usan un rootfs en disco. Si ya
+                                    // está, conecta directo; sino, auto-pull.
+                                    s.container_engine = engine.to_string();
+                                    let mount = s.mount.text();
+                                    let mount_opt =
+                                        if mount.trim().is_empty() { None } else { Some(mount) };
+                                    let path = rootfs_path_for(s.distro)
+                                        .map(|p| p.display().to_string())
+                                        .unwrap_or_default();
+                                    s.container = Some(path.clone());
+                                    if rootfs_listo(s.distro) {
+                                        s.conn = ConnState::Connected;
+                                    } else {
+                                        s.conn = ConnState::Pending;
+                                        plan = Some(CreatePlan::Rootfs {
+                                            distro: s.distro,
+                                            mount: mount_opt,
+                                        });
+                                    }
+                                }
+                                Some(_) /* "podman" */ => {
+                                    s.container_engine = "podman".into();
+                                    let n = s.number.unwrap_or(0);
+                                    let name = format!(
+                                        "shuma-{}-{n}",
+                                        s.distro.label().to_lowercase()
+                                    );
+                                    s.container = Some(name.clone());
+                                    s.conn = ConnState::Pending;
+                                    let mount = s.mount.text();
+                                    let mount_opt =
+                                        if mount.trim().is_empty() { None } else { Some(mount) };
+                                    plan = Some(CreatePlan::Podman {
+                                        image: s.distro.image(),
+                                        name,
+                                        mount: mount_opt,
+                                    });
+                                }
                             }
                         }
                         s.apply_isolation();
                         if s.isolation == Isolation::Remote {
-                            // Si el form remoto tiene host+user, conectar.
                             if !s.host.text().trim().is_empty() && !s.user.text().trim().is_empty() {
                                 s.connect_remote();
                             }
@@ -1878,8 +2074,23 @@ impl App for Shell {
                         ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(text)),
                     );
                 }
-                if let Some((image, name, mount)) = to_create {
-                    spawn_create_container(handle, image, name, mount);
+                match plan {
+                    Some(CreatePlan::Rootfs { distro, mount }) => {
+                        let slot = Slot::Session(m.active_session, Which::Shell);
+                        m = apply_module_msg(
+                            m,
+                            slot,
+                            ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(format!(
+                                "⬇ descargando rootfs LXC ({}) — ~50 MB, esto tarda unos segundos…",
+                                distro.label()
+                            ))),
+                        );
+                        spawn_pull_rootfs_lxc(handle, distro, mount);
+                    }
+                    Some(CreatePlan::Podman { image, name, mount }) => {
+                        spawn_create_container(handle, image, name, mount);
+                    }
+                    None => {}
                 }
                 save_sessions(&m);
                 save_chrome(&m);

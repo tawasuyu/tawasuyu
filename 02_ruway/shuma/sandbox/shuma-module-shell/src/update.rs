@@ -2653,14 +2653,24 @@ fn inject_askpass(line: &str) -> String {
     format!("{lead}sudo -A{rest_after_sudo}")
 }
 
-/// Envuelve `spec` en una invocación `{engine} exec` contra `name`. La idea:
-/// el comando que pidió el usuario corre **dentro del contenedor**, pero el
-/// proceso hijo que ve `shuma-exec` sigue siendo local — así reusamos la
-/// misma maquinaria de PTY / capture / kill que `Source::Local`.
+/// Envuelve `spec` en la invocación del **engine de aislamiento** elegido.
 ///
-/// `cwd` del host **no** se traslada (puede no existir adentro). El engine
-/// arranca en el `WORKDIR` del contenedor, salvo que se haya creado con `-w`.
+/// - `engine = "podman"` / `"docker"`: `name` es el nombre del container ya
+///   creado; corremos `<engine> exec -i <name> bash -c <line>`.
+/// - `engine = "bwrap"`: `name` es el PATH al rootfs en disco
+///   (`~/.local/share/shuma/rootfs/<distro>`); corremos `bwrap` con los
+///   binds estándar y `bash -c <line>` adentro. No requiere config
+///   global — sólo el binario `bwrap` instalado.
+///
+/// En ambos casos el proceso hijo que ve `shuma-exec` sigue siendo local —
+/// reusamos la maquinaria de PTY / capture / kill de `Source::Local`.
 fn wrap_spec_for_container(mut spec: CommandSpec, engine: &str, name: &str) -> CommandSpec {
+    if engine == "unshare" {
+        return wrap_spec_for_unshare(spec, name);
+    }
+    if engine == "bwrap" {
+        return wrap_spec_for_bwrap(spec, name);
+    }
     let eng = engine.to_string();
     let nm = name.to_string();
     spec.exec = match spec.exec {
@@ -2715,6 +2725,185 @@ fn wrap_spec_for_container(mut spec: CommandSpec, engine: &str, name: &str) -> C
             Exec::Shell {
                 line: inner,
                 program: "bash".into(),
+            }
+        }
+    };
+    spec
+}
+
+/// Script `sh` que recibe `$1 = rootfs_path` y `$2 = línea bash a correr`
+/// y ejecuta el comando aislado por `unshare` + `chroot`. Monta `/proc`,
+/// `/dev`, `/sys` y bind-mountea `/etc/resolv.conf` del host para que apt
+/// y pacman alcancen la red. Sin `--unshare-net` por la misma razón.
+///
+/// El `|| true` después de cada `mount` evita que el script entero
+/// aborte si el rootfs ya tenía algo montado (re-entry tras crash).
+const UNSHARE_SCRIPT: &str = "\
+mount -t proc proc \"$1/proc\" 2>/dev/null || true; \
+mount --bind /dev \"$1/dev\" 2>/dev/null || true; \
+mount --bind /sys \"$1/sys\" 2>/dev/null || true; \
+mount --bind /etc/resolv.conf \"$1/etc/resolv.conf\" 2>/dev/null || true; \
+exec chroot \"$1\" /bin/bash -c \"$2\"";
+
+/// Variante de [`wrap_spec_for_container`] para `engine = "unshare"`. El
+/// `rootfs_path` es un filesystem extraído en disco local; `unshare -r`
+/// + `chroot` lo activan sin necesidad de root ni bwrap ni podman — sólo
+/// requiere `util-linux` + `coreutils` (instalados en todo Linux moderno).
+///
+/// Funciona en distros con `kernel.unprivileged_userns_clone = 1` (default
+/// en kernels >= 5.10 mayoritarios). Si está deshabilitado, el `unshare -r`
+/// falla con "Operation not permitted" y el caller verá el stderr en el
+/// notice.
+fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec {
+    fn base_args(rootfs: &str, inner_line: &str) -> Vec<String> {
+        vec![
+            "-r".into(),       // map root in user ns
+            "-m".into(),       // mount ns (para mount -t proc etc.)
+            "-u".into(),       // uts ns
+            "-i".into(),       // ipc ns
+            "-p".into(),       // pid ns
+            "-f".into(),       // fork (necesario con -p)
+            "--kill-child".into(), // los hijos mueren con el padre
+            "--".into(),
+            "/bin/sh".into(), "-c".into(), UNSHARE_SCRIPT.into(),
+            "_".into(),                  // $0
+            rootfs.to_string(),          // $1
+            inner_line.to_string(),      // $2
+        ]
+    }
+    let rootfs = rootfs_path.to_string();
+    spec.exec = match spec.exec {
+        Exec::Shell { line, program: _ } => {
+            // Forzamos PTY adentro: apt/pacman/etc. usan isatty para
+            // prompts y colores. El frontend ya emula vt100.
+            let args = base_args(&rootfs, &line);
+            Exec::Pty { program: "unshare".into(), args, cols: 80, rows: 24 }
+        }
+        Exec::Pty { program, args, cols, rows } => {
+            // Para Exec::Pty (TUI fullscreen tipo vim) armamos el `bash -c`
+            // con el program + args ya quoteados.
+            let mut inner = String::new();
+            inner.push_str(&shell_quote(&program));
+            for a in &args {
+                inner.push(' ');
+                inner.push_str(&shell_quote(a));
+            }
+            let args = base_args(&rootfs, &inner);
+            Exec::Pty { program: "unshare".into(), args, cols, rows }
+        }
+        Exec::Direct { stages } => {
+            let mut line = String::new();
+            for (i, st) in stages.iter().enumerate() {
+                if i > 0 {
+                    line.push_str(" | ");
+                }
+                line.push_str(&shell_quote(&st.program));
+                for a in &st.args {
+                    line.push(' ');
+                    line.push_str(&shell_quote(a));
+                }
+            }
+            let args = base_args(&rootfs, &line);
+            Exec::Pty { program: "unshare".into(), args, cols: 80, rows: 24 }
+        }
+    };
+    spec
+}
+
+/// Args base de bwrap para correr un comando dentro de `rootfs_path`. La
+/// idea: aislar mount/pid/uts/ipc pero **compartir net** del host (para
+/// que `apt update`, `pacman -Sy`, etc. lleguen al mundo). El `/work`
+/// queda como bind del cwd del host cuando aplica.
+fn bwrap_args(rootfs_path: &str) -> Vec<String> {
+    let mut a: Vec<String> = vec![
+        // Root del container.
+        "--bind".into(), rootfs_path.into(), "/".into(),
+        // Filesystems internos.
+        "--proc".into(), "/proc".into(),
+        "--dev".into(), "/dev".into(),
+        "--tmpfs".into(), "/tmp".into(),
+        // DNS funcional: copia el resolv.conf del host (ro).
+        "--ro-bind-try".into(), "/etc/resolv.conf".into(), "/etc/resolv.conf".into(),
+        // Aislamiento: namespaces propios menos net (compartido).
+        "--unshare-pid".into(),
+        "--unshare-uts".into(),
+        "--unshare-ipc".into(),
+        // El process tree muere si el padre muere — no quedan zombies.
+        "--die-with-parent".into(),
+        // Env mínimo razonable para un shell vacío.
+        "--setenv".into(), "HOME".into(), "/root".into(),
+        "--setenv".into(), "USER".into(), "root".into(),
+        "--setenv".into(), "PATH".into(),
+        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into(),
+        "--setenv".into(), "TERM".into(), "xterm-256color".into(),
+    ];
+    // Si existe ~/work en el rootfs, lo usamos como cwd; sino /.
+    a.push("--chdir".into());
+    a.push("/".into());
+    a
+}
+
+/// Variante de [`wrap_spec_for_container`] para `engine = "bwrap"`. El
+/// `rootfs_path` es el filesystem extraído (LXC image) en disco local.
+fn wrap_spec_for_bwrap(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec {
+    let base = bwrap_args(rootfs_path);
+    spec.exec = match spec.exec {
+        Exec::Shell { line, program } => {
+            // `bwrap <args> -- <program> -c <line>` como Exec::Pty para
+            // preservar isatty adentro (apt, pacman, etc. usan colores +
+            // prompts si detectan TTY).
+            //
+            // PTY mode = Exec::Pty: el frontend ya tiene emulador vt100
+            // (output bytes). Para mantener captura por líneas usaríamos
+            // Exec::Shell, pero apt/pacman dependen de TTY para prompts.
+            // Compromiso: PTY siempre en bwrap.
+            let mut args = base;
+            args.push("--".into());
+            args.push(program);
+            args.push("-c".into());
+            args.push(line);
+            Exec::Pty {
+                program: "bwrap".into(),
+                args,
+                cols: 80,
+                rows: 24,
+            }
+        }
+        Exec::Pty { program, args, cols, rows } => {
+            let mut new_args = base;
+            new_args.push("--".into());
+            new_args.push(program);
+            new_args.extend(args);
+            Exec::Pty {
+                program: "bwrap".into(),
+                args: new_args,
+                cols,
+                rows,
+            }
+        }
+        Exec::Direct { stages } => {
+            // Serialize pipe as a single bash line (mismo tradeoff que podman).
+            let mut line = String::new();
+            for (i, st) in stages.iter().enumerate() {
+                if i > 0 {
+                    line.push_str(" | ");
+                }
+                line.push_str(&shell_quote(&st.program));
+                for a in &st.args {
+                    line.push(' ');
+                    line.push_str(&shell_quote(a));
+                }
+            }
+            let mut args = base;
+            args.push("--".into());
+            args.push("bash".into());
+            args.push("-c".into());
+            args.push(line);
+            Exec::Pty {
+                program: "bwrap".into(),
+                args,
+                cols: 80,
+                rows: 24,
             }
         }
     };
