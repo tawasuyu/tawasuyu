@@ -584,7 +584,10 @@ pub(crate) fn tui_panel<HostMsg: Clone + 'static>(
 ) -> View<HostMsg> {
     // Snapshot + skin en un solo lock; la closure de paint debe ser
     // `Send + Sync`, así que no captura el Mutex.
-    let (snapshot, skin) = match state.running.as_ref().and_then(|arc| arc.lock().ok()) {
+    // try_lock por la misma razón que `is_tui_active`: si el lector del PTY
+    // está dentro del mutex en este instante, devolvemos snapshot vacío y el
+    // panel cae al frame anterior — preferible a pasmar la pantalla.
+    let (snapshot, skin) = match state.running.as_ref().and_then(|arc| arc.try_lock().ok()) {
         Some(g) => {
             let skin = g.tui.as_ref().map(|t| t.skin).unwrap_or(AppSkin::Generic);
             (capture_tui(&g), skin)
@@ -1420,9 +1423,14 @@ pub(crate) fn shell_header<HostMsg: Clone + 'static>(
     theme: &Theme,
 ) -> View<HostMsg> {
     let status = if let Some(arc) = state.running.as_ref() {
-        let cmd = match arc.lock() {
+        // try_lock: si el lector del PTY está dentro del mutex (drenando una
+        // ráfaga grande de output), no bloqueamos el render — el header pinta
+        // un placeholder vivo (`· ⟳ …`) y el comando real reaparece en el
+        // siguiente frame. Antes el lock duro pasmaba la pantalla en negro
+        // mientras el PTY drenaba.
+        let cmd = match arc.try_lock() {
             Ok(g) => g.command.clone(),
-            Err(p) => p.into_inner().command.clone(),
+            Err(_) => "…".to_string(),
         };
         let queued = state.queue.len();
         if queued > 0 {

@@ -1176,13 +1176,19 @@ pub(crate) fn handle_find_key(s: State, ev: &KeyEvent) -> State {
 /// `true` si hay un `ActiveRun` con PTY vivo. Las teclas van al stdin del
 /// PTY mientras esto sea cierto (el programa es interactivo, esté o no en
 /// pantalla completa). El **render** en cambio sigue a [`is_tui_fullscreen`].
+///
+/// **No-blocking**: usa `try_lock`. Si el lector del PTY tiene el mutex en
+/// este instante (drenando una ráfaga grande de output, p. ej. `ls -alR`),
+/// volvemos `false` antes que pasmar el thread de pintura: pintar `false`
+/// un frame de más es indistinguible de "todavía no llegó el dato", pero
+/// bloquear el render durante una ráfaga deja la pantalla negra.
 pub(crate) fn is_tui_active(s: &State) -> bool {
     let Some(arc) = s.running.as_ref() else {
         return false;
     };
-    let g = match arc.lock() {
+    let g = match arc.try_lock() {
         Ok(g) => g,
-        Err(p) => p.into_inner(),
+        Err(_) => return false,
     };
     g.tui.is_some()
 }
@@ -1191,13 +1197,17 @@ pub(crate) fn is_tui_active(s: &State) -> bool {
 /// señal dura de una app TUI de pantalla completa (vim, htop, less, man…).
 /// Es lo que decide pintar el panel full-screen (grid/vim) en vez de las
 /// líneas. Al salir del alt-screen (`ESC[?1049l`) vuelve a modo líneas.
+///
+/// Misma política `try_lock` que [`is_tui_active`]: ante contienda, `false`
+/// — el render cae al pane de cards (que sí usa data ya volcada a
+/// `state.output`) y nunca se pasma esperando al lector del PTY.
 pub(crate) fn is_tui_fullscreen(s: &State) -> bool {
     let Some(arc) = s.running.as_ref() else {
         return false;
     };
-    let g = match arc.lock() {
+    let g = match arc.try_lock() {
         Ok(g) => g,
-        Err(p) => p.into_inner(),
+        Err(_) => return false,
     };
     g.tui
         .as_ref()
@@ -3037,8 +3047,15 @@ pub(crate) fn drain_run(mut s: State) -> State {
                 tui.set_size(rows, cols);
             }
         }
-        let events = guard.handle.try_events();
-        for ev in events {
+        // Limitamos los eventos por tick. Un `ls -alR /` puede escupir miles
+        // de líneas en un solo flush; procesar todo dentro del lock de
+        // `active_arc` pasma la pantalla porque el render llama `try_lock`
+        // en cada frame. Con un tope, el lock se libera entre Ticks y la UI
+        // se actualiza sin esperar al final del comando. Los restantes
+        // QUEDAN EN LA COLA del backend para el próximo Tick (no se pierden).
+        const DRAIN_BUDGET: usize = 512;
+        let events = guard.handle.try_events_limit(DRAIN_BUDGET);
+        for ev in events.into_iter() {
             match ev {
                 RunEvent::Stdout(line) => {
                     // +1 por el `\n` implícito de cada línea drenada.
@@ -3132,7 +3149,10 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
                 Err(p) => p.into_inner(),
             };
             job_block = guard.block;
-            for ev in guard.handle.try_events() {
+            // Mismo límite que `drain_run`: ráfagas grandes de un job background
+            // no pasman la pantalla; los eventos restantes se procesan en el
+            // próximo Tick.
+            for ev in guard.handle.try_events_limit(512) {
                 match ev {
                     RunEvent::Stdout(line) => s.push_in_block(
                         job_block,

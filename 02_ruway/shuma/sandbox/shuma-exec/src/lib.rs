@@ -347,8 +347,15 @@ impl RunHandle {
 
     /// Drena todos los eventos disponibles ahora mismo, sin bloquear.
     pub fn try_events(&mut self) -> Vec<RunEvent> {
+        self.try_events_limit(usize::MAX)
+    }
+
+    /// Drena hasta `max` eventos del receiver, dejando el resto en cola para
+    /// el próximo llamado. Pensado para ráfagas grandes (`ls -alR`): permite
+    /// liberar el lock del run entre tandas para que el render no se pasme.
+    pub fn try_events_limit(&mut self, max: usize) -> Vec<RunEvent> {
         let mut out = Vec::new();
-        loop {
+        for _ in 0..max {
             match self.rx.try_recv() {
                 Ok(ev) => {
                     if ev.is_terminal() {

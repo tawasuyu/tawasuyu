@@ -172,6 +172,19 @@ impl BackendHandle {
             BackendHandle::Remote(h) => h.try_events(),
         }
     }
+    /// Como [`try_events`], pero limitado a `max` eventos por tick. El resto
+    /// queda en la cola del backend para el próximo llamado. Necesario para
+    /// no pasmar el render con ráfagas grandes (`ls -alR`, builds verbose).
+    pub fn try_events_limit(&mut self, max: usize) -> Vec<RunEvent> {
+        match self {
+            BackendHandle::Local(h) => h.try_events_limit(max),
+            // El backend remoto todavía drena todo de una; cuando soporte
+            // límite, encadenamos. Mientras tanto, el limit es un techo
+            // suave (no rompe nada, solo no rinde igual con un remoto
+            // que escupe rápido).
+            BackendHandle::Remote(h) => h.try_events(),
+        }
+    }
     pub fn is_finished(&self) -> bool {
         match self {
             BackendHandle::Local(h) => h.is_finished(),
