@@ -245,17 +245,18 @@ cruza a "lista para mostrar".
 
 ## Nivel 5 — Documentación (🤖 borrador, 🧑 voz)
 
-- **5.1 — READMEs faltantes** (PRIMERO dentro de docs): `02_ruway/cards`,
-  `02_ruway/tullpu`, `03_ukupacha/sandokan`, `shared/launcher-llimphi`,
-  `shared/sandokan`. Todos los demás dominios ya tienen.
-- **5.2 — README raíz orientado a *visitante público*.** Hoy `LEEME.md`/`PLAN.md`
-  son notas internas. Falta la puerta de entrada: qué es tawasuyu, cómo se
-  compila, qué se puede correr en 5 minutos (los `examples/*_demo.rs`).
-- **5.3 — `CONTRIBUTING.md` + convenciones** (commits en español, regla un
-  dominio = un crate, cuadrantes). Mucho ya vive en `CLAUDE.md` → destilar la
-  parte pública.
-- **5.4 — Mapa de demos ejecutables.** Una tabla "querés ver X → corré este
-  comando". Es lo que convierte 454 crates en algo navegable para un extraño.
+- **5.1 — READMEs faltantes** ✅ (2026-06-09): `cards`, `tullpu`,
+  `03_ukupacha/sandokan`, `shared/sandokan` (en+es), `launcher-llimphi`
+  (en; es ya existía), `media` (en; el es pasó a LEEME.md). Todos los
+  dominios tienen ahora README.md (en) + LEEME.md (es).
+- **5.2 — README raíz orientado a *visitante público*.** ✅ (2026-06-09):
+  `README.md` (en) + `LEEME.md` (es) con divulgación progresiva; el LEEME
+  interno viejo quedó absorbido.
+- **5.3 — `CONTRIBUTING.md`** ✅ (2026-06-09): bilingüe en un archivo,
+  destilado de CLAUDE.md (reglas duras, setup, tests, licencias, sin CLA).
+- **5.4 — Mapa de demos ejecutables.** ✅ vive como tabla "querés ver X →
+  corré esto" dentro del README/LEEME raíz (comandos verificados contra
+  el árbol).
 - **5.5 — Cerrar SDDs pendientes** sólo de los dominios que se publican.
 
 ---
