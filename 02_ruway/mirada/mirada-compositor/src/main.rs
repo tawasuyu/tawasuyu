@@ -285,6 +285,13 @@ struct ManagedWindow {
     /// `true` si duerme tras una capa de zoom: no se le envían frame
     /// callbacks (el cliente queda inerte) además de quedar oculta.
     suspended: bool,
+    /// Divisor de frames: se le envía 1 de cada `frame_divisor` frame callbacks
+    /// (1 = pleno ritmo). El throttle de fondo del Cerebro lo sube para las
+    /// ventanas visibles sin foco.
+    frame_divisor: u32,
+    /// Contador de vblanks para el throttle: avanza cada frame; el callback se
+    /// envía sólo cuando `frame_tick % frame_divisor == 0`.
+    frame_tick: u32,
     /// Título del cliente — para pintar la etiqueta (barra de título).
     /// Se actualiza en `title_changed`.
     title: String,
@@ -779,7 +786,7 @@ impl App {
     /// Ejecuta una operación concreta sobre las superficies reales.
     fn exec_op(&mut self, op: BodyOp) {
         match op {
-            BodyOp::Configure { id, rect, visible, floating, fullscreen, suspended } => {
+            BodyOp::Configure { id, rect, visible, floating, fullscreen, suspended, frame_divisor } => {
                 // La barra de título reserva una franja arriba: la superficie
                 // del cliente se configura más baja por `tb` (no-shell, no
                 // fullscreen). `w.size` guarda la celda entera; `render_loc`
@@ -792,6 +799,7 @@ impl App {
                     w.floating = floating;
                     w.fullscreen = fullscreen;
                     w.suspended = suspended;
+                    w.frame_divisor = frame_divisor.max(1);
                     let tb = if w.is_shell || fullscreen { 0 } else { tbh };
                     w.toplevel.with_pending_state(|s| {
                         s.size = Some((rect.w.max(1), (rect.h - tb).max(1)).into());
@@ -895,6 +903,8 @@ impl App {
             is_shell,
             fullscreen: false,
             suspended: false,
+            frame_divisor: 1,
+            frame_tick: 0,
             title: title.clone(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
@@ -2546,10 +2556,16 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
 
         // 4 · Callbacks de frame + clientes nuevos + flush.
         let time = start.elapsed().as_millis() as u32;
-        for w in &state.windows {
+        for w in &mut state.windows {
+            w.frame_tick = w.frame_tick.wrapping_add(1);
             // Las capas dormidas (zoom-Z) no reciben frame callbacks: el
             // cliente bloquea su bucle y deja de pintar a ciegas.
             if w.suspended {
+                continue;
+            }
+            // Throttle de fondo: 1 de cada `frame_divisor` vblanks.
+            let div = w.frame_divisor.max(1);
+            if div > 1 && w.frame_tick % div != 0 {
                 continue;
             }
             send_frames_surface_tree(&w.surface, time);

@@ -162,11 +162,25 @@ pub struct Config {
     /// espacial. `false` = sólo el rectángulo (mosaicos más limpios).
     #[serde(default = "default_true")]
     pub overview_show_titles: bool,
+    /// Divisor de frames de las ventanas **de fondo** (visibles pero sin foco,
+    /// teseladas): el Cuerpo les espacia los `wl_surface.frame` callbacks a 1 de
+    /// cada N vblanks, así dejan de quemar GPU pintando a 60 Hz detrás del foco.
+    /// `1` (default) = throttle apagado (todas a pleno ritmo). `2` = mitad de
+    /// ritmo, `4` = un cuarto… La enfocada, las flotantes y la de pantalla
+    /// completa siempre van a pleno ritmo; las dormidas (zoom-Z) ya tienen los
+    /// frames cortados del todo.
+    #[serde(default = "default_one")]
+    pub background_frame_divisor: u32,
 }
 
 /// Default de los toggles que arrancan en `true` (serde necesita una fn).
 fn default_true() -> bool {
     true
+}
+
+/// Default de los divisores que arrancan neutros (1 = sin efecto).
+fn default_one() -> u32 {
+    1
 }
 
 /// Default de [`Config::overview_anim_ms`]: un vuelo de cámara ágil.
@@ -322,6 +336,7 @@ impl Default for Config {
             overview_columns: 0,
             overview_anim_ms: 260,
             overview_show_titles: true,
+            background_frame_divisor: 1,
         }
     }
 }

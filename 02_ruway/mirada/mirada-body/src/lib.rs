@@ -36,6 +36,9 @@ pub struct Surface {
     /// `true` si duerme tras una capa de zoom: oculta y con los frame
     /// callbacks suspendidos (el cliente queda inerte).
     pub suspended: bool,
+    /// Divisor de frames: 1 de cada N frame callbacks (1 = pleno ritmo). El
+    /// backend lo consulta para espaciar el pintado de las ventanas de fondo.
+    pub frame_divisor: u32,
 }
 
 impl Surface {
@@ -49,6 +52,7 @@ impl Surface {
             floating: false,
             fullscreen: false,
             suspended: false,
+            frame_divisor: 1,
         }
     }
 }
@@ -68,6 +72,9 @@ pub enum BodyOp {
         /// `true` si la superficie duerme: el backend no le envía frame
         /// callbacks (queda inerte) además de ocultarla.
         suspended: bool,
+        /// Divisor de frames: el backend le envía 1 de cada N frame callbacks
+        /// (1 = pleno ritmo). Throttle de las ventanas de fondo.
+        frame_divisor: u32,
     },
     /// Da el foco del teclado a una superficie.
     Focus(WindowId),
@@ -131,12 +138,14 @@ impl BodyState {
                             || s.floating != p.floating
                             || s.fullscreen != p.fullscreen
                             || s.suspended != p.suspended
+                            || s.frame_divisor != p.frame_divisor
                         {
                             s.geometry = Some(p.rect);
                             s.visible = p.visible;
                             s.floating = p.floating;
                             s.fullscreen = p.fullscreen;
                             s.suspended = p.suspended;
+                            s.frame_divisor = p.frame_divisor;
                             ops.push(BodyOp::Configure {
                                 id: p.id,
                                 rect: p.rect,
@@ -144,6 +153,7 @@ impl BodyState {
                                 floating: p.floating,
                                 fullscreen: p.fullscreen,
                                 suspended: p.suspended,
+                                frame_divisor: p.frame_divisor,
                             });
                         }
                     }
@@ -156,6 +166,9 @@ impl BodyState {
                         // Oculta por omisión (otro escritorio, scratchpad…): no
                         // es el sueño dirigido del zoom.
                         s.suspended = false;
+                        // Oculta: vuelve a pleno ritmo (el throttle es de fondo
+                        // *visible*; lo oculto no pinta).
+                        s.frame_divisor = 1;
                         let rect = s.geometry.unwrap_or(Rect::new(0, 0, 0, 0));
                         ops.push(BodyOp::Configure {
                             id: *id,
@@ -164,6 +177,7 @@ impl BodyState {
                             floating: s.floating,
                             fullscreen: s.fullscreen,
                             suspended: false,
+                            frame_divisor: 1,
                         });
                     }
                 }
@@ -332,6 +346,7 @@ mod tests {
             floating: false,
             fullscreen: false,
             suspended: false,
+            frame_divisor: 1,
         }
     }
 
@@ -396,6 +411,7 @@ mod tests {
             floating: false,
             fullscreen: false,
             suspended: false,
+            frame_divisor: 1,
         }));
         assert!(!b.surface(2).unwrap().visible);
     }

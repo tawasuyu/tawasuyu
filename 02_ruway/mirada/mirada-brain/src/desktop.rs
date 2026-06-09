@@ -1093,6 +1093,19 @@ impl Desktop {
         for p in &mut all {
             p.focused = Some(p.id) == global_focus;
         }
+        // Throttle de fondo: las ventanas visibles pero sin foco (y teseladas:
+        // ni flotantes ni fullscreen, que suelen ser el vídeo/PiP activo) pintan
+        // a 1 de cada N vblanks, en vez de quemar GPU a 60 Hz detrás del foco.
+        // Apagado por defecto (divisor 1). Las dormidas ya tienen el frame
+        // cortado del todo, así que no se tocan.
+        let bg_divisor = self.config.background_frame_divisor.max(1);
+        if bg_divisor > 1 {
+            for p in &mut all {
+                if p.visible && !p.focused && !p.floating && !p.fullscreen && !p.suspended {
+                    p.frame_divisor = bg_divisor;
+                }
+            }
+        }
         vec![BrainCommand::Place(all)]
     }
 
@@ -2130,6 +2143,35 @@ mod tests {
             BrainCommand::SetCapabilities(p) => assert!(!p.clipboard_permitido("/usr/bin/wl-paste")),
             other => panic!("se esperaba SetCapabilities, no {other:?}"),
         }
+    }
+
+    #[test]
+    fn background_throttle_spaces_unfocused_visible_windows() {
+        use crate::config::Config;
+        let mut d = desktop_with_screen();
+        d.set_config(Config::from_ron("( background_frame_divisor: 3 )").unwrap());
+        open(&mut d, 1);
+        open(&mut d, 2); // MasterStack: ambas visibles (maestra + pila)
+        let cmds = d.apply(DesktopAction::FocusWindow(1));
+        let p = places(&cmds);
+        // La enfocada va a pleno ritmo.
+        let f = p.iter().find(|p| p.id == 1).unwrap();
+        assert!(f.focused);
+        assert_eq!(f.frame_divisor, 1, "la enfocada no se throttlea");
+        // La de fondo (visible, sin foco) se espacia al divisor configurado.
+        let bg = p.iter().find(|p| p.id == 2).unwrap();
+        assert!(bg.visible && !bg.focused);
+        assert_eq!(bg.frame_divisor, 3, "el fondo visible se throttlea");
+    }
+
+    #[test]
+    fn background_throttle_off_by_default_keeps_full_rate() {
+        let mut d = desktop_with_screen();
+        open(&mut d, 1);
+        open(&mut d, 2);
+        let cmds = d.apply(DesktopAction::FocusWindow(1));
+        // Sin configurar (divisor 1), nadie se throttlea.
+        assert!(places(&cmds).iter().all(|p| p.frame_divisor == 1));
     }
 
     #[test]

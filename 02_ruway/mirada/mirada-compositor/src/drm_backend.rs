@@ -1051,9 +1051,15 @@ impl DrmState {
     /// `render`, no por salida.
     fn send_frames_to_clients(&mut self) {
         let time = self.start.elapsed().as_millis() as u32;
-        for w in &self.app.windows {
+        for w in &mut self.app.windows {
+            w.frame_tick = w.frame_tick.wrapping_add(1);
             // Las capas dormidas (zoom-Z) no reciben frame callbacks.
             if w.suspended {
+                continue;
+            }
+            // Throttle de fondo: 1 de cada `frame_divisor` vblanks.
+            let div = w.frame_divisor.max(1);
+            if div > 1 && w.frame_tick % div != 0 {
                 continue;
             }
             send_frames_surface_tree(&w.surface, time);

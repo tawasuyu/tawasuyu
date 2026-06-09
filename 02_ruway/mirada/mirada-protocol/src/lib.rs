@@ -56,6 +56,12 @@ pub struct WindowPlacement {
     /// ciegas. El `rect` es su hogar del nivel superior, al que vuelve al salir
     /// del zoom — no se redimensiona mientras duerme.
     pub suspended: bool,
+    /// Divisor de frames: el Cuerpo le envía 1 de cada N `wl_surface.frame`
+    /// callbacks, espaciando su ritmo de pintado. `1` = pleno ritmo (lo normal);
+    /// `>1` = throttle de fondo (ver [`Config::background_frame_divisor`]). A
+    /// diferencia de `suspended` (corte total para una ventana oculta), aquí la
+    /// ventana **sigue visible y pintando**, sólo que más lento.
+    pub frame_divisor: u32,
 }
 
 /// Parámetros de decoración de ventana que el Cerebro fija en el Cuerpo.
@@ -304,6 +310,9 @@ pub fn placements(ws: &Workspace, screen: Rect) -> Vec<WindowPlacement> {
                 floating,
                 fullscreen: is_fs,
                 suspended: false,
+                // Throttle apagado por defecto; la política de fondo (si la hay)
+                // la aplica el Cerebro en `relayout`, que conoce el foco global.
+                frame_divisor: 1,
             }
         })
         .collect();
@@ -317,6 +326,8 @@ pub fn placements(ws: &Workspace, screen: Rect) -> Vec<WindowPlacement> {
             floating: false,
             fullscreen: false,
             suspended: true,
+            // Dormida: los frames ya están cortados del todo; el divisor da igual.
+            frame_divisor: 1,
         });
     }
     out
@@ -348,6 +359,7 @@ mod tests {
             floating: false,
             fullscreen: false,
             suspended: false,
+            frame_divisor: 1,
         }]);
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
