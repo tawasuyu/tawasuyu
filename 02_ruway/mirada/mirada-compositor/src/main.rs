@@ -280,6 +280,9 @@ struct ManagedWindow {
     is_shell: bool,
     /// `true` si está a pantalla completa — no lleva barra de título ni marco.
     fullscreen: bool,
+    /// `true` si duerme tras una capa de zoom: no se le envían frame
+    /// callbacks (el cliente queda inerte) además de quedar oculta.
+    suspended: bool,
     /// Título del cliente — para pintar la etiqueta (barra de título).
     /// Se actualiza en `title_changed`.
     title: String,
@@ -768,7 +771,7 @@ impl App {
     /// Ejecuta una operación concreta sobre las superficies reales.
     fn exec_op(&mut self, op: BodyOp) {
         match op {
-            BodyOp::Configure { id, rect, visible, floating, fullscreen } => {
+            BodyOp::Configure { id, rect, visible, floating, fullscreen, suspended } => {
                 // La barra de título reserva una franja arriba: la superficie
                 // del cliente se configura más baja por `tb` (no-shell, no
                 // fullscreen). `w.size` guarda la celda entera; `render_loc`
@@ -780,6 +783,7 @@ impl App {
                     w.visible = visible;
                     w.floating = floating;
                     w.fullscreen = fullscreen;
+                    w.suspended = suspended;
                     let tb = if w.is_shell || fullscreen { 0 } else { tbh };
                     w.toplevel.with_pending_state(|s| {
                         s.size = Some((rect.w.max(1), (rect.h - tb).max(1)).into());
@@ -875,6 +879,7 @@ impl App {
             focused: false,
             is_shell,
             fullscreen: false,
+            suspended: false,
             title: title.clone(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
@@ -2427,6 +2432,11 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
         // 4 · Callbacks de frame + clientes nuevos + flush.
         let time = start.elapsed().as_millis() as u32;
         for w in &state.windows {
+            // Las capas dormidas (zoom-Z) no reciben frame callbacks: el
+            // cliente bloquea su bucle y deja de pintar a ciegas.
+            if w.suspended {
+                continue;
+            }
             send_frames_surface_tree(&w.surface, time);
         }
         if let Some(output) = state.output.clone() {

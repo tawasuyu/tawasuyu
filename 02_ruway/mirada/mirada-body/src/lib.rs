@@ -33,6 +33,9 @@ pub struct Surface {
     pub floating: bool,
     /// `true` si está en pantalla completa.
     pub fullscreen: bool,
+    /// `true` si duerme tras una capa de zoom: oculta y con los frame
+    /// callbacks suspendidos (el cliente queda inerte).
+    pub suspended: bool,
 }
 
 impl Surface {
@@ -45,6 +48,7 @@ impl Surface {
             focused: false,
             floating: false,
             fullscreen: false,
+            suspended: false,
         }
     }
 }
@@ -61,6 +65,9 @@ pub enum BodyOp {
         visible: bool,
         floating: bool,
         fullscreen: bool,
+        /// `true` si la superficie duerme: el backend no le envía frame
+        /// callbacks (queda inerte) además de ocultarla.
+        suspended: bool,
     },
     /// Da el foco del teclado a una superficie.
     Focus(WindowId),
@@ -119,17 +126,20 @@ impl BodyState {
                             || s.visible != p.visible
                             || s.floating != p.floating
                             || s.fullscreen != p.fullscreen
+                            || s.suspended != p.suspended
                         {
                             s.geometry = Some(p.rect);
                             s.visible = p.visible;
                             s.floating = p.floating;
                             s.fullscreen = p.fullscreen;
+                            s.suspended = p.suspended;
                             ops.push(BodyOp::Configure {
                                 id: p.id,
                                 rect: p.rect,
                                 visible: p.visible,
                                 floating: p.floating,
                                 fullscreen: p.fullscreen,
+                                suspended: p.suspended,
                             });
                         }
                     }
@@ -139,6 +149,9 @@ impl BodyState {
                 for (id, s) in &mut self.surfaces {
                     if !listed.contains(id) && s.visible {
                         s.visible = false;
+                        // Oculta por omisión (otro escritorio, scratchpad…): no
+                        // es el sueño dirigido del zoom.
+                        s.suspended = false;
                         let rect = s.geometry.unwrap_or(Rect::new(0, 0, 0, 0));
                         ops.push(BodyOp::Configure {
                             id: *id,
@@ -146,6 +159,7 @@ impl BodyState {
                             visible: false,
                             floating: s.floating,
                             fullscreen: s.fullscreen,
+                            suspended: false,
                         });
                     }
                 }
@@ -312,6 +326,7 @@ mod tests {
             focused,
             floating: false,
             fullscreen: false,
+            suspended: false,
         }
     }
 
@@ -375,6 +390,7 @@ mod tests {
             visible: false,
             floating: false,
             fullscreen: false,
+            suspended: false,
         }));
         assert!(!b.surface(2).unwrap().visible);
     }
@@ -454,6 +470,22 @@ mod tests {
             placement(2, true, true),
         ]));
         assert_eq!(ops, vec![BodyOp::Focus(2)]);
+    }
+
+    #[test]
+    fn a_suspend_change_alone_triggers_a_configure_and_sticks() {
+        let mut b = body_with_two();
+        let p1 = placement(1, true, true);
+        b.apply(BrainCommand::Place(vec![p1, placement(2, true, false)]));
+        // La 2 se duerme: oculta + suspendida (sin foco).
+        let mut p2 = placement(2, false, false);
+        p2.suspended = true;
+        let ops = b.apply(BrainCommand::Place(vec![p1, p2]));
+        assert!(ops
+            .iter()
+            .any(|o| matches!(o, BodyOp::Configure { id: 2, suspended: true, .. })));
+        assert!(b.surface(2).unwrap().suspended);
+        assert!(!b.surface(2).unwrap().visible);
     }
 
     #[test]

@@ -50,6 +50,12 @@ pub struct WindowPlacement {
     pub floating: bool,
     /// `true` si está en pantalla completa: cubre toda la salida.
     pub fullscreen: bool,
+    /// `true` si está **dormida** tras una capa de zoom (árbol fractal): el
+    /// Cuerpo, además de ocultarla (`visible: false`), le suspende los frame
+    /// callbacks para que el cliente quede inerte en vez de seguir pintando a
+    /// ciegas. El `rect` es su hogar del nivel superior, al que vuelve al salir
+    /// del zoom — no se redimensiona mientras duerme.
+    pub suspended: bool,
 }
 
 /// Parámetros de decoración de ventana que el Cerebro fija en el Cuerpo.
@@ -215,11 +221,17 @@ pub fn read_frame<R: Read, T: DeserializeOwned>(r: &mut R) -> io::Result<Option<
 ///
 /// En modo [`LayoutMode::Monocle`] sólo la ventana enfocada queda
 /// `visible`; en el resto de modos todas lo están.
+///
+/// Con zoom activo (árbol fractal) añade, tras las visibles, las ventanas
+/// **dormidas** ([`Workspace::dormant`]) marcadas `suspended` — fuera de vista
+/// pero listadas explícitamente para que el Cuerpo les corte los frames en vez
+/// de limitarse a ocultarlas por omisión.
 pub fn placements(ws: &Workspace, screen: Rect) -> Vec<WindowPlacement> {
     let fullscreen = ws.fullscreen();
     let monocle = ws.params().mode == LayoutMode::Monocle;
     let focused = ws.focused();
-    ws.layout(screen)
+    let mut out: Vec<WindowPlacement> = ws
+        .layout(screen)
         .into_iter()
         .map(|(id, rect)| {
             let floating = ws.is_floating(id);
@@ -241,9 +253,23 @@ pub fn placements(ws: &Workspace, screen: Rect) -> Vec<WindowPlacement> {
                 focused: is_focused,
                 floating,
                 fullscreen: is_fs,
+                suspended: false,
             }
         })
-        .collect()
+        .collect();
+    // Capas profundas dormidas: ocultas, sin foco y con los frames suspendidos.
+    for (id, rect) in ws.dormant(screen) {
+        out.push(WindowPlacement {
+            id,
+            rect,
+            visible: false,
+            focused: false,
+            floating: false,
+            fullscreen: false,
+            suspended: true,
+        });
+    }
+    out
 }
 
 #[cfg(test)]
@@ -271,6 +297,7 @@ mod tests {
             focused: true,
             floating: false,
             fullscreen: false,
+            suspended: false,
         }]);
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -411,6 +438,34 @@ mod tests {
         assert_eq!(fs.rect, SCREEN);
         // El resto queda oculto.
         assert!(p.iter().filter(|x| x.id != 20).all(|x| !x.visible));
+    }
+
+    #[test]
+    fn zoomed_layers_are_listed_dormant_not_omitted() {
+        // Tres en columnas; agrupo {20,30} y entro en el grupo.
+        let mut w = Workspace::new(LayoutParams {
+            mode: LayoutMode::Columns,
+            gap: 0,
+            ..LayoutParams::default()
+        });
+        for id in [10, 20, 30] {
+            w.add(id);
+        }
+        w.group(&[20, 30]);
+        w.focus_window(20);
+        w.zoom_in();
+        let p = placements(&w, SCREEN);
+        // Las tres siguen en la lista (la 10 no se omite: se marca dormida).
+        assert_eq!(p.len(), 3);
+        let ten = p.iter().find(|x| x.id == 10).unwrap();
+        assert!(ten.suspended, "la capa profunda fuera de vista duerme");
+        assert!(!ten.visible);
+        assert!(!ten.focused);
+        // Las en vista no están suspendidas y sí visibles.
+        for id in [20, 30] {
+            let v = p.iter().find(|x| x.id == id).unwrap();
+            assert!(!v.suspended && v.visible);
+        }
     }
 
     #[test]

@@ -137,6 +137,7 @@ mod tests {
             focused: true,
             floating: false,
             fullscreen: false,
+            suspended: false,
         }])
     }
 

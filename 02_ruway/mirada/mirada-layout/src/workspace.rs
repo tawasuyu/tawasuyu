@@ -280,6 +280,26 @@ impl Workspace {
         out
     }
 
+    /// Las ventanas **dormidas** tras la capa de zoom actual: las teseladas que
+    /// existen pero quedan fuera del sub-espacio en vista, con el rectángulo que
+    /// tendrían en el nivel superior (su "hogar", al que vuelven al salir del
+    /// zoom). Vacío sin zoom activo — en el nivel superior se ve todo, nada
+    /// duerme. Es disjunto de [`layout`](Workspace::layout): éste devuelve lo
+    /// que se ve, aquél lo que se aparta. El Cuerpo las oculta **y** les suspende
+    /// los frame callbacks (quedan inertes en vez de seguir pintando a ciegas).
+    pub fn dormant(&self, screen: Rect) -> Vec<(WindowId, Rect)> {
+        if self.grouping.is_none() && self.view_path.is_empty() {
+            return Vec::new();
+        }
+        let root = self.root_tree();
+        let view = node_at_path(&root, &self.view_path).unwrap_or(&root);
+        let in_view = collect_leaves(view);
+        root.resolve(screen)
+            .into_iter()
+            .filter(|(id, _)| !in_view.contains(id) && !self.floating.contains_key(id))
+            .collect()
+    }
+
     /// `true` si el escritorio está agrupado en sub-espacios.
     pub fn is_grouped(&self) -> bool {
         self.grouping.is_some()
@@ -695,6 +715,55 @@ mod tests {
             f.layout(Rect::new(0, 0, 1200, 600))
         };
         assert_eq!(w.layout(Rect::new(0, 0, 1200, 600)), flat);
+    }
+
+    #[test]
+    fn nothing_is_dormant_without_zoom() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        // Plano: nada duerme.
+        assert!(w.dormant(Rect::new(0, 0, 1200, 600)).is_empty());
+        // Agrupado pero en el nivel superior: se ve todo, nada duerme.
+        w.group(&[2, 3]);
+        assert!(w.dormant(Rect::new(0, 0, 1200, 600)).is_empty());
+    }
+
+    #[test]
+    fn zooming_in_makes_the_out_of_view_windows_dormant() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.focus_window(2);
+        w.zoom_in(); // entro al grupo {2,3}; la 1 queda fuera
+        let screen = Rect::new(0, 0, 1200, 600);
+        let dormant = w.dormant(screen);
+        // Sólo la 1 duerme, con su rect del nivel superior (columna izquierda).
+        assert_eq!(dormant, vec![(1, Rect::new(0, 0, 600, 600))]);
+        // Es disjunto de lo que se ve: la vista trae 2 y 3, dormant trae 1.
+        let shown: Vec<_> = w.layout(screen).iter().map(|(id, _)| *id).collect();
+        assert_eq!(shown, vec![2, 3]);
+        assert!(!shown.iter().any(|id| dormant.iter().any(|(d, _)| d == id)));
+        // Al salir del zoom nadie duerme.
+        w.zoom_out();
+        assert!(w.dormant(screen).is_empty());
+    }
+
+    #[test]
+    fn a_floating_window_never_goes_dormant() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]);
+        w.set_floating(1, Some(Rect::new(10, 10, 100, 100)));
+        w.focus_window(2);
+        w.zoom_in();
+        // La 1 flota: se queda encima, no duerme.
+        assert!(w.dormant(Rect::new(0, 0, 1200, 600)).is_empty());
     }
 
     #[test]

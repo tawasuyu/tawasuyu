@@ -96,16 +96,24 @@ nuevas: `GroupStack` (pliega la pila en un sub-espacio), `Ungroup`, `ZoomIn`,
 `ZoomOut` (`Super+a`/`Super+Shift+a`/`Super+i`/`Super+u`). El `mirada-protocol`
 no cambia: el Cuerpo sigue recibiendo una lista plana.
 
-Pendiente del zoom-Z (siguientes rebanadas): suspender frames de las capas
-profundas inactivas (necesita hint en el protocolo + soporte en el Cuerpo);
-agrupación dirigida por el grafo de actividad (constelaciones); navegación de
-zoom multinivel arbitraria en la UI; persistir la agrupación en la sesión.
+**Capas dormidas  ✅ HECHA (2ª rebanada):** al entrar en un sub-espacio, las
+ventanas que quedan fuera de la vista ya no se ocultan *por omisión* sino que se
+listan explícitamente con `WindowPlacement.suspended = true` (`Workspace::dormant`
+las calcula con su rect del nivel superior). El Cuerpo (`mirada-body` →
+`BodyOp::Configure.suspended` → `ManagedWindow.suspended`) les **corta los frame
+callbacks** en ambos backends (winit y DRM): el cliente bloquea su bucle y deja de
+pintar a ciegas, en vez de seguir consumiendo GPU detrás del zoom. 3 tests de
+`dormant` en layout + 1 en protocol + 1 en body + el de integración en brain.
+
+Pendiente del zoom-Z (siguientes rebanadas): agrupación dirigida por el grafo de
+actividad (constelaciones); navegación de zoom multinivel arbitraria en la UI;
+persistir la agrupación en la sesión.
 
 **Encima de Fase 2** (orden de ROI):
 
 | Idea | Estado | Nota |
 |---|---|---|
-| **Zoom semántico en Z** | ✅ 1ª rebanada | Agrupar la pila + entrar/salir del sub-espacio (absorbe la pantalla). Falta: suspender frames de capas profundas (Cuerpo), constelaciones, multinivel UI. |
+| **Zoom semántico en Z** | ✅ 2ª rebanada | Agrupar la pila + entrar/salir (absorbe la pantalla) + **capas dormidas** (las ventanas fuera de vista se suspenden: el Cuerpo les corta los frame callbacks). Falta: constelaciones, multinivel UI, persistir la agrupación. |
 | **Capabilities por ventana** | BUILD | Gatear screencopy/export-dmabuf por `app_id` en el Cuerpo. El sandboxing *real* y honesto: somos quien otorga el protocolo. |
 | **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". Solapa con suspender capas profundas del zoom-Z. |
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |

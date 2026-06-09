@@ -2216,10 +2216,15 @@ mod tests {
         // Con el foco en la pila, entrar: sólo se ven 2,3,4.
         d.apply(DesktopAction::FocusWindow(3));
         let cmds = d.apply(DesktopAction::ZoomIn);
-        let ids: Vec<_> = places(&cmds).iter().map(|p| p.id).collect();
-        assert_eq!(ids.len(), 3);
-        assert!(ids.contains(&2) && ids.contains(&3) && ids.contains(&4));
-        assert!(!ids.contains(&1)); // la maestra queda fuera del zoom
+        let p = places(&cmds);
+        // Las visibles son la pila; la maestra 1 queda fuera del zoom.
+        let visibles: Vec<_> = p.iter().filter(|p| p.visible).map(|p| p.id).collect();
+        assert_eq!(visibles.len(), 3);
+        assert!(visibles.contains(&2) && visibles.contains(&3) && visibles.contains(&4));
+        // Pero la 1 no se omite: se lista dormida (suspended) para cortarle los
+        // frames, no oculta a ciegas por ausencia.
+        let one = p.iter().find(|p| p.id == 1).unwrap();
+        assert!(one.suspended && !one.visible);
         // Salir y deshacer: vuelven las cuatro.
         d.apply(DesktopAction::ZoomOut);
         let cmds = d.apply(DesktopAction::Ungroup);

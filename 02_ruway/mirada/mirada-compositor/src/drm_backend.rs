@@ -1052,6 +1052,10 @@ impl DrmState {
     fn send_frames_to_clients(&mut self) {
         let time = self.start.elapsed().as_millis() as u32;
         for w in &self.app.windows {
+            // Las capas dormidas (zoom-Z) no reciben frame callbacks.
+            if w.suspended {
+                continue;
+            }
             send_frames_surface_tree(&w.surface, time);
         }
         // Layers de TODAS las salidas — un cliente puede tener barras en
