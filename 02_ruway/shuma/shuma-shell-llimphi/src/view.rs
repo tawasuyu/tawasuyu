@@ -1211,6 +1211,27 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
     // Form remoto opcional (host/usuario/puerto) cuando aislamiento = Remote.
     let mut children: Vec<View<Msg>> = vec![titulo, sub, iso_label, iso_trigger];
     if session.isolation == Isolation::Remote {
+        // Atajo: los hosts guardados aparecen como filas clickeables y un
+        // botón abre la ventana gestora para crear/borrar.
+        if !model.hosts.is_empty() {
+            children.push(panel_label("Hosts guardados", theme));
+            for (i, h) in model.hosts.iter().enumerate() {
+                children.push(
+                    View::new(Style {
+                        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                        ..Default::default()
+                    })
+                    .fill(theme.bg_panel_alt)
+                    .hover_fill(theme.bg_row_hover)
+                    .radius(3.0)
+                    .text_aligned(h.display(), 11.0, theme.fg_text, llimphi_ui::llimphi_text::Alignment::Start)
+                    .on_click(Msg::HostApply(i)),
+                );
+            }
+        }
+        children.push(action_button_small("⚙ Gestionar hosts…", Msg::OpenHostsWindow, theme));
         children.push(panel_label("Host", theme));
         children.push(text_input_view(
             &session.host,
@@ -1273,6 +1294,11 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
                 llimphi_ui::llimphi_text::Alignment::Start,
             ),
         );
+        children.push(action_button_small(
+            "⚙ Gestionar containers…",
+            Msg::OpenContainersWindow,
+            theme,
+        ));
     }
 
     // Botones: Cancelar | Crear.
@@ -1620,4 +1646,318 @@ pub(crate) fn placeholder(theme: &Theme, text: &str) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .text_aligned(text.to_string(), 13.0, theme.fg_muted, Alignment::Start)
+}
+
+// ─── Ventanas secundarias: gestor de containers / hosts ─────────────
+
+/// Ventana de gestión de containers (`Handle::open_window(WIN_CONTAINERS)`).
+/// Lista `podman ps -a` con acciones por fila (start / stop / rm) + un botón
+/// para refrescar. La lista se carga al abrir (RefreshContainersFull) y
+/// después de cada acción.
+pub(crate) fn containers_window(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+
+    let title = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned("Containers (podman)".to_string(), 16.0, theme.fg_text, Alignment::Start);
+    let sub = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        "Lista de podman ps -a. Click ▶ para arrancar uno, ■ para parar, 🗑 para borrar.".to_string(),
+        11.0, theme.fg_muted, Alignment::Start,
+    );
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    if model.containers_full.is_empty() {
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(
+                "Sin containers — creá uno desde el formulario de sesión nueva".to_string(),
+                12.0, theme.fg_muted, Alignment::Start,
+            ),
+        );
+    } else {
+        for c in &model.containers_full {
+            rows.push(container_row(c, theme));
+        }
+    }
+
+    let actions = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(8.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        action_button_small("⟳ Refrescar", Msg::RefreshContainersFull, theme),
+    ]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(20.0_f32), right: length(20.0_f32),
+            top: length(20.0_f32), bottom: length(20.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children({
+        let mut all = vec![title, sub, actions];
+        all.extend(rows);
+        all
+    })
+}
+
+fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    let running = c.status.starts_with("Up");
+    let name_view = View::new(Style {
+        size: Size { width: length(180.0_f32), height: length(18.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text_aligned(c.name.clone(), 12.0, theme.fg_text, Alignment::Start);
+    let status_view = View::new(Style {
+        size: Size {
+            width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+            height: length(18.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{} · {}", c.status, c.image),
+        11.0,
+        if running { theme.accent } else { theme.fg_muted },
+        Alignment::Start,
+    );
+    let name_for_start = c.name.clone();
+    let name_for_stop = c.name.clone();
+    let name_for_rm = c.name.clone();
+    let start_btn = action_button_small("▶", Msg::StartContainer(name_for_start), theme);
+    let stop_btn = action_button_small("■", Msg::StopContainer(name_for_stop), theme);
+    let rm_btn = action_button_small("🗑", Msg::RemoveContainer(name_for_rm), theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .children(vec![name_view, status_view, start_btn, stop_btn, rm_btn])
+}
+
+/// Ventana de gestión de hosts (`Handle::open_window(WIN_HOSTS)`).
+/// Lista los hosts persistidos en `hosts.json` + un form embebido (cuando
+/// el draft está abierto) para crear/editar uno.
+pub(crate) fn hosts_window(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+
+    let title = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned("Hosts remotos".to_string(), 16.0, theme.fg_text, Alignment::Start);
+    let sub = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        "Guardados en ~/.config/shuma/hosts.json. Click → usa el host en la sesión activa.".to_string(),
+        11.0, theme.fg_muted, Alignment::Start,
+    );
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    if model.hosts.is_empty() {
+        rows.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text_aligned(
+                "Sin hosts guardados — agregá uno abajo".to_string(),
+                12.0, theme.fg_muted, Alignment::Start,
+            ),
+        );
+    } else {
+        for (i, h) in model.hosts.iter().enumerate() {
+            rows.push(host_row(i, h, theme));
+        }
+    }
+
+    // Form embebido (visible cuando host_draft.is_some()) o botón "+ Nuevo".
+    let draft_or_button: View<Msg> = match &model.host_draft {
+        Some(d) => host_draft_form(d, theme),
+        None => action_button_small("+ Nuevo host", Msg::HostDraftStart, theme),
+    };
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        padding: Rect {
+            left: length(20.0_f32), right: length(20.0_f32),
+            top: length(20.0_f32), bottom: length(20.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children({
+        let mut all = vec![title, sub];
+        all.extend(rows);
+        all.push(draft_or_button);
+        all
+    })
+}
+
+fn host_row(idx: usize, h: &hosts::RemoteHost, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    let display = View::new(Style {
+        size: Size {
+            width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+            height: length(18.0_f32),
+        },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{} · {}", h.display(), h.auth.label()),
+        12.0, theme.fg_text, Alignment::Start,
+    );
+    let use_btn = action_button_small("→ Usar", Msg::HostApply(idx), theme);
+    let rm_btn = action_button_small("🗑", Msg::HostDelete(idx), theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .children(vec![display, use_btn, rm_btn])
+}
+
+fn host_draft_form(d: &HostDraft, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+    use llimphi_ui::llimphi_text::Alignment;
+    let tpal = TextInputPalette::from_theme(theme);
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(panel_label("Nombre", theme));
+    rows.push(text_input_view(
+        &d.name, "ejemplo",
+        d.focused == Some(HostDraftField::Name),
+        &tpal,
+        Msg::HostDraftFocus(HostDraftField::Name),
+    ));
+    rows.push(panel_label("Host", theme));
+    rows.push(text_input_view(
+        &d.host, "1.2.3.4 o ejemplo.com",
+        d.focused == Some(HostDraftField::Host),
+        &tpal,
+        Msg::HostDraftFocus(HostDraftField::Host),
+    ));
+    rows.push(panel_label("Usuario", theme));
+    rows.push(text_input_view(
+        &d.user, "root",
+        d.focused == Some(HostDraftField::User),
+        &tpal,
+        Msg::HostDraftFocus(HostDraftField::User),
+    ));
+    rows.push(panel_label("Puerto", theme));
+    rows.push(text_input_view(
+        &d.port, "22",
+        d.focused == Some(HostDraftField::Port),
+        &tpal,
+        Msg::HostDraftFocus(HostDraftField::Port),
+    ));
+    // Toggle de auth.
+    let auth_label = if d.use_password { "Contraseña (askpass al conectar)" } else { "Clave PEM" };
+    rows.push(
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+            align_items: Some(AlignItems::Center),
+            padding: Rect { left: length(4.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+            ..Default::default()
+        })
+        .hover_fill(theme.bg_row_hover)
+        .on_click(Msg::HostDraftToggleAuth)
+        .text_aligned(format!("· Auth: {auth_label} (click cambia)"), 11.0, theme.fg_text, Alignment::Start),
+    );
+    if !d.use_password {
+        rows.push(panel_label("Path PEM", theme));
+        rows.push(text_input_view(
+            &d.pem_path, "/home/usuario/.ssh/id_rsa",
+            d.focused == Some(HostDraftField::Pem),
+            &tpal,
+            Msg::HostDraftFocus(HostDraftField::Pem),
+        ));
+    }
+    // Botones Guardar / Cancelar.
+    let save = action_button_small("Guardar (Enter)", Msg::HostDraftSave, theme);
+    let cancel = action_button_small("Cancelar (Esc)", Msg::HostDraftCancel, theme);
+    let buttons = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(10.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![save, cancel]);
+    rows.push(buttons);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+        },
+        padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(12.0_f32), bottom: length(12.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(4.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(6.0)
+    .children(rows)
+}
+
+fn action_button_small(label: &str, msg: Msg, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size {
+            width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+            height: length(28.0_f32),
+        },
+        flex_shrink: 0.0,
+        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .hover_fill(theme.bg_button_hover)
+    .radius(4.0)
+    .text_aligned(label.to_string(), 11.0, theme.fg_text, Alignment::Center)
+    .on_click(msg)
 }

@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 
 mod config;
+mod hosts;
 
 use std::time::Duration;
 
@@ -227,6 +228,53 @@ fn spawn_list_containers(handle: &Handle<Msg>) {
             })
             .unwrap_or_default();
         Msg::ContainersLoaded(names)
+    });
+}
+
+/// Lista containers locales con su status + image (ventana gestora).
+/// Usa `podman ps -a --format` con un formato Go simple y parsea por
+/// líneas para no depender de `jq` ni del JSON output de podman.
+fn spawn_list_containers_full(handle: &Handle<Msg>) {
+    handle.spawn(|| {
+        let infos = std::process::Command::new("podman")
+            .args([
+                "ps",
+                "-a",
+                "--format",
+                "{{.Names}}\t{{.Status}}\t{{.Image}}",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter_map(|l| {
+                        let mut it = l.splitn(3, '\t');
+                        let name = it.next()?.trim().to_string();
+                        let status = it.next().unwrap_or("").trim().to_string();
+                        let image = it.next().unwrap_or("").trim().to_string();
+                        if name.is_empty() { None } else { Some(ContainerInfo { name, status, image }) }
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Msg::ContainersFullLoaded(infos)
+    });
+}
+
+/// Dispara `podman <action> <name>` en bg; al terminar, refresca la
+/// lista. `action` ∈ {start, stop, rm} (con `rm` agregamos `-f`).
+fn spawn_container_action(handle: &Handle<Msg>, action: &'static str, name: String) {
+    handle.spawn(move || {
+        let mut args: Vec<String> = if action == "rm" {
+            vec!["rm".into(), "-f".into()]
+        } else {
+            vec![action.into()]
+        };
+        args.push(name.clone());
+        let _ = std::process::Command::new("podman").args(&args).output();
+        Msg::RefreshContainersFull
     });
 }
 
@@ -438,6 +486,75 @@ enum RemoteField {
 enum PendingField {
     Mount,
 }
+
+/// Estado de un container listado en la ventana gestora — más rico que el
+/// `Vec<String>` que usa el dropdown (que solo necesita names).
+#[derive(Debug, Clone)]
+struct ContainerInfo {
+    pub name: String,
+    pub status: String, // "Up 2 hours", "Exited (0) 3 days ago", etc.
+    pub image: String,
+}
+
+/// Form embebido en la ventana de hosts para crear/editar uno nuevo.
+#[derive(Debug, Clone)]
+struct HostDraft {
+    name: TextInputState,
+    host: TextInputState,
+    user: TextInputState,
+    port: TextInputState,
+    /// Modo de auth: `true` = password (askpass al conectar), `false` = PEM.
+    use_password: bool,
+    pem_path: TextInputState,
+    /// Campo con foco de teclado dentro del draft (`None` = ninguno).
+    focused: Option<HostDraftField>,
+}
+
+impl HostDraft {
+    fn new() -> Self {
+        let mut port = TextInputState::new();
+        port.set_text("22");
+        Self {
+            name: TextInputState::new(),
+            host: TextInputState::new(),
+            user: TextInputState::new(),
+            port,
+            use_password: true,
+            pem_path: TextInputState::new(),
+            focused: Some(HostDraftField::Name),
+        }
+    }
+
+    fn to_host(&self) -> Option<hosts::RemoteHost> {
+        let name = self.name.text();
+        let host = self.host.text();
+        let user = self.user.text();
+        if name.trim().is_empty() || host.trim().is_empty() || user.trim().is_empty() {
+            return None;
+        }
+        let port: u16 = self.port.text().trim().parse().unwrap_or(22);
+        let auth = if self.use_password {
+            hosts::HostAuth::Password
+        } else {
+            let path = self.pem_path.text();
+            hosts::HostAuth::Key { path }
+        };
+        Some(hosts::RemoteHost { name, host, user, port, auth })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostDraftField {
+    Name,
+    Host,
+    User,
+    Port,
+    Pem,
+}
+
+/// Keys de ventanas secundarias del chasis.
+const WIN_HOSTS: u64 = 1;
+const WIN_CONTAINERS: u64 = 2;
 
 /// Cuál dropdown de la config de sesión está abierto (overlay del select).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -972,10 +1089,17 @@ struct Model {
     session_panel_open: bool,
     /// Dropdown de config abierto (overlay del select), o `None`.
     dropdown_open: Option<DropKind>,
-    /// Contenedores locales descubiertos (`docker ps -a`) — para suscribir.
+    /// Contenedores locales descubiertos (`podman ps -a`) — para suscribir.
     containers: Vec<String>,
+    /// Lista detallada de containers para el gestor (name + state).
+    containers_full: Vec<ContainerInfo>,
     /// Campo del form remoto con foco de teclado (`None` = ninguno).
     focused_field: Option<RemoteField>,
+    /// Hosts remotos guardados (`$XDG_CONFIG_HOME/shuma/hosts.json`).
+    hosts: Vec<hosts::RemoteHost>,
+    /// Draft del nuevo host que se está creando en la ventana gestora.
+    /// `None` = no hay form abierto; `Some(...)` lo pinta.
+    host_draft: Option<HostDraft>,
 
     // Anchos resizables de los paneles laterales (px).
     session_w: f32,
@@ -1095,6 +1219,46 @@ enum Msg {
     /// recrearlo. Si falla por inexistencia, el `ContainerFailed`
     /// rebaja la sesión a Local con notice.
     EnsureContainer(String),
+
+    // ─── Ventana gestora de containers (WIN_CONTAINERS) ───────────────
+    /// Abre la ventana de gestión de containers. Carga la lista inicial
+    /// con `podman ps -a`.
+    OpenContainersWindow,
+    /// El thread de `podman ps -a --format json` terminó. Reemplaza la
+    /// lista completa de containers en el modelo.
+    ContainersFullLoaded(Vec<ContainerInfo>),
+    /// Refresca la lista (re-spawn de `podman ps -a`).
+    RefreshContainersFull,
+    /// `podman start <name>` para un container parado.
+    StartContainer(String),
+    /// `podman stop <name>` para un container corriendo.
+    StopContainer(String),
+    /// `podman rm -f <name>` — destructivo, borra el container.
+    RemoveContainer(String),
+
+    // ─── Ventana gestora de hosts (WIN_HOSTS) ─────────────────────────
+    /// Abre la ventana de gestión de hosts remotos.
+    OpenHostsWindow,
+    /// El usuario cerró una ventana secundaria con el botón del SO —
+    /// limpiamos el host_draft asociado.
+    SecondaryClosed(u64),
+    /// Empieza un draft de host nuevo (form embebido en la ventana).
+    HostDraftStart,
+    /// Cancela el draft del host (cierra el form).
+    HostDraftCancel,
+    /// Guarda el draft del host en disco + en el modelo.
+    HostDraftSave,
+    /// Foco a un campo del draft del host.
+    HostDraftFocus(HostDraftField),
+    /// Tecla al campo del draft focado.
+    HostDraftKey(KeyEvent),
+    /// Cambia el modo de auth del draft (Password ↔ Key).
+    HostDraftToggleAuth,
+    /// Borrar el host `idx` de la lista guardada.
+    HostDelete(usize),
+    /// Aplicar un host guardado al form de la sesión actual (rellena
+    /// host/user/port + dispara connect si la sesión está pending).
+    HostApply(usize),
     /// Reordenar dientes por drag: mover la sesión `from` a la posición `to`.
     /// La draft (0) queda fija.
     ReorderSession(usize, usize),
@@ -1229,7 +1393,10 @@ impl App for Shell {
             session_panel_open: chrome.session_panel_open,
             dropdown_open: None,
             containers: Vec::new(),
+            containers_full: Vec::new(),
             focused_field: None,
+            hosts: hosts::load_hosts(),
+            host_draft: None,
             session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
@@ -1478,6 +1645,113 @@ impl App for Shell {
                 // Dispara `podman start name` en bg; el resultado vuelve
                 // como ContainerCreated / ContainerFailed.
                 spawn_ensure_container(handle, name);
+            }
+            Msg::OpenContainersWindow => {
+                handle.open_window(WIN_CONTAINERS, "shuma · containers", 720, 500);
+                spawn_list_containers_full(handle);
+            }
+            Msg::ContainersFullLoaded(v) => {
+                m.containers_full = v;
+            }
+            Msg::RefreshContainersFull => spawn_list_containers_full(handle),
+            Msg::StartContainer(name) => spawn_container_action(handle, "start", name),
+            Msg::StopContainer(name) => spawn_container_action(handle, "stop", name),
+            Msg::RemoveContainer(name) => spawn_container_action(handle, "rm", name),
+            Msg::OpenHostsWindow => {
+                handle.open_window(WIN_HOSTS, "shuma · hosts remotos", 640, 560);
+            }
+            Msg::SecondaryClosed(key) => {
+                if key == WIN_HOSTS {
+                    m.host_draft = None;
+                }
+            }
+            Msg::HostDraftStart => {
+                m.host_draft = Some(HostDraft::new());
+            }
+            Msg::HostDraftCancel => {
+                m.host_draft = None;
+            }
+            Msg::HostDraftSave => {
+                if let Some(draft) = &m.host_draft {
+                    if let Some(h) = draft.to_host() {
+                        // Reemplazar si ya hay uno con el mismo `name`.
+                        if let Some(idx) = m.hosts.iter().position(|x| x.name == h.name) {
+                            m.hosts[idx] = h;
+                        } else {
+                            m.hosts.push(h);
+                        }
+                        hosts::save_hosts(&m.hosts);
+                        m.host_draft = None;
+                    }
+                }
+            }
+            Msg::HostDraftFocus(f) => {
+                if let Some(d) = m.host_draft.as_mut() {
+                    d.focused = Some(f);
+                }
+            }
+            Msg::HostDraftKey(e) => {
+                if let Some(d) = m.host_draft.as_mut() {
+                    let Some(f) = d.focused else { return m };
+                    match &e.key {
+                        llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                            d.focused = None;
+                        }
+                        llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                            handle.dispatch(Msg::HostDraftSave);
+                        }
+                        llimphi_ui::Key::Named(llimphi_ui::NamedKey::Tab) => {
+                            // Tab cicla los campos del draft.
+                            let next = match f {
+                                HostDraftField::Name => HostDraftField::Host,
+                                HostDraftField::Host => HostDraftField::User,
+                                HostDraftField::User => HostDraftField::Port,
+                                HostDraftField::Port => {
+                                    if d.use_password { HostDraftField::Name } else { HostDraftField::Pem }
+                                }
+                                HostDraftField::Pem => HostDraftField::Name,
+                            };
+                            d.focused = Some(next);
+                        }
+                        _ => {
+                            let target = match f {
+                                HostDraftField::Name => &mut d.name,
+                                HostDraftField::Host => &mut d.host,
+                                HostDraftField::User => &mut d.user,
+                                HostDraftField::Port => &mut d.port,
+                                HostDraftField::Pem => &mut d.pem_path,
+                            };
+                            let _ = target.apply_key(&e);
+                        }
+                    }
+                }
+            }
+            Msg::HostDraftToggleAuth => {
+                if let Some(d) = m.host_draft.as_mut() {
+                    d.use_password = !d.use_password;
+                }
+            }
+            Msg::HostDelete(idx) => {
+                if idx < m.hosts.len() {
+                    m.hosts.remove(idx);
+                    hosts::save_hosts(&m.hosts);
+                }
+            }
+            Msg::HostApply(idx) => {
+                let h = match m.hosts.get(idx).cloned() {
+                    Some(h) => h,
+                    None => return m,
+                };
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.isolation = Isolation::Remote;
+                    s.host.set_text(h.host);
+                    s.user.set_text(h.user);
+                    s.port.set_text(h.port.to_string());
+                    if !s.pending {
+                        s.connect_remote();
+                    }
+                }
+                save_sessions(&m);
             }
             Msg::ContainerCreated(name) => {
                 // Encontrar la sesión que está esperando este contenedor y
@@ -1764,6 +2038,30 @@ impl App for Shell {
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
         // El dropdown de config (select) tiene prioridad sobre el menú.
         view::dropdown_overlay(model).or_else(|| menu::overlay(model))
+    }
+
+    fn secondary_view(model: &Self::Model, key: u64) -> Option<View<Self::Msg>> {
+        let theme = wawa_config_llimphi::theme_from_wawa(
+            &wawa_config::WawaConfig::load(),
+            &Theme::dark(),
+        );
+        match key {
+            WIN_CONTAINERS => Some(view::containers_window(model, &theme)),
+            WIN_HOSTS => Some(view::hosts_window(model, &theme)),
+            _ => None,
+        }
+    }
+
+    fn secondary_title(_model: &Self::Model, key: u64) -> Option<String> {
+        match key {
+            WIN_CONTAINERS => Some("shuma · containers".into()),
+            WIN_HOSTS => Some("shuma · hosts remotos".into()),
+            _ => None,
+        }
+    }
+
+    fn on_secondary_close(_model: &Self::Model, key: u64) -> Option<Self::Msg> {
+        Some(Msg::SecondaryClosed(key))
     }
 }
 
