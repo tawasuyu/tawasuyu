@@ -38,9 +38,12 @@ description = "renaser :: kernel asincrono SASOS basado en aislamiento por softw
 #  unicamente alli donde las features por defecto arrastrarian `std`.
 # -----------------------------------------------------------------------------
 [workspace.dependencies]
-# Constructor de la imagen de disco UEFI/BIOS. Es una herramienta de ANFITRION
+# Constructor de la imagen de disco UEFI. Es una herramienta de ANFITRION
 # (usa std), la consume el miembro `boot` y NO debe enlazarse jamas en el kernel.
-bootloader = "0.11"
+# Solo la feature `uefi`: `boot` forja exclusivamente con `UefiBoot`, y las
+# cuatro etapas BIOS del build.rs (targets i386 tier-3) son peso muerto que
+# ademas rompe la compilacion en entornos sin esos toolchains.
+bootloader = { version = "0.11", default-features = false, features = ["uefi"] }
 
 # API `#![no_std]` que el kernel SI consume: expone `entry_point!`, `BootInfo`
 # y la descripcion del framebuffer GOP. Su version debe acompasar a `bootloader`.
