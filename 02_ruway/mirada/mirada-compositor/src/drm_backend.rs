@@ -189,6 +189,66 @@ fn border_rects(sx: i32, sy: i32, sw: i32, sh: i32, bw: i32) -> [(i32, i32, i32,
     ]
 }
 
+/// Fondo default cuando el usuario no configura `wallpaper_path`: un gradient
+/// vertical sobrio (noche profunda → púrpura → azul-medianoche) generado
+/// runtime, sin bytes embebidos en el binario. La idea es que arrancar mirada
+/// "vacío" no se sienta como una pantalla muerta — un par de stops bastan
+/// para que el escritorio respire.
+fn make_default_wallpaper(w: i32, h: i32) -> MemoryRenderBuffer {
+    let w_u = w as usize;
+    let h_u = h as usize;
+    let mut bgra = vec![0u8; w_u * h_u * 4];
+    let stops: [(f32, [u8; 3]); 3] = [
+        (0.0, [0x0a, 0x0e, 0x22]),
+        (0.55, [0x1b, 0x1a, 0x3e]),
+        (1.0, [0x2a, 0x1c, 0x4a]),
+    ];
+    let denom = (h_u.saturating_sub(1)).max(1) as f32;
+    for y in 0..h_u {
+        let t = y as f32 / denom;
+        let (r, g, b) = mezcla_stops(&stops, t);
+        let row = &mut bgra[y * w_u * 4..(y + 1) * w_u * 4];
+        for x in 0..w_u {
+            let i = x * 4;
+            row[i] = b;
+            row[i + 1] = g;
+            row[i + 2] = r;
+            row[i + 3] = 255;
+        }
+    }
+    MemoryRenderBuffer::from_slice(
+        &bgra,
+        Fourcc::Argb8888,
+        (w, h),
+        1,
+        Transform::Normal,
+        None,
+    )
+}
+
+/// Interpola entre stops `(t, rgb)` para `t in 0..1`. Lineal por tramo.
+fn mezcla_stops(stops: &[(f32, [u8; 3])], t: f32) -> (u8, u8, u8) {
+    let t = t.clamp(0.0, 1.0);
+    let mut prev = stops[0];
+    for s in &stops[1..] {
+        if t <= s.0 {
+            let span = (s.0 - prev.0).max(1e-6);
+            let u = ((t - prev.0) / span).clamp(0.0, 1.0);
+            let lerp = |a: u8, b: u8| -> u8 {
+                (a as f32 + (b as f32 - a as f32) * u).round().clamp(0.0, 255.0) as u8
+            };
+            return (
+                lerp(prev.1[0], s.1[0]),
+                lerp(prev.1[1], s.1[1]),
+                lerp(prev.1[2], s.1[2]),
+            );
+        }
+        prev = *s;
+    }
+    let last = stops.last().unwrap().1;
+    (last[0], last[1], last[2])
+}
+
 /// Decodifica el wallpaper de `path` y lo compone en un buffer del tamaño
 /// de la salida (`w` × `h`) según `fit`. El resto del buffer queda en negro
 /// opaco (BGRA `[0, 0, 0, 255]`). Devuelve `None` si la imagen no abre o el
@@ -927,18 +987,22 @@ impl DrmState {
     /// fondo distinto a cada monitor.
     fn emit_wallpaper(&mut self, idx: usize, into: &mut Vec<Frame<GlesRenderer>>) {
         let ctx = &mut self.outputs[idx];
-        let Some(path) = ctx.wallpaper_path.clone() else {
-            return;
-        };
+        let path = ctx.wallpaper_path.clone();
         let fit = ctx.wallpaper_fit;
         let size = (ctx.rect.w, ctx.rect.h);
+        if size.0 <= 0 || size.1 <= 0 {
+            return;
+        }
         let stale = ctx
             .wallpaper
             .as_ref()
             .map(|(_, s)| *s != size)
             .unwrap_or(true);
-        if stale && size.0 > 0 && size.1 > 0 {
-            ctx.wallpaper = load_wallpaper(&path, fit, size.0, size.1).map(|b| (b, size));
+        if stale {
+            ctx.wallpaper = match path {
+                Some(p) => load_wallpaper(&p, fit, size.0, size.1).map(|b| (b, size)),
+                None => Some((make_default_wallpaper(size.0, size.1), size)),
+            };
         }
         let Some((buf, _)) = &ctx.wallpaper else {
             return;
