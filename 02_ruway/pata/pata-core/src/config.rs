@@ -395,22 +395,57 @@ impl Config {
     /// autoescondible. Referencia widgets que aún no existen como builtin —el
     /// frontend cae a un placeholder— para encodear la visión completa.
     pub fn preset() -> Self {
+        // Barra superior: thickness 44 para que los medidores Medium verticales
+        // (~38 px de barrita + caption + padding) entren cómodos. Antes eran
+        // 32 y los chips verticales no entraban — el frontend acababa
+        // mostrándolos achicados o cayendo a horizontal.
         let mut top = Surface::bar(Anchor::Top);
+        top.thickness = 44.0;
         top.start = vec![WidgetSpec::new("start_button"), WidgetSpec::new("clock")];
         top.center = vec![
             WidgetSpec::new("workspace_switcher"),
             WidgetSpec::new("window_list"),
         ];
+        // Medidores con tamaño + orientación EXPLÍCITOS. Antes el default
+        // global era horizontal, así que cualquier widget sin `orientation` en
+        // su spec acababa horizontal aunque el size fuera small. Ahora los
+        // fijamos vertical-medium para que se vean como columnas visibles.
+        let meter_v = |kind: &str| {
+            WidgetSpec::new(kind)
+                .with("size", Prop::Str("medium".to_string()))
+                .with("orientation", Prop::Str("vertical".to_string()))
+        };
         top.end = vec![
             WidgetSpec::new("astro"),
             WidgetSpec::new("moon"),
             WidgetSpec::new("clipboard"),
-            WidgetSpec::new("volume").with("size", Prop::Str("small".to_string())),
-            WidgetSpec::new("brightness").with("size", Prop::Str("small".to_string())),
+            meter_v("volume"),
+            meter_v("brightness"),
             WidgetSpec::new("tray"),
-            WidgetSpec::new("ram_meter").with("size", Prop::Str("small".to_string())),
-            WidgetSpec::new("cpu_meter").with("size", Prop::Str("small".to_string())),
+            meter_v("ram_meter"),
+            meter_v("cpu_meter"),
         ];
+
+        // Sidebar izquierdo con dientes default (rail acoplable estilo
+        // VSCode/Slack). Antes el preset solo traía top + shell — el panel
+        // global de pestañas no aparecía hasta que el usuario lo escribiera
+        // a mano en el TOML.
+        let mut rail = Surface::sidebar(Anchor::Left);
+        rail.tabs.push(SidebarTab::new(
+            "monads",
+            "Mónadas",
+            WidgetSpec::new("navigator").with("source", Prop::Str("nouser".to_string())),
+        ));
+        rail.tabs.push(SidebarTab::new(
+            "files",
+            "Archivos",
+            WidgetSpec::new("navigator").with("source", Prop::Str("home".to_string())),
+        ));
+        rail.tabs.push(SidebarTab::new(
+            "search",
+            "Buscar",
+            WidgetSpec::new("search"),
+        ));
 
         let mut shell = Surface::bar(Anchor::Bottom);
         shell.autohide = true;
@@ -421,7 +456,7 @@ impl Config {
 
         Self {
             general: General::default(),
-            surfaces: vec![top, shell],
+            surfaces: vec![top, rail, shell],
         }
     }
 }
@@ -484,16 +519,25 @@ mod tests {
     }
 
     #[test]
-    fn preset_tiene_barra_top_y_shell_bottom() {
+    fn preset_tiene_barra_top_sidebar_y_shell_bottom() {
         let cfg = Config::preset();
-        assert_eq!(cfg.surfaces.len(), 2);
+        assert_eq!(cfg.surfaces.len(), 3);
         let top = &cfg.surfaces[0];
         assert_eq!(top.anchor, Anchor::Top);
         assert_eq!(top.kind, SurfaceKind::Bar);
         assert_eq!(top.start[0].kind, "start_button");
         assert!(top.end.iter().any(|w| w.kind == "astro"));
+        // Los medidores fijan size+orientation explícitos en el preset.
+        let cpu = top.end.iter().find(|w| w.kind == "cpu_meter").unwrap();
+        assert_eq!(cpu.str_prop("size", "?"), "medium");
+        assert_eq!(cpu.str_prop("orientation", "?"), "vertical");
 
-        let shell = &cfg.surfaces[1];
+        let rail = &cfg.surfaces[1];
+        assert_eq!(rail.kind, SurfaceKind::Sidebar);
+        assert_eq!(rail.anchor, Anchor::Left);
+        assert!(!rail.tabs.is_empty());
+
+        let shell = &cfg.surfaces[2];
         assert_eq!(shell.anchor, Anchor::Bottom);
         assert!(shell.autohide);
         assert_eq!(shell.center[0].kind, "shuma_input");

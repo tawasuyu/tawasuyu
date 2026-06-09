@@ -179,14 +179,23 @@ mod tests {
     }
 
     #[test]
-    fn top_solida_mas_shell_autohide_solo_reserva_la_top() {
-        // El caso del preset: barra top sólida + shell inferior autohide.
+    fn preset_reserva_top_y_sidebar_pero_no_shell() {
+        // Preset: top (bar, thickness 44) + sidebar izquierdo (rail 44) +
+        // shell inferior autohide. La top y el sidebar reservan franja; el
+        // shell no, así un fullscreen cabe debajo de la top.
         let cfg = Config::preset();
         let f = resolve(&cfg, pantalla());
-        // top reserva 32; shell no reserva.
-        assert!(f.surfaces[0].reserva);
-        assert!(!f.surfaces[1].reserva);
-        assert_eq!(f.work_area, Rect::new(0, 32, 1920, 1048));
+        assert_eq!(f.surfaces.len(), 3);
+        assert!(f.surfaces[0].reserva); // top
+        assert!(f.surfaces[1].reserva); // sidebar left
+        assert!(!f.surfaces[2].reserva); // shell autohide
+        // work_area: descuenta los 44 de la top arriba y los 44 del sidebar
+        // izquierda.
+        let wa = f.work_area;
+        assert_eq!(wa.y, 44);
+        assert_eq!(wa.x, 44);
+        assert_eq!(wa.h, 1080 - 44);
+        assert_eq!(wa.w, 1920 - 44);
     }
 
     #[test]

@@ -1085,23 +1085,41 @@ pub fn shuma_open_view(
     data: &BarData,
     theme: &Theme,
     bar_px: f32,
+    drawer_h: f32,
 ) -> View<Msg> {
-    // El cuerpo del drawer ocupa todo lo que sobra por encima de la barra.
-    let mut body_style = Style {
+    // Scrim transparente arriba del drawer — captura el click "fuera del
+    // drawer" y dispara ShumaToggle, como un modal. Sin fill: el clic se
+    // detecta por el rect del nodo. La layer surface es full-screen al
+    // abrirse (set_size(0, 10_000) clampeado por el compositor), así que
+    // este scrim cubre todo lo que NO es el drawer + bar.
+    let scrim = {
+        let mut style = Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        };
+        style.flex_grow = 1.0;
+        View::new(style).on_click(Msg::ShumaToggle)
+    };
+
+    let body = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
-            height: length(0.0_f32),
+            height: length(drawer_h),
         },
+        flex_shrink: 0.0,
         ..Default::default()
-    };
-    body_style.flex_grow = 1.0;
-    let body = View::new(body_style).children(vec![shuma::drawer_body_view(shuma_state, theme)]);
+    })
+    .children(vec![shuma::drawer_body_view(shuma_state, theme)]);
 
     let bar = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(bar_px),
         },
+        flex_shrink: 0.0,
         ..Default::default()
     })
     .children(vec![bar_view(surface, widgets, shuma_state, data, theme)]);
@@ -1114,7 +1132,7 @@ pub fn shuma_open_view(
         },
         ..Default::default()
     })
-    .children(vec![body, bar])
+    .children(vec![scrim, body, bar])
 }
 
 /// Construye los tres slots (start/center/end) de una superficie a lo largo de
@@ -1534,8 +1552,6 @@ pub fn start_menu_body(
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_app)
-    .alpha(0.0)
     .on_click(Msg::StartToggle)
     .children(vec![panel])
 }
@@ -1866,8 +1882,6 @@ pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<
         },
         ..Default::default()
     })
-    .fill(theme.bg_app)
-    .alpha(0.0)
     .on_click(Msg::ClipboardMenu)
     .children(vec![clipboard_panel(history, theme)]);
     View::new(Style {
@@ -2071,8 +2085,6 @@ pub fn clock_overlay(draft: &crate::ClockDraft, bar_h: f32, theme: &Theme) -> Vi
         },
         ..Default::default()
     })
-    .fill(theme.bg_app)
-    .alpha(0.0)
     .on_click(Msg::ClockPanel)
     .children(vec![clock_panel(draft, theme)]);
     View::new(Style {
@@ -2184,8 +2196,6 @@ fn overlay_con_scrim(panel: View<Msg>, click_msg: Msg, bar_h: f32, theme: &Theme
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_app)
-    .alpha(0.0)
     .on_click(click_msg)
     .children(vec![panel]);
     View::new(Style {

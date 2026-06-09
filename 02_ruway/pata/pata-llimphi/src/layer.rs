@@ -728,10 +728,12 @@ impl LayerApp {
             return;
         }
         self.shuma.open = open;
-        let h = if open { DRAWER_H } else { self.shuma_bar_px };
-        // El contenido es el shell real hospedado (`self.shuma.inner`), vivo
-        // desde el arranque: no hace falta spawnear nada al abrir. El cwd, los
-        // jobs y el historial persisten en el `State` aunque se repliegue.
+        // Abierto: la layer crece a pantalla completa (un alto enorme que el
+        // compositor clampea al output) para que el scrim del view capture
+        // los clicks fuera del drawer y los traduzca a "cerrar". Cerrado:
+        // vuelve al alto de la barra normal. El `exclusive_zone` se queda en
+        // el grosor de la barra — no recolocamos el teselado al abrir.
+        let h = if open { 10_000 } else { self.shuma_bar_px };
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
         // Abierto: Exclusive. OnDemand parecía la elección "correcta" pero en
@@ -1326,6 +1328,7 @@ impl LayerApp {
                 &data,
                 &self.theme,
                 self.shuma_bar_px as f32,
+                DRAWER_H as f32,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Sidebar {
             // Dientes hospedados de la app enfocada (si registró alguno en el host).
