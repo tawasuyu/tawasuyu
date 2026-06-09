@@ -209,6 +209,9 @@ fn dibujar_texto(lienzo: &mut Lienzo, x: usize, base_y: usize, s: &str, fondo: C
     }
 }
 
+/// Diámetro del disco lunar de `WidgetView::Moon` en la barra del kernel (px).
+const LUNA_D: usize = 12;
+
 /// Ancho de una mini-barra del racimo `Cores` en la barra del kernel (px).
 const MINI_W: usize = 6;
 /// Separación entre mini-barras del racimo (px).
@@ -219,6 +222,10 @@ fn medir_vista(v: &WidgetView) -> usize {
     match v {
         WidgetView::Empty => 0,
         WidgetView::Text(t) | WidgetView::Placeholder(t) => medir_texto(t),
+        // El tooltip es cosa del frontend con cursor; en el framebuffer del
+        // kernel solo cuenta el texto del chip.
+        WidgetView::TextRich { text, .. } => medir_texto(text),
+        WidgetView::Moon { .. } => LUNA_D,
         WidgetView::Meter { label, caption, .. } => {
             let mut w = 0;
             if let Some(l) = label {
@@ -269,6 +276,40 @@ fn pintar_vista(lienzo: &mut Lienzo, v: &WidgetView, x: usize, region: RegionPan
         WidgetView::Text(t) | WidgetView::Placeholder(t) => {
             dibujar_texto(lienzo, x, base_y, t, fondo, Color::TEXTO);
             medir_texto(t)
+        }
+        // El chip pinta solo `text` (el glifo); `tooltip` requiere hover y el
+        // framebuffer del kernel no rutea el cursor — es display.
+        WidgetView::TextRich { text, .. } => {
+            dibujar_texto(lienzo, x, base_y, text, fondo, Color::TEXTO);
+            medir_texto(text)
+        }
+        WidgetView::Moon { phase, .. } => {
+            // El disco lunar dibujado con píxeles, como en el frontend Llimphi:
+            // base oscura (`SIN_FOCO`) y columnas iluminadas (`FOCO`) desde la
+            // derecha según la fracción iluminada del ciclo. Sin glifo emoji:
+            // en una máquina sin Noto Color Emoji saldría tofu.
+            let r = (LUNA_D / 2) as isize;
+            let cx = x as isize + r;
+            let cy = (region.y + region.alto / 2) as isize;
+            // Fracción iluminada: 0 en luna nueva (phase 0 ó 1), 1 en llena (0.5).
+            let d = 2.0 * phase - 1.0;
+            let d = if d < 0.0 { -d } else { d };
+            let ilum = 1.0 - d;
+            let borde_luz = cx + r - (ilum * LUNA_D as f32) as isize;
+            for dy in -r..=r {
+                for dx in -r..=r {
+                    if dx * dx + dy * dy > r * r {
+                        continue;
+                    }
+                    let (px, py) = (cx + dx, cy + dy);
+                    if px < 0 || py < 0 {
+                        continue;
+                    }
+                    let tinta = if px >= borde_luz { Color::FOCO } else { Color::SIN_FOCO };
+                    lienzo.pintar_pixel(px as usize, py as usize, tinta);
+                }
+            }
+            LUNA_D
         }
         WidgetView::Meter { label, fraction, caption, .. } => {
             let mut cur = x;
