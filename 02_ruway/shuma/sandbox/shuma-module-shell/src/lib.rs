@@ -425,6 +425,10 @@ pub struct State {
     /// ajusta. Aplicado al `font_size`, `row_h` y `char_width` de la
     /// superficie de output. Bounded [0.5, 3.0] al renderizar.
     pub font_zoom: f32,
+    /// Offset horizontal del scroll del shell en px (≥ 0). Útil cuando
+    /// el zoom-in hace que las líneas excedan el viewport — Shift+rueda
+    /// mueve este valor. El gutter queda fijo; el texto se desplaza.
+    pub surf_scroll_x: f32,
     /// Estado de orden de las sub-secciones tipo tabla: por `(block, sec_idx)`
     /// guarda `(col, ascending)`. Sin entry = orden natural (el del output).
     /// Click en un header de columna togglea (col, true) → (col, false) →
@@ -644,6 +648,7 @@ impl State {
             section_collapsed: HashSet::new(),
             section_sort: HashMap::new(),
             font_zoom: 1.0,
+            surf_scroll_x: 0.0,
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
@@ -919,6 +924,9 @@ pub enum Msg {
     ZoomBy(f32),
     /// Resetea el zoom a 1.0. Ctrl+0 lo dispara.
     ZoomReset,
+    /// Mueve el scroll horizontal del shell por `dx` px (positivo = ver
+    /// hacia la derecha del texto). Shift+rueda lo dispara. Cap a [0, ∞).
+    ScrollHoriz(f32),
     /// Pega el clipboard al PTY del TUI activo — click derecho o botón
     /// del medio sobre el panel de vim (paste estilo terminal).
     VimPaste,

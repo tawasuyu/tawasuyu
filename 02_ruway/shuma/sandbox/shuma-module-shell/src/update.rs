@@ -276,12 +276,16 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::ZoomReset => {
             let old = s.font_zoom;
             s.font_zoom = 1.0;
+            s.surf_scroll_x = 0.0;
             if (old - 1.0).abs() > f32::EPSILON {
                 s.push_output(OutputLine::notice(format!(
                     "🔍 zoom {:.0}% → 100%",
                     old * 100.0
                 )));
             }
+        }
+        Msg::ScrollHoriz(dx) => {
+            s.surf_scroll_x = (s.surf_scroll_x + dx).max(0.0);
         }
         Msg::ToggleSection { block, idx } => {
             let key = (block, idx);

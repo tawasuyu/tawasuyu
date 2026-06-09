@@ -2694,7 +2694,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     let on_scroll = move |delta: f32| lift_scroll(Msg::Scroll(-delta));
 
     use llimphi_widget_terminal::{
-        block_surface_with_selection, gutter_width, SelectionConfig,
+        block_surface_with_scroll, gutter_width, SelectionConfig,
     };
 
     // Snapshot del layout para que el `update` resuelva clicks contra la
@@ -2746,10 +2746,11 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         on_double_click: Some(on_double_click),
     };
 
-    let surface = block_surface_with_selection::<HostMsg, _, _>(
+    let surface = block_surface_with_scroll::<HostMsg, _, _>(
         &store,
         items,
         scroll_y,
+        state.surf_scroll_x.max(0.0),
         viewport_h,
         metrics,
         &palette,

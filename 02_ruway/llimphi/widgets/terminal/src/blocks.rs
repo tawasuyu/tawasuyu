@@ -249,6 +249,34 @@ where
     S: Fn(usize, &str) -> LineStyle,
     F: Fn(f32) -> Msg + Send + Sync + 'static,
 {
+    block_surface_with_scroll(
+        store, items, scroll_y, 0.0, viewport_h, metrics, palette, line_style,
+        on_scroll, measure, selection,
+    )
+}
+
+/// Variante con `scroll_x` adicional — el texto se desplaza horizontalmente
+/// (gutter queda fijo). Pensado para acomodar zoom-in que desborda. El
+/// caller actualiza `scroll_x` con Shift+rueda o atajos custom.
+#[allow(clippy::too_many_arguments)]
+pub fn block_surface_with_scroll<Msg, S, F>(
+    store: &Scrollback,
+    items: Vec<Item<Msg>>,
+    scroll_y: f32,
+    scroll_x: f32,
+    viewport_h: f32,
+    metrics: TermMetrics,
+    palette: &TermPalette,
+    line_style: S,
+    on_scroll: F,
+    measure: Option<Arc<Mutex<f32>>>,
+    selection: SelectionConfig<'_, Msg>,
+) -> View<Msg>
+where
+    Msg: Clone + 'static,
+    S: Fn(usize, &str) -> LineStyle,
+    F: Fn(f32) -> Msg + Send + Sync + 'static,
+{
     let row_h = metrics.line_height;
     let gw = gutter_width(store, metrics);
     let heights: Vec<f32> = items.iter().map(|it| it.height(row_h)).collect();
@@ -321,7 +349,7 @@ where
                     children.push(gutter_number(store.line_number(idx), y, gw, row_h, metrics, palette));
                     let fg = style.fg.unwrap_or(palette.fg_text);
                     let runs = clamp_runs(style.runs, text.len());
-                    children.push(text_row(text, y, gw, row_h, fg, runs, metrics));
+                    children.push(text_row_with_offset(text, y, gw, row_h, fg, runs, metrics, scroll_x));
                 }
             }
         }
@@ -489,10 +517,26 @@ fn text_row<Msg: Clone + 'static>(
     runs: Vec<(usize, usize, Color)>,
     metrics: TermMetrics,
 ) -> View<Msg> {
+    text_row_with_offset(text, y, gw, row_h, fg, runs, metrics, 0.0)
+}
+
+/// Como [`text_row`] pero permite un offset horizontal en px (scroll_x del
+/// caller — el gutter queda fijo, el texto se desplaza).
+#[allow(clippy::too_many_arguments)]
+fn text_row_with_offset<Msg: Clone + 'static>(
+    text: &str,
+    y: f32,
+    gw: f32,
+    row_h: f32,
+    fg: Color,
+    runs: Vec<(usize, usize, Color)>,
+    metrics: TermMetrics,
+    scroll_x: f32,
+) -> View<Msg> {
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
-            left: length(gw + 4.0),
+            left: length(gw + 4.0 - scroll_x),
             top: length(y),
             right: auto(),
             bottom: auto(),

@@ -1451,6 +1451,15 @@ impl App for Shell {
                 ModuleMsg::Shell(shuma_module_shell::Msg::ZoomBy(factor)),
             ));
         }
+        // Shift+rueda = scroll horizontal del shell (útil cuando zoom-in
+        // hace líneas más largas que el viewport). 40 px por click.
+        if modifiers.shift && delta.y != 0.0 {
+            let dx = delta.y * 40.0;
+            return Some(Msg::Module(
+                Slot::Session(model.active_session, Which::Shell),
+                ModuleMsg::Shell(shuma_module_shell::Msg::ScrollHoriz(dx)),
+            ));
+        }
         // `delta.y` viene en líneas (positivo = hacia abajo). El scroll
         // del shell mide px desde el fondo, donde positivo = ver
         // historial, así que invertimos y escalamos a ~40 px por línea.

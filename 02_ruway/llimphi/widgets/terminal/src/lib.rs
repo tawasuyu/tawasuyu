@@ -34,8 +34,9 @@ pub mod store;
 pub mod view;
 
 pub use blocks::{
-    block_surface, block_surface_with_selection, blocks_height, blocks_scroll_to_bottom,
-    gutter_width, line_top_in_content, Item, ItemGeo, SelectionConfig,
+    block_surface, block_surface_with_scroll, block_surface_with_selection, blocks_height,
+    blocks_scroll_to_bottom, gutter_width, line_top_in_content, Item, ItemGeo, SelectionConfig,
+    TEXT_LEFT_PADDING_PX,
 };
 pub use find::{find_matches, next_match, prev_match, FindMatch, FindOpts};
 pub use cell_pipeline::{
