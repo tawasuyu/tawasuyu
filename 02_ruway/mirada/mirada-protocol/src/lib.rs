@@ -90,6 +90,43 @@ impl Default for Decorations {
     }
 }
 
+/// Permisos de capacidad por ejecutable que el Cerebro fija en el Cuerpo.
+///
+/// El Cuerpo es **quien otorga el protocolo Wayland**: una capacidad sensible
+/// (hoy, espiar el portapapeles vía `zwlr_data_control`) no se concede por una
+/// tabla que el cliente pueda eludir, sino **no anunciando el global** a los
+/// clientes no autorizados (frontera física, igual que el bitfield `Permisos`
+/// del kernel wawa).
+///
+/// La identidad del cliente es su **ejecutable real**, resuelto por el Cuerpo
+/// vía `SO_PEERCRED → /proc/<pid>/exe` — verdad del kernel, no falsificable; el
+/// `app_id` es aserción del cliente y los clientes de `data_control` ni siquiera
+/// tienen superficie/`app_id`. La postura es **permitir por defecto**: sólo se
+/// deniega a los ejecutables que casen (por subcadena, sin distinguir
+/// mayúsculas) con alguna entrada de la denylist.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Permisos {
+    /// Ejecutables a los que se les niega `zwlr_data_control` (el snoop del
+    /// portapapeles). Casa por subcadena del path del ejecutable, sin distinguir
+    /// mayúsculas. Vacía = nadie denegado (todos pueden bindear el global).
+    #[serde(default)]
+    pub clipboard_denylist: Vec<String>,
+}
+
+impl Permisos {
+    /// `true` si el ejecutable `exe` puede bindear `zwlr_data_control` (leer el
+    /// portapapeles). Deniega sólo si `exe` contiene —sin distinguir
+    /// mayúsculas— alguna entrada de la denylist. Denylist vacía ⇒ siempre
+    /// permitido.
+    pub fn clipboard_permitido(&self, exe: &str) -> bool {
+        let exe = exe.to_lowercase();
+        !self
+            .clipboard_denylist
+            .iter()
+            .any(|d| exe.contains(&d.to_lowercase()))
+    }
+}
+
 /// Una orden del Cerebro al Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BrainCommand {
@@ -108,6 +145,10 @@ pub enum BrainCommand {
     /// Fija los parámetros de decoración de las ventanas (marco, …). El
     /// Cerebro lo envía al arrancar y tras recargar la config.
     SetDecorations(Decorations),
+    /// Fija los permisos de capacidad por ejecutable (qué se le concede a
+    /// quién). Hoy gatea el snoop de portapapeles (`zwlr_data_control`). El
+    /// Cerebro lo envía al arrancar y tras recargar la config.
+    SetCapabilities(Permisos),
     /// Lanza un programa como proceso hijo del Cuerpo — hereda su
     /// entorno, `WAYLAND_DISPLAY` incluido, así el cliente se conecta
     /// aquí. La cadena se pasa a `sh -c`.
@@ -313,6 +354,36 @@ mod tests {
         let mut cur = Cursor::new(buf);
         let back: BrainCommand = read_frame(&mut cur).unwrap().unwrap();
         assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn frame_round_trips_set_capabilities() {
+        let cmd = BrainCommand::SetCapabilities(Permisos {
+            clipboard_denylist: vec!["wl-paste".into(), "/usr/bin/sneaky".into()],
+        });
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &cmd).unwrap();
+        let mut cur = Cursor::new(buf);
+        let back: BrainCommand = read_frame(&mut cur).unwrap().unwrap();
+        assert_eq!(back, cmd);
+    }
+
+    #[test]
+    fn permisos_vacios_permiten_a_todos() {
+        let p = Permisos::default();
+        assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
+        assert!(p.clipboard_permitido("cualquiera"));
+    }
+
+    #[test]
+    fn denylist_niega_por_subcadena_sin_distinguir_mayusculas() {
+        let p = Permisos { clipboard_denylist: vec!["wl-paste".into()] };
+        // Casa por subcadena: el path completo contiene el binario denegado.
+        assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
+        // Sin distinguir mayúsculas.
+        assert!(!p.clipboard_permitido("/opt/WL-Paste"));
+        // No casa lo no listado.
+        assert!(p.clipboard_permitido("/usr/bin/wl-copy"));
     }
 
     #[test]

@@ -18,7 +18,7 @@
 
 use std::collections::BTreeMap;
 
-use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, Rect, WindowId};
+use mirada_protocol::{BodyEvent, BrainCommand, Decorations, OutputId, Permisos, Rect, WindowId};
 
 /// Una superficie Wayland desde la óptica del Cuerpo.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +83,10 @@ pub enum BodyOp {
     SetCursor(String),
     /// Fija los parámetros de decoración de las ventanas (marco, …).
     SetDecorations(Decorations),
+    /// Fija los permisos de capacidad por ejecutable: el backend los consulta
+    /// al decidir qué clientes ven los globals sensibles (hoy, el snoop de
+    /// portapapeles `zwlr_data_control`).
+    SetCapabilities(Permisos),
     /// Lanza un programa como proceso hijo del compositor.
     Spawn(String),
     /// Apaga el compositor y libera el hardware.
@@ -182,6 +186,7 @@ impl BodyState {
             BrainCommand::GrabKeys(keys) => vec![BodyOp::SetGrabs(keys)],
             BrainCommand::SetCursor(name) => vec![BodyOp::SetCursor(name)],
             BrainCommand::SetDecorations(d) => vec![BodyOp::SetDecorations(d)],
+            BrainCommand::SetCapabilities(p) => vec![BodyOp::SetCapabilities(p)],
             BrainCommand::Spawn(cmd) => vec![BodyOp::Spawn(cmd)],
             BrainCommand::Shutdown => vec![BodyOp::Shutdown],
         }
@@ -422,6 +427,16 @@ mod tests {
             vec![BodyOp::SetCursor("crosshair".into())]
         );
         assert_eq!(b.apply(BrainCommand::Shutdown), vec![BodyOp::Shutdown]);
+    }
+
+    #[test]
+    fn set_capabilities_passes_through() {
+        let mut b = BodyState::new();
+        let p = Permisos { clipboard_denylist: vec!["wl-paste".into()] };
+        assert_eq!(
+            b.apply(BrainCommand::SetCapabilities(p.clone())),
+            vec![BodyOp::SetCapabilities(p)]
+        );
     }
 
     #[test]

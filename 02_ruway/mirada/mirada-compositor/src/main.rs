@@ -390,6 +390,12 @@ struct App {
     grabs: Vec<String>,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     decorations: mirada_brain::Decorations,
+    /// Permisos de capacidad por ejecutable que fija el Cerebro. El filtro del
+    /// global `zwlr_data_control` (creado al arrancar) los consulta para decidir
+    /// qué clientes ven el snoop de portapapeles — de ahí el [`Arc`]/[`RwLock`]:
+    /// el filtro vive `'static` dentro de smithay y `exec_op` los reemplaza
+    /// cuando el Cerebro recarga la política.
+    caps: Arc<std::sync::RwLock<mirada_brain::Permisos>>,
     /// Atajo capturado en el último evento de teclado, pendiente de enviar.
     pending_keybind: Option<String>,
     /// VT a la que conmutar, capturada por `Ctrl+Alt+Fn`. El backend DRM
@@ -835,6 +841,7 @@ impl App {
             BodyOp::SetGrabs(keys) => self.grabs = keys,
             BodyOp::SetCursor(_) => {}
             BodyOp::SetDecorations(d) => self.decorations = d,
+            BodyOp::SetCapabilities(p) => *self.caps.write().unwrap() = p,
             BodyOp::Spawn(cmd) => {
                 // En modo greeter no se lanza nada: la pantalla de login
                 // no es un sitio desde donde abrir programas.
@@ -1528,6 +1535,16 @@ fn process_ancestors(pid: i32) -> Vec<u32> {
     out
 }
 
+/// El ejecutable real de un proceso, leído de `/proc/<pid>/exe` (un symlink al
+/// binario). Es la **identidad honesta** del cliente para decidir capacidades:
+/// la da el kernel, no el cliente (a diferencia del `app_id`, que es aserción).
+/// `None` si el proceso ya murió o `/proc` no expone el enlace.
+fn exe_de_pid(pid: i32) -> Option<String> {
+    std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .map(|p| p.to_string_lossy().into_owned())
+}
+
 /// El PPID de un proceso desde `/proc/<pid>/stat` (campo 4). El `comm` (campo 2)
 /// puede llevar espacios y paréntesis, así que se parsea desde el último ')':
 /// tras él viene " <state> <ppid> …", y el ppid es el segundo token.
@@ -1980,6 +1997,15 @@ fn load_user_rules() -> Rules {
     }
 }
 
+/// Carga los permisos de capacidad del usuario (`~/.config/mirada/caps.ron`),
+/// o ninguno (todo permitido) si no hay archivo.
+fn load_user_caps() -> mirada_brain::Permisos {
+    match mirada_brain::permisos::default_path() {
+        Some(p) => mirada_brain::permisos::load_or_default(&p),
+        None => mirada_brain::Permisos::default(),
+    }
+}
+
 /// Carga la config general del WM (`~/.config/mirada/config.ron`), o los
 /// valores por defecto si no hay archivo.
 fn load_user_config() -> mirada_brain::Config {
@@ -2001,6 +2027,7 @@ fn embedded_brain(keymap_path: &Option<std::path::PathBuf>) -> Brain {
     let mut desktop = Desktop::with_keymap(keymap);
     desktop.set_config(load_user_config());
     desktop.set_rules(load_user_rules());
+    let _ = desktop.set_caps(load_user_caps());
     Brain::Embedded(desktop)
 }
 
@@ -2197,6 +2224,14 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         }
     };
 
+    // Los permisos de capacidad: un Arc compartido entre el `App` (que lo
+    // reemplaza cuando el Cerebro recarga la política) y el filtro del global
+    // `zwlr_data_control`, que decide qué clientes lo ven. Arranca permitiendo a
+    // todos; `apply_commands` lo siembra con la política del usuario en cuanto
+    // el arranque emite `SetCapabilities`.
+    let caps: Arc<std::sync::RwLock<mirada_brain::Permisos>> = Arc::default();
+    let caps_filter = caps.clone();
+
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
         xdg_shell_state: XdgShellState::new::<App>(&dh),
@@ -2208,7 +2243,16 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         dmabuf_state: DmabufState::new(),
         seat_state,
         data_device_state: DataDeviceState::new::<App>(&dh),
-        data_control_state: DataControlState::new::<App, _>(&dh, None, |_| true),
+        // `zwlr_data_control` (snoop de portapapeles): el filtro consulta los
+        // permisos por el **ejecutable real** del cliente (de su PID por
+        // `SO_PEERCRED`). Sin PID identificable → se permite (no romper).
+        data_control_state: DataControlState::new::<App, _>(&dh, None, move |client| {
+            let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
+            match pid.and_then(exe_de_pid) {
+                Some(exe) => caps_filter.read().unwrap().clipboard_permitido(&exe),
+                None => true,
+            }
+        }),
         seat,
         keyboard: None,
         pointer: None,
@@ -2227,6 +2271,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         session_env: Vec::new(),
         grabs: Vec::new(),
         decorations: mirada_brain::Decorations::default(),
+        caps,
         pending_keybind: None,
         pending_vt: None,
         pending_session: None,
@@ -2245,7 +2290,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     // el traspaso a la sesión (`complete_greeter_handoff`).
     if !greeter {
         if let Brain::Embedded(desktop) = &app.brain {
-            let cmds = vec![desktop.grab_keys(), desktop.decorations()];
+            let cmds = vec![desktop.grab_keys(), desktop.decorations(), desktop.capabilities()];
             app.apply_commands(cmds);
         }
     }

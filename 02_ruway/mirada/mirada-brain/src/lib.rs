@@ -26,6 +26,7 @@ pub mod config;
 pub mod ctl;
 pub mod desktop;
 pub mod keymap;
+pub mod permisos;
 pub mod rules;
 pub mod session;
 /// `impl allichay::Configurable for Config` — vuelve la config editable por UI.
@@ -38,6 +39,7 @@ pub use config::{default_root_menu, Config, MenuEntry, OutputOverride, ZoneCfg, 
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesState};
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
+pub use permisos::Permisos;
 pub use rules::{Rule, RuleOutcome, Rules};
 pub use session::{DesktopState, SESSION_VERSION};
 pub use watch::FileWatch;

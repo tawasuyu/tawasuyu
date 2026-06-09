@@ -9,6 +9,7 @@ use crate::action::{Direction, DesktopAction, WORKSPACE_COUNT};
 use crate::activity::ActivityGraph;
 use crate::config::Config;
 use crate::keymap::Keymap;
+use crate::permisos::Permisos;
 use crate::rules::Rules;
 use crate::session::{DesktopState, NodeShape, SpaceShape, SESSION_VERSION};
 
@@ -73,6 +74,10 @@ pub struct Desktop {
     keymap: Keymap,
     /// Reglas de ventana — escritorio/flotante por `app_id`/título.
     rules: Rules,
+    /// Permisos de capacidad por ejecutable — hoy, la denylist del snoop de
+    /// portapapeles. El Cerebro los empuja al Cuerpo (que es quien otorga el
+    /// protocolo) con [`Desktop::capabilities`].
+    caps: Permisos,
     /// Config general del WM — dropterm, parámetros del teselado, foco.
     config: Config,
     /// Ventanas del scratchpad: se invocan flotando y se ocultan a
@@ -124,6 +129,7 @@ impl Desktop {
             windows: HashMap::new(),
             keymap,
             rules: Rules::default(),
+            caps: Permisos::default(),
             config: Config::default(),
             scratchpad: Vec::new(),
             pending_output_workspaces: Vec::new(),
@@ -137,6 +143,22 @@ impl Desktop {
     /// abran a partir de ahora; las ya abiertas no se tocan.
     pub fn set_rules(&mut self, rules: Rules) {
         self.rules = rules;
+    }
+
+    /// Reemplaza los permisos de capacidad y devuelve el [`BrainCommand`] que
+    /// el dueño debe enviar al Cuerpo para que tomen efecto. La app lo llama
+    /// tras recargar `caps.ron` en caliente.
+    pub fn set_caps(&mut self, caps: Permisos) -> BrainCommand {
+        self.caps = caps;
+        self.capabilities()
+    }
+
+    /// El comando que fija los permisos de capacidad en el Cuerpo (hoy, la
+    /// denylist del snoop de portapapeles). La app lo envía al arrancar —junto
+    /// a [`grab_keys`](Desktop::grab_keys) y [`decorations`](Desktop::decorations)—
+    /// y tras recargar los permisos.
+    pub fn capabilities(&self) -> BrainCommand {
+        BrainCommand::SetCapabilities(self.caps.clone())
     }
 
     /// Aplica la config general del WM. Los parámetros de teselado
@@ -2086,6 +2108,27 @@ mod tests {
         match cmds.as_slice() {
             [BrainCommand::SetDecorations(dec)] => assert_eq!(dec.border_width, 5),
             other => panic!("se esperaba un SetDecorations, no {other:?}"),
+        }
+    }
+
+    #[test]
+    fn capabilities_emits_the_loaded_policy() {
+        let mut d = Desktop::new();
+        // Por defecto, permisos vacíos (todo permitido).
+        match d.capabilities() {
+            BrainCommand::SetCapabilities(p) => assert!(p.clipboard_denylist.is_empty()),
+            other => panic!("se esperaba SetCapabilities, no {other:?}"),
+        }
+        // set_caps reemplaza la política y devuelve el comando a enviar.
+        let nueva = Permisos { clipboard_denylist: vec!["wl-paste".into()] };
+        match d.set_caps(nueva.clone()) {
+            BrainCommand::SetCapabilities(p) => assert_eq!(p, nueva),
+            other => panic!("se esperaba SetCapabilities, no {other:?}"),
+        }
+        // Y queda fijada: capabilities() la sigue emitiendo.
+        match d.capabilities() {
+            BrainCommand::SetCapabilities(p) => assert!(!p.clipboard_permitido("/usr/bin/wl-paste")),
+            other => panic!("se esperaba SetCapabilities, no {other:?}"),
         }
     }
 
