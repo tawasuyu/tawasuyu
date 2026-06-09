@@ -125,6 +125,11 @@ web/tawasuyu-web/
     └── tawasuyu_web_bg.wasm
 ```
 
+Además de esos cuatro, el escritorio fetchea los **markdown del repo**
+(`/README.md`, `/00_unanchay/*/README.md`, `/docs/*.md`, …): el host
+tiene que servir también el árbol de documentos (en la práctica, un
+checkout del repo con `pkg/` buildeado encima).
+
 Funciona en cualquier static host (Nginx, GitHub Pages, S3+CloudFront,
 Caddy, netlify, fly, Vercel static). **Importante:**
 
@@ -159,9 +164,27 @@ sólo los 4 archivos. Un workflow CI que corra el script y commitee el
 
 ## Routing
 
-Los `<a href="#aire|fuego|tierra|agua">` apuntan a anchors locales.
-Cuando definamos rutas reales (otras páginas, sub-apps, etc.), basta con
-cambiar el `href` en `index.html` o interceptar el click desde JS.
+Hay dos mecanismos, ambos en el JS de `index.html`:
+
+1. **Hash por documento.** Cada artículo abierto pushea `#/ruta/al.md`;
+   back/forward re-abre o re-foca la ventana (`aplicarHash`).
+2. **Rutas limpias por dominio.** `tawasuyu.net/llimphi`,
+   `tawasuyu.net/wawa`, `tawasuyu.net/unanchay`… abren la ficha del
+   dominio (`aplicarRutaDominio`): el último segmento del pathname se
+   matchea contra los `data-doc` de la sidebar; las colisiones se
+   resuelven en el mapa `overrides` (hoy: `/wawa` = el SO en
+   `03_ukupacha`, no el host-side).
+
+Para que (2) funcione el server tiene que hacer **fallback a
+`index.html` de las rutas sin punto** (`/llimphi` → `index.html`),
+sirviendo los archivos reales (`.md`, `.wasm`, …) tal cual. En Nginx:
+
+```nginx
+location / { try_files $uri $uri/ /index.html; }
+```
+
+Si el fallback pisara un `.md`, `cargarMdSeguro` lo detecta (sniff de
+`<!doctype html`) y muestra error en vez de HTML crudo.
 
 ---
 

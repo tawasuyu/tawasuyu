@@ -55,6 +55,7 @@
           <li><span class="doc" data-doc="/PLAN.md" data-title="tawasuyu · PLAN" data-theme="tawasuyu">PLAN</span></li>
           <li><span class="doc" data-doc="/docs/SUITE.md" data-title="suite" data-theme="tawasuyu">suite</span></li>
           <li><span class="doc" data-doc="/docs/MODULES.md" data-title="módulos" data-theme="tawasuyu">módulos</span></li>
+          <li><span class="doc" data-doc="/CONTRIBUTING.md" data-title="contribuir" data-theme="tawasuyu">contribuir</span></li>
           <li><span class="doc is-panel" data-panel="1" data-title="panel · tawasuyu" data-theme="tawasuyu">panel</span></li>
           <li><a class="doc" href="https://git.tawasuyu.net/tawasuyu/tawasuyu" target="_blank" rel="noopener">gitea ↗</a></li>
         </ul>
@@ -86,14 +87,17 @@
       <div class="sidebar-section" data-mod="ruway">
         <h3 class="sec-head"><span class="doc" data-doc="/02_ruway/README.md" data-title="02 ruway · hacer" data-theme="ruway">02 ruway · hacer</span></h3>
         <ul>
+          <li><span class="doc" data-doc="/02_ruway/cards/README.md"   data-title="cards"   data-theme="ruway">cards</span></li>
           <li><span class="doc" data-doc="/02_ruway/chasqui/README.md" data-title="chasqui" data-theme="ruway">chasqui</span></li>
           <li><span class="doc" data-doc="/02_ruway/llimphi/README.md" data-title="llimphi" data-theme="ruway">llimphi</span></li>
+          <li><span class="doc" data-doc="/02_ruway/media/README.md"   data-title="media"   data-theme="ruway">media</span></li>
           <li><span class="doc" data-doc="/02_ruway/mirada/README.md"  data-title="mirada"  data-theme="ruway">mirada</span></li>
           <li><span class="doc" data-doc="/02_ruway/nada/README.md"    data-title="nada"    data-theme="ruway">nada</span></li>
           <li><span class="doc" data-doc="/02_ruway/nahual/README.md"  data-title="nahual"  data-theme="ruway">nahual</span></li>
           <li><span class="doc" data-doc="/02_ruway/shuma/README.md"   data-title="shuma"   data-theme="ruway">shuma</span></li>
           <li><span class="doc" data-doc="/02_ruway/supay/README.md"   data-title="supay"   data-theme="ruway">supay</span></li>
           <li><span class="doc" data-doc="/02_ruway/takiy/README.md"   data-title="takiy"   data-theme="fuego">takiy</span></li>
+          <li><span class="doc" data-doc="/02_ruway/tullpu/README.md"  data-title="tullpu"  data-theme="ruway">tullpu</span></li>
           <li><span class="doc" data-doc="/02_ruway/wawa/README.md"    data-title="wawa (user)" data-theme="ruway">wawa</span></li>
         </ul>
       </div>
@@ -104,6 +108,7 @@
           <li><span class="doc" data-doc="/03_ukupacha/agora/README.md"         data-title="agora"         data-theme="agua">agora</span></li>
           <li><span class="doc" data-doc="/03_ukupacha/arje/README.md"          data-title="arje"          data-theme="ukupacha">arje</span></li>
           <li><span class="doc" data-doc="/03_ukupacha/minga/README.md"         data-title="minga"         data-theme="tierra">minga</span></li>
+          <li><span class="doc" data-doc="/03_ukupacha/sandokan/README.md"      data-title="sandokan"      data-theme="ukupacha">sandokan</span></li>
           <li><span class="doc" data-doc="/03_ukupacha/wawa/README.md"          data-title="wawa (root)"   data-theme="ukupacha">wawa</span></li>
           <li><span class="doc" data-doc="/03_ukupacha/wawa-explorer/README.md" data-title="wawa-explorer" data-theme="ukupacha">wawa-explorer</span></li>
         </ul>
@@ -354,6 +359,36 @@
   }
   window.addEventListener('popstate',   aplicarHash);
   window.addEventListener('hashchange', aplicarHash);
+
+  // ===== rutas limpias por dominio =====
+  // tawasuyu.net/llimphi, tawasuyu.net/wawa, tawasuyu.net/unanchay…
+  // abren la ficha del dominio (README según el idioma del visitante).
+  // Requiere que el server haga fallback de rutas sin punto a index.html;
+  // los .md reales se sirven tal cual (el sniff de cargarMdSeguro detecta
+  // un fallback mal configurado y muestra error en vez de HTML crudo).
+  function aplicarRutaDominio() {
+    const seg = window.location.pathname.replace(/\/+$/, '').split('/').pop();
+    if (!seg || seg.includes('.')) return false;
+    const alias = seg.toLowerCase();
+    // colisiones se resuelven explícito: /wawa = el SO (raíz), no el host-side
+    const overrides = { wawa: '/03_ukupacha/wawa/README.md' };
+    let url = overrides[alias] || null;
+    if (!url) {
+      for (const el of document.querySelectorAll('#sidebar [data-doc]')) {
+        const doc = el.dataset.doc || '';
+        // /<cuadrante>/<dominio>/README.md  ó  /<NN_cuadrante>/README.md
+        const m = doc.match(/^\/[0-9]+_([^/]+)\/README\.md$/) ||
+                  doc.match(/^\/[^/]+\/([^/]+)\/README\.md$/);
+        if (m && m[1].toLowerCase() === alias) { url = doc; break; }
+      }
+    }
+    if (!url) return false;
+    const el = document.querySelector(`#sidebar [data-doc="${url}"]`);
+    const title = (el && el.dataset.title) || alias;
+    const theme = (el && el.dataset.theme) || 'tawasuyu';
+    abrirVentana(url, title, theme, /* fromHash */ true);
+    return true;
+  }
 
   // ===== lang resolution =====
   // Convención: README.md = inglés (default), LEEME.md = español,
@@ -750,7 +785,9 @@
     tickClock();
     setInterval(tickClock, 30_000);
     // Si la página arranca con un hash (ej. shared link), abrir.
+    // Si no, probar ruta limpia de dominio (tawasuyu.net/llimphi).
     if (window.location.hash.startsWith('#/')) aplicarHash();
+    else aplicarRutaDominio();
   });
 </script>
 </body>
