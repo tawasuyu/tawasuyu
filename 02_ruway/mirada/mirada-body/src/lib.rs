@@ -91,8 +91,9 @@ pub enum BodyOp {
     /// Fija los parámetros de decoración de las ventanas (marco, …).
     SetDecorations(Decorations),
     /// Fija los permisos de capacidad por ejecutable: el backend los consulta
-    /// al decidir qué clientes ven los globals sensibles (hoy, el snoop de
-    /// portapapeles `zwlr_data_control`).
+    /// al decidir qué clientes ven los globals sensibles (el snoop de
+    /// portapapeles `zwlr_data_control`, la inyección de teclas
+    /// `zwp_virtual_keyboard`, el censo de ventanas `ext_foreign_toplevel_list`).
     SetCapabilities(Permisos),
     /// Lanza un programa como proceso hijo del compositor.
     Spawn(String),
@@ -451,6 +452,7 @@ mod tests {
         let p = Permisos {
             clipboard_denylist: vec!["wl-paste".into()],
             virtual_input_denylist: vec!["wtype".into()],
+            window_list_denylist: vec!["lswt".into()],
         };
         assert_eq!(
             b.apply(BrainCommand::SetCapabilities(p.clone())),

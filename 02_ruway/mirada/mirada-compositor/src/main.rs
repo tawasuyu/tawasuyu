@@ -61,6 +61,9 @@ use smithay::wayland::compositor::{
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
 };
+use smithay::wayland::foreign_toplevel_list::{
+    ForeignToplevelHandle, ForeignToplevelListHandler, ForeignToplevelListState,
+};
 use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
 use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler, XdgDecorationState};
@@ -79,8 +82,8 @@ use smithay::desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface
 use smithay::output::Output;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
-    delegate_layer_shell, delegate_output, delegate_seat, delegate_shm, delegate_virtual_keyboard_manager,
-    delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_foreign_toplevel_list, delegate_layer_shell, delegate_output, delegate_seat,
+    delegate_shm, delegate_virtual_keyboard_manager, delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use auth_core::{SessionTicket, UserInfo};
@@ -296,6 +299,10 @@ struct ManagedWindow {
     /// Título del cliente — para pintar la etiqueta (barra de título).
     /// Se actualiza en `title_changed`.
     title: String,
+    /// Handle en el censo `ext_foreign_toplevel_list` — espeja título y
+    /// `app_id` hacia los clientes autorizados. `None` para la ventana del
+    /// shell (el marco no es una ventana del usuario).
+    foreign_handle: Option<ForeignToplevelHandle>,
     /// Búferes de los 4 lados del marco (arriba, abajo, izq., der.) —
     /// cada uno con su `Id` estable para el seguimiento de daño.
     borders: [SolidColorBuffer; 4],
@@ -348,6 +355,11 @@ struct App {
     /// (espejo del de `data_control`): los clientes en `virtual_input_denylist`
     /// no lo ven. Se guarda para mantenerlo vivo durante toda la sesión.
     _virtual_keyboard_state: VirtualKeyboardManagerState,
+    /// Estado de `ext_foreign_toplevel_list_v1` — el censo de ventanas
+    /// (título + `app_id` de todo lo abierto) para taskbars, docks y switchers.
+    /// El global se crea con un filtro por ejecutable (espejo de los otros
+    /// dos): los clientes en `window_list_denylist` no lo ven.
+    foreign_toplevel_state: ForeignToplevelListState,
     seat: Seat<Self>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).
@@ -898,6 +910,13 @@ impl App {
             .client()
             .and_then(|c| c.get_data::<ClientState>().and_then(|s| s.pid));
 
+        // Alta en el censo `ext_foreign_toplevel_list` — sólo ventanas del
+        // usuario (el marco del shell no se anuncia a taskbars/switchers).
+        let foreign_handle = (!is_shell).then(|| {
+            self.foreign_toplevel_state
+                .new_toplevel::<App>(title.clone(), app_id.clone())
+        });
+
         self.windows.push(ManagedWindow {
             id,
             toplevel,
@@ -913,6 +932,7 @@ impl App {
             frame_divisor: 1,
             frame_tick: 0,
             title: title.clone(),
+            foreign_handle,
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
 
@@ -1345,6 +1365,10 @@ impl XdgShellHandler for App {
             .position(|w| w.surface == *surface.wl_surface());
         if let Some(pos) = pos {
             let w = self.windows.remove(pos);
+            // Baja en el censo: los clientes autorizados reciben `closed`.
+            if let Some(handle) = &w.foreign_handle {
+                self.foreign_toplevel_state.remove_toplevel(handle);
+            }
             if w.is_shell {
                 // El shell se cerró: libera su reserva (insets en cero), el
                 // Cerebro vuelve a teselar en la salida entera.
@@ -1371,12 +1395,38 @@ impl XdgShellHandler for App {
                 .and_then(|d| d.title.clone())
                 .unwrap_or_default()
         });
-        // Espeja el título en la ventana gestionada (para pintar la etiqueta).
+        // Espeja el título en la ventana gestionada (para pintar la etiqueta)
+        // y en el censo `ext_foreign_toplevel_list`.
         if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
             w.title = title.clone();
+            if let Some(handle) = &w.foreign_handle {
+                handle.send_title(&title);
+                handle.send_done();
+            }
         }
         if let Some(ev) = self.body.retitle_surface(id, title) {
             self.brain_feed(ev);
+        }
+    }
+
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        // Espeja el `app_id` en el censo `ext_foreign_toplevel_list` (los
+        // clientes suelen fijarlo después de crear el toplevel).
+        let app_id = with_states(surface.wl_surface(), |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .and_then(|d| d.lock().ok())
+                .and_then(|d| d.app_id.clone())
+                .unwrap_or_default()
+        });
+        let w = self
+            .windows
+            .iter()
+            .find(|w| w.surface == *surface.wl_surface());
+        if let Some(handle) = w.and_then(|w| w.foreign_handle.as_ref()) {
+            handle.send_app_id(&app_id);
+            handle.send_done();
         }
     }
 
@@ -1495,6 +1545,13 @@ delegate_seat!(App);
 delegate_data_device!(App);
 delegate_data_control!(App);
 delegate_virtual_keyboard_manager!(App);
+delegate_foreign_toplevel_list!(App);
+
+impl ForeignToplevelListHandler for App {
+    fn foreign_toplevel_list_state(&mut self) -> &mut ForeignToplevelListState {
+        &mut self.foreign_toplevel_state
+    }
+}
 delegate_output!(App);
 
 // ---------------------------------------------------------------------
@@ -2250,6 +2307,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     let caps: Arc<std::sync::RwLock<mirada_brain::Permisos>> = Arc::default();
     let caps_filter = caps.clone();
     let caps_vk_filter = caps.clone();
+    let caps_ftl_filter = caps.clone();
 
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
@@ -2282,6 +2340,19 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
                 None => true,
             }
         }),
+        // `ext_foreign_toplevel_list` (censo de ventanas): mismo filtro por
+        // **ejecutable real** del cliente. Sin PID identificable → se permite
+        // (no romper taskbars/docks legítimos).
+        foreign_toplevel_state: ForeignToplevelListState::new_with_filter::<App>(
+            &dh,
+            move |client| {
+                let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
+                match pid.and_then(exe_de_pid) {
+                    Some(exe) => caps_ftl_filter.read().unwrap().window_list_permitido(&exe),
+                    None => true,
+                }
+            },
+        ),
         seat,
         keyboard: None,
         pointer: None,

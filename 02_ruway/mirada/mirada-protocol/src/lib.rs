@@ -124,6 +124,13 @@ pub struct Permisos {
     /// denegado (todos pueden bindear el global).
     #[serde(default)]
     pub virtual_input_denylist: Vec<String>,
+    /// Ejecutables a los que se les niega `ext_foreign_toplevel_list` (el censo
+    /// de ventanas: título + `app_id` de todo lo abierto — con qué banco operás,
+    /// qué documento editás). Casa por subcadena del path del ejecutable, sin
+    /// distinguir mayúsculas. Vacía = nadie denegado (todos pueden bindear el
+    /// global).
+    #[serde(default)]
+    pub window_list_denylist: Vec<String>,
 }
 
 impl Permisos {
@@ -140,6 +147,14 @@ impl Permisos {
     /// [`Permisos::clipboard_permitido`]. Denylist vacía ⇒ siempre permitido.
     pub fn virtual_input_permitido(&self, exe: &str) -> bool {
         permitido(&self.virtual_input_denylist, exe)
+    }
+
+    /// `true` si el ejecutable `exe` puede bindear `ext_foreign_toplevel_list`
+    /// (enumerar las ventanas abiertas). Misma semántica de denylist por
+    /// subcadena que [`Permisos::clipboard_permitido`]. Denylist vacía ⇒
+    /// siempre permitido.
+    pub fn window_list_permitido(&self, exe: &str) -> bool {
+        permitido(&self.window_list_denylist, exe)
     }
 }
 
@@ -169,8 +184,10 @@ pub enum BrainCommand {
     /// Cerebro lo envía al arrancar y tras recargar la config.
     SetDecorations(Decorations),
     /// Fija los permisos de capacidad por ejecutable (qué se le concede a
-    /// quién). Hoy gatea el snoop de portapapeles (`zwlr_data_control`). El
-    /// Cerebro lo envía al arrancar y tras recargar la config.
+    /// quién): el snoop de portapapeles (`zwlr_data_control`), la inyección
+    /// de teclas (`zwp_virtual_keyboard`) y el censo de ventanas
+    /// (`ext_foreign_toplevel_list`). El Cerebro lo envía al arrancar y tras
+    /// recargar la config.
     SetCapabilities(Permisos),
     /// Lanza un programa como proceso hijo del Cuerpo — hereda su
     /// entorno, `WAYLAND_DISPLAY` incluido, así el cliente se conecta
@@ -390,6 +407,7 @@ mod tests {
         let cmd = BrainCommand::SetCapabilities(Permisos {
             clipboard_denylist: vec!["wl-paste".into(), "/usr/bin/sneaky".into()],
             virtual_input_denylist: vec!["wtype".into()],
+            window_list_denylist: vec!["lswt".into()],
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -404,6 +422,7 @@ mod tests {
         assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.clipboard_permitido("cualquiera"));
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
+        assert!(p.window_list_permitido("/usr/bin/lswt"));
     }
 
     #[test]
@@ -411,6 +430,7 @@ mod tests {
         let p = Permisos {
             clipboard_denylist: vec!["wl-paste".into()],
             virtual_input_denylist: vec!["wtype".into()],
+            window_list_denylist: vec!["lswt".into()],
         };
         // Casa por subcadena: el path completo contiene el binario denegado.
         assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
@@ -418,11 +438,15 @@ mod tests {
         assert!(!p.clipboard_permitido("/opt/WL-Paste"));
         // No casa lo no listado.
         assert!(p.clipboard_permitido("/usr/bin/wl-copy"));
-        // Las dos denylists son independientes: wtype inyecta pero puede leer
-        // el portapapeles; wl-paste lee pero puede inyectar.
+        // Las denylists son independientes: wtype inyecta pero puede leer
+        // el portapapeles; wl-paste lee pero puede inyectar; lswt sólo
+        // pierde el censo de ventanas.
         assert!(!p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.virtual_input_permitido("/usr/bin/wl-paste"));
         assert!(p.clipboard_permitido("/usr/bin/wtype"));
+        assert!(!p.window_list_permitido("/usr/bin/lswt"));
+        assert!(p.window_list_permitido("/usr/bin/wtype"));
+        assert!(p.virtual_input_permitido("/usr/bin/lswt"));
     }
 
     #[test]

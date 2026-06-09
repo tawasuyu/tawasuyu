@@ -7,10 +7,11 @@
 //! es quien **otorga el protocolo**: una capacidad denegada no se concede por
 //! una tabla eludible sino **no anunciando el global** al cliente.
 //!
-//! Hoy gatea una sola capacidad: el snoop del portapapeles
-//! (`zwlr_data_control`). La identidad del cliente es su **ejecutable real**
-//! (`SO_PEERCRED → /proc/<pid>/exe`), no su `app_id` (falsificable). Postura:
-//! **permitir por defecto**, con una denylist de ejecutables.
+//! Gatea tres capacidades: el snoop del portapapeles (`zwlr_data_control`), la
+//! inyección de pulsaciones (`zwp_virtual_keyboard`) y el censo de ventanas
+//! (`ext_foreign_toplevel_list`). La identidad del cliente es su **ejecutable
+//! real** (`SO_PEERCRED → /proc/<pid>/exe`), no su `app_id` (falsificable).
+//! Postura: **permitir por defecto**, con una denylist de ejecutables.
 //!
 //! El tipo de datos en sí ([`Permisos`]) vive en `mirada-protocol` porque cruza
 //! el cable Cerebro↔Cuerpo; este módulo sólo aporta la carga desde disco.
@@ -85,6 +86,10 @@ const PERMISOS_TEMPLATE: &str = "\
 // (inyectar pulsaciones sintéticas). Misma semántica de subcadena. Vacía = todos
 // permitidos.
 //
+// `window_list_denylist`: ejecutables a los que se NIEGA
+// `ext_foreign_toplevel_list` (el censo de ventanas: título + app_id de todo lo
+// abierto). Misma semántica de subcadena. Vacía = todos permitidos.
+//
 // Descomenta y edita:
 (
     clipboard_denylist: [
@@ -94,6 +99,10 @@ const PERMISOS_TEMPLATE: &str = "\
     virtual_input_denylist: [
         // \"wtype\",
         // \"/opt/sospechoso/bin/autoclicker\",
+    ],
+    window_list_denylist: [
+        // \"lswt\",
+        // \"/opt/sospechoso/bin/vigia\",
     ],
 )
 ";
@@ -107,27 +116,33 @@ mod tests {
         let p = from_ron(PERMISOS_TEMPLATE).unwrap();
         assert!(p.clipboard_denylist.is_empty());
         assert!(p.virtual_input_denylist.is_empty());
+        assert!(p.window_list_denylist.is_empty());
         assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
+        assert!(p.window_list_permitido("/usr/bin/lswt"));
     }
 
     #[test]
     fn permisos_parse_from_ron() {
-        let ron = r#"( clipboard_denylist: ["wl-paste", "spyware"], virtual_input_denylist: ["wtype"] )"#;
+        let ron = r#"( clipboard_denylist: ["wl-paste", "spyware"], virtual_input_denylist: ["wtype"], window_list_denylist: ["lswt"] )"#;
         let p = from_ron(ron).unwrap();
         assert_eq!(p.clipboard_denylist.len(), 2);
         assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.clipboard_permitido("/usr/bin/firefox"));
         assert!(!p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.virtual_input_permitido("/usr/bin/firefox"));
+        assert!(!p.window_list_permitido("/usr/bin/lswt"));
+        assert!(p.window_list_permitido("/usr/bin/firefox"));
     }
 
     #[test]
     fn campos_ausentes_caen_a_vacio() {
-        // Una config vieja (sólo clipboard) sigue parseando: el campo nuevo
-        // cae a vacío por `#[serde(default)]`.
+        // Una config vieja (sólo clipboard) sigue parseando: los campos nuevos
+        // caen a vacío por `#[serde(default)]`.
         let p = from_ron(r#"( clipboard_denylist: ["wl-paste"] )"#).unwrap();
         assert!(p.virtual_input_denylist.is_empty());
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
+        assert!(p.window_list_denylist.is_empty());
+        assert!(p.window_list_permitido("/usr/bin/lswt"));
     }
 }

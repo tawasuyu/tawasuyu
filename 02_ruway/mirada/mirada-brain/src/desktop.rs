@@ -2136,6 +2136,7 @@ mod tests {
         let nueva = Permisos {
             clipboard_denylist: vec!["wl-paste".into()],
             virtual_input_denylist: vec!["wtype".into()],
+            window_list_denylist: vec!["lswt".into()],
         };
         match d.set_caps(nueva.clone()) {
             BrainCommand::SetCapabilities(p) => assert_eq!(p, nueva),
