@@ -634,7 +634,9 @@ pub enum MenuStyle {
 
 impl Default for MenuStyle {
     fn default() -> Self {
-        MenuStyle::Classic
+        // Xp es el único skin con panel claro propio (Classic hereda `theme.bg_app`
+        // y, con tema oscuro, sale negro lavado). Mejor default visual de fábrica.
+        MenuStyle::Xp
     }
 }
 

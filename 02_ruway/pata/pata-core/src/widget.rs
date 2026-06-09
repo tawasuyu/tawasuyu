@@ -235,6 +235,17 @@ pub enum WidgetView {
         /// Máscara de ocupados (bit `i` → escritorio `i + 1`).
         occupied: u16,
     },
+    /// Fase lunar — fracción del ciclo sinódico (`0`/`1` = nueva, `0.5` = llena)
+    /// + el nombre de la fase para el tooltip. El frontend pinta el disco con
+    /// **shapes** (un círculo iluminado desplazado contra un fondo oscuro): los
+    /// glifos emoji 🌑..🌘 caen a *tofu* en cualquier máquina sin Noto Color
+    /// Emoji y arruinan la lectura. Mejor dibujarla.
+    Moon {
+        /// Fracción del ciclo `0..=1`.
+        phase: f32,
+        /// Nombre de la fase (para el tooltip).
+        name: String,
+    },
     /// Un widget cuyo `kind` el core no implementa todavía: el frontend pinta un
     /// chip tenue con este nombre. Permite encodear la visión completa del marco
     /// (start_button, tray, astro…) antes de que cada widget exista.
@@ -575,15 +586,16 @@ impl Widget for Astro {
     }
 }
 
-/// Widget del ciclo lunar: muestra **sólo el glifo de la fase actual** en el
-/// chip y el nombre de la fase en el tooltip. Antes vivía mezclado dentro de
-/// [`Astro`]; al separarse se ve claramente y no compite con el signo solar.
-/// La fase la entrega el host vía [`WidgetCtx::moon_phase`] (`0..1`, donde
-/// `0`/`1` son luna nueva y `0.5` luna llena).
+/// Widget del ciclo lunar: emite [`WidgetView::Moon`] con la fracción del ciclo
+/// y el nombre de la fase. El frontend la pinta con shapes (un disco iluminado
+/// desplazado contra un fondo oscuro) — antes emitía el glifo emoji 🌑..🌘,
+/// pero en cualquier máquina sin Noto Color Emoji salía como cuadrado tofu.
+/// La fase la entrega el host vía [`WidgetCtx::moon_phase`] (`0..1`).
 #[derive(Debug, Clone, Default)]
 pub struct Moon {
-    glyph: String,
-    tooltip: String,
+    phase: f32,
+    name: String,
+    primed: bool,
 }
 
 impl Moon {
@@ -596,19 +608,22 @@ impl Moon {
 impl Widget for Moon {
     fn tick(&mut self, ctx: &WidgetCtx) {
         let frac = ctx.moon_phase.clamp(0.0, 1.0);
+        // El nombre se saca del bin más cercano de las 8 fases canónicas, para
+        // que el tooltip diga "Llena" / "Creciente" / … sin números.
         let idx = ((frac * 8.0 + 0.5) as usize) % 8;
-        let (nombre, glifo) = FASES_LUNA[idx];
-        self.glyph = glifo.to_string();
-        self.tooltip = nombre.to_string();
+        let (nombre, _glifo) = FASES_LUNA[idx];
+        self.phase = frac;
+        self.name = nombre.to_string();
+        self.primed = true;
     }
 
     fn view(&self) -> WidgetView {
-        if self.glyph.is_empty() {
+        if !self.primed {
             WidgetView::Empty
         } else {
-            WidgetView::TextRich {
-                text: self.glyph.clone(),
-                tooltip: self.tooltip.clone(),
+            WidgetView::Moon {
+                phase: self.phase,
+                name: self.name.clone(),
             }
         }
     }
@@ -1091,16 +1106,16 @@ mod tests {
     }
 
     #[test]
-    fn moon_mapea_fase_a_glifo_con_tooltip() {
+    fn moon_emite_phase_y_nombre_de_fase() {
         let mut ctx = ctx();
         ctx.moon_phase = 0.5; // llena → idx 4
         let mut m = Moon::from_spec(&WidgetSpec::new("moon"));
         m.tick(&ctx);
         assert_eq!(
             m.view(),
-            WidgetView::TextRich {
-                text: "🌕".to_string(),
-                tooltip: "Llena".to_string(),
+            WidgetView::Moon {
+                phase: 0.5,
+                name: "Llena".to_string(),
             }
         );
     }

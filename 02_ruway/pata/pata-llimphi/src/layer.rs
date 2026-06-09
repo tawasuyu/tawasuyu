@@ -734,10 +734,14 @@ impl LayerApp {
         // jobs y el historial persisten en el `State` aunque se repliegue.
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
-        // Abierto: foco Exclusive para escribir. Cerrado: `None` — no
-        // retiene el teclado, así una app lanzada (kitty) lo recibe.
+        // Abierto: `OnDemand` para escribir sin secuestrar al teclado —
+        // `Exclusive` retenía el foco aunque el usuario clickeara una ventana
+        // y daba la sensación de que pata "no soltaba". Con OnDemand el
+        // compositor entrega el foco al click; el `leave` handler ya cierra
+        // el drawer al perder foco. Cerrado: `None`, así una app lanzada
+        // (kitty) lo recibe sin pasar por pata.
         layer.set_keyboard_interactivity(if open {
-            KeyboardInteractivity::Exclusive
+            KeyboardInteractivity::OnDemand
         } else {
             KeyboardInteractivity::None
         });

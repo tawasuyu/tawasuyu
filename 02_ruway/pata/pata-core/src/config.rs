@@ -397,7 +397,10 @@ impl Config {
     pub fn preset() -> Self {
         let mut top = Surface::bar(Anchor::Top);
         top.start = vec![WidgetSpec::new("start_button"), WidgetSpec::new("clock")];
-        top.center = vec![WidgetSpec::new("window_list")];
+        top.center = vec![
+            WidgetSpec::new("workspace_switcher"),
+            WidgetSpec::new("window_list"),
+        ];
         top.end = vec![
             WidgetSpec::new("astro"),
             WidgetSpec::new("moon"),

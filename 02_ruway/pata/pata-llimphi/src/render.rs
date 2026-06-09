@@ -97,6 +97,7 @@ pub fn widget_tooltip(v: &WidgetView) -> Option<String> {
             Some(format!("{l} {caption} · {n} cores"))
         }
         WidgetView::Workspaces { active, count, .. } => Some(format!("Escritorio {active}/{count}")),
+        WidgetView::Moon { name, .. } => Some(name.clone()),
         WidgetView::Placeholder(kind) => Some(kind.clone()),
     }
 }
@@ -145,7 +146,16 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             ..Default::default()
         }),
         WidgetView::Text(t) => chip(theme).text(t.clone(), 13.0, theme.fg_text),
-        WidgetView::TextRich { text, .. } => chip(theme).text(text.clone(), 16.0, theme.fg_text),
+        WidgetView::TextRich { text, .. } => {
+            // El signo zodiacal toma el color del elemento; el resto cae al
+            // fg neutro. Sin esto el glifo sale blanco y se pierde de vista.
+            let color = match kind {
+                Some("astro") => astro_color(text, theme.fg_text),
+                _ => theme.fg_text,
+            };
+            let body_px = if matches!(kind, Some("astro")) { 19.0 } else { 16.0 };
+            chip(theme).text(text.clone(), body_px, color)
+        }
         WidgetView::Meter {
             label,
             fraction,
@@ -172,6 +182,7 @@ pub fn widget_view_kinded(v: &WidgetView, kind: Option<&str>, theme: &Theme) -> 
             // con gap chico. En la barra, el slot lo pinta con su gap real.
             workspaces_view(*active, *count, *occupied, 4.0, FlexDirection::Row, theme)
         }
+        WidgetView::Moon { phase, .. } => moon_view(*phase),
         WidgetView::Placeholder(kind) => chip(theme)
             .fill(theme.bg_panel)
             .radius(6.0)
@@ -191,6 +202,60 @@ fn kind_icon(kind: &str) -> Option<(&'static str, Color)> {
         "cpu_cores" | "cpu_cores_meter" => Some(("◉", Color::from_rgba8(96, 200, 232, 255))),
         _ => None,
     }
+}
+
+/// Color del glifo zodiacal según su elemento — fuego (Aries/Leo/Sagitario),
+/// tierra (Tauro/Virgo/Capricornio), aire (Géminis/Libra/Acuario), agua
+/// (Cáncer/Escorpio/Piscis). Sin esto el glifo sale blanco y el chip pierde
+/// su carácter; con esto, un vistazo da la lectura.
+fn astro_color(glyph: &str, fallback: Color) -> Color {
+    match glyph {
+        "♈" | "♌" | "♐" => Color::from_rgba8(232, 96, 64, 255),   // fuego
+        "♉" | "♍" | "♑" => Color::from_rgba8(120, 168, 96, 255),  // tierra
+        "♊" | "♎" | "♒" => Color::from_rgba8(232, 192, 96, 255),  // aire
+        "♋" | "♏" | "♓" => Color::from_rgba8(96, 168, 232, 255),  // agua
+        _ => fallback,
+    }
+}
+
+/// Pinta la fase lunar como **shapes** (no glifo emoji). Un disco oscuro de
+/// fondo y un disco iluminado desplazado horizontalmente según `phase`:
+/// `0` (nueva) → totalmente desplazado a la izquierda (invisible);
+/// `0.5` (llena) → centrado; `1` (nueva) → totalmente a la derecha. La
+/// transición pasa por cuartos y gibosas naturalmente. Recortado al disco
+/// grande para que no chorree fuera.
+fn moon_view(phase: f32) -> View<Msg> {
+    let phase = phase.clamp(0.0, 1.0) as f64;
+    let size_px = 22.0_f32;
+    View::new(Style {
+        size: Size {
+            width: length(size_px + 6.0),
+            height: length(size_px + 4.0),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::{BlendMode, Fill};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let r = ((rect.w.min(rect.h) as f64) * 0.5 - 1.0).max(2.0);
+        let dark = Color::from_rgba8(46, 51, 76, 255);
+        let light = Color::from_rgba8(245, 235, 199, 255);
+        let disco = Circle::new((cx, cy), r);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &dark, None, &disco);
+        // Clip al disco grande y dibujar el disco claro desplazado.
+        scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, Affine::IDENTITY, &disco);
+        let dx = -2.0 * r * (core::f64::consts::PI * phase).cos();
+        let iluminado = Circle::new((cx + dx, cy), r);
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &light, None, &iluminado);
+        scene.pop_layer();
+    })
 }
 
 /// Antepone al chip un glifo coloreado por kind, si corresponde, manteniendo
@@ -427,9 +492,12 @@ fn barra_dims(size: MeterSize, orient: MeterOrient) -> (f32, f32) {
         (MeterSize::Small, MeterOrient::Horizontal) => (28.0, 4.0),
         (MeterSize::Medium, MeterOrient::Horizontal) => (BARRA_W, 6.0),
         (MeterSize::Large, MeterOrient::Horizontal) => (78.0, 8.0),
-        (MeterSize::Small, MeterOrient::Vertical) => (4.0, 18.0),
-        (MeterSize::Medium, MeterOrient::Vertical) => (6.0, 28.0),
-        (MeterSize::Large, MeterOrient::Vertical) => (8.0, 48.0),
+        // Verticales: las defaults históricas (4×18 / 6×28 / 8×48) se veían
+        // como hilitos en una barra grande. Subo el grosor y el alto para que
+        // la lectura sea inmediata sin tener que entrecerrar los ojos.
+        (MeterSize::Small, MeterOrient::Vertical) => (8.0, 26.0),
+        (MeterSize::Medium, MeterOrient::Vertical) => (12.0, 38.0),
+        (MeterSize::Large, MeterOrient::Vertical) => (16.0, 60.0),
     }
 }
 
@@ -594,9 +662,9 @@ fn meter_view(
 /// barra + padding + caption si la hay).
 fn auto_h(size: MeterSize) -> f32 {
     match size {
-        MeterSize::Small => 24.0,
-        MeterSize::Medium => 44.0,
-        MeterSize::Large => 70.0,
+        MeterSize::Small => 32.0,
+        MeterSize::Medium => 54.0,
+        MeterSize::Large => 82.0,
     }
 }
 
@@ -1819,8 +1887,9 @@ pub fn clipboard_overlay(history: &[String], bar_h: f32, theme: &Theme) -> View<
     .children(vec![scrim])
 }
 
-/// Ancho del panel del reloj (px).
-const CLOCK_PANEL_W: f32 = 360.0;
+/// Ancho del panel del reloj (px). Compacto a propósito — antes era 360 y
+/// se sentía como un panel completo para cambiar la hora.
+const CLOCK_PANEL_W: f32 = 260.0;
 
 /// Los cinco campos editables del reloj: índice + rótulo.
 const CLOCK_FIELDS: [(u8, &str); 5] = [
@@ -1863,8 +1932,8 @@ fn spinner(label: &str, field: u8, valor: &str, theme: &Theme) -> View<Msg> {
     let flecha = |glifo: &str, delta: i32| {
         View::new(Style {
             size: Size {
-                width: length(34.0_f32),
-                height: length(22.0_f32),
+                width: length(26.0_f32),
+                height: length(18.0_f32),
             },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
@@ -1873,12 +1942,12 @@ fn spinner(label: &str, field: u8, valor: &str, theme: &Theme) -> View<Msg> {
         .radius(5.0)
         .hover_fill(theme.bg_button_hover)
         .on_click(Msg::ClockAdjust(field, delta))
-        .text(glifo.to_string(), 12.0, theme.accent)
+        .text(glifo.to_string(), 11.0, theme.accent)
     };
     let val = View::new(Style {
         size: Size {
-            width: length(40.0_f32),
-            height: length(26.0_f32),
+            width: length(34.0_f32),
+            height: length(22.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
@@ -1886,7 +1955,7 @@ fn spinner(label: &str, field: u8, valor: &str, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .radius(5.0)
-    .text(valor.to_string(), 15.0, theme.fg_text);
+    .text(valor.to_string(), 13.0, theme.fg_text);
     let rotulo = View::new(Style {
         size: Size {
             width: auto(),
@@ -1932,7 +2001,7 @@ pub fn clock_panel(draft: &crate::ClockDraft, theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         gap: Size {
-            width: length(6.0_f32),
+            width: length(3.0_f32),
             height: length(0.0_f32),
         },
         ..Default::default()
@@ -1969,14 +2038,14 @@ pub fn clock_panel(draft: &crate::ClockDraft, theme: &Theme) -> View<Msg> {
         flex_direction: FlexDirection::Column,
         align_items: Some(AlignItems::Center),
         padding: TaffyRect {
-            left: length(12.0_f32),
-            right: length(12.0_f32),
-            top: length(10.0_f32),
-            bottom: length(12.0_f32),
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(8.0_f32),
+            bottom: length(10.0_f32),
         },
         gap: Size {
             width: length(0.0_f32),
-            height: length(10.0_f32),
+            height: length(7.0_f32),
         },
         ..Default::default()
     })
