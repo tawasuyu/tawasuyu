@@ -43,7 +43,9 @@ use smithay::reexports::wayland_server::protocol::wl_buffer;
 use smithay::reexports::wayland_server::protocol::wl_output;
 use smithay::reexports::wayland_server::protocol::wl_seat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, ListeningSocket};
+use smithay::reexports::wayland_server::{
+    Client, Display, DisplayHandle, ListeningSocket, Resource,
+};
 use smithay::reexports::winit::platform::pump_events::PumpStatus;
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::utils::{Serial, Transform};
@@ -891,6 +893,19 @@ impl App {
             let title = if title.is_empty() { format!("ventana {id}") } else { title };
             let ev = self.body.open_surface(id, app_id, title);
             self.brain_feed(ev);
+            // Linaje de proceso para las constelaciones (best-effort): el PID lo
+            // guardó el accept-loop en `ClientState`; los ancestros salen de /proc.
+            let pid = surface
+                .client()
+                .and_then(|c| c.get_data::<ClientState>().and_then(|s| s.pid));
+            if let Some(pid) = pid.filter(|&p| p > 0) {
+                let ancestors = process_ancestors(pid);
+                self.brain_feed(BodyEvent::WindowLineage {
+                    id,
+                    pid: pid as u32,
+                    ancestors,
+                });
+            }
         }
     }
 
@@ -1459,12 +1474,52 @@ delegate_output!(App);
 // ---------------------------------------------------------------------
 
 #[derive(Default)]
-struct ClientState {
+pub struct ClientState {
     compositor_state: CompositorClientState,
+    /// PID del proceso cliente, leído de las credenciales del socket Unix al
+    /// aceptarlo (`SO_PEERCRED`). Alimenta el linaje de las *constelaciones*.
+    /// `None` si el backend no expone credenciales.
+    pid: Option<i32>,
+}
+impl ClientState {
+    /// Estado de cliente con su PID (de `UnixStream::peer_cred`).
+    pub fn with_pid(pid: Option<i32>) -> Self {
+        Self { pid, ..Default::default() }
+    }
 }
 impl ClientData for ClientState {
     fn initialized(&self, _id: ClientId) {}
     fn disconnected(&self, _id: ClientId, _reason: DisconnectReason) {}
+}
+
+/// La cadena de PIDs ancestros de un proceso (padre inmediato primero), leída de
+/// `/proc/<pid>/stat`. Acotada a 32 saltos por si /proc miente o cicla. Vacía si
+/// no se puede leer (el proceso ya murió, no es Linux…). Alimenta el linaje de
+/// las *constelaciones* del Cerebro.
+fn process_ancestors(pid: i32) -> Vec<u32> {
+    let mut out = Vec::new();
+    let mut cur = pid;
+    for _ in 0..32 {
+        let Some(ppid) = read_ppid(cur) else { break };
+        if ppid <= 0 || ppid == cur {
+            break;
+        }
+        out.push(ppid as u32);
+        if ppid == 1 {
+            break; // init: la raíz del árbol de procesos
+        }
+        cur = ppid;
+    }
+    out
+}
+
+/// El PPID de un proceso desde `/proc/<pid>/stat` (campo 4). El `comm` (campo 2)
+/// puede llevar espacios y paréntesis, así que se parsea desde el último ')':
+/// tras él viene " <state> <ppid> …", y el ppid es el segundo token.
+fn read_ppid(pid: i32) -> Option<i32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after = &stat[stat.rfind(')')? + 1..];
+    after.split_whitespace().nth(1)?.parse().ok()
 }
 
 // ---------------------------------------------------------------------
@@ -2445,9 +2500,12 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         if let Some(stream) = listener.accept()? {
+            // El PID del cliente, de las credenciales del socket — el linaje de
+            // las constelaciones (best-effort: `None` si no se pueden leer).
+            let pid = stream.peer_cred().ok().and_then(|c| c.pid());
             let client = display
                 .handle()
-                .insert_client(stream, Arc::new(ClientState::default()))
+                .insert_client(stream, Arc::new(ClientState::with_pid(pid)))
                 .unwrap();
             clients.push(client);
         }

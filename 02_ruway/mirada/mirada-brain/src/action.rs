@@ -117,6 +117,11 @@ pub enum DesktopAction {
     /// sub-espacio anidado — el árbol fractal. Luego se puede entrar en él con
     /// [`ZoomIn`](DesktopAction::ZoomIn).
     GroupStack,
+    /// Pliega la **constelación** de la ventana enfocada (su familia por linaje
+    /// de proceso: la terminal y lo que lanzó, …) en un sub-espacio. Como
+    /// [`GroupStack`](DesktopAction::GroupStack) pero el criterio es la actividad,
+    /// no la posición en la pila.
+    GroupConstellation,
     /// Deshace toda la agrupación del escritorio activo: vuelve al teselado plano.
     Ungroup,
     /// Entra ("zoom in") en el sub-espacio que contiene la ventana enfocada:
@@ -203,6 +208,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::PromoteToMaster => f.write_str("promote-to-master"),
             DesktopAction::SwapMaster => f.write_str("swap-master"),
             DesktopAction::GroupStack => f.write_str("group-stack"),
+            DesktopAction::GroupConstellation => f.write_str("group-constellation"),
             DesktopAction::Ungroup => f.write_str("ungroup"),
             DesktopAction::ZoomIn => f.write_str("zoom-in"),
             DesktopAction::ZoomOut => f.write_str("zoom-out"),
@@ -246,6 +252,7 @@ impl FromStr for DesktopAction {
             "promote-to-master" => Self::PromoteToMaster,
             "swap-master" => Self::SwapMaster,
             "group-stack" => Self::GroupStack,
+            "group-constellation" => Self::GroupConstellation,
             "ungroup" => Self::Ungroup,
             "zoom-in" => Self::ZoomIn,
             "zoom-out" => Self::ZoomOut,
@@ -359,6 +366,8 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         // Árbol fractal: plegar la pila en un sub-espacio y entrar/salir de él.
         ("Super+a".into(), DesktopAction::GroupStack),
         ("Super+Shift+a".into(), DesktopAction::Ungroup),
+        // Plegar por constelación (familia de actividad) en vez de por pila.
+        ("Super+Shift+c".into(), DesktopAction::GroupConstellation),
         ("Super+i".into(), DesktopAction::ZoomIn),
         ("Super+u".into(), DesktopAction::ZoomOut),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),

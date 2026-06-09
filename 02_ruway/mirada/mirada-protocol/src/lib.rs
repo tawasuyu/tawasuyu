@@ -142,6 +142,15 @@ pub enum BodyEvent {
     },
     /// Un cliente creó una ventana de nivel superior.
     WindowOpened { id: WindowId, app_id: String, title: String },
+    /// El **linaje de proceso** de una ventana recién abierta: su PID y la
+    /// cadena de PIDs ancestros (del padre inmediato hacia la raíz, acotada). Lo
+    /// emite el Cuerpo justo tras [`WindowOpened`](BodyEvent::WindowOpened),
+    /// **best-effort**: el Cerebro lo usa para agrupar por *constelación* (linaje
+    /// de actividad). Evento aparte —no campo de `WindowOpened`— para no romper la
+    /// simulación ni los 20+ sitios que ya construyen ese evento; si el Cuerpo no
+    /// puede averiguar el PID (backend anidado, sin credenciales), simplemente no
+    /// lo emite.
+    WindowLineage { id: WindowId, pid: u32, ancestors: Vec<u32> },
     /// Una ventana se cerró (por el cliente o tras un [`BrainCommand::Close`]).
     WindowClosed { id: WindowId },
     /// Una ventana cambió su título.
@@ -317,6 +326,15 @@ mod tests {
         write_frame(&mut buf, &ev).unwrap();
         let mut cur = Cursor::new(buf);
         let back: BodyEvent = read_frame(&mut cur).unwrap().unwrap();
+        assert_eq!(back, ev);
+    }
+
+    #[test]
+    fn frame_round_trips_a_window_lineage_event() {
+        let ev = BodyEvent::WindowLineage { id: 9, pid: 4242, ancestors: vec![4200, 1, 0] };
+        let mut buf = Vec::new();
+        write_frame(&mut buf, &ev).unwrap();
+        let back: BodyEvent = read_frame(&mut Cursor::new(buf)).unwrap().unwrap();
         assert_eq!(back, ev);
     }
 

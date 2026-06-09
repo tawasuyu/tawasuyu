@@ -2375,10 +2375,12 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
             |_readiness, listener, state| {
                 while let Some(stream) = listener.accept()? {
                     eprintln!("mirada-compositor · cliente Wayland conectado.");
+                    // PID del cliente para el linaje de las constelaciones.
+                    let pid = stream.peer_cred().ok().and_then(|c| c.pid());
                     let _ = state
                         .display
                         .handle()
-                        .insert_client(stream, Arc::new(ClientState::default()));
+                        .insert_client(stream, Arc::new(ClientState::with_pid(pid)));
                 }
                 Ok(PostAction::Continue)
             },

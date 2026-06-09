@@ -122,15 +122,29 @@ y se **rematerializa** cuando todas las apps miembro reabren en su escritorio
 alguna hoja no tiene `app_id`, ese escritorio no se persiste (no se podría
 reconstruir fielmente). El zoom (view_path) arranca en el nivel superior.
 
-Pendiente del zoom-Z (siguiente rebanada): agrupación dirigida por el grafo de
-actividad (constelaciones — necesita que el Cuerpo reporte linaje/PID de los
-clientes).
+**Constelaciones  ✅ HECHA (5ª rebanada):** agrupación dirigida por el grafo de
+actividad. El Cuerpo reporta el linaje de proceso de cada ventana
+(`BodyEvent::WindowLineage { id, pid, ancestors }`: PID por `SO_PEERCRED` del
+socket al aceptar el cliente, ancestros caminando `/proc/<pid>/stat`). El Cerebro
+(`mirada-brain/src/activity.rs`, `ActivityGraph` puro y testeable) parte las
+ventanas en *constelaciones* — componentes conexas por linaje, así que la terminal
+y el editor que lanzó caen juntos aunque haya un shell intermedio sin ventana. La
+acción `GroupConstellation` (`Super+Shift+c`) pliega la constelación de la ventana
+enfocada en un sub-espacio del zoom-Z. Evento aditivo (no campo de `WindowOpened`)
+para no romper la simulación; best-effort (sin PID → no se emite, la ventana es su
+propia constelación).
+
+**Zoom-Z completo.** Las cinco rebanadas están hechas: agrupar+entrar/salir,
+capas dormidas, multinivel, persistencia, constelaciones. Lo único que queda fuera
+del scope del compositor (alt-tab por constelación como navegación de foco) puede
+colgarse del `ActivityGraph` cuando se quiera.
 
 **Encima de Fase 2** (orden de ROI):
 
 | Idea | Estado | Nota |
 |---|---|---|
-| **Zoom semántico en Z** | ✅ 4ª rebanada | Agrupar + entrar/salir + **capas dormidas** (el Cuerpo corta sus frame callbacks) + **multinivel** (anidar a profundidad arbitraria; chip ⧉N) + **persistencia** (la forma del árbol sobrevive al reinicio, anclada por `app_id`). Falta: constelaciones. |
+| **Zoom semántico en Z** | ✅ COMPLETO | Agrupar + entrar/salir + **capas dormidas** (el Cuerpo corta frames) + **multinivel** (anidar a profundidad arbitraria; chip ⧉N) + **persistencia** (la forma del árbol sobrevive al reinicio por `app_id`) + **constelaciones** (agrupar por linaje de proceso, `Super+Shift+c`). |
+| **Alt-Tab por grafo de actividad** | PARCIAL | El `ActivityGraph` (constelaciones) ya existe en `mirada-brain`. Falta sólo la acción de *navegar* el foco entre constelaciones. |
 | **Capabilities por ventana** | BUILD | Gatear screencopy/export-dmabuf por `app_id` en el Cuerpo. El sandboxing *real* y honesto: somos quien otorga el protocolo. |
 | **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". Solapa con suspender capas profundas del zoom-Z. |
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |

@@ -6,6 +6,7 @@ use mirada_layout::{LayoutNode, LayoutParams, Rect, SpaceNode, WindowId, Workspa
 use mirada_protocol::{placements, BodyEvent, BrainCommand, OutputId, WindowPlacement};
 
 use crate::action::{Direction, DesktopAction, WORKSPACE_COUNT};
+use crate::activity::ActivityGraph;
 use crate::config::Config;
 use crate::keymap::Keymap;
 use crate::rules::Rules;
@@ -92,6 +93,9 @@ pub struct Desktop {
     /// escritorio (mapeando los `WindowId` nuevos por `app_id`), y entonces se
     /// quita de aquí. Si alguna app no reabre, queda pendiente sin efecto.
     restored_groupings: HashMap<usize, SpaceShape>,
+    /// Grafo de actividad: el linaje de proceso de cada ventana, para agrupar y
+    /// navegar por *constelación* (familias de ventanas emparentadas).
+    activity: ActivityGraph,
 }
 
 impl Default for Desktop {
@@ -125,6 +129,7 @@ impl Desktop {
             pending_output_workspaces: Vec::new(),
             restored_homes: HashMap::new(),
             restored_groupings: HashMap::new(),
+            activity: ActivityGraph::default(),
         }
     }
 
@@ -426,8 +431,14 @@ impl Desktop {
                 self.try_restore_grouping(ws);
                 self.relayout()
             }
+            BodyEvent::WindowLineage { id, pid, ancestors } => {
+                // Sólo contabilidad para las constelaciones: no cambia geometría.
+                self.activity.record(id, pid, ancestors);
+                Vec::new()
+            }
             BodyEvent::WindowClosed { id } => {
                 self.windows.remove(&id);
+                self.activity.forget(id);
                 self.scratchpad.retain(|&w| w != id);
                 for ws in &mut self.workspaces {
                     ws.remove(id);
@@ -759,6 +770,18 @@ impl Desktop {
                 // (anidamiento), no en la raíz.
                 let stack: Vec<WindowId> = ws.view_leaves().into_iter().skip(nmaster).collect();
                 ws.group(&stack);
+                self.relayout()
+            }
+            DesktopAction::GroupConstellation => {
+                let ws = &self.workspaces[active];
+                let Some(focused) = ws.focused() else {
+                    return Vec::new();
+                };
+                // La constelación de la enfocada, restringida a las hojas sueltas
+                // del nivel en vista (lo que `group` puede plegar). Con una sola
+                // ventana, `group` no hace nada.
+                let members = self.activity.constellation_of(focused, &ws.view_leaves());
+                self.workspaces[active].group(&members);
                 self.relayout()
             }
             DesktopAction::Ungroup => {
@@ -2368,6 +2391,69 @@ mod tests {
             app_id: app_id.into(),
             title: format!("win {id}"),
         })
+    }
+
+    /// Reporta el linaje de una ventana (como haría el Cuerpo tras abrirla).
+    fn lineage(d: &mut Desktop, id: WindowId, pid: u32, ancestors: Vec<u32>) {
+        d.on_event(BodyEvent::WindowLineage { id, pid, ancestors });
+    }
+
+    #[test]
+    fn group_constellation_folds_the_focused_windows_family() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id);
+        }
+        // 2 es una terminal (pid 100); 3 es un editor que lanzó (ancestro 100).
+        // 1 y 4 no tienen parentesco.
+        lineage(&mut d, 1, 10, vec![1]);
+        lineage(&mut d, 2, 100, vec![1]);
+        lineage(&mut d, 3, 102, vec![100, 1]);
+        lineage(&mut d, 4, 40, vec![1]);
+        d.apply(DesktopAction::FocusWindow(2));
+        d.apply(DesktopAction::GroupConstellation);
+        assert!(d.active_workspace().is_grouped());
+        // Entrar al grupo muestra la constelación {2,3}, no 1 ni 4.
+        d.apply(DesktopAction::FocusWindow(3));
+        let cmds = d.apply(DesktopAction::ZoomIn);
+        let visibles: Vec<_> = places(&cmds)
+            .iter()
+            .filter(|p| p.visible)
+            .map(|p| p.id)
+            .collect();
+        assert_eq!(visibles.len(), 2);
+        assert!(visibles.contains(&2) && visibles.contains(&3));
+    }
+
+    #[test]
+    fn group_constellation_does_nothing_for_a_lone_window() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2] {
+            open(&mut d, id);
+        }
+        // Sin parentesco entre ellas.
+        lineage(&mut d, 1, 10, vec![1]);
+        lineage(&mut d, 2, 20, vec![1]);
+        d.apply(DesktopAction::FocusWindow(1));
+        d.apply(DesktopAction::GroupConstellation);
+        // La constelación de la 1 es ella sola → no se agrupa.
+        assert!(!d.active_workspace().is_grouped());
+    }
+
+    #[test]
+    fn closing_a_window_forgets_its_lineage() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        lineage(&mut d, 1, 10, vec![1]);
+        lineage(&mut d, 2, 100, vec![1]);
+        lineage(&mut d, 3, 102, vec![100, 1]); // 3 desciende de 2
+        // Cierro la 2: 3 pierde el puente, ya no forma constelación con nadie.
+        d.on_event(BodyEvent::WindowClosed { id: 2 });
+        d.apply(DesktopAction::FocusWindow(3));
+        d.apply(DesktopAction::GroupConstellation);
+        assert!(!d.active_workspace().is_grouped());
     }
 
     #[test]
