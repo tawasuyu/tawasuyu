@@ -230,6 +230,34 @@ fn spawn_list_containers(handle: &Handle<Msg>) {
     });
 }
 
+/// Se asegura de que el container `name` esté corriendo: prueba `podman
+/// start name` (no-op si ya está vivo). Si el container no existe (sesión
+/// persistida pero el storage local lo borró), emite `ContainerFailed`
+/// para que el chasis caiga a Local con notice. Si arranca OK, emite
+/// `ContainerCreated(name)` que dispara `apply_isolation` y conecta.
+fn spawn_ensure_container(handle: &Handle<Msg>, name: String) {
+    handle.spawn(move || {
+        match std::process::Command::new("podman")
+            .args(["start", &name])
+            .output()
+        {
+            Ok(out) if out.status.success() => Msg::ContainerCreated(name),
+            Ok(out) => {
+                let err = String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("podman start salió con status no-cero")
+                    .to_string();
+                Msg::ContainerFailed { name, reason: err }
+            }
+            Err(e) => Msg::ContainerFailed {
+                name,
+                reason: format!("no pude ejecutar podman: {e}"),
+            },
+        }
+    });
+}
+
 /// Crea un contenedor `name` de la `image` dada (detached, `sleep infinity`)
 /// en un hilo; `mount` opcional se monta como `/work` adentro (RW). Al volver,
 /// emite `ContainerCreated(name)` para que la sesión active termine de
@@ -380,13 +408,18 @@ impl Distro {
             Distro::Arch => "Arch",
         }
     }
-    /// Imagen OCI para crear el contenedor.
+    /// Imagen OCI **fully-qualified** para `podman run`. Sin el prefijo
+    /// `docker.io/library/`, podman rootless en distros sin
+    /// `unqualified-search-registries` configurado (Artix por defecto)
+    /// falla con: `Error: short-name "ubuntu:latest" did not resolve to
+    /// an alias and no unqualified-search registries are defined in
+    /// /etc/containers/registries.conf`. Con el FQN no necesita config.
     fn image(self) -> &'static str {
         match self {
-            Distro::Ubuntu => "ubuntu:latest",
-            Distro::Debian => "debian:latest",
-            Distro::Alpine => "alpine:latest",
-            Distro::Arch => "archlinux:latest",
+            Distro::Ubuntu => "docker.io/library/ubuntu:latest",
+            Distro::Debian => "docker.io/library/debian:latest",
+            Distro::Alpine => "docker.io/library/alpine:latest",
+            Distro::Arch => "docker.io/library/archlinux:latest",
         }
     }
 }
@@ -669,10 +702,15 @@ impl Session {
         } else {
             base
         };
-        // Local está listo; remoto queda en espera hasta conectar.
-        self.conn = match self.isolation {
-            Isolation::Local => ConnState::Connected,
-            Isolation::Remote => ConnState::Pending,
+        // Container/remote arrancan en espera (hasta ContainerCreated /
+        // connect_remote); local está listo de entrada.
+        self.conn = if self.use_container {
+            ConnState::Pending
+        } else {
+            match self.isolation {
+                Isolation::Local => ConnState::Connected,
+                Isolation::Remote => ConnState::Pending,
+            }
         };
         self.shell = Instance::shell(self.name.clone(), source.clone());
         self.matilda = Instance::matilda(self.name.clone(), source.clone());
@@ -1052,6 +1090,11 @@ enum Msg {
     /// El motivo (primera línea de stderr) se muestra al usuario en el
     /// shell de la sesión que pidió el container.
     ContainerFailed { name: String, reason: String },
+    /// Al reabrir un workspace con `use_container=true`, despachamos esto
+    /// para reactivar el container (podman start name) sin tener que
+    /// recrearlo. Si falla por inexistencia, el `ContainerFailed`
+    /// rebaja la sesión a Local con notice.
+    EnsureContainer(String),
     /// Reordenar dientes por drag: mover la sesión `from` a la posición `to`.
     /// La draft (0) queda fija.
     ReorderSession(usize, usize),
@@ -1148,6 +1191,19 @@ impl App for Shell {
         let mut sessions = vec![Session::draft()];
         for c in load_sessions() {
             sessions.push(Session::from_config(c));
+        }
+
+        // Reactivar containers persistidos: por cada sesión con
+        // `use_container=true && container=Some(name)`, dispatchamos
+        // `EnsureContainer(name)`. El thread bg corre `podman start name`;
+        // si el container existe queda listo, si no, ContainerFailed
+        // rebaja la sesión a Local con notice.
+        for s in &sessions {
+            if s.use_container {
+                if let Some(name) = s.container.clone() {
+                    handle.dispatch(Msg::EnsureContainer(name));
+                }
+            }
         }
 
         // Estado de chrome (paneles + pestaña) del último arranque. El default
@@ -1417,6 +1473,11 @@ impl App for Shell {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.use_container = !s.use_container;
                 }
+            }
+            Msg::EnsureContainer(name) => {
+                // Dispara `podman start name` en bg; el resultado vuelve
+                // como ContainerCreated / ContainerFailed.
+                spawn_ensure_container(handle, name);
             }
             Msg::ContainerCreated(name) => {
                 // Encontrar la sesión que está esperando este contenedor y
