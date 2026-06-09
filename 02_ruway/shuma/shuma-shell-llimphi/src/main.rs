@@ -256,15 +256,22 @@ fn spawn_create_container(
         args.push(image.into());
         args.push("sleep".into());
         args.push("infinity".into());
-        let ok = std::process::Command::new("podman")
-            .args(&args)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        if ok {
-            Msg::ContainerCreated(name)
-        } else {
-            Msg::ContainerFailed(name)
+        match std::process::Command::new("podman").args(&args).output() {
+            Ok(out) if out.status.success() => Msg::ContainerCreated(name),
+            Ok(out) => {
+                // Capturamos stderr para que el usuario vea por qué falló
+                // (imagen no existe, name ya en uso, rootless storage, etc.).
+                let err = String::from_utf8_lossy(&out.stderr)
+                    .lines()
+                    .next()
+                    .unwrap_or("podman run salió con status no-cero")
+                    .to_string();
+                Msg::ContainerFailed { name, reason: err }
+            }
+            Err(e) => Msg::ContainerFailed {
+                name,
+                reason: format!("no pude ejecutar podman: {e}"),
+            },
         }
     });
 }
@@ -1042,8 +1049,9 @@ enum Msg {
     /// queda lista (conectada) y, si era pending, ya tiene su shell montado.
     ContainerCreated(String),
     /// El thread de `podman run` falló (podman ausente / imagen / nombre).
-    /// Se notifica y la sesión queda en `Pending`.
-    ContainerFailed(String),
+    /// El motivo (primera línea de stderr) se muestra al usuario en el
+    /// shell de la sesión que pidió el container.
+    ContainerFailed { name: String, reason: String },
     /// Reordenar dientes por drag: mover la sesión `from` a la posición `to`.
     /// La draft (0) queda fija.
     ReorderSession(usize, usize),
@@ -1429,7 +1437,7 @@ impl App for Shell {
                 spawn_list_containers(handle);
                 save_sessions(&m);
             }
-            Msg::ContainerFailed(name) => {
+            Msg::ContainerFailed { name, reason } => {
                 // Rebajamos a Local: si dejábamos `use_container=true` con
                 // `container=Some(name)`, el shell seguiría disparando
                 // `podman exec` que falla por cada comando — peor que
@@ -1450,7 +1458,7 @@ impl App for Shell {
                         m,
                         slot,
                         ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(format!(
-                            "✘ podman run falló para {name} — caí a shell local. Revisá podman / imagen / permisos."
+                            "✘ podman run {name} falló: {reason} — caí a shell local."
                         ))),
                     );
                 }

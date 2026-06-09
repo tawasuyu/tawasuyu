@@ -2832,17 +2832,25 @@ pub(crate) fn drain_run(mut s: State) -> State {
                 RunEvent::Stdout(line) => {
                     // +1 por el `\n` implícito de cada línea drenada.
                     s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
-                    s.push_in_block(run_block, OutputLine::stdout(line));
+                    // Strip ANSI escapes: comandos como `fastfetch`, `ls
+                    // --color`, `git --color=always` emiten SGR + `\r` para
+                    // sobrescribir. `strip_ansi` colapsa `\r` y descarta
+                    // códigos sin perder el contenido visible. El coloreo
+                    // real (style runs) queda para una iteración futura.
+                    let clean = shuma_line::ansi::strip_ansi(&line);
+                    s.push_in_block(run_block, OutputLine::stdout(clean));
                 }
                 RunEvent::StageStdout { stage, line } => {
                     // Salida de una etapa intermedia (tee). NO suma a
                     // `current_run_bytes` (el grafo cuenta la salida final);
                     // queda guardada para el desplegable de su etapa.
-                    s.push_in_block(run_block, OutputLine::stage_stdout(stage, line));
+                    let clean = shuma_line::ansi::strip_ansi(&line);
+                    s.push_in_block(run_block, OutputLine::stage_stdout(stage, clean));
                 }
                 RunEvent::Stderr(line) => {
                     s.current_run_bytes = s.current_run_bytes.saturating_add(line.len() as u64 + 1);
-                    s.push_in_block(run_block, OutputLine::stderr(line));
+                    let clean = shuma_line::ansi::strip_ansi(&line);
+                    s.push_in_block(run_block, OutputLine::stderr(clean));
                 }
                 RunEvent::Truncated => s.push_in_block(
                     run_block,
@@ -2915,11 +2923,18 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
             job_block = guard.block;
             for ev in guard.handle.try_events() {
                 match ev {
-                    RunEvent::Stdout(line) => s.push_in_block(job_block, OutputLine::stdout(line)),
-                    RunEvent::StageStdout { stage, line } => {
-                        s.push_in_block(job_block, OutputLine::stage_stdout(stage, line))
-                    }
-                    RunEvent::Stderr(line) => s.push_in_block(job_block, OutputLine::stderr(line)),
+                    RunEvent::Stdout(line) => s.push_in_block(
+                        job_block,
+                        OutputLine::stdout(shuma_line::ansi::strip_ansi(&line)),
+                    ),
+                    RunEvent::StageStdout { stage, line } => s.push_in_block(
+                        job_block,
+                        OutputLine::stage_stdout(stage, shuma_line::ansi::strip_ansi(&line)),
+                    ),
+                    RunEvent::Stderr(line) => s.push_in_block(
+                        job_block,
+                        OutputLine::stderr(shuma_line::ansi::strip_ansi(&line)),
+                    ),
                     RunEvent::Truncated => {
                         s.push_in_block(job_block, OutputLine::notice("… (truncada)"))
                     }

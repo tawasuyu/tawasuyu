@@ -462,20 +462,21 @@ pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Optio
     // Ctrl+= / Ctrl++ → zoom in · Ctrl+- → zoom out · Ctrl+0 → reset.
     // Atajos universales: aplican al shell de la sesión activa sin
     // importar si está focado en el input o un TUI; los chequeamos
-    // antes de las ramas main/pending.
+    // antes de las ramas main/pending. Detectamos por tres caminos
+    // (winit puede entregar la tecla por uno u otro según layout/IME):
+    //   1. `Key::Character` con el char.
+    //   2. `Key::Named(NamedKey::Equal/Minus/...)` (si winit las
+    //      promueve a Named en algunos backends).
+    //   3. `e.text` (string ya resuelto con modifiers).
     if e.modifiers.ctrl {
-        let zoom_msg: Option<shuma_module_shell::Msg> = match &e.key {
-            llimphi_ui::Key::Character(c)
-                if c == "+" || c == "=" =>
-            {
-                Some(shuma_module_shell::Msg::ZoomBy(1.1))
-            }
-            llimphi_ui::Key::Character(c) if c == "-" || c == "_" => {
-                Some(shuma_module_shell::Msg::ZoomBy(1.0 / 1.1))
-            }
-            llimphi_ui::Key::Character(c) if c == "0" => {
-                Some(shuma_module_shell::Msg::ZoomReset)
-            }
+        let ch: Option<&str> = match &e.key {
+            llimphi_ui::Key::Character(c) => Some(c.as_str()),
+            _ => e.text.as_deref(),
+        };
+        let zoom_msg: Option<shuma_module_shell::Msg> = match ch {
+            Some("+" | "=") => Some(shuma_module_shell::Msg::ZoomBy(1.1)),
+            Some("-" | "_") => Some(shuma_module_shell::Msg::ZoomBy(1.0 / 1.1)),
+            Some("0") => Some(shuma_module_shell::Msg::ZoomReset),
             _ => None,
         };
         if let Some(z) = zoom_msg {
