@@ -636,6 +636,28 @@ struct ContainerInfo {
     pub image: String,
 }
 
+/// Draft embebido en la ventana de containers: engine + distro + mount.
+/// El "nombre" es derivado de la distro; el usuario no lo elige (evita
+/// colisiones con shuma-<distro>-N de sesiones anteriores).
+#[derive(Debug, Clone)]
+struct ContainerDraft {
+    engine: String,
+    distro: Distro,
+    mount: TextInputState,
+    mount_focused: bool,
+}
+
+impl ContainerDraft {
+    fn new() -> Self {
+        Self {
+            engine: engine_preferido().unwrap_or("unshare").to_string(),
+            distro: Distro::Ubuntu,
+            mount: TextInputState::new(),
+            mount_focused: false,
+        }
+    }
+}
+
 /// Form embebido en la ventana de hosts para crear/editar uno nuevo.
 #[derive(Debug, Clone)]
 struct HostDraft {
@@ -1257,6 +1279,9 @@ struct Model {
     /// Draft del nuevo host que se está creando en la ventana gestora.
     /// `None` = no hay form abierto; `Some(...)` lo pinta.
     host_draft: Option<HostDraft>,
+    /// Draft del nuevo container que se está creando en la ventana de
+    /// gestión de containers.
+    container_draft: Option<ContainerDraft>,
 
     // Anchos resizables de los paneles laterales (px).
     session_w: f32,
@@ -1367,6 +1392,9 @@ enum Msg {
     /// Cambia el engine de aislamiento de la sesión activa (unshare /
     /// bwrap / podman) desde el dropdown del form.
     SetEngine(String),
+    /// Click sobre un rootfs presente en disco (filas en el form de
+    /// container) — asocia la sesión activa con ese rootfs y arranca.
+    PickRootfs(Distro),
     /// El thread de `podman run` terminó OK — la sesión que lo esperaba
     /// queda lista (conectada) y, si era pending, ya tiene su shell montado.
     ContainerCreated(String),
@@ -1416,6 +1444,22 @@ enum Msg {
     HostDraftToggleAuth,
     /// Borrar el host `idx` de la lista guardada.
     HostDelete(usize),
+    // ─── Draft de container nuevo (ventana de gestión) ─────────────────
+    /// Empieza el draft de un container nuevo en la ventana de gestión.
+    ContainerDraftStart,
+    /// Cancela el draft del container (cierra el form).
+    ContainerDraftCancel,
+    /// Crea el container con los datos del draft (descarga rootfs si no
+    /// está) y lo deja disponible para sesiones futuras.
+    ContainerDraftCreate,
+    /// Cambia el engine del draft del container.
+    ContainerDraftSetEngine(String),
+    /// Cambia la distro del draft del container.
+    ContainerDraftSetDistro(Distro),
+    /// Foco al campo mount del draft del container.
+    ContainerDraftFocusMount,
+    /// Tecla al draft del container (solo afecta el mount input).
+    ContainerDraftKey(KeyEvent),
     /// Aplicar un host guardado al form de la sesión actual (rellena
     /// host/user/port + dispara connect si la sesión está pending).
     HostApply(usize),
@@ -1557,6 +1601,7 @@ impl App for Shell {
             focused_field: None,
             hosts: hosts::load_hosts(),
             host_draft: None,
+            container_draft: None,
             session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
@@ -1832,6 +1877,33 @@ impl App for Shell {
                     }
                 }
             }
+            Msg::PickRootfs(distro) => {
+                // El usuario eligió un rootfs presente en disco. Asocia
+                // a la sesión activa y, si está pending, confirma. Si no,
+                // aplica isolation y conecta.
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.use_container = true;
+                    s.distro = distro;
+                    if !binary_disponible(&s.container_engine) {
+                        if let Some(pref) = engine_preferido() {
+                            s.container_engine = pref.to_string();
+                        }
+                    }
+                    let path = rootfs_path_for(distro)
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_default();
+                    s.container = Some(path);
+                    s.apply_isolation();
+                    s.conn = ConnState::Connected;
+                    if s.pending {
+                        // Si estaba en form de creación, lo confirmamos.
+                        s.pending = false;
+                        s.pending_focus = None;
+                        m.session_panel_open = true;
+                    }
+                }
+                save_sessions(&m);
+            }
             Msg::EnsureContainer(name) => {
                 // Ramificamos por engine de la sesión que lo pidió. Para
                 // unshare/bwrap, el "name" es el path al rootfs — si ya
@@ -1943,6 +2015,80 @@ impl App for Shell {
                 if idx < m.hosts.len() {
                     m.hosts.remove(idx);
                     hosts::save_hosts(&m.hosts);
+                }
+            }
+            Msg::ContainerDraftStart => {
+                m.container_draft = Some(ContainerDraft::new());
+            }
+            Msg::ContainerDraftCancel => {
+                m.container_draft = None;
+            }
+            Msg::ContainerDraftCreate => {
+                if let Some(d) = m.container_draft.clone() {
+                    let mount = d.mount.text();
+                    let mount_opt =
+                        if mount.trim().is_empty() { None } else { Some(mount) };
+                    match d.engine.as_str() {
+                        "unshare" | "bwrap" => {
+                            if rootfs_listo(d.distro) {
+                                // Ya está — solo refresca la lista.
+                                spawn_list_containers_full(handle);
+                            } else {
+                                spawn_pull_rootfs_lxc(handle, d.distro, mount_opt);
+                            }
+                        }
+                        _ /* podman */ => {
+                            // Numerar buscando primer slot libre.
+                            let n = (1..1000)
+                                .find(|n| {
+                                    let cand = format!(
+                                        "shuma-{}-{n}",
+                                        d.distro.label().to_lowercase()
+                                    );
+                                    !m.containers_full.iter().any(|c| c.name == cand)
+                                })
+                                .unwrap_or(1);
+                            let name = format!(
+                                "shuma-{}-{n}",
+                                d.distro.label().to_lowercase()
+                            );
+                            spawn_create_container(handle, d.distro.image(), name, mount_opt);
+                        }
+                    }
+                    m.container_draft = None;
+                }
+            }
+            Msg::ContainerDraftSetEngine(name) => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    d.engine = name;
+                }
+            }
+            Msg::ContainerDraftSetDistro(distro) => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    d.distro = distro;
+                }
+            }
+            Msg::ContainerDraftFocusMount => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    d.mount_focused = true;
+                }
+            }
+            Msg::ContainerDraftKey(e) => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    if !d.mount_focused {
+                        return m;
+                    }
+                    match &e.key {
+                        llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                            d.mount_focused = false;
+                        }
+                        llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                            handle.dispatch(Msg::ContainerDraftCreate);
+                        }
+                        _ => {
+                            let _ = d.mount.apply_key(&e);
+                        }
+                    }
                 }
             }
             Msg::HostApply(idx) => {

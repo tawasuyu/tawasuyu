@@ -459,6 +459,20 @@ pub(crate) fn forward_wheel_to_focused_shell(model: &Model, dpx: f32) -> Option<
 }
 
 pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Option<Msg> {
+    // Si una ventana secundaria tiene un draft con foco de campo, las
+    // teclas van al draft (no al shell). El runtime de Llimphi dispatcha
+    // on_key tanto para primary como para secondary, así que modelamos
+    // el "foco" por estado de la app.
+    if let Some(d) = model.host_draft.as_ref() {
+        if d.focused.is_some() {
+            return Some(Msg::HostDraftKey(e.clone()));
+        }
+    }
+    if let Some(d) = model.container_draft.as_ref() {
+        if d.mount_focused {
+            return Some(Msg::ContainerDraftKey(e.clone()));
+        }
+    }
     // Ctrl+= / Ctrl++ → zoom in · Ctrl+- → zoom out · Ctrl+0 → reset.
     // Atajos universales: aplican al shell de la sesión activa sin
     // importar si está focado en el input o un TUI; los chequeamos

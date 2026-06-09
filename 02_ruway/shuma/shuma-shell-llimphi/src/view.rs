@@ -1216,6 +1216,46 @@ fn container_toggle(on: bool, theme: &Theme) -> View<Msg> {
     .children(vec![box_view, label])
 }
 
+/// Botones radio horizontales para el aislamiento. Cada botón fija
+/// `session.isolation` al click; el actual queda resaltado con el accent.
+fn iso_radio_row(current: Isolation, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    let mk = |label: &str, iso: Isolation| {
+        let active = iso == current;
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size {
+                width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+                height: length(32.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(if active { theme.accent } else { theme.bg_button })
+        .hover_fill(if active { theme.accent } else { theme.bg_button_hover })
+        .radius(4.0)
+        .text_aligned(
+            label.to_string(),
+            12.0,
+            if active { theme.bg_app } else { theme.fg_text },
+            Alignment::Center,
+        )
+        .on_click(Msg::SetIsolation(iso))
+    };
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        mk("Local", Isolation::Local),
+        mk("Remoto", Isolation::Remote),
+    ])
+}
+
 /// Form grande de creación de sesión, ocupa el canvas mientras `session.pending`.
 /// Aislamiento (Local/Remote) + Distro + Mount + opción de container. Confirma
 /// con Enter / botón "Crear". Cancela con Esc / "Cancelar".
@@ -1247,122 +1287,104 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
         Alignment::Start,
     );
 
-    // Aislamiento
+    // Aislamiento — botones radio inline (no dropdown). El dropdown
+    // dispara su overlay anclado al panel izquierdo, que en el canvas
+    // grande aparece desplazado feo. Botones directos son más claros y
+    // no tienen problema de posicionamiento.
+    let _ = &pal;
     let iso_label = panel_label("Aislamiento", theme);
-    let isos = iso_items();
-    let iso_trigger = select_trigger_view(
-        isos.get(iso_index(session.isolation)),
-        "Elegí el aislamiento…",
-        model.dropdown_open == Some(DropKind::Isolation),
-        None,
-        &pal,
-        Msg::ToggleDropdown(DropKind::Isolation),
-    );
+    let iso_trigger = iso_radio_row(session.isolation, theme);
 
-    // Form remoto opcional (host/usuario/puerto) cuando aislamiento = Remote.
+    // Sólo selects + botones. La creación de hosts/containers concretos
+    // pasa por sus ventanas dedicadas (Msg::OpenHostsWindow / OpenContainersWindow).
+    // El form principal sólo PICKEA de lo que ya existe.
+    let _ = &tpal; // todavía lo usa el form de auth remoto si lo agregamos
     let mut children: Vec<View<Msg>> = vec![titulo, sub, iso_label, iso_trigger];
     if session.isolation == Isolation::Remote {
-        // Atajo: los hosts guardados aparecen como filas clickeables y un
-        // botón abre la ventana gestora para crear/borrar.
-        if !model.hosts.is_empty() {
-            children.push(panel_label("Hosts guardados", theme));
+        children.push(panel_label("Host remoto", theme));
+        if model.hosts.is_empty() {
+            children.push(panel_note(
+                "Sin hosts guardados — creá uno en la ventana de gestión.",
+                theme,
+            ));
+        } else {
             for (i, h) in model.hosts.iter().enumerate() {
                 children.push(
                     View::new(Style {
-                        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-                        padding: Rect { left: length(10.0_f32), right: length(10.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+                        padding: Rect {
+                            left: length(10.0_f32),
+                            right: length(10.0_f32),
+                            top: length(0.0_f32),
+                            bottom: length(0.0_f32),
+                        },
                         align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
                         ..Default::default()
                     })
                     .fill(theme.bg_panel_alt)
                     .hover_fill(theme.bg_row_hover)
                     .radius(3.0)
-                    .text_aligned(h.display(), 11.0, theme.fg_text, llimphi_ui::llimphi_text::Alignment::Start)
+                    .text_aligned(
+                        h.display(),
+                        11.0,
+                        theme.fg_text,
+                        llimphi_ui::llimphi_text::Alignment::Start,
+                    )
                     .on_click(Msg::HostApply(i)),
                 );
             }
         }
-        children.push(action_button_small("⚙ Gestionar hosts…", Msg::OpenHostsWindow, theme));
-        children.push(panel_label("Host", theme));
-        children.push(text_input_view(
-            &session.host,
-            "ejemplo.com",
-            model.focused_field == Some(RemoteField::Host),
-            &tpal,
-            Msg::FocusField(RemoteField::Host),
-        ));
-        children.push(panel_label("Usuario", theme));
-        children.push(text_input_view(
-            &session.user,
-            "usuario",
-            model.focused_field == Some(RemoteField::User),
-            &tpal,
-            Msg::FocusField(RemoteField::User),
-        ));
-        children.push(panel_label("Puerto", theme));
-        children.push(text_input_view(
-            &session.port,
-            "22",
-            model.focused_field == Some(RemoteField::Port),
-            &tpal,
-            Msg::FocusField(RemoteField::Port),
+        children.push(action_button_small(
+            "⚙ Gestionar hosts…",
+            Msg::OpenHostsWindow,
+            theme,
         ));
     }
 
-    // Toggle "Aislar con rootfs propio" (opt-in).
+    // Aislar en contenedor — sólo selección de uno ya creado + botón a la
+    // ventana de gestión donde se crean (engine + distro + mount).
     children.push(container_toggle(session.use_container, theme));
     if session.use_container {
-        // Engine de aislamiento — muestra cuál vamos a usar + permite
-        // cambiarlo. Default: el preferido del sistema (unshare > bwrap >
-        // podman). Si la sesión tenía uno persistido que ya no está
-        // disponible, sigue mostrándose pero el confirm rebajará.
-        children.push(panel_label("Engine de aislamiento", theme));
-        let engines = engine_items();
-        let cur_eng_idx = engines
-            .iter()
-            .position(|it| it.label == session.container_engine)
-            .unwrap_or(0);
-        children.push(select_trigger_view(
-            engines.get(cur_eng_idx),
-            "Engine…",
-            model.dropdown_open == Some(DropKind::Engine),
-            None,
-            &pal,
-            Msg::ToggleDropdown(DropKind::Engine),
-        ));
-        children.push(panel_label("Distro", theme));
-        let distros = distro_items();
-        children.push(select_trigger_view(
-            distros.get(distro_index(session.distro)),
-            "Elegí la distro…",
-            model.dropdown_open == Some(DropKind::Distro),
-            None,
-            &pal,
-            Msg::ToggleDropdown(DropKind::Distro),
-        ));
-        children.push(panel_label(
-            "Directorio del HOST a montar (opcional)",
-            theme,
-        ));
-        children.push(text_input_view(
-            &session.mount,
-            "/home/sergio/proyectos",
-            session.pending_focus == Some(PendingField::Mount),
-            &tpal,
-            Msg::FocusPendingField(PendingField::Mount),
-        ));
-        children.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
-                ..Default::default()
-            })
-            .text_aligned(
-                "queda visible como /work dentro del contenedor".to_string(),
-                10.0,
-                theme.fg_muted,
-                llimphi_ui::llimphi_text::Alignment::Start,
-            ),
-        );
+        children.push(panel_label("Contenedor", theme));
+        // Combinamos: rootfs presentes en disco (para unshare/bwrap) + nada más.
+        // Los containers podman vienen vía `containers_full` y se enchufan en
+        // la ventana de gestión (Msg::OpenContainersWindow) que los lista.
+        let mut shown_any = false;
+        for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
+            if super::rootfs_listo(*distro) {
+                shown_any = true;
+                let d = *distro;
+                children.push(
+                    View::new(Style {
+                        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+                        padding: Rect {
+                            left: length(10.0_f32),
+                            right: length(10.0_f32),
+                            top: length(0.0_f32),
+                            bottom: length(0.0_f32),
+                        },
+                        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+                        ..Default::default()
+                    })
+                    .fill(theme.bg_panel_alt)
+                    .hover_fill(theme.bg_row_hover)
+                    .radius(3.0)
+                    .text_aligned(
+                        format!("rootfs · {}", d.label()),
+                        11.0,
+                        theme.fg_text,
+                        llimphi_ui::llimphi_text::Alignment::Start,
+                    )
+                    .on_click(Msg::PickRootfs(d)),
+                );
+            }
+        }
+        if !shown_any && model.containers_full.is_empty() {
+            children.push(panel_note(
+                "Sin contenedores creados — abrí la ventana de gestión y creá uno.",
+                theme,
+            ));
+        }
         children.push(action_button_small(
             "⚙ Gestionar containers…",
             Msg::OpenContainersWindow,
@@ -1770,7 +1792,17 @@ pub(crate) fn containers_window(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .children(vec![
         action_button_small("⟳ Refrescar", Msg::RefreshContainersFull, theme),
+        action_button_small("+ Crear container", Msg::ContainerDraftStart, theme),
     ]);
+
+    // Draft form (visible cuando container_draft is Some).
+    let draft_view = match &model.container_draft {
+        Some(d) => container_draft_form(d, theme),
+        None => View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        }),
+    };
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -1784,10 +1816,152 @@ pub(crate) fn containers_window(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_app)
     .children({
-        let mut all = vec![title, sub, actions];
+        let mut all = vec![title, sub, actions, draft_view];
         all.extend(rows);
         all
     })
+}
+
+/// Form embebido para crear un container nuevo (engine + distro + mount).
+/// Usa botones radio inline para evitar el bug del overlay en ventana
+/// secundaria.
+fn container_draft_form(d: &ContainerDraft, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    let tpal = TextInputPalette::from_theme(theme);
+
+    // Botones radio horizontales — engine.
+    let mk_engine = |label: &str, name: &str| {
+        let active = d.engine == name;
+        let n = name.to_string();
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(), height: length(28.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(if active { theme.accent } else { theme.bg_button })
+        .hover_fill(if active { theme.accent } else { theme.bg_button_hover })
+        .radius(4.0)
+        .text_aligned(label.to_string(), 11.0, if active { theme.bg_app } else { theme.fg_text }, Alignment::Center)
+        .on_click(Msg::ContainerDraftSetEngine(n))
+    };
+    let mut engine_btns: Vec<View<Msg>> = Vec::new();
+    if super::unshare_disponible() {
+        engine_btns.push(mk_engine("unshare", "unshare"));
+    }
+    if super::bwrap_disponible() {
+        engine_btns.push(mk_engine("bwrap", "bwrap"));
+    }
+    if super::podman_disponible() {
+        engine_btns.push(mk_engine("podman", "podman"));
+    }
+    if engine_btns.is_empty() {
+        engine_btns.push(
+            View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(), height: length(28.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(
+                "ningún engine disponible".to_string(),
+                11.0,
+                theme.fg_muted,
+                Alignment::Center,
+            ),
+        );
+    }
+    let engine_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(engine_btns);
+
+    // Botones radio — distro.
+    let mk_distro = |distro: Distro| {
+        let active = d.distro == distro;
+        View::new(Style {
+            flex_grow: 1.0,
+            size: Size { width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(), height: length(28.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(if active { theme.accent } else { theme.bg_button })
+        .hover_fill(if active { theme.accent } else { theme.bg_button_hover })
+        .radius(4.0)
+        .text_aligned(distro.label().to_string(), 11.0, if active { theme.bg_app } else { theme.fg_text }, Alignment::Center)
+        .on_click(Msg::ContainerDraftSetDistro(distro))
+    };
+    let distro_row = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        mk_distro(Distro::Ubuntu),
+        mk_distro(Distro::Debian),
+        mk_distro(Distro::Alpine),
+        mk_distro(Distro::Arch),
+    ]);
+
+    let mount_label = panel_label("Directorio del host a montar (opcional)", theme);
+    let mount_input = text_input_view(
+        &d.mount,
+        "/home/usuario/proyectos",
+        d.mount_focused,
+        &tpal,
+        Msg::ContainerDraftFocusMount,
+    );
+    let mount_hint = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .text_aligned(
+        "queda visible como /work dentro del container".to_string(),
+        10.0,
+        theme.fg_muted,
+        Alignment::Start,
+    );
+
+    let btn_create = action_button_small("Crear (Enter)", Msg::ContainerDraftCreate, theme);
+    let btn_cancel = action_button_small("Cancelar (Esc)", Msg::ContainerDraftCancel, theme);
+    let buttons = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(10.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![btn_create, btn_cancel]);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+        },
+        padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(12.0_f32), bottom: length(12.0_f32) },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(6.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(6.0)
+    .children(vec![
+        panel_label("Engine", theme),
+        engine_row,
+        panel_label("Distro", theme),
+        distro_row,
+        mount_label,
+        mount_input,
+        mount_hint,
+        buttons,
+    ])
 }
 
 fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
