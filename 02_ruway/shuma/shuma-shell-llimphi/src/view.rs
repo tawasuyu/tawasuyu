@@ -10,6 +10,37 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 /// Alto del disparador del select (debe seguir a `llimphi-widget-select`).
 const TRIGGER_H: f32 = 34.0;
 
+/// Ítems del dropdown de engine de aislamiento. Sólo muestra los que el
+/// sistema tiene en `PATH` — si falta uno, no aparece (no podés elegirlo
+/// y romperte). Orden de presentación = orden de preferencia.
+pub(crate) fn engine_items() -> Vec<SelectItem> {
+    let mut out: Vec<SelectItem> = Vec::new();
+    if super::unshare_disponible() {
+        out.push(
+            SelectItem::new("unshare".to_string())
+                .with_sublabel("util-linux + chroot — sin instalar nada (recomendado)"),
+        );
+    }
+    if super::bwrap_disponible() {
+        out.push(
+            SelectItem::new("bwrap".to_string()).with_sublabel("bubblewrap — sandbox liviano"),
+        );
+    }
+    if super::podman_disponible() {
+        out.push(
+            SelectItem::new("podman".to_string()).with_sublabel("OCI completo (con storage.conf)"),
+        );
+    }
+    if out.is_empty() {
+        out.push(
+            SelectItem::new("(ninguno)".to_string()).with_sublabel(
+                "instalá util-linux + coreutils, bubblewrap o podman",
+            ),
+        );
+    }
+    out
+}
+
 /// Ítems del dropdown de aislamiento (orden = `Isolation::ALL`).
 fn iso_items() -> Vec<SelectItem> {
     vec![
@@ -36,6 +67,7 @@ fn cfg_trigger_y(is_draft: bool, kind: DropKind) -> f32 {
     let iso_y = if is_draft { 134.0 } else { 92.0 };
     match kind {
         DropKind::Isolation => iso_y,
+        DropKind::Engine => iso_y + 50.0,
         DropKind::Distro => iso_y + 98.0,
         DropKind::Container => iso_y + 98.0 + 64.0,
     }
@@ -70,6 +102,15 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
                 .unwrap_or_default();
             (its, sel)
         }
+        DropKind::Engine => {
+            let its = engine_items();
+            let sel = its
+                .iter()
+                .position(|it| it.label == session.container_engine)
+                .map(|i| vec![i])
+                .unwrap_or_default();
+            (its, sel)
+        }
     };
     let visible: Vec<usize> = (0..items.len()).collect();
     let anchor = (12.0, cfg_trigger_y(is_draft, kind) + TRIGGER_H + 4.0);
@@ -81,6 +122,16 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
             std::sync::Arc::new(|i| Msg::SetIsolation(Isolation::ALL[i.min(1)]))
         }
         DropKind::Distro => std::sync::Arc::new(|i| Msg::SetDistro(Distro::ALL[i.min(3)])),
+        DropKind::Engine => {
+            let items_clone = engine_items();
+            std::sync::Arc::new(move |i| {
+                let label = items_clone
+                    .get(i)
+                    .map(|it| it.label.clone())
+                    .unwrap_or_default();
+                Msg::SetEngine(label)
+            })
+        }
         DropKind::Container => std::sync::Arc::new(move |i| {
             if i < n_containers {
                 Msg::SubscribeContainer(i)
@@ -1151,7 +1202,7 @@ fn container_toggle(on: bool, theme: &Theme) -> View<Msg> {
         flex_grow: 1.0,
         ..Default::default()
     })
-    .text_aligned("Aislar en contenedor (podman)".to_string(), 13.0, fg, Alignment::Start);
+    .text_aligned("Aislar con rootfs propio (sin instalar nada)".to_string(), 13.0, fg, Alignment::Start);
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
@@ -1258,9 +1309,27 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
         ));
     }
 
-    // Toggle "Aislar en contenedor" (opt-in). Si on, mostrá distro + mount.
+    // Toggle "Aislar con rootfs propio" (opt-in).
     children.push(container_toggle(session.use_container, theme));
     if session.use_container {
+        // Engine de aislamiento — muestra cuál vamos a usar + permite
+        // cambiarlo. Default: el preferido del sistema (unshare > bwrap >
+        // podman). Si la sesión tenía uno persistido que ya no está
+        // disponible, sigue mostrándose pero el confirm rebajará.
+        children.push(panel_label("Engine de aislamiento", theme));
+        let engines = engine_items();
+        let cur_eng_idx = engines
+            .iter()
+            .position(|it| it.label == session.container_engine)
+            .unwrap_or(0);
+        children.push(select_trigger_view(
+            engines.get(cur_eng_idx),
+            "Engine…",
+            model.dropdown_open == Some(DropKind::Engine),
+            None,
+            &pal,
+            Msg::ToggleDropdown(DropKind::Engine),
+        ));
         children.push(panel_label("Distro", theme));
         let distros = distro_items();
         children.push(select_trigger_view(

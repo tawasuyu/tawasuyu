@@ -703,6 +703,9 @@ enum DropKind {
     Distro,
     /// Suscribir a un contenedor existente / crear uno nuevo.
     Container,
+    /// Elegir el engine de aislamiento (unshare / bwrap / podman) — sólo
+    /// muestra los disponibles en el `PATH` del proceso.
+    Engine,
 }
 
 /// El tipo de una sesión — define el icono de su diente (rail izquierdo).
@@ -1026,8 +1029,12 @@ impl Session {
         s.distro = c.distro;
         s.container = c.container;
         s.use_container = c.use_container;
-        if !c.container_engine.is_empty() {
+        // Si la sesión persistió "podman" pero ya no está instalado,
+        // rebajamos al preferido del sistema actual.
+        if !c.container_engine.is_empty() && binary_disponible(&c.container_engine) {
             s.container_engine = c.container_engine;
+        } else if let Some(pref) = engine_preferido() {
+            s.container_engine = pref.to_string();
         }
         s.mount.set_text(c.mount);
         s.host.set_text(c.host);
@@ -1357,6 +1364,9 @@ enum Msg {
     CreateContainer,
     /// Toggle del checkbox "Aislar en contenedor" del form de creación.
     ToggleUseContainer,
+    /// Cambia el engine de aislamiento de la sesión activa (unshare /
+    /// bwrap / podman) desde el dropdown del form.
+    SetEngine(String),
     /// El thread de `podman run` terminó OK — la sesión que lo esperaba
     /// queda lista (conectada) y, si era pending, ya tiene su shell montado.
     ContainerCreated(String),
@@ -1798,6 +1808,28 @@ impl App for Shell {
             Msg::ToggleUseContainer => {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.use_container = !s.use_container;
+                    // Si el engine persistido ya no está disponible, lo
+                    // refrescamos al preferido en el momento de activar.
+                    if s.use_container {
+                        if let Some(pref) = engine_preferido() {
+                            if !binary_disponible(&s.container_engine) {
+                                s.container_engine = pref.to_string();
+                            }
+                        }
+                    }
+                }
+            }
+            Msg::SetEngine(name) => {
+                m.dropdown_open = None;
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    // Sólo aceptamos engines realmente disponibles.
+                    if binary_disponible(&name)
+                        || name == "unshare"
+                        || name == "bwrap"
+                        || name == "podman"
+                    {
+                        s.container_engine = name;
+                    }
                 }
             }
             Msg::EnsureContainer(name) => {
@@ -2008,7 +2040,16 @@ impl App for Shell {
                         s.pending = false;
                         s.pending_focus = None;
                         if s.use_container {
-                            match engine_preferido() {
+                            // Resolver engine: usar el que el usuario eligió
+                            // en el form si está disponible; sino, el
+                            // preferido del sistema. Si no hay ninguno,
+                            // rebajar a Local con notice.
+                            let chosen: Option<String> = if binary_disponible(&s.container_engine) {
+                                Some(s.container_engine.clone())
+                            } else {
+                                engine_preferido().map(|e| e.to_string())
+                            };
+                            match chosen.as_deref() {
                                 None => {
                                     s.use_container = false;
                                     s.container = None;
@@ -2016,10 +2057,9 @@ impl App for Shell {
                                         "✘ ningún engine de aislamiento está disponible (faltan `unshare`/`bwrap`/`podman`). Arrancó como shell local.".into(),
                                     );
                                 }
-                                Some(engine @ ("unshare" | "bwrap")) => {
-                                    // Ambos usan un rootfs en disco. Si ya
-                                    // está, conecta directo; sino, auto-pull.
-                                    s.container_engine = engine.to_string();
+                                Some("unshare") | Some("bwrap") => {
+                                    let engine = chosen.unwrap();
+                                    s.container_engine = engine.clone();
                                     let mount = s.mount.text();
                                     let mount_opt =
                                         if mount.trim().is_empty() { None } else { Some(mount) };
