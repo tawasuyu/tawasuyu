@@ -316,9 +316,11 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
     // del input. El cursor cae en (línea, columna) calculadas desde el
     // byte offset del cursor.
     let line_count = text.matches('\n').count() + 1;
-    const LINE_H: f64 = 18.0;
-    const BORDER_INNER_H: f64 = 16.0; // padding visual sumado al alto
-    let container_h = BORDER_INNER_H + LINE_H * line_count as f64;
+    let zoom = state.font_zoom.clamp(0.5, 3.0) as f64;
+    let font_px = 13.0_f64 * zoom;
+    let line_h: f64 = 18.0_f64 * zoom;
+    let border_inner_h: f64 = 16.0_f64 * zoom; // padding visual sumado al alto
+    let container_h = border_inner_h + line_h * line_count as f64;
     let theme_clone = *theme;
     let focused = state.focused;
     // Parpadeo del caret: sólido el primer medio período tras la última tecla,
@@ -346,7 +348,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
         if let Some(ph) = &placeholder {
             let block = TextBlock {
                 text: ph,
-                size_px: 13.0,
+                size_px: font_px as f32,
                 color: theme_clone.fg_placeholder,
                 origin: (line_x_start, baseline_y),
                 max_width: None,
@@ -381,7 +383,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
         let char_w: f64 = {
             let probe = TextBlock {
                 text: "0000000000",
-                size_px: 13.0,
+                size_px: font_px as f32,
                 color: theme_clone.fg_text,
                 origin: (0.0, 0.0),
                 max_width: None,
@@ -399,7 +401,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
         let mut last_line_y: f64 = baseline_y;
         let mut line_byte_start = 0usize;
         for (line_idx, line_str) in text.split('\n').enumerate() {
-            let line_y = baseline_y + line_idx as f64 * LINE_H;
+            let line_y = baseline_y + line_idx as f64 * line_h;
             let mut x = line_x_start;
             // Pintar tokens sobre el slice de la línea, usando el
             // tokenizer estándar (dialect por defecto = bash).
@@ -409,7 +411,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                 let segment = &line_str[tok.start..tok.end];
                 let block = TextBlock {
                     text: segment,
-                    size_px: 13.0,
+                    size_px: font_px as f32,
                     color,
                     origin: (x, line_y),
                     max_width: None,
@@ -450,7 +452,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             if !suffix.is_empty() && cursor == text.len() {
                 let block = TextBlock {
                     text: suffix,
-                    size_px: 13.0,
+                    size_px: font_px as f32,
                     color: theme_clone.fg_placeholder,
                     origin: (last_line_end_x, last_line_y),
                     max_width: None,
@@ -482,7 +484,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                     }
                     let blk = TextBlock {
                         text: &text[..upto],
-                        size_px: 13.0,
+                        size_px: font_px as f32,
                         color: theme_clone.fg_text,
                         origin: (0.0, 0.0),
                         max_width: None,
@@ -495,7 +497,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
                 };
                 let x0 = line_x_start + measure_w(ts, ss);
                 let x1 = line_x_start + measure_w(ts, se);
-                let rect = KurboRect::new(x0, baseline_y, x1, baseline_y + LINE_H);
+                let rect = KurboRect::new(x0, baseline_y, x1, baseline_y + line_h);
                 let a = theme_clone.bg_selected;
                 let sel_color = Color::from_rgba8(
                     (a.components[0] * 255.0) as u8,
@@ -519,7 +521,7 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             use llimphi_ui::llimphi_raster::peniko::Fill;
             // Caret un poco más ancho (2.5px) y en el acento para que se note.
             let cursor_rect =
-                KurboRect::new(cursor_x, cursor_y + 1.0, cursor_x + 2.5, cursor_y + LINE_H);
+                KurboRect::new(cursor_x, cursor_y + 1.0, cursor_x + 2.5, cursor_y + line_h);
             scene.fill(
                 Fill::NonZero,
                 vello::kurbo::Affine::IDENTITY,

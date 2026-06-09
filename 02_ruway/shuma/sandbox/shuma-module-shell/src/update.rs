@@ -259,11 +259,29 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::ZoomBy(factor) => {
             if factor > 0.0 && factor.is_finite() {
+                let old = s.font_zoom;
                 s.font_zoom = (s.font_zoom * factor).clamp(0.5, 3.0);
+                if (s.font_zoom - old).abs() > f32::EPSILON {
+                    // Notice visible para que el usuario confirme que el
+                    // atajo le llegó. Sin esto, si el render no respeta
+                    // el cambio (path TUI fullscreen) parece no funcionar.
+                    s.push_output(OutputLine::notice(format!(
+                        "🔍 zoom {:.0}% → {:.0}%",
+                        old * 100.0,
+                        s.font_zoom * 100.0
+                    )));
+                }
             }
         }
         Msg::ZoomReset => {
+            let old = s.font_zoom;
             s.font_zoom = 1.0;
+            if (old - 1.0).abs() > f32::EPSILON {
+                s.push_output(OutputLine::notice(format!(
+                    "🔍 zoom {:.0}% → 100%",
+                    old * 100.0
+                )));
+            }
         }
         Msg::ToggleSection { block, idx } => {
             let key = (block, idx);
