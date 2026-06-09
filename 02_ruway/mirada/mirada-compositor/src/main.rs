@@ -95,6 +95,7 @@ use mirada_link::BodyLink;
 
 mod drm_backend;
 mod menu;
+mod screencopy;
 mod text;
 
 // ---------------------------------------------------------------------
@@ -360,6 +361,14 @@ struct App {
     /// El global se crea con un filtro por ejecutable (espejo de los otros
     /// dos): los clientes en `window_list_denylist` no lo ven.
     foreign_toplevel_state: ForeignToplevelListState,
+    /// Estado de `zwlr_screencopy_v1` — captura de pantalla (implementado a
+    /// mano en [`screencopy`]; smithay 0.7 no lo trae). El global se crea con
+    /// un filtro por ejecutable: los clientes en `screencopy_denylist` no lo
+    /// ven. Se guarda para mantenerlo vivo durante toda la sesión.
+    _screencopy_state: screencopy::ScreencopyState,
+    /// Capturas screencopy aceptadas, esperando la próxima composición de su
+    /// salida — el backend las drena con [`screencopy::tomar_capturas`].
+    pending_screencopy: Vec<screencopy::PendingScreencopy>,
     seat: Seat<Self>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).
@@ -2308,6 +2317,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     let caps_filter = caps.clone();
     let caps_vk_filter = caps.clone();
     let caps_ftl_filter = caps.clone();
+    let caps_sc_filter = caps.clone();
 
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
@@ -2353,6 +2363,17 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
                 }
             },
         ),
+        // `zwlr_screencopy` (captura de pantalla — la más sensible): mismo
+        // filtro por **ejecutable real** del cliente. Sin PID identificable →
+        // se permite (no romper herramientas de screenshot legítimas).
+        _screencopy_state: screencopy::ScreencopyState::new(&dh, move |client| {
+            let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
+            match pid.and_then(exe_de_pid) {
+                Some(exe) => caps_sc_filter.read().unwrap().screencopy_permitido(&exe),
+                None => true,
+            }
+        }),
+        pending_screencopy: Vec::new(),
         seat,
         keyboard: None,
         pointer: None,
@@ -2642,6 +2663,15 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
                 .unwrap();
             draw_render_elements(&mut frame, 1.0, &elements, &[damage]).unwrap();
             let _ = frame.finish().unwrap();
+
+            // Capturas screencopy pendientes: el backbuffer recién compuesto
+            // sigue bindeado — se leen los píxeles antes del submit.
+            if !state.pending_screencopy.is_empty() {
+                if let Some(out) = state.output.clone() {
+                    let capturas = screencopy::tomar_capturas(&mut state, &out);
+                    screencopy::servir(renderer, &framebuffer, capturas);
+                }
+            }
         }
 
         // 4 · Callbacks de frame + clientes nuevos + flush.

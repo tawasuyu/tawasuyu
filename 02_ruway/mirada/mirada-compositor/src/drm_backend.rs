@@ -1160,6 +1160,23 @@ impl DrmState {
                 ctx.name
             ),
         }
+
+        // Capturas screencopy pendientes de esta salida: el framebuffer real
+        // vive dentro del DrmCompositor, así que se re-componen los mismos
+        // elementos en un offscreen y se copia de ahí.
+        if !self.app.pending_screencopy.is_empty() {
+            let output = self.outputs[idx].output.clone();
+            let capturas = crate::screencopy::tomar_capturas(&mut self.app, &output);
+            if !capturas.is_empty() {
+                crate::screencopy::servir_offscreen(
+                    &mut self.renderer,
+                    (rect.w, rect.h),
+                    &elements,
+                    CLEAR_COLOR.into(),
+                    capturas,
+                );
+            }
+        }
     }
 
     /// La sesión se cede a otra VT (`Ctrl+Alt+Fn`): suelta la GPU y deja

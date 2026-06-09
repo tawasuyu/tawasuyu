@@ -7,10 +7,11 @@
 //! es quien **otorga el protocolo**: una capacidad denegada no se concede por
 //! una tabla eludible sino **no anunciando el global** al cliente.
 //!
-//! Gatea tres capacidades: el snoop del portapapeles (`zwlr_data_control`), la
-//! inyección de pulsaciones (`zwp_virtual_keyboard`) y el censo de ventanas
-//! (`ext_foreign_toplevel_list`). La identidad del cliente es su **ejecutable
-//! real** (`SO_PEERCRED → /proc/<pid>/exe`), no su `app_id` (falsificable).
+//! Gatea cuatro capacidades: el snoop del portapapeles (`zwlr_data_control`),
+//! la inyección de pulsaciones (`zwp_virtual_keyboard`), el censo de ventanas
+//! (`ext_foreign_toplevel_list`) y la captura de pantalla (`zwlr_screencopy`).
+//! La identidad del cliente es su **ejecutable real**
+//! (`SO_PEERCRED → /proc/<pid>/exe`), no su `app_id` (falsificable).
 //! Postura: **permitir por defecto**, con una denylist de ejecutables.
 //!
 //! El tipo de datos en sí ([`Permisos`]) vive en `mirada-protocol` porque cruza
@@ -90,6 +91,10 @@ const PERMISOS_TEMPLATE: &str = "\
 // `ext_foreign_toplevel_list` (el censo de ventanas: título + app_id de todo lo
 // abierto). Misma semántica de subcadena. Vacía = todos permitidos.
 //
+// `screencopy_denylist`: ejecutables a los que se NIEGA `zwlr_screencopy`
+// (capturar los píxeles de la pantalla — la capacidad más sensible). Misma
+// semántica de subcadena. Vacía = todos permitidos.
+//
 // Descomenta y edita:
 (
     clipboard_denylist: [
@@ -104,6 +109,9 @@ const PERMISOS_TEMPLATE: &str = "\
         // \"lswt\",
         // \"/opt/sospechoso/bin/vigia\",
     ],
+    screencopy_denylist: [
+        // \"/opt/sospechoso/bin/captor\",
+    ],
 )
 ";
 
@@ -117,9 +125,11 @@ mod tests {
         assert!(p.clipboard_denylist.is_empty());
         assert!(p.virtual_input_denylist.is_empty());
         assert!(p.window_list_denylist.is_empty());
+        assert!(p.screencopy_denylist.is_empty());
         assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.window_list_permitido("/usr/bin/lswt"));
+        assert!(p.screencopy_permitido("/usr/bin/grim"));
     }
 
     #[test]
@@ -133,6 +143,7 @@ mod tests {
         assert!(p.virtual_input_permitido("/usr/bin/firefox"));
         assert!(!p.window_list_permitido("/usr/bin/lswt"));
         assert!(p.window_list_permitido("/usr/bin/firefox"));
+        assert!(p.screencopy_permitido("/usr/bin/grim"));
     }
 
     #[test]
@@ -144,5 +155,7 @@ mod tests {
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.window_list_denylist.is_empty());
         assert!(p.window_list_permitido("/usr/bin/lswt"));
+        assert!(p.screencopy_denylist.is_empty());
+        assert!(p.screencopy_permitido("/usr/bin/grim"));
     }
 }

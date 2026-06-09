@@ -131,6 +131,12 @@ pub struct Permisos {
     /// global).
     #[serde(default)]
     pub window_list_denylist: Vec<String>,
+    /// Ejecutables a los que se les niega `zwlr_screencopy` (leer los píxeles
+    /// de la pantalla — la capacidad más sensible de todas). Casa por
+    /// subcadena del path del ejecutable, sin distinguir mayúsculas. Vacía =
+    /// nadie denegado (todos pueden bindear el global).
+    #[serde(default)]
+    pub screencopy_denylist: Vec<String>,
 }
 
 impl Permisos {
@@ -155,6 +161,14 @@ impl Permisos {
     /// siempre permitido.
     pub fn window_list_permitido(&self, exe: &str) -> bool {
         permitido(&self.window_list_denylist, exe)
+    }
+
+    /// `true` si el ejecutable `exe` puede bindear `zwlr_screencopy` (capturar
+    /// los píxeles de la pantalla). Misma semántica de denylist por subcadena
+    /// que [`Permisos::clipboard_permitido`]. Denylist vacía ⇒ siempre
+    /// permitido.
+    pub fn screencopy_permitido(&self, exe: &str) -> bool {
+        permitido(&self.screencopy_denylist, exe)
     }
 }
 
@@ -185,9 +199,10 @@ pub enum BrainCommand {
     SetDecorations(Decorations),
     /// Fija los permisos de capacidad por ejecutable (qué se le concede a
     /// quién): el snoop de portapapeles (`zwlr_data_control`), la inyección
-    /// de teclas (`zwp_virtual_keyboard`) y el censo de ventanas
-    /// (`ext_foreign_toplevel_list`). El Cerebro lo envía al arrancar y tras
-    /// recargar la config.
+    /// de teclas (`zwp_virtual_keyboard`), el censo de ventanas
+    /// (`ext_foreign_toplevel_list`) y la captura de pantalla
+    /// (`zwlr_screencopy`). El Cerebro lo envía al arrancar y tras recargar
+    /// la config.
     SetCapabilities(Permisos),
     /// Lanza un programa como proceso hijo del Cuerpo — hereda su
     /// entorno, `WAYLAND_DISPLAY` incluido, así el cliente se conecta
@@ -408,6 +423,7 @@ mod tests {
             clipboard_denylist: vec!["wl-paste".into(), "/usr/bin/sneaky".into()],
             virtual_input_denylist: vec!["wtype".into()],
             window_list_denylist: vec!["lswt".into()],
+            screencopy_denylist: vec!["grim".into()],
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -423,6 +439,7 @@ mod tests {
         assert!(p.clipboard_permitido("cualquiera"));
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.window_list_permitido("/usr/bin/lswt"));
+        assert!(p.screencopy_permitido("/usr/bin/grim"));
     }
 
     #[test]
@@ -431,6 +448,7 @@ mod tests {
             clipboard_denylist: vec!["wl-paste".into()],
             virtual_input_denylist: vec!["wtype".into()],
             window_list_denylist: vec!["lswt".into()],
+            screencopy_denylist: vec!["grim".into()],
         };
         // Casa por subcadena: el path completo contiene el binario denegado.
         assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
@@ -447,6 +465,9 @@ mod tests {
         assert!(!p.window_list_permitido("/usr/bin/lswt"));
         assert!(p.window_list_permitido("/usr/bin/wtype"));
         assert!(p.virtual_input_permitido("/usr/bin/lswt"));
+        assert!(!p.screencopy_permitido("/usr/bin/grim"));
+        assert!(p.screencopy_permitido("/usr/bin/lswt"));
+        assert!(p.window_list_permitido("/usr/bin/grim"));
     }
 
     #[test]

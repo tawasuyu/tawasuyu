@@ -93,7 +93,8 @@ pub enum BodyOp {
     /// Fija los permisos de capacidad por ejecutable: el backend los consulta
     /// al decidir qué clientes ven los globals sensibles (el snoop de
     /// portapapeles `zwlr_data_control`, la inyección de teclas
-    /// `zwp_virtual_keyboard`, el censo de ventanas `ext_foreign_toplevel_list`).
+    /// `zwp_virtual_keyboard`, el censo de ventanas `ext_foreign_toplevel_list`,
+    /// la captura de pantalla `zwlr_screencopy`).
     SetCapabilities(Permisos),
     /// Lanza un programa como proceso hijo del compositor.
     Spawn(String),
@@ -453,6 +454,7 @@ mod tests {
             clipboard_denylist: vec!["wl-paste".into()],
             virtual_input_denylist: vec!["wtype".into()],
             window_list_denylist: vec!["lswt".into()],
+            screencopy_denylist: vec!["grim".into()],
         };
         assert_eq!(
             b.apply(BrainCommand::SetCapabilities(p.clone())),
