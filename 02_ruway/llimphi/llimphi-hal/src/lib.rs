@@ -404,11 +404,31 @@ impl RawSurface {
                 )))
             }
         };
-        let alpha_mode = caps
-            .alpha_modes
-            .first()
-            .copied()
-            .unwrap_or(wgpu::CompositeAlphaMode::Auto);
+        // Para una layer surface (wlr-layer-shell) la transparencia es
+        // crítica: la usamos para popovers/menús que pintan un panel chico y
+        // dejan el resto transparente para ver el escritorio. La heurística
+        // ingenua `caps.alpha_modes.first()` cae a veces en `Opaque` (el
+        // compositor descarta alpha) — el clear TRANSPARENT se compone como
+        // negro literal y el menú inicio sale como un cuadrón negro.
+        //
+        // Preferencia: PreMultiplied > PostMultiplied > Inherit > Auto >
+        // Opaque. Los dos primeros componen alpha como esperamos; los dos
+        // siguientes dejan que el compositor decida (típicamente respeta el
+        // alpha del buffer ARGB); Opaque es el último recurso.
+        let alpha_mode = {
+            use wgpu::CompositeAlphaMode as Mode;
+            let want = [
+                Mode::PreMultiplied,
+                Mode::PostMultiplied,
+                Mode::Inherit,
+                Mode::Auto,
+            ];
+            want.iter()
+                .copied()
+                .find(|m| caps.alpha_modes.contains(m))
+                .or_else(|| caps.alpha_modes.first().copied())
+                .unwrap_or(Mode::Auto)
+        };
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format,
