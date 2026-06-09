@@ -295,7 +295,7 @@ pluma-tone-valid = khuska
 pluma-tone-pending = qhawana
 pluma-tone-conflict = ch'aqwaypi
 
-# === gioser-edit (qillqa hukchaq) ===
+# === tawasuyu-edit (qillqa hukchaq) ===
 edit-status-find = maskay · Ctrl+G qatiq · Esc wisq'ay
 edit-status-goto-def-waiting = goto-def · LSP suyaykuchkan…
 edit-status-references-waiting = references · LSP suyaykuchkan…
@@ -366,7 +366,7 @@ wawa-panel-about-name = Sistema
 wawa-panel-about-version = Mit'a
 wawa-panel-about-kernel = Sunqu
 wawa-panel-about-toolkit = Llamk'ana qillqana
-wawa-panel-about-blurb = wawa kaqmi gioser suiteq sistemaynin. arje sunqu, llimphi llamk'anakuna, huch'uy userland patapi.
+wawa-panel-about-blurb = wawa kaqmi tawasuyu suiteq sistemaynin. arje sunqu, llimphi llamk'anakuna, huch'uy userland patapi.
 wawa-panel-mod-mirada = mirada · wayland kamachiq
 wawa-panel-mod-shuma = shuma · q'ipichay, willay ima
 wawa-panel-mod-chasqui = chasqui · willasqa, chasqui ima

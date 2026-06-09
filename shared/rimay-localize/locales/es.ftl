@@ -294,7 +294,7 @@ pluma-tone-valid = coherente
 pluma-tone-pending = por evaluar
 pluma-tone-conflict = en conflicto
 
-# === gioser-edit (editor de código) ===
+# === tawasuyu-edit (editor de código) ===
 edit-status-find = find · Ctrl+G siguiente · Esc cierra
 edit-status-goto-def-waiting = goto-def · esperando LSP…
 edit-status-references-waiting = references · esperando LSP…
@@ -365,7 +365,7 @@ wawa-panel-about-name = Sistema
 wawa-panel-about-version = Versión
 wawa-panel-about-kernel = Núcleo
 wawa-panel-about-toolkit = Toolkit
-wawa-panel-about-blurb = wawa es el sistema operativo de la suite gioser. El kernel arje y las apps llimphi sobre un userland mínimo.
+wawa-panel-about-blurb = wawa es el sistema operativo de la suite tawasuyu. El kernel arje y las apps llimphi sobre un userland mínimo.
 wawa-panel-mod-mirada = mirada · compositor wayland
 wawa-panel-mod-shuma = shuma · empaquetado y release
 wawa-panel-mod-chasqui = chasqui · correo y mensajería
