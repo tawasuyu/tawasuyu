@@ -99,10 +99,11 @@ impl Default for Decorations {
 /// Permisos de capacidad por ejecutable que el Cerebro fija en el Cuerpo.
 ///
 /// El Cuerpo es **quien otorga el protocolo Wayland**: una capacidad sensible
-/// (hoy, espiar el portapapeles vía `zwlr_data_control`) no se concede por una
-/// tabla que el cliente pueda eludir, sino **no anunciando el global** a los
-/// clientes no autorizados (frontera física, igual que el bitfield `Permisos`
-/// del kernel wawa).
+/// (espiar el portapapeles vía `zwlr_data_control`, o inyectar pulsaciones
+/// sintéticas vía `zwp_virtual_keyboard`) no se concede por una tabla que el
+/// cliente pueda eludir, sino **no anunciando el global** a los clientes no
+/// autorizados (frontera física, igual que el bitfield `Permisos` del kernel
+/// wawa).
 ///
 /// La identidad del cliente es su **ejecutable real**, resuelto por el Cuerpo
 /// vía `SO_PEERCRED → /proc/<pid>/exe` — verdad del kernel, no falsificable; el
@@ -117,6 +118,12 @@ pub struct Permisos {
     /// mayúsculas. Vacía = nadie denegado (todos pueden bindear el global).
     #[serde(default)]
     pub clipboard_denylist: Vec<String>,
+    /// Ejecutables a los que se les niega `zwp_virtual_keyboard` (la inyección
+    /// de pulsaciones sintéticas — keylogger a la inversa). Casa por subcadena
+    /// del path del ejecutable, sin distinguir mayúsculas. Vacía = nadie
+    /// denegado (todos pueden bindear el global).
+    #[serde(default)]
+    pub virtual_input_denylist: Vec<String>,
 }
 
 impl Permisos {
@@ -125,12 +132,22 @@ impl Permisos {
     /// mayúsculas— alguna entrada de la denylist. Denylist vacía ⇒ siempre
     /// permitido.
     pub fn clipboard_permitido(&self, exe: &str) -> bool {
-        let exe = exe.to_lowercase();
-        !self
-            .clipboard_denylist
-            .iter()
-            .any(|d| exe.contains(&d.to_lowercase()))
+        permitido(&self.clipboard_denylist, exe)
     }
+
+    /// `true` si el ejecutable `exe` puede bindear `zwp_virtual_keyboard`
+    /// (inyectar pulsaciones). Misma semántica de denylist por subcadena que
+    /// [`Permisos::clipboard_permitido`]. Denylist vacía ⇒ siempre permitido.
+    pub fn virtual_input_permitido(&self, exe: &str) -> bool {
+        permitido(&self.virtual_input_denylist, exe)
+    }
+}
+
+/// Resuelve una denylist por subcadena, sin distinguir mayúsculas: permite
+/// salvo que `exe` contenga alguna entrada. Lista vacía ⇒ siempre permitido.
+fn permitido(denylist: &[String], exe: &str) -> bool {
+    let exe = exe.to_lowercase();
+    !denylist.iter().any(|d| exe.contains(&d.to_lowercase()))
 }
 
 /// Una orden del Cerebro al Cuerpo.
@@ -372,6 +389,7 @@ mod tests {
     fn frame_round_trips_set_capabilities() {
         let cmd = BrainCommand::SetCapabilities(Permisos {
             clipboard_denylist: vec!["wl-paste".into(), "/usr/bin/sneaky".into()],
+            virtual_input_denylist: vec!["wtype".into()],
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -385,17 +403,26 @@ mod tests {
         let p = Permisos::default();
         assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.clipboard_permitido("cualquiera"));
+        assert!(p.virtual_input_permitido("/usr/bin/wtype"));
     }
 
     #[test]
     fn denylist_niega_por_subcadena_sin_distinguir_mayusculas() {
-        let p = Permisos { clipboard_denylist: vec!["wl-paste".into()] };
+        let p = Permisos {
+            clipboard_denylist: vec!["wl-paste".into()],
+            virtual_input_denylist: vec!["wtype".into()],
+        };
         // Casa por subcadena: el path completo contiene el binario denegado.
         assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
         // Sin distinguir mayúsculas.
         assert!(!p.clipboard_permitido("/opt/WL-Paste"));
         // No casa lo no listado.
         assert!(p.clipboard_permitido("/usr/bin/wl-copy"));
+        // Las dos denylists son independientes: wtype inyecta pero puede leer
+        // el portapapeles; wl-paste lee pero puede inyectar.
+        assert!(!p.virtual_input_permitido("/usr/bin/wtype"));
+        assert!(p.virtual_input_permitido("/usr/bin/wl-paste"));
+        assert!(p.clipboard_permitido("/usr/bin/wtype"));
     }
 
     #[test]

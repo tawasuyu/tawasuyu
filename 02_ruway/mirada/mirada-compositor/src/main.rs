@@ -74,12 +74,13 @@ use smithay::wayland::shell::wlr_layer::{
     WlrLayerShellHandler, WlrLayerShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::desktop::{layer_map_for_output, LayerSurface as DesktopLayerSurface, WindowSurfaceType};
 use smithay::output::Output;
 use smithay::{
     delegate_compositor, delegate_data_control, delegate_data_device, delegate_dmabuf,
-    delegate_layer_shell, delegate_output, delegate_seat, delegate_shm, delegate_xdg_decoration,
-    delegate_xdg_shell,
+    delegate_layer_shell, delegate_output, delegate_seat, delegate_shm, delegate_virtual_keyboard_manager,
+    delegate_xdg_decoration, delegate_xdg_shell,
 };
 
 use auth_core::{SessionTicket, UserInfo};
@@ -341,6 +342,12 @@ struct App {
     /// el foco cada segundo. También lo usan cliphist y los gestores de
     /// portapapeles.
     data_control_state: DataControlState,
+    /// Estado de `zwp_virtual_keyboard_manager_v1` — inyección de pulsaciones
+    /// sintéticas (teclados en pantalla, `wtype`, automatización, el
+    /// asistente NL→input). El global se crea con un filtro por ejecutable
+    /// (espejo del de `data_control`): los clientes en `virtual_input_denylist`
+    /// no lo ven. Se guarda para mantenerlo vivo durante toda la sesión.
+    _virtual_keyboard_state: VirtualKeyboardManagerState,
     seat: Seat<Self>,
     /// Estado del protocolo `wlr-layer-shell` (barras/fondos/overlays como
     /// waybar, swaybg, wofi, mako).
@@ -1487,6 +1494,7 @@ delegate_shm!(App);
 delegate_seat!(App);
 delegate_data_device!(App);
 delegate_data_control!(App);
+delegate_virtual_keyboard_manager!(App);
 delegate_output!(App);
 
 // ---------------------------------------------------------------------
@@ -2241,6 +2249,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
     // el arranque emite `SetCapabilities`.
     let caps: Arc<std::sync::RwLock<mirada_brain::Permisos>> = Arc::default();
     let caps_filter = caps.clone();
+    let caps_vk_filter = caps.clone();
 
     let mut app = App {
         compositor_state: CompositorState::new::<App>(&dh),
@@ -2260,6 +2269,16 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
             let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
             match pid.and_then(exe_de_pid) {
                 Some(exe) => caps_filter.read().unwrap().clipboard_permitido(&exe),
+                None => true,
+            }
+        }),
+        // `zwp_virtual_keyboard` (inyección de pulsaciones): mismo filtro por
+        // **ejecutable real** del cliente. Sin PID identificable → se permite
+        // (no romper teclados en pantalla / automatización legítima).
+        _virtual_keyboard_state: VirtualKeyboardManagerState::new::<App, _>(&dh, move |client| {
+            let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
+            match pid.and_then(exe_de_pid) {
+                Some(exe) => caps_vk_filter.read().unwrap().virtual_input_permitido(&exe),
                 None => true,
             }
         }),

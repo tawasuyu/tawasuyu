@@ -81,11 +81,19 @@ const PERMISOS_TEMPLATE: &str = "\
 // snoop del portapapeles). Casa por subcadena del path del ejecutable, sin
 // distinguir mayúsculas. Vacía = todos permitidos.
 //
+// `virtual_input_denylist`: ejecutables a los que se NIEGA `zwp_virtual_keyboard`
+// (inyectar pulsaciones sintéticas). Misma semántica de subcadena. Vacía = todos
+// permitidos.
+//
 // Descomenta y edita:
 (
     clipboard_denylist: [
         // \"wl-paste\",
         // \"/opt/sospechoso/bin/spyware\",
+    ],
+    virtual_input_denylist: [
+        // \"wtype\",
+        // \"/opt/sospechoso/bin/autoclicker\",
     ],
 )
 ";
@@ -98,15 +106,28 @@ mod tests {
     fn the_template_parses_to_empty_permits_all() {
         let p = from_ron(PERMISOS_TEMPLATE).unwrap();
         assert!(p.clipboard_denylist.is_empty());
+        assert!(p.virtual_input_denylist.is_empty());
         assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
+        assert!(p.virtual_input_permitido("/usr/bin/wtype"));
     }
 
     #[test]
     fn permisos_parse_from_ron() {
-        let ron = r#"( clipboard_denylist: ["wl-paste", "spyware"] )"#;
+        let ron = r#"( clipboard_denylist: ["wl-paste", "spyware"], virtual_input_denylist: ["wtype"] )"#;
         let p = from_ron(ron).unwrap();
         assert_eq!(p.clipboard_denylist.len(), 2);
         assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.clipboard_permitido("/usr/bin/firefox"));
+        assert!(!p.virtual_input_permitido("/usr/bin/wtype"));
+        assert!(p.virtual_input_permitido("/usr/bin/firefox"));
+    }
+
+    #[test]
+    fn campos_ausentes_caen_a_vacio() {
+        // Una config vieja (sólo clipboard) sigue parseando: el campo nuevo
+        // cae a vacío por `#[serde(default)]`.
+        let p = from_ron(r#"( clipboard_denylist: ["wl-paste"] )"#).unwrap();
+        assert!(p.virtual_input_denylist.is_empty());
+        assert!(p.virtual_input_permitido("/usr/bin/wtype"));
     }
 }

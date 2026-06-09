@@ -2133,7 +2133,10 @@ mod tests {
             other => panic!("se esperaba SetCapabilities, no {other:?}"),
         }
         // set_caps reemplaza la política y devuelve el comando a enviar.
-        let nueva = Permisos { clipboard_denylist: vec!["wl-paste".into()] };
+        let nueva = Permisos {
+            clipboard_denylist: vec!["wl-paste".into()],
+            virtual_input_denylist: vec!["wtype".into()],
+        };
         match d.set_caps(nueva.clone()) {
             BrainCommand::SetCapabilities(p) => assert_eq!(p, nueva),
             other => panic!("se esperaba SetCapabilities, no {other:?}"),

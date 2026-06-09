@@ -448,7 +448,10 @@ mod tests {
     #[test]
     fn set_capabilities_passes_through() {
         let mut b = BodyState::new();
-        let p = Permisos { clipboard_denylist: vec!["wl-paste".into()] };
+        let p = Permisos {
+            clipboard_denylist: vec!["wl-paste".into()],
+            virtual_input_denylist: vec!["wtype".into()],
+        };
         assert_eq!(
             b.apply(BrainCommand::SetCapabilities(p.clone())),
             vec![BodyOp::SetCapabilities(p)]
