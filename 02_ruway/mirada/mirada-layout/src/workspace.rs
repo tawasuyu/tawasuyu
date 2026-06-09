@@ -310,30 +310,64 @@ impl Workspace {
         self.view_path.len()
     }
 
-    /// Agrupa las ventanas dadas en un nuevo sub-espacio (con los parámetros de
-    /// teselado actuales): para el nivel superior ocupa un solo hueco del
-    /// teselado, y dentro reparte su propio espacio. Sólo agrupa ventanas
-    /// teseladas que existan; no hace nada con menos de dos. Es la base del
-    /// anidamiento fractal.
-    pub fn group(&mut self, ids: &[WindowId]) {
-        let members: Vec<WindowId> = ids
+    /// Las ventanas que son hijas-hoja **directas** del sub-espacio en vista —
+    /// las "sueltas" del nivel actual, sin contar las ya plegadas en
+    /// sub-espacios— en orden de teselado. Sin zoom son las teseladas del nivel
+    /// superior. Es lo que [`group`](Workspace::group) puede plegar y lo que la
+    /// pila de `GroupStack` mira para anidar dentro del nivel actual.
+    pub fn view_leaves(&self) -> Vec<WindowId> {
+        let root = self.root_tree();
+        let view = node_at_path(&root, &self.view_path).unwrap_or(&root);
+        view.children
             .iter()
-            .copied()
-            .filter(|id| self.windows.contains(id) && !self.floating.contains_key(id))
-            .collect();
-        if members.len() < 2 {
-            return;
-        }
+            .filter_map(|c| match c {
+                LayoutNode::Leaf(id) => Some(*id),
+                LayoutNode::Space(_) => None,
+            })
+            .collect()
+    }
+
+    /// Pliega las ventanas dadas en un nuevo sub-espacio **dentro del nivel en
+    /// vista** (con los parámetros de teselado actuales): para ese nivel ocupa un
+    /// solo hueco del teselado, y dentro reparte su propio espacio. Sólo pliega
+    /// las que sean hojas directas del nivel actual ([`view_leaves`](Workspace::view_leaves));
+    /// no hace nada con menos de dos. Operar sobre la vista —no siempre sobre la
+    /// raíz— es lo que hace el árbol genuinamente fractal: agrupar dentro de un
+    /// grupo, a profundidad arbitraria.
+    pub fn group(&mut self, ids: &[WindowId]) {
         let mut root = self.root_tree();
-        // Saca las hojas de los miembros del nivel superior y mételas en un
-        // nuevo sub-espacio al final.
-        root.children
-            .retain(|n| !matches!(n, LayoutNode::Leaf(id) if members.contains(id)));
-        let sub = SpaceNode {
-            params: self.params,
-            children: members.iter().map(|&id| LayoutNode::Leaf(id)).collect(),
-        };
-        root.children.push(LayoutNode::Space(Box::new(sub)));
+        {
+            let Some(view) = node_at_path_mut(&mut root, &self.view_path) else {
+                return;
+            };
+            // Sólo hojas directas del nivel en vista: no se agrupa a través de
+            // niveles ni se mete una hoja ya anidada.
+            let direct: Vec<WindowId> = view
+                .children
+                .iter()
+                .filter_map(|c| match c {
+                    LayoutNode::Leaf(id) => Some(*id),
+                    LayoutNode::Space(_) => None,
+                })
+                .collect();
+            let members: Vec<WindowId> = ids
+                .iter()
+                .copied()
+                .filter(|id| direct.contains(id) && !self.floating.contains_key(id))
+                .collect();
+            if members.len() < 2 {
+                return;
+            }
+            // Saca las hojas de los miembros de este nivel y mételas en un nuevo
+            // sub-espacio al final.
+            view.children
+                .retain(|n| !matches!(n, LayoutNode::Leaf(id) if members.contains(id)));
+            let sub = SpaceNode {
+                params: self.params,
+                children: members.iter().map(|&id| LayoutNode::Leaf(id)).collect(),
+            };
+            view.children.push(LayoutNode::Space(Box::new(sub)));
+        }
         self.grouping = Some(root);
     }
 
@@ -422,6 +456,19 @@ fn node_at_path<'a>(root: &'a SpaceNode, path: &[usize]) -> Option<&'a SpaceNode
     let mut node = root;
     for &i in path {
         match node.children.get(i) {
+            Some(LayoutNode::Space(s)) => node = s,
+            _ => return None,
+        }
+    }
+    Some(node)
+}
+
+/// Igual que [`node_at_path`] pero da acceso mutable — para plegar un grupo
+/// dentro del sub-espacio en vista sin tocar el resto del árbol.
+fn node_at_path_mut<'a>(root: &'a mut SpaceNode, path: &[usize]) -> Option<&'a mut SpaceNode> {
+    let mut node = root;
+    for &i in path {
+        match node.children.get_mut(i) {
             Some(LayoutNode::Space(s)) => node = s,
             _ => return None,
         }
@@ -750,6 +797,70 @@ mod tests {
         // Al salir del zoom nadie duerme.
         w.zoom_out();
         assert!(w.dormant(screen).is_empty());
+    }
+
+    #[test]
+    fn view_leaves_follows_the_zoom_into_a_nested_level() {
+        let mut w = cols();
+        for id in [1, 2, 3, 4] {
+            w.add(id);
+        }
+        // Sin zoom: las cuatro son hojas del nivel superior.
+        assert_eq!(w.view_leaves(), vec![1, 2, 3, 4]);
+        w.group(&[2, 3, 4]);
+        // Tras agrupar: arriba quedan la 1 (suelta) y el grupo {2,3,4}.
+        assert_eq!(w.view_leaves(), vec![1]);
+        w.focus_window(3);
+        w.zoom_in();
+        // Dentro del grupo, las hojas directas son 2,3,4.
+        assert_eq!(w.view_leaves(), vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn grouping_nests_inside_the_current_view_to_arbitrary_depth() {
+        let mut w = cols();
+        for id in [1, 2, 3, 4] {
+            w.add(id);
+        }
+        w.group(&[2, 3, 4]); // nivel 1: grupo {2,3,4}
+        w.focus_window(3);
+        w.zoom_in(); // entro al grupo
+        assert_eq!(w.zoom_depth(), 1);
+        // Pliego 3 y 4 DENTRO del grupo → un sub-sub-espacio.
+        w.group(&[3, 4]);
+        // En vista (nivel 1) ahora hay: la 2 suelta + el grupo {3,4}.
+        assert_eq!(w.view_leaves(), vec![2]);
+        w.focus_window(4);
+        w.zoom_in(); // entro al grupo anidado {3,4}
+        assert_eq!(w.zoom_depth(), 2);
+        let screen = Rect::new(0, 0, 1200, 600);
+        let ids: Vec<_> = w.layout(screen).iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, vec![3, 4]); // sólo el nivel más profundo
+        // La 1 y la 2 duermen (capas más superficiales fuera de vista).
+        let dormant: Vec<_> = w.dormant(screen).iter().map(|(id, _)| *id).collect();
+        assert!(dormant.contains(&1) && dormant.contains(&2));
+        // Salir dos niveles vuelve al tope; deshacer aplana del todo.
+        w.zoom_out();
+        w.zoom_out();
+        assert_eq!(w.zoom_depth(), 0);
+        w.ungroup();
+        assert!(!w.is_grouped());
+    }
+
+    #[test]
+    fn group_only_folds_direct_leaves_of_the_view_not_across_levels() {
+        let mut w = cols();
+        for id in [1, 2, 3] {
+            w.add(id);
+        }
+        w.group(&[2, 3]); // {2,3} ya anidado
+        // Intentar agrupar la 1 (suelta) con la 2 (ya dentro del grupo): la 2 no
+        // es hoja directa del tope → menos de dos miembros válidos → no hace nada.
+        w.group(&[1, 2]);
+        // El nivel superior sigue siendo {1} + grupo{2,3}: tres ventanas.
+        let placed = w.layout(Rect::new(0, 0, 1200, 600));
+        assert_eq!(placed.len(), 3);
+        assert_eq!(w.view_leaves(), vec![1]);
     }
 
     #[test]

@@ -661,14 +661,10 @@ impl Desktop {
             DesktopAction::GroupStack => {
                 let ws = &mut self.workspaces[active];
                 let nmaster = ws.params().master_count;
-                // La pila: las teseladas que no caben en el área maestra.
-                let stack: Vec<WindowId> = ws
-                    .windows()
-                    .iter()
-                    .copied()
-                    .filter(|&id| !ws.is_floating(id))
-                    .skip(nmaster)
-                    .collect();
+                // La pila del **nivel en vista**: sus hojas sueltas menos el área
+                // maestra. Con zoom activo pliega dentro del sub-espacio actual
+                // (anidamiento), no en la raíz.
+                let stack: Vec<WindowId> = ws.view_leaves().into_iter().skip(nmaster).collect();
                 ws.group(&stack);
                 self.relayout()
             }
@@ -2230,6 +2226,33 @@ mod tests {
         let cmds = d.apply(DesktopAction::Ungroup);
         assert_eq!(places(&cmds).len(), 4);
         assert!(!d.active_workspace().is_grouped());
+    }
+
+    #[test]
+    fn group_stack_nests_inside_the_current_zoom_level() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3, 4] {
+            open(&mut d, id); // MasterStack nmaster=1 → maestra 1, pila 2/3/4
+        }
+        // Nivel 1: plegar la pila (2,3,4) y entrar.
+        d.apply(DesktopAction::GroupStack);
+        d.apply(DesktopAction::FocusWindow(3));
+        d.apply(DesktopAction::ZoomIn);
+        assert_eq!(d.active_workspace().zoom_depth(), 1);
+        // Nivel 2: dentro del grupo, plegar SU pila (3,4) — la maestra del nivel
+        // es la 2 — y entrar otra vez.
+        d.apply(DesktopAction::GroupStack);
+        d.apply(DesktopAction::FocusWindow(4));
+        let cmds = d.apply(DesktopAction::ZoomIn);
+        assert_eq!(d.active_workspace().zoom_depth(), 2);
+        // En el nivel más profundo sólo se ven 3 y 4; 1 y 2 duermen.
+        let p = places(&cmds);
+        let visibles: Vec<_> = p.iter().filter(|p| p.visible).map(|p| p.id).collect();
+        assert_eq!(visibles.len(), 2);
+        assert!(visibles.contains(&3) && visibles.contains(&4));
+        for id in [1, 2] {
+            assert!(p.iter().find(|p| p.id == id).unwrap().suspended);
+        }
     }
 
     #[test]

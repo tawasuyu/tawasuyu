@@ -1054,6 +1054,31 @@ fn top_bar(
         12.0,
         180.0,
     );
+    // Chip de zoom-Z: visible sólo con agrupación. El glifo ⧉ marca el árbol
+    // fractal; el número es la profundidad de zoom (0 = se ve el espacio
+    // entero). Lenguaje-neutro: no toca el catálogo de localización.
+    let ws = model.desktop.active_workspace();
+    let zoom_chip = ws.is_grouped().then(|| {
+        let depth = ws.zoom_depth();
+        let (fg, bg) = if depth > 0 {
+            (on_accent, theme.accent)
+        } else {
+            (theme.fg_muted, theme.bg_row_hover)
+        };
+        View::new(Style {
+            size: Size {
+                width: length(46.0_f32),
+                height: length(22.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(bg)
+        .radius(4.0)
+        .text_aligned(format!("⧉ {depth}"), 12.0, fg, Alignment::Start)
+    });
+
     let spacer = View::new(Style {
         size: Size {
             width: Dimension::auto(),
@@ -1089,15 +1114,15 @@ fn top_bar(
         ..Default::default()
     })
     .fill(bar_bg)
-    .children(vec![
-        mirada_tag,
-        sep_a,
-        pips_row,
-        sep_b,
-        layout_label,
-        spacer,
-        focus_label_node,
-    ])
+    .children({
+        let mut kids = vec![mirada_tag, sep_a, pips_row, sep_b, layout_label];
+        if let Some(chip) = zoom_chip {
+            kids.push(chip);
+        }
+        kids.push(spacer);
+        kids.push(focus_label_node);
+        kids
+    })
 }
 
 fn canvas_view(

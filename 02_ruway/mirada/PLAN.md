@@ -105,15 +105,24 @@ callbacks** en ambos backends (winit y DRM): el cliente bloquea su bucle y deja 
 pintar a ciegas, en vez de seguir consumiendo GPU detrás del zoom. 3 tests de
 `dormant` en layout + 1 en protocol + 1 en body + el de integración en brain.
 
+**Multinivel  ✅ HECHA (3ª rebanada):** el árbol ya es genuinamente fractal.
+`Workspace::group` pliega **dentro del sub-espacio en vista** (no siempre en la
+raíz), con `view_leaves` exponiendo las hojas sueltas del nivel actual y
+`GroupStack` tomando su pila de ahí: estando dentro de un grupo se puede plegar
+otra vez y entrar más profundo, a nivel arbitrario (`zoom_in`/`zoom_out` ya
+navegaban cualquier profundidad por `view_path`). La app pinta un chip `⧉ N` en
+la barra con la profundidad de zoom cuando hay agrupación.
+
 Pendiente del zoom-Z (siguientes rebanadas): agrupación dirigida por el grafo de
-actividad (constelaciones); navegación de zoom multinivel arbitraria en la UI;
-persistir la agrupación en la sesión.
+actividad (constelaciones — necesita que el Cuerpo reporte linaje/PID de los
+clientes); persistir la agrupación en la sesión (requiere anclarla por `app_id`,
+como los window_homes, porque los `WindowId` son efímeros).
 
 **Encima de Fase 2** (orden de ROI):
 
 | Idea | Estado | Nota |
 |---|---|---|
-| **Zoom semántico en Z** | ✅ 2ª rebanada | Agrupar la pila + entrar/salir (absorbe la pantalla) + **capas dormidas** (las ventanas fuera de vista se suspenden: el Cuerpo les corta los frame callbacks). Falta: constelaciones, multinivel UI, persistir la agrupación. |
+| **Zoom semántico en Z** | ✅ 3ª rebanada | Agrupar la pila + entrar/salir (absorbe la pantalla) + **capas dormidas** (el Cuerpo corta sus frame callbacks) + **multinivel** (plegar dentro de un grupo, a profundidad arbitraria; chip ⧉N en la barra). Falta: constelaciones, persistir la agrupación. |
 | **Capabilities por ventana** | BUILD | Gatear screencopy/export-dmabuf por `app_id` en el Cuerpo. El sandboxing *real* y honesto: somos quien otorga el protocolo. |
 | **Throttle de frames** | BUILD | Espaciar los `wl_surface.frame` callbacks de apps de fondo / abusivas. Reemplaza el fantasioso "CRIU pre-emptivo". Solapa con suspender capas profundas del zoom-Z. |
 | **Clipboard por zona** | BUILD | Somos el broker del clipboard: lo que se copia en "código" no lo lee el browser de "comunicación". Historial en `pata`. |
