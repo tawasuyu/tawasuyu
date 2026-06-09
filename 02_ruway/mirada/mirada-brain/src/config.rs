@@ -313,7 +313,7 @@ impl Default for Config {
             font_path: String::new(),
             wallpaper_path: String::new(),
             wallpaper_fit: WallpaperFit::default(),
-            menu: Vec::new(),
+            menu: default_root_menu(),
             zones: Vec::new(),
             zone_presets: Vec::new(),
             output_direction: "horizontal".to_string(),
@@ -324,6 +324,51 @@ impl Default for Config {
             overview_show_titles: true,
         }
     }
+}
+
+/// Menú raíz por defecto cuando el usuario no configura `menu`: un set mínimo
+/// de acciones que cualquier escritorio espera al hacer click-derecho sobre el
+/// fondo (terminal, navegador, lanzador, recargar config, cerrar sesión). Los
+/// comandos usan fallbacks `||` para que funcionen sin saber qué tiene el
+/// sistema instalado.
+fn default_root_menu() -> Vec<MenuEntry> {
+    let leaf = |label: &str, cmd: &str| MenuEntry {
+        label: label.to_string(),
+        command: cmd.to_string(),
+        submenu: Vec::new(),
+    };
+    let sub = |label: &str, children: Vec<MenuEntry>| MenuEntry {
+        label: label.to_string(),
+        command: String::new(),
+        submenu: children,
+    };
+    vec![
+        leaf("Terminal", "shuma || kitty || alacritty || foot || xterm"),
+        leaf("Navegador", "xdg-open https://duckduckgo.com"),
+        leaf("Archivos", "xdg-open \"$HOME\""),
+        leaf(
+            "Lanzador de apps",
+            "rofi -show drun || wofi --show drun || dmenu_run",
+        ),
+        sub(
+            "Mirada",
+            vec![
+                leaf("Recargar config", "mirada-ctl reload-config || true"),
+                leaf("Vista espacial", "mirada-ctl overview-toggle || true"),
+                leaf("Ciclar zonas", "mirada-ctl cycle-zones || true"),
+            ],
+        ),
+        sub(
+            "Sesión",
+            vec![
+                leaf("Bloquear", "loginctl lock-session || swaylock || xset s activate"),
+                leaf("Cerrar sesión", "loginctl terminate-user \"$USER\""),
+                leaf("Suspender", "systemctl suspend"),
+                leaf("Reiniciar", "systemctl reboot"),
+                leaf("Apagar", "systemctl poweroff"),
+            ],
+        ),
+    ]
 }
 
 impl Config {
@@ -589,18 +634,28 @@ const CONFIG_TEMPLATE: &str = "\
     wallpaper_fit: \"stretch\",
 
     // Menú raíz (estilo openbox): aparece al click DERECHO sobre el fondo.
-    // Vacío = sin menú. Una entrada es hoja (lanza command con `sh -c`) o
-    // submenú (si trae `submenu`, anidable a cualquier profundidad). Ej:
-    //   menu: [
-    //       (label: \"Terminal\",  command: \"kitty\"),
-    //       (label: \"Apps\", submenu: [
-    //           (label: \"Navegador\", command: \"firefox\"),
-    //           (label: \"Editores\", submenu: [
-    //               (label: \"nada\", command: \"nada\"),
-    //           ]),
-    //       ]),
-    //   ],
-    menu: [],
+    // Una entrada es hoja (lanza command con `sh -c`) o submenú (si trae
+    // `submenu`, anidable a cualquier profundidad). Vaciá la lista a `[]` si
+    // no querés menú. Lo que sigue es el set por defecto — editalo, agregá
+    // tus apps, o dejalo así para tener algo usable de fábrica.
+    menu: [
+        (label: \"Terminal\",  command: \"shuma || kitty || alacritty || foot || xterm\"),
+        (label: \"Navegador\", command: \"xdg-open https://duckduckgo.com\"),
+        (label: \"Archivos\",  command: \"xdg-open \\\"$HOME\\\"\"),
+        (label: \"Lanzador de apps\", command: \"rofi -show drun || wofi --show drun || dmenu_run\"),
+        (label: \"Mirada\", submenu: [
+            (label: \"Recargar config\",  command: \"mirada-ctl reload-config || true\"),
+            (label: \"Vista espacial\",   command: \"mirada-ctl overview-toggle || true\"),
+            (label: \"Ciclar zonas\",     command: \"mirada-ctl cycle-zones || true\"),
+        ]),
+        (label: \"Sesión\", submenu: [
+            (label: \"Bloquear\",      command: \"loginctl lock-session || swaylock || xset s activate\"),
+            (label: \"Cerrar sesión\", command: \"loginctl terminate-user \\\"$USER\\\"\"),
+            (label: \"Suspender\",     command: \"systemctl suspend\"),
+            (label: \"Reiniciar\",     command: \"systemctl reboot\"),
+            (label: \"Apagar\",        command: \"systemctl poweroff\"),
+        ]),
+    ],
 
     // Zonas: blancos de arrastre (fracciones 0..=1 de la pantalla). Al arrastrar
     // una ventana sobre una zona se resalta; al soltarla encima, aterriza en ese

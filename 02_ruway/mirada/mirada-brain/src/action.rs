@@ -298,6 +298,11 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
     let mut map = vec![
         ("Super+j".into(), DesktopAction::FocusNext),
         ("Super+k".into(), DesktopAction::FocusPrev),
+        // Alt+Tab clásico — el cycler estándar que cualquier usuario espera.
+        // Hoy es un ciclado simple sobre el workspace activo; un HUD con
+        // miniaturas queda como evolución del overview de mirada.
+        ("Alt+Tab".into(), DesktopAction::FocusNext),
+        ("Alt+Shift+Tab".into(), DesktopAction::FocusPrev),
         // Foco espacial estilo i3/sway — el clásico Super+flechas.
         ("Super+Left".into(), DesktopAction::FocusDir(Direction::Left)),
         ("Super+Right".into(), DesktopAction::FocusDir(Direction::Right)),
