@@ -692,10 +692,23 @@ impl App {
     }
 
     /// El árbol del menú raíz configurado (con submenús anidados). Vacío con
-    /// Cerebro enlazado o sin entradas en la config.
+    /// Cerebro enlazado. Si el config persistido del usuario trae `menu: []`
+    /// (lo que dejaba a la pantalla sin nada al click-derecho), caemos al
+    /// menú default — Terminal/Navegador/Archivos + submenús Mirada y Sesión
+    /// con fallbacks `||` que andan sin saber qué tiene instalado.
     fn config_menu(&self) -> Vec<crate::menu::MenuNode> {
         match &self.brain {
-            Brain::Embedded(d) => d.config().menu.iter().map(menu_node_from_entry).collect(),
+            Brain::Embedded(d) => {
+                let cfg_menu = &d.config().menu;
+                if cfg_menu.is_empty() {
+                    mirada_brain::default_root_menu()
+                        .iter()
+                        .map(menu_node_from_entry)
+                        .collect()
+                } else {
+                    cfg_menu.iter().map(menu_node_from_entry).collect()
+                }
+            }
             Brain::Linked(_) => Vec::new(),
         }
     }

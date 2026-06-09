@@ -331,7 +331,7 @@ impl Default for Config {
 /// fondo (terminal, navegador, lanzador, recargar config, cerrar sesión). Los
 /// comandos usan fallbacks `||` para que funcionen sin saber qué tiene el
 /// sistema instalado.
-fn default_root_menu() -> Vec<MenuEntry> {
+pub fn default_root_menu() -> Vec<MenuEntry> {
     let leaf = |label: &str, cmd: &str| MenuEntry {
         label: label.to_string(),
         command: cmd.to_string(),
@@ -560,7 +560,18 @@ impl Config {
     /// Carga la config del usuario con un fallback amable: si el archivo no
     /// existe, escribe una plantilla documentada y devuelve los defaults; si
     /// está corrupto, avisa y devuelve los defaults.
+    ///
+    /// Si la env `MIRADA_RESET_CONFIG=1` está, ignora el archivo (no lo
+    /// borra) y arranca con los defaults — escotilla para verificar cambios
+    /// en defaults sin tener que `rm` la config a mano.
     pub fn load_or_default(path: &Path) -> Config {
+        if std::env::var_os("MIRADA_RESET_CONFIG").is_some() {
+            eprintln!(
+                "mirada · MIRADA_RESET_CONFIG activo; ignoro «{}» y uso los defaults",
+                path.display()
+            );
+            return Config::default();
+        }
         if path.exists() {
             match Config::load(path) {
                 Ok(c) => c,

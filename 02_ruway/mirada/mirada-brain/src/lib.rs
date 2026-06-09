@@ -30,7 +30,7 @@ pub mod settings;
 pub mod watch;
 
 pub use action::{default_keymap, DesktopAction, WORKSPACE_COUNT};
-pub use config::{Config, MenuEntry, OutputOverride, ZoneCfg, DROPTERM_APP_ID};
+pub use config::{default_root_menu, Config, MenuEntry, OutputOverride, ZoneCfg, DROPTERM_APP_ID};
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesState};
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
