@@ -30,7 +30,15 @@ pub fn load_from_str(src: &str) -> Result<Config, toml::de::Error> {
 /// Carga el marco: el primer `launcher.toml` que parsee gana; si ninguno
 /// existe o todos fallan, devuelve el [`Config::preset`]. Diagnostica por
 /// stderr cuál cargó o por qué cayó al default.
+///
+/// Si la env `PATA_RESET_CONFIG=1` está, ignora cualquier `launcher.toml`
+/// en disco y arranca con el preset — escotilla para regenerar el marco
+/// después de un cambio en defaults sin tener que borrar el archivo a mano.
 pub fn load() -> Config {
+    if std::env::var_os("PATA_RESET_CONFIG").is_some() {
+        eprintln!("pata · PATA_RESET_CONFIG activo; ignoro launcher.toml y uso el preset");
+        return Config::preset();
+    }
     for path in candidate_paths() {
         match std::fs::read_to_string(&path) {
             Ok(text) => match load_from_str(&text) {

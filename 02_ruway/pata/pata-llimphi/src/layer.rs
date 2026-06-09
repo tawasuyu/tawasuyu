@@ -734,14 +734,15 @@ impl LayerApp {
         // jobs y el historial persisten en el `State` aunque se repliegue.
         let layer = &self.panels[pi].layer;
         layer.set_size(0, h);
-        // Abierto: `OnDemand` para escribir sin secuestrar al teclado —
-        // `Exclusive` retenía el foco aunque el usuario clickeara una ventana
-        // y daba la sensación de que pata "no soltaba". Con OnDemand el
-        // compositor entrega el foco al click; el `leave` handler ya cierra
-        // el drawer al perder foco. Cerrado: `None`, así una app lanzada
-        // (kitty) lo recibe sin pasar por pata.
+        // Abierto: Exclusive. OnDemand parecía la elección "correcta" pero en
+        // la práctica mirada-compositor no le entrega foco al click sobre la
+        // surface, así que el shell queda sin recibir teclado. Mejor lo
+        // contrario: tomarlo de entrada (escribir es lo que se quiere hacer)
+        // y soltar con Escape o togglear desde el cabezal — el handler de
+        // `leave` ya cierra cuando el compositor mueva el foco a otra surface
+        // (por ejemplo, al abrir el menú de inicio). Cerrado: None.
         layer.set_keyboard_interactivity(if open {
-            KeyboardInteractivity::OnDemand
+            KeyboardInteractivity::Exclusive
         } else {
             KeyboardInteractivity::None
         });
@@ -1395,7 +1396,12 @@ impl LayerApp {
         };
         gpu.scene.reset();
         paint(&mut gpu.scene, &mounted, &computed, &mut gpu.typesetter, hover_idx, None);
-        if let Err(e) = gpu.renderer.render(hal, &gpu.scene, &frame, palette::css::BLACK) {
+        // Clear transparente: la layer surface es ARGB, así que el área que no
+        // pinta ningún nodo se compone como invisible. Antes era BLACK opaco,
+        // y los scrims con `.alpha(0.0)` (menú inicio, popover del reloj,
+        // historial del clipboard) salían como un cuadrón negro completo —
+        // el "fondo" era ese clear, no el scrim.
+        if let Err(e) = gpu.renderer.render(hal, &gpu.scene, &frame, palette::css::TRANSPARENT) {
             eprintln!("pata layer · render: {e}");
         }
         gpu.surface.present(frame, hal);

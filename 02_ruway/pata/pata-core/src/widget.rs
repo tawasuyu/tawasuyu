@@ -328,11 +328,12 @@ impl MeterSource {
 /// (entra en una barra angosta sin caption). El resto cae a horizontal/medium.
 fn size_orient_de(spec: &WidgetSpec) -> (MeterSize, MeterOrient) {
     let size = MeterSize::from_str(spec.str_prop("size", "")).unwrap_or_default();
+    // Default global: vertical. La barra es horizontal, así que un medidor
+    // horizontal "consume ancho" sin necesidad — la columna vertical entra en
+    // el alto de la barra y aprovecha el espacio. Para forzar horizontal hay
+    // que escribir `orientation = "horizontal"` explícito.
     let orient_explicit = MeterOrient::from_str(spec.str_prop("orientation", ""));
-    let orient = orient_explicit.unwrap_or(match size {
-        MeterSize::Small => MeterOrient::Vertical,
-        _ => MeterOrient::Horizontal,
-    });
+    let orient = orient_explicit.unwrap_or(MeterOrient::Vertical);
     (size, orient)
 }
 
@@ -882,7 +883,9 @@ mod tests {
                 fraction: 0.42,
                 caption: "42%".to_string(),
                 size: MeterSize::Medium,
-                orient: MeterOrient::Horizontal,
+                // Default orient: Vertical (la barra es horizontal; columnas
+                // entran mejor que filas).
+                orient: MeterOrient::Vertical,
             }
         );
     }
@@ -910,12 +913,12 @@ mod tests {
             WidgetView::Meter { orient, .. } => assert_eq!(orient, MeterOrient::Horizontal),
             v => panic!("esperaba Meter, vino {v:?}"),
         }
-        // Large sin orientación → horizontal.
+        // Large sin orientación → vertical (default global).
         let spec = WidgetSpec::new("cpu_meter").with("size", Prop::Str("LARGE".into()));
         let m = Meter::from_spec(MeterSource::Cpu, &spec);
         assert_eq!(
             (m.size, m.orient),
-            (MeterSize::Large, MeterOrient::Horizontal)
+            (MeterSize::Large, MeterOrient::Vertical)
         );
     }
 
