@@ -257,6 +257,14 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::PushNotice(text) => {
             s.push_output(OutputLine::notice(text));
         }
+        Msg::ZoomBy(factor) => {
+            if factor > 0.0 && factor.is_finite() {
+                s.font_zoom = (s.font_zoom * factor).clamp(0.5, 3.0);
+            }
+        }
+        Msg::ZoomReset => {
+            s.font_zoom = 1.0;
+        }
         Msg::ToggleSection { block, idx } => {
             let key = (block, idx);
             if !s.section_collapsed.remove(&key) {
@@ -1799,6 +1807,26 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     let trimmed = line.trim().to_string();
     s.input.clear();
     if trimmed.is_empty() {
+        return s;
+    }
+    // Si ya hay un comando vivo y el usuario NO terminó con `&` (que
+    // fuerza bg), interpretamos el Enter como respuesta al stdin del
+    // running: típico apt Y/n, sudo password, prompts custom. Escribimos
+    // `<line>\n` al stdin. El usuario aún puede arrancar un bg paralelo
+    // tipeando `cmd &`.
+    if s.running.is_some() && !trimmed.ends_with('&') {
+        let bytes = {
+            let mut v = line.clone().into_bytes();
+            v.push(b'\n');
+            v
+        };
+        if let Some(active_arc) = s.running.clone() {
+            if let Ok(guard) = active_arc.lock() {
+                guard.handle.write_input(bytes);
+            }
+        }
+        // Echo discreto de lo enviado para que el usuario vea qué tipeó.
+        s.push_output(OutputLine::notice(format!("← {line}")));
         return s;
     }
     // El comando que estaba en foco recede al historial: se pliega para que

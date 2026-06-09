@@ -421,6 +421,10 @@ pub struct State {
     /// El `usize` es el índice de la sección que devolvió
     /// [`sections::detect_sections`] para el comando del bloque.
     pub section_collapsed: HashSet<(u64, usize)>,
+    /// Factor de zoom del texto del shell (1.0 = default). Ctrl+rueda lo
+    /// ajusta. Aplicado al `font_size`, `row_h` y `char_width` de la
+    /// superficie de output. Bounded [0.5, 3.0] al renderizar.
+    pub font_zoom: f32,
     /// Estado de orden de las sub-secciones tipo tabla: por `(block, sec_idx)`
     /// guarda `(col, ascending)`. Sin entry = orden natural (el del output).
     /// Click en un header de columna togglea (col, true) → (col, false) →
@@ -639,6 +643,7 @@ impl State {
             collapsed: HashSet::new(),
             section_collapsed: HashSet::new(),
             section_sort: HashMap::new(),
+            font_zoom: 1.0,
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
@@ -908,6 +913,12 @@ pub enum Msg {
     /// para que el chasis (o cualquier consumidor) comunique fallas
     /// (podman, askpass, ...) en la vista del shell.
     PushNotice(String),
+    /// Ajusta el zoom del texto del shell por un factor multiplicativo
+    /// (e.g. 1.1 zoom in 10%, 1/1.1 zoom out). Ctrl+rueda lo dispara con
+    /// pasos pequeños; Ctrl+= / Ctrl+- con pasos más grandes.
+    ZoomBy(f32),
+    /// Resetea el zoom a 1.0. Ctrl+0 lo dispara.
+    ZoomReset,
     /// Pega el clipboard al PTY del TUI activo — click derecho o botón
     /// del medio sobre el panel de vim (paste estilo terminal).
     VimPaste,
@@ -1301,19 +1312,23 @@ mod tests {
     }
 
     #[test]
-    fn second_enter_starts_bg_while_busy() {
-        // Cambió la política (2026-06-08): un Enter durante un run vivo
-        // arranca el nuevo en background paralelo en lugar de encolarlo.
-        // Evita que un comando colgado bloquee el shell.
+    fn second_enter_with_ampersand_starts_bg() {
+        // Política (2026-06-09): un Enter durante un run vivo SIN `&`
+        // se interpreta como respuesta al stdin del running (apt Y/n,
+        // sudo, etc.). Para spawnear bg paralelo, el usuario agrega `&`.
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
         s.input.set_text("sleep 0.2");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
         assert!(s.is_running());
-        s.input.set_text("echo segunda");
+        // Sin `&`: va al stdin del running, no spawnea bg.
+        s.input.set_text("y");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
-        assert_eq!(s.queue.len(), 0, "ya no se encola, va a bg");
-        assert!(!s.bg_jobs.is_empty(), "el segundo run quedó como bg job");
+        assert!(s.bg_jobs.is_empty(), "sin & no debe spawnar bg job");
+        // Con `&`: arranca como bg job paralelo.
+        s.input.set_text("echo segunda &");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(!s.bg_jobs.is_empty(), "con & arranca bg job");
         s = drain_until_idle(s);
         let combined: Vec<String> = s.output.iter().map(|l| l.text.clone()).collect();
         assert!(combined.iter().any(|t| t == "segunda"), "{combined:?}");
@@ -2632,14 +2647,15 @@ mod tests {
     fn surf_select_drag_move_arranca_y_extiende_la_seleccion() {
         let mut s = State::new(Source::Local);
         *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
-        // Primer Move: anchor en línea 0 col 2 (ax=46 = 30+2*8, ay=4).
+        // Primer Move: anchor en línea 0 col 2 (ax=50 = 30 gutter + 4
+        // TEXT_LEFT_PADDING + 2*8 char_w, ay=4).
         s = update(
             s,
             Msg::SurfSelectDrag {
                 phase: llimphi_ui::DragPhase::Move,
                 dx: 0.0,
                 dy: 0.0,
-                ax: 46.0,
+                ax: 50.0,
                 ay: 4.0,
             },
         );
@@ -2654,7 +2670,7 @@ mod tests {
                 phase: llimphi_ui::DragPhase::Move,
                 dx: 32.0,
                 dy: 32.0,
-                ax: 46.0,
+                ax: 50.0,
                 ay: 4.0,
             },
         );
@@ -2669,13 +2685,13 @@ mod tests {
         *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
         // Drag completo (Press → Move → End) cubriendo varios chars.
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::Move, dx: 16.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::Move, dx: 16.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         assert!(!s.surf_selecting, "End libera el flag");
         assert!(s.surf_selection.is_some(), "pero la selección queda para copy");
@@ -2689,11 +2705,11 @@ mod tests {
         let mut s = State::new(Source::Local);
         *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         // Ahora un End sin Mover.
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::End, dx: 0.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         assert!(s.surf_selection.is_none(), "click sin drag → sin selección");
     }
@@ -3129,10 +3145,10 @@ mod tests {
         *s.surf_layout.lock().unwrap() = Some(synth_surf_layout());
         // Arranca un drag.
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::Move, dx: 0.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         s = update(s, Msg::SurfSelectDrag {
-            phase: llimphi_ui::DragPhase::Move, dx: 16.0, dy: 0.0, ax: 46.0, ay: 4.0,
+            phase: llimphi_ui::DragPhase::Move, dx: 16.0, dy: 0.0, ax: 50.0, ay: 4.0,
         });
         assert!(s.surf_selection.is_some());
         s = update(s, Msg::SurfClearSelection);

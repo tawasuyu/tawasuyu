@@ -1210,8 +1210,16 @@ impl App for Shell {
         model: &Self::Model,
         delta: WheelDelta,
         _cursor: (f32, f32),
-        _modifiers: Modifiers,
+        modifiers: Modifiers,
     ) -> Option<Self::Msg> {
+        // Ctrl+rueda = zoom del texto del shell (paso ~10% por click).
+        if modifiers.ctrl && delta.y != 0.0 {
+            let factor = if delta.y > 0.0 { 1.0 / 1.1 } else { 1.1 };
+            return Some(Msg::Module(
+                Slot::Session(model.active_session, Which::Shell),
+                ModuleMsg::Shell(shuma_module_shell::Msg::ZoomBy(factor)),
+            ));
+        }
         // `delta.y` viene en líneas (positivo = hacia abajo). El scroll
         // del shell mide px desde el fondo, donde positivo = ver
         // historial, así que invertimos y escalamos a ~40 px por línea.

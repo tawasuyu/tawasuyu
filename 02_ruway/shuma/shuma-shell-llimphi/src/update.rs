@@ -459,6 +459,32 @@ pub(crate) fn forward_wheel_to_focused_shell(model: &Model, dpx: f32) -> Option<
 }
 
 pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Option<Msg> {
+    // Ctrl+= / Ctrl++ → zoom in · Ctrl+- → zoom out · Ctrl+0 → reset.
+    // Atajos universales: aplican al shell de la sesión activa sin
+    // importar si está focado en el input o un TUI; los chequeamos
+    // antes de las ramas main/pending.
+    if e.modifiers.ctrl {
+        let zoom_msg: Option<shuma_module_shell::Msg> = match &e.key {
+            llimphi_ui::Key::Character(c)
+                if c == "+" || c == "=" =>
+            {
+                Some(shuma_module_shell::Msg::ZoomBy(1.1))
+            }
+            llimphi_ui::Key::Character(c) if c == "-" || c == "_" => {
+                Some(shuma_module_shell::Msg::ZoomBy(1.0 / 1.1))
+            }
+            llimphi_ui::Key::Character(c) if c == "0" => {
+                Some(shuma_module_shell::Msg::ZoomReset)
+            }
+            _ => None,
+        };
+        if let Some(z) = zoom_msg {
+            return Some(Msg::Module(
+                Slot::Session(model.active_session, Which::Shell),
+                ModuleMsg::Shell(z),
+            ));
+        }
+    }
     // 1) Slot Main siempre gana — si está configurado como shell.
     if let Some(inst) = model.main.as_ref() {
         if matches!(inst.state, ModuleState::Shell(_)) {

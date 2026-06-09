@@ -589,6 +589,12 @@ pub fn line_top_in_content(items_geo: &[ItemGeo], row_h: f32, target_line: usize
     None
 }
 
+/// Padding extra entre el borde derecho del gutter y el primer carácter del
+/// texto del renglón. Lo respeta `text_row` (línea ~495) y DEBE incluirse en
+/// los offsets de hit-test (`point_at`) y selección visual para que el rect
+/// pintado y el byte_col copiado coincidan con donde cayó el mouse.
+pub const TEXT_LEFT_PADDING_PX: f32 = 4.0;
+
 pub fn gutter_width(store: &Scrollback, metrics: TermMetrics) -> f32 {
     let max_num = store.total_pushed().max(1);
     let digits = (max_num as f64).log10().floor() as usize + 1;

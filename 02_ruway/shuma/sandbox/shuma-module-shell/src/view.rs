@@ -2427,11 +2427,14 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         groups.entry(line.block).or_default().push(line);
     }
 
-    let row_h = ROW_H;
+    // Zoom multiplica font_size, row_h y char_width. Lo controla
+    // Ctrl+rueda y Ctrl+- / Ctrl+= / Ctrl+0. Clampeo [0.5, 3.0].
+    let zoom = state.font_zoom.clamp(0.5, 3.0);
+    let row_h = ROW_H * zoom;
     let metrics = TermMetrics {
-        font_size: 12.0,
+        font_size: 12.0 * zoom,
         line_height: row_h,
-        char_width: 12.0 * 0.6,
+        char_width: 12.0 * 0.6 * zoom,
     };
     let mut palette = TermPalette::from_theme(theme);
     // La superficie entera es el panel hundido; los cuerpos se leen sobre él.

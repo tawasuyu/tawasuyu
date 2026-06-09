@@ -562,13 +562,18 @@ struct StageTee {
     sink: std::fs::File,
 }
 
-/// Lanza un único proceso shell (`program -c "<line>"`).
-fn spawn_shell(line: &str, program: &str, cwd: &str, want_stdin: bool) -> std::io::Result<Spawned> {
+/// Lanza un único proceso shell (`program -c "<line>"`). `_want_stdin` se
+/// mantiene por compatibilidad de firma: ahora stdin SIEMPRE se abre como
+/// `piped` para que el usuario pueda alimentar Y/n a prompts interactivos
+/// (apt, pacman, sudo, etc.). Los comandos que no leen stdin no se
+/// afectan; los que sí (cat sin args, head -) se cuelgan esperando — lo
+/// cual es el comportamiento esperado de un shell real.
+fn spawn_shell(line: &str, program: &str, cwd: &str, _want_stdin: bool) -> std::io::Result<Spawned> {
     let mut child = Command::new(program)
         .arg("-c")
         .arg(line)
         .current_dir(cwd)
-        .stdin(if want_stdin { Stdio::piped() } else { Stdio::null() })
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Nuevo grupo de procesos: con `bash -c "sleep 30"` el bash se
@@ -776,10 +781,30 @@ pub fn run(spec: &CommandSpec) -> RunHandle {
             }
         };
 
-        // Alimenta stdin (reproceso) en su propio hilo.
-        if let (Some(data), Some(mut sink)) = (spec.stdin_data.clone(), stdin) {
+        // Alimenta stdin. Hay DOS modos según si el caller dio `stdin_data`:
+        //
+        // - **Reprocess** (`stdin_data = Some(...)`): escribimos los bytes
+        //   y CERRAMOS el sink inmediatamente. El child recibe EOF y procesa
+        //   normal (sort, head, jq…). El input vivo NO aplica acá.
+        //
+        // - **Interactivo** (`stdin_data = None`): el thread queda leyendo
+        //   `stdin_rx` para que el usuario pueda responder prompts (apt Y/n,
+        //   sudo password, etc.) tipeando en el input box. Sale cuando el
+        //   channel cierra (`RunHandle` droppeado) o el child cierra stdin.
+        if let Some(mut sink) = stdin {
+            let initial = spec.stdin_data.clone();
             std::thread::spawn(move || {
-                let _ = sink.write_all(data.as_bytes());
+                if let Some(data) = initial {
+                    let _ = sink.write_all(data.as_bytes());
+                    // Drop del sink al salir = EOF para el child.
+                    return;
+                }
+                while let Ok(bytes) = stdin_rx.recv() {
+                    if sink.write_all(&bytes).is_err() {
+                        break;
+                    }
+                    let _ = sink.flush();
+                }
             });
         }
 

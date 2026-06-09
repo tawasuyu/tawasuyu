@@ -223,7 +223,11 @@ pub fn point_at_geo(
                     let k = (((content_y - item_top) / row_h).floor() as usize).min(nrows - 1);
                     let line = start + k;
                     let text = store.line(line).unwrap_or("");
-                    let vis_x = (lx - gutter_w).max(0.0);
+                    // Mismo offset que usa `text_row` al pintar el texto
+                    // (gutter + 4 px de padding); sin esto el byte_col
+                    // copiado quedaba a ~½ char a la izquierda del click.
+                    let vis_x =
+                        (lx - gutter_w - crate::blocks::TEXT_LEFT_PADDING_PX).max(0.0);
                     let vis_col = (vis_x / char_w).floor() as usize;
                     let byte_col = visual_to_byte_col(text, vis_col);
                     return Some(Point::new(line, byte_col));
@@ -324,8 +328,11 @@ pub fn selection_rects<Msg>(
                 let vis_a = text[..a_safe].chars().count() as f32;
                 let vis_b = text[..b_safe].chars().count() as f32;
                 let row_y = item_top + k as f32 * row_h - scroll_y;
+                // El texto se pinta a `gutter + TEXT_LEFT_PADDING_PX` —
+                // el rect tiene que arrancar en el mismo offset.
+                let text_x0 = gutter_w + crate::blocks::TEXT_LEFT_PADDING_PX;
                 out.push(HighlightRect {
-                    x: gutter_w + vis_a * char_w,
+                    x: text_x0 + vis_a * char_w,
                     y: row_y,
                     w: (vis_b - vis_a) * char_w,
                     h: row_h,
@@ -564,8 +571,9 @@ mod tests {
         // "héllo": vis 0='h', vis 1='é' (2 bytes), vis 2='l' (byte 3), vis 3='l' (byte 4).
         let store = store_of(&["héllo"]);
         let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
-        // Click en vis col 2 (lx = 30 + 2*8 = 46) → byte col 3.
-        let p = point(&items, 0.0, 30.0, &store, 46.0, 5.0).unwrap();
+        // Click en vis col 2 (lx = 30 + 4 + 2*8 = 50) — el +4 es
+        // TEXT_LEFT_PADDING_PX → byte col 3.
+        let p = point(&items, 0.0, 30.0, &store, 50.0, 5.0).unwrap();
         assert_eq!(p, Point::new(0, 3));
     }
 
@@ -579,7 +587,8 @@ mod tests {
 
     #[test]
     fn rect_single_line_ubica_x_y_w_correctos() {
-        // Línea 0 entera (3 chars). chars 0..3 → x = gutter + 0, w = 3 * char_w.
+        // Línea 0 entera (3 chars). x = gutter + TEXT_LEFT_PADDING (4) + 0,
+        // w = 3 * char_w. El +4 es el padding interno del text_row.
         let store = store_of(&["abc"]);
         let items: Vec<Item<()>> = vec![Item::lines(0, 1)];
         let sel = SelectionRange {
@@ -589,7 +598,7 @@ mod tests {
         let r = rects(&items, 0.0, 100.0, 30.0, &store, &sel);
         assert_eq!(r.len(), 1);
         let h = r[0];
-        assert_eq!(h.x, 30.0);
+        assert_eq!(h.x, 34.0); // 30 + 4
         assert_eq!(h.y, 0.0);
         assert_eq!(h.w, 24.0); // 3 * 8.0
         assert_eq!(h.h, 16.0);
@@ -606,14 +615,14 @@ mod tests {
         };
         let r = rects(&items, 0.0, 100.0, 30.0, &store, &sel);
         assert_eq!(r.len(), 3);
-        // Línea 0: chars 2..5 → x = 30 + 2*8 = 46, w = 3*8 = 24
-        assert_eq!(r[0].x, 46.0);
+        // Línea 0: chars 2..5 → x = 30 + 4 + 2*8 = 50, w = 3*8 = 24
+        assert_eq!(r[0].x, 50.0);
         assert_eq!(r[0].w, 24.0);
         // Línea 1 entera: "beta" (4 chars).
-        assert_eq!(r[1].x, 30.0);
+        assert_eq!(r[1].x, 34.0);
         assert_eq!(r[1].w, 32.0);
         // Línea 2: chars 0..3 → "gam".
-        assert_eq!(r[2].x, 30.0);
+        assert_eq!(r[2].x, 34.0);
         assert_eq!(r[2].w, 24.0);
     }
 
