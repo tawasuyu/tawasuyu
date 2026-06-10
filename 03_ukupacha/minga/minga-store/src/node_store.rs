@@ -5,7 +5,7 @@
 //! recursiva sobre los hijos (igual que `MemStore::put`): cada
 //! subárbol se hashea y persiste exactamente una vez.
 
-use minga_core::{cas, hash_stored, ContentHash, SemanticNode, StoredNode};
+use minga_core::{cas, hash_stored, ContentHash, NodeStore, SemanticNode, StoredNode};
 use sled::{Db, Tree};
 
 use crate::error::StoreError;
@@ -152,8 +152,7 @@ impl SledNodeStore {
     }
 
     /// Itera todos los pares `(hash, stored_node)` persistidos. Sin
-    /// orden garantizado más allá del lexicográfico de sled. Usado al
-    /// arrancar para volcar el contenido a un `MemStore` en memoria.
+    /// orden garantizado más allá del lexicográfico de sled.
     pub fn iter(
         &self,
     ) -> impl Iterator<Item = Result<(ContentHash, StoredNode), StoreError>> + '_ {
@@ -167,5 +166,50 @@ impl SledNodeStore {
             let stored: StoredNode = postcard::from_bytes(&v)?;
             Ok((ContentHash(bytes), stored))
         })
+    }
+}
+
+/// `SledNodeStore` como `NodeStore` de minga-core: deja que el sync P2P
+/// opere **directamente sobre disco** (sled), sin volcar el grafo entero
+/// a RAM (`MemStore`). Es el corazón del refactor #5/A — un repo de 1,4M
+/// nodos se sirve y sincroniza con memoria O(1), no O(n).
+///
+/// El trait es infalible; los métodos de `SledNodeStore` devuelven
+/// `Result`. Contrato de manejo de errores:
+/// - **Escritura** (`put`): un fallo es irrecuperable (disco lleno,
+///   corrupción) → `panic` fail-fast. Mejor caer que persistir a medias.
+/// - **Wire** (`put_chunked`): un hash que no valida viene de un peer; no
+///   debe tumbar el proceso → se ignora con log (best-effort).
+/// - **Lectura** (`get`/`contains`/`reconstruct`/`iter`): un fallo se
+///   trata como ausencia → el protocolo de sync vuelve a pedir el nodo.
+impl NodeStore for SledNodeStore {
+    fn put(&mut self, node: &SemanticNode) -> ContentHash {
+        SledNodeStore::put(self, node).expect("sled node_store put (escritura irrecuperable)")
+    }
+
+    fn put_chunked(&mut self, hash: ContentHash, stored: StoredNode) {
+        if let Err(e) = SledNodeStore::put_chunked(self, hash, &stored) {
+            eprintln!("minga: put_chunked descartado ({hash:?}): {e}");
+        }
+    }
+
+    fn get(&self, h: &ContentHash) -> Option<StoredNode> {
+        SledNodeStore::get(self, h).unwrap_or(None)
+    }
+
+    fn contains(&self, h: &ContentHash) -> bool {
+        SledNodeStore::contains(self, h).unwrap_or(false)
+    }
+
+    fn reconstruct(&self, h: &ContentHash) -> Option<SemanticNode> {
+        SledNodeStore::reconstruct(self, h).unwrap_or(None)
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = (ContentHash, StoredNode)> + '_> {
+        Box::new(SledNodeStore::iter(self).filter_map(|r| r.ok()))
+    }
+
+    fn len(&self) -> usize {
+        SledNodeStore::len(self)
     }
 }

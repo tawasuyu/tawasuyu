@@ -422,11 +422,14 @@ fn merge_into_state(
             let _ = repo.mst.insert(*h);
         }
     }
+    // `iter` entrega pares owned (trait por valor). `h` es Copy; el nodo
+    // se presta al sled persistente y luego se mueve al store en memoria,
+    // sin clonarlo.
     for (h, node) in new_store.iter() {
-        state.store.put_chunked(*h, node.clone());
         if let Some(repo) = &state.persistent {
-            let _ = repo.nodes.put_chunked(*h, node);
+            let _ = repo.nodes.put_chunked(h, &node);
         }
+        state.store.put_chunked(h, node);
     }
     for att in new_atts.all() {
         if state.attestations.add(att.clone()).is_ok() {

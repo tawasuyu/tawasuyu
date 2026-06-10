@@ -345,7 +345,8 @@ impl SyncSession {
             }
 
             Message::Fetch { hash } => {
-                if let Some(stored) = self.store.get(&hash).cloned() {
+                // `get` ya devuelve owned (trait NodeStore por valor).
+                if let Some(stored) = self.store.get(&hash) {
                     out.push(Message::Deliver { hash, stored });
                 }
                 // Si no lo tenemos, callamos. El peer no debería estar

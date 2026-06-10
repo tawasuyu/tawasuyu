@@ -51,22 +51,28 @@ pub trait NodeStore {
     /// orden y solicita los faltantes a medida que descubre referencias).
     fn put_chunked(&mut self, hash: ContentHash, stored: StoredNode);
 
-    fn get(&self, h: &ContentHash) -> Option<&StoredNode>;
+    /// Devuelve el nodo **por valor**. Owned (no `&StoredNode`) a
+    /// propósito: un backend persistente (sled) deserializa de bytes y
+    /// no puede prestar una referencia a algo que no tiene en memoria.
+    /// `MemStore` clona; el costo es aceptable porque el sync ya
+    /// consumía copias (`.cloned()`).
+    fn get(&self, h: &ContentHash) -> Option<StoredNode>;
 
-    fn contains(&self, h: &ContentHash) -> bool {
-        self.get(h).is_some()
-    }
+    /// Existencia sin materializar el valor. Método propio (no default
+    /// sobre `get`) para que cada backend lo resuelva barato:
+    /// `HashMap::contains_key` / `Tree::contains_key`, sin deserializar.
+    fn contains(&self, h: &ContentHash) -> bool;
 
     /// Reconstruye el `SemanticNode` original a partir de su hash,
     /// resolviendo recursivamente los hijos. `None` si algún hash no se
     /// encuentra (almacén incompleto, inconsistente).
     fn reconstruct(&self, h: &ContentHash) -> Option<SemanticNode>;
 
-    /// Itera todas las parejas `(hash, stored_node)` del store. Sin
-    /// orden garantizado. Usado para mergear stores tras una sesión
-    /// de sync (un peer recibe los nodos del otro en su sesión, y
-    /// luego los volcamos al store compartido).
-    fn iter(&self) -> Box<dyn Iterator<Item = (&ContentHash, &StoredNode)> + '_>;
+    /// Itera todas las parejas `(hash, stored_node)` del store, **por
+    /// valor**. Sin orden garantizado. Usado para mergear stores tras
+    /// una sesión de sync. Owned por la misma razón que `get`: el
+    /// backend sled produce valores deserializados, no referencias.
+    fn iter(&self) -> Box<dyn Iterator<Item = (ContentHash, StoredNode)> + '_>;
 
     fn len(&self) -> usize;
 
@@ -116,12 +122,16 @@ impl NodeStore for MemStore {
         self.map.entry(hash).or_insert(stored);
     }
 
-    fn get(&self, h: &ContentHash) -> Option<&StoredNode> {
-        self.map.get(h)
+    fn get(&self, h: &ContentHash) -> Option<StoredNode> {
+        self.map.get(h).cloned()
     }
 
-    fn iter(&self) -> Box<dyn Iterator<Item = (&ContentHash, &StoredNode)> + '_> {
-        Box::new(self.map.iter())
+    fn contains(&self, h: &ContentHash) -> bool {
+        self.map.contains_key(h)
+    }
+
+    fn iter(&self) -> Box<dyn Iterator<Item = (ContentHash, StoredNode)> + '_> {
+        Box::new(self.map.iter().map(|(h, s)| (*h, s.clone())))
     }
 
     fn reconstruct(&self, h: &ContentHash) -> Option<SemanticNode> {

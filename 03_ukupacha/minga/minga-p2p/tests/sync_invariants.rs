@@ -300,7 +300,7 @@ fn cas_hash_node_equals_hash_stored() {
     assert_eq!(direct, via_store);
 
     let stored = store.get(&direct).unwrap();
-    let recomputed = hash_stored(stored);
+    let recomputed = hash_stored(&stored);
     assert_eq!(direct, recomputed);
 }
 
