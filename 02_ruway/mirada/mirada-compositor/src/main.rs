@@ -55,8 +55,8 @@ use smithay::wayland::dmabuf::{
     DmabufFeedbackBuilder, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier,
 };
 use smithay::wayland::compositor::{
-    with_states, with_surface_tree_downward, CompositorClientState, CompositorHandler,
-    CompositorState, SurfaceAttributes, TraversalAction,
+    get_parent, with_states, with_surface_tree_downward, CompositorClientState,
+    CompositorHandler, CompositorState, SurfaceAttributes, TraversalAction,
 };
 use smithay::wayland::selection::data_device::{
     ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
@@ -820,7 +820,16 @@ impl App {
                 // fullscreen). `w.size` guarda la celda entera; `render_loc`
                 // baja la superficie por `tb`.
                 let tbh = self.decorations.titlebar_height.max(0);
+                let mut danio = None;
                 if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+                    // La celda vieja y la nueva quedan dañadas (screencopy):
+                    // mover/redimensionar/ocultar repinta ambas regiones.
+                    let viejo: Rectangle<i32, Logical> =
+                        Rectangle::new(w.loc.into(), w.size.into());
+                    let nuevo = Rectangle::new((rect.x, rect.y).into(), (rect.w, rect.h).into());
+                    if viejo != nuevo || w.visible != visible {
+                        danio = Some(viejo.merge(nuevo));
+                    }
                     w.loc = (rect.x, rect.y);
                     w.size = (rect.w, rect.h);
                     w.visible = visible;
@@ -839,11 +848,19 @@ impl App {
                     });
                     w.toplevel.send_pending_configure();
                 }
+                if let Some(d) = danio {
+                    screencopy::danar(self, d);
+                }
             }
             BodyOp::Focus(id) => {
                 let mut target = None;
+                let mut danios = Vec::new();
                 for w in &mut self.windows {
                     let active = w.id == id;
+                    if w.focused != active {
+                        // El marco cambia de color: la celda queda dañada.
+                        danios.push(Rectangle::new(w.loc.into(), w.size.into()));
+                    }
                     w.focused = active;
                     if active {
                         target = Some(w.surface.clone());
@@ -857,13 +874,23 @@ impl App {
                     });
                     w.toplevel.send_pending_configure();
                 }
+                for d in danios {
+                    screencopy::danar(self, d);
+                }
                 if let Some(kb) = self.keyboard.clone() {
                     kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
                 }
             }
             BodyOp::Unfocus => {
+                let mut danios = Vec::new();
                 for w in &mut self.windows {
+                    if w.focused {
+                        danios.push(Rectangle::new(w.loc.into(), w.size.into()));
+                    }
                     w.focused = false;
+                }
+                for d in danios {
+                    screencopy::danar(self, d);
                 }
                 if let Some(kb) = self.keyboard.clone() {
                     kb.set_focus(self, Option::<WlSurface>::None, SERIAL_COUNTER.next_serial());
@@ -983,8 +1010,14 @@ impl App {
         // Dimensiona la ventana del shell y la fija en la franja del borde.
         // Con autohide, su visibilidad la decide el puntero (estado actual).
         let visible = !(dock.autohide && self.shell_hidden);
+        let mut danio = None;
         if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
             let (x, y, sw, sh) = shell_strip(dock.anchor, ow, oh, t);
+            let viejo: Rectangle<i32, Logical> = Rectangle::new(w.loc.into(), w.size.into());
+            let nuevo = Rectangle::new((x, y).into(), (sw, sh).into());
+            if viejo != nuevo || w.visible != visible {
+                danio = Some(viejo.merge(nuevo));
+            }
             w.loc = (x, y);
             w.size = (sw, sh);
             w.visible = visible;
@@ -992,6 +1025,9 @@ impl App {
                 s.size = Some((sw.max(1), sh.max(1)).into());
             });
             w.toplevel.send_pending_configure();
+        }
+        if let Some(d) = danio {
+            screencopy::danar(self, d);
         }
 
         // La reserva del borde (franja pata + zonas exclusivas de
@@ -1072,8 +1108,13 @@ impl App {
             return false;
         }
         self.shell_hidden = next;
+        let mut danio = None;
         if let Some(w) = self.windows.iter_mut().find(|w| w.is_shell) {
             w.visible = !next;
+            danio = Some(Rectangle::new(w.loc.into(), w.size.into()));
+        }
+        if let Some(d) = danio {
+            screencopy::danar(self, d);
         }
         true
     }
@@ -1083,6 +1124,8 @@ impl App {
     /// su franja (la reserva por insets se mantiene relativa al borde).
     fn output_changed(&mut self, width: i32, height: i32) {
         self.output_size = (width, height);
+        // Cambió el modo: todo lo capturable queda dañado (screencopy).
+        screencopy::danar_todo(self);
         // Mantené el Output (y su LayerMap) al día con el tamaño nuevo.
         if let Some(output) = self.output.clone() {
             output.change_current_state(
@@ -1239,6 +1282,32 @@ impl CompositorHandler for App {
 
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
+        // Daño para screencopy `copy_with_damage`: el commit de un toplevel
+        // gestionado (o de una de sus subsuperficies) daña su celda; el de
+        // un layer surface (waybar y cía.) daña todo — granularidad gruesa
+        // para un caso raro. Los demás (cursor, íconos de drag) no dañan:
+        // tampoco entran en la captura. Guardado por la cola para no pagar
+        // el lookup en el camino caliente.
+        if self.pending_screencopy.iter().any(|p| p.con_damage()) {
+            let mut raiz = surface.clone();
+            while let Some(p) = get_parent(&raiz) {
+                raiz = p;
+            }
+            if let Some(rect) = self
+                .windows
+                .iter()
+                .find(|w| w.surface == raiz)
+                .map(|w| Rectangle::new(w.loc.into(), w.size.into()))
+            {
+                screencopy::danar(self, rect);
+            } else if self.outputs.iter().any(|o| {
+                layer_map_for_output(o)
+                    .layer_for_surface(&raiz, WindowSurfaceType::ALL)
+                    .is_some()
+            }) {
+                screencopy::danar_todo(self);
+            }
+        }
         // Layer surface: cada commit re-arregla el mapa (zona exclusiva) y,
         // en el PRIMER commit, le mandamos el configure inicial.
         if let Some(output) = self.output.clone() {
@@ -1374,6 +1443,9 @@ impl XdgShellHandler for App {
             .position(|w| w.surface == *surface.wl_surface());
         if let Some(pos) = pos {
             let w = self.windows.remove(pos);
+            // La celda que ocupaba queda dañada (screencopy): se repinta
+            // lo que hubiera debajo.
+            screencopy::danar(self, Rectangle::new(w.loc.into(), w.size.into()));
             // Baja en el censo: los clientes autorizados reciben `closed`.
             if let Some(handle) = &w.foreign_handle {
                 self.foreign_toplevel_state.remove_toplevel(handle);
@@ -1406,12 +1478,20 @@ impl XdgShellHandler for App {
         });
         // Espeja el título en la ventana gestionada (para pintar la etiqueta)
         // y en el censo `ext_foreign_toplevel_list`.
+        let mut danio = None;
         if let Some(w) = self.windows.iter_mut().find(|w| w.id == id) {
+            if w.title != title {
+                // La barra de título se repinta (screencopy).
+                danio = Some(Rectangle::new(w.loc.into(), w.size.into()));
+            }
             w.title = title.clone();
             if let Some(handle) = &w.foreign_handle {
                 handle.send_title(&title);
                 handle.send_done();
             }
+        }
+        if let Some(d) = danio {
+            screencopy::danar(self, d);
         }
         if let Some(ev) = self.body.retitle_surface(id, title) {
             self.brain_feed(ev);
@@ -2668,7 +2748,8 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             // sigue bindeado — se leen los píxeles antes del submit.
             if !state.pending_screencopy.is_empty() {
                 if let Some(out) = state.output.clone() {
-                    let capturas = screencopy::tomar_capturas(&mut state, &out);
+                    // Salida única del backend winit: origen global (0,0).
+                    let capturas = screencopy::tomar_capturas(&mut state, &out, (0, 0));
                     screencopy::servir(renderer, &framebuffer, capturas);
                 }
             }

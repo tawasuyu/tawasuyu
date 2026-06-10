@@ -1166,7 +1166,8 @@ impl DrmState {
         // elementos en un offscreen y se copia de ahí.
         if !self.app.pending_screencopy.is_empty() {
             let output = self.outputs[idx].output.clone();
-            let capturas = crate::screencopy::tomar_capturas(&mut self.app, &output);
+            let capturas =
+                crate::screencopy::tomar_capturas(&mut self.app, &output, (rect.x, rect.y));
             if !capturas.is_empty() {
                 crate::screencopy::servir_offscreen(
                     &mut self.renderer,
@@ -1239,6 +1240,8 @@ impl DrmState {
             self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
             self.root_menu = None; // un menú abierto puede quedar obsoleto
             self.menu_output_idx = None;
+            // Config nueva (wallpaper, fuente, menú): todo puede repintarse.
+            crate::screencopy::danar_todo(&mut self.app);
             // Refresca el wallpaper por salida: cada `OutputCtx` resuelve su
             // ruta y su `fit` por nombre del conector (override o global).
             for ctx in &mut self.outputs {
@@ -1426,6 +1429,9 @@ impl DrmState {
                             self.menu_output_idx = None;
                         }
                     }
+                    // El click cambió el menú (abrió submenú o lo cerró):
+                    // daño para screencopy. Grueso pero raro.
+                    crate::screencopy::danar_todo(&mut self.app);
                     return; // el menú captura el botón
                 }
 
@@ -1456,6 +1462,8 @@ impl DrmState {
                             r.w,
                             r.h,
                         ));
+                        // El menú aparece en pantalla: daño para screencopy.
+                        crate::screencopy::danar_todo(&mut self.app);
                         return; // el botón abrió el menú, no va al cliente
                     }
                 }

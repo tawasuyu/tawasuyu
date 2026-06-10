@@ -4,9 +4,15 @@
 //! bindings generados del XML, vía `wayland-protocols-wlr`), así que el
 //! dispatch vive acá. Primera rebanada: `capture_output` y
 //! `capture_output_region` sobre buffers `wl_shm`, copia one-shot. Sin dmabuf
-//! (el cliente cae a shm) y `copy_with_damage` se sirve como copia inmediata
-//! con daño total — suficiente para screenshots (`grim`); la captura continua
-//! eficiente (daño real) es la próxima rebanada.
+//! (el cliente cae a shm). Segunda rebanada: **daño real** para
+//! `copy_with_damage` — la captura queda retenida hasta que la salida tenga
+//! daño genuino (commits de clientes, re-teselados, foco, cierre de ventanas)
+//! y el evento `damage` reporta el extents acumulado, no el frame entero;
+//! es lo que permite a wf-recorder grabar sin re-capturar cuadros idénticos.
+//! Granularidad: la celda de la ventana (no los rects finos del commit);
+//! lo que no se puede acotar (layer surfaces, menú raíz, cambio de modo)
+//! daña todo. El cursor NO acumula daño porque tampoco entra en la captura
+//! (`overlay_cursor` sigue pendiente).
 //!
 //! El global nace **gateado por ejecutable** (`Permisos.screencopy_denylist`),
 //! igual que clipboard / virtual-keyboard / foreign-toplevel-list: al denegado
@@ -37,7 +43,7 @@ use smithay::reexports::wayland_server::{
     backend::{ClientId, GlobalId},
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use smithay::utils::{Buffer as BufferCoord, Monotonic, Rectangle, Size, Transform};
+use smithay::utils::{Buffer as BufferCoord, Logical, Monotonic, Rectangle, Size, Transform};
 use smithay::wayland::shm::with_buffer_contents_mut;
 
 use crate::App;
@@ -97,12 +103,34 @@ pub struct ScreencopyFrameData {
 }
 
 /// Una captura aceptada, esperando la próxima composición de su salida.
+/// Las `copy` planas se sirven en la composición que sigue; las
+/// `copy_with_damage` quedan retenidas hasta acumular daño real.
 pub struct PendingScreencopy {
     pub frame: ZwlrScreencopyFrameV1,
     pub buffer: WlBuffer,
     pub output: Output,
     rect: Rectangle<i32, BufferCoord>,
     con_damage: bool,
+    /// Daño acumulado desde que se aceptó la copia, en coordenadas GLOBALES
+    /// del compositor (el espacio de `ManagedWindow::loc`). Se guarda el
+    /// extents — un solo rect que envuelve todo, igual que wlroots, que
+    /// también emite un único evento `damage` con la envolvente.
+    danio_global: Option<Rectangle<i32, Logical>>,
+    /// Daño que no se puede acotar a un rect (layer surfaces, menú raíz,
+    /// cambio de modo de la salida): sirve la captura con daño total.
+    danio_todo: bool,
+    /// El daño ya traducido al frame del cliente — lo fija [`tomar_capturas`]
+    /// en el drenado (es quien conoce el origen de la salida) para que
+    /// [`copiar_una`] lo emita sin re-traducir.
+    danio_frame: Option<Rectangle<i32, BufferCoord>>,
+}
+
+impl PendingScreencopy {
+    /// `true` si la captura espera daño (`copy_with_damage`) — los sitios
+    /// que acumulan daño lo usan para saltarse el trabajo si nadie escucha.
+    pub fn con_damage(&self) -> bool {
+        self.con_damage
+    }
 }
 
 impl GlobalDispatch<ZwlrScreencopyManagerV1, ScreencopyGlobalData> for App {
@@ -288,15 +316,86 @@ fn aceptar_copia(
         output: meta.output.clone(),
         rect: meta.rect,
         con_damage,
+        danio_global: None,
+        danio_todo: false,
+        danio_frame: None,
     });
 }
 
-/// Saca de la cola las capturas que esperan a `output` — el backend las pasa
-/// a [`servir`] con el framebuffer recién compuesto de esa salida.
-pub fn tomar_capturas(app: &mut App, output: &Output) -> Vec<PendingScreencopy> {
+/// Acumula daño (en coordenadas globales del compositor) en todas las
+/// capturas `copy_with_damage` que esperan. Las `copy` planas no lo
+/// necesitan: se sirven en la próxima composición incondicionalmente.
+pub fn danar(app: &mut App, rect: Rectangle<i32, Logical>) {
+    if rect.is_empty() {
+        return;
+    }
+    for p in app.pending_screencopy.iter_mut().filter(|p| p.con_damage) {
+        p.danio_global = Some(match p.danio_global {
+            Some(acc) => acc.merge(rect),
+            None => rect,
+        });
+    }
+}
+
+/// Daño total: para cambios que no se pueden acotar a un rect (layer
+/// surfaces, menú raíz, cambio de modo de la salida).
+pub fn danar_todo(app: &mut App) {
+    for p in app.pending_screencopy.iter_mut().filter(|p| p.con_damage) {
+        p.danio_todo = true;
+    }
+}
+
+/// Traduce el daño global acumulado al espacio del frame del cliente
+/// (origen = esquina del rect capturado), recortado al rect. `None` =
+/// todavía no hay daño visible dentro de la captura. Función pura para
+/// poder testearla sin recursos wayland.
+fn danio_en_frame(
+    danio_global: Option<Rectangle<i32, Logical>>,
+    danio_todo: bool,
+    rect: Rectangle<i32, BufferCoord>,
+    origen: (i32, i32),
+) -> Option<Rectangle<i32, BufferCoord>> {
+    if danio_todo {
+        return Some(Rectangle::from_size(rect.size));
+    }
+    let g = danio_global?;
+    // global → local de la salida (restar el origen) → local del frame
+    // (restar la esquina del rect). A escala 1 y sin transform, las
+    // coordenadas lógicas coinciden con las del buffer.
+    let local: Rectangle<i32, BufferCoord> = Rectangle::new(
+        (
+            g.loc.x - origen.0 - rect.loc.x,
+            g.loc.y - origen.1 - rect.loc.y,
+        )
+            .into(),
+        (g.size.w, g.size.h).into(),
+    );
+    local.intersection(Rectangle::from_size(rect.size))
+}
+
+/// Saca de la cola las capturas de `output` que ya pueden servirse — las
+/// `copy` planas siempre; las `copy_with_damage` sólo si acumularon daño
+/// visible dentro de su rect (las demás siguen esperando en la cola). El
+/// backend pasa las drenadas a [`servir`] con el framebuffer recién
+/// compuesto. `origen` es la esquina de la salida en coordenadas globales
+/// del compositor ((0,0) en winit; el rect de la salida en DRM).
+pub fn tomar_capturas(
+    app: &mut App,
+    output: &Output,
+    origen: (i32, i32),
+) -> Vec<PendingScreencopy> {
     let todas = std::mem::take(&mut app.pending_screencopy);
-    let (mias, resto): (Vec<_>, Vec<_>) = todas.into_iter().partition(|p| p.output == *output);
+    let (mut mias, resto): (Vec<_>, Vec<_>) = todas.into_iter().partition(|p| {
+        p.output == *output
+            && (!p.con_damage
+                || danio_en_frame(p.danio_global, p.danio_todo, p.rect, origen).is_some())
+    });
     app.pending_screencopy = resto;
+    for p in &mut mias {
+        if p.con_damage {
+            p.danio_frame = danio_en_frame(p.danio_global, p.danio_todo, p.rect, origen);
+        }
+    }
     mias
 }
 
@@ -350,9 +449,14 @@ fn copiar_una(
         zwlr_screencopy_frame_v1::Flags::empty()
     });
     if c.con_damage {
-        // 1ª rebanada: copia inmediata con daño total (sin esperar daño real).
+        // El extents del daño acumulado mientras la captura esperaba,
+        // traducido al frame por `tomar_capturas`. El fallback a daño total
+        // sólo dispara si alguien llamó a `servir` sin pasar por el drenado.
+        let d = c
+            .danio_frame
+            .unwrap_or_else(|| Rectangle::from_size(c.rect.size));
         c.frame
-            .damage(0, 0, c.rect.size.w as u32, c.rect.size.h as u32);
+            .damage(d.loc.x as u32, d.loc.y as u32, d.size.w as u32, d.size.h as u32);
     }
     let ahora: std::time::Duration =
         smithay::utils::Clock::<Monotonic>::new().now().into();
@@ -416,4 +520,73 @@ pub fn servir_offscreen<E>(
         }
     }
     servir(renderer, &target, capturas);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn r<K>(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, K> {
+        Rectangle::new((x, y).into(), (w, h).into())
+    }
+
+    #[test]
+    fn sin_danio_no_se_sirve() {
+        assert_eq!(danio_en_frame(None, false, r(0, 0, 800, 600), (0, 0)), None);
+    }
+
+    #[test]
+    fn danio_todo_cubre_el_frame() {
+        assert_eq!(
+            danio_en_frame(Some(r(10, 10, 5, 5)), true, r(0, 0, 800, 600), (0, 0)),
+            Some(r(0, 0, 800, 600)),
+        );
+        // … incluso sin rect acumulado (p. ej. cambio de modo).
+        assert_eq!(
+            danio_en_frame(None, true, r(0, 0, 800, 600), (0, 0)),
+            Some(r(0, 0, 800, 600)),
+        );
+    }
+
+    #[test]
+    fn danio_global_se_traduce_al_frame() {
+        // Captura del output entero en (0,0): global == frame.
+        assert_eq!(
+            danio_en_frame(Some(r(100, 50, 200, 100)), false, r(0, 0, 800, 600), (0, 0)),
+            Some(r(100, 50, 200, 100)),
+        );
+        // Salida secundaria en x=1920: la misma ventana global cae 1920 a la izquierda.
+        assert_eq!(
+            danio_en_frame(Some(r(2020, 50, 200, 100)), false, r(0, 0, 800, 600), (1920, 0)),
+            Some(r(100, 50, 200, 100)),
+        );
+        // Captura de región: además se resta la esquina del rect.
+        assert_eq!(
+            danio_en_frame(Some(r(100, 50, 200, 100)), false, r(80, 40, 400, 300), (0, 0)),
+            Some(r(20, 10, 200, 100)),
+        );
+    }
+
+    #[test]
+    fn danio_fuera_del_rect_no_despierta_la_captura() {
+        // Ventana dañada en la otra salida: no intersecta este frame.
+        assert_eq!(
+            danio_en_frame(Some(r(2020, 50, 200, 100)), false, r(0, 0, 800, 600), (0, 0)),
+            None,
+        );
+        // Dentro de la salida pero fuera de la región capturada.
+        assert_eq!(
+            danio_en_frame(Some(r(500, 500, 50, 50)), false, r(0, 0, 100, 100), (0, 0)),
+            None,
+        );
+    }
+
+    #[test]
+    fn danio_se_recorta_al_frame() {
+        // Daño que desborda la captura: se recorta a sus límites.
+        assert_eq!(
+            danio_en_frame(Some(r(-50, -50, 200, 200)), false, r(0, 0, 100, 100), (0, 0)),
+            Some(r(0, 0, 100, 100)),
+        );
+    }
 }
