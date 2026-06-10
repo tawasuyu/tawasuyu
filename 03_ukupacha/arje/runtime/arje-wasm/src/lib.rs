@@ -12,7 +12,7 @@
 //! Más adelante: `ente.bus_call`, `ente.cap_invoke`, etc.
 
 use arje_card::EntityCard;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 use wasmi::{Caller, CompilationMode, Config, Engine, Linker, Memory, Module, Store};
@@ -25,23 +25,64 @@ pub struct WasmEnte {
     pub exit_code: Arc<AtomicI32>,
 }
 
-/// Encarna un payload Wasm en un hilo dedicado. Devuelve un identificador
-/// no-PID que el grafo trata como Ente Virtual con cuerpo de cómputo.
-pub fn incarnate_wasm(card: &EntityCard, module_bytes: Vec<u8>, entry: String) -> anyhow::Result<()> {
+/// Handle liviano sobre un Ente Wasm encarnado. El thread runner es
+/// detached (wasmi es síncrono y corre en su propio hilo); este handle es
+/// la única forma que tiene el orquestador de saber **cuándo** terminó y
+/// **con qué código**. `finished` pasa a `true` cuando el `entry` retorna
+/// (limpio o con error); `exit_code` lleva el código que el módulo fijó
+/// vía `ente.exit`, o `-1` si el runtime falló (compile/instancia/trap).
+#[derive(Clone)]
+pub struct WasmHandle {
+    pub exit_code: Arc<AtomicI32>,
+    pub finished: Arc<AtomicBool>,
+}
+
+impl WasmHandle {
+    /// `true` si el `entry` del Ente ya retornó (el cómputo terminó).
+    pub fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+
+    /// Código de salida observado. Sólo es definitivo cuando
+    /// [`is_finished`](Self::is_finished) es `true`.
+    pub fn exit_code(&self) -> i32 {
+        self.exit_code.load(Ordering::Acquire)
+    }
+}
+
+/// Encarna un payload Wasm en un hilo dedicado. Devuelve un [`WasmHandle`]
+/// con el que el grafo (que lo trata como Ente sin PID) observa la
+/// terminación del cómputo. El `thread::JoinHandle` se descarta a
+/// propósito: el ciclo de vida lo marca el `finished` del handle.
+pub fn incarnate_wasm(
+    card: &EntityCard,
+    module_bytes: Vec<u8>,
+    entry: String,
+) -> anyhow::Result<WasmHandle> {
     let label = card.label.clone();
     let id = card.id;
     let exit_code = Arc::new(AtomicI32::new(0));
+    let finished = Arc::new(AtomicBool::new(false));
     let exit_code_handle = exit_code.clone();
+    let finished_handle = finished.clone();
 
     std::thread::Builder::new()
         .name(format!("wasm-{label}"))
         .spawn(move || {
-            if let Err(e) = run_wasm(WasmEnte { id, label: label.clone(), exit_code: exit_code_handle.clone() }, &module_bytes, &entry) {
+            if let Err(e) = run_wasm(
+                WasmEnte { id, label: label.clone(), exit_code: exit_code_handle.clone() },
+                &module_bytes,
+                &entry,
+            ) {
                 error!(?e, %label, "Wasm ente terminó con error");
                 exit_code_handle.store(-1, Ordering::Relaxed);
             }
+            // Señal de terminación SIEMPRE, en éxito o error — con Release
+            // para que el código de salida escrito arriba sea visible al
+            // observador que lea `finished` con Acquire.
+            finished_handle.store(true, Ordering::Release);
         })?;
-    Ok(())
+    Ok(WasmHandle { exit_code, finished })
 }
 
 fn run_wasm(ente: WasmEnte, module_bytes: &[u8], entry: &str) -> anyhow::Result<()> {

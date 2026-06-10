@@ -15,6 +15,7 @@ pub use interactive::{Attachment, EngineSnapshot, SessionSnapshot};
 pub use sandokan_core::PtySize;
 
 use arje_incarnate::{Incarnator, IncarnatorConfig};
+use arje_wasm::WasmHandle;
 use async_trait::async_trait;
 use nix::sys::signal::{kill, Signal};
 use nix::sys::wait::{waitpid, WaitPidFlag, WaitStatus};
@@ -42,6 +43,11 @@ struct Entity {
     /// `telemetry`. El primer sample sólo siembra el cache y devuelve
     /// 0.0 %; del segundo en adelante hay delta vs wall-clock.
     last_cpu_sample: Option<(Instant, u64)>,
+    /// Handle del Ente Wasm si esta entidad es `Payload::Wasm`. `None`
+    /// para procesos reales (se cosechan por `pid`) y para Virtual. Su
+    /// `finished`/`exit_code` reemplazan al `reap` de proceso: un Wasm no
+    /// tiene PID, su terminación se observa por este handle.
+    wasm: Option<WasmHandle>,
 }
 
 /// Política y backoff por defecto del tracker en `LocalEngine`. Cuenta
@@ -207,11 +213,51 @@ fn reap(pid: i32) -> Option<LifecycleState> {
 /// proceso real detrás. `0` no es nunca un PID válido en Linux (lo
 /// ocupa el scheduler swapper-task) y `nix::Pid::from_raw(0)` también
 /// tiene semántica especial en `waitpid`/`kill`. Para esquivar ambos,
-/// las operaciones que toquen pids consultan [`is_virtual_pid`] primero.
+/// las operaciones que toquen pids consultan [`is_synthetic_pid`] primero.
 const VIRTUAL_PID: i32 = 0;
 
-fn is_virtual_pid(pid: i32) -> bool {
-    pid == VIRTUAL_PID
+/// PID sentinel para Entes `Wasm` — cuerpo de cómputo que corre en un
+/// hilo wasmi, sin proceso ni PID del kernel. Negativo para no colisionar
+/// jamás con un PID real (siempre > 0) ni con el sentinel Virtual (`0`).
+const WASM_PID: i32 = -2;
+
+/// `true` para cualquier PID que **no** corresponde a un proceso real del
+/// kernel: Virtual (`0`) o Wasm (`< 0`). Esas entidades nunca se cosechan
+/// con `waitpid` ni se leen de `/proc` — su estado se resuelve de otra
+/// forma (Virtual: vive hasta `stop`; Wasm: por su [`WasmHandle`]).
+fn is_synthetic_pid(pid: i32) -> bool {
+    pid <= 0
+}
+
+/// Refresca el estado de una entidad in-place. Para un proceso real:
+/// `reap` no-bloqueante. Para un Ente Wasm: consulta su `WasmHandle`
+/// (terminó → `Exited{code}`, contando el fallo en el tracker si el código
+/// no es 0). No-op para entidades ya terminales o Virtual (sin cuerpo).
+/// Es el punto único que antes estaba duplicado en cada loop de consulta.
+fn refresh_entity_state(ent: &mut Entity) {
+    if ent.state.is_terminal() {
+        return;
+    }
+    if let Some(h) = &ent.wasm {
+        if h.is_finished() {
+            let new_state = LifecycleState::Exited {
+                code: h.exit_code(),
+            };
+            if es_fallo(&new_state) {
+                ent.tracker.on_failure();
+            }
+            ent.state = new_state;
+        }
+        return;
+    }
+    if !is_synthetic_pid(ent.pid) {
+        if let Some(new_state) = reap(ent.pid) {
+            if es_fallo(&new_state) {
+                ent.tracker.on_failure();
+            }
+            ent.state = new_state;
+        }
+    }
 }
 
 #[async_trait]
@@ -240,18 +286,40 @@ impl Engine for LocalEngine {
                     state: LifecycleState::Running,
                     tracker: default_tracker(),
                     last_cpu_sample: None,
+                    wasm: None,
                 },
             );
             return Ok(handle);
         }
 
-        // `Payload::Wasm` exige delegar a un runtime distinto (futuro
-        // `ente-wasm`); por ahora marcamos no-soportado en vez de
-        // pretender encarnarlo y fallar con un mensaje de exec.
-        if matches!(intent.card.payload, Payload::Wasm { .. }) {
-            return Err(EngineError::UnsupportedPayload {
-                kind: "Wasm".into(),
-            });
+        // `Payload::Wasm`: resolvemos el módulo por su sha256 desde el CAS
+        // (arje-cas) y lo encarnamos en wasmi (arje-wasm), que lo corre en
+        // un hilo dedicado. No hay PID — el `WasmHandle` reporta cuándo el
+        // `entry` retornó y con qué código. Se trata como Ente sintético
+        // (`WASM_PID`): no se cosecha por `waitpid` ni se lee de `/proc`.
+        if let Payload::Wasm { module_sha256, entry } = &intent.card.payload {
+            let bytes = arje_cas::resolve(module_sha256)
+                .map_err(|e| EngineError::Incarnate(format!("resolver módulo wasm del CAS: {e}")))?;
+            let wasm = arje_wasm::incarnate_wasm(&intent.card, bytes, entry.clone())
+                .map_err(|e| EngineError::Incarnate(format!("encarnar wasm: {e}")))?;
+            let handle = ExecHandle {
+                card_id,
+                label,
+                started_at: SystemTime::now(),
+            };
+            let mut reg = self.registry.lock().expect("registry lock");
+            reg.insert(
+                card_id,
+                Entity {
+                    handle: handle.clone(),
+                    pid: WASM_PID,
+                    state: LifecycleState::Running,
+                    tracker: default_tracker(),
+                    last_cpu_sample: None,
+                    wasm: Some(wasm),
+                },
+            );
+            return Ok(handle);
         }
 
         // El env del contexto se mergea sobre el del engine base.
@@ -281,6 +349,7 @@ impl Engine for LocalEngine {
                 state: LifecycleState::Running,
                 tracker: default_tracker(),
                 last_cpu_sample: None,
+                wasm: None,
             },
         );
         Ok(handle)
@@ -293,8 +362,11 @@ impl Engine for LocalEngine {
                 .map(|e| e.pid)
                 .ok_or(EngineError::NotFound(card_id))?
         };
-        // Entidades Virtual no tienen proceso: marcar Killed y salir.
-        if is_virtual_pid(pid) {
+        // Entidades sintéticas (Virtual/Wasm) no tienen proceso: marcar
+        // Killed y salir. Para Wasm es best-effort: wasmi 1.0 sin fuel/epoch
+        // no es interrumpible, así que el hilo corre hasta que su `entry`
+        // retorne; el registro deja de reportarla viva igual.
+        if is_synthetic_pid(pid) {
             self.mark(card_id, LifecycleState::Killed);
             self.drop_session(card_id);
             return Ok(());
@@ -330,16 +402,9 @@ impl Engine for LocalEngine {
         let mut reg = self.registry.lock().expect("registry lock");
         let mut out = Vec::new();
         for ent in reg.values_mut() {
-            // Entidades Virtual (sin pid real) no reapean: viven en
-            // Running hasta que un stop() las marque Killed.
-            if !ent.state.is_terminal() && !is_virtual_pid(ent.pid) {
-                if let Some(new_state) = reap(ent.pid) {
-                    if es_fallo(&new_state) {
-                        ent.tracker.on_failure();
-                    }
-                    ent.state = new_state;
-                }
-            }
+            // Entidades Virtual viven en Running hasta stop(); procesos
+            // reales se cosechan por pid; Entes Wasm por su handle.
+            refresh_entity_state(ent);
             if !ent.state.is_terminal() {
                 out.push(ent.handle.clone());
             }
@@ -352,14 +417,7 @@ impl Engine for LocalEngine {
         let ent = reg
             .get_mut(&card_id)
             .ok_or(EngineError::NotFound(card_id))?;
-        if !ent.state.is_terminal() && !is_virtual_pid(ent.pid) {
-            if let Some(new_state) = reap(ent.pid) {
-                if es_fallo(&new_state) {
-                    ent.tracker.on_failure();
-                }
-                ent.state = new_state;
-            }
-        }
+        refresh_entity_state(ent);
         Ok(ent.state.clone())
     }
 
@@ -372,24 +430,18 @@ impl Engine for LocalEngine {
             let ent = reg
                 .get_mut(&card_id)
                 .ok_or(EngineError::NotFound(card_id))?;
-            if !ent.state.is_terminal() && !is_virtual_pid(ent.pid) {
-                if let Some(new_state) = reap(ent.pid) {
-                    if es_fallo(&new_state) {
-                        ent.tracker.on_failure();
-                    }
-                    ent.state = new_state;
-                }
-            }
-            // Sample CPU + cómputo del % desde el último sample. Virtual y
-            // procesos ya terminales devuelven 0.0 sin tocar /proc.
-            let cpu_pct = if is_virtual_pid(ent.pid) || ent.state.is_terminal() {
+            refresh_entity_state(ent);
+            // Sample CPU + cómputo del % desde el último sample. Entidades
+            // sintéticas (Virtual/Wasm) y procesos ya terminales devuelven
+            // 0.0 sin tocar /proc.
+            let cpu_pct = if is_synthetic_pid(ent.pid) || ent.state.is_terminal() {
                 0.0
             } else {
                 cpu_pct_desde_ultimo_sample(ent.pid, &mut ent.last_cpu_sample)
             };
             (ent.pid, ent.tracker.count(), cpu_pct)
         };
-        let (mem_bytes, nproc) = if is_virtual_pid(pid) {
+        let (mem_bytes, nproc) = if is_synthetic_pid(pid) {
             (0, 0)
         } else {
             (proc::read_mem_bytes(pid), proc::read_thread_count(pid))
@@ -575,11 +627,11 @@ mod tests {
         c
     }
 
-    fn wasm_card(label: &str) -> card_core::Card {
+    fn wasm_card(label: &str, module_sha256: [u8; 32], entry: &str) -> card_core::Card {
         let mut c = card_core::Card::new(label);
         c.payload = card_core::Payload::Wasm {
-            module_sha256: [0u8; 32],
-            entry: "main".into(),
+            module_sha256,
+            entry: entry.into(),
         };
         c
     }
@@ -609,18 +661,60 @@ mod tests {
         assert_eq!(e.status(id).await.unwrap(), LifecycleState::Killed);
     }
 
-    /// Una Card `Wasm` se rechaza con error tipado, no se intenta
-    /// encarnar como si fuera Native (que daría un error de exec
-    /// confuso). El caller distingue "no soportado" de "fallé".
+    /// Encarnación real de `Payload::Wasm`: el módulo demo (`_start` →
+    /// `ente.log` + `ente.exit(0)`) se guarda en el CAS, se referencia por
+    /// su sha256, y el `LocalEngine` lo corre en wasmi. El Ente no tiene
+    /// PID — su terminación se observa por el `WasmHandle`: `status()`
+    /// transiciona de `Running` a `Exited{0}` cuando el hilo termina.
+    /// Cubre también el caso de sha ausente → `EngineError::Incarnate`.
+    ///
+    /// Un solo test (no dos) a propósito: ambos manipulan el env global
+    /// `ENTE_CAS_ROOT`; partirlo en dos tests los haría correr en paralelo
+    /// y pisarse la raíz del CAS.
     #[tokio::test]
-    async fn wasm_card_es_unsupported_payload() {
+    async fn wasm_card_corre_en_cas_y_termina_limpio() {
+        // CAS hermético en tempdir (override por env del default XDG).
+        let cas_dir = tempfile::tempdir().expect("tempdir CAS");
+        std::env::set_var("ENTE_CAS_ROOT", cas_dir.path());
+
         let e = LocalEngine::new();
-        let card = wasm_card("modulo-wasm");
-        let err = e.run(Intent::new(card)).await.unwrap_err();
-        match err {
-            EngineError::UnsupportedPayload { kind } => assert_eq!(kind, "Wasm"),
-            other => panic!("esperaba UnsupportedPayload, fue {other:?}"),
+
+        // 1) sha que no está en el CAS → error de encarnación tipado.
+        let ausente = wasm_card("wasm-ausente", [7u8; 32], "_start");
+        match e.run(Intent::new(ausente)).await.unwrap_err() {
+            EngineError::Incarnate(_) => {}
+            other => panic!("esperaba Incarnate por sha ausente, fue {other:?}"),
         }
+
+        // 2) módulo demo al CAS → corre y termina con exit(0).
+        let bytes = arje_wasm::demo_module_bytes().expect("demo wasm compila");
+        let sha = arje_cas::store(&bytes).expect("store demo en CAS");
+        let card = wasm_card("modulo-wasm", sha, "_start");
+        let id = card.id;
+        e.run(Intent::new(card)).await.expect("run wasm");
+
+        // El hilo wasmi corre async; poll hasta terminal (limpio en < 5s).
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match e.status(id).await.expect("status wasm") {
+                LifecycleState::Exited { code } => {
+                    assert_eq!(code, 0, "ente.exit(0) ⇒ Exited{{0}}");
+                    break;
+                }
+                LifecycleState::Running => {}
+                other => panic!("estado inesperado: {other:?}"),
+            }
+            if Instant::now() >= deadline {
+                panic!("el ente wasm no terminó en 5s");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // Ya terminal: list() no lo reporta vivo; telemetry no toca /proc.
+        assert!(e.list().await.unwrap().is_empty());
+        let t = e.telemetry(id).await.expect("telemetry wasm");
+        assert_eq!(t.mem_bytes, 0);
+        assert_eq!(t.nproc, 0);
     }
 
     /// Telemetry calcula CPU% por delta entre dos samples. El primero

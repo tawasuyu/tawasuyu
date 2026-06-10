@@ -11,6 +11,10 @@ publish.workspace = true
 sandokan-core = { path = "../../../shared/sandokan/sandokan-core" }
 sandokan-lifecycle = { path = "../../../shared/sandokan/sandokan-lifecycle" }
 arje-incarnate = { path = "../../arje/init/arje-incarnate" }
+# Encarnación de Payload::Wasm: arje-cas resuelve module_sha256 → bytes,
+# arje-wasm los corre en wasmi (mismo runtime que el kernel de wawa).
+arje-cas = { path = "../../arje/runtime/arje-cas" }
+arje-wasm = { path = "../../arje/runtime/arje-wasm" }
 card-core = { path = "../../../shared/card/card-core" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
