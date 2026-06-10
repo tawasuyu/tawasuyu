@@ -37,6 +37,9 @@ llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 # Dropdown/select para la config de la sesión (aislamiento + distro).
 llimphi-widget-select = { workspace = true }
+# Diálogos bloqueantes (centrados con scrim) para crear host/contenedor desde
+# el form de sesión nueva — reemplazan las viejas ventanas secundarias.
+llimphi-widget-modal = { workspace = true }
 # Campos del form de conexión remota (host/usuario/puerto).
 llimphi-widget-text-input = { workspace = true }
 llimphi-motion = { workspace = true }

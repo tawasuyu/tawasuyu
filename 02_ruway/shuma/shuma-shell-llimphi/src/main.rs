@@ -714,10 +714,6 @@ enum HostDraftField {
     Pem,
 }
 
-/// Keys de ventanas secundarias del chasis.
-const WIN_HOSTS: u64 = 1;
-const WIN_CONTAINERS: u64 = 2;
-
 /// Cuál dropdown de la config de sesión está abierto (overlay del select).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DropKind {
@@ -728,6 +724,9 @@ enum DropKind {
     /// Elegir el engine de aislamiento (unshare / bwrap / podman) — sólo
     /// muestra los disponibles en el `PATH` del proceso.
     Engine,
+    /// Elegir un host remoto guardado en el form de sesión nueva. El menú
+    /// flota centrado (el form vive en el canvas, no en el panel lateral).
+    Host,
 }
 
 /// El tipo de una sesión — define el icono de su diente (rail izquierdo).
@@ -1282,6 +1281,14 @@ struct Model {
     /// Draft del nuevo container que se está creando en la ventana de
     /// gestión de containers.
     container_draft: Option<ContainerDraft>,
+    /// El diálogo bloqueante de hosts está abierto (modal centrado, no una
+    /// ventana del SO). Pinta lista + borrar + form de alta.
+    hosts_modal_open: bool,
+    /// El diálogo bloqueante de containers está abierto (modal centrado).
+    containers_modal_open: bool,
+    /// Tamaño del viewport en px lógicos, para centrar los modales y anclar
+    /// los selects del form de sesión nueva. Lo actualiza `on_resize`.
+    viewport: (f32, f32),
 
     // Anchos resizables de los paneles laterales (px).
     session_w: f32,
@@ -1342,6 +1349,9 @@ enum Msg {
     /// Tick rápido que drena la salida del shell (~100 ms) sin tocar
     /// el muestreo de sysmon.
     ShellTick,
+    /// El viewport cambió de tamaño (winit `Resized`). Guardamos las
+    /// dimensiones para centrar los modales y anclar los selects del form.
+    Resized(f32, f32),
     /// Click en un diente de sesión (rail izquierdo): cambia el ambiente.
     SelectSession(usize),
     /// Click en un diente de herramienta (rail derecho): abre/cierra su panel.
@@ -1408,10 +1418,13 @@ enum Msg {
     /// rebaja la sesión a Local con notice.
     EnsureContainer(String),
 
-    // ─── Ventana gestora de containers (WIN_CONTAINERS) ───────────────
-    /// Abre la ventana de gestión de containers. Carga la lista inicial
-    /// con `podman ps -a`.
+    // ─── Diálogo bloqueante de containers ─────────────────────────────
+    /// Abre el modal de containers (centrado, bloqueante) y arranca un
+    /// draft de alta. Carga la lista con `podman ps -a`. Reemplaza la
+    /// vieja ventana secundaria del SO.
     OpenContainersWindow,
+    /// Cierra el modal de containers (scrim / Esc / Listo) y descarta el draft.
+    CloseContainersModal,
     /// El thread de `podman ps -a --format json` terminó. Reemplaza la
     /// lista completa de containers en el modelo.
     ContainersFullLoaded(Vec<ContainerInfo>),
@@ -1424,12 +1437,13 @@ enum Msg {
     /// `podman rm -f <name>` — destructivo, borra el container.
     RemoveContainer(String),
 
-    // ─── Ventana gestora de hosts (WIN_HOSTS) ─────────────────────────
-    /// Abre la ventana de gestión de hosts remotos.
+    // ─── Diálogo bloqueante de hosts ──────────────────────────────────
+    /// Abre el modal de hosts (centrado, bloqueante) y arranca un draft
+    /// de alta para que el form de «nuevo host» esté listo. Reemplaza la
+    /// vieja ventana secundaria del SO.
     OpenHostsWindow,
-    /// El usuario cerró una ventana secundaria con el botón del SO —
-    /// limpiamos el host_draft asociado.
-    SecondaryClosed(u64),
+    /// Cierra el modal de hosts (scrim / Esc / Listo) y descarta el draft.
+    CloseHostsModal,
     /// Empieza un draft de host nuevo (form embebido en la ventana).
     HostDraftStart,
     /// Cancela el draft del host (cierra el form).
@@ -1602,6 +1616,9 @@ impl App for Shell {
             hosts: hosts::load_hosts(),
             host_draft: None,
             container_draft: None,
+            hosts_modal_open: false,
+            containers_modal_open: false,
+            viewport: (1280.0, 800.0),
             session_w: 240.0,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
@@ -1617,9 +1634,27 @@ impl App for Shell {
         }
     }
 
+    fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {
+        Some(Msg::Resized(width as f32, height as f32))
+    }
+
     fn on_key(model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Los modales bloqueantes capturan TODO el teclado (prioridad máxima):
+        // Esc cierra; el resto va al draft que están editando.
+        if model.hosts_modal_open {
+            if let llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) = &e.key {
+                return Some(Msg::CloseHostsModal);
+            }
+            return Some(Msg::HostDraftKey(e.clone()));
+        }
+        if model.containers_modal_open {
+            if let llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) = &e.key {
+                return Some(Msg::CloseContainersModal);
+            }
+            return Some(Msg::ContainerDraftKey(e.clone()));
         }
         // Con un campo del form remoto focado, las teclas van ahí (no al shell).
         if model.focused_field.is_some() {
@@ -1684,6 +1719,11 @@ impl App for Shell {
             }
             Msg::ShellTick => {
                 drain_shell_instances(&mut m);
+            }
+            Msg::Resized(w, h) => {
+                if w > 0.0 && h > 0.0 {
+                    m.viewport = (w, h);
+                }
             }
             Msg::WawaConfigChanged(cfg) => {
                 // Re-armar el theme con el nuevo variant + accent. El
@@ -1851,17 +1891,23 @@ impl App for Shell {
                 save_sessions(&m);
             }
             Msg::ToggleUseContainer => {
+                let mut activado = false;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.use_container = !s.use_container;
                     // Si el engine persistido ya no está disponible, lo
                     // refrescamos al preferido en el momento de activar.
                     if s.use_container {
+                        activado = true;
                         if let Some(pref) = engine_preferido() {
                             if !binary_disponible(&s.container_engine) {
                                 s.container_engine = pref.to_string();
                             }
                         }
                     }
+                }
+                // Poblar el select de contenedores con los podman existentes.
+                if activado {
+                    spawn_list_containers(handle);
                 }
             }
             Msg::SetEngine(name) => {
@@ -1881,6 +1927,7 @@ impl App for Shell {
                 // El usuario eligió un rootfs presente en disco. Asocia
                 // a la sesión activa y, si está pending, confirma. Si no,
                 // aplica isolation y conecta.
+                m.dropdown_open = None;
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.use_container = true;
                     s.distro = distro;
@@ -1927,8 +1974,15 @@ impl App for Shell {
                 }
             }
             Msg::OpenContainersWindow => {
-                handle.open_window(WIN_CONTAINERS, "shuma · containers", 720, 500);
+                // Modal bloqueante (no ventana del SO): arranca el draft de
+                // alta y carga la lista de containers para mostrarla debajo.
+                m.containers_modal_open = true;
+                m.container_draft = Some(ContainerDraft::new());
                 spawn_list_containers_full(handle);
+            }
+            Msg::CloseContainersModal => {
+                m.containers_modal_open = false;
+                m.container_draft = None;
             }
             Msg::ContainersFullLoaded(v) => {
                 m.containers_full = v;
@@ -1938,12 +1992,14 @@ impl App for Shell {
             Msg::StopContainer(name) => spawn_container_action(handle, "stop", name),
             Msg::RemoveContainer(name) => spawn_container_action(handle, "rm", name),
             Msg::OpenHostsWindow => {
-                handle.open_window(WIN_HOSTS, "shuma · hosts remotos", 640, 560);
+                // Modal bloqueante (no ventana del SO): arranca el draft de
+                // alta y muestra la lista guardada debajo (con borrar).
+                m.hosts_modal_open = true;
+                m.host_draft = Some(HostDraft::new());
             }
-            Msg::SecondaryClosed(key) => {
-                if key == WIN_HOSTS {
-                    m.host_draft = None;
-                }
+            Msg::CloseHostsModal => {
+                m.hosts_modal_open = false;
+                m.host_draft = None;
             }
             Msg::HostDraftStart => {
                 m.host_draft = Some(HostDraft::new());
@@ -2092,6 +2148,7 @@ impl App for Shell {
                 }
             }
             Msg::HostApply(idx) => {
+                m.dropdown_open = None;
                 let h = match m.hosts.get(idx).cloned() {
                     Some(h) => h,
                     None => return m,
@@ -2442,32 +2499,14 @@ impl App for Shell {
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
-        // El dropdown de config (select) tiene prioridad sobre el menú.
+        // Prioridad: diálogo bloqueante (modal) > dropdown de select > menú.
+        if model.hosts_modal_open {
+            return Some(view::hosts_modal(model, &model.theme));
+        }
+        if model.containers_modal_open {
+            return Some(view::containers_modal(model, &model.theme));
+        }
         view::dropdown_overlay(model).or_else(|| menu::overlay(model))
-    }
-
-    fn secondary_view(model: &Self::Model, key: u64) -> Option<View<Self::Msg>> {
-        let theme = wawa_config_llimphi::theme_from_wawa(
-            &wawa_config::WawaConfig::load(),
-            &Theme::dark(),
-        );
-        match key {
-            WIN_CONTAINERS => Some(view::containers_window(model, &theme)),
-            WIN_HOSTS => Some(view::hosts_window(model, &theme)),
-            _ => None,
-        }
-    }
-
-    fn secondary_title(_model: &Self::Model, key: u64) -> Option<String> {
-        match key {
-            WIN_CONTAINERS => Some("shuma · containers".into()),
-            WIN_HOSTS => Some("shuma · hosts remotos".into()),
-            _ => None,
-        }
-    }
-
-    fn on_secondary_close(_model: &Self::Model, key: u64) -> Option<Self::Msg> {
-        Some(Msg::SecondaryClosed(key))
     }
 }
 

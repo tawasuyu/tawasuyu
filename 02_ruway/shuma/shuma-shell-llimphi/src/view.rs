@@ -70,6 +70,8 @@ fn cfg_trigger_y(is_draft: bool, kind: DropKind) -> f32 {
         DropKind::Engine => iso_y + 50.0,
         DropKind::Distro => iso_y + 98.0,
         DropKind::Container => iso_y + 98.0 + 64.0,
+        // Host nunca usa este anclaje del panel (se expande inline en el canvas).
+        DropKind::Host => iso_y,
     }
 }
 
@@ -77,12 +79,21 @@ fn cfg_trigger_y(is_draft: bool, kind: DropKind) -> f32 {
 pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
     let kind = model.dropdown_open?;
     let session = model.active()?;
+    // El form de sesión nueva (canvas) expande sus selects INLINE — no
+    // anclamos un overlay flotante ahí (no sabemos su Y exacto). Sólo el
+    // panel lateral usa este overlay.
+    if session.pending {
+        return None;
+    }
     let is_draft = session.kind == SessionKind::Draft;
     let pal = SelectPalette::from_theme(&model.theme);
 
     let (items, selected_vec): (Vec<SelectItem>, Vec<usize>) = match kind {
         DropKind::Isolation => (iso_items(), vec![iso_index(session.isolation)]),
         DropKind::Distro => (distro_items(), vec![distro_index(session.distro)]),
+        // Host sólo se elige desde el form en canvas (inline) — nunca llega
+        // acá con sesión no-pending.
+        DropKind::Host => return None,
         DropKind::Container => {
             // Contenedores existentes + la opción de crear uno nuevo al final.
             let mut its: Vec<SelectItem> = model
@@ -139,6 +150,7 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
                 Msg::CreateContainer
             }
         }),
+        DropKind::Host => std::sync::Arc::new(|_| Msg::DismissDropdown),
     };
 
     Some(select_menu_view(SelectMenuSpec {
@@ -1262,7 +1274,7 @@ fn iso_radio_row(current: Isolation, theme: &Theme) -> View<Msg> {
 fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
-    use llimphi_widget_text_input::{text_input_view, TextInputPalette};
+    use llimphi_widget_text_input::TextInputPalette;
     let pal = SelectPalette::from_theme(theme);
     let tpal = TextInputPalette::from_theme(theme);
 
@@ -1291,102 +1303,94 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
     // dispara su overlay anclado al panel izquierdo, que en el canvas
     // grande aparece desplazado feo. Botones directos son más claros y
     // no tienen problema de posicionamiento.
-    let _ = &pal;
     let iso_label = panel_label("Aislamiento", theme);
     let iso_trigger = iso_radio_row(session.isolation, theme);
 
-    // Sólo selects + botones. La creación de hosts/containers concretos
-    // pasa por sus ventanas dedicadas (Msg::OpenHostsWindow / OpenContainersWindow).
-    // El form principal sólo PICKEA de lo que ya existe.
+    // Cada recurso (host / contenedor) se ELIGE con un select que expande su
+    // lista inline, y se CREA con un botón «+ Nuevo …» que abre un diálogo
+    // bloqueante (modal centrado). Ya no hay ventana «Gestionar …» del SO.
     let _ = &tpal; // todavía lo usa el form de auth remoto si lo agregamos
     let mut children: Vec<View<Msg>> = vec![titulo, sub, iso_label, iso_trigger];
     if session.isolation == Isolation::Remote {
         children.push(panel_label("Host remoto", theme));
-        if model.hosts.is_empty() {
-            children.push(panel_note(
-                "Sin hosts guardados — creá uno en la ventana de gestión.",
-                theme,
-            ));
+        // Select: el host aplicado (si lo hay) como selección actual.
+        let host_text = session.host.text();
+        let host_sel = if host_text.trim().is_empty() {
+            None
         } else {
-            for (i, h) in model.hosts.iter().enumerate() {
-                children.push(
-                    View::new(Style {
-                        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
-                        padding: Rect {
-                            left: length(10.0_f32),
-                            right: length(10.0_f32),
-                            top: length(0.0_f32),
-                            bottom: length(0.0_f32),
-                        },
-                        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
-                        ..Default::default()
-                    })
-                    .fill(theme.bg_panel_alt)
-                    .hover_fill(theme.bg_row_hover)
-                    .radius(3.0)
-                    .text_aligned(
-                        h.display(),
-                        11.0,
-                        theme.fg_text,
-                        llimphi_ui::llimphi_text::Alignment::Start,
-                    )
-                    .on_click(Msg::HostApply(i)),
-                );
+            let u = session.user.text();
+            let label = if u.trim().is_empty() {
+                host_text.clone()
+            } else {
+                format!("{u}@{host_text}")
+            };
+            Some(SelectItem::new(label))
+        };
+        children.push(select_trigger_view(
+            host_sel.as_ref(),
+            "Elegí un host guardado…",
+            model.dropdown_open == Some(DropKind::Host),
+            None,
+            &pal,
+            Msg::ToggleDropdown(DropKind::Host),
+        ));
+        if model.dropdown_open == Some(DropKind::Host) {
+            if model.hosts.is_empty() {
+                children.push(panel_note("Sin hosts guardados — usá «+ Nuevo host».", theme));
+            } else {
+                let rows: Vec<View<Msg>> = model
+                    .hosts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, h)| pick_row(h.display(), Msg::HostApply(i), theme))
+                    .collect();
+                children.push(inline_list(rows));
             }
         }
-        children.push(action_button_small(
-            "⚙ Gestionar hosts…",
-            Msg::OpenHostsWindow,
-            theme,
-        ));
+        children.push(action_button_small("+ Nuevo host", Msg::OpenHostsWindow, theme));
     }
 
-    // Aislar en contenedor — sólo selección de uno ya creado + botón a la
-    // ventana de gestión donde se crean (engine + distro + mount).
+    // Aislar en contenedor: select de los ya creados (rootfs en disco para
+    // unshare/bwrap + contenedores podman) + «+ Nuevo contenedor» (modal).
     children.push(container_toggle(session.use_container, theme));
     if session.use_container {
         children.push(panel_label("Contenedor", theme));
-        // Combinamos: rootfs presentes en disco (para unshare/bwrap) + nada más.
-        // Los containers podman vienen vía `containers_full` y se enchufan en
-        // la ventana de gestión (Msg::OpenContainersWindow) que los lista.
-        let mut shown_any = false;
-        for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
-            if super::rootfs_listo(*distro) {
-                shown_any = true;
-                let d = *distro;
-                children.push(
-                    View::new(Style {
-                        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
-                        padding: Rect {
-                            left: length(10.0_f32),
-                            right: length(10.0_f32),
-                            top: length(0.0_f32),
-                            bottom: length(0.0_f32),
-                        },
-                        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
-                        ..Default::default()
-                    })
-                    .fill(theme.bg_panel_alt)
-                    .hover_fill(theme.bg_row_hover)
-                    .radius(3.0)
-                    .text_aligned(
+        let cont_sel = session.container.as_ref().map(|c| {
+            // Basename, no el path completo del rootfs.
+            let short = c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c.as_str());
+            SelectItem::new(short.to_string())
+        });
+        children.push(select_trigger_view(
+            cont_sel.as_ref(),
+            "Elegí un contenedor…",
+            model.dropdown_open == Some(DropKind::Container),
+            None,
+            &pal,
+            Msg::ToggleDropdown(DropKind::Container),
+        ));
+        if model.dropdown_open == Some(DropKind::Container) {
+            let mut rows: Vec<View<Msg>> = Vec::new();
+            for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
+                if super::rootfs_listo(*distro) {
+                    let d = *distro;
+                    rows.push(pick_row(
                         format!("rootfs · {}", d.label()),
-                        11.0,
-                        theme.fg_text,
-                        llimphi_ui::llimphi_text::Alignment::Start,
-                    )
-                    .on_click(Msg::PickRootfs(d)),
-                );
+                        Msg::PickRootfs(d),
+                        theme,
+                    ));
+                }
+            }
+            for (i, c) in model.containers.iter().enumerate() {
+                rows.push(pick_row(c.clone(), Msg::SubscribeContainer(i), theme));
+            }
+            if rows.is_empty() {
+                children.push(panel_note("Sin contenedores — usá «+ Nuevo contenedor».", theme));
+            } else {
+                children.push(inline_list(rows));
             }
         }
-        if !shown_any && model.containers_full.is_empty() {
-            children.push(panel_note(
-                "Sin contenedores creados — abrí la ventana de gestión y creá uno.",
-                theme,
-            ));
-        }
         children.push(action_button_small(
-            "⚙ Gestionar containers…",
+            "+ Nuevo contenedor",
             Msg::OpenContainersWindow,
             theme,
         ));
@@ -1741,82 +1745,61 @@ pub(crate) fn placeholder(theme: &Theme, text: &str) -> View<Msg> {
 
 // ─── Ventanas secundarias: gestor de containers / hosts ─────────────
 
-/// Ventana de gestión de containers (`Handle::open_window(WIN_CONTAINERS)`).
-/// Lista `podman ps -a` con acciones por fila (start / stop / rm) + un botón
-/// para refrescar. La lista se carga al abrir (RefreshContainersFull) y
-/// después de cada acción.
-pub(crate) fn containers_window(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+/// Diálogo bloqueante de containers (modal centrado, abierto por
+/// `Msg::OpenContainersWindow`). Form de alta arriba (engine + distro +
+/// mount) + lista de `podman ps -a` con acciones por fila (start/stop/rm).
+/// La lista se carga al abrir y tras cada acción.
+pub(crate) fn containers_modal(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
+    modal_view(ModalSpec {
+        title: "Containers".to_string(),
+        body: containers_modal_body(model, theme),
+        buttons: vec![ModalButton::cancel("Listo", Msg::CloseContainersModal)],
+        size: (560.0, 600.0),
+        viewport: model.viewport,
+        on_dismiss: Msg::CloseContainersModal,
+        palette: ModalPalette::from_theme(theme),
+    })
+}
+
+fn containers_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
 
-    let title = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
-        ..Default::default()
-    })
-    .text_aligned("Containers (podman)".to_string(), 16.0, theme.fg_text, Alignment::Start);
     let sub = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         ..Default::default()
     })
     .text_aligned(
-        "Lista de podman ps -a. Click ▶ para arrancar uno, ■ para parar, 🗑 para borrar.".to_string(),
+        "Local con rootfs (unshare/bwrap) o podman (OCI). ▶ arranca · ■ para · 🗑 borra.".to_string(),
         11.0, theme.fg_muted, Alignment::Start,
     );
 
+    // Form de alta si hay draft; si no, el botón para empezar uno.
+    let draft_or_button: View<Msg> = match &model.container_draft {
+        Some(d) => container_draft_form(d, theme),
+        None => action_button_small("+ Nuevo contenedor", Msg::ContainerDraftStart, theme),
+    };
+    let refresh = action_button_small("⟳ Refrescar lista", Msg::RefreshContainersFull, theme);
+
     let mut rows: Vec<View<Msg>> = Vec::new();
-    if model.containers_full.is_empty() {
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .text_aligned(
-                "Sin containers — creá uno desde el formulario de sesión nueva".to_string(),
-                12.0, theme.fg_muted, Alignment::Start,
-            ),
-        );
-    } else {
+    if !model.containers_full.is_empty() {
+        rows.push(panel_label("Existentes (podman)", theme));
         for c in &model.containers_full {
             rows.push(container_row(c, theme));
         }
     }
 
-    let actions = View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
-        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
-        align_items: Some(AlignItems::Center),
-        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(8.0_f32), bottom: length(0.0_f32) },
-        ..Default::default()
-    })
-    .children(vec![
-        action_button_small("⟳ Refrescar", Msg::RefreshContainersFull, theme),
-        action_button_small("+ Crear container", Msg::ContainerDraftStart, theme),
-    ]);
-
-    // Draft form (visible cuando container_draft is Some).
-    let draft_view = match &model.container_draft {
-        Some(d) => container_draft_form(d, theme),
-        None => View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(0.0_f32) },
-            ..Default::default()
-        }),
-    };
-
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-        padding: Rect {
-            left: length(20.0_f32), right: length(20.0_f32),
-            top: length(20.0_f32), bottom: length(20.0_f32),
+        size: Size {
+            width: percent(1.0_f32),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
         },
         gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_app)
     .children({
-        let mut all = vec![title, sub, actions, draft_view];
+        let mut all = vec![sub, draft_or_button, refresh];
         all.extend(rows);
         all
     })
@@ -2006,67 +1989,60 @@ fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
     .children(vec![name_view, status_view, start_btn, stop_btn, rm_btn])
 }
 
-/// Ventana de gestión de hosts (`Handle::open_window(WIN_HOSTS)`).
-/// Lista los hosts persistidos en `hosts.json` + un form embebido (cuando
-/// el draft está abierto) para crear/editar uno.
-pub(crate) fn hosts_window(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::AlignItems;
+/// Diálogo bloqueante de hosts (modal centrado, abierto por
+/// `Msg::OpenHostsWindow`). Form de alta + lista de hosts guardados en
+/// `hosts.json` con borrar por fila.
+pub(crate) fn hosts_modal(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
+    modal_view(ModalSpec {
+        title: "Hosts remotos".to_string(),
+        body: hosts_modal_body(model, theme),
+        buttons: vec![ModalButton::cancel("Listo", Msg::CloseHostsModal)],
+        size: (520.0, 560.0),
+        viewport: model.viewport,
+        on_dismiss: Msg::CloseHostsModal,
+        palette: ModalPalette::from_theme(theme),
+    })
+}
+
+fn hosts_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
 
-    let title = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
-        ..Default::default()
-    })
-    .text_aligned("Hosts remotos".to_string(), 16.0, theme.fg_text, Alignment::Start);
     let sub = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         ..Default::default()
     })
     .text_aligned(
-        "Guardados en ~/.config/shuma/hosts.json. Click → usa el host en la sesión activa.".to_string(),
+        "Se guardan en ~/.config/shuma/hosts.json.".to_string(),
         11.0, theme.fg_muted, Alignment::Start,
     );
 
-    let mut rows: Vec<View<Msg>> = Vec::new();
-    if model.hosts.is_empty() {
-        rows.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .text_aligned(
-                "Sin hosts guardados — agregá uno abajo".to_string(),
-                12.0, theme.fg_muted, Alignment::Start,
-            ),
-        );
-    } else {
-        for (i, h) in model.hosts.iter().enumerate() {
-            rows.push(host_row(i, h, theme));
-        }
-    }
-
-    // Form embebido (visible cuando host_draft.is_some()) o botón "+ Nuevo".
+    // Form de alta si hay draft; si no, el botón para empezar uno.
     let draft_or_button: View<Msg> = match &model.host_draft {
         Some(d) => host_draft_form(d, theme),
         None => action_button_small("+ Nuevo host", Msg::HostDraftStart, theme),
     };
 
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    if !model.hosts.is_empty() {
+        rows.push(panel_label("Guardados", theme));
+        for (i, h) in model.hosts.iter().enumerate() {
+            rows.push(host_row(i, h, theme));
+        }
+    }
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-        padding: Rect {
-            left: length(20.0_f32), right: length(20.0_f32),
-            top: length(20.0_f32), bottom: length(20.0_f32),
+        size: Size {
+            width: percent(1.0_f32),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
         },
         gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
         ..Default::default()
     })
-    .fill(theme.bg_app)
     .children({
-        let mut all = vec![title, sub];
+        let mut all = vec![sub, draft_or_button];
         all.extend(rows);
-        all.push(draft_or_button);
         all
     })
 }
@@ -2181,6 +2157,42 @@ fn host_draft_form(d: &HostDraft, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .radius(6.0)
+    .children(rows)
+}
+
+/// Fila clickeable de un select expandido inline (form de sesión nueva).
+/// El menú flotante del widget select se anclaría mal en el canvas
+/// centrado, así que el form expande su lista en flujo, debajo del trigger.
+fn pick_row(label: String, msg: Msg, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .hover_fill(theme.bg_row_hover)
+    .radius(3.0)
+    .text_aligned(label, 11.0, theme.fg_text, llimphi_ui::llimphi_text::Alignment::Start)
+    .on_click(msg)
+}
+
+/// Columna de `pick_row`s — el cuerpo expandido de un select inline.
+fn inline_list(rows: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
+        },
+        gap: Size { width: length(0.0_f32), height: length(3.0_f32) },
+        ..Default::default()
+    })
     .children(rows)
 }
 
