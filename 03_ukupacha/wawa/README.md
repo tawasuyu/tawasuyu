@@ -4,6 +4,8 @@
 
 ## Try it in one minute — no toolchain
 
+![wawa booted in QEMU: the genesis desktop — bitacora open, the app taskbar, RAM meter and clock, all painted by the kernel](https://tawasuyu.net/03_ukupacha/wawa/pantallazo.png)
+
 Download the prebuilt demo image (~1.3 MB) and boot it in QEMU:
 
 ```sh

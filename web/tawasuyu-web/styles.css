@@ -1044,3 +1044,6 @@ body.sidebar-collapsed #sidebar { display: none; }
   --accent:          #E89B6E;
 }
 
+
+/* Imágenes dentro de los artículos markdown: nunca desbordar la ventana. */
+.pluma-host img { max-width: 100%; height: auto; border-radius: 4px; }

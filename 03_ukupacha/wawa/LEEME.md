@@ -4,6 +4,8 @@
 
 ## Probalo en un minuto — sin toolchain
 
+![wawa booteado en QEMU: el escritorio de génesis — bitacora abierta, la taskbar de apps, medidor de RAM y reloj, todo pintado por el kernel](https://tawasuyu.net/03_ukupacha/wawa/pantallazo.png)
+
 Descargá la imagen demo pre-forjada (~1.3 MB) y bootéala en QEMU:
 
 ```sh
