@@ -12,6 +12,7 @@ use format::{
     PERMISO_RAIZ, PERMISO_RED, PERMISO_TINKUY,
 };
 use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::prelude::length;
 use llimphi_ui::View;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use llimphi_widget_text_input::TextInputPalette;
@@ -103,12 +104,20 @@ pub(crate) fn capacidad_view(model: &Model, theme: &Theme) -> View<Msg> {
             11.0,
             theme.fg_muted,
         ),
-        Some(c) => column(vec![
-            label_line(&format!("bytecode: {}", bytes_to_hex(&c.bytecode)), 10.0, theme.fg_text),
-            label_line(&format!("permisos: 0b{:07b} · {}", c.permisos, resumen_permisos(c.permisos)), 10.0, theme.fg_muted),
-            label_line(&format!("autor: {}", bytes_to_hex(&c.autor)), 10.0, theme.fg_muted),
-            label_line(&format!("firma: {}…", &bytes_to_hex(&c.firma)[..32]), 10.0, theme.fg_muted),
-        ]),
+        Some(c) => {
+            let mut v = column(vec![
+                label_line(&format!("bytecode: {}", bytes_to_hex(&c.bytecode)), 10.0, theme.fg_text),
+                label_line(&format!("permisos: 0b{:07b} · {}", c.permisos, resumen_permisos(c.permisos)), 10.0, theme.fg_muted),
+                label_line(&format!("autor: {}", bytes_to_hex(&c.autor)), 10.0, theme.fg_muted),
+                label_line(&format!("firma: {}…", &bytes_to_hex(&c.firma)[..32]), 10.0, theme.fg_muted),
+            ]);
+            // Alto fijo: el `column` por defecto es 100% de alto y, con una
+            // concesión vigente, se comía todo el espacio flexible del tile
+            // aplastando el checklist de permisos a cero.
+            v.style.size.height = length(86.0_f32);
+            v.style.flex_shrink = 0.0;
+            v
+        }
     };
 
     let acciones = row(

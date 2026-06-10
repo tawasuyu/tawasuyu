@@ -8,6 +8,7 @@
 //! — el mismo código que corre el kernel, no una reimplementación.
 
 use llimphi_theme::Theme;
+use llimphi_ui::llimphi_layout::taffy::prelude::length;
 use llimphi_ui::View;
 use llimphi_widget_text_input::TextInputPalette;
 
@@ -51,19 +52,26 @@ pub(crate) fn release_view(model: &Model, theme: &Theme) -> View<Msg> {
             11.0,
             theme.fg_muted,
         ),
-        Some(mf) => column(vec![
-            label_line(
-                &format!("manifiesto: {}", bytes_to_hex(&mf.manifiesto_hash)),
-                10.0,
-                theme.fg_text,
-            ),
-            label_line(&format!("autor: {}", bytes_to_hex(&mf.autor)), 10.0, theme.fg_muted),
-            label_line(
-                &format!("firma: {}…", &bytes_to_hex(&mf.firma)[..32]),
-                10.0,
-                theme.fg_muted,
-            ),
-        ]),
+        Some(mf) => {
+            let mut v = column(vec![
+                label_line(
+                    &format!("manifiesto: {}", bytes_to_hex(&mf.manifiesto_hash)),
+                    10.0,
+                    theme.fg_text,
+                ),
+                label_line(&format!("autor: {}", bytes_to_hex(&mf.autor)), 10.0, theme.fg_muted),
+                label_line(
+                    &format!("firma: {}…", &bytes_to_hex(&mf.firma)[..32]),
+                    10.0,
+                    theme.fg_muted,
+                ),
+            ]);
+            // Alto fijo: sin esto, el `column` 100% absorbe el espacio
+            // flexible del tile cuando hay un release vigente.
+            v.style.size.height = length(68.0_f32);
+            v.style.flex_shrink = 0.0;
+            v
+        }
     };
 
     let acciones = row(

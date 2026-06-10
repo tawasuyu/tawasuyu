@@ -137,7 +137,7 @@ pub(crate) fn multifirma_view(model: &Model, theme: &Theme) -> View<Msg> {
             let v = multi.verdict(mensaje_bytes.as_bytes());
             let pasa = v.firmantes_distintos >= model.multi_threshold;
             let color = if pasa { theme.accent } else { theme.fg_destructive };
-            column(vec![
+            let mut bloque = column(vec![
                 label_line(
                     &format!(
                         "verdict: {} válidas · {} distintas · umbral {}",
@@ -155,7 +155,12 @@ pub(crate) fn multifirma_view(model: &Model, theme: &Theme) -> View<Msg> {
                     14.0,
                     color,
                 ),
-            ])
+            ]);
+            // Alto fijo: el `column` 100% absorbía el espacio flexible del
+            // tile y aplastaba la lista de firmantes con multifirma vigente.
+            bloque.style.size.height = length(56.0_f32);
+            bloque.style.flex_shrink = 0.0;
+            bloque
         }
     };
 
