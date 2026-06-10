@@ -24,3 +24,8 @@ llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 app-bus = { path = "../../../shared/app-bus" }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_sandokan` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }

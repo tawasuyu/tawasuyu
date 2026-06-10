@@ -45,7 +45,9 @@ use llimphi_ui::llimphi_text::{draw_layout, measurement, Alignment};
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use llimphi_widget_menubar::{menubar_overlay, menubar_view, MenuBarSpec, DEFAULT_HEIGHT};
 
-mod procfs;
+// `pub(crate)`: el example `pantallazo_sandokan` incluye este archivo por
+// `#[path]` y necesita nombrar `Sig`/`Scan` (variantes de `Msg`).
+pub(crate) mod procfs;
 mod treemap;
 use procfs::{Scan, Sig};
 
@@ -65,7 +67,7 @@ const GRAPH_LEN: usize = 120;
 /// El Engine es async; Llimphi es sync. Encapsulamos un runtime tokio y el
 /// `Box<dyn Engine>` (que es `Send + Sync`) en un `Arc` que los hilos de
 /// polling/control clonan barato.
-struct EngineCtx {
+pub(crate) struct EngineCtx {
     rt: tokio::runtime::Runtime,
     engine: Box<dyn Engine>,
 }
@@ -83,7 +85,7 @@ impl EngineCtx {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Tab {
+pub(crate) enum Tab {
     /// Todos los procesos del SO (lectura de `/proc`) — el process monitor.
     System,
     /// Treemap jerárquico (fractal) de procesos por memoria o CPU.
@@ -95,7 +97,7 @@ enum Tab {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Sort {
+pub(crate) enum Sort {
     Cpu,
     Mem,
     Pid,
@@ -105,29 +107,29 @@ enum Sort {
 
 /// Un proceso del SO ya con %CPU/%MEM derivados, listo para pintar.
 #[derive(Clone)]
-struct SysProc {
-    pid: i32,
-    ppid: i32,
-    name: String,
-    state: char,
-    cpu_pct: f32,
-    mem_pct: f32,
-    rss_kb: u64,
-    threads: u32,
-    uid: u32,
+pub(crate) struct SysProc {
+    pub(crate) pid: i32,
+    pub(crate) ppid: i32,
+    pub(crate) name: String,
+    pub(crate) state: char,
+    pub(crate) cpu_pct: f32,
+    pub(crate) mem_pct: f32,
+    pub(crate) rss_kb: u64,
+    pub(crate) threads: u32,
+    pub(crate) uid: u32,
     /// Antigüedad del proceso en segundos (uptime del sistema − starttime).
-    uptime_secs: u64,
-    cmd: String,
+    pub(crate) uptime_secs: u64,
+    pub(crate) cmd: String,
 }
 
 #[derive(Clone)]
-struct WawaApp {
-    name: String,
-    bytes: u64,
+pub(crate) struct WawaApp {
+    pub(crate) name: String,
+    pub(crate) bytes: u64,
 }
 
 #[derive(Clone)]
-enum Msg {
+pub(crate) enum Msg {
     /// Resultado de un poll al Engine (snapshot o error de transporte).
     Snapshot(Result<MonitorSnapshot, String>),
     /// Barrido de `/proc` (modo Sistema). El %CPU se deriva en `update`.
@@ -167,7 +169,7 @@ enum Msg {
 
 /// Menú de la app (Monitor / Ver / Ayuda). Los `command` los mapea
 /// `update` en `Msg::MenuCmd`.
-fn build_menu() -> AppMenu {
+pub(crate) fn build_menu() -> AppMenu {
     AppMenu::new()
         .menu(
             Menu::new("Monitor")
@@ -185,50 +187,50 @@ fn build_menu() -> AppMenu {
         .menu(Menu::new("Ayuda").item(MenuItem::new("Observa por el contrato Engine", "help.about")))
 }
 
-struct Model {
-    theme: Theme,
-    tab: Tab,
-    snapshot: MonitorSnapshot,
+pub(crate) struct Model {
+    pub(crate) theme: Theme,
+    pub(crate) tab: Tab,
+    pub(crate) snapshot: MonitorSnapshot,
     /// Historial de CPU por unidad → sparkline.
-    history: HashMap<Ulid, VecDeque<f32>>,
-    selected: Option<Ulid>,
-    error: Option<String>,
-    wawa: Vec<WawaApp>,
+    pub(crate) history: HashMap<Ulid, VecDeque<f32>>,
+    pub(crate) selected: Option<Ulid>,
+    pub(crate) error: Option<String>,
+    pub(crate) wawa: Vec<WawaApp>,
     // --- modo Sistema (/proc) ---
-    system: Vec<SysProc>,
-    sys_sel: Option<i32>,
-    sys_sort: Sort,
-    sys_scroll: usize,
+    pub(crate) system: Vec<SysProc>,
+    pub(crate) sys_sel: Option<i32>,
+    pub(crate) sys_sort: Sort,
+    pub(crate) sys_scroll: usize,
     /// Modo árbol (padre/hijo) vs lista plana ordenable.
-    sys_tree: bool,
+    pub(crate) sys_tree: bool,
     /// PIDs con su subárbol colapsado.
-    collapsed: HashSet<i32>,
+    pub(crate) collapsed: HashSet<i32>,
     /// Filtro por nombre/comando/PID (vacío = sin filtro).
-    sys_filter: String,
+    pub(crate) sys_filter: String,
     /// Capturando teclas para el filtro (modo búsqueda activo).
-    filter_mode: bool,
+    pub(crate) filter_mode: bool,
     /// Treemap: `true` colorea/dimensiona por CPU, `false` por memoria.
-    map_cpu: bool,
+    pub(crate) map_cpu: bool,
     /// Zoom del treemap: si `Some(pid)`, sólo se muestra ese subárbol.
-    map_root: Option<i32>,
+    pub(crate) map_root: Option<i32>,
     /// Último click en el mapa (pid, instante) para detectar doble-click.
-    last_map_click: Option<(i32, Instant)>,
-    mem_total_kb: u64,
-    mem_avail_kb: u64,
+    pub(crate) last_map_click: Option<(i32, Instant)>,
+    pub(crate) mem_total_kb: u64,
+    pub(crate) mem_avail_kb: u64,
     /// Historial de %uso por core + historial de %MEM (un punto por barrido).
-    core_hist: Vec<VecDeque<f32>>,
+    pub(crate) core_hist: Vec<VecDeque<f32>>,
     /// Números de core (ordenados), para etiquetar los gráficos `CPUn`.
-    core_ids: Vec<u32>,
-    mem_hist: VecDeque<f32>,
+    pub(crate) core_ids: Vec<u32>,
+    pub(crate) mem_hist: VecDeque<f32>,
     /// Lectura previa `(total, idle)` por core, para derivar %uso por delta.
-    prev_core: Vec<(u64, u64)>,
+    pub(crate) prev_core: Vec<(u64, u64)>,
     /// Jiffies previos por PID + total, para derivar %CPU por proceso.
-    prev_proc: HashMap<i32, u64>,
-    prev_total: u64,
+    pub(crate) prev_proc: HashMap<i32, u64>,
+    pub(crate) prev_total: u64,
     // --- menú ---
-    menu: AppMenu,
-    menu_open: Option<usize>,
-    ctx: Arc<EngineCtx>,
+    pub(crate) menu: AppMenu,
+    pub(crate) menu_open: Option<usize>,
+    pub(crate) ctx: Arc<EngineCtx>,
 }
 
 struct Monitor;
@@ -237,7 +239,7 @@ struct Monitor;
 // Arranque del Engine + siembra opcional de demo.
 // ---------------------------------------------------------------------------
 
-fn build_ctx() -> EngineCtx {
+pub(crate) fn build_ctx() -> EngineCtx {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -956,7 +958,7 @@ fn sys_move(model: &Model, dir: i32) -> Option<Msg> {
 }
 
 /// Spec de la barra de menú — armado en cada `view()`/`view_overlay()`.
-fn menu_spec(model: &Model) -> MenuBarSpec<'_, Msg> {
+pub(crate) fn menu_spec(model: &Model) -> MenuBarSpec<'_, Msg> {
     MenuBarSpec {
         menu: &model.menu,
         open: model.menu_open,
@@ -972,7 +974,7 @@ fn menu_spec(model: &Model) -> MenuBarSpec<'_, Msg> {
 // Cabecera + pestañas de mundo.
 // ---------------------------------------------------------------------------
 
-fn header(model: &Model) -> View<Msg> {
+pub(crate) fn header(model: &Model) -> View<Msg> {
     let t = &model.theme;
     let mut chips = match model.tab {
         Tab::System | Tab::Map => {
@@ -1037,7 +1039,7 @@ fn header(model: &Model) -> View<Msg> {
     ])
 }
 
-fn tabs(model: &Model) -> View<Msg> {
+pub(crate) fn tabs(model: &Model) -> View<Msg> {
     let t = &model.theme;
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -1083,7 +1085,7 @@ fn tab(t: &Theme, label: &str, active: bool, on: Msg) -> View<Msg> {
 // Modo Mapa: treemap jerárquico (fractal) de procesos.
 // ---------------------------------------------------------------------------
 
-fn map_body(model: &Model) -> View<Msg> {
+pub(crate) fn map_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     if model.system.is_empty() {
         return empty_state(t, "Leyendo /proc…", "Armando el mapa de procesos.");
@@ -1262,7 +1264,7 @@ fn map_toolbar(model: &Model) -> View<Msg> {
 // Modo Unidades (sandokan): grilla de tarjetas vivas.
 // ---------------------------------------------------------------------------
 
-fn units_body(model: &Model) -> View<Msg> {
+pub(crate) fn units_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     if model.snapshot.is_empty() {
         return empty_state(
@@ -1423,7 +1425,7 @@ const W_UID: f32 = 54.0;
 const W_TIME: f32 = 66.0;
 const ROW_H: f32 = 21.0;
 
-fn system_body(model: &Model) -> View<Msg> {
+pub(crate) fn system_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     if model.system.is_empty() {
         return empty_state(t, "Leyendo /proc…", "Barriendo los procesos del sistema.");
@@ -2063,7 +2065,7 @@ fn state_color(t: &Theme, s: char) -> Color {
 // Mundo Wawa: censo de apps WASM instaladas.
 // ---------------------------------------------------------------------------
 
-fn wawa_body(model: &Model) -> View<Msg> {
+pub(crate) fn wawa_body(model: &Model) -> View<Msg> {
     let t = &model.theme;
     let mut children = vec![note(
         t,
