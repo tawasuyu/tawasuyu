@@ -157,6 +157,92 @@ wawa.
 
 ---
 
+## C. Integrar el workspace tawasuyu en el lab de hammer
+
+Que arje sea el init es sólo el piso. "tawasuyu en hammer" significa que el laboratorio
+determinista de hammer **construya las apps de tawasuyu** y que **corran en su userland**.
+Frentes verificados contra el código (2026-06-10):
+
+### C.1 El muro — build Rust + GPU dinámico
+
+1. **hammer no construye Rust.** `hammer-build` detecta `autotools/cmake/meson/make` y compila C
+   con `zig cc`; **no hay `BuildSys::Cargo`**. Prerrequisito #0: vía cargo en el lab (recipe =
+   repo+commit fijado → `cargo build --release` con target y toolchain pinneados).
+2. **musl-estático (la vía de oro de hammer) no sirve para lo gráfico.** Verificado: Llimphi =
+   `wgpu`+`winit`+`vello` (→ `libvulkan`/`libEGL`/`libwayland`/`libxkbcommon`); mirada =
+   `smithay 0.7` (→ `libdrm`/`libinput`/`libseat`/`libgbm`/`libudev`). Todo C dinámico. El
+   front-end gráfico va por la **vía secundaria** de hammer (`patchelf` + core dinámico curado,
+   SDD 03 §4–5), invirtiendo el "static por defecto". Hay que curar y **versionar** ese core
+   gráfico.
+3. **Decisión abierta: musl vs glibc para la capa gráfica.** Mesa/Vulkan y sobre todo NVIDIA
+   propietario asumen glibc (NVIDIA ya es pendiente en mirada). Choca con el caveat de la cage
+   glibc (§B.5). Probable resolución: **el 80% no-gráfico va musl-estático; el 20% gráfico vive
+   en un sub-mundo glibc-dinámico curado.** No es detalle: es bifurcación de arquitectura. ⚠️ A
+   decidir.
+
+### C.2 Toolchain y reproducibilidad
+
+4. **No hay `rust-toolchain.toml` en la raíz** (wawa nightly, resto stable). hammer mete el
+   toolchain en el hash → pin explícito por recipe o no hay determinismo.
+5. **cargo no es reproducible bit-a-bit gratis:** `--remap-path-prefix`, `SOURCE_DATE_EPOCH`,
+   orden de paralelismo, rutas del registry. `Cargo.lock` ya está fijado; falta el resto.
+
+### C.3 La unidad de empaque ya está bien encaminada
+
+hammer compila desde **repo público + commit fijado**, no desde un monorepo. Los front-doors
+standalone ya extraídos (`llimphi`, `mirada` publicados con commit; `nahual`+`shuma` por git-dep)
+**son las unidades naturales de recipe**. Alinear la estrategia de extracción con el modelo
+recipe (cada front-door = un `.toml` con su pin).
+
+### C.4 Runtime / userland — no duplicar supervisión
+
+- Init = arje (§B, ADR 0007).
+- **Supervisión:** hammer modela servicios como `/etc/service/<name>/run` (s6/runit); tawasuyu
+  ya tiene **sandokan** como plano de control sin duplicados. Decisión: **sandokan+arje SON el
+  supervisor**; el `/etc/service/run` de hammer mapea a Cards de arje. No coexisten tres.
+- Red: card-net/libp2p (TCP/QUIC) corre nativo en Linux ✅. Storage sled = Rust puro ✅.
+
+### C.5 Fronteras (qué NO integra)
+
+- **wawa** (bare-metal `x86_64-none`) no es app de userland-hammer; lo *bootea* arje, es otro
+  track. No confundir "tawasuyu en hammer" con wawa. La landing wasm no aplica.
+
+### C.6 Milestones (secuencia de riesgo creciente)
+
+1. **M1 — vía Rust con lo fácil:** una app **no gráfica** (`agora-cli` / `sandokan-daemon` /
+   un daemon CLI) → cargo + musl-estático + commit fijado. Prueba el path end-to-end barato.
+   ← *en curso, ver C.7.*
+2. **M2 — primera gráfica:** un `example` de Llimphi por la vía dinámica → paga la deuda del
+   core gráfico curado y materializa la decisión musl/glibc (#3).
+3. **M3 — mirada:** lo más pesado (DRM/seat/input).
+
+### C.7 Bitácora del experimento M1 — ✅ sale limpio (2026-06-10)
+
+Candidato: **`agora-cli`** (CLI no gráfico: identidades/atestaciones/grafo). Target
+`x86_64-unknown-linux-musl`, linker `musl-gcc` (sin zig). Resultado: **build OK, binario corre**.
+
+- **Una sola fricción, y fue reveladora:** `wawa-explorer-aoe` (arrastrado por agora-cli para el
+  transporte AoE) pasaba `libc::SIOCGIFINDEX`/`SIOCGIFHWADDR` a `ioctl`. El `request` de `ioctl`
+  es **`c_ulong` (u64) en glibc** pero **`c_int` (i32) en musl** → `error[E0308]`. Es la clase de
+  divergencia musl/glibc que M1 debía destapar. Fix portable: `… as _` (infiere el tipo por
+  target, no rompe glibc). Verificado: `cargo check -p wawa-explorer-aoe` en el target gnu por
+  defecto sigue en exit 0.
+- **Binario:** 2.2 MB, `ldd` → *statically linked* (cero deps de `.so`). Es un **static-PIE**
+  (pide `/lib/ld-musl-x86_64.so.1` como loader pero sin librerías dinámicas). Para el
+  estático-clásico-sin-interpreter de la vía de oro de hammer se desactiva PIE
+  (`-C relocation-model=static` / `target-feature=+crt-static`) — detalle de config, no bloqueante.
+- **Lecciones para la recipe Rust de hammer:**
+  1. El path cargo→musl-estático **funciona** para el tier no gráfico; el trabajo de hammer es
+     añadir `BuildSys::Cargo` (C.1 #1), no pelear con el linker.
+  2. El código con `libc`/raw-sockets tiene asunciones glibc latentes (ioctl, tipos de `request`,
+     anchura de constantes). Auditar `unsafe { libc::… }` al portar es parte del costo M1→M2.
+  3. Pin de linker (`musl-gcc` o `zig cc`) y de toolchain entran al hash de la recipe (C.2).
+
+Próximo: **M2** (un `example` de Llimphi por la vía dinámica) — ahí se materializa la decisión
+musl/glibc del tier gráfico (#3).
+
+---
+
 ## Coordinación
 
 Contraparte en hammer: [`docs/adr/0007-arje-como-init-propio.md`](https://gitea.gioser.net/sergio/hammer)
