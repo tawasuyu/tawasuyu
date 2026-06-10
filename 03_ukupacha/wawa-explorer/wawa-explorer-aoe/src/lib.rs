@@ -417,7 +417,8 @@ fn ifindex_de(fd: &OwnedFd, nombre: &str) -> Result<i32> {
         req.ifr_name[i] = b as libc::c_char;
     }
     // SAFETY: req contiene un nombre válido NUL-terminated.
-    let r = unsafe { libc::ioctl(fd.raw(), libc::SIOCGIFINDEX, &mut req) };
+    // `request` es c_ulong en glibc y c_int en musl: `as _` adapta el tipo por target.
+    let r = unsafe { libc::ioctl(fd.raw(), libc::SIOCGIFINDEX as _, &mut req) };
     if r < 0 {
         let err = io::Error::last_os_error();
         if matches!(err.raw_os_error(), Some(libc::ENODEV) | Some(libc::ENOTTY)) {
@@ -437,7 +438,8 @@ fn mac_de(fd: &OwnedFd, nombre: &str) -> Result<Mac> {
         req.ifr_name[i] = b as libc::c_char;
     }
     // SAFETY: req con nombre válido; SIOCGIFHWADDR rellena ifr_hwaddr.
-    let r = unsafe { libc::ioctl(fd.raw(), libc::SIOCGIFHWADDR, &mut req) };
+    // `request` es c_ulong en glibc y c_int en musl: `as _` adapta el tipo por target.
+    let r = unsafe { libc::ioctl(fd.raw(), libc::SIOCGIFHWADDR as _, &mut req) };
     if r < 0 {
         return Err(io::Error::last_os_error().into());
     }
