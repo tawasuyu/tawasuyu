@@ -2,6 +2,8 @@
 
 > Astronomy with astronomical precision. Time · ephemerides · coordinates · images · astrology.
 
+![the cosmos astrological IDE: Frida Kahlo's full natal wheel with zodiac glyphs, house cusps and aspect lines, the chart library tree on the left, the populated aspects table on the right](https://tawasuyu.net/01_yachay/cosmos/pantallazo.png)
+
 Rust suite for astronomical computation, validated against official ephemerides (JPL DE440/441, IAU 2006/2000A, IERS). Covers everything from time scales (UTC/TT/TAI/UT1) to WCS projections, through star catalogs, planetary positions, eclipses, transits, sundials, tides, tropical and sidereal astrology, astro-cartography and natal-hour rectification (GR System, [RECTIFICADOR.md](RECTIFICADOR.md)).
 
 ## Install

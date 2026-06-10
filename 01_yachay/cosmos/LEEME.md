@@ -2,6 +2,8 @@
 
 > Astronomía con precisión astronómica. Tiempo · efemérides · coordenadas · imágenes · astrología.
 
+![el IDE astrológico de cosmos: la rueda natal completa de Frida Kahlo con glifos zodiacales, cúspides de casas y líneas de aspectos, el árbol de biblioteca de cartas a la izquierda y la tabla de aspectos poblada a la derecha](https://tawasuyu.net/01_yachay/cosmos/pantallazo.png)
+
 Suite Rust de cálculo astronómico validada contra ephemerides oficiales (JPL DE440/441, IAU 2006/2000A, IERS). Cubre desde escalas de tiempo (UTC/TT/TAI/UT1) hasta proyecciones WCS pasando por catálogos estelares, posiciones planetarias, eclipses, tránsitos, reloj de sol, mareas, astrología tropical y sideral, astrocartografía y rectificación horaria (Sistema GR, [RECTIFICADOR.md](RECTIFICADOR.md)).
 
 ## Instalación
