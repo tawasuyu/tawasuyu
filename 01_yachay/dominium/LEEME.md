@@ -2,6 +2,8 @@
 
 > Simulador determinista de campo medio con agentes vectoriales.
 
+![la ventana de dominium: un continente procedural isométrico de 240×240 — mares y ríos azules, llanuras verdes, sierras siena — poblado por ~6300 lemmings tras 15 ticks reales de simulación, con métricas vivas (época, materia, oro, Gini) y los sliders del motor en el panel lateral](https://tawasuyu.net/01_yachay/dominium/pantallazo.png)
+
 Cinco capas físicas (`materia`, `psique`, `poder`, `oro`, `degradacion`) viven sobre un `Grid<f32>` denso; encima corre un mundo de agentes con seis acciones atómicas (mover, tomar, soltar, transmitir, atacar, descansar). Acoplamiento ψ↔acción **endógeno** (Fase A): el campo `psique` y la dinámica de los agentes se influyen mutuamente sin que el operador toque parámetros entre ticks. Encima: contagio social del `vector_psi` con homofilia y persuasión institucional (Fase B), ψ-métricas — polarización, Moran's I, k-means (Fase C), y eventos discretos Spawn/Kill, carga de poblaciones CSV y sweeps Monte Carlo (Fase D). Detalle de diseño en [SDD.md](SDD.md).
 
 Conceptos metaprogramables: cualquier emisor de campo (radiación, mercado, dogma) se carga como JSON con `id+pos+radio+mods+hack` — el motor sigue tonto, la IA externa es opcional.
