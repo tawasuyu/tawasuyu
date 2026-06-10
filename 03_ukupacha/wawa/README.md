@@ -2,6 +2,24 @@
 
 > Operating system from scratch. Kernel + boot + filesystem + apps.
 
+## Try it in one minute — no toolchain
+
+Download the prebuilt demo image (~1.3 MB) and boot it in QEMU:
+
+```sh
+curl -LO https://tawasuyu.net/dist/wawa-latest.tar.zst
+tar --zstd -xf wawa-latest.tar.zst && cd wawa-*/
+./correr.sh        # needs qemu-system-x86_64 + OVMF (edk2-ovmf / ovmf package)
+```
+
+The launcher finds the OVMF firmware by itself (override with
+`WAWA_OVMF=/path/OVMF.fd`); extra args are forwarded to QEMU. The package
+ships `wawa.img` (UEFI-bootable as-is — `dd` it to a USB stick for real
+metal), `SHA256SUMS`, and a `LEEME.md` with what's inside: the full genesis
+userspace (pluma, ayni, bitacora, asistente, rimay, testigo…) embedded as a
+ramdisk, so the session is ephemeral by design. Experimental software:
+prefer the VM; flash real hardware at your own risk.
+
 `wawa` (Quechua: *new creature, baby*) is the kernel side of the pair; userspace lives in `02_ruway/wawa/`. Filesystem is a **content-addressed DAG** over BLAKE3; apps are WASM modules isolated by `wasmi`, with capabilities gated at the linker; cooperative frame pacing; the host-side forge (`boot`) + AoE (network) + atlas (Fontdue) materialize the DAG. Wawa **never speaks NTFS/Ext4 directly** — everything enters the graph as BLAKE3-addressed objects (forge or AoE).
 
 Gaming-grade north star: AOT WASM + GPU passthrough + BLAKE3 asset streaming (today: `wasmi` + cooperative frame pacing — see Estado).

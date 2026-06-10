@@ -53,6 +53,11 @@ Pick something to run:
 Many crates ship more `examples/*_demo.rs` — they are the intended way to
 try a feature without standing up the whole suite.
 
+No toolchain at all? There is a **prebuilt wawa demo image** (~1.3 MB):
+download [wawa-latest.tar.zst](https://tawasuyu.net/dist/wawa-latest.tar.zst),
+extract, `./correr.sh` — the OS boots in QEMU in under a minute (needs
+`qemu-system-x86_64` + OVMF).
+
 ## The map
 
 The filesystem *is* the architecture. The workspace is organized as four

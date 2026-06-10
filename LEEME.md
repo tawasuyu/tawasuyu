@@ -54,6 +54,11 @@ Elegí algo para correr:
 Muchos crates traen más `examples/*_demo.rs` — son la forma esperada de
 probar una feature sin levantar la suite completa.
 
+¿Sin toolchain? Hay una **imagen demo pre-forjada de wawa** (~1.3 MB):
+descargá [wawa-latest.tar.zst](https://tawasuyu.net/dist/wawa-latest.tar.zst),
+extraé, `./correr.sh` — el SO bootea en QEMU en menos de un minuto (necesita
+`qemu-system-x86_64` + OVMF).
+
 ## El mapa
 
 El filesystem *es* la arquitectura. El workspace se organiza en cuatro
