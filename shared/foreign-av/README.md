@@ -1,31 +1,31 @@
-# foreign-av — puente de audio/video ajenos
+# foreign-av — foreign audio/video bridge
 
-Puente de **audio/video extranjero** (vía ffmpeg) al modelo de frames nativo del
-suite. Demux / decode / encode ocurren **detrás de la frontera `shared/foreign-*`**
-(regla #4 de `CLAUDE.md`): `media-core` trabaja siempre en frames nativos y no
-sabe de ffmpeg. Ingiere cualquier códec; emite AV1/Opus.
+Bridge from **foreign audio/video** (via ffmpeg) to the suite's native frame
+model. Demux / decode / encode happen **behind the `shared/foreign-*` boundary**
+(rule #4 of `CLAUDE.md`): `media-core` always works in native frames and doesn't
+know about ffmpeg. It ingests any codec; it emits AV1/Opus.
 
-## Qué expone
+## What it exposes
 
-- Decodificación de contenedores/códecs ajenos a frames nativos.
-- `transcode_a_av1` — reencode al formato de emisión nativo (AV1/Opus).
+- Decoding of foreign containers/codecs into native frames.
+- `transcode_a_av1` — reencode to the native emission format (AV1/Opus).
 
-## No-objetivos
+## Non-goals
 
-- No es el reproductor (eso es `media`); es sólo el puente de formato.
-- No mete tipos de ffmpeg en el núcleo de las apps.
+- It is not the player (that's `media`); it's only the format bridge.
+- It doesn't put ffmpeg types into the apps' core.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Puente ffmpeg movido a `shared/foreign-av` (cumple regla #4), extraído de media.
-- Demux/decode de entrada + `transcode_a_av1` para emitir en formato nativo.
+### Done
+- ffmpeg bridge moved to `shared/foreign-av` (complies with rule #4), extracted from media.
+- Input demux/decode + `transcode_a_av1` to emit in native format.
 
-### Pendiente
-- Cobertura amplia de códecs/contenedores de entrada (hoy lo que media necesita).
-- Streaming/pipeline incremental sin materializar todo en memoria.
-- Más tests de ida y vuelta por códec (hoy mínimos).
+### Pending
+- Broad coverage of input codecs/containers (today whatever media needs).
+- Streaming/incremental pipeline without materializing everything in memory.
+- More roundtrip tests per codec (today minimal).
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/foreign-av` — puente de formato A/V. Consumidor: `media`.
+`shared/foreign-av` — A/V format bridge. Consumer: `media`.

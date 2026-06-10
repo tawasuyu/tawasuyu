@@ -1,34 +1,34 @@
-# ssh — cliente SSH mínimo para tawasuyu
+# ssh — minimal SSH client for tawasuyu
 
-Envoltura de `russh` reducida a lo que tawasuyu necesita: **transporte cifrado +
-autenticación + un canal de ejecución de comandos**. No pretende cubrir todo
-OpenSSH; la shell interactiva real la cubrirá `shuma`
-(ver `project_shuma_shell_roadmap`).
+A `russh` wrapper reduced to what tawasuyu needs: **encrypted transport +
+authentication + a command-execution channel**. It doesn't aim to cover all of
+OpenSSH; the real interactive shell will be covered by `shuma`
+(see `project_shuma_shell_roadmap`).
 
-## Qué expone
+## What it exposes
 
-- `Client` — conecta, autentica y ejecuta comandos remotos (async, sobre tokio).
-- `Config` — parámetros de conexión.
-- `Auth` — método de autenticación (clave / contraseña).
+- `Client` — connects, authenticates and runs remote commands (async, over tokio).
+- `Config` — connection parameters.
+- `Auth` — authentication method (key / password).
 
-## No-objetivos (hoy)
+## Non-goals (today)
 
-- No es un reemplazo de OpenSSH ni de mosh/tmux.
-- No hace multiplexación de sesiones ni reconexión.
+- It is not a replacement for OpenSSH nor mosh/tmux.
+- It doesn't do session multiplexing or reconnection.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- `Client`: conexión, autenticación (clave/contraseña) y exec de comandos.
-- API async sobre tokio + tipos de configuración/error.
+### Done
+- `Client`: connection, authentication (key/password) and command exec.
+- Async API over tokio + configuration/error types.
 
-### Pendiente
-- `Server` (aceptar conexiones + handler de exec) — sólo mencionado, no implementado.
-- PTY interactivo, port-forwarding y SFTP.
-- Multiplexación / reconexión (deferido a `shuma`).
-- Tests de integración (hoy sin cobertura automatizada).
+### Pending
+- `Server` (accept connections + exec handler) — only mentioned, not implemented.
+- Interactive PTY, port-forwarding and SFTP.
+- Multiplexing / reconnection (deferred to `shuma`).
+- Integration tests (today no automated coverage).
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/ssh` — cliente SSH mínimo. La experiencia de shell remota la integra
+`shared/ssh` — minimal SSH client. The remote shell experience is integrated by
 `shuma`.

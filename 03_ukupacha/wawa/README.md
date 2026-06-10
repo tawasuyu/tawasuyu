@@ -24,7 +24,7 @@ prefer the VM; flash real hardware at your own risk.
 
 `wawa` (Quechua: *new creature, baby*) is the kernel side of the pair; userspace lives in `02_ruway/wawa/`. Filesystem is a **content-addressed DAG** over BLAKE3; apps are WASM modules isolated by `wasmi`, with capabilities gated at the linker; cooperative frame pacing; the host-side forge (`boot`) + AoE (network) + atlas (Fontdue) materialize the DAG. Wawa **never speaks NTFS/Ext4 directly** — everything enters the graph as BLAKE3-addressed objects (forge or AoE).
 
-Gaming-grade north star: AOT WASM + GPU passthrough + BLAKE3 asset streaming (today: `wasmi` + cooperative frame pacing — see Estado).
+Gaming-grade north star: AOT WASM + GPU passthrough + BLAKE3 asset streaming (today: `wasmi` + cooperative frame pacing — see Status).
 
 ## Install
 
@@ -83,25 +83,25 @@ cargo +nightly check --target x86_64-unknown-none -Z build-std=core,alloc   # ke
 - **Zero direct NTFS/Ext4**: the host-side forge seeds the graph; Wawa reads the DAG.
 - **Cooperative pacing**: no app can hog the frame; the scheduler asks it to yield.
 
-## Estado (2026-06-09)
+## Status (2026-06-09)
 
-> Fuente autoritativa del estado del kernel: [WAWA.md](../../WAWA.md) (§0–§14) y [SDD-capacidades.md](SDD-capacidades.md). Excluido del workspace raíz: compila `x86_64-unknown-none` con `panic = "abort"`.
+> Authoritative source for kernel status: [WAWA.md](../../WAWA.md) (§0–§14) and [SDD-capacidades.md](SDD-capacidades.md). Excluded from the root workspace: compiles `x86_64-unknown-none` with `panic = "abort"`.
 
-### Hecho (subsistemas en disco)
-- **Boot + gráficos**: **solo-UEFI** vía `wawa-boot` (`bootloader::UefiBoot`; consume el kernel como `artifact = "bin"`), framebuffer GOP, compositor (refactorizado de 1980 LOC a directorio `compositor/`), consola/texto. **Bootea end-to-end en QEMU** (pila del kernel a 1 MiB: montar virtio-sound desbordaba los 80 KiB por defecto del bootloader).
-- **Multi-monitor** (Fase 64): driver virtio-gpu nativo multi-scanout + render por output, gateado por `RENASER_MONITORES`; Alt+O mueve la ventana enfocada al siguiente monitor; `gop-probe` para sondear GOP en metal.
-- **Marco de escritorio `pata`** (Fase 9): el kernel pinta el marco (`compositor/pata_marco.rs`) — franja reservada dinámica, start button que abre el launcher, workspace switcher, config bidireccional por akasha, cobertura de `WidgetView::TextRich` y `Moon`.
-- **Imagen publicable**: `scripts/build-wawa-image.sh` encadena apps → imagen UEFI autocontenida (grafo de génesis como ramdisk) → `dist/` con `wawa.img` + lanzador QEMU portable + SHA256SUMS + tarball `.tar.zst`.
-- **Reactor cooperativo** (`async_system/`): PIT 100Hz + IRQs, executor de tareas; frame pacing cooperativo.
-- **Almacenamiento direccionado por contenido** (`almacen.rs`): BLAKE3 + log + GC mark/sweep/swap semántico; configuración (idioma+tema) como nodo del grafo inyectada en `ContextoCapacidades`.
-- **Apps WASM** (`wasm/`): aisladas por `wasmi`, fuel/tick + techo de memoria, capacidades gateadas en el linker (frontera física, no tabla). 17 apps en `apps/` (asistente, ayni, bitácora, cronista, discola, glotona, hello_wasm, memoriosa, mudanza, pluma, pregón, pulso, rimay, testigo, tinkuy, tonada, tonalero).
-- **Capacidades firmadas §14.1.3** (cableado code-complete): concesión firmada por hash de bytecode (`claves::verificar_concesion_capacidad`), enforcement por intersección viva (`permisos_efectivos_de`), seam de génesis al boot que ancla concesiones offline, revocación cableada al overlay de agora, ceremonia automatizada (`scripts/wawa-conceder-genesis.sh`) y flip estricto como toggle nombrado `MODO_CAPACIDAD_ESTRICTO_GLOBAL`.
-- **Red `akasha`** (EtherType propio, sin TCP/IP) + bridge Akasha-over-Ether vía transporte TAP host↔guest; descarga recursiva del DAG delta (anuncio arrastra el cono canal→manifiesto→bytecodes); bucle Aceptar/Rechazar de `mudanza`.
-- **USB/HID**: inicialización de todos los controladores XHCI, Port Power, ratón USB HID nativo (boot protocol).
-- **Firmas Ed25519** en el kernel (`claves.rs`, zero-alloc `ed25519-compact`): `verificar_manifiesto_firmado` / `verificar_anuncio_canal` / `verificar_cuaderno_firmado` / `verificar_revocacion`.
+### Done (subsystems on disk)
+- **Boot + graphics**: **UEFI-only** via `wawa-boot` (`bootloader::UefiBoot`; consumes the kernel as `artifact = "bin"`), GOP framebuffer, compositor (refactored from 1980 LOC into a `compositor/` directory), console/text. **Boots end-to-end in QEMU** (kernel stack at 1 MiB: mounting virtio-sound overflowed the bootloader's default 80 KiB).
+- **Multi-monitor** (Phase 64): native multi-scanout virtio-gpu driver + per-output render, gated by `RENASER_MONITORES`; Alt+O moves the focused window to the next monitor; `gop-probe` to probe GOP on metal.
+- **`pata` desktop frame** (Phase 9): the kernel paints the frame (`compositor/pata_marco.rs`) — dynamic reserved strip, start button that opens the launcher, workspace switcher, bidirectional config over akasha, coverage of `WidgetView::TextRich` and `Moon`.
+- **Publishable image**: `scripts/build-wawa-image.sh` chains apps → self-contained UEFI image (genesis graph as ramdisk) → `dist/` with `wawa.img` + portable QEMU launcher + SHA256SUMS + `.tar.zst` tarball.
+- **Cooperative reactor** (`async_system/`): PIT 100Hz + IRQs, task executor; cooperative frame pacing.
+- **Content-addressed storage** (`almacen.rs`): BLAKE3 + log + semantic GC mark/sweep/swap; configuration (language+theme) as a graph node injected into `ContextoCapacidades`.
+- **WASM apps** (`wasm/`): isolated by `wasmi`, fuel/tick + memory ceiling, capabilities gated at the linker (physical boundary, not a table). 17 apps in `apps/` (asistente, ayni, bitacora, cronista, discola, glotona, hello_wasm, memoriosa, mudanza, pluma, pregon, pulso, rimay, testigo, tinkuy, tonada, tonalero).
+- **Signed capabilities §14.1.3** (code-complete wiring): grant signed by bytecode hash (`claves::verificar_concesion_capacidad`), enforcement by live intersection (`permisos_efectivos_de`), genesis seam at boot that anchors offline grants, revocation wired to the agora overlay, automated ceremony (`scripts/wawa-conceder-genesis.sh`), and the strict flip as a named toggle `MODO_CAPACIDAD_ESTRICTO_GLOBAL`.
+- **`akasha` network** (own EtherType, no TCP/IP) + Akasha-over-Ether bridge via TAP transport host↔guest; recursive download of the delta DAG (an announcement drags the channel→manifest→bytecodes cone); Accept/Reject loop of `mudanza`.
+- **USB/HID**: initialization of all XHCI controllers, Port Power, native USB HID mouse (boot protocol).
+- **Ed25519 signatures** in the kernel (`claves.rs`, zero-alloc `ed25519-compact`): `verificar_manifiesto_firmado` / `verificar_anuncio_canal` / `verificar_cuaderno_firmado` / `verificar_revocacion`.
 
-### Pendiente
-- Flipear `MODO_CAPACIDAD_ESTRICTO_GLOBAL` a `true` tras sembrar las concesiones de génesis (hoy `false`: sin concesión rigen los permisos declarados en `EntradaApp`) — el enforcement y la ceremonia ya existen (WAWA.md §14.1.3).
-- Optimizaciones gaming pendientes: AOT WASM (cranelift) sobre el path de ejecución, GPU passthrough, asset streaming BLAKE3 (hoy el render es el camino base).
-- Sin restart automático de apps (oneshot por diseño); "process monitor" de Wawa (censo del executor + balizas del compositor) aún por construir.
-- El camino sobre hardware metal real (más allá de QEMU) sigue endureciéndose (XHCI/GOP). No hay port aarch64: el target único es `x86_64-unknown-none`.
+### Pending
+- Flip `MODO_CAPACIDAD_ESTRICTO_GLOBAL` to `true` after seeding the genesis grants (today `false`: without a grant the permissions declared in `EntradaApp` rule) — enforcement and the ceremony already exist (WAWA.md §14.1.3).
+- Pending gaming optimizations: AOT WASM (cranelift) over the execution path, GPU passthrough, BLAKE3 asset streaming (today render is the base path).
+- No automatic app restart (oneshot by design); Wawa's "process monitor" (executor census + compositor beacons) still to be built.
+- The path on real metal hardware (beyond QEMU) keeps hardening (XHCI/GOP). No aarch64 port: the sole target is `x86_64-unknown-none`.

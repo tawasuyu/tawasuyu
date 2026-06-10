@@ -1,183 +1,183 @@
 # media-source-capture
 
-Captura **en vivo** como `media_core::FrameSource` — el lado INPUT del
-dominio. Mientras los `media-source-*` de archivo reproducen bytes en
-disco, este produce frames de un dispositivo en tiempo real. Su razón
-de ser: alimentar a `media-recorder-webm` para grabar la cámara a un
-`.webm` AV1+Opus **nativo**, sin ffmpeg.
+**Live** capture as `media_core::FrameSource` — the INPUT side of the
+domain. While the file-based `media-source-*` crates play back bytes on
+disk, this one produces frames from a real-time device. Its reason for
+being: feed `media-recorder-webm` to record the camera to a **native**
+AV1+Opus `.webm`, without ffmpeg.
 
 ```text
-cámara v4l2 ──hilo──▶ convert (YUYV/MJPEG→RGBA) ──▶ LiveSink
-                                                       │  (slot latest-frame + versión)
-bucle de render ◀── FrameSource::tick ◀── LiveSource ──┘
+v4l2 camera ──thread──▶ convert (YUYV/MJPEG→RGBA) ──▶ LiveSink
+                                                       │  (latest-frame slot + version)
+render loop ◀── FrameSource::tick ◀── LiveSource ──────┘
                          │
                          ▼
-            media-recorder-webm ──▶ .webm AV1+Opus nativo
+            media-recorder-webm ──▶ native AV1+Opus .webm
 ```
 
-## Las dos piezas
+## The two pieces
 
-### Núcleo agnóstico — `LiveSource` / `LiveSink` (siempre compilado)
+### Agnostic core — `LiveSource` / `LiveSink` (always compiled)
 
-Un **slot de último frame**: `Arc<Mutex>` + versión atómica. El
-productor empuja frames desde su propio hilo/timing (`push_rgba` o
-`push_raw`); el consumidor los lee en `tick` **sin bloquear** — si no
-hay frame nuevo desde la última lectura, `tick` devuelve `None` y no
-toca el buffer. Es la disciplina correcta para una fuente en vivo
-dentro de un bucle de render:
+A **latest-frame slot**: `Arc<Mutex>` + atomic version. The producer
+pushes frames from its own thread/timing (`push_rgba` or `push_raw`);
+the consumer reads them in `tick` **without blocking** — if there is no
+new frame since the last read, `tick` returns `None` and does not touch
+the buffer. This is the correct discipline for a live source inside a
+render loop:
 
-- el render **nunca se frena** esperando al dispositivo;
-- un frame viejo **nunca se re-emite** (no infla el recorder a fps de
-  pantalla cuando la cámara va más lenta);
-- si el productor va más rápido que el consumidor, **sólo sobrevive el
-  último** frame (queremos el ahora, no una cola).
+- the render **never stalls** waiting on the device;
+- an old frame is **never re-emitted** (it doesn't inflate the recorder
+  to screen fps when the camera runs slower);
+- if the producer is faster than the consumer, **only the last** frame
+  survives (we want the now, not a queue).
 
-Es reusable por **cualquier** grabber: cámara hoy, captura de pantalla
-mañana (sin crate nuevo), un compute shader, o la red.
+It is reusable by **any** grabber: camera today, screen capture tomorrow
+(without a new crate), a compute shader, or the network.
 
-### Backend cámara v4l2 — `CameraSource` (feature `camera`, opt-in)
+### v4l2 camera backend — `CameraSource` (feature `camera`, opt-in)
 
-Abre `/dev/videoN`, negocia formato, y corre un hilo dedicado que
-convierte cada frame a RGBA y lo empuja al `LiveSink`. Se detiene y se
-junta solo al dropearse. `open()` bloquea hasta negociar el formato —
-así "no hay cámara" / "formato inválido" llega sincrónico, no en
-silencio a media reproducción.
+Opens `/dev/videoN`, negotiates a format, and runs a dedicated thread
+that converts each frame to RGBA and pushes it to the `LiveSink`. It
+stops and joins itself on drop. `open()` blocks until the format is
+negotiated — so "no camera" / "invalid format" arrives synchronously,
+not silently mid-playback.
 
 ```rust
 use media_source_capture::{CameraSource, CameraOptions};
 
 let cam = CameraSource::open_default()?;          // /dev/video0, 640×480, YUYV
 println!("{}×{} {:?}", cam.width(), cam.height(), cam.format());
-// cam: FrameSource — enchufar al pipeline o al recorder.
+// cam: FrameSource — plug into the pipeline or the recorder.
 ```
 
-### Backend pantalla X11 — `ScreenSource` (feature `screen`, opt-in)
+### X11 screen backend — `ScreenSource` (feature `screen`, opt-in)
 
-Mismo molde que la cámara, pero la fuente es el **framebuffer del
-servidor**: un hilo dedicado hace `GetImage` del root window de X11,
-convierte a RGBA y empuja al `LiveSink`. La pantalla no marca ritmo
-(a diferencia de la cámara, que lo da el driver), así que un timer
-interno limita a `fps` para no re-grabar un framebuffer que no cambió.
+Same mold as the camera, but the source is the **server's
+framebuffer**: a dedicated thread does a `GetImage` of the X11 root
+window, converts to RGBA and pushes to the `LiveSink`. The screen does
+not set the pace (unlike the camera, which gets it from the driver), so
+an internal timer caps it at `fps` so as not to re-record a framebuffer
+that didn't change.
 
 ```rust
 use media_source_capture::{ScreenSource, ScreenOptions};
 
-let scr = ScreenSource::open_default()?;           // $DISPLAY, pantalla completa, 30 fps
+let scr = ScreenSource::open_default()?;           // $DISPLAY, full screen, 30 fps
 println!("{}×{} {:?}", scr.width(), scr.height(), scr.format());
-// scr: FrameSource — mismo recorder, ahora grabás la pantalla a .webm.
+// scr: FrameSource — same recorder, now you record the screen to .webm.
 ```
 
-Cumple la promesa del núcleo: "cámara hoy, captura de pantalla mañana
-**sin crate nuevo**" — reusa `LiveSource`/`LiveSink` tal cual. X11 sólo
-por ahora; Wayland (portal + PipeWire) sería otro backend sobre el
-mismo núcleo. `GetImage` copia el framebuffer por el socket cada frame
-(MVP); MIT-SHM (memoria compartida) es la optimización natural cuando
-duela.
+It keeps the core's promise: "camera today, screen capture tomorrow
+**without a new crate**" — it reuses `LiveSource`/`LiveSink` as-is. X11
+only for now; Wayland (portal + PipeWire) would be another backend on
+the same core. `GetImage` copies the framebuffer over the socket every
+frame (MVP); MIT-SHM (shared memory) is the natural optimization when it
+starts to hurt.
 
-### Backend pantalla Wayland — `WaylandScreenSource` (feature `wayland`, opt-in)
+### Wayland screen backend — `WaylandScreenSource` (feature `wayland`, opt-in)
 
-Mismo molde que X11, pero por el protocolo `wlr-screencopy`
-(`zwlr_screencopy_manager_v1`): un hilo copia el output a un buffer shm
-(memfd+mmap), convierte a RGBA y empuja al `LiveSink`. **Puro-Rust**
-(`wayland-client` + `wayland-protocols-wlr`, con `dlopen` ni siquiera
-enlaza libwayland en build) — mismo ethos que x11rb.
+Same mold as X11, but over the `wlr-screencopy` protocol
+(`zwlr_screencopy_manager_v1`): a thread copies the output into an shm
+buffer (memfd+mmap), converts to RGBA and pushes to the `LiveSink`.
+**Pure-Rust** (`wayland-client` + `wayland-protocols-wlr`, with `dlopen`
+it doesn't even link libwayland at build) — same ethos as x11rb.
 
-Wayland prohíbe por diseño que un cliente lea la pantalla sin un
-protocolo sancionado. `wlr-screencopy` lo exponen los compositores
-**wlroots** (Sway, Hyprland, river); **GNOME/KDE no** — ahí la vía es
-xdg-desktop-portal + PipeWire (otro backend, que sí arrastraría
-libpipewire en C). El `media-recorder-app` elige X11 o Wayland en
-runtime según `$WAYLAND_DISPLAY`/`$DISPLAY`.
+Wayland forbids by design that a client read the screen without a
+sanctioned protocol. `wlr-screencopy` is exposed by **wlroots**
+compositors (Sway, Hyprland, river); **GNOME/KDE don't** — there the way
+is xdg-desktop-portal + PipeWire (another backend, which would drag in
+libpipewire in C). The `media-recorder-app` chooses X11 or Wayland at
+runtime depending on `$WAYLAND_DISPLAY`/`$DISPLAY`.
 
 ```rust
 use media_source_capture::WaylandScreenSource;
-let scr = WaylandScreenSource::open_default()?;  // primer output, 30 fps
+let scr = WaylandScreenSource::open_default()?;  // first output, 30 fps
 ```
 
-El loop completo pantalla→`.webm` (sin ffmpeg) está como ejemplo
-ejecutable, en dos variantes:
+The full screen→`.webm` loop (without ffmpeg) is provided as a runnable
+example, in two variants:
 
 ```bash
-# sólo pantalla (AV1). Necesita $DISPLAY.
+# screen only (AV1). Needs $DISPLAY.
 cargo run -p media-source-capture --example grabar_pantalla \
     --features screen --release -- 5 pantalla.webm 30
 
-# pantalla + micrófono (AV1+Opus). Necesita $DISPLAY + input device.
+# screen + microphone (AV1+Opus). Needs $DISPLAY + input device.
 cargo run -p media-source-capture --example grabar_pantalla_audio \
     --features "screen mic" --release -- 5 pantalla.webm 30
 ```
 
-La conversión de pixel-formats (`convert`) es **pura y testeable sin
-ningún dispositivo** — vive separada de los backends. Soporta `YUYV`
-(YUV 4:2:2, BT.601 limited range — la convención v4l2), `MJPG` (vía el
-crate `image`), `RGB3`, `BGR3` y los empaquetados de 32-bit
-(`Bgrx32`/`Xrgb32` de X11 + `Rgbx32` del XBGR8888 de Wayland, padding
-ignorado).
+The pixel-format conversion (`convert`) is **pure and testable without
+any device** — it lives separate from the backends. It supports `YUYV`
+(YUV 4:2:2, BT.601 limited range — the v4l2 convention), `MJPG` (via the
+`image` crate), `RGB3`, `BGR3` and the 32-bit packings
+(`Bgrx32`/`Xrgb32` from X11 + `Rgbx32` from Wayland's XBGR8888, padding
+ignored).
 
-### Lado del audio — `AudioLiveSink`/`AudioLiveSource` + `MicSource`
+### Audio side — `AudioLiveSink`/`AudioLiveSource` + `MicSource`
 
-El espejo de audio del núcleo en vivo. La diferencia con el video es la
-disciplina: un frame viejo se descarta (queremos el ahora), pero el
-audio **no se descarta** — el slot es un **ring buffer** que se drena
-en orden (`AudioSource::fill`), rellenando con silencio en underrun. El
-ring está acotado (~4 s): si el consumidor se cuelga, se descarta lo más
-viejo y se cuenta el overrun, en vez de crecer sin límite.
+The audio mirror of the live core. The difference from video is the
+discipline: an old frame is dropped (we want the now), but audio is
+**not dropped** — the slot is a **ring buffer** that is drained in order
+(`AudioSource::fill`), filling with silence on underrun. The ring is
+bounded (~4 s): if the consumer hangs, the oldest is dropped and the
+overrun is counted, instead of growing without limit.
 
-`MicSource` (feature `mic`, opt-in) abre el input device default por
-cpal y empuja las muestras al `AudioLiveSink` desde el callback
-realtime. Pide **48 kHz** (rate nativo de Opus) para que el recorder no
-degrade; un device que sólo da 44.1 kHz graba video-solo.
+`MicSource` (feature `mic`, opt-in) opens the default input device via
+cpal and pushes the samples to the `AudioLiveSink` from the realtime
+callback. It asks for **48 kHz** (Opus's native rate) so the recorder
+doesn't degrade; a device that only gives 44.1 kHz records video-only.
 
 ```rust
 use media_source_capture::{ScreenSource, MicSource};
 
 let scr = ScreenSource::open_default()?;   // video: FrameSource
 let mic = MicSource::open_default()?;       // audio: AudioSource (48 kHz)
-// ambos → media-recorder-webm → screencast .webm AV1+Opus nativo.
+// both → media-recorder-webm → native AV1+Opus .webm screencast.
 ```
 
-El loop completo pantalla+mic→`.webm` está en el ejemplo
-`grabar_pantalla_audio` (abajo).
+The full screen+mic→`.webm` loop is in the `grabar_pantalla_audio`
+example (below).
 
-## Por qué los backends son opt-in
+## Why the backends are opt-in
 
-`v4l` arrastra `v4l2-sys-mit` → `bindgen` → `libclang`, una dependencia
-de **build** pesada y frágil en builds paralelos (el smoke test
-`cargo check --workspace` reventaba con *"libclang not loaded on this
-thread"*). Misma lógica que los puentes `foreign-*`: el hardware/ajeno
-entra opt-in, el núcleo del dominio queda liviano. `screen` (x11rb),
-`wayland` (wayland-client + wlr-protocols) y `mic` (cpal) son todos
-puro-Rust y sin lib C en build, pero igual quedan opt-in: son backends
-de sistema (necesitan servidor X / compositor wlroots / input device) y
-no toda plataforma los quiere.
+`v4l` drags in `v4l2-sys-mit` → `bindgen` → `libclang`, a heavy and
+fragile **build** dependency on parallel builds (the `cargo check
+--workspace` smoke test blew up with *"libclang not loaded on this
+thread"*). Same logic as the `foreign-*` bridges: hardware/foreign
+enters opt-in, the domain core stays light. `screen` (x11rb), `wayland`
+(wayland-client + wlr-protocols) and `mic` (cpal) are all pure-Rust and
+without a C lib at build, but they stay opt-in anyway: they are system
+backends (they need an X server / wlroots compositor / input device) and
+not every platform wants them.
 
 ```bash
-cargo test  -p media-source-capture                    # núcleo puro (21 tests) + integración (2)
-cargo check -p media-source-capture --features camera  # backend v4l2 (necesita libclang)
-cargo check -p media-source-capture --features screen  # backend X11 (x11rb, puro-Rust)
-cargo check -p media-source-capture --features wayland # backend Wayland wlr-screencopy (puro-Rust)
-cargo check -p media-source-capture --features mic     # backend micrófono (cpal)
+cargo test  -p media-source-capture                    # pure core (21 tests) + integration (2)
+cargo check -p media-source-capture --features camera  # v4l2 backend (needs libclang)
+cargo check -p media-source-capture --features screen  # X11 backend (x11rb, pure-Rust)
+cargo check -p media-source-capture --features wayland # Wayland wlr-screencopy backend (pure-Rust)
+cargo check -p media-source-capture --features mic     # microphone backend (cpal)
 ```
 
-`camera` compila donde haya cabeceras `videodev2` + `libclang` y
-**correr** necesita un `/dev/videoN` real; `screen` compila en cualquier
-lado y correr necesita un `$DISPLAY`; `mic` necesita un input device.
-En todos la capa de backend es fina y la lógica testeable (conversión +
-slots latest-frame / ring de audio) vive fuera — igual que
-`media-audio-cpal` necesita un sink de sonido para sonar pero no para
-compilar.
+`camera` compiles wherever there are `videodev2` headers + `libclang`
+and **running** needs a real `/dev/videoN`; `screen` compiles anywhere
+and running needs a `$DISPLAY`; `mic` needs an input device. In all of
+them the backend layer is thin and the testable logic (conversion +
+latest-frame slots / audio ring) lives outside — just like
+`media-audio-cpal` needs a sound sink to make sound but not to compile.
 
 ## Tests
 
-- `convert::tests` — round-trips de conversión (YUYV gris/rojo, RGB/BGR,
-  los 32-bit `Bgrx32`/`Xrgb32`/`Rgbx32` con padding ignorado, rechazo de
-  buffers truncados, mapeo de FourCC).
-- `live_audio::tests` — ring de audio: drena en orden, underrun rellena
-  silencio, fill parcial mantiene continuidad, overrun descarta lo viejo
-  y lo cuenta, detección de huérfano.
-- `lib::tests` — contrato del `LiveSource`: empieza vacío, emite sólo
-  frames nuevos, descarta intermedios, detecta huérfano.
-- `tests/captura_a_webm.rs` — el loop estrella sin hardware: `LiveSink`
-  (sintético) → `RecordedFrameSource` → `media-recorder-webm` produce un
-  `.webm` con header EBML válido; y la garantía de no-re-emisión de
-  frames estancados.
+- `convert::tests` — conversion round-trips (gray/red YUYV, RGB/BGR, the
+  32-bit `Bgrx32`/`Xrgb32`/`Rgbx32` with padding ignored, rejection of
+  truncated buffers, FourCC mapping).
+- `live_audio::tests` — audio ring: drains in order, underrun fills
+  silence, partial fill keeps continuity, overrun drops the old and
+  counts it, orphan detection.
+- `lib::tests` — `LiveSource` contract: starts empty, emits only new
+  frames, drops intermediates, detects orphan.
+- `tests/captura_a_webm.rs` — the star loop without hardware: `LiveSink`
+  (synthetic) → `RecordedFrameSource` → `media-recorder-webm` produces a
+  `.webm` with a valid EBML header; and the no-re-emission guarantee for
+  stale frames.

@@ -1,28 +1,28 @@
-# forth-emisor — compilador Forth→WASM para wawa
+# forth-emisor — Forth→WASM compiler for wawa
 
-Toma un dialecto **Forth** y emite un módulo **WASM** válido. Núcleo `no_std`
-reusable: lo consume el pipeline de apps de wawa (`build-pluma.sh`, etc.) para
-escribir lógica de bajo nivel en Forth y correrla en el cage WASM del kernel.
+Takes a **Forth** dialect and emits a valid **WASM** module. Reusable `no_std`
+core: it is consumed by the wawa apps pipeline (`build-pluma.sh`, etc.) to
+write low-level logic in Forth and run it in the kernel's WASM cage.
 
-## Capacidades
+## Capabilities
 
-- Definición de palabras y macros.
-- ABI `(i32) -> i32`.
-- Cascade injection a través de macros importadas (Fase 40).
+- Word and macro definition.
+- `(i32) -> i32` ABI.
+- Cascade injection through imported macros (Phase 40).
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Emisión de módulos WASM válidos desde el dialecto Forth.
-- Macros + ABI `(i32) -> i32` + cascade injection across imported macros (Fase 40).
-- Núcleo `no_std` (cruza al pipeline de wawa); ≈9 tests.
+### Done
+- Emission of valid WASM modules from the Forth dialect.
+- Macros + `(i32) -> i32` ABI + cascade injection across imported macros (Phase 40).
+- `no_std` core (crosses into the wawa pipeline); ≈9 tests.
 
-### Pendiente
-- ABI más rica (múltiples args/retornos, tipos no-i32).
-- Optimización del WASM emitido (hoy se apoya en `wasm-opt` aguas abajo).
-- Diagnósticos/errores de compilación más finos.
+### Pending
+- Richer ABI (multiple args/returns, non-i32 types).
+- Optimization of the emitted WASM (today it relies on `wasm-opt` downstream).
+- Finer compilation diagnostics/errors.
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/forth-emisor` — extraído del kernel de wawa (Fase 30). Consumido por el
-pipeline de apps WASM de `03_ukupacha/wawa`.
+`shared/forth-emisor` — extracted from the wawa kernel (Phase 30). Consumed by the
+WASM apps pipeline of `03_ukupacha/wawa`.

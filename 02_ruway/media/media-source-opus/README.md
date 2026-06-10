@@ -1,18 +1,18 @@
 # media-source-opus
 
-Decode **Opus nativo** del dominio `media` — puro-Rust, sin C, sin FFI,
-sin patentes. Opus es el formato de audio **nativo** de tawasuyu (PLAN.md
-§6.quinquies), par del video AV1 (`media-source-av1`).
+**Native Opus** decode from the `media` domain — pure-Rust, no C, no FFI,
+no patents. Opus is tawasuyu's **native** audio format (PLAN.md
+§6.quinquies), the pair of AV1 video (`media-source-av1`).
 
-Abre un **Ogg Opus** (`.opus`/`.ogg`), demuxea con el crate `ogg`,
-decodifica los paquetes con [`opus-wave`](https://crates.io/crates/opus-wave)
-(port puro-Rust de libopus: SILK + CELT) y expone el resultado como
+Opens an **Ogg Opus** (`.opus`/`.ogg`), demuxes with the `ogg` crate,
+decodes the packets with [`opus-wave`](https://crates.io/crates/opus-wave)
+(pure-Rust port of libopus: SILK + CELT) and exposes the result as
 `media_core::AudioSource` + `Seekable`.
 
-Mismo patrón que `media-source-mp3` / `media-source-wav`: decodifica el
-archivo entero a `f32` intercalado al construir (Opus siempre sale a
-48 kHz) y `fill` reproduce con resampleo lineal cuando el sink pide otra
-sample rate, con `set_speed` / `set_loop` / `seek_to`.
+Same pattern as `media-source-mp3` / `media-source-wav`: decodes the
+entire file to interleaved `f32` on construction (Opus always comes out at
+48 kHz) and `fill` plays back with linear resampling when the sink requests
+another sample rate, with `set_speed` / `set_loop` / `seek_to`.
 
 ```rust
 use media_source_opus::OpusSource;
@@ -20,27 +20,27 @@ use media_core::AudioSource;
 
 let mut src = OpusSource::from_path("cancion.opus")?;
 let mut buf = vec![0f32; 1024 * 2];
-src.fill(&mut buf, 48_000, 2); // resamplea/duplica canales al pedido del sink
+src.fill(&mut buf, 48_000, 2); // resamples/duplicates channels at the sink's request
 ```
 
-## Alcance
+## Scope
 
-- Soporta **mono y estéreo** (mapping family 0, el caso común). Aplica el
-  `output_gain` de la cabecera y descarta el `pre_skip` (delay del encoder).
-- Multicanal (family 1: 5.1, ambisonics) necesitaría `OpusMSDecoder` —
-  pendiente; hoy devuelve `OpusError::Multicanal`.
+- Supports **mono and stereo** (mapping family 0, the common case). Applies
+  the header's `output_gain` and discards the `pre_skip` (encoder delay).
+- Multichannel (family 1: 5.1, ambisonics) would need `OpusMSDecoder` —
+  pending; today it returns `OpusError::Multicanal`.
 
 ## Tests
 
 ```bash
-cargo test -p media-source-opus   # parse OpusHead + decode de un Ogg Opus real (fixture)
+cargo test -p media-source-opus   # parse OpusHead + decode of a real Ogg Opus (fixture)
 ```
 
-El fixture `tests/fixtures/tone_440_mono.opus` (tono 440 Hz, 1 s, generado
-con `ffmpeg -c:a libopus`) se decodifica end-to-end por opus-wave y se
-valida duración + energía de la señal.
+The fixture `tests/fixtures/tone_440_mono.opus` (440 Hz tone, 1 s, generated
+with `ffmpeg -c:a libopus`) is decoded end-to-end by opus-wave and
+duration + signal energy are validated.
 
-## Generar un `.opus` de prueba
+## Generate a test `.opus`
 
 ```bash
 ffmpeg -f lavfi -i "sine=frequency=440:duration=2" -c:a libopus tono.opus

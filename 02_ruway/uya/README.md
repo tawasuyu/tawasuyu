@@ -1,115 +1,115 @@
-# uya — videollamada soberana
+# uya — sovereign video call
 
-**uya** es "cara/rostro" en quechua: una videollamada es, ante todo, ver caras
-en vivo. Es la app nativa que reemplaza a Zoom/Meet (la "web de aplicación" de
-tiempo real), sobre el mismo principio del resto de la suite — un `*-core`
-agnóstico + frontends Llimphi intercambiables, sin navegador ni JIT de por medio
-(ver `APPS-NATIVAS.md`, Tanda 2).
+**uya** is "face" in Quechua: a video call is, above all, seeing faces
+live. It is the native app that replaces Zoom/Meet (the real-time
+"application web"), on the same principle as the rest of the suite — an
+agnostic `*-core` + interchangeable Llimphi frontends, with no browser or JIT
+in the way (see `APPS-NATIVAS.md`, Batch 2).
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| `uya-core` | Modelo agnóstico: protocolo de cable (`Paquete`), identidad determinista (`ParticipanteId = BLAKE3(nombre)`) y roster de la sala (`Sala`). No sabe de transporte ni de UI. |
-| `uya-app` | Pegamento: transporte P2P soberano sobre **card-net** (`BrahmanNet`/libp2p, con relay/dcutr/autonat), captura de video (TestCard sintética por defecto; webcam v4l2 tras la feature `camara`), audio (mic→mezcla→`AudioSink`) y bus de eventos (`EventoUya`) hacia la UI. |
-| `uya-cli` | Nodo headless: ejercita transporte + captura y reporta eventos por consola. Sin GPU. |
-| `uya-llimphi` | Cara gráfica (bucle Elm): rejilla de caras (un tile por participante, su último cuadro RGBA con `View::image`) + barra de cámara/micrófono/colgar. |
+| `uya-core` | Agnostic model: wire protocol (`Paquete`), deterministic identity (`ParticipanteId = BLAKE3(name)`) and the room roster (`Sala`). Knows nothing of transport or UI. |
+| `uya-app` | Glue: sovereign P2P transport over **card-net** (`BrahmanNet`/libp2p, with relay/dcutr/autonat), video capture (synthetic TestCard by default; v4l2 webcam behind the `camara` feature), audio (mic→mix→`AudioSink`) and an event bus (`EventoUya`) toward the UI. |
+| `uya-cli` | Headless node: exercises transport + capture and reports events to the console. No GPU. |
+| `uya-llimphi` | Graphical face (Elm loop): grid of faces (one tile per participant, their latest RGBA frame via `View::image`) + camera/microphone/hang-up bar. |
 
-## Probar
+## Trying it
 
-El transporte es libp2p: cada nodo imprime al arrancar su **multiaddr dialable**
-(con `/p2p/<peerid>`). Para llamar a alguien, pasale esa dirección por
-`UYA_CONECTAR`. Dos ventanas:
+The transport is libp2p: each node prints its **dialable multiaddr** on
+startup (with `/p2p/<peerid>`). To call someone, pass them that address via
+`UYA_CONECTAR`. Two windows:
 
 ```bash
-# 1) Arrancá Alicia y copiá la dirección dialable que imprime:
+# 1) Start Alicia and copy the dialable address it prints:
 UYA_NOMBRE=Alicia UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7800 cargo run -p uya-llimphi --release
 #    → "uya: dialable en /ip4/127.0.0.1/tcp/7800/p2p/12D3KooW..."
 
-# 2) Conectá Beto a esa dirección:
+# 2) Connect Beto to that address:
 UYA_NOMBRE=Beto UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7801 \
   UYA_CONECTAR=/ip4/127.0.0.1/tcp/7800/p2p/12D3KooW... cargo run -p uya-llimphi --release
 ```
 
-Headless (sin ventana / sin GPU), mismo flujo con `uya-cli` (reporta cuadros y
-muestras de audio recibidas):
+Headless (no window / no GPU), same flow with `uya-cli` (reports received
+frames and audio samples):
 
 ```bash
 UYA_NOMBRE=Alicia UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7810 cargo run -p uya-cli
-UYA_NOMBRE=Beto UYA_CONECTAR=<dirección dialable de Alicia> cargo run -p uya-cli
+UYA_NOMBRE=Beto UYA_CONECTAR=<Alicia's dialable address> cargo run -p uya-cli
 ```
 
-Variables: `UYA_NOMBRE` (→ identidad), `UYA_ESCUCHAR` (multiaddr de escucha,
-default `/ip4/0.0.0.0/tcp/0`), `UYA_CONECTAR` (multiaddr(s) dialable(s),
-coma-separado), `UYA_TONO=1` (tono sintético si no hay micrófono).
+Variables: `UYA_NOMBRE` (→ identity), `UYA_ESCUCHAR` (listen multiaddr,
+default `/ip4/0.0.0.0/tcp/0`), `UYA_CONECTAR` (dialable multiaddr(s),
+comma-separated), `UYA_TONO=1` (synthetic tone if there is no microphone).
 
-**Entrar por nombre de sala** (en vez de pegar direcciones): todos con la misma
-`UYA_SALA`, sembrando el DHT con un rendezvous (`UYA_BOOTSTRAP`, p. ej. el primer
-nodo). Quien quiera puede dialear a cualquiera de la sala; la malla converge sola.
+**Joining by room name** (instead of pasting addresses): everyone with the same
+`UYA_SALA`, seeding the DHT with a rendezvous (`UYA_BOOTSTRAP`, e.g. the first
+node). Anyone can dial anyone in the room; the mesh converges on its own.
 
 ```bash
-# Anfitrión/rendezvous (anotá su dirección dialable):
+# Host/rendezvous (note its dialable address):
 UYA_NOMBRE=Ana UYA_SALA=oficina UYA_ESCUCHAR=/ip4/0.0.0.0/tcp/7880 cargo run -p uya-cli
-# Los demás: misma sala, bootstrap al anfitrión, SIN pegar direcciones:
-UYA_NOMBRE=Bea UYA_SALA=oficina UYA_BOOTSTRAP=<dirección de Ana> cargo run -p uya-cli
+# Everyone else: same room, bootstrap to the host, WITHOUT pasting addresses:
+UYA_NOMBRE=Bea UYA_SALA=oficina UYA_BOOTSTRAP=<Ana's address> cargo run -p uya-cli
 ```
 
-## Estado (MVP)
+## Status (MVP)
 
-Anda hoy, end-to-end y feo a propósito:
+Works today, end-to-end and ugly on purpose:
 
-- ✅ **Transporte P2P soberano** sobre card-net (`BrahmanNet`/libp2p): Noise +
-  Yamux + relay/dcutr/autonat — el mismo nodo que ayni/minga/agora, así que
-  sirve cruzando NAT, no sólo en LAN. Streams multiplexados por `/uya/transporte/1.0.0`.
-- ✅ **Identidad determinista por nombre**: el `ParticipanteId` de app y el
-  keypair ed25519 del transporte derivan ambos de `BLAKE3(nombre)`, así que el
-  **PeerId (y la multiaddr dialable) es estable entre arranques** — comparten raíz.
-- ✅ Presencia: entrar / salir / estado de medios.
-- ✅ **Video en ambos sentidos** + preview local. Comprimido con **JPEG por
-  cuadro** (MJPEG): ~40× menos bytes que RGBA crudo (192×144: 110 KB → ~2,8 KB),
-  sin estado inter-cuadro (baja latencia). El preview local va sin comprimir.
-- ✅ **Audio en ambos sentidos**, comprimido con **Opus** (~57×: 20 ms = 3840 B PCM
-  → ~67 B): captura de micrófono (`MicSource` a 48 kHz, o tono sintético con
-  `UYA_TONO=1`), downmix + resampleo a 48 kHz mono, encode Opus por frame de 20 ms;
-  en recepción un `OpusDecoder` por par decodifica a PCM y una `MezclaRemota`
-  resamplea al dispositivo + suma a los N pares, reproducida por `AudioSink` (cpal).
-  **Jitter buffer adaptativo**: latencia acotada (~120 ms, descarta ráfagas con
-  catch-up suave) + prebuffer (~40 ms, sin chasquido al arrancar / tras underrun).
-- ✅ **Llamadas grupales (malla N-a-N automática)**: uniéndote a un solo nodo
-  anfitrión, todos se descubren y auto-conectan. Cada nodo gossipea las
-  multiaddrs dialables que conoce (`Paquete::Pares`); el receptor disca las que
-  le faltan, con desempate por PeerId (sólo el menor inicia) para no duplicar
-  conexiones. Verificado con 3 nodos: cada uno ve y recibe video de los otros dos.
-- ✅ Cámara sintética por defecto (TestCard); webcam real v4l2 con `--features camara` en `uya-app`.
-- ✅ Toggle de cámara / micrófono y cuelgue.
-- ✅ **Conectar desde la UI**: la app muestra tu dirección dialable (para
-  compartir) y un campo donde pegás (Ctrl/Cmd+V) la de un par + Enter/botón —
-  ya no hace falta `UYA_CONECTAR`. (Funciona también por env, como antes.)
-- ✅ **Entrar por nombre de sala (DHT)**: `UYA_SALA=<nombre>` se anuncia como
-  provider de `BLAKE3("uya/sala/<nombre>")` en la Kademlia de `BrahmanNet` y
-  descubre a los demás providers, que entran a la malla solos. Verificado con
-  3 nodos (con `UYA_BOOTSTRAP` para sembrar el DHT): los tres se ven, sin pegar
-  direcciones.
-- ✅ **Zero-config en LAN (baliza multicast)**: en una sala, uya emite una baliza
-  UDP multicast `uya1\t<sala>\t<puerto>\t<peerid>` (grupo 239.255.42.99:7799) y
-  escucha las ajenas; al recibir una de su sala, reconstruye la multiaddr usando
-  la **IP de origen del datagrama** (resuelve el caso loopback → anda entre
-  máquinas) y disca. Room-aware, sin `UYA_BOOTSTRAP` ni `UYA_CONECTAR`. Se une y
-  emite por **todas las interfaces IPv4** (robusto en desktops con wifi+eth+docker+
-  VPN, donde el multicast por la interfaz default no llega). Verificado: 2 nodos
-  misma sala → se descubren y conectan solos. (También se sumó mDNS a
-  `shared/card/card-net` para poblar el DHT, pero la baliza propia es el camino
-  fiable de uya en LAN.)
+- ✅ **Sovereign P2P transport** over card-net (`BrahmanNet`/libp2p): Noise +
+  Yamux + relay/dcutr/autonat — the same node as ayni/minga/agora, so it
+  works across NAT, not just on the LAN. Streams multiplexed over `/uya/transporte/1.0.0`.
+- ✅ **Deterministic name-based identity**: the app's `ParticipanteId` and the
+  transport's ed25519 keypair both derive from `BLAKE3(name)`, so the
+  **PeerId (and the dialable multiaddr) is stable across startups** — they share a root.
+- ✅ Presence: join / leave / media state.
+- ✅ **Two-way video** + local preview. Compressed with **per-frame JPEG**
+  (MJPEG): ~40× fewer bytes than raw RGBA (192×144: 110 KB → ~2.8 KB),
+  with no inter-frame state (low latency). The local preview goes uncompressed.
+- ✅ **Two-way audio**, compressed with **Opus** (~57×: 20 ms = 3840 B PCM
+  → ~67 B): microphone capture (`MicSource` at 48 kHz, or synthetic tone with
+  `UYA_TONO=1`), downmix + resample to 48 kHz mono, Opus encode per 20 ms frame;
+  on receive, an `OpusDecoder` per peer decodes to PCM and a `MezclaRemota`
+  resamples to the device + sums the N peers, played back by `AudioSink` (cpal).
+  **Adaptive jitter buffer**: bounded latency (~120 ms, drops bursts with
+  smooth catch-up) + prebuffer (~40 ms, no click on startup / after underrun).
+- ✅ **Group calls (automatic N-to-N mesh)**: by joining a single host node,
+  everyone discovers and auto-connects. Each node gossips the dialable
+  multiaddrs it knows (`Paquete::Pares`); the receiver dials the ones it is
+  missing, with PeerId tie-break (only the lower one initiates) so as not to
+  duplicate connections. Verified with 3 nodes: each one sees and receives video from the other two.
+- ✅ Synthetic camera by default (TestCard); real v4l2 webcam with `--features camara` in `uya-app`.
+- ✅ Camera / microphone toggle and hang-up.
+- ✅ **Connect from the UI**: the app shows your dialable address (to
+  share) and a field where you paste (Ctrl/Cmd+V) a peer's + Enter/button —
+  `UYA_CONECTAR` is no longer needed. (Also works via env, as before.)
+- ✅ **Join by room name (DHT)**: `UYA_SALA=<name>` announces itself as a
+  provider of `BLAKE3("uya/sala/<name>")` in `BrahmanNet`'s Kademlia and
+  discovers the other providers, which join the mesh on their own. Verified with
+  3 nodes (with `UYA_BOOTSTRAP` to seed the DHT): all three see each other, without pasting
+  addresses.
+- ✅ **Zero-config on LAN (multicast beacon)**: in a room, uya emits a UDP
+  multicast beacon `uya1\t<room>\t<port>\t<peerid>` (group 239.255.42.99:7799) and
+  listens for others'; on receiving one from its room, it reconstructs the multiaddr using
+  the **source IP of the datagram** (resolves the loopback case → works between
+  machines) and dials. Room-aware, without `UYA_BOOTSTRAP` or `UYA_CONECTAR`. It joins and
+  emits on **all IPv4 interfaces** (robust on desktops with wifi+eth+docker+
+  VPN, where multicast on the default interface does not arrive). Verified: 2 nodes
+  same room → they discover and connect on their own. (mDNS was also added to
+  `shared/card/card-net` to populate the DHT, but uya's own beacon is the reliable
+  path on LAN.)
 
-## Pendiente (por orden)
+## Pending (in order)
 
-1. **Firma agora del `Hola`**: el PeerId ya es estable (deriva de `BLAKE3(nombre)`),
-   pero el nombre es auto-declarado. Atar la identidad a `agora`: firmar el `Hola`
-   con la clave agora y verificarla, para que nadie suplante un nombre.
-2. **Bootstrap público para WAN**: en LAN ya hay descubrimiento por baliza;
-   falta un rendezvous conocido por defecto para "entrar por nombre" entre redes
-   distintas (la baliza multicast no cruza routers).
-3. **Cancelación de eco acústico (AEC)**: cuando el micro capta el parlante.
-   Necesita un AEC real (y oídos/hardware para evaluarlo). El jitter buffer ya
-   es adaptativo.
-4. **SFU / selective forwarding** para grupos grandes (hoy malla completa: N² streams).
+1. **agora signature of `Hola`**: the PeerId is already stable (derives from `BLAKE3(name)`),
+   but the name is self-declared. Tie identity to `agora`: sign the `Hola`
+   with the agora key and verify it, so no one can impersonate a name.
+2. **Public bootstrap for WAN**: on LAN there is already beacon discovery;
+   what's missing is a known default rendezvous to "join by name" across
+   different networks (the multicast beacon does not cross routers).
+3. **Acoustic echo cancellation (AEC)**: when the mic picks up the speaker.
+   Needs a real AEC (and ears/hardware to evaluate it). The jitter buffer is already
+   adaptive.
+4. **SFU / selective forwarding** for large groups (today it's a full mesh: N² streams).

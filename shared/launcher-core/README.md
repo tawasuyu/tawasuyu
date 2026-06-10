@@ -1,39 +1,39 @@
-# launcher-core — layout del motor único de launcher
+# launcher-core — layout of the single launcher engine
 
-El **layout configurable** de un solo motor de launcher reusable. No tres
-launchers (mirada / shuma / wawa) sino **una** estructura de datos que se monta
-donde sea. Lo que varía por entorno NO vive aquí: el render (Llimphi en
-host/shuma, compositor en wawa) y la instrucción de ejecución
-(`app_bus::Launcher`) son adaptadores inyectados. Aquí vive sólo el *qué se
-dibuja y dónde*, como datos puros `no_std`.
+The **configurable layout** of a single reusable launcher engine. Not three
+launchers (mirada / shuma / wawa) but **one** data structure mounted
+anywhere. What varies per environment does NOT live here: the render (Llimphi in
+host/shuma, compositor in wawa) and the execution instruction
+(`app_bus::Launcher`) are injected adapters. Here lives only the *what gets
+drawn and where*, as pure `no_std` data.
 
-Generaliza el `WidgetSpec { kind, props }` de `mirada-launcher`: cada `Module`
-es un `kind` + props arbitrarios que el render interpreta.
+It generalizes the `WidgetSpec { kind, props }` from `mirada-launcher`: each `Module`
+is a `kind` + arbitrary props that the render interprets.
 
-## Qué expone
+## What it exposes
 
-- `Surface` — la superficie completa: `bars` + `docks` + `floating` + `app_menu`.
-  Se describe en `~/.config/tawasuyu/launcher.toml`, idéntica en host/shuma/wawa.
-- `Bar` (anclada a un `Edge`, slots start/center/end), `Dock` (con `tear_off`),
-  `FloatingCard` (tear-off materializado), `AppMenuBar` (menú global estilo mac).
-- `Module` (`kind` + `props: BTreeMap<String, Prop>`) con accesores tipados.
-- `Surface::desktop_default()` — escritorio de arranque sensato.
+- `Surface` — the complete surface: `bars` + `docks` + `floating` + `app_menu`.
+  Described in `~/.config/tawasuyu/launcher.toml`, identical in host/shuma/wawa.
+- `Bar` (anchored to an `Edge`, start/center/end slots), `Dock` (with `tear_off`),
+  `FloatingCard` (materialized tear-off), `AppMenuBar` (mac-style global menu).
+- `Module` (`kind` + `props: BTreeMap<String, Prop>`) with typed accessors.
+- `Surface::desktop_default()` — a sensible startup desktop.
 
-`#![no_std] + alloc`; sólo depende de `serde`. El render es `launcher-llimphi`.
+`#![no_std] + alloc`; depends only on `serde`. The render is `launcher-llimphi`.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Schema completo de `Surface`/`Bar`/`Dock`/`FloatingCard`/`AppMenuBar`/`Module`.
-- `Prop` portátil (bool/int/float/str) y accesores `str_prop`/`f64_prop`/`bool_prop`.
-- Default de escritorio + roundtrip TOML/JSON; tests del schema.
+### Done
+- Complete schema for `Surface`/`Bar`/`Dock`/`FloatingCard`/`AppMenuBar`/`Module`.
+- Portable `Prop` (bool/int/float/str) and accessors `str_prop`/`f64_prop`/`bool_prop`.
+- Desktop default + TOML/JSON roundtrip; schema tests.
 
-### Pendiente
-- Render en wawa (compositor) — hoy sólo lo consume `launcher-llimphi` en host.
-- Persistencia de tear-offs / posición de flotantes entre sesiones.
-- Kinds de módulo extra más allá de los builtin documentados.
+### Pending
+- Render in wawa (compositor) — today only `launcher-llimphi` consumes it on host.
+- Persistence of tear-offs / floating positions across sessions.
+- Extra module kinds beyond the documented builtins.
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/launcher-core` — schema de datos. Frontend: `launcher-llimphi`. Catálogo
-de apps + bus: `app-bus`.
+`shared/launcher-core` — data schema. Frontend: `launcher-llimphi`. App catalog
++ bus: `app-bus`.

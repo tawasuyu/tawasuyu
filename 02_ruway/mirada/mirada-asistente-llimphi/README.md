@@ -1,27 +1,28 @@
-# mirada-asistente — asistente conversacional del escritorio carmen
+# mirada-asistente — conversational assistant for the carmen desktop
 
-App Llimphi que traduce **lenguaje natural** a **comandos de `mirada-ctl`**
-consultando un LLM. La IA propone; el humano confirma antes de ejecutar.
+A Llimphi app that translates **natural language** into **`mirada-ctl`
+commands** by querying an LLM. The AI proposes; the human confirms before
+executing.
 
-## Qué hace, en una frase
+## What it does, in one sentence
 
-Escribís «manda esta ventana al escritorio 3», el LLM te devuelve
-`mirada-ctl send-to-workspace 3` con explicación. Pulsás **Ejecutar** y
-el asistente spawnea el comando. No firma nada, no toca el socket de
-`mirada-brain` directamente — pasa por la CLI pública para que un
-auditor vea los mismos eventos que verá un humano tipeando.
+You type "send this window to desktop 3", the LLM returns
+`mirada-ctl send-to-workspace 3` with an explanation. You press **Execute** and
+the assistant spawns the command. It signs nothing, it does not touch the
+`mirada-brain` socket directly — it goes through the public CLI so that an
+auditor sees the same events a human would by typing.
 
-## Cómo arrancarlo
+## How to start it
 
 ```bash
 cargo run -p mirada-asistente-llimphi --release
 ```
 
-Sin variables de entorno cae al backend **Mock** (pluma-llm) y devuelve
-respuestas fijas — útil para probar la UI sin gastar tokens.
+With no environment variables it falls back to the **Mock** backend (pluma-llm)
+and returns fixed responses — useful for testing the UI without spending tokens.
 
-Para consultar un LLM real, `pluma-llm::from_env()` autodetecta el
-primero que tenga credencial:
+To query a real LLM, `pluma-llm::from_env()` autodetects the first one that has
+a credential:
 
 | Variable                                | Backend     |
 |-----------------------------------------|-------------|
@@ -31,55 +32,55 @@ primero que tenga credencial:
 | `COHERE_API_KEY`                        | Cohere      |
 | `PLUMA_LLM_BACKEND=ollama`              | Ollama local|
 
-Para forzar uno en concreto: `PLUMA_LLM_BACKEND=anthropic` (o el que sea)
-sobreescribe la auto-detección.
+To force a specific one: `PLUMA_LLM_BACKEND=anthropic` (or whichever)
+overrides auto-detection.
 
-El asistente **necesita** que `mirada-ctl` esté en `PATH` para ejecutar.
-Si no lo está, el spawn falla con un mensaje legible y el operador puede
-instalarlo (`cargo install --path 02_ruway/mirada/mirada-ctl` o equivalente).
+The assistant **needs** `mirada-ctl` to be on `PATH` to execute.
+If it is not, the spawn fails with a legible message and the operator can
+install it (`cargo install --path 02_ruway/mirada/mirada-ctl` or equivalent).
 
-## Atajos de teclado
+## Keyboard shortcuts
 
-| Tecla    | Acción                                |
+| Key      | Action                                |
 |----------|---------------------------------------|
-| Enter    | Manda la pregunta al LLM              |
-| Esc      | Limpia la pregunta y descarta estado  |
-| Mouse    | Tipear normalmente; clic en botones   |
+| Enter    | Sends the question to the LLM         |
+| Esc      | Clears the question and discards state |
+| Mouse    | Type normally; click on buttons       |
 
-## Flujo
+## Flow
 
 ```
-[1] tipeás pregunta         "manda esta ventana al workspace 3"
+[1] you type a question     "send this window to workspace 3"
               ↓ Enter
-[2] consulta al LLM         pluma-llm → backend → respuesta JSON
+[2] query the LLM           pluma-llm → backend → JSON response
               ↓
-[3] propuesta visible       "mirada-ctl send-to-workspace 3"
-                            + explicación
-              ↓ Ejecutar
-[4] spawn mirada-ctl        captura stdout+stderr
+[3] visible proposal        "mirada-ctl send-to-workspace 3"
+                            + explanation
+              ↓ Execute
+[4] spawn mirada-ctl        captures stdout+stderr
               ↓
-[5] resultado visible       ✓ send-to-workspace ejecutado
+[5] visible result          ✓ send-to-workspace executed
 ```
 
-En cualquier paso, **Descartar** (o Esc) vuelve al estado inicial sin
-ejecutar nada.
+At any step, **Discard** (or Esc) returns to the initial state without
+executing anything.
 
-## Modelo de seguridad
+## Security model
 
-La IA **no ejerce capacidades**. Sólo produce una propuesta visible para
-el operador. El paso de "ejecutar" es siempre un acto humano: hasta que
-pulses el botón, el compositor sigue intacto. Esto es deliberado:
-acciones destructivas (`quit`, `close-focused`) las muestra igual con su
-explicación, y dejamos que vos decidas.
+The AI **exercises no capabilities**. It only produces a proposal visible to
+the operator. The "execute" step is always a human act: until you
+press the button, the compositor stays intact. This is deliberate:
+destructive actions (`quit`, `close-focused`) are shown all the same with their
+explanation, and we let you decide.
 
-El asistente **pasa por la CLI** `mirada-ctl` para que cualquier auditoría
-posterior — logs de proceso, history shell, monitoring de daemons — vea
-exactamente los mismos eventos que vería si los hubieras tipeado a mano.
-No hay un canal lateral al socket del brain.
+The assistant **goes through the CLI** `mirada-ctl` so that any subsequent
+audit — process logs, shell history, daemon monitoring — sees
+exactly the same events it would if you had typed them by hand.
+There is no side channel to the brain's socket.
 
-Para acciones que `mirada-ctl` no expone (re-anclar manifiestos, gestionar
-secretos), el asistente **no las propone**: la lista de acciones está
-en el system prompt y limitada a los subcomandos del CLI.
+For actions that `mirada-ctl` does not expose (re-anchoring manifests, managing
+secrets), the assistant **does not propose them**: the list of actions is
+in the system prompt and limited to the CLI's subcommands.
 
 ## Tests
 
@@ -87,42 +88,42 @@ en el system prompt y limitada a los subcomandos del CLI.
 cargo test -p mirada-asistente-llimphi
 ```
 
-Cubren la lógica del parser JSON (15 tests): markdown fences alrededor,
-prosa antes y después, JSON anidado, rechazo explícito del LLM, JSON
-desconocido, acción vacía, etc. Lógica pura — corren sin entorno gráfico
-ni red.
+They cover the JSON parser logic (15 tests): markdown fences around it,
+prose before and after, nested JSON, explicit LLM refusal, unknown
+JSON, empty action, etc. Pure logic — they run without a graphical
+environment or network.
 
-## Contexto del compositor
+## Compositor context
 
-Antes de cada consulta, el asistente intenta spawnear `mirada-ctl
-windows` y embebe su salida en el system prompt como "Estado actual del
-compositor". Eso le permite al LLM responder con valores concretos
-(`focus-window 5` con el id real, no inventado). Si el spawn falla
-(compositor caído, `mirada-ctl` no en PATH), seguimos con el prompt base
-y el LLM responde "a ciegas" — el flujo no se rompe, sólo pierde
-precisión.
+Before each query, the assistant tries to spawn `mirada-ctl
+windows` and embeds its output in the system prompt as "Current state of the
+compositor". That lets the LLM respond with concrete values
+(`focus-window 5` with the real id, not made up). If the spawn fails
+(compositor down, `mirada-ctl` not on PATH), we continue with the base prompt
+and the LLM responds "blind" — the flow does not break, it only loses
+precision.
 
-## Limitaciones conocidas
+## Known limitations
 
-- **Sin multi-turn.** Cada consulta es independiente; no se mantiene
-  contexto entre pedidos. Si querés refinar ("no, prefiero grid"), tenés
-  que reformular la pregunta entera. Ampliable, no urgente.
-- **El binario `mirada-ctl` debe estar en PATH** tanto para ejecutar
-  acciones como para obtener contexto. Si no, fallan legiblemente pero
-  el asistente no intenta otras rutas.
-- **El contexto se relee en cada consulta** — un spawn extra por
-  pregunta. Trivial frente al RTT del LLM, pero medible si el usuario
-  pregunta cien cosas seguidas.
+- **No multi-turn.** Each query is independent; no context is kept
+  between requests. If you want to refine ("no, I'd rather grid"), you have
+  to reformulate the whole question. Expandable, not urgent.
+- **The `mirada-ctl` binary must be on PATH** both to execute
+  actions and to obtain context. If not, they fail legibly but
+  the assistant does not try other routes.
+- **The context is re-read on every query** — one extra spawn per
+  question. Trivial against the LLM's RTT, but measurable if the user
+  asks a hundred things in a row.
 
-## Versión wawa
+## wawa version
 
-Existe un diseño técnico en `docs/ASISTENTE_WAWA.md` para portar este
-patrón al kernel bare-metal. Las piezas (app `asistente.wasm`, puente
-Akasha↔HTTP, firma humana vía `daemon-firma`) están descritas; el código
-está pendiente.
+There is a technical design in `docs/ASISTENTE_WAWA.md` for porting this
+pattern to the bare-metal kernel. The pieces (`asistente.wasm` app,
+Akasha↔HTTP bridge, human signing via `daemon-firma`) are described; the code
+is pending.
 
-## Estilo
+## Style
 
-Comentarios y mensajes de commit en español (convención del repo).
-Strings de UI a través de `rimay-localize` (ES/EN/QU). Para agregar una
-locale: editar los `.ftl` en `shared/rimay-localize/locales/`.
+Comments and commit messages in Spanish (the repo's convention).
+UI strings via `rimay-localize` (ES/EN/QU). To add a
+locale: edit the `.ftl` files in `shared/rimay-localize/locales/`.

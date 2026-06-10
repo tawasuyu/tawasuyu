@@ -1,35 +1,35 @@
-# auth — autenticación del escritorio tawasuyu
+# auth — tawasuyu desktop authentication
 
-Dominio de autenticación: ¿esta credencial es válida en esta máquina? Hoy un
-solo subcrate, **`auth-core`** (`brahman-auth`).
+Authentication domain: is this credential valid on this machine? Today a
+single subcrate, **`auth-core`** (`brahman-auth`).
 
 ## Subcrates
 
-- **`auth-core`** — núcleo agnóstico del backend. El consumidor (greeter
-  `mirada-greeter` y cualquier otro) llama a `Authenticator::authenticate`
-  sin saber si detrás hay PAM real o un mock:
-  - `Authenticator` (trait) + `AuthSession` (usuario validado) + `AuthError`.
-  - `PamAuthenticator` — PAM real en Linux (feature `pam`, default).
-  - `MockAuthenticator` — backend para tests/CI o builds sin la feature.
+- **`auth-core`** — backend-agnostic core. The consumer (the
+  `mirada-greeter` greeter and any other) calls `Authenticator::authenticate`
+  without knowing whether real PAM or a mock is behind it:
+  - `Authenticator` (trait) + `AuthSession` (validated user) + `AuthError`.
+  - `PamAuthenticator` — real PAM on Linux (feature `pam`, default).
+  - `MockAuthenticator` — backend for tests/CI or builds without the feature.
 
-No guarda usuarios ni tarjetas de identidad: la identidad de red vive en `card`.
-Esto es estrictamente validar credenciales contra el host.
+It does not store users nor identity cards: the network identity lives in `card`.
+This is strictly validating credentials against the host.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Trait `Authenticator` agnóstico con `AuthSession`/`AuthError`.
-- `PamAuthenticator` (PAM/`pam-client`+`users`, feature `pam`) y
-  `MockAuthenticator` para CI.
-- Consumido por `mirada-greeter` (login del escritorio).
-- Tests del backend mock.
+### Done
+- Agnostic `Authenticator` trait with `AuthSession`/`AuthError`.
+- `PamAuthenticator` (PAM/`pam-client`+`users`, feature `pam`) and
+  `MockAuthenticator` for CI.
+- Consumed by `mirada-greeter` (desktop login).
+- Mock backend tests.
 
-### Pendiente
-- Cobertura de PAM real (hoy sólo se ejercita el mock en CI).
-- Más métodos (biometría, token) tras el mismo trait.
-- Integración con la sesión de identidad de `card`/`agora` (hoy separados).
+### Pending
+- Real PAM coverage (today only the mock is exercised in CI).
+- More methods (biometrics, token) behind the same trait.
+- Integration with the `card`/`agora` identity session (today separate).
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/auth` — validación de credenciales del host. La identidad criptográfica
-de red es `card` + `agora`.
+`shared/auth` — host credential validation. The network cryptographic identity
+is `card` + `agora`.

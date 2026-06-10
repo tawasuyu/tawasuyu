@@ -1,13 +1,13 @@
 # media-source-vorbis
 
-Vorbis nativo (puro-Rust, vía `symphonia`) → `AudioSource + Seekable`.
+Native Vorbis (pure-Rust, via `symphonia`) → `AudioSource + Seekable`.
 
-Vorbis es el **lossy clásico libre de patentes** del tier nativo: el
-tercero del trío de audio abierto junto a **Opus** (lossy moderno) y
-**FLAC** (lossless). Decoder + demuxer Ogg puro-Rust, sin C ni
-patentes — compila a WASM y corre en wawa.
+Vorbis is the **classic patent-free lossy** of the native tier: the
+third of the open audio trio alongside **Opus** (modern lossy) and
+**FLAC** (lossless). Pure-Rust Ogg decoder + demuxer, no C and no
+patents — compiles to WASM and runs on wawa.
 
-## Uso
+## Usage
 
 ```rust
 use media_source_vorbis::VorbisSource;
@@ -15,25 +15,25 @@ use media_core::AudioSource;
 
 let mut src = VorbisSource::from_path("cancion.ogg")?;
 let mut buf = vec![0f32; 1024 * 2];
-src.fill(&mut buf, 48_000, 2); // resamplea/duplica canales al pedido del sink
+src.fill(&mut buf, 48_000, 2); // resamples/duplicates channels at the sink's request
 ```
 
-Misma forma que `media-source-flac` / `media-source-mp3`: decodea el
-archivo entero a `f32` intercalado al construir y reproduce en loop con
-resampleo lineal y varispeed. RAM = duración · sample_rate · channels ·
-4 B; para audios largos haría falta streaming por bloques.
+Same shape as `media-source-flac` / `media-source-mp3`: decodes the entire
+file to interleaved `f32` on construction and plays back in a loop with
+linear resampling and varispeed. RAM = duration · sample_rate · channels ·
+4 B; for long audio, block-based streaming would be needed.
 
 ## Tests
 
 ```bash
-cargo test -p media-source-vorbis   # decode + fill + seek sobre un Ogg Vorbis real (fixture)
+cargo test -p media-source-vorbis   # decode + fill + seek over a real Ogg Vorbis (fixture)
 ```
 
-El fixture `tests/fixtures/tone_440_stereo.ogg` (tono 440 Hz, 1 s,
-estéreo 48 kHz, generado con `ffmpeg -c:a libvorbis`) se decodifica
-end-to-end por symphonia y se valida duración, energía de señal y seek.
+The fixture `tests/fixtures/tone_440_stereo.ogg` (440 Hz tone, 1 s,
+stereo 48 kHz, generated with `ffmpeg -c:a libvorbis`) is decoded
+end-to-end by symphonia and duration, signal energy and seek are validated.
 
-## Generar un `.ogg` de prueba
+## Generate a test `.ogg`
 
 ```bash
 ffmpeg -f lavfi -i "sine=frequency=440:duration=2" -ac 2 -c:a libvorbis tono.ogg

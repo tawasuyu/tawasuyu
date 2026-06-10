@@ -26,31 +26,31 @@ Crates listed in [LEEME.md](LEEME.md).
 - DRM/KMS requires permissions: launch from a greeter, not a user terminal.
 - XDG portal is **complete**: `pluma`, `nada`, etc. can request file pickers via portal with no app-specific code.
 
-## Estado (2026-06-09)
+## Status (2026-06-09)
 
-### Hecho
-- **Persistencia de sesión** (`mirada-brain/src/session.rs`): la *forma* del escritorio (teselado por escritorio virtual, qué escritorio mostraba cada salida, foco) sobrevive al reinicio en RON; *window homes* re-ubican las ventanas reabiertas en su escritorio, ancladas por `app_id`.
-- **Zoom-Z**: agrupar ventanas en sub-espacios como **árbol fractal multinivel** (entrar/salir de profundidad arbitraria), con capas dormidas (suspende los frames de las profundas), agrupación persistida por `app_id`, y **constelaciones** por linaje de proceso (PID estable vía `SO_PEERCRED`) con Alt-Tab por constelación.
-- **Capabilities por ventana** (`mirada-brain/src/permisos.rs`): el clipboard (`zwlr_data_control`) y la inyección de teclas (`zwp_virtual_keyboard`) se niegan **por ejecutable** vía denylists en config.
-- **Throttle de frames de fondo**: las ventanas visibles sin foco reciben sus `frame` callbacks a 1 de cada N vblanks (divisor configurable, `1` = apagado) — dejan de quemar GPU detrás del foco.
-- **Drag-to-zone**: zonas de arrastre configurables (`config.ron` → `zones` / `zone_presets`); soltar fuera de zona deja la ventana flotando (overflow); `mirada-ctl cycle-zones` cicla presets.
-- **Vista espacial (Prezi)** (`mirada-app-llimphi/src/overview.rs` + base en el Cerebro): saltar entre escritorios sobre un plano espacial.
-- **Hot-reload de config** (`mirada-brain/src/watch.rs`): keymap, config y reglas son RON en `~/.config/mirada/` que se recargan en caliente, sin reiniciar.
-- **Multi-monitor completo**: hotplug aplicado en caliente (crear/destruir `OutputCtx`), scale + transform por salida (HiDPI mixto, rotación), layer-shell y reservas exclusivas por salida, disposición configurable (orden + dirección) y cursor sin dead-zones entre outputs.
-- **`mirada-wallpaper`**: daemon de wallpaper automático (Bing/NASA/carpeta local + provider solar tipo dynamic desktop) que reescribe `wallpaper_path` en `config.ron` y deja que el hot-reload del compositor aplique; wallpaper procedural por defecto sin bytes embebidos.
-- **El marco del escritorio migró a `pata`** (`02_ruway/pata`, Fase 10, 2026-06-03): el viejo `mirada-launcher-llimphi` se retiró. Su rol —barras/paneles/dock declarativos, widgets builtin (reloj/UTC, brillo, volumen, clipboard, bandeja, medidores con gradiente, astro), drawer Quake (shell por shuma-exec + IA), task manager estilo KDE, tarjetas flotantes conky, botón de inicio con menú nativo, tooltips— lo cubre y excede `pata`, portable Linux/wawa. Ver `02_ruway/pata/SDD.md`.
-- **Bandeja del sistema** (`tray`): la hospeda `pata` (un `org.kde.StatusNotifierWatcher`, zbus en hilo aparte) y pinta los applets modernos (nm-applet, blueman, clientes de chat) con su ícono; click → activa el item por D-Bus.
-- **Wallpaper** del escritorio (`config.ron` → `wallpaper_path`): PNG/JPEG/WebP escalado a la salida, compuesto al fondo (backend DRM). **Multi-monitor**: `outputs: [(name: "HDMI-A-1", wallpaper_path: "…", wallpaper_fit: "fill", order: 1)]` permite un fondo distinto por conector y elegir qué monitor es primario (`order` menor → primaria). `output_direction: "horizontal"` / `"vertical"` decide cómo se reparten las salidas. Lo que no se indique cae al global. Hot-reload aplica el cambio de wallpaper sin reiniciar (la disposición sí pide reinicio).
-- **Menú raíz estilo openbox**: click derecho sobre el fondo despliega comandos del usuario (`config.ron` → `menu`), con **submenús anidados** en cascada (hover abre la columna hija); click en una hoja la lanza (backend DRM).
-- **Barra inferior autoescondible** (`autohide` de pata): en reposo sólo una franja fina en el borde que la revela al pasar el puntero; subir al área libre la esconde.
-- `mirada-layout::outputs`: geometría pura de disposición multi-monitor, ahora **multi-DPI** (`Salida` + `disponer_logico`: reparte en coordenadas lógicas según la escala fraccional de cada output, así un 1× y un 2× comparten un plano continuo). Lista para cuando aterrice la enumeración de scanouts.
-- `asistente-puente` / `mirada-asistente-llimphi`: pipeline de propuestas extremo a extremo (modo daemon Unix socket + codec testeado, firma humana de propuestas por hash — Fase 60).
-- Compositor/portal/greeter sobre Llimphi-HAL; portal XDG completo (file pickers genéricos sin código por app). Menú principal + contextual (lotes 4–6).
-- **Greeter MVP cerrado**: recuerda último usuario y escritorio entre logins, botón «Entrar», `↑`/`↓` cambian de escritorio, ventana clavada (no arrastrable) y fondo de lluvia *Matrix* configurable (rusty rain). Backend PAM real + mock para iterar.
-- **Conmutación de VT robusta** (`Ctrl+Alt+F1…F12`): el backend DRM honra tanto el keysym dedicado `XF86Switch_VT_n` como `Ctrl+Alt+Fn` literal, con ciclo pause/resume de sesión (libseat) — independiente del keymap activo.
+### Done
+- **Session persistence** (`mirada-brain/src/session.rs`): the desktop's *shape* (tiling per virtual desktop, which desktop each output showed, focus) survives restart in RON; *window homes* re-place reopened windows on their desktop, anchored by `app_id`.
+- **Zoom-Z**: group windows into sub-spaces as a **multilevel fractal tree** (enter/exit arbitrary depth), with dormant layers (suspends the frames of the deep ones), grouping persisted by `app_id`, and **constellations** by process lineage (stable PID via `SO_PEERCRED`) with Alt-Tab per constellation.
+- **Per-window capabilities** (`mirada-brain/src/permisos.rs`): the clipboard (`zwlr_data_control`) and key injection (`zwp_virtual_keyboard`) are denied **per executable** via denylists in config.
+- **Background frame throttle**: visible unfocused windows receive their `frame` callbacks at 1 of every N vblanks (configurable divisor, `1` = off) — they stop burning GPU behind the focus.
+- **Drag-to-zone**: configurable drag zones (`config.ron` → `zones` / `zone_presets`); dropping outside a zone leaves the window floating (overflow); `mirada-ctl cycle-zones` cycles presets.
+- **Spatial view (Prezi)** (`mirada-app-llimphi/src/overview.rs` + base in the Brain): jump between desktops over a spatial plane.
+- **Config hot-reload** (`mirada-brain/src/watch.rs`): keymap, config and rules are RON in `~/.config/mirada/` that reload hot, without restarting.
+- **Full multi-monitor**: hotplug applied hot (create/destroy `OutputCtx`), scale + transform per output (mixed HiDPI, rotation), layer-shell and exclusive reservations per output, configurable layout (order + direction) and a cursor with no dead-zones between outputs.
+- **`mirada-wallpaper`**: automatic wallpaper daemon (Bing/NASA/local folder + dynamic-desktop-style solar provider) that rewrites `wallpaper_path` in `config.ron` and lets the compositor's hot-reload apply it; procedural wallpaper by default with no embedded bytes.
+- **The desktop shell migrated to `pata`** (`02_ruway/pata`, Phase 10, 2026-06-03): the old `mirada-launcher-llimphi` was retired. Its role —declarative bars/panels/dock, builtin widgets (clock/UTC, brightness, volume, clipboard, tray, gradient meters, astro), Quake drawer (shell via shuma-exec + AI), KDE-style task manager, floating conky cards, start button with native menu, tooltips— is covered and exceeded by `pata`, portable Linux/wawa. See `02_ruway/pata/SDD.md`.
+- **System tray** (`tray`): hosted by `pata` (an `org.kde.StatusNotifierWatcher`, zbus on a separate thread) and paints the modern applets (nm-applet, blueman, chat clients) with their icon; click → activates the item over D-Bus.
+- Desktop **wallpaper** (`config.ron` → `wallpaper_path`): PNG/JPEG/WebP scaled to the output, composited to the background (DRM backend). **Multi-monitor**: `outputs: [(name: "HDMI-A-1", wallpaper_path: "…", wallpaper_fit: "fill", order: 1)]` allows a different background per connector and lets you choose which monitor is primary (lower `order` → primary). `output_direction: "horizontal"` / `"vertical"` decides how the outputs are laid out. Anything unspecified falls back to the global. Hot-reload applies the wallpaper change without restarting (the layout does require a restart).
+- **Openbox-style root menu**: right-click on the background unfolds the user's commands (`config.ron` → `menu`), with **nested submenus** in cascade (hover opens the child column); clicking a leaf launches it (DRM backend).
+- **Auto-hiding bottom bar** (pata's `autohide`): at rest only a thin strip at the edge reveals it on pointer-over; moving into the free area hides it.
+- `mirada-layout::outputs`: pure multi-monitor layout geometry, now **multi-DPI** (`Salida` + `disponer_logico`: lays out in logical coordinates according to each output's fractional scale, so a 1× and a 2× share a continuous plane). Ready for when scanout enumeration lands.
+- `asistente-puente` / `mirada-asistente-llimphi`: end-to-end proposal pipeline (Unix-socket daemon mode + tested codec, human signing of proposals by hash — Phase 60).
+- Compositor/portal/greeter over Llimphi-HAL; complete XDG portal (generic file pickers with no per-app code). Main + context menu (batches 4–6).
+- **Greeter MVP closed**: remembers last user and desktop between logins, «Enter» button, `↑`/`↓` change desktop, pinned window (not draggable) and a configurable *Matrix* rain background (rusty rain). Real PAM backend + mock for iteration.
+- **Robust VT switching** (`Ctrl+Alt+F1…F12`): the DRM backend honors both the dedicated keysym `XF86Switch_VT_n` and literal `Ctrl+Alt+Fn`, with session pause/resume cycling (libseat) — independent of the active keymap.
 
-### Pendiente
-- Estabilidad del compositor frente a `weston`/`sway` (no es reemplazo en robustez todavía).
-- Compositor mínimo sobre el framebuffer de `wawa` (depende del runtime Llimphi winit-free).
-- Endurecimiento del flujo DRM/KMS de producción más allá del MVP (multi-GPU/NVIDIA propietario; hoy validado en Intel).
-- Cierre del stack asistente (más allá del pipeline base) y `bar-*` intercambiables como producto.
+### Pending
+- Compositor stability versus `weston`/`sway` (not yet a replacement in robustness).
+- Minimal compositor over `wawa`'s framebuffer (depends on the winit-free Llimphi runtime).
+- Hardening of the production DRM/KMS path beyond the MVP (multi-GPU/proprietary NVIDIA; today validated on Intel).
+- Closing the assistant stack (beyond the base pipeline) and swappable `bar-*` as a product.

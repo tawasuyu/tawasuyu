@@ -1,53 +1,53 @@
 # media-recorder-webm
 
-**Recorder unificado** del dominio: graba video **y** audio a un único
-`.webm` AV1+Opus nativo. Donde `media-recorder-av1` deja un `.ivf` de video
-y `media-recorder-wav` un `.wav` de audio en archivos separados, este los
-junta en el **contenedor nativo** de tawasuyu — sin ffmpeg.
+**Unified recorder** of the domain: records video **and** audio to a single
+native `.webm` AV1+Opus. Where `media-recorder-av1` leaves an `.ivf` of video
+and `media-recorder-wav` a `.wav` of audio in separate files, this one joins
+them into tawasuyu's **native container** — without ffmpeg.
 
 ```
 FrameSource ─ RecordedFrameSource ─→ media-encode-av1 (rav1e) ─┐
                                                                ├─ media-mux-webm ─→ .webm
-AudioSource ─ RecordedAudioSource ─→ media-encode-opus (opus) ─┘   (en stop())
+AudioSource ─ RecordedAudioSource ─→ media-encode-opus (opus) ─┘   (on stop())
 ```
 
-## Patrón
+## Pattern
 
-Idéntico a los otros recorders: un handle **clonable** (`WebmRecorder`,
-`Arc<Mutex<…>>`) más dos wrappers transparentes que se enchufan al pipeline:
+Identical to the other recorders: a **clonable** handle (`WebmRecorder`,
+`Arc<Mutex<…>>`) plus two transparent wrappers that plug into the pipeline:
 
-- `RecordedFrameSource<S: FrameSource>` — tee'a cada frame al encoder AV1.
-- `RecordedAudioSource<S: AudioSource>` — tee'a cada bloque al encoder Opus.
+- `RecordedFrameSource<S: FrameSource>` — tees each frame to the AV1 encoder.
+- `RecordedAudioSource<S: AudioSource>` — tees each block to the Opus encoder.
 
-Ambos son **no-ops** cuando el recorder no está armado: el inner ni se
-entera. Se arma con `start(path)` y se cierra con `stop()`, que devuelve el
-path y un `RecordingSummary { video_frames, audio_packets, … }`.
+Both are **no-ops** when the recorder is not armed: the inner never even
+notices. It is armed with `start(path)` and closed with `stop()`, which
+returns the path and a `RecordingSummary { video_frames, audio_packets, … }`.
 
 ```rust
 let rec = WebmRecorder::new();
 let mut vsrc = RecordedFrameSource::new(mi_video, rec.clone());
 let mut asrc = RecordedAudioSource::new(mi_audio, rec.clone());
 
-// Un frame debe pasar antes de armar (descubre las dimensiones).
+// A frame must pass before arming (discovers the dimensions).
 vsrc.tick(dt, &mut buf);
 rec.start("captura.webm")?;
-// … corre el pipeline …
+// … run the pipeline …
 let (path, resumen) = rec.stop()?;
 ```
 
-## Decisiones del códec
+## Codec decisions
 
-- **Video.** Las dimensiones se descubren del primer frame y se congelan al
-  `start()` (como en `media-recorder-av1`). rav1e bufferea: los paquetes
-  viven en RAM y el `.webm` se escribe entero en `stop()`.
-- **Audio.** El encoder Opus se crea **perezosamente** al primer bloque de
-  audio durante la grabación, capturando su sample-rate y canales. Como Opus
-  pide frames exactos (p.ej. 960 muestras @ 48 kHz), el audio entrante se
-  acumula en un buffer y se drena por frames completos; el resto parcial se
-  rellena con silencio recién en `stop()`.
-- **Degradación limpia.** Opus sólo admite 8/12/16/24/48 kHz y mono/estéreo.
-  Un formato fuera de eso **no rompe nada**: el audio se descarta (se refleja
-  en `RecordingSummary::audio_packets == 0`) y el `.webm` queda video-solo.
+- **Video.** Dimensions are discovered from the first frame and frozen at
+  `start()` (as in `media-recorder-av1`). rav1e buffers: the packets
+  live in RAM and the `.webm` is written entirely on `stop()`.
+- **Audio.** The Opus encoder is created **lazily** on the first audio block
+  during recording, capturing its sample-rate and channels. Since Opus
+  requests exact frames (e.g. 960 samples @ 48 kHz), the incoming audio is
+  accumulated in a buffer and drained by complete frames; the remaining
+  partial is padded with silence only at `stop()`.
+- **Clean degradation.** Opus only admits 8/12/16/24/48 kHz and mono/stereo.
+  A format outside that **breaks nothing**: the audio is discarded (reflected
+  in `RecordingSummary::audio_packets == 0`) and the `.webm` is left video-only.
 
 ## Tests
 
@@ -55,6 +55,6 @@ let (path, resumen) = rec.stop()?;
 cargo test -p media-recorder-webm
 ```
 
-Round-trip: graba frames + tono sintéticos → `.webm` → demux + decode
-nativo de ambos tracks (`media-source-webm`). Incluye el caso de
-degradación a video-solo con un rate no-Opus (44.1 kHz).
+Round-trip: records synthetic frames + tone → `.webm` → native demux +
+decode of both tracks (`media-source-webm`). Includes the degradation case
+to video-only with a non-Opus rate (44.1 kHz).

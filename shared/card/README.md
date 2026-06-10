@@ -1,36 +1,36 @@
-# card — identidad agnóstica de transporte
+# card — transport-agnostic identity
 
-Contrato de identidad y membresía **independiente del transporte**: claves
-Ed25519, `EspinaId` (hash de la clave pública), firmas y handshake de membresía
-de una "espina" (red privada). El mismo contrato lo implementan dos transportes
-distintos: `card-net` (libp2p) y `wawa-akasha` (protocolo propio de wawa).
+Identity and membership contract **independent of the transport**: Ed25519
+keys, `EspinaId` (hash of the public key), signatures and the membership handshake
+of an "espina" (private network). The same contract is implemented by two different
+transports: `card-net` (libp2p) and `wawa-akasha` (wawa's own protocol).
 
 ## Subcrates
 
-- **`card-core`** — el contrato agnóstico real: par Ed25519 → `EspinaId`,
-  `Card` firmada, `handshake` de membresía (un miembro presenta su tarjeta
-  firmada; el anfitrión la verifica contra la raíz de confianza de la espina).
-  Sólo bytes firmados — no sabe de libp2p ni Akasha.
-- **`card-net`** — espina dorsal P2P sobre **libp2p**: discovery (mDNS +
+- **`card-core`** — the actual agnostic contract: Ed25519 pair → `EspinaId`,
+  signed `Card`, membership `handshake` (a member presents its signed
+  card; the host verifies it against the espina's root of trust).
+  Only signed bytes — it knows nothing of libp2p or Akasha.
+- **`card-net`** — P2P backbone over **libp2p**: discovery (mDNS +
   Kademlia DHT), gossipsub, NAT traversal (Circuit Relay v2 + DCUtR + AutoNAT).
-  Implementa el contrato de `card-core` sobre libp2p. Lo consume `khipu`.
-- **`card-wit`** — **[DORMIDO]** binding WIT/wasm del contrato. Se reactiva
-  cuando `card` cruce a apps WASM; hoy el contrato real es `card-core`.
+  Implements the `card-core` contract over libp2p. Consumed by `khipu`.
+- **`card-wit`** — **[DORMANT]** WIT/wasm binding of the contract. It reactivates
+  when `card` crosses to WASM apps; today the actual contract is `card-core`.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- `card-core`: identidad Ed25519 + `EspinaId` + handshake de membresía (contrato
-  agnóstico declarado como la fuente de verdad).
-- `card-net`: discovery (mDNS+DHT), gossipsub y NAT traversal completo
-  (Relay v2 + DCUtR + AutoNAT); discovery de personas por `DhtKey::Persona`.
+### Done
+- `card-core`: Ed25519 identity + `EspinaId` + membership handshake (agnostic
+  contract declared as the source of truth).
+- `card-net`: discovery (mDNS+DHT), gossipsub and complete NAT traversal
+  (Relay v2 + DCUtR + AutoNAT); person discovery by `DhtKey::Persona`.
 
-### Pendiente
-- `card-wit`: dormido — binding WASM pendiente de reactivación.
-- Espejo del contrato sobre `wawa-akasha` (transporte wawa) aún por cablear.
-- Endurecer revocación / rotación de membresía de espina.
+### Pending
+- `card-wit`: dormant — WASM binding pending reactivation.
+- Mirror of the contract over `wawa-akasha` (wawa transport) still to be wired.
+- Harden espina membership revocation / rotation.
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/card` — contrato de identidad. `card-net` lo lleva a libp2p (khipu);
-`agora` cubre firma/confianza de más alto nivel.
+`shared/card` — identity contract. `card-net` carries it to libp2p (khipu);
+`agora` covers higher-level signing/trust.

@@ -1,54 +1,54 @@
 # arje-card-llimphi
 
-Card de escritorio (Llimphi) con el **estado vivo del init `arje`**. Es la
-"card escritorio (estado de arje)" que el README de arje promete; `arje-card`
-nunca lo fue (quedó como alias de tipos de `card-core`).
+Desktop card (Llimphi) with the **live state of the `arje` init**. It is the
+"desktop card (arje state)" that arje's README promises; `arje-card` never was
+(it stayed as a type alias of `card-core`).
 
 ```sh
 cargo run -p arje-card-llimphi
 ```
 
-## Qué muestra
+## What it shows
 
-Seis secciones, refrescadas por polling cada 2 s (mismo patrón que
+Six sections, refreshed by polling every 2 s (same pattern as
 `minga-explorer-llimphi` / `nakui-explorer-llimphi`):
 
-| Sección | Fuente | Requiere daemon |
+| Section | Source | Requires daemon |
 |---|---|---|
-| **Aislamiento** | `arje_incarnate::caps::CapabilitySet::detect()` — namespaces creables (N/7) | no (solo `/proc`) |
-| **Privilegios** | idem — `CAP_SYS_ADMIN`, user-ns, `max_user_namespaces` | no |
-| **cgroups** | idem — v2 unified/híbrido/legacy + delegación + ruta | no |
-| **Unidades** | **vivas** vía `Engine` sobre arje-bus (`sandokan-monitor-core` + `sandokan-arje-engine`): estado + telemetría reales. Sin bus alcanzable, cae al scan estático del card store (`$ARJE_CARDS_DIR`) | no (Engine si hay bus; si no, filesystem) |
-| **Brain** | socket introspect — reglas vivas + entropía/muestras/tipos de evento | sí (brain) |
-| **Audit log** | socket introspect — seq del head + últimas 6 entradas | sí (brain) |
+| **Isolation** | `arje_incarnate::caps::CapabilitySet::detect()` — creatable namespaces (N/7) | no (only `/proc`) |
+| **Privileges** | same — `CAP_SYS_ADMIN`, user-ns, `max_user_namespaces` | no |
+| **cgroups** | same — v2 unified/hybrid/legacy + delegation + path | no |
+| **Units** | **live** via `Engine` over arje-bus (`sandokan-monitor-core` + `sandokan-arje-engine`): real state + telemetry. With no reachable bus, falls back to the static scan of the card store (`$ARJE_CARDS_DIR`) | no (Engine if there is a bus; otherwise, filesystem) |
+| **Brain** | introspect socket — live rules + entropy/samples/event types | yes (brain) |
+| **Audit log** | introspect socket — head seq + last 6 entries | yes (brain) |
 
-Las cuatro primeras siempre están disponibles (la misma rutina que corre
-`Incarnator::new` antes de encarnar una Card, más una lectura del store). Las
-dos del brain se consultan por su socket; si el brain no corre, la card degrada
-a un banner "brain no disponible" y el resto sigue sirviendo.
+The first four are always available (the same routine that `Incarnator::new`
+runs before incarnating a Card, plus a read of the store). The two brain ones
+are queried over its socket; if the brain is not running, the card degrades to a
+"brain unavailable" banner and the rest keeps serving.
 
-La caps **no se cachea**: sysctl/LSM/cgroup-delegation cambian entre boots (a
-veces en caliente), por eso se re-detecta en cada tick.
+The caps are **not cached**: sysctl/LSM/cgroup-delegation change between boots
+(sometimes hot), which is why they are re-detected on every tick.
 
-## Acciones
+## Actions
 
-- **Verificar audit** (header, solo con brain vivo): pide `VerifyAudit` al brain
-  (recorre la cadena `prev_sha` hasta el génesis validando cada entry contra el
-  CAS) y muestra el resultado en un banner. Read-only.
+- **Verify audit** (header, only with a live brain): asks the brain for
+  `VerifyAudit` (walks the `prev_sha` chain back to genesis, validating each
+  entry against the CAS) and shows the result in a banner. Read-only.
 
-## Socket del brain
+## Brain socket
 
-`$ENTE_BRAIN_SOCK`, o `$XDG_RUNTIME_DIR/ente-brain.sock` (fallback `$TMPDIR`,
-`/tmp`) — misma convención que `arje-zero` y `brainctl`.
+`$ENTE_BRAIN_SOCK`, or `$XDG_RUNTIME_DIR/ente-brain.sock` (fallback `$TMPDIR`,
+`/tmp`) — same convention as `arje-zero` and `brainctl`.
 
-## No incluido a propósito
+## Deliberately not included
 
-- **GC del CAS** (`GcCas`): destructivo — borra todo blob no alcanzable desde el
-  head del audit salvo los pasados en `extra_roots`. Sin los hashes WASM de las
-  Cards eso borraría apps vivas. El GC correcto lo posee el kernel/brain, no un
-  dashboard de monitoreo.
-- **Stream del audit** (`StreamAudit`): los dashboards del repo usan polling 2 s;
-  el audit ya se refresca a ese ritmo. Un stream con hilo reconectante sería la
-  única excepción no idiomática.
+- **CAS GC** (`GcCas`): destructive — deletes every blob not reachable from the
+  audit head except those passed in `extra_roots`. Without the Cards' WASM
+  hashes that would delete live apps. The correct GC is owned by the
+  kernel/brain, not a monitoring dashboard.
+- **Audit stream** (`StreamAudit`): the repo's dashboards use 2 s polling; the
+  audit already refreshes at that rate. A stream with a reconnecting thread would
+  be the only non-idiomatic exception.
 
-Reactivo a `wawa-config` (theme/accent).
+Reactive to `wawa-config` (theme/accent).

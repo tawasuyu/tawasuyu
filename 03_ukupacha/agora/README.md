@@ -41,16 +41,16 @@ cargo run --release -p agora-app
 - Self-attestation is preserved but flagged separately from third-party endorsement.
 - Plays well with `minga`: when both are active, agora rides the same `BrahmanNet` node (one PeerId, one Kademlia, two stream protocols).
 
-## Estado (2026-06-10)
+## Status (2026-06-10)
 
-### Hecho
-- Núcleo de identidad completo: `agora-core` (identidades, claims, atestaciones Ed25519, multifirma, lifecycle) + `agora-graph` (TrustGraph con corroboración y política negociada) + `agora-store` (persistencia JSON atómica con re-verificación al cargar) + `agora-keystore` (semillas cifradas Argon2 + ChaCha20-Poly1305).
-- Rotación/revocación de claves end-to-end (SDD #4, fases 1–5): primitivos en `agora-core`, tombstones en el TrustGraph, persistencia en el snapshot, CLI `identidad rotar/revocar`, y espejo en el kernel Wawa (`verificar_revocacion`, canónicos a `format`).
-- Plano de control sobre Wawa: overlay de revocación cableado al kernel + seam de boot que ancla las concesiones offline (§14.1.3), ceremonia `wawa concesion`, y transporte TAP host↔guest que cierra el bridge Akasha-over-Ether.
-- Transporte P2P: `agora-gossip` (anti-entropía agnóstica de transporte) + `agora-net-brahman` (puente libp2p `/agora/gossip/1.0.0` convergente con minga sobre un solo `BrahmanNet`). Discovery de personas por `DhtKey::Persona` (Fase 2b).
-- UI Llimphi `agora-app` con tiles (identidades, atestaciones, multifirma, política, capacidad, release) + menú principal y contextuales; `agora-channel` (forja de propuestas/release) con demo y test e2e de mudanza.
+### Done
+- Complete identity core: `agora-core` (identities, claims, Ed25519 attestations, multisig, lifecycle) + `agora-graph` (TrustGraph with corroboration and negotiated policy) + `agora-store` (atomic JSON persistence with re-verification on load) + `agora-keystore` (encrypted seeds Argon2 + ChaCha20-Poly1305).
+- End-to-end key rotation/revocation (SDD #4, phases 1–5): primitives in `agora-core`, tombstones in the TrustGraph, persistence in the snapshot, CLI `identidad rotar/revocar`, and mirror in the Wawa kernel (`verificar_revocacion`, canonicalized to `format`).
+- Control plane over Wawa: revocation overlay wired to the kernel + boot seam that anchors the offline grants (§14.1.3), `wawa concesion` ceremony, and host↔guest TAP transport that closes the Akasha-over-Ether bridge.
+- P2P transport: `agora-gossip` (transport-agnostic anti-entropy) + `agora-net-brahman` (libp2p bridge `/agora/gossip/1.0.0` convergent with minga over a single `BrahmanNet`). Person discovery by `DhtKey::Persona` (Phase 2b).
+- Llimphi UI `agora-app` with tiles (identities, attestations, multisig, policy, capability, release) + main and context menus; `agora-channel` (proposal/release forge) with demo and e2e migration test.
 
-### Pendiente
-- Tabla de capacidades por hash de bytecode (WAWA.md §14.1.3): **code-complete** — primitivos (`firmar/verificar_capacidad`), espejo kernel (`verificar_concesion_capacidad`), intersección cableada en la carga (`permisos_efectivos_de`), tool de operador (`agora-cli wawa concesion`), anclaje en boot (`sembrar_concesion`) y ceremonia automatizada (`scripts/wawa-conceder-genesis.sh`) ya existen. Resta sólo el **paso de operador**: correr la ceremonia con la seed slot-0 (siembra `assets/concesiones/`) y luego flipear `MODO_CAPACIDAD_ESTRICTO_GLOBAL = true`.
-- Convergencia de red más allá del par agora/minga: aún sin descubrimiento masivo ni hardening de rate-limit en escenarios adversarios reales.
-- Las 17 aplicaciones priorizadas en `APLICACIONES.md` son diseño/roadmap; sólo el sustrato (identidad + grafo de confianza) está implementado.
+### Pending
+- Capability table by bytecode hash (WAWA.md §14.1.3): **code-complete** — primitives (`firmar/verificar_capacidad`), kernel mirror (`verificar_concesion_capacidad`), intersection wired at load (`permisos_efectivos_de`), operator tool (`agora-cli wawa concesion`), boot anchoring (`sembrar_concesion`) and automated ceremony (`scripts/wawa-conceder-genesis.sh`) already exist. Only the **operator step** remains: run the ceremony with the slot-0 seed (seeds `assets/concesiones/`) and then flip `MODO_CAPACIDAD_ESTRICTO_GLOBAL = true`.
+- Network convergence beyond the agora/minga pair: still no mass discovery nor rate-limit hardening in real adversarial scenarios.
+- The 17 applications prioritized in `APLICACIONES.md` are design/roadmap; only the substrate (identity + trust graph) is implemented.

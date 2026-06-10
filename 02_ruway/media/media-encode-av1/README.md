@@ -1,26 +1,27 @@
 # media-encode-av1
 
-Encoder **AV1 nativo** (puro-Rust, vía [`rav1e`](https://crates.io/crates/rav1e))
-desde frames RGBA → contenedor **IVF**. Es la **contraparte exacta** de
-`media-source-av1`: ese crate *decodea* AV1; éste lo *produce*. Cierra el
-ciclo encode↔decode del formato de video nativo de tawasuyu (`PLAN.md`
-§6.quinquies) **sin tocar ffmpeg en ningún extremo**.
+**Native AV1** encoder (pure-Rust, via [`rav1e`](https://crates.io/crates/rav1e))
+from RGBA frames → **IVF** container. It is the **exact counterpart** of
+`media-source-av1`: that crate *decodes* AV1; this one *produces* it. It
+closes the encode↔decode cycle of tawasuyu's native video format
+(`PLAN.md` §6.quinquies) **without touching ffmpeg at either end**.
 
-`rav1e` es el encoder de referencia AV1 en Rust (Xiph/AOMedia). Con
-`default-features = false` sale el camino escalar (sin nasm) — mismo
-criterio que `rav1d` en el decoder; compila a WASM y corre en wawa.
+`rav1e` is the reference AV1 encoder in Rust (Xiph/AOMedia). With
+`default-features = false` you get the scalar path (no nasm) — same
+criterion as `rav1d` in the decoder; it compiles to WASM and runs on
+wawa.
 
-## Por qué no hay encoder H.264/H.265
+## Why there is no H.264/H.265 encoder
 
-No es restricción de esfuerzo ni de licencia de fuente: es **patentes**.
-H.264/H.265/AAC están cubiertos por pools (Via LA / Access Advance) que
-gravan las *técnicas del bitstream*, da igual el lenguaje en que las
-implementes. AV1/Opus se diseñaron royalty-free a propósito — por eso son
-el formato nativo y son los únicos que tawasuyu *produce* en código propio.
-H.264 entra/sale por el puente `shared/foreign-av` (ffmpeg), y se
-transcodifica a AV1 al importar.
+It is not an effort or source-license restriction: it is **patents**.
+H.264/H.265/AAC are covered by pools (Via LA / Access Advance) that levy
+the *bitstream techniques*, no matter the language you implement them
+in. AV1/Opus were designed royalty-free on purpose — that is why they
+are the native format and the only ones tawasuyu *produces* in its own
+code. H.264 enters/exits through the `shared/foreign-av` (ffmpeg)
+bridge, and is transcoded to AV1 on import.
 
-## Uso
+## Usage
 
 ```rust
 use media_encode_av1::{Av1Encoder, Av1EncoderConfig};
@@ -28,30 +29,30 @@ use media_encode_av1::{Av1Encoder, Av1EncoderConfig};
 let cfg = Av1EncoderConfig { width: 320, height: 240, fps_num: 30, fps_den: 1, ..Default::default() };
 let mut enc = Av1Encoder::new(cfg.clone())?;
 let mut packets = Vec::new();
-for frame_rgba in &frames {            // cada uno width*height*4 bytes RGBA
-    packets.extend(enc.encode_rgba(frame_rgba)?);  // rav1e tiene latencia: los primeros frames no emiten paquete
+for frame_rgba in &frames {            // each one width*height*4 bytes RGBA
+    packets.extend(enc.encode_rgba(frame_rgba)?);  // rav1e has latency: the first frames emit no packet
 }
-packets.extend(enc.finish()?);         // vacía la tubería
+packets.extend(enc.finish()?);         // drains the pipeline
 media_encode_av1::write_ivf_file("salida.ivf", &cfg, &packets)?;
 ```
 
-O en un tiro con `encode_rgba_to_ivf_file(path, cfg, frames)`.
+Or in one shot with `encode_rgba_to_ivf_file(path, cfg, frames)`.
 
-- **Input**: RGBA8 fila por fila, `width*height*4` bytes — el mismo formato
-  que escupe el `FrameSource` del decoder.
-- **Conversión RGBA→YUV420**: inverso exacto de la del decoder (**BT.601
-  full range**, sin escalado 16-235); la luma es por pixel, el croma
-  promedia cada bloque 2×2. Así el round-trip preserva color.
-- **`quantizer`** 0..=255 (modo cuantizador constante, menor = mejor
-  calidad); **`speed`** 0..=10 (mayor = más rápido).
-- **Salida IVF**: cabecera `DKIF` + FourCC `AV01` + dims + framerate + nº
-  de frames; por paquete 12 bytes (tamaño u32 + timestamp u64) + bitstream.
+- **Input**: RGBA8 row by row, `width*height*4` bytes — the same format
+  the decoder's `FrameSource` spits out.
+- **RGBA→YUV420 conversion**: exact inverse of the decoder's (**BT.601
+  full range**, no 16-235 scaling); luma is per pixel, chroma averages
+  each 2×2 block. This way the round-trip preserves color.
+- **`quantizer`** 0..=255 (constant quantizer mode, lower = better
+  quality); **`speed`** 0..=10 (higher = faster).
+- **IVF output**: `DKIF` header + FourCC `AV01` + dims + framerate + nº
+  of frames; per packet 12 bytes (size u32 + timestamp u64) + bitstream.
 
 ## Demo
 
 ```bash
 cargo run -p media-encode-av1 --example gradient --release
-# escribe /tmp/gradient.ivf — reprodúcelo con media-app o media-source-av1
+# writes /tmp/gradient.ivf — play it back with media-app or media-source-av1
 ```
 
 ## Tests
@@ -60,9 +61,9 @@ cargo run -p media-encode-av1 --example gradient --release
 cargo test -p media-encode-av1
 ```
 
-- `rgba_to_yuv_solid_colors` — matriz de color (blanco/rojo).
-- `encodes_to_valid_ivf` — N frames in → N paquetes out + cabecera válida.
+- `rgba_to_yuv_solid_colors` — color matrix (white/red).
+- `encodes_to_valid_ivf` — N frames in → N packets out + valid header.
 - **`encode_then_decode_preserves_color`** (`tests/roundtrip.rs`) —
-  round-trip real: encodea aquí → escribe IVF → **decodea con
-  `media-source-av1`** → verifica que el color central sobrevive. Prueba
-  que el ciclo nativo cierra sin ffmpeg.
+  real round-trip: encode here → write IVF → **decode with
+  `media-source-av1`** → verify that the central color survives. It
+  proves that the native cycle closes without ffmpeg.

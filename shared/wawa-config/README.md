@@ -1,35 +1,35 @@
-# wawa-config — bus de configuración del SO
+# wawa-config — OS configuration bus
 
-El **bus de configuración** del escritorio/SO: un archivo TOML canónico
-(`~/.config/wawa/config.toml`) + un watcher (`notify`) que reemite cambios en
-vivo, sobre una capa de sistema (`/etc/wawa/config.toml`) que el usuario puede
-override-ar. Los consumidores (apps Llimphi del escritorio) se suscriben y
-reaccionan al vuelo: cambiar theme/acento se propaga **sin reiniciar**.
+The desktop/OS **configuration bus**: a canonical TOML file
+(`~/.config/wawa/config.toml`) + a watcher (`notify`) that re-emits live
+changes, over a system layer (`/etc/wawa/config.toml`) that the user can
+override. Consumers (desktop Llimphi apps) subscribe and react on the fly:
+changing theme/accent propagates **without restarting**.
 
-UI-agnóstico: **no depende de `llimphi`**. El adaptador que ensambla un `Theme`
-efectivo a partir del `WawaConfig` vive en `wawa-config-llimphi`.
+UI-agnostic: **it does not depend on `llimphi`**. The adapter that assembles an
+effective `Theme` out of the `WawaConfig` lives in `wawa-config-llimphi`.
 
-## Qué expone
+## What it exposes
 
-- `WawaConfig` — la configuración (variant de theme, accent override, …).
-- Carga con merge `/etc/wawa` (sistema) bajo override de usuario.
-- Watcher (`notify`) que reemite el config al cambiar el archivo.
+- `WawaConfig` — the configuration (theme variant, accent override, …).
+- Load with merge of `/etc/wawa` (system) under user override.
+- Watcher (`notify`) that re-emits the config when the file changes.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Archivo canónico TOML + watcher `notify` (live reload).
-- Capa de sistema `/etc/wawa/config.toml` mergeada bajo el override de usuario.
-- Auto-apply del acento al theme global; ≈10 tests.
-- Consumido por nada, cosmos, nakui, dominium, shuma, nahual, minga, arje,
-  wawa-panel y `wawactl` (CLI).
+### Done
+- Canonical TOML file + `notify` watcher (live reload).
+- System layer `/etc/wawa/config.toml` merged under the user override.
+- Auto-apply of the accent to the global theme; ≈10 tests.
+- Consumed by nada, cosmos, nakui, dominium, shuma, nahual, minga, arje,
+  wawa-panel and `wawactl` (CLI).
 
-### Pendiente
-- Esquema de config más amplio (más que theme/acento).
-- Validación/migración de versiones del TOML.
-- Consumo desde el SO wawa bare-metal (hoy es el escritorio host).
+### Pending
+- Broader config schema (beyond theme/accent).
+- TOML version validation/migration.
+- Consumption from the bare-metal wawa OS (today it is the host desktop).
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/wawa-config` — fuente de verdad UI-agnóstica. Adaptador de theme:
+`shared/wawa-config` — UI-agnostic source of truth. Theme adapter:
 `wawa-config-llimphi`. CLI: `wawactl`.

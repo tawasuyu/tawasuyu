@@ -1,63 +1,63 @@
 # ayni
 
-> `ayni` (quechua: *reciprocidad*). Chat persona-a-persona soberano, local-first,
-> sin servidor. La conversación tratada como un grafo criptográfico reproducible
-> (BLAKE3 + DAG + postcard), identidad `agora` Ed25519, transporte por
+> `ayni` (quechua: *reciprocity*). Sovereign person-to-person chat, local-first,
+> serverless. The conversation treated as a reproducible cryptographic graph
+> (BLAKE3 + DAG + postcard), `agora` Ed25519 identity, transport over
 > `chasqui`/`minga`/`akasha`.
 
-Documento de diseño y tesis completos en [LEEME.md](LEEME.md). Esta página es
-el resumen de estado vivo.
+Full design document and thesis in [LEEME.md](LEEME.md). This page is
+the live status summary.
 
 ## Crates
 
-| Crate | Rol |
+| Crate | Role |
 |---|---|
-| `ayni-core` | DAG de mensajes firmados + membresía/confianza/recibos (`no_std`+alloc). |
-| `ayni-crypto` | firma Ed25519 sobre agora + E2EE 1:1 (X25519/HKDF/ChaCha20-Poly1305). |
-| `ayni-sync` | trait `Transporte` + `EnlaceTcp` + anti-entropía (diff Merkle). |
-| `ayni-minga` | `EnlaceMinga`: transporte P2P sobre libp2p. |
-| `ayni-store` | persistencia del DAG + blobs de adjuntos (dedup) sobre sled. |
-| `ayni-app` | núcleo de aplicación: transporte + store + cifrado + adjuntos + confianza. |
-| `ayni-cli` | chat de terminal (bin `ayni`), frontend delgado sobre `ayni-app`. |
-| `ayni-llimphi` | UI Llimphi: charla + gente + adjuntos + recibos. |
-| `ayni-index` | búsqueda semántica local (rimay embeddings + coseno). |
-| `ayni-ai` | multilienzo: traducir/resumir/tono vía `pluma-llm`. |
+| `ayni-core` | DAG of signed messages + membership/trust/receipts (`no_std`+alloc). |
+| `ayni-crypto` | Ed25519 signing over agora + 1:1 E2EE (X25519/HKDF/ChaCha20-Poly1305). |
+| `ayni-sync` | `Transporte` trait + `EnlaceTcp` + anti-entropy (Merkle diff). |
+| `ayni-minga` | `EnlaceMinga`: P2P transport over libp2p. |
+| `ayni-store` | DAG persistence + attachment blobs (dedup) over sled. |
+| `ayni-app` | application core: transport + store + encryption + attachments + trust. |
+| `ayni-cli` | terminal chat (bin `ayni`), thin frontend over `ayni-app`. |
+| `ayni-llimphi` | Llimphi UI: chat + people + attachments + receipts. |
+| `ayni-index` | local semantic search (rimay embeddings + cosine). |
+| `ayni-ai` | multilienzo: translate/summarize/tone via `pluma-llm`. |
 
-## Instalación
+## Install
 
 ```sh
-cargo run --release -p ayni-cli       # chat de terminal
-cargo run --release -p ayni-llimphi   # UI gráfica
+cargo run --release -p ayni-cli       # terminal chat
+cargo run --release -p ayni-llimphi   # graphical UI
 ```
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
+### Done
 
-- **P0–P7 cerradas** (ver LEEME.md fase a fase). `ayni-core` con DAG firmado,
-  orden topológico determinista y 17 tests verdes (membresía/confianza/recibos
-  incluidos).
-- **E2EE 1:1** (P2): `CanalSeguro` X25519 + HKDF-SHA256 + ChaCha20-Poly1305, par
-  derivado de la misma semilla agora; el cable sólo ve ciphertext.
-- **Sin servidor** (P3): anti-entropía por diff de Merkle, persistencia sled, y
-  `EnlaceMinga` (transporte P2P real sobre libp2p) tras el mismo trait `Transporte`.
-- **Inteligencia local** (P4): `ayni-index` (búsqueda coseno) + `ayni-ai`
-  (multilienzo traducir/resumir/tono, Mock determinista sin credenciales).
-- **Cross-app** (P5): `Carga::Adjunto` como referencia viva por hash, blobs
-  deduplicados y verificados por contenido.
-- **Ayni en wawa** (P6/P6+): el mismo `ayni-core` corre como app WASM en el SO
-  bare-metal; persiste la conversación en el grafo de objetos akasha y la difunde
-  por la red propia del SO (EtherType `0x88B7`, sin TCP/IP) con verificación de
-  firma al recibir.
-- **`ayni-app` + UI completa**: transporte intercambiable (`--transporte tcp|minga`),
-  store local-first, adjuntar con UX, recibos simétricos; GUI de dos columnas
-  (gente/charla) con grafo de confianza.
-- **Menús** (lote 1): menú principal + menús contextuales en la UI Llimphi.
+- **P0–P7 closed** (see LEEME.md phase by phase). `ayni-core` with signed DAG,
+  deterministic topological order, and 17 green tests (membership/trust/receipts
+  included).
+- **1:1 E2EE** (P2): `CanalSeguro` X25519 + HKDF-SHA256 + ChaCha20-Poly1305, pair
+  derived from the same agora seed; the wire only sees ciphertext.
+- **Serverless** (P3): anti-entropy by Merkle diff, sled persistence, and
+  `EnlaceMinga` (real P2P transport over libp2p) behind the same `Transporte` trait.
+- **Local intelligence** (P4): `ayni-index` (cosine search) + `ayni-ai`
+  (multilienzo translate/summarize/tone, deterministic Mock without credentials).
+- **Cross-app** (P5): `Carga::Adjunto` as a live reference by hash, blobs
+  deduplicated and content-verified.
+- **Ayni on wawa** (P6/P6+): the same `ayni-core` runs as a WASM app on the
+  bare-metal OS; it persists the conversation in the akasha object graph and broadcasts it
+  over the OS's own network (EtherType `0x88B7`, no TCP/IP) with signature
+  verification on receipt.
+- **`ayni-app` + complete UI**: interchangeable transport (`--transporte tcp|minga`),
+  local-first store, attaching with UX, symmetric receipts; two-column GUI
+  (people/chat) with trust graph.
+- **Menus** (batch 1): main menu + contextual menus in the Llimphi UI.
 
-### Pendiente
+### Pending
 
-- **MLS de grupo** (RFC 9420 / OpenMLS): chat de grupo con forward + post-compromise
-  secrecy. `CanalSeguro` es el seam donde entrará; el canal de hoy es 1:1 sin PCS.
-- **NAT traversal**: deuda de `minga`, no de ayni (hoy TCP directo + DHT en LAN).
-- **En la app de wawa**: anti-entropía completa sobre L2 (hoy se ve lo nuevo en
-  vivo, falta reconciliar historial) y cifrado de sesión.
+- **Group MLS** (RFC 9420 / OpenMLS): group chat with forward + post-compromise
+  secrecy. `CanalSeguro` is the seam where it will land; today's channel is 1:1 without PCS.
+- **NAT traversal**: `minga`'s debt, not ayni's (today direct TCP + DHT on LAN).
+- **In the wawa app**: complete anti-entropy over L2 (today the new arrives live,
+  history reconciliation is missing) and session encryption.

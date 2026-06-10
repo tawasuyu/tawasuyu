@@ -1,48 +1,49 @@
 # media-recorder-av1
 
-Captura los frames de cualquier `FrameSource` a un `.ivf` **AV1 nativo**
-(vía `media-encode-av1`). Es la **contraparte de video** de
-`media-recorder-wav`: ese tee'a el audio a WAV, éste tee'a los frames a
-AV1 — sin ffmpeg.
+Captures the frames of any `FrameSource` to a **native AV1** `.ivf`
+(via `media-encode-av1`). It is the **video counterpart** of
+`media-recorder-wav`: that one tees the audio to WAV, this one tees the
+frames to AV1 — without ffmpeg.
 
-`Av1Recorder` es un handle clonable (`Arc<Mutex<…>>`); `RecordedFrameSource`
-lo envuelve sobre un `FrameSource` y encodea cada frame **si está armado**.
-Sin armar, el wrapper es un no-op transparente — el mismo patrón de
-composición que `RecordedAudioSource`.
+`Av1Recorder` is a clonable handle (`Arc<Mutex<…>>`); `RecordedFrameSource`
+wraps it over a `FrameSource` and encodes each frame **if it is armed**.
+Unarmed, the wrapper is a transparent no-op — the same composition
+pattern as `RecordedAudioSource`.
 
-## Uso
+## Usage
 
 ```rust
 use media_recorder_av1::{Av1Recorder, RecordedFrameSource};
 use media_core::FrameSource;
 
-let rec = Av1Recorder::new();                       // 30fps, calidad media por defecto
+let rec = Av1Recorder::new();                       // 30fps, medium quality by default
 let mut src = RecordedFrameSource::new(mi_fuente, rec.clone());
 
 let mut buf = Vec::new();
-src.tick(dt, &mut buf);                             // un frame para descubrir dimensiones
-rec.start("captura.ivf")?;                          // congela dims + arma el encoder
-for _ in 0..frames { src.tick(dt, &mut buf); }      // cada frame se encodea al vuelo
-let (path, n) = rec.stop()?;                        // vacía la tubería + escribe el .ivf
+src.tick(dt, &mut buf);                             // one frame to discover dimensions
+rec.start("captura.ivf")?;                          // freezes dims + arms the encoder
+for _ in 0..frames { src.tick(dt, &mut buf); }      // each frame is encoded on the fly
+let (path, n) = rec.stop()?;                        // drains the pipeline + writes the .ivf
 ```
 
-El `.ivf` resultante lo reproduce `media-source-av1` (o `media-app`) sin
-volver a tocar ffmpeg.
+The resulting `.ivf` is played back by `media-source-av1` (or
+`media-app`) without touching ffmpeg again.
 
-## Particularidades del códec
+## Codec particularities
 
-- **Dimensiones fijas**: se descubren del primer frame que pasa por el
-  wrapper (como sr/channels en el recorder de audio) y se congelan al
-  `start()`. Frames de otro tamaño se descartan (`dropped_frames()`).
-- **fps declarado, no medido**: `Av1RecorderSettings { fps_num, fps_den,
-  quantizer, speed }` fija la cadencia que va a la cabecera IVF; no se
-  infiere del `dt` real.
-- **Cierre diferido**: rav1e bufferea (lookahead), así que los paquetes se
-  acumulan en RAM y el `.ivf` se escribe entero en `stop()`, cuando ya se
-  conoce el conteo de frames. Para grabaciones muy largas convendría
-  escribir incremental (num_frames=0); hoy se prioriza la simplicidad.
-- El `tick` retiene el lock mientras encodea — igual tradeoff que el
-  writer sync de hound en `media-recorder-wav`.
+- **Fixed dimensions**: discovered from the first frame that passes
+  through the wrapper (like sr/channels in the audio recorder) and
+  frozen at `start()`. Frames of another size are dropped
+  (`dropped_frames()`).
+- **fps declared, not measured**: `Av1RecorderSettings { fps_num,
+  fps_den, quantizer, speed }` fixes the cadence that goes to the IVF
+  header; it is not inferred from the real `dt`.
+- **Deferred close**: rav1e buffers (lookahead), so the packets pile up
+  in RAM and the `.ivf` is written whole at `stop()`, once the frame
+  count is known. For very long recordings it would be better to write
+  incrementally (num_frames=0); today simplicity is prioritized.
+- The `tick` holds the lock while it encodes — same tradeoff as hound's
+  sync writer in `media-recorder-wav`.
 
 ## Tests
 
@@ -50,7 +51,7 @@ volver a tocar ffmpeg.
 cargo test -p media-recorder-av1
 ```
 
-- estados (`NoFormatYet` / `NotArmed`) + transparencia sin armar.
-- **`record_then_decode_preserves_color`** (`tests/roundtrip.rs`) — tee de
-  un `FrameSource` sólido → `.ivf` → **decode con `media-source-av1`** →
-  verifica el color. El camino de captura cierra sin ffmpeg.
+- states (`NoFormatYet` / `NotArmed`) + transparency when unarmed.
+- **`record_then_decode_preserves_color`** (`tests/roundtrip.rs`) — tee
+  of a solid `FrameSource` → `.ivf` → **decode with `media-source-av1`**
+  → verify the color. The capture path closes without ffmpeg.

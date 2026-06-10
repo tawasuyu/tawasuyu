@@ -1,26 +1,26 @@
 # media-source-av1
 
-Decode **AV1 nativo** del dominio `media` — puro-Rust, sin C, sin
-patentes, compila a WASM. AV1 (+ Opus) es el formato de medios **nativo**
-de tawasuyu (PLAN.md §6.quinquies): los códecs ajenos entran por
-`shared/foreign-av` (puente ffmpeg), que además transcodifica a AV1 al
-importar.
+**Native AV1** decode from the `media` domain — pure-Rust, no C, no
+patents, compiles to WASM. AV1 (+ Opus) is tawasuyu's **native** media
+format (PLAN.md §6.quinquies): foreign codecs enter through
+`shared/foreign-av` (ffmpeg bridge), which also transcodes to AV1 on
+import.
 
-## Tres capas
+## Three layers
 
-| módulo | rol | depende de rav1d |
-|--------|-----|:---:|
-| `ivf`  | demuxer del contenedor IVF (cabecera + temporal units) | no |
-| `obu`  | splitter de OBUs + LEB128 (inspección de bitstream) | no |
-| `Av1VideoSource` | demux + decode AV1 → `media_core::FrameSource` (RGBA) | sí (feature `decode`, default) |
+| module | role | depends on rav1d |
+|--------|------|:---:|
+| `ivf`  | demuxer for the IVF container (header + temporal units) | no |
+| `obu`  | OBU splitter + LEB128 (bitstream inspection) | no |
+| `Av1VideoSource` | demux + decode AV1 → `media_core::FrameSource` (RGBA) | yes (feature `decode`, default) |
 
-Las dos primeras son puro-Rust sin dependencias: sirven para parsear
-contenedores e inspeccionar el bitstream sin arrastrar el decoder. El
-decode real va sobre [`rav1d`](https://crates.io/crates/rav1d) (port
-puro-Rust de dav1d), con `default-features = false` para sacar el feature
-`asm` (que exigiría nasm/gas) — decode escalar, portable a wawa.
+The first two are pure-Rust with no dependencies: they serve to parse
+containers and inspect the bitstream without dragging in the decoder. The
+actual decode runs on [`rav1d`](https://crates.io/crates/rav1d) (pure-Rust
+port of dav1d), with `default-features = false` to drop the `asm` feature
+(which would require nasm/gas) — scalar decode, portable to wawa.
 
-## Uso
+## Usage
 
 ```rust
 use media_source_av1::Av1VideoSource;
@@ -30,18 +30,18 @@ use std::time::Duration;
 let mut src = Av1VideoSource::open("clip.ivf")?;
 let (w, h) = src.dimensions();
 let mut rgba = Vec::new();
-// En el bucle Elm: tick(dt) respeta el framerate del contenedor.
+// In the Elm loop: tick(dt) respects the container's framerate.
 if let Some((w, h)) = src.tick(Duration::from_millis(33), &mut rgba) {
-    // rgba tiene w*h*4 bytes listos para subir a llimphi-surface.
+    // rgba has w*h*4 bytes ready to upload to llimphi-surface.
 }
 ```
 
-`Av1VideoSource` implementa `FrameSource` + `Seekable`. El modelo es de
-bajo retardo (`max_frame_delay = 1`): una temporal unit entra, un frame
-sale. El seek reabre el archivo y descarta frames hasta el objetivo
-(O(n), pero correcto: el decoder ve el sequence header).
+`Av1VideoSource` implements `FrameSource` + `Seekable`. The model is
+low-latency (`max_frame_delay = 1`): one temporal unit in, one frame out.
+Seek reopens the file and discards frames up to the target (O(n), but
+correct: the decoder sees the sequence header).
 
-## Generar un IVF de prueba
+## Generate a test IVF
 
 ```bash
 ffmpeg -f lavfi -i testsrc=size=320x240:rate=30:duration=2 \
@@ -49,21 +49,21 @@ ffmpeg -f lavfi -i testsrc=size=320x240:rate=30:duration=2 \
 cargo run -p media-source-av1 --example av1_decode --release -- clip.ivf
 ```
 
-## Audio: par nativo
+## Audio: the native pair
 
-Este crate cubre sólo el video. El audio nativo de tawasuyu es **Opus**
-(`media-source-opus`, puro-Rust vía opus-wave); el lossless es **FLAC**
-(`media-source-flac`, vía symphonia). Un `.webm` AV1+Opus se reproduce
-100% nativo uniendo `media-source-av1` + `media-source-opus` por
-`media-source-webm` (demux Matroska). H.264/H.265/AAC entran por
+This crate covers video only. tawasuyu's native audio is **Opus**
+(`media-source-opus`, pure-Rust via opus-wave); the lossless one is **FLAC**
+(`media-source-flac`, via symphonia). A `.webm` AV1+Opus plays back 100%
+native by joining `media-source-av1` + `media-source-opus` through
+`media-source-webm` (Matroska demux). H.264/H.265/AAC enter through
 `shared/foreign-av`.
 
 ## Tests
 
 ```bash
-cargo test -p media-source-av1   # demux, OBU split, y decode de un IVF AV1 real (fixture)
+cargo test -p media-source-av1   # demux, OBU split, and decode of a real AV1 IVF (fixture)
 ```
 
-El fixture `tests/fixtures/testsrc_64x48.ivf` (933 B) es un clip AV1 real
-generado con SVT-AV1; el test `decodes_real_fixture` lo decodifica de
-punta a punta por rav1d y valida dimensiones, alpha y variedad de color.
+The fixture `tests/fixtures/testsrc_64x48.ivf` (933 B) is a real AV1 clip
+generated with SVT-AV1; the test `decodes_real_fixture` decodes it
+end-to-end through rav1d and validates dimensions, alpha and color variety.

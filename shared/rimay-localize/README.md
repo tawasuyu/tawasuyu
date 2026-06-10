@@ -1,34 +1,34 @@
-# rimay-localize — localización (i18n) declarativa
+# rimay-localize — declarative localization (i18n)
 
-Catálogos de cadenas por idioma + una API de lookup minimalista para las apps de
-tawasuyu. Los catálogos son **datos** (JSON) cargables en tiempo de ejecución; el
-código pide una clave y un idioma y obtiene la cadena, con interpolación de
-placeholders `{nombre}`.
+Per-language string catalogs + a minimalist lookup API for tawasuyu's
+apps. The catalogs are **data** (JSON) loadable at runtime; the
+code asks for a key and a language and gets the string, with interpolation of
+`{nombre}` placeholders.
 
-## Qué expone
+## What it exposes
 
-- `Lang` — etiqueta de idioma (BCP-47 simplificado).
-- `Catalog` — mapa clave → cadena para un idioma.
-- `Localizer` — colección de catálogos + idioma activo + fallback.
-- Lookup con sustitución de placeholders por argumentos con nombre.
+- `Lang` — language tag (simplified BCP-47).
+- `Catalog` — key → string map for one language.
+- `Localizer` — collection of catalogs + active language + fallback.
+- Lookup with placeholder substitution by named arguments.
 
-## Nota de naming
+## Naming note
 
-`rimay` es el dominio de lenguaje/voz; este crate es su utilidad de localización
-transversal (no es parte del núcleo de `rimay`).
+`rimay` is the language/voice domain; this crate is its cross-cutting
+localization utility (it is not part of `rimay`'s core).
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Carga de catálogos JSON por idioma.
-- Lookup con idioma activo + fallback y tests.
-- Interpolación de placeholders `{nombre}`.
+### Done
+- Loading of JSON catalogs per language.
+- Lookup with active language + fallback and tests.
+- Interpolation of `{nombre}` placeholders.
 
-### Pendiente
-- Pluralización compleja (ICU) y reglas por idioma.
-- Detección del idioma del sistema (hoy lo decide la app).
-- Herramienta de extracción/validación de claves faltantes.
+### Pending
+- Complex pluralization (ICU) and per-language rules.
+- Detection of the system language (today the app decides it).
+- Tool for extracting/validating missing keys.
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/rimay-localize` — utilidad i18n transversal para apps tawasuyu.
+`shared/rimay-localize` — cross-cutting i18n utility for tawasuyu apps.

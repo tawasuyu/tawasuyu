@@ -1,28 +1,28 @@
-# wawa-config-llimphi — adaptador Llimphi de wawa-config
+# wawa-config-llimphi — Llimphi adapter for wawa-config
 
-Ensambla el `Theme` efectivo de Llimphi a partir del `WawaConfig` (variant +
-accent override). Existe para **no obligar a `wawa-config` a depender de
-`llimphi-theme`** — así el bus de configuración sigue siendo UI-agnóstico y este
-crate hace el puente hacia el render.
+Assembles the effective Llimphi `Theme` out of the `WawaConfig` (variant +
+accent override). It exists to **avoid forcing `wawa-config` to depend on
+`llimphi-theme`** — so the configuration bus stays UI-agnostic and this
+crate bridges towards the render.
 
-## Qué expone
+## What it exposes
 
-- Conversión `WawaConfig` → `Theme` de Llimphi (variant + acento).
-- Helper para que una app Llimphi obtenga su theme efectivo y reaccione al
-  watcher de `wawa-config`.
+- `WawaConfig` → Llimphi `Theme` conversion (variant + accent).
+- Helper so a Llimphi app obtains its effective theme and reacts to the
+  `wawa-config` watcher.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Adaptador `WawaConfig` → `Theme` (variant + accent override).
-- Cableado a varios consumidores (cosmos, nakui, nahual-shell, nada, dominium,
+### Done
+- `WawaConfig` → `Theme` adapter (variant + accent override).
+- Wired to several consumers (cosmos, nakui, nahual-shell, nada, dominium,
   shuma).
 - ≈4 tests.
 
-### Pendiente
-- Mapear más campos de config al theme conforme `wawa-config` crezca.
-- Transiciones/animación al cambiar theme en vivo (hoy aplica directo).
+### Pending
+- Map more config fields to the theme as `wawa-config` grows.
+- Transitions/animation on live theme change (today it applies directly).
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/wawa-config-llimphi` — frontend de theme sobre `shared/wawa-config`.
+`shared/wawa-config-llimphi` — theme frontend over `shared/wawa-config`.

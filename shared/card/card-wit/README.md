@@ -1,34 +1,34 @@
 # brahman-card-wit
 
-> **DORMIDO (2026-05-30).** Capa 3 de Brahman. Ver `/BRAHMAN.md`.
+> **DORMANT (2026-05-30).** Layer 3 of Brahman. See `/BRAHMAN.md`.
 
-Parser opcional de contratos WIT (`.wit` texto → `Vec<card_core::WitInterface>`, uno por `world`),
-sobre `wit-parser` (sin `wasm-tools`/`wit-component`).
+Optional parser for WIT contracts (`.wit` text → `Vec<card_core::WitInterface>`, one per `world`),
+over `wit-parser` (without `wasm-tools`/`wit-component`).
 
-## Estado: relegado, no borrado
+## Status: shelved, not deleted
 
-La visión original de Brahman incluía **módulos agnósticos descritos por interfaz WIT** (eventualmente WASM).
-Esa capa **nunca se ejecutó**:
+Brahman's original vision included **agnostic modules described by a WIT interface** (eventually WASM).
+That layer **never ran**:
 
-- No existe ningún archivo `.wit` en el workspace.
-- Ningún crate de producción depende de este crate — sólo `examples/brahman-wit-info.rs` y la
-  **dev-dependency** de `card-sidecar`.
+- No `.wit` file exists in the workspace.
+- No production crate depends on this crate — only `examples/brahman-wit-info.rs` and the
+  **dev-dependency** of `card-sidecar`.
 
-Se conserva (funciona, 210 LOC, reversible) por si algún día aparecen `.wit` reales. **No asumir que está
-en ninguna ruta de build.**
+It is kept (it works, 210 LOC, reversible) in case real `.wit`s ever appear. **Don't assume it's
+on any build path.**
 
-## El contrato agnóstico real y vigente
+## The real and current agnostic contract
 
 ```
 shared/card (formato Card)  +  card-handshake (handshake nativo Rust)  +  DhtKey (namespacing en la DHT)
 ```
 
-El tipo de metadata `WitInterface` vive en **`card-core`** (no aquí) y **sí** lo usa el broker
-(`chasqui-broker`) para matching estructural — es metadata opcional viva. Lo único dormido es *este parser*
-de archivos `.wit` inexistentes.
+The `WitInterface` metadata type lives in **`card-core`** (not here) and **is** used by the broker
+(`chasqui-broker`) for structural matching — it's live optional metadata. The only dormant thing is *this parser*
+of nonexistent `.wit` files.
 
-## Si se decide revivir WIT
+## If WIT is to be revived
 
-Requeriría: (1) que el Init lea `<modulo>/wit/protocol.wit` en el descubrimiento y construya
-`ResolvedCard::from_conscious(card, wit)`; (2) que algún módulo de producción publique un `.wit`.
-Hasta entonces, este crate es tooling latente (`cargo run -p card-wit --example brahman-wit-info -- <archivo.wit>`).
+It would require: (1) the Init reading `<modulo>/wit/protocol.wit` at discovery and building
+`ResolvedCard::from_conscious(card, wit)`; (2) some production module publishing a `.wit`.
+Until then, this crate is latent tooling (`cargo run -p card-wit --example brahman-wit-info -- <archivo.wit>`).

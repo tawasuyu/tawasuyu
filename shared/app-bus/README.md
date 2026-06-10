@@ -1,38 +1,38 @@
-# app-bus — bus de eventos in-proc para apps Llimphi
+# app-bus — in-proc event bus for Llimphi apps
 
-Bus de **publish/subscribe** tipado, síncrono y en memoria, para coordinar apps
-dentro del mismo proceso. Cubre tres familias de eventos transversales: **foco**
-(qué app/ventana lo tiene), **navegación** (abrir/cerrar/enfocar una app o ruta)
-y **notificaciones** efímeras.
+A typed, synchronous, in-memory **publish/subscribe** bus to coordinate apps
+within the same process. It covers three families of cross-cutting events: **focus**
+(which app/window holds it), **navigation** (open/close/focus an app or route)
+and ephemeral **notifications**.
 
-## Qué expone
+## What it exposes
 
-- `AppBus` — handle compartible (`Clone`, internamente `Arc<RwLock<…>>`).
-- `Event` — enum transversal: `FocusChanged` / `Navigate` / `CloseApp` / `Notify`.
+- `AppBus` — shareable handle (`Clone`, internally `Arc<RwLock<…>>`).
+- `Event` — cross-cutting enum: `FocusChanged` / `Navigate` / `CloseApp` / `Notify`.
 - `NotifyLevel` — `Info` / `Warn` / `Error`.
-- `Subscription` — guard RAII: al soltarlo se cancela la suscripción.
-- `publish(Event)` entrega de forma síncrona a todos los suscriptores; entrega
-  anidada si un callback publica desde su propio handler.
+- `Subscription` — RAII guard: dropping it cancels the subscription.
+- `publish(Event)` delivers synchronously to all subscribers; nested delivery
+  if a callback publishes from its own handler.
 
-## No-objetivos
+## Non-goals
 
-- No es un bus interproceso ni de red (eso es Akasha / app-channel).
-- No persiste eventos ni garantiza entrega tras reinicio.
-- No ordena por prioridad.
+- It is not an inter-process or network bus (that is Akasha / app-channel).
+- It does not persist events nor guarantee delivery after restart.
+- It does not order by priority.
 
-## Estado (2026-05-31)
+## Status (2026-05-31)
 
-### Hecho
-- Bus pub/sub completo: `publish`, `subscribe`, cancelación por guard RAII.
-- Enum `Event` con foco/navegación/cierre/notificaciones.
-- Consumido por `launcher-llimphi` (dispara navegación/lanzamiento).
+### Done
+- Complete pub/sub bus: `publish`, `subscribe`, cancellation via RAII guard.
+- `Event` enum with focus/navigation/close/notifications.
+- Consumed by `launcher-llimphi` (fires navigation/launch).
 
-### Pendiente
-- Adaptador multiproceso (hoy estrictamente in-proc).
-- Entrega diferida / cola (hoy reentrancia anidada síncrona).
-- Filtrado por tipo de evento en `subscribe` (hoy el callback filtra).
+### Pending
+- Multi-process adapter (today strictly in-proc).
+- Deferred delivery / queue (today synchronous nested reentrancy).
+- Filtering by event type in `subscribe` (today the callback filters).
 
-## Lugar en el repo
+## Place in the repo
 
-`shared/app-bus` — canal in-proc de grano fino. El plano de control a más alto
-nivel es `shared/sandokan` (ver su SDD.md).
+`shared/app-bus` — fine-grained in-proc channel. The higher-level control plane
+is `shared/sandokan` (see its SDD.md).

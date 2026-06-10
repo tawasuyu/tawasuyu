@@ -1,41 +1,41 @@
 # nahual-video-viewer-llimphi
 
-Visor/reproductor de video sobre Llimphi — el tercer visor de la familia
-nahual, junto a `nahual-text-viewer-llimphi` y `nahual-image-viewer-llimphi`.
+Video viewer/player on Llimphi — the third viewer of the nahual
+family, alongside `nahual-text-viewer-llimphi` and `nahual-image-viewer-llimphi`.
 
-Crate fino, mismo patrón que sus hermanos:
+Thin crate, same pattern as its siblings:
 
-- **`VideoViewerState::open_av1(path)`** — abre un `.ivf` con el decoder
-  **AV1 nativo** (`media-source-av1`, puro-Rust, sin ffmpeg). Arranca
-  reproduciendo.
-- **`VideoViewerState::from_source(src, …)`** — envuelve cualquier
-  `Box<dyn FrameSource>` (p.ej. un puente `shared/foreign-av` para
-  H.264, o el `TestCard` de media-core). El viewer no sabe de códecs.
-- **`VideoViewerState::tick(dt)`** — avanza la fuente; cuando hay frame
-  nuevo arma un `peniko::Image` y lo deja listo para pintar.
-- **`video_viewer_view(state, palette)`** — header (`nombre · W×H · ▶/⏸ ·
-  mm:ss / mm:ss`) + cuerpo con el frame aspect-fit, o placeholder de
-  estado / error.
+- **`VideoViewerState::open_av1(path)`** — opens an `.ivf` with the
+  **native AV1** decoder (`media-source-av1`, pure-Rust, no ffmpeg). Starts
+  playing.
+- **`VideoViewerState::from_source(src, …)`** — wraps any
+  `Box<dyn FrameSource>` (e.g. a `shared/foreign-av` bridge for
+  H.264, or media-core's `TestCard`). The viewer knows nothing of codecs.
+- **`VideoViewerState::tick(dt)`** — advances the source; when there's a new
+  frame it builds a `peniko::Image` and leaves it ready to paint.
+- **`video_viewer_view(state, palette)`** — header (`name · W×H · ▶/⏸ ·
+  mm:ss / mm:ss`) + body with the aspect-fit frame, or a state /
+  error placeholder.
 
-## Render por frame vs. llimphi-surface
+## Per-frame render vs. llimphi-surface
 
-Pinta cada frame con `View::image` (reconstruye un `peniko::Image`). Es
-simple, reusable y devuelve un `View<Msg>` sin plumbing de wgpu — sirve
-hasta ~1080p. Para 4K@60 fps el camino de cero-copia es `llimphi-surface`
-(textura GPU persistente), como hace `media-app`; eso requiere acceso
-directo al device/queue y no cabe en un componente que sólo retorna
-`View<Msg>`. Ese trade-off está documentado en el doc del crate.
+It paints each frame with `View::image` (rebuilding a `peniko::Image`). It is
+simple, reusable and returns a `View<Msg>` without wgpu plumbing — good
+up to ~1080p. For 4K@60 fps the zero-copy path is `llimphi-surface`
+(persistent GPU texture), as `media-app` does; that requires direct
+access to the device/queue and doesn't fit in a component that only returns
+`View<Msg>`. That trade-off is documented in the crate's doc.
 
 ## Demo
 
 ```bash
-# archivo AV1
+# AV1 file
 cargo run -p nahual-video-viewer-llimphi --example video_viewer_demo --release -- clip.ivf
-# procedural (TestCard de media-core), sin archivo
+# procedural (media-core's TestCard), no file
 cargo run -p nahual-video-viewer-llimphi --example video_viewer_demo --release
 ```
 
-Generá un `.ivf` de prueba con:
+Generate a test `.ivf` with:
 `ffmpeg -f lavfi -i testsrc=size=640x480:rate=30:duration=3 -c:v libsvtav1 clip.ivf`
 
 ## Tests

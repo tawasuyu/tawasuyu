@@ -33,22 +33,22 @@ No sub-crates: `nada` is a single binary that **consumes** Llimphi's modules and
 - JSON sessions are **portable**: copy your `session.json` and the editor opens with your tabs.
 - LSP: any system LSP server (rust-analyzer, pyright, ...) — none bundled.
 
-## Estado (2026-06-10)
+## Status (2026-06-10)
 
-### Hecho
-- Editor funcional: árbol de archivos (scrolleable, con íconos y guías) + editor con syntax highlight + LSP (cualquier server del sistema), tabs, mini-map, bookmarks, symbol-outline, diff-viewer, terminal embebido (`shuma-term`).
-- Búsqueda estilo JetBrains: find-in-files (`fif`) con dialog modal + barra inferior, replace y watcher de cambios externos.
-- Save As (Ctrl+Shift+S), `--fmt-on-save`, timeouts LSP visibles, recientes al tope del file-picker, indicador de git status en tabs/tree/status bar.
-- Sesiones JSON portables en `$XDG_CONFIG_HOME/nada/session.json`; tema/idioma vía `wawa-config`; clipboard del sistema (`arboard`).
-- Menú principal + menú de edición contextual (con navegación por teclado, íconos y submenú vivo "Buscar"). Crate de un solo binario que ensambla módulos/widgets de Llimphi — patrón de referencia de menubar/edit-menu/clipboard para el resto de las apps.
-- `main.rs` (3512 LOC) partido en módulos del crate (actions/clipboard/fsutil/keys/session/settings/update/view).
-- Panel de configuración embebido (primer consumidor de `llimphi-module-allichay::settings_overlay`).
-- UI localizada con `rimay-localize` (es/en/qu) + menú de idioma.
-- IME activo en el editor (`ime_allowed` + `on_ime`: dead keys, CJK, emoji picker).
-- LSP: diagnostics + completion + hover (Ctrl+K, clampado a 5 líneas) + go-to-definition + document symbols.
+### Done
+- Functional editor: file tree (scrollable, with icons and guides) + editor with syntax highlight + LSP (any system server), tabs, mini-map, bookmarks, symbol-outline, diff-viewer, embedded terminal (`shuma-term`).
+- JetBrains-style search: find-in-files (`fif`) with modal dialog + bottom bar, replace, and watcher for external changes.
+- Save As (Ctrl+Shift+S), `--fmt-on-save`, visible LSP timeouts, recents at the top of the file-picker, git status indicator in tabs/tree/status bar.
+- Portable JSON sessions in `$XDG_CONFIG_HOME/nada/session.json`; theme/language via `wawa-config`; system clipboard (`arboard`).
+- Main menu + contextual edit menu (with keyboard navigation, icons, and a live "Search" submenu). Single-binary crate that assembles Llimphi modules/widgets — reference pattern of menubar/edit-menu/clipboard for the rest of the apps.
+- `main.rs` (3512 LOC) split into crate modules (actions/clipboard/fsutil/keys/session/settings/update/view).
+- Embedded configuration panel (first consumer of `llimphi-module-allichay::settings_overlay`).
+- UI localized with `rimay-localize` (es/en/qu) + language menu.
+- IME active in the editor (`ime_allowed` + `on_ime`: dead keys, CJK, emoji picker).
+- LSP: diagnostics + completion + hover (Ctrl+K, clamped to 5 lines) + go-to-definition + document symbols.
 
-### Pendiente
-- Multi-ventana / split de editores (hoy un editor activo por tab).
-- Integración más rica de LSP (code actions, rename, signatures) más allá de diagnostics/completion/hover/definition.
-- Empuje de features de vuelta a los módulos Llimphi (regla de diseño: extender módulos, no engordar `nada`).
-- Estabilidad ante el cuelgue/deadlock genérico de apps Llimphi (investigación abierta).
+### Pending
+- Multi-window / editor split (today one active editor per tab).
+- Richer LSP integration (code actions, rename, signatures) beyond diagnostics/completion/hover/definition.
+- Pushing features back into the Llimphi modules (design rule: extend modules, don't fatten `nada`).
+- Stability against the generic hang/deadlock of Llimphi apps (open investigation).
