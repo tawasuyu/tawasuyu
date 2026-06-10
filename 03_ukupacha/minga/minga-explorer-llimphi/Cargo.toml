@@ -21,6 +21,13 @@ app-bus = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 
+[dev-dependencies]
+# Para el example headless `pantallazo_minga`: siembra un repo sled real
+# (parse tree-sitter + atestaciones Ed25519) y vuelca la view a PNG.
+minga-core = { path = "../minga-core" }
+pollster = { workspace = true }
+png = { workspace = true }
+
 [[bin]]
 name = "minga-explorer-llimphi"
 path = "src/main.rs"

@@ -60,40 +60,43 @@ const REPO_DIRNAME: &str = "repo";
 /// sample, no como log temporal.
 const RECENT_LIMIT: usize = 5;
 
+// Los tipos del estado son `pub(crate)`: el example headless
+// `pantallazo_minga` incluye este archivo por `#[path]` y necesita
+// construir el `Model` real para llamar la misma `view`.
 #[derive(Clone, Default, Debug)]
-struct RepoSnapshot {
-    nodes: usize,
-    attestations: usize,
-    mst_keys: usize,
-    recent_nodes: Vec<(String, String)>,
-    recent_attestations: Vec<(String, String)>,
-    recent_mst_keys: Vec<String>,
+pub(crate) struct RepoSnapshot {
+    pub nodes: usize,
+    pub attestations: usize,
+    pub mst_keys: usize,
+    pub recent_nodes: Vec<(String, String)>,
+    pub recent_attestations: Vec<(String, String)>,
+    pub recent_mst_keys: Vec<String>,
 }
 
-struct Model {
-    theme: Theme,
-    repo_path: PathBuf,
-    snapshot: Option<RepoSnapshot>,
-    error: Option<String>,
-    last_load_ms: u64,
+pub(crate) struct Model {
+    pub theme: Theme,
+    pub repo_path: PathBuf,
+    pub snapshot: Option<RepoSnapshot>,
+    pub error: Option<String>,
+    pub last_load_ms: u64,
     /// Mantenemos vivo el watcher para que su thread no muera. No se
     /// usa después de crearlo (consume su sí mismo cuando se dropea).
-    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    pub _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado).
-    menu_open: Option<usize>,
+    pub menu_open: Option<usize>,
     /// Fila activa dentro del dropdown abierto (`usize::MAX` = ninguna).
-    menu_active: usize,
+    pub menu_active: usize,
     /// Animación de aparición del dropdown.
-    menu_anim: Tween<f32>,
+    pub menu_anim: Tween<f32>,
     /// Menú contextual sobre el dashboard: `(x, y)` ancla en ventana.
     /// `None` cerrado. El explorer es de sólo lectura — el contextual
     /// sólo ofrece acciones de observación (refrescar / tema).
-    context_menu: Option<(f32, f32)>,
+    pub context_menu: Option<(f32, f32)>,
 }
 
 #[derive(Clone)]
-enum Msg {
+pub(crate) enum Msg {
     /// Tick del scheduler: corre `load_snapshot` y dispatcha el
     /// resultado como `Refresh`.
     Tick,
@@ -125,7 +128,7 @@ enum Msg {
     CycleTheme,
 }
 
-struct Explorer;
+pub(crate) struct Explorer;
 
 impl App for Explorer {
     type Model = Model;
@@ -518,7 +521,7 @@ fn empty_message(theme: &Theme) -> View<Msg> {
 /// Falla si: el dir no existe, sled rebota al abrir, o cualquier
 /// store falla a `len()`. Ningún error es fatal — la UI muestra el
 /// banner y mantiene el último snapshot bueno.
-fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String> {
+pub(crate) fn load_snapshot(repo_path: &std::path::Path) -> Result<RepoSnapshot, String> {
     let inner = repo_path.join(REPO_DIRNAME);
     if !inner.exists() {
         return Err(format!(
