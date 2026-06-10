@@ -31,7 +31,9 @@ Full crate index (framework · widgets · modules · android) in [MANUAL.md](MAN
 
 ## Demo
 
-A self-contained prezi-style tour lives in [`demo/`](demo/): arch, Elm loop, widget kit, and headless screenshots of ~10 real apps running on llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Open `demo/index.html` in any browser, or serve it (`python3 -m http.server -d demo`). Space / arrows / click to navigate; auto-advances every 6 s — ready to screen-record.
+Live: **<https://tawasuyu.net/02_ruway/llimphi/demo/>** — a self-contained prezi-style tour: arch, Elm loop, widget kit, and headless screenshots of ~10 real apps running on llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Space / arrows / click to navigate; auto-advances every 6 s — ready to screen-record.
+
+Source under [`demo/`](demo/index.html) (plain HTML+CSS+JS, no build step). To run locally: `python3 -m http.server -d demo`.
 
 ## Considerations
 

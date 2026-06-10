@@ -100,7 +100,9 @@ Y además (catálogo completo con firmas en [MANUAL.md](MANUAL.md) §13): avatar
 
 ## Demo
 
-Tour autocontenido tipo prezi en [`demo/`](demo/): arquitectura, bucle Elm, kit de widgets y pantallazos headless de ~10 apps reales corriendo sobre llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Abrí `demo/index.html` en cualquier navegador o serví con `python3 -m http.server -d demo`. Espacio / flechas / click para navegar; auto-advance cada 6 s — listo para grabar como video.
+En vivo: **<https://tawasuyu.net/02_ruway/llimphi/demo/>** — tour autocontenido tipo prezi: arquitectura, bucle Elm, kit de widgets y pantallazos headless de ~10 apps reales corriendo sobre llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Espacio / flechas / click para navegar; auto-advance cada 6 s — listo para grabar como video.
+
+Fuente en [`demo/`](demo/index.html) (HTML+CSS+JS plano, sin build). Local: `python3 -m http.server -d demo`.
 
 ## Consideraciones
 
