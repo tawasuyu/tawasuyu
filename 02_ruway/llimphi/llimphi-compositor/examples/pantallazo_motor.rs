@@ -148,7 +148,7 @@ fn main() {
         })
         .children(vec![
             rect(8.0, 8.0).radius(2.5).fill(dot),
-            txt(auto(), 17.0, nombre, 13.0, if sel { theme.fg_text } else { theme.fg_muted }),
+            txt(length(135.0), 17.0, nombre, 13.0, if sel { theme.fg_text } else { theme.fg_muted }),
         ]);
         let mut hijos = vec![izq];
         if let Some(b) = badge {
@@ -169,6 +169,7 @@ fn main() {
     let seccion = |t: &str| txt(percent(1.0), 16.0, t, 11.0, theme.fg_placeholder).bold();
     let sidebar = View::<()>::new(Style {
         size: Size { width: length(236.0), height: percent(1.0) },
+        flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
         gap: Size { width: length(0.0), height: length(4.0) },
         padding: Rect { left: length(12.0), right: length(12.0), top: length(14.0), bottom: length(14.0) },
@@ -191,27 +192,31 @@ fn main() {
         rect(1.0, 10.0),
         seccion("DAEMONS"),
         fila("verbo · e5-small", Some("384d"), false, rgb(152, 195, 121)),
-        fila("chasqui · DHT", Some("9 peers"), false, rgb(152, 195, 121)),
+        fila("chasqui · DHT", Some("9"), false, rgb(152, 195, 121)),
     ]);
 
     // ─────────────────────── editor de código (centro) ───────────────────────
-    let codigo = "\
-// bucle Elm del motor: input → update → view → layout → raster\n\
-pub fn frame(&mut self, msg: Msg) -> Scene {\n\
-    self.app.update(msg);\n\
-    let view = self.app.view();\n\
-    let tree = mount(&mut self.layout, view);\n\
-    let computed = self.layout.compute(tree.root, self.size);\n\
-    let mut scene = Scene::new();\n\
-    paint(&mut scene, &tree, &computed, &mut self.ts);\n\
-    scene // vello la rasteriza en GPU vía wgpu\n\
-}\n\
-\n\
-let sombra = Shadow::soft(90, 24.0).offset(0.0, 12.0);\n\
-let card = View::new(estilo)\n\
-    .fill_gradient(grad)      // gradiente en [0,1]²\n\
-    .radius_corners(18.0, 18.0, 4.0, 4.0)\n\
-    .shadow(sombra);";
+    // (líneas unidas a mano — la continuación `\` de Rust se comería la indentación)
+    let codigo = [
+        "// bucle Elm del motor: input → update → view → layout → raster",
+        "pub fn frame(&mut self, msg: Msg) -> Scene {",
+        "    self.app.update(msg);",
+        "    let view = self.app.view();",
+        "    let tree = mount(&mut self.layout, view);",
+        "    let computed = self.layout.compute(tree.root, self.size);",
+        "    let mut scene = Scene::new();",
+        "    paint(&mut scene, &tree, &computed, &mut self.ts);",
+        "    scene // vello la rasteriza en GPU vía wgpu",
+        "}",
+        "",
+        "let sombra = Shadow::soft(90, 24.0).offset(0.0, 12.0);",
+        "let card = View::new(estilo)",
+        "    .fill_gradient(grad)      // gradiente en [0,1]²",
+        "    .radius_corners(18.0, 18.0, 4.0, 4.0)",
+        "    .shadow(sombra);",
+    ]
+    .join("\n");
+    let codigo = codigo.as_str();
     let reglas = [
         ("// bucle Elm del motor: input → update → view → layout → raster", TextSpanStyle { color: Some(cmt), italic: Some(true), ..Default::default() }),
         ("// vello la rasteriza en GPU vía wgpu", TextSpanStyle { color: Some(cmt), italic: Some(true), ..Default::default() }),
@@ -348,14 +353,15 @@ medido y pintado por el mismo layout_spans, sin HTML ni DOM.";
         .with_stops([rgb(64, 92, 180), rgb(34, 46, 96)].as_slice());
     let metrica = |valor: &str, label: &str| {
         View::<()>::new(Style {
-            size: Size { width: length(88.0), height: auto() },
+            size: Size { width: length(80.0), height: auto() },
+            flex_shrink: 0.0,
             flex_direction: FlexDirection::Column,
             gap: Size { width: length(0.0), height: length(2.0) },
             ..Default::default()
         })
         .children(vec![
-            txt(length(88.0), 26.0, valor, 21.0, rgb(240, 244, 252)).bold(),
-            txt(length(88.0), 15.0, label, 11.0, rgba(214, 222, 240, 190)),
+            txt(length(80.0), 26.0, valor, 21.0, rgb(240, 244, 252)).bold(),
+            txt(length(80.0), 15.0, label, 11.0, rgba(214, 222, 240, 190)),
         ])
     };
     let hero = View::<()>::new(Style {
@@ -374,7 +380,7 @@ medido y pintado por el mismo layout_spans, sin HTML ni DOM.";
         txt(percent(1.0), 16.0, "RENDER · ÚLTIMO FRAME", 11.0, rgba(214, 222, 240, 200)).bold(),
         View::<()>::new(Style {
             flex_direction: FlexDirection::Row,
-            gap: Size { width: length(26.0), height: length(0.0) },
+            gap: Size { width: length(16.0), height: length(0.0) },
             ..Default::default()
         })
         .children(vec![metrica("1.8 ms", "scene → GPU"), metrica("2 411", "nodos"), metrica("60 fps", "vsync")]),
@@ -460,7 +466,7 @@ medido y pintado por el mismo layout_spans, sin HTML ni DOM.";
         gap: Size { width: length(10.0), height: length(0.0) },
         ..Default::default()
     })
-    .children(vec![boton("Regenerar cuerpo", true), boton("Difundir", false)]);
+    .children(vec![boton("Regenerar", true), boton("Difundir", false), boton("Alinear", false)]);
 
     // 4) Tarjeta de hebras (estado del haz multilienzo) — filas con dot de estado.
     let hebra = |de: &str, a: &str, estado: &str, c: Color| {
@@ -509,6 +515,7 @@ medido y pintado por el mismo layout_spans, sin HTML ni DOM.";
 
     let derecha = View::<()>::new(Style {
         size: Size { width: length(330.0), height: percent(1.0) },
+        flex_shrink: 0.0,
         flex_direction: FlexDirection::Column,
         gap: Size { width: length(0.0), height: length(14.0) },
         padding: Rect { left: length(0.0), right: length(14.0), top: length(14.0), bottom: length(14.0) },

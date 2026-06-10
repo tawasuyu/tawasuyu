@@ -42,7 +42,7 @@ use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, View};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_text_input::TextInputState;
-use llimphi_widget_tiled::{tiled_view_reorderable, TileSpec, TiledPalette};
+use llimphi_widget_tiled::{tiled_view_cols, tiled_view_reorderable, TileSpec, TiledPalette};
 
 use crate::model::{
     ComposeField, FocusedInput, Model, Msg, Screen, StatusBanner, StatusLevel, Tile,
@@ -216,37 +216,68 @@ fn menu_demo() -> app_bus::AppMenu {
         .menu(Menu::new("Ayuda").item(MenuItem::new("Recargar grafo", "help.recargar")))
 }
 
-/// Réplica fiel del `view()` de `AgoraApp` (pantalla Main): menubar arriba,
-/// tiles draggables al centro, banner de estado al pie.
+/// Misma composición que el `view()` de `AgoraApp` (menubar arriba, tiles
+/// draggables al centro, banner de estado al pie), con la grilla acomodada
+/// para el pantallazo: el sustrato social en 2×2 a la izquierda y el tile
+/// **capacidad · wawa** a columna completa a la derecha — los sobres firmados
+/// muestran hashes de 64 hex que necesitan ese ancho/alto para no envolver.
 fn view_demo(model: &Model, menu: &app_bus::AppMenu, theme: &Theme) -> View<Msg> {
     let palette = TiledPalette::from_theme(theme);
 
-    let tile_specs: Vec<TileSpec<Msg>> = model
-        .tiles_order
-        .iter()
-        .map(|t| {
-            let (label, content) = match t {
-                Tile::Identidades => ("identidades", tiles::identidades_view(model, theme)),
-                Tile::Compositor => ("compositor", tiles::compositor_view(model, theme)),
-                Tile::Atestaciones => ("atestaciones", tiles::atestaciones_view(model, theme)),
-                Tile::Politica => ("política", tiles::politica_view(model, theme)),
-                Tile::Multifirma => ("multifirma", tiles::multifirma_view(model, theme)),
-                Tile::Release => ("release · wawa", tiles::release_view(model, theme)),
-                Tile::Capacidad => ("capacidad · wawa", tiles::capacidad_view(model, theme)),
-            };
-            TileSpec {
-                label: label.into(),
-                content,
-            }
-        })
-        .collect();
+    let spec = |t: &Tile| {
+        let (label, content) = match t {
+            Tile::Identidades => ("identidades", tiles::identidades_view(model, theme)),
+            Tile::Compositor => ("compositor", tiles::compositor_view(model, theme)),
+            Tile::Atestaciones => ("atestaciones", tiles::atestaciones_view(model, theme)),
+            Tile::Politica => ("política", tiles::politica_view(model, theme)),
+            Tile::Multifirma => ("multifirma", tiles::multifirma_view(model, theme)),
+            Tile::Release => ("release · wawa", tiles::release_view(model, theme)),
+            Tile::Capacidad => ("capacidad · wawa", tiles::capacidad_view(model, theme)),
+        };
+        TileSpec {
+            label: label.into(),
+            content,
+        }
+    };
 
-    let tiled =
-        tiled_view_reorderable(tile_specs, |from, to| Some(Msg::SwapTile(from, to)), &palette);
+    // Izquierda: web-of-trust en grilla 2×2 (los mismos tiles reales).
+    let sociales: Vec<TileSpec<Msg>> = [
+        Tile::Identidades,
+        Tile::Atestaciones,
+        Tile::Politica,
+        Tile::Multifirma,
+    ]
+    .iter()
+    .map(spec)
+    .collect();
+    let left = tiled_view_reorderable(sociales, |from, to| Some(Msg::SwapTile(from, to)), &palette);
+
+    // Derecha: el plano de control de wawa a columna completa.
+    let right = tiled_view_cols(vec![spec(&Tile::Capacidad)], 1, &palette);
+
+    let envolver = |v: View<Msg>, w: f32| {
+        View::new(Style {
+            size: Size {
+                width: percent(w),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(vec![v])
+    };
+    let grids = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![envolver(left, 0.56), envolver(right, 0.44)]);
 
     let body = match &model.status {
-        None => tiled,
-        Some(banner) => ui::status_layout(theme, tiled, banner),
+        None => grids,
+        Some(banner) => ui::status_layout(theme, grids, banner),
     };
 
     let menubar = menubar_view(&MenuBarSpec {
