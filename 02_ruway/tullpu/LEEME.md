@@ -2,6 +2,8 @@
 
 **Un editor de imágenes por capas donde nada se destruye nunca.**
 
+![el editor por capas tullpu: un lienzo de atardecer compuesto — cielo en gradiente, sol brillante con marquee de selección, montañas en silueta, un trazo de pincel con máscara que se desvanece — con el panel de siete capas (blends, sliders de opacidad, capas derivadas por IA) a la izquierda y el panel de herramientas con histograma a la derecha](https://tawasuyu.net/02_ruway/tullpu/pantallazo.png)
+
 *Read this in English: [README.md](README.md).*
 
 tullpu es el editor de imágenes de tawasuyu. Trabajás en capas, como en

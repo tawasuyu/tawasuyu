@@ -2,6 +2,8 @@
 
 **A layered image editor where nothing is ever destroyed.**
 
+![the tullpu layered editor: a composited sunset canvas — gradient sky, glowing sun with a selection marquee, silhouetted mountains, a fading masked brush stroke — with the seven-row layers panel (blend modes, opacity sliders, AI-derived layers) on the left and the tools panel with histogram on the right](https://tawasuyu.net/02_ruway/tullpu/pantallazo.png)
+
 *Leé esto en español: [LEEME.md](LEEME.md).*
 
 tullpu is tawasuyu's image editor. You work in layers, like in any serious
