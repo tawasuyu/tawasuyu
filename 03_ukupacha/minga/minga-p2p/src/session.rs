@@ -67,9 +67,9 @@ pub(crate) fn hello_payload(
     p
 }
 
-pub struct SyncSession {
+pub struct SyncSession<S: NodeStore = MemStore> {
     mst: Mst,
-    store: MemStore,
+    store: S,
     attestations: AttestationStore,
     retractions: RetractionStore,
 
@@ -135,12 +135,12 @@ pub struct SyncSession {
     received_done: bool,
 }
 
-impl SyncSession {
+impl<S: NodeStore> SyncSession<S> {
     /// Constructor sin retracciones — el chasis lo usa cuando no hay
     /// retracciones que sincronizar (o por compat con tests viejos).
     pub fn new(
         mst: Mst,
-        store: MemStore,
+        store: S,
         attestations: AttestationStore,
         keypair: Keypair,
     ) -> Self {
@@ -152,7 +152,7 @@ impl SyncSession {
     /// igual avance al `Done` (el contador de sent_root_decls se marca).
     pub fn with_retractions(
         mst: Mst,
-        store: MemStore,
+        store: S,
         attestations: AttestationStore,
         retractions: RetractionStore,
         keypair: Keypair,
@@ -173,7 +173,7 @@ impl SyncSession {
     /// las re-verificará al final de la sesión.
     pub fn with_roots(
         mst: Mst,
-        store: MemStore,
+        store: S,
         attestations: AttestationStore,
         retractions: RetractionStore,
         local_roots: HashMap<ContentHash, (ContentHash, Dialect)>,
@@ -220,7 +220,7 @@ impl SyncSession {
 
     /// Conveniencia para sesiones sin atestaciones previas. Equivalente
     /// a `new(mst, store, AttestationStore::new(), keypair)`.
-    pub fn without_attestations(mst: Mst, store: MemStore, keypair: Keypair) -> Self {
+    pub fn without_attestations(mst: Mst, store: S, keypair: Keypair) -> Self {
         Self::new(mst, store, AttestationStore::new(), keypair)
     }
 
@@ -647,11 +647,11 @@ impl SyncSession {
         &self.mst
     }
 
-    pub fn store(&self) -> &MemStore {
+    pub fn store(&self) -> &S {
         &self.store
     }
 
-    pub fn into_parts(self) -> (Mst, MemStore, AttestationStore) {
+    pub fn into_parts(self) -> (Mst, S, AttestationStore) {
         (self.mst, self.store, self.attestations)
     }
 
@@ -660,7 +660,7 @@ impl SyncSession {
     /// recibidos en su estado persistente.
     pub fn into_parts_with_retractions(
         self,
-    ) -> (Mst, MemStore, AttestationStore, RetractionStore) {
+    ) -> (Mst, S, AttestationStore, RetractionStore) {
         (self.mst, self.store, self.attestations, self.retractions)
     }
 
@@ -672,7 +672,7 @@ impl SyncSession {
         self,
     ) -> (
         Mst,
-        MemStore,
+        S,
         AttestationStore,
         RetractionStore,
         HashMap<ContentHash, (ContentHash, Dialect)>,
