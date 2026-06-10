@@ -1225,8 +1225,10 @@ fn kernel_main(boot_info: &'static mut BootInfo) -> ! {
     }
     // FASE 15 :: la voz del sistema da los buenos dias con un acorde de Do
     // mayor. La tarea del compositor lo hara sonar nota a nota una vez que
-    // el reactor arranque y las interrupciones empiecen a llegar.
-    drivers::altavoz::agendar(&drivers::altavoz::VOZ_BIENVENIDA);
+    // el reactor arranque y las interrupciones empiecen a llegar. La
+    // bienvenida suena incluso sin tarjeta de sonido (bocina PIT): es el
+    // pitido fundacional, no una voz frecuente silenciable.
+    drivers::altavoz::agendar_bienvenida();
     traza("ejecutor :: arrancando reactor");
     x86_64::instructions::interrupts::enable();
     ejecutor.run();

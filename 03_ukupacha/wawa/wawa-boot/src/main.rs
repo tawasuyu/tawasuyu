@@ -730,6 +730,28 @@ fn localizar_ovmf() -> Result<String, String> {
 ///                        en bucle: asi la baliza de panico permanece visible.
 ///   * `virtio-blk-pci`   el disco de objetos, sobre el bus PCI (q35 es x86_64;
 ///                        `virtio-blk-device`, su gemelo MMIO, es cosa de ARM).
+/// Elige el backend de audio de QEMU: el primero disponible entre
+/// pipewire/pa/alsa/sdl (consultando `-audiodev help`), o `none` si no hay
+/// ninguno utilizable. `WAWA_AUDIO=<backend>` lo fuerza sin consultar.
+fn backend_de_audio() -> String {
+    if let Ok(forzado) = std::env::var("WAWA_AUDIO") {
+        if !forzado.is_empty() {
+            return forzado;
+        }
+    }
+    let disponibles = Command::new("qemu-system-x86_64")
+        .args(["-audiodev", "help"])
+        .output()
+        .map(|s| String::from_utf8_lossy(&s.stdout).into_owned())
+        .unwrap_or_default();
+    for candidato in ["pipewire", "pa", "alsa", "sdl"] {
+        if disponibles.lines().any(|l| l.trim() == candidato) {
+            return candidato.to_string();
+        }
+    }
+    "none".to_string()
+}
+
 fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
     println!("[renaser/boot] arrancando QEMU :: la superficie indigo nace ahora\n");
 
@@ -770,12 +792,13 @@ fn lanzar_qemu(imagen: &Path, ovmf: &str) -> Result<(), String> {
         // cursor del host a este dispositivo (coordenadas absolutas), de modo
         // que el puntero del huesped lo sigue 1:1, sin captura ni deriva.
         .arg("-device").arg("virtio-tablet-pci")
-        // FASE 62 :: virtio-sound — PCM real por DMA. El backend de audio es
-        // `none` por DEFECTO: el dispositivo funciona (el kernel ejercita todo
-        // el camino PCM) pero el host NO emite sonido — asi NO arriesgamos
-        // romper el arranque en una maquina sin PulseAudio/PipeWire. Para OIRLO,
-        // cambia `none` por `pa` (PulseAudio/pipewire-pulse), `pipewire` o `sdl`.
-        .arg("-audiodev").arg("none,id=snd0")
+        // FASE 62 :: virtio-sound — PCM real por DMA. El backend se AUTODETECTA
+        // (primer disponible entre pipewire/pa/alsa/sdl) para que la voz del
+        // kernel —el acorde de bienvenida, los repiques— se OIGA de verdad; en
+        // una maquina sin backend utilizable cae a `none` (el dispositivo
+        // funciona igual, el kernel ejercita todo el camino PCM, solo que en
+        // silencio). Forzable con WAWA_AUDIO=<backend>.
+        .arg("-audiodev").arg(format!("{},id=snd0", backend_de_audio()))
         .arg("-device").arg("virtio-sound-pci,audiodev=snd0");
 
     // FASE 67 :: la tarjeta de red. Dos backends segun para que arrancamos:

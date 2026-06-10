@@ -190,6 +190,21 @@ if [ -z "$OVMF" ]; then
     exit 1
 fi
 
+# Audio: elegir el primer backend disponible para que la voz del kernel
+# (el acorde de bienvenida y los repiques) se oiga de verdad. Sin backend
+# utilizable cae a `none` (silencio, pero el dispositivo existe igual).
+# Forzable con WAWA_AUDIO=<backend> (pipewire|pa|alsa|sdl|none).
+AUDIO="${WAWA_AUDIO:-}"
+if [ -z "$AUDIO" ]; then
+    AUDIO=none
+    for backend in pipewire pa alsa sdl; do
+        if qemu-system-x86_64 -audiodev help 2>/dev/null | grep -qx "$backend"; then
+            AUDIO="$backend"
+            break
+        fi
+    done
+fi
+
 # accel=kvm:tcg intenta KVM y recae en emulacion pura si no hay /dev/kvm.
 # El grafo de objetos viaja DENTRO de la imagen (ramdisk): sin discos extra.
 # Nota Arch/Artix: si QEMU segfaultea al arrancar, falta el paquete
@@ -202,7 +217,7 @@ exec qemu-system-x86_64 \
     -vga none \
     -device virtio-vga \
     -device virtio-tablet-pci \
-    -audiodev none,id=snd0 \
+    -audiodev "$AUDIO,id=snd0" \
     -device virtio-sound-pci,audiodev=snd0 \
     -serial stdio \
     --no-reboot \

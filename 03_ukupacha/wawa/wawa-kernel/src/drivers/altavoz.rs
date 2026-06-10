@@ -123,11 +123,29 @@ pub fn agendar(secuencia: &[(u32, u32)]) {
     }
     // EN METAL SIN tarjeta de sonido la unica salida fisica es la BOCINA del
     // PIT —el pitido seco del buzzer de placa, el de los PCs sin corneta—. Las
-    // VOCES DEL KERNEL (bienvenida, lanzar, cerrar, desalojo) no valen ese
-    // ruido: se SILENCIAN cuando no hay audio real. Sin esto, cada arranque y
-    // cada `Alt+N` disparan el buzzer. La bocina queda reservada para lo que una
-    // app pida explicitamente via `sys_tono` (camino `tono`, no este).
+    // VOCES FRECUENTES del kernel (lanzar, cerrar, desalojo) no valen ese
+    // ruido: se SILENCIAN cuando no hay audio real. Sin esto, cada `Alt+N`
+    // dispara el buzzer. La bocina queda reservada para lo que una app pida
+    // explicitamente via `sys_tono` (camino `tono`, no este) y para la
+    // BIENVENIDA (ver `agendar_bienvenida`), que es la voz de identidad del
+    // sistema y suena una sola vez por arranque.
     let _ = secuencia;
+}
+
+/// Agenda el acorde de bienvenida. A diferencia de las voces frecuentes,
+/// la bienvenida suena SIEMPRE — una vez por arranque — aunque la unica
+/// salida sea la bocina del PIT: es el pitido fundacional del sistema, la
+/// señal audible de que el kernel llego vivo al reactor. Con virtio-sound
+/// suena como PCM real; sin tarjeta, como el buzzer de placa de toda la vida.
+pub fn agendar_bienvenida() {
+    if usar_virtio() {
+        crate::drivers::sonido::agendar(&VOZ_BIENVENIDA);
+        return;
+    }
+    let mut cola = SECUENCIA.lock();
+    for &(frec, dur) in VOZ_BIENVENIDA.iter() {
+        cola.push_back((frec, dur));
+    }
 }
 
 /// ¿Esta el kernel sonando una nota suya? Mientras dure, las llamadas de los
