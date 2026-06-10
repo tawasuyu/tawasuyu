@@ -2,6 +2,8 @@
 
 > `takiy` (Quechua: *to sing*). The monorepo's music.
 
+![the takiy sequencer's piano roll: a pitch×beats grid with four colored tracks — high orange arpeggio, blue melody with a selected note, pink chord pads, low green bass — a highlighted loop band, a yellow playback cursor and volume/pan automation curves with draggable dots](https://tawasuyu.net/02_ruway/takiy/pantallazo.png)
+
 Synthesis, sequencing, playback. Designed to run in real time (measurable xruns, not hand-wavey) and to be deterministic when asked (same seed → same WAV). First real consumer: supay's audio engine renders takiy scores straight into its mixer (`AudioEngine::play_takiy_score`).
 
 ## Install

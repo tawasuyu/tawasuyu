@@ -19,6 +19,10 @@ path = "src/main.rs"
 name = "smoke"
 path = "examples/smoke.rs"
 
+[[example]]
+name = "pantallazo_takiy"
+path = "examples/pantallazo_takiy.rs"
+
 [dependencies]
 takiy-core = { path = "../takiy-core" }
 takiy-synth = { path = "../takiy-synth" }
@@ -31,3 +35,8 @@ llimphi-widget-context-menu = { workspace = true }
 llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 serde_json = { workspace = true }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_takiy` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }

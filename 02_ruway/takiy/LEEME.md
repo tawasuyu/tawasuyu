@@ -2,6 +2,8 @@
 
 > `takiy` (quechua: *cantar*). Música del monorepo.
 
+![el piano roll del secuenciador takiy: grilla pitch×beats con cuatro pistas de colores — arpegio naranja agudo, melodía azul con una nota seleccionada, acordes rosas, bajo verde grave — banda de loop resaltada, cursor de reproducción amarillo y curvas de automación de volumen/pan con puntos arrastrables](https://tawasuyu.net/02_ruway/takiy/pantallazo.png)
+
 Síntesis, secuenciación y playback. Diseñado para correr en tiempo real (xruns medibles, no hand-wavey) y para ser deterministic cuando se pide (mismo seed → mismo wav). Primer consumidor real: el motor de audio de supay renderiza partituras takiy directo a su mixer (`AudioEngine::play_takiy_score`).
 
 ## Instalación
