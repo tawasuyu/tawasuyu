@@ -241,6 +241,44 @@ Candidato: **`agora-cli`** (CLI no gráfico: identidades/atestaciones/grafo). Ta
 Próximo: **M2** (un `example` de Llimphi por la vía dinámica) — ahí se materializa la decisión
 musl/glibc del tier gráfico (#3).
 
+### C.8 Bitácora del experimento M2 — tier gráfico, evidencia clara (2026-06-10)
+
+Candidato: **`llimphi-ui` example `counter`** (stack completo `wgpu`+`winit`+`vello`+`parley`,
+el del GIF del repo standalone). Dos hallazgos duros:
+
+1. **El binario gráfico NO linkea las libs gráficas en tiempo de carga.** `ldd` del build glibc
+   da sólo **5 `.so`**: `libc`, `libgcc_s`, `ld-linux` (+`libm`/`libdl`). `libvulkan`/`libwayland`/
+   `libxkbcommon` **no aparecen** — wgpu (ash) y winit las cargan por **`dlopen` en runtime**. O
+   sea: la dependencia gráfica es *runtime*, no *link-time*. Esto descarta el estático-de-oro
+   (un binario fully-static no puede `dlopen` fiable) y obliga a la **vía dinámica**.
+2. **Todo el árbol gráfico COMPILA a musl sin tocar una línea.** El build a
+   `x86_64-unknown-linux-musl` (dinámico, `-crt-static`) compiló wgpu/naga/vello/parley/winit
+   completo y **falló sólo en el link final**: `musl-gcc: cannot find -lgcc_s`. No es
+   incompatibilidad de fuente: es un **hueco de toolchain** (musl dinámico quiere el `libgcc_s`
+   compartido para unwinding, ausente en el sysroot musl de este host glibc).
+
+**Diagnóstico y decisión (ahora con evidencia, ya no abierta a ciegas):**
+
+- El `-lgcc_s` faltante es **exactamente lo que el `zig cc` de hammer resuelve** (zig empaqueta
+  su `compiler-rt`/equivalente de libgcc). En el lab de hammer (zig cc, no `musl-gcc`) este link
+  cierra. Alternativas: musl-cross-make con `libgcc_s`, o `panic=abort`.
+- El "muro musl/glibc" del tier gráfico **no es de código**: es **coherencia de ABI en runtime**.
+  Un binario musl debe `dlopen` un mesa/vulkan/wayland **también musl**. Alpine (la base de
+  hammer) los trae musl-built → userland coherente → funciona. La rotura aparece sólo al
+  **mezclar** (binario musl + libs gráficas glibc, como en este host Artix).
+- **Resolución del #3:** el tier gráfico va **dinámico** y es **musl-viable a nivel de fuente**;
+  el link exige el toolchain de hammer (zig cc) y el runtime exige un stack gráfico musl
+  coherente (Alpine lo da). **glibc queda como fallback obligado sólo para NVIDIA propietario**
+  (sin build musl). No hace falta un sub-mundo glibc para todo lo gráfico, sólo para el driver
+  cerrado.
+
+**No verificable en este sandbox:** el runtime (no hay display ni mesa-musl en el host glibc) —
+queda para una VM Alpine con mesa musl. El link con `zig cc` queda para el lab de hammer.
+
+Próximo natural: **M2b** — repetir el link con `zig cc` en el lab de hammer (cierra el binario)
+y runtime-validar en Alpine. Luego **M3** (mirada: DRM/seat/input, link-time real contra
+`libdrm`/`libinput`/`libseat`, no sólo `dlopen`).
+
 ---
 
 ## Coordinación
