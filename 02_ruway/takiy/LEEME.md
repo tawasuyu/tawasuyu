@@ -2,7 +2,7 @@
 
 > `takiy` (quechua: *cantar*). Música del monorepo.
 
-Síntesis, secuenciación y playback. Diseñado para correr en tiempo real (xruns medibles, no hand-wavey) y para ser deterministic cuando se pide (mismo seed → mismo wav). Acopla con el bus `chasqui` para integrarse con otras apps (notebook, dominium, supay).
+Síntesis, secuenciación y playback. Diseñado para correr en tiempo real (xruns medibles, no hand-wavey) y para ser deterministic cuando se pide (mismo seed → mismo wav). Primer consumidor real: el motor de audio de supay renderiza partituras takiy directo a su mixer (`AudioEngine::play_takiy_score`).
 
 ## Instalación
 
@@ -24,6 +24,7 @@ cargo run --release -p takiy-app-llimphi
 | [`takiy-core`](takiy-core/README.md) | Modelo musical: nota, secuencia, voz. |
 | [`takiy-synth`](takiy-synth/README.md) | Synths (osciladores, filtros, envolventes). |
 | [`takiy-playback`](takiy-playback/README.md) | Output a audio device. |
+| [`takiy-midi`](takiy-midi/) | Import/export SMF (MIDI). |
 | [`takiy-app-llimphi`](takiy-app-llimphi/README.md) | UI Llimphi (secuenciador + síntesis). |
 
 ## Consideraciones

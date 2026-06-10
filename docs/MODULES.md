@@ -22,7 +22,9 @@ diff viewer, mini-map, picker, etc.
 │   ├── tree/
 │   └── …
 └── modules/                                     ← features completas
-    └── fif/                                     ← (este es el primero)
+    ├── fif/                                     ← (este fue el primero)
+    ├── command-palette/
+    └── …                                        ← 11 al 2026-06-10
 ```
 
 ## Forma del contrato
@@ -292,6 +294,8 @@ distintos a propósito.
 | `llimphi-module-bookmarks`     | `editor.bookmarks`       | Ctrl+Alt+B / Ctrl+Shift+B |
 | `llimphi-module-mini-map`      | `editor.mini-map`        | Ctrl+Shift+M      |
 | `llimphi-module-symbol-outline`| `editor.symbol-outline`  | Ctrl+Shift+O      |
+| `llimphi-module-allichay`      | — (renderiza el `Schema` de config declarativa de `allichay`) | — |
+| `llimphi-module-selector`      | — (trait `Selector`: abrir/guardar portátil, `HostSelector` FS / `WawaSelector` content-addressed) | — |
 
 | Crate (Tier 2 runtime)         | Rol                                                                              |
 |--------------------------------|----------------------------------------------------------------------------------|

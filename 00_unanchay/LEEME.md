@@ -8,7 +8,7 @@ La regla del cuadrante es **fidelidad antes que opinión**: lo que entra se pres
 
 - **[chaka](chaka/README.md)** — puente al legado. Lee fuentes externas (BCD, formatos viejos, lenguajes muertos) y las normaliza al lenguaje del monorepo.
 - **[khipu](khipu/README.md)** — captura de notas con gravedad temporal. El olvido es parte del modelo: lo viejo se difumina, lo recurrente queda.
-- **[pineal](pineal/README.md)** — visualización agnóstica del backend (cartesiano · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · umbrella). El órgano visual.
+- **[pineal](pineal/README.md)** — visualización agnóstica del backend (cartesiano · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · hexbin · contour · bars). El órgano visual.
 - **[pluma](pluma/README.md)** — documentos vivos. Markdown como grafo de átomos editables, con LLM como transformador, no como autor.
 - **[puriy](puriy/README.md)** — navegador web soberano sobre Servo + Llimphi. Mismo engine en Linux y en Wawa bare-metal.
 - **[rimay](rimay/README.md)** — lenguaje. Embeddings y verbos: cuando algo *quiere decir* algo, pasa por acá.

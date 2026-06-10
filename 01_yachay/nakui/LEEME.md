@@ -26,11 +26,14 @@ cargo run --release -p nakui-explorer-llimphi
 | Crate | Rol |
 |---|---|
 | [`nakui-core`](nakui-core/README.md) | Motor: tokens, schema, DAG, cascada, WAL. |
-| [`nakui-sheet`](nakui-sheet/README.md) | Vista matriz (rangos, celdas, fórmulas). |
+| [`nakui-backend`](nakui-backend/) | Backend agnóstico de GUI: MemoryStore + EventLog + executors, persistencia WAL/snapshot con recovery. |
+| [`nakui-sheet`](nakui-sheet/README.md) | Vista matriz (rangos, celdas, fórmulas, motor de pivot). |
 | [`nakui-sheet-nakuicore`](nakui-sheet-nakuicore/README.md) | Bridge nakui-sheet ↔ nakui-core. |
 | [`nakui-sheet-llimphi`](nakui-sheet-llimphi/README.md) | UI matriz Llimphi. |
 | [`nakui-ui-llimphi`](nakui-ui-llimphi/README.md) | Shell de UI (selector de vista, panel). |
 | [`nakui-explorer-llimphi`](nakui-explorer-llimphi/README.md) | Explorer del grafo de tokens. |
+
+Los módulos de producción viven en [`modules/`](modules/) — `crm`, `inventory`, `sales`, `treasury`: schema Nickel (`schema.ncl`) + morfismos Rhai, ejecutados por el kernel de executors de `nakui-core` (133/133 tests verdes).
 
 ## Consideraciones
 
@@ -38,7 +41,7 @@ cargo run --release -p nakui-explorer-llimphi
 - **WAL antes que mutar**: cada operación pasa por log; el dato en memoria sólo cambia cuando el WAL se sincronizó.
 - **No es Excel.** No buscamos compatibilidad de fórmulas con XLSX; los formularios y el grafo son first-class, no addons.
 
-## Estado (2026-05-31)
+## Estado (2026-06-09)
 
 ### Hecho
 
@@ -48,13 +51,23 @@ cargo run --release -p nakui-explorer-llimphi
 - Parser de fórmulas + catálogo de funciones por categoría
   (`formula/`, splitteado desde el megafile `funcs.rs` de ~1.9k LOC).
 - `nakui-core`: motor de tokens/schema/DAG con cascada y WAL (base de las
-  tres vistas).
+  tres vistas) — 133/133 tests verdes, incluyendo los suites de integración
+  de los módulos `crm`/`inventory`/`sales`/`treasury` (`modules/`, schema
+  Nickel + morfismos Rhai como `register_cash_move` y
+  `transfer_between_cajas`).
+- `nakui-backend`: backend agnóstico de GUI extraído de la UI (regla #2) —
+  MemoryStore + EventLog + executors por módulo, persistencia WAL/snapshot
+  con recovery y auto-compaction.
 - Bridge `nakui-sheet-nakuicore` entre la vista matriz y el motor de tokens.
 - UI Llimphi viva: `nakui-sheet-llimphi` (matriz), `nakui-ui-llimphi`
   (shell + selector de vista), `nakui-explorer-llimphi` (grafo de morfismos
   con zoom + fit-to-view). Menús principal y contextual de edición añadidos.
 - Métricas/desgloses: SumBySeries multi-serie, columnas apiladas, running
-  total, tesorería (saldo acumulado), count_distinct, labels legibles.
+  total, tesorería (saldo acumulado), count_distinct, labels legibles; el
+  motor de tabla dinámica vive en `nakui_sheet::pivot`.
+- Edición in-situ en la ficha de detalle (click en un campo abre el editor
+  en el lugar, sin form aparte) + stat cards con la firma de panel del kit
+  (`panel_signature_painter`, coherencia visual Nivel 4).
 - Megafiles de los binarios Llimphi (~2k LOC) splitteados en módulos.
 
 ### Pendiente

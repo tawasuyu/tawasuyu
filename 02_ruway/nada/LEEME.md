@@ -2,7 +2,7 @@
 
 > Editor de archivos sobre Llimphi. Banco de pruebas del framework.
 
-`nada` (nombre interno; antes `tawasuyu-edit`) es el editor de texto del monorepo: file tree a la izquierda, editor con syntax highlight + LSP a la derecha, paleta de comandos, find-in-files, mini-mapa, bookmarks, diff viewer, terminal embebida, sesiones JSON. Cada feature corresponde a un módulo de Llimphi — `nada` ensambla; no inventa.
+`nada` (nombre interno; antes `tawasuyu-edit`, renombrado 2026-05-27) es el editor de texto del monorepo: file tree a la izquierda, editor con syntax highlight + LSP a la derecha, paleta de comandos, find-in-files, mini-mapa, bookmarks, diff viewer, terminal embebida, panel de configuración embebido (allichay), UI localizada con `rimay-localize` (es/en/qu), sesiones JSON. Cada feature corresponde a un módulo de Llimphi — `nada` ensambla; no inventa. Es además el patrón de referencia del cableado menubar / edit-menu / clipboard que copian las demás apps.
 
 ## Instalación
 
@@ -21,9 +21,9 @@ cargo run --release -p nada
 
 Sin sub-crates: `nada` es un único binario que **consume** los módulos y widgets de Llimphi:
 
-- `llimphi-module-{command-palette, diff-viewer, fif, file-picker, bookmarks, mini-map, shuma-term, symbol-outline}`
-- `llimphi-widget-{tabs, text-editor, text-editor-lsp, text-input, tree}`
-- `wawa-config{,-llimphi}` para preferencias
+- `llimphi-module-{command-palette, diff-viewer, fif, file-picker, bookmarks, mini-map, shuma-term, symbol-outline, allichay}`
+- `llimphi-widget-{tabs, text-editor, text-editor-lsp, text-input, tree, scroll, menubar, edit-menu, context-menu}`
+- `wawa-config{,-llimphi}` para preferencias, `rimay-localize` para i18n
 
 ## Consideraciones
 

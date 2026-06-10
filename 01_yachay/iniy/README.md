@@ -8,7 +8,7 @@
 
 ```sh
 cargo run --release -p iniy-cli -- ingest /path/to/book.md
-cargo run --release -p iniy-cli -- audit  /path/to/book.md
+cargo run --release -p iniy-cli -- extract <doc_id>   # then: nli, contradictions, testimonio, consenso, ask...
 cargo run --release -p iniy-explorer-llimphi
 cargo run --release -p iniy-server
 ```
@@ -21,7 +21,19 @@ cargo run --release -p iniy-server
 
 ## Crates
 
-See [README.md](README.md). Pipeline: `iniy-{core, ingest, extract, graph, nli, nli-llm, store, wiki, cli, server, explorer-llimphi}`.
+| Crate | Role |
+|---|---|
+| [`iniy-core`](iniy-core/README.md) | Types: opinions, evidence, subjectivity axes. |
+| [`iniy-ingest`](iniy-ingest/README.md) | Source readers (md/pdf/wiki). |
+| [`iniy-extract`](iniy-extract/README.md) | Assertion extraction. |
+| [`iniy-graph`](iniy-graph/README.md) | Assertion graph + relations. |
+| [`iniy-nli`](iniy-nli/README.md) | Local inference (rules + embeddings via rimay). |
+| [`iniy-nli-llm`](iniy-nli-llm/README.md) | LLM-delegated inference. |
+| [`iniy-store`](iniy-store/README.md) | Persistence. |
+| [`iniy-wiki`](iniy-wiki/README.md) | Crawler/parser for Wikipedia/MediaWiki. |
+| [`iniy-cli`](iniy-cli/README.md) | CLI. |
+| [`iniy-server`](iniy-server/README.md) | HTTP. |
+| [`iniy-explorer-llimphi`](iniy-explorer-llimphi/README.md) | Llimphi UI: graph + audit. |
 
 ## Considerations
 

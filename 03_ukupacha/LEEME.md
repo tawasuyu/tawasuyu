@@ -9,6 +9,7 @@ La regla del cuadrante es **la invariante antes que la feature**: en `ukupacha` 
 - **[agora](agora/README.md)** — plaza pública. Foro, conversación, deliberación con identidad mínima.
 - **[arje](arje/README.md)** — bootloader y vida temprana del sistema. `arje-seeds` (semillas), `arje-packager` (empaquetado), `arje-installer` (instalación), `arje-absorb` (ingestión de un sistema existente).
 - **[minga](minga/README.md)** — colaboración entre nodos. Tradición andina del trabajo comunitario, aplicada a la red.
+- **[sandokan](sandokan/LEEME.md)** — el plano de control, encarnado: correr, parar, mirar y supervisar unidades en Linux por un solo contrato (el `Engine` de `shared/sandokan`) — cuatro sabores de engine (uno por transporte) + CLI + monitor visual.
 - **[wawa](wawa/README.md)** — sistema operativo desde cero (`wawa-kernel`, `wawa-boot`, `wawa-fs`, `apps/`). Ingesta POSIX → BLAKE3; el filesystem como DAG content-addressed; gaming-grade (AOT WASM + GPU passthrough + frame pacing cooperativo).
 - **[wawa-explorer](wawa-explorer/README.md)** — visor host-side del DAG de Wawa: lee `.img`, habla el protocolo Akasha por raw sockets, muestra el árbol con detalle en Llimphi.
 

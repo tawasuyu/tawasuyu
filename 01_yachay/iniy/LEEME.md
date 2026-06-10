@@ -8,7 +8,7 @@
 
 ```sh
 cargo run --release -p iniy-cli -- ingest /path/to/libro.md
-cargo run --release -p iniy-cli -- audit  /path/to/libro.md
+cargo run --release -p iniy-cli -- extract <doc_id>   # después: nli, contradictions, testimonio, consenso, ask...
 cargo run --release -p iniy-explorer-llimphi
 cargo run --release -p iniy-server
 ```

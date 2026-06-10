@@ -7,23 +7,37 @@ Bridge between the `doomgeneric` engine (C) and Llimphi: FFI + WAD sprite atlas 
 ## Install
 
 ```sh
-# precondition: place doom1.wad (shareware or registered) in cwd
-cargo run --release -p supay-app-llimphi
+# real Doom (precondition: doom1.wad, shareware or registered, in cwd)
 cargo run --release -p supay-doom-llimphi
+
+# Phase 0 mini-raycaster (hardcoded, no WAD needed)
+cargo run --release -p supay-app-llimphi
+
+# headless frame dump to PNG (verification without a window)
+cargo run --release -p supay-doom-llimphi --example dump_frame
 ```
 
 ## Compatibility
 
 - **Linux / macOS / Windows** — native Llimphi + `cc` to build `doomgeneric`.
-- **Wawa** — `supay-core/scene/wad` compile to WASM; renderer uses the Wawa HAL.
+- **Wawa** — `supay-core/scene/wad` compile to WASM; the renderer over the Wawa HAL is not closed yet (see "Estado").
 
-Crates listed in [README.md](README.md).
+| Crate | Role |
+|---|---|
+| [`supay-core`](supay-core/README.md) | FFI to `doomgeneric` + safe `DoomEngine`. |
+| [`supay-wad`](supay-wad/README.md) | WAD parser (lumps, patches, flats, sprites). |
+| [`supay-scene`](supay-scene/README.md) | Level snapshot: sectors, mobjs, player. |
+| [`supay-render-llimphi`](supay-render-llimphi/README.md) | `scene_view` → vello polygons + atlas. |
+| [`supay-audio`](supay-audio/) | Doom mixer over cpal: WAD SFX + MUS→FM music + takiy bridge. |
+| [`supay-mini-core`](supay-mini-core/) | Mini-raycaster world + sim (Phase 0), GUI-agnostic. |
+| [`supay-doom-llimphi`](supay-doom-llimphi/README.md) | Driver: links engine + atlas + UI. |
+| [`supay-app-llimphi`](supay-app-llimphi/README.md) | Phase 0 mini-raycaster binary (paints `supay-mini-core`). |
 
 ## Considerations
 
 - **Legal WAD:** only shareware `doom1.wad` is referenced; others come from you.
 - `vendor/doomgeneric/`: clone it from upstream before build (`build.rs` detects).
-- **`FEATURE_SOUND=0`** for now; audio bus goes through `takiy` when ready.
+- **`FEATURE_SOUND=0`** stays: audio doesn't come from the C engine but from `supay-audio` (Rust), which already synthesizes WAD SFX + MUS music and bridges `takiy` (`AudioEngine::play_takiy_score`).
 - Simplified 3D rendering: BSP-correct painter's ordering (Phase 3.13b) but no per-column BSP occlusion clipping yet — see "Estado" below.
 
 ## Estado (2026-05-31)
@@ -57,7 +71,10 @@ Crates listed in [README.md](README.md).
   crossfade de ambiente, oclusión pasa-bajos por linedef y por vano (puertas cerradas
   tapan el sonido). Cierra el hueco del audio (0% → sonando).
 - **Menús** (lotes 4 y 6): menú principal + menús contextuales.
-- Refactors regla #1: split de `supay-render` (8556 LOC) y `supay-app-llimphi` main (1849).
+- Refactors regla #1: split de `supay-render` (8556 LOC) y `supay-app-llimphi` main (1849);
+  extracción del mundo+sim del raycaster a `supay-mini-core` (regla #2).
+- **Volcado headless de frames a PNG** (`supay-doom-llimphi/examples/dump_frame.rs`) para
+  verificar el renderer sin ventana.
 
 ### Pendiente
 

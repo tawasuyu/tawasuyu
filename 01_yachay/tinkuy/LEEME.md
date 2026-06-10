@@ -16,6 +16,7 @@ cargo run --release -p tinkuy-sim -- --particles 100000 --ticks 1000
 
 - **Linux / macOS / Windows** — motor puro Rust con `rayon`.
 - **Wawa** — `tinkuy-core` compila a WASM; snapshots intercambiables; `apps/tinkuy` es un cdylib de 30 KiB empotrado en el kernel y manejado desde userspace por `apps/testigo` (sim LJ lattice 4³ con visor 3D axonométrico).
+- **Notebooks** — `pluma-notebook-kernel-tinkuy` (en `00_unanchay/pluma`) corre una sim LJ desde una celda de notebook → PNG + observables.
 
 ## Crates
 
@@ -24,7 +25,7 @@ cargo run --release -p tinkuy-sim -- --particles 100000 --ticks 1000
 | [`tinkuy-core`](tinkuy-core/LEEME.md) | ECS SoA + Grid3D + Velocity-Verlet. |
 | [`tinkuy-forces`](tinkuy-forces/LEEME.md) | Catálogo de fuerzas (Lennard-Jones, Coulomb, ...). |
 | [`tinkuy-abi`](tinkuy-abi/LEEME.md) | ABI plana C-friendly que usa el cdylib WASM. |
-| [`tinkuy-dsl`](tinkuy-dsl/LEEME.md) | DSL matemático: parser Pratt → AST → bytecode + optimizer (números en `benches/optimize.rs`). |
+| [`tinkuy-dsl`](tinkuy-dsl/LEEME.md) | DSL matemático: parser Pratt → AST → bytecode + optimizer (números en `benches/optimize.rs`); ejemplos `.tnk` en `examples/` (lj, coulomb, hooke). |
 | [`tinkuy-llimphi`](tinkuy-llimphi/LEEME.md) | UI Llimphi: tiles, visor 3D, grafo de nodos, rewind de snapshots. |
 | [`tinkuy-sim`](tinkuy-sim/LEEME.md) | CLI: corre simulación, dumpea snapshots. |
 
@@ -33,3 +34,4 @@ cargo run --release -p tinkuy-sim -- --particles 100000 --ticks 1000
 - **Determinista** con seed fija + número de threads fijo (`rayon` con scheduler propio).
 - **Snapshots = BLAKE3 de la SoA serializada.** Mismo input ⇒ mismo hash; reproducibilidad bit-a-bit entre máquinas.
 - **Sin alocar en el hot loop.** El motor pre-aloca grids, partículas y buffers temporales al `init`.
+- **`DslForce` queda single-thread a propósito.** Bench D4 (const-fold + simplify): LJ ×1.31, Coulomb ×1.00, Hooke ×1.47; el fast path siguen siendo los kernels nativos paralelos (ver [PLAN.md](PLAN.md)).

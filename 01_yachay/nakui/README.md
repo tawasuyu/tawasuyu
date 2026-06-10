@@ -26,11 +26,14 @@ cargo run --release -p nakui-explorer-llimphi
 | Crate | Role |
 |---|---|
 | [`nakui-core`](nakui-core/README.md) | Engine: tokens, schema, DAG, cascade, WAL. |
-| [`nakui-sheet`](nakui-sheet/README.md) | Matrix view (ranges, cells, formulas). |
+| [`nakui-backend`](nakui-backend/) | GUI-agnostic backend: MemoryStore + EventLog + executors, WAL/snapshot persistence with recovery. |
+| [`nakui-sheet`](nakui-sheet/README.md) | Matrix view (ranges, cells, formulas, pivot engine). |
 | [`nakui-sheet-nakuicore`](nakui-sheet-nakuicore/README.md) | nakui-sheet ↔ nakui-core bridge. |
 | [`nakui-sheet-llimphi`](nakui-sheet-llimphi/README.md) | Matrix UI Llimphi. |
 | [`nakui-ui-llimphi`](nakui-ui-llimphi/README.md) | UI shell (view selector, panel). |
 | [`nakui-explorer-llimphi`](nakui-explorer-llimphi/README.md) | Token-graph explorer. |
+
+Production modules live in [`modules/`](modules/) — `crm`, `inventory`, `sales`, `treasury`: Nickel schema (`schema.ncl`) + Rhai morphisms, executed by the `nakui-core` executor kernel (133/133 tests green).
 
 ## Considerations
 

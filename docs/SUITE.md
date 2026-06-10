@@ -47,10 +47,14 @@ a las cuatro fases del ciclo de la información:
 ```
 tawasuyu/
 ├── 00_unanchay/   PERCIBIR  — pluma · khipu · rimay · chaka · pineal · puriy
-├── 01_yachay/     CONOCER   — cosmos · dominium · nakui · iniy
+├── 01_yachay/     CONOCER   — cosmos · dominium · nakui · iniy · tinkuy
 ├── 02_ruway/      HACER     — mirada · shuma · nahual · chasqui · takiy · llimphi · supay
-├── 03_ukupacha/   RAÍZ      — arje · wawa · agora · minga
-├── shared/                  — sandokan · auth · card · ssh · format
+│                              · media · tullpu · cards · nada · pata · ayni
+│                              · paloma · raymi · uya · wawa (host-side)
+├── 03_ukupacha/   RAÍZ      — arje · wawa (kernel + apps WASM) · agora · minga
+│                              · sandokan · wawa-explorer
+├── shared/                  — sandokan · auth · card · ssh · format · foreign-*
+│                              · rimay-localize · wawa-config · forth-emisor · app-bus
 └── web/                     — landing sobria (no producto)
 ```
 
@@ -79,21 +83,26 @@ Disciplina constante:
    idioma. Si el quechua nombra mejor una cosa que el inglés, queda en
    quechua.
 
-Hoy (2026-05-25): **~220 crates compilando** en el workspace, más 13 más en
-wawa (kernel, excluido del workspace por target distinto). GPUI está marcado
-para extinción y se reemplaza por Llimphi.
+Hoy (2026-06-10): **~480 crates compilando** en el workspace, más el kernel
+wawa y sus apps (excluidos del workspace por target distinto). GPUI quedó
+extinto (2026-05-26): todo lo gráfico corre sobre Llimphi.
 
 ---
 
 ## 3. Los dominios, uno por uno
+
+> Este recorrido se escribió al 2026-05-25 y cubre los dominios fundacionales.
+> Los que llegaron después (media, tullpu, cards, nada, pata, ayni, paloma,
+> raymi, uya, tinkuy, sandokan, wawa-explorer…) están descritos en el README
+> de su cuadrante (`00_unanchay/` … `03_ukupacha/`).
 
 ### `00_unanchay` — Percibir
 
 **pluma** — Edición de documentos vivos. No “un editor de markdown”: un
 sistema donde un documento es un grafo dirigido (DAG) de bloques que se
 pueden ejecutar, encadenar, observar. Incluye un *notebook* estilo Jupyter
-pero con runtimes vía WASM (RustPython, Boa para JS, webR para R), y un
-*deck* (presentaciones). Editor portado a Llimphi (2026-05-25): bloques
+con kernels intercambiables (LLM, Python vía RustPython, WASM, tinkuy,
+media), y un *deck* (presentaciones). Editor portado a Llimphi (2026-05-25): bloques
 posicionados absolutamente, conectores en S, osciloscopio de coherencia
 visible.
 
@@ -107,8 +116,9 @@ según afinidad de contenido, no por carpetas. El nombre viene del sistema
 de cuerdas anudadas inca: información codificada en topología.
 
 **rimay** — Capa de lenguaje natural. Un *daemon* (`verbo-daemon`) sirve
-embeddings y modelos pequeños locales a cualquier otro dominio que necesite
-entender o generar texto. Sin enviar nada a servidores externos.
+embeddings locales a cualquier otro dominio que necesite entender texto
+(la generación vive aparte, en `pluma-llm`). Sin enviar nada a servidores
+externos.
 
 **chaka** — Puente con código legacy. *Chaka* es “puente” en quechua: un
 compilador-traductor con lexer, parser, IR, codegen y runtime que entiende
@@ -121,7 +131,8 @@ industria abandonó; chaka lo recupera.
 **pineal** — Visualización viva. Charts, heatmaps, treemaps, polares,
 cartesianos, financieros, malla 3D, fósforo (oscilloscopio retro),
 streaming. Backend basado en *SceneCanvas* sobre Llimphi (ya migrado del
-GPUI viejo). Cuatro widgets y cuatro demos funcionando.
+GPUI viejo). Catálogo cerrado (2026-06-01): 12 painters, export
+SVG/PNG/PDF, camino GPU directo (hasta 1 M de primitivas) y 14 demos.
 
 **puriy** — *Navegador web soberano*. Quizás la apuesta más ambiciosa del
 cuadrante. Embebe **Servo** (motor web en Rust, sin C++) y delega *todo* el
@@ -283,19 +294,21 @@ pendientes.
 **WASM**. *Wawa* es “niño / bebé” en quechua: porque el kernel arranca
 desde lo más pequeño. La idea radical: en vez de procesos aislados por
 MMU (con todo el costo de cambio de contexto), todas las aplicaciones son
-módulos **WASM compilados AOT con cranelift**, viven en un único espacio
-de direcciones, y la seguridad la garantiza la **verificación de tipos
-del bytecode**, no el hardware. Ingesta de datos vía POSIX → BLAKE3
+módulos **WASM** (hoy ejecutados por `wasmi`; el AOT con cranelift es una
+optimización planificada), viven en un único espacio de direcciones, y la
+seguridad la garantiza la **verificación de tipos del bytecode**, no el
+hardware. Ingesta de datos vía POSIX → BLAKE3
 (Destilador en host + AoE en red + atlas con Fontdue, fase 21a): wawa
 *nunca* habla NTFS/Ext4 directo, todo entra por contenido hasheado.
 
 Optimizaciones gaming planificadas: AOT WASM cranelift, GPU passthrough,
 frame pacing cooperativo, asset streaming BLAKE3.
 
-Apps wawa ya esbozadas: `bitacora` (logs), `cronista` (historia/registro),
-`discola` (audio), `glotona` (consumidor de recursos / test), `hello_wasm`,
-`memoriosa` (memoria), `pregon` (anuncios), `pulso` (heartbeat),
-`tonada` (audio melódico).
+Apps wawa hoy (17 módulos WASM): `asistente`, `ayni`, `bitacora` (logs),
+`cronista` (historia/registro), `discola` (audio), `glotona` (consumidor de
+recursos / test), `hello_wasm`, `memoriosa` (memoria), `mudanza`, `pluma`,
+`pregon` (anuncios), `pulso` (heartbeat), `rimay`, `testigo`, `tinkuy`,
+`tonada` (audio melódico), `tonalero`.
 
 > *Logro técnico:* un kernel donde la unidad de aislamiento es el módulo
 > WASM, no el proceso UNIX. Eso significa: arranque más rápido,
@@ -353,8 +366,8 @@ ecosistema Rust, y rellena los huecos.
 | Compositor Wayland | **mirada** (propio) | Compositor + shell + bar. |
 | Motor web | **Servo** + **puriy** | Único motor web nativo en Rust. |
 | Hashing de contenido | **BLAKE3** | Direccionamiento por contenido en wawa y notebooks. |
-| WebAssembly runtime | **wasmtime/cranelift** | AOT para apps de wawa y kernels de notebook. |
-| Lenguajes embebidos | **Rhai** (scripting de nakui), **RustPython** / **Boa** / **webR** (kernels de notebook) | Ejecución sandboxed. |
+| WebAssembly runtime | **wasmi** | Apps del kernel wawa y plugins Llimphi. |
+| Lenguajes embebidos | **Rhai** (scripting de nakui), **RustPython** (kernel Python del notebook) | Ejecución sandboxed. |
 | Decodificación imágenes | crate `image` (PNG, JPEG) | Viewers de nahual. |
 | Persistencia de ERP | WAL + snapshot + auto-compact propios | nakui-core. |
 | P2P / DHT | minga propio | VFS distribuido. |
@@ -405,14 +418,13 @@ Visto en frío, lo que tawasuyu logra es:
 
 7. **ERP, navegador web, simulador, juego, compositor, kernel — todos en
    el mismo workspace, todos verdes en `cargo check --workspace`.** Más de
-   220 crates conviven sin romperse. Eso es disciplina de monorepo a un
+   480 crates conviven sin romperse. Eso es disciplina de monorepo a un
    nivel raro en proyectos no corporativos.
 
 8. **Reescritura simultánea de GPUI.** GPUI (el toolkit de Zed) era una
-   dependencia clave. Se está desenchufando crate a crate (mirada-greeter,
-   pluma-editor, dominium-canvas, cosmos-canvas, nakui-explorer, nahual-shell
-   ya migrados). Salir de un toolkit de UI vivo es brutal — y tawasuyu lo
-   hace en producción.
+   dependencia clave. Se desenchufó crate a crate hasta completar la
+   migración (2026-05-26): hoy no queda código gráfico sobre GPUI. Salir
+   de un toolkit de UI vivo es brutal — y tawasuyu lo hizo en producción.
 
 ---
 
@@ -498,6 +510,9 @@ misma**: la informática no es solo Silicon Valley.
 
 ## 7. Estado al 2026-05-25
 
+> Snapshot histórico, conservado tal cual. Para el estado vivo de cada
+> dominio, ver el README de su cuadrante y los `SDD.md` por dominio.
+
 - ~220 crates en el workspace tawasuyu, verde en `cargo check --workspace`.
 - 13 crates más en wawa (kernel, target distinto, excluido del workspace).
 - Llimphi: 5 crates (`hal/raster/layout/text/ui`) verdes en hardware.
@@ -531,7 +546,7 @@ determinista.
   depender de Google, Apple ni Microsoft. Cada palabra rara (cosmos,
   nakui, mirada, llimphi) es el nombre de un módulo, como “Word” es el
   nombre de un programa de Microsoft.
-- Si sos programador: es un workspace Rust de ~220 crates organizados en
+- Si sos programador: es un workspace Rust de ~480 crates organizados en
   cuatro cuadrantes semánticos, con un motor gráfico propio (Llimphi)
   sobre wgpu/vello/taffy/parley, un compositor Wayland propio (mirada),
   un kernel WASM SASOS propio (wawa), un navegador propio sobre Servo
@@ -542,6 +557,8 @@ determinista.
   subjetividad, y revaloración de lenguas no-coloniales como
   infraestructura semántica.
 
-El nombre **tawasuyu** (de *geocentric organizer*) refleja el principio
-fundacional: la computación parte del lugar concreto donde el usuario
+El nombre **tawasuyu** (quechua: *tawa* = cuatro, *suyu* = región — eco del
+Tawantinsuyu, "las cuatro regiones") refleja el principio fundacional: la
+arquitectura son cuatro cuadrantes, las cuatro fases del ciclo de la
+información, y la computación parte del lugar concreto donde el usuario
 está parado, no del centro de datos de otro.

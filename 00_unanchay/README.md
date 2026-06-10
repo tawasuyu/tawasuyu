@@ -8,7 +8,7 @@ The quadrant's rule is **fidelity before opinion**: what enters keeps its shape,
 
 - **[chaka](chaka/README.md)** — bridge to the legacy. Reads external sources (BCD, old formats, dead languages) and normalizes them to the monorepo's language.
 - **[khipu](khipu/README.md)** — note capture with temporal gravity. Forgetting is part of the model: the old fades, the recurrent stays.
-- **[pineal](pineal/README.md)** — backend-agnostic visualization (Cartesian · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · umbrella). The visual organ.
+- **[pineal](pineal/README.md)** — backend-agnostic visualization (Cartesian · polar · mesh · treemap · phosphor · flow · heatmap · stream · financial · hexbin · contour · bars). The visual organ.
 - **[pluma](pluma/README.md)** — living documents. Markdown as a graph of editable atoms, with LLM as a transformer, not as an author.
 - **[puriy](puriy/README.md)** — sovereign web browser over Servo + Llimphi. Same engine on Linux and Wawa bare-metal.
 - **[rimay](rimay/README.md)** — language. Embeddings and verbs: when something *wants to say* something, it passes through here.

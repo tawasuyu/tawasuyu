@@ -27,7 +27,9 @@ cargo run --release -p agora-app
 | [`agora-keystore`](agora-keystore/README.md) | Encrypted private-seed storage (Argon2 + ChaCha20-Poly1305). |
 | [`agora-gossip`](agora-gossip/README.md) | Transport-agnostic anti-entropy protocol over signed attestations. |
 | [`agora-net-brahman`](agora-net-brahman/README.md) | libp2p bridge: registers `/agora/gossip/1.0.0` over `BrahmanNet` (shared with minga). |
-| [`agora-app`](agora-app/README.md) | Llimphi UI: identities, attestations, composer, policy. |
+| [`agora-channel`](agora-channel/README.md) | Signing adapter to wawa's `format::Canal` contract: signed roots/releases, channel-history verification, capability grants by bytecode hash (§14.1.3). |
+| [`agora-cli`](agora-cli/README.md) | Shell CLI: identities (rotate/revoke), attestations, export/import, channels, and the `wawa` ceremonies (publicar / concesion / anunciar / revocar). |
+| [`agora-app`](agora-app/README.md) | Llimphi UI: identities, attestations, composer, policy, wawa control tiles (capability/release). |
 
 ## Considerations
 
@@ -37,7 +39,7 @@ cargo run --release -p agora-app
 - Self-attestation is preserved but flagged separately from third-party endorsement.
 - Plays well with `minga`: when both are active, agora rides the same `BrahmanNet` node (one PeerId, one Kademlia, two stream protocols).
 
-## Estado (2026-05-31)
+## Estado (2026-06-10)
 
 ### Hecho
 - Núcleo de identidad completo: `agora-core` (identidades, claims, atestaciones Ed25519, multifirma, lifecycle) + `agora-graph` (TrustGraph con corroboración y política negociada) + `agora-store` (persistencia JSON atómica con re-verificación al cargar) + `agora-keystore` (semillas cifradas Argon2 + ChaCha20-Poly1305).

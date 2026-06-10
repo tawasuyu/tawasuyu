@@ -27,7 +27,9 @@ cargo run --release -p agora-app
 | [`agora-keystore`](agora-keystore/LEEME.md) | Almacén cifrado de seeds privadas (Argon2 + ChaCha20-Poly1305). |
 | [`agora-gossip`](agora-gossip/LEEME.md) | Protocolo anti-entropy transport-agnóstico sobre atestaciones firmadas. |
 | [`agora-net-brahman`](agora-net-brahman/LEEME.md) | Puente libp2p: registra `/agora/gossip/1.0.0` sobre `BrahmanNet` (compartido con minga). |
-| [`agora-app`](agora-app/LEEME.md) | UI Llimphi: identidades, atestaciones, compositor, política. |
+| [`agora-channel`](agora-channel/LEEME.md) | Adapter de firma al contrato `format::Canal` de wawa: raíces/releases firmados, verificación del historial de un canal, concesiones de capacidad por hash de bytecode (§14.1.3). |
+| [`agora-cli`](agora-cli/LEEME.md) | CLI de shell: identidades (rotar/revocar), atestaciones, exportar/importar, canales y las ceremonias `wawa` (publicar / concesion / anunciar / revocar). |
+| [`agora-app`](agora-app/LEEME.md) | UI Llimphi: identidades, atestaciones, compositor, política, tiles de control wawa (capacidad/release). |
 
 ## Consideraciones
 

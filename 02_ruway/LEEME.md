@@ -6,14 +6,22 @@ La regla del cuadrante es **el material manda**: un widget no se diseña pensand
 
 ## Aplicaciones
 
+- **[ayni](ayni/LEEME.md)** — chat persona-a-persona soberano, local-first, sin servidor: la conversación como grafo criptográfico reproducible (BLAKE3 + DAG), identidad `agora`, transporte `chasqui`/`minga`.
+- **[cards](cards/LEEME.md)** — una sola manera de leer toda Card: proyecta los documentos Card de la suite (runtime, semánticos, de UI) sobre una única estructura canónica.
 - **[chasqui](chasqui/README.md)** — broker de mensajería + bus tipado. El sistema nervioso del monorepo.
 - **[llimphi](llimphi/README.md)** — framework de UI nativa (hal · raster · layout · text · theme · ui) + widgets + modules. El núcleo gráfico que comparten todas las apps.
+- **[media](media/LEEME.md)** — el dominio audio/video de la suite: player, decoders, visualizadores, grabadora.
 - **[mirada](mirada/README.md)** — compositor Wayland (`mirada-compositor`) + portal XDG (`mirada-portal`) + greeter de login (`mirada-greeter`). La pila de display.
 - **[nada](nada/README.md)** — editor de archivos sobre Llimphi: file tree + editor con LSP + clipboard real + sesiones. Banco de pruebas del framework.
 - **[nahual](nahual/README.md)** — visores cotidianos: shell de archivos, viewer de texto, viewer de imagen.
+- **[paloma](paloma/LEEME.md)** — cliente de correo nativo sobre Llimphi: IMAP de entrada, SMTP de salida, sin navegador de por medio.
+- **[pata](pata/LEEME.md)** — el marco del escritorio: barras, paneles y dock declarativos desde un archivo de config; mismo modelo en Linux y en Wawa.
+- **[raymi](raymi/LEEME.md)** — calendario + contactos nativos (CalDAV/CardDAV), el compañero de paloma; reusa su capa de cuentas.
 - **[shuma](shuma/README.md)** — shell interactivo (zsh/fish-paridad) con vistas en chasis Llimphi (TopBar/Main/BottomBar/Drawer).
 - **[supay](supay/README.md)** — renderer estilo DOOM sobre Llimphi (FFI a `doomgeneric`, atlas de sprites, paletas WAD).
 - **[takiy](takiy/README.md)** — música. Captura, secuenciación, render audio.
+- **[tullpu](tullpu/LEEME.md)** — editor de imágenes por capas donde nada se destruye: la pila de capas es un DAG content-addressed; las capas derivadas quedan *stale* en vez de sobreescribir.
+- **[uya](uya/README.md)** — videollamada soberana (`uya` = "cara" en quechua): `uya-core` agnóstico + frontends Llimphi sobre el nodo P2P de la suite (`card-net`).
 - **[wawa](wawa/README.md)** — panel de control + `wawactl` para la pila Wawa (la pareja userspace del kernel de `03_ukupacha/wawa`).
 
 ## Manifiesto

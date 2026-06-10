@@ -2,7 +2,7 @@
 
 > Astronomía con precisión astronómica. Tiempo · efemérides · coordenadas · imágenes · astrología.
 
-Suite Rust de cálculo astronómico validada contra ephemerides oficiales (JPL DE440/441, IAU 2006/2000A, IERS). Cubre desde escalas de tiempo (UTC/TT/TAI/UT1) hasta proyecciones WCS pasando por catálogos estelares, posiciones planetarias, eclipses, tránsitos, reloj de sol, mareas, astrología tropical y sideral.
+Suite Rust de cálculo astronómico validada contra ephemerides oficiales (JPL DE440/441, IAU 2006/2000A, IERS). Cubre desde escalas de tiempo (UTC/TT/TAI/UT1) hasta proyecciones WCS pasando por catálogos estelares, posiciones planetarias, eclipses, tránsitos, reloj de sol, mareas, astrología tropical y sideral, astrocartografía y rectificación horaria (Sistema GR, [RECTIFICADOR.md](RECTIFICADOR.md)).
 
 ## Instalación
 
@@ -10,7 +10,7 @@ Suite Rust de cálculo astronómico validada contra ephemerides oficiales (JPL D
 # CLI
 cargo run --release -p cosmos-cli -- --help
 
-# App Llimphi (mapa del cielo + ephemerides interactivas)
+# App Llimphi (shell de 3 zonas: datos | gráfica | herramientas)
 cargo run --release -p cosmos-app-llimphi
 
 # Server HTTP
@@ -54,7 +54,7 @@ cargo run --release -p cosmos-server
 | [`cosmos-app-llimphi`](cosmos-app-llimphi/README.md) | App escritorio. |
 | [`cosmos-card`](cosmos-card/README.md) | Card resumen para escritorio. |
 | [`cosmos-cli`](cosmos-cli/README.md) | CLI. |
-| [`cosmos-store`](cosmos-store/README.md) | Cache local (DE files, catálogos). |
+| [`cosmos-store`](cosmos-store/README.md) | Persistencia SQLite del estudio (grupos → contactos → cartas). |
 | [`cosmos-server`](cosmos-server/README.md) | HTTP server (REST). |
 | [`cosmos-validation`](cosmos-validation/README.md) | Regression harness vs Horizons/AstroPy. |
 | [`cosmos-web`](cosmos-web/README.md) | Bindings WASM. |
@@ -65,7 +65,7 @@ cargo run --release -p cosmos-server
 - Los DE files se descargan **explícitamente** vía `cosmos-cli download`.
 - Astrología es separable: si no la querés, no enlazás `cosmos-astrology`.
 
-## Estado (2026-05-31)
+## Estado (2026-06-09)
 
 ### Hecho
 
@@ -79,7 +79,22 @@ cargo run --release -p cosmos-server
   `cosmos-render` sphere3d, `cosmos-coords` topocentric, `cosmos-engine` bridge).
 - App de escritorio `cosmos-app-llimphi`: shell profesional de 3 zonas
   redimensionables (datos | gráfica | herramientas), menú principal + menús
-  contextuales, pestañas y gráficas astronómicas.
+  contextuales, dock de paneles con pestañas acoplables («dientes»)
+  arrastrables entre sidebars, y sidebar delegable al rail de pata (opt-in).
+- Canvas astrológico completo: rueda natal, dial de 90° rotable (look de
+  lámina clásica, Escuela de Hamburgo), flor armónica con trama de aspectos
+  real, astrocartografía con mapa de continentes y zoom con detalle, y Cielo
+  gráfico (eclíptica, malla ecuatorial, constelaciones, zoom y drag).
+- Topocéntrico en las vistas: dial de 90°, cartografía y flor armónica
+  (geo relleno + topo contorno).
+- Rectificador de hora (Sistema GR / Germán Rosas): triggers por dirección
+  primaria con HUD y selector Naibod/Ptolomeo — manual en
+  [RECTIFICADOR.md](RECTIFICADOR.md).
+- Hoja imprimible con fidelidad gráfica (render real a PNG del mismo árbol
+  de vista) + tema B/N de impresión.
+- Diálogos de crear contacto y carta con datos natales (fecha, hora, ciudad
+  con presets lat/lon/tz), rama fija «Efemérides → Hoy» del instante actual,
+  e import/export de grupos (JSON).
 - Árbol de datos jerárquico (grupos → contactos → cartas) sobre SQLite
   (`cosmos-store`) con esfera 3D viva.
 - CRUD completo del árbol desde la UI: crear/renombrar inline/eliminar
@@ -89,9 +104,9 @@ cargo run --release -p cosmos-server
 
 ### Pendiente
 
-- Cerrar el ciclo de edición de cartas en la UI (formularios de datos natales
-  ricos, no sólo nombre).
-- Visualizaciones astrológicas avanzadas (ruedas de aspectos, tránsitos
-  animados) en el canvas Llimphi.
-- Ampliar cobertura de `cosmos-validation` a los núcleos recién extraídos.
+- Tránsitos animados en el canvas Llimphi.
+- Vista multi-carta (sinastría/compuesta) en la app — el cálculo ya existe
+  en `cosmos-astrology` (composite).
+- Ampliar cobertura de `cosmos-validation` a los núcleos recién extraídos
+  (`sundial`/`tides`/`skywatch` aún sin harness propio).
 - Pulir `cosmos-card` y los kernels de notebook como vistas embebibles.

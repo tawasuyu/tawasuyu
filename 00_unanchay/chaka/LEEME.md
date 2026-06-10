@@ -21,13 +21,14 @@ cargo build --release -p chaka-app
 | Crate | Rol |
 |---|---|
 | [`chaka-app`](chaka-app/LEEME.md) | CLI: `transpile`, `scaffold`, `run`, `check`. |
-| [`chaka-lexer`](chaka-lexer/LEEME.md) | Tokeniza fuentes COBOL; expande directivas `COPY`. |
+| [`chaka-lexer`](chaka-lexer/LEEME.md) | Tokeniza fuentes COBOL; expande `COPY` y aplica directivas `REPLACE`. |
 | [`chaka-parser`](chaka-parser/LEEME.md) | AST tipado (divisiones, árbol DATA, sentencias del PROCEDURE). |
 | [`chaka-ir`](chaka-ir/LEEME.md) | Baja el AST a statements tipados (`MOVE`, `IF`, `PERFORM`, `CALL`, `SEARCH`...). |
 | [`chaka-codegen`](chaka-codegen/LEEME.md) | IR → fuente Rust (por defecto) o IR → JSON. |
 | [`chaka-runtime`](chaka-runtime/LEEME.md) | Tipos de runtime contra los que enlaza el transpilado (`Num`, `Text`, `CobFile`, `format_edited`). |
 | [`chaka-bcd`](chaka-bcd/LEEME.md) | Aritmética decimal con semántica COBOL + codec packed-decimal (`COMP-3`). |
 | [`chaka-shadow`](chaka-shadow/LEEME.md) | Intérprete en proceso + harness GnuCOBOL para diff contra la verdad. |
+| [`chaka-app-llimphi`](chaka-app-llimphi/) | UI de escritorio: corpus + editor + sombra + Rust generado en vivo. |
 
 ## Test diferencial
 

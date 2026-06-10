@@ -1,6 +1,6 @@
 # SDD — superficie de terminal infinita y supereficiente
 
-> Estado: **diseño, sin implementar** · 2026-06-05 · autor de la tarea futura: quien forje esto.
+> Estado: **implementado — Fases 0-5 ✅** (ver §Estado al final) · diseño 2026-06-05, forjado al 2026-06-07.
 > Idioma del repo: español. Reemplaza, por fases, el `output_pane` actual del shell Llimphi.
 
 ## Tesis

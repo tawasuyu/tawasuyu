@@ -21,23 +21,27 @@ cargo run --release -p wawactl
 | Crate | Role |
 |---|---|
 | [`wawa-panel-llimphi`](wawa-panel-llimphi/README.md) | Llimphi control panel: app state, config, resources. |
-| [`wawactl`](wawactl/README.md) | CLI: `wawactl status`, `wawactl deploy`, etc. |
+| [`wawactl`](wawactl/README.md) | CLI: `wawactl show`, `wawactl set`, `wawactl gc`, `wawactl daemon-firma`, etc. |
 
 ## Considerations
 
 - **Userspace, not kernel.** Boot/fs/proc tweaks → `03_ukupacha/wawa`.
 - Panel and `wawactl` share the config model with the desktop shell (via `shared/wawa-config`).
 
-## Estado (2026-05-31)
+## Estado (2026-06-09)
 
 ### Hecho
 
-- **`wawa-panel-llimphi`**: app Llimphi gráfica con seis categorías (apariencia, idioma,
-  aplicaciones, monitor, módulos, acerca de); productor y consumidor del bus
-  `shared/wawa-config` (reacciona a `ConfigChanged` si otro proceso edita el archivo).
+- **`wawa-panel-llimphi`**: panel de configuración navegado por un rail de **dientes**
+  (`llimphi-widget-dock-rail`) con jerarquía de 3 niveles (pestaña → items en sidebar →
+  canvas): pestañas **Sistema** (Apariencia · Idioma · Interfaz · Arranque · Módulos) e
+  **Información**, más dientes-de-app suscritas (**mirada** — incl. keymap editable como
+  tabla — y **pata**). Renderiza con `llimphi-module-allichay` (edición in-situ de celdas
+  de tabla/lista, campo hex `#RRGGBB` en el color-picker, sidebar resizable/ocultable);
+  productor y consumidor del bus `shared/wawa-config`, con debounce del guardado.
 - **`wawactl`**: CLI sobre el mismo bus — `path`, `show`, `get`, `set`, `module`,
-  `reset`, `watch`; con `--system` para la capa `/etc/wawa/config.json` y
-  `--layer system|user|effective` en `show`.
+  `reset`, `watch`, `firmar-cuaderno`, `claves`, `gc`, `daemon-firma`; con `--system`
+  para la capa `/etc/wawa/config.json` y `--layer system|user|effective` en `show`.
 - **Bus de configuración en dos capas** (`shared/wawa-config`): system (`/etc/wawa`) +
   user (`$XDG_CONFIG_HOME/wawa`), deep-merge en `modules`, save atómico (tmp+rename),
   watcher `notify` con debounce 200 ms sobre ambas capas. Adaptador
@@ -55,10 +59,9 @@ cargo run --release -p wawactl
 
 ### Pendiente
 
-- **`accent` aplicado al theme global**: hoy sólo tinta los chips del panel; falta
-  propagarlo como override de `theme.accent` cuando no es `"default"`.
-- **Toggles de módulos con efecto real**: hoy persisten estado, no arrancan/paran
-  daemons (espera el contrato con el supervisor del SO: arje/mirada-compositor/shuma).
+- **Toggles de módulos con efecto real**: hoy persisten estado y ocultan el diente de la
+  app en el panel, pero no arrancan/paran daemons (espera el contrato con el supervisor
+  del SO: arje/mirada-compositor/shuma).
 - **Permisos**: cualquier proceso del usuario puede tocar el archivo; falta
   `getpeercred`/`SO_PEERCRED` para multiusuario/sandboxes.
 - **Migración a wawa-OS**: `system_config_path()` devolverá el mecanismo nativo de arje

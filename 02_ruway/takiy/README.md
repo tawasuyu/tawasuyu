@@ -2,7 +2,7 @@
 
 > `takiy` (Quechua: *to sing*). The monorepo's music.
 
-Synthesis, sequencing, playback. Designed to run in real time (measurable xruns, not hand-wavey) and to be deterministic when asked (same seed → same WAV). Couples with the `chasqui` bus to integrate with other apps (notebook, dominium, supay).
+Synthesis, sequencing, playback. Designed to run in real time (measurable xruns, not hand-wavey) and to be deterministic when asked (same seed → same WAV). First real consumer: supay's audio engine renders takiy scores straight into its mixer (`AudioEngine::play_takiy_score`).
 
 ## Install
 
@@ -17,7 +17,7 @@ cargo run --release -p takiy-app-llimphi
 - **Windows** — WASAPI.
 - **Wawa** — kernel driver (when ready).
 
-Crates: [`takiy-core`](takiy-core/README.md), [`takiy-synth`](takiy-synth/README.md), [`takiy-playback`](takiy-playback/README.md), [`takiy-app-llimphi`](takiy-app-llimphi/README.md).
+Crates: [`takiy-core`](takiy-core/README.md), [`takiy-synth`](takiy-synth/README.md), [`takiy-playback`](takiy-playback/README.md), [`takiy-midi`](takiy-midi/), [`takiy-app-llimphi`](takiy-app-llimphi/README.md).
 
 ## Considerations
 
@@ -42,10 +42,12 @@ Crates: [`takiy-core`](takiy-core/README.md), [`takiy-synth`](takiy-synth/README
 - **Menús** (lote 3): menú principal + menús contextuales.
 - Refactors regla #1: split del `model.rs` del lib en `model/` y del `main.rs` del
   binario en módulos bin-only.
+- **Puente supay↔takiy**: `supay-audio` depende de `takiy-{core,synth}` y renderiza
+  partituras al `DoomMixer` (`AudioEngine::play_takiy_score`) — primer consumidor real.
 
 ### Pendiente
 
-- **Acoplamiento al bus `chasqui`** para integrarse con otras apps (notebook, dominium,
-  supay) — diseñado, aún no cableado.
+- **Más consumidores** (notebook, dominium) — el patrón quedó probado con supay
+  (dependencia directa de crate, no bus).
 - **Driver de audio en Wawa** (cuando exista el kernel driver).
 - **`takiy-midi`**: ampliar import/export MIDI más allá del soporte actual de GENMIDI/synth.

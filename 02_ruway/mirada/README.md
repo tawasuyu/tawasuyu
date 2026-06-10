@@ -18,7 +18,7 @@ cargo run --release -p mirada-launcher
 - **Linux nested** — runs inside a host Wayland (dev mode).
 - **Wawa** — minimal compositor on the kernel's framebuffer.
 
-Crates listed in [README.md](README.md).
+Crates listed in [LEEME.md](LEEME.md).
 
 ## Considerations
 
@@ -26,9 +26,18 @@ Crates listed in [README.md](README.md).
 - DRM/KMS requires permissions: launch from a greeter, not a user terminal.
 - XDG portal is **complete**: `pluma`, `nada`, etc. can request file pickers via portal with no app-specific code.
 
-## Estado (2026-06-03)
+## Estado (2026-06-09)
 
 ### Hecho
+- **Persistencia de sesión** (`mirada-brain/src/session.rs`): la *forma* del escritorio (teselado por escritorio virtual, qué escritorio mostraba cada salida, foco) sobrevive al reinicio en RON; *window homes* re-ubican las ventanas reabiertas en su escritorio, ancladas por `app_id`.
+- **Zoom-Z**: agrupar ventanas en sub-espacios como **árbol fractal multinivel** (entrar/salir de profundidad arbitraria), con capas dormidas (suspende los frames de las profundas), agrupación persistida por `app_id`, y **constelaciones** por linaje de proceso (PID estable vía `SO_PEERCRED`) con Alt-Tab por constelación.
+- **Capabilities por ventana** (`mirada-brain/src/permisos.rs`): el clipboard (`zwlr_data_control`) y la inyección de teclas (`zwp_virtual_keyboard`) se niegan **por ejecutable** vía denylists en config.
+- **Throttle de frames de fondo**: las ventanas visibles sin foco reciben sus `frame` callbacks a 1 de cada N vblanks (divisor configurable, `1` = apagado) — dejan de quemar GPU detrás del foco.
+- **Drag-to-zone**: zonas de arrastre configurables (`config.ron` → `zones` / `zone_presets`); soltar fuera de zona deja la ventana flotando (overflow); `mirada-ctl cycle-zones` cicla presets.
+- **Vista espacial (Prezi)** (`mirada-app-llimphi/src/overview.rs` + base en el Cerebro): saltar entre escritorios sobre un plano espacial.
+- **Hot-reload de config** (`mirada-brain/src/watch.rs`): keymap, config y reglas son RON en `~/.config/mirada/` que se recargan en caliente, sin reiniciar.
+- **Multi-monitor completo**: hotplug aplicado en caliente (crear/destruir `OutputCtx`), scale + transform por salida (HiDPI mixto, rotación), layer-shell y reservas exclusivas por salida, disposición configurable (orden + dirección) y cursor sin dead-zones entre outputs.
+- **`mirada-wallpaper`**: daemon de wallpaper automático (Bing/NASA/carpeta local + provider solar tipo dynamic desktop) que reescribe `wallpaper_path` en `config.ron` y deja que el hot-reload del compositor aplique; wallpaper procedural por defecto sin bytes embebidos.
 - **El marco del escritorio migró a `pata`** (`02_ruway/pata`, Fase 10, 2026-06-03): el viejo `mirada-launcher-llimphi` se retiró. Su rol —barras/paneles/dock declarativos, widgets builtin (reloj/UTC, brillo, volumen, clipboard, bandeja, medidores con gradiente, astro), drawer Quake (shell por shuma-exec + IA), task manager estilo KDE, tarjetas flotantes conky, botón de inicio con menú nativo, tooltips— lo cubre y excede `pata`, portable Linux/wawa. Ver `02_ruway/pata/SDD.md`.
 - **Bandeja del sistema** (`tray`): la hospeda `pata` (un `org.kde.StatusNotifierWatcher`, zbus en hilo aparte) y pinta los applets modernos (nm-applet, blueman, clientes de chat) con su ícono; click → activa el item por D-Bus.
 - **Wallpaper** del escritorio (`config.ron` → `wallpaper_path`): PNG/JPEG/WebP escalado a la salida, compuesto al fondo (backend DRM). **Multi-monitor**: `outputs: [(name: "HDMI-A-1", wallpaper_path: "…", wallpaper_fit: "fill", order: 1)]` permite un fondo distinto por conector y elegir qué monitor es primario (`order` menor → primaria). `output_direction: "horizontal"` / `"vertical"` decide cómo se reparten las salidas. Lo que no se indique cae al global. Hot-reload aplica el cambio de wallpaper sin reiniciar (la disposición sí pide reinicio).

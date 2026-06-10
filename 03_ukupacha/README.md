@@ -9,6 +9,7 @@ The quadrant's rule is **invariants before features**: in `ukupacha`, breaking c
 - **[agora](agora/README.md)** — public square. Forum, conversation, deliberation with minimal identity.
 - **[arje](arje/README.md)** — bootloader and the system's early life. `arje-seeds` (seeds), `arje-packager` (packaging), `arje-installer` (install), `arje-absorb` (ingest an existing system).
 - **[minga](minga/README.md)** — collaboration between nodes. Andean tradition of communal work, applied to the network.
+- **[sandokan](sandokan/README.md)** — the control plane, incarnated: run, stop, watch and supervise units on Linux through one contract (`shared/sandokan`'s `Engine`) — four engine flavors (one per transport) + CLI + visual monitor.
 - **[wawa](wawa/README.md)** — operating system from scratch (`wawa-kernel`, `wawa-boot`, `wawa-fs`, `apps/`). POSIX → BLAKE3 ingest; filesystem as content-addressed DAG; gaming-grade (AOT WASM + GPU passthrough + cooperative frame pacing).
 - **[wawa-explorer](wawa-explorer/README.md)** — host-side viewer of Wawa's DAG: reads `.img`, speaks the Akasha protocol over raw sockets, shows the tree with detail in Llimphi.
 

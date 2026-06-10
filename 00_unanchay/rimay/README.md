@@ -8,7 +8,8 @@ Local NLP/embeddings service that any monorepo app queries when it needs "how si
 
 ```sh
 # start the daemon with the default real backend (fastembed / multilingual-e5-small)
-cargo run --release -p rimay-verbo-daemon-bin -- --provider fastembed
+# (--allow-download authorizes the one-time ONNX model download)
+cargo run --release -p rimay-verbo-daemon-bin -- --provider fastembed --allow-download
 
 # or in mock mode (no model download, deterministic vectors, fine for CI)
 cargo run --release -p rimay-verbo-daemon-bin -- --provider mock
@@ -48,6 +49,7 @@ Consumers that want to fail loud when the daemon is missing use `rimay_verbo::co
 
 ## Considerations
 
-- The `fastembed` backend downloads the ONNX model on first start without prompting. The cache lives in `~/.cache/fastembed`; delete it to force a re-download. (Permission gating before download is pending.)
+- The `fastembed` backend only downloads the ONNX model with explicit opt-in: env var `RIMAY_VERBO_ALLOW_DOWNLOAD=1` (or the daemon's `--allow-download` flag, which sets it). Without it, the provider returns an error with the opt-in recipe instead of silently pulling 100+ MB. The cache lives in `~/.cache/fastembed`; delete it to force a re-download.
 - [`pluma-llm`](../pluma/pluma-llm/) and `rimay-verbo` are orthogonal: the former generates text, the latter *understands* it.
 - Vectors are tagged with their `ModelId`; `EmbeddingVector::cosine` refuses to compare across models, so a `mock` vector and a `fastembed` vector are never silently mixed.
+- [`shared/rimay-localize`](../../shared/rimay-localize/) — the desktop i18n layer (fluent catalogs, es/en/qu) — carries the rimay name as its cross-cutting localization utility; it is not part of these subcrates.

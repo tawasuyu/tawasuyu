@@ -23,7 +23,16 @@ cargo run --release -p khipu-app
 | [`khipu-gravity`](khipu-gravity/README.md) | Algoritmo de masa/decay; refuerzo por acceso. |
 | `khipu-share` | Sobres de notas firmados (Ed25519) y direccionados por contenido (BLAKE3) sobre agora; transporte TCP/LAN + descubrimiento UDP + identidad cifrada. |
 | `khipu-brahman` | Transporte de sobres sobre libp2p (BrahmanNet): stream cifrado + descubrimiento por DHT. |
-| [`khipu-app`](khipu-app/README.md) | UI Llimphi sobre el core. |
+| [`khipu-app`](khipu-app/README.md) | UI Llimphi sobre el core: el mapa mental es la interfaz. |
+
+## El mapa es la interfaz (mapa mental)
+
+El lienzo de pensamientos ocupa toda la ventana; lista y editor son overlays que aparecen sólo cuando hacen falta (cajón «☰ notas» a la izquierda, editor flotante a la derecha; `Esc` cierra en cascada: bautizo → editor → cajón → foco). Lo que lo hace habitable:
+
+- **Ancla persistida**: cada nota se domicilia una sola vez (`Note.pos`) en el baricentro de su parentela semántica (afinidad coseno) con separación mínima — los clústeres emergen y nada se reacomoda solo, así la memoria espacial puede recordar dónde vive cada cosa. Cámara con pan/zoom sobre lienzo infinito.
+- **El mapa respira**: el render usa la masa viva (`khipu-gravity`) para tamaño y brillo — lo reciente arde, lo abandonado se apaga. Al seleccionar, filamentos de activación por difusión.
+- **Zoom semántico**: cerca (zoom ≥ 1.6) el nodo deja de ser un punto y se abre *en su lugar del mapa* como tarjeta editable que viaja con pan/zoom; lejos, el editor cae al panel lateral.
+- **Regiones emergentes**: cuando un clúster denso junta ≥3 notas visibles sin topónimo cerca, el mapa ofrece un chip «✛ nombrar zona» en su centroide; el nombre queda como landmark tenue detrás de los nodos (pertenencia por vecindad, no carpeta). Se bautiza *después* de ver el patrón.
 
 ## Gravedad semántica (embeddings)
 
@@ -53,14 +62,15 @@ Para compartir en vivo sin copiar archivos: `publicar` levanta un servidor TCP q
 
 **Descubrimiento por DHT**: con `KHIPU_BOOTSTRAP=/ip4/…/p2p/<id>` (un nodo de la malla), khipu se une a la DHT Kademlia al arrancar; `publicar` se anuncia bajo la clave khipu y `recibir` lista —además de los pares LAN— los pares hallados por DHT (filas `DHT · …<id>`), que se jalan por peer-id. Así dos khipu se encuentran sin compartir IP ni multiaddr a mano, sólo conociendo un bootstrap común. Verificado end-to-end en localhost (rendezvous + publicador + receptor; 4 tests en `khipu-brahman`).
 
-La lógica vive en `khipu-share`: `net` (transporte TCP) y `discovery` (baliza UDP). 15 tests + un test de integración que recorre la cadena completa descubrir→jalar→verificar en loopback.
+La lógica vive en `khipu-share`: `net` (transporte TCP), `discovery` (baliza UDP) e `identity` (keystore). 19 tests + un test de integración que recorre la cadena completa descubrir→jalar→verificar en loopback.
 
-## Estado (2026-05-31)
+## Estado (2026-06-10)
 
 ### Hecho
 
 - `khipu-core` (modelo de nota + store) + `khipu-gravity` (masa/decay con refuerzo por acceso).
-- `khipu-app`: UI Llimphi sobre el core, con menú principal y contextual.
+- `khipu-app`: UI Llimphi sobre el core, con menú principal y contextual; partida en módulos (`main` / `map` / `panels` / `net`).
+- Rediseño mapa mental completo: canvas-raíz (lista/editor flotan), ancla persistida con cámara pan/zoom, masa viva como tamaño/brillo, zoom semántico in-situ y regiones emergentes bautizables.
 - Gravedad semántica: clustering por embeddings del `verbo-daemon` (rimay), con fallback trigram 16d offline; cálculo en worker que no bloquea la UI.
 - Compartir vía agora (`khipu-share`): sobres firmados Ed25519 + direccionados BLAKE3, identidad cifrada (Argon2id + ChaCha20-Poly1305 en keystore), compartir selectivo + procedencia del autor; transporte TCP/LAN + descubrimiento por baliza UDP (15 tests + integración loopback).
 - WAN/P2P (`khipu-brahman` sobre libp2p/BrahmanNet): stream cifrado Noise, NAT traversal (Circuit Relay v2 + DCUtR), AutoNAT, descubrimiento por DHT Kademlia (4 tests e2e localhost).

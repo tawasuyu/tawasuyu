@@ -22,13 +22,14 @@ cargo run --release -p minga-explorer-llimphi
 
 | Crate | Rol |
 |---|---|
-| [`minga-core`](minga-core/README.md) | Modelo: peer, chunk, address. |
-| [`minga-dht`](minga-dht/README.md) | DHT (Kademlia adaptado). |
-| [`minga-p2p`](minga-p2p/README.md) | Capa P2P (libp2p o propio). |
-| [`minga-vfs`](minga-vfs/README.md) | VFS distribuido. |
-| [`minga-store`](minga-store/README.md) | Storage local. |
-| [`minga-cli`](minga-cli/README.md) | CLI. |
-| [`minga-explorer-llimphi`](minga-explorer-llimphi/README.md) | UI: peers, content, tráfico. |
+| [`minga-core`](minga-core/README.md) | Núcleo: AST semántico, direccionamiento por contenido, Merkle Search Tree, α-hashing por lenguaje. Lógica pura, sin IO. |
+| [`minga-store`](minga-store/README.md) | Almacenamiento persistente sobre sled: nodos, atestaciones, MST. |
+| [`minga-dht`](minga-dht/README.md) | Discovery typed (`DhtKey`: Code/Card/Persona/Service) sobre el Kademlia compartido vía `card-net`. |
+| [`minga-p2p`](minga-p2p/README.md) | Protocolo de sync entre repos + `MingaPeer` sobre libp2p (`card-net`: relay + DCUtR + AutoNAT heredados). |
+| [`minga-vfs`](minga-vfs/README.md) | Proyecta el repo direccionado por contenido como filesystem FUSE de sólo lectura. |
+| [`minga-cli`](minga-cli/README.md) | CLI: init, ingest, log/show/diff/blame, sign, verify, prune, sync, listen, mount, bundles. |
+| [`minga-explorer-llimphi`](minga-explorer-llimphi/README.md) | Dashboard Llimphi del repo (stat cards sobre sled). |
+| [`card-discovery`](card-discovery/) | Búsqueda de Cards: índice local + escaneo de directorios + discovery P2P sobre `minga-dht`. |
 
 ## Consideraciones
 

@@ -21,13 +21,14 @@ cargo build --release -p chaka-app
 | Crate | Role |
 |---|---|
 | [`chaka-app`](chaka-app/README.md) | CLI entry: `transpile`, `scaffold`, `run`, `check`. |
-| [`chaka-lexer`](chaka-lexer/README.md) | Tokenize COBOL sources; expand `COPY` directives. |
+| [`chaka-lexer`](chaka-lexer/README.md) | Tokenize COBOL sources; expand `COPY` and apply `REPLACE` directives. |
 | [`chaka-parser`](chaka-parser/README.md) | Typed AST (divisions, DATA tree, PROCEDURE sentences). |
 | [`chaka-ir`](chaka-ir/README.md) | Lower the AST to typed statements (`MOVE`, `IF`, `PERFORM`, `CALL`, `SEARCH`...). |
 | [`chaka-codegen`](chaka-codegen/README.md) | IR → Rust source (default) or IR → JSON. |
 | [`chaka-runtime`](chaka-runtime/README.md) | Runtime types the transpiled code links against (`Num`, `Text`, `CobFile`, `format_edited`). |
 | [`chaka-bcd`](chaka-bcd/README.md) | Decimal arithmetic with COBOL semantics + packed-decimal (`COMP-3`) codec. |
 | [`chaka-shadow`](chaka-shadow/README.md) | In-process interpreter + GnuCOBOL harness for diff-against-truth. |
+| [`chaka-app-llimphi`](chaka-app-llimphi/) | Desktop UI: corpus + editor + shadow run + generated Rust, live. |
 
 ## Differential test
 

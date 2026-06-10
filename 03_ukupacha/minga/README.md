@@ -15,7 +15,18 @@ cargo run --release -p minga-explorer-llimphi
 
 - **Linux / macOS / Windows / Wawa** — native Rust + tokio for I/O.
 
-Crates listed in [README.md](README.md).
+## Crates
+
+| Crate | Role |
+|---|---|
+| [`minga-core`](minga-core/README.md) | Core: semantic AST, content addressing, Merkle Search Tree, per-language α-hashing. Pure logic, no IO. |
+| [`minga-store`](minga-store/README.md) | Persistent storage over sled: nodes, attestations, MST. |
+| [`minga-dht`](minga-dht/README.md) | Typed discovery (`DhtKey`: Code/Card/Persona/Service) over the Kademlia shared via `card-net`. |
+| [`minga-p2p`](minga-p2p/README.md) | Sync protocol between repos + `MingaPeer` over libp2p (`card-net`: relay + DCUtR + AutoNAT inherited). |
+| [`minga-vfs`](minga-vfs/README.md) | Projects the content-addressed repo as a read-only FUSE filesystem. |
+| [`minga-cli`](minga-cli/README.md) | CLI: init, ingest, log/show/diff/blame, sign, verify, prune, sync, listen, mount, bundles. |
+| [`minga-explorer-llimphi`](minga-explorer-llimphi/README.md) | Llimphi dashboard of the repo (stat cards over sled). |
+| [`card-discovery`](card-discovery/) | Card search: local index + directory scan + P2P discovery over `minga-dht`. |
 
 ## Considerations
 
@@ -23,7 +34,7 @@ Crates listed in [README.md](README.md).
 - **Privacy by default**: nothing is published without explicit user share.
 - Designed for community/domestic latency, not global CDN.
 
-## Estado (2026-05-31)
+## Estado (2026-06-10)
 
 > Reporte técnico detallado en [REPORTE.md](REPORTE.md). Mapa arquitectónico en [ARQUITECTURA.md](ARQUITECTURA.md).
 
@@ -31,7 +42,7 @@ Crates listed in [README.md](README.md).
 - VCS semántico P2P funcionalmente completo: `minga-core` (AST + CAS + MST + atestaciones + α-hashing por lenguaje), `minga-store` (sled: nodes/attestations/mst/roots/timestamps/path-history/alpha-paths/retractions), `minga-dht` (DhtKey tipado), `minga-p2p` (MingaPeer libp2p con sync, Kademlia, RootDeclaration y RetractPush en el wire), `minga-vfs` (FUSE + pretty-printer Python indent-aware).
 - CLI rica (`minga-cli`): init, ingest, ingest-dir, watch (autoremove), log, show (+ diff/sexp), diff, blame, history, roots, signers, sign (vouching), retire, verify, prune (GC), sync (DHT lookup), listen (announce-all-roots), mount.
 - Bundle offline ("USB-stick mode"): export/import single + export-all/import-all multi-bundle con zstd, re-verificación criptográfica end-to-end. Daemon HTTP read-only `serve` (axum) con auth Bearer opcional (`--token`/`MINGA_SERVE_TOKEN`).
-- Convergencia con ágora: `MingaPeer` adopta `Arc<LibP2pNode>` compartido; un solo PeerId/listen sirve `/minga/sync/1.0.0` + `/agora/gossip/1.0.0`. Discovery de personas por `DhtKey::Persona` (Fase 2b).
+- Convergencia con ágora: `MingaPeer` adopta `Arc<LibP2pNode>` compartido (alias de `card-net::BrahmanNet`); un solo PeerId/listen sirve `/minga/sync/1.0.0` + `/agora/gossip/1.0.0`. Discovery de personas por `DhtKey::Persona` (Fase 2b). NAT traversal heredado de `card-net`: relay + DCUtR + AutoNAT.
 - Frontends: `minga-explorer-llimphi` (dashboard con theme/lang reactivos vía wawa-config) + `shuma-module-minga` (tab del shell con raíces, verify, dot de retracciones); menús principal + contextuales (lote 2). `cargo check --workspace` verde.
 
 ### Pendiente

@@ -2,7 +2,7 @@
 
 > Native UI framework: HAL · raster · layout · text · theme · ui — plus widgets and modules.
 
-`llimphi` is the graphics engine all monorepo apps share. Retained-mode declarative pipeline over `vello` + `wgpu` + `taffy`, with `fontdue`/`harfbuzz` shaping, `Dark/Light/Aurora/Sunset` themes, multi-platform HAL (Wayland · X11 · Win32 · Android · Wawa).
+`llimphi` is the graphics engine all monorepo apps share. Retained-mode declarative pipeline over `vello` 0.7 + `wgpu` 27 + `taffy`, with `parley` 0.6 shaping (embedded DejaVu Sans as symbol fallback), `Dark/Light/Aurora/Sunset` themes, AccessKit accessibility, multi-platform HAL (Wayland · X11 · Win32 · Android · Wawa).
 
 **Usage manual:** [MANUAL.md](MANUAL.md) — full reference (Elm loop, `View<Msg>` DSL, the ~44 widgets and 10 modules, GPU path, gotchas) for humans and AI. Design rationale and roadmap: [SDD.md](SDD.md).
 
@@ -25,7 +25,7 @@ llimphi-widget-... = { workspace = true }
 - **Android** — HAL via `android` crates.
 - **Wawa bare-metal** — alternative framebuffer HAL.
 
-Crates listed in [README.md](README.md) (framework, widgets, modules, android).
+Full crate index (framework · widgets · modules · android) in [MANUAL.md](MANUAL.md) §19; per-crate tables in [LEEME.md](LEEME.md). The raster crate ships an opt-in `hybrid` feature (CPU+GPU renderer, no compute shaders) for targets without full compute support.
 
 ## Considerations
 

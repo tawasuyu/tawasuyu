@@ -8,7 +8,8 @@ Servicio local de NLP/embeddings que cualquier app del monorepo consulta cuando 
 
 ```sh
 # arrancar el daemon con el backend real (fastembed / multilingual-e5-small)
-cargo run --release -p rimay-verbo-daemon-bin -- --provider fastembed
+# (--allow-download autoriza la descarga única del modelo ONNX)
+cargo run --release -p rimay-verbo-daemon-bin -- --provider fastembed --allow-download
 
 # o en modo mock (sin descarga de modelos, vectores deterministas, ideal para CI)
 cargo run --release -p rimay-verbo-daemon-bin -- --provider mock
@@ -46,7 +47,7 @@ Los consumidores que quieran fallar fuerte si no hay daemon usan `rimay_verbo::c
 | [`rimay-verbo-fastembed`](rimay-verbo-fastembed/) | Backend ONNX (`multilingual-e5-small` por defecto; catálogo E5/BGE). |
 | [`rimay-verbo-mock`](rimay-verbo-mock/) | Backend determinista (FNV + LCG; sin descargas, sin GPU). |
 
-## Estado (2026-05-31)
+## Estado (2026-06-10)
 
 ### Hecho
 
@@ -54,15 +55,16 @@ Los consumidores que quieran fallar fuerte si no hay daemon usan `rimay_verbo::c
 - Daemon `rimay-verbo-daemon` + binario `rimay-verbo-daemon-bin`: IPC por socket Unix (frames postcard, 1 reintento transparente, apagado limpio SIGINT/SIGTERM, descubrimiento de socket con fallback `/tmp`).
 - Backends: `rimay-verbo-fastembed` (ONNX real, `multilingual-e5-small` por defecto, catálogo E5/BGE, sin API key) y `rimay-verbo-mock` (FNV+LCG determinista, ideal CI).
 - Fachada `rimay-verbo` one-line (`conectar_o_mock`/`conectar`) + `ping` health-check + reconnect. Consumida por pluma/khipu/chasqui.
+- Gate de descarga del modelo ONNX: opt-in explícito vía `RIMAY_VERBO_ALLOW_DOWNLOAD=1` o el flag `--allow-download` del daemon; sin autorización el provider devuelve un error con la receta en vez de bajar 100+ MB en silencio.
 
 ### Pendiente
 
-- Gating de permiso antes de la descarga del modelo ONNX (hoy descarga sin confirmar).
 - Compilar el daemon a WASM para Wawa (hoy es Linux/host-only).
 - Vertiente lingüística de rimay (morfología/conjugación quechua) más allá de embeddings — no presente en estos subcrates.
 
 ## Consideraciones
 
-- El backend `fastembed` descarga el modelo ONNX en el primer arranque sin pedir confirmación. La cache vive en `~/.cache/fastembed`; borrarla fuerza re-descarga. (El gating de permiso antes de la descarga está pendiente.)
+- El backend `fastembed` sólo descarga el modelo ONNX con opt-in explícito: env var `RIMAY_VERBO_ALLOW_DOWNLOAD=1` (o el flag `--allow-download` del daemon, que la setea). Sin eso, el provider devuelve un error con la receta del opt-in en lugar de bajar 100+ MB en silencio. La cache vive en `~/.cache/fastembed`; borrarla fuerza re-descarga.
 - [`pluma-llm`](../pluma/pluma-llm/) y `rimay-verbo` son ortogonales: el primero *genera* texto, el segundo lo *entiende*.
 - Los vectores van etiquetados con su `ModelId`; `EmbeddingVector::cosine` se niega a comparar a través de modelos, así que un vector `mock` y uno `fastembed` no se mezclan silenciosamente.
+- [`shared/rimay-localize`](../../shared/rimay-localize/) — la capa de i18n del escritorio (catálogos fluent, es/en/qu) — lleva el nombre rimay como su utilidad transversal de localización; no es parte de estos subcrates.

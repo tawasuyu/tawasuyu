@@ -2,7 +2,7 @@
 
 > Framework de UI nativa: HAL · raster · layout · text · theme · ui — más widgets y módulos.
 
-`llimphi` es el motor gráfico que comparten todas las apps del monorepo. Pipeline retained-mode declarativa sobre `vello` + `wgpu` + `taffy`, con shaping `fontdue`/`harfbuzz`, theme `Dark/Light/Aurora/Sunset`, HAL multiplataforma (Wayland · X11 · Win32 · Android · Wawa).
+`llimphi` es el motor gráfico que comparten todas las apps del monorepo. Pipeline retained-mode declarativa sobre `vello` 0.7 + `wgpu` 27 + `taffy`, con shaping `parley` 0.6 (DejaVu Sans embebida como fallback de símbolos), theme `Dark/Light/Aurora/Sunset`, accesibilidad AccessKit, HAL multiplataforma (Wayland · X11 · Win32 · Android · Wawa).
 
 **Manual de uso:** [MANUAL.md](MANUAL.md) — referencia completa (bucle Elm, DSL `View<Msg>`, los ~44 widgets y 10 módulos, GPU directo, gotchas) para humanos e IA. Diseño y roadmap: [SDD.md](SDD.md).
 
@@ -31,11 +31,20 @@ llimphi-widget-... = { workspace = true }
 | Crate | Rol |
 |---|---|
 | [`llimphi-hal`](llimphi-hal/README.md) | Abstracción de superficie (winit / framebuffer / android). |
-| [`llimphi-raster`](llimphi-raster/README.md) | Rasterizer vello + cache de scenes. |
+| [`llimphi-raster`](llimphi-raster/README.md) | Rasterizer vello + cache de scenes (feature opt-in `hybrid`: renderer CPU+GPU sin compute shaders). |
 | [`llimphi-layout`](llimphi-layout/README.md) | Layout taffy + extensiones. |
-| [`llimphi-text`](llimphi-text/README.md) | Shaping + fonts (Fontdue/HarfBuzz). |
-| [`llimphi-theme`](llimphi-theme/README.md) | Themes Dark/Light/Aurora/Sunset + paleta. |
-| [`llimphi-ui`](llimphi-ui/README.md) | `View<Msg>` retained-mode + Elm-arch. |
+| [`llimphi-text`](llimphi-text/README.md) | Shaping + fonts (parley; DejaVu Sans embebida como fallback). |
+| [`llimphi-theme`](llimphi-theme/README.md) | Themes Dark/Light/Aurora/Sunset + paleta + tokens de motion/elevation. |
+| [`llimphi-ui`](llimphi-ui/README.md) | `View<Msg>` retained-mode + Elm-arch + puente AccessKit. |
+| `llimphi-compositor` | Núcleo declarativo sin winit: árbol `View<Msg>`, mount taffy, paint a scene, hit-test. |
+| `llimphi-image` | Decode PNG/JPEG → `peniko::Image`. |
+| `llimphi-svg` | Puente `vello_svg` → Llimphi (SVG real, íconos `.desktop`). |
+| `llimphi-icons` | Íconos vectoriales propios (grid 24×24). |
+| `llimphi-motion` | Tweens e interpolación (incl. transform afín). |
+| `llimphi-surface` | Texturas externas. |
+| `llimphi-workspace` | Chasis tipo tmux: splits resizables sobre `widget-panes`. |
+| `llimphi-gallery` | Demo único del kit de elegancia (todos los widgets juntos). |
+| `llimphi-gpu-bench` | Bench standalone del path GPU directo. |
 
 ## Crates: widgets (visuales reactivos)
 
@@ -61,6 +70,8 @@ llimphi-widget-... = { workspace = true }
 | [`theme-switcher`](widgets/theme-switcher/README.md) | Selector de tema. |
 | [`nodegraph`](widgets/nodegraph/README.md) | Lienzo de nodos + cables Bezier. |
 
+Y además (catálogo completo con firmas en [MANUAL.md](MANUAL.md) §13): avatar · badge · breadcrumb · calendar · carousel · chip · clipboard · color-picker · dock-rail · edit-menu · empty · fab · field · fitted-box · gauge · grid · hero · menubar · modal · navigator · panel · panes · progress · range-slider · rating · scaffold · scroll · segmented · select · shortcuts-help · skeleton · spinner · splash · status-bar · switch · table · terminal · text-editor-core · timeline · toast · tooltip · transport · waveform · wawa-mark · wrap.
+
 ## Crates: modules (feature funcional con estado)
 
 | Module | Función |
@@ -74,6 +85,8 @@ llimphi-widget-... = { workspace = true }
 | [`symbol-outline`](modules/symbol-outline/README.md) | Outline de símbolos LSP. |
 | [`plugin-host`](modules/plugin-host/README.md) | Host para plugins WASM. |
 | [`shuma-term`](modules/shuma-term/README.md) | Terminal embebida (shell shuma). |
+| `allichay` | Renderizador único de configuración declarativa (`allichay::Schema` → rail + controles). |
+| `selector` | Abstracción portátil abrir/guardar (`trait Selector`: host con PathBuf, Wawa content-addressed). |
 
 ## Crates: android
 
