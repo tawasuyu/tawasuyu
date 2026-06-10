@@ -48,7 +48,12 @@
 //! ## Lo que NO está acá (defer a 3.3+)
 //!
 //! - Sampling de texturas WAD reales (lumps PNAMES/TEXTURE1/SIDEDEF).
-//! - BSP front-to-back ordering correcto (3.2 sigue con painter's algo).
+//! - **Occlusion culling** (solidsegs clip-list estilo Doom para *no
+//!   pintar* columnas tapadas). El ordering BSP **sí** está (fase 3.13b:
+//!   `walk_bsp` back-to-front → `bsp_rank` como clave primaria del sort
+//!   unificado en `frame.rs`, con tests `bsp_walk_*`/`bsp_ranks_*`), así
+//!   que la imagen es correcta para geometría opaca convexa; lo que falta
+//!   es saltarse el overdraw de lo oculto — es **perf**, no correctitud.
 //! - Stencil/RT shadows, TAA, fog volumétrico real.
 //! - Sprite real lookup por `sprite/frame` desde el WAD.
 
