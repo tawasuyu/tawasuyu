@@ -98,6 +98,10 @@ Y además (catálogo completo con firmas en [MANUAL.md](MANUAL.md) §13): avatar
 | [`vello-hello-android`](android/vello-hello-android/README.md) | Vello hello-world Android. |
 | [`vello-text-android`](android/vello-text-android/README.md) | Text shaping Android. |
 
+## Demo
+
+Tour autocontenido tipo prezi en [`demo/`](demo/): arquitectura, bucle Elm, kit de widgets y pantallazos headless de ~10 apps reales corriendo sobre llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Abrí `demo/index.html` en cualquier navegador o serví con `python3 -m http.server -d demo`. Espacio / flechas / click para navegar; auto-advance cada 6 s — listo para grabar como video.
+
 ## Consideraciones
 
 - **Una sola API: `View<Msg>` declarativa**. Sin imperativo, sin DOM virtual ajeno.

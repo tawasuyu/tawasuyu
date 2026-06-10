@@ -29,6 +29,10 @@ llimphi-widget-... = { workspace = true }
 
 Full crate index (framework · widgets · modules · android) in [MANUAL.md](MANUAL.md) §19; per-crate tables in [LEEME.md](LEEME.md). The raster crate ships an opt-in `hybrid` feature (CPU+GPU renderer, no compute shaders) for targets without full compute support.
 
+## Demo
+
+A self-contained prezi-style tour lives in [`demo/`](demo/): arch, Elm loop, widget kit, and headless screenshots of ~10 real apps running on llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Open `demo/index.html` in any browser, or serve it (`python3 -m http.server -d demo`). Space / arrows / click to navigate; auto-advances every 6 s — ready to screen-record.
+
 ## Considerations
 
 - **Single API: declarative `View<Msg>`.** No imperative, no foreign vDOM.
