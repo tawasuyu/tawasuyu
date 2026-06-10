@@ -120,6 +120,20 @@ Esta es la columna "Falta para cerrar el core" del inventario, ordenada por
 **ROI de publicación** (cuánto sube el % vs cuánto cuesta), separando lo tuyo
 de lo automatizable.
 
+> **Auditoría 2026-06-10 (reconciliación con el árbol).** Las tareas 🤖 de
+> 2B estaban en su mayoría **ya hechas** desde que se escribió este plan
+> (2026-06-01) — verificadas con `file:line` y marcadas ✅ abajo: **minga**
+> (#5/A), **chasqui** (`consume_remote`), **sandokan** (RestartTracker +
+> RunCard Virtual; Wasm-incarnator pendiente), **shuma** (mouse + flock),
+> **arje** (lifecycle compartido),
+> **wawa-explorer** (process-monitor extraído). **media** tiene la lógica
+> de PTS lista (resta wiring a `foreign-av`). Lo que queda genuinamente
+> abierto en 2B y NO es trivial-🤖: **supay** (BSP walk real — gráfico),
+> **puriy** (APIs Web, largo), **iniy** (e2e probado), y los 🧑 de UX
+> (**nakui**, **nahual**, **wawa host**). El cuello-de-publicación real ya
+> no es "cerrar cores 🤖" sino el **Nivel 4 (pulido/UX, tu juicio)** y los
+> pocos abiertos grandes.
+
 ### 2A. Las que ya casi cierran (≥80%) — empujón corto
 
 | App | Acción de cierre | Quién |
@@ -143,19 +157,19 @@ de lo automatizable.
 |---|---|---|
 | **agora** (80) | Tabla de capacidades por bytecode hash (§14.1.3) — **code-complete**: enforcement cableado + tool + boot-anchor + ceremonia scripteada (`scripts/wawa-conceder-genesis.sh`). Resta SÓLO el paso de operador (firmar con seed slot-0 + flip a estricto). | 🧑 — ceremonia con tu seed |
 | **minga** (80) | ~~`MingaPeer` genérico para escala~~ ✅ (#5/A cerrado 2026-06-10): `MingaPeer<S: NodeStore>` sobre handle sled compartido — sync P2P sin volcar 1.44M nodos a RAM, snapshot O(1), merge O(delta). | 🤖 |
-| **arje** (78) | Cleanup socket daemon + `RestartTracker` en `LocalEngine` | 🤖 |
-| **supay** (78) | BSP-walking real (orden de render). *Audio vía takiy: ✅ hecho (`play_takiy_score`).* | 🤖 |
-| **shuma** (78) | Mouse en PTY + lockfile del daemon | 🤖 |
+| **arje** (78) | ~~Cleanup socket daemon + `RestartTracker` en `LocalEngine`~~ ✅ (verif. 2026-06-10): supervisión con backoff vía `sandokan_lifecycle::{Backoff,RestartTracker}` (compartido, sin duplicar — `arje/init/arje-zero/src/graph/lifecycle.rs`); el `LocalEngine` con tracker vive en `sandokan-local` y cuenta restarts (tests `telemetry_cuenta_restarts_*`). | 🤖 |
+| **supay** (78) | **BSP-walking real (orden de render front-to-back).** ABIERTO de verdad: el renderer sigue en painter's algorithm (`supay-render-llimphi/src/lib.rs:51` "3.2 sigue con painter's algo"); `supay-scene` ya modela hojas/segs/subsectores del BSP — falta cablear el walk. *Audio vía takiy: ✅ (`play_takiy_score`).* | 🤖 (gráfico, no trivial) |
+| **shuma** (78) | ~~Mouse en PTY + lockfile del daemon~~ ✅ (verif. 2026-06-10): mouse xterm (`sandbox/shuma-module-shell/src/mouse_xterm.rs`) + lockfile `flock(LOCK_EX\|LOCK_NB)` del daemon (`shuma-daemon/src/main.rs:1473`, test `socket_in_use + flock`). | 🤖 |
 | **puriy** (78) | Cerrar APIs Web restantes + conformance | 🤖 (largo) |
-| **wawa-explorer** (78) | Sacar process-monitor a su crate | 🤖 |
+| **wawa-explorer** (78) | ~~Sacar process-monitor a su crate~~ ✅ (verif. 2026-06-10): extraído a `shared/sandokan/sandokan-monitor-core`; `wawa-explorer-core` ya no lo contiene. | 🤖 |
 | **wawa host** (72) | Toggles de módulos con efecto real, accent→theme global | 🧑+🤖 |
 | **takiy** (72) | Pulir `takiy-midi` (núcleo ya cerrado). *Primer consumidor real: supay (`play_takiy_score`).* | 🤖 |
 | **nakui** (70) | **Editor de fórmulas en UI + WAL desde UI + vista formulario.** Módulos de producción (crm/inventory/sales/treasury) **completos y verdes — nakui-core 133/133** (ver 1.4). El hueco de core que resta es el de UI/persistencia desde la app, no la lógica de dominio. | 🧑 — UX, tuya |
 | **nahual** (68) | Visor PDF (falta rasterizador) + SVG + seek/scrub | 🤝 (svg-viewer untracked ya empezado: ver 0.2) |
-| **media** (68) | **M1: sync A/V por PTS completa** | 🤖 — es el cuello de media |
+| **media** (68) | **M1: sync A/V por PTS.** Lógica pura ✅ (`media-core/src/sync.rs`: `plan_frame`/`AvSync`, ventana de presentación por PTS). Residual: cablear la extracción de PTS desde `foreign-av` al decode real. | 🤖 — es el cuello de media |
 | **iniy** (65 ⚠️) | **Pipeline e2e *probado* + NLI local** (hoy piezas sueltas/mock) | 🤖 — primero *verlo correr*, recién después subir % |
-| **chasqui** (62) | ~~transporte/discovery P2P~~ ✅ discovery DHT cableado (`resolve_provider`). Falta connect-and-consume remoto. *(La "persistencia del broker" es un no-feature: efímero por diseño.)* | 🤖 |
-| **sandokan** (60) | Cleanup socket + `RunCard` arbitraria | 🤖 |
+| **chasqui** (62) | ~~transporte/discovery P2P + connect-and-consume remoto~~ ✅ (verif. 2026-06-10): discovery DHT (`resolve_provider`) **+ `consume_remote`** (`card-sidecar/src/discovery.rs:256`: dial+`connect_libp2p` sobre los `PeerId`, fallback entre peers). *(La "persistencia del broker" es un no-feature: efímero por diseño.)* | 🤖 |
+| **sandokan** (60) | ~~Cleanup socket + `RunCard` arbitraria~~ 🟡 (verif. 2026-06-10): `LocalEngine` con `RestartTracker` + socket por sesión + telemetría (`telemetry_cuenta_restarts_en_salida_anomala`); `RunCard::Virtual` corre y para limpio (`virtual_card_corre_sin_proceso_y_se_para_limpio`). **Residual:** `RunCard::Wasm` aún devuelve *unsupported payload* (`wasm_card_es_unsupported_payload`) — falta el incarnator WASM. | 🤖 |
 
 ### 2C. Cuello real (<60%) — NO DETALLABLE como tarea simple
 
