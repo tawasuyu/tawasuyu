@@ -27,10 +27,10 @@ use tokio_util::compat::FuturesAsyncReadCompatExt;
 
 use minga_core::{
     alpha::hash_alpha_with, parse::Dialect, AttestationStore, ContentHash, Keypair, MemStore, Mst,
-    NodeStore, RetractionStore, SemanticNode,
+    NodeStore, RetractionStore, SemanticNode, StoredNode,
 };
 use minga_dht::DhtKey;
-use minga_store::{PersistentRepo, StoreError};
+use minga_store::{PersistentRepo, SledNodeStore, StoreError};
 
 use crate::async_driver::{run_sync_async, AsyncSyncError};
 use crate::network::{DiscoveredPeer, LibP2pNode, NodeError, SYNC_PROTOCOL};
@@ -54,9 +54,9 @@ pub enum PeerOpenError {
     Store(#[from] StoreError),
 }
 
-struct PeerState {
+struct PeerState<S: NodeStore> {
     mst: Mst,
-    store: MemStore,
+    store: S,
     attestations: AttestationStore,
     retractions: RetractionStore,
     /// Tabla local α-hash → (struct-hash, dialect). Se replica al
@@ -69,17 +69,17 @@ struct PeerState {
     persistent: Option<Arc<PersistentRepo>>,
 }
 
-pub struct MingaPeer {
+pub struct MingaPeer<S: NodeStore = MemStore> {
     /// El nodo libp2p envuelto en `Arc` para que otros consumidores
     /// (por ejemplo `agora_net_brahman::AgoraNet`) puedan compartir
     /// el mismo `BrahmanNet` — una sola identidad libp2p, una sola
     /// tabla Kademlia, dos protocolos de stream. Ver
     /// [`MingaPeer::brahman_net`] y [`MingaPeer::open_with_node`].
     node: Arc<LibP2pNode>,
-    state: Arc<Mutex<PeerState>>,
+    state: Arc<Mutex<PeerState<S>>>,
 }
 
-impl MingaPeer {
+impl MingaPeer<MemStore> {
     pub fn new(
         keypair: Keypair,
         mst: Mst,
@@ -98,7 +98,9 @@ impl MingaPeer {
         }));
         Ok(Self { node, state })
     }
+}
 
+impl MingaPeer<SledNodeStore> {
     /// Abre o crea un peer persistente sobre `path`, construyendo un
     /// `LibP2pNode` propio (efímero). Atajo para procesos que sólo
     /// corren minga; si querés compartir el nodo libp2p con ágora u
@@ -106,15 +108,6 @@ impl MingaPeer {
     pub fn open(keypair: Keypair, path: impl AsRef<Path>) -> Result<Self, PeerOpenError> {
         let node = Arc::new(LibP2pNode::new()?);
         Self::open_with_node(keypair, path, node)
-    }
-
-    /// Acceso al nodo libp2p subyacente — útil para que otro consumidor
-    /// (típicamente `agora_net_brahman::AgoraNet`) abra sus propios
-    /// sub-protocolos de stream sobre la misma malla brahman-net. Es
-    /// el lado "lectura" de la convergencia; el lado "construcción" es
-    /// [`MingaPeer::open_with_node`].
-    pub fn brahman_net(&self) -> Arc<LibP2pNode> {
-        Arc::clone(&self.node)
     }
 
     /// Como [`MingaPeer::open`], pero adopta un `LibP2pNode` ya
@@ -137,12 +130,12 @@ impl MingaPeer {
             mst.insert(r?);
         }
 
-        // Cargar nodos desde disco.
-        let mut store = MemStore::new();
-        for r in repo.nodes.iter() {
-            let (h, node) = r?;
-            store.put_chunked(h, node);
-        }
+        // El store de nodos NO se vuelca a RAM: tomamos un handle
+        // compartido al árbol sled de `repo.nodes` (clone barato,
+        // `Arc`-backed). El sync opera directo sobre disco. Éste es el
+        // corazón del refactor #5/A — un repo de 1,4M nodos arranca con
+        // memoria O(1), no O(n).
+        let store = repo.nodes.clone();
 
         // Cargar atestaciones desde disco.
         let mut attestations = AttestationStore::new();
@@ -182,6 +175,17 @@ impl MingaPeer {
             persistent: Some(repo),
         }));
         Ok(Self { node, state })
+    }
+}
+
+impl<S: NodeStore + Clone + Send + 'static> MingaPeer<S> {
+    /// Acceso al nodo libp2p subyacente — útil para que otro consumidor
+    /// (típicamente `agora_net_brahman::AgoraNet`) abra sus propios
+    /// sub-protocolos de stream sobre la misma malla brahman-net. Es
+    /// el lado "lectura" de la convergencia; el lado "construcción" es
+    /// [`MingaPeer::open_with_node`].
+    pub fn brahman_net(&self) -> Arc<LibP2pNode> {
+        Arc::clone(&self.node)
     }
 
     pub fn peer_id(&self) -> PeerId {
@@ -273,8 +277,11 @@ impl MingaPeer {
         Ok(())
     }
 
-    async fn snapshot_session(&self) -> SyncSession {
+    async fn snapshot_session(&self) -> SyncSession<S> {
         let s = self.state.lock().await;
+        // `s.store.clone()` es O(1) cuando S = SledNodeStore (handle al
+        // árbol en disco); O(n) sólo en el peer en memoria (MemStore),
+        // donde el grafo entero ya está en RAM de todos modos.
         SyncSession::with_roots(
             s.mst.clone(),
             s.store.clone(),
@@ -285,20 +292,23 @@ impl MingaPeer {
         )
     }
 
-    async fn merge_back(&self, mut session: SyncSession) {
+    async fn merge_back(&self, mut session: SyncSession<S>) {
         // Verifica α↔struct de las declaraciones recibidas ANTES de
         // mover la sesión: si el caller no llamó `take_verified_root_decls`
         // explícitamente, las raíces no pasarían a `verified_root_decls`
         // y se perderían en silencio.
         let _verified = session.take_verified_root_decls();
+        let delta = session.drain_inserted();
         let (new_mst, new_store, new_atts, new_rets, new_roots) =
             session.into_parts_with_roots();
+        let new_nodes = materialize_delta(&new_store, delta);
         let mut s = self.state.lock().await;
-        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets, new_roots);
+        merge_into_state(&mut s, new_mst, new_nodes, new_atts, new_rets, new_roots);
     }
 
-    /// Instantánea del estado actual (mst + store + attestations).
-    pub async fn snapshot(&self) -> (Mst, MemStore, AttestationStore) {
+    /// Instantánea del estado actual (mst + store + attestations). El
+    /// `store` devuelto es un clone — handle compartido cuando es sled.
+    pub async fn snapshot(&self) -> (Mst, S, AttestationStore) {
         let s = self.state.lock().await;
         (s.mst.clone(), s.store.clone(), s.attestations.clone())
     }
@@ -311,10 +321,12 @@ impl MingaPeer {
     /// Devuelve el `ContentHash` raíz del árbol.
     pub async fn ingest(&self, node: &SemanticNode) -> ContentHash {
         let mut s = self.state.lock().await;
+        // `s.store.put` persiste por sí mismo cuando S = SledNodeStore
+        // (el store ES el árbol en disco); el MST sí necesita su propio
+        // write-through al tree `mst` de `repo`.
         let h = s.store.put(node);
         s.mst.insert(h);
         if let Some(repo) = &s.persistent {
-            let _ = repo.nodes.put(node);
             let _ = repo.mst.insert(h);
         }
         drop(s);
@@ -343,7 +355,6 @@ impl MingaPeer {
         s.mst.insert(alpha);
         s.roots.insert(alpha, (struct_hash, dialect));
         if let Some(repo) = &s.persistent {
-            let _ = repo.nodes.put(node);
             let _ = repo.mst.insert(alpha);
             let _ = repo.roots.put(alpha, struct_hash, dialect);
         }
@@ -380,7 +391,10 @@ impl MingaPeer {
     }
 }
 
-async fn handle_incoming(stream: Stream, state: Arc<Mutex<PeerState>>) {
+async fn handle_incoming<S: NodeStore + Clone + Send + 'static>(
+    stream: Stream,
+    state: Arc<Mutex<PeerState<S>>>,
+) {
     let session = {
         let s = state.lock().await;
         SyncSession::with_roots(
@@ -394,20 +408,35 @@ async fn handle_incoming(stream: Stream, state: Arc<Mutex<PeerState>>) {
     };
     if let Ok(mut result) = run_sync_async(session, stream.compat()).await {
         let _verified = result.take_verified_root_decls();
+        let delta = result.drain_inserted();
         let (new_mst, new_store, new_atts, new_rets, new_roots) =
             result.into_parts_with_roots();
+        let new_nodes = materialize_delta(&new_store, delta);
         let mut s = state.lock().await;
-        merge_into_state(&mut s, new_mst, new_store, new_atts, new_rets, new_roots);
+        merge_into_state(&mut s, new_mst, new_nodes, new_atts, new_rets, new_roots);
     }
     // Errores de sync se ignoran: cada sesión es independiente, una
     // sesión rota no debería tumbar el peer entero. Una iteración
     // futura puede contar errores para telemetría.
 }
 
-fn merge_into_state(
-    state: &mut PeerState,
+/// Materializa el *delta* de hashes de la sesión a pares `(hash, nodo)`
+/// leyéndolos del store de la sesión. O(delta), no O(n): nunca recorre el
+/// store entero — el punto del refactor #5/A cuando el backend es sled.
+fn materialize_delta<S: NodeStore>(
+    store: &S,
+    delta: Vec<ContentHash>,
+) -> Vec<(ContentHash, StoredNode)> {
+    delta
+        .into_iter()
+        .filter_map(|h| store.get(&h).map(|n| (h, n)))
+        .collect()
+}
+
+fn merge_into_state<S: NodeStore>(
+    state: &mut PeerState<S>,
     new_mst: Mst,
-    new_store: MemStore,
+    new_nodes: Vec<(ContentHash, StoredNode)>,
     new_atts: AttestationStore,
     new_rets: RetractionStore,
     new_roots: HashMap<ContentHash, (ContentHash, Dialect)>,
@@ -422,13 +451,12 @@ fn merge_into_state(
             let _ = repo.mst.insert(*h);
         }
     }
-    // `iter` entrega pares owned (trait por valor). `h` es Copy; el nodo
-    // se presta al sled persistente y luego se mueve al store en memoria,
-    // sin clonarlo.
-    for (h, node) in new_store.iter() {
-        if let Some(repo) = &state.persistent {
-            let _ = repo.nodes.put_chunked(h, &node);
-        }
+    // Sólo el *delta* de nodos nuevos del sync (no el store entero).
+    // `state.store.put_chunked` persiste por sí mismo cuando es sled (el
+    // store ES el árbol en disco — mismo handle que `repo.nodes`); en el
+    // peer en memoria simplemente copia el nodo al MemStore. En ningún
+    // caso se recorre O(n) el grafo completo.
+    for (h, node) in new_nodes {
         state.store.put_chunked(h, node);
     }
     for att in new_atts.all() {

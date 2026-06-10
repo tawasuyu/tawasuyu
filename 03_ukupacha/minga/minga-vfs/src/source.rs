@@ -112,7 +112,8 @@ impl NodeSource for MemSource {
 
     fn get(&self, hash: &ContentHash) -> Option<StoredNode> {
         use minga_core::NodeStore;
-        self.store.get(hash).cloned()
+        // `NodeStore::get` ya devuelve owned (trait por valor desde #5/A).
+        self.store.get(hash)
     }
 }
 

@@ -10,6 +10,11 @@ use sled::{Db, Tree};
 
 use crate::error::StoreError;
 
+/// `Clone` barato: `sled::Tree` es un handle `Arc`-backed; clonarlo
+/// comparte el mismo árbol en disco (no copia el contenido). Es lo que
+/// permite a `MingaPeer<SledNodeStore>` tomar un snapshot O(1) del store
+/// para correr una sesión de sync sin volcar 1,4M nodos a RAM.
+#[derive(Clone)]
 pub struct SledNodeStore {
     tree: Tree,
 }

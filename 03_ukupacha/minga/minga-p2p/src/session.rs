@@ -70,6 +70,13 @@ pub(crate) fn hello_payload(
 pub struct SyncSession<S: NodeStore = MemStore> {
     mst: Mst,
     store: S,
+
+    /// Hashes de los nodos que **esta sesión** insertó en `store` vía
+    /// `put_chunked` (los `Deliver` verificados). Es el *delta* del sync:
+    /// el caller lo drena con [`SyncSession::drain_inserted`] para mergear
+    /// sólo lo nuevo al estado del peer en O(delta), sin recorrer el store
+    /// entero (que con un backend sled de 1,4M nodos sería O(n) en disco).
+    inserted: Vec<ContentHash>,
     attestations: AttestationStore,
     retractions: RetractionStore,
 
@@ -186,6 +193,7 @@ impl<S: NodeStore> SyncSession<S> {
         Self {
             mst,
             store,
+            inserted: Vec::new(),
             attestations,
             retractions,
             local_roots,
@@ -386,6 +394,7 @@ impl<S: NodeStore> SyncSession<S> {
                 }
 
                 self.store.put_chunked(hash, stored);
+                self.inserted.push(hash);
                 if was_root {
                     self.mst.insert(hash);
                 }
@@ -649,6 +658,14 @@ impl<S: NodeStore> SyncSession<S> {
 
     pub fn store(&self) -> &S {
         &self.store
+    }
+
+    /// Drena el *delta* de hashes que esta sesión insertó (los `Deliver`
+    /// verificados). El caller los usa para mergear sólo lo nuevo al
+    /// estado del peer en O(delta). Llamar **antes** de consumir la
+    /// sesión con `into_parts*` (que mueve el store fuera).
+    pub fn drain_inserted(&mut self) -> Vec<ContentHash> {
+        std::mem::take(&mut self.inserted)
     }
 
     pub fn into_parts(self) -> (Mst, S, AttestationStore) {

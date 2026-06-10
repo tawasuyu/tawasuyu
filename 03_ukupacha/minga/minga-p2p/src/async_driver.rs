@@ -46,12 +46,13 @@ pub enum AsyncSyncError {
 /// Ejecuta una sesión de sincronización completa sobre una stream
 /// duplex. Devuelve la `SyncSession` resultante (con el `Mst`,
 /// `MemStore` y `AttestationStore` ya mergeados con el peer).
-pub async fn run_sync_async<S>(
-    mut session: SyncSession,
-    mut stream: S,
-) -> Result<SyncSession, AsyncSyncError>
+pub async fn run_sync_async<St, Store>(
+    mut session: SyncSession<Store>,
+    mut stream: St,
+) -> Result<SyncSession<Store>, AsyncSyncError>
 where
-    S: AsyncRead + AsyncWrite + Unpin,
+    St: AsyncRead + AsyncWrite + Unpin,
+    Store: minga_core::NodeStore,
 {
     let mut outbound: VecDeque<Message> = session.start().into();
 

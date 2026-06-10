@@ -51,10 +51,12 @@ async fn ingest_persists_across_restart() {
         let (mst, store, _) = peer.snapshot().await;
         assert_eq!(mst.len(), 1);
         assert!(mst.contains(&h_expected));
-        assert!(store.contains(&h_expected));
+        assert!(store.contains(&h_expected).unwrap());
 
-        // Reconstrucción exacta del árbol original.
-        let reconstructed = store.reconstruct(&h_expected).unwrap();
+        // Reconstrucción exacta del árbol original. `store` es un
+        // `SledNodeStore` concreto (snapshot del peer persistente) →
+        // sus métodos inherentes devuelven `Result`.
+        let reconstructed = store.reconstruct(&h_expected).unwrap().unwrap();
         assert_eq!(reconstructed, n);
     }
 }
@@ -226,10 +228,10 @@ async fn sync_into_persistent_peer_survives_restart() {
             mst_a.contains(&h_b),
             "el contenido de B no sobrevivió al reinicio"
         );
-        assert!(store_a.contains(&h_b));
+        assert!(store_a.contains(&h_b).unwrap());
 
         // Reconstruimos: lo que B firmó sigue ahí íntegro.
-        let reconstructed = store_a.reconstruct(&h_b).unwrap();
+        let reconstructed = store_a.reconstruct(&h_b).unwrap().unwrap();
         assert_eq!(reconstructed, n);
     }
 }
