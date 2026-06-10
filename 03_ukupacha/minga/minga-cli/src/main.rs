@@ -692,13 +692,33 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (y, m, d)
 }
 
+/// Si `MINGA_PASSPHRASE` está en el entorno, la usa sin preguntar — el
+/// camino para daemons (`listen`/`serve`), CI y automatización (incluido
+/// el flujo de versionado por iteración). Si no, pide por TTY. Es el
+/// equivalente de minga al `GIT_ASKPASS`/credential-helper de git: sin
+/// esto ningún proceso sin terminal puede operar el repo.
+fn passphrase_de_entorno() -> Option<String> {
+    match std::env::var("MINGA_PASSPHRASE") {
+        Ok(p) if !p.is_empty() => Some(p),
+        _ => None,
+    }
+}
+
 fn prompt_passphrase() -> Result<String, CliError> {
+    if let Some(p) = passphrase_de_entorno() {
+        return Ok(p);
+    }
     let pass = rpassword::prompt_password("Passphrase: ")
         .map_err(CliError::Io)?;
     Ok(pass)
 }
 
 fn prompt_passphrase_with_confirm() -> Result<String, CliError> {
+    // En modo no-interactivo (env) no hay confirmación que pedir: la
+    // intención ya está declarada al exportar la variable.
+    if let Some(p) = passphrase_de_entorno() {
+        return Ok(p);
+    }
     let pass = rpassword::prompt_password("Passphrase nueva: ")
         .map_err(CliError::Io)?;
     let conf = rpassword::prompt_password("Confirma: ")
