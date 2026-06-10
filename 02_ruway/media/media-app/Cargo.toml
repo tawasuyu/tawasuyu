@@ -42,3 +42,8 @@ rhai = "1.20"
 ron = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
+
+[dev-dependencies]
+# Sólo para el example headless `pantallazo_media` (readback de textura → PNG).
+pollster = { workspace = true }
+png = { workspace = true }
