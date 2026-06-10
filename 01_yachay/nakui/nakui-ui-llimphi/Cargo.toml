@@ -37,3 +37,6 @@ path = "src/main.rs"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Sólo para el example `pantallazo_nakui` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }
