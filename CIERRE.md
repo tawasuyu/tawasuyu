@@ -142,7 +142,7 @@ de lo automatizable.
 | App | Acción de cierre | Quién |
 |---|---|---|
 | **agora** (80) | Tabla de capacidades por bytecode hash (§14.1.3) — **code-complete**: enforcement cableado + tool + boot-anchor + ceremonia scripteada (`scripts/wawa-conceder-genesis.sh`). Resta SÓLO el paso de operador (firmar con seed slot-0 + flip a estricto). | 🧑 — ceremonia con tu seed |
-| **minga** (80) | `MingaPeer` genérico para escala | 🤖 |
+| **minga** (80) | ~~`MingaPeer` genérico para escala~~ ✅ (#5/A cerrado 2026-06-10): `MingaPeer<S: NodeStore>` sobre handle sled compartido — sync P2P sin volcar 1.44M nodos a RAM, snapshot O(1), merge O(delta). | 🤖 |
 | **arje** (78) | Cleanup socket daemon + `RestartTracker` en `LocalEngine` | 🤖 |
 | **supay** (78) | BSP-walking real (orden de render). *Audio vía takiy: ✅ hecho (`play_takiy_score`).* | 🤖 |
 | **shuma** (78) | Mouse en PTY + lockfile del daemon | 🤖 |
