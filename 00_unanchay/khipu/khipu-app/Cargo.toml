@@ -16,6 +16,10 @@ path = "src/main.rs"
 name = "demo_cli"
 path = "examples/demo_cli.rs"
 
+[[example]]
+name = "pantallazo_mapa"
+path = "examples/pantallazo_mapa.rs"
+
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 khipu-gravity = { path = "../khipu-gravity" }
@@ -38,3 +42,8 @@ app-bus = { workspace = true }
 directories = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
+
+[dev-dependencies]
+# Sólo para el example headless `pantallazo_mapa` (readback de textura → PNG).
+png = { workspace = true }
+pollster = { workspace = true }

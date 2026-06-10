@@ -36,3 +36,8 @@ directories = { workspace = true }
 rand = { workspace = true }
 notify = { workspace = true }
 postcard = { workspace = true }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_agora` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }
