@@ -13,3 +13,6 @@ dist/
 pkg/
 # Salida accidental de build fuera de árbol (no es un dominio del workspace)
 /crates/
+
+# Artefacto de deploy de la landing (build-tawasuyu-web.sh con DEST); el sitio se sirve del repo vivo
+/release/
