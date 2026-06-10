@@ -52,8 +52,10 @@ use wawa_explorer_core::{short_hex, Disco};
 /// margen para una retransmisión perdida sin colgar la UI.
 const TIMEOUT_FETCH: Duration = Duration::from_secs(3);
 
+// `Model`/`Msg`/`Explorer` son `pub(crate)`: el example `pantallazo_wawa`
+// incluye este archivo por `#[path]` para montar la view real headless.
 #[derive(Clone)]
-enum Msg {
+pub(crate) enum Msg {
     Toggle(Hash),
     Select(Hash),
     FetchPeers(Hash),
@@ -80,36 +82,36 @@ enum Msg {
     ContextMenuOpen(f32, f32),
 }
 
-struct Model {
-    theme: Theme,
-    disco: Option<Disco>,
-    source: PathBuf,
-    error: Option<String>,
-    expanded: HashSet<Hash>,
-    selected: Option<Hash>,
-    raices: Vec<Hash>,
+pub(crate) struct Model {
+    pub(crate) theme: Theme,
+    pub(crate) disco: Option<Disco>,
+    pub(crate) source: PathBuf,
+    pub(crate) error: Option<String>,
+    pub(crate) expanded: HashSet<Hash>,
+    pub(crate) selected: Option<Hash>,
+    pub(crate) raices: Vec<Hash>,
     /// Interfaz que usará el cliente AoE. `Err` lleva el motivo legible —
     /// se muestra en lugar del botón de fetch.
-    iface: Result<String, String>,
+    pub(crate) iface: Result<String, String>,
     /// Objetos traídos por AoE — viven sólo en esta sesión.
-    fetched: HashMap<Hash, Objeto>,
+    pub(crate) fetched: HashMap<Hash, Objeto>,
     /// Hashes con fetch en vuelo.
-    fetching: HashSet<Hash>,
+    pub(crate) fetching: HashSet<Hash>,
     /// Último error de fetch por hash. Se limpia cuando arranca un retry.
-    fetch_errors: HashMap<Hash, String>,
+    pub(crate) fetch_errors: HashMap<Hash, String>,
     /// Barra de menú principal: índice del menú raíz abierto (`None`
     /// cerrado).
-    menu_open: Option<usize>,
+    pub(crate) menu_open: Option<usize>,
     /// Fila activa dentro del dropdown abierto (`usize::MAX` = ninguna).
-    menu_active: usize,
+    pub(crate) menu_active: usize,
     /// Animación de aparición del dropdown.
-    menu_anim: Tween<f32>,
+    pub(crate) menu_anim: Tween<f32>,
     /// Menú contextual sobre un nodo: `(hash, x, y)` ancla en ventana.
     /// `None` cerrado.
-    context_menu: Option<(Hash, f32, f32)>,
+    pub(crate) context_menu: Option<(Hash, f32, f32)>,
 }
 
-struct Explorer;
+pub(crate) struct Explorer;
 
 impl App for Explorer {
     type Model = Model;
@@ -506,7 +508,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
 /// Determina las raíces a mostrar en el tree top-level. Prioridad:
 /// manifest > raíz > orphans (objetos sin padre conocido). Si el disco
 /// está vacío, lista vacía.
-fn raices_de(d: &Disco) -> Vec<Hash> {
+pub(crate) fn raices_de(d: &Disco) -> Vec<Hash> {
     let mut raices = Vec::new();
     if let Some(h) = d.superbloque().manifiesto {
         raices.push(h);

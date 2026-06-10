@@ -2,6 +2,8 @@
 
 > File editor over Llimphi. Test bench of the framework.
 
+![the nada editor: the real workspace tree expanded down to 02_ruway/nada/src on the left, three tabs open with view.rs active under Rust syntax highlight, Spanish menubar, and a status bar showing cursor position, git marks and the live rust-analyzer LSP indicator](https://tawasuyu.net/02_ruway/nada/pantallazo.png)
+
 `nada` (internal name; formerly `tawasuyu-edit`, renamed 2026-05-27) is the monorepo's text editor: file tree on the left, editor with syntax highlight + LSP on the right, command palette, find-in-files, mini-map, bookmarks, diff viewer, embedded terminal, embedded settings panel (allichay), UI localized via `rimay-localize` (es/en/qu), JSON sessions. Each feature is a Llimphi module — `nada` assembles; it doesn't invent. It is also the reference pattern for the menubar / edit-menu / clipboard wiring the other apps copy.
 
 ## Install

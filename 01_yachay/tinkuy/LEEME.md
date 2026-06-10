@@ -2,6 +2,8 @@
 
 > `tinkuy` (quechua: *encuentro, choque*). Motor de partículas DOD.
 
+![el chassis de tinkuy: grilla 2×2 de tiles con el visor 3D axonométrico mostrando 64 partículas Lennard-Jones a mitad de simulación coloreadas por velocidad, el grafo visual de fuerzas compilado a bytecode, observables en vivo (step, temperatura, energía cinética) y el ring de CIDs de snapshots direccionados por contenido](https://tawasuyu.net/01_yachay/tinkuy/pantallazo.png)
+
 ECS Structure-of-Arrays + Grid3D + integrador Velocity-Verlet paralelo. Snapshots `BLAKE3` content-addressed compatibles con el filesystem de Wawa: una simulación puede pausarse, exportarse y reanudarse en otra máquina sin perder ni un bit. Roadmap B-F completo: motor, ABI WASM, DSL matemático, nodos visuales, visor empotrado en el kernel.
 
 Visión a largo plazo (anti token-junkie): motor Rust → ABI WASM → DSL matemático → nodos visuales. Cuatro capas secuenciales; el motor primero. Orden confirmado.

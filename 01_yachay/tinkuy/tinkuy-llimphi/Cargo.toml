@@ -20,6 +20,15 @@ tinkuy-core   = { path = "../tinkuy-core" }
 tinkuy-dsl    = { path = "../tinkuy-dsl" }
 tinkuy-forces = { path = "../tinkuy-forces" }
 
+[dev-dependencies]
+# Sólo para el example `pantallazo_tinkuy` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }
+
 [[example]]
 name = "tinkuy_demo"
 path = "examples/tinkuy_demo.rs"
+
+[[example]]
+name = "pantallazo_tinkuy"
+path = "examples/pantallazo_tinkuy.rs"

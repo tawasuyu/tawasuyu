@@ -2,6 +2,8 @@
 
 > Visor host-side del DAG de Wawa.
 
+![el wawa-explorer sobre una wawa.img forjada de verdad: a la izquierda, el grafo de objetos direccionado por contenido como árbol — manifiesto y raíz expandidos, cada nodo rotulado con su hash corto BLAKE3, tamaño del payload y cantidad de hijos; a la derecha, el panel de detalle del objeto seleccionado con su hash completo, hex dump del payload y el censo de hijos; arriba, el header del superbloque con tamaño de imagen, versión, cursor, cantidad de objetos y la interfaz AoE](https://tawasuyu.net/03_ukupacha/wawa-explorer/pantallazo.png)
+
 Corre en un host Linux y lee el filesystem de Wawa **sin montar nada**: abre el `.img`, recorre el DAG content-addressed y muestra el árbol con detalle en Llimphi. Cliente Akasha (raw sockets) para traer objetos ausentes desde un Wawa vivo en la LAN. Útil para debugging, forensics y educación.
 
 ## Instalación

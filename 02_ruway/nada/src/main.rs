@@ -106,7 +106,7 @@ const TERM_PANEL_H: f32 = 220.0;
 const DIFF_PANEL_H: f32 = 480.0;
 
 #[derive(Clone)]
-enum Msg {
+pub(crate) enum Msg {
     ToggleNode(usize),
     SelectNode(usize),
     EditKey(KeyEvent),
@@ -249,199 +249,199 @@ enum Msg {
 }
 
 #[derive(Debug, Clone)]
-struct TreeNode {
-    path: PathBuf,
-    depth: usize,
-    is_dir: bool,
-    expanded: bool,
+pub(crate) struct TreeNode {
+    pub(crate) path: PathBuf,
+    pub(crate) depth: usize,
+    pub(crate) is_dir: bool,
+    pub(crate) expanded: bool,
 }
 
 /// Un archivo abierto en su tab. El editor + el flag `dirty` viven aquí;
 /// switchear tabs es cuestión de mover el índice `Model.active`.
-struct Tab {
-    path: PathBuf,
-    editor: EditorState,
-    dirty: bool,
+pub(crate) struct Tab {
+    pub(crate) path: PathBuf,
+    pub(crate) editor: EditorState,
+    pub(crate) dirty: bool,
     /// mtime del archivo la última vez que lo leímos o escribimos. Si en
     /// el siguiente `PollLsp` el mtime de disco difiere, alguien lo tocó
     /// por fuera — el host avisa o recarga según `dirty`.
-    last_mtime: Option<std::time::SystemTime>,
+    pub(crate) last_mtime: Option<std::time::SystemTime>,
     /// `true` si ya advertimos al user del cambio externo desde el último
     /// reload — para no spamear el status bar cada poll.
-    external_warned: bool,
+    pub(crate) external_warned: bool,
 }
 
-struct Model {
-    root: PathBuf,
-    nodes: Vec<TreeNode>,
-    selected: Option<usize>,
+pub(crate) struct Model {
+    pub(crate) root: PathBuf,
+    pub(crate) nodes: Vec<TreeNode>,
+    pub(crate) selected: Option<usize>,
     /// Walk recursivo de todos los archivos bajo `root` (skip dotfiles,
     /// `target/`, `node_modules/`). Cacheado al arrancar; lo consume el
     /// fuzzy file picker (Ctrl+P).
-    all_files: Vec<PathBuf>,
+    pub(crate) all_files: Vec<PathBuf>,
     /// Estado del picker; `None` cerrado.
-    picker: Option<PickerState>,
+    pub(crate) picker: Option<PickerState>,
     /// Estado del find-in-files; `None` cerrado.
-    fif: Option<FifState>,
+    pub(crate) fif: Option<FifState>,
     /// Terminal integrado; `None` cerrado. Cuando está abierto, las
     /// teclas pasan al PTY (con excepciones del módulo).
-    term: Option<ShumaTermState>,
+    pub(crate) term: Option<ShumaTermState>,
     /// Command palette; `None` cerrado.
-    palette: Option<PaletteState>,
+    pub(crate) palette: Option<PaletteState>,
     /// Catálogo estático de comandos disponibles. Se construye en
     /// `init` y se reusa en cada apertura del palette — el palette no
     /// lo copia, sólo guarda índices.
-    palette_commands: Vec<PaletteCommand>,
+    pub(crate) palette_commands: Vec<PaletteCommand>,
     /// Symbol outline; `None` cerrado.
-    outline: Option<OutlineState>,
+    pub(crate) outline: Option<OutlineState>,
     /// Últimos símbolos devueltos por el LSP para el tab activo. Se
     /// repuebla en cada `OutlineRefresh`; vacío hasta que llega la
     /// primera respuesta.
-    outline_symbols: Vec<SymbolItem>,
-    minimap: Option<MiniMapState>,
-    bookmarks: BookmarksState,
+    pub(crate) outline_symbols: Vec<SymbolItem>,
+    pub(crate) minimap: Option<MiniMapState>,
+    pub(crate) bookmarks: BookmarksState,
     /// Diff viewer; `None` cerrado. Snapshot del diff: si el buffer
     /// cambia con el panel abierto, las filas no se recomputan — el
     /// usuario cierra y reabre para refrescar (semántica congelada,
     /// como VS Code "Compare with Saved").
-    diff: Option<DiffState>,
-    tabs: Vec<Tab>,
+    pub(crate) diff: Option<DiffState>,
+    pub(crate) tabs: Vec<Tab>,
     /// Índice del tab activo dentro de `tabs`. `None` si no hay ninguno
     /// abierto todavía.
-    active: Option<usize>,
-    clipboard: ArboardClipboard,
-    status: String,
+    pub(crate) active: Option<usize>,
+    pub(crate) clipboard: ArboardClipboard,
+    pub(crate) status: String,
     /// Acumulado de drag del editor: cada `Msg::EditorPointer(Drag)`
     /// suma `(dx, dy)`. Pos actual = `initial + drag_accum`.
-    drag_accum: (f32, f32),
+    pub(crate) drag_accum: (f32, f32),
     /// Modo find: cuando es Some, la barra del find está abierta y las
     /// teclas van al input en lugar de al editor.
-    find: Option<FindBarState>,
+    pub(crate) find: Option<FindBarState>,
     /// Demo de diagnostics fake (--demo-lsp): TODO/FIXME en .rs/.py se
     /// pintan como warning/error. Útil cuando no hay rust-analyzer y
     /// querés ver el render del subrayado.
-    demo_lsp: bool,
+    pub(crate) demo_lsp: bool,
     /// Cliente LSP real: `--lsp` spawnea rust-analyzer (o el binary
     /// pasado con `--lsp-cmd=...`). En modo no-op cuando no se pide.
-    lsp: Box<dyn LspClient>,
+    pub(crate) lsp: Box<dyn LspClient>,
     /// Etiqueta corta del LSP activo para mostrar en la status bar.
     /// Se setea una vez en init y no muta despues.
-    lsp_label: String,
-    theme: Theme,
+    pub(crate) lsp_label: String,
+    pub(crate) theme: Theme,
     /// Items del popup de completions; `None` si el popup está cerrado.
-    completions: Option<CompletionsBar>,
+    pub(crate) completions: Option<CompletionsBar>,
     /// Popup de hover; `None` cerrado.
-    hover: Option<HoverPopup>,
+    pub(crate) hover: Option<HoverPopup>,
     /// Popup de signatureHelp; `None` cerrado.
-    sig_help: Option<SignatureHelpBar>,
+    pub(crate) sig_help: Option<SignatureHelpBar>,
     /// Lista de references; `None` cerrada.
-    references: Option<ReferencesBar>,
+    pub(crate) references: Option<ReferencesBar>,
     /// Prompt de rename con el nuevo nombre + pos original; `None` cerrado.
-    rename: Option<RenameBar>,
+    pub(crate) rename: Option<RenameBar>,
     /// Subscripción al bus de configuración del SO (`wawa-config`).
     /// Mantiene vivo el watcher mientras el editor corre; al droparlo
     /// dejan de llegar `WawaConfigChanged`. `None` si la plataforma
     /// no expone ProjectDirs (caso muy raro).
-    _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    pub(crate) _wawa_watcher: Option<wawa_config::ConfigWatcher>,
     /// Si `true`, `Msg::Save` dispara primero `request_formatting` y
     /// guarda recién al volver los `TextEditsApply`. Lo enciende
     /// `--fmt-on-save` desde CLI; off por default para no romper save
     /// si el LSP devuelve edits que rompen sintaxis.
-    format_on_save: bool,
+    pub(crate) format_on_save: bool,
     /// Idx del tab al que hay que guardar tras aplicar el próximo
     /// `TextEditsApply`. `None` si el último format fue manual.
-    pending_save_after_format: Option<usize>,
+    pub(crate) pending_save_after_format: Option<usize>,
     /// Prompt de Save-As (Ctrl+Shift+S); `None` cerrado.
-    save_as: Option<SaveAsBar>,
+    pub(crate) save_as: Option<SaveAsBar>,
     /// Marca git por path absoluto. Repoblado cada ~3 s por un hilo que
     /// ejecuta `git status --porcelain` desde `root`. Vacío si no es
     /// un repo git o git no está instalado.
-    git_status: GitStatusMap,
+    pub(crate) git_status: GitStatusMap,
     /// Cola LRU de archivos abiertos recientemente (cap 20). El picker
     /// los muestra al tope cuando se abre — mejor que tener que escribir
     /// el nombre para encontrar algo que acabás de cerrar.
-    recent_files: std::collections::VecDeque<PathBuf>,
+    pub(crate) recent_files: std::collections::VecDeque<PathBuf>,
     /// Menú principal: índice del menú raíz abierto (`None` cerrado).
-    menu_open: Option<usize>,
+    pub(crate) menu_open: Option<usize>,
     /// Menú de edición contextual: ancla `(x, y)` en ventana (`None` cerrado).
-    edit_menu: Option<(f32, f32)>,
+    pub(crate) edit_menu: Option<(f32, f32)>,
     /// Animación de aparición del menú de edición (0→1, fade + slide).
-    edit_menu_anim: Tween<f32>,
+    pub(crate) edit_menu_anim: Tween<f32>,
     /// Índice del item raíz cuyo submenú está desplegado (flyout). `None`
     /// = ninguno. Hoy sólo lo usa el item "Buscar" del menú de edición.
-    edit_sub: Option<usize>,
+    pub(crate) edit_sub: Option<usize>,
     /// Fila resaltada por teclado en el dropdown del menú principal
     /// (`usize::MAX` = ninguna).
-    menu_active: usize,
+    pub(crate) menu_active: usize,
     /// Fila resaltada por teclado en el menú de edición.
-    edit_active: usize,
+    pub(crate) edit_active: usize,
     /// Animación de aparición/swap del dropdown del menú principal.
-    menu_anim: Tween<f32>,
+    pub(crate) menu_anim: Tween<f32>,
     /// Alto de la ventana en px (físicos). Lo actualiza `on_resize`;
     /// arranca en `initial_size().1`. Se usa para dimensionar el viewport
     /// del scroll del árbol de archivos.
-    win_h: f32,
+    pub(crate) win_h: f32,
     /// Ancho de la ventana en px (físicos). Lo actualiza `on_resize`. Se usa
     /// para centrar el modal del panel de configuración.
-    win_w: f32,
+    pub(crate) win_w: f32,
     /// Panel de configuración (allichay) embebido como modal; `None` cerrado.
-    settings: Option<AllichayState>,
+    pub(crate) settings: Option<AllichayState>,
     /// Desplazamiento vertical del árbol de archivos (px, ≥0). El árbol
     /// scrollea con la rueda (cursor encima) y la barra arrastrable.
-    tree_scroll: f32,
+    pub(crate) tree_scroll: f32,
 }
 
 const RECENT_FILES_CAP: usize = 20;
 
-type GitStatusMap = std::collections::HashMap<PathBuf, char>;
+pub(crate) type GitStatusMap = std::collections::HashMap<PathBuf, char>;
 
-struct SaveAsBar {
-    input: TextInputState,
+pub(crate) struct SaveAsBar {
+    pub(crate) input: TextInputState,
 }
 
-struct RenameBar {
-    input: TextInputState,
+pub(crate) struct RenameBar {
+    pub(crate) input: TextInputState,
     /// Pos donde se pidió el rename.
-    anchor: (usize, usize),
+    pub(crate) anchor: (usize, usize),
     /// `true` mientras esperamos la respuesta del LSP tras submit.
-    waiting: bool,
+    pub(crate) waiting: bool,
     /// Cuándo se llamó a `request_rename` — `None` si todavía no hubo
     /// submit. Sirve para detectar timeouts del LSP.
-    submitted_at: Option<std::time::Instant>,
+    pub(crate) submitted_at: Option<std::time::Instant>,
     /// `true` después de avisar al user del timeout, para no spamear.
-    timeout_warned: bool,
+    pub(crate) timeout_warned: bool,
 }
 
-struct ReferencesBar {
-    items: Vec<DefinitionLocation>,
-    selected: usize,
+pub(crate) struct ReferencesBar {
+    pub(crate) items: Vec<DefinitionLocation>,
+    pub(crate) selected: usize,
     /// Pos donde se pidió la búsqueda.
-    anchor: (usize, usize),
+    pub(crate) anchor: (usize, usize),
     /// Cuándo se disparó el request — para detectar timeouts del LSP.
-    requested_at: std::time::Instant,
+    pub(crate) requested_at: std::time::Instant,
     /// `true` después de avisarle al user que el LSP no respondió, para
     /// no spamear status.
-    timeout_warned: bool,
+    pub(crate) timeout_warned: bool,
 }
 
-struct SignatureHelpBar {
-    info: Option<SignatureHelpInfo>,
-    anchor: (usize, usize),
+pub(crate) struct SignatureHelpBar {
+    pub(crate) info: Option<SignatureHelpInfo>,
+    pub(crate) anchor: (usize, usize),
 }
 
-struct HoverPopup {
-    info: Option<HoverInfo>,
-    anchor: (usize, usize),
+pub(crate) struct HoverPopup {
+    pub(crate) info: Option<HoverInfo>,
+    pub(crate) anchor: (usize, usize),
 }
 
-struct CompletionsBar {
-    items: Vec<CompletionItem>,
-    selected: usize,
+pub(crate) struct CompletionsBar {
+    pub(crate) items: Vec<CompletionItem>,
+    pub(crate) selected: usize,
     /// Pos donde se pidió la completion — para anclar el popup visual.
-    anchor: (usize, usize),
+    pub(crate) anchor: (usize, usize),
     /// Prefijo actual derivado del buffer en cada frame. Se filtran
     /// los items por `label.to_lowercase().contains(filter.to_lowercase())`.
-    filter: String,
+    pub(crate) filter: String,
 }
 
 impl CompletionsBar {
@@ -459,9 +459,9 @@ impl CompletionsBar {
     }
 }
 
-struct FindBarState {
-    input: TextInputState,
-    state: FindState,
+pub(crate) struct FindBarState {
+    pub(crate) input: TextInputState,
+    pub(crate) state: FindState,
 }
 
 impl FindBarState {
@@ -503,7 +503,7 @@ impl Model {
     }
 }
 
-struct EditorApp;
+pub(crate) struct EditorApp;
 
 impl App for EditorApp {
     type Model = Model;
@@ -644,7 +644,7 @@ impl App for EditorApp {
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
-        crate::update::dispatch(model, msg, handle)
+        update::dispatch(model, msg, handle)
     }
 
     fn on_wheel(
@@ -668,7 +668,7 @@ impl App for EditorApp {
     }
 
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
-        crate::keys::handle_key(model, event)
+        keys::handle_key(model, event)
     }
 
     /// Habilita el IME para que el texto compuesto (acentos por dead key,
@@ -728,7 +728,7 @@ impl App for EditorApp {
         // El panel de configuración es un modal: captura todo mientras está
         // abierto, así que tiene prioridad sobre los menús.
         if let Some(state) = model.settings.as_ref() {
-            return Some(crate::settings::settings_overlay_view(model, state));
+            return Some(settings::settings_overlay_view(model, state));
         }
         // El menú de edición tiene prioridad si está abierto.
         if let Some((x, y)) = model.edit_menu {
@@ -745,7 +745,7 @@ impl App for EditorApp {
 }
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
-fn menubar_spec<'a>(
+pub(crate) fn menubar_spec<'a>(
     menu: &'a app_bus::AppMenu,
     model: &Model,
     theme: &'a Theme,
@@ -886,14 +886,26 @@ fn edit_menu_view(model: &Model, x: f32, y: f32) -> View<Msg> {
     context_menu_view_ex(spec, extras)
 }
 
-mod actions;
-mod clipboard;
-mod fsutil;
-mod keys;
-mod session;
-mod settings;
-mod update;
-mod view;
+// Los `#[path]` explícitos permiten que `examples/pantallazo_nada.rs`
+// incluya este archivo como módulo (`#[path = "../src/main.rs"] mod app;`)
+// y los hijos sigan resolviendo contra `src/` — sin ellos, rustc los
+// buscaría en `src/main/<hijo>.rs`.
+#[path = "actions.rs"]
+pub(crate) mod actions;
+#[path = "clipboard.rs"]
+pub(crate) mod clipboard;
+#[path = "fsutil.rs"]
+pub(crate) mod fsutil;
+#[path = "keys.rs"]
+pub(crate) mod keys;
+#[path = "session.rs"]
+pub(crate) mod session;
+#[path = "settings.rs"]
+pub(crate) mod settings;
+#[path = "update.rs"]
+pub(crate) mod update;
+#[path = "view.rs"]
+pub(crate) mod view;
 
 use actions::*;
 use clipboard::*;

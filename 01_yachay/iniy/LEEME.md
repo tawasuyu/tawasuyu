@@ -2,6 +2,8 @@
 
 > Laboratorio semántico. Modela grados de creencia y dirección de subjetividad.
 
+![el banco de verificación de afirmaciones iniy: cuatro fuentes con barras de reputación (un blog detox en −1.00, el consenso IARC/OMS, una revista médica, wikipedia), once aserciones sobre el café puntuadas con creencia/incertidumbre (b/u/π), y las hebras de relación — apoyo y contradicción — cruzando el lienzo entre ellas](https://tawasuyu.net/01_yachay/iniy/pantallazo.png)
+
 `iniy` aplica **Subjective Logic** + un eje explícito de "dirección de subjetividad" (autoría, fuente, posicionalidad) para auditar afirmaciones en textos largos. Piloto: auditoría de libros y wikis. Pipeline: ingest → extract → graph → NLI → reporte.
 
 ## Instalación

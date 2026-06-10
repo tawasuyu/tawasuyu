@@ -43,8 +43,11 @@ use pineal_treemap::{paint_treemap, Tile};
 // Modelo y mensajes
 // =====================================================================
 
+// `pub(crate)` (acá y en `Model`/`GaleriaDemo`): el example
+// `pantallazo_pineal` incluye este archivo por `#[path]` para montar la
+// MISMA view de la galería sin ventana. Para el binario no cambia nada.
 #[derive(Clone)]
-enum Msg {
+pub(crate) enum Msg {
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cierra).
     MenuOpen(Option<usize>),
     /// Comando elegido en la barra → se traduce al `Msg` real.
@@ -53,7 +56,7 @@ enum Msg {
     CycleTheme,
 }
 
-struct Model {
+pub(crate) struct Model {
     theme: Theme,
     menu_open: Option<usize>,
     /// Grafo del tile mesh, ya relajado en el init (posiciones fijas).
@@ -64,7 +67,7 @@ struct Model {
     field: Arc<HeatmapMatrix>,
 }
 
-struct GaleriaDemo;
+pub(crate) struct GaleriaDemo;
 
 impl App for GaleriaDemo {
     type Model = Model;

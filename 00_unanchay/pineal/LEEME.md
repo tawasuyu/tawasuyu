@@ -2,6 +2,8 @@
 
 > Visualización agnóstica del backend. El "tercer ojo" del monorepo.
 
+![la galería de painters de pineal renderizada headless: una grilla de 11 tiles — cartesiano con senoide, pie/donut, radar, treemap squarified, heatmap Viridis, hexbin, isolíneas de contour, un sankey de presupuesto, un mesh force-directed, barras con un valor negativo y un histograma](https://tawasuyu.net/00_unanchay/pineal/pantallazo.png)
+
 Pineal es un catálogo de painters especializados — cartesiano, polar,
 mesh, treemap, phosphor, flow, heatmap, stream, financial, hexbin,
 contour y bars — sobre una **única abstracción de pintura**, el trait

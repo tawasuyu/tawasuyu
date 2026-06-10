@@ -886,7 +886,7 @@ pub(crate) fn handle_menu_command(mut model: Model, command: String, handle: &Ha
         _ => None,
     };
     match target {
-        Some(msg) => crate::update::dispatch(model, msg, handle),
+        Some(msg) => super::update::dispatch(model, msg, handle),
         None => model,
     }
 }

@@ -2,6 +2,8 @@
 
 > Semantic lab. Models degrees of belief and subjectivity direction.
 
+![the iniy claim-verification workbench: four sources with reputation bars (a detox blog at −1.00, IARC/OMS consensus, a medical journal, wikipedia), eleven assertions about coffee each scored with belief/uncertainty (b/u/π), and the relation threads — support and contradiction — crossing the canvas between them](https://tawasuyu.net/01_yachay/iniy/pantallazo.png)
+
 `iniy` applies **Subjective Logic** + an explicit "subjectivity direction" axis (authorship, source, positionality) to audit statements in long texts. Pilot: book and wiki audits. Pipeline: ingest → extract → graph → NLI → report.
 
 ## Install

@@ -2,6 +2,8 @@
 
 > `puriy` (Quechua: *to travel, to walk*). Sovereign web browser.
 
+![the puriy browser rendering a tawasuyu page with its own engine: tab strip and URL bar, hero banner, six quadrant cards in a grid and a footer — the status bar reads "OK · 76 boxes", every one parsed, styled and laid out by puriy-engine, no Chromium anywhere](https://tawasuyu.net/00_unanchay/puriy/pantallazo.png)
+
 **Own DOM/CSS engine in Rust** (from upstream only the parsers: `html5ever`, `markup5ever_rcdom`, `cssparser` as anchor) + JS via **QuickJS-NG compiled to WASM** (`wasmi` sandbox) + render delegated to **Llimphi**. Servo remained the initial inspiration, not an architectural dependency. Result: a browser with no Chromium or WebKit, no FFI to corporate C++, designed to run identically on Linux/Wayland and on Wawa bare-metal. Architecture in [SDD.md](SDD.md).
 
 ## Install

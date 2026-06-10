@@ -76,8 +76,11 @@ const MAX_SOURCE_BYTES: usize = 256 * 1024;
 const ACCENT_OK: Color = Color::from_rgba8(0xa3, 0xbe, 0x8c, 0xff);
 const ACCENT_WARN: Color = Color::from_rgba8(0xeb, 0xcb, 0x8b, 0xff);
 
+// `pub(crate)` (acá y en `Model`/`ChakaApp`/`OutputTab`/`CorpusEntry`):
+// el example `pantallazo_chaka` incluye este archivo por `#[path]` para
+// montar la MISMA view de la app sin ventana. Para el binario no cambia nada.
 #[derive(Clone)]
-enum Msg {
+pub(crate) enum Msg {
     /// Carga el archivo en el índice `i` del árbol.
     OpenFile(usize),
     /// Tecla a aplicar al editor del .cob.
@@ -119,7 +122,7 @@ enum Msg {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum OutputTab {
+pub(crate) enum OutputTab {
     Salida = 0,
     Rust = 1,
     Ir = 2,
@@ -140,8 +143,8 @@ impl OutputTab {
     }
 }
 
-struct CorpusEntry {
-    label: String,
+pub(crate) struct CorpusEntry {
+    pub(crate) label: String,
     path: PathBuf,
 }
 
@@ -178,8 +181,8 @@ enum PipelineSummary {
     PipelineError,
 }
 
-struct Model {
-    entries: Vec<CorpusEntry>,
+pub(crate) struct Model {
+    pub(crate) entries: Vec<CorpusEntry>,
     /// Índice del archivo abierto en `entries`. `None` si nada se ha
     /// cargado todavía.
     open: Option<usize>,
@@ -219,7 +222,7 @@ struct Model {
     edit_anim: Tween<f32>,
 }
 
-struct ChakaApp;
+pub(crate) struct ChakaApp;
 
 impl App for ChakaApp {
     type Model = Model;

@@ -2,6 +2,8 @@
 
 > `puriy` (quechua: *viajar, caminar*). Navegador web soberano.
 
+![el navegador puriy renderizando una página de tawasuyu con su propio motor: tira de pestañas y barra de URL, banner hero, seis tarjetas de cuadrantes en grilla y un pie — la barra de estado dice "OK · 76 boxes", todas parseadas, estiladas y layouteadas por puriy-engine, sin Chromium en ninguna parte](https://tawasuyu.net/00_unanchay/puriy/pantallazo.png)
+
 Motor DOM/CSS **propio en Rust** (de upstream sólo los parsers: `html5ever`, `markup5ever_rcdom`, `cssparser` como anchor) + JS vía **QuickJS-NG compilado a WASM** (sandbox `wasmi`) + render delegado a **Llimphi**. Servo quedó como inspiración inicial, no como dependencia arquitectónica. Resultado: un navegador sin Chromium ni WebKit, sin FFI a C++ corporativo, pensado para correr idéntico en Linux/Wayland y en Wawa bare-metal. Detalle de arquitectura en [SDD.md](SDD.md).
 
 ## Instalación

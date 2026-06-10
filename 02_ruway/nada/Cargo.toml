@@ -43,3 +43,8 @@ app-bus = { path = "../../shared/app-bus" }
 rimay-localize = { path = "../../shared/rimay-localize" }
 wawa-config = { path = "../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../shared/wawa-config-llimphi" }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_nada` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }

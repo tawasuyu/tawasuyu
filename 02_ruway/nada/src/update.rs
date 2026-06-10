@@ -790,7 +790,7 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 match am {
                     // Un cambio de campo se aplica al `Model` (y al status).
                     AllichayMsg::Change(path, value) => {
-                        crate::settings::apply_settings_change(&mut m, &path, value);
+                        super::settings::apply_settings_change(&mut m, &path, value);
                     }
                     // El resto sólo muta el estado del panel (diente activo,
                     // scroll, foco). Los `Focus*` no se disparan hoy porque
@@ -813,7 +813,7 @@ pub(crate) fn dispatch(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
                 // devuelve el cambio entero para aplicarlo.
                 let change = m.settings.as_mut().and_then(|st| st.apply_key(&ev));
                 if let Some((path, value)) = change {
-                    crate::settings::apply_settings_change(&mut m, &path, value);
+                    super::settings::apply_settings_change(&mut m, &path, value);
                 }
                 m
             }

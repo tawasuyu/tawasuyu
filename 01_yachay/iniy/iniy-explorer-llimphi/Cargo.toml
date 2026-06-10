@@ -23,3 +23,14 @@ app-bus = { workspace = true }
 [[bin]]
 name = "iniy-explorer-llimphi"
 path = "src/main.rs"
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_iniy` (siembra del corpus + volcado
+# headless a PNG).
+iniy-ingest = { workspace = true }
+pollster = { workspace = true }
+png = { workspace = true }
+
+[[example]]
+name = "pantallazo_iniy"
+path = "examples/pantallazo_iniy.rs"

@@ -2,6 +2,8 @@
 
 > `chaka` (quechua: *puente*). Puente entre el monorepo y el código COBOL legacy.
 
+![el transpilador chaka trabajando: el corpus de programas COBOL a la izquierda, una fuente COBOL'85 de archivo indexado abierta en el editor central, y el Rust generado — producido en vivo por el pipeline lexer→parser→ir→codegen — en el tab derecho, con el estado del intérprete sombra en la tira de tabs](https://tawasuyu.net/00_unanchay/chaka/pantallazo.png)
+
 Lee fuentes COBOL'85 y los transpila a Rust compilable. Pipeline en capas: `lexer → parser → ir → codegen` para la salida en Rust, con `chaka-shadow` como validador de tiempo de desarrollo: un intérprete en proceso comprueba que el IR camina como corre el código transpilado, y un harness opt-in con GnuCOBOL valida ambos contra un compilador COBOL real.
 
 ## Instalación

@@ -2,6 +2,8 @@
 
 > Backend-agnostic visualization. The "third eye" of the monorepo.
 
+![the pineal painter gallery rendered headless: an 11-tile grid — sine cartesian, pie/donut, radar, squarified treemap, Viridis heatmap, hexbin, contour isolines, a budget sankey, a force-directed mesh, bars with a negative value and a histogram](https://tawasuyu.net/00_unanchay/pineal/pantallazo.png)
+
 Pineal is a catalog of specialized painters — cartesian, polar, mesh,
 treemap, phosphor, flow, heatmap, stream, financial, hexbin, contour and
 bars — over a **single painter abstraction**, the `Canvas` trait. Any

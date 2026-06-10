@@ -1,16 +1,16 @@
-//! `iniy-explorer-llimphi` — visualiza el corpus de iniy en Llimphi.
-//!
-//! Lee la DB SQLite de iniy y muestra:
-//! - Header con conteos del corpus.
-//! - Lista de fuentes con su reputación (score derivado del grafo NLI).
-//! - Lista de aserciones, cada una coloreada por su opinión dominante
-//!   (verde=creencia, rojo=descreencia, gris=incertidumbre) y atribuida
-//!   a su fuente efectiva.
-//!
-//! MVP feo: lectura única al arrancar, sin polling. Re-lanzar el binario
-//! para ver actualizaciones tras correr `iniy nli` o `iniy extract` de nuevo.
-//!
-//! Path de la DB: env `INIY_DB` o `./iniy.db`.
+// `iniy-explorer-llimphi` — visualiza el corpus de iniy en Llimphi.
+//
+// Lee la DB SQLite de iniy y muestra:
+// - Header con conteos del corpus.
+// - Lista de fuentes con su reputación (score derivado del grafo NLI).
+// - Lista de aserciones, cada una coloreada por su opinión dominante
+//   (verde=creencia, rojo=descreencia, gris=incertidumbre) y atribuida
+//   a su fuente efectiva.
+//
+// MVP feo: lectura única al arrancar, sin polling. Re-lanzar el binario
+// para ver actualizaciones tras correr `iniy nli` o `iniy extract` de nuevo.
+//
+// Path de la DB: env `INIY_DB` o `./iniy.db`.
 
 use std::path::PathBuf;
 

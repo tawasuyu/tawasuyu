@@ -2,6 +2,8 @@
 
 > `tinkuy` (Quechua: *encounter, collision*). DOD particle engine.
 
+![the tinkuy chassis: a 2×2 tile grid with the 3D axonometric viewer showing 64 Lennard-Jones particles mid-simulation colored by speed, the visual force graph compiled to bytecode, live observables (step, temperature, kinetic energy) and the ring of content-addressed snapshot CIDs](https://tawasuyu.net/01_yachay/tinkuy/pantallazo.png)
+
 ECS Structure-of-Arrays + Grid3D + parallel Velocity-Verlet integrator. `BLAKE3` content-addressed snapshots compatible with Wawa's filesystem: a simulation can be paused, exported, and resumed on another machine without losing a single bit. Roadmap B–F complete: engine, WASM ABI, math DSL, visual nodes, in-kernel viewer.
 
 Long-term vision (anti token-junkie): Rust engine → WASM ABI → math DSL → visual nodes. Four sequential layers; engine first. Order confirmed.

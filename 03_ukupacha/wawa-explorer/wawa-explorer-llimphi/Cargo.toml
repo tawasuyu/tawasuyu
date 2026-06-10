@@ -26,3 +26,8 @@ llimphi-motion = { workspace = true }
 app-bus = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_wawa` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }

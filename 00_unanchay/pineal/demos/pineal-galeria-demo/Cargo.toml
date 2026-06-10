@@ -21,3 +21,8 @@ pineal-contour = { path = "../../pineal-contour" }
 pineal-flow = { path = "../../pineal-flow" }
 pineal-mesh = { path = "../../pineal-mesh" }
 pineal-bars = { path = "../../pineal-bars" }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_pineal` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }
