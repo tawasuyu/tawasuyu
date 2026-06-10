@@ -41,3 +41,9 @@ serde_json = { workspace = true }
 tempfile = { workspace = true }
 wawa-config = { path = "../../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }
+
+[dev-dependencies]
+# Sólo para el example `pantallazo_nahual` (volcado headless a PNG).
+pollster = { workspace = true }
+png = { workspace = true }
+llimphi-widget-tiled = { workspace = true }
