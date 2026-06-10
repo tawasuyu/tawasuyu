@@ -24,11 +24,17 @@ jobs:
       - name: Toolchain estable
         uses: dtolnay/rust-toolchain@stable
       - name: Dependencias de sistema (wgpu / vello / audio)
+        # En un runner Ubuntu (contenedor/GitHub) instala los -dev; en el
+        # runner host (Artix) apt no existe y las libs ya están — no-op.
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            libasound2-dev libudev-dev pkg-config \
-            libwayland-dev libxkbcommon-dev
+          if command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y \
+              libasound2-dev libudev-dev pkg-config \
+              libwayland-dev libxkbcommon-dev
+          else
+            echo "host sin apt: libs de sistema ya presentes"
+          fi
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace
 
