@@ -2,6 +2,8 @@
 
 > `khipu` (Quechua: knotted cord recordkeeping). Notes with temporal gravity.
 
+![khipu's mind map: nodes breathing by mass, affinity filaments from the selected node, named-region toponyms and the naming chip of an emerging cluster](https://tawasuyu.net/00_unanchay/khipu/pantallazo.png)
+
 Quick-note capture where forgetting is part of the model: each note has a mass that decays with time and reinforces with each access. What's recurrent stays visible; what isn't touched fades until it falls off the horizon.
 
 ## Install

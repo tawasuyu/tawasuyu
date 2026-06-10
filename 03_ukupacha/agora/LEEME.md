@@ -2,6 +2,8 @@
 
 > Plaza pública. Identidad federada y un grafo de confianza que no administra nadie.
 
+![agora-app: siete tiles sobre el mismo TrustGraph — identidades con claves Ed25519 reales, atestaciones firmadas y verificadas, una multifirma 2-de-2 y los sobres del plano de control de wawa](https://tawasuyu.net/03_ukupacha/agora/pantallazo.png)
+
 `agora` es la capa de identidad del monorepo. Cada identidad — persona, comunidad, alianza, institución — es una clave pública ed25519. Cada afirmación sobre ella es un `Claim`. Cada respaldo es una `Attestation`: un claim firmado por un atestador. La verdad del ágora no la dicta un servidor: emerge de quién atestigua qué, pesado por una `TrustPolicy` que cada lector negocia para sí.
 
 No hay registro maestro, no hay algoritmo de moderación, no hay feed. La misma forma — pubkey + atestaciones firmadas — cubre desde una persona hasta una institución, pasando por comunidades y alianzas.

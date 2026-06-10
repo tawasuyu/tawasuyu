@@ -2,6 +2,8 @@
 
 > Shell interactivo con paridad zsh/fish, sobre chasis Llimphi.
 
+![una sesión de shuma sobre la superficie de bloques: ls -l reconocido como tabla ordenable, ls -R partido en sub-bloques colapsables por directorio, y un comando corriendo en vivo sobre un proceso real](https://tawasuyu.net/02_ruway/shuma/pantallazo.png)
+
 `shuma` reemplaza zsh + tmux + mosh con una sola pieza: shell con history/completion/job-control, multiplexing nativo (no `tmux`), sesiones remotas (no `mosh`), todo dentro de un chasis Llimphi de 4 slots (TopBar, Main, BottomBar, DrawerTab + drawer Quake). Roadmap de 8 bloques (target 2026-05-25). `matilda` es la herramienta hermana para configuración declarativa multi-host.
 
 ## Instalación

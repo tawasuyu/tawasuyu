@@ -2,6 +2,8 @@
 
 > Public square. Federated identity and a trust graph that no one runs.
 
+![agora-app: seven tiles over the same TrustGraph — identities with real Ed25519 keys, signed and verified attestations, a 2-of-2 multisig and wawa's control-plane envelopes](https://tawasuyu.net/03_ukupacha/agora/pantallazo.png)
+
 `agora` is the identity layer of the monorepo. Each identity — person, community, alliance, institution — is an ed25519 public key. Each assertion about it is a `Claim`. Each endorsement is an `Attestation`: a claim signed by an attester. The truth of the agora is not dictated by a server: it emerges from who attests to what, weighted by a `TrustPolicy` that every reader negotiates for themselves.
 
 There is no central registry, no moderation algorithm, no feed. The same shape — pubkey + signed attestations — covers a single person, a neighborhood community, a federation, or an institution.

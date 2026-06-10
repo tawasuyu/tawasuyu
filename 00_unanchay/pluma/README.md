@@ -2,6 +2,8 @@
 
 > Living documents. Markdown as a graph of editable atoms; LLM as transformer, not author.
 
+![pluma's multilienzo: one text living in several languages at once — a Spanish mother body, its English translation and a summary, aligned paragraph-to-paragraph by threads](https://tawasuyu.net/00_unanchay/pluma/pantallazo.png)
+
 `pluma` treats a document as a DAG of paragraphs (atoms) with stable identity. Editing preserves ids; the LLM is invoked as **pure transformation** over subgraphs (summarize this section, translate that paragraph) — always with visible, reversible diff. A document can also be a **multilienzo**: a bundle of bodies (original, translation, summary, tone…) over the same material, aligned paragraph-to-paragraph by threads; if the mother changes, the derived body goes *stale* and the UI paints the thread dotted until regenerated. Includes notebook (with Python/WASM/LLM/media/tinkuy kernels — the cosmos and dominium kernels live in their own domains as `cosmos-notebook-kernel` / `dominium-notebook-kernel`), visual multilienzo editor, deck (slides with a Prezi-style Recorrido mode) and web reader.
 
 ## Install

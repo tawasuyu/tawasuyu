@@ -2,6 +2,8 @@
 
 > Framework de UI nativa: HAL · raster · layout · text · theme · ui — más widgets y módulos.
 
+![una UI densa compuesta sólo con primitivas del compositor: tema oscuro, top bar con tabs, sidebar, editor de código con resaltado sintáctico, texto rico, tarjetas de métricas con gradientes y sombras, un gráfico de barras de puros rects y un toast flotante](https://tawasuyu.net/02_ruway/llimphi/pantallazo.png)
+
 `llimphi` es el motor gráfico que comparten todas las apps del monorepo. Pipeline retained-mode declarativa sobre `vello` 0.7 + `wgpu` 27 + `taffy`, con shaping `parley` 0.6 (DejaVu Sans embebida como fallback de símbolos), theme `Dark/Light/Aurora/Sunset`, accesibilidad AccessKit, HAL multiplataforma (Wayland · X11 · Win32 · Android · Wawa).
 
 **Manual de uso:** [MANUAL.md](MANUAL.md) — referencia completa (bucle Elm, DSL `View<Msg>`, los ~44 widgets y 10 módulos, GPU directo, gotchas) para humanos e IA. Diseño y roadmap: [SDD.md](SDD.md).

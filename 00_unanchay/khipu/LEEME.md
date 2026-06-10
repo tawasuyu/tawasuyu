@@ -2,6 +2,8 @@
 
 > `khipu` (quechua: nudos de cuerdas para registrar memoria). Notas con gravedad temporal.
 
+![el mapa mental de khipu: nodos que respiran por masa, filamentos de afinidad del nodo seleccionado, topónimos de regiones bautizadas y el chip de bautizo de un clúster emergente](https://tawasuyu.net/00_unanchay/khipu/pantallazo.png)
+
 Captura de notas rápidas donde el olvido es parte del modelo: cada nota tiene una masa que decae con el tiempo y se refuerza con cada acceso. Lo recurrente queda visible; lo que no se vuelve a tocar se va difuminando hasta caer del horizonte.
 
 ## Instalación
