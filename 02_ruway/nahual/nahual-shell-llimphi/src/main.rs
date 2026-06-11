@@ -149,14 +149,36 @@ const FRAME_TICK: Duration = Duration::from_millis(33);
 /// para no rehacer la fusión de tiles en cada evento de arrastre.
 const RESTREAM_THROTTLE: Duration = Duration::from_millis(90);
 
-struct Model {
-    /// Pila de navegación unificada (Fase 4.2): `nav_stack[0]` es la base
-    /// **POSIX** (fuente anclada en `/`, arrancada en el cwd con miga de pan
-    /// completa); montar una fuente no-POSIX (wawa/nouser/minga) **empuja** un
-    /// navegador encima, desmontar lo saca. El activo es siempre el tope, así
-    /// que POSIX y las demás fuentes comparten el mismo código (orden, filtro,
-    /// vista detalle). Nunca vacía.
+/// Un panel del file manager: su propia pila de navegación (mount stack). En
+/// modo simple sólo el panel 0 se ve (panel 1 = visor); en modo dual ambos son
+/// listas de archivos lado a lado (Fase 4.2c).
+struct Pane {
+    /// Pila de navegación: `[0]` = base POSIX (anclada en `/`, arrancada en el
+    /// cwd con miga completa); montar una fuente no-POSIX empuja, desmontar
+    /// saca. El navegador activo del panel es el tope. Nunca vacía.
     nav_stack: Vec<Navigator>,
+}
+
+impl Pane {
+    fn nav(&self) -> &Navigator {
+        self.nav_stack.last().expect("nav_stack nunca vacía")
+    }
+    fn nav_mut(&mut self) -> &mut Navigator {
+        self.nav_stack.last_mut().expect("nav_stack nunca vacía")
+    }
+    fn is_foreign(&self) -> bool {
+        self.nav_stack.len() > 1
+    }
+}
+
+struct Model {
+    /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
+    /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
+    panes: [Pane; 2],
+    /// Panel activo: 0 o 1.
+    focus: usize,
+    /// `true` = dos paneles de archivos lado a lado; `false` = panel + visor.
+    dual: bool,
     /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
     list_width: f32,
     /// `true` mientras se teclea el filtro vivo sobre la fuente montada
@@ -217,7 +239,12 @@ enum Msg {
     Down,
     OpenSelected,
     Parent,
-    Select(usize),
+    /// Click en una fila del panel `pane`: lo enfoca y selecciona la fila.
+    SelectIn(usize, usize),
+    /// Alterna panel doble ↔ panel + visor (`d`).
+    ToggleDual,
+    /// Cambia el foco al otro panel (Tab), sólo en modo dual.
+    SwitchFocus,
     /// Scroll en filas — positivo abajo, negativo arriba.
     Scroll(i32),
     /// Arrastre sobre el mapa: panea la cámara `(dx, dy)` en px físicos.
@@ -276,9 +303,9 @@ enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
     /// de ventana sobre la entrada seleccionada.
     ContextMenuOpen(f32, f32),
-    /// Click en un encabezado de la vista detalle → ordena por esa columna
-    /// (0 nombre · 1 tamaño · 2 fecha · 3 tipo). Toggle si ya era la activa.
-    NavSortBy(usize),
+    /// Click en un encabezado de la vista detalle del panel `pane` → ordena por
+    /// esa columna (0 nombre · 1 tamaño · 2 fecha · 3 tipo). Toggle si repite.
+    SortByIn(usize, usize),
     /// Alterna lista ↔ detalle sobre la fuente montada (`v`).
     NavToggleView,
     /// Entra en modo filtro vivo de la fuente montada (`/`).
@@ -289,8 +316,8 @@ enum Msg {
     NavFilterBackspace,
     /// Sale del modo filtro (conserva el filtro aplicado).
     NavFilterEnd,
-    /// Click en un segmento del breadcrumb → sube a ese nivel de la pila.
-    Breadcrumb(usize),
+    /// Click en un segmento del breadcrumb del panel `pane` → sube a ese nivel.
+    BreadcrumbIn(usize, usize),
     /// Abre el archivo seleccionado con la app `id` de la suite (AppBus).
     OpenWith(String),
     /// Edita el archivo seleccionado en `nada`.
@@ -300,22 +327,26 @@ enum Msg {
 }
 
 impl Model {
-    /// El navegador activo (tope de la pila). Nunca falla: la base POSIX
-    /// siempre está.
+    /// El navegador activo: el tope de la pila del panel enfocado.
     fn cur(&self) -> &Navigator {
-        self.nav_stack.last().expect("nav_stack nunca vacía")
+        self.panes[self.focus].nav()
     }
 
     /// El navegador activo, mutable.
     fn cur_mut(&mut self) -> &mut Navigator {
-        self.nav_stack.last_mut().expect("nav_stack nunca vacía")
+        self.panes[self.focus].nav_mut()
     }
 
-    /// `true` si hay una fuente no-POSIX montada encima de la base (la pila
-    /// tiene más de un nivel). Gatea el montaje (no se anidan fuentes) y el
-    /// desmontaje.
+    /// `true` si el panel enfocado tiene una fuente no-POSIX montada (pila > 1).
+    /// Gatea el montaje (no se anidan fuentes) y el desmontaje.
     fn is_foreign(&self) -> bool {
-        self.nav_stack.len() > 1
+        self.panes[self.focus].is_foreign()
+    }
+
+    /// El panel enfocado, mutable (para empujar/sacar de su pila de montaje).
+    fn cur_pane_mut(&mut self) -> &mut Pane {
+        let f = self.focus;
+        &mut self.panes[f]
     }
 }
 
@@ -377,7 +408,13 @@ impl App for Shell {
         // barato cuando el panel no avanza (el update sale temprano).
         handle.spawn_periodic(FRAME_TICK, || Msg::Tick);
         Model {
-            nav_stack: vec![posix_nav(&cwd)],
+            // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
+            panes: [
+                Pane { nav_stack: vec![posix_nav(&cwd)] },
+                Pane { nav_stack: vec![posix_nav(&cwd)] },
+            ],
+            focus: 0,
+            dual: false,
             list_width: 400.0,
             nav_filtering: false,
             preview: PreviewPane::Empty,
@@ -451,6 +488,9 @@ impl App for Shell {
             Key::Character(c) if c == "/" && !matches!(_model.preview, PreviewPane::Map(_)) => {
                 Some(Msg::NavFilterStart)
             }
+            // `d` alterna panel doble; Tab cambia el foco entre los dos.
+            Key::Character(c) if c == "d" => Some(Msg::ToggleDual),
+            Key::Named(NamedKey::Tab) => Some(Msg::SwitchFocus),
             // Puntos de entrada del front universal: montar el directorio
             // objetivo (el subdir seleccionado, o el cwd) como otra `Source`.
             // Sólo desde POSIX — dentro de una fuente montada no aplican.
@@ -509,8 +549,21 @@ impl App for Shell {
                     refresh_preview(&mut m);
                 }
             }
-            Msg::Select(idx) => {
+            Msg::SelectIn(pane, idx) => {
+                m.focus = pane;
                 if m.cur_mut().select(idx) {
+                    refresh_preview(&mut m);
+                }
+            }
+            Msg::ToggleDual => {
+                m.dual = !m.dual;
+                if !m.dual {
+                    m.focus = 0; // al volver a simple, el visor vuelve a la derecha
+                }
+            }
+            Msg::SwitchFocus => {
+                if m.dual {
+                    m.focus = 1 - m.focus;
                     refresh_preview(&mut m);
                 }
             }
@@ -529,7 +582,7 @@ impl App for Shell {
                             // DAG); cualquier otra cosa cae al open-with.
                             match try_mount(id_path) {
                                 Some(nav) => {
-                                    m.nav_stack.push(nav);
+                                    m.cur_pane_mut().nav_stack.push(nav);
                                     clear_preview(&mut m);
                                 }
                                 None => {
@@ -565,14 +618,15 @@ impl App for Shell {
                     // es `/` y no hay a dónde subir.
                     Ok(false) => {
                         if m.is_foreign() {
-                            m.nav_stack.pop();
+                            m.cur_pane_mut().nav_stack.pop();
                             clear_preview(&mut m);
                         }
                     }
                     Err(_) => {}
                 }
             }
-            Msg::NavSortBy(col) => {
+            Msg::SortByIn(pane, col) => {
+                m.focus = pane;
                 let key = match col {
                     1 => nahual_source_core::SortKey::Size,
                     2 => nahual_source_core::SortKey::Mtime,
@@ -606,7 +660,8 @@ impl App for Shell {
             Msg::NavFilterEnd => {
                 m.nav_filtering = false;
             }
-            Msg::Breadcrumb(depth) => {
+            Msg::BreadcrumbIn(pane, depth) => {
+                m.focus = pane;
                 if matches!(m.cur_mut().ascend_to(depth), Ok(true)) {
                     refresh_preview(&mut m);
                 }
@@ -744,7 +799,7 @@ impl App for Shell {
                         .ok()
                         .and_then(|src| Navigator::open(Box::new(src)).ok())
                     {
-                        m.nav_stack.push(nav);
+                        m.cur_pane_mut().nav_stack.push(nav);
                         clear_preview(&mut m);
                     }
                 }
@@ -760,7 +815,7 @@ impl App for Shell {
                             .ok()
                             .and_then(|src| Navigator::open(Box::new(src)).ok())
                         {
-                            m.nav_stack.push(nav);
+                            m.cur_pane_mut().nav_stack.push(nav);
                             clear_preview(&mut m);
                         }
                     }
@@ -768,7 +823,7 @@ impl App for Shell {
             }
             Msg::Unmount => {
                 if m.is_foreign() {
-                    m.nav_stack.pop();
+                    m.cur_pane_mut().nav_stack.pop();
                     clear_preview(&mut m);
                 }
             }
@@ -844,7 +899,7 @@ impl App for Shell {
             Msg::TerminalHere => {
                 // El dir POSIX base (la fuente del fondo de la pila), aunque
                 // haya una fuente montada encima.
-                let dir = PathBuf::from(m.nav_stack[0].current_id());
+                let dir = PathBuf::from(m.panes[m.focus].nav_stack[0].current_id());
                 let bin = std::env::var("SHUMA_BIN").unwrap_or_else(|_| "shuma-shell-llimphi".into());
                 if let Err(e) = std::process::Command::new(bin).current_dir(&dir).spawn() {
                     eprintln!("[nahual] terminal shuma: {e}");
@@ -872,8 +927,6 @@ impl App for Shell {
         let map_palette = MapViewerPalette::from_theme(&theme);
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
-        let header = header_bar(model, &theme);
-        let list_pane = nav_pane_view(model.cur(), &theme, model.nav_filtering);
         let viewer_pane = match &model.preview {
             PreviewPane::Empty => text_viewer_view::<Msg>(
                 &PreviewState::Empty,
@@ -938,18 +991,35 @@ impl App for Shell {
             ),
         };
 
-        let body = splitter_two(
-            Direction::Row,
-            list_pane,
-            PaneSize::Fixed(model.list_width),
-            viewer_pane,
-            PaneSize::Flex,
-            |phase, dx| match phase {
-                DragPhase::Move => Some(Msg::ResizeList(dx)),
-                DragPhase::End => None,
-            },
-            &splitter_palette,
-        );
+        // Modo simple: panel 0 (con su breadcrumb) + visor a la derecha.
+        // Modo dual: dos columnas de archivos, la enfocada resaltada.
+        let body = if model.dual {
+            splitter_two(
+                Direction::Row,
+                pane_column(model, 0, model.focus == 0, &theme),
+                PaneSize::Fixed(model.list_width),
+                pane_column(model, 1, model.focus == 1, &theme),
+                PaneSize::Flex,
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::ResizeList(dx)),
+                    DragPhase::End => None,
+                },
+                &splitter_palette,
+            )
+        } else {
+            splitter_two(
+                Direction::Row,
+                pane_column(model, 0, false, &theme),
+                PaneSize::Fixed(model.list_width),
+                viewer_pane,
+                PaneSize::Flex,
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::ResizeList(dx)),
+                    DragPhase::End => None,
+                },
+                &splitter_palette,
+            )
+        };
 
         View::new(Style {
             flex_direction: FlexDirection::Column,
@@ -963,7 +1033,7 @@ impl App for Shell {
         // Right-click en la raíz (origen 0,0 ⇒ local == coords de ventana)
         // abre el menú contextual sobre la entrada seleccionada.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, header, body])
+        .children(vec![menubar, body])
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
@@ -1183,22 +1253,23 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
     }
 }
 
-/// Cabecera con el **breadcrumb clicable** de la pila del navegador activo
-/// (Fase 4.2): cada segmento sube a ese nivel. Sobre una fuente no-POSIX, un
-/// prefijo `⊟ <fuente>` marca que no es el filesystem.
-fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
-    let nav = model.cur();
-    // Segmentos = nombres de la cadena de ancestros. El primero de POSIX es
-    // "/"; lo dejamos como "/" salvo que haya prefijo de fuente.
+/// Barra de **breadcrumb clicable** de un panel (Fase 4.2): cada segmento sube
+/// a ese nivel (`BreadcrumbIn(pane, depth)`). Sobre una fuente no-POSIX, el
+/// primer segmento lleva el prefijo `⊟ <fuente>`. `focused` tiñe la barra
+/// cuando el panel está enfocado (sólo se nota en modo dual).
+fn pane_breadcrumb(pane_obj: &Pane, pane: usize, focused: bool, theme: &Theme) -> View<Msg> {
+    let nav = pane_obj.nav();
     let mut segs: Vec<String> = nav.ancestors().iter().map(|n| n.name.clone()).collect();
-    if model.is_foreign() {
-        // Prepend la etiqueta de la fuente como raíz visual (no clicable más
-        // allá de su propio nivel 0).
+    if pane_obj.is_foreign() && !segs.is_empty() {
         segs[0] = format!("⊟ {}", nav.label());
     }
     let seg_refs: Vec<&str> = segs.iter().map(String::as_str).collect();
-    let crumbs = breadcrumb_view(&seg_refs, Msg::Breadcrumb, &BreadcrumbPalette::from_theme(theme));
-
+    let crumbs = breadcrumb_view(
+        &seg_refs,
+        move |depth| Msg::BreadcrumbIn(pane, depth),
+        &BreadcrumbPalette::from_theme(theme),
+    );
+    let bg = if focused { theme.bg_selected } else { theme.bg_panel };
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -1213,8 +1284,24 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .fill(theme.bg_panel)
+    .fill(bg)
     .children(vec![crumbs])
+}
+
+/// Una columna de panel: su breadcrumb arriba + su lista/grilla. `focused`
+/// resalta el panel activo (relevante en modo dual). Las filas emiten `Msg`s
+/// que llevan `pane`, así que el click actúa sobre el panel correcto.
+fn pane_column(model: &Model, pane: usize, focused: bool, theme: &Theme) -> View<Msg> {
+    let crumb = pane_breadcrumb(&model.panes[pane], pane, focused, theme);
+    // El filtro vivo sólo aplica al panel enfocado.
+    let filtering = focused && model.nav_filtering;
+    let content = nav_pane_view(model.panes[pane].nav(), theme, filtering, pane);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![crumb, content])
 }
 
 /// Limpia el panel derecho y suelta cualquier tempfile de hoja no-POSIX.
@@ -1315,14 +1402,15 @@ fn sanitizar_nombre(nombre: &str) -> String {
     }
 }
 
-/// Pinta el panel izquierdo de la fuente montada según su `ViewMode`: lista
-/// simple o grilla detalle (Fase 4.1).
-fn nav_pane_view(nav: &Navigator, theme: &Theme, filtering: bool) -> View<Msg> {
+/// Pinta el contenido de un panel según su `ViewMode` (lista o detalle). `pane`
+/// es el índice del panel (0/1): las filas y encabezados emiten `Msg`s que lo
+/// llevan, para que el click actúe sobre el panel correcto en modo dual.
+fn nav_pane_view(nav: &Navigator, theme: &Theme, filtering: bool, pane: usize) -> View<Msg> {
     match nav.view {
         nahual_source_core::ViewMode::List => {
-            navigator_list_view(nav, ListPalette::from_theme(theme), filtering)
+            navigator_list_view(nav, ListPalette::from_theme(theme), filtering, pane)
         }
-        nahual_source_core::ViewMode::Details => navigator_detail_view(nav, theme, filtering),
+        nahual_source_core::ViewMode::Details => navigator_detail_view(nav, theme, filtering, pane),
     }
 }
 
@@ -1346,7 +1434,7 @@ fn nav_caption(nav: &Navigator, filtering: bool) -> String {
 
 /// Pinta los hijos visibles (filtrados) del contenedor actual como una lista
 /// `llimphi-widget-list` — el gemelo genérico de `file_explorer_view`.
-fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool) -> View<Msg> {
+fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool, pane: usize) -> View<Msg> {
     use std::cmp::min;
     let visibles = nav.visible();
     let start = nav.visible_offset.min(visibles.len());
@@ -1363,7 +1451,7 @@ fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool) -
             ListRow {
                 label,
                 selected: *idx == nav.selected,
-                on_click: Msg::Select(*idx),
+                on_click: Msg::SelectIn(pane, *idx),
             }
         })
         .collect();
@@ -1385,7 +1473,7 @@ fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool) -
 /// Pinta los hijos visibles como grilla detalle con columnas ordenables
 /// (nombre · tamaño · modificado · tipo). Click en un encabezado emite
 /// `NavSortBy`; click en una fila selecciona.
-fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool) -> View<Msg> {
+fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool, pane: usize) -> View<Msg> {
     use llimphi_widget_detail_table::{
         detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
     };
@@ -1419,7 +1507,7 @@ fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool) -> Vie
                 ],
                 selected: *idx == nav.selected,
                 accent: None,
-                on_click: Msg::Select(*idx),
+                on_click: Msg::SelectIn(pane, *idx),
             }
         })
         .collect();
@@ -1439,7 +1527,7 @@ fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool) -> Vie
             caption: Some(nav_caption(nav, filtering)),
             palette: DetailPalette::from_theme(theme),
         },
-        Msg::NavSortBy,
+        move |col| Msg::SortByIn(pane, col),
     )
 }
 
