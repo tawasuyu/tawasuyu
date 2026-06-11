@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 llimphi-surface = { path = "../../llimphi/llimphi-surface" }
+llimphi-image = { path = "../../llimphi/llimphi-image" }
 llimphi-theme = { workspace = true }
 llimphi-ui = { path = "../../llimphi/llimphi-ui" }
 llimphi-icons = { workspace = true }

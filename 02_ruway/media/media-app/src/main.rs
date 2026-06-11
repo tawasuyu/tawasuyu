@@ -659,6 +659,26 @@ fn load_media_metadata(path: &Path) -> Metadata {
     metadata::parse(&buf)
 }
 
+/// Carátula decodificada (`peniko::Image`) del medio actual, lista para pintar.
+/// Se decodifica una sola vez (lazy) de `Metadata.cover.data` con
+/// `llimphi-image` (adivina PNG/JPEG por magic bytes). `None` si el medio no
+/// trae carátula o no decodifica. La imagen es Arc-backed: clonarla por frame
+/// es barato.
+fn cover_image() -> Option<llimphi_image::Image> {
+    static SLOT: OnceLock<Option<llimphi_image::Image>> = OnceLock::new();
+    SLOT.get_or_init(|| {
+        let cover = media_metadata_slot().get()?.cover.as_ref()?;
+        match llimphi_image::decode_bytes(&cover.data) {
+            Ok(img) => Some(img),
+            Err(e) => {
+                eprintln!("media-app: carátula no decodifica: {e}");
+                None
+            }
+        }
+    })
+    .clone()
+}
+
 /// Capítulos del medio actual (V7), extraídos una vez al arrancar.
 fn chapters_slot() -> &'static OnceLock<Chapters> {
     static SLOT: OnceLock<Chapters> = OnceLock::new();
@@ -3023,7 +3043,9 @@ impl App for MediaApp {
             if let Some(v) = above_bars {
                 kids.push(v);
             }
-            kids.push(canvas);
+            // U5: si es audio-only con carátula, el hero es la carátula; si no,
+            // el lienzo de video (gpu_paint).
+            kids.push(cover_hero().unwrap_or(canvas));
             kids.push(subs_strip);
             if let Some(v) = below_bars {
                 kids.push(v);
@@ -3117,6 +3139,39 @@ fn palette_overlay(model: &Model, state: &PaletteState) -> View<Msg> {
     .fill(Color::from_rgba8(0, 0, 0, 150))
     .on_click(Msg::Palette(PaletteMsg::Close))
     .children(vec![panel])
+}
+
+/// Hero de carátula (U5): cuando el medio es **audio-only** (sin video real,
+/// cae al testcard) y trae carátula incrustada, la mostramos en el área del
+/// lienzo en vez del testcard. Con video real devuelve `None` (manda el
+/// `gpu_paint`). `.image` encaja en Contain y respeta el `radius`.
+fn cover_hero() -> Option<View<Msg>> {
+    let audio_only = matches!(config_slot().get().map(|c| c.kind), Some(VideoKind::Testcard));
+    if !audio_only {
+        return None;
+    }
+    let img = cover_image()?;
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            flex_grow: 1.0,
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            padding: TaffyRect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(12.0_f32),
+                bottom: length(12.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(Color::from_rgba8(10, 12, 18, 255))
+        .radius(10.0)
+        .image(img),
+    )
 }
 
 /// Overlay del OSD (U4): un cartel transitorio cerca del borde superior, estilo
