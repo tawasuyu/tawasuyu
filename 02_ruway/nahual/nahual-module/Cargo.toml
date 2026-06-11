@@ -1,0 +1,24 @@
+[package]
+name = "nahual-module"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "nahual-module — el front universal de nahual como MÓDULO hospedable. Frontend liviano sobre nahual-source-core (Navigator + Source) con State/Msg/view<HostMsg>/update(+Effect): un chasis (pata, shuma, …) lo monta en un panel, le rutea eventos vía un `lift` y ejecuta sus Effects (generar miniatura, lanzar app). Mismo motor y acciones que nahual-shell, sin la ventana propia."
+
+[dependencies]
+nahual-source-core = { path = "../nahual-source-core", features = ["nouser-daemon"] }
+nahual-thumb-core = { workspace = true }
+app-bus = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-list = { workspace = true }
+llimphi-widget-detail-table = { workspace = true }
+llimphi-widget-grid = { workspace = true }
+llimphi-widget-breadcrumb = { workspace = true }
+llimphi-widget-context-menu = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
