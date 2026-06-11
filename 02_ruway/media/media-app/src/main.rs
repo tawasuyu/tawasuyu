@@ -89,6 +89,7 @@ use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
 use media_core::library::History;
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
+use media_core::osd::{self, Osd};
 use media_core::chapters::Chapters;
 use media_core::metadata::{self, Metadata};
 use media_core::toolbar::{BarItem, BarPosition};
@@ -1011,6 +1012,37 @@ fn loudness() -> &'static LoudnessTap {
     SLOT.get_or_init(LoudnessTap::new)
 }
 
+/// OSD transitorio (volumen/seek/velocidad…), U4. Global como el resto del
+/// estado vivo de la cadena: `apply_command` (free fn, sin acceso al `Model`)
+/// lo flashea y `view` lo pinta. El reloj es inyectado (ver [`osd_now`]).
+fn osd() -> &'static Mutex<Osd> {
+    static SLOT: OnceLock<Mutex<Osd>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Osd::new()))
+}
+
+/// Reloj del OSD: segundos monotónicos desde el primer uso. Único reloj que
+/// comparten el flash (`apply_command`) y el paint (`view`), así la expiración
+/// y el fade son consistentes sin depender del wall-clock de cada hilo.
+fn osd_now() -> f64 {
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    EPOCH.get_or_init(Instant::now).elapsed().as_secs_f64()
+}
+
+/// Flashea un texto en el OSD con la duración por defecto.
+fn osd_flash(text: impl Into<String>) {
+    osd().lock().flash(text, osd_now());
+}
+
+/// Flashea la posición/total actual (tras un seek/salto de capítulo). Lee un
+/// snapshot fresco no-bloqueante; si no hay playlist, no muestra nada.
+fn osd_flash_seek() {
+    let s = playback_snapshot();
+    if s.present {
+        let total = s.duration.unwrap_or(Duration::ZERO).as_secs_f64();
+        osd_flash(osd::format_seek(s.position.as_secs_f64(), total));
+    }
+}
+
 /// Handle al [`Playlist`] activo cuando hay tracks WAV/MP3. `None`
 /// si la fuente es tono A4 — en ese caso los botones de seek /
 /// playlist / speed quedan apagados.
@@ -1809,14 +1841,23 @@ fn apply_command(cmd: MediaCommand) {
     match cmd {
         TogglePause => {
             pause().toggle();
+            osd_flash(if pause().is_paused() { "Pausa" } else { "Reproduciendo" });
         }
-        SeekBy { secs } => seek_audio_by(secs),
-        SeekTo { fraction } => seek_audio_to(fraction),
+        SeekBy { secs } => {
+            seek_audio_by(secs);
+            osd_flash_seek();
+        }
+        SeekTo { fraction } => {
+            seek_audio_to(fraction);
+            osd_flash_seek();
+        }
         VolumeBy { delta } => {
             volume().update(|v| v + delta);
+            osd_flash(osd::format_volume(volume().get()));
         }
         SetVolume { level } => {
             volume().update(|_| level);
+            osd_flash(osd::format_volume(volume().get()));
         }
         ToggleMute => {
             // Guarda el volumen al silenciar; lo restaura al des-silenciar.
@@ -1829,22 +1870,28 @@ fn apply_command(cmd: MediaCommand) {
                     volume().update(|_| 0.0);
                 }
             }
+            drop(g);
+            osd_flash(osd::format_volume(volume().get()));
         }
         PrevTrack => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
                 h.lock().prev();
             }
+            osd_flash(media_title_string());
         }
         NextTrack => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
                 h.lock().next();
             }
+            osd_flash(media_title_string());
         }
         ChapterNext => {
             if let Some(ch) = chapters_slot().get() {
                 let pos = playback_snapshot().position;
                 if let Some(c) = ch.next(pos) {
+                    let title = c.title.clone();
                     seek_audio_to_pos(c.start);
+                    osd_flash(format!("▸ {title}"));
                 }
             }
         }
@@ -1852,27 +1899,42 @@ fn apply_command(cmd: MediaCommand) {
             if let Some(ch) = chapters_slot().get() {
                 let pos = playback_snapshot().position;
                 if let Some(c) = ch.prev(pos, Duration::from_secs(3)) {
+                    let title = c.title.clone();
                     seek_audio_to_pos(c.start);
+                    osd_flash(format!("◂ {title}"));
                 }
             }
         }
-        SpeedStep { dir } => step_speed(dir),
-        SetSpeed { mult } => set_speed_abs(mult),
+        SpeedStep { dir } => {
+            step_speed(dir);
+            osd_flash(osd::format_speed(player_speed() as f32));
+        }
+        SetSpeed { mult } => {
+            set_speed_abs(mult);
+            osd_flash(osd::format_speed(player_speed() as f32));
+        }
         CycleRepeat => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
                 let mut pl = h.lock();
                 pl.cycle_repeat();
-                eprintln!("media-app: repeat {}", pl.repeat_mode().label());
+                let mode = pl.repeat_mode();
+                eprintln!("media-app: repeat {}", mode.label());
+                drop(pl);
+                osd_flash(match mode {
+                    RepeatMode::Off => "Repetir: no",
+                    RepeatMode::One => "Repetir: una",
+                    RepeatMode::All => "Repetir: todo",
+                });
             }
         }
         ToggleShuffle => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
                 let mut pl = h.lock();
                 pl.toggle_shuffle();
-                eprintln!(
-                    "media-app: shuffle {}",
-                    if pl.shuffle_on() { "on" } else { "off" }
-                );
+                let on = pl.shuffle_on();
+                eprintln!("media-app: shuffle {}", if on { "on" } else { "off" });
+                drop(pl);
+                osd_flash(if on { "Aleatorio: sí" } else { "Aleatorio: no" });
             }
         }
         Snapshot => do_snapshot(),
@@ -1897,7 +1959,10 @@ fn apply_command(cmd: MediaCommand) {
             if let Some(pipe) = pipeline_slot().get() {
                 let mut s = pipe.sync.lock();
                 s.add_offset_ms(ms);
-                eprintln!("media-app: sync A/V {:+}ms", s.offset_ms());
+                let off = s.offset_ms();
+                drop(s);
+                eprintln!("media-app: sync A/V {off:+}ms");
+                osd_flash(format!("Sync A/V {off:+} ms"));
             }
         }
         AvSyncReset => {
@@ -1941,6 +2006,7 @@ fn apply_command(cmd: MediaCommand) {
                 .clamp(-MAX_SUB_DELAY_MS, MAX_SUB_DELAY_MS);
             SUB_DELAY_MS.store(new, Ordering::Relaxed);
             eprintln!("media-app: subtítulo {new:+}ms");
+            osd_flash(format!("Subtítulo {new:+} ms"));
         }
         SubDelayReset => {
             SUB_DELAY_MS.store(0, Ordering::Relaxed);
@@ -2896,7 +2962,16 @@ impl App for MediaApp {
         // Right-click en la raíz (origen 0,0 ⇒ local == ventana) abre el
         // menú contextual del reproductor.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, content])
+        .children({
+            // El OSD (U4) va último → se pinta sobre el contenido. Es absoluto,
+            // así que no afecta el layout del column; los overlays modales
+            // (menú/palette/ayuda) van por `view_overlay`, por encima de éste.
+            let mut kids = vec![menubar, content];
+            if let Some(osd) = osd_overlay(model) {
+                kids.push(osd);
+            }
+            kids
+        })
     }
 }
 
@@ -2941,6 +3016,44 @@ fn palette_overlay(model: &Model, state: &PaletteState) -> View<Msg> {
     .fill(Color::from_rgba8(0, 0, 0, 150))
     .on_click(Msg::Palette(PaletteMsg::Close))
     .children(vec![panel])
+}
+
+/// Overlay del OSD (U4): un cartel transitorio cerca del borde superior, estilo
+/// mpv. No intercepta clics (posición absoluta, sin `on_click`), así no estorba
+/// al video ni a las barras. `None` cuando no hay mensaje activo. El alfa decae
+/// con el fade del `Osd`; el repintado periódico (Tick) anima la desaparición.
+fn osd_overlay(model: &Model) -> Option<View<Msg>> {
+    let now = osd_now();
+    let g = osd().lock();
+    let text = g.active(now)?.to_string();
+    let a = g.alpha_default(now).clamp(0.0, 1.0);
+    drop(g);
+    let fade = |base: u8| (base as f32 * a).round() as u8;
+    let (vw, vh) = model.viewport;
+    let box_w = 380.0_f32.min(vw - 40.0).max(120.0);
+    let x = ((vw - box_w) * 0.5).max(0.0);
+    let y = (vh * 0.09).max(MENU_H + 8.0);
+    Some(
+        View::new(Style {
+            position: Position::Absolute,
+            inset: TaffyRect {
+                left: length(x),
+                top: length(y),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size {
+                width: length(box_w),
+                height: length(34.0_f32),
+            },
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(Color::from_rgba8(0, 0, 0, fade(175)))
+        .radius(8.0)
+        .text(text, 16.0, Color::from_rgba8(240, 240, 245, fade(255))),
+    )
 }
 
 // ============================================================
