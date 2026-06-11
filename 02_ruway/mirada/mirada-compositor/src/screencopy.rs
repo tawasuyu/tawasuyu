@@ -496,12 +496,23 @@ fn copiar_a_shm(
     if bytes.len() < w * h * 4 {
         return Err(format!("mapping corto: {} < {}", bytes.len(), w * h * 4));
     }
-    with_buffer_contents_mut(buffer, |ptr, len, datos| {
-        let destino = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+    let escrito = with_buffer_contents_mut(buffer, |ptr, len, datos| {
         let desde = datos.offset as usize;
-        destino[desde..desde + w * h * 4].copy_from_slice(&bytes[..w * h * 4]);
+        // Re-chequeo en el punto de uso: `aceptar_copia` ya validó el buffer,
+        // pero el `unsafe` de abajo no debe depender de eso. Un `desde + n` que
+        // se salga del mapeo (cliente raro, pool mutado) aborta la copia en vez
+        // de escribir fuera de rango.
+        let Some(fin) = desde.checked_add(w * h * 4).filter(|&fin| fin <= len) else {
+            return false;
+        };
+        let destino = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+        destino[desde..fin].copy_from_slice(&bytes[..w * h * 4]);
+        true
     })
     .map_err(|e| format!("buffer shm: {e:?}"))?;
+    if !escrito {
+        return Err("buffer shm: offset+tamaño fuera del mapeo".into());
+    }
     Ok(mapping.flipped())
 }
 

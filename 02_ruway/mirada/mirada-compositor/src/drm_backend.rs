@@ -531,7 +531,10 @@ impl DrmState {
             return (x, y);
         }
         // El menor cuadrado-distancia al rect proyecta `(x, y)` al borde.
-        let mut best = (self.outputs[Self::PRIMARY].rect, f64::INFINITY);
+        let Some(first) = self.outputs.first() else {
+            return (x, y); // sin monitores conectados: nada a lo que recortar
+        };
+        let mut best = (first.rect, f64::INFINITY);
         for o in &self.outputs {
             let r = o.rect;
             if r.w <= 0 || r.h <= 0 {
@@ -1025,7 +1028,10 @@ impl DrmState {
     /// rindiendo — se hace una vez al inicio de [`Self::render`].
     fn refresh_window_borders(&mut self) {
         let dec = self.app.decorations;
-        let output_h = self.outputs[Self::PRIMARY].rect.h;
+        let Some(primary) = self.outputs.get(Self::PRIMARY) else {
+            return; // sin monitores: no hay bordes que recalcular
+        };
+        let output_h = primary.rect.h;
         for w in &mut self.app.windows {
             if !w.visible || w.is_shell {
                 continue;
@@ -1758,8 +1764,12 @@ impl DrmState {
             (!w.is_shell, !w.floating, !w.focused)
         });
         // `output_h` se usa para anclar el shell al borde inferior; el shell
-        // vive en la primaria, así que usamos su altura, no la total.
-        let output_h = self.outputs[Self::PRIMARY].rect.h;
+        // vive en la primaria, así que usamos su altura, no la total. Sin
+        // monitores (todos desconectados) no hay ventana que golpear.
+        let Some(primary) = self.outputs.get(Self::PRIMARY) else {
+            return None;
+        };
+        let output_h = primary.rect.h;
         let tbh = self.app.decorations.titlebar_height;
         idx.into_iter().find(|&i| {
             let w = &self.app.windows[i];
@@ -1781,8 +1791,12 @@ impl DrmState {
             return None;
         }
         // `output_h` se usa para anclar el shell al borde inferior; el shell
-        // vive en la primaria, así que usamos su altura, no la total.
-        let output_h = self.outputs[Self::PRIMARY].rect.h;
+        // vive en la primaria, así que usamos su altura, no la total. Sin
+        // monitores (todos desconectados) no hay ventana que golpear.
+        let Some(primary) = self.outputs.get(Self::PRIMARY) else {
+            return None;
+        };
+        let output_h = primary.rect.h;
         let mut idx: Vec<usize> = (0..self.app.windows.len())
             .filter(|&i| self.app.windows[i].visible)
             .collect();
