@@ -4,6 +4,18 @@
 > **reproductor** frente a VLC/mpv y en qué orden cerrarlo. Complementa a
 > `CONTROLES.md` (que cubre el mapeo de entrada → acción, ya ✅).
 
+## Handoff — retomar el hilo (2026-06-11)
+
+> **2026-06-11 — wiring de la fase de interfaz.** Se cablearon en `media-app`
+> (sin pantalla, sólo compilación) **U4 OSD · U6 bookmarks · S3 estilo ASS ·
+> U5 carátula · V2 aspect/zoom/pan · A2 pista de audio**. Todo compila
+> (`media-core` 228 + `foreign-av` 11 verde, `--workspace` verde) pero **falta
+> validar a ojo/oído corriendo la app** — ver el detalle por ítem en
+> `PENDIENTE-UI.md` (sesión 2026-06-11). Nota: V2 cambió el default de blit de
+> **estirar** a **ajustar** (preserva aspecto, estilo VLC/mpv). Queda pendiente
+> **S2** (subtítulos embebidos: pipeline de extracción) y la sección de
+> hardware/GPU.
+
 ## Handoff — retomar el hilo (2026-06-01)
 
 > **2026-06-02 — el núcleo puro está agotado.** Todo lo testeable en CI sin

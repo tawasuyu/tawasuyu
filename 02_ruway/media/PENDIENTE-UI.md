@@ -10,6 +10,35 @@
 > (mapeo de entrada → acción, ya ✅). Cuando un ítem se cierre, moverlo a
 > "Hecho" en `PARIDAD.md` y borrarlo de acá.
 
+## Sesión 2026-06-11 — wiring de features pendientes
+
+Se cableó en `media-app` (compila, `media-core` 228 + `foreign-av` 11 verde,
+`--workspace` verde) toda la tanda de bajo/medio riesgo. **Todo esto necesita
+una pasada con pantalla para validar a ojo/oído** (no se pudo correr la GUI):
+
+- ✅ **U4 OSD** — `osd()` global + `osd_now()`; flash en cada comando
+  (pausa/volumen/seek/velocidad/pista/capítulo/repeat/shuffle/sync/sub-delay);
+  overlay top-center estilo mpv con fade. *Validar: posición/tipografía/duración.*
+- ✅ **U6 Bookmarks** — `MediaCommand::{BookmarkToggle,Next,Prev}` (Shift+B +
+  palette), `bookmarks()` global → `bookmarks.ron`, marcas ámbar sobre el
+  timeline (`timeline_view_marked`). *Validar: marcas a ojo.*
+- ✅ **S3 estilo ASS** — `subtitle_strip` aplica color primario + alineación
+  horizontal (`align_for`/`style_for`). *Pendiente con pantalla: anclaje
+  vertical + `\pos` (necesitan overlay sobre el video con PlayResY), `\c`/`\k`.*
+- ✅ **U5 carátula** — `llimphi-image::decode_bytes` → `peniko::Image` cacheada;
+  hero de carátula en audio-only. *Validar: mp3/flac con cover.*
+- ✅ **V2 aspect/crop/zoom/pan** — `ExternalSurface::blit_layout(dst,src_uv,clip)`
+  (shader + scissor), `viewcontrol()` global, comandos `View*` (tecla `a` cicla
+  encaje). **Cambio de default: de ESTIRAR a AJUSTAR** (preserva aspecto).
+  *Validar: encaje/zoom/pan/scissor a ojo.*
+- ✅ **A2 pista de audio** — `MediaSession::select_audio_stream` (re-map
+  `0:<idx>` + respawn), `CycleAudioTrack` (palette), `tracks()` global.
+  *Validar: archivo multi-pista, audio que cambia de idioma sin desync.*
+
+**Sigue pendiente:** **S2** subtítulos embebidos (necesita pipeline de
+extracción `ffmpeg -map s` + render, aparte del re-map de audio); el resto de
+la sección E (V1/V5/V6/V8/M2/M3/M4/U3/A3/R3/R4) que pide hardware/GPU.
+
 ## Sesión 2026-06-02 — decisiones y avance
 
 **Decisiones del usuario** (válidas para todo lo de abajo):
