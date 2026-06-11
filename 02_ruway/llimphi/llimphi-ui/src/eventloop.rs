@@ -554,13 +554,16 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     // hover-test va contra él; el árbol principal queda
                     // congelado mientras el overlay esté arriba.
                     //
-                    // Además del repintado (para el `hover_fill`), si el
-                    // nodo recién hovereado declara un `on_pointer_enter`,
-                    // lo dispatcheamos: es lo que permite, p.ej., cambiar
-                    // de menú con el mouse o abrir un submenú al pasar por
-                    // encima. Extraemos el Msg en un scope para soltar el
+                    // Además del repintado (para el `hover_fill`), en la
+                    // transición de hover dispatcheamos dos Msgs: el
+                    // `on_pointer_leave` del nodo que abandonamos y el
+                    // `on_pointer_enter` del recién hovereado. Es lo que
+                    // permite, p.ej., cambiar de menú con el mouse, abrir un
+                    // submenú al pasar por encima, o cerrar un tooltip/drawer
+                    // al salir. Extraemos los Msg en un scope para soltar el
                     // borrow del cache antes de mutar el modelo.
                     let mut enter_msg: Option<A::Msg> = None;
+                    let mut leave_msg: Option<A::Msg> = None;
                     let mut hovered_changed = false;
                     let mut new_hovered: Option<usize> = state.hovered;
                     // Forma del cursor del nodo recién hovereado (sólo se
@@ -584,6 +587,14 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         // (y el hover-switch de menús no andaría). Ver `hovered`.
                         if new_hover != state.hovered {
                             hovered_changed = true;
+                            // El nodo que dejamos (índice persistente previo)
+                            // dispara su leave; el nuevo, su enter. Ambos se
+                            // resuelven contra el árbol montado actual, igual
+                            // que el resto del hit-test de hover.
+                            leave_msg = state
+                                .hovered
+                                .and_then(|i| mounted.nodes.get(i))
+                                .and_then(|n| n.on_pointer_leave.clone());
                             enter_msg = new_hover
                                 .and_then(|i| mounted.nodes.get(i))
                                 .and_then(|n| n.on_pointer_enter.clone());
@@ -605,11 +616,13 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.last_render = None;
                         state.window.request_redraw();
                     }
-                    if let Some(msg) = enter_msg {
+                    // Despachamos leave antes que enter: el orden natural de
+                    // la transición es "salgo de A, luego entro en B".
+                    for msg in [leave_msg, enter_msg].into_iter().flatten() {
                         let model = state.model.take().expect("model");
                         state.model = Some(A::update(model, msg, &self.handle));
                         // El estado cambió → invalidamos el cache para
-                        // re-render (p.ej. el submenú que se abre).
+                        // re-render (p.ej. el submenú que se abre/cierra).
                         state.last_render = None;
                     }
                     let _ = prev_cursor;
