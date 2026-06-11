@@ -165,9 +165,11 @@ Frentes verificados contra el código (2026-06-10):
 
 ### C.1 El muro — build Rust + GPU dinámico
 
-1. **hammer no construye Rust.** `hammer-build` detecta `autotools/cmake/meson/make` y compila C
-   con `zig cc`; **no hay `BuildSys::Cargo`**. Prerrequisito #0: vía cargo en el lab (recipe =
-   repo+commit fijado → `cargo build --release` con target y toolchain pinneados).
+1. ~~**hammer no construye Rust.**~~ **✅ HECHO** (hammer commit `c5ab7e4`): se agregó
+   `BuildSys::Cargo` al lab — detección por `Cargo.toml`, traducción de triple zig→rustc, link
+   por wrapper `zig cc` (cierra el `-lgcc_s` de M2), `--offline --locked` para hermeticidad,
+   `link=dynamic`→`-crt-static` para el tier gráfico. 5 tests verdes + receta de ejemplo. Falta
+   el siguiente eslabón: **deps vendoreadas** por front-door (el build hermético no tiene red).
 2. **musl-estático (la vía de oro de hammer) no sirve para lo gráfico.** Verificado: Llimphi =
    `wgpu`+`winit`+`vello` (→ `libvulkan`/`libEGL`/`libwayland`/`libxkbcommon`); mirada =
    `smithay 0.7` (→ `libdrm`/`libinput`/`libseat`/`libgbm`/`libudev`). Todo C dinámico. El
