@@ -155,7 +155,12 @@ Antes: sólo `scroll_y` vertical. Ahora (todo stateless, offset en el Model):
 - ✅ Decode pipeline (`llimphi-image`, Bloque 20) — `decode_bytes(&[u8])`,
   `load_path(&Path, max_bytes)`, `from_rgba8(rgba, w, h)`. Re-exporta
   `peniko::{Blob, Image, ImageFormat}`.
-- Falta: imágenes de red con caché (descarga + decode + cache por URL).
+- ✅ Imágenes de red con caché — feature `net` de `llimphi-image` (ureq
+  síncrono, opt-in): `fetch_bytes`/`load_url` bloqueantes + `ImageCache`
+  (`Clone + Send + Sync`, `get`/`contains`/`insert`/`get_or_fetch`). Patrón:
+  la `view` consulta `cache.get(url)` en el hilo UI; si falta, un
+  `Handle::spawn` llama `get_or_fetch` y despacha un `Msg` al volver. El crate
+  base sigue sin dep de red.
 
 ### 🔴 Tier 7 — accesibilidad (la brecha categórica más grande)
 **Cero hoy.** No hay árbol de semántica ni lectores de pantalla. A desarrollar:

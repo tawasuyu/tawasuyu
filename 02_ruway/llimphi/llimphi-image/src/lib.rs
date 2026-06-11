@@ -20,6 +20,11 @@
 //!   `Result<peniko::Image>`, con guardia de tamaño en disco (las apps
 //!   no quieren leer un .iso de 4 GB pensando que es una imagen).
 //!
+//! Con la feature `net` (opt-in, ureq síncrono) se suman descarga + caché por
+//! URL: [`fetch_bytes`]/[`load_url`] (bloqueantes, para correr en un worker) y
+//! [`ImageCache`] (`Clone + Send + Sync`) que la `view` consulta en el hilo UI
+//! mientras un `Handle::spawn` la puebla. El crate base queda sin dep de red.
+//!
 //! `image` (del crate `image`) se construye con `to_rgba8` siempre — la
 //! conversión necesaria para `peniko::ImageFormat::Rgba8`. Para imagen
 //! ya en `rgba8` en memoria (sin necesidad de decodificación), ver
@@ -142,6 +147,154 @@ pub fn load_path(path: &Path, max_bytes: u64) -> Result<Image, DecodeError> {
     Ok(from_rgba8(rgba.into_raw(), w, h))
 }
 
+/// Descarga + caché de imágenes por URL (feature `net`). Síncrono (ureq):
+/// la idea es que la app lo llame desde un worker (`Handle::spawn` /
+/// `std::thread`), NO en el hilo de UI, y despache un `Msg` con la imagen
+/// decodificada. La [`ImageCache`] es `Clone + Send + Sync` (interna
+/// `Arc<Mutex<…>>`) para compartirse entre el hilo UI (lecturas) y los
+/// workers (descargas).
+#[cfg(feature = "net")]
+mod net {
+    use super::{decode_bytes, DecodeError, Image};
+    use std::collections::HashMap;
+    use std::io::Read;
+    use std::sync::{Arc, Mutex};
+
+    /// Errores de [`fetch_bytes`]/[`load_url`].
+    #[derive(Debug)]
+    pub enum FetchError {
+        /// La capa de red/HTTP falló (DNS, TLS, status no-2xx, timeout…).
+        Network(String),
+        /// El cuerpo descargado superó `max_bytes`.
+        TooBig { max_bytes: u64 },
+        /// Se descargó pero no se pudo decodificar como imagen.
+        Decode(DecodeError),
+    }
+
+    impl std::fmt::Display for FetchError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                FetchError::Network(s) => write!(f, "red: {s}"),
+                FetchError::TooBig { max_bytes } => {
+                    write!(f, "descarga supera el cap de {max_bytes} bytes")
+                }
+                FetchError::Decode(e) => write!(f, "{e}"),
+            }
+        }
+    }
+
+    impl std::error::Error for FetchError {}
+
+    impl From<DecodeError> for FetchError {
+        fn from(e: DecodeError) -> Self {
+            FetchError::Decode(e)
+        }
+    }
+
+    /// Descarga los bytes crudos de una URL (bloqueante). `max_bytes = 0`
+    /// deshabilita el cap; si no, corta la lectura apenas se excede (no
+    /// bufferiza un cuerpo gigante antes de rechazarlo).
+    pub fn fetch_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>, FetchError> {
+        let resp = ureq::get(url)
+            .call()
+            .map_err(|e| FetchError::Network(e.to_string()))?;
+        let mut reader = resp.into_reader();
+        let mut buf = Vec::new();
+        if max_bytes > 0 {
+            // Leemos hasta max_bytes+1: si llega a +1 sabemos que se pasó.
+            reader
+                .by_ref()
+                .take(max_bytes + 1)
+                .read_to_end(&mut buf)
+                .map_err(|e| FetchError::Network(e.to_string()))?;
+            if buf.len() as u64 > max_bytes {
+                return Err(FetchError::TooBig { max_bytes });
+            }
+        } else {
+            reader
+                .read_to_end(&mut buf)
+                .map_err(|e| FetchError::Network(e.to_string()))?;
+        }
+        Ok(buf)
+    }
+
+    /// Descarga + decodifica una URL a `peniko::Image` (bloqueante). Sin
+    /// caché — para eso usar [`ImageCache::get_or_fetch`].
+    pub fn load_url(url: &str, max_bytes: u64) -> Result<Image, FetchError> {
+        let bytes = fetch_bytes(url, max_bytes)?;
+        Ok(decode_bytes(&bytes)?)
+    }
+
+    /// Caché de imágenes por URL, compartible entre hilos. La `peniko::Image`
+    /// es barata de clonar (su `Blob` es `Arc`-backed), así que `get` devuelve
+    /// una copia lista para `View::image()`.
+    #[derive(Clone, Default)]
+    pub struct ImageCache {
+        inner: Arc<Mutex<HashMap<String, Image>>>,
+    }
+
+    impl ImageCache {
+        pub fn new() -> Self {
+            Self::default()
+        }
+
+        /// Imagen cacheada para esa URL, si ya se descargó. Barato — esto es
+        /// lo que la `view` consulta en el hilo UI cada frame.
+        pub fn get(&self, url: &str) -> Option<Image> {
+            self.inner.lock().ok()?.get(url).cloned()
+        }
+
+        /// `true` si la URL ya está en caché (sin clonar la imagen).
+        pub fn contains(&self, url: &str) -> bool {
+            self.inner
+                .lock()
+                .map(|m| m.contains_key(url))
+                .unwrap_or(false)
+        }
+
+        /// Inserta (o reemplaza) la imagen de una URL. Lo llama el worker tras
+        /// decodificar, o la app si ya tiene la imagen por otra vía.
+        pub fn insert(&self, url: impl Into<String>, img: Image) {
+            if let Ok(mut m) = self.inner.lock() {
+                m.insert(url.into(), img);
+            }
+        }
+
+        /// Vacía la caché (p. ej. al cambiar de sesión/usuario).
+        pub fn clear(&self) {
+            if let Ok(mut m) = self.inner.lock() {
+                m.clear();
+            }
+        }
+
+        /// Cantidad de imágenes cacheadas.
+        pub fn len(&self) -> usize {
+            self.inner.lock().map(|m| m.len()).unwrap_or(0)
+        }
+
+        pub fn is_empty(&self) -> bool {
+            self.len() == 0
+        }
+
+        /// Devuelve la imagen cacheada o, si falta, la descarga+decodifica y la
+        /// cachea (bloqueante). **Llamar desde un worker**, no en el hilo UI.
+        /// El patrón típico: la `view` hace `cache.get(url)`; si es `None`,
+        /// dispara `Handle::spawn` que llama `get_or_fetch` y al volver
+        /// despacha un `Msg` para repintar.
+        pub fn get_or_fetch(&self, url: &str, max_bytes: u64) -> Result<Image, FetchError> {
+            if let Some(img) = self.get(url) {
+                return Ok(img);
+            }
+            let img = load_url(url, max_bytes)?;
+            self.insert(url.to_string(), img.clone());
+            Ok(img)
+        }
+    }
+}
+
+#[cfg(feature = "net")]
+pub use net::{fetch_bytes, load_url, FetchError, ImageCache};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +372,30 @@ mod tests {
             Err(DecodeError::Io(_)) => {}
             other => panic!("esperaba Io, recibí: {other:?}"),
         }
+    }
+
+    /// La lógica de caché (sin red): insert / get / contains / clear sobre una
+    /// imagen sintética. La descarga real no se testea (requiere red).
+    #[cfg(feature = "net")]
+    #[test]
+    fn image_cache_insert_get_contains_clear() {
+        let cache = ImageCache::new();
+        assert!(cache.is_empty());
+        assert!(!cache.contains("http://x/a.png"));
+        assert!(cache.get("http://x/a.png").is_none());
+
+        let img = from_rgba8(vec![0u8; 16], 2, 2);
+        cache.insert("http://x/a.png", img);
+        assert!(cache.contains("http://x/a.png"));
+        assert_eq!(cache.len(), 1);
+        let got = cache.get("http://x/a.png").expect("cacheada");
+        assert_eq!(got.image.width, 2);
+
+        // Una segunda URL no colisiona.
+        cache.insert("http://x/b.png".to_string(), from_rgba8(vec![0u8; 4], 1, 1));
+        assert_eq!(cache.len(), 2);
+
+        cache.clear();
+        assert!(cache.is_empty());
     }
 }
