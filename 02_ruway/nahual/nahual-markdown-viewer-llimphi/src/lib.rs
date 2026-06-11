@@ -12,11 +12,12 @@
 //! render en [`markdown_viewer_view`]. No conoce el AppBus: el caller
 //! pasa el path.
 //!
-//! MVP feo-primero: el formato inline (negrita/itálica/enlaces) se aplana
-//! a texto — sólo la **estructura de bloques** se respeta visualmente. El
-//! código inline se conserva con backticks. Sin scroll (clip, como los
-//! demás visores estáticos); capamos por bloques y bytes para que parley
-//! no se atragante.
+//! El formato inline (negrita/itálica/código/tachado/enlaces) se pinta con
+//! `View::text_spans` (RichText): cada tramo lleva su override de peso,
+//! itálica, monospace, color y subrayado. El `href` de los enlaces se
+//! descarta — el visor lee, no navega. Sin scroll (clip, como los demás
+//! visores estáticos); capamos por bloques y bytes para que parley no se
+//! atragante.
 
 #![forbid(unsafe_code)]
 
@@ -27,7 +28,7 @@ use llimphi_ui::llimphi_layout::taffy::{
     AlignItems, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
-use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::llimphi_text::{Alignment, TextSpan, TextSpanStyle};
 use llimphi_ui::View;
 
 // El dominio (parseo + tipos) vive en `nahual-viewer-core`; lo
@@ -44,6 +45,8 @@ pub struct MarkdownViewerPalette {
     pub fg_error: Color,
     pub code_bg: Color,
     pub code_fg: Color,
+    /// Color de los enlaces (y, por reuso, del código inline tinte acento).
+    pub fg_link: Color,
 }
 
 impl Default for MarkdownViewerPalette {
@@ -62,6 +65,7 @@ impl MarkdownViewerPalette {
             fg_error: t.fg_destructive,
             code_bg: t.bg_panel,
             code_fg: t.fg_text,
+            fg_link: t.accent,
         }
     }
 }
@@ -172,47 +176,60 @@ where
     Msg: Clone + 'static,
 {
     match block {
-        MdBlock::Heading { level, text } => View::new(block_style(8.0, 3.0)).text_aligned(
-            text.clone(),
-            heading_size(*level),
-            palette.fg_heading,
-            Alignment::Start,
-        ),
-        MdBlock::Paragraph(text) => View::new(block_style(4.0, 3.0)).text_aligned(
-            text.clone(),
-            13.0,
-            palette.fg_text,
-            Alignment::Start,
-        ),
-        MdBlock::ListItem { depth, text } => {
-            let indent = "    ".repeat(*depth as usize);
-            View::new(block_style(2.0, 1.0)).text_aligned(
-                format!("{indent}•  {text}"),
-                13.0,
-                palette.fg_text,
+        MdBlock::Heading { level, text } => {
+            let (s, spans) = build_inline(text, "", InlineFlags::default(), palette);
+            View::new(block_style(8.0, 3.0)).text_spans(
+                s,
+                heading_size(*level),
+                palette.fg_heading,
+                spans,
                 Alignment::Start,
             )
         }
-        MdBlock::Quote(text) => View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: auto(),
-            },
-            padding: Rect {
-                left: length(12.0_f32),
-                right: length(0.0_f32),
-                top: length(3.0_f32),
-                bottom: length(3.0_f32),
-            },
-            ..Default::default()
-        })
-        .text_aligned_italic(
-            format!("▌  {text}"),
-            13.0,
-            palette.fg_muted,
-            Alignment::Start,
-            true,
-        ),
+        MdBlock::Paragraph(text) => {
+            let (s, spans) = build_inline(text, "", InlineFlags::default(), palette);
+            View::new(block_style(4.0, 3.0)).text_spans(
+                s,
+                13.0,
+                palette.fg_text,
+                spans,
+                Alignment::Start,
+            )
+        }
+        MdBlock::ListItem { depth, text } => {
+            let indent = "    ".repeat(*depth as usize);
+            let prefix = format!("{indent}•  ");
+            let (s, spans) = build_inline(text, &prefix, InlineFlags::default(), palette);
+            View::new(block_style(2.0, 1.0)).text_spans(
+                s,
+                13.0,
+                palette.fg_text,
+                spans,
+                Alignment::Start,
+            )
+        }
+        MdBlock::Quote(text) => {
+            // Base itálica para toda la cita; los spans inline se superponen.
+            let base = InlineFlags {
+                italic: true,
+                ..Default::default()
+            };
+            let (s, spans) = build_inline(text, "▌  ", base, palette);
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                padding: Rect {
+                    left: length(12.0_f32),
+                    right: length(0.0_f32),
+                    top: length(3.0_f32),
+                    bottom: length(3.0_f32),
+                },
+                ..Default::default()
+            })
+            .text_spans(s, 13.0, palette.fg_muted, spans, Alignment::Start)
+        }
         MdBlock::Code(code) => View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
@@ -273,6 +290,46 @@ where
         ..Default::default()
     })
     .text_aligned(text.to_string(), 12.0, color, Alignment::Start)
+}
+
+/// Construye `(texto, spans)` para un [`Inline`]: antepone `prefix` (viñeta
+/// de lista, barra de cita) desplazando los offsets, aplica un `base`
+/// full-range (p. ej. itálica de cita) como span de menor especificidad, y
+/// luego los spans inline del documento. Listo para `View::text_spans`.
+fn build_inline(
+    inl: &Inline,
+    prefix: &str,
+    base: InlineFlags,
+    palette: &MarkdownViewerPalette,
+) -> (String, Vec<TextSpan>) {
+    let shift = prefix.len();
+    let text = format!("{prefix}{}", inl.text);
+    let mut spans = Vec::with_capacity(inl.spans.len() + 1);
+    if !base.is_plain() {
+        spans.push(TextSpan::new(0, text.len(), span_style(base, palette)));
+    }
+    for (s, e, f) in &inl.spans {
+        spans.push(TextSpan::new(s + shift, e + shift, span_style(*f, palette)));
+    }
+    (text, spans)
+}
+
+/// Traduce un conjunto de flags inline al override de estilo de Llimphi.
+/// Código y enlace comparten el tinte de acento; el enlace agrega subrayado.
+fn span_style(f: InlineFlags, palette: &MarkdownViewerPalette) -> TextSpanStyle {
+    TextSpanStyle {
+        size_px: None,
+        weight: f.bold.then_some(700.0),
+        italic: f.italic.then_some(true),
+        font_family: f.code.then(|| "monospace".to_string()),
+        color: if f.link || f.code {
+            Some(palette.fg_link)
+        } else {
+            None
+        },
+        underline: f.link.then_some(true),
+        strikethrough: f.strikethrough.then_some(true),
+    }
 }
 
 /// Estilo de bloque: ancho completo, padding vertical configurable.
