@@ -78,6 +78,9 @@ pub struct WindowLine {
     pub workspace: usize,
     /// `true` si es la ventana enfocada del escritorio activo.
     pub focused: bool,
+    /// `true` si está minimizada/oculta. En mirada el equivalente es estar
+    /// guardada en el scratchpad (`workspace == 0`): un taskbar la atenúa.
+    pub minimized: bool,
 }
 
 /// La ruta del socket de control: `$XDG_RUNTIME_DIR/mirada-ctl.sock`, o
@@ -220,6 +223,7 @@ mod tests {
             title: "shell".into(),
             workspace: 2,
             focused: true,
+            minimized: false,
         }];
         let expected = lines.clone();
 

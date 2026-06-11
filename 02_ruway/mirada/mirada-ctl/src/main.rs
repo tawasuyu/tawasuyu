@@ -118,13 +118,14 @@ fn print_windows(windows: &[WindowLine]) {
 /// Imprime las ventanas en formato **porcelain**: una línea por ventana, campos
 /// separados por TAB, pensada para que la consuma un *task manager* (la barra de
 /// `pata` en el backend winit) sin parsear la tabla humana:
-/// `id\tworkspace\tfocused\tapp_id\ttitle`. El título puede llevar espacios pero
-/// no tabs, así que el separador es estable aunque el `app_id` esté vacío.
+/// `id\tworkspace\tfocused\tminimized\tapp_id\ttitle`. El título puede llevar
+/// espacios pero no tabs, así que el separador es estable aunque el `app_id`
+/// esté vacío.
 fn print_windows_porcelain(windows: &[WindowLine]) {
     for w in windows {
         println!(
-            "{}\t{}\t{}\t{}\t{}",
-            w.id, w.workspace, w.focused as u8, w.app_id, w.title
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            w.id, w.workspace, w.focused as u8, w.minimized as u8, w.app_id, w.title
         );
     }
 }
@@ -173,6 +174,7 @@ Acciones de mirada-ctl:
   move-forward               adelanta la ventana enfocada en el teselado
   move-backward              la atrasa
   close-focused              cierra la ventana enfocada
+  close-window <id>          cierra la ventana <id>  (ver: mirada-ctl windows)
   toggle-float               alterna flotante / teselada la enfocada
   toggle-fullscreen          alterna pantalla completa en la enfocada
   send-to-scratchpad         guarda la ventana enfocada en el scratchpad

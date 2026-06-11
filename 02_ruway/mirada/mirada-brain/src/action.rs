@@ -79,6 +79,10 @@ pub enum DesktopAction {
     MoveBackward,
     /// Cierra la ventana enfocada (cierre ordenado).
     CloseFocused,
+    /// Cierra una ventana concreta por su id (cierre ordenado), sin tener que
+    /// enfocarla antes. Para el clic derecho de un taskbar o
+    /// `mirada-ctl close-window`.
+    CloseWindow(WindowId),
     /// Alterna entre flotante y teselada la ventana enfocada.
     ToggleFloat,
     /// Alterna el escritorio entero entre teselado y flotante: si queda
@@ -199,6 +203,7 @@ impl fmt::Display for DesktopAction {
             DesktopAction::MoveForward => f.write_str("move-forward"),
             DesktopAction::MoveBackward => f.write_str("move-backward"),
             DesktopAction::CloseFocused => f.write_str("close-focused"),
+            DesktopAction::CloseWindow(id) => write!(f, "close-window:{id}"),
             DesktopAction::ToggleFloat => f.write_str("toggle-float"),
             DesktopAction::ToggleTiling => f.write_str("toggle-tiling"),
             DesktopAction::ToggleFullscreen => f.write_str("toggle-fullscreen"),
@@ -286,6 +291,12 @@ impl FromStr for DesktopAction {
                     Self::MoveDir(d)
                 } else if let Some(id) = s.strip_prefix("focus-window:") {
                     Self::FocusWindow(
+                        id.trim()
+                            .parse()
+                            .map_err(|_| format!("id de ventana inválido: '{id}'"))?,
+                    )
+                } else if let Some(id) = s.strip_prefix("close-window:") {
+                    Self::CloseWindow(
                         id.trim()
                             .parse()
                             .map_err(|_| format!("id de ventana inválido: '{id}'"))?,
@@ -488,6 +499,15 @@ mod tests {
         let a = DesktopAction::FocusWindow(42);
         assert_eq!(a.to_string(), "focus-window:42");
         assert_eq!("focus-window:42".parse::<DesktopAction>().unwrap(), a);
+    }
+
+    #[test]
+    fn close_window_round_trips_with_its_id() {
+        let a = DesktopAction::CloseWindow(7);
+        assert_eq!(a.to_string(), "close-window:7");
+        assert_eq!("close-window:7".parse::<DesktopAction>().unwrap(), a);
+        // id inválido → error, no panic.
+        assert!("close-window:abc".parse::<DesktopAction>().is_err());
     }
 
     #[test]

@@ -611,6 +611,17 @@ impl Desktop {
                     None => Vec::new(),
                 }
             }
+            DesktopAction::CloseWindow(id) => {
+                // Cierre por id (clic derecho del taskbar): sólo si la ventana
+                // existe —en algún escritorio o en el scratchpad—. El estado se
+                // actualiza al recibir el `WindowClosed`, igual que CloseFocused.
+                let existe = self.windows.contains_key(&id);
+                if existe {
+                    vec![BrainCommand::Close(id)]
+                } else {
+                    Vec::new()
+                }
+            }
             DesktopAction::ToggleFloat => {
                 let Some(id) = self.workspaces[active].focused() else {
                     return Vec::new();
@@ -1182,6 +1193,7 @@ impl Desktop {
                     title: info.map(|i| i.title.clone()).unwrap_or_default(),
                     workspace: n + 1,
                     focused: n == active && ws_focus == Some(id),
+                    minimized: false,
                 });
             }
         }
@@ -1196,6 +1208,7 @@ impl Desktop {
                     title: info.map(|i| i.title.clone()).unwrap_or_default(),
                     workspace: 0, // 0 = guardada en el scratchpad
                     focused: false,
+                    minimized: true, // guardada = minimizada/oculta
                 });
             }
         }
@@ -1468,6 +1481,19 @@ mod tests {
         assert_eq!(cmds, vec![BrainCommand::Close(7)]);
         // No se elimina hasta que el Cuerpo confirme con WindowClosed.
         assert!(d.window_info(7).is_some());
+    }
+
+    #[test]
+    fn close_window_by_id_closes_only_existing_windows() {
+        let mut d = desktop_with_screen();
+        for id in [1, 2, 3] {
+            open(&mut d, id);
+        }
+        // El foco está en 3, pero cerramos la 1 por id (no la enfocada).
+        let cmds = d.apply(DesktopAction::CloseWindow(1));
+        assert_eq!(cmds, vec![BrainCommand::Close(1)]);
+        // Id inexistente: no emite nada (no rompe).
+        assert!(d.apply(DesktopAction::CloseWindow(999)).is_empty());
     }
 
     #[test]
