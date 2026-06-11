@@ -33,7 +33,7 @@ use llimphi_widget_detail_table::{
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 
 use app_bus::{AppMenu, Menu, MenuItem};
-use nahual_source_core::{Navigator, NodeKind, PosixSource, SortDir, SortKey, ViewMode};
+use nahual_source_core::{Navigator, Node, NodeKind, PosixSource, SortDir, SortKey, ViewMode};
 
 const W: u32 = 1500;
 const H: u32 = 940;
@@ -208,9 +208,23 @@ fn main() {
         .canonicalize()
         .expect("raíz del workspace");
 
-    // Montar la raíz del repo como PosixSource y navegar en modo detalle,
-    // ordenado por tamaño descendente.
-    let mut nav = Navigator::open(Box::new(PosixSource::new(&raiz))).expect("montar posix");
+    // POSIX base como en el shell (Fase 4.2): fuente anclada en `/`, arrancada
+    // PROFUNDO en un subdir vía `open_at` con la cadena de ancestros — así el
+    // breadcrumb muestra la ruta entera y se puede subir hasta `/`. Navegamos
+    // en modo detalle, ordenado por tamaño descendente.
+    let cwd = raiz.join("02_ruway/nahual");
+    let mut stack = vec![Node::new("/", "/", true).with_kind(NodeKind::Dir)];
+    let mut acc = PathBuf::from("/");
+    for comp in cwd.components() {
+        if let std::path::Component::Normal(c) = comp {
+            acc.push(c);
+            stack.push(
+                Node::new(acc.to_string_lossy().into_owned(), c.to_string_lossy().into_owned(), true)
+                    .with_kind(NodeKind::Dir),
+            );
+        }
+    }
+    let mut nav = Navigator::open_at(Box::new(PosixSource::new("/")), stack).expect("posix open_at");
     nav.visible_rows = 34;
     nav.view = ViewMode::Details;
     nav.set_sort(SortKey::Size);

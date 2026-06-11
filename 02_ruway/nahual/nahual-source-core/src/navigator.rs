@@ -138,6 +138,43 @@ impl Navigator {
         Ok(nav)
     }
 
+    /// Monta el navegador con una **pila de contenedores ya provista** (de la
+    /// raíz al actual), en vez de posarse sólo en la raíz. Sirve para arrancar
+    /// adentro de un subárbol con la miga de pan completa — p. ej. POSIX con la
+    /// fuente anclada en `/` pero arrancando en el cwd, sin perder la cadena de
+    /// ancestros para el breadcrumb ni la navegación hacia arriba.
+    ///
+    /// `stack` debe ser no vacía; el último es el contenedor actual, cuyos
+    /// hijos se cargan. El caller arma la cadena (para POSIX es trivial: partir
+    /// la ruta en componentes).
+    pub fn open_at(source: Box<dyn Source>, stack: Vec<Node>) -> io::Result<Self> {
+        let current = stack.last().ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "open_at: pila vacía")
+        })?;
+        let children = source.children(&current.id)?;
+        let mut nav = Self {
+            source,
+            stack,
+            children,
+            selected: 0,
+            visible_offset: 0,
+            visible_rows: DEFAULT_VISIBLE_ROWS,
+            wheel_accum: 0.0,
+            sort_key: SortKey::default(),
+            sort_dir: SortKey::default().default_dir(),
+            view: ViewMode::default(),
+            filter: String::new(),
+        };
+        nav.apply_sort();
+        Ok(nav)
+    }
+
+    /// El [`NodeId`] del contenedor actual (el tope de la pila). Para POSIX es
+    /// la ruta del directorio en que estamos parados.
+    pub fn current_id(&self) -> &NodeId {
+        &self.stack.last().expect("la pila nunca está vacía").id
+    }
+
     /// Nombre humano de la fuente (para el header).
     pub fn label(&self) -> String {
         self.source.label()
@@ -476,6 +513,30 @@ mod tests {
         nav.set_sort(SortKey::Size);
         // Tras reordenar, la selección sigue sobre "chico.txt".
         assert_eq!(nav.selected_node().unwrap().name, "chico.txt");
+    }
+
+    #[test]
+    fn open_at_arranca_adentro_con_miga_completa() {
+        // Fuente anclada en la raíz del tmp, pero arrancamos en sub/ con la
+        // cadena de ancestros (raíz · sub).
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        fs::write(dir.path().join("sub/x.txt"), b"x").unwrap();
+        let root_id = dir.path().to_string_lossy().into_owned();
+        let sub_id = dir.path().join("sub").to_string_lossy().into_owned();
+        let stack = vec![
+            Node::new(root_id.clone(), "raíz", true),
+            Node::new(sub_id.clone(), "sub", true),
+        ];
+        let mut nav = Navigator::open_at(Box::new(PosixSource::new(dir.path())), stack).unwrap();
+        // Estamos en sub/: vemos x.txt, y el breadcrumb tiene los dos niveles.
+        assert_eq!(nav.current_id(), &sub_id);
+        assert_eq!(nav.breadcrumb().split(" / ").count(), 2);
+        assert!(nav.children().iter().any(|n| n.name == "x.txt"));
+        // Subir vuelve a la raíz; subir de nuevo = false (tope de la pila).
+        assert!(nav.parent().unwrap());
+        assert_eq!(nav.current_id(), &root_id);
+        assert!(!nav.parent().unwrap());
     }
 
     #[test]

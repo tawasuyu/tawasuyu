@@ -65,10 +65,9 @@ use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
 use app_bus::{AppMenu, AppRegistry, Menu, MenuItem};
-use nahual_file_explorer_llimphi::{
-    file_explorer_view, FileExplorerState, OpenedFile,
+use nahual_source_core::{
+    MingaSource, Navigator, Node, NodeKind, NouserSource, Opened, PosixSource, WawaImgSource,
 };
-use nahual_source_core::{MingaSource, Navigator, NouserSource, Opened, WawaImgSource};
 use nahual_image_viewer_llimphi::{
     image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
     DEFAULT_IMAGE_BYTES_MAX,
@@ -150,12 +149,13 @@ const FRAME_TICK: Duration = Duration::from_millis(33);
 const RESTREAM_THROTTLE: Duration = Duration::from_millis(90);
 
 struct Model {
-    explorer: FileExplorerState,
-    /// Fuente no-POSIX montada sobre el panel izquierdo (Brahman Fase 3).
-    /// `Some` cuando descendimos a una imagen wawa u otra `Source`: mientras
-    /// dure, la navegación se rutea acá en vez de a `explorer`. Subir desde
-    /// su raíz la desmonta y vuelve a POSIX.
-    mounted: Option<Navigator>,
+    /// Pila de navegación unificada (Fase 4.2): `nav_stack[0]` es la base
+    /// **POSIX** (fuente anclada en `/`, arrancada en el cwd con miga de pan
+    /// completa); montar una fuente no-POSIX (wawa/nouser/minga) **empuja** un
+    /// navegador encima, desmontar lo saca. El activo es siempre el tope, así
+    /// que POSIX y las demás fuentes comparten el mismo código (orden, filtro,
+    /// vista detalle). Nunca vacía.
+    nav_stack: Vec<Navigator>,
     /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
     list_width: f32,
     /// `true` mientras se teclea el filtro vivo sobre la fuente montada
@@ -296,6 +296,48 @@ enum Msg {
     TerminalHere,
 }
 
+impl Model {
+    /// El navegador activo (tope de la pila). Nunca falla: la base POSIX
+    /// siempre está.
+    fn cur(&self) -> &Navigator {
+        self.nav_stack.last().expect("nav_stack nunca vacía")
+    }
+
+    /// El navegador activo, mutable.
+    fn cur_mut(&mut self) -> &mut Navigator {
+        self.nav_stack.last_mut().expect("nav_stack nunca vacía")
+    }
+
+    /// `true` si hay una fuente no-POSIX montada encima de la base (la pila
+    /// tiene más de un nivel). Gatea el montaje (no se anidan fuentes) y el
+    /// desmontaje.
+    fn is_foreign(&self) -> bool {
+        self.nav_stack.len() > 1
+    }
+}
+
+/// Construye el navegador **POSIX base**: ancla la fuente en `/` (para poder
+/// subir hasta la raíz del filesystem) y arranca parado en `cwd`, sembrando la
+/// pila de ancestros para que el breadcrumb tenga la ruta completa. Si algo
+/// falla, cae a la raíz `/`.
+fn posix_nav(cwd: &Path) -> Navigator {
+    use std::path::Component;
+    let mut stack = vec![Node::new("/", "/", true).with_kind(NodeKind::Dir)];
+    let mut acc = PathBuf::from("/");
+    for comp in cwd.components() {
+        if let Component::Normal(c) = comp {
+            acc.push(c);
+            stack.push(
+                Node::new(acc.to_string_lossy().into_owned(), c.to_string_lossy().into_owned(), true)
+                    .with_kind(NodeKind::Dir),
+            );
+        }
+    }
+    Navigator::open_at(Box::new(PosixSource::new("/")), stack)
+        .or_else(|_| Navigator::open(Box::new(PosixSource::new("/"))))
+        .expect("la raíz / siempre se puede listar")
+}
+
 struct Shell;
 
 impl App for Shell {
@@ -332,8 +374,7 @@ impl App for Shell {
         // barato cuando el panel no avanza (el update sale temprano).
         handle.spawn_periodic(FRAME_TICK, || Msg::Tick);
         Model {
-            explorer: FileExplorerState::new(cwd),
-            mounted: None,
+            nav_stack: vec![posix_nav(&cwd)],
             list_width: 400.0,
             nav_filtering: false,
             preview: PreviewPane::Empty,
@@ -385,9 +426,8 @@ impl App for Shell {
                 _ => None,
             };
         }
-        // Modo filtro vivo de la fuente montada: captura el teclado para el
-        // filtro por nombre (Fase 4.1).
-        if _model.mounted.is_some() && _model.nav_filtering {
+        // Modo filtro vivo: captura el teclado para el filtro por nombre.
+        if _model.nav_filtering {
             return match &e.key {
                 Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter) => Some(Msg::NavFilterEnd),
                 Key::Named(NamedKey::Backspace) => Some(Msg::NavFilterBackspace),
@@ -402,9 +442,12 @@ impl App for Shell {
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
-            // Sobre una fuente montada: `v` alterna lista/detalle, `/` filtra.
-            Key::Character(c) if c == "v" && _model.mounted.is_some() => Some(Msg::NavToggleView),
-            Key::Character(c) if c == "/" && _model.mounted.is_some() => Some(Msg::NavFilterStart),
+            // `v` alterna lista/detalle, `/` filtra (salvo que un mapa quiera
+            // `/` para su propia búsqueda, que tiene su arm más abajo).
+            Key::Character(c) if c == "v" => Some(Msg::NavToggleView),
+            Key::Character(c) if c == "/" && !matches!(_model.preview, PreviewPane::Map(_)) => {
+                Some(Msg::NavFilterStart)
+            }
             // Puntos de entrada del front universal: montar el directorio
             // objetivo (el subdir seleccionado, o el cwd) como otra `Source`.
             // Sólo desde POSIX — dentro de una fuente montada no aplican.
@@ -454,55 +497,43 @@ impl App for Shell {
         let mut m = model;
         match msg {
             Msg::Up => {
-                if m.mounted.is_some() {
-                    if m.mounted.as_mut().unwrap().up() {
-                        refresh_preview_nav(&mut m);
-                    }
-                } else if m.explorer.up() {
+                if m.cur_mut().up() {
                     refresh_preview(&mut m);
                 }
             }
             Msg::Down => {
-                if m.mounted.is_some() {
-                    if m.mounted.as_mut().unwrap().down() {
-                        refresh_preview_nav(&mut m);
-                    }
-                } else if m.explorer.down() {
+                if m.cur_mut().down() {
                     refresh_preview(&mut m);
                 }
             }
             Msg::Select(idx) => {
-                if m.mounted.is_some() {
-                    if m.mounted.as_mut().unwrap().select(idx) {
-                        refresh_preview_nav(&mut m);
-                    }
-                } else if m.explorer.select(idx) {
+                if m.cur_mut().select(idx) {
                     refresh_preview(&mut m);
                 }
             }
             Msg::OpenSelected => {
-                if m.mounted.is_some() {
-                    abrir_en_fuente(&mut m);
-                } else {
-                    match m.explorer.open_selected() {
-                        Some(OpenedFile::Directory) => clear_preview(&mut m),
-                        Some(OpenedFile::File(path)) => {
-                            // Content-based: si el archivo abre como imagen
-                            // wawa, montamos su DAG en el panel izquierdo en
-                            // vez de previsualizarlo. Cualquier otra cosa cae
-                            // al open-with universal de siempre.
-                            match try_mount(&path) {
+                // Abrir la selección por el navegador activo (POSIX o fuente
+                // montada): contenedor → descender; hoja → montar/previsualizar.
+                match m.cur_mut().open_selected() {
+                    Ok(Some(Opened::Descended)) => clear_preview(&mut m),
+                    Ok(Some(Opened::Leaf(id))) => {
+                        let nombre =
+                            m.cur().selected_node().map(|n| n.name.clone()).unwrap_or_default();
+                        let id_path = Path::new(&id);
+                        // Hoja POSIX (su id ES una ruta de archivo real):
+                        if id_path.is_file() {
+                            // Content-based: un `.img` wawa se MONTA (empuja su
+                            // DAG); cualquier otra cosa cae al open-with.
+                            match try_mount(id_path) {
                                 Some(nav) => {
-                                    m.mounted = Some(nav);
+                                    m.nav_stack.push(nav);
                                     clear_preview(&mut m);
                                 }
                                 None => {
+                                    let path = id_path.to_path_buf();
                                     m.preview = load_for(&path);
                                     m.basemap = open_basemap_if_pmtiles(&path);
                                     m.basemap_dirty = m.basemap.is_some();
-                                    // HTML: además de previsualizar el fuente,
-                                    // abrir el archivo lo entrega a puriy (como
-                                    // un file manager abre el visor default).
                                     if matches!(m.preview, PreviewPane::Web(_)) {
                                         launch_puriy(&path);
                                     }
@@ -512,66 +543,62 @@ impl App for Shell {
                                     m.map_view.color_field = None;
                                 }
                             }
+                        } else {
+                            // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge.
+                            match m.cur().read(&id) {
+                                Ok(bytes) => preview_from_bytes(&mut m, bytes, &nombre),
+                                Err(_) => clear_preview(&mut m),
+                            }
                         }
-                        None => {}
                     }
+                    Ok(None) | Err(_) => {}
                 }
             }
             Msg::Parent => {
-                if m.mounted.is_some() {
-                    match m.mounted.as_mut().unwrap().parent() {
-                        Ok(true) => refresh_preview_nav(&mut m),
-                        // Subir desde la raíz de la fuente la desmonta:
-                        // volvemos al filesystem POSIX.
-                        Ok(false) => {
-                            m.mounted = None;
+                match m.cur_mut().parent() {
+                    Ok(true) => refresh_preview(&mut m),
+                    // Subir desde la raíz de una fuente montada la desmonta
+                    // (vuelve al nivel de abajo de la pila). En POSIX, la raíz
+                    // es `/` y no hay a dónde subir.
+                    Ok(false) => {
+                        if m.is_foreign() {
+                            m.nav_stack.pop();
                             clear_preview(&mut m);
                         }
-                        Err(_) => {}
                     }
-                } else if m.explorer.parent() {
-                    refresh_preview(&mut m);
+                    Err(_) => {}
                 }
             }
             Msg::NavSortBy(col) => {
-                if let Some(nav) = m.mounted.as_mut() {
-                    let key = match col {
-                        1 => nahual_source_core::SortKey::Size,
-                        2 => nahual_source_core::SortKey::Mtime,
-                        3 => nahual_source_core::SortKey::Kind,
-                        _ => nahual_source_core::SortKey::Name,
-                    };
-                    nav.set_sort(key);
-                }
+                let key = match col {
+                    1 => nahual_source_core::SortKey::Size,
+                    2 => nahual_source_core::SortKey::Mtime,
+                    3 => nahual_source_core::SortKey::Kind,
+                    _ => nahual_source_core::SortKey::Name,
+                };
+                m.cur_mut().set_sort(key);
             }
             Msg::NavToggleView => {
-                if let Some(nav) = m.mounted.as_mut() {
-                    nav.view = match nav.view {
-                        nahual_source_core::ViewMode::List => nahual_source_core::ViewMode::Details,
-                        nahual_source_core::ViewMode::Details => nahual_source_core::ViewMode::List,
-                    };
-                }
+                let nav = m.cur_mut();
+                nav.view = match nav.view {
+                    nahual_source_core::ViewMode::List => nahual_source_core::ViewMode::Details,
+                    nahual_source_core::ViewMode::Details => nahual_source_core::ViewMode::List,
+                };
             }
             Msg::NavFilterStart => {
-                if m.mounted.is_some() {
-                    m.nav_filtering = true;
-                }
+                m.nav_filtering = true;
             }
             Msg::NavFilterInput(s) => {
-                if let Some(nav) = m.mounted.as_mut() {
-                    let mut f = nav.filter().to_string();
-                    f.push_str(&s);
-                    nav.set_filter(f);
-                    refresh_preview_nav(&mut m);
-                }
+                let mut f = m.cur().filter().to_string();
+                f.push_str(&s);
+                m.cur_mut().set_filter(f);
+                refresh_preview(&mut m);
             }
             Msg::NavFilterBackspace => {
-                if let Some(nav) = m.mounted.as_mut() {
-                    let mut f = nav.filter().to_string();
-                    f.pop();
-                    nav.set_filter(f);
-                    refresh_preview_nav(&mut m);
-                }
+                let mut f = m.cur().filter().to_string();
+                f.pop();
+                m.cur_mut().set_filter(f);
+                refresh_preview(&mut m);
             }
             Msg::NavFilterEnd => {
                 m.nav_filtering = false;
@@ -580,13 +607,9 @@ impl App for Shell {
                 m.list_width = (m.list_width + dx).clamp(220.0, 900.0);
             }
             Msg::Scroll(steps) => {
-                // El navegador (o el explorer) tiene su propio acumulador
-                // para touchpads — le pasamos el delta crudo (en líneas).
-                if let Some(nav) = m.mounted.as_mut() {
-                    nav.apply_wheel(steps as f32);
-                } else {
-                    m.explorer.apply_wheel(steps as f32);
-                }
+                // El navegador activo tiene su propio acumulador para touchpads
+                // — le pasamos el delta crudo (en líneas).
+                m.cur_mut().apply_wheel(steps as f32);
             }
             Msg::MapPan(dx, dy) => {
                 m.map_view.pan_by(dx as f64, dy as f64);
@@ -707,13 +730,13 @@ impl App for Shell {
             Msg::MountNouser => {
                 // Sólo montamos desde POSIX (no anidamos fuentes). nouser sólo
                 // LEE el dir, así que no hay riesgo de efecto secundario.
-                if m.mounted.is_none() {
+                if !m.is_foreign() {
                     let dir = target_dir(&m);
                     if let Some(nav) = NouserSource::escanear(&dir, 1)
                         .ok()
                         .and_then(|src| Navigator::open(Box::new(src)).ok())
                     {
-                        m.mounted = Some(nav);
+                        m.nav_stack.push(nav);
                         clear_preview(&mut m);
                     }
                 }
@@ -722,22 +745,22 @@ impl App for Shell {
                 // Guard: `PersistentRepo::open` (sled) CREA archivos si el dir
                 // no es un repo — sólo montamos si ya parece uno, para no
                 // ensuciar directorios ajenos.
-                if m.mounted.is_none() {
+                if !m.is_foreign() {
                     let dir = target_dir(&m);
                     if parece_repo_minga(&dir) {
                         if let Some(nav) = MingaSource::abrir(&dir)
                             .ok()
                             .and_then(|src| Navigator::open(Box::new(src)).ok())
                         {
-                            m.mounted = Some(nav);
+                            m.nav_stack.push(nav);
                             clear_preview(&mut m);
                         }
                     }
                 }
             }
             Msg::Unmount => {
-                if m.mounted.is_some() {
-                    m.mounted = None;
+                if m.is_foreign() {
+                    m.nav_stack.pop();
                     clear_preview(&mut m);
                 }
             }
@@ -811,7 +834,9 @@ impl App for Shell {
                 m.context_menu = None;
             }
             Msg::TerminalHere => {
-                let dir = m.explorer.cwd.clone();
+                // El dir POSIX base (la fuente del fondo de la pila), aunque
+                // haya una fuente montada encima.
+                let dir = PathBuf::from(m.nav_stack[0].current_id());
                 let bin = std::env::var("SHUMA_BIN").unwrap_or_else(|_| "shuma-shell-llimphi".into());
                 if let Err(e) = std::process::Command::new(bin).current_dir(&dir).spawn() {
                     eprintln!("[nahual] terminal shuma: {e}");
@@ -840,14 +865,7 @@ impl App for Shell {
         let menu = app_menu(model);
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &theme);
-        let list_pane = match &model.mounted {
-            Some(nav) => nav_pane_view(nav, &theme, model.nav_filtering),
-            None => file_explorer_view::<Msg, _>(
-                &model.explorer,
-                ListPalette::from_theme(&theme),
-                Msg::Select,
-            ),
-        };
+        let list_pane = nav_pane_view(model.cur(), &theme, model.nav_filtering);
         let viewer_pane = match &model.preview {
             PreviewPane::Empty => text_viewer_view::<Msg>(
                 &PreviewState::Empty,
@@ -966,10 +984,7 @@ fn viewport_of(_model: &Model) -> (f32, f32) {
 /// contextual? En POSIX, cualquier entry del explorer; en una fuente
 /// montada, el nodo seleccionado.
 fn hay_seleccion(m: &Model) -> bool {
-    match &m.mounted {
-        Some(nav) => nav.selected_node().is_some(),
-        None => m.explorer.selected_entry().is_some(),
-    }
+    m.cur().selected_node().is_some()
 }
 
 /// Discierne el **mime** del contenido de `path` con el pipeline real de shuma
@@ -995,30 +1010,33 @@ fn compute_open_with(m: &mut Model) {
     m.ctx_target = None;
     m.ctx_temp = None;
 
-    let (path, temp): (Option<PathBuf>, Option<tempfile::TempDir>) = match &m.mounted {
-        Some(nav) => match nav.selected_node() {
-            // Una hoja no-POSIX: materializarla a un tempfile con su nombre
-            // (preserva la extensión para el discernimiento y la app externa).
-            Some(n) if !n.is_container => match nav.read(&n.id) {
-                Ok(bytes) => match tempfile::tempdir() {
-                    Ok(dir) => {
-                        let p = dir.path().join(&n.name);
-                        if std::fs::write(&p, &bytes).is_ok() {
-                            (Some(p), Some(dir))
-                        } else {
-                            (None, None)
+    let nav = m.cur();
+    let (path, temp): (Option<PathBuf>, Option<tempfile::TempDir>) = match nav.selected_node() {
+        Some(n) if !n.is_container => {
+            let id_path = Path::new(&n.id);
+            if id_path.is_file() {
+                // Hoja POSIX: su id ES la ruta real.
+                (Some(id_path.to_path_buf()), None)
+            } else {
+                // Hoja no-POSIX (wawa/nouser/minga): materializarla a un
+                // tempfile con su nombre (preserva extensión para discernir).
+                match nav.read(&n.id) {
+                    Ok(bytes) => match tempfile::tempdir() {
+                        Ok(dir) => {
+                            let p = dir.path().join(&n.name);
+                            if std::fs::write(&p, &bytes).is_ok() {
+                                (Some(p), Some(dir))
+                            } else {
+                                (None, None)
+                            }
                         }
-                    }
+                        Err(_) => (None, None),
+                    },
                     Err(_) => (None, None),
-                },
-                Err(_) => (None, None),
-            },
-            _ => (None, None),
-        },
-        None => match m.explorer.selected_entry() {
-            Some(e) if !e.is_dir => (m.explorer.selected_path(), None),
-            _ => (None, None),
-        },
+                }
+            }
+        }
+        _ => (None, None),
     };
 
     let Some(path) = path else {
@@ -1035,17 +1053,10 @@ fn compute_open_with(m: &mut Model) {
 
 /// Etiqueta de la entrada seleccionada para el header del contextual.
 fn etiqueta_seleccion(m: &Model) -> String {
-    match &m.mounted {
-        Some(nav) => nav
-            .selected_node()
-            .map(|n| n.name.clone())
-            .unwrap_or_else(|| "nodo".to_string()),
-        None => m
-            .explorer
-            .selected_entry()
-            .map(|e| e.name)
-            .unwrap_or_else(|| "entrada".to_string()),
-    }
+    m.cur()
+        .selected_node()
+        .map(|n| n.name.clone())
+        .unwrap_or_else(|| "entrada".to_string())
 }
 
 /// Arma el `MenuBarSpec` compartido por `menubar_view` y `menubar_overlay`.
@@ -1066,7 +1077,7 @@ fn menubar_spec<'a>(menu: &'a AppMenu, model: &Model, theme: &'a Theme) -> MenuB
 /// desmontar, tema. Sin "Editar": el shell no tiene campos de texto
 /// editables — el panel derecho son visores de sólo lectura.
 fn app_menu(model: &Model) -> AppMenu {
-    let montado = model.mounted.is_some();
+    let montado = model.is_foreign();
     // Montar sólo aplica desde POSIX (no anidamos fuentes); desmontar sólo
     // cuando hay una fuente activa. Reflejamos eso en gris.
     let mut mount_nouser = MenuItem::new("Montar Mónadas (nouser)", "file.mount_nouser")
@@ -1114,7 +1125,7 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
 /// seleccionada. Las acciones son las navegaciones/montajes que ya existen
 /// como `Msg` — no inventamos edición (no hay campos de texto).
 fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
-    let montado = model.mounted.is_some();
+    let montado = model.is_foreign();
     // Construimos la lista de (item, msg) según el contexto, para que el
     // índice del `on_pick` y el item visible siempre coincidan.
     let mut acciones: Vec<(ContextMenuItem, Msg)> = vec![
@@ -1181,15 +1192,16 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .text_aligned(
-        match &model.mounted {
-            // Montados sobre una fuente: mostramos su etiqueta + la miga de
-            // pan dentro de ella, con un glifo que marca que no es POSIX.
-            Some(nav) => format!("nahual · ⊟ {} · {}", nav.label(), nav.breadcrumb()),
-            // En POSIX: la ruta + los atajos para montar otras fuentes.
-            None => format!(
+        if model.is_foreign() {
+            // Sobre una fuente montada: su etiqueta + la miga de pan dentro de
+            // ella, con un glifo que marca que no es POSIX.
+            format!("nahual · ⊟ {} · {}", model.cur().label(), model.cur().breadcrumb())
+        } else {
+            // En POSIX: la ruta (breadcrumb del cwd) + atajos de montaje.
+            format!(
                 "nahual · {}   ·   m Mónadas · g grafo minga",
-                model.explorer.cwd.display()
-            ),
+                model.cur().breadcrumb()
+            )
         },
         12.0,
         theme.fg_text,
@@ -1246,9 +1258,12 @@ fn try_mount(path: &Path) -> Option<Navigator> {
 /// El directorio que un montaje explícito (`m`/`g`) toma como objetivo: el
 /// subdirectorio seleccionado si lo hay, o el `cwd` del explorador POSIX.
 fn target_dir(m: &Model) -> PathBuf {
-    match m.explorer.selected_entry() {
-        Some(entry) if entry.is_dir => m.explorer.cwd.join(&entry.name),
-        _ => m.explorer.cwd.clone(),
+    let nav = m.cur();
+    match nav.selected_node() {
+        // Subdir seleccionado (en POSIX su id ES la ruta absoluta).
+        Some(n) if n.is_container => PathBuf::from(&n.id),
+        // Si no, el dir actual.
+        _ => PathBuf::from(nav.current_id()),
     }
 }
 
@@ -1258,51 +1273,6 @@ fn target_dir(m: &Model) -> PathBuf {
 /// queremos evitar.
 fn parece_repo_minga(dir: &Path) -> bool {
     dir.is_dir() && (dir.join("conf").exists() || dir.join("db").exists())
-}
-
-/// Abre la selección dentro de la fuente montada: si es contenedor desciende
-/// (limpia el preview); si es hoja, vuelca sus bytes a un tempfile y lo
-/// previsualiza con el open-with universal de siempre.
-fn abrir_en_fuente(m: &mut Model) {
-    let Some(nav) = m.mounted.as_mut() else { return };
-    match nav.open_selected() {
-        Ok(Some(Opened::Descended)) => clear_preview(m),
-        Ok(Some(Opened::Leaf(id))) => {
-            // Releemos por el nodo ya seleccionado (open_selected no movió la
-            // selección al ser hoja).
-            let nombre = nav
-                .selected_node()
-                .map(|n| n.name.clone())
-                .unwrap_or_default();
-            match nav.read(&id) {
-                Ok(bytes) => preview_from_bytes(m, bytes, &nombre),
-                Err(_) => clear_preview(m),
-            }
-        }
-        Ok(None) | Err(_) => {}
-    }
-}
-
-/// Releé el preview tras moverse dentro de la fuente montada. Hoja → vuelca a
-/// tempfile y previsualiza; contenedor (o nada) → limpia.
-fn refresh_preview_nav(m: &mut Model) {
-    // Calculamos la acción soltando el préstamo de `m.mounted` antes de
-    // mutar el resto del modelo (el preview).
-    enum Accion {
-        Limpiar,
-        Mostrar(Vec<u8>, String),
-    }
-    let accion = match m.mounted.as_ref().and_then(|nav| nav.selected_node().map(|n| (nav, n))) {
-        Some((nav, node)) if !node.is_container => match nav.read(&node.id) {
-            Ok(bytes) => Accion::Mostrar(bytes, node.name.clone()),
-            Err(_) => Accion::Limpiar,
-        },
-        _ => Accion::Limpiar,
-    };
-    match accion {
-        Accion::Limpiar => clear_preview(m),
-        Accion::Mostrar(bytes, nombre) => preview_from_bytes(m, bytes, &nombre),
-    }
 }
 
 /// Materializa los bytes de una hoja no-POSIX en un tempfile y la
@@ -1549,32 +1519,46 @@ fn next_in_cycle(fields: &[String], current: &Option<String>) -> Option<String> 
     }
 }
 
-/// Si es directorio, limpia; si es archivo, lo carga sync con el
-/// viewer apropiado según extensión.
+/// Releé el preview del nodo seleccionado en el navegador activo (POSIX o
+/// fuente montada). Contenedor (o nada) → limpia. Hoja POSIX (id = ruta real)
+/// → carga directa con `load_for`. Hoja no-POSIX → vuelca a tempfile y
+/// previsualiza. Unifica los dos caminos viejos (POSIX y `*_nav`).
 fn refresh_preview(m: &mut Model) {
-    let Some(entry) = m.explorer.selected_entry() else {
-        m.preview = PreviewPane::Empty;
-        m.preview_of = None;
-        return;
-    };
-    if entry.is_dir {
-        m.preview = PreviewPane::Empty;
-        m.preview_of = None;
-        return;
+    // Resolvemos la acción soltando el préstamo de `cur()` antes de mutar el
+    // preview (que toca el resto del modelo).
+    enum Accion {
+        Limpiar,
+        Posix(PathBuf),
+        Bytes(Vec<u8>, String),
     }
-    let Some(path) = m.explorer.selected_path() else {
-        m.preview = PreviewPane::Empty;
-        m.preview_of = None;
-        return;
+    let accion = match m.cur().selected_node() {
+        Some(n) if !n.is_container => {
+            let p = Path::new(&n.id);
+            if p.is_file() {
+                Accion::Posix(p.to_path_buf())
+            } else {
+                match m.cur().read(&n.id) {
+                    Ok(bytes) => Accion::Bytes(bytes, n.name.clone()),
+                    Err(_) => Accion::Limpiar,
+                }
+            }
+        }
+        _ => Accion::Limpiar,
     };
-    m.preview = load_for(&path);
-    m.basemap = open_basemap_if_pmtiles(&path);
-    m.basemap_dirty = m.basemap.is_some();
-    m.preview_of = Some(path);
-    // Encuadre fresco para el nuevo archivo (si fuera un mapa); los campos de
-    // color son del archivo anterior, así que se descartan.
-    m.map_view.reset();
-    m.map_view.color_field = None;
+    match accion {
+        Accion::Limpiar => clear_preview(m),
+        Accion::Posix(path) => {
+            m.preview = load_for(&path);
+            m.basemap = open_basemap_if_pmtiles(&path);
+            m.basemap_dirty = m.basemap.is_some();
+            m.preview_of = Some(path);
+            m.preview_temp = None;
+            // Encuadre fresco para el nuevo archivo (si fuera un mapa).
+            m.map_view.reset();
+            m.map_view.color_field = None;
+        }
+        Accion::Bytes(bytes, nombre) => preview_from_bytes(m, bytes, &nombre),
+    }
 }
 
 /// Decide qué viewer usar discerniendo el **contenido** del archivo (no
