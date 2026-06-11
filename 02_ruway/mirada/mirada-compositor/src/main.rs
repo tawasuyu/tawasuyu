@@ -1429,6 +1429,23 @@ impl XdgShellHandler for App {
     }
 
     fn new_toplevel(&mut self, surface: ToplevelSurface) {
+        // Tope de toplevels por cliente: un cliente con fuga (o malicioso) podía
+        // crear ventanas sin freno y agotar la memoria del compositor —que
+        // además recorre `windows` en cada frame (sort, hit-test, render)—. Más
+        // allá del tope cerramos el toplevel nuevo (el cliente recibe `close`)
+        // en vez de registrarlo. 64 es holgado para cualquier app real.
+        const MAX_TOPLEVELS_POR_CLIENTE: usize = 64;
+        if let Some(cid) = surface.wl_surface().client().map(|c| c.id()) {
+            let n = self
+                .windows
+                .iter()
+                .filter(|w| w.surface.client().map(|c| c.id()).as_ref() == Some(&cid))
+                .count();
+            if n >= MAX_TOPLEVELS_POR_CLIENTE {
+                surface.send_close();
+                return;
+            }
+        }
         surface.with_pending_state(|s| {
             s.states.set(xdg_toplevel::State::Activated);
         });
