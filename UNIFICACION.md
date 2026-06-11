@@ -145,13 +145,21 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
 - **Entrega:** `pantallazo_detalle.rs` (raíz del repo, detalle ordenado por Tamaño ▼). +3 tests
   Navigator (25 verde).
 
-### F4.2 — Dual-pane + tabs + árbol + breadcrumbs  *(el chasis Dopus)*
-- Model multi-pane (D4); `Tab`/`Tab+Click` cambian foco; `Ctrl+T` nueva tab, `Ctrl+W` cierra.
-- `splitter` divide los dos panes; toggle `dual` (F9-style).
-- `widget-breadcrumb` clicable reemplaza el header de texto; click en un crumb sube a ese nivel.
-- Árbol lateral opcional (`widget-tree`) sincronizado con el pane activo.
-- **Entrega:** `pantallazo_dualpane.rs` — dos panes, cada uno con 2 tabs, breadcrumbs.
-- ~500 LOC.
+### F4.2 — Dual-pane + breadcrumbs + unificación POSIX  *(el chasis Dopus)*  ✅ HECHA (14ea04d3·5cc33c95·22f53d72)
+- **F4.2a (linchpin)** — POSIX unificado sobre `Navigator`: el shell pasa de `explorer:
+  FileExplorerState` + `mounted:Option<Navigator>` a un solo `nav_stack:Vec<Navigator>` ([0]=POSIX
+  base anclada en `/`, arrancada en el cwd vía `Navigator::open_at` con la cadena de ancestros;
+  montar empuja, desmontar saca). Todos los handlers operan sobre `cur()`. **POSIX hereda detalle/
+  orden/filtro** (antes lista plana). `+current_id`.
+- **F4.2b** — breadcrumbs clicables (`widget-breadcrumb`): `Navigator::ancestors()` + `ascend_to(depth)`;
+  cada segmento sube a su nivel; prefijo `⊟<fuente>` sobre montadas.
+- **F4.2c** — panel doble: `Model{panes:[Pane;2], focus, dual}`; `d` alterna panel+visor ↔ panel|panel,
+  `Tab` cambia foco; filas/encabezados/breadcrumbs llevan el índice de panel (`SelectIn`/`SortByIn`/
+  `BreadcrumbIn`); panel enfocado resaltado.
+- **Entrega:** `pantallazo_detalle` (POSIX profundo + breadcrumb), `pantallazo_dualpane` (raíz en
+  detalle | widgets en lista). +3 tests Navigator (27 verde).
+- **Pendiente (F4.2d, no bloqueante):** tabs por panel (`Ctrl+T`/`Ctrl+W`) y árbol lateral
+  (`widget-tree`) sincronizado. El chasis (dual-pane) ya soporta agregarlos.
 
 ### F4.3 — Operaciones de archivo + cola  *(el músculo)*
 - Selección múltiple (`BTreeSet`, Ctrl/Shift-click) + acciones: New folder/file, Rename (inline
