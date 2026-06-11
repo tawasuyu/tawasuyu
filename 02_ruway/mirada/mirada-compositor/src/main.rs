@@ -1366,6 +1366,29 @@ impl WlrLayerShellHandler for App {
         let Some(output) = target else {
             return; // sin outputs todavía; el cliente reintentará
         };
+        // Tope de layer surfaces por cliente (mismo agotamiento que los
+        // toplevels): cada layer mapeado se arregla y se pinta en cada frame.
+        // Una barra/fondo legítimos usan 1-2 por salida; pasado el tope no lo
+        // mapeamos (queda sin rol activo, sin costo de arrange/render). 32 cubre
+        // de sobra un cliente multi-monitor (barra+fondo por salida).
+        const MAX_LAYERS_POR_CLIENTE: usize = 32;
+        if let Some(cid) = surface.wl_surface().client().map(|c| c.id()) {
+            let n: usize = self
+                .outputs
+                .iter()
+                .map(|o| {
+                    layer_map_for_output(o)
+                        .layers()
+                        .filter(|l| {
+                            l.wl_surface().client().map(|c| c.id()).as_ref() == Some(&cid)
+                        })
+                        .count()
+                })
+                .sum();
+            if n >= MAX_LAYERS_POR_CLIENTE {
+                return; // no lo mapeamos: el cliente abusó del recurso
+            }
+        }
         let desktop = DesktopLayerSurface::new(surface, namespace.clone());
         let mut map = layer_map_for_output(&output);
         if let Err(e) = map.map_layer(&desktop) {
