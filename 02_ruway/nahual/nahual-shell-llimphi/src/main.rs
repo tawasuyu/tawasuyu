@@ -72,7 +72,8 @@ use llimphi_widget_context_menu::{
 };
 use app_bus::{AppMenu, AppRegistry, Menu, MenuItem};
 use nahual_source_core::{
-    MingaSource, Navigator, Node, NodeKind, NouserSource, Opened, PosixSource, WawaImgSource,
+    ArchiveSource, MingaSource, Navigator, Node, NodeKind, NouserSource, Opened, PosixSource,
+    WawaImgSource,
 };
 use nahual_image_viewer_llimphi::{
     image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
@@ -2444,8 +2445,17 @@ fn restream_basemap(m: &mut Model) -> bool {
 /// el grafo si el archivo realmente es una imagen wawa — para todo lo demás
 /// falla rápido y devolvemos `None` (se previsualiza normal).
 fn try_mount(path: &Path) -> Option<Navigator> {
-    let src = WawaImgSource::abrir(path).ok()?;
-    Navigator::open(Box::new(src)).ok()
+    // Imagen wawa `.img` → su DAG content-addressed.
+    if let Ok(src) = WawaImgSource::abrir(path) {
+        return Navigator::open(Box::new(src)).ok();
+    }
+    // Archivo contenedor (.zip/.tar/.tar.gz) → su árbol interno como carpeta.
+    if ArchiveSource::es_archivo(path) {
+        if let Ok(src) = ArchiveSource::abrir(path) {
+            return Navigator::open(Box::new(src)).ok();
+        }
+    }
+    None
 }
 
 /// El directorio que un montaje explícito (`m`/`g`) toma como objetivo: el

@@ -51,3 +51,6 @@ wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }
 pollster = { workspace = true }
 png = { workspace = true }
 llimphi-widget-tiled = { workspace = true }
+# Para `pantallazo_archive`: forja un `.tar.gz` real y lo monta como fuente.
+tar = { workspace = true }
+flate2 = { workspace = true }

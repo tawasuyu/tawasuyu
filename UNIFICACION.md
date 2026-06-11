@@ -220,14 +220,20 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
   folder format en dual (hoy el formato es por path, compartido entre paneles — correcto, pero el
   apply usa el panel enfocado).
 
-### F4.6 — Adapters extra como Source  *(extrapolación de fuentes)*
-- `ArchiveSource`: montar `.zip/.tar/.tar.gz` como árbol navegable (reusa el reader del
-  `archive-viewer`); `read` extrae la entrada. Read-only.
-- `NetSource` (opt-in, sobre **card-net** CAPA 1): navegar contenido remoto direccionado por
-  `DhtKey` (el "FTP/cloud" de Dopus, pero P2P y soberano). Read-only primero.
-- Doble-clic en un `.zip` POSIX → auto-monta `ArchiveSource` (como ya hace con `.img`→wawa).
-- **Entrega:** `pantallazo_archive.rs` — un .tar.gz montado como carpeta + un archivo leído.
-- ~400 LOC.
+### F4.6 — Adapters extra como Source  *(extrapolación de fuentes)*  ◑ PARCIAL (ArchiveSource ✅)
+- **`ArchiveSource` ✅ HECHA** — `nahual-source-core/src/archive.rs`: monta `.zip/.tar/.tar.gz/.tgz`
+  como árbol navegable. Olfatea formato por **magic** (no por extensión); indexa la lista plana de
+  entradas **una vez al abrir** y **sintetiza los directorios intermedios** que el formato no declara
+  (la mayoría de los `.tar` no traen entradas de dir). `NodeId` = ruta interna normalizada (raíz =
+  centinela `@archivo`); `read` reabre y extrae (zip por índice con nombre normalizado, tar por
+  recorrido en streaming). Read-only (`writable()=None`, igual que wawa/minga). Tope 20 000 entradas
+  (reportado en `label`). Doble-clic en un `.zip/.tar.gz` POSIX → `try_mount` lo empuja (mismo gesto
+  que `.img`→wawa). +6 tests (zip/tar/tar.gz navegados como carpeta, errores, read-only). **Entrega:**
+  `pantallazo_archive.rs` — un `.tar.gz` forjado y montado, navegando `src/` con tamaños **reales**
+  extraídos por la fuente (lib.rs 920 B · main.rs 1.8 KiB · util.rs 410 B).
+- **`NetSource` ⏳ PENDIENTE** (opt-in, sobre **card-net** CAPA 1): navegar contenido remoto
+  direccionado por `DhtKey` (el "FTP/cloud" de Dopus, pero P2P y soberano). Diferido: requiere DHT
+  vivo de card-net y es extrapolación; arrancarlo cuando haya caso real de contenido remoto montado.
 
 ### F4.7 — Absorción y retiro de exploradores sueltos  *(saldar la deuda)*
 - **`pata`**: su `nouser.rs` (reimplementa el query a chasqui) pasa a consumir

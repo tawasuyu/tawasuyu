@@ -13,6 +13,9 @@ wawa-explorer-core = { path = "../../../03_ukupacha/wawa-explorer/wawa-explorer-
 chasqui-core = { path = "../../chasqui/chasqui-core", optional = true }
 minga-store = { path = "../../../03_ukupacha/minga/minga-store", optional = true }
 minga-core = { path = "../../../03_ukupacha/minga/minga-core", optional = true }
+zip = { workspace = true }
+tar = { workspace = true }
+flate2 = { workspace = true }
 
 [features]
 default = []

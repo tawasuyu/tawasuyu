@@ -31,6 +31,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod archive;
 pub mod navigator;
 pub mod posix;
 pub mod wawa;
@@ -39,6 +40,7 @@ pub mod nouser;
 #[cfg(feature = "minga")]
 pub mod minga;
 
+pub use archive::ArchiveSource;
 pub use navigator::{Navigator, Opened, SortDir, SortKey, ViewMode};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
