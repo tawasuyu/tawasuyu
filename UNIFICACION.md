@@ -194,12 +194,16 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
   Cards de apps en `assets/apps/*.toml` (hoy los defaults viven en código). Registrar visores como
   Cards on-disk ya está cubierto por BRAHMAN F2a (`discover_viewer_cards`).
 
-### F4.5 — Batch rename · labels · favoritos · folder formats  *(power-user)*
-- Batch rename con patrón (`{n}`, `{ext}`, contador, regex Rhai) + preview tabular antes de aplicar.
-- Labels/colores por archivo (sled), columna y tinte de fila.
-- Favoritos/places (sidebar) + recents; folder formats (recordar `ViewMode`/`sort` por path).
-- **Entrega:** `pantallazo_power.rs` — batch-rename preview + filas con labels de color.
-- ~450 LOC.
+### F4.5 — Batch rename · labels · favoritos · folder formats  *(power-user)*  ◐ EN CURSO
+- **F4.5a (batch rename) ✅ HECHA** — patrón con tokens `{name}`/`{ext}`/`{n}` (contador 1-based) +
+  preview tabular `viejo → nuevo` con detección de colisiones (rojo) antes de aplicar. Disparado por
+  `F2` con marca múltiple (sin marca, `F2` = renombrado simple), o "Renombrar por lote…" del
+  contextual. Al aplicar encola un `OpKind::Rename` por objetivo cuyo nombre cambie (reusa la cola
+  F4.3). `aplicar_patron` + `BatchRename`; +4 tests. Pantallazo: `pantallazo_power.rs`. *(Pendiente:
+  regex/Rhai en el patrón, padding del contador `{n:3}`.)*
+- **Pendiente:** Labels/colores por archivo (sled), columna y tinte de fila.
+- **Pendiente:** Favoritos/places (sidebar) + recents; folder formats (recordar `ViewMode`/`sort` por
+  path). Todo esto vive en `nahual-shell-llimphi/src/state.rs` (sled) — el bloque F4.5b.
 
 ### F4.6 — Adapters extra como Source  *(extrapolación de fuentes)*
 - `ArchiveSource`: montar `.zip/.tar/.tar.gz` como árbol navegable (reusa el reader del

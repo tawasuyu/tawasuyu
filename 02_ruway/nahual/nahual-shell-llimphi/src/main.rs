@@ -227,6 +227,49 @@ impl Prompt {
     }
 }
 
+/// Estado del **renombrado por lote** (Fase 4.5): un patrón en edición + los
+/// nodos objetivo (la marca del panel). El patrón soporta tokens `{name}`
+/// (nombre sin extensión), `{ext}` (extensión sin punto) y `{n}` (contador
+/// 1-based, en el orden de los objetivos). El overlay pinta la previsualización
+/// `viejo → nuevo` antes de aplicar.
+struct BatchRename {
+    /// Patrón en edición (p. ej. `foto_{n}.{ext}`).
+    pattern: String,
+    /// `(id, nombre_original)` de cada nodo a renombrar, en orden estable.
+    targets: Vec<(nahual_source_core::NodeId, String)>,
+}
+
+impl BatchRename {
+    /// Calcula el nuevo nombre del objetivo `idx` aplicando el patrón al nombre
+    /// original. Si el resultado queda vacío, conserva el original (no se
+    /// renombra a "nada").
+    fn nuevo_nombre(&self, idx: usize) -> String {
+        let original = &self.targets[idx].1;
+        let out = aplicar_patron(&self.pattern, original, idx + 1);
+        if out.trim().is_empty() {
+            original.clone()
+        } else {
+            out
+        }
+    }
+}
+
+/// Sustituye los tokens del patrón de batch-rename sobre `original` (el nombre
+/// completo, con extensión) usando el contador `n` (1-based). Tokens:
+/// `{name}` = stem, `{ext}` = extensión sin punto, `{n}` = contador. El texto
+/// fuera de los tokens es literal. Un `{ext}` sobre un archivo sin extensión
+/// rinde vacío (y el `.` que lo preceda queda — responsabilidad del patrón).
+fn aplicar_patron(pattern: &str, original: &str, n: usize) -> String {
+    let (stem, ext) = match original.rsplit_once('.') {
+        Some((s, e)) if !s.is_empty() => (s.to_string(), e.to_string()),
+        _ => (original.to_string(), String::new()),
+    };
+    pattern
+        .replace("{name}", &stem)
+        .replace("{ext}", &ext)
+        .replace("{n}", &n.to_string())
+}
+
 struct Model {
     /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
     /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
@@ -296,6 +339,9 @@ struct Model {
     /// Confirmación de borrado pendiente: los `(id, nombre)` a borrar. `None` =
     /// sin diálogo. Borrar es destructivo, así que pasa por este sí/no.
     confirm_delete: Option<Vec<(nahual_source_core::NodeId, String)>>,
+    /// Renombrado por lote en curso (Fase 4.5): patrón + objetivos + preview.
+    /// `None` = sin overlay; mientras esté `Some`, el teclado va al patrón.
+    batch: Option<BatchRename>,
 }
 
 #[derive(Clone)]
@@ -428,6 +474,18 @@ enum Msg {
     ToggleQueue,
     /// Olvida los jobs ya terminados de la cola.
     ClearQueue,
+
+    // ---- Fase 4.5: renombrado por lote ----
+    /// Abre el overlay de renombrado por lote sobre la marca del panel.
+    BatchRenameStart,
+    /// Agrega texto al patrón del batch.
+    BatchPatternInput(String),
+    /// Borra el último carácter del patrón.
+    BatchPatternBackspace,
+    /// Aplica el patrón: encola un Rename por objetivo cuyo nombre cambie.
+    BatchApply,
+    /// Cierra el overlay sin renombrar.
+    BatchCancel,
 }
 
 impl Model {
@@ -552,6 +610,7 @@ impl App for Shell {
             queue: OpQueue::default(),
             prompt: None,
             confirm_delete: None,
+            batch: None,
         }
     }
 
@@ -568,6 +627,17 @@ impl App for Shell {
                 Key::Named(NamedKey::Backspace) => Some(Msg::PromptBackspace),
                 Key::Named(NamedKey::Space) => Some(Msg::PromptInput(" ".to_string())),
                 Key::Character(c) => Some(Msg::PromptInput(c.to_string())),
+                _ => None,
+            };
+        }
+        // Renombrado por lote: el teclado edita el patrón. Enter aplica.
+        if _model.batch.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::BatchCancel),
+                Key::Named(NamedKey::Enter) => Some(Msg::BatchApply),
+                Key::Named(NamedKey::Backspace) => Some(Msg::BatchPatternBackspace),
+                Key::Named(NamedKey::Space) => Some(Msg::BatchPatternInput(" ".to_string())),
+                Key::Character(c) => Some(Msg::BatchPatternInput(c.to_string())),
                 _ => None,
             };
         }
@@ -1091,6 +1161,11 @@ impl App for Shell {
             }
             Msg::RenamePrompt => {
                 if m.can_edit() {
+                    // Con marca múltiple, "Renombrar" abre el batch; si no, el
+                    // renombrado simple del nodo bajo el cursor.
+                    if !m.cur_pane().marked.is_empty() {
+                        return Shell::update(m, Msg::BatchRenameStart, handle);
+                    }
                     if let Some(n) = m.cur().selected_node() {
                         let (id, name) = (n.id.clone(), n.name.clone());
                         m.prompt = Some(Prompt { kind: PromptKind::Rename { id }, text: name });
@@ -1167,6 +1242,48 @@ impl App for Shell {
             }
             Msg::ClearQueue => {
                 m.queue.clear_finished();
+            }
+
+            // ---- Fase 4.5: renombrado por lote ----
+            Msg::BatchRenameStart => {
+                if m.can_edit() {
+                    // Objetivos: la marca, o el cursor si no hay marca.
+                    let targets = m.cur_pane().op_targets();
+                    if !targets.is_empty() {
+                        m.batch = Some(BatchRename { pattern: "{name}".to_string(), targets });
+                        m.context_menu = None;
+                    }
+                }
+            }
+            Msg::BatchPatternInput(s) => {
+                if let Some(b) = m.batch.as_mut() {
+                    b.pattern.push_str(&s);
+                }
+            }
+            Msg::BatchPatternBackspace => {
+                if let Some(b) = m.batch.as_mut() {
+                    b.pattern.pop();
+                }
+            }
+            Msg::BatchApply => {
+                if let Some(b) = m.batch.take() {
+                    for idx in 0..b.targets.len() {
+                        let nuevo = b.nuevo_nombre(idx);
+                        let (id, original) = &b.targets[idx];
+                        // Sólo encolá los que efectivamente cambian de nombre.
+                        if &nuevo != original {
+                            enqueue(
+                                &mut m,
+                                handle,
+                                OpKind::Rename { id: id.clone(), new_name: nuevo },
+                            );
+                        }
+                    }
+                    m.cur_pane_mut().marked.clear();
+                }
+            }
+            Msg::BatchCancel => {
+                m.batch = None;
             }
         }
         m
@@ -1321,6 +1438,9 @@ impl App for Shell {
         }
         if let Some(targets) = &model.confirm_delete {
             return Some(confirm_overlay(targets, &model.theme));
+        }
+        if let Some(b) = &model.batch {
+            return Some(batch_overlay(b, &model.theme));
         }
         // El menú contextual del nodo seleccionado tiene prioridad.
         if let Some((x, y)) = model.context_menu {
@@ -1524,6 +1644,12 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
             acciones.push((ContextMenuItem::action("Renombrar"), Msg::RenamePrompt));
             acciones.push((ContextMenuItem::action("Borrar"), Msg::DeleteSelection));
         }
+        if !model.cur_pane().marked.is_empty() {
+            acciones.push((
+                ContextMenuItem::action("Renombrar por lote…"),
+                Msg::BatchRenameStart,
+            ));
+        }
         if model.dual {
             acciones.push((ContextMenuItem::action("Copiar al otro panel"), Msg::CopyToOther));
             acciones.push((ContextMenuItem::action("Mover al otro panel"), Msg::MoveToOther));
@@ -1575,6 +1701,11 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
 /// Rect de padding uniforme — atajo para los modales/panel de la cola.
 fn pad(v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
     Rect { left: length(v), right: length(v), top: length(v), bottom: length(v) }
+}
+
+/// Rect de padding sólo horizontal (top/bottom 0).
+fn pad_h(v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
+    Rect { left: length(v), right: length(v), top: length(0.0), bottom: length(0.0) }
 }
 
 /// Una fila de alto fijo, ancho total, contenido centrado verticalmente.
@@ -1695,6 +1826,94 @@ fn confirm_overlay(targets: &[(nahual_source_core::NodeId, String)], theme: &The
         botones,
     ]);
     modal_scrim(card, Msg::CancelConfirm)
+}
+
+/// Overlay del **renombrado por lote** (Fase 4.5): patrón en edición + tabla de
+/// previsualización `viejo → nuevo`. Las colisiones (dos objetivos al mismo
+/// nombre nuevo) se tiñen en rojo para avisar antes de aplicar.
+fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
+    let total = b.targets.len();
+    // Pre-calcula los nuevos nombres y cuenta colisiones entre ellos.
+    let nuevos: Vec<String> = (0..total).map(|i| b.nuevo_nombre(i)).collect();
+    let mut conteo: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    for nn in &nuevos {
+        *conteo.entry(nn.as_str()).or_insert(0) += 1;
+    }
+
+    let input = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
+        padding: pad(8.0),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(6.0)
+    .border(1.0, theme.accent)
+    .text(format!("{}_", b.pattern), 15.0, theme.fg_text);
+
+    // Filas de preview (hasta 12 visibles).
+    let filas: Vec<View<Msg>> = (0..total)
+        .take(12)
+        .map(|i| {
+            let original = &b.targets[i].1;
+            let nuevo = &nuevos[i];
+            let colision = conteo.get(nuevo.as_str()).copied().unwrap_or(0) > 1;
+            let color = if colision {
+                theme.fg_destructive
+            } else if nuevo == original {
+                theme.fg_muted
+            } else {
+                theme.fg_text
+            };
+            let marca = if colision { "⚠ " } else { "" };
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                padding: pad_h(4.0),
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text(format!("{marca}{original}  →  {nuevo}"), 13.0, color)
+        })
+        .collect();
+    let oculto = total.saturating_sub(12);
+    let mut hijos_lista = filas;
+    if oculto > 0 {
+        hijos_lista.push(
+            View::new(fila(20.0)).text(format!("… y {oculto} más"), 12.0, theme.fg_muted),
+        );
+    }
+    let lista = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: length(300.0_f32) },
+        padding: pad(8.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(6.0)
+    .children(hijos_lista);
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(640.0_f32), height: length(470.0_f32) },
+        padding: pad(18.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .border(1.0, theme.accent)
+    .children(vec![
+        View::new(fila(30.0)).text(format!("Renombrar por lote · {total} elementos"), 16.0, theme.fg_text),
+        View::new(fila(22.0)).text(
+            "Patrón — tokens: {name} · {ext} · {n} (contador)",
+            12.0,
+            theme.fg_muted,
+        ),
+        input,
+        View::new(fila(24.0)).text("Previsualización", 13.0, theme.fg_muted),
+        lista,
+        View::new(fila(26.0)).text("Enter aplica · Esc cancela", 12.0, theme.fg_muted),
+    ]);
+    modal_scrim(card, Msg::BatchCancel)
 }
 
 /// Panel inferior colapsable de la **cola de operaciones**. `None` si no hay
@@ -2354,4 +2573,49 @@ fn read_header_sample(path: &Path, max: usize) -> Option<Vec<u8>> {
     let n = f.read(&mut buf).ok()?;
     buf.truncate(n);
     Some(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn patron_tokens_basicos() {
+        // {name} = stem, {ext} = extensión, {n} = contador.
+        assert_eq!(aplicar_patron("{name}.{ext}", "foto.png", 1), "foto.png");
+        assert_eq!(aplicar_patron("img_{n}.{ext}", "foto.png", 3), "img_3.png");
+        assert_eq!(aplicar_patron("{name}_copia", "notas.md", 1), "notas_copia");
+    }
+
+    #[test]
+    fn patron_sin_extension() {
+        // Un archivo sin extensión: {ext} queda vacío, {name} es el nombre.
+        assert_eq!(aplicar_patron("{name}-{n}", "LICENSE", 7), "LICENSE-7");
+        assert_eq!(aplicar_patron("{name}.{ext}", "LICENSE", 1), "LICENSE.");
+    }
+
+    #[test]
+    fn batch_nuevo_nombre_respeta_vacio() {
+        // Un patrón que rinde vacío conserva el original (no renombra a nada).
+        let b = BatchRename {
+            pattern: String::new(),
+            targets: vec![("/x/a.txt".into(), "a.txt".into())],
+        };
+        assert_eq!(b.nuevo_nombre(0), "a.txt");
+    }
+
+    #[test]
+    fn batch_contador_es_uno_based_y_ordenado() {
+        let b = BatchRename {
+            pattern: "f{n}".to_string(),
+            targets: vec![
+                ("/x/a".into(), "a".into()),
+                ("/x/b".into(), "b".into()),
+                ("/x/c".into(), "c".into()),
+            ],
+        };
+        assert_eq!(b.nuevo_nombre(0), "f1");
+        assert_eq!(b.nuevo_nombre(1), "f2");
+        assert_eq!(b.nuevo_nombre(2), "f3");
+    }
 }
