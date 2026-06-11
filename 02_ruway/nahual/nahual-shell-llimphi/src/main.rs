@@ -64,7 +64,7 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
-use app_bus::{AppMenu, Menu, MenuItem};
+use app_bus::{AppMenu, AppRegistry, Menu, MenuItem};
 use nahual_file_explorer_llimphi::{
     file_explorer_view, FileExplorerState, OpenedFile,
 };
@@ -195,6 +195,19 @@ struct Model {
     last_restream: Option<Instant>,
     /// Suscripción al bus de configuración del SO.
     _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+    /// Catálogo de apps de la suite (AppBus): qué app abre qué mime. Se
+    /// consulta al abrir el menú contextual sobre un archivo (open-with).
+    registry: AppRegistry,
+    /// Opciones "Abrir con <app>" precomputadas al abrir el contextual:
+    /// `(app_id, label)`. El render del menú las pinta sin tocar el registro.
+    ctx_open_with: Vec<(String, String)>,
+    /// El archivo que el contextual abriría: ruta POSIX real, o un tempfile
+    /// materializado de una hoja no-POSIX (Mónada/wawa). `None` si la
+    /// selección no es un archivo abrible.
+    ctx_target: Option<PathBuf>,
+    /// Tempfile de la hoja no-POSIX materializada (lo mantiene vivo mientras
+    /// la app externa lo lee). Se reemplaza al recomputar el contextual.
+    ctx_temp: Option<tempfile::TempDir>,
 }
 
 #[derive(Clone)]
@@ -275,6 +288,12 @@ enum Msg {
     NavFilterBackspace,
     /// Sale del modo filtro (conserva el filtro aplicado).
     NavFilterEnd,
+    /// Abre el archivo seleccionado con la app `id` de la suite (AppBus).
+    OpenWith(String),
+    /// Edita el archivo seleccionado en `nada`.
+    EditSelected,
+    /// Abre una terminal `shuma` en el directorio actual.
+    TerminalHere,
 }
 
 struct Shell;
@@ -292,7 +311,14 @@ impl App for Shell {
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        // El primer argumento, si es un directorio, fija el cwd de arranque
+        // (lo usa `app_bus::reveal` para "Reveal in nahual <dir>").
+        let cwd = std::env::args()
+            .nth(1)
+            .map(PathBuf::from)
+            .filter(|p| p.is_dir())
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"));
         let cfg = wawa_config::WawaConfig::load();
         let theme = theme_from_wawa(&cfg, &Theme::dark());
         let handle_clone = handle.clone();
@@ -323,6 +349,10 @@ impl App for Shell {
             basemap_dirty: false,
             last_restream: None,
             _wawa_watcher: watcher,
+            registry: AppRegistry::with_defaults(),
+            ctx_open_with: Vec::new(),
+            ctx_target: None,
+            ctx_temp: None,
         }
     }
 
@@ -754,8 +784,39 @@ impl App for Shell {
                 // Sólo si hay algo seleccionado (POSIX o fuente montada).
                 if hay_seleccion(&m) {
                     m.menu_open = None;
+                    // Precomputa las opciones "Abrir con…" del archivo
+                    // seleccionado (discernir → handlers_for) para que el
+                    // render no toque el registro ni el disco.
+                    compute_open_with(&mut m);
                     m.context_menu = Some((x, y));
                 }
+            }
+            Msg::OpenWith(id) => {
+                if let (Some(app), Some(target)) =
+                    (m.registry.get(&id), m.ctx_target.as_ref().and_then(|p| p.to_str()))
+                {
+                    if let Err(e) = app.open(target) {
+                        eprintln!("[nahual] abrir con {id}: {e}");
+                    }
+                }
+                m.context_menu = None;
+            }
+            Msg::EditSelected => {
+                if let Some(target) = m.ctx_target.as_ref().and_then(|p| p.to_str()) {
+                    let bin = std::env::var("NADA_BIN").unwrap_or_else(|_| "nada".into());
+                    if let Err(e) = std::process::Command::new(bin).arg(target).spawn() {
+                        eprintln!("[nahual] editar en nada: {e}");
+                    }
+                }
+                m.context_menu = None;
+            }
+            Msg::TerminalHere => {
+                let dir = m.explorer.cwd.clone();
+                let bin = std::env::var("SHUMA_BIN").unwrap_or_else(|_| "shuma-shell-llimphi".into());
+                if let Err(e) = std::process::Command::new(bin).current_dir(&dir).spawn() {
+                    eprintln!("[nahual] terminal shuma: {e}");
+                }
+                m.context_menu = None;
             }
         }
         m
@@ -911,6 +972,67 @@ fn hay_seleccion(m: &Model) -> bool {
     }
 }
 
+/// Discierne el **mime** del contenido de `path` con el pipeline real de shuma
+/// (los mismos primeros KB que usa `load_for`). `None` si no se puede leer o
+/// shuma no le asigna mime.
+fn discern_mime(path: &Path) -> Option<String> {
+    let sample = read_header_sample(path, DISCERN_SAMPLE_BYTES)?;
+    let pipeline = shuma_discern::DiscernPipeline::default();
+    let hint = shuma_discern::Hint {
+        path: path.to_str(),
+        size_total: std::fs::metadata(path).ok().map(|m| m.len()),
+    };
+    pipeline.discern(&sample, &hint)?.mime
+}
+
+/// Precomputa las opciones de open-with del archivo seleccionado: resuelve el
+/// target (ruta POSIX real, o tempfile de una hoja no-POSIX preservando el
+/// nombre/extensión), discierne su mime y consulta el `AppRegistry`. Llena
+/// `ctx_target`/`ctx_temp`/`ctx_open_with`. Si la selección no es un archivo
+/// abrible, deja todo vacío (el contextual sólo muestra navegación/montaje).
+fn compute_open_with(m: &mut Model) {
+    m.ctx_open_with.clear();
+    m.ctx_target = None;
+    m.ctx_temp = None;
+
+    let (path, temp): (Option<PathBuf>, Option<tempfile::TempDir>) = match &m.mounted {
+        Some(nav) => match nav.selected_node() {
+            // Una hoja no-POSIX: materializarla a un tempfile con su nombre
+            // (preserva la extensión para el discernimiento y la app externa).
+            Some(n) if !n.is_container => match nav.read(&n.id) {
+                Ok(bytes) => match tempfile::tempdir() {
+                    Ok(dir) => {
+                        let p = dir.path().join(&n.name);
+                        if std::fs::write(&p, &bytes).is_ok() {
+                            (Some(p), Some(dir))
+                        } else {
+                            (None, None)
+                        }
+                    }
+                    Err(_) => (None, None),
+                },
+                Err(_) => (None, None),
+            },
+            _ => (None, None),
+        },
+        None => match m.explorer.selected_entry() {
+            Some(e) if !e.is_dir => (m.explorer.selected_path(), None),
+            _ => (None, None),
+        },
+    };
+
+    let Some(path) = path else {
+        return;
+    };
+    if let Some(mime) = discern_mime(&path) {
+        for app in m.registry.handlers_for(&mime) {
+            m.ctx_open_with.push((app.id.clone(), app.label.clone()));
+        }
+    }
+    m.ctx_target = Some(path);
+    m.ctx_temp = temp;
+}
+
 /// Etiqueta de la entrada seleccionada para el header del contextual.
 fn etiqueta_seleccion(m: &Model) -> String {
     match &m.mounted {
@@ -1009,6 +1131,21 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
         acciones.push((
             ContextMenuItem::action("Montar grafo minga"),
             Msg::MountMinga,
+        ));
+    }
+    // Open-with (AppBus): si la selección es un archivo, ofrecé abrirlo con
+    // cada app de la suite que declara su mime, más "editar" y "terminal".
+    if model.ctx_target.is_some() {
+        for (id, label) in &model.ctx_open_with {
+            acciones.push((
+                ContextMenuItem::action(format!("Abrir con {label}")),
+                Msg::OpenWith(id.clone()),
+            ));
+        }
+        acciones.push((ContextMenuItem::action("Editar en Nada"), Msg::EditSelected));
+        acciones.push((
+            ContextMenuItem::action("Abrir terminal aquí"),
+            Msg::TerminalHere,
         ));
     }
     let msgs: Vec<Msg> = acciones.iter().map(|(_, m)| m.clone()).collect();

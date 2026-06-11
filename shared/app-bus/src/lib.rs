@@ -73,10 +73,57 @@ pub struct AppEntry {
 }
 
 impl AppEntry {
-    /// `true` si la app declara saber abrir `mime`.
+    /// `true` si la app declara saber abrir `mime`. Un handle que termina en
+    /// `/` (p.ej. `"image/"`) actúa como **prefijo**: matchea cualquier mime
+    /// que arranque con él (`image/png`, `image/webp`…). El resto es match
+    /// exacto. Así una app declara una familia entera sin enumerar cada mime.
     pub fn handles_mime(&self, mime: &str) -> bool {
-        self.handles.iter().any(|m| m == mime)
+        self.handles
+            .iter()
+            .any(|h| h == mime || (h.ends_with('/') && mime.starts_with(h.as_str())))
     }
+}
+
+/// El catálogo **por defecto** de la suite: las apps con su `Launch::Exec` y
+/// los mimes que abren (`handles`), para que el open-with universal funcione
+/// sin que el usuario tenga que sembrar config. `AppRegistry::with_defaults`
+/// las fusiona con lo descubierto en disco. Es `no_std + alloc`.
+pub fn default_entries() -> Vec<AppEntry> {
+    // (id, label, icono, exec, categoría, handles)
+    const D: &[(&str, &str, &str, &str, &str, &[&str])] = &[
+        ("nada", "Nada", "✎", "nada", "ruway",
+            &["text/", "application/json", "application/toml", "inode/x-empty"]),
+        ("pluma", "Pluma", "✒", "pluma-editor-llimphi", "unanchay",
+            &["text/markdown", "text/plain"]),
+        ("pluma-notebook", "Pluma Notebook", "▦", "pluma-notebook-llimphi", "unanchay",
+            &["application/x-pluma-notebook"]),
+        ("tullpu", "Tullpu", "✦", "tullpu-app-llimphi", "ruway", &["image/"]),
+        ("takiy", "Takiy", "♪", "takiy-app-llimphi", "ruway", &["audio/"]),
+        ("media", "Media", "▶", "media-app", "ruway", &["video/", "audio/"]),
+        ("cosmos", "Cosmos", "✶", "cosmos-app-llimphi", "yachay",
+            &["application/x-cosmos-chart"]),
+        ("dominium", "Dominium", "◉", "dominium-app-llimphi", "yachay",
+            &["application/x-dominium"]),
+        ("tinkuy", "Tinkuy", "⚛", "tinkuy-llimphi", "yachay", &["application/x-tinkuy"]),
+        ("chaka", "Chaka", "◫", "chaka-app-llimphi", "unanchay", &["application/x-chaka"]),
+        ("nakui", "Nakui", "▤", "nakui-sheet-llimphi", "yachay",
+            &["text/csv", "application/x-nakui"]),
+        ("puriy", "Puriy", "◎", "puriy", "unanchay", &["text/html"]),
+        ("raymi", "Raymi", "◷", "raymi-app", "ruway", &["text/calendar"]),
+        ("supay", "Supay", "✷", "supay-app-llimphi", "ruway", &[]),
+        ("sandokan-monitor", "Monitor", "❤", "sandokan-monitor", "ukupacha", &[]),
+        ("nahual", "Nahual", "❖", "nahual-shell-llimphi", "ruway", &["inode/directory"]),
+    ];
+    D.iter()
+        .map(|(id, label, icon, exec, cat, handles)| AppEntry {
+            id: String::from(*id),
+            label: String::from(*label),
+            icon: Some(String::from(*icon)),
+            category: Some(String::from(*cat)),
+            launch: Launch::Exec { program: String::from(*exec), args: Vec::new() },
+            handles: handles.iter().map(|h| String::from(*h)).collect(),
+        })
+        .collect()
 }
 
 #[cfg(feature = "std")]
@@ -274,6 +321,48 @@ impl AppRegistry {
         let mut entries = Self::discover().entries;
         let mut labels: HashSet<String> =
             entries.iter().map(|e| e.label.to_lowercase()).collect();
+        for e in discover_desktop_entries() {
+            if labels.insert(e.label.to_lowercase()) {
+                entries.push(e);
+            }
+        }
+        Self::new(entries)
+    }
+
+    /// El registro **con el catálogo por defecto de la suite** ([`default_entries`])
+    /// fusionado con lo descubierto en disco (`~/.config/tawasuyu/apps/*.toml`) y
+    /// las `.desktop` del sistema. Para apps presentes en ambos lados: el
+    /// `launch`/`label` del usuario gana, pero los `handles` se **unen** (no se
+    /// pierden los mimes builtin). Es lo que un front quiere por defecto: el
+    /// open-with funciona sin sembrar nada.
+    pub fn with_defaults() -> Self {
+        use std::collections::{BTreeMap, HashSet};
+        let mut by_id: BTreeMap<String, AppEntry> =
+            default_entries().into_iter().map(|e| (e.id.clone(), e)).collect();
+        for d in Self::discover().entries {
+            match by_id.get_mut(&d.id) {
+                Some(base) => {
+                    for h in &d.handles {
+                        if !base.handles.contains(h) {
+                            base.handles.push(h.clone());
+                        }
+                    }
+                    base.launch = d.launch;
+                    base.label = d.label;
+                    if d.icon.is_some() {
+                        base.icon = d.icon;
+                    }
+                    if d.category.is_some() {
+                        base.category = d.category;
+                    }
+                }
+                None => {
+                    by_id.insert(d.id.clone(), d);
+                }
+            }
+        }
+        let mut entries: Vec<AppEntry> = by_id.into_values().collect();
+        let mut labels: HashSet<String> = entries.iter().map(|e| e.label.to_lowercase()).collect();
         for e in discover_desktop_entries() {
             if labels.insert(e.label.to_lowercase()) {
                 entries.push(e);
@@ -531,6 +620,23 @@ pub fn seed_default_apps() -> std::io::Result<usize> {
     Ok(escritos)
 }
 
+/// **Reveal in nahual** — el recíproco del open-with: abre el front universal
+/// `nahual` en el directorio que contiene `path` (o en `path` si ya es un dir),
+/// para que cualquier app pueda "volver al explorador". Spawnea
+/// `nahual-shell-llimphi <dir>`; `$NAHUAL_BIN` lo override (útil en dev). Un
+/// fallo al spawnear se propaga para que el caller lo reporte.
+#[cfg(feature = "std")]
+pub fn reveal(path: impl AsRef<std::path::Path>) -> std::io::Result<std::process::Child> {
+    let path = path.as_ref();
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    let bin = std::env::var("NAHUAL_BIN").unwrap_or_else(|_| "nahual-shell-llimphi".into());
+    std::process::Command::new(bin).arg(dir).spawn()
+}
+
 // =====================================================================
 // Menú global (Archivo / Editar / Ayuda …)
 // =====================================================================
@@ -761,6 +867,43 @@ impl Bus {
 #[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handles_mime_exacto_y_prefijo() {
+        let img = AppEntry {
+            id: "tullpu".into(),
+            label: "Tullpu".into(),
+            icon: None,
+            category: None,
+            launch: Launch::Exec { program: "tullpu-app-llimphi".into(), args: vec![] },
+            handles: vec!["image/".into(), "text/x-rust".into()],
+        };
+        // Prefijo: cualquier image/* matchea.
+        assert!(img.handles_mime("image/png"));
+        assert!(img.handles_mime("image/webp"));
+        // Exacto: sólo el mime declarado.
+        assert!(img.handles_mime("text/x-rust"));
+        assert!(!img.handles_mime("text/plain"));
+        assert!(!img.handles_mime("audio/mp3"));
+    }
+
+    #[test]
+    fn registry_de_defaults_rutea_por_mime() {
+        let reg = AppRegistry::new(default_entries());
+        // image/png → tullpu (editor pixel).
+        let png = reg.handlers_for("image/png");
+        assert!(png.iter().any(|e| e.id == "tullpu"));
+        // audio/mp3 → takiy y media.
+        let mp3: Vec<&str> = reg.handlers_for("audio/mpeg").iter().map(|e| e.id.as_str()).collect();
+        assert!(mp3.contains(&"takiy"));
+        assert!(mp3.contains(&"media"));
+        // text/x-rust → nada (prefijo text/).
+        assert!(reg.handlers_for("text/x-rust").iter().any(|e| e.id == "nada"));
+        // text/html → puriy.
+        assert!(reg.handlers_for("text/html").iter().any(|e| e.id == "puriy"));
+        // Un mime sin handler no rompe.
+        assert!(reg.handlers_for("application/x-desconocido").is_empty());
+    }
 
     #[test]
     fn parse_exec_entry() {
