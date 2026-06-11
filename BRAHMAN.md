@@ -161,6 +161,14 @@ FASE 3  Espina única de exploradores: nouser/nahual/minga/wawa-explorer como Ca
           Header POSIX muestra la pista de atajos. Front universal de los 4 mundos: realizado.
 ```
 
+## Fase 4 — front universal nivel Directory Opus (plan aparte)
+
+La Fase 3 dejó la **espina de datos completa** (un trait `Source`, cuatro mundos). El paso siguiente
+—volver a `nahual-shell` un file manager pleno (dual-pane, columnas, operaciones, batch rename),
+cablear el AppBus vivo ("abrir con" hacia las ~30 apps), y **absorber/retirar los exploradores
+sueltos**— está planificado en **`UNIFICACION.md`** (2026-06-11). Ese doc es autoritativo sobre la
+Fase 4; este sobre las Fases 0–3.
+
 ## Tesis de cierre
 
 No hay un sistema fragmentado. Hay un **transporte unificado vivo (Capa 1)** con **dos clientes desconectados**
