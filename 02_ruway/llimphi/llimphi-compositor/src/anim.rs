@@ -35,6 +35,14 @@
 //! [`AnimRegistry::store_live_exit`]); cuando la key desaparece, esa subescena
 //! retenida se promueve a **fantasma** y [`AnimRegistry::replay_ghosts`] la
 //! reproduce con opacidad decreciente hasta que el reloj se agota.
+//!
+//! **Cross-fade real (`AnimatedSwitcher`).** Un nodo puede declarar
+//! ([`crate::View::animated_switch`]) una `key` estable + una **variante** de
+//! contenido. Cuando la variante cambia entre frames, el runtime promueve el
+//! contenido anterior (retenido en `live` el frame previo) a fantasma
+//! (fade-out) y arranca el subárbol nuevo desde alpha 0 (fade-in), en el mismo
+//! rect — una transición entre dos identidades distintas reusando la misma
+//! infra de ghosts del `exit`, sin tener que combinar enter+exit de dos keys.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -74,6 +82,14 @@ pub struct Anim {
     /// (`node.transform` o identidad) en `duration`. Sin efecto si `enter` es
     /// `false`. Combinable con el fade de entrada por defecto.
     pub enter_from_xf: Option<Affine>,
+    /// Discriminador de **variante de contenido** para cross-fade real
+    /// (Flutter `AnimatedSwitcher`). Cuando es `Some(v)` y `v` **cambia**
+    /// entre frames bajo la misma `key`, el runtime promueve la subescena del
+    /// contenido anterior a fantasma (fade-out) y hace fade-in del nuevo, en
+    /// el mismo rect — una transición real entre dos identidades distintas, no
+    /// la combinación enter+exit de dos keys. Implica captura `live` por frame
+    /// (como `exit`). La primera aparición no cruza (sólo asienta la variante).
+    pub switch: Option<u64>,
 }
 
 /// Ease-out cúbico, el default razonable para transiciones implícitas
@@ -437,11 +453,16 @@ impl Ghost {
 #[derive(Default)]
 pub struct AnimRegistry {
     entries: HashMap<u64, AnimEntry>,
-    /// Snapshots de los nodos `exit` presentes (refrescados por el runtime tras
-    /// el paint de cada frame). Membresía = "presente el frame anterior".
+    /// Snapshots de los nodos `exit`/`switch` presentes (refrescados por el
+    /// runtime tras el paint de cada frame). Membresía = "presente el frame
+    /// anterior".
     live: HashMap<u64, LiveExit>,
-    /// Nodos `exit` que ya desaparecieron y se están desvaneciendo.
+    /// Nodos `exit` que ya desaparecieron (o contenido viejo de un `switch`)
+    /// que se están desvaneciendo.
     ghosts: HashMap<u64, Ghost>,
+    /// Última variante vista por cada key con `switch` — para detectar el
+    /// cambio de contenido que dispara el cross-fade.
+    variants: HashMap<u64, u64>,
 }
 
 impl AnimRegistry {
@@ -461,19 +482,49 @@ impl AnimRegistry {
     pub fn reconcile<Msg>(&mut self, mounted: &mut Mounted<Msg>, now: Instant) -> bool {
         let mut animating = false;
         let mut seen: Vec<u64> = Vec::new();
-        let mut present_exit: Vec<u64> = Vec::new();
+        // Keys presentes que requieren captura `live` y tracking de vanish
+        // (exit O switch). Membresía = "vive este frame".
+        let mut present_live: Vec<u64> = Vec::new();
+        // Sólo keys `exit` puras: su reaparición CANCELA el fade-out. Las de
+        // `switch` están presentes todos los frames y su ghost (contenido
+        // viejo) NO debe cancelarse por presencia.
+        let mut present_exit_only: Vec<u64> = Vec::new();
         for node in &mut mounted.nodes {
             let Some(anim) = node.anim else { continue };
             seen.push(anim.key);
-            if anim.exit {
-                present_exit.push(anim.key);
-            }
             let target = AnimSnapshot {
                 fill: node.fill,
                 radius: node.radius,
                 alpha: node.alpha,
                 transform: node.transform,
             };
+            // Detección de cross-fade (switch) ANTES de tomar prestado
+            // `entries`: si la variante cambió, el contenido viejo retenido en
+            // `live` (del frame anterior) se promueve a fantasma (fade-out) y
+            // el nodo nuevo arranca su fade-in desde alpha 0.
+            let mut switched = false;
+            if anim.exit {
+                present_live.push(anim.key);
+                present_exit_only.push(anim.key);
+            } else if let Some(variant) = anim.switch {
+                present_live.push(anim.key);
+                if let Some(prev) = self.variants.insert(anim.key, variant) {
+                    if prev != variant {
+                        switched = true;
+                        if let Some(le) = self.live.remove(&anim.key) {
+                            self.ghosts.insert(
+                                anim.key,
+                                Ghost {
+                                    scene: le.scene,
+                                    start: now,
+                                    duration: le.duration,
+                                    easing: le.easing,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
             let entry = self.entries.entry(anim.key).or_insert_with(|| {
                 // Primera aparición. Con `enter`, arranca un tween de opacidad
                 // 0 → objetivo (fade-in); si además hay `enter_from_xf`, también
@@ -495,9 +546,20 @@ impl AnimRegistry {
                     AnimEntry::settled(target, now)
                 }
             });
-            // Cambió el objetivo: congelá el valor actual como nuevo origen y
-            // rearrancá el reloj hacia el objetivo nuevo.
-            if entry.to != target {
+            if switched {
+                // Cross-fade: el contenido nuevo entra desde transparente
+                // (el viejo ya quedó como fantasma desvaneciéndose encima).
+                entry.from = AnimSnapshot {
+                    alpha: Some(0.0),
+                    ..target
+                };
+                entry.to = target;
+                entry.start = now;
+                entry.duration = anim.duration;
+                entry.easing = anim.easing;
+            } else if entry.to != target {
+                // Cambió el objetivo: congelá el valor actual como nuevo origen
+                // y rearrancá el reloj hacia el objetivo nuevo.
                 entry.from = entry.value(now);
                 entry.to = target;
                 entry.start = now;
@@ -519,15 +581,22 @@ impl AnimRegistry {
         if self.entries.len() != seen.len() {
             self.entries.retain(|k, _| seen.contains(k));
         }
+        // Las variantes de keys que ya no aparecen se descartan (si la key
+        // vuelve, su primera aparición re-asienta sin cross-fade).
+        if self.variants.len() != seen.len() {
+            self.variants.retain(|k, _| seen.contains(k));
+        }
 
-        // Salidas (fade-out). Una key `exit` presente el frame anterior (vive en
-        // `live`) que ya no aparece → se promueve a fantasma con su última
-        // subescena retenida. Si una key con fantasma reaparece, se cancela el
-        // fade. Por último, descartamos los fantasmas cuyo reloj se agotó.
+        // Salidas (fade-out). Una key `exit`/`switch` presente el frame anterior
+        // (vive en `live`) que ya no aparece → se promueve a fantasma con su
+        // última subescena retenida. Si una key `exit` con fantasma reaparece,
+        // se cancela el fade (no las de `switch`: su fantasma es contenido viejo
+        // que debe seguir desvaneciéndose aunque la key siga presente). Por
+        // último, descartamos los fantasmas cuyo reloj se agotó.
         let vanished: Vec<u64> = self
             .live
             .keys()
-            .filter(|k| !present_exit.contains(k))
+            .filter(|k| !present_live.contains(k))
             .copied()
             .collect();
         for key in vanished {
@@ -543,7 +612,7 @@ impl AnimRegistry {
                 );
             }
         }
-        for key in &present_exit {
+        for key in &present_exit_only {
             self.ghosts.remove(key);
         }
         self.ghosts.retain(|_, g| !g.done(now));
@@ -562,7 +631,7 @@ impl AnimRegistry {
             .enumerate()
             .filter_map(|(idx, n)| {
                 n.anim
-                    .filter(|a| a.exit)
+                    .filter(|a| a.exit || a.switch.is_some())
                     .map(|a| (idx, n.subtree_end, a.key))
             })
             .collect()
@@ -746,6 +815,63 @@ mod tests {
         let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(300));
         assert!(!animating, "fantasma agotado → sin más frames");
         assert!(!reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(300), 100.0, 100.0));
+    }
+
+    /// Monta un nodo `switch` (key=5) con la variante dada.
+    fn one_switch(variant: u64) -> Mounted<()> {
+        let v = View::<()>::new(Style::default())
+            .fill(rgba(10, 20, 30))
+            .animated_switch(5, variant, Duration::from_millis(200));
+        let mut layout = LayoutTree::new();
+        mount(&mut layout, v)
+    }
+
+    #[test]
+    fn switch_de_variante_cruza_contenido() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        // Frame 1: variante 1, primera aparición → asienta, no cruza.
+        let mut m = one_switch(1);
+        assert!(!reg.reconcile(&mut m, t0), "primera aparición no cruza");
+        // El runtime captura su subescena (de prueba, vacía).
+        reg.store_live_exit(5, Scene::new(), Duration::from_millis(200), ease_out_cubic);
+        // Frame 2: variante 2 → cross-fade. El contenido nuevo arranca casi
+        // transparente y hay un fantasma del contenido viejo desvaneciéndose.
+        let mut m = one_switch(2);
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(10));
+        assert!(animating, "el cross-fade pide frames");
+        let a = m.nodes[0].alpha.expect("alpha de fade-in");
+        assert!(a < 0.3, "el contenido nuevo arranca casi transparente: {a}");
+        assert!(
+            reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(10), 100.0, 100.0),
+            "hay un fantasma del contenido viejo"
+        );
+        // Re-captura del frame 2 (lo haría el runtime tras el paint).
+        reg.store_live_exit(5, Scene::new(), Duration::from_millis(200), ease_out_cubic);
+        // Frame 3: misma variante, pasada la duración → asentado y sin fantasma.
+        let mut m = one_switch(2);
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(400));
+        assert!(!animating, "asentado tras la duración");
+        assert_eq!(m.nodes[0].alpha, None, "opaco exacto sin capa residual");
+        assert!(
+            !reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(400), 100.0, 100.0),
+            "fantasma agotado"
+        );
+    }
+
+    #[test]
+    fn switch_misma_variante_no_cruza() {
+        let mut reg = AnimRegistry::new();
+        let t0 = Instant::now();
+        let mut m = one_switch(1);
+        reg.reconcile(&mut m, t0);
+        reg.store_live_exit(5, Scene::new(), Duration::from_millis(200), ease_out_cubic);
+        // Misma variante en el frame siguiente: ni fade-in ni fantasma.
+        let mut m = one_switch(1);
+        let animating = reg.reconcile(&mut m, t0 + Duration::from_millis(10));
+        assert!(!animating, "sin cambio de variante no cruza");
+        assert_eq!(m.nodes[0].alpha, None, "el contenido sigue opaco");
+        assert!(!reg.replay_ghosts(&mut Scene::new(), t0 + Duration::from_millis(10), 100.0, 100.0));
     }
 
     #[test]

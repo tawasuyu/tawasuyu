@@ -415,6 +415,7 @@ impl<Msg> View<Msg> {
             enter: false,
             exit: false,
             enter_from_xf: None,
+            switch: None,
         });
         self
     }
@@ -469,6 +470,7 @@ impl<Msg> View<Msg> {
             enter: true,
             exit: false,
             enter_from_xf: None,
+            switch: None,
         });
         self
     }
@@ -497,6 +499,7 @@ impl<Msg> View<Msg> {
             enter: true,
             exit: false,
             enter_from_xf: Some(from_xf),
+            switch: None,
         });
         self
     }
@@ -521,6 +524,7 @@ impl<Msg> View<Msg> {
             enter: false,
             exit: true,
             enter_from_xf: None,
+            switch: None,
         });
         self
     }
@@ -537,6 +541,7 @@ impl<Msg> View<Msg> {
             enter: true,
             exit: true,
             enter_from_xf: None,
+            switch: None,
         });
         self
     }
@@ -558,6 +563,7 @@ impl<Msg> View<Msg> {
             enter: true,
             exit: true,
             enter_from_xf: Some(from_xf),
+            switch: None,
         });
         self
     }
@@ -577,6 +583,37 @@ impl<Msg> View<Msg> {
             enter: false,
             exit: false,
             enter_from_xf: None,
+            switch: None,
+        });
+        self
+    }
+
+    /// Cross-fade real entre **variantes de contenido** bajo la misma `key`
+    /// (Flutter `AnimatedSwitcher`). `variant` identifica el contenido actual
+    /// (índice de pestaña, hash del estado, discriminante de un enum…). Cuando
+    /// `variant` cambia entre frames, el runtime desvanece la subescena vieja
+    /// (fade-out, retenida del frame previo) mientras hace fade-in del subárbol
+    /// nuevo, en el mismo rect — la transición real entre dos identidades, en
+    /// vez de combinar `animated_enter`+`animated_exit` de dos keys distintas.
+    ///
+    /// Envolvé el contenido conmutable en un nodo con esta marca; sus hijos son
+    /// el contenido. La primera aparición no cruza (sólo fija la variante).
+    /// Igual que `exit`, captura el subárbol por frame — usar en pocos nodos
+    /// (un panel central, un visor que cambia de documento), no por fila.
+    pub fn animated_switch(
+        mut self,
+        key: u64,
+        variant: u64,
+        duration: std::time::Duration,
+    ) -> Self {
+        self.anim = Some(Anim {
+            key,
+            duration,
+            easing: ease_out_cubic,
+            enter: false,
+            exit: false,
+            enter_from_xf: None,
+            switch: Some(variant),
         });
         self
     }
