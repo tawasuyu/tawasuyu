@@ -12,6 +12,8 @@
 //! El estado de interacción del drawer (abierto, animación) vive acá; el
 //! **contenido** es el módulo, en [`NahualState::inner`].
 
+use std::sync::{Arc, Mutex};
+
 use llimphi_motion::Tween;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -25,9 +27,25 @@ use crate::Msg;
 /// Alto máximo del drawer, como fracción de la pantalla.
 const DRAWER_FRAC: f32 = 0.6;
 
+/// Estado de la carga del daemon de Mónadas (que es **cara**: descubrimiento
+/// por broker + consulta inicial, hasta ~5 s). Se monta en un worker; este
+/// enum gobierna que se intente una sola vez y refleja el progreso.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DaemonLoad {
+    /// Aún no se intentó.
+    Idle,
+    /// El worker está descubriendo/conectando.
+    Loading,
+    /// Montado: las Mónadas vivas están en la pila del módulo.
+    Mounted,
+    /// Falló (sin daemon, broker caído…). El usuario se queda en POSIX.
+    Failed(String),
+}
+
 /// Estado del drawer del front universal. El contenido —el módulo— se
-/// inicializa perezosamente la primera vez que se abre (mover el cwd POSIX no
-/// bloquea; un mount de daemon sí lo haría, por eso arranca en POSIX).
+/// inicializa perezosamente la primera vez que se abre, **siempre en POSIX**
+/// (no bloquea). Las Mónadas del daemon se montan aparte, en un worker, y se
+/// empujan sobre la pila cuando están listas (ver [`DaemonLoad`]).
 pub struct NahualState {
     /// `true` cuando el drawer está desplegado.
     pub open: bool,
@@ -35,11 +53,23 @@ pub struct NahualState {
     pub inner: Option<nahual_module::State>,
     /// Animación de despliegue `0..1`.
     pub anim: Tween<f32>,
+    /// Progreso de la carga del daemon de Mónadas.
+    pub daemon: DaemonLoad,
+    /// Canal lateral worker→UI: el `Navigator` del daemon, listo para montar.
+    /// No viaja por el `Msg` (no es `Clone`); el worker lo deja acá y dispara
+    /// un `Msg` liviano para que el hilo de UI lo tome y lo monte.
+    pub slot: Arc<Mutex<Option<nahual_module::Navigator>>>,
 }
 
 impl Default for NahualState {
     fn default() -> Self {
-        Self { open: false, inner: None, anim: Tween::idle(0.0) }
+        Self {
+            open: false,
+            inner: None,
+            anim: Tween::idle(0.0),
+            daemon: DaemonLoad::Idle,
+            slot: Arc::new(Mutex::new(None)),
+        }
     }
 }
 

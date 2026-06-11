@@ -79,6 +79,12 @@ pub enum Msg {
     Nahual(nahual_module::Msg),
     /// Tick de la animación del drawer de nahual / no-op para absorber clicks.
     NahualAnim,
+    /// El worker terminó de construir el `Navigator` de las Mónadas del daemon
+    /// (lo dejó en el slot de `NahualState`). El hilo de UI lo toma y lo monta.
+    NahualDaemonReady,
+    /// El montaje del daemon de Mónadas falló (sin daemon / broker caído). El
+    /// usuario se queda navegando POSIX.
+    NahualDaemonFailed(String),
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
     /// Saltar al escritorio virtual `n` (**1-based**), por click en una celda del
@@ -893,6 +899,23 @@ impl App for PataApp {
                 model.nahual.open = !model.nahual.open;
                 let destino = if model.nahual.open { 1.0 } else { 0.0 };
                 model.animar_nahual(destino, handle);
+                // Al abrir por primera vez, montá las Mónadas del daemon en un
+                // worker (es caro: descubrimiento + consulta inicial). Una sola
+                // vez (gateado por `DaemonLoad::Idle`); no bloquea el arranque
+                // ni el toggle.
+                if model.nahual.open && model.nahual.daemon == nahual::DaemonLoad::Idle {
+                    model.nahual.daemon = nahual::DaemonLoad::Loading;
+                    let slot = model.nahual.slot.clone();
+                    handle.spawn(move || match nahual_module::connect_daemon_navigator() {
+                        Ok(nav) => {
+                            if let Ok(mut g) = slot.lock() {
+                                *g = Some(nav);
+                            }
+                            Msg::NahualDaemonReady
+                        }
+                        Err(e) => Msg::NahualDaemonFailed(e.to_string()),
+                    });
+                }
             }
             Msg::Nahual(m) => {
                 // El módulo es puro: lo actualizamos y ejecutamos sus Effects
@@ -906,6 +929,18 @@ impl App for PataApp {
                 }
             }
             Msg::NahualAnim => {}
+            Msg::NahualDaemonReady => {
+                // El worker dejó el Navigator listo: tomalo y montalo sobre la
+                // pila del módulo (sin I/O — la consulta cara ya corrió).
+                let nav = model.nahual.slot.lock().ok().and_then(|mut g| g.take());
+                if let (Some(nav), Some(inner)) = (nav, model.nahual.inner.as_mut()) {
+                    inner.mount_navigator(nav);
+                    model.nahual.daemon = nahual::DaemonLoad::Mounted;
+                }
+            }
+            Msg::NahualDaemonFailed(e) => {
+                model.nahual.daemon = nahual::DaemonLoad::Failed(e);
+            }
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
             Msg::SwitchWorkspace(n) => sampler::switch_workspace(n),
             Msg::VolumeWheel(dy) => {

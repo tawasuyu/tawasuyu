@@ -44,9 +44,10 @@ use llimphi_widget_detail_table::{
 use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, GridPalette, GridSpec};
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
 use nahual_source_core::{
-    ArchiveSource, Navigator, Node, NodeId, NodeKind, Opened, PosixSource, SortKey, SortDir,
-    Source, ViewMode, WawaImgSource,
+    ArchiveSource, Node, NodeId, NodeKind, Opened, PosixSource, SortKey, SortDir, Source, ViewMode,
+    WawaImgSource,
 };
+pub use nahual_source_core::Navigator;
 use nahual_thumb_core::{generar_thumb_de_archivo, ThumbRgba};
 
 /// Lado máximo (px) de las miniaturas de la vista iconos.
@@ -110,11 +111,23 @@ impl State {
     }
 
     /// Monta el módulo sobre las **Mónadas del daemon vivo** de nouser
-    /// (descubre el socket por el broker → fallback). El gancho que reemplaza
-    /// al `nouser.rs` bespoke de pata.
+    /// (descubre el socket por el broker → fallback). **Bloqueante** (consulta
+    /// inicial al daemon): construir el [`State`] así en el hilo de UI lo
+    /// congela. Para un chasis, preferí [`connect_daemon_navigator`] en un
+    /// worker + [`State::mount_navigator`].
     pub fn nouser_daemon() -> std::io::Result<Self> {
         let src = nahual_source_core::NouserDaemonSource::discover()?;
         Self::on_source(Box::new(src))
+    }
+
+    /// Empuja un [`Navigator`] **ya construido** sobre la pila de montaje (sin
+    /// I/O — no bloquea). El gancho para montar una fuente cara (el daemon de
+    /// Mónadas) que un worker armó con [`connect_daemon_navigator`]: el host
+    /// hace el `Handle::spawn`, recibe el `Navigator` listo y lo monta acá.
+    pub fn mount_navigator(&mut self, nav: Navigator) {
+        self.nav_stack.push(nav);
+        self.marked.clear();
+        self.menu = None;
     }
 
     fn from_nav(nav: Navigator) -> Self {
@@ -359,6 +372,16 @@ pub fn run_gen_thumb(path: PathBuf) -> Msg {
         Ok(t) => Msg::ThumbReady(path, t),
         Err(_) => Msg::ThumbFailed(path),
     }
+}
+
+/// Construye —**bloqueante**, pensado para un worker del host— el [`Navigator`]
+/// de las Mónadas del daemon vivo: descubre el socket (broker → fallback) y hace
+/// la consulta inicial. El chasis lo corre en `Handle::spawn` para no congelar
+/// la UI y luego monta el resultado con [`State::mount_navigator`]. El
+/// `Navigator` es `Send`, así que viaja del worker al hilo de UI sin problema.
+pub fn connect_daemon_navigator() -> std::io::Result<Navigator> {
+    let src = nahual_source_core::NouserDaemonSource::discover()?;
+    Navigator::open(Box::new(src))
 }
 
 // =====================================================================
@@ -818,6 +841,25 @@ mod tests {
         let (st, fx) = update(st, Msg::OpenWith("nada".into()));
         assert!(matches!(fx.as_slice(), [Effect::Launch { app_id, .. }] if app_id == "nada"));
         assert!(st.menu.is_none());
+    }
+
+    #[test]
+    fn mount_navigator_empuja_y_parent_desmonta() {
+        let base = arbol();
+        let otra = tempfile::tempdir().unwrap();
+        fs::write(otra.path().join("solo.txt"), b"z").unwrap();
+
+        let mut st = State::posix(base.path());
+        assert!(!st.is_foreign());
+        // Montar una 2da fuente ya construida (como el daemon, off-thread).
+        let nav = Navigator::open(Box::new(PosixSource::new(otra.path()))).unwrap();
+        st.mount_navigator(nav);
+        assert!(st.is_foreign(), "montar una fuente vuelve foreign");
+        assert!(st.cur().children().iter().any(|n| n.name == "solo.txt"));
+        // Subir desde la raíz de la fuente montada la desmonta (vuelve a POSIX).
+        let (st, _) = update(st, Msg::Parent);
+        assert!(!st.is_foreign());
+        assert!(st.cur().children().iter().any(|n| n.name == "a.txt"));
     }
 
     #[test]
