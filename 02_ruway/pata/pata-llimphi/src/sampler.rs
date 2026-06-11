@@ -409,36 +409,38 @@ mod tests {
 
     #[test]
     fn parse_windows_lee_la_salida_porcelain() {
-        // `id\tworkspace\tfocused\tapp_id\ttitle`. La enfocada (focused=1) marca
-        // `active`; la etiqueta es el título si lo hay.
-        let s = "5\t2\t1\tfirefox\tMozilla Firefox\n\
-                 7\t1\t0\torg.kde.konsole\tKonsole\n";
+        // `id\tworkspace\tfocused\tminimized\tapp_id\ttitle`. La enfocada
+        // (focused=1) marca `active`; la etiqueta es el título si lo hay.
+        let s = "5\t2\t1\t0\tfirefox\tMozilla Firefox\n\
+                 7\t0\t0\t1\torg.kde.konsole\tKonsole\n";
         let ws = super::parse_windows(s);
         assert_eq!(ws.len(), 2);
         assert_eq!(ws[0].id, 5);
         assert_eq!(ws[0].label, "Mozilla Firefox"); // título con espacios intacto
         assert_eq!(ws[0].app_id, "firefox");
         assert!(ws[0].active);
+        assert!(!ws[0].minimized);
         assert!(!ws[1].active);
+        assert!(ws[1].minimized); // la del scratchpad (minimized=1) va atenuada
     }
 
     #[test]
     fn parse_windows_app_id_vacio_cae_al_titulo_y_titulo_vacio_al_app_id() {
         // app_id vacío: el TAB separa limpio, la etiqueta cae al título.
-        let a = super::parse_windows("3\t1\t0\t\tDocumento sin guardar\n");
+        let a = super::parse_windows("3\t1\t0\t0\t\tDocumento sin guardar\n");
         assert_eq!(a[0].label, "Documento sin guardar");
         assert_eq!(a[0].app_id, "");
         // título vacío: la etiqueta cae al app_id (un chip vacío no se clickea).
-        let b = super::parse_windows("4\t1\t0\txterm\t\n");
+        let b = super::parse_windows("4\t1\t0\t0\txterm\t\n");
         assert_eq!(b[0].label, "xterm");
     }
 
     #[test]
     fn parse_windows_ignora_lineas_malformadas() {
-        // Menos de 5 campos o id no numérico: se descartan sin romper.
-        let s = "no-es-id\t1\t0\tapp\ttitulo\n\
+        // Menos de 6 campos o id no numérico: se descartan sin romper.
+        let s = "no-es-id\t1\t0\t0\tapp\ttitulo\n\
                  solo\tdos\n\
-                 9\t1\t1\tvalida\tOK\n";
+                 9\t1\t1\t0\tvalida\tOK\n";
         let ws = super::parse_windows(s);
         assert_eq!(ws.len(), 1);
         assert_eq!(ws[0].id, 9);
@@ -605,17 +607,19 @@ pub fn sample_windows() -> Vec<WindowEntry> {
 }
 
 /// Parsea la salida porcelain de `mirada-ctl windows --porcelain`: una línea por
-/// ventana, campos TAB-separados `id\tworkspace\tfocused\tapp_id\ttitle`. El
-/// `id` de mirada es `u64`, pero [`WindowEntry::id`] es `u32` (en layer-shell es
-/// un contador local); el casteo es exacto porque un WM nunca abre 2³² ventanas
-/// en una sesión, y el valor round-trip-ea a `focus-window N` sin pérdida. El
-/// `workspace` no se usa en la lista plana; mirada no reporta `minimized` por
-/// esta vía, así que queda en `false`. Líneas con menos de 5 campos se ignoran.
+/// ventana, campos TAB-separados
+/// `id\tworkspace\tfocused\tminimized\tapp_id\ttitle`. El `id` de mirada es
+/// `u64`, pero [`WindowEntry::id`] es `u32` (en layer-shell es un contador
+/// local); el casteo es exacto porque un WM nunca abre 2³² ventanas en una
+/// sesión, y el valor round-trip-ea a `focus-window N` / `close-window N` sin
+/// pérdida. El `workspace` no se usa en la lista plana. Líneas con menos de 6
+/// campos o id no numérico se ignoran.
 fn parse_windows(s: &str) -> Vec<WindowEntry> {
     let mut out = Vec::new();
     for line in s.lines() {
-        let mut campos = line.splitn(5, '\t');
-        let (Some(id), Some(_ws), Some(focused), Some(app_id), Some(title)) = (
+        let mut campos = line.splitn(6, '\t');
+        let (Some(id), Some(_ws), Some(focused), Some(minimized), Some(app_id), Some(title)) = (
+            campos.next(),
             campos.next(),
             campos.next(),
             campos.next(),
@@ -639,7 +643,7 @@ fn parse_windows(s: &str) -> Vec<WindowEntry> {
             label,
             app_id: app_id.to_string(),
             active: focused == "1",
-            minimized: false,
+            minimized: minimized == "1",
         });
     }
     out
@@ -650,6 +654,13 @@ fn parse_windows(s: &str) -> Vec<WindowEntry> {
 /// [`switch_workspace`]: se llama desde el hilo de UI al clickear un chip.
 pub fn activate_window(id: u32) {
     crate::spawn_cmd(&format!("mirada-ctl focus-window {id}"));
+}
+
+/// Cierra la ventana `id` del `window_list` pidiéndoselo al WM
+/// (`mirada-ctl close-window N`). Desacoplado, como [`activate_window`]: lo
+/// dispara el clic derecho sobre un chip del task manager.
+pub fn close_window(id: u32) {
+    crate::spawn_cmd(&format!("mirada-ctl close-window {id}"));
 }
 
 /// Ajusta el brillo de la pantalla en pasos de 5% (relativo). `up` sube, `!up`

@@ -937,9 +937,8 @@ impl App for PataApp {
             // foreign-toplevel; en winit lo muestreamos del WM y activamos por su
             // CLI (`mirada-ctl focus-window N`).
             Msg::ActivateWindow(id) => sampler::activate_window(id),
-            // mirada-ctl sólo cierra la enfocada (no por id), así que el cierre
-            // del task manager queda al backend layer-shell. No-op en winit.
-            Msg::CloseWindow(_) => {}
+            // Cierre por id del task manager (clic derecho), por la CLI del WM.
+            Msg::CloseWindow(id) => sampler::close_window(id),
             // --- Sidebar navegador (Fase 11c) ---
             Msg::NavTabActivate(si, ti) => model.nav.toggle_tab(si, ti),
             Msg::NavClosePanel => model.nav.open = None,
