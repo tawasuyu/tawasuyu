@@ -425,6 +425,22 @@ impl Navigator {
         });
     }
 
+    /// Fija columna y dirección de orden de forma **absoluta** (no toggle como
+    /// [`Navigator::set_sort`]) — para restaurar un "folder format" guardado al
+    /// entrar a una carpeta. Re-ordena preservando qué nodo estaba seleccionado.
+    pub fn set_sort_to(&mut self, key: SortKey, asc: bool) {
+        self.sort_key = key;
+        self.sort_dir = if asc { SortDir::Asc } else { SortDir::Desc };
+        let sel_id = self.children.get(self.selected).map(|n| n.id.clone());
+        self.apply_sort();
+        if let Some(id) = sel_id {
+            if let Some(pos) = self.children.iter().position(|n| n.id == id) {
+                self.selected = pos;
+            }
+        }
+        self.sync_offset();
+    }
+
     /// El filtro vivo actual (substring del nombre).
     pub fn filter(&self) -> &str {
         &self.filter
@@ -557,6 +573,21 @@ mod tests {
         nav.reload().unwrap();
         assert!(!nav.children().iter().any(|n| n.name == "nuevo.txt"));
         assert!(nav.selected_node().is_some());
+    }
+
+    #[test]
+    fn set_sort_to_es_absoluto() {
+        let dir = arbol();
+        let mut nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        // Fijar orden por nombre descendente de forma absoluta (no toggle).
+        nav.set_sort_to(SortKey::Name, false);
+        assert_eq!(nav.sort(), (SortKey::Name, SortDir::Desc));
+        // Re-fijar el mismo sentido NO invierte (a diferencia de set_sort).
+        nav.set_sort_to(SortKey::Name, false);
+        assert_eq!(nav.sort(), (SortKey::Name, SortDir::Desc));
+        // Cambiar a tamaño ascendente.
+        nav.set_sort_to(SortKey::Size, true);
+        assert_eq!(nav.sort(), (SortKey::Size, SortDir::Asc));
     }
 
     #[test]

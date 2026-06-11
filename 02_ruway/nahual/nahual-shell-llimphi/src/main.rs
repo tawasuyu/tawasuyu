@@ -496,6 +496,12 @@ enum Msg {
     SetLabel(Label),
     /// Quita el label de la selección.
     ClearLabel,
+    /// Navega el panel enfocado a una ruta POSIX absoluta (favorito/reciente).
+    GoTo(String),
+    /// Agrega a favoritos la carpeta seleccionada (o la actual si no es dir).
+    AddPlace,
+    /// Quita un favorito por su ruta.
+    RemovePlace(String),
 }
 
 impl Model {
@@ -805,6 +811,8 @@ impl App for Shell {
                     Ok(Some(Opened::Descended)) => {
                         m.cur_pane_mut().marked.clear();
                         clear_preview(&mut m);
+                        apply_format(&mut m);
+                        record_recent(&mut m);
                     }
                     Ok(Some(Opened::Leaf(id))) => {
                         let nombre =
@@ -847,7 +855,10 @@ impl App for Shell {
             Msg::Parent => {
                 m.cur_pane_mut().marked.clear();
                 match m.cur_mut().parent() {
-                    Ok(true) => refresh_preview(&mut m),
+                    Ok(true) => {
+                        apply_format(&mut m);
+                        refresh_preview(&mut m);
+                    }
                     // Subir desde la raíz de una fuente montada la desmonta
                     // (vuelve al nivel de abajo de la pila). En POSIX, la raíz
                     // es `/` y no hay a dónde subir.
@@ -862,13 +873,9 @@ impl App for Shell {
             }
             Msg::SortByIn(pane, col) => {
                 m.focus = pane;
-                let key = match col {
-                    1 => nahual_source_core::SortKey::Size,
-                    2 => nahual_source_core::SortKey::Mtime,
-                    3 => nahual_source_core::SortKey::Kind,
-                    _ => nahual_source_core::SortKey::Name,
-                };
-                m.cur_mut().set_sort(key);
+                m.cur_mut().set_sort(col_to_sortkey(col as u8));
+                // Recordá el orden elegido para esta carpeta (folder format).
+                save_format(&mut m);
             }
             Msg::NavToggleView => {
                 let nav = m.cur_mut();
@@ -876,6 +883,8 @@ impl App for Shell {
                     nahual_source_core::ViewMode::List => nahual_source_core::ViewMode::Details,
                     nahual_source_core::ViewMode::Details => nahual_source_core::ViewMode::List,
                 };
+                // Recordá la vista elegida para esta carpeta (folder format).
+                save_format(&mut m);
             }
             Msg::NavFilterStart => {
                 m.nav_filtering = true;
@@ -899,6 +908,7 @@ impl App for Shell {
                 m.focus = pane;
                 if matches!(m.cur_mut().ascend_to(depth), Ok(true)) {
                     m.cur_pane_mut().marked.clear();
+                    apply_format(&mut m);
                     refresh_preview(&mut m);
                 }
             }
@@ -1310,6 +1320,34 @@ impl App for Shell {
                 m.state.save();
                 m.context_menu = None;
             }
+            Msg::GoTo(path) => {
+                let p = PathBuf::from(&path);
+                if p.is_dir() {
+                    // Reemplaza la pila del panel enfocado por un POSIX fresco en
+                    // esa ruta (desmonta cualquier fuente no-POSIX activa).
+                    m.cur_pane_mut().nav_stack = vec![posix_nav(&p)];
+                    m.cur_pane_mut().marked.clear();
+                    apply_format(&mut m);
+                    record_recent(&mut m);
+                    refresh_preview(&mut m);
+                }
+            }
+            Msg::AddPlace => {
+                // La carpeta seleccionada si es un dir; si no, la carpeta actual.
+                let target = match m.cur().selected_node() {
+                    Some(n) if n.is_container => n.id.clone(),
+                    _ => m.cur().current_id().clone(),
+                };
+                if !m.is_foreign() {
+                    m.state.add_place(&target);
+                    m.state.save();
+                }
+                m.context_menu = None;
+            }
+            Msg::RemovePlace(path) => {
+                m.state.remove_place(&path);
+                m.state.save();
+            }
         }
         m
     }
@@ -1426,14 +1464,22 @@ impl App for Shell {
         };
 
         // El cuerpo ocupa el alto restante (flex), dejando lugar al panel de
-        // la cola de operaciones abajo si hay jobs.
-        let body_wrap = View::new(Style {
+        // la cola de operaciones abajo si hay jobs. A la izquierda, el sidebar
+        // de favoritos/recientes (ancho fijo); el resto es el split de paneles.
+        let body_inner = View::new(Style {
             flex_grow: 1.0,
             min_size: Size { width: length(0.0), height: length(0.0) },
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .children(vec![body]);
+        let body_wrap = View::new(Style {
+            flex_grow: 1.0,
+            min_size: Size { width: length(0.0), height: length(0.0) },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![sidebar_view(model, &theme), body_inner]);
 
         let mut col: Vec<View<Msg>> = vec![menubar, body_wrap];
         if let Some(panel) = queue_panel(model, &theme) {
@@ -1729,6 +1775,7 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
                 Msg::BatchRenameStart,
             ));
         }
+        acciones.push((ContextMenuItem::action("★ Añadir a favoritos"), Msg::AddPlace));
         if model.dual {
             acciones.push((ContextMenuItem::action("Copiar al otro panel"), Msg::CopyToOther));
             acciones.push((ContextMenuItem::action("Mover al otro panel"), Msg::MoveToOther));
@@ -1995,6 +2042,99 @@ fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     modal_scrim(card, Msg::BatchCancel)
 }
 
+/// Basename legible de una ruta POSIX (para las filas del sidebar). La raíz
+/// `/` se muestra como tal.
+fn basename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// Sidebar izquierdo (Fase 4.5): **favoritos** (places) + **recientes**. Cada
+/// fila navega el panel enfocado a esa carpeta (`GoTo`); los favoritos llevan
+/// una `✕` para quitarlos. Ancho fijo.
+fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
+    const WIDTH: f32 = 190.0;
+
+    // Encabezado de sección.
+    let seccion = |titulo: &str| {
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+            padding: pad_h(12.0),
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(titulo, 12.0, theme.fg_muted)
+    };
+
+    let mut hijos: Vec<View<Msg>> = vec![seccion("FAVORITOS")];
+
+    if model.state.places.is_empty() {
+        hijos.push(
+            View::new(fila(22.0))
+                .text("  (sin favoritos)", 12.0, theme.fg_placeholder),
+        );
+    } else {
+        for path in &model.state.places {
+            // Fila: nombre (navega) + ✕ (quita). Dos targets de click.
+            let nombre = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                padding: pad_h(12.0),
+                ..Default::default()
+            })
+            .on_click(Msg::GoTo(path.clone()))
+            .text(format!("★ {}", basename(path)), 13.0, theme.fg_text);
+            let quitar = View::new(Style {
+                size: Size { width: length(24.0_f32), height: percent(1.0_f32) },
+                justify_content: Some(JustifyContent::Center),
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .on_click(Msg::RemovePlace(path.clone()))
+            .text("✕", 12.0, theme.fg_muted);
+            hijos.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    ..Default::default()
+                })
+                .children(vec![nombre, quitar]),
+            );
+        }
+    }
+
+    hijos.push(seccion("RECIENTES"));
+    if model.state.recents.is_empty() {
+        hijos.push(
+            View::new(fila(22.0)).text("  (vacío)", 12.0, theme.fg_placeholder),
+        );
+    } else {
+        for path in model.state.recents.iter().take(10) {
+            hijos.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                    align_items: Some(AlignItems::Center),
+                    padding: pad_h(12.0),
+                    ..Default::default()
+                })
+                .on_click(Msg::GoTo(path.clone()))
+                .text(format!("🕘 {}", basename(path)), 12.5, theme.fg_muted),
+            );
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(WIDTH), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(hijos)
+}
+
 /// Panel inferior colapsable de la **cola de operaciones**. `None` si no hay
 /// jobs. La barra de cabecera (siempre visible) resume y alterna el detalle;
 /// cuando está abierto, lista cada job con su estado.
@@ -2147,6 +2287,77 @@ fn pane_column(model: &Model, pane: usize, focused: bool, theme: &Theme) -> View
         ..Default::default()
     })
     .children(vec![crumb, content])
+}
+
+/// Índice de columna (0 nombre · 1 tamaño · 2 fecha · 3 tipo) → `SortKey`.
+fn col_to_sortkey(col: u8) -> nahual_source_core::SortKey {
+    use nahual_source_core::SortKey::*;
+    match col {
+        1 => Size,
+        2 => Mtime,
+        3 => Kind,
+        _ => Name,
+    }
+}
+
+/// `SortKey` → índice de columna.
+fn sortkey_to_col(key: nahual_source_core::SortKey) -> u8 {
+    use nahual_source_core::SortKey::*;
+    match key {
+        Name => 0,
+        Size => 1,
+        Mtime => 2,
+        Kind => 3,
+    }
+}
+
+/// El `FolderFormat` (vista + orden) actual del navegador.
+fn current_format(nav: &Navigator) -> state::FolderFormat {
+    let (key, dir) = nav.sort();
+    state::FolderFormat {
+        details: matches!(nav.view, nahual_source_core::ViewMode::Details),
+        sort_col: sortkey_to_col(key),
+        sort_asc: matches!(dir, nahual_source_core::SortDir::Asc),
+    }
+}
+
+/// Recuerda el formato (vista/orden) de la carpeta actual del panel enfocado.
+/// No-op sobre fuentes montadas (sus ids no son rutas estables).
+fn save_format(m: &mut Model) {
+    if m.is_foreign() {
+        return;
+    }
+    let id = m.cur().current_id().clone();
+    let fmt = current_format(m.cur());
+    m.state.set_format(&id, fmt);
+    m.state.save();
+}
+
+/// Aplica el formato guardado de la carpeta actual (si hay), tras entrar a ella.
+fn apply_format(m: &mut Model) {
+    if m.is_foreign() {
+        return;
+    }
+    let id = m.cur().current_id().clone();
+    if let Some(fmt) = m.state.format_of(&id) {
+        let nav = m.cur_mut();
+        nav.view = if fmt.details {
+            nahual_source_core::ViewMode::Details
+        } else {
+            nahual_source_core::ViewMode::List
+        };
+        nav.set_sort_to(col_to_sortkey(fmt.sort_col), fmt.sort_asc);
+    }
+}
+
+/// Registra la carpeta actual del panel enfocado como reciente (MRU).
+fn record_recent(m: &mut Model) {
+    if m.is_foreign() {
+        return;
+    }
+    let id = m.cur().current_id().clone();
+    m.state.push_recent(&id);
+    m.state.save();
 }
 
 /// Encola una operación y lanza su worker (`Handle::spawn`): el job corre en un

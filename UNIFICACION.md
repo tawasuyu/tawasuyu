@@ -194,7 +194,7 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
   Cards de apps en `assets/apps/*.toml` (hoy los defaults viven en código). Registrar visores como
   Cards on-disk ya está cubierto por BRAHMAN F2a (`discover_viewer_cards`).
 
-### F4.5 — Batch rename · labels · favoritos · folder formats  *(power-user)*  ◐ EN CURSO
+### F4.5 — Batch rename · labels · favoritos · folder formats  *(power-user)*  ✅ HECHA
 - **F4.5a (batch rename) ✅ HECHA** — patrón con tokens `{name}`/`{ext}`/`{n}` (contador 1-based) +
   preview tabular `viejo → nuevo` con detección de colisiones (rojo) antes de aplicar. Disparado por
   `F2` con marca múltiple (sin marca, `F2` = renombrado simple), o "Renombrar por lote…" del
@@ -209,8 +209,16 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
   `●` monocromo (la lista no pinta color por fila — un `ListRow::accent` sería cross-cutting, 18
   callers; diferido). `ShellState` también ya modela places/recents/formats (campos listos para
   F4.5c). +4 tests. Pantallazo: `pantallazo_power.rs` (detalle con filas de color + preview batch).
-- **Pendiente (F4.5c):** Favoritos/places (sidebar) + recents; folder formats (recordar
-  `ViewMode`/`sort` por path) — los campos ya viven en `ShellState`, falta el wiring de UI/nav.
+- **F4.5c (sidebar + folder formats) ✅ HECHA** — sidebar izquierdo (ancho fijo 190px) con
+  **FAVORITOS** (places, cada uno con `✕` para quitar) y **RECIENTES** (MRU, cap 12); cada fila
+  navega el panel enfocado (`GoTo` reconstruye un POSIX fresco). "★ Añadir a favoritos" en el
+  contextual. **Folder formats**: la vista (`v`) y el orden (click en encabezado) se guardan por
+  carpeta y se restauran al entrar (`Navigator::set_sort_to` para orden absoluto; `apply_format` en
+  descend/parent/breadcrumb/GoTo). Recientes se registran al entrar a una carpeta. +1 test
+  (`set_sort_to`). Pantallazo: `pantallazo_sidebar.rs`.
+- **Pendiente menor:** toggle del sidebar (hoy siempre visible); reordenar favoritos por drag; per-pane
+  folder format en dual (hoy el formato es por path, compartido entre paneles — correcto, pero el
+  apply usa el panel enfocado).
 
 ### F4.6 — Adapters extra como Source  *(extrapolación de fuentes)*
 - `ArchiveSource`: montar `.zip/.tar/.tar.gz` como árbol navegable (reusa el reader del
