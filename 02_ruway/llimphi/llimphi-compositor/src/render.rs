@@ -46,6 +46,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_leave,
         on_scroll,
         on_scale,
+        on_rotate,
         on_double_tap,
         on_double_tap_at,
         on_long_press,
@@ -95,6 +96,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_pointer_leave,
         on_scroll,
         on_scale,
+        on_rotate,
         on_double_tap,
         on_double_tap_at,
         on_long_press,
@@ -993,6 +995,19 @@ pub fn hit_test_scale<Msg>(
     hit_test_pred(mounted, computed, x, y, |n| n.on_scale.is_some())
 }
 
+/// Hit-test específico para gestos de **rotación** (trackpad): el nodo más al
+/// frente bajo el punto que declaró un `on_rotate`. Análogo a
+/// [`hit_test_scale`]; el runtime lo invoca al recibir un `RotationGesture`.
+/// `None` = ningún nodo rotable bajo el cursor.
+pub fn hit_test_rotate<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.on_rotate.is_some())
+}
+
 /// Hit-test para **doble-tap**: el nodo más al frente bajo el punto que
 /// declaró `on_double_tap`/`on_double_tap_at`. El runtime lo usa al detectar
 /// dos presses rápidos y cercanos.
@@ -1237,6 +1252,31 @@ mod tests {
         assert_eq!(hit_test_scale(&m, &c, 150.0, 25.0), Some(0));
         // Fuera del canvas → None.
         assert_eq!(hit_test_scale(&m, &c, 350.0, 350.0), None);
+    }
+
+    #[test]
+    fn hit_test_rotate_directo_y_por_herencia() {
+        use crate::{hit_test_rotate, GesturePhase};
+        // Mismo patrón que escala: canvas rotable con un widget no-rotable
+        // encima; el gesto cae al ancestro que declara on_rotate.
+        let widget = View::<()>::new(Style {
+            size: Size { width: length(50.0), height: length(50.0) },
+            ..Default::default()
+        });
+        let canvas = View::<()>::new(Style {
+            size: Size { width: length(200.0), height: length(200.0) },
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .on_rotate(|_phase: GesturePhase, _d, _fx, _fy| None)
+        .children(vec![widget]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, canvas);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        assert_eq!(hit_test_rotate(&m, &c, 25.0, 25.0), Some(0));
+        assert_eq!(hit_test_rotate(&m, &c, 150.0, 25.0), Some(0));
+        assert_eq!(hit_test_rotate(&m, &c, 350.0, 350.0), None);
     }
 
     #[test]

@@ -187,6 +187,15 @@ pub enum GesturePhase {
 /// los canvases (pineal/cosmos/nakui).
 pub type ScaleFn<Msg> = Arc<dyn Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync>;
 
+/// Handler de gesto de **rotación** (trackpad, sólo macOS — winit no emite
+/// `RotationGesture` en Wayland/Windows). Análogo a [`ScaleFn`] pero el
+/// segundo argumento es el **delta de ángulo incremental en radianes**
+/// (positivo = horario) en lugar del factor de escala; `(focal_x, focal_y)`
+/// es el punto bajo el cursor relativo al rect del nodo. El nodo más al
+/// frente bajo el cursor que declare un `on_rotate` consume el gesto. Base
+/// para rotar canvases/imágenes con dos dedos. Ver [`View::on_rotate`].
+pub type RotateFn<Msg> = Arc<dyn Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync>;
+
 /// Restricciones de tamaño que un [`LayoutBuilderFn`] recibe: las dimensiones
 /// del slot que el layout le asignó al nodo (en px físicos). Análogo a las
 /// `BoxConstraints` de Flutter `LayoutBuilder` / al `MediaQuery` pero **local
@@ -442,6 +451,11 @@ pub struct View<Msg> {
     /// macOS), el runtime lo invoca con el factor incremental + el punto focal
     /// local. Base del zoom de canvases. Ver [`ScaleFn`] y [`View::on_scale`].
     pub on_scale: Option<ScaleFn<Msg>>,
+    /// Handler de gesto de **rotación** (dos dedos en trackpad, macOS). Si
+    /// está presente y el gesto cae sobre este nodo, el runtime lo invoca con
+    /// el delta de ángulo incremental (radianes) + el punto focal local. Ver
+    /// [`RotateFn`] y [`View::on_rotate`].
+    pub on_rotate: Option<RotateFn<Msg>>,
     /// Msg a emitir en **doble-tap** (dos presses izquierdos sobre este nodo
     /// dentro de una ventana temporal corta y muy cerca). Es un evento
     /// **aditivo**: si el nodo también tiene `on_click`, éste igual dispara en
@@ -717,6 +731,9 @@ pub struct MountedNode<Msg> {
     /// Handler de gesto de escala (pinch-to-zoom) de este nodo. Ver
     /// [`View::on_scale`] y [`ScaleFn`].
     pub on_scale: Option<ScaleFn<Msg>>,
+    /// Handler de gesto de rotación (trackpad) de este nodo. Ver
+    /// [`View::on_rotate`] y [`RotateFn`].
+    pub on_rotate: Option<RotateFn<Msg>>,
     /// Handlers de doble-tap (ver [`View::on_double_tap`]).
     pub on_double_tap: Option<Msg>,
     pub on_double_tap_at: Option<ClickAtFn<Msg>>,

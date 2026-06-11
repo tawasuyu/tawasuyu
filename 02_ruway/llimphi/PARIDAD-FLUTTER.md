@@ -102,8 +102,12 @@ Hoy: tap, drag(delta), scroll **+ pinch/scale (zoom), double-tap, long-press**.
   tiempo — double-tap = dos presses dentro de 400 ms y <16px; long-press = press
   que sobrevive 500 ms quieto (lo vence `about_to_wait`, lo cancelan movimiento
   >8px o release). Caso canónico limpio: canvas con pan + gesto sin `on_click`.
-- Falta: **rotate** (trackpad, sólo macOS — plumbing igual al scale, sin
-  fallback de teclado), **velocity/fling** (vive con scroll-physics, Tier 5), y
+- ✅ **rotate** (trackpad, sólo macOS) — `View::on_rotate(|phase, delta_rad,
+  fx, fy| …)`, plumbing espejo del scale: `RotateFn`/`on_rotate` en View+nodo,
+  `hit_test_rotate`, `WindowEvent::RotationGesture` → handler bajo el cursor
+  (delta de winit en grados → radianes). Sin fallback de teclado (no hay gesto
+  universal de rotación). 1 test de hit-test.
+- Falta: **velocity/fling** (vive con scroll-physics, Tier 5), y
   pinch **multi-touch real** desde eventos `Touch` (touchscreen wawa/android:
   trackear dos dedos y derivar distancia → factor). La arena hoy es por-gesto
   (cada uno su hit-test + su árbitro temporal), no un grafo de desambiguación

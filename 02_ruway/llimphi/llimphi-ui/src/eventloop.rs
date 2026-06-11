@@ -73,6 +73,31 @@ fn scale_hit_from_cache<Msg: Clone>(
     })
 }
 
+/// Resuelve el handler de **rotación** (trackpad) bajo `(x, y)` contra el
+/// cache del último frame (overlay con prioridad). Espejo de
+/// [`scale_hit_from_cache`]. Devuelve `(handler, focal_x, focal_y)` con el
+/// punto focal local al rect del nodo. `None` si no hay nodo `on_rotate`.
+fn rotate_hit_from_cache<Msg: Clone>(
+    cache: &RenderCache<Msg>,
+    x: f32,
+    y: f32,
+) -> Option<(RotateFn<Msg>, f32, f32)> {
+    let (m, c) = match cache.overlay.as_ref() {
+        Some(ov) => (&ov.mounted, &ov.computed),
+        None => (&cache.mounted, &cache.computed),
+    };
+    hit_test_rotate(m, c, x, y).and_then(|i| {
+        let node = &m.nodes[i];
+        node.on_rotate.clone().map(|h| {
+            let (fx, fy) = c
+                .get(node.id)
+                .map(|r| (x - r.x, y - r.y))
+                .unwrap_or((0.0, 0.0));
+            (h, fx, fy)
+        })
+    })
+}
+
 /// Resuelve el handler de **doble-tap** bajo `(x, y)` contra el cache del
 /// último frame (overlay con prioridad). Elige la variante `_at` (con focal
 /// local) si está, o el `Msg` directo. `None` si no hay nodo con doble-tap.
@@ -641,6 +666,37 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                     .and_then(|cache| scale_hit_from_cache(cache, cursor.0, cursor.1));
                 if let Some((h, fx, fy)) = scale_hit {
                     if let Some(msg) = h(gphase, factor, fx, fy) {
+                        let model = state.model.take().expect("model");
+                        state.model = Some(A::update(model, msg, &self.handle));
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::RotationGesture { delta, phase, .. } => {
+                // Rotación de dos dedos en el trackpad (winit la emite **sólo
+                // en macOS**). `delta` viene en **grados**; lo convertimos a
+                // radianes para el handler (positivo = horario). La fase de
+                // winit se traduce a la de gesto (Begin/Update/End). No hay
+                // camino universal por teclado/rueda como sí lo tiene el zoom.
+                use llimphi_hal::winit::event::TouchPhase;
+                let cursor = (state.cursor.x as f32, state.cursor.y as f32);
+                let gphase = match phase {
+                    TouchPhase::Started => GesturePhase::Begin,
+                    TouchPhase::Moved => GesturePhase::Update,
+                    TouchPhase::Ended | TouchPhase::Cancelled => GesturePhase::End,
+                };
+                let delta_rad = if gphase == GesturePhase::Update && delta.is_finite() {
+                    delta.to_radians()
+                } else {
+                    0.0
+                };
+                let rotate_hit = state
+                    .last_render
+                    .as_ref()
+                    .and_then(|cache| rotate_hit_from_cache(cache, cursor.0, cursor.1));
+                if let Some((h, fx, fy)) = rotate_hit {
+                    if let Some(msg) = h(gphase, delta_rad, fx, fy) {
                         let model = state.model.take().expect("model");
                         state.model = Some(A::update(model, msg, &self.handle));
                         state.last_render = None;

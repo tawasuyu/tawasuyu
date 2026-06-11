@@ -32,6 +32,7 @@ impl<Msg> View<Msg> {
             clip: false,
             on_scroll: None,
             on_scale: None,
+            on_rotate: None,
             on_double_tap: None,
             on_double_tap_at: None,
             on_long_press: None,
@@ -270,6 +271,23 @@ impl<Msg> View<Msg> {
         F: Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
     {
         self.on_scale = Some(Arc::new(handler));
+        self
+    }
+
+    /// Registra un handler de **rotación con dos dedos** (gesto de trackpad).
+    /// El runtime lo invoca cuando el cursor está sobre este nodo y el usuario
+    /// rota dos dedos en el trackpad (winit emite `RotationGesture` **sólo en
+    /// macOS**). El handler recibe `(phase, delta_radianes, focal_x, focal_y)`
+    /// — ver [`RotateFn`]: `delta_radianes` es el incremento angular (positivo
+    /// = horario) y `(focal_x, focal_y)` el punto bajo el cursor relativo al
+    /// rect del nodo, para rotar "alrededor del cursor". Patrón típico de
+    /// canvas/imagen: `Msg::Rotate { delta, fx, fy }` que acumula el ángulo del
+    /// viewport. Devolver `Some(Msg)` consume el gesto.
+    pub fn on_rotate<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(GesturePhase, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_rotate = Some(Arc::new(handler));
         self
     }
 
