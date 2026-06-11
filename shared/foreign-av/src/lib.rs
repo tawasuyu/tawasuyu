@@ -459,6 +459,10 @@ struct SessionInner {
     /// Sample rate / channels activos en el subprocess vivo.
     audio_sr: u32,
     audio_ch: u16,
+    /// Índice **absoluto** del stream de audio a mapear de la entrada 0 (A2).
+    /// `None` = la primera pista de audio (`0:a:0`, comportamiento original).
+    /// No aplica al camino DASH (el audio viene de la entrada 1).
+    audio_stream: Option<u32>,
     generation: u64,
     start_offset: Duration,
 }
@@ -493,6 +497,7 @@ impl MediaSession {
                 audio_read: None,
                 audio_sr,
                 audio_ch,
+                audio_stream: None,
                 generation: 0,
                 start_offset: Duration::ZERO,
             };
@@ -510,6 +515,29 @@ impl MediaSession {
 
     pub fn info(&self) -> MediaInfo {
         self.inner.lock().info.clone()
+    }
+
+    /// A2 — selecciona la pista de audio por índice **absoluto** de stream y
+    /// respawnea desde `from` (la posición actual, para no reiniciar). Como el
+    /// seek: bumpea la generación, y los sources de audio/video re-agarran sus
+    /// pipes en el próximo `tick`/`fill`. El subprocess fuerza el mismo
+    /// `-ar/-ac` de salida, así el sink no ve cambios de formato. No-op en DASH
+    /// (un solo stream de audio) y en plataformas no-unix.
+    pub fn select_audio_stream(&self, index: u32, from: Duration) -> Result<(), FfmpegError> {
+        #[cfg(unix)]
+        {
+            let mut s = self.inner.lock();
+            if s.info.audio_path.is_some() {
+                return Ok(()); // DASH: un solo audio, nada que re-mapear.
+            }
+            s.audio_stream = Some(index);
+            spawn_into(&mut s, from)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (index, from);
+            Err(FfmpegError::Unsupported)
+        }
     }
 }
 
@@ -581,8 +609,16 @@ fn spawn_into(inner: &mut SessionInner, from: Duration) -> Result<(), FfmpegErro
     if want_audio {
         let sr = inner.audio_sr.to_string();
         let ch = inner.audio_ch.to_string();
+        // A2 — pista de audio seleccionable: con un índice elegido mapeamos ese
+        // stream **absoluto** de la entrada 0 (`0:<idx>`); si no, la primera de
+        // audio (`<input>:a:0`). En DASH el audio sale de la entrada 1, así que
+        // la selección no aplica (un solo stream de audio).
+        let audio_map = match inner.audio_stream {
+            Some(idx) if audio_input == 0 => format!("0:{idx}"),
+            _ => format!("{audio_input}:a:0"),
+        };
         cmd.arg("-map")
-            .arg(format!("{audio_input}:a:0"))
+            .arg(audio_map)
             .arg("-vn")
             .arg("-ar")
             .arg(sr)

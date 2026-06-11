@@ -95,6 +95,7 @@ use media_core::metadata::{self, Metadata};
 use media_core::toolbar::{BarItem, BarPosition};
 use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
 use media_core::viewport::{compute_layout, ViewControl};
+use media_core::tracks::TrackSet;
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use media_core::sync::{AvSync, FramePlan};
@@ -1210,6 +1211,22 @@ fn ffmpeg_session_slot() -> &'static OnceLock<Option<MediaSession>> {
     &SLOT
 }
 
+/// Conjunto de pistas (audio/subtítulos) del medio actual (A2/S2), construido
+/// de `MediaInfo.tracks` la primera vez que se consulta — para entonces la
+/// sesión ffmpeg ya está abierta. `None` si no hay sesión ffmpeg (fuentes
+/// nativas / tono). Sólo se cicla la pista de audio por ahora (S2 embebido
+/// queda pendiente del pipeline de extracción).
+fn tracks() -> &'static Mutex<Option<TrackSet>> {
+    static SLOT: OnceLock<Mutex<Option<TrackSet>>> = OnceLock::new();
+    SLOT.get_or_init(|| {
+        let ts = ffmpeg_session_slot()
+            .get()
+            .and_then(|o| o.as_ref())
+            .map(|s| TrackSet::from_tracks(s.info().tracks));
+        Mutex::new(ts)
+    })
+}
+
 /// Adapter que comparte una fuente vía `Arc<Mutex<T>>` sin moverla.
 /// El cpal sink ve un `AudioSource` normal; otros consumidores (la UI
 /// para seek/position) pueden seguir hablando con el inner por la
@@ -1855,6 +1872,7 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (BookmarkToggle, "Marcas"),
         (BookmarkNext, "Marcas"),
         (BookmarkPrev, "Marcas"),
+        (CycleAudioTrack, "Pistas"),
     ];
     let mut catalog = Vec::with_capacity(acciones.len());
     let mut cmds = Vec::with_capacity(acciones.len());
@@ -2207,6 +2225,38 @@ fn apply_command(cmd: MediaCommand) {
         ViewReset => {
             viewcontrol().lock().reset();
             osd_flash("Vista original");
+        }
+        CycleAudioTrack => {
+            let Some(session) = ffmpeg_session_slot().get().and_then(|o| o.as_ref()) else {
+                osd_flash("Sin pistas de audio");
+                return;
+            };
+            let mut guard = tracks().lock();
+            let Some(ts) = guard.as_mut() else {
+                drop(guard);
+                osd_flash("Sin pistas de audio");
+                return;
+            };
+            if !ts.has_audio_choice() {
+                drop(guard);
+                osd_flash("Una sola pista de audio");
+                return;
+            }
+            // Ciclamos la selección y leemos índice + etiqueta de la nueva pista.
+            let picked = ts.cycle_audio().map(|t| (t.index, t.label()));
+            drop(guard);
+            if let Some((index, label)) = picked {
+                // Respawn de ffmpeg con el nuevo `-map` desde la posición actual
+                // (snapshot no-bloqueante; no tocamos el lock del Playlist).
+                let from = playback_snapshot().position;
+                match session.select_audio_stream(index, from) {
+                    Ok(()) => {
+                        reset_av_sync_anchor();
+                        osd_flash(format!("Audio: {label}"));
+                    }
+                    Err(e) => eprintln!("media-app: cambio de pista de audio: {e}"),
+                }
+            }
         }
     }
 }

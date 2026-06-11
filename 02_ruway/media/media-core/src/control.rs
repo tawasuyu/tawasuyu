@@ -136,6 +136,8 @@ pub enum MediaCommand {
     ViewPanBy { dx: f32, dy: f32 },
     /// Vuelve la vista al encaje neutro (Ajustar, sin zoom/pan/crop). V2.
     ViewReset,
+    /// Cicla la pista de audio (archivos multi-stream / multi-idioma). A2.
+    CycleAudioTrack,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -238,6 +240,7 @@ impl MediaCommand {
             ViewZoomBy { .. } => "Acercar (zoom +)".to_string(),
             ViewPanBy { .. } => "Paneo del video".to_string(),
             ViewReset => "Vista original (sin zoom/pan)".to_string(),
+            CycleAudioTrack => "Pista de audio (ciclar)".to_string(),
         }
     }
 }
