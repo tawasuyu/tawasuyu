@@ -886,12 +886,12 @@ pub fn root(model: &Model) -> View<Msg> {
     let (sw, sh) = model.screen;
     let mut superficies: Vec<View<Msg>> = Vec::new();
 
-    // Datos del host muestreados por el Model: portapapeles y tray ya funcionan en
-    // este path winit. El `window_list` queda vacío hasta que el compositor mirada
-    // exponga sus toplevels por IPC (en layer-shell sí se llena).
+    // Datos del host muestreados por el Model: portapapeles, tray y el
+    // `window_list` (este último vía `mirada-ctl windows`, muestreado en el Tick;
+    // en layer-shell la lista sale de los toplevels Wayland directos).
     let tray_items = model.tray.as_ref().map(|t| t.items()).unwrap_or_default();
     let data = BarData {
-        windows: &[],
+        windows: &model.windows,
         clipboard: model.clipboard.as_deref(),
         tray: &tray_items,
         weather: model.weather_now.as_ref(),

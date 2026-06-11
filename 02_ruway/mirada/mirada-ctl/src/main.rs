@@ -42,7 +42,13 @@ fn run(args: &[String]) -> Result<(), String> {
         }
         Some("windows") => match request(CtlRequest::ListWindows)? {
             CtlReply::Windows(ws) => {
-                print_windows(&ws);
+                // `--porcelain`: una línea TAB-separada por ventana, para que la
+                // consuma la barra (`pata`) sin parsear la tabla humana.
+                if args.iter().any(|a| a == "--porcelain") {
+                    print_windows_porcelain(&ws);
+                } else {
+                    print_windows(&ws);
+                }
                 Ok(())
             }
             CtlReply::Error(e) => Err(e),
@@ -109,6 +115,20 @@ fn print_windows(windows: &[WindowLine]) {
     }
 }
 
+/// Imprime las ventanas en formato **porcelain**: una línea por ventana, campos
+/// separados por TAB, pensada para que la consuma un *task manager* (la barra de
+/// `pata` en el backend winit) sin parsear la tabla humana:
+/// `id\tworkspace\tfocused\tapp_id\ttitle`. El título puede llevar espacios pero
+/// no tabs, así que el separador es estable aunque el `app_id` esté vacío.
+fn print_windows_porcelain(windows: &[WindowLine]) {
+    for w in windows {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            w.id, w.workspace, w.focused as u8, w.app_id, w.title
+        );
+    }
+}
+
 /// Imprime el estado de los escritorios en **una línea key=value** estable —
 /// pensada para que la consuma un *workspace switcher* (la barra de `pata`) sin
 /// parsear texto humano: `active=2 count=9 loads=1,0,3,0,0,0,0,0,0`.
@@ -128,7 +148,7 @@ fn print_help() {
          \n\
          USO:\n  \
            mirada-ctl <acción>      aplica una acción de escritorio\n  \
-           mirada-ctl windows       lista las ventanas\n  \
+           mirada-ctl windows       lista las ventanas (--porcelain: TAB-separado)\n  \
            mirada-ctl workspaces    estado de los escritorios (active/count/loads)\n  \
            mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
            mirada-ctl actions       lista las acciones disponibles\n\

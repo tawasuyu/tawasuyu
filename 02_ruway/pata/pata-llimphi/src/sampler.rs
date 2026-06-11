@@ -14,6 +14,8 @@ use chrono::{Datelike, Local, Timelike, Utc};
 
 use pata_core::widget::{ClockReading, WidgetCtx, MAX_CORES};
 
+use crate::toplevel::WindowEntry;
+
 /// Duración del mes sinódico (de luna nueva a luna nueva), en días.
 const MES_SINODICO: f64 = 29.530588853;
 /// Época de referencia de luna nueva: 2000-01-06 18:14 UTC, en días julianos.
@@ -404,6 +406,43 @@ mod tests {
         let uso = 1.0 - di as f32 / dt as f32;
         assert!((uso - 0.5).abs() < 1e-6);
     }
+
+    #[test]
+    fn parse_windows_lee_la_salida_porcelain() {
+        // `id\tworkspace\tfocused\tapp_id\ttitle`. La enfocada (focused=1) marca
+        // `active`; la etiqueta es el título si lo hay.
+        let s = "5\t2\t1\tfirefox\tMozilla Firefox\n\
+                 7\t1\t0\torg.kde.konsole\tKonsole\n";
+        let ws = super::parse_windows(s);
+        assert_eq!(ws.len(), 2);
+        assert_eq!(ws[0].id, 5);
+        assert_eq!(ws[0].label, "Mozilla Firefox"); // título con espacios intacto
+        assert_eq!(ws[0].app_id, "firefox");
+        assert!(ws[0].active);
+        assert!(!ws[1].active);
+    }
+
+    #[test]
+    fn parse_windows_app_id_vacio_cae_al_titulo_y_titulo_vacio_al_app_id() {
+        // app_id vacío: el TAB separa limpio, la etiqueta cae al título.
+        let a = super::parse_windows("3\t1\t0\t\tDocumento sin guardar\n");
+        assert_eq!(a[0].label, "Documento sin guardar");
+        assert_eq!(a[0].app_id, "");
+        // título vacío: la etiqueta cae al app_id (un chip vacío no se clickea).
+        let b = super::parse_windows("4\t1\t0\txterm\t\n");
+        assert_eq!(b[0].label, "xterm");
+    }
+
+    #[test]
+    fn parse_windows_ignora_lineas_malformadas() {
+        // Menos de 5 campos o id no numérico: se descartan sin romper.
+        let s = "no-es-id\t1\t0\tapp\ttitulo\n\
+                 solo\tdos\n\
+                 9\t1\t1\tvalida\tOK\n";
+        let ws = super::parse_windows(s);
+        assert_eq!(ws.len(), 1);
+        assert_eq!(ws[0].id, 9);
+    }
 }
 
 /// Brillo `0..1` desde el primer dispositivo en `/sys/class/backlight`. `None`
@@ -543,6 +582,74 @@ fn parse_workspaces(s: &str) -> Option<(u8, u8, u16)> {
     let count = count.filter(|&c| c > 0).unwrap_or(loads_len);
     let active = active?;
     (count > 0).then_some((active, count, occupied))
+}
+
+// --- Lista de ventanas (task manager, backend winit) --------------------------
+//
+// En layer-shell el `window_list` se alimenta de `wlr-foreign-toplevel` directo
+// (ver `crate::layer`). En el backend winit no hay ese protocolo, así que pata
+// le pide la lista al WM por su CLI —igual que el switcher de escritorios—:
+// **lee** con `mirada-ctl windows --porcelain` y **activa** con
+// `mirada-ctl focus-window N`. Si ningún WM responde, la lista queda vacía y el
+// task manager no pinta nada (no rompe).
+
+/// La lista de ventanas abiertas por la CLI del WM, para el `window_list` en el
+/// backend winit. `Vec` vacío si no hay compositor que responda (`mirada-ctl`
+/// falla o no está). Corre un subproceso por muestreo (~1Hz), barato a esa
+/// frecuencia.
+pub fn sample_windows() -> Vec<WindowEntry> {
+    match run("mirada-ctl", &["windows", "--porcelain"]) {
+        Some(out) => parse_windows(&out),
+        None => Vec::new(),
+    }
+}
+
+/// Parsea la salida porcelain de `mirada-ctl windows --porcelain`: una línea por
+/// ventana, campos TAB-separados `id\tworkspace\tfocused\tapp_id\ttitle`. El
+/// `id` de mirada es `u64`, pero [`WindowEntry::id`] es `u32` (en layer-shell es
+/// un contador local); el casteo es exacto porque un WM nunca abre 2³² ventanas
+/// en una sesión, y el valor round-trip-ea a `focus-window N` sin pérdida. El
+/// `workspace` no se usa en la lista plana; mirada no reporta `minimized` por
+/// esta vía, así que queda en `false`. Líneas con menos de 5 campos se ignoran.
+fn parse_windows(s: &str) -> Vec<WindowEntry> {
+    let mut out = Vec::new();
+    for line in s.lines() {
+        let mut campos = line.splitn(5, '\t');
+        let (Some(id), Some(_ws), Some(focused), Some(app_id), Some(title)) = (
+            campos.next(),
+            campos.next(),
+            campos.next(),
+            campos.next(),
+            campos.next(),
+        ) else {
+            continue;
+        };
+        let Ok(id) = id.parse::<u64>() else { continue };
+        // La etiqueta: título si lo hay, si no el app_id, si no un genérico —
+        // espeja `Toplevel::etiqueta`, un chip vacío no se podría clickear.
+        let label = if !title.is_empty() {
+            title.to_string()
+        } else if !app_id.is_empty() {
+            app_id.to_string()
+        } else {
+            "ventana".to_string()
+        };
+        out.push(WindowEntry {
+            id: id as u32,
+            label,
+            app_id: app_id.to_string(),
+            active: focused == "1",
+            minimized: false,
+        });
+    }
+    out
+}
+
+/// Activa la ventana `id` del `window_list` pidiéndoselo al WM
+/// (`mirada-ctl focus-window N`). Desacoplado (no espera), como
+/// [`switch_workspace`]: se llama desde el hilo de UI al clickear un chip.
+pub fn activate_window(id: u32) {
+    crate::spawn_cmd(&format!("mirada-ctl focus-window {id}"));
 }
 
 /// Ajusta el brillo de la pantalla en pasos de 5% (relativo). `up` sube, `!up`

@@ -512,6 +512,11 @@ pub struct Model {
     pub nav: NavState,
     /// Tamaño de la pantalla en píxeles.
     pub screen: (i32, i32),
+    /// Ventanas abiertas para el `window_list`, en el backend winit. Se muestrean
+    /// cada tick por `mirada-ctl windows --porcelain` (en layer-shell la lista
+    /// sale de `wlr-foreign-toplevel` directo, ver [`crate::layer`]). Vacío si no
+    /// hay compositor que responda.
+    pub windows: Vec<crate::toplevel::WindowEntry>,
 }
 
 impl Model {
@@ -724,6 +729,7 @@ impl App for PataApp {
             cava_frame: Vec::new(),
             nav: NavState::default(),
             screen,
+            windows: Vec::new(),
         };
         // Primer tick para que los widgets arranquen con datos.
         model.tick_widgets(&ctx);
@@ -763,6 +769,11 @@ impl App for PataApp {
                     if let Some(w) = h.latest() {
                         model.weather_now = Some(w);
                     }
+                }
+                // Lista de ventanas para el task manager: sólo si la config la
+                // declara (no molestar al WM con un subproceso por tick de balde).
+                if config_tiene_widget(&model.cfg, "window_list") {
+                    model.windows = sampler::sample_windows();
                 }
             }
             Msg::CavaTick => {
@@ -922,9 +933,12 @@ impl App for PataApp {
                     t.activate(key);
                 }
             }
-            // El window_list necesita el cliente foreign-toplevel del backend
-            // layer-shell; bajo el compositor mirada llegará por su IPC. No-op acá.
-            Msg::ActivateWindow(_) => {}
+            // En layer-shell el window_list resuelve el id por su cliente
+            // foreign-toplevel; en winit lo muestreamos del WM y activamos por su
+            // CLI (`mirada-ctl focus-window N`).
+            Msg::ActivateWindow(id) => sampler::activate_window(id),
+            // mirada-ctl sólo cierra la enfocada (no por id), así que el cierre
+            // del task manager queda al backend layer-shell. No-op en winit.
             Msg::CloseWindow(_) => {}
             // --- Sidebar navegador (Fase 11c) ---
             Msg::NavTabActivate(si, ti) => model.nav.toggle_tab(si, ti),
