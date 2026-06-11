@@ -42,7 +42,8 @@ impl WawaImgSource {
     }
 
     /// Construye el `Node` de un objeto del grafo. El nombre es el hash
-    /// corto; es contenedor si tiene hijos.
+    /// corto; es contenedor si tiene hijos; el tamaño es el del payload
+    /// (gratis: el objeto ya está en memoria).
     fn nodo_de(&self, hash: &[u8; 32], nombre: Option<String>) -> Node {
         let hex = to_hex(hash);
         let nombre = nombre.unwrap_or_else(|| hex.chars().take(12).collect());
@@ -51,7 +52,11 @@ impl WawaImgSource {
             .hijos(hash)
             .map(|h| !h.is_empty())
             .unwrap_or(false);
-        Node::new(hex, nombre, es_contenedor)
+        let mut nodo = Node::new(hex, nombre, es_contenedor);
+        if let Some(obj) = self.disco.objeto(hash) {
+            nodo = nodo.with_size(obj.datos.len() as u64);
+        }
+        nodo
     }
 
     fn parse_id(id: &NodeId) -> io::Result<[u8; 32]> {

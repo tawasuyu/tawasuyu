@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use chasqui_core::cluster::by_directory;
 use chasqui_core::scanner::{scan_directory, ScanConfig};
 
-use crate::{Node, NodeId, Source};
+use crate::{Node, NodeId, NodeKind, Source};
 
 /// Id de la raíz sintética que lista las Mónadas.
 const RAIZ: &str = "@monadas";
@@ -87,9 +87,21 @@ impl NouserSource {
     }
 
     fn nodo_archivo(&self, fid: &str) -> Option<Node> {
-        self.archivos
-            .get(fid)
-            .map(|a| Node::new(format!("{PREF_ARCHIVO}{fid}"), a.nombre.clone(), false))
+        self.archivos.get(fid).map(|a| {
+            let mut nodo = Node::new(format!("{PREF_ARCHIVO}{fid}"), a.nombre.clone(), false);
+            // Los miembros de una Mónada son archivos POSIX reales: stat barato
+            // para la columna tamaño/fecha de la vista detalle.
+            if let Ok(m) = std::fs::metadata(&a.ruta) {
+                nodo = nodo.with_size(m.len());
+                if let Ok(ms) = m
+                    .modified()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).map_err(std::io::Error::other))
+                {
+                    nodo = nodo.with_mtime(ms.as_millis() as u64);
+                }
+            }
+            nodo
+        })
     }
 }
 
@@ -99,7 +111,7 @@ impl Source for NouserSource {
     }
 
     fn root(&self) -> Node {
-        Node::new(RAIZ, self.etiqueta.clone(), true)
+        Node::new(RAIZ, self.etiqueta.clone(), true).with_kind(NodeKind::Synthetic)
     }
 
     fn children(&self, id: &NodeId) -> io::Result<Vec<Node>> {
@@ -108,11 +120,13 @@ impl Source for NouserSource {
                 .monadas
                 .iter()
                 .map(|m| {
+                    // Una Mónada es un contenedor sintético: no existe en disco.
                     Node::new(
                         format!("{PREF_MONADA}{}", m.id),
                         format!("{} ({})", m.label, m.miembros.len()),
                         true,
                     )
+                    .with_kind(NodeKind::Synthetic)
                 })
                 .collect());
         }

@@ -55,8 +55,29 @@ pub use minga::MingaSource;
 /// absoluta; wawa usa el hash en hex. No mezclar ids entre fuentes.
 pub type NodeId = String;
 
+/// Naturaleza de un nodo — para iconografía y para la columna "tipo" de la
+/// vista detalle. Es ortogonal a `is_container` (que es la bandera de
+/// navegabilidad): un `Archive` o un `Symlink`-a-dir pueden ser contenedores.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum NodeKind {
+    /// Archivo regular (hoja POSIX o equivalente).
+    #[default]
+    File,
+    /// Directorio / contenedor jerárquico.
+    Dir,
+    /// Enlace simbólico (POSIX). `is_container` refleja a qué apunta.
+    Symlink,
+    /// Archivo-contenedor (zip/tar) montable como carpeta.
+    Archive,
+    /// Contenedor sintético que no existe como entidad física (la raíz
+    /// `@imagen` de wawa, una Mónada de nouser, la raíz `@nodos` de minga).
+    Synthetic,
+}
+
 /// Un nodo del árbol de una [`Source`]: lo mínimo que la UI necesita para
-/// pintar una fila y decidir si se puede descender.
+/// pintar una fila y decidir si se puede descender. Los campos de metadata
+/// son `Option` a propósito — una fuente que no los tiene (clusters
+/// sintéticos, DAGs anónimos) devuelve `None` y la columna sale "—".
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Node {
     /// Identidad estable dentro de la fuente (ver [`NodeId`]).
@@ -66,16 +87,54 @@ pub struct Node {
     /// `true` si se puede descender (tiene hijos / es directorio); `false`
     /// si es una hoja que se abre en el visor.
     pub is_container: bool,
+    /// Tamaño en bytes, si la fuente lo conoce.
+    pub size: Option<u64>,
+    /// Última modificación en epoch-ms, si la fuente lo conoce.
+    pub mtime: Option<u64>,
+    /// Naturaleza del nodo (para icono y columna "tipo").
+    pub kind: NodeKind,
+    /// MIME ya sabido por la fuente — evita re-discernir el contenido si la
+    /// fuente ya lo tiene (p. ej. una entrada de archivo con tipo declarado).
+    pub mime_hint: Option<String>,
 }
 
 impl Node {
-    /// Atajo para construir un nodo.
+    /// Atajo para construir un nodo. `kind` se deriva de `is_container`
+    /// (`Dir`/`File`); usá los `with_*` para refinar metadata.
     pub fn new(id: impl Into<NodeId>, name: impl Into<String>, is_container: bool) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
             is_container,
+            size: None,
+            mtime: None,
+            kind: if is_container { NodeKind::Dir } else { NodeKind::File },
+            mime_hint: None,
         }
+    }
+
+    /// Fija el tamaño en bytes.
+    pub fn with_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
+    }
+
+    /// Fija la última modificación en epoch-ms.
+    pub fn with_mtime(mut self, mtime_ms: u64) -> Self {
+        self.mtime = Some(mtime_ms);
+        self
+    }
+
+    /// Fija la naturaleza del nodo (anula la derivada de `is_container`).
+    pub fn with_kind(mut self, kind: NodeKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// Fija el MIME conocido por la fuente.
+    pub fn with_mime_hint(mut self, mime: impl Into<String>) -> Self {
+        self.mime_hint = Some(mime.into());
+        self
     }
 }
 
@@ -99,6 +158,52 @@ pub trait Source: Send + Sync {
     /// Bytes de una hoja — para discernir (`shuma-discern`) y visualizar.
     /// Error si el id no existe o no tiene contenido leíble.
     fn read(&self, id: &NodeId) -> std::io::Result<Vec<u8>>;
+
+    /// Si la fuente soporta mutación, devuelve su cara [`SourceMut`]; si es
+    /// read-only (wawa/minga son CAS inmutables, nouser es derivado), `None`.
+    ///
+    /// El front gatea la UI con esto: sin `SourceMut`, los ítems de operación
+    /// (crear/borrar/renombrar/mover/copiar) salen deshabilitados. Frontera
+    /// honesta — no se finge escritura sobre lo que no la tiene.
+    fn writable(&self) -> Option<&dyn SourceMut> {
+        None
+    }
+}
+
+/// La cara **mutable** de una fuente. Trait aparte (no métodos en [`Source`])
+/// para que las fuentes inmutables —wawa y minga son content-addressed, sus
+/// objetos no se editan en sitio; nouser es un derivado de POSIX— no tengan
+/// que fingir operaciones que no existen. Hoy sólo [`posix::PosixSource`] lo
+/// implementa.
+///
+/// Todas las operaciones toman `&self` (no `&mut`): el estado mutable vive en
+/// el filesystem, no en el adapter, así que no hace falta exclusividad. Eso
+/// también mantiene el trait object-safe detrás de un `&dyn`.
+pub trait SourceMut: Source {
+    /// Crea un directorio `name` dentro del contenedor `parent`. Devuelve el
+    /// [`NodeId`] del nuevo directorio.
+    fn create_dir(&self, parent: &NodeId, name: &str) -> std::io::Result<NodeId>;
+
+    /// Crea un archivo vacío `name` dentro de `parent`. Devuelve su id.
+    fn create_file(&self, parent: &NodeId, name: &str) -> std::io::Result<NodeId>;
+
+    /// Borra el nodo `id` (recursivo si es contenedor).
+    fn delete(&self, id: &NodeId) -> std::io::Result<()>;
+
+    /// Renombra el nodo `id` a `new_name`, dentro de su mismo contenedor.
+    /// Devuelve el nuevo id (la identidad puede cambiar — en POSIX el id ES
+    /// la ruta).
+    fn rename(&self, id: &NodeId, new_name: &str) -> std::io::Result<NodeId>;
+
+    /// Mueve `id` al contenedor `new_parent`. Devuelve el id resultante.
+    fn move_into(&self, id: &NodeId, new_parent: &NodeId) -> std::io::Result<NodeId>;
+
+    /// Copia `id` (recursivo si es contenedor) dentro de `new_parent`.
+    /// Devuelve el id de la copia.
+    fn copy_into(&self, id: &NodeId, new_parent: &NodeId) -> std::io::Result<NodeId>;
+
+    /// Sobrescribe los bytes de la hoja `id`.
+    fn write(&self, id: &NodeId, bytes: &[u8]) -> std::io::Result<()>;
 }
 
 /// Codifica 32 bytes a hex en minúscula (64 chars). Compartido por el
