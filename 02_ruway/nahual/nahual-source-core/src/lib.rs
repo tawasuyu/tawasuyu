@@ -39,7 +39,7 @@ pub mod nouser;
 #[cfg(feature = "minga")]
 pub mod minga;
 
-pub use navigator::{Navigator, Opened};
+pub use navigator::{Navigator, Opened, SortDir, SortKey, ViewMode};
 pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
 #[cfg(feature = "nouser")]

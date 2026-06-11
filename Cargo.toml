@@ -272,6 +272,7 @@ members = [
     "02_ruway/llimphi/widgets/nodegraph",
     "02_ruway/llimphi/widgets/tree",
     "02_ruway/llimphi/widgets/navigator",
+    "02_ruway/llimphi/widgets/detail-table",
     "02_ruway/llimphi/widgets/select",
     "02_ruway/llimphi/widgets/terminal",
     "02_ruway/llimphi/widgets/transport",
@@ -712,6 +713,7 @@ llimphi-widget-tiled = { path = "02_ruway/llimphi/widgets/tiled" }
 llimphi-widget-nodegraph = { path = "02_ruway/llimphi/widgets/nodegraph" }
 llimphi-widget-tree = { path = "02_ruway/llimphi/widgets/tree" }
 llimphi-widget-navigator = { path = "02_ruway/llimphi/widgets/navigator" }
+llimphi-widget-detail-table = { path = "02_ruway/llimphi/widgets/detail-table" }
 llimphi-widget-select = { path = "02_ruway/llimphi/widgets/select" }
 llimphi-widget-terminal = { path = "02_ruway/llimphi/widgets/terminal" }
 # Sello vectorial wawa (rombo + W implícita + Merkle Core).

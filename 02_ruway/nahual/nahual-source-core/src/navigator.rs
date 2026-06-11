@@ -11,9 +11,10 @@
 //! `dyn Source`. Montar una imagen wawa = `Navigator::open(Box::new(
 //! WawaImgSource::abrir(...)?))` — el mismo navegador, otro backend.
 
+use std::cmp::Ordering;
 use std::io;
 
-use crate::{Node, NodeId, Source};
+use crate::{Node, NodeId, NodeKind, Source};
 
 /// Cuántas filas se ven a la vez por defecto (mismo calibrado que el
 /// explorador POSIX histórico).
@@ -25,6 +26,71 @@ pub enum Opened {
     Descended,
     /// Era una hoja: su [`NodeId`] para que el caller lea sus bytes.
     Leaf(NodeId),
+}
+
+/// Por qué columna se ordenan los hijos del contenedor actual.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SortKey {
+    /// Alfabético por nombre (default, case-insensitive).
+    #[default]
+    Name,
+    /// Por tamaño en bytes.
+    Size,
+    /// Por última modificación.
+    Mtime,
+    /// Por naturaleza del nodo (dir/file/symlink…).
+    Kind,
+}
+
+/// Dirección del orden.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDir {
+    Asc,
+    Desc,
+}
+
+impl SortDir {
+    fn toggle(self) -> Self {
+        match self {
+            SortDir::Asc => SortDir::Desc,
+            SortDir::Desc => SortDir::Asc,
+        }
+    }
+}
+
+impl SortKey {
+    /// Dirección natural al elegir esta columna por primera vez: nombre y tipo
+    /// ascendentes; tamaño y fecha descendentes (lo grande/lo nuevo primero,
+    /// como en un file manager típico).
+    fn default_dir(self) -> SortDir {
+        match self {
+            SortKey::Name | SortKey::Kind => SortDir::Asc,
+            SortKey::Size | SortKey::Mtime => SortDir::Desc,
+        }
+    }
+}
+
+/// Cómo presenta el caller los hijos (lista simple vs grilla detalle). Vive
+/// acá para que sobreviva a descender/subir y se comparta entre fuentes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    /// Una columna (nombre). El modo histórico.
+    #[default]
+    List,
+    /// Grilla con columnas nombre/tamaño/fecha/tipo (vista detalle Dopus).
+    Details,
+}
+
+/// Orden de un `NodeKind` para la columna "tipo": contenedores sintéticos y
+/// dirs arriba, luego archivos, symlinks, archives.
+fn kind_rank(k: NodeKind) -> u8 {
+    match k {
+        NodeKind::Dir => 0,
+        NodeKind::Synthetic => 1,
+        NodeKind::Archive => 2,
+        NodeKind::File => 3,
+        NodeKind::Symlink => 4,
+    }
 }
 
 /// Estado de navegación sobre una [`Source`]. El caller lo guarda en su
@@ -39,6 +105,14 @@ pub struct Navigator {
     pub visible_offset: usize,
     pub visible_rows: usize,
     wheel_accum: f32,
+    /// Columna y dirección de orden de los hijos del contenedor actual.
+    sort_key: SortKey,
+    sort_dir: SortDir,
+    /// Modo de presentación (lista vs detalle). El widget lo lee.
+    pub view: ViewMode,
+    /// Filtro vivo por substring del nombre (case-insensitive). Vacío = todo
+    /// visible.
+    filter: String,
 }
 
 impl Navigator {
@@ -47,7 +121,7 @@ impl Navigator {
     pub fn open(source: Box<dyn Source>) -> io::Result<Self> {
         let root = source.root();
         let children = source.children(&root.id)?;
-        Ok(Self {
+        let mut nav = Self {
             source,
             stack: vec![root],
             children,
@@ -55,7 +129,13 @@ impl Navigator {
             visible_offset: 0,
             visible_rows: DEFAULT_VISIBLE_ROWS,
             wheel_accum: 0.0,
-        })
+            sort_key: SortKey::default(),
+            sort_dir: SortKey::default().default_dir(),
+            view: ViewMode::default(),
+            filter: String::new(),
+        };
+        nav.apply_sort();
+        Ok(nav)
     }
 
     /// Nombre humano de la fuente (para el header).
@@ -93,22 +173,24 @@ impl Navigator {
         self.source.read(id)
     }
 
-    /// Mueve la selección una fila arriba.
+    /// Mueve la selección a la fila visible anterior (salta lo filtrado).
     pub fn up(&mut self) -> bool {
-        if self.selected == 0 {
+        let Some(prev) = (0..self.selected).rev().find(|&i| self.passes(&self.children[i])) else {
             return false;
-        }
-        self.selected -= 1;
+        };
+        self.selected = prev;
         self.sync_offset();
         true
     }
 
-    /// Mueve la selección una fila abajo.
+    /// Mueve la selección a la fila visible siguiente (salta lo filtrado).
     pub fn down(&mut self) -> bool {
-        if self.selected + 1 >= self.children.len() {
+        let Some(next) =
+            (self.selected + 1..self.children.len()).find(|&i| self.passes(&self.children[i]))
+        else {
             return false;
-        }
-        self.selected += 1;
+        };
+        self.selected = next;
         self.sync_offset();
         true
     }
@@ -134,6 +216,7 @@ impl Navigator {
             let children = self.source.children(&node.id)?;
             self.stack.push(node);
             self.children = children;
+            self.apply_sort();
             self.selected = 0;
             self.visible_offset = 0;
             Ok(Some(Opened::Descended))
@@ -152,6 +235,7 @@ impl Navigator {
         let dejado = self.stack.pop().expect("len > 1");
         let actual = self.stack.last().expect("queda al menos la raíz");
         self.children = self.source.children(&actual.id)?;
+        self.apply_sort();
         self.selected = self
             .children
             .iter()
@@ -183,6 +267,105 @@ impl Navigator {
             self.visible_offset = (self.visible_offset + steps as usize).min(max_offset);
         } else {
             self.visible_offset = self.visible_offset.saturating_sub((-steps) as usize);
+        }
+    }
+
+    // =================================================================
+    // Orden, modo de vista y filtro (Fase 4.1)
+    // =================================================================
+
+    /// Columna y dirección de orden activas (para la flecha del encabezado).
+    pub fn sort(&self) -> (SortKey, SortDir) {
+        (self.sort_key, self.sort_dir)
+    }
+
+    /// Elige la columna de orden: si ya era la activa, invierte la dirección;
+    /// si no, la activa con su dirección natural. Re-ordena preservando qué
+    /// nodo estaba seleccionado.
+    pub fn set_sort(&mut self, key: SortKey) {
+        if self.sort_key == key {
+            self.sort_dir = self.sort_dir.toggle();
+        } else {
+            self.sort_key = key;
+            self.sort_dir = key.default_dir();
+        }
+        let sel_id = self.children.get(self.selected).map(|n| n.id.clone());
+        self.apply_sort();
+        if let Some(id) = sel_id {
+            if let Some(pos) = self.children.iter().position(|n| n.id == id) {
+                self.selected = pos;
+            }
+        }
+        self.sync_offset();
+    }
+
+    /// Ordena `self.children` in situ según `sort_key`/`sort_dir`. Los
+    /// contenedores van SIEMPRE arriba (agrupados), sin importar la dirección
+    /// — convención de file manager; dentro de cada grupo manda la columna.
+    fn apply_sort(&mut self) {
+        let key = self.sort_key;
+        let dir = self.sort_dir;
+        self.children.sort_by(|a, b| {
+            // Grupo: contenedores primero (no se invierte con la dirección).
+            let grupo = b.is_container.cmp(&a.is_container);
+            if grupo != Ordering::Equal {
+                return grupo;
+            }
+            let base = match key {
+                SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                SortKey::Size => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
+                SortKey::Mtime => a.mtime.unwrap_or(0).cmp(&b.mtime.unwrap_or(0)),
+                SortKey::Kind => kind_rank(a.kind).cmp(&kind_rank(b.kind)),
+            };
+            let base = match dir {
+                SortDir::Asc => base,
+                SortDir::Desc => base.reverse(),
+            };
+            // Desempate estable por nombre ascendente.
+            base.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+        });
+    }
+
+    /// El filtro vivo actual (substring del nombre).
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Fija el filtro y reubica la selección al primer nodo visible si el
+    /// seleccionado quedó oculto.
+    pub fn set_filter(&mut self, filter: String) {
+        self.filter = filter;
+        if !self.children.is_empty() && !self.passes(&self.children[self.selected.min(self.children.len() - 1)]) {
+            if let Some(i) = (0..self.children.len()).find(|&i| self.passes(&self.children[i])) {
+                self.selected = i;
+            }
+        }
+        self.visible_offset = 0;
+        self.sync_offset();
+    }
+
+    /// `true` si el nodo pasa el filtro vivo.
+    fn passes(&self, n: &Node) -> bool {
+        self.filter.is_empty() || n.name.to_lowercase().contains(&self.filter.to_lowercase())
+    }
+
+    /// Los hijos visibles (que pasan el filtro), apareados con su índice real
+    /// en `children` — el caller usa ese índice para `select`/`Msg`. El orden
+    /// es el del `apply_sort`.
+    pub fn visible(&self) -> Vec<(usize, &Node)> {
+        self.children
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| self.passes(n))
+            .collect()
+    }
+
+    /// Cuántos hijos pasan el filtro.
+    pub fn visible_count(&self) -> usize {
+        if self.filter.is_empty() {
+            self.children.len()
+        } else {
+            self.children.iter().filter(|n| self.passes(n)).count()
         }
     }
 
@@ -257,5 +440,58 @@ mod tests {
         assert!(!nav.up());
         assert!(!nav.down());
         assert!(nav.open_selected().unwrap().is_none());
+    }
+
+    /// Arma un dir con tres archivos de tamaños distintos + un subdir.
+    fn arbol_tamanos() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("zdir")).unwrap();
+        fs::write(dir.path().join("grande.txt"), vec![b'x'; 300]).unwrap();
+        fs::write(dir.path().join("medio.txt"), vec![b'x'; 200]).unwrap();
+        fs::write(dir.path().join("chico.txt"), vec![b'x'; 100]).unwrap();
+        dir
+    }
+
+    #[test]
+    fn ordena_por_tamano_con_dirs_arriba() {
+        let dir = arbol_tamanos();
+        let mut nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        nav.set_sort(SortKey::Size); // default_dir = Desc (grande primero)
+        let nombres: Vec<&str> = nav.children().iter().map(|n| n.name.as_str()).collect();
+        // El dir siempre arriba; luego archivos por tamaño descendente.
+        assert_eq!(nombres, vec!["zdir", "grande.txt", "medio.txt", "chico.txt"]);
+        // Invertir: mismo dir arriba, archivos ascendentes.
+        nav.set_sort(SortKey::Size);
+        let nombres: Vec<&str> = nav.children().iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(nombres, vec!["zdir", "chico.txt", "medio.txt", "grande.txt"]);
+    }
+
+    #[test]
+    fn set_sort_preserva_seleccion_por_id() {
+        let dir = arbol_tamanos();
+        let mut nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        // Seleccionar "chico.txt" (orden alfabético: zdir, chico, grande, medio).
+        let idx = nav.children().iter().position(|n| n.name == "chico.txt").unwrap();
+        nav.select(idx);
+        nav.set_sort(SortKey::Size);
+        // Tras reordenar, la selección sigue sobre "chico.txt".
+        assert_eq!(nav.selected_node().unwrap().name, "chico.txt");
+    }
+
+    #[test]
+    fn filtro_oculta_y_navega_solo_visibles() {
+        let dir = arbol_tamanos();
+        let mut nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        nav.set_filter("medio".into());
+        assert_eq!(nav.visible_count(), 1);
+        let vis = nav.visible();
+        assert_eq!(vis.len(), 1);
+        assert_eq!(vis[0].1.name, "medio.txt");
+        // down no se mueve si sólo hay un visible.
+        nav.select(vis[0].0);
+        assert!(!nav.down());
+        // Limpiar el filtro restaura todo.
+        nav.set_filter(String::new());
+        assert_eq!(nav.visible_count(), 4);
     }
 }

@@ -16,6 +16,7 @@ path = "src/main.rs"
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-list = { workspace = true }
+llimphi-widget-detail-table = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }

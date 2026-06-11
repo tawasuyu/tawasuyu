@@ -158,6 +158,9 @@ struct Model {
     mounted: Option<Navigator>,
     /// Ancho del panel izquierdo en px. Lo muta el drag del splitter.
     list_width: f32,
+    /// `true` mientras se teclea el filtro vivo sobre la fuente montada
+    /// (entra con `/`, sale con Esc/Enter). El teclado se captura al filtro.
+    nav_filtering: bool,
     preview: PreviewPane,
     /// Path del archivo previsualizado (header del panel derecho).
     preview_of: Option<PathBuf>,
@@ -259,6 +262,19 @@ enum Msg {
     /// Right-click en la raíz → abre el menú contextual anclado en `(x, y)`
     /// de ventana sobre la entrada seleccionada.
     ContextMenuOpen(f32, f32),
+    /// Click en un encabezado de la vista detalle → ordena por esa columna
+    /// (0 nombre · 1 tamaño · 2 fecha · 3 tipo). Toggle si ya era la activa.
+    NavSortBy(usize),
+    /// Alterna lista ↔ detalle sobre la fuente montada (`v`).
+    NavToggleView,
+    /// Entra en modo filtro vivo de la fuente montada (`/`).
+    NavFilterStart,
+    /// Agrega texto al filtro vivo.
+    NavFilterInput(String),
+    /// Borra el último carácter del filtro.
+    NavFilterBackspace,
+    /// Sale del modo filtro (conserva el filtro aplicado).
+    NavFilterEnd,
 }
 
 struct Shell;
@@ -293,6 +309,7 @@ impl App for Shell {
             explorer: FileExplorerState::new(cwd),
             mounted: None,
             list_width: 400.0,
+            nav_filtering: false,
             preview: PreviewPane::Empty,
             preview_of: None,
             preview_temp: None,
@@ -338,12 +355,26 @@ impl App for Shell {
                 _ => None,
             };
         }
+        // Modo filtro vivo de la fuente montada: captura el teclado para el
+        // filtro por nombre (Fase 4.1).
+        if _model.mounted.is_some() && _model.nav_filtering {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Enter) => Some(Msg::NavFilterEnd),
+                Key::Named(NamedKey::Backspace) => Some(Msg::NavFilterBackspace),
+                Key::Named(NamedKey::Space) => Some(Msg::NavFilterInput(" ".to_string())),
+                Key::Character(c) => Some(Msg::NavFilterInput(c.to_string())),
+                _ => None,
+            };
+        }
         match &e.key {
             Key::Named(NamedKey::ArrowUp) => Some(Msg::Up),
             Key::Named(NamedKey::ArrowDown) => Some(Msg::Down),
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
+            // Sobre una fuente montada: `v` alterna lista/detalle, `/` filtra.
+            Key::Character(c) if c == "v" && _model.mounted.is_some() => Some(Msg::NavToggleView),
+            Key::Character(c) if c == "/" && _model.mounted.is_some() => Some(Msg::NavFilterStart),
             // Puntos de entrada del front universal: montar el directorio
             // objetivo (el subdir seleccionado, o el cwd) como otra `Source`.
             // Sólo desde POSIX — dentro de una fuente montada no aplican.
@@ -471,6 +502,49 @@ impl App for Shell {
                 } else if m.explorer.parent() {
                     refresh_preview(&mut m);
                 }
+            }
+            Msg::NavSortBy(col) => {
+                if let Some(nav) = m.mounted.as_mut() {
+                    let key = match col {
+                        1 => nahual_source_core::SortKey::Size,
+                        2 => nahual_source_core::SortKey::Mtime,
+                        3 => nahual_source_core::SortKey::Kind,
+                        _ => nahual_source_core::SortKey::Name,
+                    };
+                    nav.set_sort(key);
+                }
+            }
+            Msg::NavToggleView => {
+                if let Some(nav) = m.mounted.as_mut() {
+                    nav.view = match nav.view {
+                        nahual_source_core::ViewMode::List => nahual_source_core::ViewMode::Details,
+                        nahual_source_core::ViewMode::Details => nahual_source_core::ViewMode::List,
+                    };
+                }
+            }
+            Msg::NavFilterStart => {
+                if m.mounted.is_some() {
+                    m.nav_filtering = true;
+                }
+            }
+            Msg::NavFilterInput(s) => {
+                if let Some(nav) = m.mounted.as_mut() {
+                    let mut f = nav.filter().to_string();
+                    f.push_str(&s);
+                    nav.set_filter(f);
+                    refresh_preview_nav(&mut m);
+                }
+            }
+            Msg::NavFilterBackspace => {
+                if let Some(nav) = m.mounted.as_mut() {
+                    let mut f = nav.filter().to_string();
+                    f.pop();
+                    nav.set_filter(f);
+                    refresh_preview_nav(&mut m);
+                }
+            }
+            Msg::NavFilterEnd => {
+                m.nav_filtering = false;
             }
             Msg::ResizeList(dx) => {
                 m.list_width = (m.list_width + dx).clamp(220.0, 900.0);
@@ -706,7 +780,7 @@ impl App for Shell {
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = header_bar(model, &theme);
         let list_pane = match &model.mounted {
-            Some(nav) => navigator_list_view(nav, ListPalette::from_theme(&theme)),
+            Some(nav) => nav_pane_view(nav, &theme, model.nav_filtering),
             None => file_explorer_view::<Msg, _>(
                 &model.explorer,
                 ListPalette::from_theme(&theme),
@@ -1126,16 +1200,45 @@ fn sanitizar_nombre(nombre: &str) -> String {
     }
 }
 
-/// Pinta los hijos del contenedor actual de la fuente montada como una lista
+/// Pinta el panel izquierdo de la fuente montada según su `ViewMode`: lista
+/// simple o grilla detalle (Fase 4.1).
+fn nav_pane_view(nav: &Navigator, theme: &Theme, filtering: bool) -> View<Msg> {
+    match nav.view {
+        nahual_source_core::ViewMode::List => {
+            navigator_list_view(nav, ListPalette::from_theme(theme), filtering)
+        }
+        nahual_source_core::ViewMode::Details => navigator_detail_view(nav, theme, filtering),
+    }
+}
+
+/// Sufijo del caption con el estado del filtro y los atajos.
+fn nav_caption(nav: &Navigator, filtering: bool) -> String {
+    let f = nav.filter();
+    if filtering || !f.is_empty() {
+        let cursor = if filtering { "_" } else { "" };
+        format!(
+            "{} de {} · filtro: {f}{cursor}  (Esc sale · v vista)",
+            nav.visible_count(),
+            nav.children().len()
+        )
+    } else {
+        format!(
+            "{} entradas · ↑↓ navega · Enter abre · ⌫ vuelve · v detalle · / filtra",
+            nav.children().len()
+        )
+    }
+}
+
+/// Pinta los hijos visibles (filtrados) del contenedor actual como una lista
 /// `llimphi-widget-list` — el gemelo genérico de `file_explorer_view`.
-fn navigator_list_view(nav: &Navigator, palette: ListPalette) -> View<Msg> {
+fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool) -> View<Msg> {
     use std::cmp::min;
-    let nodes = nav.children();
-    let start = nav.visible_offset.min(nodes.len());
-    let end = min(nodes.len(), start + nav.visible_rows);
-    let rows: Vec<ListRow<Msg>> = (start..end)
-        .map(|idx| {
-            let n = &nodes[idx];
+    let visibles = nav.visible();
+    let start = nav.visible_offset.min(visibles.len());
+    let end = min(visibles.len(), start + nav.visible_rows);
+    let rows: Vec<ListRow<Msg>> = visibles[start..end]
+        .iter()
+        .map(|(idx, n)| {
             let icon = if n.is_container { "▸ " } else { "  " };
             let label = if n.is_container {
                 format!("{icon}{}/", n.name)
@@ -1144,25 +1247,154 @@ fn navigator_list_view(nav: &Navigator, palette: ListPalette) -> View<Msg> {
             };
             ListRow {
                 label,
-                selected: idx == nav.selected,
-                on_click: Msg::Select(idx),
+                selected: *idx == nav.selected,
+                on_click: Msg::Select(*idx),
             }
         })
         .collect();
-    let caption = format!("{} entradas · ↑↓ navega · Enter abre · ⌫ vuelve", nodes.len());
-    let truncated_hint = if nodes.len() > end {
-        Some(format!("… y {} más (rueda o ↓ para ver más)", nodes.len() - end))
+    let truncated_hint = if visibles.len() > end {
+        Some(format!("… y {} más (rueda o ↓ para ver más)", visibles.len() - end))
     } else {
         None
     };
     list_view(ListSpec {
         rows,
-        total: nodes.len(),
-        caption: Some(caption),
+        total: visibles.len(),
+        caption: Some(nav_caption(nav, filtering)),
         truncated_hint,
         row_height: 22.0,
         palette,
     })
+}
+
+/// Pinta los hijos visibles como grilla detalle con columnas ordenables
+/// (nombre · tamaño · modificado · tipo). Click en un encabezado emite
+/// `NavSortBy`; click en una fila selecciona.
+fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool) -> View<Msg> {
+    use llimphi_widget_detail_table::{
+        detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
+    };
+    use nahual_source_core::SortKey;
+
+    let (skey, sdir) = nav.sort();
+    let sort_col = match skey {
+        SortKey::Name => 0,
+        SortKey::Size => 1,
+        SortKey::Mtime => 2,
+        SortKey::Kind => 3,
+    };
+    let dt_dir = match sdir {
+        nahual_source_core::SortDir::Asc => DtDir::Asc,
+        nahual_source_core::SortDir::Desc => DtDir::Desc,
+    };
+
+    let visibles = nav.visible();
+    let start = nav.visible_offset.min(visibles.len());
+    let end = (start + nav.visible_rows).min(visibles.len());
+    let rows: Vec<DetailRow<Msg>> = visibles[start..end]
+        .iter()
+        .map(|(idx, n)| {
+            let icon = kind_icon(n.kind, n.is_container);
+            DetailRow {
+                cells: vec![
+                    format!("{icon} {}", n.name),
+                    n.size.map(human_size).unwrap_or_default(),
+                    n.mtime.map(epoch_ms_to_date).unwrap_or_default(),
+                    kind_label(n.kind, &n.name).to_string(),
+                ],
+                selected: *idx == nav.selected,
+                accent: None,
+                on_click: Msg::Select(*idx),
+            }
+        })
+        .collect();
+
+    let columns = [
+        Column::flex("Nombre", 1.0),
+        Column::fixed("Tamaño", 88.0).right(),
+        Column::fixed("Modificado", 140.0),
+        Column::fixed("Tipo", 84.0),
+    ];
+    detail_table_view(
+        DetailSpec {
+            columns: &columns,
+            rows,
+            sort: Some((sort_col, dt_dir)),
+            row_height: 22.0,
+            caption: Some(nav_caption(nav, filtering)),
+            palette: DetailPalette::from_theme(theme),
+        },
+        Msg::NavSortBy,
+    )
+}
+
+/// Icono de una columna nombre según la naturaleza del nodo.
+fn kind_icon(kind: nahual_source_core::NodeKind, is_container: bool) -> &'static str {
+    use nahual_source_core::NodeKind::*;
+    match kind {
+        Dir => "▸",
+        Synthetic => "◇",
+        Archive => "▤",
+        Symlink => "↪",
+        File if is_container => "▸",
+        File => " ",
+    }
+}
+
+/// Rótulo de la columna "tipo".
+fn kind_label(kind: nahual_source_core::NodeKind, name: &str) -> &'static str {
+    use nahual_source_core::NodeKind::*;
+    match kind {
+        Dir => "carpeta",
+        Synthetic => "mónada",
+        Archive => "archivo",
+        Symlink => "enlace",
+        File => match name.rsplit_once('.').map(|(_, e)| e) {
+            Some("rs") => "rust",
+            Some("md") => "markdown",
+            Some("toml") => "toml",
+            Some("json") => "json",
+            Some("png" | "jpg" | "jpeg" | "webp" | "gif") => "imagen",
+            Some("txt") => "texto",
+            _ => "archivo",
+        },
+    }
+}
+
+/// Tamaño humano compacto (B/KB/MB/GB/TB), una cifra decimal salvo bytes.
+fn human_size(b: u64) -> String {
+    const U: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut val = b as f64;
+    let mut i = 0;
+    while val >= 1024.0 && i < U.len() - 1 {
+        val /= 1024.0;
+        i += 1;
+    }
+    if i == 0 {
+        format!("{b} B")
+    } else {
+        format!("{val:.1} {}", U[i])
+    }
+}
+
+/// Epoch-ms → `YYYY-MM-DD HH:MM` en UTC (civil-from-days de Hinnant). Sin
+/// dependencias de fechas — alcanza para la columna "modificado".
+fn epoch_ms_to_date(ms: u64) -> String {
+    let secs = (ms / 1000) as i64;
+    let days = secs.div_euclid(86_400);
+    let tod = secs.rem_euclid(86_400);
+    let (h, min) = (tod / 3600, (tod % 3600) / 60);
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    format!("{y:04}-{m:02}-{d:02} {h:02}:{min:02}")
 }
 
 /// Releé el preview del entry seleccionado tras un cambio de selección.
