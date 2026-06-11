@@ -216,6 +216,64 @@ pub fn rubber_band(overscroll: f32, dim: f32) -> f32 {
     (1.0 - 1.0 / (x * C / dim + 1.0)) * dim * overscroll.signum()
 }
 
+// ── Auto-hide del thumb (timer-driven, lo maneja la app) ──
+
+/// Segundos que el thumb queda a opacidad plena tras la última interacción de
+/// scroll antes de empezar a desvanecerse.
+pub const THUMB_HOLD_SECS: f32 = 1.2;
+/// Segundos que tarda el thumb en desvanecerse de pleno a invisible.
+pub const THUMB_FADE_SECS: f32 = 0.4;
+
+/// Opacidad del thumb en función de los segundos desde la última interacción
+/// de scroll (auto-hide estilo overlay móvil/Chromium): pleno (`1.0`) durante
+/// [`THUMB_HOLD_SECS`], luego baja linealmente a `0.0` en [`THUMB_FADE_SECS`].
+///
+/// El bucle Elm reconstruye el `View` sin estado retenido, así que el timer lo
+/// lleva la app (igual que el fling): trackeá `last_scroll: Instant` en el
+/// Model, reseteándolo en cada `on_scroll`, y antes de llamar a
+/// `scroll_y`/`scroll_xy` hacé `palette.thumb_idle_alpha =
+/// thumb_autohide_alpha(last_scroll.elapsed().as_secs_f32())`. Mientras
+/// [`thumb_autohide_active`] sea `true`, pedí frames (`Handle::spawn_periodic`).
+/// En reposo el thumb queda invisible pero su `hover_fill` lo revela al pasar
+/// el cursor por el borde.
+pub fn thumb_autohide_alpha(secs_since_scroll: f32) -> f32 {
+    if secs_since_scroll <= THUMB_HOLD_SECS {
+        return 1.0;
+    }
+    let fade = (secs_since_scroll - THUMB_HOLD_SECS) / THUMB_FADE_SECS.max(1e-3);
+    (1.0 - fade).clamp(0.0, 1.0)
+}
+
+/// `true` mientras el thumb sigue desvaneciéndose (la app debe seguir pidiendo
+/// frames). Una vez invisible (pasado hold+fade), devuelve `false` y la app
+/// puede dejar de tickear.
+pub fn thumb_autohide_active(secs_since_scroll: f32) -> bool {
+    secs_since_scroll < THUMB_HOLD_SECS + THUMB_FADE_SECS
+}
+
+// ── Pull-to-refresh (compone sobre el overscroll que ya maneja la app) ──
+
+/// Distancia de overscroll (px) a la que el pull-to-refresh queda **armado**
+/// por defecto: soltar más allá dispara el refresh.
+pub const DEFAULT_PULL_THRESHOLD: f32 = 64.0;
+
+/// Progreso del gesto pull-to-refresh en `[0,1]`: qué fracción del umbral
+/// cubre el `overscroll` actual en el tope (distancia que el contenido fue
+/// arrastrado más allá del borde superior — la app ya la computa para el
+/// [`rubber_band`]). Alimenta el barrido de [`pull_indicator_view`].
+pub fn pull_progress(overscroll_px: f32, threshold_px: f32) -> f32 {
+    if threshold_px <= 0.0 {
+        return 0.0;
+    }
+    (overscroll_px / threshold_px).clamp(0.0, 1.0)
+}
+
+/// `true` si el overscroll alcanzó el umbral — soltar en este punto dispara el
+/// refresh. La app lo chequea en `DragPhase::End`/al asentar el rubber-band.
+pub fn pull_triggered(overscroll_px: f32, threshold_px: f32) -> bool {
+    threshold_px > 0.0 && overscroll_px >= threshold_px
+}
+
 // ── Slivers: app-bar colapsable + sticky headers (seam "extent-por-offset") ──
 
 /// Altura de un **app-bar colapsable** dado el `offset` de scroll: arranca en
@@ -542,6 +600,72 @@ where
     .children(children)
 }
 
+/// Indicador circular del **pull-to-refresh**. Mientras el usuario arrastra
+/// más allá del tope, un arco se completa con `progress` (0→1, de
+/// [`pull_progress`]); al alcanzar 1 el círculo queda cerrado ("armado"). Con
+/// `refreshing = true` gira como spinner (arco de 270° rotando por reloj
+/// absoluto — pedí frames mientras dure). `size_px` es el diámetro.
+///
+/// La app lo posiciona en la zona de overscroll del tope (típico: centrado
+/// arriba, bajando junto con el contenido arrastrado). Es puro paint; no
+/// retiene estado.
+pub fn pull_indicator_view<Msg: Clone + 'static>(
+    progress: f32,
+    refreshing: bool,
+    size_px: f32,
+    palette: &ScrollPalette,
+) -> View<Msg> {
+    let p = progress.clamp(0.0, 1.0);
+    let arc_color = palette.thumb;
+    let track_color = palette.track;
+    let started = std::time::Instant::now();
+    View::new(Style {
+        size: Size {
+            width: length(size_px),
+            height: length(size_px),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Arc, Point, Shape, Stroke, Vec2};
+        use std::f64::consts::TAU;
+
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let d = (rect.w.min(rect.h)) as f64;
+        let stroke_w = (d * 0.1).clamp(1.5, 4.0);
+        let r = d * 0.5 - stroke_w;
+        if r <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let center = Point::new(cx, cy);
+        let radii = Vec2::new(r, r);
+        let stroke = Stroke::new(stroke_w);
+
+        // Anillo de fondo tenue (track).
+        let ring = Arc::new(center, radii, 0.0, TAU, 0.0).to_path(0.2);
+        scene.stroke(&stroke, Affine::IDENTITY, track_color, None, &ring);
+
+        // Arco activo: arranca arriba (12 en punto = -PI/2). Si refresca, gira
+        // un arco de 270°; si no, barre proporcional al progreso.
+        let top = -std::f64::consts::FRAC_PI_2;
+        let (start, sweep) = if refreshing {
+            let spin = started.elapsed().as_secs_f64() * 3.0; // rad/s
+            (top + spin, TAU * 0.75)
+        } else {
+            (top, TAU * p as f64)
+        };
+        if sweep.abs() > 1e-3 {
+            let active = Arc::new(center, radii, start, sweep, 0.0).to_path(0.2);
+            scene.stroke(&stroke, Affine::IDENTITY, arc_color, None, &active);
+        }
+    })
+}
+
 /// **App-bar colapsable + cuerpo scrolleable** en un solo viewport (el sliver
 /// más pedido). Un único `offset` (en el Model) maneja las dos cosas: primero
 /// **colapsa** el header de `header_max` a `header_min` (consume los primeros
@@ -617,6 +741,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumb_autohide_hold_fade_y_oculto() {
+        // Pleno durante el hold.
+        assert_eq!(thumb_autohide_alpha(0.0), 1.0);
+        assert_eq!(thumb_autohide_alpha(THUMB_HOLD_SECS), 1.0);
+        // A mitad del fade, alpha intermedio.
+        let mid = thumb_autohide_alpha(THUMB_HOLD_SECS + THUMB_FADE_SECS * 0.5);
+        assert!(mid > 0.0 && mid < 1.0, "alpha intermedio: {mid}");
+        // Pasado hold+fade, invisible y la app puede dejar de tickear.
+        assert_eq!(thumb_autohide_alpha(THUMB_HOLD_SECS + THUMB_FADE_SECS + 0.1), 0.0);
+        assert!(thumb_autohide_active(THUMB_HOLD_SECS + THUMB_FADE_SECS * 0.5));
+        assert!(!thumb_autohide_active(THUMB_HOLD_SECS + THUMB_FADE_SECS + 0.1));
+    }
+
+    #[test]
+    fn pull_progress_y_trigger() {
+        assert_eq!(pull_progress(0.0, 64.0), 0.0);
+        assert_eq!(pull_progress(32.0, 64.0), 0.5);
+        assert_eq!(pull_progress(128.0, 64.0), 1.0); // satura
+        assert_eq!(pull_progress(10.0, 0.0), 0.0); // umbral inválido
+        assert!(!pull_triggered(63.9, 64.0));
+        assert!(pull_triggered(64.0, 64.0));
+        assert!(pull_triggered(100.0, 64.0));
+    }
 
     #[test]
     fn max_y_clamp() {

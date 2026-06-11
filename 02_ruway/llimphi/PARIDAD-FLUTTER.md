@@ -126,9 +126,18 @@ Antes: sólo `scroll_y` vertical. Ahora (todo stateless, offset en el Model):
   "extent-por-offset", resuelto como composición sobre offset-en-Model).
   Helpers: `collapsed_height`/`collapse_fraction`/`sliver_max_offset` +
   `sticky_y` (encabezados de sección pegados). Demo: `--example scroll_avanzado`.
-- Falta: **scrollbar persistente con auto-hide**, **scroll anidado** (hoy el
+- ✅ **scrollbar auto-hide con timer** — helpers puros `thumb_autohide_alpha(secs)`
+  / `thumb_autohide_active(secs)` (+ `THUMB_HOLD_SECS`/`THUMB_FADE_SECS`): la app
+  trackea `last_scroll: Instant`, setea `palette.thumb_idle_alpha` por frame y
+  tickea mientras `active`. Cero churn de API (el thumb ya multiplica por
+  `thumb_idle_alpha`); el `hover_fill` revela el thumb oculto al pasar el cursor.
+- ✅ **pull-to-refresh** — `pull_progress(overscroll, thr)` / `pull_triggered(...)`
+  (+ `DEFAULT_PULL_THRESHOLD`) compuestos sobre el overscroll que la app ya lleva
+  para el `rubber_band`, + `pull_indicator_view(progress, refreshing, …)` (arco
+  circular que se completa con el gesto y gira como spinner al refrescar).
+- Falta: **scroll anidado** (hoy el
   `on_scroll` del nodo más al frente consume; falta el "pasar el sobrante al
-  padre" al llegar al tope), **pull-to-refresh** (patrón móvil, diferido), y un
+  padre" al llegar al tope), y un
   **builder de lista sticky** llave-en-mano (hoy `sticky_y` es el helper; el
   caller posiciona los encabezados). El **fling desde arrastre** necesita
   capturar velocidad del drag (timestamp por evento) — hoy el helper existe pero
