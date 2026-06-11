@@ -7,9 +7,10 @@
 //! es quien **otorga el protocolo**: una capacidad denegada no se concede por
 //! una tabla eludible sino **no anunciando el global** al cliente.
 //!
-//! Gatea cuatro capacidades: el snoop del portapapeles (`zwlr_data_control`),
+//! Gatea cinco capacidades: el snoop del portapapeles (`zwlr_data_control`),
 //! la inyección de pulsaciones (`zwp_virtual_keyboard`), el censo de ventanas
-//! (`ext_foreign_toplevel_list`) y la captura de pantalla (`zwlr_screencopy`).
+//! (`ext_foreign_toplevel_list`), la captura de pantalla (`zwlr_screencopy`) y
+//! el atajo de búferes de GPU zero-copy (`zwp_linux_dmabuf`).
 //! La identidad del cliente es su **ejecutable real**
 //! (`SO_PEERCRED → /proc/<pid>/exe`), no su `app_id` (falsificable).
 //! Postura: **permitir por defecto**, con una denylist de ejecutables.
@@ -95,6 +96,11 @@ const PERMISOS_TEMPLATE: &str = "\
 // (capturar los píxeles de la pantalla — la capacidad más sensible). Misma
 // semántica de subcadena. Vacía = todos permitidos.
 //
+// `dmabuf_denylist`: ejecutables a los que se NIEGA `zwp_linux_dmabuf` (importar
+// búferes de GPU compartidos, zero-copy). Negarlo no rompe la app: cae al camino
+// `wl_shm` por software, sólo pierde el atajo. Misma semántica de subcadena.
+// Vacía = todos permitidos.
+//
 // Descomenta y edita:
 (
     clipboard_denylist: [
@@ -112,6 +118,9 @@ const PERMISOS_TEMPLATE: &str = "\
     screencopy_denylist: [
         // \"/opt/sospechoso/bin/captor\",
     ],
+    dmabuf_denylist: [
+        // \"/opt/sospechoso/bin/leak\",
+    ],
 )
 ";
 
@@ -126,10 +135,12 @@ mod tests {
         assert!(p.virtual_input_denylist.is_empty());
         assert!(p.window_list_denylist.is_empty());
         assert!(p.screencopy_denylist.is_empty());
+        assert!(p.dmabuf_denylist.is_empty());
         assert!(p.clipboard_permitido("/usr/bin/wl-paste"));
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.window_list_permitido("/usr/bin/lswt"));
         assert!(p.screencopy_permitido("/usr/bin/grim"));
+        assert!(p.dmabuf_permitido("/usr/bin/firefox"));
     }
 
     #[test]
@@ -157,5 +168,7 @@ mod tests {
         assert!(p.window_list_permitido("/usr/bin/lswt"));
         assert!(p.screencopy_denylist.is_empty());
         assert!(p.screencopy_permitido("/usr/bin/grim"));
+        assert!(p.dmabuf_denylist.is_empty());
+        assert!(p.dmabuf_permitido("/usr/bin/firefox"));
     }
 }

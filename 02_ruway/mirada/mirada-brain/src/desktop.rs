@@ -2164,6 +2164,7 @@ mod tests {
             virtual_input_denylist: vec!["wtype".into()],
             window_list_denylist: vec!["lswt".into()],
             screencopy_denylist: vec!["grim".into()],
+            dmabuf_denylist: vec!["leak".into()],
         };
         match d.set_caps(nueva.clone()) {
             BrainCommand::SetCapabilities(p) => assert_eq!(p, nueva),

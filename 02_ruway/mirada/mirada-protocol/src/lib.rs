@@ -137,6 +137,14 @@ pub struct Permisos {
     /// nadie denegado (todos pueden bindear el global).
     #[serde(default)]
     pub screencopy_denylist: Vec<String>,
+    /// Ejecutables a los que se les niega `zwp_linux_dmabuf` (importar búferes
+    /// de GPU compartidos: el cliente pinta directo en memoria de video y se la
+    /// pasa al compositor sin copia). Negarlo no rompe la app —cae al camino
+    /// `wl_shm` por software—, sólo le quita el atajo zero-copy. Casa por
+    /// subcadena del path del ejecutable, sin distinguir mayúsculas. Vacía =
+    /// nadie denegado (todos pueden bindear el global).
+    #[serde(default)]
+    pub dmabuf_denylist: Vec<String>,
 }
 
 impl Permisos {
@@ -169,6 +177,13 @@ impl Permisos {
     /// permitido.
     pub fn screencopy_permitido(&self, exe: &str) -> bool {
         permitido(&self.screencopy_denylist, exe)
+    }
+
+    /// `true` si el ejecutable `exe` puede bindear `zwp_linux_dmabuf` (importar
+    /// búferes de GPU zero-copy). Misma semántica de denylist por subcadena que
+    /// [`Permisos::clipboard_permitido`]. Denylist vacía ⇒ siempre permitido.
+    pub fn dmabuf_permitido(&self, exe: &str) -> bool {
+        permitido(&self.dmabuf_denylist, exe)
     }
 }
 
@@ -424,6 +439,7 @@ mod tests {
             virtual_input_denylist: vec!["wtype".into()],
             window_list_denylist: vec!["lswt".into()],
             screencopy_denylist: vec!["grim".into()],
+            dmabuf_denylist: vec!["spyware".into()],
         });
         let mut buf = Vec::new();
         write_frame(&mut buf, &cmd).unwrap();
@@ -440,6 +456,7 @@ mod tests {
         assert!(p.virtual_input_permitido("/usr/bin/wtype"));
         assert!(p.window_list_permitido("/usr/bin/lswt"));
         assert!(p.screencopy_permitido("/usr/bin/grim"));
+        assert!(p.dmabuf_permitido("/usr/bin/firefox"));
     }
 
     #[test]
@@ -449,6 +466,7 @@ mod tests {
             virtual_input_denylist: vec!["wtype".into()],
             window_list_denylist: vec!["lswt".into()],
             screencopy_denylist: vec!["grim".into()],
+            dmabuf_denylist: vec!["spyware".into()],
         };
         // Casa por subcadena: el path completo contiene el binario denegado.
         assert!(!p.clipboard_permitido("/usr/bin/wl-paste"));
@@ -468,6 +486,10 @@ mod tests {
         assert!(!p.screencopy_permitido("/usr/bin/grim"));
         assert!(p.screencopy_permitido("/usr/bin/lswt"));
         assert!(p.window_list_permitido("/usr/bin/grim"));
+        // dmabuf es otra denylist independiente: niega «spyware», permite el resto.
+        assert!(!p.dmabuf_permitido("/opt/spyware/bin/leak"));
+        assert!(p.dmabuf_permitido("/usr/bin/firefox"));
+        assert!(p.screencopy_permitido("/opt/spyware/bin/leak")); // no toca screencopy
     }
 
     #[test]

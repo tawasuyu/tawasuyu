@@ -2257,10 +2257,29 @@ pub fn transform_from_slug(slug: &str) -> Transform {
     }
 }
 
+/// `true` si el cliente puede bindear `zwp_linux_dmabuf`, según la denylist de
+/// permisos por **ejecutable real** del cliente (`SO_PEERCRED → /proc/<pid>/exe`,
+/// no el `app_id` falsificable). Sin PID identificable → se permite (no romper
+/// apps con GPU legítimas). Mismo patrón que el resto de capacidades gateadas.
+fn dmabuf_permitido_para(
+    caps: &std::sync::Arc<std::sync::RwLock<mirada_brain::Permisos>>,
+    client: &Client,
+) -> bool {
+    let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
+    match pid.and_then(exe_de_pid) {
+        Some(exe) => caps.read().unwrap().dmabuf_permitido(&exe),
+        None => true,
+    }
+}
+
 /// Anuncia el global `zwp_linux_dmabuf` con los formatos que el
 /// `GlesRenderer` admite. Hay que llamarlo una vez creado el renderer
 /// (no antes: los formatos salen de él) — así las apps que pintan por
 /// GPU (GPUI, navegadores acelerados) pueden ser clientes del compositor.
+///
+/// El global se anuncia **filtrado por permisos** (`dmabuf_denylist`): un
+/// ejecutable denegado no ve el global y cae al camino `wl_shm` por software,
+/// igual que clipboard/virtual-keyboard/foreign-toplevel/screencopy.
 fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
     let formats: Vec<_> = renderer.dmabuf_formats().into_iter().collect();
     // Nodo de render del adaptador del renderer — necesario para armar el
@@ -2282,8 +2301,13 @@ fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
         // con v3; el path Vulkan WSI no. Clientes que se bindean a v3 siguen
         // recibiendo los formatos de la tranche principal.
         Some(feedback) => {
+            let caps = app.caps.clone();
             app.dmabuf_state
-                .create_global_with_default_feedback::<App>(dh, &feedback);
+                .create_global_with_filter_and_default_feedback::<App, _>(
+                    dh,
+                    &feedback,
+                    move |client| dmabuf_permitido_para(&caps, client),
+                );
             println!(
                 "mirada-compositor · dmabuf v4 (feedback): {} format(s) anunciado(s).",
                 formats.len()
@@ -2292,7 +2316,12 @@ fn announce_dmabuf(app: &mut App, dh: &DisplayHandle, renderer: &GlesRenderer) {
         // Sin nodo de render no se puede armar feedback: caemos al global v3.
         None => {
             let n = formats.len();
-            app.dmabuf_state.create_global::<App>(dh, formats);
+            let caps = app.caps.clone();
+            app.dmabuf_state.create_global_with_filter::<App, _>(
+                dh,
+                formats,
+                move |client| dmabuf_permitido_para(&caps, client),
+            );
             eprintln!(
                 "mirada-compositor · dmabuf v3 sin feedback ({n} fmt) — sin nodo de render; \
                  los clientes Vulkan podrían ver 0 formatos."
