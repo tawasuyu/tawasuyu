@@ -22,3 +22,6 @@ llimphi-widget-context-menu = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Para el pantallazo headless de la vista hospedada.
+pollster = { workspace = true }
+png = { workspace = true }

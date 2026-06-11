@@ -25,6 +25,7 @@ pub mod keys;
 pub mod layer;
 pub mod nouser;
 pub mod config_watch;
+pub mod nahual;
 pub mod open;
 pub mod render;
 pub mod sampler;
@@ -45,6 +46,7 @@ use pata_core::config::{FloatingCard, SurfaceKind};
 use pata_core::widget::{build, Widget, WidgetCtx};
 use pata_core::{Config, Frame, Rect};
 
+use nahual::NahualState;
 use nouser::{MembersOutcome, NavState, PollOutcome};
 use sampler::Sampler;
 use shuma::ShumaState;
@@ -69,6 +71,14 @@ pub enum Msg {
     /// Tick de la animación de despliegue (sólo re-render). También sirve de
     /// no-op para absorber clicks sobre el borde del panel del drawer.
     ShumaAnim,
+    /// Desplegar/replegar el drawer del **front universal de nahual** (Super+E).
+    NahualToggle,
+    /// Un evento del módulo `nahual-module` hospedado (navegación, abrir, vista,
+    /// miniaturas…). El `view` del módulo lo envuelve con su `lift`; pata lo
+    /// reenvía a `nahual_module::update` y ejecuta los `Effect`s que devuelve.
+    Nahual(nahual_module::Msg),
+    /// Tick de la animación del drawer de nahual / no-op para absorber clicks.
+    NahualAnim,
     /// Lanzar un programa (click sobre un widget con prop `exec`).
     Spawn(String),
     /// Saltar al escritorio virtual `n` (**1-based**), por click en una celda del
@@ -238,6 +248,31 @@ pub fn usa_utc(cfg: &Config) -> bool {
 /// usan ambos backends al recibir [`Msg::Spawn`].
 pub fn spawn_cmd(cmd: &str) {
     let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+}
+
+/// Ejecuta un [`nahual_module::Effect`] del módulo hospedado: el host tiene el
+/// `Handle` (para spawnear la generación de miniaturas) y el registro de apps
+/// (para lanzar). Las miniaturas reentran como `Msg::Nahual(ThumbReady/Failed)`.
+fn ejecutar_efecto_nahual(
+    registry: &app_bus::AppRegistry,
+    ef: nahual_module::Effect,
+    handle: &Handle<Msg>,
+) {
+    use nahual_module::Effect;
+    match ef {
+        Effect::GenThumb(path) => {
+            handle.spawn(move || Msg::Nahual(nahual_module::run_gen_thumb(path)));
+        }
+        Effect::OpenDefault(path) => {
+            // Sin app declarada: que el escritorio decida (xdg-open).
+            let _ = std::process::Command::new("xdg-open").arg(&path).spawn();
+        }
+        Effect::Launch { app_id, path } => {
+            if let Some(entry) = registry.get(&app_id) {
+                let _ = entry.open(&path.to_string_lossy());
+            }
+        }
+    }
 }
 
 /// Borrador editable de fecha/hora para el panel del reloj. Se inicializa con la
@@ -460,6 +495,8 @@ pub struct Model {
     pub cards: Vec<(FloatingCard, Vec<Box<dyn Widget>>)>,
     /// Estado del cabezal del shell y su drawer Quake.
     pub shuma: ShumaState,
+    /// Estado del drawer del front universal de nahual (módulo hospedado).
+    pub nahual: NahualState,
     /// Registro de apps para el menú del botón de inicio.
     pub registry: app_bus::AppRegistry,
     /// `true` cuando el menú de inicio está desplegado.
@@ -649,6 +686,12 @@ impl Model {
         self.shuma.anim = Tween::new(desde, destino, motion::FAST, motion::ease_out_cubic);
         animate(handle, motion::FAST, || Msg::ShumaAnim);
     }
+
+    fn animar_nahual(&mut self, destino: f32, handle: &Handle<Msg>) {
+        let desde = self.nahual.anim.value();
+        self.nahual.anim = Tween::new(desde, destino, motion::FAST, motion::ease_out_cubic);
+        animate(handle, motion::FAST, || Msg::NahualAnim);
+    }
 }
 
 /// Estilos del menú de inicio. El default `Classic` es el panel a la
@@ -740,6 +783,7 @@ impl App for PataApp {
             surfaces,
             cards,
             shuma,
+            nahual: NahualState::default(),
             registry: app_bus::AppRegistry::discover_merged(),
             menu_open: false,
             menu_query: String::new(),
@@ -844,6 +888,24 @@ impl App for PataApp {
                 }
             }
             Msg::ShumaAnim => {}
+            Msg::NahualToggle => {
+                model.nahual.ensure();
+                model.nahual.open = !model.nahual.open;
+                let destino = if model.nahual.open { 1.0 } else { 0.0 };
+                model.animar_nahual(destino, handle);
+            }
+            Msg::Nahual(m) => {
+                // El módulo es puro: lo actualizamos y ejecutamos sus Effects
+                // (el host tiene el Handle + el registro de apps).
+                if let Some(inner) = model.nahual.inner.take() {
+                    let (inner, efectos) = nahual_module::update(inner, m);
+                    model.nahual.inner = Some(inner);
+                    for ef in efectos {
+                        ejecutar_efecto_nahual(&model.registry, ef, handle);
+                    }
+                }
+            }
+            Msg::NahualAnim => {}
             Msg::Spawn(cmd) => spawn_cmd(&cmd),
             Msg::SwitchWorkspace(n) => sampler::switch_workspace(n),
             Msg::VolumeWheel(dy) => {
@@ -1056,6 +1118,9 @@ impl App for PataApp {
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
         // El drawer Quake tiene prioridad; luego el menú de inicio; luego los
         // popups de widgets (historial de portapapeles, panel del reloj).
+        if let Some(d) = nahual::drawer_overlay(&model.nahual, model.screen, &model.theme) {
+            return Some(d);
+        }
         if let Some(d) = shuma::drawer_overlay(&model.shuma, model.screen, &model.theme) {
             return Some(d);
         }
@@ -1121,6 +1186,26 @@ impl App for PataApp {
 
     fn on_key(model: &Model, event: &KeyEvent) -> Option<Msg> {
         if event.state != KeyState::Pressed {
+            return None;
+        }
+        // 0) Super+E abre/cierra el front universal de nahual (file manager).
+        //    Con su drawer abierto, el teclado va al módulo (Esc / Super+E cierran).
+        if event.modifiers.meta {
+            if let Key::Character(s) = &event.key {
+                if s.eq_ignore_ascii_case("e") {
+                    return Some(Msg::NahualToggle);
+                }
+            }
+        }
+        if model.nahual.open {
+            if let Key::Named(NamedKey::Escape) = &event.key {
+                return Some(Msg::NahualToggle);
+            }
+            if let Some(inner) = &model.nahual.inner {
+                if let Some(m) = nahual_module::on_key(inner, event) {
+                    return Some(Msg::Nahual(m));
+                }
+            }
             return None;
         }
         // 1) El hotkey del shuma_input abre/cierra el drawer (prioridad).

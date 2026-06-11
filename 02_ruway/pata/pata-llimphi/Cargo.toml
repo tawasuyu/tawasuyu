@@ -20,6 +20,10 @@ pata-config = { path = "../pata-config" }
 # Rail hospedado (sidebar delegado): pata hospeda los dientes de la app enfocada
 # y le reenvía las activaciones. Lado servidor del protocolo.
 pata-host = { path = "../pata-host" }
+# El front universal de nahual, hospedado como módulo en un drawer Quake
+# (Super+E). Mismo motor que nahual-shell sobre nahual-source-core; pata le
+# rutea eventos y ejecuta sus Effects (miniaturas, lanzar apps).
+nahual-module = { path = "../../nahual/nahual-module" }
 # El puente pata→shuma (SDD §5): el marco provee el borde, shuma el contenido.
 # El drawer Quake **hospeda el shell real de shuma** montando el módulo
 # `shuma-module-shell` —el mismo de `shuma-shell-llimphi`, con cards, cuerpo
