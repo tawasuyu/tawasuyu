@@ -150,10 +150,13 @@ impl ExternalSurface {
             ..Default::default()
         });
 
-        // Uniforms: 8 floats — rect (x, y, w, h) + viewport (vw, vh, _, _).
+        // Uniforms: 12 floats — rect destino (x, y, w, h) + viewport
+        // (vw, vh, _, _) + src_uv (u0, v0, du, dv): el sub-rectángulo de la
+        // textura a muestrear, en UV 0..1. `blit` lo deja en (0,0,1,1)
+        // (textura entera); `blit_layout` lo usa para crop/zoom/pan (V2).
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("llimphi-surface-uniforms"),
-            size: 32,
+            size: 48,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -238,18 +241,53 @@ impl ExternalSurface {
         rect: PaintRect,
         viewport: (u32, u32),
     ) {
+        // Comportamiento clásico: la textura entera estirada al rect, recortada
+        // al propio rect. `blit_layout` con `src_uv` = textura completa y el
+        // `clip` = el mismo rect.
+        self.blit_layout(
+            queue,
+            encoder,
+            dst_view,
+            [rect.x, rect.y, rect.w, rect.h],
+            [0.0, 0.0, 1.0, 1.0],
+            [rect.x, rect.y, rect.w, rect.h],
+            viewport,
+        );
+    }
+
+    /// Blit con control de **origen y destino** (V2: aspect/crop/zoom/pan).
+    /// `dst` es el rectángulo (px de viewport) donde dibujar — puede exceder el
+    /// `clip`; `src_uv` (`u0, v0, du, dv` en 0..1) es el sub-rectángulo de la
+    /// textura a muestrear (crop); `clip` (px de viewport) acota el dibujado con
+    /// un scissor — típicamente el rect del canvas, así el sobrante de
+    /// Fill/zoom/pan no pinta fuera de su área. El `dst`/`src_uv` los calcula
+    /// `media_core::viewport::compute_layout`.
+    pub fn blit_layout(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        dst_view: &wgpu::TextureView,
+        dst: [f32; 4],
+        src_uv: [f32; 4],
+        clip: [f32; 4],
+        viewport: (u32, u32),
+    ) {
         let inner = self.inner.lock();
         let uniforms = [
-            rect.x,
-            rect.y,
-            rect.w,
-            rect.h,
+            dst[0],
+            dst[1],
+            dst[2],
+            dst[3],
             viewport.0 as f32,
             viewport.1 as f32,
             0.0,
             0.0,
+            src_uv[0],
+            src_uv[1],
+            src_uv[2],
+            src_uv[3],
         ];
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0u8; 48];
         for (i, v) in uniforms.iter().enumerate() {
             bytes[i * 4..(i + 1) * 4].copy_from_slice(&v.to_ne_bytes());
         }
@@ -272,6 +310,16 @@ impl ExternalSurface {
         });
         pass.set_pipeline(&inner.pipeline);
         pass.set_bind_group(0, &inner.bind_group, &[]);
+        // Scissor = clip ∩ viewport (en px enteros). Evita que el sobrante de
+        // Fill/zoom/pan pinte fuera del área del canvas.
+        let (vw, vh) = (viewport.0 as f32, viewport.1 as f32);
+        let x0 = clip[0].max(0.0).floor();
+        let y0 = clip[1].max(0.0).floor();
+        let x1 = (clip[0] + clip[2]).min(vw).ceil();
+        let y1 = (clip[1] + clip[3]).min(vh).ceil();
+        if x1 > x0 && y1 > y0 {
+            pass.set_scissor_rect(x0 as u32, y0 as u32, (x1 - x0) as u32, (y1 - y0) as u32);
+        }
         pass.draw(0..6, 0..1);
     }
 
@@ -357,8 +405,9 @@ fn make_texture_and_bg(
 
 const WGSL: &str = r#"
 struct Uniforms {
-    rect: vec4<f32>,     // x, y, w, h en pixels del frame
+    rect: vec4<f32>,     // x, y, w, h del rect destino en pixels del frame
     viewport: vec4<f32>, // vw, vh, _, _
+    src_uv: vec4<f32>,   // u0, v0, du, dv: sub-rect de textura a muestrear (UV)
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -381,10 +430,11 @@ fn vs(@builtin(vertex_index) vid: u32) -> V2F {
         vec2<f32>(1.0, 1.0),
         vec2<f32>(0.0, 1.0),
     );
-    let uv = uvs[vid];
+    // `q` recorre el quad destino (0..1); el muestreo va al sub-rect `src_uv`.
+    let q = uvs[vid];
 
-    let px = u.rect.x + uv.x * u.rect.z;
-    let py = u.rect.y + uv.y * u.rect.w;
+    let px = u.rect.x + q.x * u.rect.z;
+    let py = u.rect.y + q.y * u.rect.w;
 
     // NDC: x ∈ [-1, 1] sin flip, y flipeado (en pantalla y-down).
     let ndc = vec2<f32>(
@@ -394,7 +444,7 @@ fn vs(@builtin(vertex_index) vid: u32) -> V2F {
 
     var out: V2F;
     out.pos = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = uv;
+    out.uv = u.src_uv.xy + q * u.src_uv.zw;
     return out;
 }
 

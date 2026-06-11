@@ -128,6 +128,14 @@ pub enum MediaCommand {
     BookmarkNext,
     /// Salta a la marca anterior del medio actual.
     BookmarkPrev,
+    /// Cicla el modo de encaje del video (Ajustar/Llenar/Estirar/Original). V2.
+    ViewCycleFit,
+    /// Aplica un zoom multiplicativo `factor` sobre el encaje (V2). `>1` acerca.
+    ViewZoomBy { factor: f32 },
+    /// Panea el video en fracción del viewport (V2). `dx/dy` en `-1..1`.
+    ViewPanBy { dx: f32, dy: f32 },
+    /// Vuelve la vista al encaje neutro (Ajustar, sin zoom/pan/crop). V2.
+    ViewReset,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -225,6 +233,11 @@ impl MediaCommand {
             BookmarkToggle => "Marca: poner / quitar".to_string(),
             BookmarkNext => "Marca siguiente".to_string(),
             BookmarkPrev => "Marca anterior".to_string(),
+            ViewCycleFit => "Encaje del video (ciclar)".to_string(),
+            ViewZoomBy { factor } if *factor < 1.0 => "Alejar (zoom −)".to_string(),
+            ViewZoomBy { .. } => "Acercar (zoom +)".to_string(),
+            ViewPanBy { .. } => "Paneo del video".to_string(),
+            ViewReset => "Vista original (sin zoom/pan)".to_string(),
         }
     }
 }
@@ -437,6 +450,9 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             // marca en marca queda en el palette (sin atajo por defecto para no
             // pisar bindings comunes).
             b(KeyChord::shift("b"), BookmarkToggle),
+            // Encaje del video (V2): `a` cicla aspecto (estilo VLC). Zoom/pan
+            // quedan en el palette.
+            b(KeyChord::key("a"), ViewCycleFit),
             b(
                 KeyChord::key("b"),
                 Script {

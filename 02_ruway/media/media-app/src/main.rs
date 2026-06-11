@@ -94,6 +94,7 @@ use media_core::chapters::Chapters;
 use media_core::metadata::{self, Metadata};
 use media_core::toolbar::{BarItem, BarPosition};
 use media_core::transform::{Rotation, Transform, TransformControl, TransformVideo};
+use media_core::viewport::{compute_layout, ViewControl};
 use media_core::eq::{EqControl, EqualizerAudio, ISO_10_BANDS_HZ};
 use media_core::layout::{LayoutSettings, PanelId as TileId};
 use media_core::sync::{AvSync, FramePlan};
@@ -1078,6 +1079,15 @@ fn transform() -> &'static TransformControl {
     SLOT.get_or_init(TransformControl::default)
 }
 
+/// Ajustes de encaje/zoom/pan del video (V2). Estado de sesión (no se
+/// persiste): lo lee el blit del video para calcular el `Layout` con
+/// `compute_layout`, y lo mutan los comandos `View*`. Arranca en Ajustar
+/// (aspecto preservado, sin zoom/pan).
+fn viewcontrol() -> &'static Mutex<ViewControl> {
+    static SLOT: OnceLock<Mutex<ViewControl>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(ViewControl::default()))
+}
+
 /// Control de normalización + limitador de audio (A5). Compartido entre el
 /// wrapper `DynamicsAudio` de la cadena de audio y los comandos Norm*.
 /// Arranca en 0 dB con el limitador activo (techo por defecto).
@@ -1824,6 +1834,14 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (FlipH, "Orientación"),
         (FlipV, "Orientación"),
         (OrientReset, "Orientación"),
+        (ViewCycleFit, "Imagen"),
+        (ViewZoomBy { factor: 1.1 }, "Imagen"),
+        (ViewZoomBy { factor: 0.9 }, "Imagen"),
+        (ViewPanBy { dx: -0.05, dy: 0.0 }, "Imagen"),
+        (ViewPanBy { dx: 0.05, dy: 0.0 }, "Imagen"),
+        (ViewPanBy { dx: 0.0, dy: -0.05 }, "Imagen"),
+        (ViewPanBy { dx: 0.0, dy: 0.05 }, "Imagen"),
+        (ViewReset, "Imagen"),
         (SubDelayBy { ms: -100 }, "Subtítulos"),
         (SubDelayBy { ms: 100 }, "Subtítulos"),
         (SubDelayReset, "Subtítulos"),
@@ -2168,6 +2186,27 @@ fn apply_command(cmd: MediaCommand) {
                     osd_flash(format!("◂ Marca {}", osd::format_hms(m.position.as_secs_f64())));
                 }
             }
+        }
+        ViewCycleFit => {
+            let mut v = viewcontrol().lock();
+            v.cycle_fit();
+            let label = v.fit.label();
+            drop(v);
+            osd_flash(format!("Encaje: {label}"));
+        }
+        ViewZoomBy { factor } => {
+            let mut v = viewcontrol().lock();
+            v.zoom_by(factor);
+            let z = v.zoom;
+            drop(v);
+            osd_flash(format!("Zoom {z:.2}×"));
+        }
+        ViewPanBy { dx, dy } => {
+            viewcontrol().lock().pan_by(dx, dy);
+        }
+        ViewReset => {
+            viewcontrol().lock().reset();
+            osd_flash("Vista original");
         }
     }
 }
@@ -2973,7 +3012,29 @@ impl App for MediaApp {
                 drop(src);
             }
             drop(buf);
-            pipe.surface.blit(queue, encoder, view, rect, viewport);
+            // V2 — aspect/crop/zoom/pan. `compute_layout` decide qué porción de
+            // la textura (src) muestrear y en qué rect (dst) pintarla, según el
+            // `ViewControl` (Ajustar por defecto: preserva aspecto, antes se
+            // estiraba). `dst` se traslada al origen del canvas; `src` (px de
+            // textura) se normaliza a UV; el scissor del `blit_layout` recorta
+            // al área del canvas el sobrante de Fill/zoom/pan.
+            let (tw, th) = pipe.surface.size();
+            if tw > 0 && th > 0 {
+                let ctl = viewcontrol().lock().clone();
+                let lay = compute_layout(tw as f32, th as f32, rect.w, rect.h, &ctl);
+                let dst = [rect.x + lay.dst.x, rect.y + lay.dst.y, lay.dst.w, lay.dst.h];
+                let src_uv = [
+                    lay.src.x / tw as f32,
+                    lay.src.y / th as f32,
+                    lay.src.w / tw as f32,
+                    lay.src.h / th as f32,
+                ];
+                let clip = [rect.x, rect.y, rect.w, rect.h];
+                pipe.surface
+                    .blit_layout(queue, encoder, view, dst, src_uv, clip, viewport);
+            } else {
+                pipe.surface.blit(queue, encoder, view, rect, viewport);
+            }
         });
 
         let subs_strip = subtitle_strip();
