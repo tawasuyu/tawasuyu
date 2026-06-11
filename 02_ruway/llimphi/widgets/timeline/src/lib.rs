@@ -41,6 +41,8 @@ pub struct TimelinePalette {
     pub fill: Color,
     /// Color del playhead (la barrita vertical en la posición actual).
     pub knob: Color,
+    /// Color de las marcas (bookmarks) pintadas sobre la barra.
+    pub mark: Color,
     /// Alto total del widget en pixels.
     pub height: f32,
     /// Radio de las esquinas del track.
@@ -60,6 +62,9 @@ impl TimelinePalette {
             track: t.bg_button,
             fill: t.accent,
             knob: t.fg_text,
+            // Ámbar cálido para que las marcas resalten tanto sobre la pista
+            // de fondo como sobre el tramo recorrido (accent).
+            mark: Color::from_rgba8(255, 196, 84, 255),
             height: 14.0,
             radius: 7.0,
         }
@@ -78,9 +83,33 @@ where
     Msg: 'static,
     F: Fn(f32) -> Option<Msg> + Send + Sync + 'static,
 {
+    timeline_view_marked(progress, &[], palette, on_seek)
+}
+
+/// Igual que [`timeline_view`] pero pinta además unas **marcas** (bookmarks)
+/// en las fracciones `marks` (`0.0..=1.0`): finas barras verticales con el
+/// color `palette.mark`, bajo el playhead. Las fracciones fuera de rango se
+/// ignoran. El resto del comportamiento (recorrido, playhead, click-to-seek)
+/// es idéntico — `timeline_view` es este con `marks` vacío.
+pub fn timeline_view_marked<Msg, F>(
+    progress: f32,
+    marks: &[f32],
+    palette: &TimelinePalette,
+    on_seek: F,
+) -> View<Msg>
+where
+    Msg: 'static,
+    F: Fn(f32) -> Option<Msg> + Send + Sync + 'static,
+{
     let p = progress.clamp(0.0, 1.0);
     let fill_color = palette.fill;
     let knob_color = palette.knob;
+    let mark_color = palette.mark;
+    let marks: Vec<f32> = marks
+        .iter()
+        .copied()
+        .filter(|f| f.is_finite() && (0.0..=1.0).contains(f))
+        .collect();
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -104,6 +133,18 @@ where
         if fw > 0.5 {
             let fill = Rect::new(x0 as f64, y0 as f64, (x0 + fw) as f64, (y0 + h) as f64);
             scene.fill(Fill::NonZero, Affine::IDENTITY, fill_color, None, &fill);
+        }
+        // Marcas — finas barras verticales en cada fracción (bajo el playhead).
+        let mw: f32 = 2.0;
+        for f in &marks {
+            let mx = x0 + w * f;
+            let mark = Rect::new(
+                (mx - mw * 0.5) as f64,
+                y0 as f64,
+                (mx + mw * 0.5) as f64,
+                (y0 + h) as f64,
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, mark_color, None, &mark);
         }
         // Playhead — fina barra vertical en la posición actual.
         let kx = x0 + fw;

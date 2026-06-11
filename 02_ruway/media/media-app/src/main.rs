@@ -87,7 +87,7 @@ use media_core::color::{ColorControl, ColorParams, ColorVideo};
 use media_core::config::MediaConfig;
 use media_core::control::{ColorParam, ControlSettings, KeyChord, MediaCommand};
 use media_core::dynamics::{DynamicsAudio, DynamicsControl};
-use media_core::library::History;
+use media_core::library::{Bookmarks, History};
 use media_core::loudness::{LoudnessProbe, LoudnessTap, REPLAYGAIN_TARGET_LUFS};
 use media_core::osd::{self, Osd};
 use media_core::chapters::Chapters;
@@ -100,7 +100,7 @@ use media_core::sync::{AvSync, FramePlan};
 use llimphi_widget_shortcuts_help::{
     shortcuts_help_view, ShortcutEntry, ShortcutGroup, ShortcutsHelpPalette, ShortcutsHelpSpec,
 };
-use llimphi_widget_timeline::{timeline_view, TimelinePalette};
+use llimphi_widget_timeline::{timeline_view_marked, TimelinePalette};
 use llimphi_widget_transport::{
     transport_button_view, TransportAction, TransportButton, TransportPalette,
 };
@@ -721,6 +721,68 @@ fn now_secs() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+// ============================================================
+// Bookmarks (U6) — marcas manuales por medio
+// ============================================================
+
+/// Marcas manuales de toda la biblioteca (U6). Se cargan de `bookmarks.ron`
+/// al primer acceso y se persisten tras cada cambio. A diferencia del
+/// `ResumePoint` (uno por medio, lo mueve el reproductor), de éstas hay varias
+/// por medio y las pone el usuario a mano.
+fn bookmarks() -> &'static Mutex<Bookmarks> {
+    static SLOT: OnceLock<Mutex<Bookmarks>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(load_bookmarks()))
+}
+
+fn bookmarks_path() -> Option<PathBuf> {
+    config_file("bookmarks.ron")
+}
+
+fn load_bookmarks() -> Bookmarks {
+    let Some(p) = bookmarks_path() else {
+        return Bookmarks::default();
+    };
+    match std::fs::read_to_string(&p) {
+        Ok(body) => ron::from_str::<Bookmarks>(&body)
+            .map(Bookmarks::sanitized)
+            .unwrap_or_default(),
+        Err(_) => Bookmarks::default(),
+    }
+}
+
+/// Persiste las marcas a `bookmarks.ron` (best-effort, sólo log).
+fn save_bookmarks() {
+    let Some(p) = bookmarks_path() else {
+        return;
+    };
+    let snapshot = bookmarks().lock().clone();
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(txt) = ron::ser::to_string_pretty(&snapshot, ron::ser::PrettyConfig::default()) {
+        let _ = std::fs::write(&p, txt);
+    }
+}
+
+/// Fracciones (0..1) de las marcas del medio actual sobre la duración total,
+/// para pintarlas en el timeline. Vacío sin playlist o sin duración conocida.
+fn bookmark_fractions() -> Vec<f32> {
+    let Some(key) = current_track_key() else {
+        return Vec::new();
+    };
+    let s = playback_snapshot();
+    let dur = s.duration.unwrap_or(Duration::ZERO).as_secs_f64();
+    if dur <= 0.0 {
+        return Vec::new();
+    }
+    bookmarks()
+        .lock()
+        .for_media(&key)
+        .iter()
+        .map(|m| (m.position.as_secs_f64() / dur).clamp(0.0, 1.0) as f32)
+        .collect()
 }
 
 /// Clave del medio en reproducción = ruta del track actual. `None` sin
@@ -1752,6 +1814,9 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (NormReset, "Normalización"),
         (Snapshot, "Captura"),
         (ToggleRecord, "Captura"),
+        (BookmarkToggle, "Marcas"),
+        (BookmarkNext, "Marcas"),
+        (BookmarkPrev, "Marcas"),
     ];
     let mut catalog = Vec::with_capacity(acciones.len());
     let mut cmds = Vec::with_capacity(acciones.len());
@@ -2046,6 +2111,42 @@ fn apply_command(cmd: MediaCommand) {
                     "media-app: normalización automática — aún sin medición \
                      (reproducí ≳ 1 s primero)"
                 ),
+            }
+        }
+        BookmarkToggle => {
+            let Some(key) = current_track_key() else {
+                osd_flash("Marcas: sólo en archivos");
+                return;
+            };
+            let pos = playback_snapshot().position;
+            let eps = Duration::from_millis(750);
+            let mut bm = bookmarks().lock();
+            if bm.remove_near(&key, pos, eps) {
+                drop(bm);
+                osd_flash("Marca quitada");
+            } else {
+                bm.add(&key, pos, "");
+                drop(bm);
+                osd_flash(format!("Marca · {}", osd::format_hms(pos.as_secs_f64())));
+            }
+            save_bookmarks();
+        }
+        BookmarkNext => {
+            if let Some(key) = current_track_key() {
+                let pos = playback_snapshot().position;
+                if let Some(m) = bookmarks().lock().next_after(&key, pos).cloned() {
+                    seek_audio_to_pos(m.position);
+                    osd_flash(format!("▸ Marca {}", osd::format_hms(m.position.as_secs_f64())));
+                }
+            }
+        }
+        BookmarkPrev => {
+            if let Some(key) = current_track_key() {
+                let pos = playback_snapshot().position;
+                if let Some(m) = bookmarks().lock().prev_before(&key, pos).cloned() {
+                    seek_audio_to_pos(m.position);
+                    osd_flash(format!("◂ Marca {}", osd::format_hms(m.position.as_secs_f64())));
+                }
             }
         }
     }
@@ -3872,6 +3973,7 @@ fn handle_menu_command(mut model: Model, cmd: &str, handle: &Handle<Msg>) -> Mod
         "file.reload" => handle.dispatch(Msg::ReloadConfig),
         "file.quit" => {
             save_history();
+            save_bookmarks();
             std::process::exit(0)
         }
         "play.toggle" => dispatch(TogglePause),
@@ -3980,7 +4082,9 @@ fn timeline_strip() -> View<Msg> {
         }
     };
     let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
-    timeline_view(frac, &palette, |fraction| {
+    // U6: marcas del medio actual pintadas sobre la barra.
+    let marks = bookmark_fractions();
+    timeline_view_marked(frac, &marks, &palette, |fraction| {
         Some(Msg::Command(MediaCommand::SeekTo { fraction }))
     })
 }

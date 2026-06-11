@@ -120,6 +120,14 @@ pub enum MediaCommand {
     /// reproducido hasta ahora y fija la ganancia para llevarla al objetivo
     /// ReplayGain 2.0 (−18 LUFS). Necesita haber reproducido ≳ 1 s.
     NormAuto,
+    /// Pone una marca (bookmark) en la posición actual, o la quita si ya hay
+    /// una marca cerca de ese punto (toggle). U6 de PARIDAD.md. Persiste en
+    /// `bookmarks.ron`; las marcas se pintan sobre el timeline.
+    BookmarkToggle,
+    /// Salta a la marca siguiente del medio actual.
+    BookmarkNext,
+    /// Salta a la marca anterior del medio actual.
+    BookmarkPrev,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -214,6 +222,9 @@ impl MediaCommand {
             NormGainBy { db } if *db < 0.0 => format!("Normalización {db:.0} dB"),
             NormGainBy { db } => format!("Normalización +{db:.0} dB"),
             NormAuto => "Normalizar automático (ReplayGain)".to_string(),
+            BookmarkToggle => "Marca: poner / quitar".to_string(),
+            BookmarkNext => "Marca siguiente".to_string(),
+            BookmarkPrev => "Marca anterior".to_string(),
         }
     }
 }
@@ -422,6 +433,10 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             b(KeyChord::key("g"), SubDelayBy { ms: -100 }),
             b(KeyChord::key("h"), SubDelayBy { ms: 100 }),
             b(KeyChord::shift("g"), SubDelayReset),
+            // Marcas (U6): Shift+B pone/quita en la posición actual; saltar de
+            // marca en marca queda en el palette (sin atajo por defecto para no
+            // pisar bindings comunes).
+            b(KeyChord::shift("b"), BookmarkToggle),
             b(
                 KeyChord::key("b"),
                 Script {
