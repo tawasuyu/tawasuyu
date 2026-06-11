@@ -328,6 +328,16 @@ fn aceptar_copia(
         );
         return;
     }
+    // Tope anti-agotamiento: un cliente malicioso podría crear capturas sin
+    // límite —sobre todo `copy_with_damage`, que esperan daño retenidas en la
+    // cola— y agotar la memoria del compositor. Pasado el tope, la captura nueva
+    // falla (el cliente reintenta) en vez de hacer crecer la cola sin freno. Un
+    // grabador legítimo tiene ~1-2 capturas en vuelo; 64 es holgado.
+    const MAX_PENDIENTES: usize = 64;
+    if state.pending_screencopy.len() >= MAX_PENDIENTES {
+        frame.failed();
+        return;
+    }
     state.pending_screencopy.push(PendingScreencopy {
         frame: frame.clone(),
         buffer,
