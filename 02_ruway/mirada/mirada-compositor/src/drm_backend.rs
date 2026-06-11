@@ -559,7 +559,14 @@ impl DrmState {
     /// la franja del shell (pata). Devuelve rect en coords globales — el
     /// teselado y las zonas de arrastre lo usan como dominio efectivo.
     fn output_work_rect(&self, idx: usize) -> Rect {
-        let o = &self.outputs[idx];
+        // `output_at_point` cae a `PRIMARY` cuando el punto no toca ninguna
+        // salida — incluido el caso de 0 monitores, donde `outputs` está
+        // vacío. Y un `idx` de antes de un desenchufe puede quedar fuera de
+        // rango. En ambos casos el dominio de zonas degenera al tamaño lógico,
+        // sin reservas: no hay panic ni salida a la que recortar.
+        let Some(o) = self.outputs.get(idx) else {
+            return Rect::new(0, 0, self.output_size.0 as i32, self.output_size.1 as i32);
+        };
         // Layers exclusivas de ESTA salida: la zona "no exclusiva" da los
         // insets directos.
         let z = smithay::desktop::layer_map_for_output(&o.output).non_exclusive_zone();
@@ -1362,9 +1369,15 @@ impl DrmState {
                 let (x, y) = self.clamp_to_outputs(x, y);
                 self.app.pointer_loc = (x, y);
                 if self.root_menu.is_some() {
-                    // El menú vive en coords locales a su salida.
+                    // El menú vive en coords locales a su salida. Si esa salida
+                    // se desenchufó mientras estaba abierto, el idx queda viejo:
+                    // cerramos el menú en vez de indexar fuera de rango.
                     let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
-                    let r = self.outputs[idx].rect;
+                    let Some(r) = self.outputs.get(idx).map(|o| o.rect) else {
+                        self.root_menu = None;
+                        self.menu_output_idx = None;
+                        return;
+                    };
                     let lx = x.round() as i32 - r.x;
                     let ly = y.round() as i32 - r.y;
                     self.root_menu.as_mut().unwrap().update_hover(lx, ly);
@@ -1389,7 +1402,11 @@ impl DrmState {
                 if self.root_menu.is_some() {
                     let (x, y) = self.app.pointer_loc;
                     let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
-                    let r = self.outputs[idx].rect;
+                    let Some(r) = self.outputs.get(idx).map(|o| o.rect) else {
+                        self.root_menu = None;
+                        self.menu_output_idx = None;
+                        return;
+                    };
                     let lx = x.round() as i32 - r.x;
                     let ly = y.round() as i32 - r.y;
                     self.root_menu.as_mut().unwrap().update_hover(lx, ly);
@@ -1415,7 +1432,11 @@ impl DrmState {
                     use crate::menu::ClickResult;
                     let (x, y) = self.app.pointer_loc;
                     let idx = self.menu_output_idx.unwrap_or(Self::PRIMARY);
-                    let r = self.outputs[idx].rect;
+                    let Some(r) = self.outputs.get(idx).map(|o| o.rect) else {
+                        self.root_menu = None;
+                        self.menu_output_idx = None;
+                        return;
+                    };
                     let lx = x.round() as i32 - r.x;
                     let ly = y.round() as i32 - r.y;
                     let res = if button == BTN_LEFT {
@@ -1459,7 +1480,11 @@ impl DrmState {
                         // origen y su rect de acotamiento son **locales** a ese
                         // monitor — así no se sale del borde de su pantalla.
                         let idx = self.output_at_point(x.round() as i32, y.round() as i32);
-                        let r = self.outputs[idx].rect;
+                        // Sin salida real (0 monitores) no hay dónde anclar el
+                        // menú: no lo abrimos en vez de indexar fuera de rango.
+                        let Some(r) = self.outputs.get(idx).map(|o| o.rect) else {
+                            return;
+                        };
                         self.menu_output_idx = Some(idx);
                         self.root_menu = Some(crate::menu::RootMenu::open(
                             x.round() as i32 - r.x,
@@ -1863,6 +1888,17 @@ impl DrmState {
             // Drop del compositor + smithay::Output: la GPU libera recursos.
             let _ = self.outputs.remove(i);
             changed = true;
+        }
+
+        // El menú raíz se ancla a una salida por índice; tras un desenchufe ese
+        // índice puede quedar viejo (fuera de rango o apuntando a otro monitor).
+        // Lo cerramos para que no pinte con coords muertas ni indexe de más.
+        if self
+            .menu_output_idx
+            .is_some_and(|i| i >= self.outputs.len())
+        {
+            self.root_menu = None;
+            self.menu_output_idx = None;
         }
 
         // 2 · Enchufes — armar OutputCtx para cada conector nuevo.
