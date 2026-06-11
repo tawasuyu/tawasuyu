@@ -215,6 +215,9 @@ struct LayerApp {
     cfg: Config,
     surfaces: Vec<crate::SurfaceWidgets>,
     shuma: crate::shuma::ShumaState,
+    /// Vigía del `launcher.toml` para recargar el contenido del dock en caliente
+    /// (reordenar dientes). Cambios de geometría/anclaje piden reinicio.
+    cfg_watch: crate::config_watch::ConfigWatch,
     /// Índice (en `panels`) de la barra que hospeda el `shuma_input`, si hay.
     shuma_panel: Option<usize>,
     /// Grosor original (px) de esa barra — al que vuelve al replegar el drawer.
@@ -405,6 +408,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         cfg,
         surfaces,
         shuma,
+        cfg_watch: crate::config_watch::ConfigWatch::new(pata_config::loaded_path()),
         // Se calculan después, una vez creados los panels.
         shuma_panel: None,
         shuma_bar_px: 40,
@@ -1113,10 +1117,41 @@ impl LayerApp {
     /// nuevo, `tick`ea los widgets y marca todas las barras para re-pintar. El
     /// muestreo en sí (subprocesos que pueden colgarse) vive en `SamplerHandle`,
     /// nunca acá: el bucle de UI no se bloquea aunque wpctl/wl-paste se cuelguen.
+    /// Hot-reload del `launcher.toml` en layer-shell: **sólo contenido** (los
+    /// widgets de las superficies + acento). Si cambió la cantidad de barras, el
+    /// anclaje de las layer surfaces (tamaño / borde / exclusive zone) tendría que
+    /// recrearse — eso pide reinicio, así que avisamos y no tocamos nada. Preserva
+    /// el shell hospedado. Devuelve `true` si recargó (para repintar).
+    fn maybe_recargar_config(&mut self) -> bool {
+        if !self.cfg_watch.changed() {
+            return false;
+        }
+        let cfg = pata_config::load();
+        if cfg.surfaces.len() != self.cfg.surfaces.len() {
+            eprintln!(
+                "pata · la config cambió la cantidad de barras; reiniciá pata para reanclar las \
+                 layer surfaces (el reorden de dientes dentro de una barra sí recarga solo)"
+            );
+            return false;
+        }
+        self.surfaces = crate::Model::construir_surfaces(&cfg);
+        let mut theme = Theme::dark();
+        if let Some(c) = crate::render::parse_hex(&cfg.general.accent) {
+            theme.accent = c;
+        }
+        self.theme = theme;
+        self.cfg = cfg;
+        true
+    }
+
     fn maybe_sample(&mut self) {
         let Some((ctx, clipboard)) = self.sampler.latest() else {
             return;
         };
+        // El reload de config late en el mismo pulso ~1 Hz que el muestreo (sólo
+        // statea el archivo cuando llegó un sample nuevo, no por frame). El bucle
+        // final de este método ya marca todos los panels dirty, así que repinta.
+        self.maybe_recargar_config();
         self.ctx = ctx;
         crate::push_clip_history(&mut self.clip_history, &clipboard);
         self.clipboard = clipboard;

@@ -22,6 +22,14 @@ pub fn candidate_paths() -> Vec<PathBuf> {
     out
 }
 
+/// La ruta del `launcher.toml` que [`load`] usaría: la primera candidata que
+/// existe en disco. `None` si ninguna existe (se arrancó con el preset, no hay
+/// archivo que vigilar). Es lo que el frontend vigila por mtime para recargar el
+/// marco en caliente.
+pub fn loaded_path() -> Option<PathBuf> {
+    candidate_paths().into_iter().find(|p| p.exists())
+}
+
 /// Parsea un TOML al modelo. Error con el detalle de toml si no cuadra.
 pub fn load_from_str(src: &str) -> Result<Config, toml::de::Error> {
     toml::from_str(src)

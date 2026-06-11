@@ -24,6 +24,7 @@ pub mod cava;
 pub mod keys;
 pub mod layer;
 pub mod nouser;
+pub mod config_watch;
 pub mod open;
 pub mod render;
 pub mod sampler;
@@ -517,14 +518,52 @@ pub struct Model {
     /// sale de `wlr-foreign-toplevel` directo, ver [`crate::layer`]). Vacío si no
     /// hay compositor que responda.
     pub windows: Vec<crate::toplevel::WindowEntry>,
+    /// Vigía del `launcher.toml`: cada tick comprueba si cambió en disco para
+    /// recargar el marco en caliente (reordenar el dock, cambiar acento, etc.).
+    pub cfg_watch: crate::config_watch::ConfigWatch,
 }
 
 impl Model {
     /// Construye los widgets de cada superficie y el estado de shuma desde la
     /// config. El primer `shuma_input` que aparece define el cabezal.
+    /// Recarga el `launcher.toml` y reconstruye el marco en caliente: geometría
+    /// (`frame`), widgets de las superficies, tarjetas flotantes y acento del
+    /// tema. **Preserva** el shell hospedado (`shuma`) y los hilos de fondo
+    /// (tray/weather/cava) —agregar o quitar uno de esos widgets sigue pidiendo
+    /// reinicio—. Cubre el caso típico: reordenar el dock / editar la barra.
+    fn recargar_config(&mut self) {
+        let cfg = pata_config::load();
+        self.frame = pata_core::resolve(&cfg, Rect::new(0, 0, self.screen.0, self.screen.1));
+        self.surfaces = Self::construir_surfaces(&cfg);
+        self.cards = Self::construir_cards(&cfg);
+        let mut theme = Theme::dark();
+        if let Some(c) = render::parse_hex(&cfg.general.accent) {
+            theme.accent = c;
+        }
+        self.theme = theme;
+        self.cfg = cfg;
+    }
+
     fn construir(cfg: &Config) -> (Vec<SurfaceWidgets>, ShumaState) {
-        let mut shuma = ShumaState::default();
-        let mut build_slot = |specs: &[pata_core::WidgetSpec]| -> Vec<SlotWidget> {
+        // El shell hospedado lo define el primer `shuma_input` declarado (orden:
+        // start→center→end por superficie). Se arma aparte de los widgets para
+        // que el hot-reload pueda reconstruir el layout **sin** recrearlo.
+        let shuma = cfg
+            .surfaces
+            .iter()
+            .flat_map(|s| s.start.iter().chain(&s.center).chain(&s.end))
+            .find(|spec| spec.kind == "shuma_input")
+            .map(ShumaState::from_spec)
+            .unwrap_or_default();
+        (Self::construir_surfaces(cfg), shuma)
+    }
+
+    /// Construye sólo los widgets de cada superficie, **sin** tocar el shell
+    /// hospedado ([`ShumaState`]). Lo usa el build inicial (vía [`construir`]) y
+    /// el hot-reload, que reconstruye el dock al reordenar la config pero
+    /// preserva el `ShumaState` vivo (su terminal no se reinicia).
+    fn construir_surfaces(cfg: &Config) -> Vec<SurfaceWidgets> {
+        let build_slot = |specs: &[pata_core::WidgetSpec]| -> Vec<SlotWidget> {
             specs
                 .iter()
                 .map(|spec| {
@@ -535,9 +574,6 @@ impl Model {
                             exec: (!exec.is_empty()).then(|| exec.to_string()),
                         }
                     } else if spec.kind == "shuma_input" {
-                        if !shuma.present {
-                            shuma = ShumaState::from_spec(spec);
-                        }
                         SlotWidget::Shuma
                     } else if spec.kind == "window_list" {
                         SlotWidget::WindowList
@@ -567,16 +603,14 @@ impl Model {
                 })
                 .collect()
         };
-        let surfaces = cfg
-            .surfaces
+        cfg.surfaces
             .iter()
             .map(|s| SurfaceWidgets {
                 start: build_slot(&s.start),
                 center: build_slot(&s.center),
                 end: build_slot(&s.end),
             })
-            .collect();
-        (surfaces, shuma)
+            .collect()
     }
 
     /// Construye las tarjetas flotantes de todas las superficies `Panel` con sus
@@ -730,6 +764,7 @@ impl App for PataApp {
             nav: NavState::default(),
             screen,
             windows: Vec::new(),
+            cfg_watch: crate::config_watch::ConfigWatch::new(pata_config::loaded_path()),
         };
         // Primer tick para que los widgets arranquen con datos.
         model.tick_widgets(&ctx);
@@ -774,6 +809,11 @@ impl App for PataApp {
                 // declara (no molestar al WM con un subproceso por tick de balde).
                 if config_tiene_widget(&model.cfg, "window_list") {
                     model.windows = sampler::sample_windows();
+                }
+                // Hot-reload: si el launcher.toml cambió en disco, reconstruye el
+                // dock/superficies (preservando el shell hospedado).
+                if model.cfg_watch.changed() {
+                    model.recargar_config();
                 }
             }
             Msg::CavaTick => {
