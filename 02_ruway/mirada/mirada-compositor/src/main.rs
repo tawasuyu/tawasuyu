@@ -904,7 +904,7 @@ impl App {
             BodyOp::SetGrabs(keys) => self.grabs = keys,
             BodyOp::SetCursor(_) => {}
             BodyOp::SetDecorations(d) => self.decorations = d,
-            BodyOp::SetCapabilities(p) => *self.caps.write().unwrap() = p,
+            BodyOp::SetCapabilities(p) => *escribir_tolerante(&self.caps) = p,
             BodyOp::Spawn(cmd) => {
                 // En modo greeter no se lanza nada: la pantalla de login
                 // no es un sitio desde donde abrir programas.
@@ -1324,7 +1324,7 @@ impl CompositorHandler for App {
                     states
                         .data_map
                         .get::<LayerSurfaceData>()
-                        .map(|d| d.lock().unwrap().initial_configure_sent)
+                        .map(|d| lock_tolerante(d).initial_configure_sent)
                         .unwrap_or(false)
                 });
                 map.arrange();
@@ -1680,6 +1680,26 @@ pub(crate) fn peer_pid(stream: &std::os::unix::net::UnixStream) -> Option<i32> {
 
 /// La cadena de PIDs ancestros de un proceso (padre inmediato primero), leída de
 /// `/proc/<pid>/stat`. Acotada a 32 saltos por si /proc miente o cicla. Vacía si
+/// Toma un `RwLock` para lectura **tolerando el veneno**: si otro hilo paniqueó
+/// con el lock tomado, Rust lo marca envenenado y `read().unwrap()` propagaría
+/// el panic — tumbando la sesión entera (justo lo que la auditoría de robustez
+/// evita). Los datos que protegemos así (bitfield de capacidades, datos planos
+/// de smithay) no tienen invariantes que un panic a medias pueda romper, así que
+/// recuperamos el guard con `into_inner()` y seguimos.
+fn leer_tolerante<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockReadGuard<'_, T> {
+    l.read().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Variante de escritura de [`leer_tolerante`].
+fn escribir_tolerante<T>(l: &std::sync::RwLock<T>) -> std::sync::RwLockWriteGuard<'_, T> {
+    l.write().unwrap_or_else(|e| e.into_inner())
+}
+
+/// Variante para `Mutex` de [`leer_tolerante`].
+fn lock_tolerante<T>(l: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    l.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// no se puede leer (el proceso ya murió, no es Linux…). Alimenta el linaje de
 /// las *constelaciones* del Cerebro.
 fn process_ancestors(pid: i32) -> Vec<u32> {
@@ -1969,7 +1989,7 @@ fn cursor_hotspot(surface: &WlSurface) -> (i32, i32) {
             .data_map
             .get::<CursorImageSurfaceData>()
             .map(|m| {
-                let h = m.lock().unwrap().hotspot;
+                let h = lock_tolerante(m).hotspot;
                 (h.x, h.y)
             })
             .unwrap_or((0, 0))
@@ -2267,7 +2287,7 @@ fn dmabuf_permitido_para(
 ) -> bool {
     let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
     match pid.and_then(exe_de_pid) {
-        Some(exe) => caps.read().unwrap().dmabuf_permitido(&exe),
+        Some(exe) => leer_tolerante(caps).dmabuf_permitido(&exe),
         None => true,
     }
 }
@@ -2445,7 +2465,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         data_control_state: DataControlState::new::<App, _>(&dh, None, move |client| {
             let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
             match pid.and_then(exe_de_pid) {
-                Some(exe) => caps_filter.read().unwrap().clipboard_permitido(&exe),
+                Some(exe) => leer_tolerante(&caps_filter).clipboard_permitido(&exe),
                 None => true,
             }
         }),
@@ -2455,7 +2475,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         _virtual_keyboard_state: VirtualKeyboardManagerState::new::<App, _>(&dh, move |client| {
             let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
             match pid.and_then(exe_de_pid) {
-                Some(exe) => caps_vk_filter.read().unwrap().virtual_input_permitido(&exe),
+                Some(exe) => leer_tolerante(&caps_vk_filter).virtual_input_permitido(&exe),
                 None => true,
             }
         }),
@@ -2467,7 +2487,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
             move |client| {
                 let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
                 match pid.and_then(exe_de_pid) {
-                    Some(exe) => caps_ftl_filter.read().unwrap().window_list_permitido(&exe),
+                    Some(exe) => leer_tolerante(&caps_ftl_filter).window_list_permitido(&exe),
                     None => true,
                 }
             },
@@ -2478,7 +2498,7 @@ fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Error>> {
         _screencopy_state: screencopy::ScreencopyState::new(&dh, move |client| {
             let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
             match pid.and_then(exe_de_pid) {
-                Some(exe) => caps_sc_filter.read().unwrap().screencopy_permitido(&exe),
+                Some(exe) => leer_tolerante(&caps_sc_filter).screencopy_permitido(&exe),
                 None => true,
             }
         }),
