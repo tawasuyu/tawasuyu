@@ -80,7 +80,7 @@ use llimphi_ui::{
 use media_audio_cpal::AudioSink;
 use media_core::{
     AudioProbe, AudioSource, FrameSource, Levels, MixerAudio, Pause, PausableAudio,
-    ProbedAudioSource, Seekable, SubtitleTrack, TestCard, ToneSource, Volume,
+    ProbedAudioSource, Seekable, SubAlign, SubtitleTrack, TestCard, ToneSource, Volume,
     VolumeAudio, Waterfall,
 };
 use media_core::color::{ColorControl, ColorParams, ColorVideo};
@@ -4047,22 +4047,49 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
     // el cue que normalmente caería en `t - delay`. Clamp a >= 0.
     let q = position.as_millis() as i64 - SUB_DELAY_MS.load(Ordering::Relaxed);
     let adjusted = Duration::from_millis(q.max(0) as u64);
-    let text = track
-        .at(adjusted)
-        .map(|c| c.text.clone())
-        .unwrap_or_default();
+    let Some(cue) = track.at(adjusted) else {
+        // Sin cue activo: franja de altura fija pero vacía (mantiene el layout
+        // estable mientras hay subtítulos cargados).
+        return View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(44.0_f32) },
+            ..Default::default()
+        });
+    };
+    // S3: estilo ASS. Del cue resolvemos color primario y alineación efectiva
+    // (override inline > estilo nombrado > default). El **anclaje horizontal**
+    // (izq/centro/der) mapea limpio a esta franja; el vertical (top/middle) y
+    // `\pos` absoluto necesitan un overlay sobre el video con la resolución del
+    // script → quedan para la pasada con pantalla. SRT/WebVTT caen al default
+    // (blanco, centrado) porque no llenan `style`/`align`.
+    let text = cue.text.clone();
+    let align = track.align_for(cue);
+    let color = match track.style_for(cue).map(|s| s.primary) {
+        Some(c) if c.a > 0 => Color::from_rgba8(c.r, c.g, c.b, c.a),
+        _ => Color::from_rgba8(240, 240, 240, 255),
+    };
+    let justify = match align {
+        SubAlign::BottomLeft | SubAlign::MiddleLeft | SubAlign::TopLeft => JustifyContent::FlexStart,
+        SubAlign::BottomRight | SubAlign::MiddleRight | SubAlign::TopRight => JustifyContent::FlexEnd,
+        _ => JustifyContent::Center,
+    };
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(44.0_f32),
         },
-        justify_content: Some(JustifyContent::Center),
+        justify_content: Some(justify),
         align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     })
     .fill(Color::from_rgba8(8, 10, 14, 240))
     .radius(6.0)
-    .text(text, 18.0, Color::from_rgba8(240, 240, 240, 255))
+    .text(text, 18.0, color)
 }
 
 /// Barra de progreso clickeable bajo el video — scrubbing estilo VLC.
