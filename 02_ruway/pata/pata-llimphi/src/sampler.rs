@@ -4,7 +4,8 @@
 //! La frontera de la Fase 4: el core no toca el SO; este es el sampler que cada
 //! plataforma aporta. En Linux leemos `chrono` para el reloj, `/proc/stat` para
 //! la CPU (necesita dos lecturas, por eso es un struct con estado), `/proc/
-//! meminfo` para la RAM y `/sys/class/backlight` para el brillo. El volumen
+//! meminfo` para la RAM y `/sys/class/backlight` para el brillo (el panel del
+//! laptop; los monitores externos van por DDC con `ddcutil`). El volumen
 //! (PulseAudio/PipeWire) queda diferido —el medidor sale en 0% hasta entonces—.
 
 use std::io::Read;
@@ -34,6 +35,10 @@ pub struct Sampler {
     /// Si `true`, el reloj se arma en UTC en vez de la hora local (de
     /// `general.timezone = "UTC"`). Paridad con el `TzMode` de mirada-launcher.
     utc: bool,
+    /// Contador para throttlear el refresco del caché de brillo DDC (monitores
+    /// externos): sólo se relee cada [`DDC_REFRESH_CADA`] ticks, porque `ddcutil`
+    /// es lento y no debe correr cada segundo.
+    ddc_refresh_tick: u32,
 }
 
 impl Sampler {
@@ -67,7 +72,7 @@ impl Sampler {
             ram_total_mb,
             volume,
             muted,
-            brightness: sample_brightness().unwrap_or(0.0),
+            brightness: self.sample_brightness(),
             sun_longitude_deg,
             moon_phase,
             active_workspace,
@@ -76,6 +81,25 @@ impl Sampler {
             cpu_cores,
             cpu_cores_n,
         }
+    }
+
+    /// Brillo `0..1`. Prioriza el panel del laptop (`/sys/class/backlight`,
+    /// barato vía sysfs); si no hay (escritorio con sólo monitores externos),
+    /// lee el caché DDC que refresca un escritor *detached*. `ddcutil` es lento
+    /// (~1-2 s) y no puede correr en el path de muestreo (timeout de [`run`] =
+    /// 500 ms), así que sólo lo disparamos cada [`DDC_REFRESH_CADA`] ticks y acá
+    /// leemos el último valor que dejó en disco. `0.0` si nada responde.
+    fn sample_brightness(&mut self) -> f32 {
+        if let Some(b) = sample_backlight() {
+            return b;
+        }
+        self.ddc_refresh_tick = self.ddc_refresh_tick.wrapping_add(1);
+        // En el primer tick (== 1) y luego cada DDC_REFRESH_CADA, relanza el
+        // escritor del caché. El medidor refleja el valor en el tick siguiente.
+        if self.ddc_refresh_tick % DDC_REFRESH_CADA == 1 {
+            refrescar_ddc_cache();
+        }
+        leer_ddc_cache().unwrap_or(0.0)
     }
 
     /// Uso de CPU `0..1` como `1 - idle_delta/total_delta`. La primera vez no
@@ -436,6 +460,19 @@ mod tests {
     }
 
     #[test]
+    fn parse_ddc_brief_lee_cur_y_max_tras_la_c() {
+        // Formato `ddcutil getvcp 10 --brief`: VCP <code> C <cur> <max>.
+        assert_eq!(super::parse_ddc_brief("VCP 10 C 42 100"), Some(0.42));
+        // Con líneas de ruido alrededor (ddcutil a veces antepone avisos).
+        let s = "Display 1\nVCP 10 C 75 100\n";
+        assert_eq!(super::parse_ddc_brief(s), Some(0.75));
+        // max=0 o forma inesperada → None (no panic, no división por cero).
+        assert_eq!(super::parse_ddc_brief("VCP 10 C 0 0"), None);
+        assert_eq!(super::parse_ddc_brief("basura sin vcp"), None);
+        assert_eq!(super::parse_ddc_brief("VCP 10 SNC x11"), None);
+    }
+
+    #[test]
     fn parse_windows_ignora_lineas_malformadas() {
         // Menos de 6 campos o id no numérico: se descartan sin romper.
         let s = "no-es-id\t1\t0\t0\tapp\ttitulo\n\
@@ -447,9 +484,14 @@ mod tests {
     }
 }
 
-/// Brillo `0..1` desde el primer dispositivo en `/sys/class/backlight`. `None`
-/// si no hay backlight (escritorio, VM).
-fn sample_brightness() -> Option<f32> {
+/// Cada cuántos ticks (~1 Hz) se relanza el escritor del caché DDC. ~10 s: el
+/// brillo de un monitor externo no cambia tan seguido y `ddcutil` golpea el bus
+/// I²C, así que no conviene sondearlo cada segundo.
+const DDC_REFRESH_CADA: u32 = 10;
+
+/// Brillo `0..1` desde el primer dispositivo en `/sys/class/backlight` (el panel
+/// del laptop). `None` si no hay backlight (escritorio, VM, sólo externos).
+fn sample_backlight() -> Option<f32> {
     let dir = std::fs::read_dir("/sys/class/backlight").ok()?;
     for entry in dir.flatten() {
         let base = entry.path();
@@ -466,6 +508,50 @@ fn sample_brightness() -> Option<f32> {
         }
     }
     None
+}
+
+/// `true` si hay al menos un panel en `/sys/class/backlight` (laptop). En
+/// escritorios con sólo monitores externos no hay → el brillo va por DDC.
+fn tiene_backlight() -> bool {
+    std::fs::read_dir("/sys/class/backlight")
+        .map(|mut d| d.next().is_some())
+        .unwrap_or(false)
+}
+
+/// Ruta del caché de brillo DDC: `$XDG_RUNTIME_DIR/pata-ddc-brightness` (o `/tmp`
+/// si la variable no está). Lo escribe un `ddcutil getvcp` detached y lo lee el
+/// muestreo (barato: un `read_to_string`).
+fn ddc_cache_path() -> String {
+    let dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".to_string());
+    format!("{dir}/pata-ddc-brightness")
+}
+
+/// Lanza —**sin esperar**— un `ddcutil getvcp 10 --brief` que vuelca el brillo
+/// del monitor externo al caché. VCP `0x10` = brillo. Display por defecto (1).
+fn refrescar_ddc_cache() {
+    crate::spawn_cmd(&format!(
+        "ddcutil getvcp 10 --brief > {} 2>/dev/null",
+        ddc_cache_path()
+    ));
+}
+
+/// Lee el caché DDC y lo parsea a fracción `0..1`. `None` si no existe (todavía
+/// no se escribió) o no se pudo parsear.
+fn leer_ddc_cache() -> Option<f32> {
+    let text = std::fs::read_to_string(ddc_cache_path()).ok()?;
+    parse_ddc_brief(&text)
+}
+
+/// Parsea la línea `--brief` de `ddcutil getvcp 10`: `VCP 10 C <cur> <max>` (el
+/// brillo es de tipo continuo, marcado `C`). Toma los dos números tras la `C`
+/// → `cur/max`. `None` si la forma no casa o `max == 0`.
+fn parse_ddc_brief(s: &str) -> Option<f32> {
+    let line = s.lines().find(|l| l.contains("VCP"))?;
+    let toks: Vec<&str> = line.split_whitespace().collect();
+    let c = toks.iter().position(|t| *t == "C")?;
+    let cur: f32 = toks.get(c + 1)?.parse().ok()?;
+    let max: f32 = toks.get(c + 2)?.parse().ok()?;
+    (max > 0.0).then(|| (cur / max).clamp(0.0, 1.0))
 }
 
 /// `(fracción_volumen, muteado)` del sink por defecto. Prueba PipeWire (`wpctl`)
@@ -511,14 +597,21 @@ pub fn set_volume(frac: f32) {
     ));
 }
 
-/// Fija el brillo de la pantalla a `frac` (`0..1`). `brightnessctl` toma
-/// porcentaje absoluto; el fallback `light` lo mismo. Tope inferior 1% para no
-/// apagar la pantalla del todo.
+/// Fija el brillo de la pantalla a `frac` (`0..1`). Con panel de laptop:
+/// `brightnessctl` (porcentaje absoluto) y fallback `light`. Sin panel (monitor
+/// externo): DDC vía `ddcutil setvcp 10 <0..100>`, y tras fijar refresca el
+/// caché para que el medidor lo refleje en el próximo tick. Tope inferior 1%
+/// para no apagar la pantalla del todo. Desacoplado, como [`nudge_volume`].
 pub fn set_brightness(frac: f32) {
     let pct = ((frac.clamp(0.0, 1.0) * 100.0 + 0.5) as u32).max(1);
-    crate::spawn_cmd(&format!(
-        "brightnessctl set {pct}% || light -S {pct}"
-    ));
+    if tiene_backlight() {
+        crate::spawn_cmd(&format!("brightnessctl set {pct}% || light -S {pct}"));
+    } else {
+        crate::spawn_cmd(&format!(
+            "ddcutil setvcp 10 {pct} 2>/dev/null; ddcutil getvcp 10 --brief > {} 2>/dev/null",
+            ddc_cache_path()
+        ));
+    }
 }
 
 /// Togglea el mute del sink por defecto (PipeWire `wpctl`, fallback PulseAudio
@@ -664,18 +757,26 @@ pub fn close_window(id: u32) {
 }
 
 /// Ajusta el brillo de la pantalla en pasos de 5% (relativo). `up` sube, `!up`
-/// baja. Usa `brightnessctl` (resuelve permisos vía systemd-logind o udev) y cae
-/// a `light`. Desacoplado, como [`nudge_volume`]. Cubre el panel del portátil
-/// (`/sys/class/backlight`); para monitores externos por DDC haría falta
-/// `ddcutil` (pendiente). El medidor refleja el cambio en el próximo tick.
+/// baja. Con panel de laptop usa `brightnessctl` (resuelve permisos vía
+/// systemd-logind o udev) y cae a `light`. Sin panel (monitor externo) va por
+/// DDC: `ddcutil setvcp 10 + 5` / `- 5` (relativo), y refresca el caché para que
+/// el medidor lo refleje. Desacoplado, como [`nudge_volume`].
 pub fn nudge_brightness(up: bool) {
-    let cmd = if up {
-        "brightnessctl set 5%+ || light -A 5"
+    if tiene_backlight() {
+        let cmd = if up {
+            "brightnessctl set 5%+ || light -A 5"
+        } else {
+            // Tope inferior 1% para no apagar la pantalla del todo.
+            "brightnessctl set 5%- || light -U 5"
+        };
+        crate::spawn_cmd(cmd);
     } else {
-        // Tope inferior 1% para no apagar la pantalla del todo.
-        "brightnessctl set 5%- || light -U 5"
-    };
-    crate::spawn_cmd(cmd);
+        let signo = if up { "+" } else { "-" };
+        crate::spawn_cmd(&format!(
+            "ddcutil setvcp 10 {signo} 5 2>/dev/null; ddcutil getvcp 10 --brief > {} 2>/dev/null",
+            ddc_cache_path()
+        ));
+    }
 }
 
 /// Fija la hora del sistema al sello `"YYYY-MM-DD HH:MM:SS"`. Como `timedatectl
