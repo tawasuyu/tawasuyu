@@ -2732,8 +2732,16 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
         // 3 · Composición de las superficies en sus rectángulos.
         let size = backend.window_size();
         let damage: Rectangle<i32, smithay::utils::Physical> = Rectangle::from_size(size);
-        {
-            let (renderer, mut framebuffer) = backend.bind().unwrap();
+        // Etiquetado para poder saltar el frame entero (sin panic) si una
+        // operación de GPU falla — paridad con el manejo del backend DRM.
+        'frame: {
+            let (renderer, mut framebuffer) = match backend.bind() {
+                Ok(rf) => rf,
+                Err(e) => {
+                    eprintln!("mirada-compositor · bind del backbuffer winit falló ({e}); salteo el frame.");
+                    break 'frame;
+                }
+            };
             // Orden de pintado: la lista de elementos va front-to-back
             // (índice 0 = encima): el shell primero —va sobre todo—, luego
             // las flotantes, luego las teseladas. `sort_by_key` es estable:
@@ -2764,14 +2772,25 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
                 .chain(window_elems)
                 .chain(under_layers)
                 .collect();
-            let mut frame = renderer
-                .render(&mut framebuffer, size, Transform::Flipped180)
-                .unwrap();
-            frame
-                .clear(Color32F::new(0.05, 0.05, 0.08, 1.0), &[damage])
-                .unwrap();
-            draw_render_elements(&mut frame, 1.0, &elements, &[damage]).unwrap();
-            let _ = frame.finish().unwrap();
+            let mut frame = match renderer.render(&mut framebuffer, size, Transform::Flipped180) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!("mirada-compositor · render winit falló ({e}); salteo el frame.");
+                    break 'frame;
+                }
+            };
+            if let Err(e) = frame.clear(Color32F::new(0.05, 0.05, 0.08, 1.0), &[damage]) {
+                eprintln!("mirada-compositor · clear winit falló ({e}); salteo el frame.");
+                break 'frame;
+            }
+            if let Err(e) = draw_render_elements(&mut frame, 1.0, &elements, &[damage]) {
+                eprintln!("mirada-compositor · draw winit falló ({e}); salteo el frame.");
+                break 'frame;
+            }
+            if let Err(e) = frame.finish() {
+                eprintln!("mirada-compositor · finish winit falló ({e}); salteo el frame.");
+                break 'frame;
+            }
 
             // Capturas screencopy pendientes: el backbuffer recién compuesto
             // sigue bindeado — se leen los píxeles antes del submit.
@@ -2809,16 +2828,20 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             // El PID del cliente, de las credenciales del socket (`SO_PEERCRED`) —
             // el linaje de las constelaciones (best-effort: `None` si no se leen).
             let pid = peer_pid(&stream);
-            let client = display
+            match display
                 .handle()
                 .insert_client(stream, Arc::new(ClientState::with_pid(pid)))
-                .unwrap();
-            clients.push(client);
+            {
+                Ok(client) => clients.push(client),
+                Err(e) => eprintln!("mirada-compositor · no pude registrar un cliente winit ({e})."),
+            }
         }
         display.dispatch_clients(&mut state)?;
         display.flush_clients()?;
 
-        backend.submit(Some(&[damage])).unwrap();
+        if let Err(e) = backend.submit(Some(&[damage])) {
+            eprintln!("mirada-compositor · submit winit falló ({e}); sigo al próximo frame.");
+        }
     }
 
     // Sesión ajena pendiente (handoff por `exec`): en anidado no hay DRM
