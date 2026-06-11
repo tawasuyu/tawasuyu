@@ -175,6 +175,28 @@ impl Navigator {
         &self.stack.last().expect("la pila nunca está vacía").id
     }
 
+    /// La cadena de contenedores de la raíz al actual — para pintar el
+    /// breadcrumb (cada nivel es clicable hacia [`Navigator::ascend_to`]).
+    pub fn ancestors(&self) -> &[Node] {
+        &self.stack
+    }
+
+    /// Sube directo al ancestro en la posición `depth` de la pila (0 = raíz).
+    /// `false` si `depth` ya es el nivel actual (o está fuera de rango); recarga
+    /// los hijos de ese nivel y reubica la selección al inicio.
+    pub fn ascend_to(&mut self, depth: usize) -> io::Result<bool> {
+        if depth + 1 >= self.stack.len() {
+            return Ok(false);
+        }
+        self.stack.truncate(depth + 1);
+        let actual = self.stack.last().expect("queda al menos la raíz");
+        self.children = self.source.children(&actual.id)?;
+        self.apply_sort();
+        self.selected = 0;
+        self.visible_offset = 0;
+        Ok(true)
+    }
+
     /// Nombre humano de la fuente (para el header).
     pub fn label(&self) -> String {
         self.source.label()
@@ -537,6 +559,29 @@ mod tests {
         assert!(nav.parent().unwrap());
         assert_eq!(nav.current_id(), &root_id);
         assert!(!nav.parent().unwrap());
+    }
+
+    #[test]
+    fn ascend_to_salta_a_un_ancestro() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("a/b/c")).unwrap();
+        let ids: Vec<String> = ["", "a", "a/b", "a/b/c"]
+            .iter()
+            .map(|s| dir.path().join(s).to_string_lossy().into_owned())
+            .collect();
+        let stack: Vec<Node> = ids
+            .iter()
+            .zip(["raíz", "a", "b", "c"])
+            .map(|(id, name)| Node::new(id.clone(), name, true))
+            .collect();
+        let mut nav = Navigator::open_at(Box::new(PosixSource::new(dir.path())), stack).unwrap();
+        // Estamos en a/b/c (4 niveles). Subir al nivel 1 (a/).
+        assert_eq!(nav.ancestors().len(), 4);
+        assert!(nav.ascend_to(1).unwrap());
+        assert_eq!(nav.current_id(), &ids[1]);
+        assert_eq!(nav.ancestors().len(), 2);
+        // Saltar al nivel actual = false (no se mueve).
+        assert!(!nav.ascend_to(1).unwrap());
     }
 
     #[test]

@@ -55,6 +55,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_theme::Theme;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_menubar::{
     menubar_command_at, menubar_nav, menubar_overlay_animated, menubar_view, MenuBarSpec,
@@ -288,6 +289,8 @@ enum Msg {
     NavFilterBackspace,
     /// Sale del modo filtro (conserva el filtro aplicado).
     NavFilterEnd,
+    /// Click en un segmento del breadcrumb → sube a ese nivel de la pila.
+    Breadcrumb(usize),
     /// Abre el archivo seleccionado con la app `id` de la suite (AppBus).
     OpenWith(String),
     /// Edita el archivo seleccionado en `nada`.
@@ -602,6 +605,11 @@ impl App for Shell {
             }
             Msg::NavFilterEnd => {
                 m.nav_filtering = false;
+            }
+            Msg::Breadcrumb(depth) => {
+                if matches!(m.cur_mut().ascend_to(depth), Ok(true)) {
+                    refresh_preview(&mut m);
+                }
             }
             Msg::ResizeList(dx) => {
                 m.list_width = (m.list_width + dx).clamp(220.0, 900.0);
@@ -1175,15 +1183,30 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
     }
 }
 
+/// Cabecera con el **breadcrumb clicable** de la pila del navegador activo
+/// (Fase 4.2): cada segmento sube a ese nivel. Sobre una fuente no-POSIX, un
+/// prefijo `⊟ <fuente>` marca que no es el filesystem.
 fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
+    let nav = model.cur();
+    // Segmentos = nombres de la cadena de ancestros. El primero de POSIX es
+    // "/"; lo dejamos como "/" salvo que haya prefijo de fuente.
+    let mut segs: Vec<String> = nav.ancestors().iter().map(|n| n.name.clone()).collect();
+    if model.is_foreign() {
+        // Prepend la etiqueta de la fuente como raíz visual (no clicable más
+        // allá de su propio nivel 0).
+        segs[0] = format!("⊟ {}", nav.label());
+    }
+    let seg_refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+    let crumbs = breadcrumb_view(&seg_refs, Msg::Breadcrumb, &BreadcrumbPalette::from_theme(theme));
+
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
             height: length(28.0_f32),
         },
         padding: Rect {
-            left: length(14.0_f32),
-            right: length(14.0_f32),
+            left: length(12.0_f32),
+            right: length(12.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -1191,22 +1214,7 @@ fn header_bar(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .text_aligned(
-        if model.is_foreign() {
-            // Sobre una fuente montada: su etiqueta + la miga de pan dentro de
-            // ella, con un glifo que marca que no es POSIX.
-            format!("nahual · ⊟ {} · {}", model.cur().label(), model.cur().breadcrumb())
-        } else {
-            // En POSIX: la ruta (breadcrumb del cwd) + atajos de montaje.
-            format!(
-                "nahual · {}   ·   m Mónadas · g grafo minga",
-                model.cur().breadcrumb()
-            )
-        },
-        12.0,
-        theme.fg_text,
-        Alignment::Start,
-    )
+    .children(vec![crumbs])
 }
 
 /// Limpia el panel derecho y suelta cualquier tempfile de hoja no-POSIX.

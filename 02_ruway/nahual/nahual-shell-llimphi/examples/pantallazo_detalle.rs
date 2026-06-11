@@ -27,6 +27,7 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::{Alignment, Typesetter};
 use llimphi_ui::{measure_text_node, mount, paint, View};
+use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_detail_table::{
     detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
 };
@@ -174,11 +175,15 @@ fn menu_demo() -> AppMenu {
 }
 
 fn header_bar(nav: &Navigator, theme: &Theme) -> View<Msg> {
+    // Breadcrumb clicable (Fase 4.2): un segmento por nivel de la pila.
+    let segs: Vec<String> = nav.ancestors().iter().map(|n| n.name.clone()).collect();
+    let seg_refs: Vec<&str> = segs.iter().map(String::as_str).collect();
+    let crumbs = breadcrumb_view(&seg_refs, |_| Msg::Nada, &BreadcrumbPalette::from_theme(theme));
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
         padding: Rect {
-            left: length(14.0_f32),
-            right: length(14.0_f32),
+            left: length(12.0_f32),
+            right: length(12.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -186,12 +191,7 @@ fn header_bar(nav: &Navigator, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .text_aligned(
-        format!("nahual · {} · vista detalle", nav.breadcrumb()),
-        12.0,
-        theme.fg_text,
-        Alignment::Start,
-    )
+    .children(vec![crumbs])
 }
 
 fn main() {
