@@ -37,6 +37,8 @@ pub mod posix;
 pub mod wawa;
 #[cfg(feature = "nouser")]
 pub mod nouser;
+#[cfg(feature = "nouser-daemon")]
+pub mod nouser_daemon;
 #[cfg(feature = "minga")]
 pub mod minga;
 
@@ -46,6 +48,8 @@ pub use posix::PosixSource;
 pub use wawa::WawaImgSource;
 #[cfg(feature = "nouser")]
 pub use nouser::NouserSource;
+#[cfg(feature = "nouser-daemon")]
+pub use nouser_daemon::NouserDaemonSource;
 #[cfg(feature = "minga")]
 pub use minga::MingaSource;
 

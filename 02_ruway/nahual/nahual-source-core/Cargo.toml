@@ -11,6 +11,9 @@ description = "nahual-source-core — abstracción de FUENTE navegable para el f
 [dependencies]
 wawa-explorer-core = { path = "../../../03_ukupacha/wawa-explorer/wawa-explorer-core" }
 chasqui-core = { path = "../../chasqui/chasqui-core", optional = true }
+chasqui-card = { path = "../../chasqui/chasqui-card", optional = true }
+card-sidecar = { path = "../../chasqui/card-sidecar", optional = true }
+ulid = { workspace = true, optional = true }
 minga-store = { path = "../../../03_ukupacha/minga/minga-store", optional = true }
 minga-core = { path = "../../../03_ukupacha/minga/minga-core", optional = true }
 zip = { workspace = true }
@@ -19,9 +22,15 @@ flate2 = { workspace = true }
 
 [features]
 default = []
-# Mónadas semánticas de nouser. Opt-in porque arrastra chasqui-core (sled,
-# walkdir) — quien sólo quiere POSIX/wawa no paga ese peso.
+# Mónadas semánticas de nouser por **scan local** (in-process, determinista,
+# sin daemon). Opt-in porque arrastra chasqui-core (sled, walkdir) — quien sólo
+# quiere POSIX/wawa no paga ese peso.
 nouser = ["dep:chasqui-core"]
+# Mónadas del **daemon vivo** de nouser (vía chasqui-card query socket). Mucho
+# más liviano que `nouser`: sólo wire types + cliente blocking + descubrimiento
+# del socket, sin el engine (notify/walkdir/sled/blake3). Es la ruta que ya usa
+# pata; tenerla acá unifica el dato de Mónadas detrás del trait `Source`.
+nouser-daemon = ["dep:chasqui-card", "dep:card-sidecar", "dep:ulid"]
 # Grafo CAS de AST de minga. Opt-in por la misma razón (minga-store, sled).
 minga = ["dep:minga-store", "dep:minga-core"]
 
