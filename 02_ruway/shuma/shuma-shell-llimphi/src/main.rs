@@ -1259,6 +1259,11 @@ struct Model {
     // vista de la sesión activa.
     sessions: Vec<Session>,
     active_session: usize,
+    /// Diente de sesión bajo el cursor (`None` = ninguno). Lo alimentan los
+    /// `on_pointer_enter/leave` del rail y lo lee la barra de estado para
+    /// mostrar el nombre completo de la sesión hovereada (los dientes sólo
+    /// muestran icono + número). Puramente efímero: no se persiste.
+    hovered_session: Option<usize>,
     /// Herramienta abierta a la derecha (`None` = sin panel de herramienta).
     active_tool: Option<Tool>,
     /// Si el panel de la sesión activa (su configuración, a la izquierda) está
@@ -1354,6 +1359,9 @@ enum Msg {
     Resized(f32, f32),
     /// Click en un diente de sesión (rail izquierdo): cambia el ambiente.
     SelectSession(usize),
+    /// El cursor entró (`Some(i)`) o salió (`None`) de un diente de sesión.
+    /// Sólo actualiza el resaltado/hint de la barra de estado; no toca foco.
+    HoverSession(Option<usize>),
     /// Click en un diente de herramienta (rail derecho): abre/cierra su panel.
     SelectTool(Tool),
     /// Abrir/cerrar un dropdown de config (aislamiento o distro).
@@ -1605,6 +1613,7 @@ impl App for Shell {
             main,
             sessions,
             active_session,
+            hovered_session: None,
             // Panel derecho: lo que se dejó la última vez (default colapsado).
             active_tool: chrome.active_tool,
             // Panel de config (izquierda): idem, default abierto.
@@ -1751,6 +1760,11 @@ impl App for Shell {
                     }
                     save_chrome(&m);
                 }
+            }
+            // Hover sobre un diente: sólo guarda el índice para el hint de la
+            // barra de estado. Efímero, no se persiste ni cambia el foco.
+            Msg::HoverSession(idx) => {
+                m.hovered_session = idx.filter(|&i| i < m.sessions.len());
             }
             // Click en una herramienta: toggle de su panel (re-click cierra).
             Msg::SelectTool(t) => {

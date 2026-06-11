@@ -197,9 +197,9 @@ pub(crate) fn render_bottombar(model: &Model, theme: &Theme) -> View<Msg> {
                     Msg::Module(Slot::BottomBar, ModuleMsg::CommandBar(m))
                 })
             }
-            _ => empty_bar(theme, 28.0),
+            _ => status_bar(model, theme),
         },
-        None => empty_bar(theme, 28.0),
+        None => status_bar(model, theme),
     }
 }
 
@@ -212,6 +212,33 @@ pub(crate) fn empty_bar(theme: &Theme, height: f32) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
+}
+
+/// Barra de estado inferior cuando el slot no tiene módulo CommandBar.
+/// Si hay un diente de sesión bajo el cursor, muestra su nombre completo
+/// (los dientes sólo pintan icono + número); si no, es la barra vacía.
+/// El nombre aparece al `on_pointer_enter` y se borra al `on_pointer_leave`
+/// — el ciclo de hover end-to-end, mismo patrón que el hover-link de puriy.
+pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+    let bar = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel);
+    match model.hovered_session.and_then(|i| model.sessions.get(i)) {
+        Some(s) => {
+            let label = match s.number {
+                Some(n) => format!("#{n}  {}", s.name),
+                None => s.name.clone(),
+            };
+            bar.text_aligned(label, 12.0, theme.fg_text, Alignment::Center)
+        }
+        None => bar,
+    }
 }
 
 /// Área central. Si el shumarc declara `[main]`, ese módulo ocupa todo
@@ -623,6 +650,11 @@ fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             })
             .fill(fill)
             .hover_fill(theme.bg_row_hover)
+            // Hover: publica el índice para que la barra de estado muestre el
+            // nombre de la sesión (el leave lo limpia — patrón de puriy con su
+            // hover-link). Independiente del click/drag de abajo.
+            .on_pointer_enter(Msg::HoverSession(Some(i)))
+            .on_pointer_leave(Msg::HoverSession(None))
             .children(vec![icon, num]);
             if i > 0 {
                 // El nodo es draggable → en Released, `draggable_at`
