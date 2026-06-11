@@ -376,8 +376,8 @@ pub fn verify_chain_from_cas(start_sha: [u8; 32]) -> VerificationReport {
                 genesis_sha: None,
             },
         };
-        // Verificación 1: el blob hashea a la SHA esperada (CAS contract).
-        let actual = arje_cas::sha256_of(&bytes);
+        // Verificación 1: el blob hashea al hash esperado (CAS contract, BLAKE3).
+        let actual = arje_cas::blake3_of(&bytes);
         if actual != sha {
             return VerificationReport {
                 verified,
@@ -515,12 +515,12 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// SHA256 sobre el entry en forma canónica (sha=[0;32]). Hash y CAS storage
+/// BLAKE3 sobre el entry en forma canónica (sha=[0;32]). Hash y CAS storage
 /// ven los mismos bytes, así que `arje_cas::store(canonical)` devuelve el
-/// mismo SHA que `compute_sha(entry)`.
+/// mismo hash que `compute_sha(entry)`.
 fn compute_sha(entry: &AuditEntry) -> [u8; 32] {
     let bytes = canonical_bytes(entry);
-    arje_cas::sha256_of(&bytes)
+    arje_cas::blake3_of(&bytes)
 }
 
 /// Forma canónica: el entry serializado JSON con `sha = [0; 32]`.

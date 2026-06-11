@@ -135,7 +135,7 @@ fn handle_file(
     // bajo la semántica del proveedor (el modelo nunca vio los bytes
     // adicionales). Si la cabeza cambia, el hash cambia y caemos a
     // re-embed naturalmente.
-    let file_sha = arje_cas::sha256_of(&buf);
+    let file_sha = arje_cas::blake3_of(&buf);
 
     if let Some(cache) = cache {
         if let Some(cached) = cache.get(&file_sha, model_id) {

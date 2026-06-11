@@ -3,8 +3,14 @@
 //! verificación de hash. Path por defecto: `$XDG_DATA_HOME/ente/cas/<hex>`.
 //!
 //! Override por env: `ENTE_CAS_ROOT`.
+//!
+//! **Hash: BLAKE3** (migrado desde SHA-256, plan A0). Es el mismo hash que usan
+//! hammer (`b3:`), `shared/format` y el kernel wawa, así que el `<hex>` del CAS
+//! casa con el `expected_hash` de un `.swm` y con `mensaje_capacidad` de la
+//! atestación. El ancho no cambia (256 bits = 32 bytes = 64 hex), así que el
+//! layout en disco y la API por hash son idénticos; sólo cambia el cómputo. El
+//! campo `module_sha256` conserva su nombre histórico aunque hoy lleva un BLAKE3.
 
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use tracing::debug;
 
@@ -22,10 +28,8 @@ pub fn cas_root() -> PathBuf {
     PathBuf::from(base).join("ente").join("cas")
 }
 
-pub fn sha256_of(bytes: &[u8]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hasher.finalize().into()
+pub fn blake3_of(bytes: &[u8]) -> [u8; 32] {
+    *blake3::hash(bytes).as_bytes()
 }
 
 pub fn hex(sha: &[u8; 32]) -> String {
@@ -89,7 +93,7 @@ pub fn resolve(sha: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
     let path = cas_root().join(hex(sha));
     let bytes = std::fs::read(&path)
         .map_err(|e| anyhow::anyhow!("CAS read {}: {e}", path.display()))?;
-    let actual = sha256_of(&bytes);
+    let actual = blake3_of(&bytes);
     if &actual != sha {
         anyhow::bail!(
             "CAS hash mismatch en {}: declarado={} real={}",
@@ -102,7 +106,7 @@ pub fn resolve(sha: &[u8; 32]) -> anyhow::Result<Vec<u8>> {
 /// Almacena bytes en el CAS, devuelve su SHA. Idempotente: si el archivo ya
 /// existe con el mismo hash, no reescribe.
 pub fn store(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
-    let sha = sha256_of(bytes);
+    let sha = blake3_of(bytes);
     let root = cas_root();
     std::fs::create_dir_all(&root)
         .map_err(|e| anyhow::anyhow!("CAS mkdir {}: {e}", root.display()))?;
@@ -117,4 +121,32 @@ pub fn store(bytes: &[u8]) -> anyhow::Result<[u8; 32]> {
         debug!(hex = %hex(&sha), len = bytes.len(), path = %path.display(), "CAS store");
     }
     Ok(sha)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// store → resolve roundtrip con BLAKE3 (migración A0). Aísla el CAS en un dir temporal
+    /// propio del proceso vía `ENTE_CAS_ROOT` para no tocar el real.
+    #[test]
+    fn store_resolve_roundtrip_blake3() {
+        let tmp = std::env::temp_dir().join(format!("arje-cas-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::env::set_var("ENTE_CAS_ROOT", &tmp);
+
+        let data = b"contenido de prueba para el CAS";
+        let h = store(data).unwrap();
+        // El hash devuelto es el BLAKE3 del contenido (no SHA-256).
+        assert_eq!(h, blake3_of(data), "store debe direccionar por BLAKE3");
+        assert_eq!(h, *blake3::hash(data).as_bytes());
+        // Resuelve a los mismos bytes y queda listado.
+        assert_eq!(resolve(&h).unwrap(), data);
+        assert!(list_all_shas().unwrap().contains(&h));
+        // El hex es de 64 chars (256 bits), igual que antes: el layout no cambió.
+        assert_eq!(hex(&h).len(), 64);
+
+        std::env::remove_var("ENTE_CAS_ROOT");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 }

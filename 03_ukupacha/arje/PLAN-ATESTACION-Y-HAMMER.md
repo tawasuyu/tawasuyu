@@ -68,12 +68,17 @@ arranque, `degraded` para el resto.
 | Tipos de capacidad/permiso del seed | `Capability`, `Permissions` | `card-core/src/lib.rs:217,266` |
 | Cadena de audit anclada al CAS | `arje-brain-audit::{AuditLog, verify_chain_from_cas}` | `runtime/arje-brain-audit/src/lib.rs` |
 
-### A.3 Prerrequisito: alinear el hash del CAS
+### A.3 Prerrequisito: alinear el hash del CAS — ✅ HECHO (A0)
 
 `arje-cas` hashea hoy con **SHA-256** (`sha256_of`); hammer, `shared/format` y el kernel wawa
 usan **BLAKE3**. La atestación tiene que hablar el mismo hash que el `expected_hash` de un
 `.swm` de hammer y que `mensaje_capacidad`. **Migrar `arje-cas` a BLAKE3** (la API es chica:
 `store/resolve/list_all_shas/gc` + `sha256_of`→`blake3_of`). Riesgo bajo, hito previo a A.
+
+> **Hecho** (A0): `arje-cas` hashea con BLAKE3 (`blake3_of`); el ancho (256 bits) no cambia, así
+> que el layout del CAS y la API por hash quedan idénticos — sólo cambia el cómputo. Callers
+> migrados: `arje-brain-audit`, `chasqui-nous-real`. `module_sha256` conserva el nombre histórico
+> aunque hoy lleva un BLAKE3. Roundtrip cubierto por test; `cargo check` de los dependientes verde.
 
 ### A.4 Punto de inserción
 
@@ -82,7 +87,7 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
 
 ### A.5 Fases
 
-1. **A0** — `arje-cas` → BLAKE3 (prerrequisito).
+1. **A0** — `arje-cas` → BLAKE3 (prerrequisito). ✅
 2. **A1** — Campo `attest: Vec<ConcesionCapacidad>` en la Seed Card + firmador en `arje-packager`
    (firma las concesiones al empaquetar con la rootkey del seed).
 3. **A2** — Gate en `arje-zero`: verificar antes del target gráfico, emitir `AuditEntry`,

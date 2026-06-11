@@ -139,7 +139,7 @@ mod tests {
     use super::*;
 
     fn sha(s: &[u8]) -> [u8; 32] {
-        arje_cas::sha256_of(s)
+        arje_cas::blake3_of(s)
     }
 
     #[test]
