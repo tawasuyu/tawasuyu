@@ -25,7 +25,9 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, Mounted, View};
-use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+use llimphi_widget_detail_table::{
+    detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
+};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 
 use app_bus::{AppMenu, Menu, MenuItem};
@@ -86,35 +88,59 @@ fn main() {
     .fill(theme.bg_panel)
     .text("/ home / sergio / fotos", 13.0, theme.fg_text);
 
-    // Cuatro IMG marcados (los del batch) + ruido alrededor.
+    // Cuatro IMG marcados (los del batch) con labels de color + ruido alrededor.
     let marcadas = ["IMG_0341.jpg", "IMG_0342.jpg", "IMG_0343.jpg", "IMG_0344.jpg"];
-    let entradas: Vec<(&str, bool)> = vec![
-        ("albumes", true),
-        ("IMG_0341.jpg", false),
-        ("IMG_0342.jpg", false),
-        ("IMG_0343.jpg", false),
-        ("IMG_0344.jpg", false),
-        ("portada.png", false),
-        ("notas.txt", false),
+    // (nombre, is_dir, label_color_rgb | None) — los colores son los de la
+    // paleta de `state::Label`.
+    let verde = (0x5A, 0xB0, 0x55);
+    let azul = (0x4A, 0x8F, 0xD8);
+    let rojo = (0xE0, 0x5A, 0x4F);
+    let entradas: Vec<(&str, bool, Option<(u8, u8, u8)>)> = vec![
+        ("albumes", true, Some(azul)),
+        ("IMG_0341.jpg", false, Some(verde)),
+        ("IMG_0342.jpg", false, Some(verde)),
+        ("IMG_0343.jpg", false, Some(rojo)),
+        ("IMG_0344.jpg", false, None),
+        ("portada.png", false, Some(azul)),
+        ("notas.txt", false, None),
     ];
-    let rows: Vec<ListRow<Msg>> = entradas
+    let rows: Vec<DetailRow<Msg>> = entradas
         .iter()
         .enumerate()
-        .map(|(i, (name, is_dir))| {
-            let mark = if marcadas.contains(name) { "✓" } else { " " };
-            let icon = if *is_dir { "▸ " } else { "  " };
-            let label = if *is_dir { format!("{mark}{icon}{name}/") } else { format!("{mark}{icon}{name}") };
-            ListRow { label, selected: i == 1, on_click: Msg::Nada }
+        .map(|(i, (name, is_dir, label))| {
+            let marca = if marcadas.contains(name) { "✓" } else { " " };
+            let icon = if *is_dir { "▸" } else { " " };
+            let dot = if label.is_some() { "● " } else { "" };
+            DetailRow {
+                cells: vec![
+                    format!("{marca}{icon} {dot}{name}"),
+                    if *is_dir { String::new() } else { "2.4 MB".to_string() },
+                    "2026-06-11 14:20".to_string(),
+                    if *is_dir { "carpeta".to_string() } else { "imagen".to_string() },
+                ],
+                selected: i == 1,
+                accent: label.map(|(r, g, b)| Color::from_rgba8(r, g, b, 255)),
+                on_click: Msg::Nada,
+            }
         })
         .collect();
-    let list = list_view(ListSpec {
-        rows,
-        total: entradas.len(),
-        caption: Some("4 marcados · F2 → renombrar por lote".to_string()),
-        truncated_hint: None,
-        row_height: 22.0,
-        palette: ListPalette::from_theme(&theme),
-    });
+    let columns = [
+        Column::flex("Nombre", 1.0),
+        Column::fixed("Tamaño", 88.0).right(),
+        Column::fixed("Modificado", 140.0),
+        Column::fixed("Tipo", 84.0),
+    ];
+    let list = detail_table_view(
+        DetailSpec {
+            columns: &columns,
+            rows,
+            sort: Some((0, DtDir::Asc)),
+            row_height: 22.0,
+            caption: Some("4 marcados · labels de color · F2 → renombrar por lote".to_string()),
+            palette: DetailPalette::from_theme(&theme),
+        },
+        |_col| Msg::Nada,
+    );
 
     let list_pane = View::new(Style {
         flex_direction: FlexDirection::Column,

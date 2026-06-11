@@ -201,9 +201,16 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
   contextual. Al aplicar encola un `OpKind::Rename` por objetivo cuyo nombre cambie (reusa la cola
   F4.3). `aplicar_patron` + `BatchRename`; +4 tests. Pantallazo: `pantallazo_power.rs`. *(Pendiente:
   regex/Rhai en el patrón, padding del contador `{n:3}`.)*
-- **Pendiente:** Labels/colores por archivo (sled), columna y tinte de fila.
-- **Pendiente:** Favoritos/places (sidebar) + recents; folder formats (recordar `ViewMode`/`sort` por
-  path). Todo esto vive en `nahual-shell-llimphi/src/state.rs` (sled) — el bloque F4.5b.
+- **F4.5b (labels) ✅ HECHA** — labels de color por archivo (paleta fija de 7), persistidos en
+  `src/state.rs` (JSON bajo `$XDG_CONFIG_HOME/nahual/state.json` vía `directories` — el volumen es
+  chico, un archivo releído/reescrito alcanza, no amerita sled). Se asignan desde el menú "Etiqueta"
+  del menubar (7 colores + "Sin etiqueta"), aplican a la marca múltiple o al cursor. Tinte: en vista
+  **detalle** el nombre va con el color del label (vía `accent` del `detail-table`); en **lista** un
+  `●` monocromo (la lista no pinta color por fila — un `ListRow::accent` sería cross-cutting, 18
+  callers; diferido). `ShellState` también ya modela places/recents/formats (campos listos para
+  F4.5c). +4 tests. Pantallazo: `pantallazo_power.rs` (detalle con filas de color + preview batch).
+- **Pendiente (F4.5c):** Favoritos/places (sidebar) + recents; folder formats (recordar
+  `ViewMode`/`sort` por path) — los campos ya viven en `ShellState`, falta el wiring de UI/nav.
 
 ### F4.6 — Adapters extra como Source  *(extrapolación de fuentes)*
 - `ArchiveSource`: montar `.zip/.tar/.tar.gz` como árbol navegable (reusa el reader del

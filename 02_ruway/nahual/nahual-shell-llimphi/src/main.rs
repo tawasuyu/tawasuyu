@@ -46,8 +46,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 mod ops;
+mod state;
 mod viewer_registry;
 use ops::{OpKind, OpQueue, OpStatus};
+use state::{Label, ShellState};
 use viewer_registry::ViewerKind;
 
 use llimphi_ui::llimphi_layout::taffy::{
@@ -342,6 +344,10 @@ struct Model {
     /// Renombrado por lote en curso (Fase 4.5): patrón + objetivos + preview.
     /// `None` = sin overlay; mientras esté `Some`, el teclado va al patrón.
     batch: Option<BatchRename>,
+    /// Preferencias persistidas (Fase 4.5): labels de color por archivo,
+    /// favoritos, recientes, folder formats. Se relee al arrancar y se reescribe
+    /// tras cada cambio.
+    state: ShellState,
 }
 
 #[derive(Clone)]
@@ -486,6 +492,10 @@ enum Msg {
     BatchApply,
     /// Cierra el overlay sin renombrar.
     BatchCancel,
+    /// Asigna un label de color a la selección (marca o cursor).
+    SetLabel(Label),
+    /// Quita el label de la selección.
+    ClearLabel,
 }
 
 impl Model {
@@ -611,6 +621,7 @@ impl App for Shell {
             prompt: None,
             confirm_delete: None,
             batch: None,
+            state: ShellState::load(),
         }
     }
 
@@ -1285,6 +1296,20 @@ impl App for Shell {
             Msg::BatchCancel => {
                 m.batch = None;
             }
+            Msg::SetLabel(label) => {
+                for (id, _) in m.cur_pane().op_targets() {
+                    m.state.set_label(&id, label);
+                }
+                m.state.save();
+                m.context_menu = None;
+            }
+            Msg::ClearLabel => {
+                for (id, _) in m.cur_pane().op_targets() {
+                    m.state.clear_label(&id);
+                }
+                m.state.save();
+                m.context_menu = None;
+            }
         }
         m
     }
@@ -1601,8 +1626,57 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(unmount)
                 .item(MenuItem::new("Salir", "file.quit").shortcut("Ctrl+Q").separated()),
         )
+        .menu(etiqueta_menu(editable))
         .menu(Menu::new("Ver").item(MenuItem::new("Cambiar tema", "view.theme")))
         .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
+}
+
+/// El menú "Etiqueta": los siete colores + "Sin etiqueta". Aplica a la marca
+/// múltiple o, si no hay, al nodo bajo el cursor. Gris si la fuente no es POSIX.
+fn etiqueta_menu(editable: bool) -> Menu {
+    let mut menu = Menu::new("Etiqueta");
+    for label in Label::ALL {
+        // Un punto del color como prefijo del nombre (el menubar pinta texto).
+        let mut it = MenuItem::new(format!("● {}", label.name()), label_cmd(label));
+        if !editable {
+            it = it.disabled();
+        }
+        menu = menu.item(it);
+    }
+    let mut sin = MenuItem::new("Sin etiqueta", "label.none").separated();
+    if !editable {
+        sin = sin.disabled();
+    }
+    menu.item(sin)
+}
+
+/// El command id del menú para cada color.
+fn label_cmd(label: Label) -> &'static str {
+    match label {
+        Label::Red => "label.red",
+        Label::Orange => "label.orange",
+        Label::Yellow => "label.yellow",
+        Label::Green => "label.green",
+        Label::Blue => "label.blue",
+        Label::Purple => "label.purple",
+        Label::Gray => "label.gray",
+    }
+}
+
+/// Inversa de [`label_cmd`]: el `Label` (o `None` para "Sin etiqueta") que un
+/// command id de etiqueta denota.
+fn label_from_cmd(cmd: &str) -> Option<Option<Label>> {
+    match cmd {
+        "label.red" => Some(Some(Label::Red)),
+        "label.orange" => Some(Some(Label::Orange)),
+        "label.yellow" => Some(Some(Label::Yellow)),
+        "label.green" => Some(Some(Label::Green)),
+        "label.blue" => Some(Some(Label::Blue)),
+        "label.purple" => Some(Some(Label::Purple)),
+        "label.gray" => Some(Some(Label::Gray)),
+        "label.none" => Some(None),
+        _ => None,
+    }
 }
 
 /// Traduce un command id del menú principal al `Msg`/efecto real.
@@ -1619,6 +1693,11 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
         "file.unmount" => handle.dispatch(Msg::Unmount),
         "file.quit" => std::process::exit(0),
         "view.theme" => handle.dispatch(Msg::CycleTheme),
+        // Etiquetas: cada color (o "Sin etiqueta") despacha su Msg.
+        _ if label_from_cmd(cmd).is_some() => match label_from_cmd(cmd).unwrap() {
+            Some(label) => handle.dispatch(Msg::SetLabel(label)),
+            None => handle.dispatch(Msg::ClearLabel),
+        },
         // "help.about" y desconocidos: no-op (sin diálogo todavía).
         _ => {}
     }
@@ -2057,6 +2136,7 @@ fn pane_column(model: &Model, pane: usize, focused: bool, theme: &Theme) -> View
     let content = nav_pane_view(
         model.panes[pane].nav(),
         &model.panes[pane].marked,
+        &model.state,
         theme,
         filtering,
         pane,
@@ -2215,18 +2295,25 @@ fn sanitizar_nombre(nombre: &str) -> String {
 fn nav_pane_view(
     nav: &Navigator,
     marked: &BTreeSet<nahual_source_core::NodeId>,
+    state: &ShellState,
     theme: &Theme,
     filtering: bool,
     pane: usize,
 ) -> View<Msg> {
     match nav.view {
         nahual_source_core::ViewMode::List => {
-            navigator_list_view(nav, marked, ListPalette::from_theme(theme), filtering, pane)
+            navigator_list_view(nav, marked, state, ListPalette::from_theme(theme), filtering, pane)
         }
         nahual_source_core::ViewMode::Details => {
-            navigator_detail_view(nav, marked, theme, filtering, pane)
+            navigator_detail_view(nav, marked, state, theme, filtering, pane)
         }
     }
+}
+
+/// Color peniko de un label (para el tinte de fila en la vista detalle).
+fn label_color(label: Label) -> Color {
+    let (r, g, b) = label.rgb();
+    Color::from_rgba8(r, g, b, 255)
 }
 
 /// Sufijo del caption con el estado del filtro y los atajos.
@@ -2252,6 +2339,7 @@ fn nav_caption(nav: &Navigator, filtering: bool) -> String {
 fn navigator_list_view(
     nav: &Navigator,
     marked: &BTreeSet<nahual_source_core::NodeId>,
+    state: &ShellState,
     palette: ListPalette,
     filtering: bool,
     pane: usize,
@@ -2265,11 +2353,14 @@ fn navigator_list_view(
         .map(|(idx, n)| {
             // Una fila marcada (selección múltiple) lleva un check al frente.
             let mark = if marked.contains(&n.id) { "✓" } else { " " };
+            // Punto cuando el nodo tiene label (el color real se ve en detalle;
+            // en lista es monocromo — la lista no pinta color por fila).
+            let dot = if state.label_of(&n.id).is_some() { "●" } else { " " };
             let icon = if n.is_container { "▸ " } else { "  " };
             let label = if n.is_container {
-                format!("{mark}{icon}{}/", n.name)
+                format!("{mark}{dot}{icon}{}/", n.name)
             } else {
-                format!("{mark}{icon}{}", n.name)
+                format!("{mark}{dot}{icon}{}", n.name)
             };
             ListRow {
                 label,
@@ -2299,6 +2390,7 @@ fn navigator_list_view(
 fn navigator_detail_view(
     nav: &Navigator,
     marked: &BTreeSet<nahual_source_core::NodeId>,
+    state: &ShellState,
     theme: &Theme,
     filtering: bool,
     pane: usize,
@@ -2329,16 +2421,22 @@ fn navigator_detail_view(
             let icon = kind_icon(n.kind, n.is_container);
             let is_marked = marked.contains(&n.id);
             let mark = if is_marked { "✓" } else { " " };
+            let label = state.label_of(&n.id);
+            // El nombre lleva un punto del color del label, si tiene.
+            let dot = if label.is_some() { "● " } else { "" };
             DetailRow {
                 cells: vec![
-                    format!("{mark}{icon} {}", n.name),
+                    format!("{mark}{icon} {dot}{}", n.name),
                     n.size.map(human_size).unwrap_or_default(),
                     n.mtime.map(epoch_ms_to_date).unwrap_or_default(),
                     kind_label(n.kind, &n.name).to_string(),
                 ],
                 selected: *idx == nav.selected,
-                // Tinte de acento en las filas marcadas (selección múltiple).
-                accent: is_marked.then_some(theme.accent),
+                // El acento del nombre lleva el color del label si lo tiene; si
+                // no, el acento neutro de las filas marcadas.
+                accent: label
+                    .map(label_color)
+                    .or_else(|| is_marked.then_some(theme.accent)),
                 on_click: Msg::SelectIn(pane, *idx),
             }
         })
