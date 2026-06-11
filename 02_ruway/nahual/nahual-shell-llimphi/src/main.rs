@@ -40,7 +40,7 @@
 //!   tengamos un bus, el shell publica `EntitySelected` y los viewers
 //!   se suscriben.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -56,10 +56,16 @@ use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::peniko::{
+    Blob, Color, ImageAlphaType, ImageBrush as Image, ImageData, ImageFormat,
+};
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use nahual_thumb_core::{generar_thumb_de_archivo, ThumbRgba};
 use llimphi_theme::Theme;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
+use llimphi_widget_grid::{
+    grid_view, ventana_visible, GridCell, GridMetrics, GridPalette, GridSpec,
+};
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_menubar::{
@@ -349,6 +355,13 @@ struct Model {
     /// favoritos, recientes, folder formats. Se relee al arrancar y se reescribe
     /// tras cada cambio.
     state: ShellState,
+    /// Cache RAM de miniaturas listas para pintar (vista iconos, Fase 4.8).
+    /// Clave = ruta POSIX del archivo. Se llena async vía `Handle::spawn`.
+    thumbs: HashMap<PathBuf, Image>,
+    /// Miniaturas pedidas y aún en vuelo (dedup: no relanzar el mismo path).
+    thumbs_pending: HashSet<PathBuf>,
+    /// Miniaturas que fallaron al generarse (se pinta un ⚠, no se reintenta).
+    thumbs_failed: HashSet<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -503,6 +516,12 @@ enum Msg {
     AddPlace,
     /// Quita un favorito por su ruta.
     RemovePlace(String),
+
+    // ---- Fase 4.8: vista iconos con miniaturas ----
+    /// Una miniatura terminó de generarse (llega del worker).
+    ThumbReady(PathBuf, ThumbRgba),
+    /// La miniatura de este path falló (formato no soportado / I/O).
+    ThumbFailed(PathBuf),
 }
 
 impl Model {
@@ -629,6 +648,9 @@ impl App for Shell {
             confirm_delete: None,
             batch: None,
             state: ShellState::load(),
+            thumbs: HashMap::new(),
+            thumbs_pending: HashSet::new(),
+            thumbs_failed: HashSet::new(),
         }
     }
 
@@ -814,6 +836,11 @@ impl App for Shell {
                         clear_preview(&mut m);
                         apply_format(&mut m);
                         record_recent(&mut m);
+                        // La nueva carpeta puede heredar vista iconos (folder
+                        // format): pedí sus miniaturas.
+                        if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                            request_thumbs(&mut m, &handle);
+                        }
                     }
                     Ok(Some(Opened::Leaf(id))) => {
                         let nombre =
@@ -859,6 +886,9 @@ impl App for Shell {
                     Ok(true) => {
                         apply_format(&mut m);
                         refresh_preview(&mut m);
+                        if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                            request_thumbs(&mut m, &handle);
+                        }
                     }
                     // Subir desde la raíz de una fuente montada la desmonta
                     // (vuelve al nivel de abajo de la pila). En POSIX, la raíz
@@ -879,11 +909,13 @@ impl App for Shell {
                 save_format(&mut m);
             }
             Msg::NavToggleView => {
+                // Cicla lista → detalle → iconos → lista.
                 let nav = m.cur_mut();
-                nav.view = match nav.view {
-                    nahual_source_core::ViewMode::List => nahual_source_core::ViewMode::Details,
-                    nahual_source_core::ViewMode::Details => nahual_source_core::ViewMode::List,
-                };
+                nav.view = nav.view.next();
+                // En vista iconos, pedí miniaturas de lo que entró en pantalla.
+                if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                    request_thumbs(&mut m, &handle);
+                }
                 // Recordá la vista elegida para esta carpeta (folder format).
                 save_format(&mut m);
             }
@@ -920,6 +952,11 @@ impl App for Shell {
                 // El navegador activo tiene su propio acumulador para touchpads
                 // — le pasamos el delta crudo (en líneas).
                 m.cur_mut().apply_wheel(steps as f32);
+                // En vista iconos, lo que entró en pantalla al scrollear pide
+                // su miniatura.
+                if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                    request_thumbs(&mut m, &handle);
+                }
             }
             Msg::MapPan(dx, dy) => {
                 m.map_view.pan_by(dx as f64, dy as f64);
@@ -1348,6 +1385,21 @@ impl App for Shell {
             Msg::RemovePlace(path) => {
                 m.state.remove_place(&path);
                 m.state.save();
+            }
+            Msg::ThumbReady(path, thumb) => {
+                m.thumbs_pending.remove(&path);
+                let img = Image::new(ImageData {
+                    data: Blob::from(thumb.rgba),
+                    format: ImageFormat::Rgba8,
+                    alpha_type: ImageAlphaType::Alpha,
+                    width: thumb.w,
+                    height: thumb.h,
+                });
+                m.thumbs.insert(path, img);
+            }
+            Msg::ThumbFailed(path) => {
+                m.thumbs_pending.remove(&path);
+                m.thumbs_failed.insert(path);
             }
         }
         m
@@ -2274,14 +2326,20 @@ fn pane_column(model: &Model, pane: usize, focused: bool, theme: &Theme) -> View
     let crumb = pane_breadcrumb(&model.panes[pane], pane, focused, theme);
     // El filtro vivo sólo aplica al panel enfocado.
     let filtering = focused && model.nav_filtering;
-    let content = nav_pane_view(
-        model.panes[pane].nav(),
-        &model.panes[pane].marked,
-        &model.state,
-        theme,
-        filtering,
-        pane,
-    );
+    // La vista iconos necesita el cache de miniaturas y las dimensiones del
+    // panel: se arma aparte (las otras dos sólo dependen del navegador).
+    let content = if matches!(model.panes[pane].nav().view, nahual_source_core::ViewMode::Icons) {
+        navigator_icons_view(model, pane, theme)
+    } else {
+        nav_pane_view(
+            model.panes[pane].nav(),
+            &model.panes[pane].marked,
+            &model.state,
+            theme,
+            filtering,
+            pane,
+        )
+    };
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -2316,9 +2374,27 @@ fn sortkey_to_col(key: nahual_source_core::SortKey) -> u8 {
 fn current_format(nav: &Navigator) -> state::FolderFormat {
     let (key, dir) = nav.sort();
     state::FolderFormat {
-        details: matches!(nav.view, nahual_source_core::ViewMode::Details),
+        view: view_to_u8(nav.view),
         sort_col: sortkey_to_col(key),
         sort_asc: matches!(dir, nahual_source_core::SortDir::Asc),
+    }
+}
+
+/// `ViewMode` → primitivo persistible (0 lista · 1 detalle · 2 iconos).
+fn view_to_u8(v: nahual_source_core::ViewMode) -> u8 {
+    match v {
+        nahual_source_core::ViewMode::List => 0,
+        nahual_source_core::ViewMode::Details => 1,
+        nahual_source_core::ViewMode::Icons => 2,
+    }
+}
+
+/// Primitivo persistido → `ViewMode` (cualquier valor desconocido = lista).
+fn u8_to_view(n: u8) -> nahual_source_core::ViewMode {
+    match n {
+        1 => nahual_source_core::ViewMode::Details,
+        2 => nahual_source_core::ViewMode::Icons,
+        _ => nahual_source_core::ViewMode::List,
     }
 }
 
@@ -2342,12 +2418,63 @@ fn apply_format(m: &mut Model) {
     let id = m.cur().current_id().clone();
     if let Some(fmt) = m.state.format_of(&id) {
         let nav = m.cur_mut();
-        nav.view = if fmt.details {
-            nahual_source_core::ViewMode::Details
-        } else {
-            nahual_source_core::ViewMode::List
-        };
+        nav.view = u8_to_view(fmt.view);
         nav.set_sort_to(col_to_sortkey(fmt.sort_col), fmt.sort_asc);
+    }
+}
+
+/// Lado máximo (px) de las miniaturas de la vista iconos.
+const THUMB_LADO: u32 = 128;
+/// Tope de miniaturas pedidas por pasada — acota los `Handle::spawn` para que
+/// una carpeta con miles de imágenes no dispare un thread por archivo.
+const MAX_ICON_TILES: usize = 160;
+
+/// ¿La extensión sugiere una imagen rasterizable? Filtro barato antes de
+/// gastar un worker en decodificar (los no-imagen muestran su glifo de tipo).
+fn es_imagen(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .as_deref(),
+        Some(
+            "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tiff" | "tif" | "ico" | "avif"
+                | "qoi" | "tga"
+        )
+    )
+}
+
+/// Pide (async) las miniaturas de las imágenes visibles del panel enfocado en
+/// vista iconos. Sólo POSIX (los ids son rutas reales); dedup por
+/// `thumbs_pending`; tope `MAX_ICON_TILES`. Cada worker reentra con
+/// `Msg::ThumbReady`/`ThumbFailed`.
+fn request_thumbs(m: &mut Model, handle: &Handle<Msg>) {
+    if m.is_foreign() {
+        return; // fuentes montadas (wawa/minga/archivo) no tienen path en disco
+    }
+    let pedir: Vec<PathBuf> = {
+        let nav = m.cur();
+        let visibles = nav.visible();
+        let start = nav.visible_offset.min(visibles.len());
+        let end = (start + MAX_ICON_TILES).min(visibles.len());
+        visibles[start..end]
+            .iter()
+            .filter(|(_, n)| !n.is_container)
+            .map(|(_, n)| PathBuf::from(&n.id))
+            .filter(|p| {
+                es_imagen(p)
+                    && !m.thumbs.contains_key(p)
+                    && !m.thumbs_pending.contains(p)
+                    && !m.thumbs_failed.contains(p)
+            })
+            .collect()
+    };
+    for path in pedir {
+        m.thumbs_pending.insert(path.clone());
+        handle.spawn(move || match generar_thumb_de_archivo(&path, THUMB_LADO) {
+            Ok(t) => Msg::ThumbReady(path, t),
+            Err(_) => Msg::ThumbFailed(path),
+        });
     }
 }
 
@@ -2528,7 +2655,95 @@ fn nav_pane_view(
         nahual_source_core::ViewMode::Details => {
             navigator_detail_view(nav, marked, state, theme, filtering, pane)
         }
+        // Icons se intercepta en `pane_column` (necesita el cache de thumbs y
+        // las dimensiones del panel); este brazo no se alcanza, pero mantiene
+        // el match exhaustivo. Fallback honesto: detalle.
+        nahual_source_core::ViewMode::Icons => {
+            navigator_detail_view(nav, marked, state, theme, filtering, pane)
+        }
     }
+}
+
+/// Pinta los hijos visibles como **grilla de iconos/miniaturas** (Fase 4.8).
+/// Las imágenes muestran su thumbnail (cache `model.thumbs`, llenado async);
+/// el resto, un glifo por `NodeKind`. Reusa `llimphi-widget-grid` (la misma
+/// grilla virtualizada de `nahual-gallery`).
+fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> {
+    let nav = model.panes[pane].nav();
+    let marked = &model.panes[pane].marked;
+    let metrics = GridMetrics::default();
+
+    // Ancho estimado del panel para derivar columnas: en dual, media ventana;
+    // en simple, el ancho de la lista (el resto es el visor).
+    let (vw, vh) = viewport_of(model);
+    let pane_w = if model.dual { vw / 2.0 } else { model.list_width };
+    let total = nav.visible_count();
+    let win = ventana_visible(total, pane_w, vh - 120.0, 0, &metrics);
+
+    let visibles = nav.visible();
+    let start = nav.visible_offset.min(visibles.len());
+    let end = (start + MAX_ICON_TILES).min(visibles.len());
+    let cells: Vec<GridCell<Msg>> = visibles[start..end]
+        .iter()
+        .map(|(idx, n)| {
+            let mark = if marked.contains(&n.id) { "✓ " } else { "" };
+            let label = format!("{mark}{}", n.name);
+            GridCell {
+                content: icon_tile_content(model, n, theme, metrics.tile_w - 12.0),
+                label: Some(label),
+                selected: *idx == nav.selected,
+                on_click: Msg::SelectIn(pane, *idx),
+            }
+        })
+        .collect();
+
+    let mostrados = start + cells.len();
+    let truncated_hint = (mostrados < total)
+        .then(|| format!("… y {} más (rueda para ver más)", total - mostrados));
+
+    grid_view(GridSpec {
+        cells,
+        cols: win.cols,
+        metrics,
+        caption: Some(format!(
+            "{total} entradas · iconos · ↑↓ navega · Enter abre · v cambia vista"
+        )),
+        truncated_hint,
+        palette: GridPalette::from_theme(theme),
+    })
+}
+
+/// Cuerpo de una celda de la grilla iconos: la miniatura si está lista; un ⚠
+/// si falló; un glifo por tipo (📁 carpeta, 🖼 imagen pendiente, 📄 archivo)
+/// mientras tanto.
+fn icon_tile_content(model: &Model, node: &Node, theme: &Theme, lado: f32) -> View<Msg> {
+    let base = || Style {
+        size: Size { width: length(lado), height: length(lado) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    };
+    // Glifos geométricos (no emoji): la fuente embebida de Llimphi no trae
+    // emoji a color, así que 📁/🖼 saldrían tofu (ver tofu_fallback). Estos
+    // sí están en DejaVu Sans.
+    if node.is_container {
+        let glifo = match node.kind {
+            NodeKind::Archive => "▤",
+            NodeKind::Synthetic => "◈",
+            _ => "▣",
+        };
+        return View::new(base()).fill(theme.bg_panel_alt).text(glifo, 44.0, theme.fg_text);
+    }
+    let path = PathBuf::from(&node.id);
+    if let Some(img) = model.thumbs.get(&path) {
+        return View::new(base()).image(img.clone());
+    }
+    if model.thumbs_failed.contains(&path) {
+        return View::new(base()).fill(theme.bg_panel_alt).text("⚠", 24.0, theme.fg_muted);
+    }
+    // Imagen aún decodificando → ▨ tenue; archivo común → ▢.
+    let glifo = if es_imagen(&path) { "▨" } else { "▢" };
+    View::new(base()).fill(theme.bg_panel_alt).text(glifo, 36.0, theme.fg_muted)
 }
 
 /// Color peniko de un label (para el tinte de fila en la vista detalle).
@@ -2549,7 +2764,7 @@ fn nav_caption(nav: &Navigator, filtering: bool) -> String {
         )
     } else {
         format!(
-            "{} entradas · ↑↓ navega · Enter abre · ⌫ vuelve · v detalle · / filtra",
+            "{} entradas · ↑↓ navega · Enter abre · ⌫ vuelve · v cambia vista · / filtra",
             nav.children().len()
         )
     }

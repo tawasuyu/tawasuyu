@@ -79,6 +79,19 @@ pub enum ViewMode {
     List,
     /// Grilla con columnas nombre/tamaño/fecha/tipo (vista detalle Dopus).
     Details,
+    /// Grilla de iconos/miniaturas (las imágenes muestran su thumbnail).
+    Icons,
+}
+
+impl ViewMode {
+    /// Cicla List → Details → Icons → List (la tecla `v`).
+    pub fn next(self) -> Self {
+        match self {
+            ViewMode::List => ViewMode::Details,
+            ViewMode::Details => ViewMode::Icons,
+            ViewMode::Icons => ViewMode::List,
+        }
+    }
 }
 
 /// Orden de un `NodeKind` para la columna "tipo": contenedores sintéticos y
@@ -705,5 +718,12 @@ mod tests {
         // Limpiar el filtro restaura todo.
         nav.set_filter(String::new());
         assert_eq!(nav.visible_count(), 4);
+    }
+
+    #[test]
+    fn view_mode_cicla_lista_detalle_iconos() {
+        assert_eq!(ViewMode::List.next(), ViewMode::Details);
+        assert_eq!(ViewMode::Details.next(), ViewMode::Icons);
+        assert_eq!(ViewMode::Icons.next(), ViewMode::List);
     }
 }

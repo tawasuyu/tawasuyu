@@ -249,11 +249,20 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
   fuente común (pantallazo).
 - ~300 LOC (mayormente borrado/mudanza).
 
-### F4.8 — Pulido Dopus restante  *(opcional, según uso)*
-- Sync/compare de carpetas (doble Navigator + diff visual).
-- Toolbar configurable declarativa; scripting de acciones Rhai.
-- Vista iconos con thumbnails (reusa decoders de los viewers).
-- Sin pantallazo único: cada sub-feature trae el suyo.
+### F4.8 — Pulido Dopus restante  *(opcional, según uso)*  ◑ PARCIAL (vista iconos ✅)
+- **Vista iconos con thumbnails ✅ HECHA** — `ViewMode::Icons` (tercer modo; `v` ahora cicla
+  lista→detalle→iconos vía `ViewMode::next`). El shell pinta la grilla con `llimphi-widget-grid`
+  (la misma virtualizada de `nahual-gallery`); las imágenes muestran su miniatura real generada
+  async por `nahual-thumb-core::generar_thumb_de_archivo` (`Handle::spawn`, cache RAM
+  `Model.thumbs`, dedup `thumbs_pending`, fallos `thumbs_failed`), el resto un glifo geométrico por
+  `NodeKind` (▣ carpeta · ▤ archivo · ◈ sintético · ▨ imagen pendiente · ▢ archivo · ⚠ fallo —
+  **no emoji**, que saldrían tofu). Pedido de thumbs gateado a POSIX (las fuentes montadas no tienen
+  path en disco) y disparado al togglear/descender/subir/scrollear. **Folder format** ahora persiste
+  el modo como `view: u8` (migra el `details: bool` viejo sin romper el resto del estado). +2 tests
+  (`view_mode_cicla`, `formats_migra_json_viejo`). **Entrega:** `pantallazo_iconos.rs` — grilla 4-col
+  con miniatura **real** (thumb-core sobre un PNG forjado) + glifos por tipo.
+- **Pendiente:** sync/compare de carpetas (doble Navigator + diff visual); toolbar configurable
+  declarativa; scripting de acciones Rhai; tabs por panel + árbol lateral (F4.2d). A demanda.
 
 ## 5. Integración con TODAS las apps (mapa content-type → app)
 

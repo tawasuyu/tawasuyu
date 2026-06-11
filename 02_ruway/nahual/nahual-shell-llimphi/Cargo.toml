@@ -37,6 +37,9 @@ nahual-archive-viewer-llimphi = { workspace = true }
 nahual-font-viewer-llimphi = { workspace = true }
 nahual-map-viewer-llimphi = { workspace = true }
 nahual-text-viewer-llimphi = { workspace = true }
+# Vista iconos (Fase 4.8): grilla virtualizada + generación de miniaturas.
+llimphi-widget-grid = { workspace = true }
+nahual-thumb-core = { workspace = true }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 card-core = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }
@@ -54,3 +57,5 @@ llimphi-widget-tiled = { workspace = true }
 # Para `pantallazo_archive`: forja un `.tar.gz` real y lo monta como fuente.
 tar = { workspace = true }
 flate2 = { workspace = true }
+# Para `pantallazo_iconos`: genera un PNG real del que sacar la miniatura.
+image = { workspace = true }

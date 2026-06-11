@@ -73,8 +73,12 @@ impl Label {
 /// estable y el módulo no dependa del navegador.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FolderFormat {
-    /// `true` = vista detalle; `false` = lista.
-    pub details: bool,
+    /// Modo de vista: 0 lista · 1 detalle · 2 iconos. `#[serde(default)]` para
+    /// migrar el JSON viejo (que traía `details: bool`): el campo `details`
+    /// desconocido se ignora y `view` cae a 0 (lista) — sin romper el resto del
+    /// estado. La preferencia detalle vieja se re-guarda al primer cambio.
+    #[serde(default)]
+    pub view: u8,
     /// Columna de orden: 0 nombre · 1 tamaño · 2 fecha · 3 tipo.
     pub sort_col: u8,
     /// `true` = ascendente.
@@ -248,12 +252,24 @@ mod tests {
     #[test]
     fn formats_round_trip_json() {
         let mut s = ShellState::default();
-        s.set_format("/proj", FolderFormat { details: true, sort_col: 2, sort_asc: false });
+        s.set_format("/proj", FolderFormat { view: 2, sort_col: 2, sort_asc: false });
         let json = serde_json::to_string(&s).unwrap();
         let back: ShellState = serde_json::from_str(&json).unwrap();
         assert_eq!(
             back.format_of("/proj"),
-            Some(FolderFormat { details: true, sort_col: 2, sort_asc: false })
+            Some(FolderFormat { view: 2, sort_col: 2, sort_asc: false })
+        );
+    }
+
+    #[test]
+    fn formats_migra_json_viejo_con_details() {
+        // El JSON viejo guardaba `details: bool`. Debe cargar sin romper el
+        // resto del estado: `details` se ignora y `view` cae a 0 (lista).
+        let viejo = r#"{"formats":{"/proj":{"details":true,"sort_col":1,"sort_asc":true}}}"#;
+        let back: ShellState = serde_json::from_str(viejo).unwrap();
+        assert_eq!(
+            back.format_of("/proj"),
+            Some(FolderFormat { view: 0, sort_col: 1, sort_asc: true })
         );
     }
 }
