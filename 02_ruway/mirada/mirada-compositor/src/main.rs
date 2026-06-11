@@ -1933,6 +1933,9 @@ fn layer_render_elements(
         let Some(geo) = map.layer_geometry(layer) else {
             continue;
         };
+        if !buffer_render_sano(layer.wl_surface()) {
+            continue; // buffer degenerado/desmesurado: no lo importamos
+        }
         let els = render_elements_from_surface_tree(
             renderer,
             layer.wl_surface(),
@@ -1995,6 +1998,25 @@ fn surface_px_size(w: &ManagedWindow) -> Option<(i32, i32)> {
     with_renderer_surface_state(&w.surface, |s| s.surface_size())
         .flatten()
         .map(|s| (s.w, s.h))
+}
+
+/// Tope de lado para el buffer raíz de una superficie a componer. Encima de
+/// `GL_MAX_TEXTURE_SIZE` típico (16384) el driver rechaza el import igual; lo
+/// atajamos antes para no pagar el intento ni su `warn` por frame —caro sobre
+/// todo en el cursor, que se importa en cada vblank— ni malgastar VRAM en
+/// texturas desmesuradas que un cliente malicioso podría adjuntar.
+const MAX_SURFACE_PX: i32 = 16384;
+
+/// `false` si el buffer raíz de `surface` es degenerado (lado ≤ 0) o desmesurado
+/// (> [`MAX_SURFACE_PX`]); en ese caso el camino de composición saltea su árbol.
+/// Sin buffer todavía → `true` (smithay no emite nada). No inspecciona
+/// subsuperficies: ataja el caso dominante (un toplevel o cursor gigante), no el
+/// árbol entero —la importación de smithay sigue cubriendo el resto (warn+skip).
+fn buffer_render_sano(surface: &WlSurface) -> bool {
+    match with_renderer_surface_state(surface, |s| s.surface_size()) {
+        Some(Some(sz)) => sz.w > 0 && sz.h > 0 && sz.w <= MAX_SURFACE_PX && sz.h <= MAX_SURFACE_PX,
+        _ => true,
+    }
 }
 
 /// El punto caliente (hotspot) de una superficie de cursor: el píxel de
@@ -2794,7 +2816,10 @@ fn run_winit(greeter: bool) -> Result<(), Box<dyn std::error::Error>> {
             // El backend winit anidado no pinta decoración; pasa el alto de
             // barra para que la superficie quede donde el DRM la pondría.
             let tbh = state.decorations.titlebar_height;
-            let window_elems = shown.iter().flat_map(|w| {
+            let window_elems = shown
+                .iter()
+                .filter(|w| buffer_render_sano(&w.surface))
+                .flat_map(|w| {
                 render_elements_from_surface_tree(
                     renderer,
                     &w.surface,

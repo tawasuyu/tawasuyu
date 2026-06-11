@@ -621,7 +621,9 @@ impl DrmState {
         }
         match &self.app.cursor_status {
             CursorImageStatus::Hidden => {}
-            CursorImageStatus::Surface(surface) if surface.alive() => {
+            CursorImageStatus::Surface(surface)
+                if surface.alive() && crate::buffer_render_sano(surface) =>
+            {
                 let (hx, hy) = crate::cursor_hotspot(surface);
                 let loc = (cxi - rect.x - hx, cyi - rect.y - hy);
                 for el in render_elements_from_surface_tree(
@@ -665,6 +667,9 @@ impl DrmState {
         // primaria (output 0); el shell vive ahí.
         let primary_h = self.outputs[Self::PRIMARY].rect.h;
         for w in &shown {
+            if !crate::buffer_render_sano(&w.surface) {
+                continue; // buffer degenerado/desmesurado: ni decoración ni superficie
+            }
             let tb = crate::titlebar_for(w, tbh);
             let (gx, gy) = crate::render_loc(w, primary_h, tbh);
             let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
