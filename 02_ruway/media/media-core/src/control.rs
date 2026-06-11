@@ -138,6 +138,9 @@ pub enum MediaCommand {
     ViewReset,
     /// Cicla la pista de audio (archivos multi-stream / multi-idioma). A2.
     CycleAudioTrack,
+    /// Cicla la pista de subtítulos embebida (incluye "apagado" al final,
+    /// estilo VLC). S2. Extrae la pista elegida y la instala en el renderer.
+    CycleSubtitleTrack,
 }
 
 /// Qué parámetro de color ajusta [`MediaCommand::ColorBy`].
@@ -241,6 +244,7 @@ impl MediaCommand {
             ViewPanBy { .. } => "Paneo del video".to_string(),
             ViewReset => "Vista original (sin zoom/pan)".to_string(),
             CycleAudioTrack => "Pista de audio (ciclar)".to_string(),
+            CycleSubtitleTrack => "Pista de subtítulos (ciclar)".to_string(),
         }
     }
 }
@@ -456,6 +460,9 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             // Encaje del video (V2): `a` cicla aspecto (estilo VLC). Zoom/pan
             // quedan en el palette.
             b(KeyChord::key("a"), ViewCycleFit),
+            // Subtítulos (S2): `v` cicla la pista embebida (estilo VLC, apaga
+            // al final). La pista de audio se cicla desde el palette.
+            b(KeyChord::key("v"), CycleSubtitleTrack),
             b(
                 KeyChord::key("b"),
                 Script {

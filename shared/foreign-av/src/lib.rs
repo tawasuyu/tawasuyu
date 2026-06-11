@@ -238,6 +238,35 @@ pub fn ffmetadata(path: impl AsRef<Path>) -> Result<String, FfmpegError> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Extrae una pista de subtítulos **embebida** (muxeada) a texto ASS (S2).
+/// `stream_index` es el índice **absoluto** del stream en el contenedor (el de
+/// `MediaTrack::index`). Convierte a ASS (`-f ass`) para preservar
+/// estilo/posición — el parser de `media-core` lo autodetecta y, con S3, el
+/// renderer respeta color/alineación. Devuelve el texto del archivo ASS por
+/// stdout. **Sólo sirve para subtítulos de texto** (SRT/ASS/mov_text/WebVTT…);
+/// los de imagen (PGS/VobSub/dvdsub) hacen fallar a ffmpeg → `Err` (el caller
+/// avisa "no es de texto"). No streaming: extrae la pista entera de una.
+pub fn extract_subtitle(
+    path: impl AsRef<Path>,
+    stream_index: u32,
+) -> Result<String, FfmpegError> {
+    let p = path.as_ref();
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-i"])
+        .arg(p)
+        .args(["-map", &format!("0:{stream_index}"), "-f", "ass", "-"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(FfmpegError::Probe(stderr.trim().to_string()));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
 pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo, FfmpegError> {
     let p = path.as_ref();
     let output = Command::new("ffprobe")

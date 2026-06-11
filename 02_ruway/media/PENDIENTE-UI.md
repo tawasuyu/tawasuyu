@@ -34,10 +34,16 @@ una pasada con pantalla para validar a ojo/oído** (no se pudo correr la GUI):
 - ✅ **A2 pista de audio** — `MediaSession::select_audio_stream` (re-map
   `0:<idx>` + respawn), `CycleAudioTrack` (palette), `tracks()` global.
   *Validar: archivo multi-pista, audio que cambia de idioma sin desync.*
+- ✅ **S2 subtítulos embebidos** — `foreign-av::extract_subtitle(path, idx)`
+  (`ffmpeg -map 0:<idx> -f ass -`), `CycleSubtitleTrack` (tecla `v` + palette,
+  apaga al final estilo VLC). `subtitles_slot` pasó a `Mutex` (reemplazo en
+  caliente); extracción en background → parse → instala → el render S3 lo pinta.
+  *Validar: archivo con subtítulos de texto embebidos; los de imagen
+  (PGS/VobSub) caen a "no es de texto".*
 
-**Sigue pendiente:** **S2** subtítulos embebidos (necesita pipeline de
-extracción `ffmpeg -map s` + render, aparte del re-map de audio); el resto de
-la sección E (V1/V5/V6/V8/M2/M3/M4/U3/A3/R3/R4) que pide hardware/GPU.
+**Sigue pendiente:** sólo la sección E (V1/V5/V6/V8/M2/M3/M4/U3/A3/R3/R4), que
+pide hardware/GPU/red. Refinamientos de S3 con pantalla: anclaje vertical +
+`\pos` (overlay sobre el video con PlayResY), color inline `\c`, karaoke `\k`.
 
 ## Sesión 2026-06-02 — decisiones y avance
 

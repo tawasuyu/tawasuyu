@@ -1144,11 +1144,13 @@ fn playlist_slot() -> &'static OnceLock<Option<Arc<Mutex<Playlist>>>> {
     &SLOT
 }
 
-/// Pista de subtítulos cargada (por env o auto-carga sidecar S5). Se
-/// consulta por timestamp del seekable_handle activo.
-fn subtitles_slot() -> &'static OnceLock<Option<SubtitleTrack>> {
-    static SLOT: OnceLock<Option<SubtitleTrack>> = OnceLock::new();
-    &SLOT
+/// Pista de subtítulos activa (por env, auto-carga sidecar S5, o pista
+/// embebida elegida S2). Se consulta por timestamp del seekable activo.
+/// `Mutex` (no `OnceLock`): S2 la **reemplaza en caliente** al ciclar la pista
+/// embebida (extracción en background → instala acá → el Tick repinta).
+fn subtitles_slot() -> &'static Mutex<Option<SubtitleTrack>> {
+    static SLOT: OnceLock<Mutex<Option<SubtitleTrack>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
 }
 
 /// Delay de subtítulos en ms (S4). Positivo retrasa el subtítulo; se aplica
@@ -1873,6 +1875,7 @@ fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>, Vec<Media
         (BookmarkNext, "Marcas"),
         (BookmarkPrev, "Marcas"),
         (CycleAudioTrack, "Pistas"),
+        (CycleSubtitleTrack, "Pistas"),
     ];
     let mut catalog = Vec::with_capacity(acciones.len());
     let mut cmds = Vec::with_capacity(acciones.len());
@@ -2255,6 +2258,52 @@ fn apply_command(cmd: MediaCommand) {
                         osd_flash(format!("Audio: {label}"));
                     }
                     Err(e) => eprintln!("media-app: cambio de pista de audio: {e}"),
+                }
+            }
+        }
+        CycleSubtitleTrack => {
+            let mut guard = tracks().lock();
+            let Some(ts) = guard.as_mut().filter(|t| t.has_subtitles()) else {
+                drop(guard);
+                osd_flash("Sin subtítulos embebidos");
+                return;
+            };
+            // Cicla la selección (apaga al final, estilo VLC) y lee la nueva.
+            ts.cycle_subtitle();
+            let sel = ts.current_subtitle().map(|t| (t.index, t.label()));
+            drop(guard);
+            match sel {
+                None => {
+                    *subtitles_slot().lock() = None;
+                    osd_flash("Subtítulos: apagado");
+                }
+                Some((index, label)) => {
+                    let Some(path) = video_path_slot().get().cloned() else {
+                        osd_flash("Subtítulos: sin archivo");
+                        return;
+                    };
+                    osd_flash(format!("Subtítulos: {label}…"));
+                    // Extracción en background (ffmpeg subprocess): no bloquea la
+                    // UI. Al instalar la pista en el slot, el Tick (33 ms) repinta
+                    // — no hace falta un Msg de vuelta.
+                    std::thread::spawn(move || {
+                        match foreign_av::extract_subtitle(&path, index) {
+                            Ok(text) => match SubtitleTrack::parse_subtitles(&text) {
+                                Ok(t) => {
+                                    *subtitles_slot().lock() = Some(t);
+                                    osd().lock().flash(format!("Subtítulos: {label}"), osd_now());
+                                }
+                                Err(e) => {
+                                    eprintln!("media-app: subtítulo embebido ilegible: {e}");
+                                    osd().lock().flash("Subtítulo ilegible", osd_now());
+                                }
+                            },
+                            Err(e) => {
+                                eprintln!("media-app: extracción de subtítulo: {e}");
+                                osd().lock().flash("Subtítulo no es de texto", osd_now());
+                            }
+                        }
+                    });
                 }
             }
         }
@@ -4198,7 +4247,11 @@ fn context_menu(model: &Model, x: f32, y: f32) -> View<Msg> {
 /// según la posición del playlist. Si no hay SRT cargado, queda con
 /// altura 0 (invisible) para no morder layout.
 fn subtitle_strip<Msg: 'static>() -> View<Msg> {
-    let Some(track) = subtitles_slot().get().and_then(|o| o.as_ref()) else {
+    // S2: el slot es mutable (la pista embebida se reemplaza en caliente). El
+    // guard se sostiene mientras resolvemos el cue; el View final captura datos
+    // **propios** (texto clonado, color/alineación Copy), así no presta el lock.
+    let guard = subtitles_slot().lock();
+    let Some(track) = guard.as_ref() else {
         // Cero altura — no mete espacio en la columna.
         return View::new(Style {
             size: Size {
@@ -5101,7 +5154,7 @@ fn main() {
         Some(path) => load_subtitle_file(Path::new(&path)),
         None => auto_load_sidecar_subtitles(),
     };
-    subtitles_slot().set(subs).ok();
+    *subtitles_slot().lock() = subs;
 
     // Audio: si MEDIA_MUTE está set, saltamos. Si no, elegimos
     // fuente — MEDIA_WAV=path la activa, sino cae al ToneSource

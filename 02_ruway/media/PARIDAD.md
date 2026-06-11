@@ -8,13 +8,13 @@
 
 > **2026-06-11 — wiring de la fase de interfaz.** Se cablearon en `media-app`
 > (sin pantalla, sólo compilación) **U4 OSD · U6 bookmarks · S3 estilo ASS ·
-> U5 carátula · V2 aspect/zoom/pan · A2 pista de audio**. Todo compila
-> (`media-core` 228 + `foreign-av` 11 verde, `--workspace` verde) pero **falta
-> validar a ojo/oído corriendo la app** — ver el detalle por ítem en
-> `PENDIENTE-UI.md` (sesión 2026-06-11). Nota: V2 cambió el default de blit de
-> **estirar** a **ajustar** (preserva aspecto, estilo VLC/mpv). Queda pendiente
-> **S2** (subtítulos embebidos: pipeline de extracción) y la sección de
-> hardware/GPU.
+> U5 carátula · V2 aspect/zoom/pan · A2 pista de audio · S2 subtítulos
+> embebidos**. Todo compila (`media-core` 228 + `foreign-av` 11 verde,
+> `--workspace` verde) pero **falta validar a ojo/oído corriendo la app** — ver
+> el detalle por ítem en `PENDIENTE-UI.md` (sesión 2026-06-11). Nota: V2 cambió
+> el default de blit de **estirar** a **ajustar** (preserva aspecto, estilo
+> VLC/mpv). De la batería de interfaz sólo queda la sección de hardware/GPU/red
+> (V1/V5/V6/V8, M2/M3/M4, A3, U3, R3/R4) y refinamientos de S3 con pantalla.
 
 ## Handoff — retomar el hilo (2026-06-01)
 
