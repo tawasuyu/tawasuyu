@@ -161,14 +161,23 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
 - **Pendiente (F4.2d, no bloqueante):** tabs por panel (`Ctrl+T`/`Ctrl+W`) y árbol lateral
   (`widget-tree`) sincronizado. El chasis (dual-pane) ya soporta agregarlos.
 
-### F4.3 — Operaciones de archivo + cola  *(el músculo)*
-- Selección múltiple (`BTreeSet`, Ctrl/Shift-click) + acciones: New folder/file, Rename (inline
-  con `text-input`), Delete (a papelera XDG si existe, si no confirm), Copy/Move (pane→pane).
-- `OpQueue`: cada operación es un job async (`Handle::spawn`) con progreso; panel inferior
-  colapsable lista jobs (cancelar/limpiar). Conflictos → diálogo skip/overwrite/rename.
-- Gateo por `as_mut()` (D2): fuentes read-only deshabilitan estos ítems.
-- **Entrega:** `pantallazo_ops.rs` — cola con un copy en curso + un rename inline.
-- ~600 LOC.
+### F4.3 — Operaciones de archivo + cola  *(el músculo)*  ✅ HECHA
+- Selección múltiple (`BTreeSet<NodeId>` por panel, marca con `Insert`) + acciones: New folder/file
+  (`F7`/menú), Rename (`F2`, prompt modal con el nombre actual), Delete (`Supr`, **diálogo de
+  confirmación** sí/no), Copy/Move pane→pane (`F5`/`F6`, sólo en dual). Todo cableado además al
+  menú principal (Archivo) y al contextual.
+- `OpQueue` (`ops.rs`): cada operación es un job async (`Handle::spawn`) que reconstruye una
+  `PosixSource` y corre por `SourceMut`; al terminar reentra con `Msg::OpFinished` y recarga ambos
+  paneles (`Navigator::reload`, conserva selección por id). Panel inferior colapsable lista los jobs
+  con su estado (`⋯`/`✓`/`✗` + error). "Limpiar" olvida los terminados.
+- Gateo por `Navigator::writable()` (D2): sobre fuentes montadas read-only (wawa/minga/nouser) los
+  ítems salen en gris / los atajos no disparan.
+- **Entrega:** `pantallazo_ops.rs` — lista con filas marcadas + cola con un copy en curso y un rename
+  terminado + prompt de renombrar. +5 tests (`ops`: 3, `navigator`: reload/select_id/writable).
+- **Pendiente menor** (no bloqueante): papelera XDG real (hoy Delete borra directo tras confirmar);
+  diálogo de conflicto skip/overwrite/rename (hoy copy/move auto-renombra con `ruta_libre`, sin
+  pisar); Ctrl/Shift-click para marcar (hoy la marca es por teclado, `Insert`); cancelar un job en
+  vuelo.
 
 ### F4.4 — AppBus vivo: "Abrir con…" hacia toda la suite  *(la integración)*  ✅ HECHA (291541fc)
 - Context-menu "Abrir con <app>" desde `AppRegistry::handlers_for(mime discernido)`; activar =

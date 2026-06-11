@@ -14,7 +14,7 @@
 use std::cmp::Ordering;
 use std::io;
 
-use crate::{Node, NodeId, NodeKind, Source};
+use crate::{Node, NodeId, NodeKind, Source, SourceMut};
 
 /// Cuántas filas se ven a la vez por defecto (mismo calibrado que el
 /// explorador POSIX histórico).
@@ -305,6 +305,46 @@ impl Navigator {
         Ok(true)
     }
 
+    /// Recarga los hijos del contenedor actual desde la fuente, sin moverse
+    /// de nivel. Es lo que se llama tras una **operación de archivo** (crear /
+    /// renombrar / borrar / copiar / mover) para que la lista refleje el disco.
+    /// Conserva la selección por id si el nodo sigue existiendo; si desapareció
+    /// (lo borraron / renombraron), la clampa al rango. Respeta orden y filtro.
+    pub fn reload(&mut self) -> io::Result<()> {
+        let actual = self.stack.last().expect("la pila nunca está vacía");
+        let sel_id = self.children.get(self.selected).map(|n| n.id.clone());
+        self.children = self.source.children(&actual.id)?;
+        self.apply_sort();
+        self.selected = sel_id
+            .and_then(|id| self.children.iter().position(|n| n.id == id))
+            .unwrap_or(0)
+            .min(self.children.len().saturating_sub(1));
+        self.sync_offset();
+        Ok(())
+    }
+
+    /// La cara **mutable** de la fuente activa, si la soporta (`None` para las
+    /// fuentes read-only: wawa/minga/nouser). El front gatea los ítems de
+    /// operación con esto — sin `SourceMut`, crear/borrar/renombrar/mover salen
+    /// deshabilitados. Frontera honesta: no se ofrece escritura sobre lo que no
+    /// la tiene.
+    pub fn writable(&self) -> Option<&dyn SourceMut> {
+        self.source.writable()
+    }
+
+    /// Mueve la selección al nodo de id `id` si está entre los hijos actuales
+    /// (tras crear o renombrar, para dejar el cursor sobre el resultado).
+    /// `false` si no existe.
+    pub fn select_id(&mut self, id: &NodeId) -> bool {
+        if let Some(pos) = self.children.iter().position(|n| &n.id == id) {
+            self.selected = pos;
+            self.sync_offset();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Aplica un delta de rueda (en líneas), devuelve los pasos enteros.
     pub fn apply_wheel(&mut self, delta_y: f32) -> i32 {
         let total = self.wheel_accum + delta_y;
@@ -489,6 +529,41 @@ mod tests {
         assert_eq!(nav.selected_node().unwrap().name, "sub");
         // Subir desde la raíz = false (el caller desmonta).
         assert!(!nav.parent().unwrap());
+    }
+
+    #[test]
+    fn reload_refleja_disco_y_conserva_seleccion() {
+        let dir = arbol();
+        let mut nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        // Selección sobre "raiz.txt" (su id es su ruta absoluta).
+        let pos = nav.children().iter().position(|n| n.name == "raiz.txt").unwrap();
+        nav.select(pos);
+        let sel_id = nav.selected_node().unwrap().id.clone();
+
+        // Crear un archivo nuevo en disco y recargar: aparece, y la selección
+        // sigue sobre "raiz.txt" pese al reordenamiento.
+        fs::File::create(dir.path().join("nuevo.txt")).unwrap();
+        nav.reload().unwrap();
+        assert!(nav.children().iter().any(|n| n.name == "nuevo.txt"));
+        assert_eq!(nav.selected_node().unwrap().id, sel_id);
+
+        // select_id reubica el cursor sobre el archivo nuevo.
+        let nuevo_id = nav.children().iter().find(|n| n.name == "nuevo.txt").unwrap().id.clone();
+        assert!(nav.select_id(&nuevo_id));
+        assert_eq!(nav.selected_node().unwrap().name, "nuevo.txt");
+
+        // Borrar el seleccionado y recargar: la selección se clampa sin panic.
+        fs::remove_file(dir.path().join("nuevo.txt")).unwrap();
+        nav.reload().unwrap();
+        assert!(!nav.children().iter().any(|n| n.name == "nuevo.txt"));
+        assert!(nav.selected_node().is_some());
+    }
+
+    #[test]
+    fn writable_expone_posix() {
+        let dir = arbol();
+        let nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        assert!(nav.writable().is_some());
     }
 
     #[test]

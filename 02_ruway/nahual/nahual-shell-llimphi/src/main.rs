@@ -40,18 +40,21 @@
 //!   tengamos un bus, el shell publica `EntitySelected` y los viewers
 //!   se suscriben.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+mod ops;
 mod viewer_registry;
+use ops::{OpKind, OpQueue, OpStatus};
 use viewer_registry::ViewerKind;
 
 use llimphi_ui::llimphi_layout::taffy::{
     prelude::{length, percent, FlexDirection, Size, Style},
-    AlignItems, Rect,
+    AlignItems, JustifyContent, Rect,
 };
-use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::{App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
 use llimphi_theme::Theme;
 use llimphi_widget_list::{list_view, ListPalette, ListRow, ListSpec};
@@ -157,6 +160,11 @@ struct Pane {
     /// cwd con miga completa); montar una fuente no-POSIX empuja, desmontar
     /// saca. El navegador activo del panel es el tope. Nunca vacía.
     nav_stack: Vec<Navigator>,
+    /// Selección **múltiple** marcada (Insert): ids de nodos sobre los que
+    /// actúan las operaciones por lote (borrar/copiar/mover). Vacía = la
+    /// operación recae sobre el cursor (`selected`). Se limpia al cambiar de
+    /// directorio o tras ejecutar una operación.
+    marked: BTreeSet<nahual_source_core::NodeId>,
 }
 
 impl Pane {
@@ -168,6 +176,54 @@ impl Pane {
     }
     fn is_foreign(&self) -> bool {
         self.nav_stack.len() > 1
+    }
+    /// Los ids objetivo de una operación por lote: la marca si hay, si no el
+    /// nodo bajo el cursor. Cada uno con su nombre, para el rótulo del job.
+    fn op_targets(&self) -> Vec<(nahual_source_core::NodeId, String)> {
+        if !self.marked.is_empty() {
+            let nav = self.nav();
+            self.marked
+                .iter()
+                .filter_map(|id| {
+                    nav.children()
+                        .iter()
+                        .find(|n| &n.id == id)
+                        .map(|n| (id.clone(), n.name.clone()))
+                })
+                .collect()
+        } else if let Some(n) = self.nav().selected_node() {
+            vec![(n.id.clone(), n.name.clone())]
+        } else {
+            Vec::new()
+        }
+    }
+}
+
+/// Pedido de un nombre antes de ejecutar una operación (nueva carpeta, nuevo
+/// archivo, renombrar). Captura el teclado mientras está activo.
+struct Prompt {
+    kind: PromptKind,
+    text: String,
+}
+
+/// Qué operación dispara el [`Prompt`] al confirmarse.
+enum PromptKind {
+    /// Crear un directorio dentro del id contenedor.
+    NewDir { parent: nahual_source_core::NodeId },
+    /// Crear un archivo vacío dentro del id contenedor.
+    NewFile { parent: nahual_source_core::NodeId },
+    /// Renombrar el nodo `id` (el texto arranca con su nombre actual).
+    Rename { id: nahual_source_core::NodeId },
+}
+
+impl Prompt {
+    /// Título humano del overlay.
+    fn title(&self) -> &'static str {
+        match self.kind {
+            PromptKind::NewDir { .. } => "Nueva carpeta",
+            PromptKind::NewFile { .. } => "Nuevo archivo",
+            PromptKind::Rename { .. } => "Renombrar",
+        }
     }
 }
 
@@ -231,6 +287,15 @@ struct Model {
     /// Tempfile de la hoja no-POSIX materializada (lo mantiene vivo mientras
     /// la app externa lo lee). Se reemplaza al recomputar el contextual.
     ctx_temp: Option<tempfile::TempDir>,
+    /// Cola de operaciones de archivo en vuelo / historial (Fase 4.3). El panel
+    /// inferior colapsable la lista.
+    queue: OpQueue,
+    /// Pedido de nombre activo (nueva carpeta/archivo, renombrar). `None` =
+    /// sin overlay; mientras esté `Some`, el teclado va al texto.
+    prompt: Option<Prompt>,
+    /// Confirmación de borrado pendiente: los `(id, nombre)` a borrar. `None` =
+    /// sin diálogo. Borrar es destructivo, así que pasa por este sí/no.
+    confirm_delete: Option<Vec<(nahual_source_core::NodeId, String)>>,
 }
 
 #[derive(Clone)]
@@ -324,6 +389,45 @@ enum Msg {
     EditSelected,
     /// Abre una terminal `shuma` en el directorio actual.
     TerminalHere,
+
+    // ---- Fase 4.3: operaciones de archivo + cola ----
+    /// Marca/desmarca el nodo bajo el cursor (Insert) y baja una fila.
+    ToggleMark,
+    /// Abre el prompt de nombre para crear una carpeta en el dir actual.
+    NewDirPrompt,
+    /// Abre el prompt de nombre para crear un archivo en el dir actual.
+    NewFilePrompt,
+    /// Abre el prompt de renombrar sobre el nodo seleccionado (texto = nombre).
+    RenamePrompt,
+    /// Agrega texto al prompt activo.
+    PromptInput(String),
+    /// Borra el último carácter del prompt.
+    PromptBackspace,
+    /// Confirma el prompt → encola la operación.
+    PromptSubmit,
+    /// Cancela el prompt sin operar.
+    PromptCancel,
+    /// Pide confirmación para borrar la selección (marca o cursor).
+    DeleteSelection,
+    /// Confirma el borrado pendiente → encola un job por nodo.
+    ConfirmDelete,
+    /// Cancela el diálogo de borrado.
+    CancelConfirm,
+    /// Copia la selección (marca o cursor) al directorio del otro panel.
+    CopyToOther,
+    /// Mueve la selección (marca o cursor) al directorio del otro panel.
+    MoveToOther,
+    /// Encola una operación de archivo y lanza su worker.
+    RunOp(OpKind),
+    /// El worker terminó la operación `id` con este resultado.
+    OpFinished {
+        id: u64,
+        result: Result<Option<nahual_source_core::NodeId>, String>,
+    },
+    /// Despliega/colapsa el panel de la cola.
+    ToggleQueue,
+    /// Olvida los jobs ya terminados de la cola.
+    ClearQueue,
 }
 
 impl Model {
@@ -347,6 +451,17 @@ impl Model {
     fn cur_pane_mut(&mut self) -> &mut Pane {
         let f = self.focus;
         &mut self.panes[f]
+    }
+
+    /// El panel enfocado (lectura).
+    fn cur_pane(&self) -> &Pane {
+        &self.panes[self.focus]
+    }
+
+    /// `true` si la fuente activa admite operaciones de archivo (POSIX). Las
+    /// fuentes montadas (wawa/minga/nouser) son read-only → sin `SourceMut`.
+    fn can_edit(&self) -> bool {
+        self.cur().writable().is_some()
     }
 }
 
@@ -410,8 +525,8 @@ impl App for Shell {
         Model {
             // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
             panes: [
-                Pane { nav_stack: vec![posix_nav(&cwd)] },
-                Pane { nav_stack: vec![posix_nav(&cwd)] },
+                Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
+                Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
             ],
             focus: 0,
             dual: false,
@@ -434,12 +549,37 @@ impl App for Shell {
             ctx_open_with: Vec::new(),
             ctx_target: None,
             ctx_temp: None,
+            queue: OpQueue::default(),
+            prompt: None,
+            confirm_delete: None,
         }
     }
 
     fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Prompt de nombre (nueva carpeta/archivo, renombrar): captura todo el
+        // teclado. Máxima prioridad — es un modal.
+        if _model.prompt.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::PromptCancel),
+                Key::Named(NamedKey::Enter) => Some(Msg::PromptSubmit),
+                Key::Named(NamedKey::Backspace) => Some(Msg::PromptBackspace),
+                Key::Named(NamedKey::Space) => Some(Msg::PromptInput(" ".to_string())),
+                Key::Character(c) => Some(Msg::PromptInput(c.to_string())),
+                _ => None,
+            };
+        }
+        // Diálogo de confirmación de borrado: Enter/y confirma, Esc/n cancela.
+        if _model.confirm_delete.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Enter) => Some(Msg::ConfirmDelete),
+                Key::Character(c) if c == "y" => Some(Msg::ConfirmDelete),
+                Key::Named(NamedKey::Escape) => Some(Msg::CancelConfirm),
+                Key::Character(c) if c == "n" => Some(Msg::CancelConfirm),
+                _ => None,
+            };
         }
         // Menú principal abierto: las flechas navegan, Enter ejecuta, Esc
         // cierra. Tiene prioridad sobre la navegación del explorer.
@@ -491,6 +631,16 @@ impl App for Shell {
             // `d` alterna panel doble; Tab cambia el foco entre los dos.
             Key::Character(c) if c == "d" => Some(Msg::ToggleDual),
             Key::Named(NamedKey::Tab) => Some(Msg::SwitchFocus),
+            // ---- Fase 4.3: operaciones de archivo (sólo sobre POSIX). ----
+            // Marcar/desmarcar (selección múltiple) bajo el cursor.
+            Key::Named(NamedKey::Insert) if _model.can_edit() => Some(Msg::ToggleMark),
+            // F7 nueva carpeta · F2 renombrar · Delete borrar.
+            Key::Named(NamedKey::F7) if _model.can_edit() => Some(Msg::NewDirPrompt),
+            Key::Named(NamedKey::F2) if _model.can_edit() => Some(Msg::RenamePrompt),
+            Key::Named(NamedKey::Delete) if _model.can_edit() => Some(Msg::DeleteSelection),
+            // F5 copiar / F6 mover al otro panel (sólo en dual).
+            Key::Named(NamedKey::F5) if _model.can_edit() && _model.dual => Some(Msg::CopyToOther),
+            Key::Named(NamedKey::F6) if _model.can_edit() && _model.dual => Some(Msg::MoveToOther),
             // Puntos de entrada del front universal: montar el directorio
             // objetivo (el subdir seleccionado, o el cwd) como otra `Source`.
             // Sólo desde POSIX — dentro de una fuente montada no aplican.
@@ -571,7 +721,10 @@ impl App for Shell {
                 // Abrir la selección por el navegador activo (POSIX o fuente
                 // montada): contenedor → descender; hoja → montar/previsualizar.
                 match m.cur_mut().open_selected() {
-                    Ok(Some(Opened::Descended)) => clear_preview(&mut m),
+                    Ok(Some(Opened::Descended)) => {
+                        m.cur_pane_mut().marked.clear();
+                        clear_preview(&mut m);
+                    }
                     Ok(Some(Opened::Leaf(id))) => {
                         let nombre =
                             m.cur().selected_node().map(|n| n.name.clone()).unwrap_or_default();
@@ -611,6 +764,7 @@ impl App for Shell {
                 }
             }
             Msg::Parent => {
+                m.cur_pane_mut().marked.clear();
                 match m.cur_mut().parent() {
                     Ok(true) => refresh_preview(&mut m),
                     // Subir desde la raíz de una fuente montada la desmonta
@@ -663,6 +817,7 @@ impl App for Shell {
             Msg::BreadcrumbIn(pane, depth) => {
                 m.focus = pane;
                 if matches!(m.cur_mut().ascend_to(depth), Ok(true)) {
+                    m.cur_pane_mut().marked.clear();
                     refresh_preview(&mut m);
                 }
             }
@@ -906,6 +1061,113 @@ impl App for Shell {
                 }
                 m.context_menu = None;
             }
+
+            // ---- Fase 4.3: operaciones de archivo + cola ----
+            Msg::ToggleMark => {
+                if let Some(n) = m.cur().selected_node() {
+                    let id = n.id.clone();
+                    let pane = m.cur_pane_mut();
+                    // `insert` devuelve `false` si ya estaba → entonces se quita.
+                    if !pane.marked.insert(id.clone()) {
+                        pane.marked.remove(&id);
+                    }
+                }
+                m.cur_mut().down();
+                refresh_preview(&mut m);
+            }
+            Msg::NewDirPrompt => {
+                if m.can_edit() {
+                    let parent = m.cur().current_id().clone();
+                    m.prompt = Some(Prompt { kind: PromptKind::NewDir { parent }, text: String::new() });
+                    m.context_menu = None;
+                }
+            }
+            Msg::NewFilePrompt => {
+                if m.can_edit() {
+                    let parent = m.cur().current_id().clone();
+                    m.prompt = Some(Prompt { kind: PromptKind::NewFile { parent }, text: String::new() });
+                    m.context_menu = None;
+                }
+            }
+            Msg::RenamePrompt => {
+                if m.can_edit() {
+                    if let Some(n) = m.cur().selected_node() {
+                        let (id, name) = (n.id.clone(), n.name.clone());
+                        m.prompt = Some(Prompt { kind: PromptKind::Rename { id }, text: name });
+                        m.context_menu = None;
+                    }
+                }
+            }
+            Msg::PromptInput(s) => {
+                if let Some(p) = m.prompt.as_mut() {
+                    p.text.push_str(&s);
+                }
+            }
+            Msg::PromptBackspace => {
+                if let Some(p) = m.prompt.as_mut() {
+                    p.text.pop();
+                }
+            }
+            Msg::PromptSubmit => {
+                if let Some(p) = m.prompt.take() {
+                    let name = p.text.trim().to_string();
+                    if !name.is_empty() {
+                        let kind = match p.kind {
+                            PromptKind::NewDir { parent } => OpKind::NewDir { parent, name },
+                            PromptKind::NewFile { parent } => OpKind::NewFile { parent, name },
+                            PromptKind::Rename { id } => OpKind::Rename { id, new_name: name },
+                        };
+                        enqueue(&mut m, handle, kind);
+                    }
+                }
+            }
+            Msg::PromptCancel => {
+                m.prompt = None;
+            }
+            Msg::DeleteSelection => {
+                let targets = m.cur_pane().op_targets();
+                if !targets.is_empty() {
+                    m.confirm_delete = Some(targets);
+                    m.context_menu = None;
+                }
+            }
+            Msg::ConfirmDelete => {
+                if let Some(targets) = m.confirm_delete.take() {
+                    for (id, name) in targets {
+                        enqueue(&mut m, handle, OpKind::Delete { id, name });
+                    }
+                    m.cur_pane_mut().marked.clear();
+                }
+            }
+            Msg::CancelConfirm => {
+                m.confirm_delete = None;
+            }
+            Msg::CopyToOther => copy_or_move(&mut m, handle, false),
+            Msg::MoveToOther => copy_or_move(&mut m, handle, true),
+            Msg::RunOp(kind) => {
+                m.context_menu = None;
+                enqueue(&mut m, handle, kind);
+            }
+            Msg::OpFinished { id, result } => {
+                let status = match &result {
+                    Ok(r) => OpStatus::Done(r.clone()),
+                    Err(e) => OpStatus::Failed(e.clone()),
+                };
+                m.queue.finish(id, status);
+                reload_panes(&mut m);
+                // Dejá el cursor sobre el resultado (carpeta/archivo nuevo,
+                // renombrado) en el panel enfocado.
+                if let Ok(Some(new_id)) = &result {
+                    m.cur_pane_mut().nav_mut().select_id(new_id);
+                }
+                refresh_preview(&mut m);
+            }
+            Msg::ToggleQueue => {
+                m.queue.open = !m.queue.open;
+            }
+            Msg::ClearQueue => {
+                m.queue.clear_finished();
+            }
         }
         m
     }
@@ -1021,6 +1283,21 @@ impl App for Shell {
             )
         };
 
+        // El cuerpo ocupa el alto restante (flex), dejando lugar al panel de
+        // la cola de operaciones abajo si hay jobs.
+        let body_wrap = View::new(Style {
+            flex_grow: 1.0,
+            min_size: Size { width: length(0.0), height: length(0.0) },
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![body]);
+
+        let mut col: Vec<View<Msg>> = vec![menubar, body_wrap];
+        if let Some(panel) = queue_panel(model, &theme) {
+            col.push(panel);
+        }
+
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -1033,10 +1310,18 @@ impl App for Shell {
         // Right-click en la raíz (origen 0,0 ⇒ local == coords de ventana)
         // abre el menú contextual sobre la entrada seleccionada.
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
-        .children(vec![menubar, body])
+        .children(col)
     }
 
     fn view_overlay(model: &Self::Model) -> Option<View<Self::Msg>> {
+        // Los modales de operación (prompt de nombre, confirmación de borrado)
+        // van por encima de todo.
+        if let Some(p) = &model.prompt {
+            return Some(prompt_overlay(p, &model.theme));
+        }
+        if let Some(targets) = &model.confirm_delete {
+            return Some(confirm_overlay(targets, &model.theme));
+        }
         // El menú contextual del nodo seleccionado tiene prioridad.
         if let Some((x, y)) = model.context_menu {
             return Some(context_menu_view(context_menu_spec(model, x, y)));
@@ -1169,11 +1454,28 @@ fn app_menu(model: &Model) -> AppMenu {
     } else {
         unmount = unmount.disabled();
     }
+    // Operaciones de archivo (Fase 4.3): sólo sobre POSIX escribible. Sobre una
+    // fuente montada read-only salen en gris.
+    let editable = model.can_edit();
+    let mut newdir = MenuItem::new("Nueva carpeta", "file.newdir").shortcut("F7").separated();
+    let mut newfile = MenuItem::new("Nuevo archivo", "file.newfile");
+    let mut rename = MenuItem::new("Renombrar", "file.rename").shortcut("F2");
+    let mut delete = MenuItem::new("Borrar", "file.delete").shortcut("Supr");
+    if !editable {
+        newdir = newdir.disabled();
+        newfile = newfile.disabled();
+        rename = rename.disabled();
+        delete = delete.disabled();
+    }
     AppMenu::new()
         .menu(
             Menu::new("Archivo")
                 .item(MenuItem::new("Abrir", "file.open").shortcut("Enter"))
                 .item(MenuItem::new("Subir al padre", "file.parent").shortcut("Backspace"))
+                .item(newdir)
+                .item(newfile)
+                .item(rename)
+                .item(delete)
                 .item(mount_nouser)
                 .item(mount_minga)
                 .item(unmount)
@@ -1188,6 +1490,10 @@ fn handle_menu_command(model: Model, cmd: &str, handle: &Handle<Msg>) -> Model {
     match cmd {
         "file.open" => handle.dispatch(Msg::OpenSelected),
         "file.parent" => handle.dispatch(Msg::Parent),
+        "file.newdir" => handle.dispatch(Msg::NewDirPrompt),
+        "file.newfile" => handle.dispatch(Msg::NewFilePrompt),
+        "file.rename" => handle.dispatch(Msg::RenamePrompt),
+        "file.delete" => handle.dispatch(Msg::DeleteSelection),
         "file.mount_nouser" => handle.dispatch(Msg::MountNouser),
         "file.mount_minga" => handle.dispatch(Msg::MountMinga),
         "file.unmount" => handle.dispatch(Msg::Unmount),
@@ -1210,6 +1516,19 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
         (ContextMenuItem::action("Abrir"), Msg::OpenSelected),
         (ContextMenuItem::action("Subir al padre"), Msg::Parent),
     ];
+    // Operaciones de archivo (Fase 4.3): sólo sobre POSIX escribible.
+    if model.can_edit() {
+        acciones.push((ContextMenuItem::action("Nueva carpeta"), Msg::NewDirPrompt));
+        acciones.push((ContextMenuItem::action("Nuevo archivo"), Msg::NewFilePrompt));
+        if model.cur().selected_node().is_some() {
+            acciones.push((ContextMenuItem::action("Renombrar"), Msg::RenamePrompt));
+            acciones.push((ContextMenuItem::action("Borrar"), Msg::DeleteSelection));
+        }
+        if model.dual {
+            acciones.push((ContextMenuItem::action("Copiar al otro panel"), Msg::CopyToOther));
+            acciones.push((ContextMenuItem::action("Mover al otro panel"), Msg::MoveToOther));
+        }
+    }
     if montado {
         acciones.push((ContextMenuItem::action("Desmontar fuente"), Msg::Unmount));
     } else {
@@ -1251,6 +1570,227 @@ fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpec<Msg> {
         on_dismiss: Msg::CloseMenus,
         palette: ContextMenuPalette::from_theme(&model.theme),
     }
+}
+
+/// Rect de padding uniforme — atajo para los modales/panel de la cola.
+fn pad(v: f32) -> Rect<llimphi_ui::llimphi_layout::taffy::LengthPercentage> {
+    Rect { left: length(v), right: length(v), top: length(v), bottom: length(v) }
+}
+
+/// Una fila de alto fijo, ancho total, contenido centrado verticalmente.
+fn fila(h: f32) -> Style {
+    Style {
+        size: Size { width: percent(1.0_f32), height: length(h) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    }
+}
+
+/// Envuelve una `card` en un scrim full-screen centrado; un click fuera
+/// dispatcha `dismiss`.
+fn modal_scrim(card: View<Msg>, dismiss: Msg) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 130))
+    .on_click(dismiss)
+    .children(vec![card])
+}
+
+/// Overlay del prompt de nombre (nueva carpeta/archivo, renombrar): card
+/// centrada con el título, el texto en edición y los atajos.
+fn prompt_overlay(p: &Prompt, theme: &Theme) -> View<Msg> {
+    let input = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(34.0) },
+        padding: pad(8.0),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(6.0)
+    .border(1.0, theme.fg_muted)
+    .text(format!("{}_", p.text), 15.0, theme.fg_text);
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(440.0_f32), height: length(160.0_f32) },
+        padding: pad(18.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .border(1.0, theme.accent)
+    .children(vec![
+        View::new(fila(30.0)).text(p.title(), 16.0, theme.fg_text),
+        input,
+        View::new(fila(26.0)).text("Enter confirma · Esc cancela", 12.0, theme.fg_muted),
+    ]);
+    modal_scrim(card, Msg::PromptCancel)
+}
+
+/// Overlay de confirmación de borrado: lista los nombres a borrar y botones
+/// Borrar / Cancelar. El click en el scrim cancela.
+fn confirm_overlay(targets: &[(nahual_source_core::NodeId, String)], theme: &Theme) -> View<Msg> {
+    let nombres: Vec<&str> = targets.iter().map(|(_, n)| n.as_str()).collect();
+    let resumen = if nombres.len() == 1 {
+        format!("¿Borrar «{}»?", nombres[0])
+    } else {
+        format!("¿Borrar {} elementos?", nombres.len())
+    };
+    let detalle = {
+        let muestra: Vec<&str> = nombres.iter().take(4).copied().collect();
+        let mut s = muestra.join(", ");
+        if nombres.len() > 4 {
+            s.push_str(&format!(", … (+{})", nombres.len() - 4));
+        }
+        s
+    };
+
+    let boton_borrar = View::new(Style {
+        size: Size { width: length(120.0_f32), height: length(34.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        margin: Rect { left: length(0.0), right: length(10.0), top: length(0.0), bottom: length(0.0) },
+        ..Default::default()
+    })
+    .fill(theme.fg_destructive)
+    .radius(6.0)
+    .on_click(Msg::ConfirmDelete)
+    .text("Borrar (Enter)", 14.0, theme.bg_app);
+
+    let boton_cancelar = View::new(Style {
+        size: Size { width: length(120.0_f32), height: length(34.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(6.0)
+    .border(1.0, theme.fg_muted)
+    .on_click(Msg::CancelConfirm)
+    .text("Cancelar (Esc)", 14.0, theme.fg_text);
+
+    let botones = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(40.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![boton_borrar, boton_cancelar]);
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(460.0_f32), height: length(180.0_f32) },
+        padding: pad(18.0),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .border(1.0, theme.fg_destructive)
+    .children(vec![
+        View::new(fila(32.0)).text(resumen, 16.0, theme.fg_text),
+        View::new(fila(40.0)).text(detalle, 12.0, theme.fg_muted),
+        botones,
+    ]);
+    modal_scrim(card, Msg::CancelConfirm)
+}
+
+/// Panel inferior colapsable de la **cola de operaciones**. `None` si no hay
+/// jobs. La barra de cabecera (siempre visible) resume y alterna el detalle;
+/// cuando está abierto, lista cada job con su estado.
+fn queue_panel(model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    let q = &model.queue;
+    if q.ops.is_empty() {
+        return None;
+    }
+    let corriendo = q.running_count();
+    let total = q.ops.len();
+    let resumen = if corriendo > 0 {
+        format!("⚙ Operaciones · {corriendo} en curso / {total}")
+    } else {
+        format!("✓ Operaciones · {total} terminadas")
+    };
+    let flecha = if q.open { "▾" } else { "▸" };
+
+    // Cabecera: resumen (toggle) + botón limpiar.
+    let titulo = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .on_click(Msg::ToggleQueue)
+    .text(format!("{flecha} {resumen}"), 13.0, theme.fg_text);
+
+    let limpiar = View::new(Style {
+        size: Size { width: length(96.0_f32), height: length(24.0_f32) },
+        justify_content: Some(JustifyContent::Center),
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .radius(5.0)
+    .on_click(Msg::ClearQueue)
+    .text("Limpiar", 12.0, theme.fg_muted);
+
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        padding: Rect { left: length(12.0), right: length(12.0), top: length(0.0), bottom: length(0.0) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![titulo, limpiar]);
+
+    let mut hijos = vec![header];
+
+    if q.open {
+        // Hasta 6 filas de jobs (las más recientes arriba).
+        let filas: Vec<View<Msg>> = q
+            .ops
+            .iter()
+            .rev()
+            .take(6)
+            .map(|op| {
+                let (glyph, color) = match &op.status {
+                    OpStatus::Running => ("⋯", theme.accent),
+                    OpStatus::Done(_) => ("✓", theme.fg_muted),
+                    OpStatus::Failed(_) => ("✗", theme.fg_destructive),
+                };
+                let texto = match &op.status {
+                    OpStatus::Failed(e) => format!("{glyph} {} — {e}", op.label),
+                    _ => format!("{glyph} {}", op.label),
+                };
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                    padding: Rect { left: length(16.0), right: length(12.0), top: length(0.0), bottom: length(0.0) },
+                    align_items: Some(AlignItems::Center),
+                    ..Default::default()
+                })
+                .text(texto, 12.0, color)
+            })
+            .collect();
+        let lista = View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: length(140.0_f32) },
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .children(filas);
+        hijos.push(lista);
+    }
+
+    let alto = if q.open { 172.0 } else { 30.0 };
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Column,
+            size: Size { width: percent(1.0_f32), height: length(alto) },
+            ..Default::default()
+        })
+        .children(hijos),
+    )
 }
 
 /// Barra de **breadcrumb clicable** de un panel (Fase 4.2): cada segmento sube
@@ -1295,13 +1835,61 @@ fn pane_column(model: &Model, pane: usize, focused: bool, theme: &Theme) -> View
     let crumb = pane_breadcrumb(&model.panes[pane], pane, focused, theme);
     // El filtro vivo sólo aplica al panel enfocado.
     let filtering = focused && model.nav_filtering;
-    let content = nav_pane_view(model.panes[pane].nav(), theme, filtering, pane);
+    let content = nav_pane_view(
+        model.panes[pane].nav(),
+        &model.panes[pane].marked,
+        theme,
+        filtering,
+        pane,
+    );
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .children(vec![crumb, content])
+}
+
+/// Encola una operación y lanza su worker (`Handle::spawn`): el job corre en un
+/// hilo aparte y, al terminar, reentra al `update` con `Msg::OpFinished`. La UI
+/// no se bloquea ni para una copia de un árbol grande.
+fn enqueue(m: &mut Model, handle: &Handle<Msg>, kind: OpKind) {
+    let id = m.queue.push(kind.clone());
+    handle.spawn(move || {
+        let result = kind.run().map_err(|e| e.to_string());
+        Msg::OpFinished { id, result }
+    });
+}
+
+/// Recarga los hijos de ambos paneles desde el disco tras una operación, y
+/// poda las marcas que ya no apuntan a un nodo existente (borrado/movido).
+fn reload_panes(m: &mut Model) {
+    for p in m.panes.iter_mut() {
+        let _ = p.nav_mut().reload();
+        let ids: BTreeSet<nahual_source_core::NodeId> =
+            p.nav().children().iter().map(|n| n.id.clone()).collect();
+        p.marked.retain(|id| ids.contains(id));
+    }
+}
+
+/// Copia (o mueve, si `is_move`) la selección del panel enfocado al directorio
+/// del **otro** panel. Sólo si el destino es POSIX escribible (no se escribe
+/// sobre una fuente montada read-only). Encola un job por nodo objetivo.
+fn copy_or_move(m: &mut Model, handle: &Handle<Msg>, is_move: bool) {
+    let other = 1 - m.focus;
+    if m.panes[other].nav().writable().is_none() {
+        return;
+    }
+    let dest = m.panes[other].nav().current_id().clone();
+    for (id, name) in m.cur_pane().op_targets() {
+        let kind = if is_move {
+            OpKind::Move { id, name, dest_parent: dest.clone() }
+        } else {
+            OpKind::Copy { id, name, dest_parent: dest.clone() }
+        };
+        enqueue(m, handle, kind);
+    }
+    m.cur_pane_mut().marked.clear();
 }
 
 /// Limpia el panel derecho y suelta cualquier tempfile de hoja no-POSIX.
@@ -1405,12 +1993,20 @@ fn sanitizar_nombre(nombre: &str) -> String {
 /// Pinta el contenido de un panel según su `ViewMode` (lista o detalle). `pane`
 /// es el índice del panel (0/1): las filas y encabezados emiten `Msg`s que lo
 /// llevan, para que el click actúe sobre el panel correcto en modo dual.
-fn nav_pane_view(nav: &Navigator, theme: &Theme, filtering: bool, pane: usize) -> View<Msg> {
+fn nav_pane_view(
+    nav: &Navigator,
+    marked: &BTreeSet<nahual_source_core::NodeId>,
+    theme: &Theme,
+    filtering: bool,
+    pane: usize,
+) -> View<Msg> {
     match nav.view {
         nahual_source_core::ViewMode::List => {
-            navigator_list_view(nav, ListPalette::from_theme(theme), filtering, pane)
+            navigator_list_view(nav, marked, ListPalette::from_theme(theme), filtering, pane)
         }
-        nahual_source_core::ViewMode::Details => navigator_detail_view(nav, theme, filtering, pane),
+        nahual_source_core::ViewMode::Details => {
+            navigator_detail_view(nav, marked, theme, filtering, pane)
+        }
     }
 }
 
@@ -1434,7 +2030,13 @@ fn nav_caption(nav: &Navigator, filtering: bool) -> String {
 
 /// Pinta los hijos visibles (filtrados) del contenedor actual como una lista
 /// `llimphi-widget-list` — el gemelo genérico de `file_explorer_view`.
-fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool, pane: usize) -> View<Msg> {
+fn navigator_list_view(
+    nav: &Navigator,
+    marked: &BTreeSet<nahual_source_core::NodeId>,
+    palette: ListPalette,
+    filtering: bool,
+    pane: usize,
+) -> View<Msg> {
     use std::cmp::min;
     let visibles = nav.visible();
     let start = nav.visible_offset.min(visibles.len());
@@ -1442,11 +2044,13 @@ fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool, p
     let rows: Vec<ListRow<Msg>> = visibles[start..end]
         .iter()
         .map(|(idx, n)| {
+            // Una fila marcada (selección múltiple) lleva un check al frente.
+            let mark = if marked.contains(&n.id) { "✓" } else { " " };
             let icon = if n.is_container { "▸ " } else { "  " };
             let label = if n.is_container {
-                format!("{icon}{}/", n.name)
+                format!("{mark}{icon}{}/", n.name)
             } else {
-                format!("{icon}{}", n.name)
+                format!("{mark}{icon}{}", n.name)
             };
             ListRow {
                 label,
@@ -1473,7 +2077,13 @@ fn navigator_list_view(nav: &Navigator, palette: ListPalette, filtering: bool, p
 /// Pinta los hijos visibles como grilla detalle con columnas ordenables
 /// (nombre · tamaño · modificado · tipo). Click en un encabezado emite
 /// `NavSortBy`; click en una fila selecciona.
-fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool, pane: usize) -> View<Msg> {
+fn navigator_detail_view(
+    nav: &Navigator,
+    marked: &BTreeSet<nahual_source_core::NodeId>,
+    theme: &Theme,
+    filtering: bool,
+    pane: usize,
+) -> View<Msg> {
     use llimphi_widget_detail_table::{
         detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
     };
@@ -1498,15 +2108,18 @@ fn navigator_detail_view(nav: &Navigator, theme: &Theme, filtering: bool, pane: 
         .iter()
         .map(|(idx, n)| {
             let icon = kind_icon(n.kind, n.is_container);
+            let is_marked = marked.contains(&n.id);
+            let mark = if is_marked { "✓" } else { " " };
             DetailRow {
                 cells: vec![
-                    format!("{icon} {}", n.name),
+                    format!("{mark}{icon} {}", n.name),
                     n.size.map(human_size).unwrap_or_default(),
                     n.mtime.map(epoch_ms_to_date).unwrap_or_default(),
                     kind_label(n.kind, &n.name).to_string(),
                 ],
                 selected: *idx == nav.selected,
-                accent: None,
+                // Tinte de acento en las filas marcadas (selección múltiple).
+                accent: is_marked.then_some(theme.accent),
                 on_click: Msg::SelectIn(pane, *idx),
             }
         })
