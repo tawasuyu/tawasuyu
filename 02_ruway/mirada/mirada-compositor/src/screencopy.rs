@@ -3,8 +3,12 @@
 //! smithay 0.7 no trae la lógica de servidor de este protocolo (sólo los
 //! bindings generados del XML, vía `wayland-protocols-wlr`), así que el
 //! dispatch vive acá. Primera rebanada: `capture_output` y
-//! `capture_output_region` sobre buffers `wl_shm`, copia one-shot. Sin dmabuf
-//! (el cliente cae a shm). Segunda rebanada: **daño real** para
+//! `capture_output_region` sobre buffers `wl_shm`, copia one-shot. Tercera
+//! rebanada: **dmabuf zero-copy** — además del `wl_shm` se anuncia
+//! `linux_dmabuf`; si el cliente trae un buffer dmabuf (lo que prefieren
+//! xdg-desktop-portal-wlr / PipeWire para el screencast), la captura se hace
+//! GPU→GPU (`blit` del framebuffer compuesto al dmabuf del cliente), sin el
+//! `ReadPixels`+memcpy del camino shm. Segunda rebanada: **daño real** para
 //! `copy_with_damage` — la captura queda retenida hasta que la salida tenga
 //! daño genuino (commits de clientes, re-teselados, foco, cierre de ventanas)
 //! y el evento `damage` reporta el extents acumulado, no el frame entero;
@@ -27,11 +31,12 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use smithay::backend::allocator::Fourcc;
+use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::{Buffer as _, Fourcc};
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTarget, GlesTexture};
 use smithay::backend::renderer::utils::draw_render_elements;
 use smithay::backend::renderer::{
-    Bind, Color32F, ExportMem, Frame as _, Offscreen, Renderer, TextureMapping,
+    Bind, Blit, Color32F, ExportMem, Frame as _, Offscreen, Renderer, TextureFilter, TextureMapping,
 };
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::{
@@ -43,7 +48,8 @@ use smithay::reexports::wayland_server::{
     backend::{ClientId, GlobalId},
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use smithay::utils::{Buffer as BufferCoord, Logical, Monotonic, Rectangle, Size, Transform};
+use smithay::utils::{Buffer as BufferCoord, Logical, Monotonic, Physical, Rectangle, Size, Transform};
+use smithay::wayland::dmabuf::get_dmabuf;
 use smithay::wayland::shm::with_buffer_contents_mut;
 
 use crate::App;
@@ -55,8 +61,8 @@ const FORMATO: wl_shm::Format = wl_shm::Format::Xrgb8888;
 const FOURCC: Fourcc = Fourcc::Xrgb8888;
 
 /// Versión del global que se anuncia. v3 = `capture_output_region` +
-/// `buffer_done` (sin `linux_dmabuf`: no anunciar dmabuf es legal, el cliente
-/// usa shm).
+/// `buffer_done` + `linux_dmabuf` (anunciamos shm **y** dmabuf; el cliente
+/// elige el tipo de buffer al pedir `copy`).
 const VERSION: u32 = 3;
 
 /// Datos del global: el filtro de visibilidad por cliente (la frontera).
@@ -224,6 +230,9 @@ fn iniciar_frame(
                 rect.size.w as u32 * 4,
             );
             if f.version() >= 3 {
+                // También ofrecemos dmabuf (mismo fourcc/tamaño): el cliente que
+                // lo soporte captura GPU→GPU. `format` es el fourcc DRM crudo.
+                f.linux_dmabuf(FOURCC as u32, rect.size.w as u32, rect.size.h as u32);
                 f.buffer_done();
             }
         }
@@ -296,17 +305,26 @@ fn aceptar_copia(
         return;
     }
     let (w, h) = (meta.rect.size.w, meta.rect.size.h);
-    let valido = with_buffer_contents_mut(&buffer, |_ptr, len, datos| {
-        datos.format == FORMATO
-            && datos.width == w
-            && datos.height == h
-            && datos.stride == w * 4
-            && (datos.offset as usize) + (h as usize * datos.stride as usize) <= len
-    });
-    if !matches!(valido, Ok(true)) {
+    // El cliente puede traer un dmabuf (zero-copy GPU→GPU) o un `wl_shm`. En
+    // ambos casos exigimos el mismo fourcc y geometría que anunciamos.
+    let valido = if let Ok(dmabuf) = get_dmabuf(&buffer) {
+        dmabuf.format().code == FOURCC && dmabuf.width() == w as u32 && dmabuf.height() == h as u32
+    } else {
+        matches!(
+            with_buffer_contents_mut(&buffer, |_ptr, len, datos| {
+                datos.format == FORMATO
+                    && datos.width == w
+                    && datos.height == h
+                    && datos.stride == w * 4
+                    && (datos.offset as usize) + (h as usize * datos.stride as usize) <= len
+            }),
+            Ok(true)
+        )
+    };
+    if !valido {
         frame.post_error(
             zwlr_screencopy_frame_v1::Error::InvalidBuffer,
-            format!("se esperaba wl_shm {FORMATO:?} de {w}×{h} con stride {}", w * 4),
+            format!("se esperaba dmabuf o wl_shm {FORMATO:?} de {w}×{h}"),
         );
         return;
     }
@@ -418,32 +436,24 @@ pub fn servir(
     }
 }
 
-/// Copia una captura del target al `wl_shm` del cliente y responde.
+/// Copia una captura del target al buffer del cliente (dmabuf o `wl_shm`) y
+/// responde con `flags`+`damage`+`ready`. El tipo de buffer se resuelve acá:
+/// dmabuf → `blit` GPU→GPU; si no, `ReadPixels`+memcpy a shm.
 fn copiar_una(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
     c: &PendingScreencopy,
 ) -> Result<(), String> {
-    let mapping = renderer
-        .copy_framebuffer(target, c.rect, FOURCC)
-        .map_err(|e| format!("copy_framebuffer: {e}"))?;
-    let bytes = renderer
-        .map_texture(&mapping)
-        .map_err(|e| format!("map_texture: {e}"))?;
-    let (w, h) = (c.rect.size.w as usize, c.rect.size.h as usize);
-    if bytes.len() < w * h * 4 {
-        return Err(format!("mapping corto: {} < {}", bytes.len(), w * h * 4));
-    }
-    with_buffer_contents_mut(&c.buffer, |ptr, len, datos| {
-        let destino = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
-        let desde = datos.offset as usize;
-        destino[desde..desde + w * h * 4].copy_from_slice(&bytes[..w * h * 4]);
-    })
-    .map_err(|e| format!("buffer shm: {e:?}"))?;
+    // `cloned()` corta el préstamo de `c.buffer` ya: lo que sigue sólo toca `c`
+    // por valores `Copy` (el rect) o re-lee `c.buffer` en el path shm.
+    let dmabuf = get_dmabuf(&c.buffer).ok().cloned();
+    let flipped = match &dmabuf {
+        Some(d) => copiar_a_dmabuf(renderer, target, c.rect, d)?,
+        None => copiar_a_shm(renderer, target, c.rect, &c.buffer)?,
+    };
 
-    // `GlesMapping` siempre sale con el origen abajo-izquierda (ReadPixels):
-    // el cliente endereza con el flag — grim y wf-recorder lo honran.
-    c.frame.flags(if mapping.flipped() {
+    // El cliente endereza con el flag — grim y wf-recorder lo honran.
+    c.frame.flags(if flipped {
         zwlr_screencopy_frame_v1::Flags::YInvert
     } else {
         zwlr_screencopy_frame_v1::Flags::empty()
@@ -466,6 +476,60 @@ fn copiar_una(
         ahora.subsec_nanos(),
     );
     Ok(())
+}
+
+/// Camino `wl_shm`: `ReadPixels` del target a CPU y memcpy al buffer del cliente.
+/// Devuelve si el resultado quedó y-invertido (`ReadPixels` lee de abajo-arriba).
+fn copiar_a_shm(
+    renderer: &mut GlesRenderer,
+    target: &GlesTarget<'_>,
+    rect: Rectangle<i32, BufferCoord>,
+    buffer: &WlBuffer,
+) -> Result<bool, String> {
+    let mapping = renderer
+        .copy_framebuffer(target, rect, FOURCC)
+        .map_err(|e| format!("copy_framebuffer: {e}"))?;
+    let bytes = renderer
+        .map_texture(&mapping)
+        .map_err(|e| format!("map_texture: {e}"))?;
+    let (w, h) = (rect.size.w as usize, rect.size.h as usize);
+    if bytes.len() < w * h * 4 {
+        return Err(format!("mapping corto: {} < {}", bytes.len(), w * h * 4));
+    }
+    with_buffer_contents_mut(buffer, |ptr, len, datos| {
+        let destino = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
+        let desde = datos.offset as usize;
+        destino[desde..desde + w * h * 4].copy_from_slice(&bytes[..w * h * 4]);
+    })
+    .map_err(|e| format!("buffer shm: {e:?}"))?;
+    Ok(mapping.flipped())
+}
+
+/// Camino **dmabuf zero-copy**: enlaza el dmabuf del cliente como framebuffer y
+/// `blit`ea la región del target compuesto adentro —sin tocar la CPU—. El blit
+/// copia framebuffer→framebuffer (origen abajo-izquierda en GL), así que el
+/// dmabuf queda y-invertido respecto al origen arriba-izquierda del `wl_buffer`,
+/// igual que el `ReadPixels` del path shm → devuelve `true` (YInvert). Si el
+/// renderer no puede enlazar el dmabuf (modifier no soportado), propaga el error
+/// y [`servir`] le manda `failed` al cliente (que puede reintentar con shm).
+fn copiar_a_dmabuf(
+    renderer: &mut GlesRenderer,
+    target: &GlesTarget<'_>,
+    rect: Rectangle<i32, BufferCoord>,
+    dmabuf: &Dmabuf,
+) -> Result<bool, String> {
+    let mut dst = dmabuf.clone();
+    let mut dst_fb = renderer
+        .bind(&mut dst)
+        .map_err(|e| format!("bind dmabuf: {e}"))?;
+    // A escala 1 sin transform las coordenadas de buffer y físicas coinciden.
+    let src: Rectangle<i32, Physical> =
+        Rectangle::new((rect.loc.x, rect.loc.y).into(), (rect.size.w, rect.size.h).into());
+    let dst_rect: Rectangle<i32, Physical> = Rectangle::from_size((rect.size.w, rect.size.h).into());
+    renderer
+        .blit(target, &mut dst_fb, src, dst_rect, TextureFilter::Linear)
+        .map_err(|e| format!("blit dmabuf: {e}"))?;
+    Ok(true)
 }
 
 /// Sirve capturas en el backend DRM: re-compone los mismos elementos del
