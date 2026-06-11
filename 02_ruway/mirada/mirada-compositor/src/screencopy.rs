@@ -506,12 +506,14 @@ fn copiar_a_shm(
 }
 
 /// Camino **dmabuf zero-copy**: enlaza el dmabuf del cliente como framebuffer y
-/// `blit`ea la región del target compuesto adentro —sin tocar la CPU—. El blit
-/// copia framebuffer→framebuffer (origen abajo-izquierda en GL), así que el
-/// dmabuf queda y-invertido respecto al origen arriba-izquierda del `wl_buffer`,
-/// igual que el `ReadPixels` del path shm → devuelve `true` (YInvert). Si el
-/// renderer no puede enlazar el dmabuf (modifier no soportado), propaga el error
-/// y [`servir`] le manda `failed` al cliente (que puede reintentar con shm).
+/// `blit`ea la región del target compuesto adentro —sin tocar la CPU—. A
+/// diferencia del `ReadPixels` del path shm (que lee de abajo-arriba y necesita
+/// `YInvert`), el `blit` de smithay deja el dmabuf ya derecho (origen
+/// arriba-izquierda, como espera el `wl_buffer`), así que devuelve `false`
+/// (sin YInvert) — verificado con wf-recorder: con `YInvert` el video salía
+/// de cabeza. Si el renderer no puede enlazar el dmabuf (modifier no soportado),
+/// propaga el error y [`servir`] le manda `failed` al cliente (que reintenta con
+/// shm).
 fn copiar_a_dmabuf(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
@@ -529,7 +531,7 @@ fn copiar_a_dmabuf(
     renderer
         .blit(target, &mut dst_fb, src, dst_rect, TextureFilter::Linear)
         .map_err(|e| format!("blit dmabuf: {e}"))?;
-    Ok(true)
+    Ok(false)
 }
 
 /// Sirve capturas en el backend DRM: re-compone los mismos elementos del
