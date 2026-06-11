@@ -506,14 +506,19 @@ fn copiar_a_shm(
 }
 
 /// Camino **dmabuf zero-copy**: enlaza el dmabuf del cliente como framebuffer y
-/// `blit`ea la región del target compuesto adentro —sin tocar la CPU—. A
-/// diferencia del `ReadPixels` del path shm (que lee de abajo-arriba y necesita
-/// `YInvert`), el `blit` de smithay deja el dmabuf ya derecho (origen
-/// arriba-izquierda, como espera el `wl_buffer`), así que devuelve `false`
-/// (sin YInvert) — verificado con wf-recorder: con `YInvert` el video salía
-/// de cabeza. Si el renderer no puede enlazar el dmabuf (modifier no soportado),
-/// propaga el error y [`servir`] le manda `failed` al cliente (que reintenta con
-/// shm).
+/// `blit`ea la región del target compuesto adentro —sin tocar la CPU—.
+///
+/// Orientación: el framebuffer compuesto es bottom-up (origen abajo-izquierda,
+/// GL); un blit recto dejaría el dmabuf invertido respecto al origen
+/// arriba-izquierda del `wl_buffer`. En vez de delegar el arreglo al flag
+/// `YInvert` —que clientes dmabuf como wf-recorder **ignoran**, dejando el video
+/// de cabeza— volteamos en el propio blit: el rect de destino lleva altura
+/// **negativa** (`glBlitFramebuffer` con `dstY0 > dstY1` invierte la copia), así
+/// el dmabuf queda físicamente top-down. Por eso devolvemos `false` (sin
+/// YInvert): correcto tanto si el cliente honra el flag como si lo ignora.
+///
+/// Si el renderer no puede enlazar el dmabuf (modifier no soportado), propaga el
+/// error y [`servir`] le manda `failed` al cliente (que reintenta con shm).
 fn copiar_a_dmabuf(
     renderer: &mut GlesRenderer,
     target: &GlesTarget<'_>,
@@ -527,7 +532,10 @@ fn copiar_a_dmabuf(
     // A escala 1 sin transform las coordenadas de buffer y físicas coinciden.
     let src: Rectangle<i32, Physical> =
         Rectangle::new((rect.loc.x, rect.loc.y).into(), (rect.size.w, rect.size.h).into());
-    let dst_rect: Rectangle<i32, Physical> = Rectangle::from_size((rect.size.w, rect.size.h).into());
+    // Destino con Y invertido: loc.y = alto, size.h = -alto → glBlitFramebuffer
+    // recibe dstY0 = h, dstY1 = 0 y voltea verticalmente al copiar.
+    let dst_rect: Rectangle<i32, Physical> =
+        Rectangle::new((0, rect.size.h).into(), (rect.size.w, -rect.size.h).into());
     renderer
         .blit(target, &mut dst_fb, src, dst_rect, TextureFilter::Linear)
         .map_err(|e| format!("blit dmabuf: {e}"))?;
