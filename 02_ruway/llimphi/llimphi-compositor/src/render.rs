@@ -52,6 +52,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_long_press,
         on_long_press_at,
         focusable,
+        text_select_key,
         alpha,
         anim,
         animated_size,
@@ -102,6 +103,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_long_press,
         on_long_press_at,
         focusable,
+        text_select_key,
         alpha,
         anim,
         animated_size,
@@ -1060,6 +1062,20 @@ pub fn hit_test_focusable<Msg>(
         .and_then(|i| mounted.nodes[i].focusable)
 }
 
+/// Hit-test para **selección de texto**: el índice del nodo de texto
+/// seleccionable (`text_select_key`) más al frente bajo el cursor. El runtime
+/// lo usa para arrancar/extender una selección; devuelve el índice (no la key)
+/// para que el caller acceda al `text` + rect del nodo. `None` si no hay texto
+/// seleccionable bajo el punto.
+pub fn hit_test_selectable<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.text_select_key.is_some())
+}
+
 /// Ids enfocables en orden de Tab (pre-orden del árbol = orden de
 /// inserción de `Mounted::nodes`). Sólo nodos con rect computado
 /// (presentes en el layout). Es el orden DOM-like de tabulación.
@@ -1277,6 +1293,33 @@ mod tests {
         assert_eq!(hit_test_rotate(&m, &c, 25.0, 25.0), Some(0));
         assert_eq!(hit_test_rotate(&m, &c, 150.0, 25.0), Some(0));
         assert_eq!(hit_test_rotate(&m, &c, 350.0, 350.0), None);
+    }
+
+    #[test]
+    fn hit_test_selectable_solo_sobre_texto_seleccionable() {
+        use crate::hit_test_selectable;
+        // Un label seleccionable 100×30 arriba-izq dentro de un panel 200×200
+        // SIN selectable. Sólo el label matchea; el resto del panel da None.
+        let label = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(30.0) },
+            ..Default::default()
+        })
+        .text("hola", 14.0, vello::peniko::Color::from_rgba8(255, 255, 255, 255))
+        .selectable(7);
+        let panel = View::<()>::new(Style {
+            size: Size { width: length(200.0), height: length(200.0) },
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .children(vec![label]);
+        let mut layout = LayoutTree::new();
+        let m = mount(&mut layout, panel);
+        let c = layout.compute(m.root, (400.0, 400.0)).expect("layout");
+        // Sobre el label (0..100, 0..30) → el label (idx 1).
+        assert_eq!(hit_test_selectable(&m, &c, 50.0, 15.0), Some(1));
+        // Sobre el panel fuera del label → None (el panel no es selectable).
+        assert_eq!(hit_test_selectable(&m, &c, 150.0, 150.0), None);
     }
 
     #[test]

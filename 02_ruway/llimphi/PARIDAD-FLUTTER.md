@@ -73,7 +73,14 @@ fingen el borde con un rect-padre inset).
 - ✅ Overflow/ellipsis (`maxLines` + `…`) → `.ellipsis(n)`/`.max_lines(n)` + `Typesetter::layout_clamped`. Clampa medida y pintado; recorta graphemes hasta caber. Cubre single-line y N líneas.
 - ✅ Decoración: subrayado / tachado → `.underline()` / `.strikethrough()` en `View` + `underline`/`strikethrough` en `TextSpec`/`TextMeasure`. parley emite `StyleProperty::{Underline,Strikethrough}` por bloque; el pintado (`draw_layout_*`) recorre los runs y emite el rect en `baseline - offset` con `underline_size`/`strikethrough_size` del font metric. Brush = mismo color que el texto (`Layout<()>` toma el `color` externo; `Layout<RunBrush>` el brush del run). `ShapeKey` separa las claves del caché de shaping. Funciona junto con `weight`, `italic`, `ellipsis` y multicolor.
 - ✅ **Spans inline mixtos (RichText)** → `View::text_spans(content, size_px, default_color, spans, alignment)` + `View::with_spans(spans)` adjuntable. Cada `TextSpan { start, end, style }` sobreescribe en su rango de bytes uno o más de `size_px`/`weight`/`italic`/`font_family`/`color`/`underline`/`strikethrough` (todos `Option`). Bloque 13. Medición y pintado pasan por `Typesetter::layout_spans` (`Layout<RunBrush>` con wrap), así taffy reserva el alto del span más alto en su línea (un heading inline de 24 px dentro de un párrafo de 16 px agranda esa línea). El caché de `layout` no aplica al camino spans en v1 — RichText típico cambia frame-a-frame; el caller que necesite caché puede memoizar el `Vec<TextSpan>` y pasarlo igual. Demo `--example rich_text_demo`.
-- Texto seleccionable fuera del editor (selección + copiar). **Único pendiente de Tier 2.**
+- ✅ **Texto seleccionable fuera del editor** (selección + copiar) — cierra
+  Tier 2. `View::selectable(key)` marca un nodo de texto uniforme; el runtime
+  retiene la selección (`parley::Selection`) anclada a la key estable (no al
+  `NodeId`): mouse-down `from_point` → drag `extend_to_point` → resaltado con
+  rects de `Selection::geometry` (tinte translúcido sobre el texto) → Ctrl/Cmd+C
+  copia el rango vía `arboard` (feature `clipboard`, best-effort). Hit-test
+  `hit_test_selectable` + `text_select_key` en View/MountedNode. Sólo texto
+  uniforme (no runs/spans). Demo: `--example selectable_text`. 1 test de hit-test.
 
 ### 🟡 Tier 3 — animación declarativa (brecha de arquitectura)
 Hay `Tween` + `animate()`, pero cada animación se cablea a mano (tween en Model +

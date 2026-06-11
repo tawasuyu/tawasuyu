@@ -38,6 +38,7 @@ impl<Msg> View<Msg> {
             on_long_press: None,
             on_long_press_at: None,
             focusable: None,
+            text_select_key: None,
             alpha: None,
             anim: None,
             animated_size: None,
@@ -341,6 +342,21 @@ impl<Msg> View<Msg> {
     /// guardó en su `Model`.
     pub fn focusable(mut self, id: u64) -> Self {
         self.focusable = Some(id);
+        self
+    }
+
+    /// Marca este nodo de **texto** como seleccionable con el mouse fuera del
+    /// editor: arrastrar sobre él resalta el rango y Ctrl/Cmd+C lo copia al
+    /// portapapeles. `key` debe ser **estable** entre rebuilds del `View`
+    /// (índice, hash del id) — la selección vive en el runtime anclada a esa
+    /// key, no al `NodeId` (que cambia cada frame). Pensá en labels, párrafos,
+    /// celdas de tabla, salidas de consola: cualquier texto que el usuario
+    /// querría copiar sin un editor. Sólo aplica a texto **uniforme** (el de
+    /// `.text(...)`/`.text_aligned(...)`); en nodos con `runs`/`spans` no tiene
+    /// efecto (esos son del editor / RichText). Componer con el texto:
+    /// `View::new(style).text_aligned(s, 14.0, col, al).selectable(key)`.
+    pub fn selectable(mut self, key: u64) -> Self {
+        self.text_select_key = Some(key);
         self
     }
 

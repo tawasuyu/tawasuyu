@@ -612,6 +612,9 @@ struct RuntimeState<A: App> {
     /// hay retención con overlay o drag activos (camino conservador). Ver el
     /// hit-check en `RedrawRequested`.
     retained: Option<RetainedScene>,
+    /// Selección de texto activa fuera del editor (drag para resaltar, Ctrl/Cmd+C
+    /// para copiar). `None` = nada seleccionado. Ver [`TextSelection`].
+    selection: Option<TextSelection>,
 }
 
 /// Metadata del frame retenido — qué pintó la `state.scene` para validar que
@@ -623,6 +626,20 @@ struct RetainedScene {
     animating: bool,
     rippling: bool,
     has_overlay: bool,
+}
+
+/// Selección de texto activa fuera del editor (ver [`crate::View::selectable`]).
+/// Anclada a la `key` estable del nodo (no a su `NodeId`, que cambia cada
+/// frame); el runtime reconstruye el `parley::Layout` del nodo bajo esa key
+/// para extender la selección al arrastrar y para pintar el resaltado.
+#[derive(Clone, Copy)]
+struct TextSelection {
+    /// Key estable del nodo seleccionable (`text_select_key`).
+    key: u64,
+    /// Rango seleccionado, en coordenadas de bytes del `parley::Layout`.
+    sel: llimphi_text::parley::Selection,
+    /// `true` mientras el botón izquierdo sigue apretado (arrastrando).
+    dragging: bool,
 }
 
 struct RenderCache<Msg> {

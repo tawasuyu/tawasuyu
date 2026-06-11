@@ -41,6 +41,7 @@ pub use semantics::{Role, SemanticsFlags, SemanticsSpec};
 /// Texto a pintar dentro de un nodo. Alineación por defecto `Center`
 /// (horizontal y vertical), apta para labels de botón. Para layouts tipo
 /// editor o párrafo, usar `.text_aligned(...)` con `Alignment::Start`.
+#[derive(Clone)]
 pub struct TextSpec {
     pub content: String,
     pub size_px: f32,
@@ -485,6 +486,13 @@ pub struct View<Msg> {
     /// a la app vía `App::on_focus` para que pinte el ring y rutee el
     /// teclado. El id lo elige el caller (índice de campo, hash, etc.).
     pub focusable: Option<u64>,
+    /// Marca este nodo de **texto** como seleccionable con el mouse fuera del
+    /// editor (arrastrar resalta, Ctrl/Cmd+C copia). El `u64` es una **key
+    /// estable** entre rebuilds del `View` (los `NodeId` de taffy cambian cada
+    /// frame, así que la selección retenida en el runtime se ancla a esta key,
+    /// igual que `animated`). Sólo tiene efecto en nodos con `text` uniforme
+    /// (no `runs`/`spans`). Ver [`View::selectable`].
+    pub text_select_key: Option<u64>,
     /// Opacidad multiplicada sobre TODO el subtree (este nodo + hijos),
     /// en `[0.0, 1.0]`. Se realiza con `scene.push_layer(Mix::Normal, a, …)`
     /// alrededor del rect del nodo: el subárbol se rasteriza en una capa
@@ -741,6 +749,8 @@ pub struct MountedNode<Msg> {
     pub on_long_press: Option<Msg>,
     pub on_long_press_at: Option<ClickAtFn<Msg>>,
     pub focusable: Option<u64>,
+    /// Key estable de selección de texto (ver [`View::selectable`]).
+    pub text_select_key: Option<u64>,
     pub alpha: Option<f32>,
     pub anim: Option<Anim>,
     /// Animación implícita de tamaño (ver [`View::animated_size`]). El

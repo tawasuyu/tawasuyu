@@ -163,6 +163,124 @@ fn ripple_hit_from_cache<Msg: Clone>(
     })
 }
 
+// ── Selección de texto fuera del editor (ver `View::selectable`) ──
+
+/// Rect absoluto de un nodo: `(x, y, w, h)`.
+type AbsRect = (f32, f32, f32, f32);
+
+/// `true` si el `TextSpec` es de texto **uniforme** (sin `runs`/`spans`): los
+/// únicos que la selección fuera-del-editor soporta. Los multicolor/RichText
+/// son del editor y se ignoran.
+fn spec_is_uniform(spec: &llimphi_compositor::TextSpec) -> bool {
+    spec.runs.is_none() && spec.spans.is_none()
+}
+
+/// Bajo `(x, y)`, el nodo de texto seleccionable más al frente: su key, su
+/// `TextSpec` clonado y su rect absoluto. `None` si no hay texto seleccionable
+/// uniforme ahí.
+fn selectable_hit_from_cache<Msg: Clone>(
+    cache: &RenderCache<Msg>,
+    x: f32,
+    y: f32,
+) -> Option<(u64, llimphi_compositor::TextSpec, AbsRect)> {
+    let (m, c) = match cache.overlay.as_ref() {
+        Some(ov) => (&ov.mounted, &ov.computed),
+        None => (&cache.mounted, &cache.computed),
+    };
+    let i = hit_test_selectable(m, c, x, y)?;
+    let node = &m.nodes[i];
+    let key = node.text_select_key?;
+    let spec = node.text.as_ref()?;
+    if !spec_is_uniform(spec) {
+        return None;
+    }
+    let r = c.get(node.id)?;
+    Some((key, spec.clone(), (r.x, r.y, r.w, r.h)))
+}
+
+/// Busca el nodo seleccionable por su `key` estable (para extender el drag o
+/// pintar el resaltado en frames posteriores, cuando el `NodeId` ya cambió).
+/// Recorre el overlay y el árbol principal. `None` si la key ya no está.
+fn selectable_by_key<Msg>(
+    cache: &RenderCache<Msg>,
+    key: u64,
+) -> Option<(llimphi_compositor::TextSpec, AbsRect)> {
+    let trees = [
+        cache.overlay.as_ref().map(|ov| (&ov.mounted, &ov.computed)),
+        Some((&cache.mounted, &cache.computed)),
+    ];
+    trees
+        .into_iter()
+        .flatten()
+        .find_map(|(m, c)| selectable_node_in(m, c, key))
+}
+
+/// Busca en un árbol montado concreto el nodo de texto seleccionable con esa
+/// `key` y devuelve su `TextSpec` clonado + rect. Lo usa tanto la búsqueda por
+/// cache como el pintado del resaltado en el redraw (que tiene el `Mounted`
+/// del frame a mano, no un `RenderCache`).
+fn selectable_node_in<Msg>(
+    m: &Mounted<Msg>,
+    c: &ComputedLayout,
+    key: u64,
+) -> Option<(llimphi_compositor::TextSpec, AbsRect)> {
+    for node in &m.nodes {
+        if node.text_select_key == Some(key) {
+            let spec = node.text.as_ref()?;
+            if !spec_is_uniform(spec) {
+                return None;
+            }
+            let r = c.get(node.id)?;
+            return Some((spec.clone(), (r.x, r.y, r.w, r.h)));
+        }
+    }
+    None
+}
+
+/// Reconstruye el `parley::Layout` de un nodo de texto, idéntico al que pinta
+/// el render (misma ruta cacheada `Typesetter::layout`), para hit-testear y
+/// medir la selección. El ancho de wrap es el del rect del nodo.
+fn build_selectable_layout(
+    ts: &mut llimphi_text::Typesetter,
+    spec: &llimphi_compositor::TextSpec,
+    width: f32,
+) -> llimphi_text::parley::Layout<()> {
+    ts.layout(
+        &spec.content,
+        spec.size_px,
+        Some(width),
+        spec.alignment,
+        spec.line_height,
+        spec.italic,
+        spec.font_family.as_deref(),
+        spec.weight,
+        spec.underline,
+        spec.strikethrough,
+    )
+}
+
+/// `true` si la tecla lógica es el carácter `c` (case-insensitive). Para
+/// atajos como Ctrl+C sin acoplarse a mayúsculas/minúsculas ni layout.
+fn key_is_char(key: &Key, c: char) -> bool {
+    matches!(
+        key,
+        Key::Character(s) if s.chars().next().map(|k| k.eq_ignore_ascii_case(&c)).unwrap_or(false)
+    )
+}
+
+/// Copia texto al portapapeles del sistema (best-effort). Con la feature
+/// `clipboard` usa `arboard`; sin backend (headless) o sin la feature es no-op
+/// silencioso — nunca panica.
+#[cfg(feature = "clipboard")]
+fn copy_to_clipboard(text: &str) {
+    if let Ok(mut cb) = arboard::Clipboard::new() {
+        let _ = cb.set_text(text.to_string());
+    }
+}
+
+#[cfg(not(feature = "clipboard"))]
+fn copy_to_clipboard(_text: &str) {}
+
 /// Resuelve los [`View::layout_builder`] del árbol de la app en dos pasadas
 /// (ver [`llimphi_compositor::expand_layout_builders`]). **Coste cero** cuando
 /// ningún nodo usa el builder: devuelve el `view()` sin tocar tras un walk
@@ -259,6 +377,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             last_tap: None,
             pending_long_press: None,
             retained: None,
+            selection: None,
             a11y_adapter,
             a11y_tree_id,
         });
@@ -354,6 +473,22 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             WindowEvent::CursorMoved { position, .. } => {
                 let prev_cursor = state.cursor;
                 state.cursor = position;
+                // Selección de texto en curso: extender el foco al punto actual.
+                if let Some(tsel) = state.selection.filter(|s| s.dragging) {
+                    let info = state
+                        .last_render
+                        .as_ref()
+                        .and_then(|c| selectable_by_key(c, tsel.key));
+                    if let Some((spec, (rx, ry, rw, _rh))) = info {
+                        let layout = build_selectable_layout(&mut state.typesetter, &spec, rw);
+                        let lx = position.x as f32 - rx;
+                        let ly = position.y as f32 - ry;
+                        let new_sel = tsel.sel.extend_to_point(&layout, lx, ly);
+                        state.selection = Some(TextSelection { sel: new_sel, ..tsel });
+                        state.last_render = None;
+                        state.window.request_redraw();
+                    }
+                }
                 // Long-press armado: si el cursor se alejó del origen del press
                 // más que el umbral, el gesto pasó a drag/scroll → cancelar.
                 if let Some(p) = state.pending_long_press.as_ref() {
@@ -523,6 +658,28 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.last_render = None;
                         state.window.request_redraw();
                         return;
+                    }
+                }
+                // Ctrl/Cmd+C copia la selección de texto activa (fuera del
+                // editor). Consume el evento sólo si había algo seleccionado;
+                // si no, cae al `on_key` normal (apps que usan Ctrl+C para lo
+                // suyo lo siguen recibiendo).
+                if event.state == ElementState::Pressed
+                    && (state.modifiers.ctrl || state.modifiers.meta)
+                    && key_is_char(&event.logical_key, 'c')
+                {
+                    if let Some(tsel) = state.selection {
+                        let text = state
+                            .last_render
+                            .as_ref()
+                            .and_then(|c| selectable_by_key(c, tsel.key))
+                            .and_then(|(spec, _)| {
+                                spec.content.get(tsel.sel.text_range()).map(str::to_string)
+                            });
+                        if let Some(t) = text.filter(|t| !t.is_empty()) {
+                            copy_to_clipboard(&t);
+                            return;
+                        }
                     }
                 }
                 let ev = KeyEvent {
@@ -735,6 +892,27 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                         state.model = Some(A::update(model, msg, &self.handle));
                     }
                     state.last_render = None;
+                }
+                // ── Selección de texto fuera del editor (aditiva) ──────────
+                // Si el press cae sobre un nodo `View::selectable`, arranca una
+                // selección (anchor = punto). Un press en cualquier otro lado
+                // limpia la selección activa. Aditivo: un label seleccionable
+                // sin `on_click`/drag no choca con el camino de abajo.
+                let sel_hit = state.last_render.as_ref().and_then(|c| {
+                    selectable_hit_from_cache(c, cursor.x as f32, cursor.y as f32)
+                });
+                if let Some((key, spec, (rx, ry, rw, _rh))) = sel_hit {
+                    let layout = build_selectable_layout(&mut state.typesetter, &spec, rw);
+                    let lx = cursor.x as f32 - rx;
+                    let ly = cursor.y as f32 - ry;
+                    let sel = llimphi_text::parley::Selection::from_point(&layout, lx, ly);
+                    state.selection = Some(TextSelection { key, sel, dragging: true });
+                    state.last_render = None;
+                    state.window.request_redraw();
+                } else if state.selection.is_some() {
+                    state.selection = None;
+                    state.last_render = None;
+                    state.window.request_redraw();
                 }
                 // ── Arena de gestos (aditiva): doble-tap + long-press ──────
                 // Se resuelven con su propio hit-test y NO tocan el camino de
@@ -1050,6 +1228,11 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 // El botón se soltó antes de vencer el long-press → no era un
                 // long-press (fue un click/drag); cancelá el gesto armado.
                 state.pending_long_press = None;
+                // Fin del arrastre de selección: la selección queda viva (para
+                // Ctrl/Cmd+C) pero deja de extenderse con el cursor.
+                if let Some(tsel) = state.selection.as_mut() {
+                    tsel.dragging = false;
+                }
                 if let Some(drag) = state.drag.take() {
                     let cursor = state.cursor;
                     // 1. Drop: si hay payload + drop target bajo cursor,
@@ -1337,6 +1520,30 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
                 state
                     .anim_registry
                     .replay_ghosts(&mut state.scene, now, w as f32, h as f32);
+                // Resaltado de la selección de texto activa (sobre el
+                // contenido, bajo el overlay). Reconstruye el layout del nodo
+                // seleccionado y pinta los rects de `parley::Selection` con un
+                // tinte translúcido (deja leer el texto debajo).
+                if let Some(tsel) = state.selection {
+                    if let Some((spec, (rx, ry, rw, _rh))) =
+                        selectable_node_in(&mounted, &computed, tsel.key)
+                    {
+                        let layout = build_selectable_layout(&mut state.typesetter, &spec, rw);
+                        use vello::kurbo::{Affine, Rect};
+                        use vello::peniko::{Color, Fill};
+                        let hl = Color::from_rgba8(86, 148, 246, 80);
+                        let scene = &mut state.scene;
+                        tsel.sel.geometry_with(&layout, |bb, _line| {
+                            let r = Rect::new(
+                                rx as f64 + bb.x0,
+                                ry as f64 + bb.y0,
+                                rx as f64 + bb.x1,
+                                ry as f64 + bb.y1,
+                            );
+                            scene.fill(Fill::NonZero, Affine::IDENTITY, hl, None, &r);
+                        });
+                    }
+                }
                 // Ripples/InkWell: las salpicaduras vivas se pintan sobre el
                 // contenido (translúcidas, recortadas al nodo) y debajo del
                 // overlay. Si alguna sigue viva, pide otro frame al final.
