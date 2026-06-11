@@ -126,22 +126,24 @@ PNG citado.
 
 Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + pantallazo).
 
-### F4.0 — Cimientos del trait y la metadata  *(refactor base)*
-- `Node` gana `size/mtime/kind/mime_hint` (D3); los 4 adapters los llenan con lo que tengan
-  (POSIX: stat real; wawa: size del objeto; nouser/minga: lo que aplique, resto `None`).
-- Trait `SourceMut` (D2) + `Source::as_mut()->Option<&dyn SourceMut>`.
-- `PosixSource` implementa `SourceMut` (std::fs).
-- **Entrega:** tests de `SourceMut` sobre tmp POSIX (crear/renombrar/borrar/mover/copiar).
-- ~250 LOC. Sin cambio visible aún.
+### F4.0 — Cimientos del trait y la metadata  *(refactor base)*  ✅ HECHA (5f095963)
+- `Node` gana `size/mtime/kind/mime_hint` (D3); adapters los llenan (POSIX: stat real; wawa:
+  size del objeto; nouser: stat de miembros; minga/wawa: kind).
+- Trait `SourceMut` (D2) + `Source::writable()->Option<&dyn SourceMut>` (se nombró `writable()`
+  en vez de `as_mut()` por claridad). `PosixSource` lo implementa (rename cross-fs → copiar+
+  borrar; copy recursivo; `ruta_libre` anti-pisado). wawa/minga read-only (gateo honesto).
+- **Entrega:** +7 tests (22 verde con `--features nouser,minga`).
 
-### F4.1 — Vista detalle con columnas ordenables  *(la cara Dopus)*
-- Extender `widget-table`: headers clicables → `on_sort(col)`, indicador asc/desc. (Si crece >
-  ~150 LOC el feature, va a un `widget-datatable` nuevo que reusa `table`.)
-- `ViewMode { List, Details, Icons }`; `Details` pinta nombre/tamaño/mtime/tipo desde `Node`.
-- Orden por columna en `Navigator` (`sort: SortKey`, estable, dirs-primero opcional).
-- Filter bar (`text-input`) que filtra `children` en vivo por substring/glob.
-- **Entrega:** `pantallazo_detalle.rs` — un dir real en vista detalle, ordenado por tamaño.
-- ~400 LOC.
+### F4.1 — Vista detalle con columnas ordenables  *(la cara Dopus)*  ✅ HECHA (a758aae1)
+- Widget NUEVO `llimphi-widget-detail-table` (el `widget-table` era editable, no servía):
+  grilla read-only, columnas flex/fijas, headers clicables `on_sort(col)` con flecha ▲/▼.
+- `ViewMode{List,Details}` en `Navigator` (Icons queda para F4.8); `Details` pinta nombre/
+  tamaño/mtime/tipo desde la metadata de `Node` (human_size + fecha civil sin deps).
+- Orden por columna en `Navigator` (`SortKey`+`SortDir`, contenedores siempre agrupados arriba,
+  `set_sort` preserva selección por id). Filtro vivo (`set_filter`/`visible()`, up/down saltan
+  lo filtrado). Shell: `v` alterna lista/detalle, `/` filtra, click en header reordena.
+- **Entrega:** `pantallazo_detalle.rs` (raíz del repo, detalle ordenado por Tamaño ▼). +3 tests
+  Navigator (25 verde).
 
 ### F4.2 — Dual-pane + tabs + árbol + breadcrumbs  *(el chasis Dopus)*
 - Model multi-pane (D4); `Tab`/`Tab+Click` cambian foco; `Ctrl+T` nueva tab, `Ctrl+W` cierra.
@@ -160,16 +162,20 @@ Cada fase es un bloque funcional commiteable (`cargo check --workspace` verde + 
 - **Entrega:** `pantallazo_ops.rs` — cola con un copy en curso + un rename inline.
 - ~600 LOC.
 
-### F4.4 — AppBus vivo: "Abrir con…" hacia toda la suite  *(la integración)*
-- Cablear `external_handler_for`: context-menu "Abrir con ▸ <app>" desde
-  `AppRegistry::handlers_for(mime)`; activar = `AppEntry::open(path)` (hoja no-POSIX → tempfile).
-- Doble-clic = default app; "Set como predeterminado" persiste en sled (D6).
-- "Editar" siempre disponible para texto → lanza `nada`; "Abrir en terminal aquí" → `shuma`.
-- Sembrar las **Cards de apps** (sección §5) en `shared/app-bus/assets/apps/*.toml`.
-- Registrar **nahual y sus 13 visores como Cards** (continúa BRAHMAN F2a: visores por broker).
-- **Entrega:** `pantallazo_openwith.rs` — menú "Abrir con" poblado real sobre un .png (tullpu,
-  media, image-viewer) y un .rs (nada, pluma).
-- ~350 LOC + N toml.
+### F4.4 — AppBus vivo: "Abrir con…" hacia toda la suite  *(la integración)*  ✅ HECHA (291541fc)
+- Context-menu "Abrir con <app>" desde `AppRegistry::handlers_for(mime discernido)`; activar =
+  `AppEntry::open(path)` (hoja no-POSIX → tempfile con su nombre). + "Editar en Nada" + "Abrir
+  terminal aquí" (shuma). Las opciones se precomputan al abrir el contextual (no toca disco en
+  render).
+- app-bus: `handles_mime` soporta **prefijos** (`image/` matchea `image/*`); `default_entries()`
+  = catálogo de la suite con sus mimes (en código, funciona sin sembrar config);
+  `AppRegistry::with_defaults()` funde defaults+disco+`.desktop` (handles se unen); `reveal(path)`
+  = Reveal in nahual (recíproco); el shell honra `argv[1]` como cwd.
+- **Entrega:** `pantallazo_openwith.rs` — contextual sobre un `.flac` → Abrir con Media/Takiy
+  (enrutado por `audio/flac`). +2 tests app-bus (15 verde).
+- **Pendiente menor** (no bloqueante): persistir "app predeterminada" en sled (D6) y sembrar las
+  Cards de apps en `assets/apps/*.toml` (hoy los defaults viven en código). Registrar visores como
+  Cards on-disk ya está cubierto por BRAHMAN F2a (`discover_viewer_cards`).
 
 ### F4.5 — Batch rename · labels · favoritos · folder formats  *(power-user)*
 - Batch rename con patrón (`{n}`, `{ext}`, contador, regex Rhai) + preview tabular antes de aplicar.
