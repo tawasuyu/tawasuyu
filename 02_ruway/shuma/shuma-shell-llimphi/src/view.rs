@@ -749,14 +749,17 @@ fn session_tooth_icon(kind: SessionKind, active_data: bool, size: f32, color: Co
 /// Ancho de la columna de historial a la izquierda (px).
 const HISTORY_W: f32 = 220.0;
 
-/// La columna de **historial** a la izquierda: los comandos corridos en la
-/// sesión activa (líneas `Prompt` del shell), el más reciente arriba. Clickear
-/// una línea la recarga en el input del shell (`Msg::RunFromHistory`).
+/// La columna de **historial** del rail derecho: los comandos corridos en la
+/// sesión activa (líneas `Prompt` del shell), el más reciente arriba. Repeticiones
+/// idénticas se **agrupan** en una sola fila con un contador `×N` (abstrae el
+/// ruido de las ráfagas). Click en una fila la **carga** en el input
+/// (`Msg::RunFromHistory`, el usuario confirma con Enter); el botón ▶ la
+/// **re-ejecuta ya** (`Msg::RunFromHistoryNow`).
 fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
 
-    // Comandos de la sesión activa (en orden de ejecución; los invertimos para
-    // mostrar el más nuevo arriba). Cada `Prompt` tiene la forma "$ <cmd>".
+    // Comandos de la sesión activa, en orden de ejecución. Cada `Prompt` tiene
+    // la forma "$ <cmd>".
     let mut comandos: Vec<String> = Vec::new();
     if let Some(s) = model.active() {
         if let ModuleState::Shell(sh) = &s.shell.state {
@@ -768,8 +771,18 @@ fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
                 .collect();
         }
     }
+    // Agrupar: del más nuevo al más viejo, conservar la primera aparición de
+    // cada comando y contar cuántas veces se repitió.
     comandos.reverse();
-    comandos.truncate(60); // sin scroll todavía: el tope cabe en pantalla
+    let mut grupos: Vec<(String, usize)> = Vec::new();
+    for c in comandos {
+        if let Some(g) = grupos.iter_mut().find(|(t, _)| *t == c) {
+            g.1 += 1;
+        } else {
+            grupos.push((c, 1));
+        }
+    }
+    grupos.truncate(60); // sin scroll todavía: el tope cabe en pantalla
 
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
@@ -782,7 +795,7 @@ fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
     .text_aligned("Historial".to_string(), 11.0, theme.fg_muted, Alignment::Start);
 
     let mut children = vec![header];
-    if comandos.is_empty() {
+    if grupos.is_empty() {
         children.push(
             View::new(Style {
                 size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
@@ -793,20 +806,8 @@ fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
             .text_aligned("(sin comandos aún)".to_string(), 11.0, theme.fg_muted, Alignment::Start),
         );
     } else {
-        for cmd in comandos {
-            let label = cmd.clone();
-            children.push(
-                View::new(Style {
-                    size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-                    padding: Rect { left: length(12.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
-                    align_items: Some(llimphi_ui::llimphi_layout::taffy::AlignItems::Center),
-                    flex_shrink: 0.0,
-                    ..Default::default()
-                })
-                .hover_fill(theme.bg_row_hover)
-                .text_aligned(label, 12.0, theme.fg_text, Alignment::Start)
-                .on_click(Msg::RunFromHistory(cmd)),
-            );
+        for (cmd, count) in grupos {
+            children.push(history_row(&cmd, count, theme));
         }
     }
 
@@ -818,6 +819,67 @@ fn history_column(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel_alt)
     .children(children)
+}
+
+/// Una fila del historial: `[ comando…  ×N  ▶ ]`. El cuerpo (comando + contador)
+/// carga la línea en el input; el botón ▶ la re-ejecuta al instante.
+fn history_row(cmd: &str, count: usize, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+
+    // Cuerpo clickeable: el comando (flex-grow) + el contador ×N si se repitió.
+    let mut cuerpo_hijos: Vec<View<Msg>> = vec![View::new(Style {
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(cmd.to_string(), 12.0, theme.fg_text, Alignment::Start)];
+    if count > 1 {
+        cuerpo_hijos.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                margin: Rect { left: length(6.0_f32), right: length(0.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+                ..Default::default()
+            })
+            .text_aligned(format!("×{count}"), 10.0, theme.fg_muted, Alignment::End),
+        );
+    }
+    let cuerpo = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(cuerpo_hijos)
+    .on_click(Msg::RunFromHistory(cmd.to_string()));
+
+    // Botón ▶ — re-ejecuta YA. Click propio (gana sobre el del cuerpo por estar
+    // en un nodo hermano, no contenedor).
+    let run = View::new(Style {
+        size: Size { width: length(22.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_button_hover)
+    .text_aligned("▶".to_string(), 10.0, theme.accent, Alignment::Center)
+    .on_click(Msg::RunFromHistoryNow(cmd.to_string()));
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        padding: Rect { left: length(12.0_f32), right: length(4.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .children(vec![cuerpo, run])
 }
 
 /// Dibuja el icono **vectorial** de un diente (no texto: la fuente no trae los

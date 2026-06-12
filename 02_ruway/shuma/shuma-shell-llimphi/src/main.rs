@@ -1803,8 +1803,11 @@ enum Msg {
     SetSessionWidth(f32),
     SetToolWidth(f32),
     /// Click en una línea del historial: carga ese comando en el input del
-    /// shell de la sesión activa.
+    /// shell de la sesión activa (el usuario confirma con Enter).
     RunFromHistory(String),
+    /// Botón ▶ de una fila del historial: re-ejecuta ese comando YA en el
+    /// shell de la sesión activa (sin esperar Enter).
+    RunFromHistoryNow(String),
     /// Msg de un módulo. El chasis lo enruta a `update` según `slot`.
     Module(Slot, ModuleMsg),
     /// Click en un botón de acción (matilda: discover/dry-run/apply/reload).
@@ -2088,6 +2091,14 @@ impl App for Shell {
                     m,
                     slot,
                     ModuleMsg::Shell(shuma_module_shell::Msg::InsertAtCursor(cmd)),
+                );
+            }
+            Msg::RunFromHistoryNow(cmd) => {
+                let slot = Slot::Session(m.active_session, Which::Shell);
+                m = apply_module_msg(
+                    m,
+                    slot,
+                    ModuleMsg::Shell(shuma_module_shell::Msg::RunLine(cmd)),
                 );
             }
             Msg::ToggleDropdown(kind) => {
