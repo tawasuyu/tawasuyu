@@ -2840,7 +2840,11 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         if let Some(status) = spill_status_view::<HostMsg>(state, theme) {
             kids.push(status);
         }
-        kids.push(surface);
+        // Cursor I-beam sobre el cuerpo: señala que el texto es seleccionable
+        // (drag selecciona, doble-click la palabra, click derecho el menú). Las
+        // decoraciones clickeables (paths/URLs) que traen su propio cursor ganan
+        // por hit-test innermost-wins.
+        kids.push(surface.cursor(llimphi_ui::Cursor::Text));
         // El menú contextual va como overlay arriba de todo.
         if let Some(menu) = surf_context_menu(state, theme, lift) {
             kids.push(menu);
