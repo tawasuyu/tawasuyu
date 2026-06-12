@@ -119,6 +119,16 @@ pub fn generar_thumb_de_bytes(bytes: &[u8], lado_max: u32) -> Result<ThumbRgba, 
     Ok(reducir(img, lado_max))
 }
 
+/// Reduce un buffer **RGBA crudo** (p. ej. un frame de video ya decodificado
+/// por `media-source-*`) a una miniatura de `lado_max` px. Es el camino de
+/// entrada para thumbs de video: el frontend decodifica el primer frame con
+/// el demuxer nativo y lo baja acá. **Función pura.**
+pub fn reducir_rgba(rgba: Vec<u8>, w: u32, h: u32, lado_max: u32) -> Result<ThumbRgba, ThumbError> {
+    let img = image::RgbaImage::from_raw(w, h, rgba)
+        .ok_or_else(|| ThumbError::Decode("buffer RGBA con dimensiones inconsistentes".into()))?;
+    Ok(reducir(image::DynamicImage::ImageRgba8(img), lado_max))
+}
+
 /// Reduce una imagen decodificada a un cuadro de `lado_max` px preservando
 /// aspecto. **Sólo reduce**: `thumbnail` también agranda, pero upscalear
 /// una miniatura desperdicia RAM y se ve borrosa — si ya entra, se deja.

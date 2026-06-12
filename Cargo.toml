@@ -627,7 +627,8 @@ petgraph = "0.6"
 # default-features = false: nos quedamos con PNG + JPEG + WebP (lossless).
 # tullpu-render exporta a las tres; AVIF/TIFF/… los habilitamos si una app
 # los pide específicamente.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+# Decoders puro-Rust baratos; avif queda fuera (arrastra dav1d/rav1e).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "ico", "tiff", "tga", "qoi"] }
 
 # === FUSE (minga-vfs) ===
 # default-features = false: prescinde de pkg-config/libfuse-dev en build.

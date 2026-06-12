@@ -174,6 +174,21 @@ impl VideoViewerState {
         }
     }
 
+    /// Viewer en estado de error explícito — para formatos que el shell
+    /// reconoce (p. ej. MP4/H.264 vía discernimiento) pero ningún decoder
+    /// nativo cubre todavía. El header muestra `msg` en vez de un error de
+    /// parseo críptico.
+    pub fn unsupported(path: &Path, msg: impl Into<String>) -> Self {
+        Self {
+            name: path
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default(),
+            error: Some(msg.into()),
+            ..Default::default()
+        }
+    }
+
     /// Construye el viewer sobre una fuente arbitraria (p.ej. un puente
     /// `foreign-av`). El viewer no decodifica: sólo tickea y pinta.
     pub fn from_source(

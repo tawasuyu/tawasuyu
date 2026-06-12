@@ -386,9 +386,11 @@ const SWATCHES: [[u8; 4]; 8] = [
     [230, 210, 70, 255],
 ];
 
-/// Vista del módulo: toolbar (herramientas · ops · undo/redo · guardar) +
-/// lienzo (pinta el composite con zoom/pan; el input depende de la
-/// herramienta) + panel de capas.
+/// Vista del módulo **autocontenida**: toolbar (herramientas · ops ·
+/// undo/redo · guardar) + lienzo (pinta el composite con zoom/pan; el input
+/// depende de la herramienta) + panel de capas a la derecha. Para hosts que
+/// prefieren poner los tools en su propio chrome (p. ej. el diente derecho
+/// de nahual), componer [`lienzo_view`] + [`tools_panel`] por separado.
 pub fn view<H: Clone + Send + Sync + 'static>(
     st: &State,
     theme: &Theme,
@@ -396,7 +398,14 @@ pub fn view<H: Clone + Send + Sync + 'static>(
 ) -> View<H> {
     let barra = barra(st, theme, lift.clone());
     let lienzo = lienzo_view(st, theme, lift.clone());
-    let capas = capas_view(st, theme, lift);
+    // El panel de capas es fluido (ancho 100%); acá lo encajonamos al ancho
+    // clásico del sidebar del módulo.
+    let capas = View::new(Style {
+        size: Size { width: length(CAPAS_W), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![capas_view(st, theme, lift)]);
     let cuerpo = View::new(Style {
         flex_direction: FlexDirection::Row,
         flex_grow: 1.0,
@@ -413,11 +422,44 @@ pub fn view<H: Clone + Send + Sync + 'static>(
     .children(vec![barra, cuerpo])
 }
 
+/// Panel de **herramientas para hospedar en un diente** del host (p. ej. el
+/// rail derecho de nahual): los grupos de la toolbar apilados en vertical
+/// (en un sidebar angosto una sola fila no entra) + capas/color/estado a
+/// ancho completo debajo.
+pub fn tools_panel<H: Clone + Send + Sync + 'static>(
+    st: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> H + Clone + Send + Sync + 'static,
+) -> View<H> {
+    let pal = ToolbarPalette::from_theme(theme);
+    let mut col: Vec<View<H>> = grupos(st, &lift)
+        .into_iter()
+        .map(|g| toolbar_view(vec![g], 34.0, &pal))
+        .collect();
+    col.push(capas_view(st, theme, lift));
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(col)
+}
+
 fn barra<H: Clone + Send + Sync + 'static>(
     st: &State,
     theme: &Theme,
     lift: impl Fn(Msg) -> H + Clone + Send + Sync + 'static,
 ) -> View<H> {
+    toolbar_view(grupos(st, &lift), 34.0, &ToolbarPalette::from_theme(theme))
+}
+
+/// Los grupos de la toolbar del módulo — compartidos entre la barra
+/// horizontal ([`barra`]) y el panel vertical ([`tools_panel`]).
+fn grupos<H: Clone + Send + Sync + 'static>(
+    st: &State,
+    lift: &(impl Fn(Msg) -> H + Clone + Send + Sync + 'static),
+) -> Vec<ToolbarGroup<H>> {
     let herr = |ic: Icon, h: Herramienta, label: &str| {
         ToolbarItem::new(move |_s, c| icon_view(ic, c, 1.7), lift(Msg::Herr(h)))
             .with_label(label)
@@ -438,8 +480,7 @@ fn barra<H: Clone + Send + Sync + 'static>(
     } else {
         ""
     };
-    toolbar_view(
-        vec![
+    vec![
             ToolbarGroup::new(vec![
                 herr(Icon::More, Herramienta::Mover, "mover"),
                 herr(Icon::Edit, Herramienta::Pincel, "pincel"),
@@ -473,13 +514,12 @@ fn barra<H: Clone + Send + Sync + 'static>(
             )
             .with_label(format!("{nombre} {estado_guardar}"))
             .enabled(st.dirty || !st.guardado)]),
-        ],
-        34.0,
-        &ToolbarPalette::from_theme(theme),
-    )
+        ]
 }
 
-fn lienzo_view<H: Clone + Send + Sync + 'static>(
+/// El lienzo del editor (composite con zoom/pan + input según herramienta),
+/// **sin** toolbar ni capas — para hosts que ponen los tools en su chrome.
+pub fn lienzo_view<H: Clone + Send + Sync + 'static>(
     st: &State,
     theme: &Theme,
     lift: impl Fn(Msg) -> H + Clone + Send + Sync + 'static,
@@ -672,8 +712,11 @@ fn capas_view<H: Clone + Send + Sync + 'static>(
     );
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(CAPAS_W), height: percent(1.0_f32) },
-        flex_shrink: 0.0,
+        // Fluido: llena a su contenedor (el `view` standalone lo encajona a
+        // CAPAS_W; `tools_panel` lo deja a ancho completo del diente).
+        flex_grow: 1.0,
+        min_size: Size { width: length(0.0), height: length(0.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)

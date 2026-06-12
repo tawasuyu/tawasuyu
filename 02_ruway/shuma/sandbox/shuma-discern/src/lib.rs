@@ -144,6 +144,17 @@ impl Discerner for MagicBytes {
             }
             // IVF — contenedor crudo de un stream AV1/VP9 ("DKIF").
             x if x.starts_with(b"DKIF") => Some(d("ivf", "video/x-ivf", Some("video"))),
+            // ISO-BMFF — "ftyp" en offset 4 (MP4/M4A/MOV). El brand (off
+            // 8..12) separa el audio puro (M4A/M4B) del video; lo demás se
+            // trata como video/mp4. Sin esto un .mp4 caía al text viewer
+            // como "binario" en vez de llegar al reproductor.
+            x if x.len() >= 12 && &x[4..8] == b"ftyp" => {
+                match &x[8..12] {
+                    b"M4A " | b"M4B " => Some(d("m4a", "audio/mp4", Some("audio"))),
+                    b"qt  " => Some(d("mov", "video/quicktime", Some("video"))),
+                    _ => Some(d("mp4", "video/mp4", Some("video"))),
+                }
+            }
             // Fuentes parseables por ttf-parser: TrueType (0x00010000 o
             // "true"), OpenType/CFF ("OTTO") y colecciones ("ttcf"). WOFF
             // queda fuera (es un wrapper comprimido que ttf-parser no abre).
@@ -486,6 +497,21 @@ mod tests {
         let r = discern(b"DKIF\x00\x00\x20\x00AV01").unwrap();
         assert_eq!(r.mime.as_deref(), Some("video/x-ivf"));
         assert_eq!(r.lens.as_deref(), Some("video"));
+    }
+
+    #[test]
+    fn mp4_ftyp_detectado_como_video() {
+        // Caja ftyp ISO-BMFF típica: tamaño + "ftyp" + brand "isom".
+        let r = discern(b"\x00\x00\x00\x20ftypisom\x00\x00\x02\x00").unwrap();
+        assert_eq!(r.mime.as_deref(), Some("video/mp4"));
+        assert_eq!(r.lens.as_deref(), Some("video"));
+    }
+
+    #[test]
+    fn m4a_ftyp_detectado_como_audio() {
+        let r = discern(b"\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00").unwrap();
+        assert_eq!(r.mime.as_deref(), Some("audio/mp4"));
+        assert_eq!(r.lens.as_deref(), Some("audio"));
     }
 
     #[test]

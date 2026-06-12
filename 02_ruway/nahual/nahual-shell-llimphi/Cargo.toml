@@ -49,6 +49,10 @@ nahual-text-viewer-llimphi = { workspace = true }
 # Vista iconos (Fase 4.8): grilla virtualizada + generación de miniaturas.
 llimphi-widget-grid = { workspace = true }
 nahual-thumb-core = { workspace = true }
+# Thumbs de video: primer frame vía los demuxers/decoders nativos.
+media-core = { path = "../../media/media-core" }
+media-source-av1 = { path = "../../media/media-source-av1" }
+media-source-webm = { path = "../../media/media-source-webm" }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 card-core = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }

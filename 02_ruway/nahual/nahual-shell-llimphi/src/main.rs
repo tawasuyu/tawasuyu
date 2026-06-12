@@ -343,6 +343,17 @@ impl llimphi_widget_text_editor::Clipboard for ShellClipboard {
     }
 }
 
+/// Qué hace la **rueda** con una app abierta en el canvas (modo alternable
+/// desde el toolbox): `Zoom` = la rueda es de la app (zoom del lienzo de
+/// imagen, scroll del editor); `Lista` = pasa al archivo siguiente/anterior
+/// de la carpeta (como un visor de fotos). Los botones atrás/adelante de la
+/// navegación también pasan de archivo mientras hay canvas abierto.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WheelMode {
+    Zoom,
+    Lista,
+}
+
 /// Estado *movible* de una sesión de trabajo (diente del rail): todo lo que
 /// cambia al saltar de una sesión a otra. La sesión activa **no** guarda su
 /// snap aquí — sus campos viven directamente en `Model` (los `panes`,
@@ -368,6 +379,8 @@ struct SessionSnap {
     tree_scroll: usize,
     /// `true` = el sidebar derecho de preview está abierto.
     viewer_open: bool,
+    /// `true` = el diente derecho de tools (tullpu) está abierto.
+    tools_open: bool,
     /// App integrada abierta en el canvas (editor/imagen/media), si hay.
     canvas: Option<CanvasApp>,
 }
@@ -402,6 +415,19 @@ struct Model {
     /// `true` = el sidebar derecho de preview está abierto (lo togglea su
     /// diente; Esc/⌫ también lo cierra). Por sesión (va al snap).
     viewer_open: bool,
+    /// `true` = el diente derecho de **tools** del editor de imágenes está
+    /// abierto (sólo aplica con `CanvasApp::Imagen`). Excluyente con
+    /// `viewer_open`: comparten el panel derecho. Por sesión (va al snap).
+    tools_open: bool,
+    /// Ancho del panel de tools del diente derecho, px. Lo muta su splitter.
+    tools_w: f32,
+    /// Modo de la rueda con una app de canvas abierta (toolbox). Global.
+    wheel_mode: WheelMode,
+    /// Tamaño real de la ventana en px (lo actualiza `on_resize`) — de acá
+    /// salen las columnas de la grilla, el ventaneo del árbol y el clamp de
+    /// los overlays. Antes era `initial_size()` constante y la grilla
+    /// quedaba clavada en las columnas del tamaño inicial.
+    win: (f32, f32),
     /// App integrada abierta en el canvas (editor/imagen/media), si hay.
     /// Por sesión (va al snap). Esc/⌫ la cierra.
     canvas: Option<CanvasApp>,
@@ -678,6 +704,17 @@ enum Msg {
     // ---- Canvas apps + panel de preview ----
     /// Diente derecho: abre/cierra el sidebar de preview.
     TogglePreviewPanel,
+    /// Diente derecho: abre/cierra el panel de tools del editor de imágenes.
+    ToggleToolsPanel,
+    /// Drag del splitter del panel de tools: ajusta su ancho.
+    ResizeTools(f32),
+    /// Fija el modo de la rueda con canvas abierto (toolbox: zoom/lista).
+    SetWheelMode(WheelMode),
+    /// Pasa al archivo siguiente (+1) / anterior (−1) de la carpeta con una
+    /// app de canvas abierta (rueda en modo lista, botones atrás/adelante).
+    CanvasNav(i32),
+    /// La ventana cambió de tamaño (px) — `App::on_resize`.
+    Resized(f32, f32),
     /// Cierra la app integrada del canvas (editor/imagen/media).
     CanvasClose,
     /// Tecla rumbo al editor de texto del canvas.
@@ -755,6 +792,7 @@ impl Model {
             tree_expanded: std::mem::take(&mut self.tree_expanded),
             tree_scroll: self.tree_scroll,
             viewer_open: self.viewer_open,
+            tools_open: self.tools_open,
             canvas: self.canvas.take(),
         }
     }
@@ -777,6 +815,7 @@ impl Model {
         self.tree_expanded = snap.tree_expanded;
         self.tree_scroll = snap.tree_scroll;
         self.viewer_open = snap.viewer_open;
+        self.tools_open = snap.tools_open;
         self.canvas = snap.canvas;
         // Asegurá el cache de subcarpetas de lo que esta sesión tiene abierto.
         ensure_children_for_expanded(&mut self.tree_children, &self.tree_expanded);
@@ -843,6 +882,7 @@ fn fresh_snap(cwd: &Path) -> SessionSnap {
         tree_expanded: ancestors_set(cwd),
         tree_scroll: 0,
         viewer_open: false,
+        tools_open: false,
         canvas: None,
     }
 }
@@ -919,6 +959,13 @@ impl App for Shell {
             tree_w: 230.0,
             preview_w: 420.0,
             viewer_open: false,
+            tools_open: false,
+            tools_w: 280.0,
+            wheel_mode: WheelMode::Zoom,
+            win: {
+                let (w, h) = Self::initial_size();
+                (w as f32, h as f32)
+            },
             canvas: None,
             clipboard: ShellClipboard::new(),
             last_click: None,
@@ -968,6 +1015,10 @@ impl App for Shell {
             thumbs_pending: HashSet::new(),
             thumbs_failed: HashSet::new(),
         }
+    }
+
+    fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {
+        Some(Msg::Resized(width as f32, height as f32))
     }
 
     fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
@@ -1160,6 +1211,18 @@ impl App for Shell {
         if cursor.0 < model.tree_w {
             return Some(Msg::TreeScroll(delta.y));
         }
+        // Con una app de canvas abierta y el toolbox en modo **lista**, la
+        // rueda pasa al archivo siguiente/anterior de la carpeta (visor de
+        // fotos). En modo zoom la rueda sigue siendo de la app (más abajo).
+        if model.canvas.is_some() && model.wheel_mode == WheelMode::Lista {
+            if delta.y > 0.3 {
+                return Some(Msg::CanvasNav(1));
+            }
+            if delta.y < -0.3 {
+                return Some(Msg::CanvasNav(-1));
+            }
+            return None;
+        }
         // Si la rueda cae sobre el panel del mapa, hace zoom de la cámara en
         // vez de scrollear la lista (gateo por el rect que el canvas registra).
         if matches!(model.preview, PreviewPane::Map(_)) && model.map_view.contains(cursor.0, cursor.1)
@@ -1232,6 +1295,7 @@ impl App for Shell {
                 // el panel de preview, recién entonces sube de directorio.
                 if m.canvas.is_some() {
                     m.canvas = None;
+                    m.tools_open = false;
                     return m;
                 }
                 if m.viewer_open {
@@ -1348,18 +1412,55 @@ impl App for Shell {
                     refresh_preview(&mut m);
                 }
             }
-            Msg::NavBack => nav_history_go(&mut m, &handle, -1),
-            Msg::NavForward => nav_history_go(&mut m, &handle, 1),
+            // Atrás/adelante: con una app de canvas abierta pasan de archivo
+            // (anterior/siguiente de la carpeta); si no, historial browser.
+            Msg::NavBack => {
+                if m.canvas.is_some() {
+                    canvas_step(&mut m, -1);
+                } else {
+                    nav_history_go(&mut m, &handle, -1);
+                }
+            }
+            Msg::NavForward => {
+                if m.canvas.is_some() {
+                    canvas_step(&mut m, 1);
+                } else {
+                    nav_history_go(&mut m, &handle, 1);
+                }
+            }
+            Msg::CanvasNav(delta) => canvas_step(&mut m, delta),
+            Msg::SetWheelMode(mode) => {
+                m.wheel_mode = mode;
+            }
+            Msg::Resized(w, h) => {
+                m.win = (w.max(320.0), h.max(240.0));
+            }
             Msg::TogglePreviewPanel => {
                 if m.viewer_open {
                     m.viewer_open = false;
                 } else {
                     m.viewer_open = true;
+                    // Comparten el panel derecho: abrir uno cierra el otro.
+                    m.tools_open = false;
                     refresh_preview(&mut m);
                 }
             }
+            Msg::ToggleToolsPanel => {
+                if m.tools_open {
+                    m.tools_open = false;
+                } else {
+                    m.tools_open = true;
+                    m.viewer_open = false;
+                }
+            }
+            Msg::ResizeTools(dx) => {
+                // El divisor está a la izquierda del panel: mover a la
+                // derecha lo achica (mismo signo que ResizePreview).
+                m.tools_w = (m.tools_w - dx).clamp(220.0, 480.0);
+            }
             Msg::CanvasClose => {
                 m.canvas = None;
+                m.tools_open = false;
             }
             Msg::CanvasSave => {
                 if let Some(CanvasApp::Texto { path, editor, dirty, saved }) = &mut m.canvas {
@@ -2058,22 +2159,6 @@ impl App for Shell {
             Some(canvas) => canvas_app_view(canvas, model, &theme),
             None => folder_view,
         };
-        let canvas_core = if model.viewer_open {
-            splitter_two(
-                Direction::Row,
-                centro,
-                PaneSize::Flex,
-                viewer_pane,
-                PaneSize::Fixed(model.preview_w),
-                |phase, dx| match phase {
-                    DragPhase::Move => Some(Msg::ResizePreview(dx)),
-                    DragPhase::End => None,
-                },
-                &splitter_palette,
-            )
-        } else {
-            centro
-        };
         // Canal interno: el contenido arranca después del ancho del rail para
         // que los dientes (overlay) no tapen las primeras columnas.
         let canvas_padded = View::new(Style {
@@ -2087,10 +2172,13 @@ impl App for Shell {
             },
             ..Default::default()
         })
-        .children(vec![canvas_core]);
-        // Dientes de sesión: overlay absoluto pegado al borde interno del
-        // canvas, sobresaliendo del sidebar (patrón canónico de cosmos).
-        let canvas_area = View::new(Style {
+        .children(vec![centro]);
+        // Dientes en los DOS bordes internos del área central (patrón
+        // canónico de cosmos: el rail flota sobre el canvas, el panel del
+        // item activo va como pane al costado). El rail derecho vive acá —
+        // dentro, pegado al borde interno del panel derecho — no en el borde
+        // de la ventana.
+        let center_host = View::new(Style {
             flex_grow: 1.0,
             min_size: Size { width: length(0.0), height: length(0.0) },
             size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
@@ -2099,8 +2187,45 @@ impl App for Shell {
         .children(vec![
             canvas_padded,
             session_teeth_overlay(model, &theme),
-            preview_tooth_overlay(model, &theme),
+            right_teeth_overlay(model, &theme),
         ]);
+        // Panel derecho: tools del editor de imágenes (diente tools) o el
+        // visor de preview (diente lupa) — comparten el costado.
+        let tools_pane: Option<View<Msg>> = match (&model.canvas, model.tools_open) {
+            (Some(CanvasApp::Imagen(st)), true) => {
+                Some(tullpu::tools_panel(st, &theme, Msg::CanvasTullpu))
+            }
+            _ => None,
+        };
+        let canvas_area = if let Some(tools) = tools_pane {
+            splitter_two(
+                Direction::Row,
+                center_host,
+                PaneSize::Flex,
+                tools,
+                PaneSize::Fixed(model.tools_w),
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::ResizeTools(dx)),
+                    DragPhase::End => None,
+                },
+                &splitter_palette,
+            )
+        } else if model.viewer_open {
+            splitter_two(
+                Direction::Row,
+                center_host,
+                PaneSize::Flex,
+                viewer_pane,
+                PaneSize::Fixed(model.preview_w),
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::ResizePreview(dx)),
+                    DragPhase::End => None,
+                },
+                &splitter_palette,
+            )
+        } else {
+            center_host
+        };
 
         // Sidebar único (árbol de carpetas) | canvas, con splitter.
         let body = splitter_two(
@@ -2169,11 +2294,10 @@ impl App for Shell {
     }
 }
 
-/// Viewport para clampear overlays. El shell no trackea el tamaño de
-/// ventana, así que usamos `initial_size()` (constante).
-fn viewport_of(_model: &Model) -> (f32, f32) {
-    let (w, h) = Shell::initial_size();
-    (w as f32, h as f32)
+/// Viewport real de la ventana (lo mantiene `Msg::Resized`). De acá salen
+/// las columnas de la grilla, el ventaneo del árbol y el clamp de overlays.
+fn viewport_of(model: &Model) -> (f32, f32) {
+    model.win
 }
 
 /// ¿Hay una entrada seleccionada sobre la que tenga sentido el menú
@@ -2964,27 +3088,41 @@ fn canvas_app_view(canvas: &CanvasApp, model: &Model, theme: &Theme) -> View<Msg
             })
             .children(vec![header, cuerpo_wrap])
         }
-        CanvasApp::Imagen(st) => tullpu::view(st, theme, Msg::CanvasTullpu),
+        // Sólo el lienzo: los tools viven en el diente derecho del shell
+        // (`right_teeth_overlay` + `tullpu::tools_panel`).
+        CanvasApp::Imagen(st) => tullpu::lienzo_view(st, theme, Msg::CanvasTullpu),
         CanvasApp::Media(st) => mediamod::view(st, theme, Msg::CanvasMedia),
     }
 }
 
-/// Diente del **panel derecho de preview**: overlay absoluto pegado al borde
-/// interno derecho (espejo del rail de sesiones). Click abre/cierra el panel.
-fn preview_tooth_overlay(model: &Model, theme: &Theme) -> View<Msg> {
-    let items = [DockRailItem { id: 0, active: model.viewer_open }];
+/// Rail de dientes del **borde interno derecho** del área central (espejo
+/// del rail de sesiones; el panel del diente activo va como pane al costado,
+/// patrón canónico de cosmos). Dientes: 🔍 preview (siempre) y ✎ tools del
+/// editor de imágenes (sólo con `CanvasApp::Imagen` abierta).
+fn right_teeth_overlay(model: &Model, theme: &Theme) -> View<Msg> {
+    let mut items = vec![DockRailItem { id: 0, active: model.viewer_open }];
+    if matches!(model.canvas, Some(CanvasApp::Imagen(_))) {
+        items.push(DockRailItem { id: 1, active: model.tools_open });
+    }
     let rail = dock_rail_view(
         &items,
         SESSION_RAIL_W,
         &DockRailPalette::from_theme(theme),
-        |_id, size, color| {
+        |id, size, color| {
+            let ic = if id == 1 { Icon::Edit } else { Icon::Search };
             View::new(Style {
                 size: Size { width: length(size), height: length(size) },
                 ..Default::default()
             })
-            .children(vec![icon_view(Icon::Search, color, 1.7)])
+            .children(vec![icon_view(ic, color, 1.7)])
         },
-        |_id| Msg::TogglePreviewPanel,
+        |id| {
+            if id == 1 {
+                Msg::ToggleToolsPanel
+            } else {
+                Msg::TogglePreviewPanel
+            }
+        },
         |_payload| -> Option<Msg> { None },
     );
     View::new(Style {
@@ -3303,15 +3441,62 @@ const MAX_ICON_TILES: usize = 160;
 /// gastar un worker en decodificar (los no-imagen muestran su glifo de tipo).
 fn es_imagen(path: &Path) -> bool {
     matches!(
-        path.extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.to_ascii_lowercase())
-            .as_deref(),
+        ext_lower(path).as_deref(),
         Some(
             "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "tiff" | "tif" | "ico" | "avif"
                 | "qoi" | "tga"
         )
     )
+}
+
+/// Extensión en minúsculas, si hay.
+fn ext_lower(path: &Path) -> Option<String> {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+}
+
+/// ¿Video del que los demuxers nativos pueden sacar un primer frame para la
+/// miniatura? (WebM/MKV con track AV1, IVF crudo.)
+fn es_video_thumbable(path: &Path) -> bool {
+    matches!(ext_lower(path).as_deref(), Some("webm" | "mkv" | "ivf"))
+}
+
+/// ¿Parece video (para el glifo de la grilla), aunque no haya decoder?
+fn es_video(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("webm" | "mkv" | "ivf" | "mp4" | "m4v" | "mov" | "avi")
+    )
+}
+
+/// ¿Parece audio (para el glifo de la grilla)?
+fn es_audio(path: &Path) -> bool {
+    matches!(
+        ext_lower(path).as_deref(),
+        Some("wav" | "mp3" | "flac" | "opus" | "ogg" | "oga" | "m4a")
+    )
+}
+
+/// Decodifica el **primer frame** de un video con los demuxers nativos
+/// (`media-source-webm`/`-av1`) y lo reduce a miniatura. Corre en un worker
+/// de `Handle::spawn`. `None` si el contenedor no abre, no hay track AV1, o
+/// no aparece un frame en el primer segundo de reloj.
+fn generar_thumb_de_video(path: &Path, lado: u32) -> Option<ThumbRgba> {
+    use media_core::FrameSource;
+    let mut src: Box<dyn FrameSource + Send> = match ext_lower(path).as_deref() {
+        Some("webm" | "mkv") => Box::new(media_source_webm::WebmMedia::open(path).ok()?.video?),
+        Some("ivf") => Box::new(media_source_av1::Av1VideoSource::open(path).ok()?),
+        _ => return None,
+    };
+    let mut rgba = Vec::new();
+    // ~1 s de reloj en pasos de frame: el primer keyframe decodificado sale.
+    for _ in 0..30 {
+        if let Some((w, h)) = src.tick(Duration::from_millis(33), &mut rgba) {
+            return nahual_thumb_core::reducir_rgba(rgba, w, h, lado).ok();
+        }
+    }
+    None
 }
 
 /// Pide (async) las miniaturas de las imágenes visibles del panel enfocado en
@@ -3332,7 +3517,7 @@ fn request_thumbs(m: &mut Model, handle: &Handle<Msg>) {
             .filter(|(_, n)| !n.is_container)
             .map(|(_, n)| PathBuf::from(&n.id))
             .filter(|p| {
-                es_imagen(p)
+                (es_imagen(p) || es_video_thumbable(p))
                     && !m.thumbs.contains_key(p)
                     && !m.thumbs_pending.contains(p)
                     && !m.thumbs_failed.contains(p)
@@ -3341,9 +3526,17 @@ fn request_thumbs(m: &mut Model, handle: &Handle<Msg>) {
     };
     for path in pedir {
         m.thumbs_pending.insert(path.clone());
-        handle.spawn(move || match generar_thumb_de_archivo(&path, THUMB_LADO) {
-            Ok(t) => Msg::ThumbReady(path, t),
-            Err(_) => Msg::ThumbFailed(path),
+        handle.spawn(move || {
+            // Video → primer frame con el demuxer nativo; imagen → decode.
+            let thumb = if es_video_thumbable(&path) {
+                generar_thumb_de_video(&path, THUMB_LADO)
+            } else {
+                generar_thumb_de_archivo(&path, THUMB_LADO).ok()
+            };
+            match thumb {
+                Some(t) => Msg::ThumbReady(path, t),
+                None => Msg::ThumbFailed(path),
+            }
         });
     }
 }
@@ -3583,11 +3776,15 @@ fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         ToolbarItem::new(move |_s, c| icon_view(ic, c, 1.7), Msg::SetViewMode(modo)).active(activo)
     };
     let pane = model.cur_pane();
-    let puede_atras = pane.hist_pos > 0;
-    let puede_adelante = pane.hist_pos + 1 < pane.hist.len();
+    // Con una app de canvas abierta, atrás/adelante pasan de archivo
+    // (anterior/siguiente de la carpeta) — integrados al modo lista.
+    let en_canvas = model.canvas.is_some();
+    let puede_atras = en_canvas || pane.hist_pos > 0;
+    let puede_adelante = en_canvas || pane.hist_pos + 1 < pane.hist.len();
     toolbar_view(
         vec![
-            // Navegación: atrás / adelante (historial browser) / subir.
+            // Navegación: atrás / adelante (historial browser; con canvas
+            // abierto, archivo anterior/siguiente) / subir.
             ToolbarGroup::new(vec![
                 ToolbarItem::new(|_s, c| icon_view(Icon::ChevronLeft, c, 1.7), Msg::NavBack)
                     .enabled(puede_atras),
@@ -3595,6 +3792,22 @@ fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
                     .enabled(puede_adelante),
                 ToolbarItem::new(|_s, c| icon_view(Icon::ChevronUp, c, 1.7), Msg::Parent)
                     .with_label("subir"),
+            ]),
+            // Modo de la rueda con un archivo abierto en el canvas:
+            // zoom (la app la usa) o lista (pasa al siguiente/anterior).
+            ToolbarGroup::new(vec![
+                ToolbarItem::new(
+                    |_s, c| icon_view(Icon::Search, c, 1.7),
+                    Msg::SetWheelMode(WheelMode::Zoom),
+                )
+                .with_label("zoom")
+                .active(model.wheel_mode == WheelMode::Zoom),
+                ToolbarItem::new(
+                    |_s, c| icon_view(Icon::SkipForward, c, 1.7),
+                    Msg::SetWheelMode(WheelMode::Lista),
+                )
+                .with_label("lista")
+                .active(model.wheel_mode == WheelMode::Lista),
             ]),
             // Modos de vista (v cicla; acá acceso directo).
             ToolbarGroup::new(vec![
@@ -3692,11 +3905,28 @@ fn icon_tile_content(model: &Model, node: &Node, theme: &Theme, lado: f32) -> Vi
     if let Some(img) = model.thumbs.get(&path) {
         return View::new(base()).image(img.clone());
     }
+    // Falló la miniatura: para media el glifo de su naturaleza es más útil
+    // que un ⚠ (un webm sin track AV1 sigue siendo un video).
     if model.thumbs_failed.contains(&path) {
-        return centered(Icon::Warning, theme.fg_muted);
+        let icon = if es_video(&path) {
+            Icon::Film
+        } else if es_audio(&path) {
+            Icon::Music
+        } else {
+            Icon::Warning
+        };
+        return centered(icon, theme.fg_muted);
     }
-    // Imagen aún decodificando → ícono de imagen; archivo común → ícono file.
-    let icon = if es_imagen(&path) { Icon::Image } else { Icon::File };
+    // Aún decodificando (o sin thumb posible) → glifo por naturaleza.
+    let icon = if es_imagen(&path) {
+        Icon::Image
+    } else if es_video(&path) {
+        Icon::Film
+    } else if es_audio(&path) {
+        Icon::Music
+    } else {
+        Icon::File
+    };
     centered(icon, theme.fg_muted)
 }
 
@@ -4064,6 +4294,42 @@ fn nav_history_go(m: &mut Model, handle: &Handle<Msg>, delta: i64) {
     }
 }
 
+/// Pasa al archivo **siguiente/anterior** de la carpeta con una app de
+/// canvas abierta (rueda en modo lista, botones atrás/adelante): mueve la
+/// selección del panel activo saltando carpetas y abre el archivo en el
+/// canvas. En los bordes de la lista no hace nada (sin wrap).
+fn canvas_step(m: &mut Model, delta: i32) {
+    if m.canvas.is_none() || delta == 0 {
+        return;
+    }
+    let destino: Option<(usize, PathBuf)> = {
+        let nav = m.cur();
+        let visibles = nav.visible();
+        let pos = visibles.iter().position(|(i, _)| *i == nav.selected);
+        pos.and_then(|p| {
+            let mut q = p as i64;
+            loop {
+                q += delta as i64;
+                if q < 0 || q as usize >= visibles.len() {
+                    return None;
+                }
+                let (idx, n) = &visibles[q as usize];
+                if !n.is_container {
+                    return Some((*idx, PathBuf::from(&n.id)));
+                }
+            }
+        })
+    };
+    let Some((idx, path)) = destino else { return };
+    m.cur_mut().select(idx);
+    // Sólo hojas POSIX (su id ES la ruta); en fuentes montadas la selección
+    // se mueve igual pero el canvas no cambia.
+    if path.is_file() {
+        m.canvas = None;
+        open_path(m, &path);
+    }
+}
+
 /// Tope de lectura para abrir un archivo en el editor del canvas. Más grande
 /// que esto va al visor de texto del preview (read-only), no al editor.
 const EDITOR_BYTES_MAX: u64 = 4 * 1024 * 1024;
@@ -4091,10 +4357,14 @@ fn open_path(m: &mut Model, path: &PathBuf) {
         .unwrap_or_default();
     let pane = load_for(path);
     match pane {
-        // Imagen → el editor por capas (tullpu); si no decodifica para el
-        // editor, cae al visor del preview derecho.
+        // Imagen → el editor por capas (tullpu) con sus tools en el diente
+        // derecho; si no decodifica para el editor, cae al preview derecho.
         PreviewPane::Image(state) => match tullpu::State::desde_imagen(path) {
-            Some(st) => m.canvas = Some(CanvasApp::Imagen(Box::new(st))),
+            Some(st) => {
+                m.canvas = Some(CanvasApp::Imagen(Box::new(st)));
+                m.tools_open = true;
+                m.viewer_open = false;
+            }
             None => open_in_preview(m, path, PreviewPane::Image(state)),
         },
         // Video/audio → el player de media embebible (reusa el estado ya
@@ -4256,6 +4526,13 @@ fn open_video(path: &Path) -> VideoViewerState {
     match ext.as_deref() {
         Some("webm" | "mkv") => VideoViewerState::open_webm(path),
         Some("gif") => VideoViewerState::open_gif(path),
+        // MP4/MOV: el discernimiento los reconoce (ftyp) pero todavía no
+        // hay decoder nativo H.264/H.265 — el player abre con un error
+        // claro en vez de un volcado binario o un fallo de parseo críptico.
+        Some("mp4" | "m4v" | "mov") => VideoViewerState::unsupported(
+            path,
+            "MP4/H.264 sin decoder nativo todavía — convertí a WebM (AV1)",
+        ),
         _ => VideoViewerState::open_av1(path),
     }
 }
