@@ -202,6 +202,50 @@ pub enum Request {
     /// (Sólo dentro de un `ExecPty`) la ventana del cliente cambió de
     /// tamaño; el daemon reescala el PTY (`TIOCSWINSZ`).
     PtyResize { rows: u16, cols: u16 },
+
+    // === Sesiones PTY persistentes (tmux-like) ===
+    // A diferencia de `ExecPty` (efímero: muere al cerrar la conexión),
+    // una sesión persiste a la desconexión del cliente. El proceso vive
+    // en el daemon, desacoplado de cualquier conexión, hasta que termina
+    // solo o se le manda `PtyKill`. No persiste a reinicio del daemon.
+
+    /// Crear una sesión PTY persistente. El daemon spawnea `program args`
+    /// bajo un pseudo-terminal y la registra; el proceso sigue vivo aunque
+    /// nadie esté adjunto. Request/response 1:1: devuelve [`Response::PtySpawned`]
+    /// con el id; luego el cliente se adjunta con [`Request::PtyAttach`]
+    /// (en esta misma conexión o en otra).
+    PtySpawn {
+        cwd: String,
+        program: String,
+        args: Vec<String>,
+        rows: u16,
+        cols: u16,
+        /// Etiqueta legible para listar (p. ej. "claude · repo X"). Si
+        /// está vacía, el daemon usa el nombre del programa.
+        #[serde(default)]
+        label: String,
+    },
+
+    /// Adjuntarse a una sesión existente. La conexión pasa a modo
+    /// **full-duplex** igual que `ExecPty`:
+    /// - server→cliente: primero el **scrollback** (bytes recientes para
+    ///   repintar la pantalla) como uno o más [`Response::ExecBytes`],
+    ///   luego la salida en vivo, terminada por `ExecExited` cuando el
+    ///   proceso de la sesión muere. Si la sesión no existe, `ExecFailed`.
+    /// - cliente→server: [`Request::PtyInput`]/[`Request::PtyResize`].
+    ///
+    /// **Cerrar la conexión = DETACH, no mata la sesión** (la diferencia
+    /// clave con `ExecPty`). `rows`/`cols` reescalan el PTY al tamaño del
+    /// cliente que se adjunta.
+    PtyAttach { session: Ulid, rows: u16, cols: u16 },
+
+    /// Listar las sesiones PTY (vivas y terminadas-no-reapeadas).
+    /// Request/response 1:1 → [`Response::PtyList`].
+    PtyList,
+
+    /// Matar (o reapear, si ya murió) una sesión y quitarla del registro.
+    /// Request/response 1:1 → [`Response::PtyKilled`].
+    PtyKill { session: Ulid },
 }
 
 /// Cómo ejecutar — variante serializable paralela a `shuma_exec::Exec`.
@@ -377,6 +421,37 @@ pub enum Response {
     /// Terminal. El proceso no se pudo ni lanzar (binario inexistente,
     /// permisos, etc.).
     ExecFailed(String),
+
+    // === Sesiones PTY persistentes ===
+    /// Respuesta a [`Request::PtySpawn`]: id de la sesión recién creada.
+    PtySpawned { session: Ulid },
+    /// Respuesta a [`Request::PtyList`]: sesiones registradas.
+    PtyList { sessions: Vec<PtySessionInfo> },
+    /// Respuesta a [`Request::PtyKill`]: `existed=false` si no había tal
+    /// sesión en el registro.
+    PtyKilled { session: Ulid, existed: bool },
+}
+
+/// Metadatos de una sesión PTY persistente, para `PtyList`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PtySessionInfo {
+    pub session: Ulid,
+    /// Etiqueta legible (cae al nombre del programa si se creó vacía).
+    pub label: String,
+    pub program: String,
+    pub args: Vec<String>,
+    pub cwd: String,
+    pub rows: u16,
+    pub cols: u16,
+    /// `true` mientras el proceso vive; `false` si ya terminó (la sesión
+    /// sigue en el registro hasta que se reapea con `PtyKill`).
+    pub alive: bool,
+    /// Código de salida una vez muerta (`None` si sigue viva).
+    pub exit_code: Option<i32>,
+    /// Instante de creación (epoch ms) — para ordenar/mostrar antigüedad.
+    pub created_unix_ms: u64,
+    /// Conexiones actualmente adjuntas a la sesión.
+    pub attached: u32,
 }
 
 impl Response {

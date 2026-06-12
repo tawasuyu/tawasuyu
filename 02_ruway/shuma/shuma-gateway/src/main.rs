@@ -4,11 +4,16 @@
 //! - `POST /rpc`    : body JSON = `shuma_protocol::Request` → round-trip postcard
 //!   contra el admin socket → `Response` como JSON. Una request por conexión
 //!   (request/response 1:1). Sirve para WorkspaceList, Health, Stats, Run, etc.
-//! - `GET /ws/pty`  : WebSocket full-duplex puenteado al subprotocolo `ExecPty`
-//!   del daemon. El primer mensaje (texto JSON) es el spec de apertura; luego
-//!   los frames binarios del cliente son stdin (teclas) y los binarios del
-//!   servidor son la salida cruda del terminal. Control de tamaño por texto
-//!   `{"t":"resize","rows":R,"cols":C}`. Cerrar el WS mata el PTY remoto.
+//! - `GET /ws/pty`  : WebSocket full-duplex hacia una **sesión PTY
+//!   persistente** del daemon. El primer mensaje (texto JSON) abre el
+//!   puente: con `{"session":"<ulid>"}` se **adjunta** a una sesión
+//!   existente; con `{"program":"claude","args":[...],"cwd":".","label":"…"}`
+//!   **crea** una sesión persistente y se adjunta (antes de la salida manda
+//!   `{"t":"session","id":"<ulid>"}` con el id, para re-adjuntarse luego).
+//!   Después, los frames binarios del cliente son stdin (teclas) y los del
+//!   servidor la salida cruda del terminal (empezando por el scrollback).
+//!   Resize por `{"t":"resize","rows":R,"cols":C}`. **Cerrar el WS =
+//!   DETACH**: la sesión sigue viva; se la mata con `PtyKill` (`POST /rpc`).
 //! - `GET /` y `GET /health` : healthcheck.
 //!
 //! Auth opcional por token (`SHIPOTE_GATEWAY_TOKEN`): header
@@ -36,6 +41,7 @@ use serde::Deserialize;
 use shuma_protocol::{default_socket_path, read_frame, write_frame, Request, Response};
 use tokio::net::UnixStream;
 use tracing::{info, warn};
+use ulid::Ulid;
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:7378";
 
@@ -154,14 +160,25 @@ async fn round_trip(sock: &std::path::Path, req: &Request) -> anyhow::Result<Res
 // GET /ws/pty — WebSocket ↔ subprotocolo ExecPty del daemon
 // =====================================================================
 
-/// Primer mensaje del cliente WS (texto JSON): abre el PTY remoto.
+/// Primer mensaje del cliente WS (texto JSON): abre el puente a una
+/// sesión. Con `session` se adjunta a una existente; con `program` crea
+/// una nueva y se adjunta.
 #[derive(Deserialize)]
 struct PtyOpen {
-    #[serde(default = "default_cwd")]
-    cwd: String,
-    program: String,
+    /// Id (ULID) de una sesión existente a la que adjuntarse.
+    #[serde(default)]
+    session: Option<String>,
+    /// Programa a lanzar si se crea una sesión nueva (ignorado si hay
+    /// `session`).
+    #[serde(default)]
+    program: Option<String>,
     #[serde(default)]
     args: Vec<String>,
+    #[serde(default = "default_cwd")]
+    cwd: String,
+    /// Etiqueta legible para la sesión nueva.
+    #[serde(default)]
+    label: String,
     #[serde(default = "default_rows")]
     rows: u16,
     #[serde(default = "default_cols")]
@@ -215,7 +232,7 @@ async fn pty_bridge(mut ws: WebSocket, sock: Arc<PathBuf>) {
         }
     };
 
-    // 2) Conectar al daemon y arrancar el ExecPty.
+    // 2) Conectar al daemon.
     let daemon = match UnixStream::connect(&*sock).await {
         Ok(s) => s,
         Err(e) => {
@@ -224,19 +241,77 @@ async fn pty_bridge(mut ws: WebSocket, sock: Arc<PathBuf>) {
         }
     };
     let (mut drd, mut dwr) = daemon.into_split();
-    let open_req = Request::ExecPty {
-        cwd: open.cwd,
-        program: open.program,
-        args: open.args,
+
+    // 3) Resolver la sesión: adjuntar a una existente, o crear una nueva
+    //    (PtySpawn 1:1 sobre la misma conexión) y luego adjuntar.
+    let session: Ulid = if let Some(s) = open.session.as_deref() {
+        match Ulid::from_string(s) {
+            Ok(id) => id,
+            Err(_) => {
+                let _ = ws.send(Message::Text(ctl_err("session id inválido"))).await;
+                return;
+            }
+        }
+    } else if let Some(program) = open.program.clone() {
+        let spawn = Request::PtySpawn {
+            cwd: open.cwd.clone(),
+            program,
+            args: open.args.clone(),
+            rows: open.rows,
+            cols: open.cols,
+            label: open.label.clone(),
+        };
+        if write_frame(&mut dwr, &spawn).await.is_err() {
+            let _ = ws.send(Message::Text(ctl_err("write spawn failed"))).await;
+            return;
+        }
+        match read_frame::<Response, _>(&mut drd).await {
+            Ok(Response::PtySpawned { session }) => {
+                // El cliente aprende el id para poder re-adjuntarse luego.
+                let _ = ws
+                    .send(Message::Text(
+                        serde_json::json!({"t":"session","id":session.to_string()}).to_string(),
+                    ))
+                    .await;
+                session
+            }
+            Ok(Response::Error { message }) => {
+                let _ = ws.send(Message::Text(ctl_err(&message))).await;
+                return;
+            }
+            Ok(other) => {
+                let _ = ws
+                    .send(Message::Text(ctl_err(&format!(
+                        "respuesta inesperada al spawn: {other:?}"
+                    ))))
+                    .await;
+                return;
+            }
+            Err(e) => {
+                let _ = ws.send(Message::Text(ctl_err(&format!("daemon: {e}")))).await;
+                return;
+            }
+        }
+    } else {
+        let _ = ws
+            .send(Message::Text(ctl_err("falta 'session' o 'program'")))
+            .await;
+        return;
+    };
+
+    // 4) Adjuntarse a la sesión. A partir de aquí la conexión es
+    //    full-duplex; cerrar el WS = DETACH (la sesión sobrevive).
+    let attach = Request::PtyAttach {
+        session,
         rows: open.rows,
         cols: open.cols,
     };
-    if write_frame(&mut dwr, &open_req).await.is_err() {
-        let _ = ws.send(Message::Text(ctl_err("write open failed"))).await;
+    if write_frame(&mut dwr, &attach).await.is_err() {
+        let _ = ws.send(Message::Text(ctl_err("write attach failed"))).await;
         return;
     }
 
-    // 3) Puente full-duplex. tokio::select! suelta la rama no completada
+    // 5) Puente full-duplex. tokio::select! suelta la rama no completada
     //    antes de correr el handler, así `ws` se puede usar en ambas ramas.
     loop {
         tokio::select! {
@@ -327,13 +402,25 @@ mod tests {
     }
 
     #[test]
-    fn pty_open_parses_with_defaults() {
+    fn pty_open_spawn_parses_with_defaults() {
         let o: PtyOpen = serde_json::from_str(r#"{"program":"claude","args":["code"]}"#).unwrap();
-        assert_eq!(o.program, "claude");
+        assert_eq!(o.program.as_deref(), Some("claude"));
         assert_eq!(o.args, vec!["code"]);
+        assert_eq!(o.session, None);
         assert_eq!(o.rows, 24);
         assert_eq!(o.cols, 80);
         assert_eq!(o.cwd, ".");
+        assert_eq!(o.label, "");
+    }
+
+    #[test]
+    fn pty_open_attach_parses() {
+        let o: PtyOpen =
+            serde_json::from_str(r#"{"session":"01ARZ3NDEKTSV4RRFFQ69G5FAV","rows":40}"#).unwrap();
+        assert_eq!(o.session.as_deref(), Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+        assert_eq!(o.program, None);
+        assert_eq!(o.rows, 40);
+        assert_eq!(o.cols, 80);
     }
 
     #[test]

@@ -25,6 +25,9 @@ use std::sync::Arc;
 use tokio::net::{UnixListener, UnixStream};
 use tracing::{error, info, warn};
 
+mod pty_sessions;
+use pty_sessions::{PtyRegistry, SessionEvent};
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
@@ -168,6 +171,10 @@ async fn main() -> anyhow::Result<()> {
 
     let discerner = Arc::new(DiscernPipeline::default_pipeline());
 
+    // Registro de sesiones PTY persistentes (tmux-like). Compartido por
+    // los dos listeners; vive lo que viva el daemon.
+    let pty_registry = Arc::new(PtyRegistry::default());
+
     // Reaper periódico cada 500 ms. Además drena pipelines pendientes
     // de restart (supervisión a nivel pipeline).
     {
@@ -267,6 +274,7 @@ async fn main() -> anyhow::Result<()> {
         let mgr_tcp = mgr.clone();
         let disc_tcp = discerner.clone();
         let pool_tcp = sidecar_pool.clone();
+        let pty_tcp = pty_registry.clone();
         let daemon_started_tcp = daemon_started;
         tokio::spawn(async move {
             loop {
@@ -279,6 +287,7 @@ async fn main() -> anyhow::Result<()> {
                         let mgr = mgr_tcp.clone();
                         let disc = disc_tcp.clone();
                         let pool = pool_tcp.clone();
+                        let pty = pty_tcp.clone();
                         tokio::spawn(async move {
                             if let Err(e) = handle_enc_client(
                                 tcp,
@@ -287,6 +296,7 @@ async fn main() -> anyhow::Result<()> {
                                 mgr,
                                 disc,
                                 pool,
+                                pty,
                                 daemon_started_tcp,
                             )
                             .await
@@ -328,8 +338,9 @@ async fn main() -> anyhow::Result<()> {
                 let mgr = mgr.clone();
                 let disc = discerner.clone();
                 let pool = sidecar_pool.clone();
+                let pty = pty_registry.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_client(stream, mgr, disc, pool, daemon_started).await {
+                    if let Err(e) = handle_client(stream, mgr, disc, pool, pty, daemon_started).await {
                         warn!(?e, "client handler error");
                     }
                 });
@@ -368,6 +379,7 @@ async fn handle_client(
     mgr: Arc<WorkspaceManager>,
     disc: Arc<DiscernPipeline>,
     pool: Option<Arc<card_sidecar::SidecarPool>>,
+    pty: Arc<PtyRegistry>,
     daemon_started: std::time::Instant,
 ) -> anyhow::Result<()> {
     // Audit: peer uid lo leemos una vez aquí (no cambia durante la conexión).
@@ -395,8 +407,13 @@ async fn handle_client(
         if let Request::ExecPty { cwd, program, args, rows, cols } = req {
             return handle_pty_stream(stream, cwd, program, args, rows, cols).await;
         }
+        // Adjuntarse a una sesión persistente: full-duplex hasta que el
+        // cliente cierra (DETACH) o el proceso de la sesión muere.
+        if let Request::PtyAttach { session, rows, cols } = req {
+            return handle_pty_attach(stream, &pty, session, rows, cols).await;
+        }
 
-        let resp = dispatch(&mgr, &disc, &pool, daemon_started, req).await;
+        let resp = dispatch(&mgr, &disc, &pool, &pty, daemon_started, req).await;
         write_frame(&mut stream, &resp).await?;
     }
 }
@@ -684,6 +701,170 @@ fn pty_spec(
     }
 }
 
+/// Adjunta una conexión Unix a una sesión PTY persistente: manda el
+/// scrollback, luego la salida en vivo, y reenvía teclas/resizes al PTY.
+/// Cerrar la conexión = **DETACH** (no mata la sesión); la sesión sólo
+/// muere al terminar su proceso o por `PtyKill`.
+async fn handle_pty_attach(
+    stream: UnixStream,
+    pty: &Arc<PtyRegistry>,
+    session: ulid::Ulid,
+    rows: u16,
+    cols: u16,
+) -> anyhow::Result<()> {
+    let (mut rd, mut wr) = tokio::io::split(stream);
+    let Some(sess) = pty.get(session) else {
+        let _ = write_frame(
+            &mut wr,
+            &Response::ExecFailed(format!("sesión {session} no existe")),
+        )
+        .await;
+        return Ok(());
+    };
+    sess.resize(rows, cols);
+    let att = sess.attach();
+
+    // Tarea lectora: teclas/resizes del cliente → PTY. EOF/error = el
+    // cliente cerró → DETACH (no matamos la sesión, sólo salimos).
+    let sess_in = Arc::clone(&sess);
+    let reader = tokio::spawn(async move {
+        loop {
+            match read_frame::<Request, _>(&mut rd).await {
+                Ok(Request::PtyInput { bytes }) => sess_in.write_input(bytes),
+                Ok(Request::PtyResize { rows, cols }) => sess_in.resize(rows, cols),
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    // Scrollback inicial para repintar la pantalla.
+    if !att.scrollback.is_empty()
+        && write_frame(&mut wr, &Response::ExecBytes(att.scrollback))
+            .await
+            .is_err()
+    {
+        reader.abort();
+        return Ok(());
+    }
+    // Sesión ya muerta al adjuntarse: el `Exited` ya se broadcasteó antes
+    // de nuestra suscripción, así que lo sintetizamos y cerramos.
+    if let Some(code) = att.exited {
+        let _ = write_frame(&mut wr, &Response::ExecExited(code)).await;
+        reader.abort();
+        return Ok(());
+    }
+    let mut rx = att.rx;
+    loop {
+        match rx.recv().await {
+            Ok(SessionEvent::Bytes(b)) => {
+                if write_frame(&mut wr, &Response::ExecBytes(b.as_ref().clone()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(SessionEvent::Exited(c)) => {
+                let _ = write_frame(&mut wr, &Response::ExecExited(c)).await;
+                break;
+            }
+            // El cliente quedó atrás: repintamos el ring entero en vez de
+            // arrastrar bytes perdidos (corromperían el vt100).
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                if write_frame(&mut wr, &Response::ExecBytes(sess.scrollback()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+    reader.abort();
+    Ok(())
+}
+
+/// Versión cifrada de [`handle_pty_attach`] sobre un `FramedChannel`.
+async fn handle_pty_attach_enc<S>(
+    ch: FramedChannel<S>,
+    pty: &Arc<PtyRegistry>,
+    session: ulid::Ulid,
+    rows: u16,
+    cols: u16,
+) -> anyhow::Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    let (mut rd, mut wr) = ch.split();
+    let Some(sess) = pty.get(session) else {
+        let _ = wr
+            .send_postcard(&Response::ExecFailed(format!("sesión {session} no existe")))
+            .await;
+        return Ok(());
+    };
+    sess.resize(rows, cols);
+    let att = sess.attach();
+
+    let sess_in = Arc::clone(&sess);
+    let reader = tokio::spawn(async move {
+        loop {
+            match rd.recv_postcard::<Request>().await {
+                Ok(Request::PtyInput { bytes }) => sess_in.write_input(bytes),
+                Ok(Request::PtyResize { rows, cols }) => sess_in.resize(rows, cols),
+                Ok(_) => {}
+                Err(_) => break,
+            }
+        }
+    });
+
+    if !att.scrollback.is_empty()
+        && wr
+            .send_postcard(&Response::ExecBytes(att.scrollback))
+            .await
+            .is_err()
+    {
+        reader.abort();
+        return Ok(());
+    }
+    if let Some(code) = att.exited {
+        let _ = wr.send_postcard(&Response::ExecExited(code)).await;
+        reader.abort();
+        return Ok(());
+    }
+    let mut rx = att.rx;
+    loop {
+        match rx.recv().await {
+            Ok(SessionEvent::Bytes(b)) => {
+                if wr
+                    .send_postcard(&Response::ExecBytes(b.as_ref().clone()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Ok(SessionEvent::Exited(c)) => {
+                let _ = wr.send_postcard(&Response::ExecExited(c)).await;
+                break;
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                if wr
+                    .send_postcard(&Response::ExecBytes(sess.scrollback()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+        }
+    }
+    reader.abort();
+    Ok(())
+}
+
 /// Atiende una conexión TCP autenticada por Noise XK.
 ///
 /// Flujo:
@@ -699,6 +880,7 @@ fn pty_spec(
 /// salida), un cliente que cierra TCP no dispara el kill hasta que el
 /// proceso emita algo. Se mejora cuando se añada un frame Cancel del
 /// cliente o se splittea el FramedChannel en mitades sender/receiver.
+#[allow(clippy::too_many_arguments)]
 async fn handle_enc_client(
     tcp: tokio::net::TcpStream,
     our_keypair: shuma_link::Keypair,
@@ -706,6 +888,7 @@ async fn handle_enc_client(
     mgr: Arc<WorkspaceManager>,
     disc: Arc<DiscernPipeline>,
     pool: Option<Arc<card_sidecar::SidecarPool>>,
+    pty: Arc<PtyRegistry>,
     daemon_started: std::time::Instant,
 ) -> anyhow::Result<()> {
     let (mut ch, peer) = shuma_link::server_handshake(tcp, &our_keypair)
@@ -742,8 +925,12 @@ async fn handle_enc_client(
         if let Request::ExecPty { cwd, program, args, rows, cols } = req {
             return handle_pty_stream_enc(ch, cwd, program, args, rows, cols).await;
         }
+        // Adjuntarse a una sesión persistente sobre el canal cifrado.
+        if let Request::PtyAttach { session, rows, cols } = req {
+            return handle_pty_attach_enc(ch, &pty, session, rows, cols).await;
+        }
 
-        let resp = dispatch(&mgr, &disc, &pool, daemon_started, req).await;
+        let resp = dispatch(&mgr, &disc, &pool, &pty, daemon_started, req).await;
         if let Err(e) = ch.send_postcard(&resp).await {
             return Err(anyhow::anyhow!("send: {e}"));
         }
@@ -884,11 +1071,18 @@ fn audit_request(peer: &str, req: &Request) {
             "exec.pty",
             format!("cwd={cwd} {program} {}", args.join(" ")),
         ),
+        Request::PtySpawn { cwd, program, args, label, .. } => (
+            "pty.spawn",
+            format!("cwd={cwd} label={label:?} {program} {}", args.join(" ")),
+        ),
+        Request::PtyAttach { session, .. } => ("pty.attach", format!("session={session}")),
+        Request::PtyKill { session } => ("pty.kill", format!("session={session}")),
         // Reads / alta frecuencia (no audit). Las teclas y resizes de un
-        // PTY no se auditan línea a línea — la apertura (`exec.pty`) ya
-        // quedó registrada.
+        // PTY no se auditan línea a línea — la apertura (`exec.pty` /
+        // `pty.spawn`) ya quedó registrada.
         Request::PtyInput { .. }
         | Request::PtyResize { .. }
+        | Request::PtyList
         | Request::Ping
         | Request::Health
         | Request::WorkspaceList
@@ -922,6 +1116,7 @@ async fn dispatch(
     mgr: &Arc<WorkspaceManager>,
     disc: &DiscernPipeline,
     pool: &Option<Arc<card_sidecar::SidecarPool>>,
+    pty: &Arc<PtyRegistry>,
     daemon_started: std::time::Instant,
     req: Request,
 ) -> Response {
@@ -1283,12 +1478,26 @@ async fn dispatch(
             }
         }
 
-        // `ExecStream`/`ExecPty` se atienden inline en `handle_client` con
-        // sus subprotocolos; los frames `PtyInput`/`PtyResize` sólo viven
-        // dentro de un `ExecPty` ya en curso. Nunca deberían llegar a
-        // `dispatch` (request/response 1:1). Si lo hacen, error explícito.
+        // Sesiones PTY persistentes. `PtySpawn`/`PtyList`/`PtyKill` son
+        // request/response 1:1 y se atienden aquí; `PtyAttach` es
+        // full-duplex y se intercepta inline antes de `dispatch`.
+        Request::PtySpawn { cwd, program, args, rows, cols, label } => {
+            let session = pty.spawn(cwd, program, args, rows, cols, label);
+            Response::PtySpawned { session }
+        }
+        Request::PtyList => Response::PtyList { sessions: pty.list() },
+        Request::PtyKill { session } => Response::PtyKilled {
+            session,
+            existed: pty.kill(session),
+        },
+
+        // `ExecStream`/`ExecPty`/`PtyAttach` se atienden inline en los
+        // handlers de conexión con sus subprotocolos full-duplex; los
+        // frames `PtyInput`/`PtyResize` sólo viven dentro de uno ya en
+        // curso. Nunca deberían llegar a `dispatch` (request/response 1:1).
         Request::ExecStream { .. }
         | Request::ExecPty { .. }
+        | Request::PtyAttach { .. }
         | Request::PtyInput { .. }
         | Request::PtyResize { .. } => Response::Error {
             message: "frame de streaming/PTY fuera de su subprotocolo; no por dispatch".into(),
