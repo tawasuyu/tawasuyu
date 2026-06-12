@@ -57,6 +57,7 @@ mod helpers;
 mod overlays;
 mod palette;
 mod find;
+mod ai;
 mod view;
 mod update;
 
@@ -181,6 +182,7 @@ impl App for Shell {
             thumbs: HashMap::new(),
             thumbs_pending: std::collections::HashSet::new(),
             thumbs_failed: std::collections::HashSet::new(),
+            ai: None,
             find: None,
             palette: None,
             palette_commands: crate::palette::build_command_catalog(),
@@ -199,6 +201,13 @@ impl App for Shell {
         // que un modal). Máxima prioridad.
         if let Some(state) = _model.palette.as_ref() {
             return command_palette::on_key(state, e).map(Msg::Palette);
+        }
+        // Panel de IA abierto: Esc lo cierra (es un overlay de resultado).
+        if _model.ai.is_some() {
+            if matches!(e.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::AiClose);
+            }
+            return None;
         }
         // Find recursivo abierto: captura todo el teclado (modal). Tab alterna
         // el modo (nombre ↔ contenido); Enter corre / abre; flechas navegan.
@@ -230,6 +239,12 @@ impl App for Shell {
             && matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
         {
             return Some(Msg::FindOpen);
+        }
+        // Ctrl+I: pregunta a la IA sobre la selección (archivo/carpeta/marca).
+        if e.modifiers.ctrl
+            && matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("i"))
+        {
+            return Some(Msg::AiAsk);
         }
         // Prompt de nombre (nueva carpeta/archivo, renombrar): captura todo el
         // teclado. Máxima prioridad — es un modal.

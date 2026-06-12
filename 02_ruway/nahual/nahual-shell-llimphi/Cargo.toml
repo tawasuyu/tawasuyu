@@ -43,6 +43,9 @@ llimphi-module-command-palette = { workspace = true }
 # por nahual-source-core; acá lo declaramos para forjar el runtime del worker.
 rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
 tokio = { workspace = true }
+# Acciones LLM ("Preguntar a la IA sobre la selección"): fachada transparente
+# que autodetecta backend por env y cae a Mock sin credenciales (CLAUDE.md).
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
 tullpu-module = { workspace = true }
 media-module = { workspace = true }
 llimphi-icons = { workspace = true }

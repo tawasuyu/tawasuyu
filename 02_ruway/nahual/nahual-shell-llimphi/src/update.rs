@@ -876,6 +876,11 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
         | Msg::FindResults { .. } => {
             return crate::find::apply_find(m, msg, handle);
         }
+
+        // ---- Acción LLM: todo al módulo `ai`. ----
+        Msg::AiAsk | Msg::AiResult(_) | Msg::AiClose => {
+            return crate::ai::apply_ai(m, msg, handle);
+        }
     }
     m
 }

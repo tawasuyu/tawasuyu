@@ -64,6 +64,8 @@ pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
         PaletteCommand::new("source.unmount", "Desmontar fuente", "Fuente"),
         // ---- Sesiones ----
         PaletteCommand::new("session.new", "Nueva sesión", "Sesión"),
+        // ---- IA ----
+        PaletteCommand::new("ai.ask", "Preguntar a la IA sobre la selección", "IA").with_shortcut("Ctrl+I"),
         // ---- Herramientas ----
         PaletteCommand::new("tools.find", "Buscar recursivo…", "Herramientas").with_shortcut("Ctrl+F"),
         PaletteCommand::new("tools.terminalHere", "Abrir terminal aquí", "Herramientas"),
@@ -121,6 +123,8 @@ pub(crate) fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "source.unmount" => Msg::Unmount,
         // Sesiones.
         "session.new" => Msg::SessionNew,
+        // IA.
+        "ai.ask" => Msg::AiAsk,
         // Herramientas.
         "tools.find" => Msg::FindOpen,
         "tools.terminalHere" => Msg::TerminalHere,

@@ -276,6 +276,10 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
     if let Some(f) = &model.find {
         return Some(find_overlay(f, &model.theme));
     }
+    // Panel de IA: overlay con la respuesta del LLM.
+    if let Some(ai) = &model.ai {
+        return Some(ai_overlay(ai, &model.theme));
+    }
     // Los modales de operación (prompt de nombre, confirmación de borrado)
     // van por encima de todo.
     if let Some(p) = &model.prompt {
@@ -298,6 +302,65 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
         model.menu_active,
         model.menu_anim.value(),
     )
+}
+
+/// Overlay del **panel de IA**: el título del contexto + la respuesta del LLM
+/// (o "consultando…" mientras está en vuelo), centrado sobre un scrim.
+pub(crate) fn ai_overlay(ai: &AiState, theme: &Theme) -> View<Msg> {
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text(format!("✦ {}", ai.titulo), 13.0, theme.fg_text);
+
+    let cuerpo_txt = match &ai.respuesta {
+        Some(r) => r.clone(),
+        None if ai.pendiente => "consultando a la IA…".to_string(),
+        None => String::new(),
+    };
+    let cuerpo = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        padding: pad(14.0),
+        ..Default::default()
+    })
+    .text(cuerpo_txt, 13.5, theme.fg_text);
+
+    let pie = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text("Esc cierra", 11.0, theme.fg_muted);
+
+    let caja = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(640.0_f32), height: length(420.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .border(1.0, theme.accent)
+    .children(vec![titulo, cuerpo, pie]);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 120))
+    .on_click(Msg::AiClose)
+    .children(vec![caja])
 }
 
 /// Overlay del **find recursivo** (Ctrl+F): input + modo + lista de resultados,

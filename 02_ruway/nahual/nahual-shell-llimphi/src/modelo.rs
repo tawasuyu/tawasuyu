@@ -293,6 +293,14 @@ impl FindState {
     }
 }
 
+/// Estado del panel de **IA** (acción "Preguntar a la IA sobre la selección"):
+/// el título del contexto, la respuesta (cuando llega) y si sigue en vuelo.
+pub(crate) struct AiState {
+    pub(crate) titulo: String,
+    pub(crate) respuesta: Option<String>,
+    pub(crate) pendiente: bool,
+}
+
 /// Clipboard del sistema para el editor del canvas (mismo backend que nada).
 pub(crate) struct ShellClipboard {
     pub(crate) inner: Option<arboard::Clipboard>,
@@ -492,6 +500,8 @@ pub(crate) struct Model {
     pub(crate) thumbs_pending: HashSet<PathBuf>,
     /// Miniaturas que fallaron al generarse (se pinta un ⚠, no se reintenta).
     pub(crate) thumbs_failed: HashSet<PathBuf>,
+    /// Panel de IA (acción LLM sobre la selección): `None` cerrado.
+    pub(crate) ai: Option<AiState>,
     /// Find recursivo (Ctrl+F): `None` cerrado. Mientras esté `Some`, captura
     /// todo el teclado (es un modal).
     pub(crate) find: Option<FindState>,
@@ -746,6 +756,14 @@ pub(crate) enum Msg {
     FindResults { gen: u64, hits: Vec<FindHit> },
     /// Cierra el find.
     FindClose,
+
+    // ---- Acción LLM ----
+    /// Pregunta a la IA sobre la selección (archivo/carpeta/marca).
+    AiAsk,
+    /// Respuesta del worker LLM (texto o error humano).
+    AiResult(Result<String, String>),
+    /// Cierra el panel de IA.
+    AiClose,
 }
 
 impl Model {
