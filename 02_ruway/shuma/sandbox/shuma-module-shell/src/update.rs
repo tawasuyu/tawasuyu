@@ -2672,6 +2672,49 @@ fn resolve_ssh_auth(
     }
 }
 
+// --- Mounts de contenedor (espejo mínimo de containers.json) ----------------
+
+#[derive(serde::Deserialize)]
+struct ContainerCfgJson {
+    name: String,
+    #[serde(default)]
+    mounts: Vec<MountJson>,
+}
+
+#[derive(serde::Deserialize, Clone)]
+struct MountJson {
+    host: String,
+    target: String,
+    #[serde(default)]
+    readonly: bool,
+}
+
+/// Mounts configurados para el rootfs en `rootfs_path` (su basename es la clave
+/// en `containers.json`). Vacío si no hay config.
+fn container_mounts(rootfs_path: &str) -> Vec<MountJson> {
+    let name = match std::path::Path::new(rootfs_path).file_name() {
+        Some(n) => n.to_string_lossy().to_string(),
+        None => return Vec::new(),
+    };
+    let Some(base) = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
+    else {
+        return Vec::new();
+    };
+    let path = base.join("shuma").join("containers.json");
+    let Ok(txt) = std::fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(cfgs) = serde_json::from_str::<Vec<ContainerCfgJson>>(&txt) else {
+        return Vec::new();
+    };
+    cfgs.into_iter()
+        .find(|c| c.name == name)
+        .map(|c| c.mounts)
+        .unwrap_or_default()
+}
+
 /// Carga el `Keypair` del shell desde el archivo de identidad,
 /// creando uno nuevo si no existe. Usa el path por defecto de
 /// `shuma-link::Keypair::default_path()` (`~/.config/shuma/keys/identity`).
@@ -2838,19 +2881,37 @@ fn wrap_spec_for_container(mut spec: CommandSpec, engine: &str, name: &str) -> C
     spec
 }
 
-/// Script `sh` que recibe `$1 = rootfs_path` y `$2 = línea bash a correr`
-/// y ejecuta el comando aislado por `unshare` + `chroot`. Monta `/proc`,
-/// `/dev`, `/sys` y bind-mountea `/etc/resolv.conf` del host para que apt
-/// y pacman alcancen la red. Sin `--unshare-net` por la misma razón.
+/// Script `sh` (`$1 = rootfs_path`, `$2 = línea bash`) que aísla por `unshare`
+/// + `chroot`. Monta `/proc`, `/dev`, `/sys` y bind-mountea `/etc/resolv.conf`
+/// del host (para que apt/pacman alcancen la red) + los directorios que el
+/// usuario configuró en el gestor, cada uno en su `target` (ro o rw).
 ///
-/// El `|| true` después de cada `mount` evita que el script entero
-/// aborte si el rootfs ya tenía algo montado (re-entry tras crash).
-const UNSHARE_SCRIPT: &str = "\
-mount -t proc proc \"$1/proc\" 2>/dev/null || true; \
-mount --bind /dev \"$1/dev\" 2>/dev/null || true; \
-mount --bind /sys \"$1/sys\" 2>/dev/null || true; \
-mount --bind /etc/resolv.conf \"$1/etc/resolv.conf\" 2>/dev/null || true; \
-exec chroot \"$1\" /bin/bash -c \"$2\"";
+/// El `|| true` tras cada `mount` evita abortar si ya había algo montado
+/// (re-entry tras crash) o un dir no existe.
+fn unshare_script(mounts: &[MountJson]) -> String {
+    let mut s = String::from(
+        "mount -t proc proc \"$1/proc\" 2>/dev/null || true; \
+         mount --bind /dev \"$1/dev\" 2>/dev/null || true; \
+         mount --bind /sys \"$1/sys\" 2>/dev/null || true; \
+         mount --bind /etc/resolv.conf \"$1/etc/resolv.conf\" 2>/dev/null || true; ",
+    );
+    for m in mounts {
+        if m.host.trim().is_empty() || m.target.trim().is_empty() {
+            continue;
+        }
+        let hq = shell_quote(&m.host);
+        let tq = shell_quote(&m.target);
+        s.push_str(&format!("mkdir -p \"$1\"{tq} 2>/dev/null || true; "));
+        s.push_str(&format!("mount --bind {hq} \"$1\"{tq} 2>/dev/null || true; "));
+        if m.readonly {
+            s.push_str(&format!(
+                "mount -o remount,bind,ro \"$1\"{tq} 2>/dev/null || true; "
+            ));
+        }
+    }
+    s.push_str("exec chroot \"$1\" /bin/bash -c \"$2\"");
+    s
+}
 
 /// Variante de [`wrap_spec_for_container`] para `engine = "unshare"`. El
 /// `rootfs_path` es un filesystem extraído en disco local; `unshare -r`
@@ -2862,7 +2923,7 @@ exec chroot \"$1\" /bin/bash -c \"$2\"";
 /// falla con "Operation not permitted" y el caller verá el stderr en el
 /// notice.
 fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec {
-    fn base_args(rootfs: &str, inner_line: &str) -> Vec<String> {
+    fn base_args(rootfs: &str, inner_line: &str, script: &str) -> Vec<String> {
         vec![
             "-r".into(),       // map root in user ns
             "-m".into(),       // mount ns (para mount -t proc etc.)
@@ -2872,13 +2933,16 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
             "-f".into(),       // fork (necesario con -p)
             "--kill-child".into(), // los hijos mueren con el padre
             "--".into(),
-            "/bin/sh".into(), "-c".into(), UNSHARE_SCRIPT.into(),
+            "/bin/sh".into(), "-c".into(), script.to_string(),
             "_".into(),                  // $0
             rootfs.to_string(),          // $1
             inner_line.to_string(),      // $2
         ]
     }
     let rootfs = rootfs_path.to_string();
+    // Script con los binds estándar + los directorios montados por el usuario
+    // (de containers.json). El basename del rootfs es la clave de config.
+    let script = unshare_script(&container_mounts(rootfs_path));
     // Prefijo común para TODO comando dentro del contenedor: HOME del root y
     // `cd` al cwd interior que trackea shuma (`spec.cwd`). Sin esto el comando
     // corría en `/` con PWD heredado del host → `pwd`/`ls`/el prompt se
@@ -2898,7 +2962,7 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
             // motivo. Los TUI fullscreen sí van por la rama `Exec::Pty` de
             // abajo, que sí trae su emulador.)
             let inner = format!("{prelude}{line}");
-            let args = base_args(&rootfs, &inner);
+            let args = base_args(&rootfs, &inner, &script);
             Exec::Direct { stages: vec![StageSpec { program: "unshare".into(), args }] }
         }
         Exec::Pty { program, args, cols, rows } => {
@@ -2910,7 +2974,7 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
                 inner.push(' ');
                 inner.push_str(&shell_quote(a));
             }
-            let args = base_args(&rootfs, &inner);
+            let args = base_args(&rootfs, &inner, &script);
             Exec::Pty { program: "unshare".into(), args, cols, rows }
         }
         Exec::Direct { stages } => {
@@ -2927,7 +2991,7 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
             }
             // Pipe simple → también por `Exec::Direct` (captura por líneas).
             let inner = format!("{prelude}{line}");
-            let args = base_args(&rootfs, &inner);
+            let args = base_args(&rootfs, &inner, &script);
             Exec::Direct { stages: vec![StageSpec { program: "unshare".into(), args }] }
         }
     };
@@ -2961,6 +3025,16 @@ fn bwrap_args(rootfs_path: &str) -> Vec<String> {
         "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin".into(),
         "--setenv".into(), "TERM".into(), "xterm-256color".into(),
     ];
+    // Directorios montados por el usuario (containers.json): `--ro-bind` o
+    // `--bind` del host a su `target` dentro del contenedor.
+    for m in container_mounts(rootfs_path) {
+        if m.host.trim().is_empty() || m.target.trim().is_empty() {
+            continue;
+        }
+        a.push(if m.readonly { "--ro-bind".into() } else { "--bind".into() });
+        a.push(m.host.clone());
+        a.push(m.target.clone());
+    }
     // Si existe ~/work en el rootfs, lo usamos como cwd; sino /.
     a.push("--chdir".into());
     a.push("/".into());

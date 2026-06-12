@@ -469,7 +469,7 @@ pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Optio
         }
     }
     if let Some(d) = model.container_draft.as_ref() {
-        if d.mount_focused {
+        if d.focus.is_some() {
             return Some(Msg::ContainerDraftKey(e.clone()));
         }
     }

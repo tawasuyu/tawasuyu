@@ -705,6 +705,12 @@ impl Distro {
     }
 }
 
+/// Distro a partir del nombre de un rootfs (`"ubuntu"` → `Distro::Ubuntu`).
+fn distro_from_name(name: &str) -> Option<Distro> {
+    let n = name.to_lowercase();
+    Distro::ALL.into_iter().find(|d| d.label().to_lowercase() == n)
+}
+
 /// Campo del form de conexión remota que tiene el foco de teclado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RemoteField {
@@ -732,24 +738,130 @@ struct ContainerInfo {
     pub rootfs: bool,
 }
 
-/// Draft embebido en la ventana de containers: engine + distro + mount.
-/// El "nombre" es derivado de la distro; el usuario no lo elige (evita
-/// colisiones con shuma-<distro>-N de sesiones anteriores).
-#[derive(Debug, Clone)]
-struct ContainerDraft {
+/// Un directorio del host montado dentro del contenedor (bind). Persistido.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct Mount {
+    /// Path en el host.
+    host: String,
+    /// Path donde aparece DENTRO del contenedor.
+    target: String,
+    /// `true` = sólo lectura.
+    #[serde(default)]
+    readonly: bool,
+}
+
+/// Config persistida de un contenedor. Vive en `~/.config/shuma/containers.json`.
+/// `name` es la clave (para rootfs unshare/bwrap = el nombre del directorio,
+/// p. ej. "ubuntu").
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct ContainerCfg {
+    name: String,
     engine: String,
     distro: Distro,
-    mount: TextInputState,
-    mount_focused: bool,
+    #[serde(default)]
+    mounts: Vec<Mount>,
+}
+
+fn containers_cfg_path() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("containers.json"))
+}
+
+fn load_container_cfgs() -> Vec<ContainerCfg> {
+    containers_cfg_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Vec<ContainerCfg>>(&s).ok())
+        .unwrap_or_default()
+}
+
+fn save_container_cfgs(cfgs: &[ContainerCfg]) {
+    let Some(path) = containers_cfg_path() else {
+        return;
+    };
+    if let Ok(json) = serde_json::to_string_pretty(cfgs) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Columna de un mount con foco de teclado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MountCol {
+    Host,
+    Target,
+}
+
+/// Una fila de mount en el editor.
+#[derive(Debug, Clone)]
+struct MountDraft {
+    host: TextInputState,
+    target: TextInputState,
+    readonly: bool,
+}
+
+impl MountDraft {
+    fn new() -> Self {
+        Self {
+            host: TextInputState::new(),
+            target: TextInputState::new(),
+            readonly: false,
+        }
+    }
+    fn from_mount(m: &Mount) -> Self {
+        let mut host = TextInputState::new();
+        host.set_text(m.host.clone());
+        let mut target = TextInputState::new();
+        target.set_text(m.target.clone());
+        Self { host, target, readonly: m.readonly }
+    }
+    fn to_mount(&self) -> Option<Mount> {
+        let host = self.host.text();
+        let target = self.target.text();
+        if host.trim().is_empty() || target.trim().is_empty() {
+            return None;
+        }
+        Some(Mount { host, target, readonly: self.readonly })
+    }
+}
+
+/// Editor de contenedor del gestor. `editing = Some(name)` edita uno existente
+/// (engine/distro quedan readonly); `None` = nuevo (engine/distro activos).
+#[derive(Debug, Clone)]
+struct ContainerDraft {
+    editing: Option<String>,
+    engine: String,
+    distro: Distro,
+    mounts: Vec<MountDraft>,
+    /// (índice de mount, columna) con foco de teclado.
+    focus: Option<(usize, MountCol)>,
 }
 
 impl ContainerDraft {
     fn new() -> Self {
         Self {
+            editing: None,
             engine: engine_preferido().unwrap_or("unshare").to_string(),
             distro: Distro::Ubuntu,
-            mount: TextInputState::new(),
-            mount_focused: false,
+            mounts: Vec::new(),
+            focus: None,
+        }
+    }
+    fn from_cfg(cfg: &ContainerCfg) -> Self {
+        Self {
+            editing: Some(cfg.name.clone()),
+            engine: cfg.engine.clone(),
+            distro: cfg.distro,
+            mounts: cfg.mounts.iter().map(MountDraft::from_mount).collect(),
+            focus: None,
+        }
+    }
+    fn to_cfg(&self, name: String) -> ContainerCfg {
+        ContainerCfg {
+            name,
+            engine: self.engine.clone(),
+            distro: self.distro,
+            mounts: self.mounts.iter().filter_map(MountDraft::to_mount).collect(),
         }
     }
 }
@@ -1378,6 +1490,8 @@ struct Model {
     containers: Vec<String>,
     /// Lista detallada de containers para el gestor (name + state).
     containers_full: Vec<ContainerInfo>,
+    /// Config persistida de contenedores (engine/distro/mounts), por nombre.
+    container_cfgs: Vec<ContainerCfg>,
     /// Campo del form remoto con foco de teclado (`None` = ninguno).
     focused_field: Option<RemoteField>,
     /// Hosts remotos guardados (`$XDG_CONFIG_HOME/shuma/hosts.json`).
@@ -1574,21 +1688,28 @@ enum Msg {
     HostDraftToggleAuth,
     /// Borrar el host `idx` de la lista guardada.
     HostDelete(usize),
-    // ─── Draft de container nuevo (ventana de gestión) ─────────────────
-    /// Empieza el draft de un container nuevo en la ventana de gestión.
-    ContainerDraftStart,
-    /// Cancela el draft del container (cierra el form).
+    // ─── Editor CRUD de contenedores (ventana de gestión) ──────────────
+    /// "Nuevo": deselecciona la lista y abre un draft con engine/distro activos.
+    ContainerDraftNew,
+    /// Cancela el draft (cierra el form de edición).
     ContainerDraftCancel,
-    /// Crea el container con los datos del draft (descarga rootfs si no
-    /// está) y lo deja disponible para sesiones futuras.
-    ContainerDraftCreate,
-    /// Cambia el engine del draft del container.
+    /// Elegir la fila `idx` de la lista para editarla (engine/distro readonly).
+    ContainerEdit(usize),
+    /// Cambia el engine del draft (sólo si es nuevo).
     ContainerDraftSetEngine(String),
-    /// Cambia la distro del draft del container.
+    /// Cambia la distro del draft (sólo si es nuevo).
     ContainerDraftSetDistro(Distro),
-    /// Foco al campo mount del draft del container.
-    ContainerDraftFocusMount,
-    /// Tecla al draft del container (solo afecta el mount input).
+    /// Agrega una fila de mount vacía.
+    ContainerDraftAddMount,
+    /// Quita la fila de mount `idx`.
+    ContainerDraftRemoveMount(usize),
+    /// Alterna readonly del mount `idx`.
+    ContainerDraftToggleMountRo(usize),
+    /// Foco a una columna (host/target) del mount `idx`.
+    ContainerDraftFocusMount(usize, MountCol),
+    /// Guarda el draft (crea el recurso si es nuevo) y persiste su config.
+    ContainerDraftSave,
+    /// Tecla al input del mount focado del draft.
     ContainerDraftKey(KeyEvent),
     /// Aplicar un host guardado al form de la sesión actual (rellena
     /// host/user/port + dispara connect si la sesión está pending).
@@ -1729,6 +1850,7 @@ impl App for Shell {
             dropdown_open: None,
             containers: Vec::new(),
             containers_full: Vec::new(),
+            container_cfgs: load_container_cfgs(),
             focused_field: None,
             hosts: hosts::load_hosts(),
             host_draft: None,
@@ -2213,104 +2335,134 @@ impl App for Shell {
                     hosts::save_hosts(&m.hosts);
                 }
             }
-            Msg::ContainerDraftStart => {
+            Msg::ContainerDraftNew => {
+                // "Nuevo": deselecciona la lista y activa engine + distro.
                 m.container_draft = Some(ContainerDraft::new());
             }
             Msg::ContainerDraftCancel => {
                 m.container_draft = None;
             }
-            Msg::ContainerDraftCreate => {
-                if let Some(d) = m.container_draft.clone() {
-                    let mount = d.mount.text();
-                    let mount_opt =
-                        if mount.trim().is_empty() { None } else { Some(mount) };
-                    // Identidad del recurso que se está creando: para
-                    // unshare/bwrap es el PATH del rootfs; para podman, el
-                    // nombre `shuma-<distro>-N` en el primer slot libre.
-                    let resource: String = match d.engine.as_str() {
-                        "unshare" | "bwrap" => rootfs_path_for(d.distro)
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_default(),
-                        _ => {
-                            let n = (1..1000)
-                                .find(|n| {
-                                    let cand = format!(
-                                        "shuma-{}-{n}",
-                                        d.distro.label().to_lowercase()
-                                    );
-                                    !m.containers_full.iter().any(|c| c.name == cand)
-                                })
-                                .unwrap_or(1);
-                            format!("shuma-{}-{n}", d.distro.label().to_lowercase())
-                        }
-                    };
-                    // Ligar el recurso a la sesión activa: así el engine elegido
-                    // VIAJA a la sesión (no queda atrapado en el draft) y el
-                    // select del form lo muestra seleccionado al volver. Sin
-                    // esto, crear en el modal no afectaba a la sesión y había
-                    // que re-elegir a mano (y el engine quedaba en el default).
-                    if let Some(s) = m.sessions.get_mut(m.active_session) {
-                        s.use_container = true;
-                        s.container_engine = d.engine.clone();
-                        s.distro = d.distro;
-                        s.container = Some(resource.clone());
-                        s.conn = ConnState::Pending;
+            Msg::ContainerEdit(idx) => {
+                // Elegir una fila (rootfs) de la lista para editarla: engine y
+                // distro quedan readonly; los mounts, editables.
+                if let Some(info) = m.containers_full.get(idx) {
+                    if info.rootfs {
+                        let name = info.name.clone();
+                        let cfg = m
+                            .container_cfgs
+                            .iter()
+                            .find(|c| c.name == name)
+                            .cloned()
+                            .unwrap_or_else(|| ContainerCfg {
+                                name: name.clone(),
+                                engine: engine_preferido().unwrap_or("unshare").to_string(),
+                                distro: distro_from_name(&name).unwrap_or(Distro::Ubuntu),
+                                mounts: Vec::new(),
+                            });
+                        m.container_draft = Some(ContainerDraft::from_cfg(&cfg));
                     }
-                    // Lanzar la creación real (una sola vez, acá). Cuando
-                    // termina, `ContainerCreated(resource)` encuentra la sesión
-                    // por `s.container` y la marca conectada.
-                    match d.engine.as_str() {
-                        "unshare" | "bwrap" => {
-                            if rootfs_listo(d.distro) {
-                                handle.dispatch(Msg::ContainerCreated(resource.clone()));
-                            } else {
-                                spawn_pull_rootfs_lxc(handle, d.distro, mount_opt);
-                            }
-                        }
-                        _ /* podman */ => {
-                            spawn_create_container(
-                                handle,
-                                d.distro.image(),
-                                resource.clone(),
-                                mount_opt,
-                            );
-                        }
-                    }
-                    m.container_draft = None;
-                    // Volver al form de la sesión con el recurso ya elegido.
-                    m.containers_modal_open = false;
-                    save_sessions(&m);
                 }
             }
             Msg::ContainerDraftSetEngine(name) => {
                 if let Some(d) = m.container_draft.as_mut() {
-                    d.engine = name;
+                    if d.editing.is_none() {
+                        d.engine = name; // readonly al editar
+                    }
                 }
             }
             Msg::ContainerDraftSetDistro(distro) => {
                 if let Some(d) = m.container_draft.as_mut() {
-                    d.distro = distro;
+                    if d.editing.is_none() {
+                        d.distro = distro; // readonly al editar
+                    }
                 }
             }
-            Msg::ContainerDraftFocusMount => {
+            Msg::ContainerDraftAddMount => {
                 if let Some(d) = m.container_draft.as_mut() {
-                    d.mount_focused = true;
+                    d.mounts.push(MountDraft::new());
+                    d.focus = Some((d.mounts.len() - 1, MountCol::Host));
+                }
+            }
+            Msg::ContainerDraftRemoveMount(i) => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    if i < d.mounts.len() {
+                        d.mounts.remove(i);
+                        d.focus = None;
+                    }
+                }
+            }
+            Msg::ContainerDraftToggleMountRo(i) => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    if let Some(md) = d.mounts.get_mut(i) {
+                        md.readonly = !md.readonly;
+                    }
+                }
+            }
+            Msg::ContainerDraftFocusMount(i, col) => {
+                if let Some(d) = m.container_draft.as_mut() {
+                    if i < d.mounts.len() {
+                        d.focus = Some((i, col));
+                    }
+                }
+            }
+            Msg::ContainerDraftSave => {
+                if let Some(d) = m.container_draft.clone() {
+                    let nuevo = d.editing.is_none();
+                    // Clave: si edita, el name existente; si es nuevo, el de la
+                    // distro (rootfs) o un nombre podman único.
+                    let name = d.editing.clone().unwrap_or_else(|| {
+                        if matches!(d.engine.as_str(), "unshare" | "bwrap") {
+                            d.distro.label().to_lowercase()
+                        } else {
+                            (1..1000)
+                                .map(|n| format!("shuma-{}-{n}", d.distro.label().to_lowercase()))
+                                .find(|cand| !m.container_cfgs.iter().any(|c| &c.name == cand))
+                                .unwrap_or_else(|| format!("shuma-{}", d.distro.label().to_lowercase()))
+                        }
+                    });
+                    let cfg = d.to_cfg(name.clone());
+                    if let Some(slot) = m.container_cfgs.iter_mut().find(|c| c.name == name) {
+                        *slot = cfg.clone();
+                    } else {
+                        m.container_cfgs.push(cfg.clone());
+                    }
+                    save_container_cfgs(&m.container_cfgs);
+                    // Si es NUEVO, crear el recurso real.
+                    if nuevo {
+                        match d.engine.as_str() {
+                            "unshare" | "bwrap" => {
+                                if !rootfs_listo(d.distro) {
+                                    spawn_pull_rootfs_lxc(handle, d.distro, None);
+                                }
+                            }
+                            _ /* podman */ => {
+                                spawn_create_container(handle, d.distro.image(), name.clone(), None);
+                            }
+                        }
+                    }
+                    // Quedamos EDITANDO el guardado (remarcado en la lista).
+                    m.container_draft = Some(ContainerDraft::from_cfg(&cfg));
+                    spawn_list_containers_full(handle);
                 }
             }
             Msg::ContainerDraftKey(e) => {
                 if let Some(d) = m.container_draft.as_mut() {
-                    if !d.mount_focused {
-                        return m;
-                    }
+                    let Some((idx, col)) = d.focus else { return m };
                     match &e.key {
                         llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
-                            d.mount_focused = false;
+                            d.focus = None;
                         }
                         llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
-                            handle.dispatch(Msg::ContainerDraftCreate);
+                            handle.dispatch(Msg::ContainerDraftSave);
                         }
                         _ => {
-                            let _ = d.mount.apply_key(&e);
+                            if let Some(md) = d.mounts.get_mut(idx) {
+                                let input = match col {
+                                    MountCol::Host => &mut md.host,
+                                    MountCol::Target => &mut md.target,
+                                };
+                                let _ = input.apply_key(&e);
+                            }
                         }
                     }
                 }

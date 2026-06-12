@@ -1712,22 +1712,28 @@ fn containers_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .text_aligned(
-        "Local con rootfs (unshare/bwrap) o podman (OCI). ▶ arranca · ■ para · 🗑 borra.".to_string(),
+        "Elegí uno de la lista para editarlo, o «Nuevo». Los mounts se aplican al correr.".to_string(),
         11.0, theme.fg_muted, Alignment::Start,
     );
 
-    // Form de alta si hay draft; si no, el botón para empezar uno.
-    let draft_or_button: View<Msg> = match &model.container_draft {
-        Some(d) => container_draft_form(d, theme),
-        None => action_button_small("+ Nuevo contenedor", Msg::ContainerDraftStart, theme),
-    };
+    // "Nuevo" arriba (deselecciona la lista y activa engine/distro) + el editor
+    // si hay un draft abierto.
+    let nuevo_btn = action_button_small("+ Nuevo", Msg::ContainerDraftNew, theme);
+    let editor: Option<View<Msg>> = model.container_draft.as_ref().map(|d| container_draft_form(d, theme));
     let refresh = action_button_small("⟳ Refrescar lista", Msg::RefreshContainersFull, theme);
+
+    // Nombre que se está editando, para remarcar su fila.
+    let editing_name: Option<&str> = model
+        .container_draft
+        .as_ref()
+        .and_then(|d| d.editing.as_deref());
 
     let mut rows: Vec<View<Msg>> = Vec::new();
     if !model.containers_full.is_empty() {
         rows.push(panel_label("Existentes", theme));
-        for c in &model.containers_full {
-            rows.push(container_row(c, theme));
+        for (i, c) in model.containers_full.iter().enumerate() {
+            let selected = editing_name == Some(c.name.as_str());
+            rows.push(container_row(i, c, selected, theme));
         }
     }
 
@@ -1741,60 +1747,73 @@ fn containers_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children({
-        let mut all = vec![sub, draft_or_button, refresh];
+        let mut all = vec![sub, nuevo_btn];
+        if let Some(ed) = editor {
+            all.push(ed);
+        }
+        all.push(refresh);
         all.extend(rows);
         all
     })
 }
 
-/// Form embebido para crear un container nuevo (engine + distro + mount).
-/// Usa botones radio inline para evitar el bug del overlay en ventana
-/// secundaria.
+/// Editor de contenedor: engine + distro (readonly al editar uno existente) +
+/// N directorios montados (host → destino, ro/rw). "Guardar" persiste.
 fn container_draft_form(d: &ContainerDraft, theme: &Theme) -> View<Msg> {
+    use super::MountCol;
+    use llimphi_ui::llimphi_layout::taffy::prelude::Dimension;
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
     let tpal = TextInputPalette::from_theme(theme);
+    let editing = d.editing.is_some();
 
-    // Botones radio horizontales — engine.
-    let mk_engine = |label: &str, name: &str| {
-        let active = d.engine == name;
-        let n = name.to_string();
-        View::new(Style {
+    // Radio readonly-aware: al editar, engine/distro quedan fijos (sin click).
+    let mk_radio = |label: String, active: bool, msg: Msg| {
+        let v = View::new(Style {
             flex_grow: 1.0,
-            size: Size { width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(), height: length(28.0_f32) },
+            size: Size { width: Dimension::auto(), height: length(28.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             ..Default::default()
         })
         .fill(if active { theme.accent } else { theme.bg_button })
-        .hover_fill(if active { theme.accent } else { theme.bg_button_hover })
         .radius(4.0)
-        .text_aligned(label.to_string(), 11.0, if active { theme.bg_app } else { theme.fg_text }, Alignment::Center)
-        .on_click(Msg::ContainerDraftSetEngine(n))
+        .text_aligned(
+            label,
+            11.0,
+            if active { theme.bg_app } else { theme.fg_muted },
+            Alignment::Center,
+        );
+        if editing {
+            v
+        } else {
+            v.hover_fill(if active { theme.accent } else { theme.bg_button_hover })
+                .on_click(msg)
+        }
     };
+
     let mut engine_btns: Vec<View<Msg>> = Vec::new();
-    if super::unshare_disponible() {
-        engine_btns.push(mk_engine("unshare", "unshare"));
-    }
-    if super::bwrap_disponible() {
-        engine_btns.push(mk_engine("bwrap", "bwrap"));
-    }
-    if super::podman_disponible() {
-        engine_btns.push(mk_engine("podman", "podman"));
+    for (avail, name) in [
+        (super::unshare_disponible(), "unshare"),
+        (super::bwrap_disponible(), "bwrap"),
+        (super::podman_disponible(), "podman"),
+    ] {
+        if avail && (!editing || d.engine == name) {
+            engine_btns.push(mk_radio(
+                name.to_string(),
+                d.engine == name,
+                Msg::ContainerDraftSetEngine(name.to_string()),
+            ));
+        }
     }
     if engine_btns.is_empty() {
         engine_btns.push(
             View::new(Style {
                 flex_grow: 1.0,
-                size: Size { width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(), height: length(28.0_f32) },
+                size: Size { width: Dimension::auto(), height: length(28.0_f32) },
                 ..Default::default()
             })
-            .text_aligned(
-                "ningún engine disponible".to_string(),
-                11.0,
-                theme.fg_muted,
-                Alignment::Center,
-            ),
+            .text_aligned("—".to_string(), 11.0, theme.fg_muted, Alignment::Center),
         );
     }
     let engine_row = View::new(Style {
@@ -1805,56 +1824,78 @@ fn container_draft_form(d: &ContainerDraft, theme: &Theme) -> View<Msg> {
     })
     .children(engine_btns);
 
-    // Botones radio — distro.
-    let mk_distro = |distro: Distro| {
-        let active = d.distro == distro;
-        View::new(Style {
-            flex_grow: 1.0,
-            size: Size { width: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(), height: length(28.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .fill(if active { theme.accent } else { theme.bg_button })
-        .hover_fill(if active { theme.accent } else { theme.bg_button_hover })
-        .radius(4.0)
-        .text_aligned(distro.label().to_string(), 11.0, if active { theme.bg_app } else { theme.fg_text }, Alignment::Center)
-        .on_click(Msg::ContainerDraftSetDistro(distro))
-    };
     let distro_row = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
         ..Default::default()
     })
-    .children(vec![
-        mk_distro(Distro::Ubuntu),
-        mk_distro(Distro::Debian),
-        mk_distro(Distro::Alpine),
-        mk_distro(Distro::Arch),
-    ]);
-
-    let mount_label = panel_label("Directorio del host a montar (opcional)", theme);
-    let mount_input = text_input_view(
-        &d.mount,
-        "/home/usuario/proyectos",
-        d.mount_focused,
-        &tpal,
-        Msg::ContainerDraftFocusMount,
-    );
-    let mount_hint = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
-        ..Default::default()
-    })
-    .text_aligned(
-        "queda visible como /work dentro del container".to_string(),
-        10.0,
-        theme.fg_muted,
-        Alignment::Start,
+    .children(
+        [Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch]
+            .into_iter()
+            .filter(|dd| !editing || d.distro == *dd)
+            .map(|dd| {
+                mk_radio(dd.label().to_string(), d.distro == dd, Msg::ContainerDraftSetDistro(dd))
+            })
+            .collect::<Vec<_>>(),
     );
 
-    let btn_create = action_button_small("Crear (Enter)", Msg::ContainerDraftCreate, theme);
-    let btn_cancel = action_button_small("Cancelar (Esc)", Msg::ContainerDraftCancel, theme);
+    // Filas de mount: host → destino + ro/rw + borrar.
+    let mut mount_rows: Vec<View<Msg>> = Vec::new();
+    for (i, md) in d.mounts.iter().enumerate() {
+        let host_in = text_input_view(
+            &md.host,
+            "/home/usuario/proyecto",
+            d.focus == Some((i, MountCol::Host)),
+            &tpal,
+            Msg::ContainerDraftFocusMount(i, MountCol::Host),
+        );
+        let arrow = View::new(Style {
+            size: Size { width: length(16.0_f32), height: length(28.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .text_aligned("→".to_string(), 12.0, theme.fg_muted, Alignment::Center);
+        let tgt_in = text_input_view(
+            &md.target,
+            "/work",
+            d.focus == Some((i, MountCol::Target)),
+            &tpal,
+            Msg::ContainerDraftFocusMount(i, MountCol::Target),
+        );
+        let ro_label = if md.readonly { "ro" } else { "rw" };
+        let ro_btn = View::new(Style {
+            size: Size { width: length(34.0_f32), height: length(28.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(if md.readonly { theme.bg_button } else { theme.accent })
+        .hover_fill(theme.bg_button_hover)
+        .radius(4.0)
+        .text_aligned(
+            ro_label.to_string(),
+            11.0,
+            if md.readonly { theme.fg_text } else { theme.bg_app },
+            Alignment::Center,
+        )
+        .on_click(Msg::ContainerDraftToggleMountRo(i));
+        let rm_btn = action_button_small("🗑", Msg::ContainerDraftRemoveMount(i), theme);
+        mount_rows.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(5.0_f32), height: length(0.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![host_in, arrow, tgt_in, ro_btn, rm_btn]),
+        );
+    }
+    let add_mount = action_button_small("+ agregar directorio", Msg::ContainerDraftAddMount, theme);
+
+    let save_label = if editing { "Guardar (Enter)" } else { "Crear (Enter)" };
     let buttons = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
@@ -1862,14 +1903,30 @@ fn container_draft_form(d: &ContainerDraft, theme: &Theme) -> View<Msg> {
         margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(10.0_f32), bottom: length(0.0_f32) },
         ..Default::default()
     })
-    .children(vec![btn_create, btn_cancel]);
+    .children(vec![
+        action_button_small(save_label, Msg::ContainerDraftSave, theme),
+        action_button_small("Cancelar (Esc)", Msg::ContainerDraftCancel, theme),
+    ]);
+
+    let titulo = panel_label(
+        if editing { "Editar contenedor" } else { "Nuevo contenedor" },
+        theme,
+    );
+    let mut children = vec![
+        titulo,
+        panel_label("Engine", theme),
+        engine_row,
+        panel_label("Distro", theme),
+        distro_row,
+        panel_label("Directorios montados (host → destino)", theme),
+    ];
+    children.extend(mount_rows);
+    children.push(add_mount);
+    children.push(buttons);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto(),
-        },
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
         padding: Rect { left: length(12.0_f32), right: length(12.0_f32), top: length(12.0_f32), bottom: length(12.0_f32) },
         gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
         margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(6.0_f32) },
@@ -1877,19 +1934,10 @@ fn container_draft_form(d: &ContainerDraft, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .radius(6.0)
-    .children(vec![
-        panel_label("Engine", theme),
-        engine_row,
-        panel_label("Distro", theme),
-        distro_row,
-        mount_label,
-        mount_input,
-        mount_hint,
-        buttons,
-    ])
+    .children(children)
 }
 
-fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
+fn container_row(idx: usize, c: &ContainerInfo, selected: bool, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::AlignItems;
     use llimphi_ui::llimphi_text::Alignment;
     let running = c.status.starts_with("Up");
@@ -1923,7 +1971,7 @@ fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
         children.push(action_button_small("■", Msg::StopContainer(c.name.clone()), theme));
         children.push(action_button_small("🗑", Msg::RemoveContainer(c.name.clone()), theme));
     }
-    View::new(Style {
+    let mut row = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -1931,8 +1979,19 @@ fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
         padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
         ..Default::default()
     })
+    .radius(4.0)
     .hover_fill(theme.bg_row_hover)
-    .children(children)
+    .children(children);
+    // Remarcado cuando está seleccionado para editar.
+    if selected {
+        row = row.fill(theme.bg_panel_alt);
+    }
+    // Sólo los rootfs se editan (engine/distro + mounts); click en la fila los
+    // selecciona. Los botones de acción (🗑/▶/■) consumen su click aparte.
+    if c.rootfs {
+        row = row.on_click(Msg::ContainerEdit(idx));
+    }
+    row
 }
 
 /// Diálogo bloqueante de hosts (modal centrado, abierto por
