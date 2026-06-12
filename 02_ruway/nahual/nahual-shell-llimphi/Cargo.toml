@@ -12,6 +12,16 @@ description = "nahual-shell-llimphi — MVP del shell nahual sobre Llimphi: file
 name = "nahual-shell-llimphi"
 path = "src/main.rs"
 
+[features]
+# `ffmpeg` (default-on): cablea el puente `foreign-av` para reproducir códecs
+# ajenos sin decoder nativo (MP4/MOV con H.264/H.265…). Es un puente puro-Rust
+# que lanza el binario `ffmpeg` por subprocess — no enlaza C, no rompe musl-
+# estático, y degrada con gracia si ffmpeg no está en PATH. `--no-default-
+# features` deja a nahual 100% puro-Rust (esos formatos caen al "sin decoder
+# nativo" de siempre). Ver CLAUDE.md regla #4 y foreign-av/Cargo.toml.
+default = ["ffmpeg"]
+ffmpeg = ["dep:foreign-av"]
+
 [dependencies]
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
@@ -53,6 +63,9 @@ nahual-thumb-core = { workspace = true }
 media-core = { path = "../../media/media-core" }
 media-source-av1 = { path = "../../media/media-source-av1" }
 media-source-webm = { path = "../../media/media-source-webm" }
+# Puente a ffmpeg (subprocess, puro-Rust) para códecs ajenos sin decoder
+# nativo. Opcional: detrás de la feature `ffmpeg` (ver [features]).
+foreign-av = { path = "../../../shared/foreign-av", optional = true }
 shuma-discern = { path = "../../shuma/sandbox/shuma-discern" }
 card-core = { path = "../../../shared/card/card-core" }
 serde = { workspace = true }

@@ -920,15 +920,51 @@ pub(crate) fn open_video(path: &Path) -> VideoViewerState {
     match ext.as_deref() {
         Some("webm" | "mkv") => VideoViewerState::open_webm(path),
         Some("gif") => VideoViewerState::open_gif(path),
-        // MP4/MOV: el discernimiento los reconoce (ftyp) pero todavía no
-        // hay decoder nativo H.264/H.265 — el player abre con un error
-        // claro en vez de un volcado binario o un fallo de parseo críptico.
-        Some("mp4" | "m4v" | "mov") => VideoViewerState::unsupported(
-            path,
-            "MP4/H.264 sin decoder nativo todavía — convertí a WebM (AV1)",
-        ),
+        // MP4/MOV: el discernimiento los reconoce (ftyp) pero no hay decoder
+        // nativo H.264/H.265. Con la feature `ffmpeg` se reproducen vía el
+        // puente `foreign-av` (subprocess); sin ella, o si ffmpeg no está en
+        // PATH, caen a un estado de error claro en vez de un volcado binario.
+        Some("mp4" | "m4v" | "mov") => open_ffmpeg_video(path),
         _ => VideoViewerState::open_av1(path),
     }
+}
+
+/// Camino para contenedores con códecs ajenos (H.264/H.265…): construye una
+/// fuente `foreign-av` (que lanza `ffmpeg` por subprocess, regla #4) y la pasa
+/// al viewer por el seam `from_source`. Si `foreign-av` no está compilado
+/// (build `--no-default-features`) o ffmpeg falla/no está en PATH, devuelve el
+/// estado de error explícito de siempre.
+#[cfg(feature = "ffmpeg")]
+fn open_ffmpeg_video(path: &Path) -> VideoViewerState {
+    let name = path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let source = foreign_av::probe(path)
+        .and_then(|info| {
+            let duration = info.duration;
+            let dims = info.video.map(|v| (v.width, v.height)).unwrap_or((0, 0));
+            let session = foreign_av::MediaSession::open(info)?;
+            let src = foreign_av::FfmpegVideoSource::from_session(session)?;
+            Ok((src, dims, duration))
+        });
+    match source {
+        Ok((src, (w, h), duration)) => {
+            VideoViewerState::from_source(Box::new(src), name, w, h, Some(duration))
+        }
+        Err(e) => VideoViewerState::unsupported(
+            path,
+            format!("MP4/H.264 vía ffmpeg falló: {e} — ¿está ffmpeg en PATH?"),
+        ),
+    }
+}
+
+#[cfg(not(feature = "ffmpeg"))]
+fn open_ffmpeg_video(path: &Path) -> VideoViewerState {
+    VideoViewerState::unsupported(
+        path,
+        "MP4/H.264 sin decoder nativo (build sin feature ffmpeg) — convertí a WebM (AV1)",
+    )
 }
 
 /// Cuántos bytes del header alcanzan a `shuma-discern`. Los magic-bytes y
@@ -946,4 +982,47 @@ pub(crate) fn read_header_sample(path: &Path, max: usize) -> Option<Vec<u8>> {
     let n = f.read(&mut buf).ok()?;
     buf.truncate(n);
     Some(buf)
+}
+
+#[cfg(all(test, feature = "ffmpeg"))]
+mod ffmpeg_tests {
+    use super::*;
+
+    /// Smoke end-to-end del puente foreign-av: forja un MP4/H.264 real con
+    /// `ffmpeg` (testsrc, 1 s) y verifica que `open_video` produzca una fuente
+    /// viva que decodifique al menos un frame. `#[ignore]` porque depende del
+    /// binario `ffmpeg` en PATH — correr con `--ignored`. Si ffmpeg no genera
+    /// el archivo (no está instalado), el test se salta solo.
+    #[test]
+    #[ignore = "requiere ffmpeg en PATH"]
+    fn mp4_h264_reproduce_via_foreign_av() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mp4 = dir.path().join("smoke.mp4");
+        let status = std::process::Command::new("ffmpeg")
+            .args(["-v", "error", "-y", "-f", "lavfi", "-i"])
+            .arg("testsrc=size=64x48:rate=10:duration=1")
+            .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
+            .arg(&mp4)
+            .status();
+        match status {
+            Ok(s) if s.success() && mp4.exists() => {}
+            _ => return, // ffmpeg ausente o sin libx264: nada que probar.
+        }
+
+        let mut st = open_video(&mp4);
+        assert!(
+            st.dimensions().0 > 0,
+            "el probe debería haber dado dimensiones de video"
+        );
+
+        // El primer frame puede tardar varios ticks (arranque del subprocess).
+        let mut got = false;
+        for _ in 0..120 {
+            if st.tick(Duration::from_millis(100)) {
+                got = true;
+                break;
+            }
+        }
+        assert!(got, "foreign-av debería decodificar al menos un frame de H.264");
+    }
 }
