@@ -55,12 +55,14 @@ mod viewer_registry;
 mod modelo;
 mod helpers;
 mod overlays;
+mod palette;
 mod view;
 mod update;
 
 use llimphi_theme::Theme;
 use llimphi_motion::Tween;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_module_command_palette::{self as command_palette, PaletteMsg};
 use app_bus::AppRegistry;
 use tullpu_module as tullpu;
 use wawa_config_llimphi::theme_from_wawa;
@@ -178,6 +180,8 @@ impl App for Shell {
             thumbs: HashMap::new(),
             thumbs_pending: std::collections::HashSet::new(),
             thumbs_failed: std::collections::HashSet::new(),
+            palette: None,
+            palette_commands: crate::palette::build_command_catalog(),
         }
     }
 
@@ -188,6 +192,20 @@ impl App for Shell {
     fn on_key(_model: &Self::Model, e: &KeyEvent) -> Option<Self::Msg> {
         if e.state != KeyState::Pressed {
             return None;
+        }
+        // Command palette abierto: el módulo se lleva todo el teclado (igual
+        // que un modal). Máxima prioridad.
+        if let Some(state) = _model.palette.as_ref() {
+            return command_palette::on_key(state, e).map(Msg::Palette);
+        }
+        // Ctrl+Shift+P (canónico, igual que VS Code/nada) o Ctrl+P abren el
+        // palette. Va antes que cualquier captura modal-light de abajo.
+        if command_palette::open_shortcut(e)
+            || (e.modifiers.ctrl
+                && !e.modifiers.shift
+                && matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("p")))
+        {
+            return Some(Msg::Palette(PaletteMsg::Open));
         }
         // Prompt de nombre (nueva carpeta/archivo, renombrar): captura todo el
         // teclado. Máxima prioridad — es un modal.

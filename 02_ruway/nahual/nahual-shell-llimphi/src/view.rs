@@ -24,6 +24,7 @@ use llimphi_widget_grid::{grid_view, ventana_visible, GridCell, GridMetrics, Gri
 use llimphi_widget_breadcrumb::{breadcrumb_view, BreadcrumbPalette};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_menubar::{menubar_view, menubar_overlay_animated};
+use llimphi_module_command_palette::{self as command_palette, PaletteMsg};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_toolbar::{toolbar_view, ToolbarGroup, ToolbarItem, ToolbarPalette};
@@ -265,6 +266,11 @@ pub(crate) fn shell_view(model: &Model) -> View<Msg> {
 
 /// Cuerpo de `App::view_overlay`: modales + menús flotantes.
 pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
+    // Command palette: prioridad máxima — mientras está abierto capta todo el
+    // teclado y se pinta sobre el resto, anclado arriba-centro como VS Code.
+    if let Some(p) = &model.palette {
+        return Some(palette_overlay(p, model));
+    }
     // Los modales de operación (prompt de nombre, confirmación de borrado)
     // van por encima de todo.
     if let Some(p) = &model.prompt {
@@ -287,6 +293,41 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
         model.menu_active,
         model.menu_anim.value(),
     )
+}
+
+/// Overlay del command palette: la caja del módulo (ancho fijo) anclada
+/// arriba-centro sobre un scrim que, al clickearse, lo cierra. El render del
+/// contenido (input + filas rankeadas) es del módulo `command-palette`.
+pub(crate) fn palette_overlay(
+    p: &command_palette::PaletteState,
+    model: &Model,
+) -> View<Msg> {
+    let pal = command_palette::PalettePalette::from_theme(&model.theme);
+    let inner = command_palette::view::<Msg, _>(p, &model.palette_commands, &pal, Msg::Palette);
+    let caja = View::new(Style {
+        size: Size { width: length(660.0_f32), height: auto() },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel)
+    .radius(10.0)
+    .border(1.0, model.theme.accent)
+    .children(vec![inner]);
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(0.0),
+            right: length(0.0),
+            top: length(64.0_f32),
+            bottom: length(0.0),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 120))
+    .on_click(Msg::Palette(PaletteMsg::Close))
+    .children(vec![caja])
 }
 
 /// Ícono vectorial (real, no glifo unicode) para una fila del árbol.

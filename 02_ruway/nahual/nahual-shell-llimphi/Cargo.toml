@@ -35,6 +35,9 @@ llimphi-widget-tree = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-toolbar = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
+# Command palette (Ctrl+Shift+P): el módulo canónico de llimphi, mismo que
+# usa `nada`. El shell sólo arma el catálogo y mapea id→Msg.
+llimphi-module-command-palette = { workspace = true }
 tullpu-module = { workspace = true }
 media-module = { workspace = true }
 llimphi-icons = { workspace = true }

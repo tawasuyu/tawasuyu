@@ -26,6 +26,7 @@ use nahual_archive_viewer_llimphi::ArchivePreview;
 use nahual_font_viewer_llimphi::FontPreview;
 use llimphi_theme::Theme;
 use llimphi_motion::Tween;
+use llimphi_module_command_palette::{Command as PaletteCommand, PaletteMsg, PaletteState};
 use app_bus::AppRegistry;
 use crate::ops::{OpKind, OpQueue};
 use crate::state::{Label, ShellState};
@@ -415,6 +416,12 @@ pub(crate) struct Model {
     pub(crate) thumbs_pending: HashSet<PathBuf>,
     /// Miniaturas que fallaron al generarse (se pinta un ⚠, no se reintenta).
     pub(crate) thumbs_failed: HashSet<PathBuf>,
+    /// Command palette (Ctrl+Shift+P / Ctrl+P): `None` cerrado. Mientras esté
+    /// `Some`, el módulo se lleva todo el teclado.
+    pub(crate) palette: Option<PaletteState>,
+    /// Catálogo de comandos del palette. Se arma una vez en `init` y se reusa
+    /// en cada apertura (el palette guarda índices, no copia los comandos).
+    pub(crate) palette_commands: Vec<PaletteCommand>,
 }
 
 #[derive(Clone)]
@@ -628,6 +635,10 @@ pub(crate) enum Msg {
     ThumbReady(PathBuf, ThumbRgba),
     /// La miniatura de este path falló (formato no soportado / I/O).
     ThumbFailed(PathBuf),
+
+    // ---- Command palette (Ctrl+Shift+P / Ctrl+P) ----
+    /// Mensaje del módulo command-palette (abrir/cerrar/teclear/navegar/aplicar).
+    Palette(PaletteMsg),
 }
 
 impl Model {

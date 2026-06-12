@@ -829,6 +829,9 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
             m.thumbs_pending.remove(&path);
             m.thumbs_failed.insert(path);
         }
+        Msg::Palette(pm) => {
+            return crate::palette::apply_palette(m, pm, handle);
+        }
     }
     m
 }
