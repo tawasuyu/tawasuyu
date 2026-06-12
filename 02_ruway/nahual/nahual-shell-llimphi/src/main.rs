@@ -53,7 +53,7 @@ use state::{Label, ShellState};
 use viewer_registry::ViewerKind;
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{auto, length, percent, FlexDirection, Size, Style},
+    prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{
@@ -74,6 +74,8 @@ use llimphi_widget_menubar::{
 };
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
@@ -156,6 +158,13 @@ enum PreviewPane {
 /// `spawn_periodic` la dispara siempre; el `update` sólo tickea el panel
 /// derecho cuando es de los que avanzan.
 const FRAME_TICK: Duration = Duration::from_millis(33);
+
+/// Alto de cada fila del árbol lateral (px) — debe coincidir con el
+/// `row_height` que se le pasa a `tree_view`, para que el ventaneo cuadre.
+const TREE_ROW_H: f32 = 22.0;
+
+/// Ancho del rail de dientes (sesiones de trabajo), px.
+const SESSION_RAIL_W: f32 = 40.0;
 
 /// Intervalo mínimo entre re-streams del basemap PMTiles (debounce): los
 /// pans/zooms se acumulan y se recalcula el viewport a lo sumo cada tanto,
@@ -287,11 +296,12 @@ fn aplicar_patron(pattern: &str, original: &str, n: usize) -> String {
         .replace("{n}", &n.to_string())
 }
 
-/// Estado *movible* de una sesión de trabajo (pestaña): todo lo que cambia
-/// al saltar de una pestaña a otra. La sesión activa **no** guarda su snap
-/// aquí — sus campos viven directamente en `Model` (los `panes`, `preview`,
-/// etc.). Al cambiar de pestaña se hace swap: los campos vivos del `Model` se
-/// vuelcan a un `SessionSnap` y los de la pestaña destino se restauran.
+/// Estado *movible* de una sesión de trabajo (diente del rail): todo lo que
+/// cambia al saltar de una sesión a otra. La sesión activa **no** guarda su
+/// snap aquí — sus campos viven directamente en `Model` (los `panes`,
+/// `preview`, el árbol expandido, etc.). Al cambiar de diente se hace swap:
+/// los campos vivos del `Model` se vuelcan a un `SessionSnap` y los de la
+/// sesión destino se restauran.
 struct SessionSnap {
     panes: [Pane; 2],
     focus: usize,
@@ -305,34 +315,35 @@ struct SessionSnap {
     basemap: Option<Basemap>,
     basemap_dirty: bool,
     last_restream: Option<Instant>,
+    /// Carpetas descolapsadas del árbol lateral — **por sesión**.
+    tree_expanded: BTreeSet<PathBuf>,
+    /// Offset de scroll del árbol lateral (en filas) — por sesión.
+    tree_scroll: usize,
 }
 
-/// Una pestaña/sesión de trabajo. `snap` es `None` para la sesión **activa**
-/// (sus campos están vivos en `Model`) y `Some(_)` para las inactivas.
+/// Una sesión de trabajo, representada por un **diente** del rail. `snap` es
+/// `None` para la sesión **activa** (sus campos están vivos en `Model`) y
+/// `Some(_)` para las inactivas.
 struct Session {
     name: String,
     snap: Option<SessionSnap>,
 }
 
-/// Árbol de carpetas del panel lateral (sidebar). No es por-sesión: es una
-/// vista global del filesystem, expandible y clickable, que navega el panel
-/// activo de la sesión activa.
-#[derive(Default)]
-struct SideTree {
-    /// Carpetas expandidas (mostrando sus subcarpetas).
-    expanded: BTreeSet<PathBuf>,
-    /// Cache de subcarpetas por carpeta (sólo directorios, ya ordenados).
-    children: HashMap<PathBuf, Vec<PathBuf>>,
-}
-
 struct Model {
-    /// Pestañas/sesiones abiertas. `sessions[active]` es la viva (sus campos
-    /// de navegación/preview están en los campos sueltos de abajo).
+    /// Sesiones de trabajo abiertas (los dientes del rail). `sessions[active]`
+    /// es la viva (sus campos de navegación/preview/árbol están en los campos
+    /// sueltos de abajo).
     sessions: Vec<Session>,
     /// Índice de la sesión activa.
     active: usize,
-    /// Árbol de carpetas del sidebar (global, navega la sesión activa).
-    side_tree: SideTree,
+    /// Carpetas descolapsadas del árbol lateral de la sesión activa.
+    tree_expanded: BTreeSet<PathBuf>,
+    /// Offset de scroll del árbol lateral (en filas) de la sesión activa.
+    tree_scroll: usize,
+    /// Cache **global** de subcarpetas por carpeta (sólo directorios, ya
+    /// ordenados). No es por-sesión: el contenido de un dir es el mismo para
+    /// todas; sólo el set de expandidas cambia por sesión.
+    tree_children: HashMap<PathBuf, Vec<PathBuf>>,
     /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
     /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
     panes: [Pane; 2],
@@ -566,19 +577,19 @@ enum Msg {
     /// Agrega a favoritos la carpeta seleccionada (o la actual si no es dir).
     AddPlace,
 
-    // ---- Pestañas / sesiones de trabajo ----
-    /// Abre una pestaña nueva (posada en la carpeta actual).
-    TabNew,
-    /// Activa la pestaña en el índice dado.
-    TabActivate(usize),
-    /// Cierra la pestaña en el índice dado (nunca cierra la última).
-    TabClose(usize),
+    // ---- Sesiones de trabajo (dientes del rail) ----
+    /// Abre una sesión nueva (posada en la carpeta actual).
+    SessionNew,
+    /// Activa la sesión (diente) en el índice dado.
+    SessionActivate(usize),
 
     // ---- Árbol de carpetas del sidebar ----
     /// Expande/colapsa una carpeta del árbol lateral.
     TreeToggle(PathBuf),
     /// Navega el panel activo a una carpeta del árbol lateral (y la expande).
     TreeSelect(PathBuf),
+    /// Rueda sobre el árbol lateral: scrollea sus filas (delta en líneas).
+    TreeScroll(f32),
 
     // ---- Fase 4.8: vista iconos con miniaturas ----
     /// Una miniatura terminó de generarse (llega del worker).
@@ -641,10 +652,12 @@ impl Model {
             basemap: self.basemap.take(),
             basemap_dirty: self.basemap_dirty,
             last_restream: self.last_restream.take(),
+            tree_expanded: std::mem::take(&mut self.tree_expanded),
+            tree_scroll: self.tree_scroll,
         }
     }
 
-    /// Restaura los campos vivos desde un `SessionSnap` (al activar su pestaña).
+    /// Restaura los campos vivos desde un `SessionSnap` (al activar su diente).
     fn restore(&mut self, snap: SessionSnap) {
         let [p0, p1] = snap.panes;
         self.panes = [p0, p1];
@@ -659,9 +672,13 @@ impl Model {
         self.basemap = snap.basemap;
         self.basemap_dirty = snap.basemap_dirty;
         self.last_restream = snap.last_restream;
+        self.tree_expanded = snap.tree_expanded;
+        self.tree_scroll = snap.tree_scroll;
+        // Asegurá el cache de subcarpetas de lo que esta sesión tiene abierto.
+        ensure_children_for_expanded(&mut self.tree_children, &self.tree_expanded);
     }
 
-    /// Activa la pestaña `i`: guarda la sesión viva en su slot y restaura la
+    /// Activa la sesión `i`: guarda la sesión viva en su slot y restaura la
     /// destino. No hace nada si `i` ya es la activa o está fuera de rango.
     fn switch_to(&mut self, i: usize) {
         if i == self.active || i >= self.sessions.len() {
@@ -677,12 +694,12 @@ impl Model {
 }
 
 /// La carpeta actual del panel enfocado de la sesión viva, para sembrar una
-/// pestaña nueva y nombrarla.
+/// sesión nueva y nombrarla.
 fn cur_dir(m: &Model) -> PathBuf {
     PathBuf::from(m.cur().current_id().as_str())
 }
 
-/// Nombre corto de una pestaña a partir de su carpeta de arranque.
+/// Nombre corto de una sesión a partir de su carpeta de arranque.
 fn session_name(cwd: &Path) -> String {
     cwd.file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -690,7 +707,8 @@ fn session_name(cwd: &Path) -> String {
         .unwrap_or_else(|| "/".to_string())
 }
 
-/// Snapshot fresco para una pestaña nueva, posada en `cwd`.
+/// Snapshot fresco para una sesión nueva, posada en `cwd`. El árbol arranca
+/// descolapsado a lo largo de la cadena de ancestros de `cwd`.
 fn fresh_snap(cwd: &Path) -> SessionSnap {
     SessionSnap {
         panes: [
@@ -708,6 +726,8 @@ fn fresh_snap(cwd: &Path) -> SessionSnap {
         basemap: None,
         basemap_dirty: false,
         last_restream: None,
+        tree_expanded: ancestors_set(cwd),
+        tree_scroll: 0,
     }
 }
 
@@ -768,15 +788,18 @@ impl App for Shell {
         // externo: cada pulso avanza un frame / refresca el espectro. Es
         // barato cuando el panel no avanza (el update sale temprano).
         handle.spawn_periodic(FRAME_TICK, || Msg::Tick);
-        // El sidebar arranca con el árbol expandido hasta el cwd, para que la
+        // El sidebar arranca con el árbol descolapsado hasta el cwd, para que la
         // carpeta actual se vea de entrada.
-        let mut side_tree = SideTree::default();
-        seed_tree_to(&mut side_tree, &cwd);
+        let tree_expanded = ancestors_set(&cwd);
+        let mut tree_children = HashMap::new();
+        ensure_children_for_expanded(&mut tree_children, &tree_expanded);
         Model {
-            // Una sola pestaña al arrancar; la activa lleva `snap: None`.
+            // Una sola sesión al arrancar; la activa lleva `snap: None`.
             sessions: vec![Session { name: session_name(&cwd), snap: None }],
             active: 0,
-            side_tree,
+            tree_expanded,
+            tree_scroll: 0,
+            tree_children,
             // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
             panes: [
                 Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
@@ -1530,9 +1553,9 @@ impl App for Shell {
                 }
                 m.context_menu = None;
             }
-            Msg::TabNew => {
-                // Guarda la sesión viva, abre una pestaña nueva en el cwd
-                // actual y la activa.
+            Msg::SessionNew => {
+                // Guarda la sesión viva, abre una sesión (diente) nueva en el
+                // cwd actual y la activa.
                 let cwd = cur_dir(&m);
                 let snap = m.snapshot_active();
                 m.sessions[m.active].snap = Some(snap);
@@ -1546,47 +1569,39 @@ impl App for Shell {
                     m.restore(snap);
                 }
             }
-            Msg::TabActivate(i) => {
+            Msg::SessionActivate(i) => {
                 m.switch_to(i);
             }
-            Msg::TabClose(i) => {
-                // Nunca cerramos la última pestaña.
-                if m.sessions.len() > 1 && i < m.sessions.len() {
-                    let was_active = m.active;
-                    m.sessions.remove(i);
-                    if i == was_active {
-                        // La sesión viva se descartó: restauramos una vecina.
-                        m.active = i.min(m.sessions.len() - 1);
-                        if let Some(snap) = m.sessions[m.active].snap.take() {
-                            m.restore(snap);
-                        }
-                    } else if i < was_active {
-                        m.active -= 1;
-                    }
-                }
-            }
             Msg::TreeToggle(path) => {
-                if m.side_tree.expanded.contains(&path) {
-                    m.side_tree.expanded.remove(&path);
+                if m.tree_expanded.contains(&path) {
+                    m.tree_expanded.remove(&path);
                 } else {
-                    ensure_tree_children(&mut m.side_tree, &path);
-                    m.side_tree.expanded.insert(path);
+                    ensure_tree_children(&mut m.tree_children, &path);
+                    m.tree_expanded.insert(path);
                 }
             }
             Msg::TreeSelect(path) => {
                 if path.is_dir() {
-                    ensure_tree_children(&mut m.side_tree, &path);
-                    m.side_tree.expanded.insert(path.clone());
+                    ensure_tree_children(&mut m.tree_children, &path);
+                    m.tree_expanded.insert(path.clone());
                     m.cur_pane_mut().nav_stack = vec![posix_nav(&path)];
                     m.cur_pane_mut().marked.clear();
                     apply_format(&mut m);
                     record_recent(&mut m);
                     refresh_preview(&mut m);
-                    // Mantené el nombre de la pestaña en sync con la carpeta.
+                    // Mantené el nombre de la sesión en sync con la carpeta.
                     let nombre = session_name(&path);
                     let activa = m.active;
                     m.sessions[activa].name = nombre;
                 }
+            }
+            Msg::TreeScroll(dy) => {
+                // Rueda hacia abajo (dy<0) baja; ~3 filas por muesca.
+                let total = count_tree_rows(&m);
+                let max = total.saturating_sub(tree_visible_rows(&m));
+                let delta = (dy * 3.0).round() as i32;
+                let nuevo = (m.tree_scroll as i32 - delta).clamp(0, max as i32);
+                m.tree_scroll = nuevo as usize;
             }
             Msg::ThumbReady(path, thumb) => {
                 m.thumbs_pending.remove(&path);
@@ -1734,10 +1749,13 @@ impl App for Shell {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
-        .children(vec![sidebar_view(model, &theme), body_inner]);
+        .children(vec![
+            session_rail_view(model, &theme),
+            sidebar_view(model, &theme),
+            body_inner,
+        ]);
 
-        let tabs = tabs_bar_view(model, &theme);
-        let mut col: Vec<View<Msg>> = vec![menubar, tabs, body_wrap];
+        let mut col: Vec<View<Msg>> = vec![menubar, body_wrap];
         if let Some(panel) = queue_panel(model, &theme) {
             col.push(panel);
         }
@@ -2305,18 +2323,18 @@ fn home_dir() -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-/// Carpetas raíz del árbol lateral, con su glifo: home (⌂), la raíz del
-/// filesystem (▣) y los favoritos del usuario (★), sin duplicar.
-fn tree_roots(state: &ShellState) -> Vec<(PathBuf, &'static str)> {
-    let mut roots: Vec<(PathBuf, &'static str)> = Vec::new();
+/// Carpetas raíz del árbol lateral, con su ícono real: home, la raíz del
+/// filesystem y los favoritos del usuario, sin duplicar.
+fn tree_roots(state: &ShellState) -> Vec<(PathBuf, Icon)> {
+    let mut roots: Vec<(PathBuf, Icon)> = Vec::new();
     if let Some(home) = home_dir() {
-        roots.push((home, "⌂"));
+        roots.push((home, Icon::Home));
     }
-    roots.push((PathBuf::from("/"), "▣"));
+    roots.push((PathBuf::from("/"), Icon::Folder));
     for p in &state.places {
         let pb = PathBuf::from(p);
         if pb.is_dir() && !roots.iter().any(|(r, _)| r == &pb) {
-            roots.push((pb, "★"));
+            roots.push((pb, Icon::Open));
         }
     }
     roots
@@ -2340,21 +2358,32 @@ fn list_dirs(dir: &Path) -> Vec<PathBuf> {
     v
 }
 
-/// Carga (si falta) el cache de subcarpetas de `dir` en el árbol lateral.
-fn ensure_tree_children(tree: &mut SideTree, dir: &Path) {
-    if !tree.children.contains_key(dir) {
-        tree.children.insert(dir.to_path_buf(), list_dirs(dir));
+/// Carga (si falta) el cache **global** de subcarpetas de `dir`.
+fn ensure_tree_children(children: &mut HashMap<PathBuf, Vec<PathBuf>>, dir: &Path) {
+    if !children.contains_key(dir) {
+        children.insert(dir.to_path_buf(), list_dirs(dir));
     }
 }
 
-/// Expande el árbol a lo largo de la cadena de ancestros hasta `target`, para
-/// que la carpeta actual quede visible de entrada.
-fn seed_tree_to(tree: &mut SideTree, target: &Path) {
+/// El set de ancestros de `target` (incluido él): `/`, `/a`, `/a/b`, … Sirve
+/// para arrancar el árbol descolapsado a lo largo del camino al cwd.
+fn ancestors_set(target: &Path) -> BTreeSet<PathBuf> {
+    let mut set = BTreeSet::new();
     let mut acc = PathBuf::new();
     for comp in target.components() {
         acc.push(comp);
-        ensure_tree_children(tree, &acc);
-        tree.expanded.insert(acc.clone());
+        set.insert(acc.clone());
+    }
+    set
+}
+
+/// Asegura el cache de subcarpetas para cada carpeta descolapsada.
+fn ensure_children_for_expanded(
+    children: &mut HashMap<PathBuf, Vec<PathBuf>>,
+    expanded: &BTreeSet<PathBuf>,
+) {
+    for dir in expanded {
+        ensure_tree_children(children, dir);
     }
 }
 
@@ -2366,25 +2395,57 @@ fn node_label(path: &Path) -> String {
         .unwrap_or_else(|| path.display().to_string())
 }
 
+/// Cuenta las filas visibles del árbol (según el set de descolapsadas) — para
+/// el clamp del scroll, sin construir las `View`s.
+fn count_tree_rows(model: &Model) -> usize {
+    fn rec(model: &Model, path: &Path) -> usize {
+        let mut n = 1;
+        if model.tree_expanded.contains(path) {
+            if let Some(ch) = model.tree_children.get(path) {
+                for c in ch {
+                    n += rec(model, c);
+                }
+            }
+        }
+        n
+    }
+    tree_roots(&model.state).iter().map(|(r, _)| rec(model, r)).sum()
+}
+
+/// Alto disponible del árbol (aprox: ventana menos menubar + cabecera).
+fn tree_viewport_h(model: &Model) -> f32 {
+    let (_, vh) = viewport_of(model);
+    (vh - 60.0).max(120.0)
+}
+
+/// Cuántas filas del árbol entran en el viewport.
+fn tree_visible_rows(model: &Model) -> usize {
+    (tree_viewport_h(model) / TREE_ROW_H).floor().max(1.0) as usize
+}
+
+/// Ícono vectorial (real, no glifo unicode) para una fila del árbol.
+fn tree_icon(icon: Icon, selected: bool, theme: &Theme) -> View<Msg> {
+    let color = if selected { theme.fg_text } else { theme.fg_muted };
+    View::new(Style {
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![icon_view(icon, color, 1.7)])
+}
+
 /// Acumula recursivamente las filas visibles del árbol bajo `path`.
 fn push_tree_node(
     model: &Model,
     path: &Path,
     depth: usize,
     cur: &Path,
-    glyph: &'static str,
+    icon: Icon,
     theme: &Theme,
     rows: &mut Vec<TreeRow<Msg>>,
 ) {
-    let expanded = model.side_tree.expanded.contains(path);
+    let expanded = model.tree_expanded.contains(path);
     let selected = path == cur;
-    let icon = View::new(Style {
-        size: Size { width: length(18.0_f32), height: percent(1.0_f32) },
-        align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
-        ..Default::default()
-    })
-    .text(glyph, 12.0, if selected { theme.fg_text } else { theme.fg_muted });
     rows.push(
         TreeRow::new(
             node_label(path),
@@ -2395,12 +2456,18 @@ fn push_tree_node(
             Msg::TreeToggle(path.to_path_buf()),
             Msg::TreeSelect(path.to_path_buf()),
         )
-        .with_icon(icon),
+        .with_icon(tree_icon(icon, selected, theme)),
     );
     if expanded {
-        if let Some(children) = model.side_tree.children.get(path) {
+        if let Some(children) = model.tree_children.get(path) {
             for child in children {
-                push_tree_node(model, child, depth + 1, cur, "▣", theme, rows);
+                // Carpeta cerrada/abierta según su propio estado.
+                let ic = if model.tree_expanded.contains(child) {
+                    Icon::FolderOpen
+                } else {
+                    Icon::Folder
+                };
+                push_tree_node(model, child, depth + 1, cur, ic, theme, rows);
             }
         }
     }
@@ -2410,15 +2477,17 @@ fn push_tree_node(
 fn build_tree_rows(model: &Model, theme: &Theme) -> Vec<TreeRow<Msg>> {
     let cur = cur_dir(model);
     let mut rows: Vec<TreeRow<Msg>> = Vec::new();
-    for (root, glyph) in tree_roots(&model.state) {
-        push_tree_node(model, &root, 0, &cur, glyph, theme, &mut rows);
+    for (root, icon) in tree_roots(&model.state) {
+        push_tree_node(model, &root, 0, &cur, icon, theme, &mut rows);
     }
     rows
 }
 
-/// Sidebar izquierdo: **árbol de carpetas** navegable (home · raíz ·
-/// favoritos). Click en el chevron expande/colapsa (`TreeToggle`); click en la
-/// fila navega el panel activo a esa carpeta (`TreeSelect`). Ancho fijo.
+/// Sidebar **único**: el árbol de carpetas navegable (home · raíz · favoritos),
+/// con íconos reales. Click en el chevron expande/colapsa (`TreeToggle`); click
+/// en la fila navega el panel activo (`TreeSelect`). La rueda lo scrollea por
+/// filas (`TreeScroll`) — sin esto el wheel caía al canvas. Ancho fijo. El set
+/// de descolapsadas y el scroll se recuerdan **por sesión**.
 fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
     const WIDTH: f32 = 210.0;
 
@@ -2431,9 +2500,15 @@ fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .text("CARPETAS", 12.0, theme.fg_muted);
 
+    // Ventaneo: sólo las filas que entran (offset recordado por sesión).
+    let all = build_tree_rows(model, theme);
+    let vis = tree_visible_rows(model);
+    let off = model.tree_scroll.min(all.len().saturating_sub(vis));
+    let rows: Vec<TreeRow<Msg>> = all.into_iter().skip(off).take(vis).collect();
+
     let tree = tree_view(TreeSpec {
-        rows: build_tree_rows(model, theme),
-        row_height: 22.0,
+        rows,
+        row_height: TREE_ROW_H,
         indent_px: 14.0,
         palette: TreePalette::from_theme(theme),
         guides: true,
@@ -2452,86 +2527,65 @@ fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
+    // La rueda sobre el sidebar scrollea el árbol (consume el evento para que
+    // no caiga al `on_wheel` global que mueve el canvas).
+    .on_scroll(|_dx, dy| Some(Msg::TreeScroll(dy)))
     .children(vec![header, tree_wrap])
 }
 
-/// Barra de **pestañas / sesiones de trabajo** (estilo cosmos): una pestaña por
-/// sesión, con su nombre y una `✕` para cerrar, más un `+` para abrir una
-/// nueva. La activa se resalta con el color del fondo de contenido.
-fn tabs_bar_view(model: &Model, theme: &Theme) -> View<Msg> {
-    let mut kids: Vec<View<Msg>> = Vec::new();
-    for (i, sess) in model.sessions.iter().enumerate() {
-        let active = i == model.active;
-        let label = View::new(Style {
-            align_items: Some(AlignItems::Center),
-            padding: Rect {
-                left: length(12.0_f32),
-                right: length(6.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            size: Size { width: auto(), height: percent(1.0_f32) },
-            ..Default::default()
-        })
-        .on_click(Msg::TabActivate(i))
-        .text(
-            sess.name.clone(),
-            12.5,
-            if active { theme.fg_text } else { theme.fg_muted },
-        );
-        let close = View::new(Style {
-            size: Size { width: length(20.0_f32), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .on_click(Msg::TabClose(i))
-        .text("✕", 11.0, theme.fg_muted);
-        let mut tab = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            margin: Rect {
-                left: length(0.0_f32),
-                right: length(2.0_f32),
-                top: length(0.0_f32),
-                bottom: length(0.0_f32),
-            },
-            size: Size { width: auto(), height: percent(1.0_f32) },
-            ..Default::default()
-        })
-        .children(vec![label, close]);
-        tab = tab.fill(if active { theme.bg_app } else { theme.bg_panel });
-        kids.push(tab);
-    }
-    // Botón "+": pestaña nueva.
-    kids.push(
-        View::new(Style {
-            size: Size { width: length(30.0_f32), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            flex_shrink: 0.0,
-            ..Default::default()
-        })
-        .on_click(Msg::TabNew)
-        .text("+", 17.0, theme.fg_muted),
+/// Rail de **dientes**: una sesión de trabajo por diente
+/// (`llimphi-widget-dock-rail`, el patrón canónico de cosmos). Click en un
+/// diente activa esa sesión → su árbol y su canvas vuelven. Debajo, un `+`
+/// abre una sesión nueva. Cada diente lleva un ícono real.
+fn session_rail_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let items: Vec<DockRailItem> = (0..model.sessions.len())
+        .map(|i| DockRailItem { id: i as u64, active: i == model.active })
+        .collect();
+    let rail = dock_rail_view(
+        &items,
+        SESSION_RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        |_id, size, color| {
+            View::new(Style {
+                size: Size { width: length(size), height: length(size) },
+                ..Default::default()
+            })
+            .children(vec![icon_view(Icon::Folder, color, 1.7)])
+        },
+        |id| Msg::SessionActivate(id as usize),
+        |_payload| -> Option<Msg> { None },
     );
+    // "+" nueva sesión, debajo del rail.
+    let plus = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(SESSION_RAIL_W) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::SessionNew)
+    .children(vec![View::new(Style {
+        size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![icon_view(Icon::Plus, theme.fg_muted, 1.8)])]);
 
     View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(SESSION_RAIL_W), height: percent(1.0_f32) },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
         padding: Rect {
-            left: length(4.0_f32),
-            right: length(4.0_f32),
-            top: length(2.0_f32),
-            bottom: length(0.0_f32),
+            left: length(0.0),
+            right: length(0.0),
+            top: length(6.0),
+            bottom: length(0.0),
         },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(kids)
+    .children(vec![rail, plus])
 }
 
 /// Panel inferior colapsable de la **cola de operaciones**. `None` si no hay
@@ -3069,9 +3123,9 @@ fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> 
     })
 }
 
-/// Cuerpo de una celda de la grilla iconos: la miniatura si está lista; un ⚠
-/// si falló; un glifo por tipo (📁 carpeta, 🖼 imagen pendiente, 📄 archivo)
-/// mientras tanto.
+/// Cuerpo de una celda de la grilla iconos/galería: la miniatura si está lista;
+/// si no, un **ícono vectorial real** por tipo (carpeta, imagen pendiente,
+/// archivo) o un aviso si la miniatura falló.
 fn icon_tile_content(model: &Model, node: &Node, theme: &Theme, lado: f32) -> View<Msg> {
     let base = || Style {
         size: Size { width: length(lado), height: length(lado) },
@@ -3079,27 +3133,32 @@ fn icon_tile_content(model: &Model, node: &Node, theme: &Theme, lado: f32) -> Vi
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     };
-    // Glifos geométricos (no emoji): la fuente embebida de Llimphi no trae
-    // emoji a color, así que 📁/🖼 saldrían tofu (ver tofu_fallback). Estos
-    // sí están en DejaVu Sans.
+    // Ícono vectorial centrado, dimensionado a la mitad del tile.
+    let big = (lado * 0.5).clamp(28.0, 96.0);
+    let centered = |icon: Icon, color: Color| {
+        View::new(base()).fill(theme.bg_panel_alt).children(vec![View::new(Style {
+            size: Size { width: length(big), height: length(big) },
+            ..Default::default()
+        })
+        .children(vec![icon_view(icon, color, 1.6)])])
+    };
     if node.is_container {
-        let glifo = match node.kind {
-            NodeKind::Archive => "▤",
-            NodeKind::Synthetic => "◈",
-            _ => "▣",
+        let icon = match node.kind {
+            NodeKind::Archive => Icon::Archive,
+            _ => Icon::Folder,
         };
-        return View::new(base()).fill(theme.bg_panel_alt).text(glifo, 44.0, theme.fg_text);
+        return centered(icon, theme.fg_text);
     }
     let path = PathBuf::from(&node.id);
     if let Some(img) = model.thumbs.get(&path) {
         return View::new(base()).image(img.clone());
     }
     if model.thumbs_failed.contains(&path) {
-        return View::new(base()).fill(theme.bg_panel_alt).text("⚠", 24.0, theme.fg_muted);
+        return centered(Icon::Warning, theme.fg_muted);
     }
-    // Imagen aún decodificando → ▨ tenue; archivo común → ▢.
-    let glifo = if es_imagen(&path) { "▨" } else { "▢" };
-    View::new(base()).fill(theme.bg_panel_alt).text(glifo, 36.0, theme.fg_muted)
+    // Imagen aún decodificando → ícono de imagen; archivo común → ícono file.
+    let icon = if es_imagen(&path) { Icon::Image } else { Icon::File };
+    centered(icon, theme.fg_muted)
 }
 
 /// Color peniko de un label (para el tinte de fila en la vista detalle).

@@ -1,14 +1,14 @@
-//! Pantallazo headless del **nuevo chrome de nahual**: pestañas (sesiones de
-//! trabajo, estilo cosmos) + **árbol de carpetas** lateral con íconos
-//! clickable, y el panel principal en vista detalle.
+//! Pantallazo headless del **chrome de nahual**: rail de **dientes** (sesiones
+//! de trabajo, `llimphi-widget-dock-rail`, el patrón canónico de cosmos) +
+//! **árbol de carpetas** lateral único con **íconos vectoriales reales**
+//! (`llimphi-icons`), y el canvas en vista detalle.
 //!
 //! Espeja la composición real del shell:
-//! - `tabs_bar_view`: una pestaña por sesión (nombre + `✕`) y un `+` para abrir
-//!   una nueva; la activa se resalta con el color del fondo de contenido.
-//! - `sidebar_view`: `llimphi-widget-tree` (el widget real que cablea el shell)
-//!   con home (⌂), la raíz (▣) y favoritos (★), expandible y con íconos.
+//! - `session_rail_view`: un diente por sesión (ícono real, activo resaltado) +
+//!   `+` para abrir una nueva — el widget `dock_rail_view` de verdad.
+//! - `sidebar_view`: `tree_view` con íconos `Icon::Home/Folder/FolderOpen/Open`.
 //!
-//! `cargo run -p nahual-shell-llimphi --example pantallazo_pestanas -- [out.png]`
+//! `cargo run -p nahual-shell-llimphi --example pantallazo_dientes -- [out.png]`
 #![allow(dead_code)]
 
 use std::fs::File;
@@ -20,7 +20,7 @@ use llimphi_theme::Theme;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy::{
     self,
-    prelude::{auto, length, percent, FlexDirection, Size, Style},
+    prelude::{length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_layout::LayoutTree;
@@ -28,9 +28,11 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, Mounted, View};
+use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_detail_table::{
     detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
 };
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
@@ -38,6 +40,7 @@ use app_bus::{AppMenu, Menu, MenuItem};
 
 const W: u32 = 1200;
 const H: u32 = 760;
+const RAIL_W: f32 = 40.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 #[derive(Clone)]
@@ -48,7 +51,7 @@ enum Msg {
 fn main() {
     let out = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "/tmp/shots/pestanas.png".to_string());
+        .unwrap_or_else(|| "/tmp/shots/dientes.png".to_string());
     if let Some(dir) = Path::new(&out).parent() {
         std::fs::create_dir_all(dir).ok();
     }
@@ -68,13 +71,13 @@ fn main() {
         on_command: Arc::new(|_: &str| Msg::Nada),
     });
 
-    // Barra de pestañas (espejo de `tabs_bar_view`): 3 sesiones, la 2ª activa.
-    let tabs = tabs_bar(&theme, &["tawasuyu", "descargas", "fotos"], 1);
+    // Rail de dientes (espejo de `session_rail_view`): 3 sesiones, la 2ª activa.
+    let rail = session_rail(&theme, 3, 1);
 
-    // Sidebar: árbol real (`llimphi-widget-tree`), espejo de `sidebar_view`.
+    // Sidebar único: árbol real con íconos reales (espejo de `sidebar_view`).
     let sidebar = sidebar(&theme);
 
-    // Panel principal: breadcrumb + lista detalle.
+    // Canvas: breadcrumb + lista detalle.
     let crumb = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
         padding: pad_h(12.0),
@@ -122,7 +125,7 @@ fn main() {
         },
         |_col| Msg::Nada,
     );
-    let main_pane = View::new(Style {
+    let canvas = View::new(Style {
         flex_direction: FlexDirection::Column,
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -135,7 +138,7 @@ fn main() {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![sidebar, main_pane]);
+    .children(vec![rail, sidebar, canvas]);
 
     let root = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -143,7 +146,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![menubar, tabs, body]);
+    .children(vec![menubar, body]);
 
     let mut ts = Typesetter::new();
     let mut scene = vello::Scene::new();
@@ -152,7 +155,7 @@ fn main() {
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
     let target = hal.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("pantallazo-pestanas"),
+        label: Some("pantallazo-dientes"),
         size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
         mip_level_count: 1,
         sample_count: 1,
@@ -170,87 +173,58 @@ fn main() {
         .render_to_view(&hal, &scene, &view, W, H, bg)
         .expect("render_to_view");
     write_png(&hal, &target, &out);
-    eprintln!("pantallazo_pestanas: escrito {out} ({W}x{H})");
+    eprintln!("pantallazo_dientes: escrito {out} ({W}x{H})");
 }
 
 fn pad_h(v: f32) -> Rect<taffy::LengthPercentage> {
     Rect { left: length(v), right: length(v), top: length(0.0), bottom: length(0.0) }
 }
 
-/// Espejo de `tabs_bar_view` del shell.
-fn tabs_bar(theme: &Theme, nombres: &[&str], activa: usize) -> View<Msg> {
-    let mut kids: Vec<View<Msg>> = Vec::new();
-    for (i, nombre) in nombres.iter().enumerate() {
-        let active = i == activa;
-        let label = View::new(Style {
-            align_items: Some(AlignItems::Center),
-            padding: Rect {
-                left: length(12.0),
-                right: length(6.0),
-                top: length(0.0),
-                bottom: length(0.0),
-            },
-            size: Size { width: auto(), height: percent(1.0_f32) },
-            ..Default::default()
-        })
-        .text(
-            nombre.to_string(),
-            12.5,
-            if active { theme.fg_text } else { theme.fg_muted },
-        );
-        let close = View::new(Style {
-            size: Size { width: length(20.0_f32), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .text("✕", 11.0, theme.fg_muted);
-        let mut tab = View::new(Style {
-            flex_direction: FlexDirection::Row,
-            flex_shrink: 0.0,
-            align_items: Some(AlignItems::Center),
-            margin: Rect {
-                left: length(0.0),
-                right: length(2.0),
-                top: length(0.0),
-                bottom: length(0.0),
-            },
-            size: Size { width: auto(), height: percent(1.0_f32) },
-            ..Default::default()
-        })
-        .children(vec![label, close]);
-        tab = tab.fill(if active { theme.bg_app } else { theme.bg_panel });
-        kids.push(tab);
-    }
-    kids.push(
-        View::new(Style {
-            size: Size { width: length(30.0_f32), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            flex_shrink: 0.0,
-            ..Default::default()
-        })
-        .text("+", 17.0, theme.fg_muted),
+/// Espejo de `session_rail_view`: el rail de dientes real + el `+`.
+fn session_rail(theme: &Theme, n: usize, active: usize) -> View<Msg> {
+    let items: Vec<DockRailItem> = (0..n)
+        .map(|i| DockRailItem { id: i as u64, active: i == active })
+        .collect();
+    let rail = dock_rail_view(
+        &items,
+        RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        |_id, size, color| {
+            View::new(Style {
+                size: Size { width: length(size), height: length(size) },
+                ..Default::default()
+            })
+            .children(vec![icon_view(Icon::Folder, color, 1.7)])
+        },
+        |_id| Msg::Nada,
+        |_payload| -> Option<Msg> { None },
     );
+    let plus = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(RAIL_W) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![View::new(Style {
+        size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![icon_view(Icon::Plus, theme.fg_muted, 1.8)])]);
 
     View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(RAIL_W), height: percent(1.0_f32) },
         flex_shrink: 0.0,
         align_items: Some(AlignItems::Center),
-        padding: Rect {
-            left: length(4.0),
-            right: length(4.0),
-            top: length(2.0),
-            bottom: length(0.0),
-        },
+        padding: Rect { left: length(0.0), right: length(0.0), top: length(6.0), bottom: length(0.0) },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(kids)
+    .children(vec![rail, plus])
 }
 
-/// Espejo de `sidebar_view`: el árbol real con íconos.
+/// Espejo de `sidebar_view`: árbol real con íconos vectoriales reales.
 fn sidebar(theme: &Theme) -> View<Msg> {
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
@@ -261,30 +235,28 @@ fn sidebar(theme: &Theme) -> View<Msg> {
     })
     .text("CARPETAS", 12.0, theme.fg_muted);
 
-    let icon = |glyph: &'static str, sel: bool| {
+    let icon = |ic: Icon, sel: bool| {
         View::new(Style {
-            size: Size { width: length(18.0_f32), height: percent(1.0_f32) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
+            size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+            flex_shrink: 0.0,
             ..Default::default()
         })
-        .text(glyph, 12.0, if sel { theme.fg_text } else { theme.fg_muted })
+        .children(vec![icon_view(ic, if sel { theme.fg_text } else { theme.fg_muted }, 1.7)])
     };
-    let row = |label: &str, depth: usize, expanded: bool, selected: bool, glyph: &'static str| {
+    let row = |label: &str, depth: usize, expanded: bool, selected: bool, ic: Icon| {
         TreeRow::new(label.to_string(), depth, true, expanded, selected, Msg::Nada, Msg::Nada)
-            .with_icon(icon(glyph, selected))
+            .with_icon(icon(ic, selected))
     };
 
-    // Árbol: home expandido con la cadena hacia "descargas" (la activa).
     let rows = vec![
-        row("sergio", 0, true, false, "⌂"),
-        row("Descargas", 1, false, false, "▣"),
-        row("descargas", 1, true, true, "▣"),
-        row("2026", 2, false, false, "▣"),
-        row("fotos", 2, false, false, "▣"),
-        row("proyectos", 1, false, false, "▣"),
-        row("/", 0, false, false, "▣"),
-        row("tawasuyu", 0, false, false, "★"),
+        row("sergio", 0, true, false, Icon::Home),
+        row("Descargas", 1, false, false, Icon::Folder),
+        row("descargas", 1, true, true, Icon::FolderOpen),
+        row("2026", 2, false, false, Icon::Folder),
+        row("fotos", 2, false, false, Icon::Folder),
+        row("proyectos", 1, false, false, Icon::Folder),
+        row("/", 0, false, false, Icon::Folder),
+        row("tawasuyu", 0, false, false, Icon::Open),
     ];
     let tree = tree_view(TreeSpec {
         rows,
