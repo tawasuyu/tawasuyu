@@ -1,0 +1,226 @@
+//! Tests del motor de estilo (grupo 14, extraído de `style/mod.rs`, regla #1).
+use super::super::*;
+
+    #[test]
+    fn supports_query_filtra_por_parser() {
+        assert!(evaluate_supports_query("(display: flex)"));
+        assert!(evaluate_supports_query("(color: red)"));
+        assert!(!evaluate_supports_query("(display: garbage)"));
+
+        let html = r#"<html><head><style>
+            @supports (display: flex) { p { color: green } }
+            @supports (display: garbage) { p { color: red } }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
+    }
+
+    #[test]
+    fn supports_query_and_or_not_selector() {
+        // and: ambas soportadas.
+        assert!(evaluate_supports_query("(display: grid) and (color: red)"));
+        assert!(!evaluate_supports_query("(display: grid) and (frobnicate: 1)"));
+        // or: alguna soportada.
+        assert!(evaluate_supports_query("(display: grid) or (frobnicate: 1)"));
+        assert!(!evaluate_supports_query("(frob: 1) or (nicate: 2)"));
+        // not.
+        assert!(evaluate_supports_query("not (frobnicate: 1)"));
+        assert!(!evaluate_supports_query("not (display: grid)"));
+        // selector(): soportado si el selector parsea.
+        assert!(evaluate_supports_query("selector(.a > .b)"));
+        // agrupación anidada.
+        assert!(evaluate_supports_query("((display: grid))"));
+        assert!(evaluate_supports_query("(display: grid) and ((color: red) or (frob: 1))"));
+        // @supports con `and` aplica el bloque end-to-end.
+        let html = r#"<html><head><style>
+            @supports (display: grid) and (color: red) { p { color: rgb(0,0,255) } }
+            @supports (display: grid) and (frob: 1) { p { color: rgb(255,0,0) } }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 0, 255));
+    }
+
+    // === Fase B1: @keyframes ===
+
+    #[test]
+    fn keyframes_from_to_se_parsean() {
+        let html = r#"<html><head><style>
+            @keyframes fade {
+                from { opacity: 0; }
+                to { opacity: 1; }
+            }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let kf = eng.keyframes().get("fade").expect("keyframes fade ausente");
+        assert_eq!(kf.steps.len(), 2);
+        assert_eq!(kf.steps[0].offset, 0.0);
+        assert_eq!(kf.steps[0].declarations, vec![("opacity".into(), "0".into())]);
+        assert_eq!(kf.steps[1].offset, 1.0);
+        assert_eq!(kf.steps[1].declarations, vec![("opacity".into(), "1".into())]);
+    }
+
+    #[test]
+    fn keyframes_porcentajes_y_orden() {
+        // Pasos declarados fuera de orden deben quedar ordenados por offset.
+        let html = r#"<html><head><style>
+            @keyframes slide {
+                100% { left: 100px; }
+                0% { left: 0px; }
+                50% { left: 40px; top: 10px; }
+            }
+        </style></head><body></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let kf = eng.keyframes().get("slide").unwrap();
+        let offsets: Vec<f32> = kf.steps.iter().map(|s| s.offset).collect();
+        assert_eq!(offsets, vec![0.0, 0.5, 1.0]);
+        // El paso del 50% conserva las dos declaraciones en orden.
+        assert_eq!(
+            kf.steps[1].declarations,
+            vec![("left".into(), "40px".into()), ("top".into(), "10px".into())]
+        );
+    }
+
+    #[test]
+    fn keyframes_selector_multiple_comparte_decls() {
+        // `0%, 100% { ... }` genera dos pasos con las mismas decls.
+        let html = r#"<html><head><style>
+            @keyframes pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.2); }
+            }
+        </style></head><body></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let kf = eng.keyframes().get("pulse").unwrap();
+        assert_eq!(kf.steps.len(), 3);
+        assert_eq!(kf.steps[0].offset, 0.0);
+        assert_eq!(kf.steps[2].offset, 1.0);
+        assert_eq!(kf.steps[0].declarations, kf.steps[2].declarations);
+    }
+
+    #[test]
+    fn keyframes_prefijo_vendor_y_no_rompe_reglas_normales() {
+        // `@-webkit-keyframes` se captura igual; y las reglas normales
+        // alrededor del at-rule siguen aplicándose.
+        let html = r#"<html><head><style>
+            p { color: red; }
+            @-webkit-keyframes spin { from { opacity: 0 } to { opacity: 1 } }
+            p { color: green; }
+        </style></head><body><p>x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        assert!(eng.keyframes().contains_key("spin"));
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).color, Color::rgb(0, 128, 0));
+    }
+
+    // === Fase B2: animation shorthand ===
+
+    fn anim_de(decl: &str) -> AnimationBinding {
+        let html = format!("<html><body><p style=\"{decl}\">x</p></body></html>");
+        let dom = DomTree::parse(&html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        eng.compute(&p).animation.expect("animation ausente")
+    }
+
+    #[test]
+    fn animation_shorthand_completo() {
+        let a = anim_de("animation: spin 2s ease-in-out 0.5s infinite alternate forwards");
+        assert_eq!(a.name, "spin");
+        assert_eq!(a.duration_s, 2.0);
+        assert_eq!(a.timing, EasingFunction::EaseInOut);
+        assert_eq!(a.delay_s, 0.5);
+        assert_eq!(a.iterations, AnimationIterations::Infinite);
+        assert_eq!(a.direction, AnimationDirection::Alternate);
+        assert_eq!(a.fill_mode, AnimationFillMode::Forwards);
+    }
+
+    #[test]
+    fn animation_orden_laxo_y_defaults() {
+        // Tokens en orden no canónico + count numérico + ms.
+        let a = anim_de("animation: 200ms linear 3 fade");
+        assert_eq!(a.name, "fade");
+        assert!((a.duration_s - 0.2).abs() < 1e-6);
+        assert_eq!(a.timing, EasingFunction::Linear);
+        assert_eq!(a.iterations, AnimationIterations::Count(3.0));
+        assert_eq!(a.delay_s, 0.0);
+        assert_eq!(a.direction, AnimationDirection::Normal);
+        assert_eq!(a.fill_mode, AnimationFillMode::None);
+    }
+
+    #[test]
+    fn animation_cubic_bezier_no_se_parte_por_comas() {
+        let a = anim_de("animation: bounce 1s cubic-bezier(0.1, 0.7, 1.0, 0.1)");
+        assert_eq!(a.name, "bounce");
+        assert_eq!(a.duration_s, 1.0);
+        assert_eq!(a.timing, EasingFunction::CubicBezier(0.1, 0.7, 1.0, 0.1));
+    }
+
+    #[test]
+    fn animation_none_limpia() {
+        let html = r#"<html><body><p style="animation: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert_eq!(eng.compute(&p).animation, None);
+    }
+
+    // === Fase B3: transition shorthand ===
+
+    fn trans_de(decl: &str) -> Vec<TransitionBinding> {
+        let html = format!("<html><body><p style=\"{decl}\">x</p></body></html>");
+        let dom = DomTree::parse(&html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        eng.compute(&p).transitions
+    }
+
+    #[test]
+    fn transition_simple() {
+        let t = trans_de("transition: opacity 200ms ease");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].property, "opacity");
+        assert!((t[0].duration_s - 0.2).abs() < 1e-6);
+        assert_eq!(t[0].timing, EasingFunction::Ease);
+        assert_eq!(t[0].delay_s, 0.0);
+    }
+
+    #[test]
+    fn transition_lista_multiple() {
+        let t = trans_de("transition: opacity 200ms ease, transform 0.3s ease-in 0.1s");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0].property, "opacity");
+        assert_eq!(t[1].property, "transform");
+        assert!((t[1].duration_s - 0.3).abs() < 1e-6);
+        assert_eq!(t[1].timing, EasingFunction::EaseIn);
+        assert!((t[1].delay_s - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn transition_default_property_es_all() {
+        // Sin nombre de propiedad, default `all` (CSS spec).
+        let t = trans_de("transition: 1s");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].property, "all");
+        assert_eq!(t[0].duration_s, 1.0);
+        assert_eq!(t[0].timing, EasingFunction::Ease);
+    }
+
+    #[test]
+    fn transition_steps_y_none() {
+        let t = trans_de("transition: width 2s steps(4, end)");
+        assert_eq!(t[0].timing, EasingFunction::Steps(4, false));
+
+        let html = r#"<html><body><p style="transition: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        assert!(eng.compute(&p).transitions.is_empty());
+    }

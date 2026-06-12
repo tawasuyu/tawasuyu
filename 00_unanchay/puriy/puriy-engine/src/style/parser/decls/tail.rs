@@ -1,0 +1,698 @@
+//! Text-decoration, list-style, content, contadores, motor calc, font-size, line-height, colores nombrados.
+//! Value-parsers extraídos de `decls.rs` (regla #1). Lógica intacta.
+use super::*;
+
+/// Parsea `text-decoration` o `text-decoration-line`. Acepta el shorthand
+/// con varios tokens — busca el primer keyword reconocido como line y
+/// devuelve eso. Estilos (`dotted`/`wavy`) y color se ignoran (sólo
+/// pintamos línea sólida del color del texto).
+pub(crate) fn parse_text_decoration(value: &str) -> Option<TextDecorationLine> {
+    for tok in value.split_whitespace() {
+        match tok.to_ascii_lowercase().as_str() {
+            "none" => return Some(TextDecorationLine::None),
+            "underline" => return Some(TextDecorationLine::Underline),
+            "line-through" => return Some(TextDecorationLine::LineThrough),
+            "overline" => return Some(TextDecorationLine::Overline),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// `text-decoration-style: solid | double | dotted | dashed | wavy`.
+pub(crate) fn parse_text_decoration_style(value: &str) -> Option<TextDecorationStyle> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "solid" => Some(TextDecorationStyle::Solid),
+        "double" => Some(TextDecorationStyle::Double),
+        "dotted" => Some(TextDecorationStyle::Dotted),
+        "dashed" => Some(TextDecorationStyle::Dashed),
+        "wavy" => Some(TextDecorationStyle::Wavy),
+        _ => None,
+    }
+}
+
+/// Expande el shorthand `text-decoration: <line> || <style> || <color>`
+/// (orden libre) a sus longhands. Cada token se prueba como line, luego
+/// como style, luego como color; los no reconocidos se ignoran. Emite
+/// siempre la línea (default `None` si no hubo keyword de línea) para que
+/// el shorthand resetee; color/style sólo si aparecieron explícitos.
+pub(crate) fn parse_text_decoration_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    let mut out = Vec::new();
+    let mut line: Option<TextDecorationLine> = None;
+    for tok in value.split_whitespace() {
+        let low = tok.to_ascii_lowercase();
+        match low.as_str() {
+            "none" => line = Some(TextDecorationLine::None),
+            "underline" => line = Some(TextDecorationLine::Underline),
+            "line-through" => line = Some(TextDecorationLine::LineThrough),
+            "overline" => line = Some(TextDecorationLine::Overline),
+            "blink" => {} // CSS legacy, sin efecto
+            _ => {
+                if let Some(st) = parse_text_decoration_style(tok) {
+                    out.push(Decl { kind: DeclKind::TextDecorationStyle(st), important });
+                } else if is_current_color(tok) {
+                    out.push(Decl { kind: DeclKind::TextDecorationColor(None), important });
+                } else if let Some(c) = parse_color(tok) {
+                    out.push(Decl { kind: DeclKind::TextDecorationColor(Some(c)), important });
+                }
+            }
+        }
+    }
+    out.push(Decl {
+        kind: DeclKind::TextDecoration(line.unwrap_or(TextDecorationLine::None)),
+        important,
+    });
+    out
+}
+
+/// Parsea `list-style-type: <keyword>`. Acepta los aliases comunes
+/// (`lower-latin` = `lower-alpha`, `upper-latin` = `upper-alpha`).
+/// Keywords no soportados (`georgian`, `hebrew`, …) caen a `None` y la
+/// declaración se ignora — el caller mantiene el valor anterior.
+pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "none" => Some(ListStyleType::None),
+        "disc" => Some(ListStyleType::Disc),
+        "circle" => Some(ListStyleType::Circle),
+        "square" => Some(ListStyleType::Square),
+        "decimal" => Some(ListStyleType::Decimal),
+        "lower-alpha" | "lower-latin" => Some(ListStyleType::LowerAlpha),
+        "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
+        "lower-roman" => Some(ListStyleType::LowerRoman),
+        "upper-roman" => Some(ListStyleType::UpperRoman),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "left" | "start" => Some(TextAlign::Left),
+        "center" => Some(TextAlign::Center),
+        "right" | "end" => Some(TextAlign::Right),
+        "justify" => Some(TextAlign::Justify),
+        _ => None,
+    }
+}
+
+/// Acepta `auto`, `Npx`, `Nrem`/`Nem` (→ px), `N%`. Sin unidad y
+/// distinto de `0` → falla (a diferencia de `parse_length_px`, que
+/// asume px).
+/// Devuelve el primer item de una lista separada por coma. Si no hay
+/// coma, devuelve el string completo. Espacios al borde recortados.
+/// Fase 7.514+ (longhands animation que sólo guardan el primer item).
+pub(crate) fn first_comma(s: &str) -> &str {
+    match s.find(',') {
+        Some(i) => s[..i].trim(),
+        None => s.trim(),
+    }
+}
+
+/// Parsea `<time>` CSS: `<n>s` o `<n>ms`. Devuelve segundos.
+/// Fase 7.515.
+pub(crate) fn parse_time_seconds(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("ms") {
+        return num.trim().parse::<f32>().ok().map(|n| n / 1000.0);
+    }
+    if let Some(num) = s.strip_suffix('s') {
+        return num.trim().parse::<f32>().ok();
+    }
+    None
+}
+
+/// Parsea `<easing-function>` por keyword (sin cubic-bezier/steps por
+/// ahora — un parser completo vive en parser/sheet.rs si lo necesitás).
+/// Fase 7.516.
+pub(crate) fn parse_easing_keyword(s: &str) -> Option<EasingFunction> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "linear" => Some(EasingFunction::Linear),
+        "ease" => Some(EasingFunction::Ease),
+        "ease-in" => Some(EasingFunction::EaseIn),
+        "ease-out" => Some(EasingFunction::EaseOut),
+        "ease-in-out" => Some(EasingFunction::EaseInOut),
+        "step-start" => Some(EasingFunction::StepStart),
+        "step-end" => Some(EasingFunction::StepEnd),
+        _ => None,
+    }
+}
+
+/// Parsea `image-resolution: [ from-image || <resolution> ] && snap?`.
+/// Devuelve `Some(ImageResolution::FromImage)` cuando aparece sólo
+/// `from-image` (con o sin `snap`). Resoluciones aceptadas: `<n>dppx`,
+/// `<n>dpi`, `<n>dpcm`. Cualquier orden entre los tokens. CSS Images 4.
+/// Fase 7.485.
+pub(crate) fn parse_image_resolution(s: &str) -> Option<ImageResolution> {
+    let lower = s.trim().to_ascii_lowercase();
+    let mut from_image = false;
+    let mut snap = false;
+    let mut dppx: Option<f32> = None;
+    for tok in lower.split_whitespace() {
+        match tok {
+            "from-image" => from_image = true,
+            "snap" => snap = true,
+            other => {
+                if let Some(num) = other.strip_suffix("dppx") {
+                    dppx = num.parse::<f32>().ok();
+                } else if let Some(num) = other.strip_suffix("dpi") {
+                    dppx = num.parse::<f32>().ok().map(|n| n / 96.0);
+                } else if let Some(num) = other.strip_suffix("dpcm") {
+                    dppx = num.parse::<f32>().ok().map(|n| n * 2.54 / 96.0);
+                } else {
+                    return None;
+                }
+            }
+        }
+    }
+    match (from_image, dppx) {
+        (true, None) => Some(ImageResolution::FromImage),
+        (_, Some(d)) if d > 0.0 => Some(ImageResolution::Resolution { dppx: d, snap }),
+        _ => None,
+    }
+}
+
+pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(LengthVal::Auto);
+    }
+    if let Some(num) = s.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
+    }
+    // Funciones matemáticas: `calc()`/`min()`/`max()`/`clamp()` (anidables,
+    // con precedencia `*`/`/` sobre `+`/`-` y paréntesis).
+    if is_math_fn(s) {
+        return eval_calc(s).and_then(calcval_to_length);
+    }
+    parse_length_px(s).map(LengthVal::Px)
+}
+
+/// Parsea el value de `content:` para pseudo-elements. Soporta una
+/// secuencia de items separados por whitespace: strings quoted,
+/// `counter(name)` y `attr(name)`. Devuelve `None` para `none`/`normal`
+/// (que suprime el pseudo-element) o si encuentra algo no reconocible.
+pub(crate) fn parse_content_value(value: &str) -> Option<Vec<ContentItem>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") || v.eq_ignore_ascii_case("normal") {
+        return None;
+    }
+    let mut items = Vec::new();
+    let mut chars = v.chars().peekable();
+    while let Some(&c) = chars.peek() {
+        if c.is_whitespace() {
+            chars.next();
+            continue;
+        }
+        if c == '"' || c == '\'' {
+            let item = parse_string_literal(&mut chars)?;
+            items.push(ContentItem::Text(item));
+            continue;
+        }
+        // Identificador: `counter(...)` o `attr(...)` (case-insensitive).
+        let ident = read_ident(&mut chars);
+        if ident.is_empty() {
+            return None;
+        }
+        let lower = ident.to_ascii_lowercase();
+        // Comer paréntesis de apertura.
+        if chars.next() != Some('(') {
+            return None;
+        }
+        let arg = read_until(&mut chars, ')')?;
+        let arg = arg.trim();
+        // `counter(name[, list-style])`: nos quedamos con el name; el
+        // list-style queda para más adelante.
+        let name = arg.split(',').next().unwrap_or("").trim();
+        if name.is_empty() {
+            return None;
+        }
+        match lower.as_str() {
+            "counter" => items.push(ContentItem::Counter(name.to_string())),
+            "attr" => items.push(ContentItem::Attr(name.to_string())),
+            "url" => {
+                // El arg de url() puede venir entre comillas o sin.
+                // arg ya fue trimmeado del paréntesis exterior; acá
+                // strippeamos comillas si las hay y devolvemos el resto
+                // sin trim adicional (las URLs pueden tener espacios
+                // encodeados pero no whitespace literal interno).
+                let raw = arg.trim();
+                let clean = raw
+                    .trim_start_matches(['"', '\''].as_ref())
+                    .trim_end_matches(['"', '\''].as_ref())
+                    .trim()
+                    .to_string();
+                if clean.is_empty() {
+                    return None;
+                }
+                items.push(ContentItem::Url(clean));
+            }
+            _ => return None, // `counters(...)` no soportado aún.
+        }
+    }
+    if items.is_empty() {
+        None
+    } else {
+        Some(items)
+    }
+}
+
+/// Lee una string literal (incluyendo las comillas) de `chars` —
+/// consume hasta encontrar la comilla de cierre matching. Soporta
+/// escape `\X` que vuelca X tal cual. Devuelve None si la string queda
+/// sin cerrar.
+pub(crate) fn parse_string_literal(chars: &mut std::iter::Peekable<std::str::Chars>) -> Option<String> {
+    let quote = chars.next()?;
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            if let Some(esc) = chars.next() {
+                out.push(esc);
+                continue;
+            }
+            return None;
+        }
+        if c == quote {
+            return Some(out);
+        }
+        out.push(c);
+    }
+    None
+}
+
+/// Lee chars mientras sean alfanuméricos, `-` o `_`. Devuelve el ident
+/// como String (vacío si el siguiente char no era válido).
+pub(crate) fn read_ident(chars: &mut std::iter::Peekable<std::str::Chars>) -> String {
+    let mut out = String::new();
+    while let Some(&c) = chars.peek() {
+        if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+            out.push(c);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    out
+}
+
+/// Lee chars hasta el delimitador `end` (exclusivo) — lo consume. Devuelve
+/// el contenido. None si no encuentra el delim.
+pub(crate) fn read_until(chars: &mut std::iter::Peekable<std::str::Chars>, end: char) -> Option<String> {
+    let mut out = String::new();
+    while let Some(c) = chars.next() {
+        if c == end {
+            return Some(out);
+        }
+        out.push(c);
+    }
+    None
+}
+
+/// Parsea `counter-reset` o `counter-increment`. Devuelve pares
+/// `(name, value)` — para reset el default es `0`, para increment es
+/// `1`. Si el value es `none`, devuelve vec vacío.
+pub(crate) fn parse_counter_list(value: &str, default: i32) -> Vec<(String, i32)> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Vec::new();
+    }
+    let mut out: Vec<(String, i32)> = Vec::new();
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    let mut i = 0;
+    while i < toks.len() {
+        let name = toks[i];
+        if !is_valid_counter_name(name) {
+            // Token no nombre — skip (parser tolerante).
+            i += 1;
+            continue;
+        }
+        let value = toks
+            .get(i + 1)
+            .and_then(|t| t.parse::<i32>().ok());
+        if let Some(v) = value {
+            out.push((name.to_string(), v));
+            i += 2;
+        } else {
+            out.push((name.to_string(), default));
+            i += 1;
+        }
+    }
+    out
+}
+
+pub(crate) fn is_valid_counter_name(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Valor intermedio de la evaluación de `calc()`/`min`/`max`/`clamp`: un
+/// número adimensional, o una longitud con componente absoluto (`px`) +
+/// componente porcentual (`pct`). px/em/rem/vw/vh/vmin/vmax se resuelven a
+/// px en parse-time; sólo `%` queda como componente `pct`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum CalcVal {
+    Number(f32),
+    Length { px: f32, pct: f32 },
+}
+
+/// `true` si `s` arranca con una función matemática CSS (`calc`/`min`/
+/// `max`/`clamp`) seguida de `(`.
+pub(crate) fn is_math_fn(s: &str) -> bool {
+    let l = s.trim_start().to_ascii_lowercase();
+    ["calc(", "min(", "max(", "clamp("].iter().any(|p| l.starts_with(p))
+}
+
+/// Convierte un `CalcVal` final a `LengthVal`. Un número crudo sólo es
+/// válido si es 0 (un número no es una longitud). Mezcla px+pct degrada a
+/// `Pct` (se pierde el offset px — sin container width, igual que el calc
+/// histórico). Ver [`parse_length_or_pct`].
+pub(crate) fn calcval_to_length(v: CalcVal) -> Option<LengthVal> {
+    match v {
+        CalcVal::Number(n) if n == 0.0 => Some(LengthVal::Px(0.0)),
+        CalcVal::Number(_) => None,
+        CalcVal::Length { px, pct } => {
+            if pct == 0.0 {
+                Some(LengthVal::Px(px))
+            } else {
+                // pct puro o mezcla → Pct (mezcla pierde el offset px).
+                Some(LengthVal::Pct(pct))
+            }
+        }
+    }
+}
+
+/// Evalúa una expresión matemática CSS (`calc`/`min`/`max`/`clamp`, con
+/// anidamiento, precedencia `*`/`/` sobre `+`/`-` y paréntesis) a un
+/// `CalcVal`. `None` si la sintaxis es inválida.
+pub(crate) fn eval_calc(s: &str) -> Option<CalcVal> {
+    let mut p = CalcCtx { b: s.as_bytes(), i: 0, src: s };
+    let v = p.expr()?;
+    p.ws();
+    if p.i != p.b.len() {
+        return None;
+    }
+    Some(v)
+}
+
+/// Parser recursivo-descendente sobre los bytes de la expresión.
+struct CalcCtx<'a> {
+    b: &'a [u8],
+    i: usize,
+    src: &'a str,
+}
+
+impl CalcCtx<'_> {
+    fn ws(&mut self) {
+        while self.i < self.b.len() && (self.b[self.i] as char).is_ascii_whitespace() {
+            self.i += 1;
+        }
+    }
+    fn peek(&self) -> Option<u8> {
+        self.b.get(self.i).copied()
+    }
+
+    /// `expr := term ((' + ' | ' - ') term)*` — `+`/`-` exigen whitespace.
+    fn expr(&mut self) -> Option<CalcVal> {
+        let mut acc = self.term()?;
+        loop {
+            self.ws();
+            let Some(c) = self.peek() else { break };
+            if c == b'+' || c == b'-' {
+                // CSS exige whitespace alrededor de `+`/`-` (antes ya hubo
+                // por `ws()`; exigimos también después para no confundir con
+                // un signo de número).
+                let after_ws = self
+                    .b
+                    .get(self.i + 1)
+                    .is_some_and(|x| (*x as char).is_ascii_whitespace());
+                if !after_ws {
+                    break;
+                }
+                self.i += 1;
+                let rhs = self.term()?;
+                acc = calc_add(acc, rhs, if c == b'+' { 1.0 } else { -1.0 })?;
+            } else {
+                break;
+            }
+        }
+        Some(acc)
+    }
+
+    /// `term := factor (('*' | '/') factor)*` — `*`/`/` sin whitespace req.
+    fn term(&mut self) -> Option<CalcVal> {
+        let mut acc = self.factor()?;
+        loop {
+            self.ws();
+            let Some(c) = self.peek() else { break };
+            if c == b'*' || c == b'/' {
+                self.i += 1;
+                let rhs = self.factor()?;
+                acc = if c == b'*' { calc_mul(acc, rhs)? } else { calc_div(acc, rhs)? };
+            } else {
+                break;
+            }
+        }
+        Some(acc)
+    }
+
+    /// `factor := '(' expr ')' | func '(' args ')' | número`.
+    fn factor(&mut self) -> Option<CalcVal> {
+        self.ws();
+        let c = self.peek()?;
+        if c == b'(' {
+            self.i += 1;
+            let v = self.expr()?;
+            self.ws();
+            if self.peek()? != b')' {
+                return None;
+            }
+            self.i += 1;
+            return Some(v);
+        }
+        if c.is_ascii_alphabetic() {
+            let start = self.i;
+            while self.i < self.b.len() && self.b[self.i].is_ascii_alphabetic() {
+                self.i += 1;
+            }
+            let name = self.src[start..self.i].to_ascii_lowercase();
+            // CSS no permite whitespace entre el nombre y `(`.
+            if self.peek() != Some(b'(') {
+                return None;
+            }
+            self.i += 1;
+            let args = self.args()?;
+            return apply_math_fn(&name, &args);
+        }
+        self.number()
+    }
+
+    /// Lista de expresiones separadas por coma hasta el `)`.
+    fn args(&mut self) -> Option<Vec<CalcVal>> {
+        let mut out = Vec::new();
+        loop {
+            out.push(self.expr()?);
+            self.ws();
+            match self.peek()? {
+                b',' => self.i += 1,
+                b')' => {
+                    self.i += 1;
+                    return Some(out);
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    /// Número con unidad opcional o signo líder.
+    fn number(&mut self) -> Option<CalcVal> {
+        self.ws();
+        let start = self.i;
+        if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+            self.i += 1;
+        }
+        let mut saw_digit = false;
+        while self.i < self.b.len() {
+            let c = self.b[self.i];
+            if c.is_ascii_digit() {
+                saw_digit = true;
+                self.i += 1;
+            } else if c == b'.' || c.is_ascii_alphabetic() || c == b'%' {
+                self.i += 1;
+            } else {
+                break;
+            }
+        }
+        if !saw_digit {
+            return None;
+        }
+        classify_calc_num(self.src[start..self.i].trim())
+    }
+}
+
+/// Clasifica un token numérico: `%` → componente pct; número crudo →
+/// `Number`; con unidad (px/em/rem/vw/…) → componente px resuelto.
+fn classify_calc_num(t: &str) -> Option<CalcVal> {
+    let t = t.trim();
+    if let Some(p) = t.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|v| CalcVal::Length { px: 0.0, pct: v });
+    }
+    if let Ok(n) = t.parse::<f32>() {
+        return Some(CalcVal::Number(n));
+    }
+    parse_length_px(t).map(|px| CalcVal::Length { px, pct: 0.0 })
+}
+
+/// `font-size`: distingue valores absolutos (px/rem/vw/`calc`/`clamp` y los
+/// keywords absolutos `medium`/`large`/…) de los relativos al font-size
+/// HEREDADO (`em`, `%`, `larger`/`smaller`), que se difieren a la resolución
+/// en `compute_with_parent`. `rem` queda absoluto (root = 16px). Fase 7.223.
+pub(crate) fn parse_font_size(value: &str) -> Option<DeclKind> {
+    let v = value.trim();
+    match v.to_ascii_lowercase().as_str() {
+        // Keywords relativos al heredado.
+        "larger" => return Some(DeclKind::FontSizeRel(1.2)),
+        "smaller" => return Some(DeclKind::FontSizeRel(1.0 / 1.2)),
+        // Keywords absolutos (escala estándar CSS, medium = 16px).
+        "xx-small" => return Some(DeclKind::FontSize(9.0)),
+        "x-small" => return Some(DeclKind::FontSize(10.0)),
+        "small" => return Some(DeclKind::FontSize(13.0)),
+        "medium" => return Some(DeclKind::FontSize(16.0)),
+        "large" => return Some(DeclKind::FontSize(18.0)),
+        "x-large" => return Some(DeclKind::FontSize(24.0)),
+        "xx-large" => return Some(DeclKind::FontSize(32.0)),
+        "xxx-large" => return Some(DeclKind::FontSize(48.0)),
+        _ => {}
+    }
+    // `%` → multiplicador relativo al heredado.
+    if let Some(p) = v.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|n| DeclKind::FontSizeRel(n / 100.0));
+    }
+    // `em` (no `rem`) → relativo al font-size del padre.
+    if let Some(num) = v.strip_suffix("em") {
+        if !num.ends_with('r') {
+            if let Ok(n) = num.trim().parse::<f32>() {
+                return Some(DeclKind::FontSizeRel(n));
+            }
+        }
+    }
+    // Absoluto: px / rem / vw / calc / clamp / …
+    parse_px_or_math(v).map(DeclKind::FontSize)
+}
+
+/// Longitud px de un solo valor, aceptando funciones matemáticas que
+/// resuelvan a **px puro** (`calc`/`min`/`max`/`clamp`). El caso estrella es
+/// la tipografía fluida `font-size: clamp(1rem, 2.5vw, 3rem)`. Un resultado
+/// `%` o número crudo (no resoluble sin contexto) → `None`. Ver Fase 7.216.
+pub(crate) fn parse_px_or_math(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Length { px, pct } if pct == 0.0 => Some(px),
+            _ => None,
+        };
+    }
+    parse_length_px(s)
+}
+
+fn calc_add(a: CalcVal, b: CalcVal, sign: f32) -> Option<CalcVal> {
+    match (a, b) {
+        (CalcVal::Number(x), CalcVal::Number(y)) => Some(CalcVal::Number(x + sign * y)),
+        (CalcVal::Length { px: p1, pct: q1 }, CalcVal::Length { px: p2, pct: q2 }) => {
+            Some(CalcVal::Length { px: p1 + sign * p2, pct: q1 + sign * q2 })
+        }
+        // Sumar número + longitud es inválido en CSS.
+        _ => None,
+    }
+}
+
+fn calc_mul(a: CalcVal, b: CalcVal) -> Option<CalcVal> {
+    match (a, b) {
+        (CalcVal::Number(x), CalcVal::Number(y)) => Some(CalcVal::Number(x * y)),
+        (CalcVal::Number(x), CalcVal::Length { px, pct })
+        | (CalcVal::Length { px, pct }, CalcVal::Number(x)) => {
+            Some(CalcVal::Length { px: px * x, pct: pct * x })
+        }
+        // longitud * longitud es inválido.
+        _ => None,
+    }
+}
+
+fn calc_div(a: CalcVal, b: CalcVal) -> Option<CalcVal> {
+    match (a, b) {
+        (CalcVal::Number(x), CalcVal::Number(y)) if y != 0.0 => Some(CalcVal::Number(x / y)),
+        (CalcVal::Length { px, pct }, CalcVal::Number(y)) if y != 0.0 => {
+            Some(CalcVal::Length { px: px / y, pct: pct / y })
+        }
+        _ => None,
+    }
+}
+
+fn apply_math_fn(name: &str, args: &[CalcVal]) -> Option<CalcVal> {
+    match name {
+        "calc" => (args.len() == 1).then(|| args[0]),
+        "min" => reduce_minmax(args, true),
+        "max" => reduce_minmax(args, false),
+        "clamp" if args.len() == 3 => clamp_calc(args[0], args[1], args[2]),
+        _ => None,
+    }
+}
+
+/// `true` si todos los valores son comparables (misma dimensión): todos
+/// número, todos px puro, o todos pct puro.
+fn all_comparable(vs: &[CalcVal]) -> bool {
+    vs.iter().all(|v| matches!(v, CalcVal::Number(_)))
+        || vs.iter().all(|v| matches!(v, CalcVal::Length { pct, .. } if *pct == 0.0))
+        || vs.iter().all(|v| matches!(v, CalcVal::Length { px, .. } if *px == 0.0))
+}
+
+/// `min()`/`max()`. Si los args son comparables resuelve exacto; si hay
+/// mezcla incomparable (px vs %) degrada al primer arg (sin container).
+fn reduce_minmax(args: &[CalcVal], is_min: bool) -> Option<CalcVal> {
+    let first = *args.first()?;
+    let pick = |a: f32, b: f32| if is_min { a.min(b) } else { a.max(b) };
+    if !all_comparable(args) {
+        return Some(first); // incomparable → degradar
+    }
+    let scalar = |v: &CalcVal| match v {
+        CalcVal::Number(n) => *n,
+        CalcVal::Length { px, pct } => px + pct, // uno es 0 (all_comparable)
+    };
+    let best = args.iter().map(scalar).reduce(pick)?;
+    Some(match first {
+        CalcVal::Number(_) => CalcVal::Number(best),
+        CalcVal::Length { pct, .. } if pct == 0.0 => CalcVal::Length { px: best, pct: 0.0 },
+        CalcVal::Length { .. } => CalcVal::Length { px: 0.0, pct: best },
+    })
+}
+
+/// `clamp(lo, val, hi)` = `max(lo, min(val, hi))`. Si los tres no son
+/// comparables, degrada al valor central (`val`, el preferido).
+fn clamp_calc(lo: CalcVal, val: CalcVal, hi: CalcVal) -> Option<CalcVal> {
+    if all_comparable(&[lo, val, hi]) {
+        let upper = reduce_minmax(&[val, hi], true)?;
+        return reduce_minmax(&[lo, upper], false);
+    }
+    Some(val)
+}
+
+/// Acepta multiplicador adimensional (`1.5`, `1.6`), `Npx`, `Nem`/`Nrem`.
+/// Devuelve siempre un multiplicador (px se divide por 16; `em`/`rem`
+/// salen como ya están). Imperfecto pero alcanza para Fase 4.
+pub(crate) fn parse_line_height(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("px") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(v / 16.0);
+    }
+    if let Some(num) = s.strip_suffix("rem") {
+        return num.trim().parse().ok();
+    }
+    if let Some(num) = s.strip_suffix("em") {
+        return num.trim().parse().ok();
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Versión pública para que `boxes` parsee colors de attrs SVG.
+pub(crate) fn parse_color_named_or_hex(s: &str) -> Option<Color> {
+    parse_color(s)
+}
