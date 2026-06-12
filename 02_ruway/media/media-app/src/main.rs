@@ -821,9 +821,7 @@ fn seek_audio_to_pos(pos: Duration) {
         return;
     };
     let mut src = handle.lock();
-    let dur = src.duration().unwrap_or(Duration::ZERO);
-    let target = if dur.is_zero() { pos } else { pos.min(dur) };
-    src.seek_to(target);
+    media_core::seek::to_pos(&mut *src, pos);
     drop(src);
     reset_av_sync_anchor();
 }
@@ -1156,53 +1154,37 @@ fn subtitles_slot() -> &'static Mutex<Option<SubtitleTrack>> {
 /// Delay de subtítulos en ms (S4). Positivo retrasa el subtítulo; se aplica
 /// al consultar el cue activo (`subtitle_strip`). Tope ±60 s.
 static SUB_DELAY_MS: AtomicI64 = AtomicI64::new(0);
-const MAX_SUB_DELAY_MS: i64 = 60_000;
+const MAX_SUB_DELAY_MS: i64 = SubtitleTrack::MAX_DELAY_MS;
 
 /// Lee y parsea un archivo de subtítulos (autodetect SRT/WebVTT/ASS por
 /// cabecera). Log a stderr; `None` si no se puede leer o no hay cues.
 fn load_subtitle_file(path: &Path) -> Option<SubtitleTrack> {
-    match std::fs::read_to_string(path) {
-        Ok(body) => match SubtitleTrack::parse_subtitles(&body) {
-            Ok(t) => {
-                eprintln!("media-app: subtitles {} · {} cues", path.display(), t.len());
-                Some(t)
-            }
-            Err(e) => {
-                eprintln!("media-app: subtítulos inválidos en {} ({e})", path.display());
-                None
-            }
-        },
+    // La carga y el parsing viven en media-core ([`SubtitleTrack::load`]);
+    // acá sólo queda el logging del host.
+    match SubtitleTrack::load(path) {
+        Ok(t) => {
+            eprintln!("media-app: subtitles {} · {} cues", path.display(), t.len());
+            Some(t)
+        }
         Err(e) => {
-            eprintln!("media-app: no pude leer subtítulos {}: {e}", path.display());
+            eprintln!("media-app: subtítulos en {}: {e}", path.display());
             None
         }
     }
 }
 
-/// Candidatos de subtítulo "sidecar" de un video: mismo nombre base con
-/// extensión de subtítulo, en orden de preferencia. Puro y testeable.
-fn subtitle_sidecar_candidates(video: &Path) -> Vec<PathBuf> {
-    ["srt", "vtt", "ass", "ssa"]
-        .iter()
-        .map(|e| video.with_extension(e))
-        .collect()
-}
-
 /// S5: busca junto al video un subtítulo con su mismo nombre base y lo
-/// carga, sin necesidad de env. Sólo para archivos locales (un stream de
-/// red no tiene hermano en disco). Silencioso si no hay ninguno.
+/// carga ([`SubtitleTrack::find_sidecar`], media-core), sin necesidad de
+/// env. Sólo para archivos locales (un stream de red no tiene hermano en
+/// disco). Silencioso si no hay ninguno.
 fn auto_load_sidecar_subtitles() -> Option<SubtitleTrack> {
     let video = video_path_slot().get()?;
     if is_network_url(&video.to_string_lossy()) {
         return None;
     }
-    for cand in subtitle_sidecar_candidates(video) {
-        if cand.is_file() {
-            eprintln!("media-app: subtítulo sidecar {}", cand.display());
-            return load_subtitle_file(&cand);
-        }
-    }
-    None
+    let cand = SubtitleTrack::find_sidecar(video)?;
+    eprintln!("media-app: subtítulo sidecar {}", cand.display());
+    load_subtitle_file(&cand)
 }
 
 /// `MediaSession` compartida entre el FfmpegVideoSource del pipeline y
@@ -1764,11 +1746,7 @@ fn seek_audio_by(delta_secs: i64) {
         return;
     };
     let mut src = handle.lock();
-    let dur = src.duration().unwrap_or(Duration::from_secs(1));
-    let dur_s = dur.as_secs_f64().max(0.001);
-    let cur_s = src.position().as_secs_f64();
-    let new_s = (cur_s + delta_secs as f64).rem_euclid(dur_s);
-    src.seek_to(Duration::from_secs_f64(new_s));
+    media_core::seek::by_wrapped(&mut *src, delta_secs);
     drop(src);
     // El video no debe interpretar el salto como tiempo transcurrido.
     reset_av_sync_anchor();
@@ -1792,9 +1770,7 @@ fn seek_audio_to(fraction: f32) {
         return;
     };
     let mut src = handle.lock();
-    let dur_s = src.duration().unwrap_or(Duration::ZERO).as_secs_f64();
-    let f = fraction.clamp(0.0, 1.0) as f64;
-    src.seek_to(Duration::from_secs_f64(dur_s * f));
+    media_core::seek::to_fraction(&mut *src, fraction);
     drop(src);
     // El video no debe interpretar el salto como tiempo transcurrido.
     reset_av_sync_anchor();
@@ -4262,11 +4238,8 @@ fn subtitle_strip<Msg: 'static>() -> View<Msg> {
         });
     };
     let position = playback_snapshot().position;
-    // S4: delay de subtítulo. Positivo retrasa = al instante `t` mostramos
-    // el cue que normalmente caería en `t - delay`. Clamp a >= 0.
-    let q = position.as_millis() as i64 - SUB_DELAY_MS.load(Ordering::Relaxed);
-    let adjusted = Duration::from_millis(q.max(0) as u64);
-    let Some(cue) = track.at(adjusted) else {
+    // S4: delay de subtítulo — la matemática vive en media-core.
+    let Some(cue) = track.at_with_delay(position, SUB_DELAY_MS.load(Ordering::Relaxed)) else {
         // Sin cue activo: franja de altura fija pero vacía (mantiene el layout
         // estable mientras hay subtítulos cargados).
         return View::new(Style {
@@ -5330,12 +5303,13 @@ fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, AudioProbe) {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_network_url, subtitle_sidecar_candidates};
+    use super::is_network_url;
+    use media_core::SubtitleTrack;
     use std::path::{Path, PathBuf};
 
     #[test]
     fn sidecar_usa_el_nombre_base_del_video() {
-        let cands = subtitle_sidecar_candidates(Path::new("/cine/peli.mp4"));
+        let cands = SubtitleTrack::sidecar_candidates(Path::new("/cine/peli.mp4"));
         assert_eq!(
             cands,
             vec![
@@ -5347,7 +5321,7 @@ mod tests {
         );
         // Sin extensión previa, la agrega.
         assert_eq!(
-            subtitle_sidecar_candidates(Path::new("clip"))[0],
+            SubtitleTrack::sidecar_candidates(Path::new("clip"))[0],
             PathBuf::from("clip.srt")
         );
     }

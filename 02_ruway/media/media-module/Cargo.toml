@@ -8,6 +8,7 @@ publish.workspace = true
 description = "media-module — el reproductor de media como módulo embebible (patrón nahual-module: State/Msg/update/view con lift). Controles en estilo dientes (dock-rail) por default: un diente por panel (controles · info). v1 envuelve los players embebibles existentes (nahual-{video,audio}-viewer-llimphi, construidos sobre media-source-*); la mudanza de esos viewers al dominio media queda como deuda anotada."
 
 [dependencies]
+media-core = { path = "../media-core" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-icons = { workspace = true }

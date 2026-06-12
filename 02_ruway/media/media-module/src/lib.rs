@@ -13,14 +13,18 @@
 //!
 //! v1 envuelve los players embebibles existentes (`nahual-{video,audio}-
 //! viewer-llimphi`, construidos sobre `media-source-*`): AV1/WebM/MKV/GIF y
-//! WAV/MP3/FLAC/Opus/Vorbis con espectro. Seek con timeline y subtítulos
-//! viven hoy sólo en `media-app`; cuando se extraigan a `media-core`
-//! entrarán acá.
+//! WAV/MP3/FLAC/Opus/Vorbis con espectro. **Subtítulos**: sidecar
+//! `.srt/.vtt/.ass` autodetectado y pintado bajo el video (la carga, el
+//! delay y el cue activo viven en `media-core::SubtitleTrack`). El seek
+//! clickeable llega cuando las fuentes embebibles implementen
+//! `media_core::Seekable` (la matemática ya está en `media-core::seek`).
 
 #![forbid(unsafe_code)]
 
 use std::path::Path;
 use std::time::Duration;
+
+use media_core::SubtitleTrack;
 
 use llimphi_icons::{icon_view, Icon};
 use llimphi_theme::Theme;
@@ -71,6 +75,10 @@ pub struct State {
     pub nombre: String,
     /// Diente activo (`None` = paneles colapsados, sólo el media).
     pub diente: Option<Diente>,
+    /// Subtítulos cargados (sidecar), si hay.
+    pub subs: Option<SubtitleTrack>,
+    /// Delay de subtítulos en ms (positivo retrasa). Clampea media-core.
+    pub sub_delay_ms: i64,
 }
 
 #[derive(Clone)]
@@ -83,12 +91,36 @@ pub enum Msg {
 impl State {
     /// Player de video ya abierto (el host suele tenerlo del discernimiento).
     pub fn desde_video(state: VideoViewerState, nombre: impl Into<String>) -> Self {
-        Self { player: Player::Video(state), nombre: nombre.into(), diente: Some(Diente::Controles) }
+        Self {
+            player: Player::Video(state),
+            nombre: nombre.into(),
+            diente: Some(Diente::Controles),
+            subs: None,
+            sub_delay_ms: 0,
+        }
+    }
+
+    /// Busca y carga el subtítulo sidecar del video (`.srt/.vtt/.ass/.ssa`
+    /// con el mismo nombre base) vía `media-core`. Silencioso si no hay.
+    pub fn con_subtitulos_sidecar(mut self, video: &Path) -> Self {
+        if let Some(cand) = SubtitleTrack::find_sidecar(video) {
+            match SubtitleTrack::load(&cand) {
+                Ok(t) if !t.is_empty() => self.subs = Some(t),
+                _ => {}
+            }
+        }
+        self
     }
 
     /// Player de audio ya abierto.
     pub fn desde_audio(state: AudioViewerState, nombre: impl Into<String>) -> Self {
-        Self { player: Player::Audio(state), nombre: nombre.into(), diente: Some(Diente::Controles) }
+        Self {
+            player: Player::Audio(state),
+            nombre: nombre.into(),
+            diente: Some(Diente::Controles),
+            subs: None,
+            sub_delay_ms: 0,
+        }
     }
 
     /// Abre `path` por extensión (video AV1/WebM/MKV/GIF; audio
@@ -108,7 +140,14 @@ impl State {
             "gif" => Player::Video(VideoViewerState::open_gif(path)),
             _ => Player::Video(VideoViewerState::open_av1(path)),
         };
-        Self { player, nombre, diente: Some(Diente::Controles) }
+        let st = Self {
+            player,
+            nombre,
+            diente: Some(Diente::Controles),
+            subs: None,
+            sub_delay_ms: 0,
+        };
+        st.con_subtitulos_sidecar(path)
     }
 
     pub fn is_playing(&self) -> bool {
@@ -181,6 +220,9 @@ pub fn view<H: Clone + Send + Sync + 'static>(
     .children(vec![media]);
 
     let mut col: Vec<View<H>> = vec![media_wrap];
+    if let Some(strip) = subtitulo_strip(st, theme) {
+        col.push(strip);
+    }
     match st.diente {
         Some(Diente::Controles) => col.push(controles(st, theme, lift.clone())),
         Some(Diente::Info) => col.push(info(st, theme)),
@@ -325,13 +367,16 @@ fn controles<H: Clone + Send + Sync + 'static>(
 
 /// Panel "info": nombre + datos del stream.
 fn info<H: Clone + Send + Sync + 'static>(st: &State, theme: &Theme) -> View<H> {
-    let detalle = match &st.player {
+    let mut detalle = match &st.player {
         Player::Video(v) => {
             let (w, h) = v.dimensions();
             format!("video · {w}×{h}")
         }
         Player::Audio(_) => "audio".to_string(),
     };
+    if let Some(t) = &st.subs {
+        detalle.push_str(&format!(" · subtítulos: {} cues", t.len()));
+    }
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: length(52.0_f32) },
@@ -359,4 +404,27 @@ fn info<H: Clone + Send + Sync + 'static>(st: &State, theme: &Theme) -> View<H> 
         })
         .text(detalle, 12.0, theme.fg_muted),
     ])
+}
+
+/// Franja de subtítulos bajo el media: el cue activo en la posición actual
+/// (delay aplicado por `media-core`). Altura fija mientras haya pista
+/// cargada — el layout no salta entre cues. Estilo plano v1 (blanco,
+/// centrado); el estilo ASS completo queda en media-app.
+fn subtitulo_strip<H: Clone + Send + Sync + 'static>(st: &State, theme: &Theme) -> Option<View<H>> {
+    let track = st.subs.as_ref()?;
+    let texto = track
+        .at_with_delay(st.position(), st.sub_delay_ms)
+        .map(|c| c.text.clone())
+        .unwrap_or_default();
+    Some(
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(llimphi_ui::llimphi_layout::taffy::JustifyContent::Center),
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .fill(theme.bg_panel)
+        .text(texto, 14.0, llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(240, 240, 240, 255)),
+    )
 }

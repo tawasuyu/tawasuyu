@@ -4100,9 +4100,10 @@ fn open_path(m: &mut Model, path: &PathBuf) {
         // Video/audio → el player de media embebible (reusa el estado ya
         // abierto por el discernimiento; controles en dientes).
         PreviewPane::Video(state) => {
-            m.canvas = Some(CanvasApp::Media(Box::new(mediamod::State::desde_video(
-                state, nombre,
-            ))));
+            // El sidecar .srt/.vtt/.ass del video se carga solo (media-core).
+            m.canvas = Some(CanvasApp::Media(Box::new(
+                mediamod::State::desde_video(state, nombre).con_subtitulos_sidecar(path),
+            )));
         }
         PreviewPane::Audio(state) => {
             m.canvas = Some(CanvasApp::Media(Box::new(mediamod::State::desde_audio(

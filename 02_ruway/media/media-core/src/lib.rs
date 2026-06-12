@@ -19,6 +19,7 @@
 //! gstreamer, v4l2, cpal…) vivan en crates `media-source-*` o
 //! `media-audio-*` que impl los traits.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -43,6 +44,7 @@ pub mod viewport;
 pub mod waveform;
 pub mod layout;
 pub mod sync;
+pub mod seek;
 
 /// Productor de frames RGBA. `tick` avanza el tiempo `dt` y, si hay
 /// un nuevo frame disponible, lo deja escrito en `buf` y devuelve
@@ -1635,6 +1637,42 @@ impl SubtitleTrack {
         self.cues.is_empty()
     }
 
+    /// Tope del delay de subtítulos aceptado por [`Self::at_with_delay`]
+    /// (±60 s) — el mismo que aplicaba media-app.
+    pub const MAX_DELAY_MS: i64 = 60_000;
+
+    /// Como [`Self::at`], pero aplicando un **delay** en ms (positivo
+    /// retrasa el subtítulo: al instante `t` se muestra el cue que caería
+    /// en `t - delay`). El delay se clampea a ±[`Self::MAX_DELAY_MS`] y la
+    /// consulta nunca cae por debajo de 0. Extraído de media-app (S4).
+    pub fn at_with_delay(&self, position: Duration, delay_ms: i64) -> Option<&SubtitleCue> {
+        let delay = delay_ms.clamp(-Self::MAX_DELAY_MS, Self::MAX_DELAY_MS);
+        let q = position.as_millis() as i64 - delay;
+        self.at(Duration::from_millis(q.max(0) as u64))
+    }
+
+    /// Candidatos de subtítulo "sidecar" de un video: mismo nombre base
+    /// con extensión de subtítulo, en orden de preferencia. Puro.
+    pub fn sidecar_candidates(video: &Path) -> Vec<PathBuf> {
+        ["srt", "vtt", "ass", "ssa"]
+            .iter()
+            .map(|e| video.with_extension(e))
+            .collect()
+    }
+
+    /// El primer sidecar que existe en disco junto al video, si hay.
+    pub fn find_sidecar(video: &Path) -> Option<PathBuf> {
+        Self::sidecar_candidates(video).into_iter().find(|c| c.is_file())
+    }
+
+    /// Lee y parsea un archivo de subtítulos (autodetect SRT/WebVTT/ASS
+    /// por cabecera). Conveniencia host-side — la única función del crate
+    /// que toca el filesystem.
+    pub fn load(path: &Path) -> Result<SubtitleTrack, String> {
+        let body = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        SubtitleTrack::parse_subtitles(&body).map_err(|e| e.to_string())
+    }
+
     /// Devuelve el cue activo en `t`, si existe. Si dos cues se
     /// solapan, gana el de `start` más cercano por debajo de `t`
     /// (el último que arrancó).
@@ -2281,6 +2319,35 @@ fn parse_timestamp(s: &str) -> Result<Duration, String> {
 #[cfg(test)]
 mod tests_subtitles {
     use super::*;
+
+    #[test]
+    fn sidecar_candidates_orden_y_sin_extension() {
+        let c = SubtitleTrack::sidecar_candidates(std::path::Path::new("/cine/peli.mp4"));
+        assert_eq!(c[0], std::path::PathBuf::from("/cine/peli.srt"));
+        assert_eq!(c[1], std::path::PathBuf::from("/cine/peli.vtt"));
+        assert_eq!(c[2], std::path::PathBuf::from("/cine/peli.ass"));
+        assert_eq!(c[3], std::path::PathBuf::from("/cine/peli.ssa"));
+        assert_eq!(
+            SubtitleTrack::sidecar_candidates(std::path::Path::new("clip"))[0],
+            std::path::PathBuf::from("clip.srt")
+        );
+    }
+
+    #[test]
+    fn at_with_delay_corre_la_consulta() {
+        let src = "1\n00:00:05,000 --> 00:00:07,000\nhola\n";
+        let track = SubtitleTrack::parse_srt(src).unwrap();
+        // Sin delay, a los 4s no hay cue.
+        assert!(track.at_with_delay(Duration::from_secs(4), 0).is_none());
+        // Delay -2000 (adelanta): a los 4s consultamos 6s → cue activo.
+        assert!(track.at_with_delay(Duration::from_secs(4), -2000).is_some());
+        // Delay +2000 (retrasa): a los 6s consultamos 4s → nada.
+        assert!(track.at_with_delay(Duration::from_secs(6), 2000).is_none());
+        // Clamp bajo cero: no panic.
+        assert!(track.at_with_delay(Duration::ZERO, 5000).is_none());
+        // Delay fuera de rango se clampea a ±60s (no revienta).
+        assert!(track.at_with_delay(Duration::from_secs(66), 1_000_000).is_some());
+    }
 
     #[test]
     fn parse_simple_srt() {
