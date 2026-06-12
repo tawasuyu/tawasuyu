@@ -21,7 +21,7 @@
 mod astrocarto;
 #[path = "../src/astroview.rs"]
 mod astroview;
-#[path = "../src/chrome.rs"]
+#[path = "../src/chrome/mod.rs"]
 mod chrome;
 #[path = "../src/dialog.rs"]
 mod dialog;
