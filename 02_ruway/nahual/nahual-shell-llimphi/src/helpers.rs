@@ -940,22 +940,114 @@ fn open_ffmpeg_video(path: &Path) -> VideoViewerState {
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    let source = foreign_av::probe(path)
-        .and_then(|info| {
-            let duration = info.duration;
-            let dims = info.video.map(|v| (v.width, v.height)).unwrap_or((0, 0));
-            let session = foreign_av::MediaSession::open(info)?;
-            let src = foreign_av::FfmpegVideoSource::from_session(session)?;
-            Ok((src, dims, duration))
-        });
+    let source = foreign_av::probe(path).and_then(|info| {
+        let duration = info.duration;
+        let dims = info.video.map(|v| (v.width, v.height)).unwrap_or((0, 0));
+        let session = foreign_av::MediaSession::open(info)?;
+        let src = foreign_av::FfmpegVideoSource::from_session(session)?;
+        let fps = src.fps();
+        Ok((src, dims, duration, fps))
+    });
     match source {
-        Ok((src, (w, h), duration)) => {
-            VideoViewerState::from_source(Box::new(src), name, w, h, Some(duration))
+        Ok((src, (w, h), duration, fps)) => {
+            // El `tick` de la fuente ffmpeg hace un read BLOQUEANTE del pipe;
+            // correrlo en el hilo de UI lo cuelga. La envolvemos en un
+            // ThreadedFrameSource: un hilo decodifica a cadencia real y el
+            // tick del viewer sólo levanta el último frame, sin bloquear.
+            let threaded = ThreadedFrameSource::spawn(Box::new(src), fps);
+            VideoViewerState::from_source(Box::new(threaded), name, w, h, Some(duration))
         }
         Err(e) => VideoViewerState::unsupported(
             path,
             format!("MP4/H.264 vía ffmpeg falló: {e} — ¿está ffmpeg en PATH?"),
         ),
+    }
+}
+
+/// Adapta una [`FrameSource`](media_core::FrameSource) de IO **bloqueante**
+/// (el pipe de ffmpeg en `foreign-av`) a un `tick` **no-bloqueante**, apto para
+/// el hilo de UI. Un hilo dedicado corre la fuente a cadencia real (sleep por
+/// frame) y deja el último frame decodificado en un slot compartido
+/// (*latest-wins*: si la UI va más lenta que el video, descarta los
+/// intermedios). El `tick` del adaptador sólo levanta ese slot — nunca bloquea.
+///
+/// Limitación conocida: el hilo decodifica de corrido aunque el viewer esté en
+/// pausa (la pausa del viewer no se propaga a la fuente), así que al reanudar el
+/// video "saltó" a la posición actual. Aceptable para una preview; un control
+/// de pausa real es trabajo aparte.
+#[cfg(feature = "ffmpeg")]
+struct ThreadedFrameSource {
+    /// (rgba, w, h, seq). `seq` monótono: el viewer detecta frame nuevo.
+    slot: std::sync::Arc<std::sync::Mutex<Option<(Vec<u8>, u32, u32, u64)>>>,
+    last_seq: u64,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    _handle: Option<std::thread::JoinHandle<()>>,
+}
+
+#[cfg(feature = "ffmpeg")]
+impl ThreadedFrameSource {
+    fn spawn(mut inner: Box<dyn media_core::FrameSource + Send>, fps: f32) -> Self {
+        use std::sync::atomic::Ordering;
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let slot_t = slot.clone();
+        let stop_t = stop.clone();
+        let interval = Duration::from_secs_f32(1.0 / fps.max(1.0));
+        let handle = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut seq = 0u64;
+            while !stop_t.load(Ordering::Relaxed) {
+                match inner.tick(interval, &mut buf) {
+                    Some((w, h)) => {
+                        seq += 1;
+                        if let Ok(mut g) = slot_t.lock() {
+                            *g = Some((buf.clone(), w, h, seq));
+                        }
+                    }
+                    // `None` de la fuente ffmpeg = EOF (el read falló): no hay
+                    // más frames, el hilo termina y suelta la fuente (Drop de
+                    // MediaSession mata ffmpeg).
+                    None => break,
+                }
+                std::thread::sleep(interval);
+            }
+        });
+        Self {
+            slot,
+            last_seq: 0,
+            stop,
+            _handle: Some(handle),
+        }
+    }
+}
+
+#[cfg(feature = "ffmpeg")]
+impl media_core::FrameSource for ThreadedFrameSource {
+    fn tick(&mut self, _dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        let g = self.slot.lock().ok()?;
+        match g.as_ref() {
+            Some((rgba, w, h, seq)) if *seq != self.last_seq => {
+                self.last_seq = *seq;
+                if buf.len() != rgba.len() {
+                    buf.resize(rgba.len(), 0);
+                }
+                buf.copy_from_slice(rgba);
+                Some((*w, *h))
+            }
+            _ => None,
+        }
+    }
+}
+
+#[cfg(feature = "ffmpeg")]
+impl Drop for ThreadedFrameSource {
+    fn drop(&mut self) {
+        // Señalamos parada; no hacemos join (el hilo puede estar en un read
+        // bloqueante del pipe), así no trabamos el cierre de la UI. El hilo ve
+        // el flag tras el frame en curso, sale y suelta la fuente → ffmpeg
+        // muere por el Drop de MediaSession.
+        self.stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -1015,13 +1107,16 @@ mod ffmpeg_tests {
             "el probe debería haber dado dimensiones de video"
         );
 
-        // El primer frame puede tardar varios ticks (arranque del subprocess).
+        // El frame lo produce el hilo del ThreadedFrameSource a cadencia real;
+        // el tick del viewer es no-bloqueante, así que dormimos de verdad entre
+        // intentos para darle tiempo al subprocess+hilo a entregar el primero.
         let mut got = false;
         for _ in 0..120 {
-            if st.tick(Duration::from_millis(100)) {
+            if st.tick(Duration::from_millis(50)) {
                 got = true;
                 break;
             }
+            std::thread::sleep(Duration::from_millis(50));
         }
         assert!(got, "foreign-av debería decodificar al menos un frame de H.264");
     }
