@@ -2529,21 +2529,27 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 }
             }
         }
-        Source::Remote { .. } => {
-            // SSH (matilda usa esta variante para otra cosa). El shell
-            // no tiene un transporte SSH para comandos arbitrarios aún;
-            // fallback a local con notice claro.
-            s.push_output(OutputLine::notice(
-                "shell vía SSH no implementado todavía — corro local",
-            ));
-            let handle = shuma_exec::run(&spec);
-            let killer = handle.killer();
-            ActiveRun {
-                handle: BackendHandle::Local(handle),
-                killer: Some(killer),
-                command: line,
-                tui,
-                block: run_block,
+        Source::Remote { host, user, port, .. } => {
+            // Shell SSH (russh vía shuma-remote-exec::run_ssh). v1: cada comando
+            // es un `ssh exec` (sin PTY/streaming). La auth sale de hosts.json.
+            match resolve_ssh_auth(host, user) {
+                Ok(auth) => {
+                    let cwd = s.cwd.display().to_string();
+                    let handle =
+                        shuma_remote_exec::run_ssh(&line, &cwd, host, user, *port, auth);
+                    ActiveRun {
+                        handle: BackendHandle::Remote(handle),
+                        killer: None,
+                        command: line,
+                        tui: None,
+                        block: run_block,
+                    }
+                }
+                Err(e) => {
+                    s.push_output(OutputLine::notice(format!("✘ SSH: {e}")));
+                    fail_pending_intent(&mut s);
+                    return s;
+                }
             }
         }
         Source::Container { engine, name, .. } => {
@@ -2578,6 +2584,92 @@ pub(crate) fn fail_pending_intent(s: &mut State) {
         s.intent_graph.complete(id, false, 0);
     }
     s.current_run_bytes = 0;
+}
+
+// --- Auth SSH para `Source::Remote` -----------------------------------------
+// Espejo MÍNIMO del schema de `~/.config/shuma/hosts.json` (lo escribe el
+// chasis vía `hosts.rs`): sólo los campos que necesita el transporte SSH.
+
+#[derive(serde::Deserialize)]
+struct HostEntry {
+    host: String,
+    #[serde(default)]
+    user: String,
+    #[serde(default = "host_default_port")]
+    port: u16,
+    #[serde(default)]
+    auth: HostAuthJson,
+}
+
+fn host_default_port() -> u16 {
+    22
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum HostAuthJson {
+    #[default]
+    Password,
+    Key {
+        path: String,
+    },
+}
+
+fn hosts_json_path() -> Option<PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+    Some(base.join("shuma").join("hosts.json"))
+}
+
+/// Corre el binario askpass (`SHUMA_ASKPASS`/`SSH_ASKPASS`) con `prompt` y
+/// devuelve lo que imprime en stdout (la contraseña/passphrase). `None` si no
+/// hay askpass configurado o el usuario canceló.
+fn run_askpass(prompt: &str) -> Option<String> {
+    let bin = std::env::var_os("SHUMA_ASKPASS").or_else(|| std::env::var_os("SSH_ASKPASS"))?;
+    let out = std::process::Command::new(bin).arg(prompt).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout)
+        .trim_end_matches(['\n', '\r'])
+        .to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
+}
+
+/// Resuelve el método de auth para `host`/`user` leyendo `hosts.json`. Clave
+/// (PEM) → `SshAuth::Key`; contraseña → askpass al conectar.
+fn resolve_ssh_auth(
+    host: &str,
+    user: &str,
+) -> Result<shuma_remote_exec::SshAuth, String> {
+    let path = hosts_json_path().ok_or("no se pudo ubicar hosts.json")?;
+    let txt = std::fs::read_to_string(&path)
+        .map_err(|e| format!("no pude leer {}: {e}", path.display()))?;
+    let entries: Vec<HostEntry> =
+        serde_json::from_str(&txt).map_err(|e| format!("hosts.json inválido: {e}"))?;
+    let entry = entries
+        .iter()
+        .find(|h| h.host == host && (h.user == user || h.user.is_empty()))
+        .or_else(|| entries.iter().find(|h| h.host == host))
+        .ok_or_else(|| format!("no hay host guardado para {host} — gestioná hosts"))?;
+    let _ = entry.port;
+    match &entry.auth {
+        HostAuthJson::Key { path } => Ok(shuma_remote_exec::SshAuth::Key {
+            path: PathBuf::from(path),
+            passphrase: None,
+        }),
+        HostAuthJson::Password => {
+            let pw = run_askpass(&format!("Contraseña SSH para {user}@{host}:")).ok_or(
+                "auth por contraseña: configurá SHUMA_ASKPASS/SSH_ASKPASS o usá una clave (PEM)",
+            )?;
+            Ok(shuma_remote_exec::SshAuth::Password(pw))
+        }
+    }
 }
 
 /// Carga el `Keypair` del shell desde el archivo de identidad,
@@ -3284,6 +3376,22 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
         };
         s.cwd = normalize_lexical(&base);
         s.completion_source = crate::completion_source_for(&s.source, &s.cwd);
+        return s;
+    }
+    // Remoto (SSH): cada comando es un `ssh exec` (shell nuevo en $HOME). v1:
+    // sólo persistimos `cd` a rutas ABSOLUTAS (un `cd` relativo no tiene contra
+    // qué resolver sin un round-trip). El cwd se antepone como `cd` en run_ssh.
+    if matches!(s.source, Source::Remote { .. }) {
+        let trimmed = rest.trim();
+        if trimmed.is_empty() {
+            s.cwd = PathBuf::from("~");
+        } else if trimmed.starts_with('/') {
+            s.cwd = normalize_lexical(&PathBuf::from(trimmed));
+        } else {
+            s.push_output(OutputLine::notice(
+                "cd remoto (v1): usá una ruta absoluta (p. ej. cd /var/log)",
+            ));
+        }
         return s;
     }
     let target = if rest.trim().is_empty() {

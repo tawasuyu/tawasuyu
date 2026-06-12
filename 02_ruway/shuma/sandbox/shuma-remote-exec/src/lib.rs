@@ -29,6 +29,8 @@
 #![forbid(unsafe_code)]
 
 pub use shuma_exec::RunEvent;
+/// Re-export para que los consumidores construyan auth sin depender de `ssh`.
+pub use ssh::SshAuth;
 use shuma_exec::{CommandSpec, Exec};
 use shuma_protocol::{
     read_frame, write_frame, ExecKind, ExecStage, Request, Response,
@@ -268,6 +270,97 @@ fn response_to_event(r: Response) -> Option<RunEvent> {
 /// [`shuma_protocol::default_socket_path`].
 pub fn run_default(spec: &CommandSpec) -> Result<RemoteRunHandle, RemoteExecError> {
     run(spec, &shuma_protocol::default_socket_path())
+}
+
+/// Ejecuta `line` en un host por **SSH** (russh, vía `shared/ssh`) y devuelve
+/// un [`RemoteRunHandle`] cuyos eventos llegan cuando el comando termina.
+///
+/// v1: NO streaming ni PTY — `ssh exec` junta toda la salida y la reemitimos
+/// como líneas `Stdout`/`Stderr` + `Exited(code)`. Suficiente para el modelo de
+/// bloques del shell (comandos no interactivos). La conexión + auth ocurren en
+/// el hilo de fondo; si fallan, salen como `RunEvent::Failed` (el shell las
+/// muestra en el bloque). `cwd` se antepone como `cd` si es un path absoluto.
+pub fn run_ssh(
+    line: &str,
+    cwd: &str,
+    host: &str,
+    user: &str,
+    port: u16,
+    auth: ssh::SshAuth,
+) -> RemoteRunHandle {
+    let (tx, rx) = std::sync::mpsc::channel::<RunEvent>();
+    let cancel = Arc::new(Notify::new());
+    // Persistencia de cwd v1: sólo paths absolutos (cada `exec` SSH es un shell
+    // nuevo que arranca en $HOME; un `cd` relativo no tiene contra qué resolver
+    // sin un round-trip extra). Relativo → corre en $HOME.
+    let remote_cmd = if cwd.starts_with('/') {
+        format!("cd {} && {}", ssh_quote(cwd), line)
+    } else {
+        line.to_string()
+    };
+    let cfg = ssh::SshConfig {
+        host: host.to_string(),
+        port,
+        user: user.to_string(),
+        auth,
+        keepalive_secs: 15,
+    };
+    let etiqueta = format!("{user}@{host}");
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(RunEvent::Failed(format!("runtime: {e}")));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let sess = match ssh::SshSession::connect(&cfg).await {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(RunEvent::Failed(format!("ssh {etiqueta}: {e}")));
+                    return;
+                }
+            };
+            match sess.exec(&remote_cmd).await {
+                Ok(out) => {
+                    for l in String::from_utf8_lossy(&out.stdout).lines() {
+                        if tx.send(RunEvent::Stdout(l.to_string())).is_err() {
+                            return;
+                        }
+                    }
+                    for l in String::from_utf8_lossy(&out.stderr).lines() {
+                        if tx.send(RunEvent::Stderr(l.to_string())).is_err() {
+                            return;
+                        }
+                    }
+                    let _ = tx.send(RunEvent::Exited(out.exit_code));
+                }
+                Err(e) => {
+                    let _ = tx.send(RunEvent::Failed(format!("ssh exec: {e}")));
+                }
+            }
+        });
+    });
+    RemoteRunHandle { rx, finished: false, cancel, pty_out: None }
+}
+
+/// Quote Bourne mínimo para inyectar un path en `cd '<path>'`.
+fn ssh_quote(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('\'');
+    for ch in s.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// Extrae `(program, args, rows, cols)` de un spec PTY; `None` si el spec

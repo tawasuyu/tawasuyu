@@ -12,5 +12,6 @@ description = "shuma — cliente sync del subprotocolo ExecStream del daemon. Re
 shuma-exec = { path = "../shuma-exec" }
 shuma-protocol = { path = "../shuma-protocol" }
 shuma-link = { path = "../shuma-link" }
+ssh = { path = "../../../../shared/ssh" }
 tokio = { workspace = true }
 thiserror = { workspace = true }

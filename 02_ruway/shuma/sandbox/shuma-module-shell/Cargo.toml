@@ -27,6 +27,8 @@ llimphi-widget-terminal = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }
 vt100 = { workspace = true }
 arboard = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 png = { workspace = true }
