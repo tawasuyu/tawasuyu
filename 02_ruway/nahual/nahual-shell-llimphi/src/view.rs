@@ -272,9 +272,15 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
     if let Some(p) = &model.palette {
         return Some(palette_overlay(p, model));
     }
-    // Find recursivo: modal, sobre el resto.
+    // Find recursivo: modal, sobre el resto. Anota el estado del índice
+    // semántico (si cubre la carpeta del find).
     if let Some(f) = &model.find {
-        return Some(find_overlay(f, &model.theme));
+        let entries = model
+            .sem_index
+            .as_ref()
+            .filter(|idx| idx.root == f.root)
+            .map(|idx| idx.entries.len());
+        return Some(find_overlay_ex(f, &model.theme, model.sem_indexing, entries));
     }
     // Panel de IA: overlay con la respuesta del LLM.
     if let Some(ai) = &model.ai {
@@ -365,20 +371,37 @@ pub(crate) fn ai_overlay(ai: &AiState, theme: &Theme) -> View<Msg> {
 
 /// Overlay del **find recursivo** (Ctrl+F): input + modo + lista de resultados,
 /// anclado arriba-centro sobre un scrim. Mismo lenguaje visual que la palette.
-pub(crate) fn find_overlay(f: &FindState, theme: &Theme) -> View<Msg> {
+/// Anota el estado del índice semántico (construyéndose, o cuántas entradas
+/// tiene para esta carpeta) cuando el modo es semántico.
+pub(crate) fn find_overlay_ex(
+    f: &FindState,
+    theme: &Theme,
+    indexing: bool,
+    index_entries: Option<usize>,
+) -> View<Msg> {
+    // Anotación del índice cuando el modo es semántico.
+    let modo_txt = if matches!(f.mode, crate::modelo::FindMode::Semantic) {
+        if indexing {
+            format!("{} (indexando…)", f.mode.label())
+        } else if let Some(n) = index_entries {
+            format!("{} (índice: {n})", f.mode.label())
+        } else {
+            format!("{} (sin índice · por consulta)", f.mode.label())
+        }
+    } else {
+        f.mode.label().to_string()
+    };
     // Cabecera: estado de la búsqueda + atajos.
     let header_txt = if f.searching {
-        format!("buscar · {} · buscando…", f.mode.label())
+        format!("buscar · {modo_txt} · buscando…")
     } else if f.ran.is_some() {
         format!(
-            "buscar · {} · {} resultados · ↓↑ navega · Enter abre · Tab modo · Esc cierra",
-            f.mode.label(),
+            "buscar · {modo_txt} · {} resultados · ↓↑ navega · Enter abre · Tab modo · Esc cierra",
             f.results.len(),
         )
     } else {
         format!(
-            "buscar · {} · Enter busca · Tab modo (nombre/contenido/semántico) · Esc cierra",
-            f.mode.label(),
+            "buscar · {modo_txt} · Enter busca · Tab modo (nombre/contenido/semántico) · Esc cierra",
         )
     };
     let header = View::new(Style {

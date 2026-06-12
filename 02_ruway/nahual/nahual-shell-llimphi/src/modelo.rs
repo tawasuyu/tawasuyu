@@ -282,6 +282,18 @@ impl FindMode {
     }
 }
 
+/// Índice de embeddings de una carpeta, para que la búsqueda semántica sea
+/// **instantánea** (sólo se embebe la consulta y se rankea contra estos
+/// vectores cacheados, en vez de embeber todo el árbol por consulta). Se
+/// construye en background con "Indexar carpeta…".
+#[derive(Clone)]
+pub(crate) struct SemIndex {
+    /// Carpeta indexada (el índice sólo aplica a búsquedas posadas acá).
+    pub(crate) root: PathBuf,
+    /// `(ruta, vector)` de cada archivo indexado.
+    pub(crate) entries: Vec<(PathBuf, Vec<f32>)>,
+}
+
 /// Un resultado del find recursivo: la ruta real + cómo mostrarla (relativa al
 /// root) + un fragmento opcional (la línea que matcheó, en modo contenido).
 #[derive(Clone)]
@@ -535,6 +547,12 @@ pub(crate) struct Model {
     /// Find recursivo (Ctrl+F): `None` cerrado. Mientras esté `Some`, captura
     /// todo el teclado (es un modal).
     pub(crate) find: Option<FindState>,
+    /// Índice de embeddings de una carpeta (búsqueda semántica instantánea).
+    /// `None` = sin índice (la semántica embebe por consulta). Se invalida solo
+    /// cuando la búsqueda se posa en otra carpeta.
+    pub(crate) sem_index: Option<SemIndex>,
+    /// `true` mientras un índice se está construyendo en background.
+    pub(crate) sem_indexing: bool,
     /// Command palette (Ctrl+Shift+P / Ctrl+P): `None` cerrado. Mientras esté
     /// `Some`, el módulo se lleva todo el teclado.
     pub(crate) palette: Option<PaletteState>,
@@ -784,6 +802,10 @@ pub(crate) enum Msg {
     FindToggleMode,
     /// Resultados del worker (con su generación para descartar los viejos).
     FindResults { gen: u64, hits: Vec<FindHit> },
+    /// Construye el índice de embeddings de la carpeta actual (background).
+    SemIndexBuild,
+    /// El índice terminó de construirse (`None` si el daemon no estaba).
+    SemIndexReady(Option<Box<SemIndex>>),
     /// Cierra el find.
     FindClose,
 

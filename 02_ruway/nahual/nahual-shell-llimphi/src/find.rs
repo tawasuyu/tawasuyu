@@ -176,6 +176,20 @@ pub(crate) fn apply_find(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model 
                 }
             }
         }
+        Msg::SemIndexBuild => {
+            // Indexa la carpeta del find (o la actual si el find no está abierto).
+            let root = m
+                .find
+                .as_ref()
+                .map(|f| f.root.clone())
+                .unwrap_or_else(|| PathBuf::from(m.cur().current_id().as_str()));
+            m.sem_indexing = true;
+            handle.spawn(move || Msg::SemIndexReady(build_index(&root).map(Box::new)));
+        }
+        Msg::SemIndexReady(idx) => {
+            m.sem_indexing = false;
+            m.sem_index = idx.map(|b| *b);
+        }
         _ => {}
     }
     m
@@ -205,9 +219,16 @@ fn find_submit(mut m: Model, handle: &Handle<Msg>) -> Model {
     let gen = f.gen;
     let mode = f.mode;
     let root = f.root.clone();
+    // Si hay un índice de embeddings para esta carpeta, la semántica usa el
+    // camino rápido (sólo embebe la consulta y rankea contra los vectores
+    // cacheados). Si no, embebe por consulta.
+    let index: Option<Vec<(PathBuf, Vec<f32>)>> = match (&mode, &m.sem_index) {
+        (FindMode::Semantic, Some(idx)) if idx.root == root => Some(idx.entries.clone()),
+        _ => None,
+    };
     handle.spawn(move || {
         let hits = match mode {
-            FindMode::Semantic => run_find_semantic(&root, &query),
+            FindMode::Semantic => run_find_semantic(&root, &query, index),
             _ => run_find(&root, &query, mode),
         };
         Msg::FindResults { gen, hits }
@@ -215,11 +236,35 @@ fn find_submit(mut m: Model, handle: &Handle<Msg>) -> Model {
     m
 }
 
-/// Búsqueda **semántica**: embebe la consulta y los archivos candidatos vía el
-/// daemon de verbo y rankea por coseno. Corre en el worker (forja un runtime
-/// tokio efímero). Si el daemon no está corriendo o falla, degrada a búsqueda
-/// por nombre (glob) para que el modo siempre devuelva algo útil.
-pub(crate) fn run_find_semantic(root: &Path, query: &str) -> Vec<FindHit> {
+/// Coseno entre dos vectores crudos. `-1.0` (mínimo) si las dimensiones no
+/// cuadran o alguno es nulo — así nunca rankea arriba un vector inválido.
+fn cosine_slices(a: &[f32], b: &[f32]) -> f32 {
+    if a.len() != b.len() || a.is_empty() {
+        return -1.0;
+    }
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        -1.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
+/// Búsqueda **semántica**: rankea archivos por afinidad con la consulta vía
+/// embeddings del daemon de verbo. Corre en el worker (runtime tokio efímero).
+///
+/// - Si `index` trae vectores pre-calculados de la carpeta (construidos con
+///   "Indexar carpeta…"), sólo embebe la consulta y rankea contra ellos —
+///   **instantáneo**, sin re-embeber el árbol.
+/// - Si no, embebe los candidatos por consulta (más lento, acotado).
+/// - Si el daemon no está, degrada a búsqueda por nombre (glob).
+pub(crate) fn run_find_semantic(
+    root: &Path,
+    query: &str,
+    index: Option<Vec<(PathBuf, Vec<f32>)>>,
+) -> Vec<FindHit> {
     use rimay_verbo::Provider;
     let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
         return run_find(root, query, FindMode::Name);
@@ -232,22 +277,34 @@ pub(crate) fn run_find_semantic(root: &Path, query: &str) -> Vec<FindHit> {
                 return run_find(root, query, FindMode::Name);
             }
         };
-        // Candidatos: archivos bajo el root (acotado), con un texto a embeber
-        // (nombre + snippet de contenido si es texto).
-        let candidatos = collect_candidates(root, SEMANTIC_MAX_CANDIDATES);
-        if candidatos.is_empty() {
-            return Vec::new();
-        }
         let consulta = match client.embed(query).await {
             Ok(v) => v,
             Err(_) => return run_find(root, query, FindMode::Name),
         };
+        // Camino rápido: rankear contra el índice cacheado.
+        if let Some(idx) = index.filter(|i| !i.is_empty()) {
+            let mut scored: Vec<(f32, usize)> = idx
+                .iter()
+                .enumerate()
+                .map(|(i, (_, v))| (cosine_slices(&consulta.values, v), i))
+                .collect();
+            scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+            scored.truncate(SEMANTIC_TOP_N);
+            return scored
+                .into_iter()
+                .map(|(score, i)| hit_for(root, &idx[i].0, Some(format!("afinidad {score:.2}"))))
+                .collect();
+        }
+        // Camino lento: embeber candidatos por consulta.
+        let candidatos = collect_candidates(root, SEMANTIC_MAX_CANDIDATES);
+        if candidatos.is_empty() {
+            return Vec::new();
+        }
         let textos: Vec<String> = candidatos.iter().map(|(_, t)| t.clone()).collect();
         let vectores = match client.embed_batch(&textos).await {
             Ok(v) => v,
             Err(_) => return run_find(root, query, FindMode::Name),
         };
-        // Rankeo por coseno descendente.
         let mut scored: Vec<(f32, usize)> = vectores
             .iter()
             .enumerate()
@@ -265,11 +322,37 @@ pub(crate) fn run_find_semantic(root: &Path, query: &str) -> Vec<FindHit> {
     })
 }
 
+/// Construye el índice de embeddings de `root`: embebe todos los candidatos y
+/// guarda `(ruta, vector)`. Corre en el worker. `None` si el daemon no está o
+/// no hay candidatos — el find semántico seguirá funcionando por consulta.
+pub(crate) fn build_index(root: &Path) -> Option<crate::modelo::SemIndex> {
+    use rimay_verbo::Provider;
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
+    rt.block_on(async move {
+        let client = rimay_verbo::conectar().await.ok()?;
+        let candidatos = collect_candidates(root, INDEX_MAX_CANDIDATES);
+        if candidatos.is_empty() {
+            return None;
+        }
+        let textos: Vec<String> = candidatos.iter().map(|(_, t)| t.clone()).collect();
+        let vectores = client.embed_batch(&textos).await.ok()?;
+        let entries: Vec<(PathBuf, Vec<f32>)> = candidatos
+            .into_iter()
+            .zip(vectores)
+            .map(|((path, _), v)| (path, v.values))
+            .collect();
+        Some(crate::modelo::SemIndex { root: root.to_path_buf(), entries })
+    })
+}
+
 /// Tope de archivos candidatos a embeber por búsqueda semántica (embeber todo
 /// el árbol sería carísimo; tomamos los primeros N del recorrido).
 const SEMANTIC_MAX_CANDIDATES: usize = 200;
 /// Cuántos resultados semánticos mostrar (los de mayor afinidad).
 const SEMANTIC_TOP_N: usize = 40;
+/// Tope de archivos a indexar (el índice se cachea, así que aceptamos más que
+/// la búsqueda por-consulta: indexás una vez, buscás muchas veces).
+const INDEX_MAX_CANDIDATES: usize = 1000;
 /// Bytes de contenido que entran al texto a embeber de un archivo de texto.
 const SEMANTIC_SNIPPET_BYTES: usize = 2048;
 
@@ -347,6 +430,14 @@ mod tests {
     use std::fs;
 
     #[test]
+    fn cosine_slices_basico() {
+        // Idénticos → 1.0; ortogonales → 0.0; dims distintas → -1.0.
+        assert!((cosine_slices(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
+        assert!(cosine_slices(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+        assert_eq!(cosine_slices(&[1.0], &[1.0, 0.0]), -1.0);
+    }
+
+    #[test]
     fn find_por_nombre_y_contenido() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
@@ -380,7 +471,7 @@ mod tests {
         fs::write(root.join("informe.rs"), b"contenido").unwrap();
         fs::write(root.join("otro.txt"), b"contenido").unwrap();
 
-        let hits = run_find_semantic(root, "*.rs");
+        let hits = run_find_semantic(root, "*.rs", None);
         // El fallback es run_find Name con la query como glob → sólo informe.rs.
         assert_eq!(hits.len(), 1);
         assert!(hits[0].display.contains("informe.rs"));

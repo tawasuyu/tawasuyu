@@ -873,7 +873,9 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
         | Msg::FindSubmit
         | Msg::FindNav(_)
         | Msg::FindToggleMode
-        | Msg::FindResults { .. } => {
+        | Msg::FindResults { .. }
+        | Msg::SemIndexBuild
+        | Msg::SemIndexReady(_) => {
             return crate::find::apply_find(m, msg, handle);
         }
 

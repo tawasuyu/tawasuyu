@@ -184,6 +184,8 @@ impl App for Shell {
             thumbs_failed: std::collections::HashSet::new(),
             ai: None,
             find: None,
+            sem_index: None,
+            sem_indexing: false,
             palette: None,
             palette_commands: crate::palette::build_command_catalog(),
         }
