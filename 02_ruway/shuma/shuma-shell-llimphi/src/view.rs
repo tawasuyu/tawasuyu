@@ -1789,7 +1789,9 @@ pub(crate) fn containers_modal(model: &Model, theme: &Theme) -> View<Msg> {
         buttons: vec![ModalButton::cancel("Listo", Msg::CloseContainersModal)],
         size: (560.0, 600.0),
         viewport: model.viewport,
-        on_dismiss: Msg::CloseContainersModal,
+        // Bloqueante: clic afuera NO cierra (evita perder el draft a medias).
+        // Se cierra con «Listo» o Esc.
+        on_dismiss: Msg::Noop,
         palette: ModalPalette::from_theme(theme),
     })
 }
@@ -2032,7 +2034,8 @@ pub(crate) fn hosts_modal(model: &Model, theme: &Theme) -> View<Msg> {
         buttons: vec![ModalButton::cancel("Listo", Msg::CloseHostsModal)],
         size: (520.0, 560.0),
         viewport: model.viewport,
-        on_dismiss: Msg::CloseHostsModal,
+        // Bloqueante: clic afuera NO cierra. Se cierra con «Listo» o Esc.
+        on_dismiss: Msg::Noop,
         palette: ModalPalette::from_theme(theme),
     })
 }

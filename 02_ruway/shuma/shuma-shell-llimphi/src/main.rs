@@ -285,13 +285,17 @@ fn spawn_list_containers(handle: &Handle<Msg>) {
 }
 
 /// Triple `(distro_slug, release, arch)` para construir la URL del LXC
-/// image. Ver: https://images.linuxcontainers.org/ — los paths son
-/// estables y el `/current/` apunta al build más reciente.
+/// image. Ver: https://images.linuxcontainers.org/ — el directorio
+/// `<distro>/<release>/<arch>/default/` NO tiene un alias `current/`; sólo
+/// builds con timestamp (`20260608_07:42/`). El build concreto se resuelve
+/// en runtime tomando el último del índice (`spawn_pull_rootfs_lxc`).
 fn lxc_image_triple(distro: Distro) -> (&'static str, &'static str, &'static str) {
     match distro {
         Distro::Ubuntu => ("ubuntu", "noble", "amd64"),
         Distro::Debian => ("debian", "bookworm", "amd64"),
-        Distro::Alpine => ("alpine", "3.20", "amd64"),
+        // Alpine versiona por número; las releases viejas se borran del
+        // mirror. Mantener en una vigente (hoy 3.22).
+        Distro::Alpine => ("alpine", "3.22", "amd64"),
         Distro::Arch => ("archlinux", "current", "amd64"),
     }
 }
@@ -322,16 +326,21 @@ fn spawn_pull_rootfs_lxc(handle: &Handle<Msg>, distro: Distro, mount: Option<Str
                 reason: format!("mkdir {}: {e}", root.display()),
             };
         }
-        // 2. URL del rootfs.tar.xz de la imagen actual. El path
-        //    `/current/` es estable; redirige al build más nuevo.
-        let url = format!(
-            "https://images.linuxcontainers.org/images/{d}/{rel}/{arch}/default/current/rootfs.tar.xz"
+        // 2. Base del directorio de builds. No hay alias `current/`: hay que
+        //    leer el índice y quedarse con el último timestamp (`20260608_07%3A42/`).
+        let base = format!(
+            "https://images.linuxcontainers.org/images/{d}/{rel}/{arch}/default"
         );
-        // 3. Pipe: curl -L -fsSL <url> | tar -xJ -C <root>
-        //    Usamos shell para mantener el pipe sin parsing manual.
+        // 3. Pipe en bash:
+        //    a) curl del índice → grep del último dir con timestamp (sort|tail).
+        //    b) curl del rootfs.tar.xz de ese build → tar -xJ -C <root>.
+        //    El `%3A` (':' codificado) se preserva tal cual en la URL.
         let cmd = format!(
-            "set -o pipefail; curl -L -fsSL {url} | tar -xJ -C {root}",
-            url = shell_quote_arg(&url),
+            "set -o pipefail; \
+             dir=$(curl -fsSL {base}/ | grep -oE '[0-9]{{8}}_[0-9]{{2}}%3A[0-9]{{2}}/' | sort | tail -1); \
+             test -n \"$dir\" || {{ echo 'no encontré builds en el índice LXC' >&2; exit 1; }}; \
+             curl -L -fsSL {base}/\"$dir\"rootfs.tar.xz | tar -xJ -C {root}",
+            base = shell_quote_arg(&base),
             root = shell_quote_arg(&root.display().to_string()),
         );
         match std::process::Command::new("bash")
@@ -1374,6 +1383,10 @@ enum Msg {
     SetIsolation(Isolation),
     /// Elegir la distro del aislamiento (idem promoción del draft).
     SetDistro(Distro),
+    /// No hace nada. Lo usan los scrims de los modales bloqueantes como
+    /// `on_dismiss`: un clic afuera NO los cierra (bloquean la app); se
+    /// cierran sólo con su botón «Listo» o con Esc.
+    Noop,
     /// Abrir/cerrar el colapsable de contenedor (capa opcional).
     ToggleContainer,
     /// Dar foco a un campo del form remoto (click).
@@ -1994,6 +2007,7 @@ impl App for Shell {
                 m.container_draft = Some(ContainerDraft::new());
                 spawn_list_containers_full(handle);
             }
+            Msg::Noop => {}
             Msg::CloseContainersModal => {
                 m.containers_modal_open = false;
                 m.container_draft = None;
@@ -2098,17 +2112,14 @@ impl App for Shell {
                     let mount = d.mount.text();
                     let mount_opt =
                         if mount.trim().is_empty() { None } else { Some(mount) };
-                    match d.engine.as_str() {
-                        "unshare" | "bwrap" => {
-                            if rootfs_listo(d.distro) {
-                                // Ya está — solo refresca la lista.
-                                spawn_list_containers_full(handle);
-                            } else {
-                                spawn_pull_rootfs_lxc(handle, d.distro, mount_opt);
-                            }
-                        }
-                        _ /* podman */ => {
-                            // Numerar buscando primer slot libre.
+                    // Identidad del recurso que se está creando: para
+                    // unshare/bwrap es el PATH del rootfs; para podman, el
+                    // nombre `shuma-<distro>-N` en el primer slot libre.
+                    let resource: String = match d.engine.as_str() {
+                        "unshare" | "bwrap" => rootfs_path_for(d.distro)
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_default(),
+                        _ => {
                             let n = (1..1000)
                                 .find(|n| {
                                     let cand = format!(
@@ -2118,14 +2129,45 @@ impl App for Shell {
                                     !m.containers_full.iter().any(|c| c.name == cand)
                                 })
                                 .unwrap_or(1);
-                            let name = format!(
-                                "shuma-{}-{n}",
-                                d.distro.label().to_lowercase()
+                            format!("shuma-{}-{n}", d.distro.label().to_lowercase())
+                        }
+                    };
+                    // Ligar el recurso a la sesión activa: así el engine elegido
+                    // VIAJA a la sesión (no queda atrapado en el draft) y el
+                    // select del form lo muestra seleccionado al volver. Sin
+                    // esto, crear en el modal no afectaba a la sesión y había
+                    // que re-elegir a mano (y el engine quedaba en el default).
+                    if let Some(s) = m.sessions.get_mut(m.active_session) {
+                        s.use_container = true;
+                        s.container_engine = d.engine.clone();
+                        s.distro = d.distro;
+                        s.container = Some(resource.clone());
+                        s.conn = ConnState::Pending;
+                    }
+                    // Lanzar la creación real (una sola vez, acá). Cuando
+                    // termina, `ContainerCreated(resource)` encuentra la sesión
+                    // por `s.container` y la marca conectada.
+                    match d.engine.as_str() {
+                        "unshare" | "bwrap" => {
+                            if rootfs_listo(d.distro) {
+                                handle.dispatch(Msg::ContainerCreated(resource.clone()));
+                            } else {
+                                spawn_pull_rootfs_lxc(handle, d.distro, mount_opt);
+                            }
+                        }
+                        _ /* podman */ => {
+                            spawn_create_container(
+                                handle,
+                                d.distro.image(),
+                                resource.clone(),
+                                mount_opt,
                             );
-                            spawn_create_container(handle, d.distro.image(), name, mount_opt);
                         }
                     }
                     m.container_draft = None;
+                    // Volver al form de la sesión con el recurso ya elegido.
+                    m.containers_modal_open = false;
+                    save_sessions(&m);
                 }
             }
             Msg::ContainerDraftSetEngine(name) => {
@@ -2207,6 +2249,19 @@ impl App for Shell {
                     .iter()
                     .position(|s| s.container.as_deref() == Some(name.as_str()));
                 if let Some(i) = idx {
+                    // El verbo del aviso depende del engine real: unshare/bwrap
+                    // bajan un rootfs; podman/docker corren `run`. Hardcodear
+                    // "podman" mentía cuando el engine era otro.
+                    let engine = m
+                        .sessions
+                        .get(i)
+                        .map(|s| s.container_engine.clone())
+                        .unwrap_or_default();
+                    let accion = match engine.as_str() {
+                        "unshare" | "bwrap" => "la descarga del rootfs",
+                        other if !other.is_empty() => "el arranque del contenedor",
+                        _ => "el contenedor",
+                    };
                     if let Some(s) = m.sessions.get_mut(i) {
                         s.conn = ConnState::Disconnected;
                         s.container = None;
@@ -2218,7 +2273,7 @@ impl App for Shell {
                         m,
                         slot,
                         ModuleMsg::Shell(shuma_module_shell::Msg::PushNotice(format!(
-                            "✘ podman run {name} falló: {reason} — caí a shell local."
+                            "✘ {accion} ({engine}) falló: {reason} — caí a shell local."
                         ))),
                     );
                 }
@@ -2249,6 +2304,9 @@ impl App for Shell {
                 enum CreatePlan {
                     Rootfs { distro: Distro, mount: Option<String> },
                     Podman { image: &'static str, name: String, mount: Option<String> },
+                    /// Container podman ya creado (en el modal): sólo asegurar
+                    /// que arranque, sin recrearlo con otro nombre.
+                    PodmanEnsure { name: String },
                 }
                 let mut plan: Option<CreatePlan> = None;
                 let mut notice: Option<String> = None;
@@ -2280,41 +2338,71 @@ impl App for Shell {
                                     let mount = s.mount.text();
                                     let mount_opt =
                                         if mount.trim().is_empty() { None } else { Some(mount) };
-                                    let path = rootfs_path_for(s.distro)
-                                        .map(|p| p.display().to_string())
-                                        .unwrap_or_default();
-                                    s.container = Some(path.clone());
+                                    // Respetar el rootfs ya ligado (creado/elegido
+                                    // en el modal); sólo caer al rootfs default de
+                                    // la distro si la sesión no tiene ninguno.
+                                    let via_modal = s.container.is_some();
+                                    if s.container.is_none() {
+                                        let path = rootfs_path_for(s.distro)
+                                            .map(|p| p.display().to_string())
+                                            .unwrap_or_default();
+                                        s.container = Some(path);
+                                    }
                                     if rootfs_listo(s.distro) {
                                         s.conn = ConnState::Connected;
                                     } else {
+                                        // No listo. Si vino del modal, la descarga
+                                        // ya está en vuelo (la lanzó el modal) y
+                                        // `ContainerCreated` conectará — no la
+                                        // dupliquemos. Si no, la arrancamos acá.
                                         s.conn = ConnState::Pending;
-                                        plan = Some(CreatePlan::Rootfs {
-                                            distro: s.distro,
-                                            mount: mount_opt,
-                                        });
+                                        if !via_modal {
+                                            plan = Some(CreatePlan::Rootfs {
+                                                distro: s.distro,
+                                                mount: mount_opt,
+                                            });
+                                        }
                                     }
                                 }
                                 Some(_) /* "podman" */ => {
                                     s.container_engine = "podman".into();
-                                    let n = s.number.unwrap_or(0);
-                                    let name = format!(
-                                        "shuma-{}-{n}",
-                                        s.distro.label().to_lowercase()
-                                    );
-                                    s.container = Some(name.clone());
                                     s.conn = ConnState::Pending;
                                     let mount = s.mount.text();
                                     let mount_opt =
                                         if mount.trim().is_empty() { None } else { Some(mount) };
-                                    plan = Some(CreatePlan::Podman {
-                                        image: s.distro.image(),
-                                        name,
-                                        mount: mount_opt,
-                                    });
+                                    match s.container.clone() {
+                                        // Ya creado/seleccionado en el modal:
+                                        // asegurarlo, no recrear con otro nombre.
+                                        Some(name) => {
+                                            plan = Some(CreatePlan::PodmanEnsure { name });
+                                        }
+                                        None => {
+                                            let n = s.number.unwrap_or(0);
+                                            let name = format!(
+                                                "shuma-{}-{n}",
+                                                s.distro.label().to_lowercase()
+                                            );
+                                            s.container = Some(name.clone());
+                                            plan = Some(CreatePlan::Podman {
+                                                image: s.distro.image(),
+                                                name,
+                                                mount: mount_opt,
+                                            });
+                                        }
+                                    }
                                 }
                             }
                         }
                         s.apply_isolation();
+                        // `apply_isolation` deja conn=Pending para todo
+                        // use_container; un rootfs unshare/bwrap ya presente está
+                        // listo de una, así que lo marcamos conectado.
+                        if s.use_container
+                            && matches!(s.container_engine.as_str(), "unshare" | "bwrap")
+                            && rootfs_listo(s.distro)
+                        {
+                            s.conn = ConnState::Connected;
+                        }
                         if s.isolation == Isolation::Remote {
                             if !s.host.text().trim().is_empty() && !s.user.text().trim().is_empty() {
                                 s.connect_remote();
@@ -2346,6 +2434,9 @@ impl App for Shell {
                     }
                     Some(CreatePlan::Podman { image, name, mount }) => {
                         spawn_create_container(handle, image, name, mount);
+                    }
+                    Some(CreatePlan::PodmanEnsure { name }) => {
+                        spawn_ensure_container(handle, name);
                     }
                     None => {}
                 }

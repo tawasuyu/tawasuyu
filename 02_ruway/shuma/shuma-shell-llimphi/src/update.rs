@@ -473,6 +473,17 @@ pub(crate) fn forward_key_to_focused_shell(model: &Model, e: &KeyEvent) -> Optio
             return Some(Msg::ContainerDraftKey(e.clone()));
         }
     }
+    // Con un modal bloqueante abierto (containers/hosts) y sin campo del draft
+    // focado, Esc lo cierra. Es el único escape de teclado ahora que el clic
+    // en el scrim ya no descarta el modal (`on_dismiss: Noop`).
+    if matches!(&e.key, llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape)) {
+        if model.containers_modal_open {
+            return Some(Msg::CloseContainersModal);
+        }
+        if model.hosts_modal_open {
+            return Some(Msg::CloseHostsModal);
+        }
+    }
     // Ctrl+= / Ctrl++ → zoom in · Ctrl+- → zoom out · Ctrl+0 → reset.
     // Atajos universales: aplican al shell de la sesión activa sin
     // importar si está focado en el input o un TUI; los chequeamos
