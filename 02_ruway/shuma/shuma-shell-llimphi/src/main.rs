@@ -231,6 +231,45 @@ fn rootfs_listo(distro: Distro) -> bool {
     root.join("bin/bash").exists() || root.join("usr/bin/bash").exists()
 }
 
+/// Prepara un rootfs (unshare/bwrap) para que los gestores de paquetes
+/// funcionen en un userns de UN SOLO uid. Ahí no se puede dropear privilegios
+/// a `_apt` (apt) ni `alpm` (pacman) — ambos fallan con `seteuid`/`chown`. El
+/// arreglo: que descarguen como root. Idempotente y best-effort (ignora
+/// ausencia/permisos; el rootfs puede no traer ese gestor). Se edita el rootfs
+/// en disco directamente, sin entrar al contenedor.
+fn prepare_rootfs(root: &std::path::Path) {
+    // apt (Debian/Ubuntu): drop-in que desactiva el sandbox de descarga.
+    let apt_dir = root.join("etc/apt/apt.conf.d");
+    if apt_dir.is_dir() {
+        let f = apt_dir.join("99shuma-nosandbox");
+        if !f.exists() {
+            let _ = std::fs::write(&f, "APT::Sandbox::User \"root\";\n");
+        }
+    }
+    // pacman (Arch): comentar `DownloadUser` para que descargue como root.
+    let pac = root.join("etc/pacman.conf");
+    if let Ok(txt) = std::fs::read_to_string(&pac) {
+        let activa = |l: &str| {
+            let t = l.trim_start();
+            !t.starts_with('#') && t.starts_with("DownloadUser")
+        };
+        if txt.lines().any(activa) {
+            let nuevo: String = txt
+                .lines()
+                .map(|l| {
+                    if activa(l) {
+                        format!("#{l}  # shuma: descarga como root (userns de 1 uid)")
+                    } else {
+                        l.to_string()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            let _ = std::fs::write(&pac, format!("{nuevo}\n"));
+        }
+    }
+}
+
 /// Resuelve el path del binario `shuma-askpass`. Orden:
 /// 1. `SHUMA_ASKPASS` override explícito.
 /// 2. Hermano del binario actual (`current_exe().parent()/shuma-askpass`).
@@ -985,6 +1024,12 @@ impl Session {
         };
         let source = if self.use_container {
             if let Some(name) = self.container.clone() {
+                // Rootfs unshare/bwrap: lo preparamos para que los gestores de
+                // paquetes funcionen en un userns de un solo uid (no pueden
+                // dropear privilegios a `_apt`/`alpm`). Idempotente.
+                if matches!(self.container_engine.as_str(), "unshare" | "bwrap") {
+                    prepare_rootfs(std::path::Path::new(&name));
+                }
                 Source::Container {
                     engine: self.container_engine.clone(),
                     name,
