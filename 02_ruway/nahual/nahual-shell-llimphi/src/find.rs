@@ -80,16 +80,17 @@ pub(crate) fn run_find(root: &Path, query: &str, mode: FindMode) -> Vec<FindHit>
                 continue;
             }
             match mode {
-                FindMode::Name => {
-                    if glob_match(query, &name) {
-                        hits.push(hit_for(root, &path, None));
-                    }
-                }
                 FindMode::Content => {
                     if es_texto(&path) {
                         if let Some(snippet) = grep_first(&path, query) {
                             hits.push(hit_for(root, &path, Some(snippet)));
                         }
+                    }
+                }
+                // Nombre (y el fallback de Semantic, que se rutea acá): glob.
+                FindMode::Name | FindMode::Semantic => {
+                    if glob_match(query, &name) {
+                        hits.push(hit_for(root, &path, None));
                     }
                 }
             }
@@ -205,10 +206,116 @@ fn find_submit(mut m: Model, handle: &Handle<Msg>) -> Model {
     let mode = f.mode;
     let root = f.root.clone();
     handle.spawn(move || {
-        let hits = run_find(&root, &query, mode);
+        let hits = match mode {
+            FindMode::Semantic => run_find_semantic(&root, &query),
+            _ => run_find(&root, &query, mode),
+        };
         Msg::FindResults { gen, hits }
     });
     m
+}
+
+/// Búsqueda **semántica**: embebe la consulta y los archivos candidatos vía el
+/// daemon de verbo y rankea por coseno. Corre en el worker (forja un runtime
+/// tokio efímero). Si el daemon no está corriendo o falla, degrada a búsqueda
+/// por nombre (glob) para que el modo siempre devuelva algo útil.
+pub(crate) fn run_find_semantic(root: &Path, query: &str) -> Vec<FindHit> {
+    use rimay_verbo::Provider;
+    let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else {
+        return run_find(root, query, FindMode::Name);
+    };
+    rt.block_on(async move {
+        let client = match rimay_verbo::conectar().await {
+            Ok(c) => c,
+            Err(_) => {
+                eprintln!("[nahual] find semántico: daemon de verbo no disponible — caigo a nombre");
+                return run_find(root, query, FindMode::Name);
+            }
+        };
+        // Candidatos: archivos bajo el root (acotado), con un texto a embeber
+        // (nombre + snippet de contenido si es texto).
+        let candidatos = collect_candidates(root, SEMANTIC_MAX_CANDIDATES);
+        if candidatos.is_empty() {
+            return Vec::new();
+        }
+        let consulta = match client.embed(query).await {
+            Ok(v) => v,
+            Err(_) => return run_find(root, query, FindMode::Name),
+        };
+        let textos: Vec<String> = candidatos.iter().map(|(_, t)| t.clone()).collect();
+        let vectores = match client.embed_batch(&textos).await {
+            Ok(v) => v,
+            Err(_) => return run_find(root, query, FindMode::Name),
+        };
+        // Rankeo por coseno descendente.
+        let mut scored: Vec<(f32, usize)> = vectores
+            .iter()
+            .enumerate()
+            .filter_map(|(i, v)| consulta.cosine(v).ok().map(|s| (s, i)))
+            .collect();
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(SEMANTIC_TOP_N);
+        scored
+            .into_iter()
+            .map(|(score, i)| {
+                let (path, _) = &candidatos[i];
+                hit_for(root, path, Some(format!("afinidad {score:.2}")))
+            })
+            .collect()
+    })
+}
+
+/// Tope de archivos candidatos a embeber por búsqueda semántica (embeber todo
+/// el árbol sería carísimo; tomamos los primeros N del recorrido).
+const SEMANTIC_MAX_CANDIDATES: usize = 200;
+/// Cuántos resultados semánticos mostrar (los de mayor afinidad).
+const SEMANTIC_TOP_N: usize = 40;
+/// Bytes de contenido que entran al texto a embeber de un archivo de texto.
+const SEMANTIC_SNIPPET_BYTES: usize = 2048;
+
+/// Junta hasta `max` archivos bajo `root` con el texto a embeber de cada uno:
+/// el nombre + (si es texto) un snippet del contenido. Misma poda de ruido que
+/// el walk literal.
+fn collect_candidates(root: &Path, max: usize) -> Vec<(PathBuf, String)> {
+    use std::io::Read;
+    let mut out: Vec<(PathBuf, String)> = Vec::new();
+    let mut stack: Vec<(PathBuf, usize)> = vec![(root.to_path_buf(), 0)];
+    while let Some((dir, depth)) = stack.pop() {
+        if out.len() >= max {
+            break;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        for entry in rd.flatten() {
+            if out.len() >= max {
+                break;
+            }
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                if !name.starts_with('.') && !dir_ignorada(&name) && depth + 1 <= MAX_DEPTH {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if name.starts_with('.') {
+                continue;
+            }
+            let mut texto = name.clone();
+            if es_texto(&path) {
+                if let Ok(mut f) = std::fs::File::open(&path) {
+                    let mut buf = vec![0u8; SEMANTIC_SNIPPET_BYTES];
+                    if let Ok(n) = f.read(&mut buf) {
+                        buf.truncate(n);
+                        texto.push('\n');
+                        texto.push_str(&String::from_utf8_lossy(&buf));
+                    }
+                }
+            }
+            out.push((path, texto));
+        }
+    }
+    out
 }
 
 /// Navega el panel enfocado a la carpeta que contiene `path` y selecciona el
@@ -261,5 +368,21 @@ mod tests {
         let by_content = run_find(root, "magico", FindMode::Content);
         assert_eq!(by_content.len(), 1, "sólo beta.rs, target/ se ignora");
         assert!(by_content[0].snippet.as_deref().unwrap().contains("token magico"));
+    }
+
+    #[test]
+    fn semantico_degrada_a_nombre_sin_daemon() {
+        // En el entorno de test no hay daemon de verbo corriendo, así que la
+        // búsqueda semántica debe degradar a búsqueda por nombre — sin panic y
+        // devolviendo los matches de nombre (no cuelga ni explota).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        fs::write(root.join("informe.rs"), b"contenido").unwrap();
+        fs::write(root.join("otro.txt"), b"contenido").unwrap();
+
+        let hits = run_find_semantic(root, "*.rs");
+        // El fallback es run_find Name con la query como glob → sólo informe.rs.
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].display.contains("informe.rs"));
     }
 }

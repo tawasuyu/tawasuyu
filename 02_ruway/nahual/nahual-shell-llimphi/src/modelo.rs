@@ -229,6 +229,10 @@ pub(crate) enum CanvasApp {
 pub(crate) enum FindMode {
     Name,
     Content,
+    /// Búsqueda por significado: embebe la consulta y los candidatos vía el
+    /// daemon de verbo y rankea por coseno. Si el daemon no está, degrada a
+    /// búsqueda por nombre.
+    Semantic,
 }
 
 impl FindMode {
@@ -236,12 +240,14 @@ impl FindMode {
         match self {
             FindMode::Name => "nombre",
             FindMode::Content => "contenido",
+            FindMode::Semantic => "semántico",
         }
     }
     pub(crate) fn next(self) -> Self {
         match self {
             FindMode::Name => FindMode::Content,
-            FindMode::Content => FindMode::Name,
+            FindMode::Content => FindMode::Semantic,
+            FindMode::Semantic => FindMode::Name,
         }
     }
 }

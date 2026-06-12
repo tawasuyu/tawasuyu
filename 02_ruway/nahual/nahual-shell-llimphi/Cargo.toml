@@ -38,6 +38,11 @@ llimphi-widget-text-editor = { workspace = true }
 # Command palette (Ctrl+Shift+P): el módulo canónico de llimphi, mismo que
 # usa `nada`. El shell sólo arma el catálogo y mapea id→Msg.
 llimphi-module-command-palette = { workspace = true }
+# Búsqueda semántica del find (tercer modo): embeddings por el daemon de verbo.
+# Degrada a búsqueda por nombre si el daemon no está corriendo. tokio ya entra
+# por nahual-source-core; acá lo declaramos para forjar el runtime del worker.
+rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
+tokio = { workspace = true }
 tullpu-module = { workspace = true }
 media-module = { workspace = true }
 llimphi-icons = { workspace = true }

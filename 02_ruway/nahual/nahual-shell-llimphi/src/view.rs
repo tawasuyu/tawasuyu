@@ -314,7 +314,7 @@ pub(crate) fn find_overlay(f: &FindState, theme: &Theme) -> View<Msg> {
         )
     } else {
         format!(
-            "buscar · {} · Enter busca · Tab cambia modo (nombre/contenido) · Esc cierra",
+            "buscar · {} · Enter busca · Tab modo (nombre/contenido/semántico) · Esc cierra",
             f.mode.label(),
         )
     };
