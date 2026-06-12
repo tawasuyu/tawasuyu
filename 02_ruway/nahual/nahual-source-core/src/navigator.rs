@@ -81,16 +81,26 @@ pub enum ViewMode {
     Details,
     /// Grilla de iconos/miniaturas (las imágenes muestran su thumbnail).
     Icons,
+    /// Galería: miniaturas grandes, pensada para carpetas de imágenes
+    /// (mismo motor que `Icons` pero con tiles más grandes y rótulo abajo).
+    Gallery,
 }
 
 impl ViewMode {
-    /// Cicla List → Details → Icons → List (la tecla `v`).
+    /// Cicla List → Details → Icons → Gallery → List (la tecla `v`).
     pub fn next(self) -> Self {
         match self {
             ViewMode::List => ViewMode::Details,
             ViewMode::Details => ViewMode::Icons,
-            ViewMode::Icons => ViewMode::List,
+            ViewMode::Icons => ViewMode::Gallery,
+            ViewMode::Gallery => ViewMode::List,
         }
+    }
+
+    /// `true` si el modo se pinta como grilla de miniaturas (iconos o
+    /// galería): ambos necesitan el cache de thumbs y el cálculo de columnas.
+    pub fn is_grid(self) -> bool {
+        matches!(self, ViewMode::Icons | ViewMode::Gallery)
     }
 }
 
@@ -724,6 +734,7 @@ mod tests {
     fn view_mode_cicla_lista_detalle_iconos() {
         assert_eq!(ViewMode::List.next(), ViewMode::Details);
         assert_eq!(ViewMode::Details.next(), ViewMode::Icons);
-        assert_eq!(ViewMode::Icons.next(), ViewMode::List);
+        assert_eq!(ViewMode::Icons.next(), ViewMode::Gallery);
+        assert_eq!(ViewMode::Gallery.next(), ViewMode::List);
     }
 }

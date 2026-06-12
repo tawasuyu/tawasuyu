@@ -400,7 +400,8 @@ pub fn view<H: Clone + 'static>(
     let body = match state.cur().view {
         ViewMode::List => list_panel::<H>(state, theme, lift.clone()),
         ViewMode::Details => detail_panel::<H>(state, theme, lift.clone()),
-        ViewMode::Icons => icons_panel::<H>(state, theme, lift),
+        // El módulo aún no distingue galería: usa la misma grilla de iconos.
+        ViewMode::Icons | ViewMode::Gallery => icons_panel::<H>(state, theme, lift),
     };
     View::new(Style {
         flex_direction: FlexDirection::Column,

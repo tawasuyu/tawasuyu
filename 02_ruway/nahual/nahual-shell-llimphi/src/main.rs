@@ -53,7 +53,7 @@ use state::{Label, ShellState};
 use viewer_registry::ViewerKind;
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{
@@ -73,6 +73,7 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_motion::{animate, motion, Tween};
+use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
@@ -177,6 +178,13 @@ struct Pane {
 }
 
 impl Pane {
+    /// Panel vacío transitorio: sólo se usa como placeholder durante el swap
+    /// de sesiones (`std::mem::replace`). Su `nav_stack` está vacío, así que
+    /// **nunca** se le debe llamar `nav()`/`nav_mut()` mientras es placeholder.
+    fn empty() -> Self {
+        Pane { nav_stack: Vec::new(), marked: BTreeSet::new() }
+    }
+
     fn nav(&self) -> &Navigator {
         self.nav_stack.last().expect("nav_stack nunca vacía")
     }
@@ -279,7 +287,52 @@ fn aplicar_patron(pattern: &str, original: &str, n: usize) -> String {
         .replace("{n}", &n.to_string())
 }
 
+/// Estado *movible* de una sesión de trabajo (pestaña): todo lo que cambia
+/// al saltar de una pestaña a otra. La sesión activa **no** guarda su snap
+/// aquí — sus campos viven directamente en `Model` (los `panes`, `preview`,
+/// etc.). Al cambiar de pestaña se hace swap: los campos vivos del `Model` se
+/// vuelcan a un `SessionSnap` y los de la pestaña destino se restauran.
+struct SessionSnap {
+    panes: [Pane; 2],
+    focus: usize,
+    dual: bool,
+    list_width: f32,
+    nav_filtering: bool,
+    preview: PreviewPane,
+    preview_of: Option<PathBuf>,
+    preview_temp: Option<tempfile::TempDir>,
+    map_view: MapView,
+    basemap: Option<Basemap>,
+    basemap_dirty: bool,
+    last_restream: Option<Instant>,
+}
+
+/// Una pestaña/sesión de trabajo. `snap` es `None` para la sesión **activa**
+/// (sus campos están vivos en `Model`) y `Some(_)` para las inactivas.
+struct Session {
+    name: String,
+    snap: Option<SessionSnap>,
+}
+
+/// Árbol de carpetas del panel lateral (sidebar). No es por-sesión: es una
+/// vista global del filesystem, expandible y clickable, que navega el panel
+/// activo de la sesión activa.
+#[derive(Default)]
+struct SideTree {
+    /// Carpetas expandidas (mostrando sus subcarpetas).
+    expanded: BTreeSet<PathBuf>,
+    /// Cache de subcarpetas por carpeta (sólo directorios, ya ordenados).
+    children: HashMap<PathBuf, Vec<PathBuf>>,
+}
+
 struct Model {
+    /// Pestañas/sesiones abiertas. `sessions[active]` es la viva (sus campos
+    /// de navegación/preview están en los campos sueltos de abajo).
+    sessions: Vec<Session>,
+    /// Índice de la sesión activa.
+    active: usize,
+    /// Árbol de carpetas del sidebar (global, navega la sesión activa).
+    side_tree: SideTree,
     /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
     /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
     panes: [Pane; 2],
@@ -510,12 +563,22 @@ enum Msg {
     SetLabel(Label),
     /// Quita el label de la selección.
     ClearLabel,
-    /// Navega el panel enfocado a una ruta POSIX absoluta (favorito/reciente).
-    GoTo(String),
     /// Agrega a favoritos la carpeta seleccionada (o la actual si no es dir).
     AddPlace,
-    /// Quita un favorito por su ruta.
-    RemovePlace(String),
+
+    // ---- Pestañas / sesiones de trabajo ----
+    /// Abre una pestaña nueva (posada en la carpeta actual).
+    TabNew,
+    /// Activa la pestaña en el índice dado.
+    TabActivate(usize),
+    /// Cierra la pestaña en el índice dado (nunca cierra la última).
+    TabClose(usize),
+
+    // ---- Árbol de carpetas del sidebar ----
+    /// Expande/colapsa una carpeta del árbol lateral.
+    TreeToggle(PathBuf),
+    /// Navega el panel activo a una carpeta del árbol lateral (y la expande).
+    TreeSelect(PathBuf),
 
     // ---- Fase 4.8: vista iconos con miniaturas ----
     /// Una miniatura terminó de generarse (llega del worker).
@@ -556,6 +619,95 @@ impl Model {
     /// fuentes montadas (wawa/minga/nouser) son read-only → sin `SourceMut`.
     fn can_edit(&self) -> bool {
         self.cur().writable().is_some()
+    }
+
+    /// Vuelca los campos vivos de navegación/preview a un `SessionSnap`
+    /// (deja los campos del `Model` en su estado por defecto, listos para
+    /// recibir los de otra sesión).
+    fn snapshot_active(&mut self) -> SessionSnap {
+        SessionSnap {
+            panes: [
+                std::mem::replace(&mut self.panes[0], Pane::empty()),
+                std::mem::replace(&mut self.panes[1], Pane::empty()),
+            ],
+            focus: self.focus,
+            dual: self.dual,
+            list_width: self.list_width,
+            nav_filtering: self.nav_filtering,
+            preview: std::mem::replace(&mut self.preview, PreviewPane::Empty),
+            preview_of: self.preview_of.take(),
+            preview_temp: self.preview_temp.take(),
+            map_view: std::mem::take(&mut self.map_view),
+            basemap: self.basemap.take(),
+            basemap_dirty: self.basemap_dirty,
+            last_restream: self.last_restream.take(),
+        }
+    }
+
+    /// Restaura los campos vivos desde un `SessionSnap` (al activar su pestaña).
+    fn restore(&mut self, snap: SessionSnap) {
+        let [p0, p1] = snap.panes;
+        self.panes = [p0, p1];
+        self.focus = snap.focus;
+        self.dual = snap.dual;
+        self.list_width = snap.list_width;
+        self.nav_filtering = snap.nav_filtering;
+        self.preview = snap.preview;
+        self.preview_of = snap.preview_of;
+        self.preview_temp = snap.preview_temp;
+        self.map_view = snap.map_view;
+        self.basemap = snap.basemap;
+        self.basemap_dirty = snap.basemap_dirty;
+        self.last_restream = snap.last_restream;
+    }
+
+    /// Activa la pestaña `i`: guarda la sesión viva en su slot y restaura la
+    /// destino. No hace nada si `i` ya es la activa o está fuera de rango.
+    fn switch_to(&mut self, i: usize) {
+        if i == self.active || i >= self.sessions.len() {
+            return;
+        }
+        let snap = self.snapshot_active();
+        self.sessions[self.active].snap = Some(snap);
+        self.active = i;
+        if let Some(snap) = self.sessions[i].snap.take() {
+            self.restore(snap);
+        }
+    }
+}
+
+/// La carpeta actual del panel enfocado de la sesión viva, para sembrar una
+/// pestaña nueva y nombrarla.
+fn cur_dir(m: &Model) -> PathBuf {
+    PathBuf::from(m.cur().current_id().as_str())
+}
+
+/// Nombre corto de una pestaña a partir de su carpeta de arranque.
+fn session_name(cwd: &Path) -> String {
+    cwd.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "/".to_string())
+}
+
+/// Snapshot fresco para una pestaña nueva, posada en `cwd`.
+fn fresh_snap(cwd: &Path) -> SessionSnap {
+    SessionSnap {
+        panes: [
+            Pane { nav_stack: vec![posix_nav(cwd)], marked: BTreeSet::new() },
+            Pane { nav_stack: vec![posix_nav(cwd)], marked: BTreeSet::new() },
+        ],
+        focus: 0,
+        dual: false,
+        list_width: 400.0,
+        nav_filtering: false,
+        preview: PreviewPane::Empty,
+        preview_of: None,
+        preview_temp: None,
+        map_view: MapView::default(),
+        basemap: None,
+        basemap_dirty: false,
+        last_restream: None,
     }
 }
 
@@ -616,7 +768,15 @@ impl App for Shell {
         // externo: cada pulso avanza un frame / refresca el espectro. Es
         // barato cuando el panel no avanza (el update sale temprano).
         handle.spawn_periodic(FRAME_TICK, || Msg::Tick);
+        // El sidebar arranca con el árbol expandido hasta el cwd, para que la
+        // carpeta actual se vea de entrada.
+        let mut side_tree = SideTree::default();
+        seed_tree_to(&mut side_tree, &cwd);
         Model {
+            // Una sola pestaña al arrancar; la activa lleva `snap: None`.
+            sessions: vec![Session { name: session_name(&cwd), snap: None }],
+            active: 0,
+            side_tree,
             // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
             panes: [
                 Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
@@ -838,7 +998,7 @@ impl App for Shell {
                         record_recent(&mut m);
                         // La nueva carpeta puede heredar vista iconos (folder
                         // format): pedí sus miniaturas.
-                        if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                        if m.cur().view.is_grid() {
                             request_thumbs(&mut m, &handle);
                         }
                     }
@@ -886,7 +1046,7 @@ impl App for Shell {
                     Ok(true) => {
                         apply_format(&mut m);
                         refresh_preview(&mut m);
-                        if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                        if m.cur().view.is_grid() {
                             request_thumbs(&mut m, &handle);
                         }
                     }
@@ -913,7 +1073,7 @@ impl App for Shell {
                 let nav = m.cur_mut();
                 nav.view = nav.view.next();
                 // En vista iconos, pedí miniaturas de lo que entró en pantalla.
-                if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                if m.cur().view.is_grid() {
                     request_thumbs(&mut m, &handle);
                 }
                 // Recordá la vista elegida para esta carpeta (folder format).
@@ -954,7 +1114,7 @@ impl App for Shell {
                 m.cur_mut().apply_wheel(steps as f32);
                 // En vista iconos, lo que entró en pantalla al scrollear pide
                 // su miniatura.
-                if matches!(m.cur().view, nahual_source_core::ViewMode::Icons) {
+                if m.cur().view.is_grid() {
                     request_thumbs(&mut m, &handle);
                 }
             }
@@ -1358,18 +1518,6 @@ impl App for Shell {
                 m.state.save();
                 m.context_menu = None;
             }
-            Msg::GoTo(path) => {
-                let p = PathBuf::from(&path);
-                if p.is_dir() {
-                    // Reemplaza la pila del panel enfocado por un POSIX fresco en
-                    // esa ruta (desmonta cualquier fuente no-POSIX activa).
-                    m.cur_pane_mut().nav_stack = vec![posix_nav(&p)];
-                    m.cur_pane_mut().marked.clear();
-                    apply_format(&mut m);
-                    record_recent(&mut m);
-                    refresh_preview(&mut m);
-                }
-            }
             Msg::AddPlace => {
                 // La carpeta seleccionada si es un dir; si no, la carpeta actual.
                 let target = match m.cur().selected_node() {
@@ -1382,9 +1530,63 @@ impl App for Shell {
                 }
                 m.context_menu = None;
             }
-            Msg::RemovePlace(path) => {
-                m.state.remove_place(&path);
-                m.state.save();
+            Msg::TabNew => {
+                // Guarda la sesión viva, abre una pestaña nueva en el cwd
+                // actual y la activa.
+                let cwd = cur_dir(&m);
+                let snap = m.snapshot_active();
+                m.sessions[m.active].snap = Some(snap);
+                m.sessions.push(Session {
+                    name: session_name(&cwd),
+                    snap: Some(fresh_snap(&cwd)),
+                });
+                let nuevo = m.sessions.len() - 1;
+                m.active = nuevo;
+                if let Some(snap) = m.sessions[nuevo].snap.take() {
+                    m.restore(snap);
+                }
+            }
+            Msg::TabActivate(i) => {
+                m.switch_to(i);
+            }
+            Msg::TabClose(i) => {
+                // Nunca cerramos la última pestaña.
+                if m.sessions.len() > 1 && i < m.sessions.len() {
+                    let was_active = m.active;
+                    m.sessions.remove(i);
+                    if i == was_active {
+                        // La sesión viva se descartó: restauramos una vecina.
+                        m.active = i.min(m.sessions.len() - 1);
+                        if let Some(snap) = m.sessions[m.active].snap.take() {
+                            m.restore(snap);
+                        }
+                    } else if i < was_active {
+                        m.active -= 1;
+                    }
+                }
+            }
+            Msg::TreeToggle(path) => {
+                if m.side_tree.expanded.contains(&path) {
+                    m.side_tree.expanded.remove(&path);
+                } else {
+                    ensure_tree_children(&mut m.side_tree, &path);
+                    m.side_tree.expanded.insert(path);
+                }
+            }
+            Msg::TreeSelect(path) => {
+                if path.is_dir() {
+                    ensure_tree_children(&mut m.side_tree, &path);
+                    m.side_tree.expanded.insert(path.clone());
+                    m.cur_pane_mut().nav_stack = vec![posix_nav(&path)];
+                    m.cur_pane_mut().marked.clear();
+                    apply_format(&mut m);
+                    record_recent(&mut m);
+                    refresh_preview(&mut m);
+                    // Mantené el nombre de la pestaña en sync con la carpeta.
+                    let nombre = session_name(&path);
+                    let activa = m.active;
+                    m.sessions[activa].name = nombre;
+                }
             }
             Msg::ThumbReady(path, thumb) => {
                 m.thumbs_pending.remove(&path);
@@ -1534,7 +1736,8 @@ impl App for Shell {
         })
         .children(vec![sidebar_view(model, &theme), body_inner]);
 
-        let mut col: Vec<View<Msg>> = vec![menubar, body_wrap];
+        let tabs = tabs_bar_view(model, &theme);
+        let mut col: Vec<View<Msg>> = vec![menubar, tabs, body_wrap];
         if let Some(panel) = queue_panel(model, &theme) {
             col.push(panel);
         }
@@ -2095,89 +2298,153 @@ fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     modal_scrim(card, Msg::BatchCancel)
 }
 
-/// Basename legible de una ruta POSIX (para las filas del sidebar). La raíz
-/// `/` se muestra como tal.
-fn basename(path: &str) -> String {
-    Path::new(path)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_string())
+/// Directorio home del usuario (si existe y es un dir).
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .filter(|p| p.is_dir())
 }
 
-/// Sidebar izquierdo (Fase 4.5): **favoritos** (places) + **recientes**. Cada
-/// fila navega el panel enfocado a esa carpeta (`GoTo`); los favoritos llevan
-/// una `✕` para quitarlos. Ancho fijo.
+/// Carpetas raíz del árbol lateral, con su glifo: home (⌂), la raíz del
+/// filesystem (▣) y los favoritos del usuario (★), sin duplicar.
+fn tree_roots(state: &ShellState) -> Vec<(PathBuf, &'static str)> {
+    let mut roots: Vec<(PathBuf, &'static str)> = Vec::new();
+    if let Some(home) = home_dir() {
+        roots.push((home, "⌂"));
+    }
+    roots.push((PathBuf::from("/"), "▣"));
+    for p in &state.places {
+        let pb = PathBuf::from(p);
+        if pb.is_dir() && !roots.iter().any(|(r, _)| r == &pb) {
+            roots.push((pb, "★"));
+        }
+    }
+    roots
+}
+
+/// Lista las subcarpetas (sólo directorios) de `dir`, ordenadas por nombre
+/// (case-insensitive). Vacío si no se puede leer.
+fn list_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut v: Vec<PathBuf> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    v.sort_by_key(|p| {
+        p.file_name()
+            .map(|s| s.to_string_lossy().to_lowercase())
+            .unwrap_or_default()
+    });
+    v
+}
+
+/// Carga (si falta) el cache de subcarpetas de `dir` en el árbol lateral.
+fn ensure_tree_children(tree: &mut SideTree, dir: &Path) {
+    if !tree.children.contains_key(dir) {
+        tree.children.insert(dir.to_path_buf(), list_dirs(dir));
+    }
+}
+
+/// Expande el árbol a lo largo de la cadena de ancestros hasta `target`, para
+/// que la carpeta actual quede visible de entrada.
+fn seed_tree_to(tree: &mut SideTree, target: &Path) {
+    let mut acc = PathBuf::new();
+    for comp in target.components() {
+        acc.push(comp);
+        ensure_tree_children(tree, &acc);
+        tree.expanded.insert(acc.clone());
+    }
+}
+
+/// Rótulo de un nodo del árbol: el nombre de la carpeta, o la ruta entera para
+/// la raíz `/`.
+fn node_label(path: &Path) -> String {
+    path.file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+/// Acumula recursivamente las filas visibles del árbol bajo `path`.
+fn push_tree_node(
+    model: &Model,
+    path: &Path,
+    depth: usize,
+    cur: &Path,
+    glyph: &'static str,
+    theme: &Theme,
+    rows: &mut Vec<TreeRow<Msg>>,
+) {
+    let expanded = model.side_tree.expanded.contains(path);
+    let selected = path == cur;
+    let icon = View::new(Style {
+        size: Size { width: length(18.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(glyph, 12.0, if selected { theme.fg_text } else { theme.fg_muted });
+    rows.push(
+        TreeRow::new(
+            node_label(path),
+            depth,
+            true,
+            expanded,
+            selected,
+            Msg::TreeToggle(path.to_path_buf()),
+            Msg::TreeSelect(path.to_path_buf()),
+        )
+        .with_icon(icon),
+    );
+    if expanded {
+        if let Some(children) = model.side_tree.children.get(path) {
+            for child in children {
+                push_tree_node(model, child, depth + 1, cur, "▣", theme, rows);
+            }
+        }
+    }
+}
+
+/// Filas aplanadas del árbol lateral, partiendo de las raíces.
+fn build_tree_rows(model: &Model, theme: &Theme) -> Vec<TreeRow<Msg>> {
+    let cur = cur_dir(model);
+    let mut rows: Vec<TreeRow<Msg>> = Vec::new();
+    for (root, glyph) in tree_roots(&model.state) {
+        push_tree_node(model, &root, 0, &cur, glyph, theme, &mut rows);
+    }
+    rows
+}
+
+/// Sidebar izquierdo: **árbol de carpetas** navegable (home · raíz ·
+/// favoritos). Click en el chevron expande/colapsa (`TreeToggle`); click en la
+/// fila navega el panel activo a esa carpeta (`TreeSelect`). Ancho fijo.
 fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
-    const WIDTH: f32 = 190.0;
+    const WIDTH: f32 = 210.0;
 
-    // Encabezado de sección.
-    let seccion = |titulo: &str| {
-        View::new(Style {
-            size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
-            padding: pad_h(12.0),
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(titulo, 12.0, theme.fg_muted)
-    };
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .text("CARPETAS", 12.0, theme.fg_muted);
 
-    let mut hijos: Vec<View<Msg>> = vec![seccion("FAVORITOS")];
-
-    if model.state.places.is_empty() {
-        hijos.push(
-            View::new(fila(22.0))
-                .text("  (sin favoritos)", 12.0, theme.fg_placeholder),
-        );
-    } else {
-        for path in &model.state.places {
-            // Fila: nombre (navega) + ✕ (quita). Dos targets de click.
-            let nombre = View::new(Style {
-                flex_grow: 1.0,
-                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-                align_items: Some(AlignItems::Center),
-                padding: pad_h(12.0),
-                ..Default::default()
-            })
-            .on_click(Msg::GoTo(path.clone()))
-            .text(format!("★ {}", basename(path)), 13.0, theme.fg_text);
-            let quitar = View::new(Style {
-                size: Size { width: length(24.0_f32), height: percent(1.0_f32) },
-                justify_content: Some(JustifyContent::Center),
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .on_click(Msg::RemovePlace(path.clone()))
-            .text("✕", 12.0, theme.fg_muted);
-            hijos.push(
-                View::new(Style {
-                    size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-                    align_items: Some(AlignItems::Center),
-                    ..Default::default()
-                })
-                .children(vec![nombre, quitar]),
-            );
-        }
-    }
-
-    hijos.push(seccion("RECIENTES"));
-    if model.state.recents.is_empty() {
-        hijos.push(
-            View::new(fila(22.0)).text("  (vacío)", 12.0, theme.fg_placeholder),
-        );
-    } else {
-        for path in model.state.recents.iter().take(10) {
-            hijos.push(
-                View::new(Style {
-                    size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
-                    align_items: Some(AlignItems::Center),
-                    padding: pad_h(12.0),
-                    ..Default::default()
-                })
-                .on_click(Msg::GoTo(path.clone()))
-                .text(format!("🕘 {}", basename(path)), 12.5, theme.fg_muted),
-            );
-        }
-    }
+    let tree = tree_view(TreeSpec {
+        rows: build_tree_rows(model, theme),
+        row_height: 22.0,
+        indent_px: 14.0,
+        palette: TreePalette::from_theme(theme),
+        guides: true,
+    });
+    let tree_wrap = View::new(Style {
+        flex_grow: 1.0,
+        min_size: Size { width: length(0.0), height: length(0.0) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![tree]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -2185,7 +2452,86 @@ fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    .children(hijos)
+    .children(vec![header, tree_wrap])
+}
+
+/// Barra de **pestañas / sesiones de trabajo** (estilo cosmos): una pestaña por
+/// sesión, con su nombre y una `✕` para cerrar, más un `+` para abrir una
+/// nueva. La activa se resalta con el color del fondo de contenido.
+fn tabs_bar_view(model: &Model, theme: &Theme) -> View<Msg> {
+    let mut kids: Vec<View<Msg>> = Vec::new();
+    for (i, sess) in model.sessions.iter().enumerate() {
+        let active = i == model.active;
+        let label = View::new(Style {
+            align_items: Some(AlignItems::Center),
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(6.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            size: Size { width: auto(), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .on_click(Msg::TabActivate(i))
+        .text(
+            sess.name.clone(),
+            12.5,
+            if active { theme.fg_text } else { theme.fg_muted },
+        );
+        let close = View::new(Style {
+            size: Size { width: length(20.0_f32), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .on_click(Msg::TabClose(i))
+        .text("✕", 11.0, theme.fg_muted);
+        let mut tab = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            margin: Rect {
+                left: length(0.0_f32),
+                right: length(2.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            size: Size { width: auto(), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![label, close]);
+        tab = tab.fill(if active { theme.bg_app } else { theme.bg_panel });
+        kids.push(tab);
+    }
+    // Botón "+": pestaña nueva.
+    kids.push(
+        View::new(Style {
+            size: Size { width: length(30.0_f32), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .on_click(Msg::TabNew)
+        .text("+", 17.0, theme.fg_muted),
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(4.0_f32),
+            right: length(4.0_f32),
+            top: length(2.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(kids)
 }
 
 /// Panel inferior colapsable de la **cola de operaciones**. `None` si no hay
@@ -2328,7 +2674,7 @@ fn pane_column(model: &Model, pane: usize, focused: bool, theme: &Theme) -> View
     let filtering = focused && model.nav_filtering;
     // La vista iconos necesita el cache de miniaturas y las dimensiones del
     // panel: se arma aparte (las otras dos sólo dependen del navegador).
-    let content = if matches!(model.panes[pane].nav().view, nahual_source_core::ViewMode::Icons) {
+    let content = if model.panes[pane].nav().view.is_grid() {
         navigator_icons_view(model, pane, theme)
     } else {
         nav_pane_view(
@@ -2386,6 +2732,7 @@ fn view_to_u8(v: nahual_source_core::ViewMode) -> u8 {
         nahual_source_core::ViewMode::List => 0,
         nahual_source_core::ViewMode::Details => 1,
         nahual_source_core::ViewMode::Icons => 2,
+        nahual_source_core::ViewMode::Gallery => 3,
     }
 }
 
@@ -2394,6 +2741,7 @@ fn u8_to_view(n: u8) -> nahual_source_core::ViewMode {
     match n {
         1 => nahual_source_core::ViewMode::Details,
         2 => nahual_source_core::ViewMode::Icons,
+        3 => nahual_source_core::ViewMode::Gallery,
         _ => nahual_source_core::ViewMode::List,
     }
 }
@@ -2655,10 +3003,10 @@ fn nav_pane_view(
         nahual_source_core::ViewMode::Details => {
             navigator_detail_view(nav, marked, state, theme, filtering, pane)
         }
-        // Icons se intercepta en `pane_column` (necesita el cache de thumbs y
-        // las dimensiones del panel); este brazo no se alcanza, pero mantiene
-        // el match exhaustivo. Fallback honesto: detalle.
-        nahual_source_core::ViewMode::Icons => {
+        // Icons y Gallery se interceptan en `pane_column` (necesitan el cache
+        // de thumbs y las dimensiones del panel); estos brazos no se alcanzan,
+        // pero mantienen el match exhaustivo. Fallback honesto: detalle.
+        nahual_source_core::ViewMode::Icons | nahual_source_core::ViewMode::Gallery => {
             navigator_detail_view(nav, marked, state, theme, filtering, pane)
         }
     }
@@ -2671,7 +3019,15 @@ fn nav_pane_view(
 fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> {
     let nav = model.panes[pane].nav();
     let marked = &model.panes[pane].marked;
-    let metrics = GridMetrics::default();
+    // Galería = mismas miniaturas pero tiles grandes (carpetas de imágenes);
+    // iconos = la grilla compacta por defecto.
+    let gallery = matches!(nav.view, nahual_source_core::ViewMode::Gallery);
+    let metrics = if gallery {
+        GridMetrics { tile_w: 220.0, tile_h: 248.0, gap: 14.0, pad: 14.0 }
+    } else {
+        GridMetrics::default()
+    };
+    let modo = if gallery { "galería" } else { "iconos" };
 
     // Ancho estimado del panel para derivar columnas: en dual, media ventana;
     // en simple, el ancho de la lista (el resto es el visor).
@@ -2706,7 +3062,7 @@ fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> 
         cols: win.cols,
         metrics,
         caption: Some(format!(
-            "{total} entradas · iconos · ↑↓ navega · Enter abre · v cambia vista"
+            "{total} entradas · {modo} · ↑↓ navega · Enter abre · v cambia vista"
         )),
         truncated_hint,
         palette: GridPalette::from_theme(theme),

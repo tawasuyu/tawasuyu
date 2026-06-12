@@ -179,6 +179,7 @@ impl ShellState {
     }
 
     /// Quita un favorito.
+    #[allow(dead_code)] // reservado para un afford de "quitar favorito" en el árbol
     pub fn remove_place(&mut self, path: &str) {
         self.places.retain(|p| p != path);
     }
