@@ -1,0 +1,17 @@
+[package]
+name = "media-module"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media-module — el reproductor de media como módulo embebible (patrón nahual-module: State/Msg/update/view con lift). Controles en estilo dientes (dock-rail) por default: un diente por panel (controles · info). v1 envuelve los players embebibles existentes (nahual-{video,audio}-viewer-llimphi, construidos sobre media-source-*); la mudanza de esos viewers al dominio media queda como deuda anotada."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-toolbar = { workspace = true }
+llimphi-widget-dock-rail = { workspace = true }
+nahual-video-viewer-llimphi = { workspace = true }
+nahual-audio-viewer-llimphi = { workspace = true }

@@ -80,6 +80,8 @@ use llimphi_widget_toolbar::{toolbar_view, ToolbarGroup, ToolbarItem, ToolbarPal
 use llimphi_widget_text_editor::{
     text_editor_view_full, EditorMetrics, EditorPalette, EditorState, Language, PointerEvent,
 };
+use tullpu_module as tullpu;
+use media_module as mediamod;
 use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
@@ -90,8 +92,8 @@ use nahual_source_core::{
     WawaImgSource,
 };
 use nahual_image_viewer_llimphi::{
-    image_viewer_view, image_viewer_view_zoom, load_image, ImagePreviewState, ImageViewerPalette,
-    ImageViewport, DEFAULT_IMAGE_BYTES_MAX,
+    image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
+    DEFAULT_IMAGE_BYTES_MAX,
 };
 use nahual_text_viewer_llimphi::{
     load_preview, text_viewer_view, PreviewState, TextViewerPalette,
@@ -312,9 +314,11 @@ fn aplicar_patron(pattern: &str, original: &str, n: usize) -> String {
 /// de media (video/audio sobre `media-source-*`). Esc/⌫ vuelve a la carpeta.
 enum CanvasApp {
     Texto { path: PathBuf, editor: Box<EditorState>, dirty: bool, saved: bool },
-    Imagen { path: PathBuf, state: ImagePreviewState, viewport: ImageViewport },
-    Video(VideoViewerState),
-    Audio(AudioViewerState),
+    /// Editor de imágenes por capas (tullpu-module sobre tullpu-core/render/
+    /// ops/paint): pincel, ops derivadas, capas, undo, guardar.
+    Imagen(Box<tullpu::State>),
+    /// Player de media embebible (media-module) con controles en dientes.
+    Media(Box<mediamod::State>),
 }
 
 /// Clipboard del sistema para el editor del canvas (mismo backend que nada).
@@ -682,12 +686,10 @@ enum Msg {
     CanvasEditPointer(PointerEvent),
     /// Guarda el archivo del editor del canvas (Ctrl+S).
     CanvasSave,
-    /// Zoom del visor de imagen del canvas (Ctrl+rueda / pinch).
-    CanvasImgZoom(f32),
-    /// Pan (arrastre) del visor de imagen del canvas.
-    CanvasImgPan(f32, f32),
-    /// Doble tap: resetea zoom/pan de la imagen del canvas.
-    CanvasImgReset,
+    /// Msg lifteado del editor de imágenes del canvas (tullpu-module).
+    CanvasTullpu(tullpu::Msg),
+    /// Msg lifteado del player de media del canvas (media-module).
+    CanvasMedia(mediamod::Msg),
 
     // ---- Fase 4.8: vista iconos con miniaturas ----
     /// Una miniatura terminó de generarse (llega del worker).
@@ -1038,6 +1040,26 @@ impl App for Shell {
             }
             return Some(Msg::CanvasEditKey(e.clone()));
         }
+        // Editor de imágenes del canvas: Ctrl+Z/Y/S y radio del pincel.
+        if matches!(_model.canvas, Some(CanvasApp::Imagen(_))) {
+            if e.modifiers.ctrl {
+                if let Key::Character(c) = &e.key {
+                    match c.as_str() {
+                        "z" => return Some(Msg::CanvasTullpu(tullpu::Msg::Undo)),
+                        "y" => return Some(Msg::CanvasTullpu(tullpu::Msg::Redo)),
+                        "s" => return Some(Msg::CanvasTullpu(tullpu::Msg::Guardar)),
+                        _ => {}
+                    }
+                }
+            }
+            if let Key::Character(c) = &e.key {
+                match c.as_str() {
+                    "[" => return Some(Msg::CanvasTullpu(tullpu::Msg::BumpRadio(-2))),
+                    "]" => return Some(Msg::CanvasTullpu(tullpu::Msg::BumpRadio(2))),
+                    _ => {}
+                }
+            }
+        }
         // Canvas con imagen/media: Esc o ⌫ cierran y vuelven a la carpeta.
         if _model.canvas.is_some() {
             if matches!(
@@ -1384,28 +1406,35 @@ impl App for Shell {
                     }
                 }
             }
-            Msg::CanvasImgZoom(factor) => {
-                if let Some(CanvasApp::Imagen { viewport, .. }) = &mut m.canvas {
-                    viewport.zoom_by(factor);
+            Msg::CanvasTullpu(tmsg) => {
+                if let Some(CanvasApp::Imagen(st)) = m.canvas.take() {
+                    m.canvas = Some(CanvasApp::Imagen(Box::new(tullpu::update(*st, tmsg))));
                 }
             }
-            Msg::CanvasImgPan(dx, dy) => {
-                if let Some(CanvasApp::Imagen { viewport, .. }) = &mut m.canvas {
-                    viewport.pan_by(dx, dy);
-                }
-            }
-            Msg::CanvasImgReset => {
-                if let Some(CanvasApp::Imagen { viewport, .. }) = &mut m.canvas {
-                    viewport.reset();
+            Msg::CanvasMedia(mmsg) => {
+                if let Some(CanvasApp::Media(st)) = &mut m.canvas {
+                    mediamod::update(st, mmsg);
                 }
             }
             Msg::Scroll(steps) => {
                 // Con una app de canvas abierta, la rueda es suya (el editor
                 // scrollea; imagen/media la ignoran — el zoom va por
                 // Ctrl+rueda).
-                if let Some(canvas) = &mut m.canvas {
-                    if let CanvasApp::Texto { editor, .. } = canvas {
-                        editor.scroll_by(steps);
+                if m.canvas.is_some() {
+                    match m.canvas.take() {
+                        Some(CanvasApp::Texto { path, mut editor, dirty, saved }) => {
+                            editor.scroll_by(steps);
+                            m.canvas = Some(CanvasApp::Texto { path, editor, dirty, saved });
+                        }
+                        // Rueda sobre el editor de imágenes = zoom del lienzo.
+                        Some(CanvasApp::Imagen(st)) => {
+                            let mult = 1.12_f32.powi(-steps);
+                            m.canvas = Some(CanvasApp::Imagen(Box::new(tullpu::update(
+                                *st,
+                                tullpu::Msg::Zoom(mult),
+                            ))));
+                        }
+                        otro => m.canvas = otro,
                     }
                     return m;
                 }
@@ -1525,12 +1554,8 @@ impl App for Shell {
                     _ => {}
                 }
                 // El player del canvas también corre con el reloj.
-                match &mut m.canvas {
-                    Some(CanvasApp::Video(state)) => {
-                        state.tick(FRAME_TICK);
-                    }
-                    Some(CanvasApp::Audio(state)) => state.tick(FRAME_TICK),
-                    _ => {}
+                if let Some(CanvasApp::Media(st)) = &mut m.canvas {
+                    mediamod::tick(st, FRAME_TICK);
                 }
                 // Debounce del streaming del basemap: coalesce los pans/zooms
                 // y re-streamea a lo sumo cada `RESTREAM_THROTTLE`.
@@ -1547,8 +1572,7 @@ impl App for Shell {
             }
             Msg::TogglePlay => match &mut m.canvas {
                 // El player del canvas tiene prioridad sobre el preview.
-                Some(CanvasApp::Video(state)) => state.toggle_play(),
-                Some(CanvasApp::Audio(state)) => state.toggle_play(),
+                Some(CanvasApp::Media(st)) => mediamod::update(st, mediamod::Msg::TogglePlay),
                 _ => match &mut m.preview {
                     PreviewPane::Video(state) => state.toggle_play(),
                     PreviewPane::Audio(state) => state.toggle_play(),
@@ -2940,21 +2964,8 @@ fn canvas_app_view(canvas: &CanvasApp, model: &Model, theme: &Theme) -> View<Msg
             })
             .children(vec![header, cuerpo_wrap])
         }
-        CanvasApp::Imagen { path, state, viewport } => image_viewer_view_zoom(
-            state,
-            Some(path),
-            &ImageViewerPalette::from_theme(theme),
-            *viewport,
-            |factor, _fx, _fy| Msg::CanvasImgZoom(factor),
-            |dx, dy| Msg::CanvasImgPan(dx, dy),
-            Msg::CanvasImgReset,
-        ),
-        CanvasApp::Video(state) => {
-            video_viewer_view(state, &VideoViewerPalette::from_theme(theme))
-        }
-        CanvasApp::Audio(state) => {
-            audio_viewer_view(state, &AudioViewerPalette::from_theme(theme))
-        }
+        CanvasApp::Imagen(st) => tullpu::view(st, theme, Msg::CanvasTullpu),
+        CanvasApp::Media(st) => mediamod::view(st, theme, Msg::CanvasMedia),
     }
 }
 
@@ -4074,20 +4085,29 @@ fn canvas_editor_lines(m: &Model) -> usize {
 /// canvas; cualquier otro tipo → el visor correspondiente en el sidebar
 /// derecho de preview.
 fn open_path(m: &mut Model, path: &PathBuf) {
+    let nombre = path
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let pane = load_for(path);
     match pane {
-        PreviewPane::Image(state) => {
-            m.canvas = Some(CanvasApp::Imagen {
-                path: path.clone(),
-                state,
-                viewport: ImageViewport::default(),
-            });
-        }
+        // Imagen → el editor por capas (tullpu); si no decodifica para el
+        // editor, cae al visor del preview derecho.
+        PreviewPane::Image(state) => match tullpu::State::desde_imagen(path) {
+            Some(st) => m.canvas = Some(CanvasApp::Imagen(Box::new(st))),
+            None => open_in_preview(m, path, PreviewPane::Image(state)),
+        },
+        // Video/audio → el player de media embebible (reusa el estado ya
+        // abierto por el discernimiento; controles en dientes).
         PreviewPane::Video(state) => {
-            m.canvas = Some(CanvasApp::Video(state));
+            m.canvas = Some(CanvasApp::Media(Box::new(mediamod::State::desde_video(
+                state, nombre,
+            ))));
         }
         PreviewPane::Audio(state) => {
-            m.canvas = Some(CanvasApp::Audio(state));
+            m.canvas = Some(CanvasApp::Media(Box::new(mediamod::State::desde_audio(
+                state, nombre,
+            ))));
         }
         PreviewPane::Text(_) | PreviewPane::Markdown(_) | PreviewPane::Web(_) => {
             // El HTML además lanza puriy (browser real), como siempre.

@@ -25,6 +25,8 @@ llimphi-widget-tree = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-toolbar = { workspace = true }
 llimphi-widget-text-editor = { workspace = true }
+tullpu-module = { workspace = true }
+media-module = { workspace = true }
 llimphi-icons = { workspace = true }
 # Clipboard del sistema para el editor integrado del canvas (como nada).
 arboard = { workspace = true }

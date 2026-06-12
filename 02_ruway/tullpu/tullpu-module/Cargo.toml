@@ -1,0 +1,20 @@
+[package]
+name = "tullpu-module"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tullpu-module — frontend embebible del editor de imágenes por capas: State/Msg/update/view con lift (patrón nahual-module) sobre los motores reales (tullpu-core/render/ops/paint). Subset v1: pincel/borrador/mover, ops locales como capas derivadas, panel de capas, undo/redo, zoom/pan, guardar. La app standalone (tullpu-app-llimphi) sigue siendo el frontend completo."
+
+[dependencies]
+tullpu-core = { workspace = true }
+tullpu-render = { workspace = true }
+tullpu-ops = { workspace = true }
+tullpu-paint = { workspace = true }
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-icons = { workspace = true }
+llimphi-widget-toolbar = { workspace = true }
+image = { workspace = true }
+uuid = { workspace = true, features = ["v4"] }
