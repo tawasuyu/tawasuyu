@@ -323,6 +323,93 @@ fn spawn_list_containers(handle: &Handle<Msg>) {
     });
 }
 
+/// Lista los contenedores de un host **remoto** vía el `ssh` del sistema:
+/// `ssh -p <port> <user>@<host> -- <engine> ps -a --format '{{.Names}}'`.
+/// Usa la auth de SSH del sistema (agente/clave) — el mismo `ssh` que el
+/// usuario ya tiene configurado. Resultado por `Msg::RemoteContainersLoaded`.
+fn spawn_list_remote_containers(
+    handle: &Handle<Msg>,
+    host: String,
+    user: String,
+    port: u16,
+    engine: String,
+) {
+    handle.spawn(move || {
+        // Sólo podman/docker tienen un `ps`; para rootfs (unshare/bwrap) no hay
+        // lista equivalente — devolvemos vacío.
+        let eng = if matches!(engine.as_str(), "podman" | "docker") {
+            engine.as_str()
+        } else {
+            "podman"
+        };
+        let target = format!("{user}@{host}");
+        let names = std::process::Command::new("ssh")
+            .args([
+                "-p",
+                &port.to_string(),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=8",
+                &target,
+                "--",
+                eng,
+                "ps",
+                "-a",
+                "--format",
+                "{{.Names}}",
+            ])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(|l| l.trim().to_string())
+                    .filter(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        Msg::RemoteContainersLoaded(names)
+    });
+}
+
+/// Corre `<engine> <action> <name>` en el host remoto por `ssh` (start/stop/rm).
+/// Fire-and-forget: el resultado real se ve en el shell (la próxima `exec`).
+/// No-op para engines sin gestión de ciclo de vida (unshare/bwrap).
+fn spawn_remote_engine_action(
+    handle: &Handle<Msg>,
+    host: String,
+    user: String,
+    port: u16,
+    engine: String,
+    action: &'static str,
+    name: String,
+) {
+    if !matches!(engine.as_str(), "podman" | "docker") {
+        return;
+    }
+    handle.spawn(move || {
+        let target = format!("{user}@{host}");
+        let _ = std::process::Command::new("ssh")
+            .args([
+                "-p",
+                &port.to_string(),
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=8",
+                &target,
+                "--",
+                &engine,
+                action,
+                &name,
+            ])
+            .output();
+        Msg::Noop
+    });
+}
+
 /// Triple `(distro_slug, release, arch)` para construir la URL del LXC
 /// image. Ver: https://images.linuxcontainers.org/ — el directorio
 /// `<distro>/<release>/<arch>/default/` NO tiene un alias `current/`; sólo
@@ -1666,6 +1753,9 @@ struct Model {
     dropdown_open: Option<DropKind>,
     /// Contenedores locales descubiertos (`podman ps -a`) — para suscribir.
     containers: Vec<String>,
+    /// Contenedores descubiertos en el host REMOTO de la sesión activa (vía
+    /// `ssh … <engine> ps -a`). Se repueblan al abrir el select en un remoto.
+    remote_containers: Vec<String>,
     /// Lista detallada de containers para el gestor (name + state).
     containers_full: Vec<ContainerInfo>,
     /// Config persistida de contenedores (engine/distro/mounts), por nombre.
@@ -1810,8 +1900,13 @@ enum Msg {
     RefreshContainers,
     /// Resultado del listado de contenedores.
     ContainersLoaded(Vec<String>),
+    /// Resultado del listado de contenedores del host remoto de la sesión.
+    RemoteContainersLoaded(Vec<String>),
     /// Suscribir la sesión activa al contenedor `idx` de la lista.
     SubscribeContainer(usize),
+    /// Suscribir la sesión activa a un contenedor del host REMOTO por nombre
+    /// (el select del remoto lista por nombre, no por índice local).
+    PickRemoteContainer(String),
     /// Crear un contenedor nuevo con la distro de la sesión y suscribirla.
     CreateContainer,
     /// Toggle del checkbox "Aislar en contenedor" del form de creación.
@@ -2064,6 +2159,7 @@ impl App for Shell {
             session_panel_open: chrome.session_panel_open,
             dropdown_open: None,
             containers: Vec::new(),
+            remote_containers: Vec::new(),
             containers_full: Vec::new(),
             container_cfgs: load_container_cfgs(),
             focused_field: None,
@@ -2244,6 +2340,21 @@ impl App for Shell {
             }
             Msg::ToggleDropdown(kind) => {
                 m.dropdown_open = if m.dropdown_open == Some(kind) { None } else { Some(kind) };
+                // Al abrir el select de contenedor en un host remoto, lista sus
+                // contenedores por SSH (asíncrono → RemoteContainersLoaded).
+                if m.dropdown_open == Some(DropKind::Container) {
+                    if let Some(s) = m.sessions.get(m.active_session) {
+                        if s.isolation == Isolation::Remote {
+                            spawn_list_remote_containers(
+                                handle,
+                                s.host.text(),
+                                s.user.text(),
+                                s.port_num(),
+                                s.container_engine.clone(),
+                            );
+                        }
+                    }
+                }
             }
             Msg::DismissDropdown => m.dropdown_open = None,
             // Config del aislamiento. Cambia el aislamiento de la sesión activa
@@ -2325,12 +2436,40 @@ impl App for Shell {
             }
             Msg::RefreshContainers => spawn_list_containers(handle),
             Msg::ContainersLoaded(v) => m.containers = v,
+            Msg::RemoteContainersLoaded(v) => m.remote_containers = v,
             Msg::SubscribeContainer(i) => {
                 m.dropdown_open = None;
                 if let Some(name) = m.containers.get(i).cloned() {
                     if let Some(s) = m.sessions.get_mut(m.active_session) {
                         s.container = Some(name);
                         s.conn = ConnState::Connected;
+                    }
+                }
+                save_sessions(&m);
+            }
+            Msg::PickRemoteContainer(name) => {
+                m.dropdown_open = None;
+                // Aseguramos que el contenedor esté arrancado en el remoto antes
+                // de hacer `exec` contra él (un parado haría fallar cada comando).
+                if let Some(s) = m.sessions.get(m.active_session) {
+                    spawn_remote_engine_action(
+                        handle,
+                        s.host.text(),
+                        s.user.text(),
+                        s.port_num(),
+                        s.container_engine.clone(),
+                        "start",
+                        name.clone(),
+                    );
+                }
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    s.use_container = true;
+                    s.container = Some(name);
+                    // Reconstruye el shell como RemoteContainer (SSH + engine
+                    // exec). Si la sesión todavía es pending, sólo deja el form
+                    // listo; el shell nace al confirmar.
+                    if !s.pending {
+                        s.connect_remote();
                     }
                 }
                 save_sessions(&m);

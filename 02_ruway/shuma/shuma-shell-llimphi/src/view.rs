@@ -393,16 +393,25 @@ fn container_picker(model: &Model, session: &Session, theme: &Theme) -> Vec<View
         &pal,
         Msg::ToggleDropdown(DropKind::Container),
     ));
-    // El contenedor pertenece al HOST de la sesión. Hoy sólo el host Local tiene
-    // contenedores que corren de verdad (rootfs en disco); los de un host remoto
-    // necesitan correr el engine allá (pendiente).
+    // El contenedor pertenece al HOST de la sesión: en Local son los rootfs en
+    // disco + podman; en un host remoto, los que devuelve `<engine> ps -a` por
+    // SSH (poblados en `RemoteContainersLoaded`).
     let es_local = session.host_key() == "local";
     if model.dropdown_open == Some(DropKind::Container) {
         if !es_local {
-            out.push(panel_note(
-                "Contenedores en hosts remotos: próximamente.",
-                theme,
-            ));
+            // Host remoto: lista los contenedores descubiertos allá.
+            if model.remote_containers.is_empty() {
+                out.push(panel_note(
+                    "Sin contenedores en el host remoto (o no respondió aún).",
+                    theme,
+                ));
+            } else {
+                let mut rows: Vec<View<Msg>> = Vec::new();
+                for c in &model.remote_containers {
+                    rows.push(pick_row(c.clone(), Msg::PickRemoteContainer(c.clone()), theme));
+                }
+                out.push(inline_list(rows));
+            }
         } else {
             let mut rows: Vec<View<Msg>> = Vec::new();
             for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
