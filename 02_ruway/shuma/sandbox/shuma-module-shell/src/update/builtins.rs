@@ -107,6 +107,172 @@ pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> Sta
     s
 }
 
+/// `:env` — variables de ambiente **aprendibles**.
+///
+/// - `:env` lista las aprendidas (rc + sesión).
+/// - `:env NAME=VALOR` exporta al proceso (los hijos la heredan) Y la
+///   aprende al `shumarc.toml` `[env]` — sobrevive reinicios.
+/// - `:env -NAME` la olvida (proceso + rc).
+pub(crate) fn apply_env(mut s: State, rest: &str) -> State {
+    let arg = rest.trim();
+    if arg.is_empty() {
+        if s.config.env.is_empty() {
+            s.push_output(OutputLine::notice(
+                "(sin variables aprendidas — `:env NAME=valor` exporta y aprende)",
+            ));
+        } else {
+            let mut keys: Vec<&String> = s.config.env.keys().collect();
+            keys.sort();
+            let rows: Vec<String> = keys
+                .iter()
+                .map(|k| format!("  {k}={}", s.config.env[k.as_str()]))
+                .collect();
+            s.push_output(OutputLine::notice(format!(
+                "{} variable{} aprendida{} (en shumarc.toml [env]):",
+                rows.len(),
+                if rows.len() == 1 { "" } else { "s" },
+                if rows.len() == 1 { "" } else { "s" },
+            )));
+            for r in rows {
+                s.push_output(OutputLine::notice(r));
+            }
+        }
+        return s;
+    }
+    // `:env -NAME` — olvidar.
+    if let Some(name) = arg.strip_prefix('-') {
+        let name = name.trim();
+        if !es_nombre_env(name) {
+            s.push_output(OutputLine::notice("uso: :env [-NAME | NAME=valor]"));
+            return s;
+        }
+        std::env::remove_var(name);
+        let estaba = s.config.env.remove(name).is_some();
+        if let Some(rc) = shuma_config::Config::default_path() {
+            let _ = shuma_config::remove_key(&rc, "env", name);
+        }
+        s.push_output(OutputLine::notice(if estaba {
+            format!("✔ {name} olvidada (proceso + shumarc)")
+        } else {
+            format!("{name} no estaba aprendida — igual se removió del proceso")
+        }));
+        return s;
+    }
+    // `:env NAME=VALOR` — exportar + aprender.
+    let Some((name, value)) = arg.split_once('=') else {
+        s.push_output(OutputLine::notice("uso: :env            (listar)"));
+        s.push_output(OutputLine::notice("     :env NAME=valor (exportar + aprender)"));
+        s.push_output(OutputLine::notice("     :env -NAME      (olvidar)"));
+        return s;
+    };
+    let (name, value) = (name.trim(), value.trim());
+    if !es_nombre_env(name) {
+        s.push_output(OutputLine::notice(format!(
+            "✘ `{name}` no es un nombre de variable válido ([A-Za-z_][A-Za-z0-9_]*)"
+        )));
+        return s;
+    }
+    // Valor con expansión de `$VAR` contra el ambiente vigente — permite
+    // `:env PATH=$PATH:/opt/bin`.
+    let value = shuma_config::expand_env(value);
+    std::env::set_var(name, &value);
+    s.config.env.insert(name.to_string(), value.clone());
+    match shuma_config::Config::default_path() {
+        Some(rc) => match shuma_config::upsert_key(&rc, "env", name, &shuma_config::toml_string(&value)) {
+            Ok(()) => s.push_output(OutputLine::notice(format!(
+                "✔ {name}={value} exportada y aprendida (shumarc.toml)"
+            ))),
+            Err(e) => s.push_output(OutputLine::notice(format!(
+                "{name}={value} exportada — pero no se pudo aprender: {e}"
+            ))),
+        },
+        None => s.push_output(OutputLine::notice(format!(
+            "{name}={value} exportada (sin directorio de config para aprenderla)"
+        ))),
+    }
+    s
+}
+
+fn es_nombre_env(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .chars()
+            .enumerate()
+            .all(|(i, c)| c == '_' || c.is_ascii_alphabetic() || (i > 0 && c.is_ascii_digit()))
+}
+
+/// `:persist` — asegura que la sesión persista lo máximo posible hoy.
+///
+/// - `:persist` muestra el estado de cada capa de persistencia.
+/// - `:persist on` enciende captura con spill (límite default 64 MB si no
+///   había) y lo aprende al rc (`[capture]` + `[scrollback]`).
+/// - `:persist off` apaga el spill (el resto de las capas no se tocan).
+pub(crate) fn apply_persist(mut s: State, rest: &str) -> State {
+    let arg = rest.trim();
+    match arg {
+        "" => {
+            let limit_mb = s.capture_limit_bytes / (1024 * 1024);
+            let spill_estado = match (s.spill, s.capture_limit_bytes) {
+                (true, 0) => "spill on, pero sin :limit (sin efecto)".to_string(),
+                (true, _) => format!("spill on, límite {limit_mb} MB"),
+                (false, _) => "off — `:persist on` lo enciende".to_string(),
+            };
+            let scrollback = match s.surf_history.lock() {
+                Ok(h) if h.spill_path().is_some() => "✔ spillea a disco".to_string(),
+                _ => "sólo en memoria ([scrollback].spill = true para disco)".to_string(),
+            };
+            let daemon = daemon_socket_path();
+            let daemon_estado = match &daemon {
+                Some(p) if p.exists() => format!("✔ corriendo ({})", p.display()),
+                Some(p) => format!("no corre (socket esperado: {})", p.display()),
+                None => "sin XDG_RUNTIME_DIR".to_string(),
+            };
+            s.push_output(OutputLine::notice("persistencia de la sesión:"));
+            s.push_output(OutputLine::notice("  ✔ historial de comandos — durable siempre"));
+            s.push_output(OutputLine::notice(
+                "  ✔ sesiones del chasis — sessions.json (se rearman al abrir)",
+            ));
+            s.push_output(OutputLine::notice(format!("  · captura por comando — {spill_estado}")));
+            s.push_output(OutputLine::notice(format!("  · scrollback — {scrollback}")));
+            s.push_output(OutputLine::notice(format!("  · shuma-daemon — {daemon_estado}")));
+            s.push_output(OutputLine::notice(
+                "  ⚠ comandos vivos mueren con la app — PTY persistente en el daemon: pendiente",
+            ));
+        }
+        "on" => {
+            s.spill = true;
+            if s.capture_limit_bytes == 0 {
+                s.capture_limit_bytes = 64 * 1024 * 1024;
+            }
+            let mb = s.capture_limit_bytes / (1024 * 1024);
+            if let Some(rc) = shuma_config::Config::default_path() {
+                let _ = shuma_config::upsert_key(&rc, "capture", "limit_mb", &mb.to_string());
+                let _ = shuma_config::upsert_key(&rc, "capture", "spill", "true");
+                let _ = shuma_config::upsert_key(&rc, "scrollback", "spill", "true");
+            }
+            s.push_output(OutputLine::notice(format!(
+                "✔ persistencia on: captura {mb} MB + spill a disco, aprendido al shumarc \
+                 (el scrollback spillea desde la próxima sesión)"
+            )));
+        }
+        "off" => {
+            s.spill = false;
+            if let Some(rc) = shuma_config::Config::default_path() {
+                let _ = shuma_config::upsert_key(&rc, "capture", "spill", "false");
+                let _ = shuma_config::upsert_key(&rc, "scrollback", "spill", "false");
+            }
+            s.push_output(OutputLine::notice("persistencia off (spill apagado)"));
+        }
+        _ => s.push_output(OutputLine::notice("uso: :persist [on|off]")),
+    }
+    s
+}
+
+/// Socket admin esperado del shuma-daemon local.
+fn daemon_socket_path() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(|d| std::path::PathBuf::from(d).join("shuma.sock"))
+}
+
 /// `:limit <MB>` — tope de captura de stdout por run. `0` = sin tope.
 pub(crate) fn apply_capture_limit(mut s: State, rest: &str) -> State {
     match rest.trim().parse::<usize>() {

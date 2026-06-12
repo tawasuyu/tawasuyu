@@ -31,6 +31,12 @@ pub enum Msg {
     /// al REPL. Cierra los overlays de búsqueda y deja el cursor justo
     /// después del texto insertado.
     InsertAtCursor(String),
+    /// Click en el chip `env` de la fila del input — lista las variables
+    /// aprendidas en el output (mismo efecto que `:env`).
+    EnvChip,
+    /// Click en el chip `persist` de la fila del input — alterna
+    /// `:persist on` / `:persist off`.
+    PersistChip,
     /// Empuja un mensaje `Notice` al output sin abrir un bloque nuevo —
     /// para que el chasis (o cualquier consumidor) comunique fallas
     /// (podman, askpass, ...) en la vista del shell.

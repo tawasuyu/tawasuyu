@@ -229,6 +229,113 @@ impl Config {
     }
 }
 
+/// Upsert **quirúrgico** de `key = value_raw` en la sección `[section]`
+/// del archivo TOML en `path`: edita el TEXTO (preserva comentarios y el
+/// resto de las secciones), crea el archivo y/o la sección si faltan.
+/// `value_raw` va literal — el caller decide el formato TOML (`"texto"`
+/// con [`toml_string`], `true`, `64`).
+pub fn upsert_key(path: &Path, section: &str, key: &str, value_raw: &str) -> std::io::Result<()> {
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let header = format!("[{section}]");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let nueva = format!("{key} = {value_raw}");
+
+    // Buscar la sección.
+    let sec_idx = lines.iter().position(|l| l.trim() == header);
+    match sec_idx {
+        Some(si) => {
+            // Rango de la sección: desde si+1 hasta el próximo header.
+            let fin = lines[si + 1..]
+                .iter()
+                .position(|l| l.trim_start().starts_with('['))
+                .map(|o| si + 1 + o)
+                .unwrap_or(lines.len());
+            // ¿La clave ya existe adentro? → reemplazo in-place.
+            for l in lines[si + 1..fin].iter_mut() {
+                let lt = l.trim_start();
+                if let Some(eq) = lt.find('=') {
+                    if lt[..eq].trim() == key {
+                        *l = nueva;
+                        let out = lines.join("\n") + "\n";
+                        return write_atomico(path, &out);
+                    }
+                }
+            }
+            // No existe: insertar al final de la sección (antes de líneas
+            // en blanco que la separen de la próxima).
+            let mut ins = fin;
+            while ins > si + 1 && lines[ins - 1].trim().is_empty() {
+                ins -= 1;
+            }
+            lines.insert(ins, nueva);
+        }
+        None => {
+            if !lines.is_empty() && !lines.last().map(|l| l.is_empty()).unwrap_or(true) {
+                lines.push(String::new());
+            }
+            lines.push(header);
+            lines.push(nueva);
+        }
+    }
+    let out = lines.join("\n") + "\n";
+    write_atomico(path, &out)
+}
+
+/// Borra `key` de la sección `[section]`. Devuelve `true` si existía.
+pub fn remove_key(path: &Path, section: &str, key: &str) -> std::io::Result<bool> {
+    let Ok(text) = std::fs::read_to_string(path) else {
+        return Ok(false);
+    };
+    let header = format!("[{section}]");
+    let mut lines: Vec<String> = text.lines().map(str::to_string).collect();
+    let Some(si) = lines.iter().position(|l| l.trim() == header) else {
+        return Ok(false);
+    };
+    let fin = lines[si + 1..]
+        .iter()
+        .position(|l| l.trim_start().starts_with('['))
+        .map(|o| si + 1 + o)
+        .unwrap_or(lines.len());
+    let antes = lines.len();
+    let mut i = si + 1;
+    let mut fin = fin;
+    while i < fin {
+        let lt = lines[i].trim_start();
+        let es_clave = lt
+            .find('=')
+            .map(|eq| lt[..eq].trim() == key)
+            .unwrap_or(false);
+        if es_clave {
+            lines.remove(i);
+            fin -= 1;
+        } else {
+            i += 1;
+        }
+    }
+    if lines.len() == antes {
+        return Ok(false);
+    }
+    let out = lines.join("\n") + "\n";
+    write_atomico(path, &out)?;
+    Ok(true)
+}
+
+/// Serializa un string como TOML basic string (comillas + escapes).
+pub fn toml_string(s: &str) -> String {
+    toml::Value::String(s.to_string()).to_string()
+}
+
+/// Escritura atómica: tmp + rename, para no dejar un rc a medias si el
+/// proceso muere en medio del write.
+fn write_atomico(path: &Path, contenido: &str) -> std::io::Result<()> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("toml.tmp");
+    std::fs::write(&tmp, contenido)?;
+    std::fs::rename(&tmp, path)
+}
+
 impl From<DedupPolicy> for &'static str {
     fn from(p: DedupPolicy) -> Self {
         match p {
@@ -504,5 +611,66 @@ spill = true
         let all = CommandCompletion::load_all(d.path());
         assert!(all.contains_key("good"));
         assert!(!all.contains_key("bad"));
+    }
+
+    #[test]
+    fn upsert_key_crea_archivo_y_seccion() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("rc.toml");
+        upsert_key(&p, "env", "EDITOR", &toml_string("hx")).unwrap();
+        let c = Config::load(&p).unwrap();
+        assert_eq!(c.env.get("EDITOR").map(String::as_str), Some("hx"));
+    }
+
+    #[test]
+    fn upsert_key_reemplaza_sin_tocar_el_resto() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("rc.toml");
+        std::fs::write(
+            &p,
+            "# mi rc\n[aliases]\ngs = \"git status\"\n\n[env]\n# comentario\nEDITOR = \"vi\"\nPAGER = \"less\"\n",
+        )
+        .unwrap();
+        upsert_key(&p, "env", "EDITOR", &toml_string("hx")).unwrap();
+        let texto = std::fs::read_to_string(&p).unwrap();
+        assert!(texto.contains("# mi rc"), "preserva comentarios");
+        assert!(texto.contains("# comentario"));
+        assert!(texto.contains("gs = \"git status\""));
+        let c = Config::load(&p).unwrap();
+        assert_eq!(c.env.get("EDITOR").map(String::as_str), Some("hx"));
+        assert_eq!(c.env.get("PAGER").map(String::as_str), Some("less"));
+    }
+
+    #[test]
+    fn upsert_key_agrega_a_seccion_existente() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("rc.toml");
+        std::fs::write(&p, "[env]\nA = \"1\"\n\n[history]\nmax = 10\n").unwrap();
+        upsert_key(&p, "env", "B", &toml_string("2")).unwrap();
+        let c = Config::load(&p).unwrap();
+        assert_eq!(c.env.get("A").map(String::as_str), Some("1"));
+        assert_eq!(c.env.get("B").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn remove_key_borra_y_reporta() {
+        let d = tempdir().unwrap();
+        let p = d.path().join("rc.toml");
+        std::fs::write(&p, "[env]\nA = \"1\"\nB = \"2\"\n").unwrap();
+        assert!(remove_key(&p, "env", "A").unwrap());
+        assert!(!remove_key(&p, "env", "A").unwrap());
+        let c = Config::load(&p).unwrap();
+        assert!(c.env.get("A").is_none());
+        assert_eq!(c.env.get("B").map(String::as_str), Some("2"));
+    }
+
+    #[test]
+    fn toml_string_escapa() {
+        assert_eq!(toml_string("hola"), "\"hola\"");
+        // El formato exacto puede variar (basic vs literal string); lo que
+        // importa es que el TOML resultante parsea de vuelta al mismo valor.
+        let raw = toml_string("con \"comillas\"");
+        let parsed: toml::Value = format!("v = {raw}").parse().unwrap();
+        assert_eq!(parsed["v"].as_str(), Some("con \"comillas\""));
     }
 }

@@ -90,6 +90,8 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":kill" => return apply_jobs_signal(s, rest, JobSignal::Kill),
             ":stop" => return apply_jobs_signal(s, rest, JobSignal::Stop),
             ":cont" => return apply_jobs_signal(s, rest, JobSignal::Cont),
+            ":env" => return apply_env(s, rest),
+            ":persist" => return apply_persist(s, rest),
             ":limit" => return apply_capture_limit(s, rest),
             ":spill" => return apply_spill(s, rest),
             ":scrollback" => return apply_scrollback(s, rest),

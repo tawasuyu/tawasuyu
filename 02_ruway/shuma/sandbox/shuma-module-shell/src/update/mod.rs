@@ -294,6 +294,13 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::Clear => {
             s.clear_output();
         }
+        Msg::EnvChip => {
+            return apply_env(s, "");
+        }
+        Msg::PersistChip => {
+            let arg = if s.spill { "off" } else { "on" };
+            return apply_persist(s, arg);
+        }
         Msg::ToggleBlock(id) => {
             if !s.collapsed.remove(&id) {
                 s.collapsed.insert(id);
