@@ -104,6 +104,30 @@ impl ViewMode {
     }
 }
 
+/// Ordena un nivel de nodos in situ: contenedores primero (sin invertir con
+/// la dirección), luego la columna activa, desempate por nombre.
+fn sort_nodes(nodes: &mut [Node], key: SortKey, dir: SortDir) {
+    nodes.sort_by(|a, b| {
+        // Grupo: contenedores primero (no se invierte con la dirección).
+        let grupo = b.is_container.cmp(&a.is_container);
+        if grupo != Ordering::Equal {
+            return grupo;
+        }
+        let base = match key {
+            SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+            SortKey::Size => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
+            SortKey::Mtime => a.mtime.unwrap_or(0).cmp(&b.mtime.unwrap_or(0)),
+            SortKey::Kind => kind_rank(a.kind).cmp(&kind_rank(b.kind)),
+        };
+        let base = match dir {
+            SortDir::Asc => base,
+            SortDir::Desc => base.reverse(),
+        };
+        // Desempate estable por nombre ascendente.
+        base.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
+}
+
 /// Orden de un `NodeKind` para la columna "tipo": contenedores sintéticos y
 /// dirs arriba, luego archivos, symlinks, archives.
 fn kind_rank(k: NodeKind) -> u8 {
@@ -122,8 +146,19 @@ pub struct Navigator {
     source: Box<dyn Source>,
     /// Contenedores desde la raíz hasta el actual (el último es el actual).
     stack: Vec<Node>,
-    /// Hijos del contenedor actual.
+    /// Hijos **directos** del contenedor actual (nivel 0 del lister).
+    top: Vec<Node>,
+    /// Subárboles expandidos inline: hijos cacheados por id de contenedor
+    /// (cualquier nivel). Colapsar saca la entrada; descender/ subir limpia.
+    expanded: Vec<(NodeId, Vec<Node>)>,
+    /// Las **filas del lister**, aplanadas: `top` + subárboles expandidos en
+    /// orden. `selected`/`visible()` indexan acá (igual que siempre).
     children: Vec<Node>,
+    /// Profundidad de cada fila (0 = hijo directo), paralela a `children`.
+    depths: Vec<usize>,
+    /// Índice de la fila padre dentro del lister (None = nivel 0), paralela
+    /// a `children` — para reconstruir la cadena de ancestros al descender.
+    parent_row: Vec<Option<usize>>,
     pub selected: usize,
     pub visible_offset: usize,
     pub visible_rows: usize,
@@ -143,11 +178,15 @@ impl Navigator {
     /// los hijos. Error si la raíz no se puede listar.
     pub fn open(source: Box<dyn Source>) -> io::Result<Self> {
         let root = source.root();
-        let children = source.children(&root.id)?;
+        let top = source.children(&root.id)?;
         let mut nav = Self {
             source,
             stack: vec![root],
-            children,
+            top,
+            expanded: Vec::new(),
+            children: Vec::new(),
+            depths: Vec::new(),
+            parent_row: Vec::new(),
             selected: 0,
             visible_offset: 0,
             visible_rows: DEFAULT_VISIBLE_ROWS,
@@ -174,11 +213,15 @@ impl Navigator {
         let current = stack.last().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "open_at: pila vacía")
         })?;
-        let children = source.children(&current.id)?;
+        let top = source.children(&current.id)?;
         let mut nav = Self {
             source,
             stack,
-            children,
+            top,
+            expanded: Vec::new(),
+            children: Vec::new(),
+            depths: Vec::new(),
+            parent_row: Vec::new(),
             selected: 0,
             visible_offset: 0,
             visible_rows: DEFAULT_VISIBLE_ROWS,
@@ -213,7 +256,8 @@ impl Navigator {
         }
         self.stack.truncate(depth + 1);
         let actual = self.stack.last().expect("queda al menos la raíz");
-        self.children = self.source.children(&actual.id)?;
+        self.top = self.source.children(&actual.id)?;
+        self.expanded.clear();
         self.apply_sort();
         self.selected = 0;
         self.visible_offset = 0;
@@ -234,7 +278,9 @@ impl Navigator {
             .join(" / ")
     }
 
-    /// Hijos del contenedor actual.
+    /// Las filas del lister: hijos del contenedor actual + subárboles
+    /// expandidos inline, ya aplanados ([`Navigator::depth_of`] da la
+    /// profundidad de cada fila).
     pub fn children(&self) -> &[Node] {
         &self.children
     }
@@ -291,13 +337,26 @@ impl Navigator {
     /// id. `None` si no hay selección. Error si el contenedor no se puede
     /// listar.
     pub fn open_selected(&mut self) -> io::Result<Option<Opened>> {
-        let Some(node) = self.children.get(self.selected).cloned() else {
+        let idx = self.selected;
+        let Some(node) = self.children.get(idx).cloned() else {
             return Ok(None);
         };
         if node.is_container {
-            let children = self.source.children(&node.id)?;
+            let top = self.source.children(&node.id)?;
+            // Si el nodo estaba anidado por expansión inline, empujá también
+            // sus ancestros del lister para que el breadcrumb quede completo.
+            let mut chain: Vec<Node> = Vec::new();
+            let mut p = self.parent_of(idx);
+            while let Some(pi) = p {
+                chain.push(self.children[pi].clone());
+                p = self.parent_of(pi);
+            }
+            for anc in chain.into_iter().rev() {
+                self.stack.push(anc);
+            }
             self.stack.push(node);
-            self.children = children;
+            self.top = top;
+            self.expanded.clear();
             self.apply_sort();
             self.selected = 0;
             self.visible_offset = 0;
@@ -316,7 +375,8 @@ impl Navigator {
         }
         let dejado = self.stack.pop().expect("len > 1");
         let actual = self.stack.last().expect("queda al menos la raíz");
-        self.children = self.source.children(&actual.id)?;
+        self.top = self.source.children(&actual.id)?;
+        self.expanded.clear();
         self.apply_sort();
         self.selected = self
             .children
@@ -336,7 +396,16 @@ impl Navigator {
     pub fn reload(&mut self) -> io::Result<()> {
         let actual = self.stack.last().expect("la pila nunca está vacía");
         let sel_id = self.children.get(self.selected).map(|n| n.id.clone());
-        self.children = self.source.children(&actual.id)?;
+        self.top = self.source.children(&actual.id)?;
+        // Refresca también los subárboles expandidos (los que sigan listables;
+        // un dir borrado simplemente pierde su expansión).
+        let ids: Vec<NodeId> = self.expanded.iter().map(|(id, _)| id.clone()).collect();
+        self.expanded.clear();
+        for id in ids {
+            if let Ok(kids) = self.source.children(&id) {
+                self.expanded.push((id, kids));
+            }
+        }
         self.apply_sort();
         self.selected = sel_id
             .and_then(|id| self.children.iter().position(|n| n.id == id))
@@ -421,31 +490,95 @@ impl Navigator {
         self.sync_offset();
     }
 
-    /// Ordena `self.children` in situ según `sort_key`/`sort_dir`. Los
+    /// Ordena cada nivel (`top` y los subárboles expandidos) según
+    /// `sort_key`/`sort_dir` y reconstruye las filas planas del lister. Los
     /// contenedores van SIEMPRE arriba (agrupados), sin importar la dirección
     /// — convención de file manager; dentro de cada grupo manda la columna.
     fn apply_sort(&mut self) {
         let key = self.sort_key;
         let dir = self.sort_dir;
-        self.children.sort_by(|a, b| {
-            // Grupo: contenedores primero (no se invierte con la dirección).
-            let grupo = b.is_container.cmp(&a.is_container);
-            if grupo != Ordering::Equal {
-                return grupo;
+        sort_nodes(&mut self.top, key, dir);
+        for (_, kids) in self.expanded.iter_mut() {
+            sort_nodes(kids, key, dir);
+        }
+        self.rebuild_flat();
+    }
+
+    /// Reconstruye `children`/`depths`/`parent_row` desde `top` + `expanded`:
+    /// recorre cada nivel y, si un contenedor está expandido, intercala sus
+    /// hijos debajo con profundidad +1.
+    fn rebuild_flat(&mut self) {
+        fn nivel(
+            out: &mut Vec<Node>,
+            depths: &mut Vec<usize>,
+            parents: &mut Vec<Option<usize>>,
+            expanded: &[(NodeId, Vec<Node>)],
+            nodes: &[Node],
+            depth: usize,
+            parent: Option<usize>,
+        ) {
+            for n in nodes {
+                out.push(n.clone());
+                depths.push(depth);
+                parents.push(parent);
+                let me = out.len() - 1;
+                if n.is_container {
+                    if let Some((_, kids)) = expanded.iter().find(|(id, _)| id == &n.id) {
+                        nivel(out, depths, parents, expanded, kids, depth + 1, Some(me));
+                    }
+                }
             }
-            let base = match key {
-                SortKey::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
-                SortKey::Size => a.size.unwrap_or(0).cmp(&b.size.unwrap_or(0)),
-                SortKey::Mtime => a.mtime.unwrap_or(0).cmp(&b.mtime.unwrap_or(0)),
-                SortKey::Kind => kind_rank(a.kind).cmp(&kind_rank(b.kind)),
-            };
-            let base = match dir {
-                SortDir::Asc => base,
-                SortDir::Desc => base.reverse(),
-            };
-            // Desempate estable por nombre ascendente.
-            base.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-        });
+        }
+        let mut out = Vec::new();
+        let mut depths = Vec::new();
+        let mut parents = Vec::new();
+        nivel(&mut out, &mut depths, &mut parents, &self.expanded, &self.top, 0, None);
+        self.children = out;
+        self.depths = depths;
+        self.parent_row = parents;
+    }
+
+    /// Profundidad de la fila `idx` del lister (0 = hijo directo).
+    pub fn depth_of(&self, idx: usize) -> usize {
+        self.depths.get(idx).copied().unwrap_or(0)
+    }
+
+    /// Índice de la fila padre de `idx` dentro del lister (None = nivel 0).
+    pub fn parent_of(&self, idx: usize) -> Option<usize> {
+        self.parent_row.get(idx).copied().flatten()
+    }
+
+    /// `true` si el contenedor de id `id` está expandido inline.
+    pub fn is_expanded(&self, id: &NodeId) -> bool {
+        self.expanded.iter().any(|(eid, _)| eid == id)
+    }
+
+    /// Expande/colapsa inline el contenedor de la fila `idx`. `Ok(false)` si
+    /// la fila no es un contenedor; error si listar sus hijos falla. Conserva
+    /// la selección por id (si colapsó el subtree que la contenía, cae al
+    /// contenedor colapsado).
+    pub fn toggle_expand(&mut self, idx: usize) -> io::Result<bool> {
+        let Some(node) = self.children.get(idx).cloned() else {
+            return Ok(false);
+        };
+        if !node.is_container {
+            return Ok(false);
+        }
+        if let Some(pos) = self.expanded.iter().position(|(id, _)| id == &node.id) {
+            self.expanded.remove(pos);
+        } else {
+            let mut kids = self.source.children(&node.id)?;
+            sort_nodes(&mut kids, self.sort_key, self.sort_dir);
+            self.expanded.push((node.id.clone(), kids));
+        }
+        let sel_id = self.children.get(self.selected).map(|n| n.id.clone());
+        self.rebuild_flat();
+        let pos = sel_id
+            .and_then(|id| self.children.iter().position(|n| n.id == id))
+            .or_else(|| self.children.iter().position(|n| n.id == node.id));
+        self.selected = pos.unwrap_or(0).min(self.children.len().saturating_sub(1));
+        self.sync_offset();
+        Ok(true)
     }
 
     /// Fija columna y dirección de orden de forma **absoluta** (no toggle como
@@ -728,6 +861,56 @@ mod tests {
         // Limpiar el filtro restaura todo.
         nav.set_filter(String::new());
         assert_eq!(nav.visible_count(), 4);
+    }
+
+    #[test]
+    fn expande_inline_y_desciende_anidado() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("sub/inner")).unwrap();
+        fs::File::create(dir.path().join("sub/hoja.txt")).unwrap();
+        fs::File::create(dir.path().join("sub/inner/leaf.txt")).unwrap();
+        fs::File::create(dir.path().join("raiz.txt")).unwrap();
+        let mut nav = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        // Plano inicial: sub, raiz.txt (contenedores primero).
+        assert_eq!(nav.children().len(), 2);
+
+        // Expandir "sub" inline: inner (dir, primero) y hoja.txt a depth 1.
+        assert!(nav.toggle_expand(0).unwrap());
+        let nombres: Vec<&str> = nav.children().iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(nombres, ["sub", "inner", "hoja.txt", "raiz.txt"]);
+        assert_eq!(nav.depth_of(0), 0);
+        assert_eq!(nav.depth_of(1), 1);
+        assert_eq!(nav.parent_of(1), Some(0));
+        assert!(nav.is_expanded(&nav.children()[0].id.clone()));
+
+        // Expandir "inner" anidado: leaf.txt a depth 2.
+        assert!(nav.toggle_expand(1).unwrap());
+        let nombres: Vec<&str> = nav.children().iter().map(|n| n.name.as_str()).collect();
+        assert_eq!(nombres, ["sub", "inner", "leaf.txt", "hoja.txt", "raiz.txt"]);
+        assert_eq!(nav.depth_of(2), 2);
+
+        // Descender a "inner" (anidado): el breadcrumb trae la cadena entera
+        // (raíz / sub / inner) y el lister muestra sus hijos.
+        nav.select(1);
+        match nav.open_selected().unwrap() {
+            Some(Opened::Descended) => {}
+            _ => panic!("esperaba descender"),
+        }
+        assert_eq!(nav.breadcrumb().split(" / ").count(), 3);
+        assert_eq!(nav.children().len(), 1);
+        assert_eq!(nav.children()[0].name, "leaf.txt");
+
+        // Subir re-selecciona "inner"; la expansión se limpió al moverse.
+        assert!(nav.parent().unwrap());
+        assert_eq!(nav.selected_node().unwrap().name, "inner");
+        assert_eq!(nav.children().len(), 2);
+
+        // Colapsar con la selección adentro cae al contenedor colapsado.
+        let mut nav2 = Navigator::open(Box::new(PosixSource::new(dir.path()))).unwrap();
+        nav2.toggle_expand(0).unwrap();
+        nav2.select(2); // hoja.txt, adentro de sub
+        nav2.toggle_expand(0).unwrap(); // colapsa sub
+        assert_eq!(nav2.selected_node().unwrap().name, "sub");
     }
 
     #[test]

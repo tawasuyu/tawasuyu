@@ -1,11 +1,12 @@
-//! Pantallazo headless del **chrome de nahual** corregido:
+//! Pantallazo headless del **chrome de nahual**:
 //!
+//! - **Toolbar** moderna (`llimphi-widget-toolbar`): subir · modos de vista
+//!   (detalle activo) · dual / nueva carpeta.
 //! - **Un solo sidebar**: el árbol de carpetas (íconos vectoriales reales).
-//! - **Dientes** de sesión (`llimphi-widget-dock-rail`) como **overlay pegado
-//!   al borde interno** del canvas, sobresaliendo del sidebar — el patrón
-//!   canónico de cosmos (`dock_rail_overlay`), NO una columna propia.
-//! - **Canvas = vista de la carpeta**: acá en modo **galería** (tiles
-//!   grandes), a ancho completo.
+//! - **Dientes** de sesión como overlay al borde interno (patrón cosmos).
+//! - **Canvas = vista de la carpeta** en detalle con una carpeta
+//!   **expandida inline** (sangría + ▾); el **visor abre a la derecha**
+//!   como sidebar resizable, sin tapar la carpeta.
 //!
 //! `cargo run -p nahual-shell-llimphi --example pantallazo_dientes -- [out.png]`
 #![allow(dead_code)]
@@ -30,8 +31,11 @@ use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, Mounted, View};
 use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
-use llimphi_widget_grid::{grid_view, GridCell, GridMetrics, GridPalette, GridSpec};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_toolbar::{toolbar_view, ToolbarGroup, ToolbarItem, ToolbarPalette};
+use llimphi_widget_detail_table::{
+    detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
+};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
 use app_bus::{AppMenu, Menu, MenuItem};
@@ -70,6 +74,9 @@ fn main() {
         on_command: Arc::new(|_: &str| Msg::Nada),
     });
 
+    // Toolbar (espejo de `shell_toolbar`): vista detalle activa.
+    let barra = toolbar(&theme);
+
     // Sidebar ÚNICO: árbol de carpetas (espejo de `sidebar_view`).
     let sidebar = sidebar(&theme);
 
@@ -84,13 +91,23 @@ fn main() {
     .fill(theme.bg_panel)
     .text("/ home / sergio / fotos", 13.0, theme.fg_text);
 
-    let galeria = gallery(&theme);
-    let canvas_core = View::new(Style {
+    let tabla = detalle(&theme);
+    let folder = View::new(Style {
         flex_direction: FlexDirection::Column,
+        flex_grow: 1.0,
+        min_size: Size { width: length(0.0), height: length(0.0) },
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![crumb, tabla]);
+    // Visor derecho (sidebar resizable en la app; acá fijo).
+    let preview = preview_pane(&theme);
+    let canvas_core = View::new(Style {
+        flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![crumb, galeria]);
+    .children(vec![folder, preview]);
 
     let canvas_padded = View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
@@ -137,7 +154,7 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![menubar, body]);
+    .children(vec![menubar, barra, body]);
 
     let mut ts = Typesetter::new();
     let mut scene = vello::Scene::new();
@@ -218,71 +235,116 @@ fn teeth_overlay(theme: &Theme, n: usize, active: usize) -> View<Msg> {
     .children(vec![rail, plus])
 }
 
-/// Vista galería de la carpeta: tiles grandes; acá los "thumbs" son fills de
-/// color (headless, sin decodificar imágenes reales) + un par de carpetas.
-fn gallery(theme: &Theme) -> View<Msg> {
-    let metrics = GridMetrics { tile_w: 220.0, tile_h: 248.0, gap: 14.0, pad: 14.0 };
-    let lado = metrics.tile_w - 12.0;
-    let tile = |c: Color| {
-        View::new(Style {
-            size: Size { width: length(lado), height: length(lado) },
-            ..Default::default()
-        })
-        .fill(c)
+/// Espejo de `shell_toolbar`: navegación + vistas (detalle activa) + acciones.
+fn toolbar(theme: &Theme) -> View<Msg> {
+    let vista = |ic: Icon, activo: bool| {
+        ToolbarItem::new(move |_s, c| icon_view(ic, c, 1.7), Msg::Nada).active(activo)
     };
-    let folder_tile = || {
-        View::new(Style {
-            size: Size { width: length(lado), height: length(lado) },
-            align_items: Some(AlignItems::Center),
-            justify_content: Some(JustifyContent::Center),
-            ..Default::default()
-        })
-        .fill(theme.bg_panel_alt)
-        .children(vec![View::new(Style {
-            size: Size { width: length(lado * 0.5), height: length(lado * 0.5) },
-            ..Default::default()
-        })
-        .children(vec![icon_view(Icon::Folder, theme.fg_text, 1.6)])])
-    };
-    let colores = [
-        Color::from_rgba8(0x6b, 0x8e, 0x6e, 255),
-        Color::from_rgba8(0xc0, 0x8a, 0x52, 255),
-        Color::from_rgba8(0x4f, 0x6d, 0x8f, 255),
-        Color::from_rgba8(0x8f, 0x4f, 0x5e, 255),
-        Color::from_rgba8(0x77, 0x66, 0x99, 255),
-        Color::from_rgba8(0x4a, 0x8a, 0x85, 255),
+    toolbar_view(
+        vec![
+            ToolbarGroup::new(vec![ToolbarItem::new(
+                |_s, c| icon_view(Icon::ChevronUp, c, 1.7),
+                Msg::Nada,
+            )
+            .with_label("subir")]),
+            ToolbarGroup::new(vec![
+                vista(Icon::Rows, false),
+                vista(Icon::Table, true),
+                vista(Icon::Grid, false),
+                vista(Icon::Image, false),
+            ]),
+            ToolbarGroup::new(vec![
+                ToolbarItem::new(|_s, c| icon_view(Icon::Columns, c, 1.7), Msg::Nada),
+                ToolbarItem::new(|_s, c| icon_view(Icon::Plus, c, 1.7), Msg::Nada)
+                    .with_label("carpeta"),
+            ]),
+        ],
+        34.0,
+        &ToolbarPalette::from_theme(theme),
+    )
+}
+
+/// Vista detalle con la carpeta "viajes" **expandida inline** (sangría + ▾)
+/// y "atardecer.jpg" seleccionada (su preview está abierto a la derecha).
+fn detalle(theme: &Theme) -> View<Msg> {
+    let filas = [
+        ("  ▸ ▣ 2026", "", "2026-06-01 10:12", "carpeta", false),
+        ("  ▾ ▣ viajes", "", "2026-06-03 18:40", "carpeta", false),
+        ("     ▸ ▣ cusco", "", "2026-05-29 09:01", "carpeta", false),
+        ("       ▫ machu.jpg", "3.1 MB", "2026-05-29 09:15", "imagen", false),
+        ("  ▫ atardecer.jpg", "2.4 MB", "2026-06-10 19:22", "imagen", true),
+        ("  ▫ cumbre.png", "1.9 MB", "2026-06-09 08:02", "imagen", false),
+        ("  ▫ lago.jpg", "2.2 MB", "2026-06-08 16:45", "imagen", false),
     ];
-    let nombres = ["atardecer.jpg", "cumbre.png", "lago.jpg", "feria.jpg", "retrato.png", "rio.webp"];
-    let mut cells: Vec<GridCell<Msg>> = vec![
-        GridCell {
-            content: folder_tile(),
-            label: Some("2026".to_string()),
-            selected: false,
+    let rows: Vec<DetailRow<Msg>> = filas
+        .iter()
+        .map(|(n, t, m, k, sel)| DetailRow {
+            cells: vec![n.to_string(), t.to_string(), m.to_string(), k.to_string()],
+            selected: *sel,
+            accent: None,
             on_click: Msg::Nada,
-        },
-        GridCell {
-            content: folder_tile(),
-            label: Some("viajes".to_string()),
-            selected: false,
-            on_click: Msg::Nada,
-        },
+        })
+        .collect();
+    let columns = [
+        Column::flex("Nombre", 1.0),
+        Column::fixed("Tamaño", 88.0).right(),
+        Column::fixed("Modificado", 140.0),
+        Column::fixed("Tipo", 84.0),
     ];
-    for (i, (c, n)) in colores.iter().zip(nombres.iter()).enumerate() {
-        cells.push(GridCell {
-            content: tile(*c),
-            label: Some(n.to_string()),
-            selected: i == 0,
-            on_click: Msg::Nada,
-        });
-    }
-    grid_view(GridSpec {
-        cells,
-        cols: 3,
-        metrics,
-        caption: Some("8 entradas · galería · ↑↓ navega · Enter abre · v cambia vista".to_string()),
-        truncated_hint: None,
-        palette: GridPalette::from_theme(theme),
+    detail_table_view(
+        DetailSpec {
+            columns: &columns,
+            rows,
+            sort: Some((0, DtDir::Asc)),
+            row_height: 22.0,
+            caption: Some(
+                "7 filas · detalle · click expande carpeta · doble click abre · →/← expande/colapsa"
+                    .to_string(),
+            ),
+            palette: DetailPalette::from_theme(theme),
+        },
+        |_c| Msg::Nada,
+    )
+}
+
+/// Visor derecho (espejo del sidebar de preview): header + "imagen".
+fn preview_pane(theme: &Theme) -> View<Msg> {
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
     })
+    .fill(theme.bg_panel)
+    .text("atardecer.jpg · 2.4 MB", 12.5, theme.fg_text);
+    let cuerpo = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: llimphi_ui::llimphi_layout::taffy::Rect {
+            left: length(18.0_f32),
+            right: length(18.0_f32),
+            top: length(18.0_f32),
+            bottom: length(18.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(0.72_f32) },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0x6b, 0x8e, 0x6e, 255))
+    .radius(4.0)]);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(320.0_f32), height: percent(1.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![header, cuerpo])
 }
 
 /// Espejo de `sidebar_view`: árbol único con íconos vectoriales reales.

@@ -796,6 +796,20 @@ del centro (los dientes sobresalen sobre la rueda/canvas), y el panel del
 item activo va al costado como un pane en el área resizable. NO es una lista
 con rótulo: leer cosmos antes de inventar UX (lección 2026-06-05).
 
+**toolbar** — barra de herramientas moderna: **grupos** de botones-ícono
+planos (hover redondeado; activo = fondo de selección + ícono en acento;
+deshabilitado atenuado y sin click) con separadores sutiles entre grupos.
+Los íconos los dibuja el caller vía closure (mismo contrato que dock-rail);
+los grupos son **datos** (`Vec<ToolbarGroup>`) → la barra es componible y
+configurable por construcción. Uso canónico:
+`nahual-shell-llimphi::shell_toolbar` (navegación + modos de vista + acciones).
+```rust
+ToolbarItem::new(icon: Fn(size_px, color) -> View<Msg>, on_click: Msg)
+    .with_label("subir").active(bool).enabled(bool)
+ToolbarGroup::new(vec![items...])
+toolbar_view(groups: Vec<ToolbarGroup<Msg>>, height: f32, &ToolbarPalette) -> View<Msg>
+```
+
 **grid** — grilla 2D virtualizada. `ventana_visible(total, vp_w, vp_h, scroll_fila,
 &metrics) -> VisibleWindow` para virtualizar, luego `grid_view(GridSpec { cells:
 Vec<GridCell { content, label, selected, on_click }>, cols, metrics, caption, ... })`.
@@ -1278,7 +1292,7 @@ navigator · nodegraph · panel · panes · progress · segmented · select ·
 shortcuts-help · skeleton · slider · splash · splitter · stat-card · status-bar ·
 switch · table · tabs · terminal · text-area · text-editor · text-editor-core ·
 text-editor-lsp · text-input · theme-switcher · tiled · timeline · toast ·
-tooltip · transport · tree · waveform · wawa-mark.
+toolbar · tooltip · transport · tree · waveform · wawa-mark.
 
 **Módulos** (`modules/`): bookmarks · command-palette · diff-viewer · fif ·
 file-picker · mini-map · plugin-host · selector · shuma-term · symbol-outline.

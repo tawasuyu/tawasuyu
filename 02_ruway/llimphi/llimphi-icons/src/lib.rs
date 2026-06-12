@@ -115,6 +115,15 @@ pub enum Icon {
     FileText,
     Link,
     Font,
+    // --- Vistas / layout (toolbars de file manager) ---
+    /// Grilla 2×2 (vista iconos / galería).
+    Grid,
+    /// Tres filas horizontales (vista lista).
+    Rows,
+    /// Tabla: marco + fila de encabezado + columnas (vista detalle).
+    Table,
+    /// Dos paneles verticales lado a lado (modo dual).
+    Columns,
 }
 
 impl Icon {
@@ -169,6 +178,10 @@ impl Icon {
             Icon::FileText => "file_text",
             Icon::Link => "link",
             Icon::Font => "font",
+            Icon::Grid => "grid",
+            Icon::Rows => "rows",
+            Icon::Table => "table",
+            Icon::Columns => "columns",
         }
     }
 
@@ -223,6 +236,10 @@ impl Icon {
             Icon::FileText => path_file_text(),
             Icon::Link => path_link(),
             Icon::Font => path_font(),
+            Icon::Grid => path_grid(),
+            Icon::Rows => path_rows(),
+            Icon::Table => path_table(),
+            Icon::Columns => path_columns(),
         }
     }
 }
@@ -949,6 +966,62 @@ fn path_font() -> BezPath {
     p.line_to((7.5, 20.0));
     p.move_to((16.5, 20.0));
     p.line_to((19.5, 20.0));
+    p
+}
+
+fn path_grid() -> BezPath {
+    let mut p = BezPath::new();
+    // Cuatro celdas 2x2.
+    for (x, y) in [(4.0, 4.0), (13.0, 4.0), (4.0, 13.0), (13.0, 13.0)] {
+        p.move_to((x, y));
+        p.line_to((x + 7.0, y));
+        p.line_to((x + 7.0, y + 7.0));
+        p.line_to((x, y + 7.0));
+        p.close_path();
+    }
+    p
+}
+
+fn path_rows() -> BezPath {
+    let mut p = BezPath::new();
+    // Tres filas (vista lista).
+    for y in [6.0, 12.0, 18.0] {
+        p.move_to((4.0, y));
+        p.line_to((20.0, y));
+    }
+    p
+}
+
+fn path_table() -> BezPath {
+    let mut p = BezPath::new();
+    // Marco.
+    p.move_to((4.0, 5.0));
+    p.line_to((20.0, 5.0));
+    p.line_to((20.0, 19.0));
+    p.line_to((4.0, 19.0));
+    p.close_path();
+    // Fila de encabezado.
+    p.move_to((4.0, 9.5));
+    p.line_to((20.0, 9.5));
+    // Separador de columnas (debajo del encabezado).
+    p.move_to((11.0, 9.5));
+    p.line_to((11.0, 19.0));
+    p
+}
+
+fn path_columns() -> BezPath {
+    let mut p = BezPath::new();
+    // Dos paneles verticales lado a lado (modo dual).
+    p.move_to((4.0, 4.0));
+    p.line_to((11.0, 4.0));
+    p.line_to((11.0, 20.0));
+    p.line_to((4.0, 20.0));
+    p.close_path();
+    p.move_to((13.0, 4.0));
+    p.line_to((20.0, 4.0));
+    p.line_to((20.0, 20.0));
+    p.line_to((13.0, 20.0));
+    p.close_path();
     p
 }
 

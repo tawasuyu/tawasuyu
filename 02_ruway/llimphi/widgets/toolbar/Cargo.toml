@@ -1,0 +1,15 @@
+[package]
+name = "llimphi-widget-toolbar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "llimphi-widget-toolbar — barra de herramientas moderna: grupos de botones-ícono planos con hover redondeado, estado activo con acento y separadores sutiles. Los grupos son datos (Vec<ToolbarGroup>) → componibles/configurables por el caller; los íconos los dibuja el caller (closure), igual que dock-rail."
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+
+[dev-dependencies]
+llimphi-icons = { workspace = true }

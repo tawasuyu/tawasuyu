@@ -76,6 +76,7 @@ use llimphi_widget_menubar::{
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_toolbar::{toolbar_view, ToolbarGroup, ToolbarItem, ToolbarPalette};
 use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
@@ -350,9 +351,14 @@ struct Model {
     tree_children: HashMap<PathBuf, Vec<PathBuf>>,
     /// Ancho del sidebar (árbol de carpetas) en px. Lo muta su splitter.
     tree_w: f32,
-    /// `true` = el canvas muestra el visor del archivo abierto (Enter);
-    /// Esc/Backspace vuelve a la vista de carpeta. Por sesión (va al snap).
+    /// Ancho del sidebar derecho del visor (preview), px. Lo muta su splitter.
+    preview_w: f32,
+    /// `true` = el sidebar derecho muestra el visor del archivo abierto
+    /// (Enter / doble click); Esc/⌫ lo cierra. Por sesión (va al snap).
     viewer_open: bool,
+    /// Último click en una fila (pane, idx, instante) — para detectar el
+    /// doble click que abre carpeta/archivo. Transitorio, no va al snap.
+    last_click: Option<(usize, usize, Instant)>,
     /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
     /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
     panes: [Pane; 2],
@@ -601,6 +607,14 @@ enum Msg {
     TreeScroll(f32),
     /// Drag del splitter del sidebar: ajusta el ancho del árbol.
     ResizeTree(f32),
+    /// Drag del splitter del visor derecho: ajusta su ancho.
+    ResizePreview(f32),
+    /// Fija el modo de vista del panel activo (toolbar; `v` sigue ciclando).
+    SetViewMode(nahual_source_core::ViewMode),
+    /// Expande inline la carpeta seleccionada (→ en lista/detalle).
+    ExpandSelected,
+    /// Colapsa la carpeta seleccionada; si ya está colapsada, salta al padre.
+    CollapseSelected,
 
     // ---- Fase 4.8: vista iconos con miniaturas ----
     /// Una miniatura terminó de generarse (llega del worker).
@@ -815,7 +829,9 @@ impl App for Shell {
             tree_scroll: 0,
             tree_children,
             tree_w: 230.0,
+            preview_w: 420.0,
             viewer_open: false,
+            last_click: None,
             // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
             panes: [
                 Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
@@ -933,6 +949,10 @@ impl App for Shell {
             // Esc con el visor abierto vuelve a la vista de carpeta (el
             // handler de Parent cierra el visor antes de subir de dir).
             Key::Named(NamedKey::Escape) if _model.viewer_open => Some(Msg::Parent),
+            // → expande inline la carpeta seleccionada; ← colapsa (o salta
+            // al padre si ya está colapsada) — lista/detalle.
+            Key::Named(NamedKey::ArrowRight) => Some(Msg::ExpandSelected),
+            Key::Named(NamedKey::ArrowLeft) => Some(Msg::CollapseSelected),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
             // `v` alterna lista/detalle, `/` filtra (salvo que un mapa quiera
             // `/` para su propia búsqueda, que tiene su arm más abajo).
@@ -1013,8 +1033,27 @@ impl App for Shell {
             }
             Msg::SelectIn(pane, idx) => {
                 m.focus = pane;
+                // Doble click (mismo pane+fila, < 400 ms) = abrir: carpeta →
+                // desciende al canvas + revela en el árbol; archivo → visor.
+                let ahora = Instant::now();
+                let doble = m.last_click.take().is_some_and(|(p, i, t)| {
+                    p == pane && i == idx && ahora.duration_since(t) < Duration::from_millis(400)
+                });
                 if m.cur_mut().select(idx) {
-                    refresh_preview(&mut m);
+                    if doble {
+                        do_open_selected(&mut m, handle);
+                    } else {
+                        m.last_click = Some((pane, idx, ahora));
+                        // Click simple en una carpeta (lista/detalle) la
+                        // expande/colapsa inline; el doble click la abre.
+                        let es_dir =
+                            m.cur().selected_node().is_some_and(|n| n.is_container);
+                        if es_dir && !m.cur().view.is_grid() {
+                            let i = m.cur().selected;
+                            let _ = m.cur_mut().toggle_expand(i);
+                        }
+                        refresh_preview(&mut m);
+                    }
                 }
             }
             Msg::ToggleDual => {
@@ -1030,63 +1069,7 @@ impl App for Shell {
                 }
             }
             Msg::OpenSelected => {
-                // Abrir la selección por el navegador activo (POSIX o fuente
-                // montada): contenedor → descender; hoja → montar/previsualizar.
-                match m.cur_mut().open_selected() {
-                    Ok(Some(Opened::Descended)) => {
-                        m.cur_pane_mut().marked.clear();
-                        m.viewer_open = false;
-                        clear_preview(&mut m);
-                        apply_format(&mut m);
-                        record_recent(&mut m);
-                        // La nueva carpeta puede heredar vista iconos (folder
-                        // format): pedí sus miniaturas.
-                        if m.cur().view.is_grid() {
-                            request_thumbs(&mut m, &handle);
-                        }
-                    }
-                    Ok(Some(Opened::Leaf(id))) => {
-                        let nombre =
-                            m.cur().selected_node().map(|n| n.name.clone()).unwrap_or_default();
-                        let id_path = Path::new(&id);
-                        // Hoja POSIX (su id ES una ruta de archivo real):
-                        if id_path.is_file() {
-                            // Content-based: un `.img` wawa se MONTA (empuja su
-                            // DAG); cualquier otra cosa cae al open-with.
-                            match try_mount(id_path) {
-                                Some(nav) => {
-                                    m.cur_pane_mut().nav_stack.push(nav);
-                                    clear_preview(&mut m);
-                                }
-                                None => {
-                                    let path = id_path.to_path_buf();
-                                    m.preview = load_for(&path);
-                                    m.basemap = open_basemap_if_pmtiles(&path);
-                                    m.basemap_dirty = m.basemap.is_some();
-                                    if matches!(m.preview, PreviewPane::Web(_)) {
-                                        launch_puriy(&path);
-                                    }
-                                    m.preview_of = Some(path);
-                                    m.preview_temp = None;
-                                    m.map_view.reset();
-                                    m.map_view.color_field = None;
-                                    // El visor toma el canvas; Esc/⌫ vuelve.
-                                    m.viewer_open = true;
-                                }
-                            }
-                        } else {
-                            // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge.
-                            match m.cur().read(&id) {
-                                Ok(bytes) => {
-                                    preview_from_bytes(&mut m, bytes, &nombre);
-                                    m.viewer_open = true;
-                                }
-                                Err(_) => clear_preview(&mut m),
-                            }
-                        }
-                    }
-                    Ok(None) | Err(_) => {}
-                }
+                do_open_selected(&mut m, handle);
             }
             Msg::Parent => {
                 // Con el visor abierto, el primer ⌫/Esc sólo vuelve a la
@@ -1166,14 +1149,58 @@ impl App for Shell {
             Msg::ResizeTree(dx) => {
                 m.tree_w = (m.tree_w + dx).clamp(170.0, 420.0);
             }
-            Msg::Scroll(steps) => {
-                // El navegador activo tiene su propio acumulador para touchpads
-                // — le pasamos el delta crudo (en líneas).
-                m.cur_mut().apply_wheel(steps as f32);
-                // En vista iconos, lo que entró en pantalla al scrollear pide
-                // su miniatura.
-                if m.cur().view.is_grid() {
+            Msg::ResizePreview(dx) => {
+                // El divisor está a la izquierda del visor: moverlo a la
+                // derecha achica el panel.
+                m.preview_w = (m.preview_w - dx).clamp(280.0, 860.0);
+            }
+            Msg::SetViewMode(v) => {
+                m.cur_mut().view = v;
+                if v.is_grid() {
                     request_thumbs(&mut m, &handle);
+                }
+                save_format(&mut m);
+            }
+            Msg::ExpandSelected => {
+                let i = m.cur().selected;
+                let ya = m
+                    .cur()
+                    .selected_node()
+                    .is_some_and(|n| m.cur().is_expanded(&n.id));
+                if !ya {
+                    let _ = m.cur_mut().toggle_expand(i);
+                }
+            }
+            Msg::CollapseSelected => {
+                let i = m.cur().selected;
+                let expandida = m
+                    .cur()
+                    .selected_node()
+                    .is_some_and(|n| n.is_container && m.cur().is_expanded(&n.id));
+                if expandida {
+                    let _ = m.cur_mut().toggle_expand(i);
+                } else if let Some(p) = m.cur().parent_of(i) {
+                    // Colapsada (o archivo): saltá a la fila padre.
+                    m.cur_mut().select(p);
+                    refresh_preview(&mut m);
+                }
+            }
+            Msg::Scroll(steps) => {
+                if m.cur().view.is_grid() {
+                    // En grilla la unidad de scroll es la FILA entera (cols
+                    // items), no el item — si no, las celdas se van "halando"
+                    // de a una y bailan de columna. El offset queda alineado
+                    // a múltiplo de cols.
+                    let cols = grid_cols(&m).max(1);
+                    let nav = m.cur_mut();
+                    nav.apply_wheel(steps as f32 * cols as f32);
+                    nav.visible_offset -= nav.visible_offset % cols;
+                    // Lo que entró en pantalla al scrollear pide su miniatura.
+                    request_thumbs(&mut m, &handle);
+                } else {
+                    // El navegador activo tiene su propio acumulador para
+                    // touchpads — le pasamos el delta crudo (en líneas).
+                    m.cur_mut().apply_wheel(steps as f32);
                 }
             }
             Msg::MapPan(dx, dy) => {
@@ -1637,11 +1664,11 @@ impl App for Shell {
                 }
             }
             Msg::TreeScroll(dy) => {
-                // Rueda hacia abajo (dy<0) baja; ~3 filas por muesca.
+                // Rueda hacia abajo baja el árbol; ~3 filas por muesca.
                 let total = count_tree_rows(&m);
                 let max = total.saturating_sub(tree_visible_rows(&m));
                 let delta = (dy * 3.0).round() as i32;
-                let nuevo = (m.tree_scroll as i32 - delta).clamp(0, max as i32);
+                let nuevo = (m.tree_scroll as i32 + delta).clamp(0, max as i32);
                 m.tree_scroll = nuevo as usize;
             }
             Msg::ThumbReady(path, thumb) => {
@@ -1745,11 +1772,10 @@ impl App for Shell {
         };
 
         // El CANVAS es la vista de la carpeta (lista/detalle/iconos/galería a
-        // ancho completo). El visor sólo lo toma cuando se abrió un archivo
-        // (Enter); Esc/⌫ vuelve. En dual, dos columnas de archivos.
-        let canvas_core = if model.viewer_open {
-            viewer_pane
-        } else if model.dual {
+        // ancho completo); en dual, dos columnas de archivos. El visor del
+        // archivo abierto vive en un **sidebar derecho** resizable (Esc/⌫ lo
+        // cierra) — nunca tapa la vista de carpeta.
+        let folder_view = if model.dual {
             splitter_two(
                 Direction::Row,
                 pane_column(model, 0, model.focus == 0, &theme),
@@ -1764,6 +1790,22 @@ impl App for Shell {
             )
         } else {
             pane_column(model, model.focus, true, &theme)
+        };
+        let canvas_core = if model.viewer_open {
+            splitter_two(
+                Direction::Row,
+                folder_view,
+                PaneSize::Flex,
+                viewer_pane,
+                PaneSize::Fixed(model.preview_w),
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::ResizePreview(dx)),
+                    DragPhase::End => None,
+                },
+                &splitter_palette,
+            )
+        } else {
+            folder_view
         };
         // Canal interno: el contenido arranca después del ancho del rail para
         // que los dientes (overlay) no tapen las primeras columnas.
@@ -1810,7 +1852,7 @@ impl App for Shell {
         })
         .children(vec![body]);
 
-        let mut col: Vec<View<Msg>> = vec![menubar, body_wrap];
+        let mut col: Vec<View<Msg>> = vec![menubar, shell_toolbar(model, &theme), body_wrap];
         if let Some(panel) = queue_panel(model, &theme) {
             col.push(panel);
         }
@@ -3123,24 +3165,88 @@ fn nav_pane_view(
 /// Las imágenes muestran su thumbnail (cache `model.thumbs`, llenado async);
 /// el resto, un glifo por `NodeKind`. Reusa `llimphi-widget-grid` (la misma
 /// grilla virtualizada de `nahual-gallery`).
-fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> {
-    let nav = model.panes[pane].nav();
-    let marked = &model.panes[pane].marked;
-    // Galería = mismas miniaturas pero tiles grandes (carpetas de imágenes);
-    // iconos = la grilla compacta por defecto.
-    let gallery = matches!(nav.view, nahual_source_core::ViewMode::Gallery);
-    let metrics = if gallery {
+/// Métricas de la grilla según el modo: galería = tiles grandes (carpetas de
+/// imágenes); iconos = la grilla compacta por defecto.
+fn grid_metrics_for(view: nahual_source_core::ViewMode) -> GridMetrics {
+    if matches!(view, nahual_source_core::ViewMode::Gallery) {
         GridMetrics { tile_w: 220.0, tile_h: 248.0, gap: 14.0, pad: 14.0 }
     } else {
         GridMetrics::default()
+    }
+}
+
+/// Ancho útil del panel de la grilla: la ventana menos el sidebar (árbol),
+/// el canal de los dientes y, si está abierto, el visor derecho; en dual,
+/// la mitad de eso.
+fn grid_pane_w(model: &Model) -> f32 {
+    let (vw, _) = viewport_of(model);
+    let mut canvas_w = (vw - model.tree_w - SESSION_RAIL_W - 8.0).max(240.0);
+    if model.viewer_open {
+        canvas_w = (canvas_w - model.preview_w).max(240.0);
+    }
+    if model.dual {
+        canvas_w / 2.0
+    } else {
+        canvas_w
+    }
+}
+
+/// Columnas actuales de la grilla del panel activo (para que el wheel
+/// scrollee por filas enteras).
+fn grid_cols(model: &Model) -> usize {
+    let nav = model.cur();
+    let metrics = grid_metrics_for(nav.view);
+    let (_, vh) = viewport_of(model);
+    let win = ventana_visible(nav.visible_count(), grid_pane_w(model), vh - 120.0, 0, &metrics);
+    win.cols.max(1)
+}
+
+/// Toolbar del shell: navegación + modos de vista + acciones, sobre el
+/// widget `llimphi-widget-toolbar` (los grupos son datos → componibles).
+fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
+    use nahual_source_core::ViewMode as VM;
+    let v = model.cur().view;
+    let vista = |ic: Icon, modo: VM, activo: bool| {
+        ToolbarItem::new(move |_s, c| icon_view(ic, c, 1.7), Msg::SetViewMode(modo)).active(activo)
     };
+    toolbar_view(
+        vec![
+            // Navegación.
+            ToolbarGroup::new(vec![ToolbarItem::new(
+                |_s, c| icon_view(Icon::ChevronUp, c, 1.7),
+                Msg::Parent,
+            )
+            .with_label("subir")]),
+            // Modos de vista (v cicla; acá acceso directo).
+            ToolbarGroup::new(vec![
+                vista(Icon::Rows, VM::List, matches!(v, VM::List)),
+                vista(Icon::Table, VM::Details, matches!(v, VM::Details)),
+                vista(Icon::Grid, VM::Icons, matches!(v, VM::Icons)),
+                vista(Icon::Image, VM::Gallery, matches!(v, VM::Gallery)),
+            ]),
+            // Acciones.
+            ToolbarGroup::new(vec![
+                ToolbarItem::new(|_s, c| icon_view(Icon::Columns, c, 1.7), Msg::ToggleDual)
+                    .active(model.dual),
+                ToolbarItem::new(|_s, c| icon_view(Icon::Plus, c, 1.7), Msg::NewDirPrompt)
+                    .with_label("carpeta")
+                    .enabled(model.can_edit()),
+            ]),
+        ],
+        34.0,
+        &ToolbarPalette::from_theme(theme),
+    )
+}
+
+fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> {
+    let nav = model.panes[pane].nav();
+    let marked = &model.panes[pane].marked;
+    let gallery = matches!(nav.view, nahual_source_core::ViewMode::Gallery);
+    let metrics = grid_metrics_for(nav.view);
     let modo = if gallery { "galería" } else { "iconos" };
 
-    // Ancho estimado para derivar columnas: el canvas es la ventana menos el
-    // sidebar (árbol) y el canal de los dientes; en dual, la mitad de eso.
-    let (vw, vh) = viewport_of(model);
-    let canvas_w = (vw - model.tree_w - SESSION_RAIL_W - 8.0).max(240.0);
-    let pane_w = if model.dual { canvas_w / 2.0 } else { canvas_w };
+    let (_, vh) = viewport_of(model);
+    let pane_w = grid_pane_w(model);
     let total = nav.visible_count();
     let win = ventana_visible(total, pane_w, vh - 120.0, 0, &metrics);
 
@@ -3261,11 +3367,19 @@ fn navigator_list_view(
             // Punto cuando el nodo tiene label (el color real se ve en detalle;
             // en lista es monocromo — la lista no pinta color por fila).
             let dot = if state.label_of(&n.id).is_some() { "●" } else { " " };
-            let icon = if n.is_container { "▸ " } else { "  " };
-            let label = if n.is_container {
-                format!("{mark}{dot}{icon}{}/", n.name)
+            // Indentación por profundidad (expansión inline) + chevron de
+            // estado: ▾ expandida, ▸ colapsada. Click la alterna; doble
+            // click la abre en el canvas.
+            let sangria = "   ".repeat(nav.depth_of(*idx));
+            let icon = if n.is_container {
+                if nav.is_expanded(&n.id) { "▾ " } else { "▸ " }
             } else {
-                format!("{mark}{dot}{icon}{}", n.name)
+                "  "
+            };
+            let label = if n.is_container {
+                format!("{mark}{dot}{sangria}{icon}{}/", n.name)
+            } else {
+                format!("{mark}{dot}{sangria}{icon}{}", n.name)
             };
             ListRow {
                 label,
@@ -3329,9 +3443,17 @@ fn navigator_detail_view(
             let label = state.label_of(&n.id);
             // El nombre lleva un punto del color del label, si tiene.
             let dot = if label.is_some() { "● " } else { "" };
+            // Indentación por profundidad + chevron de expansión inline
+            // (▾ expandida / ▸ colapsada). Click alterna; doble click abre.
+            let sangria = "   ".repeat(nav.depth_of(*idx));
+            let chev = if n.is_container {
+                if nav.is_expanded(&n.id) { "▾ " } else { "▸ " }
+            } else {
+                "  "
+            };
             DetailRow {
                 cells: vec![
-                    format!("{mark}{icon} {dot}{}", n.name),
+                    format!("{mark}{sangria}{chev}{icon} {dot}{}", n.name),
                     n.size.map(human_size).unwrap_or_default(),
                     n.mtime.map(epoch_ms_to_date).unwrap_or_default(),
                     kind_label(n.kind, &n.name).to_string(),
@@ -3454,10 +3576,81 @@ fn next_in_cycle(fields: &[String], current: &Option<String>) -> Option<String> 
 /// fuente montada). Contenedor (o nada) → limpia. Hoja POSIX (id = ruta real)
 /// → carga directa con `load_for`. Hoja no-POSIX → vuelca a tempfile y
 /// previsualiza. Unifica los dos caminos viejos (POSIX y `*_nav`).
+/// Abre la selección (Enter o doble click): contenedor → desciende al canvas
+/// y **revela la carpeta en el árbol lateral**; hoja → monta (`.img` wawa) o
+/// abre el visor en el sidebar derecho.
+fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
+    match m.cur_mut().open_selected() {
+        Ok(Some(Opened::Descended)) => {
+            m.cur_pane_mut().marked.clear();
+            m.viewer_open = false;
+            clear_preview(m);
+            apply_format(m);
+            record_recent(m);
+            // Revela la carpeta nueva en el árbol lateral (descolapsa la
+            // cadena de ancestros) y sincroniza el nombre de la sesión.
+            let cwd = cur_dir(m);
+            if cwd.is_dir() {
+                for anc in ancestors_set(&cwd) {
+                    m.tree_expanded.insert(anc);
+                }
+                ensure_children_for_expanded(&mut m.tree_children, &m.tree_expanded);
+            }
+            let activa = m.active;
+            m.sessions[activa].name = session_name(&cwd);
+            // La nueva carpeta puede heredar vista iconos (folder format):
+            // pedí sus miniaturas.
+            if m.cur().view.is_grid() {
+                request_thumbs(m, handle);
+            }
+        }
+        Ok(Some(Opened::Leaf(id))) => {
+            let nombre = m.cur().selected_node().map(|n| n.name.clone()).unwrap_or_default();
+            let id_path = Path::new(&id);
+            // Hoja POSIX (su id ES una ruta de archivo real):
+            if id_path.is_file() {
+                // Content-based: un `.img` wawa se MONTA (empuja su DAG);
+                // cualquier otra cosa cae al open-with.
+                match try_mount(id_path) {
+                    Some(nav) => {
+                        m.cur_pane_mut().nav_stack.push(nav);
+                        clear_preview(m);
+                    }
+                    None => {
+                        let path = id_path.to_path_buf();
+                        m.preview = load_for(&path);
+                        m.basemap = open_basemap_if_pmtiles(&path);
+                        m.basemap_dirty = m.basemap.is_some();
+                        if matches!(m.preview, PreviewPane::Web(_)) {
+                            launch_puriy(&path);
+                        }
+                        m.preview_of = Some(path);
+                        m.preview_temp = None;
+                        m.map_view.reset();
+                        m.map_view.color_field = None;
+                        // El visor abre en el sidebar derecho; Esc/⌫ cierra.
+                        m.viewer_open = true;
+                    }
+                }
+            } else {
+                // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge.
+                match m.cur().read(&id) {
+                    Ok(bytes) => {
+                        preview_from_bytes(m, bytes, &nombre);
+                        m.viewer_open = true;
+                    }
+                    Err(_) => clear_preview(m),
+                }
+            }
+        }
+        Ok(None) | Err(_) => {}
+    }
+}
+
 fn refresh_preview(m: &mut Model) {
-    // Con el canvas en vista de carpeta (visor cerrado) no hay nada que
-    // refrescar — y cargar/decodificar en cada flecha sería I/O tirado. El
-    // visor carga fresco al abrirse (OpenSelected).
+    // Con el visor cerrado no hay nada que refrescar — y cargar/decodificar
+    // en cada flecha sería I/O tirado. El visor carga fresco al abrirse
+    // (OpenSelected / doble click).
     if !m.viewer_open {
         return;
     }
