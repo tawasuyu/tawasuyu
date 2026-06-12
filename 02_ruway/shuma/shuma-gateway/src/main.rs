@@ -1,168 +1,346 @@
-//! `shuma-gateway` — HTTP/JSON adapter para el daemon.
+//! `shuma-gateway` — adaptador HTTP/JSON + WebSocket para el daemon shuma.
 //!
-//! Acepta `POST /rpc` con body JSON serializado como `shuma_protocol::Request`,
-//! hace round-trip al admin socket via postcard, devuelve `Response` como JSON.
+//! Endpoints:
+//! - `POST /rpc`    : body JSON = `shuma_protocol::Request` → round-trip postcard
+//!   contra el admin socket → `Response` como JSON. Una request por conexión
+//!   (request/response 1:1). Sirve para WorkspaceList, Health, Stats, Run, etc.
+//! - `GET /ws/pty`  : WebSocket full-duplex puenteado al subprotocolo `ExecPty`
+//!   del daemon. El primer mensaje (texto JSON) es el spec de apertura; luego
+//!   los frames binarios del cliente son stdin (teclas) y los binarios del
+//!   servidor son la salida cruda del terminal. Control de tamaño por texto
+//!   `{"t":"resize","rows":R,"cols":C}`. Cerrar el WS mata el PTY remoto.
+//! - `GET /` y `GET /health` : healthcheck.
 //!
-//! Diseñado para clients no-Rust (curl, Python, web app) que no pueden
-//! hablar postcard directo. NO es un proxy completo — sólo translation
-//! layer del protocolo.
+//! Auth opcional por token (`SHIPOTE_GATEWAY_TOKEN`): header
+//! `Authorization: Bearer <token>` o, para clientes WS que no fijan headers,
+//! `?token=<token>` en la URL. Sin token configurado, el gateway queda abierto
+//! (pensado para escucharse en loopback o detrás de un túnel).
 //!
-//! Sin dep de axum/hyper: HTTP parser ad-hoc, suficiente para 1 endpoint.
+//! Pensado para clientes no-Rust (app Android, web, curl) que no hablan postcard.
 
-use shuma_protocol::{default_socket_path, read_frame, write_frame, Request, Response};
+use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream, UnixStream};
+
+use axum::{
+    body::Bytes,
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Query, State,
+    },
+    http::{header::AUTHORIZATION, HeaderMap, StatusCode},
+    response::{IntoResponse, Response as AxumResponse},
+    routing::{get, post},
+    Json, Router,
+};
+use serde::Deserialize;
+use shuma_protocol::{default_socket_path, read_frame, write_frame, Request, Response};
+use tokio::net::UnixStream;
 use tracing::{info, warn};
 
 const DEFAULT_LISTEN: &str = "127.0.0.1:7378";
+
+#[derive(Clone)]
+struct AppState {
+    sock: Arc<PathBuf>,
+    token: Option<Arc<String>>,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     init_tracing();
     let listen = std::env::var("SHIPOTE_GATEWAY_LISTEN").unwrap_or_else(|_| DEFAULT_LISTEN.into());
-    let daemon_sock = Arc::new(default_socket_path());
-    let listener = TcpListener::bind(&listen).await?;
-    info!(listen = %listen, daemon = %daemon_sock.display(), "shuma-gateway listening");
+    let token = std::env::var("SHIPOTE_GATEWAY_TOKEN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(Arc::new);
 
-    loop {
-        match listener.accept().await {
-            Ok((stream, peer)) => {
-                let sock = daemon_sock.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = handle_http(stream, sock).await {
-                        warn!(?e, ?peer, "request error");
-                    }
-                });
-            }
-            Err(e) => {
-                warn!(?e, "accept failed");
-                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            }
-        }
-    }
+    let state = AppState {
+        sock: Arc::new(default_socket_path()),
+        token,
+    };
+
+    let app = Router::new()
+        .route("/", get(health))
+        .route("/health", get(health))
+        .route("/rpc", post(rpc))
+        .route("/ws/pty", get(ws_pty))
+        .with_state(state.clone());
+
+    let listener = tokio::net::TcpListener::bind(&listen).await?;
+    info!(
+        listen = %listen,
+        daemon = %state.sock.display(),
+        auth = state.token.is_some(),
+        "shuma-gateway listening"
+    );
+    axum::serve(listener, app).await?;
+    Ok(())
 }
 
-async fn handle_http(mut stream: TcpStream, daemon_sock: Arc<std::path::PathBuf>) -> anyhow::Result<()> {
-    // Parser HTTP mínimo: read hasta `\r\n\r\n`, parsear request line +
-    // Content-Length, después leer body exacto.
-    let mut buf = Vec::with_capacity(4096);
-    let mut tmp = [0u8; 4096];
-    let header_end;
-    loop {
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            return Ok(()); // closed
-        }
-        buf.extend_from_slice(&tmp[..n]);
-        if let Some(pos) = find_double_crlf(&buf) {
-            header_end = pos + 4;
-            break;
-        }
-        if buf.len() > 64 * 1024 {
-            return write_error(&mut stream, 413, "headers too large").await;
-        }
-    }
+async fn health() -> &'static str {
+    "shuma-gateway ok\n"
+}
 
-    let header_str = std::str::from_utf8(&buf[..header_end - 4])?;
-    let mut lines = header_str.lines();
-    let request_line = lines.next().unwrap_or("");
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().unwrap_or("");
-    let path = parts.next().unwrap_or("");
-    let mut content_length: usize = 0;
-    for line in lines {
-        if let Some(v) = line.strip_prefix("Content-Length:").or_else(|| line.strip_prefix("content-length:")) {
-            content_length = v.trim().parse().unwrap_or(0);
+// =====================================================================
+// Auth
+// =====================================================================
+
+#[derive(Deserialize)]
+struct TokenQuery {
+    token: Option<String>,
+}
+
+fn authorized(state: &AppState, headers: &HeaderMap, query_token: Option<&str>) -> bool {
+    let Some(expected) = state.token.as_deref() else {
+        return true; // sin token configurado = abierto
+    };
+    if let Some(bearer) = headers
+        .get(AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+    {
+        if ct_eq(bearer.trim(), expected) {
+            return true;
         }
     }
+    matches!(query_token, Some(t) if ct_eq(t, expected))
+}
 
-    // Rutas:
-    if method == "GET" && (path == "/" || path == "/health") {
-        return write_text(&mut stream, 200, "shuma-gateway ok\n").await;
+/// Comparación en tiempo constante para no filtrar el token por timing.
+fn ct_eq(a: &str, b: &str) -> bool {
+    let (a, b) = (a.as_bytes(), b.as_bytes());
+    if a.len() != b.len() {
+        return false;
     }
-    if method != "POST" || path != "/rpc" {
-        return write_error(&mut stream, 404, "use POST /rpc").await;
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
     }
+    diff == 0
+}
 
-    // Leer body.
-    let mut body = buf[header_end..].to_vec();
-    while body.len() < content_length {
-        let n = stream.read(&mut tmp).await?;
-        if n == 0 {
-            break;
-        }
-        body.extend_from_slice(&tmp[..n]);
-    }
-    body.truncate(content_length);
+// =====================================================================
+// POST /rpc — una Request JSON → una Response JSON
+// =====================================================================
 
-    // Parsear JSON → Request.
+async fn rpc(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> AxumResponse {
+    if !authorized(&state, &headers, None) {
+        return (StatusCode::UNAUTHORIZED, Json(err("unauthorized"))).into_response();
+    }
     let req: Request = match serde_json::from_slice(&body) {
         Ok(r) => r,
-        Err(e) => return write_error(&mut stream, 400, &format!("bad json: {e}")).await,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(err(&format!("bad json: {e}")))).into_response()
+        }
     };
-
-    // Round-trip al daemon.
-    let resp = match round_trip_daemon(&daemon_sock, &req).await {
-        Ok(r) => r,
-        Err(e) => return write_error(&mut stream, 502, &format!("daemon: {e}")).await,
-    };
-
-    // Serializar Response → JSON.
-    let body_json = serde_json::to_vec(&resp)?;
-    write_response(&mut stream, 200, "application/json", &body_json).await
+    match round_trip(&state.sock, &req).await {
+        Ok(resp) => Json(resp).into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, Json(err(&format!("daemon: {e}")))).into_response(),
+    }
 }
 
-async fn round_trip_daemon(sock: &std::path::Path, req: &Request) -> anyhow::Result<Response> {
+fn err(msg: &str) -> serde_json::Value {
+    serde_json::json!({ "error": msg })
+}
+
+async fn round_trip(sock: &std::path::Path, req: &Request) -> anyhow::Result<Response> {
     let mut stream = UnixStream::connect(sock).await?;
     write_frame(&mut stream, req).await?;
     let resp: Response = read_frame(&mut stream).await?;
     Ok(resp)
 }
 
-fn find_double_crlf(buf: &[u8]) -> Option<usize> {
-    buf.windows(4).position(|w| w == b"\r\n\r\n")
+// =====================================================================
+// GET /ws/pty — WebSocket ↔ subprotocolo ExecPty del daemon
+// =====================================================================
+
+/// Primer mensaje del cliente WS (texto JSON): abre el PTY remoto.
+#[derive(Deserialize)]
+struct PtyOpen {
+    #[serde(default = "default_cwd")]
+    cwd: String,
+    program: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default = "default_rows")]
+    rows: u16,
+    #[serde(default = "default_cols")]
+    cols: u16,
 }
 
-async fn write_response(
-    stream: &mut TcpStream,
-    code: u16,
-    content_type: &str,
-    body: &[u8],
-) -> anyhow::Result<()> {
-    let status = match code {
-        200 => "OK",
-        400 => "Bad Request",
-        404 => "Not Found",
-        413 => "Payload Too Large",
-        502 => "Bad Gateway",
-        _ => "Unknown",
+fn default_cwd() -> String {
+    ".".into()
+}
+fn default_rows() -> u16 {
+    24
+}
+fn default_cols() -> u16 {
+    80
+}
+
+/// Mensaje de control (texto JSON) durante un PTY activo.
+#[derive(Deserialize)]
+struct PtyControl {
+    t: String,
+    rows: Option<u16>,
+    cols: Option<u16>,
+}
+
+async fn ws_pty(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<TokenQuery>,
+    ws: WebSocketUpgrade,
+) -> AxumResponse {
+    if !authorized(&state, &headers, q.token.as_deref()) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let sock = state.sock.clone();
+    ws.on_upgrade(move |socket| pty_bridge(socket, sock))
+}
+
+async fn pty_bridge(mut ws: WebSocket, sock: Arc<PathBuf>) {
+    // 1) Primer mensaje = spec de apertura (texto JSON).
+    let open: PtyOpen = loop {
+        match ws.recv().await {
+            Some(Ok(Message::Text(t))) => match serde_json::from_str(&t) {
+                Ok(o) => break o,
+                Err(e) => {
+                    let _ = ws.send(Message::Text(ctl_err(&format!("bad open: {e}")))).await;
+                    return;
+                }
+            },
+            Some(Ok(Message::Ping(_) | Message::Pong(_))) => continue,
+            _ => return, // cerró o mandó binario antes de abrir
+        }
     };
-    let head = format!(
-        "HTTP/1.1 {code} {status}\r\n\
-         Content-Type: {content_type}\r\n\
-         Content-Length: {}\r\n\
-         Connection: close\r\n\
-         \r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes()).await?;
-    stream.write_all(body).await?;
-    stream.flush().await?;
-    Ok(())
+
+    // 2) Conectar al daemon y arrancar el ExecPty.
+    let daemon = match UnixStream::connect(&*sock).await {
+        Ok(s) => s,
+        Err(e) => {
+            let _ = ws.send(Message::Text(ctl_err(&format!("daemon: {e}")))).await;
+            return;
+        }
+    };
+    let (mut drd, mut dwr) = daemon.into_split();
+    let open_req = Request::ExecPty {
+        cwd: open.cwd,
+        program: open.program,
+        args: open.args,
+        rows: open.rows,
+        cols: open.cols,
+    };
+    if write_frame(&mut dwr, &open_req).await.is_err() {
+        let _ = ws.send(Message::Text(ctl_err("write open failed"))).await;
+        return;
+    }
+
+    // 3) Puente full-duplex. tokio::select! suelta la rama no completada
+    //    antes de correr el handler, así `ws` se puede usar en ambas ramas.
+    loop {
+        tokio::select! {
+            frame = read_frame::<Response, _>(&mut drd) => {
+                match frame {
+                    Ok(Response::ExecBytes(b)) => {
+                        if ws.send(Message::Binary(b)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Ok(Response::ExecExited(code)) => {
+                        let _ = ws.send(Message::Text(format!("{{\"t\":\"exit\",\"code\":{code}}}"))).await;
+                        break;
+                    }
+                    Ok(Response::ExecFailed(m)) => {
+                        let _ = ws.send(Message::Text(ctl_err(&m))).await;
+                        break;
+                    }
+                    Ok(_) => {} // otros frames no aplican al PTY
+                    Err(_) => break, // daemon cerró
+                }
+            }
+            msg = ws.recv() => {
+                match msg {
+                    Some(Ok(Message::Binary(bytes))) => {
+                        if write_frame(&mut dwr, &Request::PtyInput { bytes }).await.is_err() {
+                            break;
+                        }
+                    }
+                    Some(Ok(Message::Text(t))) => {
+                        if let Ok(c) = serde_json::from_str::<PtyControl>(&t) {
+                            if c.t == "resize" {
+                                if let (Some(rows), Some(cols)) = (c.rows, c.cols) {
+                                    let _ = write_frame(&mut dwr, &Request::PtyResize { rows, cols }).await;
+                                }
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Ok(_)) => {} // ping/pong: axum responde solo
+                    Some(Err(_)) => break,
+                }
+            }
+        }
+    }
+    // Al salir, drd/dwr se dropean → el daemon ve EOF → mata el PTY (convención SSH).
+    warn!("pty bridge closed");
 }
 
-async fn write_text(stream: &mut TcpStream, code: u16, body: &str) -> anyhow::Result<()> {
-    write_response(stream, code, "text/plain", body.as_bytes()).await
-}
-
-async fn write_error(stream: &mut TcpStream, code: u16, msg: &str) -> anyhow::Result<()> {
-    let body = serde_json::json!({ "error": msg }).to_string();
-    write_response(stream, code, "application/json", body.as_bytes()).await
+/// Mensaje de control de error hacia el cliente WS (JSON con string escapado).
+fn ctl_err(msg: &str) -> String {
+    serde_json::json!({ "t": "error", "msg": msg }).to_string()
 }
 
 fn init_tracing() {
     use tracing_subscriber::{fmt, EnvFilter};
-    let filter = EnvFilter::try_from_env("SHIPOTE_GATEWAY_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter =
+        EnvFilter::try_from_env("SHIPOTE_GATEWAY_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
     fmt().with_env_filter(filter).init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ct_eq_matches_and_rejects() {
+        assert!(ct_eq("s3cr3t", "s3cr3t"));
+        assert!(!ct_eq("s3cr3t", "s3cr3T"));
+        assert!(!ct_eq("short", "longer"));
+    }
+
+    #[test]
+    fn auth_open_when_no_token() {
+        let st = AppState { sock: Arc::new(PathBuf::from("/x")), token: None };
+        assert!(authorized(&st, &HeaderMap::new(), None));
+    }
+
+    #[test]
+    fn auth_requires_token_when_set() {
+        let st = AppState {
+            sock: Arc::new(PathBuf::from("/x")),
+            token: Some(Arc::new("abc".into())),
+        };
+        assert!(!authorized(&st, &HeaderMap::new(), None));
+        assert!(authorized(&st, &HeaderMap::new(), Some("abc")));
+        assert!(!authorized(&st, &HeaderMap::new(), Some("nope")));
+    }
+
+    #[test]
+    fn pty_open_parses_with_defaults() {
+        let o: PtyOpen = serde_json::from_str(r#"{"program":"claude","args":["code"]}"#).unwrap();
+        assert_eq!(o.program, "claude");
+        assert_eq!(o.args, vec!["code"]);
+        assert_eq!(o.rows, 24);
+        assert_eq!(o.cols, 80);
+        assert_eq!(o.cwd, ".");
+    }
+
+    #[test]
+    fn pty_control_resize_parses() {
+        let c: PtyControl = serde_json::from_str(r#"{"t":"resize","rows":40,"cols":120}"#).unwrap();
+        assert_eq!(c.t, "resize");
+        assert_eq!(c.rows, Some(40));
+        assert_eq!(c.cols, Some(120));
+    }
 }
