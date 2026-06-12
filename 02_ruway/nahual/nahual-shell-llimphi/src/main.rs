@@ -77,6 +77,9 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
 use llimphi_widget_toolbar::{toolbar_view, ToolbarGroup, ToolbarItem, ToolbarPalette};
+use llimphi_widget_text_editor::{
+    text_editor_view_full, EditorMetrics, EditorPalette, EditorState, Language, PointerEvent,
+};
 use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
@@ -87,8 +90,8 @@ use nahual_source_core::{
     WawaImgSource,
 };
 use nahual_image_viewer_llimphi::{
-    image_viewer_view, load_image, ImagePreviewState, ImageViewerPalette,
-    DEFAULT_IMAGE_BYTES_MAX,
+    image_viewer_view, image_viewer_view_zoom, load_image, ImagePreviewState, ImageViewerPalette,
+    ImageViewport, DEFAULT_IMAGE_BYTES_MAX,
 };
 use nahual_text_viewer_llimphi::{
     load_preview, text_viewer_view, PreviewState, TextViewerPalette,
@@ -186,6 +189,12 @@ struct Pane {
     /// operación recae sobre el cursor (`selected`). Se limpia al cambiar de
     /// directorio o tras ejecutar una operación.
     marked: BTreeSet<nahual_source_core::NodeId>,
+    /// Historial de navegación estilo browser (sólo carpetas POSIX): la
+    /// posición `hist_pos` es el presente; back/forward se mueven por acá
+    /// sin truncar, y navegar a un lugar nuevo poda la cola forward.
+    hist: Vec<PathBuf>,
+    /// Posición actual dentro de `hist`.
+    hist_pos: usize,
 }
 
 impl Pane {
@@ -193,7 +202,7 @@ impl Pane {
     /// de sesiones (`std::mem::replace`). Su `nav_stack` está vacío, así que
     /// **nunca** se le debe llamar `nav()`/`nav_mut()` mientras es placeholder.
     fn empty() -> Self {
-        Pane { nav_stack: Vec::new(), marked: BTreeSet::new() }
+        Pane { nav_stack: Vec::new(), marked: BTreeSet::new(), hist: Vec::new(), hist_pos: 0 }
     }
 
     fn nav(&self) -> &Navigator {
@@ -298,6 +307,38 @@ fn aplicar_patron(pattern: &str, original: &str, n: usize) -> String {
         .replace("{n}", &n.to_string())
 }
 
+/// App integrada abierta **en el canvas** (doble click / Enter sobre un
+/// archivo): editor de texto potente, visor de imágenes con zoom, o player
+/// de media (video/audio sobre `media-source-*`). Esc/⌫ vuelve a la carpeta.
+enum CanvasApp {
+    Texto { path: PathBuf, editor: Box<EditorState>, dirty: bool, saved: bool },
+    Imagen { path: PathBuf, state: ImagePreviewState, viewport: ImageViewport },
+    Video(VideoViewerState),
+    Audio(AudioViewerState),
+}
+
+/// Clipboard del sistema para el editor del canvas (mismo backend que nada).
+struct ShellClipboard {
+    inner: Option<arboard::Clipboard>,
+}
+
+impl ShellClipboard {
+    fn new() -> Self {
+        Self { inner: arboard::Clipboard::new().ok() }
+    }
+}
+
+impl llimphi_widget_text_editor::Clipboard for ShellClipboard {
+    fn get(&mut self) -> Option<String> {
+        self.inner.as_mut()?.get_text().ok()
+    }
+    fn set(&mut self, s: &str) {
+        if let Some(c) = self.inner.as_mut() {
+            let _ = c.set_text(s.to_owned());
+        }
+    }
+}
+
 /// Estado *movible* de una sesión de trabajo (diente del rail): todo lo que
 /// cambia al saltar de una sesión a otra. La sesión activa **no** guarda su
 /// snap aquí — sus campos viven directamente en `Model` (los `panes`,
@@ -321,9 +362,10 @@ struct SessionSnap {
     tree_expanded: BTreeSet<PathBuf>,
     /// Offset de scroll del árbol lateral (en filas) — por sesión.
     tree_scroll: usize,
-    /// `true` = el canvas muestra el visor (se abrió un archivo con Enter);
-    /// `false` = el canvas muestra la vista de carpeta.
+    /// `true` = el sidebar derecho de preview está abierto.
     viewer_open: bool,
+    /// App integrada abierta en el canvas (editor/imagen/media), si hay.
+    canvas: Option<CanvasApp>,
 }
 
 /// Una sesión de trabajo, representada por un **diente** del rail. `snap` es
@@ -353,12 +395,19 @@ struct Model {
     tree_w: f32,
     /// Ancho del sidebar derecho del visor (preview), px. Lo muta su splitter.
     preview_w: f32,
-    /// `true` = el sidebar derecho muestra el visor del archivo abierto
-    /// (Enter / doble click); Esc/⌫ lo cierra. Por sesión (va al snap).
+    /// `true` = el sidebar derecho de preview está abierto (lo togglea su
+    /// diente; Esc/⌫ también lo cierra). Por sesión (va al snap).
     viewer_open: bool,
+    /// App integrada abierta en el canvas (editor/imagen/media), si hay.
+    /// Por sesión (va al snap). Esc/⌫ la cierra.
+    canvas: Option<CanvasApp>,
+    /// Clipboard del sistema para el editor del canvas. Transitorio.
+    clipboard: ShellClipboard,
     /// Último click en una fila (pane, idx, instante) — para detectar el
     /// doble click que abre carpeta/archivo. Transitorio, no va al snap.
     last_click: Option<(usize, usize, Instant)>,
+    /// Acumulador del drag del editor del canvas (como `drag_accum` de nada).
+    canvas_drag: (f32, f32),
     /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
     /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
     panes: [Pane; 2],
@@ -616,6 +665,30 @@ enum Msg {
     /// Colapsa la carpeta seleccionada; si ya está colapsada, salta al padre.
     CollapseSelected,
 
+    // ---- Historia de navegación (estilo browser) ----
+    /// Vuelve a la carpeta anterior del historial del panel activo.
+    NavBack,
+    /// Avanza a la carpeta siguiente del historial.
+    NavForward,
+
+    // ---- Canvas apps + panel de preview ----
+    /// Diente derecho: abre/cierra el sidebar de preview.
+    TogglePreviewPanel,
+    /// Cierra la app integrada del canvas (editor/imagen/media).
+    CanvasClose,
+    /// Tecla rumbo al editor de texto del canvas.
+    CanvasEditKey(KeyEvent),
+    /// Click/drag sobre el editor del canvas (posicionar caret / seleccionar).
+    CanvasEditPointer(PointerEvent),
+    /// Guarda el archivo del editor del canvas (Ctrl+S).
+    CanvasSave,
+    /// Zoom del visor de imagen del canvas (Ctrl+rueda / pinch).
+    CanvasImgZoom(f32),
+    /// Pan (arrastre) del visor de imagen del canvas.
+    CanvasImgPan(f32, f32),
+    /// Doble tap: resetea zoom/pan de la imagen del canvas.
+    CanvasImgReset,
+
     // ---- Fase 4.8: vista iconos con miniaturas ----
     /// Una miniatura terminó de generarse (llega del worker).
     ThumbReady(PathBuf, ThumbRgba),
@@ -680,6 +753,7 @@ impl Model {
             tree_expanded: std::mem::take(&mut self.tree_expanded),
             tree_scroll: self.tree_scroll,
             viewer_open: self.viewer_open,
+            canvas: self.canvas.take(),
         }
     }
 
@@ -701,6 +775,7 @@ impl Model {
         self.tree_expanded = snap.tree_expanded;
         self.tree_scroll = snap.tree_scroll;
         self.viewer_open = snap.viewer_open;
+        self.canvas = snap.canvas;
         // Asegurá el cache de subcarpetas de lo que esta sesión tiene abierto.
         ensure_children_for_expanded(&mut self.tree_children, &self.tree_expanded);
     }
@@ -739,8 +814,18 @@ fn session_name(cwd: &Path) -> String {
 fn fresh_snap(cwd: &Path) -> SessionSnap {
     SessionSnap {
         panes: [
-            Pane { nav_stack: vec![posix_nav(cwd)], marked: BTreeSet::new() },
-            Pane { nav_stack: vec![posix_nav(cwd)], marked: BTreeSet::new() },
+            Pane {
+                nav_stack: vec![posix_nav(cwd)],
+                marked: BTreeSet::new(),
+                hist: vec![cwd.to_path_buf()],
+                hist_pos: 0,
+            },
+            Pane {
+                nav_stack: vec![posix_nav(cwd)],
+                marked: BTreeSet::new(),
+                hist: vec![cwd.to_path_buf()],
+                hist_pos: 0,
+            },
         ],
         focus: 0,
         dual: false,
@@ -756,6 +841,7 @@ fn fresh_snap(cwd: &Path) -> SessionSnap {
         tree_expanded: ancestors_set(cwd),
         tree_scroll: 0,
         viewer_open: false,
+        canvas: None,
     }
 }
 
@@ -831,11 +917,24 @@ impl App for Shell {
             tree_w: 230.0,
             preview_w: 420.0,
             viewer_open: false,
+            canvas: None,
+            clipboard: ShellClipboard::new(),
             last_click: None,
+            canvas_drag: (0.0, 0.0),
             // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
             panes: [
-                Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
-                Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
+                Pane {
+                    nav_stack: vec![posix_nav(&cwd)],
+                    marked: BTreeSet::new(),
+                    hist: vec![cwd.clone()],
+                    hist_pos: 0,
+                },
+                Pane {
+                    nav_stack: vec![posix_nav(&cwd)],
+                    marked: BTreeSet::new(),
+                    hist: vec![cwd.clone()],
+                    hist_pos: 0,
+                },
             ],
             focus: 0,
             dual: false,
@@ -919,6 +1018,34 @@ impl App for Shell {
                 Key::Named(NamedKey::Enter) => Some(Msg::MenuActivate),
                 _ => None,
             };
+        }
+        // Editor de texto del canvas abierto: el teclado es del editor.
+        // Ctrl+S guarda; Esc sin selección/multicursor cierra; el resto va
+        // al buffer (incluidos Ctrl+C/X/V/Z/Y, que resuelve el editor).
+        if let Some(CanvasApp::Texto { editor, .. }) = &_model.canvas {
+            if e.modifiers.ctrl {
+                if let Key::Character(c) = &e.key {
+                    if c == "s" {
+                        return Some(Msg::CanvasSave);
+                    }
+                }
+            }
+            if matches!(e.key, Key::Named(NamedKey::Escape))
+                && !editor.has_selection()
+                && editor.extra_cursors.is_empty()
+            {
+                return Some(Msg::CanvasClose);
+            }
+            return Some(Msg::CanvasEditKey(e.clone()));
+        }
+        // Canvas con imagen/media: Esc o ⌫ cierran y vuelven a la carpeta.
+        if _model.canvas.is_some() {
+            if matches!(
+                e.key,
+                Key::Named(NamedKey::Escape) | Key::Named(NamedKey::Backspace)
+            ) {
+                return Some(Msg::CanvasClose);
+            }
         }
         // Modo búsqueda del mapa: captura todo el teclado para la consulta.
         if matches!(_model.preview, PreviewPane::Map(_)) && _model.map_view.searching {
@@ -1004,6 +1131,13 @@ impl App for Shell {
         cursor: (f32, f32),
         _mods: Modifiers,
     ) -> Option<Self::Msg> {
+        // La rueda sobre el sidebar del árbol va SIEMPRE al árbol — ruteo por
+        // región: el hit-test del `on_scroll` local se pierde entre updates
+        // rápidos (el cache de render se invalida en cada update), y el
+        // sobrante caía acá moviendo el canvas.
+        if cursor.0 < model.tree_w {
+            return Some(Msg::TreeScroll(delta.y));
+        }
         // Si la rueda cae sobre el panel del mapa, hace zoom de la cámara en
         // vez de scrollear la lista (gateo por el rect que el canvas registra).
         if matches!(model.preview, PreviewPane::Map(_)) && model.map_view.contains(cursor.0, cursor.1)
@@ -1072,8 +1206,12 @@ impl App for Shell {
                 do_open_selected(&mut m, handle);
             }
             Msg::Parent => {
-                // Con el visor abierto, el primer ⌫/Esc sólo vuelve a la
-                // vista de carpeta; el siguiente sube de directorio.
+                // ⌫/Esc pelan por capas: primero la app del canvas, después
+                // el panel de preview, recién entonces sube de directorio.
+                if m.canvas.is_some() {
+                    m.canvas = None;
+                    return m;
+                }
                 if m.viewer_open {
                     m.viewer_open = false;
                     return m;
@@ -1081,6 +1219,7 @@ impl App for Shell {
                 m.cur_pane_mut().marked.clear();
                 match m.cur_mut().parent() {
                     Ok(true) => {
+                        record_history(&mut m);
                         apply_format(&mut m);
                         refresh_preview(&mut m);
                         if m.cur().view.is_grid() {
@@ -1094,6 +1233,7 @@ impl App for Shell {
                         if m.is_foreign() {
                             m.cur_pane_mut().nav_stack.pop();
                             clear_preview(&mut m);
+                            record_history(&mut m);
                         }
                     }
                     Err(_) => {}
@@ -1138,7 +1278,8 @@ impl App for Shell {
                 m.focus = pane;
                 if matches!(m.cur_mut().ascend_to(depth), Ok(true)) {
                     m.cur_pane_mut().marked.clear();
-                    m.viewer_open = false;
+                    m.canvas = None;
+                    record_history(&mut m);
                     apply_format(&mut m);
                     refresh_preview(&mut m);
                 }
@@ -1185,7 +1326,89 @@ impl App for Shell {
                     refresh_preview(&mut m);
                 }
             }
+            Msg::NavBack => nav_history_go(&mut m, &handle, -1),
+            Msg::NavForward => nav_history_go(&mut m, &handle, 1),
+            Msg::TogglePreviewPanel => {
+                if m.viewer_open {
+                    m.viewer_open = false;
+                } else {
+                    m.viewer_open = true;
+                    refresh_preview(&mut m);
+                }
+            }
+            Msg::CanvasClose => {
+                m.canvas = None;
+            }
+            Msg::CanvasSave => {
+                if let Some(CanvasApp::Texto { path, editor, dirty, saved }) = &mut m.canvas {
+                    match std::fs::write(&*path, editor.text()) {
+                        Ok(()) => {
+                            *dirty = false;
+                            *saved = true;
+                        }
+                        Err(e) => eprintln!("[nahual] guardar {}: {e}", path.display()),
+                    }
+                }
+            }
+            Msg::CanvasEditKey(ev) => {
+                let lines = canvas_editor_lines(&m);
+                if let Some(CanvasApp::Texto { editor, dirty, saved, .. }) = &mut m.canvas {
+                    let r = editor.apply_key_with_clipboard(&ev, &mut m.clipboard);
+                    if r.changed() {
+                        *dirty = true;
+                        *saved = false;
+                    }
+                    if r.touched() {
+                        editor.ensure_caret_visible(lines);
+                    }
+                }
+            }
+            Msg::CanvasEditPointer(ev) => {
+                let metrics = EditorMetrics::for_font_size(13.0);
+                if let Some(CanvasApp::Texto { editor, .. }) = &mut m.canvas {
+                    let scroll = editor.scroll_offset;
+                    match ev {
+                        PointerEvent::Click { x, y } => {
+                            m.canvas_drag = (0.0, 0.0);
+                            let (line, col) = metrics.screen_to_pos(x, y, scroll);
+                            editor.set_caret_at(line, col);
+                        }
+                        PointerEvent::Drag { initial_x, initial_y, dx, dy } => {
+                            m.canvas_drag.0 += dx;
+                            m.canvas_drag.1 += dy;
+                            let cx = initial_x + m.canvas_drag.0;
+                            let cy = initial_y + m.canvas_drag.1;
+                            let (line, col) = metrics.screen_to_pos(cx, cy, scroll);
+                            editor.extend_selection_to(line, col);
+                        }
+                    }
+                }
+            }
+            Msg::CanvasImgZoom(factor) => {
+                if let Some(CanvasApp::Imagen { viewport, .. }) = &mut m.canvas {
+                    viewport.zoom_by(factor);
+                }
+            }
+            Msg::CanvasImgPan(dx, dy) => {
+                if let Some(CanvasApp::Imagen { viewport, .. }) = &mut m.canvas {
+                    viewport.pan_by(dx, dy);
+                }
+            }
+            Msg::CanvasImgReset => {
+                if let Some(CanvasApp::Imagen { viewport, .. }) = &mut m.canvas {
+                    viewport.reset();
+                }
+            }
             Msg::Scroll(steps) => {
+                // Con una app de canvas abierta, la rueda es suya (el editor
+                // scrollea; imagen/media la ignoran — el zoom va por
+                // Ctrl+rueda).
+                if let Some(canvas) = &mut m.canvas {
+                    if let CanvasApp::Texto { editor, .. } = canvas {
+                        editor.scroll_by(steps);
+                    }
+                    return m;
+                }
                 if m.cur().view.is_grid() {
                     // En grilla la unidad de scroll es la FILA entera (cols
                     // items), no el item — si no, las celdas se van "halando"
@@ -1301,6 +1524,14 @@ impl App for Shell {
                     PreviewPane::Audio(state) => state.tick(FRAME_TICK),
                     _ => {}
                 }
+                // El player del canvas también corre con el reloj.
+                match &mut m.canvas {
+                    Some(CanvasApp::Video(state)) => {
+                        state.tick(FRAME_TICK);
+                    }
+                    Some(CanvasApp::Audio(state)) => state.tick(FRAME_TICK),
+                    _ => {}
+                }
                 // Debounce del streaming del basemap: coalesce los pans/zooms
                 // y re-streamea a lo sumo cada `RESTREAM_THROTTLE`.
                 if m.basemap_dirty && m.basemap.is_some() {
@@ -1314,10 +1545,15 @@ impl App for Shell {
                     }
                 }
             }
-            Msg::TogglePlay => match &mut m.preview {
-                PreviewPane::Video(state) => state.toggle_play(),
-                PreviewPane::Audio(state) => state.toggle_play(),
-                _ => {}
+            Msg::TogglePlay => match &mut m.canvas {
+                // El player del canvas tiene prioridad sobre el preview.
+                Some(CanvasApp::Video(state)) => state.toggle_play(),
+                Some(CanvasApp::Audio(state)) => state.toggle_play(),
+                _ => match &mut m.preview {
+                    PreviewPane::Video(state) => state.toggle_play(),
+                    PreviewPane::Audio(state) => state.toggle_play(),
+                    _ => {}
+                },
             },
             Msg::MountNouser => {
                 // Sólo montamos desde POSIX (no anidamos fuentes). nouser sólo
@@ -1649,7 +1885,8 @@ impl App for Shell {
                     m.cur_pane_mut().nav_stack = vec![posix_nav(&path)];
                     m.cur_pane_mut().marked.clear();
                     // Seleccionar una carpeta abre su vista en el canvas.
-                    m.viewer_open = false;
+                    m.canvas = None;
+                    record_history(&mut m);
                     apply_format(&mut m);
                     record_recent(&mut m);
                     refresh_preview(&mut m);
@@ -1791,10 +2028,16 @@ impl App for Shell {
         } else {
             pane_column(model, model.focus, true, &theme)
         };
+        // Centro: la app integrada del canvas si hay una abierta (editor /
+        // imagen / media); si no, la vista de carpeta.
+        let centro = match &model.canvas {
+            Some(canvas) => canvas_app_view(canvas, model, &theme),
+            None => folder_view,
+        };
         let canvas_core = if model.viewer_open {
             splitter_two(
                 Direction::Row,
-                folder_view,
+                centro,
                 PaneSize::Flex,
                 viewer_pane,
                 PaneSize::Fixed(model.preview_w),
@@ -1805,7 +2048,7 @@ impl App for Shell {
                 &splitter_palette,
             )
         } else {
-            folder_view
+            centro
         };
         // Canal interno: el contenido arranca después del ancho del rail para
         // que los dientes (overlay) no tapen las primeras columnas.
@@ -1829,7 +2072,11 @@ impl App for Shell {
             size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
-        .children(vec![canvas_padded, session_teeth_overlay(model, &theme)]);
+        .children(vec![
+            canvas_padded,
+            session_teeth_overlay(model, &theme),
+            preview_tooth_overlay(model, &theme),
+        ]);
 
         // Sidebar único (árbol de carpetas) | canvas, con splitter.
         let body = splitter_two(
@@ -2623,10 +2870,125 @@ fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
-    // La rueda sobre el sidebar scrollea el árbol (consume el evento para que
-    // no caiga al `on_wheel` global que mueve el canvas).
-    .on_scroll(|_dx, dy| Some(Msg::TreeScroll(dy)))
+    // La rueda sobre el sidebar la rutea `on_wheel` por región (cursor.x <
+    // tree_w) — el handler local se perdía entre updates rápidos.
     .children(vec![header, tree_wrap])
+}
+
+/// La app integrada abierta en el canvas: editor de texto potente (con
+/// header de estado y Ctrl+S), visor de imagen con zoom/pan, o player de
+/// media. Esc/⌫ vuelve a la vista de carpeta.
+fn canvas_app_view(canvas: &CanvasApp, model: &Model, theme: &Theme) -> View<Msg> {
+    match canvas {
+        CanvasApp::Texto { path, editor, dirty, saved } => {
+            let nombre = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            let estado = if *dirty {
+                "● sin guardar"
+            } else if *saved {
+                "✓ guardado"
+            } else {
+                ""
+            };
+            let titulo = View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text(format!("{nombre}  {estado}"), 13.0, theme.fg_text);
+            let hint = View::new(Style {
+                size: Size { width: auto(), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text("Ctrl+S guarda · Esc cierra", 11.5, theme.fg_muted);
+            let header = View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+                padding: pad_h(12.0),
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .fill(theme.bg_panel)
+            .children(vec![titulo, hint]);
+
+            let cuerpo = text_editor_view_full(
+                editor,
+                &EditorPalette::from_theme(theme),
+                EditorMetrics::for_font_size(13.0),
+                canvas_editor_lines(model),
+                language_for_path(path),
+                &[],
+                |ev| Some(Msg::CanvasEditPointer(ev)),
+            );
+            let cuerpo_wrap = View::new(Style {
+                flex_grow: 1.0,
+                min_size: Size { width: length(0.0), height: length(0.0) },
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![cuerpo]);
+
+            View::new(Style {
+                flex_direction: FlexDirection::Column,
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![header, cuerpo_wrap])
+        }
+        CanvasApp::Imagen { path, state, viewport } => image_viewer_view_zoom(
+            state,
+            Some(path),
+            &ImageViewerPalette::from_theme(theme),
+            *viewport,
+            |factor, _fx, _fy| Msg::CanvasImgZoom(factor),
+            |dx, dy| Msg::CanvasImgPan(dx, dy),
+            Msg::CanvasImgReset,
+        ),
+        CanvasApp::Video(state) => {
+            video_viewer_view(state, &VideoViewerPalette::from_theme(theme))
+        }
+        CanvasApp::Audio(state) => {
+            audio_viewer_view(state, &AudioViewerPalette::from_theme(theme))
+        }
+    }
+}
+
+/// Diente del **panel derecho de preview**: overlay absoluto pegado al borde
+/// interno derecho (espejo del rail de sesiones). Click abre/cierra el panel.
+fn preview_tooth_overlay(model: &Model, theme: &Theme) -> View<Msg> {
+    let items = [DockRailItem { id: 0, active: model.viewer_open }];
+    let rail = dock_rail_view(
+        &items,
+        SESSION_RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        |_id, size, color| {
+            View::new(Style {
+                size: Size { width: length(size), height: length(size) },
+                ..Default::default()
+            })
+            .children(vec![icon_view(Icon::Search, color, 1.7)])
+        },
+        |_id| Msg::TogglePreviewPanel,
+        |_payload| -> Option<Msg> { None },
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0_f32),
+            right: length(0.0_f32),
+            left: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(SESSION_RAIL_W), height: auto() },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![rail])
 }
 
 /// **Dientes** de sesión como overlay absoluto pegado al borde interno del
@@ -3209,14 +3571,20 @@ fn shell_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     let vista = |ic: Icon, modo: VM, activo: bool| {
         ToolbarItem::new(move |_s, c| icon_view(ic, c, 1.7), Msg::SetViewMode(modo)).active(activo)
     };
+    let pane = model.cur_pane();
+    let puede_atras = pane.hist_pos > 0;
+    let puede_adelante = pane.hist_pos + 1 < pane.hist.len();
     toolbar_view(
         vec![
-            // Navegación.
-            ToolbarGroup::new(vec![ToolbarItem::new(
-                |_s, c| icon_view(Icon::ChevronUp, c, 1.7),
-                Msg::Parent,
-            )
-            .with_label("subir")]),
+            // Navegación: atrás / adelante (historial browser) / subir.
+            ToolbarGroup::new(vec![
+                ToolbarItem::new(|_s, c| icon_view(Icon::ChevronLeft, c, 1.7), Msg::NavBack)
+                    .enabled(puede_atras),
+                ToolbarItem::new(|_s, c| icon_view(Icon::ChevronRight, c, 1.7), Msg::NavForward)
+                    .enabled(puede_adelante),
+                ToolbarItem::new(|_s, c| icon_view(Icon::ChevronUp, c, 1.7), Msg::Parent)
+                    .with_label("subir"),
+            ]),
             // Modos de vista (v cicla; acá acceso directo).
             ToolbarGroup::new(vec![
                 vista(Icon::Rows, VM::List, matches!(v, VM::List)),
@@ -3583,7 +3951,7 @@ fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
     match m.cur_mut().open_selected() {
         Ok(Some(Opened::Descended)) => {
             m.cur_pane_mut().marked.clear();
-            m.viewer_open = false;
+            m.canvas = None;
             clear_preview(m);
             apply_format(m);
             record_recent(m);
@@ -3598,6 +3966,7 @@ fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
             }
             let activa = m.active;
             m.sessions[activa].name = session_name(&cwd);
+            record_history(m);
             // La nueva carpeta puede heredar vista iconos (folder format):
             // pedí sus miniaturas.
             if m.cur().view.is_grid() {
@@ -3616,21 +3985,9 @@ fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
                         m.cur_pane_mut().nav_stack.push(nav);
                         clear_preview(m);
                     }
-                    None => {
-                        let path = id_path.to_path_buf();
-                        m.preview = load_for(&path);
-                        m.basemap = open_basemap_if_pmtiles(&path);
-                        m.basemap_dirty = m.basemap.is_some();
-                        if matches!(m.preview, PreviewPane::Web(_)) {
-                            launch_puriy(&path);
-                        }
-                        m.preview_of = Some(path);
-                        m.preview_temp = None;
-                        m.map_view.reset();
-                        m.map_view.color_field = None;
-                        // El visor abre en el sidebar derecho; Esc/⌫ cierra.
-                        m.viewer_open = true;
-                    }
+                    // Apertura integrada: texto → editor, imagen → visor con
+                    // zoom, video/audio → media; el resto, preview derecho.
+                    None => open_path(m, &id_path.to_path_buf()),
                 }
             } else {
                 // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge.
@@ -3645,6 +4002,128 @@ fn do_open_selected(m: &mut Model, handle: &Handle<Msg>) {
         }
         Ok(None) | Err(_) => {}
     }
+}
+
+/// Registra la carpeta actual del panel activo en su historial (si cambió):
+/// poda la cola forward y empuja el presente. Sólo carpetas POSIX.
+fn record_history(m: &mut Model) {
+    if m.is_foreign() {
+        return;
+    }
+    let cwd = cur_dir(m);
+    let pane = m.cur_pane_mut();
+    if pane.hist.get(pane.hist_pos) == Some(&cwd) {
+        return;
+    }
+    pane.hist.truncate(pane.hist_pos + 1);
+    pane.hist.push(cwd);
+    pane.hist_pos = pane.hist.len().saturating_sub(1);
+}
+
+/// Atrás/adelante por el historial del panel activo (delta = ±1), como un
+/// navegador: moverse NO poda la cola. Revela la carpeta en el árbol.
+fn nav_history_go(m: &mut Model, handle: &Handle<Msg>, delta: i64) {
+    let pane = m.cur_pane();
+    let destino = pane.hist_pos as i64 + delta;
+    if destino < 0 || (destino as usize) >= pane.hist.len() {
+        return;
+    }
+    let destino = destino as usize;
+    let path = pane.hist[destino].clone();
+    if !path.is_dir() {
+        return;
+    }
+    {
+        let pane = m.cur_pane_mut();
+        pane.hist_pos = destino;
+        pane.nav_stack = vec![posix_nav(&path)];
+        pane.marked.clear();
+    }
+    m.canvas = None;
+    apply_format(m);
+    refresh_preview(m);
+    for anc in ancestors_set(&path) {
+        m.tree_expanded.insert(anc);
+    }
+    ensure_children_for_expanded(&mut m.tree_children, &m.tree_expanded);
+    let activa = m.active;
+    m.sessions[activa].name = session_name(&path);
+    if m.cur().view.is_grid() {
+        request_thumbs(m, handle);
+    }
+}
+
+/// Tope de lectura para abrir un archivo en el editor del canvas. Más grande
+/// que esto va al visor de texto del preview (read-only), no al editor.
+const EDITOR_BYTES_MAX: u64 = 4 * 1024 * 1024;
+
+/// Lenguaje de highlight por extensión (mismo mapeo que nada).
+fn language_for_path(path: &Path) -> Language {
+    let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+    Language::from_cell_language(ext)
+}
+
+/// Cuántas líneas del editor entran en el canvas.
+fn canvas_editor_lines(m: &Model) -> usize {
+    let (_, vh) = viewport_of(m);
+    (((vh - 150.0) / (13.0 * 1.4)).floor() as usize).max(10)
+}
+
+/// Abre `path` de forma **integrada**: texto → editor potente en el canvas;
+/// imagen → visor con zoom en el canvas; video/audio → player de media en el
+/// canvas; cualquier otro tipo → el visor correspondiente en el sidebar
+/// derecho de preview.
+fn open_path(m: &mut Model, path: &PathBuf) {
+    let pane = load_for(path);
+    match pane {
+        PreviewPane::Image(state) => {
+            m.canvas = Some(CanvasApp::Imagen {
+                path: path.clone(),
+                state,
+                viewport: ImageViewport::default(),
+            });
+        }
+        PreviewPane::Video(state) => {
+            m.canvas = Some(CanvasApp::Video(state));
+        }
+        PreviewPane::Audio(state) => {
+            m.canvas = Some(CanvasApp::Audio(state));
+        }
+        PreviewPane::Text(_) | PreviewPane::Markdown(_) | PreviewPane::Web(_) => {
+            // El HTML además lanza puriy (browser real), como siempre.
+            if matches!(pane, PreviewPane::Web(_)) {
+                launch_puriy(path);
+            }
+            let chico = std::fs::metadata(path).map(|md| md.len() <= EDITOR_BYTES_MAX);
+            match chico.ok().filter(|c| *c).and_then(|_| std::fs::read_to_string(path).ok()) {
+                Some(contenido) => {
+                    let mut editor = EditorState::new();
+                    editor.set_text(&contenido);
+                    m.canvas = Some(CanvasApp::Texto {
+                        path: path.clone(),
+                        editor: Box::new(editor),
+                        dirty: false,
+                        saved: false,
+                    });
+                }
+                // Muy grande o no-UTF8: visor de texto read-only a la derecha.
+                None => open_in_preview(m, path, pane),
+            }
+        }
+        otra => open_in_preview(m, path, otra),
+    }
+}
+
+/// Deja `pane` como contenido del sidebar derecho de preview (y lo abre).
+fn open_in_preview(m: &mut Model, path: &PathBuf, pane: PreviewPane) {
+    m.preview = pane;
+    m.basemap = open_basemap_if_pmtiles(path);
+    m.basemap_dirty = m.basemap.is_some();
+    m.preview_of = Some(path.clone());
+    m.preview_temp = None;
+    m.map_view.reset();
+    m.map_view.color_field = None;
+    m.viewer_open = true;
 }
 
 fn refresh_preview(m: &mut Model) {

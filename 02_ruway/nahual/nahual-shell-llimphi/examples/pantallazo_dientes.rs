@@ -130,7 +130,11 @@ fn main() {
         size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![canvas_padded, teeth_overlay(&theme, 3, 1)]);
+    .children(vec![
+        canvas_padded,
+        teeth_overlay(&theme, 3, 1),
+        preview_tooth(&theme),
+    ]);
 
     let body = View::new(Style {
         flex_grow: 1.0,
@@ -242,11 +246,13 @@ fn toolbar(theme: &Theme) -> View<Msg> {
     };
     toolbar_view(
         vec![
-            ToolbarGroup::new(vec![ToolbarItem::new(
-                |_s, c| icon_view(Icon::ChevronUp, c, 1.7),
-                Msg::Nada,
-            )
-            .with_label("subir")]),
+            ToolbarGroup::new(vec![
+                ToolbarItem::new(|_s, c| icon_view(Icon::ChevronLeft, c, 1.7), Msg::Nada),
+                ToolbarItem::new(|_s, c| icon_view(Icon::ChevronRight, c, 1.7), Msg::Nada)
+                    .enabled(false),
+                ToolbarItem::new(|_s, c| icon_view(Icon::ChevronUp, c, 1.7), Msg::Nada)
+                    .with_label("subir"),
+            ]),
             ToolbarGroup::new(vec![
                 vista(Icon::Rows, false),
                 vista(Icon::Table, true),
@@ -262,6 +268,38 @@ fn toolbar(theme: &Theme) -> View<Msg> {
         34.0,
         &ToolbarPalette::from_theme(theme),
     )
+}
+
+/// Diente derecho del panel de preview (activo = panel abierto).
+fn preview_tooth(theme: &Theme) -> View<Msg> {
+    let items = [DockRailItem { id: 0, active: true }];
+    let rail = dock_rail_view(
+        &items,
+        RAIL_W,
+        &DockRailPalette::from_theme(theme),
+        |_id, size, color| {
+            View::new(Style {
+                size: Size { width: length(size), height: length(size) },
+                ..Default::default()
+            })
+            .children(vec![icon_view(Icon::Search, color, 1.7)])
+        },
+        |_id| Msg::Nada,
+        |_payload| -> Option<Msg> { None },
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0_f32),
+            right: length(0.0_f32),
+            left: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(RAIL_W), height: auto() },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![rail])
 }
 
 /// Vista detalle con la carpeta "viajes" **expandida inline** (sangría + ▾)
