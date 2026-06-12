@@ -90,37 +90,12 @@ pub(crate) fn dropdown_overlay(model: &Model) -> Option<View<Msg>> {
 
     let (items, selected_vec): (Vec<SelectItem>, Vec<usize>) = match kind {
         DropKind::Isolation => (iso_items(), vec![iso_index(session.isolation)]),
-        DropKind::Distro => (distro_items(), vec![distro_index(session.distro)]),
-        // Host sólo se elige desde el form en canvas (inline) — nunca llega
-        // acá con sesión no-pending.
-        DropKind::Host => return None,
-        DropKind::Container => {
-            // Contenedores existentes + la opción de crear uno nuevo al final.
-            let mut its: Vec<SelectItem> = model
-                .containers
-                .iter()
-                .map(|c| SelectItem::new(c.clone()))
-                .collect();
-            its.push(SelectItem::new(format!(
-                "+ Crear nuevo ({})",
-                session.distro.label()
-            )));
-            let sel = session
-                .container
-                .as_ref()
-                .and_then(|c| model.containers.iter().position(|x| x == c))
-                .map(|i| vec![i])
-                .unwrap_or_default();
-            (its, sel)
-        }
-        DropKind::Engine => {
-            let its = engine_items();
-            let sel = its
-                .iter()
-                .position(|it| it.label == session.container_engine)
-                .map(|i| vec![i])
-                .unwrap_or_default();
-            (its, sel)
+        // El resto (Host, Contenedor, Distro, Engine) se elige con pickers
+        // INLINE (host_picker/container_picker); este overlay flotante ya no
+        // los maneja. Antes pintaba `model.containers` + un "+ Crear nuevo"
+        // ENCIMA de la lista inline, tapándola y creando un ubuntu random.
+        DropKind::Host | DropKind::Container | DropKind::Distro | DropKind::Engine => {
+            return None
         }
     };
     let visible: Vec<usize> = (0..items.len()).collect();
