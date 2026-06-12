@@ -3,8 +3,8 @@
 //! pintado del mapa (nodos que respiran por masa, filamentos, topónimos).
 //!
 //! El resto de la app le pide vistas y consultas; los helpers compartidos
-//! (`current_mass`, `now_secs`, `button`, `CLUSTER_THRESHOLD`) viven en la
-//! raíz y se alcanzan por `crate::`.
+//! (`current_mass`, `now_secs`, `CLUSTER_THRESHOLD`) vienen de `estado` y
+//! `modelo`; `button` viene de `panels`.
 
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
@@ -19,7 +19,8 @@ use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use khipu_core::NoteId;
 
 use crate::panels::button;
-use crate::{current_mass, now_secs, Focus, Model, Msg, CLUSTER_THRESHOLD};
+use crate::estado::{current_mass, now_secs};
+use crate::modelo::{Focus, Model, Msg, CLUSTER_THRESHOLD};
 
 /// Un nodo del mapa, ya resuelto a coordenadas de mundo + su masa viva.
 /// Datos planos para viajar dentro de la closure de pintura.

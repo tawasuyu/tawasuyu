@@ -15,10 +15,8 @@ use llimphi_widget_text_editor::{text_editor_view, EditorMetrics, EditorPalette}
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
 use khipu_core::{Note, NoteId};
 
-use crate::{
-    current_mass, now_secs, Focus, Model, Msg, EDITOR_VISIBLE_LINES, FIELD_LABEL_SIZE, HEADER_H,
-    LIST_WIDTH, ROW_H,
-};
+use crate::estado::{current_mass, now_secs};
+use crate::modelo::{Focus, Model, Msg, EDITOR_VISIBLE_LINES, FIELD_LABEL_SIZE, HEADER_H, LIST_WIDTH, ROW_H};
 
 pub(crate) fn header_view(model: &Model) -> View<Msg> {
     let title = format!("khipu · {} notas", model.store.len());
@@ -725,4 +723,143 @@ pub(crate) fn join_or_dash(items: &[String]) -> String {
     } else {
         items.join(", ")
     }
+}
+
+// =====================================================================
+// Vistas de estado y passphrase (usadas desde app.rs)
+// =====================================================================
+
+/// Barra de estado al pie: muestra el último mensaje de export/import.
+pub(crate) fn status_bar(model: &Model) -> Option<View<Msg>> {
+    let text = model.status.as_ref()?;
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(22.0_f32),
+            },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(2.0_f32),
+                bottom: length(2.0_f32),
+            },
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .fill(model.theme.bg_panel_alt)
+        .text_aligned(text.clone(), 11.0, model.theme.fg_muted, Alignment::Start),
+    )
+}
+
+/// Prompt modal de passphrase: tarjeta centrada con el input (enmascarado
+/// con •) y dos botones. Enter desbloquea, Esc cancela (ver `on_key`).
+pub(crate) fn unlock_view(model: &Model, input_palette: &TextInputPalette) -> View<Msg> {
+    let titulo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "Desbloqueá tu identidad para firmar".to_string(),
+        14.0,
+        model.theme.fg_text,
+        Alignment::Start,
+    );
+
+    let hint = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(
+        "La semilla vive cifrada (Argon2id). La primera vez, esta passphrase la crea."
+            .to_string(),
+        11.0,
+        model.theme.fg_muted,
+        Alignment::Start,
+    );
+
+    let input = text_input_view(
+        &model.passphrase,
+        "passphrase",
+        model.focus == Focus::Passphrase,
+        input_palette,
+        Msg::Focus(Focus::Passphrase),
+    );
+    let input_row = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .children(vec![input]);
+
+    let unlock_btn = button(
+        "desbloquear (Enter)",
+        model.theme.bg_button,
+        model.theme.accent,
+        Msg::Unlock,
+    );
+    let cancel_btn = button(
+        "cancelar (Esc)",
+        model.theme.bg_button,
+        model.theme.fg_muted,
+        Msg::CancelUnlock,
+    );
+    let buttons = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        gap: Size {
+            width: length(8.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![unlock_btn, cancel_btn]);
+
+    let card = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(420.0_f32),
+            height: Dimension::auto(),
+        },
+        padding: Rect {
+            left: length(18.0_f32),
+            right: length(18.0_f32),
+            top: length(16.0_f32),
+            bottom: length(16.0_f32),
+        },
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(10.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(model.theme.bg_panel)
+    .radius(6.0)
+    .children(vec![titulo, hint, input_row, buttons]);
+
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(model.theme.bg_app)
+    .children(vec![card])
 }

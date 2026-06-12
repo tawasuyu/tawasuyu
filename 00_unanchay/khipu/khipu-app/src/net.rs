@@ -9,7 +9,8 @@ use khipu_share::{SharedNote, SignedBundle};
 use llimphi_ui::Handle;
 
 use crate::panels::note_matches;
-use crate::{khipu_dir, now_secs, schedule_embedding, Model, Msg, P2p};
+use crate::estado::{khipu_dir, now_secs, schedule_embedding};
+use crate::modelo::{Model, Msg, P2p};
 
 pub(crate) fn export_notebook(model: &Model) -> String {
     let Some(kp) = model.keypair.as_ref() else {
