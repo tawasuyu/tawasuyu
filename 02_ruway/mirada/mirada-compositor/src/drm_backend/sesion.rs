@@ -1,0 +1,110 @@
+use super::*;
+
+impl DrmState {
+    /// La sesión se cede a otra VT (`Ctrl+Alt+Fn`): suelta la GPU y deja
+    /// de leer el ratón y el teclado, para no chocar con quien ahora
+    /// manda en la pantalla.
+    pub(super) fn pause_session(&mut self) {
+        self.active = false;
+        self.drm.pause();
+        self.libinput.suspend();
+        println!("mirada-compositor · sesión cedida a otra VT.");
+    }
+
+    /// La sesión vuelve a esta VT: recupera la GPU y la entrada, reinicia
+    /// el estado de cada compositor y repinta.
+    pub(super) fn resume_session(&mut self) {
+        if self.libinput.resume().is_err() {
+            eprintln!("mirada-compositor · libinput.resume falló.");
+        }
+        if let Err(e) = self.drm.activate(false) {
+            eprintln!("mirada-compositor · drm.activate falló: {e}");
+        }
+        for ctx in &mut self.outputs {
+            if let Err(e) = ctx.compositor.reset_state() {
+                eprintln!(
+                    "mirada-compositor · compositor.reset_state[{}]: {e}",
+                    ctx.name
+                );
+            }
+            ctx.pending_flip = false;
+        }
+        self.active = true;
+        self.render();
+        println!("mirada-compositor · sesión recuperada.");
+    }
+
+    /// Tarea periódica: Cerebro enlazado, recarga del keymap, API de
+    /// control, composición y vaciado hacia los clientes.
+    pub(super) fn tick(&mut self) {
+        self.app.brain_poll();
+
+        let n = self.app.windows.len();
+        if n != self.last_windows {
+            eprintln!("mirada-compositor · ventanas en pantalla: {n}");
+            self.last_windows = n;
+        }
+
+        // Recarga en caliente de keymap/config/reglas si cambiaron en disco.
+        // Si la config general cambió, refresca las cachés que el Cuerpo deriva
+        // de ella (menú raíz, wallpaper, fuente de etiquetas) — el Cerebro ya
+        // aplicó teselado/decoración/foco.
+        if self.watches.poll(&mut self.app) {
+            self.menu_entries = self.app.config_menu();
+            // Reconstruye los presets de zonas y reacota el activo.
+            let mut presets = vec![self.app.config_zones()];
+            presets.extend(self.app.config_zone_presets());
+            self.zone_presets = presets;
+            if self.active_preset >= self.zone_presets.len() {
+                self.active_preset = 0;
+            }
+            self.zones = self.zone_presets.get(self.active_preset).cloned().unwrap_or_default();
+            self.root_menu = None; // un menú abierto puede quedar obsoleto
+            self.menu_output_idx = None;
+            // Config nueva (wallpaper, fuente, menú): todo puede repintarse.
+            crate::screencopy::danar_todo(&mut self.app);
+            // Refresca el wallpaper por salida: cada `OutputCtx` resuelve su
+            // ruta y su `fit` por nombre del conector (override o global).
+            for ctx in &mut self.outputs {
+                let new_wp = self.app.config_wallpaper_path_for(&ctx.name);
+                let new_fit = self.app.config_wallpaper_fit_for(&ctx.name);
+                if new_wp != ctx.wallpaper_path || new_fit != ctx.wallpaper_fit {
+                    ctx.wallpaper_path = new_wp;
+                    ctx.wallpaper_fit = new_fit;
+                    ctx.wallpaper = None; // se rearma en el próximo render
+                }
+            }
+            self.text = crate::text::TextRenderer::system(self.app.config_font_path().as_deref());
+        }
+
+        if let Some(ctl) = &self.ctl {
+            while let Some(mut conn) = ctl.poll() {
+                let reply = match conn.read_request() {
+                    // El ciclo de zonas es estado del Cuerpo (DRM): lo atendemos
+                    // acá, no en el Cerebro. Avanza al siguiente preset.
+                    Ok(Some(CtlRequest::CycleZones)) => {
+                        if !self.zone_presets.is_empty() {
+                            self.active_preset =
+                                (self.active_preset + 1) % self.zone_presets.len();
+                            self.zones = self.zone_presets[self.active_preset].clone();
+                            self.preset_hud_label = format!(
+                                "Zonas · {}/{}",
+                                self.active_preset + 1,
+                                self.zone_presets.len()
+                            );
+                            self.preset_hud_until = Some(Instant::now() + HUD_DURATION);
+                        }
+                        CtlReply::Ok
+                    }
+                    Ok(Some(req)) => self.app.serve_ctl(req),
+                    Ok(None) => continue,
+                    Err(e) => CtlReply::Error(format!("{e}")),
+                };
+                let _ = conn.reply(&reply);
+            }
+        }
+
+        self.render();
+        let _ = self.display.flush_clients();
+    }
+}
