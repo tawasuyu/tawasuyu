@@ -712,6 +712,7 @@ shuma-shell-clear-input = Yaykuna pakay
 shuma-shell-clear-screen = Rikuykuna pakay
 shuma-shell-cancel-cmd = Kamachiy saqiy
 shuma-shell-about = Shuma haqhay
+shuma-layouts = Churaykunakuna…
 
 # === supay-app-llimphi ===
 supay-hud-health = KAWSAY

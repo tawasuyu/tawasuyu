@@ -708,6 +708,7 @@ shuma-shell-clear-input = Clear input
 shuma-shell-clear-screen = Clear screen
 shuma-shell-cancel-cmd = Cancel command
 shuma-shell-about = About shuma
+shuma-layouts = Layouts…
 
 # === supay-app-llimphi ===
 supay-hud-health = HEALTH

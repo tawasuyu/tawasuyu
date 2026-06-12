@@ -1385,7 +1385,7 @@ impl Session {
 }
 
 /// Config persistible de una sesión (lo que sobrevive a reiniciar shuma).
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct SessionConfig {
     name: String,
     #[serde(default)]
@@ -1446,7 +1446,7 @@ fn load_sessions() -> Vec<SessionConfig> {
 /// Estado de chrome persistible: qué paneles están abiertos y qué pestaña
 /// (sesión) está activa, para reabrir shuma como lo dejaste. Separado de
 /// `sessions.json` para no acoplar el layout de UI al de las sesiones.
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
 struct ChromeState {
     /// Herramienta abierta a la derecha (`None` = rail derecho colapsado).
     /// Por defecto colapsado — el panel derecho no se impone al arrancar.
@@ -1523,6 +1523,64 @@ fn load_chrome() -> ChromeState {
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str::<ChromeState>(&s).ok())
         .unwrap_or_default()
+}
+
+/// Una **disposición guardada** (estilo "sesión de tmux"): un nombre + el
+/// conjunto de sesiones de trabajo y la geometría/paneles con que estaban.
+/// Restaurarla reemplaza el espacio de trabajo entero por el guardado.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct LayoutSnapshot {
+    name: String,
+    sessions: Vec<SessionConfig>,
+    chrome: ChromeState,
+}
+
+/// `$XDG_CONFIG_HOME/shuma/layouts.json`.
+fn layouts_path() -> Option<std::path::PathBuf> {
+    directories::BaseDirs::new().map(|b| b.config_dir().join("shuma").join("layouts.json"))
+}
+
+/// Lee las disposiciones guardadas (vacío si no hay archivo o no parsea).
+fn load_layouts() -> Vec<LayoutSnapshot> {
+    layouts_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<Vec<LayoutSnapshot>>(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Persiste la lista de disposiciones. Silencioso ante IO.
+fn save_layouts(layouts: &[LayoutSnapshot]) {
+    let Some(path) = layouts_path() else {
+        return;
+    };
+    if let Ok(json) = serde_json::to_string_pretty(layouts) {
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(&path, json);
+    }
+}
+
+/// Snapshot del espacio de trabajo actual: las sesiones reales (sin la draft
+/// ni las pending) + el estado de chrome. Lo usa "Guardar disposición".
+fn snapshot_workspace(m: &Model, name: String) -> LayoutSnapshot {
+    let sessions: Vec<SessionConfig> = m
+        .sessions
+        .iter()
+        .filter(|s| s.kind != SessionKind::Draft && !s.pending)
+        .map(|s| s.to_config())
+        .collect();
+    LayoutSnapshot {
+        name,
+        sessions,
+        chrome: ChromeState {
+            active_tool: m.active_tool,
+            session_panel_open: m.session_panel_open,
+            active_session: m.active_session,
+            session_w: m.session_w,
+            monitors_width: m.monitors_width,
+        },
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1603,6 +1661,14 @@ struct Model {
     hosts_modal_open: bool,
     /// El diálogo bloqueante de containers está abierto (modal centrado).
     containers_modal_open: bool,
+    /// Disposiciones guardadas (`$XDG_CONFIG_HOME/shuma/layouts.json`).
+    layouts: Vec<LayoutSnapshot>,
+    /// El diálogo bloqueante de disposiciones está abierto (modal centrado).
+    layouts_modal_open: bool,
+    /// Nombre que se está tipeando para guardar la disposición actual.
+    layout_name: TextInputState,
+    /// `true` si el input de nombre de disposición tiene foco.
+    layout_name_focused: bool,
     /// Tamaño del viewport en px lógicos, para centrar los modales y anclar
     /// los selects del form de sesión nueva. Lo actualiza `on_resize`.
     viewport: (f32, f32),
@@ -1789,6 +1855,24 @@ enum Msg {
     HostDraftToggleAuth,
     /// Borrar el host `idx` de la lista guardada.
     HostDelete(usize),
+
+    // ─── Disposiciones guardadas (estilo sesiones de tmux) ─────────────
+    /// Abre el modal de disposiciones (centrado, bloqueante).
+    OpenLayoutsModal,
+    /// Cierra el modal de disposiciones (scrim / Esc / Listo).
+    CloseLayoutsModal,
+    /// Foco al input del nombre de la disposición a guardar.
+    LayoutNameFocus,
+    /// Tecla al input de nombre (Esc desenfoca, Enter guarda).
+    LayoutNameKey(KeyEvent),
+    /// Guarda el espacio de trabajo actual como disposición con el nombre
+    /// tipeado (si existe una con ese nombre, la sobreescribe).
+    SaveLayout,
+    /// Restaura la disposición `idx`: reemplaza las sesiones + el chrome.
+    RestoreLayout(usize),
+    /// Borra la disposición `idx` de la lista guardada.
+    DeleteLayout(usize),
+
     // ─── Editor CRUD de contenedores (ventana de gestión) ──────────────
     /// "Nuevo": deselecciona la lista y abre un draft con engine/distro activos.
     ContainerDraftNew,
@@ -1964,6 +2048,10 @@ impl App for Shell {
             container_draft: None,
             hosts_modal_open: false,
             containers_modal_open: false,
+            layouts: load_layouts(),
+            layouts_modal_open: false,
+            layout_name: TextInputState::new(),
+            layout_name_focused: false,
             viewport: (1280.0, 800.0),
             session_w: chrome.session_w,
             sysmon: SystemSampler::new(HISTORY),
@@ -2001,6 +2089,12 @@ impl App for Shell {
                 return Some(Msg::CloseContainersModal);
             }
             return Some(Msg::ContainerDraftKey(e.clone()));
+        }
+        if model.layouts_modal_open {
+            if let llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) = &e.key {
+                return Some(Msg::CloseLayoutsModal);
+            }
+            return Some(Msg::LayoutNameKey(e.clone()));
         }
         // Con un campo del form remoto focado, las teclas van ahí (no al shell).
         if model.focused_field.is_some() {
@@ -2468,6 +2562,80 @@ impl App for Shell {
                 if idx < m.hosts.len() {
                     m.hosts.remove(idx);
                     hosts::save_hosts(&m.hosts);
+                }
+            }
+            Msg::OpenLayoutsModal => {
+                m.layouts_modal_open = true;
+                m.layout_name_focused = true; // listo para tipear el nombre
+                m.menu_open = None;
+            }
+            Msg::CloseLayoutsModal => {
+                m.layouts_modal_open = false;
+                m.layout_name_focused = false;
+            }
+            Msg::LayoutNameFocus => {
+                m.layout_name_focused = true;
+            }
+            Msg::LayoutNameKey(e) => match &e.key {
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Escape) => {
+                    m.layout_name_focused = false;
+                }
+                llimphi_ui::Key::Named(llimphi_ui::NamedKey::Enter) => {
+                    handle.dispatch(Msg::SaveLayout);
+                }
+                _ => {
+                    let _ = m.layout_name.apply_key(&e);
+                }
+            },
+            Msg::SaveLayout => {
+                let name = m.layout_name.text().trim().to_string();
+                if !name.is_empty() {
+                    let snap = snapshot_workspace(&m, name.clone());
+                    // Sobreescribe si ya existe una disposición con ese nombre.
+                    if let Some(i) = m.layouts.iter().position(|l| l.name == name) {
+                        m.layouts[i] = snap;
+                    } else {
+                        m.layouts.push(snap);
+                    }
+                    save_layouts(&m.layouts);
+                    m.layout_name.set_text("");
+                    m.layout_name_focused = false;
+                }
+            }
+            Msg::RestoreLayout(idx) => {
+                if let Some(snap) = m.layouts.get(idx).cloned() {
+                    // Reconstruye el espacio de trabajo entero: la draft (índice
+                    // 0, siempre) + las sesiones guardadas, igual que el arranque.
+                    let mut sessions = vec![Session::draft()];
+                    for c in snap.sessions {
+                        sessions.push(Session::from_config(c));
+                    }
+                    // Reactivar los containers de las sesiones restauradas.
+                    for s in &sessions {
+                        if s.use_container {
+                            if let Some(name) = s.container.clone() {
+                                handle.dispatch(Msg::EnsureContainer(name));
+                            }
+                        }
+                    }
+                    m.sessions = sessions;
+                    m.active_tool = snap.chrome.active_tool;
+                    m.session_panel_open = snap.chrome.session_panel_open;
+                    m.session_w = snap.chrome.session_w;
+                    m.monitors_width = snap.chrome.monitors_width;
+                    m.active_session = snap
+                        .chrome
+                        .active_session
+                        .min(m.sessions.len().saturating_sub(1));
+                    m.layouts_modal_open = false;
+                    save_sessions(&m);
+                    save_chrome(&m);
+                }
+            }
+            Msg::DeleteLayout(idx) => {
+                if idx < m.layouts.len() {
+                    m.layouts.remove(idx);
+                    save_layouts(&m.layouts);
                 }
             }
             Msg::ContainerDraftNew => {
@@ -3058,6 +3226,9 @@ impl App for Shell {
         }
         if model.containers_modal_open {
             return Some(view::containers_modal(model, &model.theme));
+        }
+        if model.layouts_modal_open {
+            return Some(view::layouts_modal(model, &model.theme));
         }
         view::dropdown_overlay(model).or_else(|| menu::overlay(model))
     }

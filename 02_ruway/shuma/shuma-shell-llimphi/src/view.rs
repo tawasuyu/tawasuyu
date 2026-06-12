@@ -2127,6 +2127,96 @@ fn host_row(idx: usize, h: &hosts::RemoteHost, selected: bool, theme: &Theme) ->
     row
 }
 
+/// Diálogo bloqueante de **disposiciones** (estilo sesiones de tmux): guardar
+/// el espacio de trabajo actual con un nombre + lista de las guardadas con
+/// Restaurar/Borrar por fila. Abierto por `Msg::OpenLayoutsModal`.
+pub(crate) fn layouts_modal(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_widget_modal::{modal_view, ModalButton, ModalPalette, ModalSpec};
+    modal_view(ModalSpec {
+        title: "Disposiciones".to_string(),
+        body: layouts_modal_body(model, theme),
+        buttons: vec![ModalButton::cancel("Listo", Msg::CloseLayoutsModal)],
+        size: (520.0, 520.0),
+        viewport: model.viewport,
+        // Bloqueante: clic afuera NO cierra. Se cierra con «Listo» o Esc.
+        on_dismiss: Msg::Noop,
+        palette: ModalPalette::from_theme(theme),
+    })
+}
+
+fn layouts_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::prelude::Dimension;
+    use llimphi_ui::llimphi_text::Alignment;
+    let tpal = TextInputPalette::from_theme(theme);
+
+    let sub = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        ..Default::default()
+    })
+    .text_aligned(
+        "Una disposición guarda tus sesiones y la geometría de los paneles. Se guardan en ~/.config/shuma/layouts.json.".to_string(),
+        11.0, theme.fg_muted, Alignment::Start,
+    );
+
+    let name_input = text_input_view(
+        &model.layout_name,
+        "nombre de la disposición",
+        model.layout_name_focused,
+        &tpal,
+        Msg::LayoutNameFocus,
+    );
+    let save_btn = action_button_small("Guardar disposición actual", Msg::SaveLayout, theme);
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    if !model.layouts.is_empty() {
+        rows.push(panel_label("Guardadas", theme));
+        for (i, l) in model.layouts.iter().enumerate() {
+            rows.push(layout_row(i, &l.name, l.sessions.len(), theme));
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .children({
+        let mut all = vec![sub, panel_label("Guardar la actual", theme), name_input, save_btn];
+        all.extend(rows);
+        all
+    })
+}
+
+/// Una fila de la lista de disposiciones: nombre + N sesiones + Restaurar + 🗑.
+fn layout_row(idx: usize, name: &str, n_sessions: usize, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
+    use llimphi_ui::llimphi_text::Alignment;
+    let plural = if n_sessions == 1 { "sesión" } else { "sesiones" };
+    let display = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{name} · {n_sessions} {plural}"),
+        12.0, theme.fg_text, Alignment::Start,
+    );
+    let restore_btn = action_button_small("Restaurar", Msg::RestoreLayout(idx), theme);
+    let rm_btn = action_button_small("🗑", Msg::DeleteLayout(idx), theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .children(vec![display, restore_btn, rm_btn])
+}
+
 fn host_draft_form(d: &HostDraft, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::AlignItems;
     use llimphi_ui::llimphi_text::Alignment;

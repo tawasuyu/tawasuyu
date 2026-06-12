@@ -106,6 +106,9 @@ pub(crate) fn app_menu(model: &Model) -> AppMenu {
         cancelar = cancelar.disabled();
     }
     let mut ver = Menu::new(t("view")).item(limpiar_pant).item(cancelar);
+    // Disposiciones guardadas (estilo sesiones de tmux): guardar/restaurar el
+    // espacio de trabajo entero. Siempre disponible (no depende del shell).
+    ver = ver.item(MenuItem::new(t("shuma-layouts"), "view.layouts").separated());
     // Una entrada por sesión para saltar directo (mapea a `Msg::SelectSession`).
     for (i, s) in model.sessions.iter().enumerate() {
         let mut it = MenuItem::new(s.name.clone(), format!("view.session.{i}"));
@@ -286,6 +289,11 @@ pub(crate) fn handle_command(mut model: Model, cmd: &str) -> Model {
             if let Some(focus) = focused_shell(&model) {
                 clear_input(&mut model, &focus.slot);
             }
+            model
+        }
+        "view.layouts" => {
+            model.layouts_modal_open = true;
+            model.layout_name_focused = true; // listo para tipear el nombre
             model
         }
         "term.clear" => route_to_shell(model, ModuleMsg::Shell(shuma_module_shell::Msg::Clear)),

@@ -711,6 +711,7 @@ shuma-shell-clear-input = Limpiar entrada
 shuma-shell-clear-screen = Limpiar pantalla
 shuma-shell-cancel-cmd = Cancelar comando
 shuma-shell-about = Acerca de shuma
+shuma-layouts = Disposiciones…
 
 # === supay-app-llimphi ===
 supay-hud-health = VIDA
