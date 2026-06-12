@@ -1,12 +1,11 @@
-//! Pantallazo headless del **chrome de nahual**: rail de **dientes** (sesiones
-//! de trabajo, `llimphi-widget-dock-rail`, el patrón canónico de cosmos) +
-//! **árbol de carpetas** lateral único con **íconos vectoriales reales**
-//! (`llimphi-icons`), y el canvas en vista detalle.
+//! Pantallazo headless del **chrome de nahual** corregido:
 //!
-//! Espeja la composición real del shell:
-//! - `session_rail_view`: un diente por sesión (ícono real, activo resaltado) +
-//!   `+` para abrir una nueva — el widget `dock_rail_view` de verdad.
-//! - `sidebar_view`: `tree_view` con íconos `Icon::Home/Folder/FolderOpen/Open`.
+//! - **Un solo sidebar**: el árbol de carpetas (íconos vectoriales reales).
+//! - **Dientes** de sesión (`llimphi-widget-dock-rail`) como **overlay pegado
+//!   al borde interno** del canvas, sobresaliendo del sidebar — el patrón
+//!   canónico de cosmos (`dock_rail_overlay`), NO una columna propia.
+//! - **Canvas = vista de la carpeta**: acá en modo **galería** (tiles
+//!   grandes), a ancho completo.
 //!
 //! `cargo run -p nahual-shell-llimphi --example pantallazo_dientes -- [out.png]`
 #![allow(dead_code)]
@@ -20,7 +19,8 @@ use llimphi_theme::Theme;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy::{
     self,
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
+    style::Position,
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_layout::LayoutTree;
@@ -29,10 +29,8 @@ use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 use llimphi_ui::{measure_text_node, mount, paint, Mounted, View};
 use llimphi_icons::{icon_view, Icon};
-use llimphi_widget_detail_table::{
-    detail_table_view, Column, DetailPalette, DetailRow, DetailSpec, SortDir as DtDir,
-};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_grid::{grid_view, GridCell, GridMetrics, GridPalette, GridSpec};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
 
@@ -40,6 +38,7 @@ use app_bus::{AppMenu, Menu, MenuItem};
 
 const W: u32 = 1200;
 const H: u32 = 760;
+const TREE_W: f32 = 230.0;
 const RAIL_W: f32 = 40.0;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
@@ -71,13 +70,11 @@ fn main() {
         on_command: Arc::new(|_: &str| Msg::Nada),
     });
 
-    // Rail de dientes (espejo de `session_rail_view`): 3 sesiones, la 2ª activa.
-    let rail = session_rail(&theme, 3, 1);
-
-    // Sidebar único: árbol real con íconos reales (espejo de `sidebar_view`).
+    // Sidebar ÚNICO: árbol de carpetas (espejo de `sidebar_view`).
     let sidebar = sidebar(&theme);
 
-    // Canvas: breadcrumb + lista detalle.
+    // Canvas: breadcrumb + vista GALERÍA de la carpeta, con el canal de los
+    // dientes a la izquierda (espejo de `view()` del shell).
     let crumb = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
         padding: pad_h(12.0),
@@ -85,60 +82,54 @@ fn main() {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .text("/ home / sergio / descargas", 13.0, theme.fg_text);
+    .text("/ home / sergio / fotos", 13.0, theme.fg_text);
 
-    let entradas = [
-        ("informe-2026.pdf", "1.2 MB", "documento"),
-        ("captura.png", "840 KB", "imagen"),
-        ("paquete.tar.gz", "12.0 MB", "archivo"),
-        ("notas.md", "3 KB", "markdown"),
-    ];
-    let rows: Vec<DetailRow<Msg>> = entradas
-        .iter()
-        .enumerate()
-        .map(|(i, (name, size, tipo))| DetailRow {
-            cells: vec![
-                format!("  {name}"),
-                size.to_string(),
-                format!("2026-06-11 09:0{i}"),
-                tipo.to_string(),
-            ],
-            selected: i == 0,
-            accent: None,
-            on_click: Msg::Nada,
-        })
-        .collect();
-    let columns = [
-        Column::flex("Nombre", 1.0),
-        Column::fixed("Tamaño", 88.0).right(),
-        Column::fixed("Modificado", 140.0),
-        Column::fixed("Tipo", 84.0),
-    ];
-    let lista = detail_table_view(
-        DetailSpec {
-            columns: &columns,
-            rows,
-            sort: Some((2, DtDir::Desc)),
-            row_height: 22.0,
-            caption: Some("4 entradas · detalle · v cicla lista/detalle/iconos/galería".to_string()),
-            palette: DetailPalette::from_theme(&theme),
-        },
-        |_col| Msg::Nada,
-    );
-    let canvas = View::new(Style {
+    let galeria = gallery(&theme);
+    let canvas_core = View::new(Style {
         flex_direction: FlexDirection::Column,
-        flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
-    .children(vec![crumb, lista]);
+    .children(vec![crumb, galeria]);
+
+    let canvas_padded = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        min_size: Size { width: length(0.0), height: length(0.0) },
+        padding: Rect {
+            left: length(RAIL_W),
+            right: length(0.0),
+            top: length(0.0),
+            bottom: length(0.0),
+        },
+        ..Default::default()
+    })
+    .children(vec![canvas_core]);
+
+    // Dientes: overlay absoluto al borde interno (espejo de
+    // `session_teeth_overlay`): 3 sesiones, la 2ª activa, + abajo.
+    let canvas_area = View::new(Style {
+        flex_grow: 1.0,
+        min_size: Size { width: length(0.0), height: length(0.0) },
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![canvas_padded, teeth_overlay(&theme, 3, 1)]);
 
     let body = View::new(Style {
         flex_grow: 1.0,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        min_size: Size { width: length(0.0), height: length(0.0) },
         ..Default::default()
     })
-    .children(vec![rail, sidebar, canvas]);
+    .children(vec![
+        View::new(Style {
+            size: Size { width: length(TREE_W), height: percent(1.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![sidebar]),
+        canvas_area,
+    ]);
 
     let root = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -180,8 +171,8 @@ fn pad_h(v: f32) -> Rect<taffy::LengthPercentage> {
     Rect { left: length(v), right: length(v), top: length(0.0), bottom: length(0.0) }
 }
 
-/// Espejo de `session_rail_view`: el rail de dientes real + el `+`.
-fn session_rail(theme: &Theme, n: usize, active: usize) -> View<Msg> {
+/// Espejo de `session_teeth_overlay`: dientes absolutos al borde interno.
+fn teeth_overlay(theme: &Theme, n: usize, active: usize) -> View<Msg> {
     let items: Vec<DockRailItem> = (0..n)
         .map(|i| DockRailItem { id: i as u64, active: i == active })
         .collect();
@@ -200,31 +191,101 @@ fn session_rail(theme: &Theme, n: usize, active: usize) -> View<Msg> {
         |_payload| -> Option<Msg> { None },
     );
     let plus = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(RAIL_W) },
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         flex_shrink: 0.0,
         ..Default::default()
     })
     .children(vec![View::new(Style {
-        size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
         ..Default::default()
     })
     .children(vec![icon_view(Icon::Plus, theme.fg_muted, 1.8)])]);
 
     View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0_f32),
+            left: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size { width: length(RAIL_W), height: auto() },
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(RAIL_W), height: percent(1.0_f32) },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        padding: Rect { left: length(0.0), right: length(0.0), top: length(6.0), bottom: length(0.0) },
         ..Default::default()
     })
-    .fill(theme.bg_panel_alt)
     .children(vec![rail, plus])
 }
 
-/// Espejo de `sidebar_view`: árbol real con íconos vectoriales reales.
+/// Vista galería de la carpeta: tiles grandes; acá los "thumbs" son fills de
+/// color (headless, sin decodificar imágenes reales) + un par de carpetas.
+fn gallery(theme: &Theme) -> View<Msg> {
+    let metrics = GridMetrics { tile_w: 220.0, tile_h: 248.0, gap: 14.0, pad: 14.0 };
+    let lado = metrics.tile_w - 12.0;
+    let tile = |c: Color| {
+        View::new(Style {
+            size: Size { width: length(lado), height: length(lado) },
+            ..Default::default()
+        })
+        .fill(c)
+    };
+    let folder_tile = || {
+        View::new(Style {
+            size: Size { width: length(lado), height: length(lado) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(theme.bg_panel_alt)
+        .children(vec![View::new(Style {
+            size: Size { width: length(lado * 0.5), height: length(lado * 0.5) },
+            ..Default::default()
+        })
+        .children(vec![icon_view(Icon::Folder, theme.fg_text, 1.6)])])
+    };
+    let colores = [
+        Color::from_rgba8(0x6b, 0x8e, 0x6e, 255),
+        Color::from_rgba8(0xc0, 0x8a, 0x52, 255),
+        Color::from_rgba8(0x4f, 0x6d, 0x8f, 255),
+        Color::from_rgba8(0x8f, 0x4f, 0x5e, 255),
+        Color::from_rgba8(0x77, 0x66, 0x99, 255),
+        Color::from_rgba8(0x4a, 0x8a, 0x85, 255),
+    ];
+    let nombres = ["atardecer.jpg", "cumbre.png", "lago.jpg", "feria.jpg", "retrato.png", "rio.webp"];
+    let mut cells: Vec<GridCell<Msg>> = vec![
+        GridCell {
+            content: folder_tile(),
+            label: Some("2026".to_string()),
+            selected: false,
+            on_click: Msg::Nada,
+        },
+        GridCell {
+            content: folder_tile(),
+            label: Some("viajes".to_string()),
+            selected: false,
+            on_click: Msg::Nada,
+        },
+    ];
+    for (i, (c, n)) in colores.iter().zip(nombres.iter()).enumerate() {
+        cells.push(GridCell {
+            content: tile(*c),
+            label: Some(n.to_string()),
+            selected: i == 0,
+            on_click: Msg::Nada,
+        });
+    }
+    grid_view(GridSpec {
+        cells,
+        cols: 3,
+        metrics,
+        caption: Some("8 entradas · galería · ↑↓ navega · Enter abre · v cambia vista".to_string()),
+        truncated_hint: None,
+        palette: GridPalette::from_theme(theme),
+    })
+}
+
+/// Espejo de `sidebar_view`: árbol único con íconos vectoriales reales.
 fn sidebar(theme: &Theme) -> View<Msg> {
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
@@ -251,9 +312,9 @@ fn sidebar(theme: &Theme) -> View<Msg> {
     let rows = vec![
         row("sergio", 0, true, false, Icon::Home),
         row("Descargas", 1, false, false, Icon::Folder),
-        row("descargas", 1, true, true, Icon::FolderOpen),
+        row("fotos", 1, true, true, Icon::FolderOpen),
         row("2026", 2, false, false, Icon::Folder),
-        row("fotos", 2, false, false, Icon::Folder),
+        row("viajes", 2, false, false, Icon::Folder),
         row("proyectos", 1, false, false, Icon::Folder),
         row("/", 0, false, false, Icon::Folder),
         row("tawasuyu", 0, false, false, Icon::Open),
@@ -275,7 +336,7 @@ fn sidebar(theme: &Theme) -> View<Msg> {
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(210.0_f32), height: percent(1.0_f32) },
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)

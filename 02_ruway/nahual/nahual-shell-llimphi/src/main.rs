@@ -53,7 +53,8 @@ use state::{Label, ShellState};
 use viewer_registry::ViewerKind;
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
+    style::Position,
     AlignItems, JustifyContent, Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::{
@@ -319,6 +320,9 @@ struct SessionSnap {
     tree_expanded: BTreeSet<PathBuf>,
     /// Offset de scroll del árbol lateral (en filas) — por sesión.
     tree_scroll: usize,
+    /// `true` = el canvas muestra el visor (se abrió un archivo con Enter);
+    /// `false` = el canvas muestra la vista de carpeta.
+    viewer_open: bool,
 }
 
 /// Una sesión de trabajo, representada por un **diente** del rail. `snap` es
@@ -344,6 +348,11 @@ struct Model {
     /// ordenados). No es por-sesión: el contenido de un dir es el mismo para
     /// todas; sólo el set de expandidas cambia por sesión.
     tree_children: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Ancho del sidebar (árbol de carpetas) en px. Lo muta su splitter.
+    tree_w: f32,
+    /// `true` = el canvas muestra el visor del archivo abierto (Enter);
+    /// Esc/Backspace vuelve a la vista de carpeta. Por sesión (va al snap).
+    viewer_open: bool,
     /// Los dos paneles (Fase 4.2c). `panes[focus]` es el activo (recibe
     /// teclado). En modo simple sólo se ve el 0; en dual, ambos.
     panes: [Pane; 2],
@@ -590,6 +599,8 @@ enum Msg {
     TreeSelect(PathBuf),
     /// Rueda sobre el árbol lateral: scrollea sus filas (delta en líneas).
     TreeScroll(f32),
+    /// Drag del splitter del sidebar: ajusta el ancho del árbol.
+    ResizeTree(f32),
 
     // ---- Fase 4.8: vista iconos con miniaturas ----
     /// Una miniatura terminó de generarse (llega del worker).
@@ -654,6 +665,7 @@ impl Model {
             last_restream: self.last_restream.take(),
             tree_expanded: std::mem::take(&mut self.tree_expanded),
             tree_scroll: self.tree_scroll,
+            viewer_open: self.viewer_open,
         }
     }
 
@@ -674,6 +686,7 @@ impl Model {
         self.last_restream = snap.last_restream;
         self.tree_expanded = snap.tree_expanded;
         self.tree_scroll = snap.tree_scroll;
+        self.viewer_open = snap.viewer_open;
         // Asegurá el cache de subcarpetas de lo que esta sesión tiene abierto.
         ensure_children_for_expanded(&mut self.tree_children, &self.tree_expanded);
     }
@@ -728,6 +741,7 @@ fn fresh_snap(cwd: &Path) -> SessionSnap {
         last_restream: None,
         tree_expanded: ancestors_set(cwd),
         tree_scroll: 0,
+        viewer_open: false,
     }
 }
 
@@ -800,6 +814,8 @@ impl App for Shell {
             tree_expanded,
             tree_scroll: 0,
             tree_children,
+            tree_w: 230.0,
+            viewer_open: false,
             // Ambos paneles arrancan en el cwd POSIX; el 1 se ve sólo en dual.
             panes: [
                 Pane { nav_stack: vec![posix_nav(&cwd)], marked: BTreeSet::new() },
@@ -914,6 +930,9 @@ impl App for Shell {
             Key::Named(NamedKey::ArrowDown) => Some(Msg::Down),
             Key::Named(NamedKey::Enter) => Some(Msg::OpenSelected),
             Key::Named(NamedKey::Backspace) => Some(Msg::Parent),
+            // Esc con el visor abierto vuelve a la vista de carpeta (el
+            // handler de Parent cierra el visor antes de subir de dir).
+            Key::Named(NamedKey::Escape) if _model.viewer_open => Some(Msg::Parent),
             Key::Named(NamedKey::Space) => Some(Msg::TogglePlay),
             // `v` alterna lista/detalle, `/` filtra (salvo que un mapa quiera
             // `/` para su propia búsqueda, que tiene su arm más abajo).
@@ -1016,6 +1035,7 @@ impl App for Shell {
                 match m.cur_mut().open_selected() {
                     Ok(Some(Opened::Descended)) => {
                         m.cur_pane_mut().marked.clear();
+                        m.viewer_open = false;
                         clear_preview(&mut m);
                         apply_format(&mut m);
                         record_recent(&mut m);
@@ -1050,12 +1070,17 @@ impl App for Shell {
                                     m.preview_temp = None;
                                     m.map_view.reset();
                                     m.map_view.color_field = None;
+                                    // El visor toma el canvas; Esc/⌫ vuelve.
+                                    m.viewer_open = true;
                                 }
                             }
                         } else {
                             // Hoja no-POSIX (wawa/nouser/minga): tempfile bridge.
                             match m.cur().read(&id) {
-                                Ok(bytes) => preview_from_bytes(&mut m, bytes, &nombre),
+                                Ok(bytes) => {
+                                    preview_from_bytes(&mut m, bytes, &nombre);
+                                    m.viewer_open = true;
+                                }
                                 Err(_) => clear_preview(&mut m),
                             }
                         }
@@ -1064,6 +1089,12 @@ impl App for Shell {
                 }
             }
             Msg::Parent => {
+                // Con el visor abierto, el primer ⌫/Esc sólo vuelve a la
+                // vista de carpeta; el siguiente sube de directorio.
+                if m.viewer_open {
+                    m.viewer_open = false;
+                    return m;
+                }
                 m.cur_pane_mut().marked.clear();
                 match m.cur_mut().parent() {
                     Ok(true) => {
@@ -1124,12 +1155,16 @@ impl App for Shell {
                 m.focus = pane;
                 if matches!(m.cur_mut().ascend_to(depth), Ok(true)) {
                     m.cur_pane_mut().marked.clear();
+                    m.viewer_open = false;
                     apply_format(&mut m);
                     refresh_preview(&mut m);
                 }
             }
             Msg::ResizeList(dx) => {
                 m.list_width = (m.list_width + dx).clamp(220.0, 900.0);
+            }
+            Msg::ResizeTree(dx) => {
+                m.tree_w = (m.tree_w + dx).clamp(170.0, 420.0);
             }
             Msg::Scroll(steps) => {
                 // El navegador activo tiene su propio acumulador para touchpads
@@ -1586,9 +1621,15 @@ impl App for Shell {
                     m.tree_expanded.insert(path.clone());
                     m.cur_pane_mut().nav_stack = vec![posix_nav(&path)];
                     m.cur_pane_mut().marked.clear();
+                    // Seleccionar una carpeta abre su vista en el canvas.
+                    m.viewer_open = false;
                     apply_format(&mut m);
                     record_recent(&mut m);
                     refresh_preview(&mut m);
+                    // Si la carpeta hereda vista iconos/galería, pedí thumbs.
+                    if m.cur().view.is_grid() {
+                        request_thumbs(&mut m, &handle);
+                    }
                     // Mantené el nombre de la sesión en sync con la carpeta.
                     let nombre = session_name(&path);
                     let activa = m.active;
@@ -1703,9 +1744,12 @@ impl App for Shell {
             ),
         };
 
-        // Modo simple: panel 0 (con su breadcrumb) + visor a la derecha.
-        // Modo dual: dos columnas de archivos, la enfocada resaltada.
-        let body = if model.dual {
+        // El CANVAS es la vista de la carpeta (lista/detalle/iconos/galería a
+        // ancho completo). El visor sólo lo toma cuando se abrió un archivo
+        // (Enter); Esc/⌫ vuelve. En dual, dos columnas de archivos.
+        let canvas_core = if model.viewer_open {
+            viewer_pane
+        } else if model.dual {
             splitter_two(
                 Direction::Row,
                 pane_column(model, 0, model.focus == 0, &theme),
@@ -1719,41 +1763,52 @@ impl App for Shell {
                 &splitter_palette,
             )
         } else {
-            splitter_two(
-                Direction::Row,
-                pane_column(model, 0, false, &theme),
-                PaneSize::Fixed(model.list_width),
-                viewer_pane,
-                PaneSize::Flex,
-                |phase, dx| match phase {
-                    DragPhase::Move => Some(Msg::ResizeList(dx)),
-                    DragPhase::End => None,
-                },
-                &splitter_palette,
-            )
+            pane_column(model, model.focus, true, &theme)
         };
-
-        // El cuerpo ocupa el alto restante (flex), dejando lugar al panel de
-        // la cola de operaciones abajo si hay jobs. A la izquierda, el sidebar
-        // de favoritos/recientes (ancho fijo); el resto es el split de paneles.
-        let body_inner = View::new(Style {
-            flex_grow: 1.0,
-            min_size: Size { width: length(0.0), height: length(0.0) },
+        // Canal interno: el contenido arranca después del ancho del rail para
+        // que los dientes (overlay) no tapen las primeras columnas.
+        let canvas_padded = View::new(Style {
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            min_size: Size { width: length(0.0), height: length(0.0) },
+            padding: Rect {
+                left: length(SESSION_RAIL_W),
+                right: length(0.0),
+                top: length(0.0),
+                bottom: length(0.0),
+            },
             ..Default::default()
         })
-        .children(vec![body]);
+        .children(vec![canvas_core]);
+        // Dientes de sesión: overlay absoluto pegado al borde interno del
+        // canvas, sobresaliendo del sidebar (patrón canónico de cosmos).
+        let canvas_area = View::new(Style {
+            flex_grow: 1.0,
+            min_size: Size { width: length(0.0), height: length(0.0) },
+            size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![canvas_padded, session_teeth_overlay(model, &theme)]);
+
+        // Sidebar único (árbol de carpetas) | canvas, con splitter.
+        let body = splitter_two(
+            Direction::Row,
+            sidebar_view(model, &theme),
+            PaneSize::Fixed(model.tree_w),
+            canvas_area,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::ResizeTree(dx)),
+                DragPhase::End => None,
+            },
+            &splitter_palette,
+        );
         let body_wrap = View::new(Style {
             flex_grow: 1.0,
             min_size: Size { width: length(0.0), height: length(0.0) },
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
-        .children(vec![
-            session_rail_view(model, &theme),
-            sidebar_view(model, &theme),
-            body_inner,
-        ]);
+        .children(vec![body]);
 
         let mut col: Vec<View<Msg>> = vec![menubar, body_wrap];
         if let Some(panel) = queue_panel(model, &theme) {
@@ -2489,8 +2544,6 @@ fn build_tree_rows(model: &Model, theme: &Theme) -> Vec<TreeRow<Msg>> {
 /// filas (`TreeScroll`) — sin esto el wheel caía al canvas. Ancho fijo. El set
 /// de descolapsadas y el scroll se recuerdan **por sesión**.
 fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
-    const WIDTH: f32 = 210.0;
-
     let header = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
         padding: pad_h(12.0),
@@ -2523,7 +2576,8 @@ fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size { width: length(WIDTH), height: percent(1.0_f32) },
+        // El ancho lo dicta el splitter del sidebar (pane Fixed(tree_w)).
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_panel_alt)
@@ -2533,11 +2587,12 @@ fn sidebar_view(model: &Model, theme: &Theme) -> View<Msg> {
     .children(vec![header, tree_wrap])
 }
 
-/// Rail de **dientes**: una sesión de trabajo por diente
-/// (`llimphi-widget-dock-rail`, el patrón canónico de cosmos). Click en un
-/// diente activa esa sesión → su árbol y su canvas vuelven. Debajo, un `+`
-/// abre una sesión nueva. Cada diente lleva un ícono real.
-fn session_rail_view(model: &Model, theme: &Theme) -> View<Msg> {
+/// **Dientes** de sesión como overlay absoluto pegado al borde interno del
+/// canvas (el patrón canónico de cosmos: `dock_rail_overlay`): cada diente
+/// (`llimphi-widget-dock-rail`) es una sesión de trabajo y sobresale del
+/// sidebar sobre el canvas. Click activa esa sesión (su árbol + su vista de
+/// carpeta vuelven); debajo, un `+` abre una sesión nueva.
+fn session_teeth_overlay(model: &Model, theme: &Theme) -> View<Msg> {
     let items: Vec<DockRailItem> = (0..model.sessions.len())
         .map(|i| DockRailItem { id: i as u64, active: i == model.active })
         .collect();
@@ -2555,9 +2610,9 @@ fn session_rail_view(model: &Model, theme: &Theme) -> View<Msg> {
         |id| Msg::SessionActivate(id as usize),
         |_payload| -> Option<Msg> { None },
     );
-    // "+" nueva sesión, debajo del rail.
+    // "+" nueva sesión, colgado debajo de los dientes.
     let plus = View::new(Style {
-        size: Size { width: percent(1.0_f32), height: length(SESSION_RAIL_W) },
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         flex_shrink: 0.0,
@@ -2566,25 +2621,23 @@ fn session_rail_view(model: &Model, theme: &Theme) -> View<Msg> {
     .hover_fill(theme.bg_row_hover)
     .on_click(Msg::SessionNew)
     .children(vec![View::new(Style {
-        size: Size { width: length(18.0_f32), height: length(18.0_f32) },
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
         ..Default::default()
     })
     .children(vec![icon_view(Icon::Plus, theme.fg_muted, 1.8)])]);
 
     View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size { width: length(SESSION_RAIL_W), height: percent(1.0_f32) },
-        flex_shrink: 0.0,
-        align_items: Some(AlignItems::Center),
-        padding: Rect {
-            left: length(0.0),
-            right: length(0.0),
-            top: length(6.0),
-            bottom: length(0.0),
+        position: Position::Absolute,
+        inset: Rect {
+            top: length(6.0_f32),
+            left: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
         },
+        size: Size { width: length(SESSION_RAIL_W), height: auto() },
+        flex_direction: FlexDirection::Column,
         ..Default::default()
     })
-    .fill(theme.bg_panel_alt)
     .children(vec![rail, plus])
 }
 
@@ -3083,10 +3136,11 @@ fn navigator_icons_view(model: &Model, pane: usize, theme: &Theme) -> View<Msg> 
     };
     let modo = if gallery { "galería" } else { "iconos" };
 
-    // Ancho estimado del panel para derivar columnas: en dual, media ventana;
-    // en simple, el ancho de la lista (el resto es el visor).
+    // Ancho estimado para derivar columnas: el canvas es la ventana menos el
+    // sidebar (árbol) y el canal de los dientes; en dual, la mitad de eso.
     let (vw, vh) = viewport_of(model);
-    let pane_w = if model.dual { vw / 2.0 } else { model.list_width };
+    let canvas_w = (vw - model.tree_w - SESSION_RAIL_W - 8.0).max(240.0);
+    let pane_w = if model.dual { canvas_w / 2.0 } else { canvas_w };
     let total = nav.visible_count();
     let win = ventana_visible(total, pane_w, vh - 120.0, 0, &metrics);
 
@@ -3401,6 +3455,12 @@ fn next_in_cycle(fields: &[String], current: &Option<String>) -> Option<String> 
 /// → carga directa con `load_for`. Hoja no-POSIX → vuelca a tempfile y
 /// previsualiza. Unifica los dos caminos viejos (POSIX y `*_nav`).
 fn refresh_preview(m: &mut Model) {
+    // Con el canvas en vista de carpeta (visor cerrado) no hay nada que
+    // refrescar — y cargar/decodificar en cada flecha sería I/O tirado. El
+    // visor carga fresco al abrirse (OpenSelected).
+    if !m.viewer_open {
+        return;
+    }
     // Resolvemos la acción soltando el préstamo de `cur()` antes de mutar el
     // preview (que toca el resto del modelo).
     enum Accion {
