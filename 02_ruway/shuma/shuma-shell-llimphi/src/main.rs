@@ -1458,16 +1458,37 @@ struct ChromeState {
     /// Índice de la sesión/pestaña activa.
     #[serde(default)]
     active_session: usize,
+    /// Ancho (px) del panel de config de la sesión (izquierda). Parte de la
+    /// **disposición**: el splitter se reabre donde lo dejaste.
+    #[serde(default = "default_session_w")]
+    session_w: f32,
+    /// Ancho (px) del panel de herramienta/monitores (derecha).
+    #[serde(default = "default_monitors_width")]
+    monitors_width: f32,
 }
 
 fn yes() -> bool {
     true
 }
 
+fn default_session_w() -> f32 {
+    240.0
+}
+
+fn default_monitors_width() -> f32 {
+    MONITORS_INITIAL_WIDTH
+}
+
 impl Default for ChromeState {
     fn default() -> Self {
         // Default pedido: panel derecho colapsado, panel de config abierto.
-        Self { active_tool: None, session_panel_open: true, active_session: 0 }
+        Self {
+            active_tool: None,
+            session_panel_open: true,
+            active_session: 0,
+            session_w: default_session_w(),
+            monitors_width: default_monitors_width(),
+        }
     }
 }
 
@@ -1485,6 +1506,8 @@ fn save_chrome(m: &Model) {
         active_tool: m.active_tool,
         session_panel_open: m.session_panel_open,
         active_session: m.active_session,
+        session_w: m.session_w,
+        monitors_width: m.monitors_width,
     };
     if let Ok(json) = serde_json::to_string_pretty(&state) {
         if let Some(dir) = path.parent() {
@@ -1942,10 +1965,10 @@ impl App for Shell {
             hosts_modal_open: false,
             containers_modal_open: false,
             viewport: (1280.0, 800.0),
-            session_w: 240.0,
+            session_w: chrome.session_w,
             sysmon: SystemSampler::new(HISTORY),
             last_snapshot: None,
-            monitors_width: MONITORS_INITIAL_WIDTH,
+            monitors_width: chrome.monitors_width,
             extra_history: HashMap::new(),
             extra_display: HashMap::new(),
             _wawa_watcher: wawa_watcher,
@@ -2914,9 +2937,12 @@ impl App for Shell {
             }
             Msg::SetSessionWidth(dx) => {
                 m.session_w = (m.session_w + dx).clamp(180.0, 480.0);
+                // Persistir la geometría: el splitter reabre donde lo dejaste.
+                save_chrome(&m);
             }
             Msg::SetToolWidth(dx) => {
                 m.monitors_width = (m.monitors_width - dx).clamp(180.0, 480.0);
+                save_chrome(&m);
             }
             Msg::Module(slot, mmsg) => {
                 // Hook: SelectRoot del módulo minga dispara la carga
