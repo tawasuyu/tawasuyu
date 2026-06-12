@@ -356,6 +356,106 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
     .children(vec![core])
 }
 
+/// Selector de **host remoto**: un único select de hosts guardados + un botón
+/// que abre el gestor (donde se crean/editan/borran). NO edita host/usuario/
+/// puerto sueltos — esos viven sólo en el gestor. Lo comparten el form de
+/// creación (sesión pending) y el sidebar (sesión viva), para que no vuelvan a
+/// divergir en dos UIs distintas. Elegir un host lo aplica a la sesión activa
+/// (y conecta, si ya no es pending) vía `Msg::HostApply`.
+fn host_picker(model: &Model, session: &Session, theme: &Theme) -> Vec<View<Msg>> {
+    let pal = SelectPalette::from_theme(theme);
+    let mut out: Vec<View<Msg>> = vec![panel_label("Host remoto", theme)];
+    let host_text = session.host.text();
+    let host_sel = if host_text.trim().is_empty() {
+        None
+    } else {
+        let u = session.user.text();
+        let label = if u.trim().is_empty() {
+            host_text.clone()
+        } else {
+            format!("{u}@{host_text}")
+        };
+        Some(SelectItem::new(label))
+    };
+    out.push(select_trigger_view(
+        host_sel.as_ref(),
+        "Elegí un host guardado…",
+        model.dropdown_open == Some(DropKind::Host),
+        None,
+        &pal,
+        Msg::ToggleDropdown(DropKind::Host),
+    ));
+    if model.dropdown_open == Some(DropKind::Host) {
+        if model.hosts.is_empty() {
+            out.push(panel_note("Sin hosts guardados — usá «Gestionar hosts».", theme));
+        } else {
+            let rows: Vec<View<Msg>> = model
+                .hosts
+                .iter()
+                .enumerate()
+                .map(|(i, h)| pick_row(h.display(), Msg::HostApply(i), theme))
+                .collect();
+            out.push(inline_list(rows));
+        }
+    }
+    out.push(action_button_small("Gestionar hosts…", Msg::OpenHostsWindow, theme));
+    out
+}
+
+/// Selector de **contenedor**: un único select (rootfs en disco para
+/// unshare/bwrap + containers podman) + un botón que abre el gestor (donde se
+/// crean/arrancan/paran/borran). Sin select de distro suelto ni botón «crear»
+/// fuera del gestor — la distro se elige al crear, dentro del gestor. Compartido
+/// por form y sidebar. Elegir uno lo liga a la sesión activa (`PickRootfs` /
+/// `SubscribeContainer`).
+fn container_picker(model: &Model, session: &Session, theme: &Theme) -> Vec<View<Msg>> {
+    let pal = SelectPalette::from_theme(theme);
+    let mut out: Vec<View<Msg>> = vec![panel_label("Contenedor", theme)];
+    let cont_sel = session.container.as_ref().map(|c| {
+        // Basename, no el path completo del rootfs.
+        let short = c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c.as_str());
+        SelectItem::new(short.to_string())
+    });
+    out.push(select_trigger_view(
+        cont_sel.as_ref(),
+        "Elegí un contenedor…",
+        model.dropdown_open == Some(DropKind::Container),
+        None,
+        &pal,
+        Msg::ToggleDropdown(DropKind::Container),
+    ));
+    if model.dropdown_open == Some(DropKind::Container) {
+        let mut rows: Vec<View<Msg>> = Vec::new();
+        for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
+            if super::rootfs_listo(*distro) {
+                let d = *distro;
+                rows.push(pick_row(
+                    format!("rootfs · {}", d.label()),
+                    Msg::PickRootfs(d),
+                    theme,
+                ));
+            }
+        }
+        for (i, c) in model.containers.iter().enumerate() {
+            rows.push(pick_row(c.clone(), Msg::SubscribeContainer(i), theme));
+        }
+        if rows.is_empty() {
+            out.push(panel_note(
+                "Sin contenedores — usá «Gestionar contenedores».",
+                theme,
+            ));
+        } else {
+            out.push(inline_list(rows));
+        }
+    }
+    out.push(action_button_small(
+        "Gestionar contenedores…",
+        Msg::OpenContainersWindow,
+        theme,
+    ));
+    out
+}
+
 /// El **panel de la sesión activa** (a la derecha de su rail): TODA su
 /// configuración. La draft trae el aislamiento a elegir → al configurarlo nace
 /// una sesión (no hay botón «+»). Una sesión real muestra su aislamiento + el
@@ -402,66 +502,17 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         Msg::ToggleDropdown(DropKind::Isolation),
     ));
 
-    // Remoto: form de conexión (host/usuario/puerto) + Conectar.
+    // Remoto: un único select de hosts guardados + botón al gestor. Sin campos
+    // host/usuario/puerto sueltos — esos viven en el gestor de hosts.
     if session.isolation == Isolation::Remote {
-        let tpal = TextInputPalette::from_theme(theme);
-        children.push(panel_label("Host", theme));
-        children.push(text_input_view(
-            &session.host,
-            "ejemplo.com",
-            model.focused_field == Some(RemoteField::Host),
-            &tpal,
-            Msg::FocusField(RemoteField::Host),
-        ));
-        children.push(panel_label("Usuario", theme));
-        children.push(text_input_view(
-            &session.user,
-            "usuario",
-            model.focused_field == Some(RemoteField::User),
-            &tpal,
-            Msg::FocusField(RemoteField::User),
-        ));
-        children.push(panel_label("Puerto", theme));
-        children.push(text_input_view(
-            &session.port,
-            "22",
-            model.focused_field == Some(RemoteField::Port),
-            &tpal,
-            Msg::FocusField(RemoteField::Port),
-        ));
-        children.push(action_button("Conectar", Msg::ConnectRemote, theme));
+        children.extend(host_picker(model, session, theme));
     }
 
-    // Contenedor: capa OPCIONAL (encima de Local o Remoto) en un colapsable.
-    children.push(container_header(session, theme));
-    if session.container_open {
-        children.push(panel_label("Distro", theme));
-        let distros = distro_items();
-        children.push(select_trigger_view(
-            distros.get(distro_index(session.distro)),
-            "Elegí la distro…",
-            model.dropdown_open == Some(DropKind::Distro),
-            None,
-            &pal,
-            Msg::ToggleDropdown(DropKind::Distro),
-        ));
-        let sub = session.container.as_ref().map(|c| SelectItem::new(c.clone()));
-        children.push(select_trigger_view(
-            sub.as_ref(),
-            "Conectar a un contenedor…",
-            model.dropdown_open == Some(DropKind::Container),
-            None,
-            &pal,
-            Msg::ToggleDropdown(DropKind::Container),
-        ));
-        // Botón explícito para crear uno nuevo de la distro elegida (antes el
-        // único disparador estaba enterrado como item "+ Crear nuevo" del
-        // dropdown de arriba — no se veía).
-        children.push(action_button(
-            &format!("+ Crear contenedor {}", session.distro.label()),
-            Msg::CreateContainer,
-            theme,
-        ));
+    // Contenedor: capa OPCIONAL (encima de Local o Remoto). Mismo selector que
+    // el form de creación: toggle + un único select + botón al gestor.
+    children.push(container_toggle(session.use_container, theme));
+    if session.use_container {
+        children.extend(container_picker(model, session, theme));
     }
 
     // Estado actual + cerrar (sólo sesiones reales).
@@ -519,7 +570,7 @@ fn conn_pill(conn: ConnState, theme: &Theme) -> View<Msg> {
     });
     let txt = View::new(Style {
         // height auto → el Row (align Center) lo centra; con 22px fijo el texto
-        // Start quedaba pegado arriba. Ver `container_header`.
+        // Start quedaba pegado arriba.
         size: Size { width: percent(1.0_f32), height: llimphi_ui::llimphi_layout::taffy::prelude::Dimension::auto() },
         ..Default::default()
     })
@@ -533,70 +584,6 @@ fn conn_pill(conn: ConnState, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![dot, txt])
-}
-
-/// Cabecera clickeable del colapsable de contenedor: chevron (vectorial) +
-/// "Contenedor" + el nombre suscrito o «ninguno». Click → `Msg::ToggleContainer`.
-fn container_header(session: &Session, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
-    use llimphi_ui::llimphi_text::Alignment;
-    let open = session.container_open;
-    let accent = theme.accent;
-    let chevron = View::new(Style {
-        size: Size { width: length(16.0_f32), height: length(28.0_f32) },
-        flex_shrink: 0.0,
-        ..Default::default()
-    })
-    .paint_with(move |scene, _ts, rect| {
-        use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Point, Stroke};
-        let cx = (rect.x + rect.w * 0.5) as f64;
-        let cy = (rect.y + rect.h * 0.5) as f64;
-        let r = 4.0;
-        let mut p = BezPath::new();
-        if open {
-            // ▾
-            p.move_to(Point::new(cx - r, cy - r * 0.5));
-            p.line_to(Point::new(cx, cy + r * 0.5));
-            p.line_to(Point::new(cx + r, cy - r * 0.5));
-        } else {
-            // ▸
-            p.move_to(Point::new(cx - r * 0.5, cy - r));
-            p.line_to(Point::new(cx + r * 0.5, cy));
-            p.line_to(Point::new(cx - r * 0.5, cy + r));
-        }
-        scene.stroke(&Stroke::new(1.6), Affine::IDENTITY, accent, None, &p);
-    });
-    // `height: auto` (no 28px fijo): el texto Start se ancla ARRIBA del nodo
-    // (el compositor sólo centra vertical el texto Center), así que un nodo más
-    // alto que el texto lo deja descentrado. Con altura = altura del texto, el
-    // `align_items: Center` del Row de afuera lo centra en sus 28px.
-    let label = View::new(Style {
-        size: Size { width: Dimension::auto(), height: Dimension::auto() },
-        flex_grow: 1.0,
-        ..Default::default()
-    })
-    .text_aligned("Contenedor".to_string(), 12.0, theme.fg_text, Alignment::Start);
-    let estado = View::new(Style {
-        size: Size { width: Dimension::auto(), height: Dimension::auto() },
-        ..Default::default()
-    })
-    .text_aligned(
-        session.container.clone().unwrap_or_else(|| "ninguno".into()),
-        11.0,
-        theme.fg_muted,
-        Alignment::End,
-    );
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
-        margin: Rect { left: length(0.0_f32), right: length(0.0_f32), top: length(6.0_f32), bottom: length(0.0_f32) },
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .hover_fill(theme.bg_row_hover)
-    .radius(5.0)
-    .on_click(Msg::ToggleContainer)
-    .children(vec![chevron, label, estado])
 }
 
 /// El **canvas principal**: SÓLO el shell de la sesión activa. Sin barra de
@@ -1306,9 +1293,6 @@ fn iso_radio_row(current: Isolation, theme: &Theme) -> View<Msg> {
 fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::{AlignItems, JustifyContent};
     use llimphi_ui::llimphi_text::Alignment;
-    use llimphi_widget_text_input::TextInputPalette;
-    let pal = SelectPalette::from_theme(theme);
-    let tpal = TextInputPalette::from_theme(theme);
 
     let titulo = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
@@ -1339,93 +1323,17 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
     let iso_trigger = iso_radio_row(session.isolation, theme);
 
     // Cada recurso (host / contenedor) se ELIGE con un select que expande su
-    // lista inline, y se CREA con un botón «+ Nuevo …» que abre un diálogo
-    // bloqueante (modal centrado). Ya no hay ventana «Gestionar …» del SO.
-    let _ = &tpal; // todavía lo usa el form de auth remoto si lo agregamos
+    // lista inline; se CREA/gestiona con un botón que abre el gestor (modal
+    // bloqueante). Mismo selector que el sidebar (host_picker/container_picker).
     let mut children: Vec<View<Msg>> = vec![titulo, sub, iso_label, iso_trigger];
     if session.isolation == Isolation::Remote {
-        children.push(panel_label("Host remoto", theme));
-        // Select: el host aplicado (si lo hay) como selección actual.
-        let host_text = session.host.text();
-        let host_sel = if host_text.trim().is_empty() {
-            None
-        } else {
-            let u = session.user.text();
-            let label = if u.trim().is_empty() {
-                host_text.clone()
-            } else {
-                format!("{u}@{host_text}")
-            };
-            Some(SelectItem::new(label))
-        };
-        children.push(select_trigger_view(
-            host_sel.as_ref(),
-            "Elegí un host guardado…",
-            model.dropdown_open == Some(DropKind::Host),
-            None,
-            &pal,
-            Msg::ToggleDropdown(DropKind::Host),
-        ));
-        if model.dropdown_open == Some(DropKind::Host) {
-            if model.hosts.is_empty() {
-                children.push(panel_note("Sin hosts guardados — usá «+ Nuevo host».", theme));
-            } else {
-                let rows: Vec<View<Msg>> = model
-                    .hosts
-                    .iter()
-                    .enumerate()
-                    .map(|(i, h)| pick_row(h.display(), Msg::HostApply(i), theme))
-                    .collect();
-                children.push(inline_list(rows));
-            }
-        }
-        children.push(action_button_small("+ Nuevo host", Msg::OpenHostsWindow, theme));
+        children.extend(host_picker(model, session, theme));
     }
 
-    // Aislar en contenedor: select de los ya creados (rootfs en disco para
-    // unshare/bwrap + contenedores podman) + «+ Nuevo contenedor» (modal).
+    // Aislar en contenedor: toggle + el mismo selector único que el sidebar.
     children.push(container_toggle(session.use_container, theme));
     if session.use_container {
-        children.push(panel_label("Contenedor", theme));
-        let cont_sel = session.container.as_ref().map(|c| {
-            // Basename, no el path completo del rootfs.
-            let short = c.rsplit('/').find(|s| !s.is_empty()).unwrap_or(c.as_str());
-            SelectItem::new(short.to_string())
-        });
-        children.push(select_trigger_view(
-            cont_sel.as_ref(),
-            "Elegí un contenedor…",
-            model.dropdown_open == Some(DropKind::Container),
-            None,
-            &pal,
-            Msg::ToggleDropdown(DropKind::Container),
-        ));
-        if model.dropdown_open == Some(DropKind::Container) {
-            let mut rows: Vec<View<Msg>> = Vec::new();
-            for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
-                if super::rootfs_listo(*distro) {
-                    let d = *distro;
-                    rows.push(pick_row(
-                        format!("rootfs · {}", d.label()),
-                        Msg::PickRootfs(d),
-                        theme,
-                    ));
-                }
-            }
-            for (i, c) in model.containers.iter().enumerate() {
-                rows.push(pick_row(c.clone(), Msg::SubscribeContainer(i), theme));
-            }
-            if rows.is_empty() {
-                children.push(panel_note("Sin contenedores — usá «+ Nuevo contenedor».", theme));
-            } else {
-                children.push(inline_list(rows));
-            }
-        }
-        children.push(action_button_small(
-            "+ Nuevo contenedor",
-            Msg::OpenContainersWindow,
-            theme,
-        ));
+        children.extend(container_picker(model, session, theme));
     }
 
     // Botones: Cancelar | Crear.
