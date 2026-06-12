@@ -391,6 +391,45 @@ fn spawn_remote_engine_action(
     }
     handle.spawn(move || {
         let target = format!("{user}@{host}");
+        let mut args: Vec<String> = vec![
+            "-p".into(),
+            port.to_string(),
+            "-o".into(),
+            "BatchMode=yes".into(),
+            "-o".into(),
+            "ConnectTimeout=8".into(),
+            target,
+            "--".into(),
+            engine,
+            action.into(),
+        ];
+        // `rm` necesita `-f` para borrar un contenedor corriendo (paridad con
+        // el `podman rm -f` local).
+        if action == "rm" {
+            args.push("-f".into());
+        }
+        args.push(name);
+        let _ = std::process::Command::new("ssh").args(&args).output();
+        Msg::RefreshRemoteContainers
+    });
+}
+
+/// Crea un contenedor en el host remoto: `ssh … <engine> run -d --name <name>
+/// <image> sleep infinity`. Sólo podman/docker. Al volver re-lista el remoto.
+fn spawn_create_remote_container(
+    handle: &Handle<Msg>,
+    host: String,
+    user: String,
+    port: u16,
+    engine: String,
+    image: &'static str,
+    name: String,
+) {
+    if !matches!(engine.as_str(), "podman" | "docker") {
+        return;
+    }
+    handle.spawn(move || {
+        let target = format!("{user}@{host}");
         let _ = std::process::Command::new("ssh")
             .args([
                 "-p",
@@ -402,11 +441,16 @@ fn spawn_remote_engine_action(
                 &target,
                 "--",
                 &engine,
-                action,
+                "run",
+                "-d",
+                "--name",
                 &name,
+                image,
+                "sleep",
+                "infinity",
             ])
             .output();
-        Msg::Noop
+        Msg::RefreshRemoteContainers
     });
 }
 
@@ -1756,6 +1800,8 @@ struct Model {
     /// Contenedores descubiertos en el host REMOTO de la sesión activa (vía
     /// `ssh … <engine> ps -a`). Se repueblan al abrir el select en un remoto.
     remote_containers: Vec<String>,
+    /// Distro elegida para «crear nuevo» en el gestor remoto.
+    remote_new_distro: Distro,
     /// Lista detallada de containers para el gestor (name + state).
     containers_full: Vec<ContainerInfo>,
     /// Config persistida de contenedores (engine/distro/mounts), por nombre.
@@ -1827,6 +1873,22 @@ impl Model {
     /// La sesión activa (la primera si el índice quedó fuera de rango).
     fn active(&self) -> Option<&Session> {
         self.sessions.get(self.active_session).or_else(|| self.sessions.first())
+    }
+
+    /// Coords del host remoto de la sesión activa + el engine para gestionar
+    /// contenedores allá (normalizado a podman/docker), si es una sesión remota.
+    /// `None` para sesiones locales — el gestor cae al camino local.
+    fn active_remote_target(&self) -> Option<(String, String, u16, String)> {
+        let s = self.active()?;
+        if s.isolation != Isolation::Remote {
+            return None;
+        }
+        let engine = if matches!(s.container_engine.as_str(), "podman" | "docker") {
+            s.container_engine.clone()
+        } else {
+            "podman".to_string()
+        };
+        Some((s.host.text(), s.user.text(), s.port_num(), engine))
     }
 
     /// Instancia-módulo `w` de la sesión `idx`, si existe.
@@ -1950,6 +2012,20 @@ enum Msg {
     RemoveContainer(String),
     /// Borra un rootfs en disco (unshare/bwrap) — destructivo, rm del dir.
     RemoveRootfs(String),
+
+    // ─── Gestor remoto (contenedores en el host remoto de la sesión) ───
+    /// Re-lista los contenedores del host remoto de la sesión activa.
+    RefreshRemoteContainers,
+    /// Distro elegida para «crear nuevo» en el gestor remoto.
+    SetRemoteNewDistro(Distro),
+    /// `ssh … <engine> run -d --name … <image>` en el host remoto.
+    CreateRemoteContainer,
+    /// `ssh … <engine> start <name>` en el host remoto.
+    RemoteStart(String),
+    /// `ssh … <engine> stop <name>` en el host remoto.
+    RemoteStop(String),
+    /// `ssh … <engine> rm -f <name>` en el host remoto — destructivo.
+    RemoteRemove(String),
 
     // ─── Diálogo bloqueante de hosts ──────────────────────────────────
     /// Abre el modal de hosts (centrado, bloqueante) y arranca un draft
@@ -2160,6 +2236,7 @@ impl App for Shell {
             dropdown_open: None,
             containers: Vec::new(),
             remote_containers: Vec::new(),
+            remote_new_distro: Distro::Ubuntu,
             containers_full: Vec::new(),
             container_cfgs: load_container_cfgs(),
             focused_field: None,
@@ -2618,7 +2695,13 @@ impl App for Shell {
                 // siempre se ve y el "seleccionar para editar arriba" es claro.
                 m.containers_modal_open = true;
                 m.container_draft = None;
-                spawn_list_containers_full(handle);
+                // El gestor opera sobre el host de la sesión activa: en remoto,
+                // lista por SSH; en local, `podman ps -a` con estado.
+                if let Some((host, user, port, engine)) = m.active_remote_target() {
+                    spawn_list_remote_containers(handle, host, user, port, engine);
+                } else {
+                    spawn_list_containers_full(handle);
+                }
             }
             Msg::Noop => {}
             Msg::CloseContainersModal => {
@@ -2633,6 +2716,47 @@ impl App for Shell {
             Msg::StopContainer(name) => spawn_container_action(handle, "stop", name),
             Msg::RemoveContainer(name) => spawn_container_action(handle, "rm", name),
             Msg::RemoveRootfs(name) => spawn_remove_rootfs(handle, name),
+            Msg::RefreshRemoteContainers => {
+                if let Some((host, user, port, engine)) = m.active_remote_target() {
+                    spawn_list_remote_containers(handle, host, user, port, engine);
+                }
+            }
+            Msg::SetRemoteNewDistro(d) => m.remote_new_distro = d,
+            Msg::CreateRemoteContainer => {
+                if let Some((host, user, port, engine)) = m.active_remote_target() {
+                    let distro = m.remote_new_distro;
+                    // Nombre estable por distro + número de la sesión activa.
+                    let n = m
+                        .active()
+                        .and_then(|s| s.number)
+                        .unwrap_or(0);
+                    let name = format!("shuma-{}-{n}", distro.label().to_lowercase());
+                    spawn_create_remote_container(
+                        handle,
+                        host,
+                        user,
+                        port,
+                        engine,
+                        distro.image(),
+                        name,
+                    );
+                }
+            }
+            Msg::RemoteStart(name) => {
+                if let Some((host, user, port, engine)) = m.active_remote_target() {
+                    spawn_remote_engine_action(handle, host, user, port, engine, "start", name);
+                }
+            }
+            Msg::RemoteStop(name) => {
+                if let Some((host, user, port, engine)) = m.active_remote_target() {
+                    spawn_remote_engine_action(handle, host, user, port, engine, "stop", name);
+                }
+            }
+            Msg::RemoteRemove(name) => {
+                if let Some((host, user, port, engine)) = m.active_remote_target() {
+                    spawn_remote_engine_action(handle, host, user, port, engine, "rm", name);
+                }
+            }
             Msg::OpenHostsWindow => {
                 // Modal bloqueante: abre mostrando la LISTA. El editor aparece
                 // al tocar "Nuevo" o una fila (mismo mecanismo que contenedores).

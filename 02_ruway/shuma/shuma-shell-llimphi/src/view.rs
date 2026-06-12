@@ -1743,6 +1743,11 @@ pub(crate) fn containers_modal(model: &Model, theme: &Theme) -> View<Msg> {
 fn containers_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
 
+    // Si la sesión activa es remota, el gestor opera sobre ESE host por SSH.
+    if let Some((host, user, port, engine)) = model.active_remote_target() {
+        return remote_containers_body(model, &host, &user, port, &engine, theme);
+    }
+
     let sub = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
         ..Default::default()
@@ -1791,6 +1796,113 @@ fn containers_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
         all.extend(rows);
         all
     })
+}
+
+/// Cuerpo del gestor cuando la sesión activa es **remota**: crear (elegí distro)
+/// + lista de contenedores del host remoto con start/stop/rm por fila. Todo por
+/// SSH (`active_remote_target` → el `ssh` del sistema). Sin mounts/engine: en el
+/// remoto el engine es podman/docker y la creación es directa.
+fn remote_containers_body(
+    model: &Model,
+    host: &str,
+    user: &str,
+    port: u16,
+    engine: &str,
+    theme: &Theme,
+) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems, JustifyContent};
+    use llimphi_ui::llimphi_text::Alignment;
+
+    let sub = panel_note(
+        &format!("Gestionando {user}@{host}:{port} ({engine}) por SSH."),
+        theme,
+    );
+
+    // Selector de distro para "crear nuevo".
+    let mut distro_btns: Vec<View<Msg>> = Vec::new();
+    for d in Distro::ALL {
+        let active = model.remote_new_distro == d;
+        distro_btns.push(
+            View::new(Style {
+                flex_grow: 1.0,
+                size: Size { width: Dimension::auto(), height: length(28.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(if active { theme.accent } else { theme.bg_button })
+            .hover_fill(if active { theme.accent } else { theme.bg_button_hover })
+            .radius(4.0)
+            .text_aligned(
+                d.label().to_string(),
+                11.0,
+                if active { theme.bg_app } else { theme.fg_muted },
+                Alignment::Center,
+            )
+            .on_click(Msg::SetRemoteNewDistro(d)),
+        );
+    }
+    let distros = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(distro_btns);
+
+    let crear = action_button_small("+ Crear en el host", Msg::CreateRemoteContainer, theme);
+    let refresh = action_button_small("⟳ Refrescar lista", Msg::RefreshRemoteContainers, theme);
+
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    if model.remote_containers.is_empty() {
+        rows.push(panel_note(
+            "Sin contenedores en el host (o no respondió aún). Refrescá.",
+            theme,
+        ));
+    } else {
+        rows.push(panel_label("En el host remoto", theme));
+        for name in &model.remote_containers {
+            rows.push(remote_container_row(name, theme));
+        }
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
+        ..Default::default()
+    })
+    .children({
+        let mut all = vec![sub, panel_label("Crear nuevo", theme), distros, crear, refresh];
+        all.extend(rows);
+        all
+    })
+}
+
+/// Una fila del gestor remoto: nombre + ▶ start · ■ stop · 🗑 rm (por SSH).
+fn remote_container_row(name: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_layout::taffy::{prelude::Dimension, AlignItems};
+    use llimphi_ui::llimphi_text::Alignment;
+    let display = View::new(Style {
+        size: Size { width: Dimension::auto(), height: length(18.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .text_aligned(name.to_string(), 12.0, theme.fg_text, Alignment::Start);
+    let start = action_button_small("▶", Msg::RemoteStart(name.to_string()), theme);
+    let stop = action_button_small("■", Msg::RemoteStop(name.to_string()), theme);
+    let rm = action_button_small("🗑", Msg::RemoteRemove(name.to_string()), theme);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
+        ..Default::default()
+    })
+    .radius(4.0)
+    .hover_fill(theme.bg_row_hover)
+    .children(vec![display, start, stop, rm])
 }
 
 /// Editor de contenedor: engine + distro (readonly al editar uno existente) +
