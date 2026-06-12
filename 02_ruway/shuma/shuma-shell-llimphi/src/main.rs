@@ -424,7 +424,32 @@ fn shell_quote_arg(s: &str) -> String {
 /// líneas para no depender de `jq` ni del JSON output de podman.
 fn spawn_list_containers_full(handle: &Handle<Msg>) {
     handle.spawn(|| {
-        let infos = std::process::Command::new("podman")
+        let mut infos: Vec<ContainerInfo> = Vec::new();
+        // 1. Rootfs en disco (unshare/bwrap) — la lista PERSISTENTE, como los
+        //    hosts. Cada subdir de `~/.local/share/shuma/rootfs/` es un
+        //    contenedor local. Es lo que el usuario crea con unshare/bwrap.
+        if let Some(root) = rootfs_root() {
+            if let Ok(rd) = std::fs::read_dir(&root) {
+                let mut dirs: Vec<_> = rd
+                    .flatten()
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                dirs.sort();
+                for name in dirs {
+                    let p = root.join(&name);
+                    let listo = p.join("bin/bash").exists() || p.join("usr/bin/bash").exists();
+                    infos.push(ContainerInfo {
+                        name,
+                        status: if listo { "listo".into() } else { "incompleto".into() },
+                        image: "rootfs · unshare/bwrap".into(),
+                        rootfs: true,
+                    });
+                }
+            }
+        }
+        // 2. Containers podman/docker (si está instalado).
+        let podman = std::process::Command::new("podman")
             .args([
                 "ps",
                 "-a",
@@ -442,12 +467,32 @@ fn spawn_list_containers_full(handle: &Handle<Msg>) {
                         let name = it.next()?.trim().to_string();
                         let status = it.next().unwrap_or("").trim().to_string();
                         let image = it.next().unwrap_or("").trim().to_string();
-                        if name.is_empty() { None } else { Some(ContainerInfo { name, status, image }) }
+                        if name.is_empty() {
+                            None
+                        } else {
+                            Some(ContainerInfo { name, status, image, rootfs: false })
+                        }
                     })
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+        infos.extend(podman);
         Msg::ContainersFullLoaded(infos)
+    });
+}
+
+/// Borra un rootfs en disco (`~/.local/share/shuma/rootfs/<name>`) en bg y
+/// refresca la lista del gestor. Es el equivalente a "borrar host".
+fn spawn_remove_rootfs(handle: &Handle<Msg>, name: String) {
+    handle.spawn(move || {
+        if let Some(root) = rootfs_root() {
+            let p = root.join(&name);
+            // Sólo dentro de la carpeta de rootfs — nunca un path arbitrario.
+            if p.starts_with(&root) && p.is_dir() {
+                let _ = std::fs::remove_dir_all(&p);
+            }
+        }
+        Msg::RefreshContainersFull
     });
 }
 
@@ -682,6 +727,9 @@ struct ContainerInfo {
     pub name: String,
     pub status: String, // "Up 2 hours", "Exited (0) 3 days ago", etc.
     pub image: String,
+    /// `true` = rootfs en disco (unshare/bwrap): no tiene start/stop, sólo se
+    /// borra (rm del directorio). `false` = container podman/docker.
+    pub rootfs: bool,
 }
 
 /// Draft embebido en la ventana de containers: engine + distro + mount.
@@ -1502,6 +1550,8 @@ enum Msg {
     StopContainer(String),
     /// `podman rm -f <name>` — destructivo, borra el container.
     RemoveContainer(String),
+    /// Borra un rootfs en disco (unshare/bwrap) — destructivo, rm del dir.
+    RemoveRootfs(String),
 
     // ─── Diálogo bloqueante de hosts ──────────────────────────────────
     /// Abre el modal de hosts (centrado, bloqueante) y arranca un draft
@@ -2080,6 +2130,7 @@ impl App for Shell {
             Msg::StartContainer(name) => spawn_container_action(handle, "start", name),
             Msg::StopContainer(name) => spawn_container_action(handle, "stop", name),
             Msg::RemoveContainer(name) => spawn_container_action(handle, "rm", name),
+            Msg::RemoveRootfs(name) => spawn_remove_rootfs(handle, name),
             Msg::OpenHostsWindow => {
                 // Modal bloqueante (no ventana del SO): arranca el draft de
                 // alta y muestra la lista guardada debajo (con borrar).

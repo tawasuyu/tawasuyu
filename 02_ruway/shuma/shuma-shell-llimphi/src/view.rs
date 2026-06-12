@@ -1725,7 +1725,7 @@ fn containers_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
 
     let mut rows: Vec<View<Msg>> = Vec::new();
     if !model.containers_full.is_empty() {
-        rows.push(panel_label("Existentes (podman)", theme));
+        rows.push(panel_label("Existentes", theme));
         for c in &model.containers_full {
             rows.push(container_row(c, theme));
         }
@@ -1913,12 +1913,16 @@ fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
         if running { theme.accent } else { theme.fg_muted },
         Alignment::Start,
     );
-    let name_for_start = c.name.clone();
-    let name_for_stop = c.name.clone();
-    let name_for_rm = c.name.clone();
-    let start_btn = action_button_small("▶", Msg::StartContainer(name_for_start), theme);
-    let stop_btn = action_button_small("■", Msg::StopContainer(name_for_stop), theme);
-    let rm_btn = action_button_small("🗑", Msg::RemoveContainer(name_for_rm), theme);
+    // Rootfs (unshare/bwrap): no hay daemon que arrancar/parar — sólo borrar.
+    // Podman: start/stop/rm completos.
+    let mut children = vec![name_view, status_view];
+    if c.rootfs {
+        children.push(action_button_small("🗑", Msg::RemoveRootfs(c.name.clone()), theme));
+    } else {
+        children.push(action_button_small("▶", Msg::StartContainer(c.name.clone()), theme));
+        children.push(action_button_small("■", Msg::StopContainer(c.name.clone()), theme));
+        children.push(action_button_small("🗑", Msg::RemoveContainer(c.name.clone()), theme));
+    }
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(32.0_f32) },
@@ -1928,7 +1932,7 @@ fn container_row(c: &ContainerInfo, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .hover_fill(theme.bg_row_hover)
-    .children(vec![name_view, status_view, start_btn, stop_btn, rm_btn])
+    .children(children)
 }
 
 /// Diálogo bloqueante de hosts (modal centrado, abierto por
