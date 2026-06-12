@@ -2591,6 +2591,33 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 block: run_block,
             }
         }
+        Source::RemoteContainer {
+            host, user, port, engine, name, ..
+        } => {
+            // El comando viaja por SSH y allá se envuelve en `<engine> exec`
+            // (o `chroot` para rootfs). El cwd interior va DENTRO del wrap (un
+            // `cd` en el shell del contenedor); a `run_ssh` le pasamos "~" para
+            // que no anteponga un `cd` del lado del HOST remoto. v1: sin PTY.
+            match resolve_ssh_auth(host, user) {
+                Ok(auth) => {
+                    let cwd = s.cwd.display().to_string();
+                    let cmd = remote_container_command(&line, engine, name, &cwd);
+                    let handle = shuma_remote_exec::run_ssh(&cmd, "~", host, user, *port, auth);
+                    ActiveRun {
+                        handle: BackendHandle::Remote(handle),
+                        killer: None,
+                        command: line,
+                        tui: None,
+                        block: run_block,
+                    }
+                }
+                Err(e) => {
+                    s.push_output(OutputLine::notice(format!("✘ SSH: {e}")));
+                    fail_pending_intent(&mut s);
+                    return s;
+                }
+            }
+        }
     };
     s.running = Some(Arc::new(Mutex::new(active)));
     s
@@ -2834,6 +2861,41 @@ fn inject_askpass(line: &str) -> String {
 ///   global — sólo el binario `bwrap` instalado.
 ///
 /// En ambos casos el proceso hijo que ve `shuma-exec` sigue siendo local —
+/// Comilla simple POSIX-segura: envuelve `s` en `'…'` escapando comillas
+/// internas (`'` → `'\''`). Para componer el comando que viaja por SSH.
+fn sh_squote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Comando a ejecutar **en el host remoto** para correr `line` dentro de un
+/// contenedor de ese host. Para podman/docker entra con `<engine> exec`; para
+/// un rootfs (unshare/bwrap) hace `chroot` al path. El `cwd` interior se aplica
+/// con un `cd` dentro del shell del contenedor (no del host) — por eso
+/// `start_run` le pasa "~" a `run_ssh`, para no anteponer un `cd` del host.
+fn remote_container_command(line: &str, engine: &str, name: &str, cwd: &str) -> String {
+    // El cwd interior sólo tiene sentido si es absoluto; si el dir no existe,
+    // el `2>/dev/null` evita romper el comando.
+    let inner = if cwd.starts_with('/') {
+        format!("cd {} 2>/dev/null; {line}", sh_squote(cwd))
+    } else {
+        line.to_string()
+    };
+    match engine {
+        // rootfs en el remoto: chroot al path (requiere privilegios allá).
+        "unshare" | "bwrap" => format!(
+            "chroot {} /bin/sh -lc {}",
+            sh_squote(name),
+            sh_squote(&inner)
+        ),
+        // podman/docker: exec contra el contenedor vivo.
+        eng => format!(
+            "{eng} exec -i {} /bin/sh -lc {}",
+            sh_squote(name),
+            sh_squote(&inner)
+        ),
+    }
+}
+
 /// reusamos la maquinaria de PTY / capture / kill de `Source::Local`.
 fn wrap_spec_for_container(mut spec: CommandSpec, engine: &str, name: &str) -> CommandSpec {
     if engine == "unshare" {
@@ -3460,7 +3522,7 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
     // host) y actualizamos el cwd interior. Sin verificación de existencia —
     // el siguiente comando (que corre con `cd <cwd>` adentro) reporta el error
     // si el dir no existe.
-    if matches!(s.source, Source::Container { .. }) {
+    if matches!(s.source, Source::Container { .. } | Source::RemoteContainer { .. }) {
         let trimmed = rest.trim();
         let base = if trimmed.is_empty() {
             PathBuf::from("/root") // HOME del root dentro del contenedor

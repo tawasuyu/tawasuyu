@@ -94,6 +94,23 @@ pub enum Source {
         #[serde(default)]
         label: Option<String>,
     },
+    /// Contenedor corriendo en un **host remoto**: cada comando viaja por SSH y
+    /// allá se envuelve en `{engine} exec` contra `name`. Combina las coords SSH
+    /// de [`Source::Remote`] con el contenedor de [`Source::Container`]. El
+    /// engine y el contenedor viven en el remoto, no en esta máquina.
+    RemoteContainer {
+        host: String,
+        user: String,
+        #[serde(default = "default_ssh_port")]
+        port: u16,
+        /// "podman"/"docker" en el remoto, o "unshare"/"bwrap" sobre un rootfs
+        /// del remoto (en cuyo caso `name` es el path del rootfs allá).
+        engine: String,
+        /// Nombre del contenedor (podman/docker) o path del rootfs (unshare).
+        name: String,
+        #[serde(default)]
+        label: Option<String>,
+    },
 }
 
 fn default_ssh_port() -> u16 {
@@ -114,12 +131,19 @@ impl Source {
             Source::Remote { host, user, .. } => format!("{user}@{host}"),
             Source::Container { label: Some(l), .. } => l.clone(),
             Source::Container { engine, name, .. } => format!("{engine}:{name}"),
+            Source::RemoteContainer { label: Some(l), .. } => l.clone(),
+            Source::RemoteContainer {
+                user, host, engine, name, ..
+            } => format!("{user}@{host}·{engine}:{name}"),
         }
     }
 
     /// `true` si el origen es remoto (SSH o DaemonTcp).
     pub fn is_remote(&self) -> bool {
-        matches!(self, Source::Remote { .. } | Source::DaemonTcp { .. })
+        matches!(
+            self,
+            Source::Remote { .. } | Source::DaemonTcp { .. } | Source::RemoteContainer { .. }
+        )
     }
 }
 

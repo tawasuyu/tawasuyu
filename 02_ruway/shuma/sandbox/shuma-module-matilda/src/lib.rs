@@ -178,7 +178,7 @@ pub fn update(state: State, msg: Msg) -> State {
                 ));
                 s.current = Some(current);
             }
-            Source::Remote { host, .. } => {
+            Source::Remote { host, .. } | Source::RemoteContainer { host, .. } => {
                 // El discover remoto necesita un runtime tokio y vive
                 // en un thread del chasis (ver `discover_remote_blocking`).
                 // Aquí sólo registramos que el módulo no puede hacerlo
@@ -354,7 +354,7 @@ pub fn discover_remote_blocking(source: &Source, desired: &Inventory) -> Result<
         Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
             Ok(discover_inventory(desired))
         }
-        Source::Remote { .. } => {
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
             let config = ssh_config_for(source)?;
             let rt = blocking_runtime()?;
             rt.block_on(async move {
@@ -386,7 +386,7 @@ pub fn dry_run_remote_blocking(
         Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
             discover_inventory(desired)
         }
-        Source::Remote { .. } => {
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
             let config = ssh_config_for(source)?;
             let rt = blocking_runtime()?;
             rt.block_on(async move {
@@ -468,7 +468,7 @@ pub fn apply_remote_blocking(
             };
             Ok((lines, new_current))
         }
-        Source::Remote { .. } => {
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
             let config = ssh_config_for(source)?;
             let rt = blocking_runtime()?;
             rt.block_on(async move {
@@ -531,7 +531,8 @@ fn push_apply_log(lines: &mut Vec<String>, report: &ApplyReport) {
 
 fn ssh_config_for(source: &Source) -> Result<SshConfig, String> {
     match source {
-        Source::Remote { host, user, port, .. } => {
+        Source::Remote { host, user, port, .. }
+        | Source::RemoteContainer { host, user, port, .. } => {
             let auth = SshAuth::Key {
                 path: default_ssh_key(),
                 passphrase: None,

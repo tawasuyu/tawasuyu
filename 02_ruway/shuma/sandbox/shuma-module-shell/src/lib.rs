@@ -618,6 +618,8 @@ impl State {
         let cwd = match &source {
             // Contenedor: arranca en su interior (`/root`).
             Source::Container { .. } => PathBuf::from("/root"),
+            // Contenedor remoto: idem, su interior (`/root`) en el host remoto.
+            Source::RemoteContainer { .. } => PathBuf::from("/root"),
             // Remoto: arranca en el `$HOME` remoto (`~`); el `cd` lo trackea.
             Source::Remote { .. } => PathBuf::from("~"),
             _ => std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")),

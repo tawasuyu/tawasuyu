@@ -1228,34 +1228,66 @@ impl Session {
         matches!(&self.shell.state, ModuleState::Shell(s) if s.is_running())
     }
 
-    /// Reconstruye el shell + matilda con el `source` que dicta el aislamiento
-    /// elegido. Pierde el shell anterior a propósito: reconfigurar el aislamiento
-    /// = ambiente nuevo. Si `use_container` y `container = Some(name)`, el
-    /// shell corre **dentro** del contenedor vía `Source::Container`.
-    fn apply_isolation(&mut self) {
-        let base = match self.isolation {
-            Isolation::Local => Source::Local,
-            Isolation::Remote => default_shell_source(),
-        };
-        let source = if self.use_container {
-            if let Some(name) = self.container.clone() {
-                // Rootfs unshare/bwrap: lo preparamos para que los gestores de
-                // paquetes funcionen en un userns de un solo uid (no pueden
-                // dropear privilegios a `_apt`/`alpm`). Idempotente.
-                if matches!(self.container_engine.as_str(), "unshare" | "bwrap") {
-                    prepare_rootfs(std::path::Path::new(&name));
-                }
-                Source::Container {
+    /// Puerto SSH del form (default 22 si está vacío o no parsea).
+    fn port_num(&self) -> u16 {
+        self.port.text().trim().parse().unwrap_or(22)
+    }
+
+    /// Resuelve el `Source` real de la sesión a partir de su aislamiento +
+    /// contenedor. Las cuatro combinaciones:
+    /// - Local sin contenedor → `Local`
+    /// - Local + contenedor   → `Container` (engine exec / chroot aquí)
+    /// - Remoto sin contenedor → `Remote` (SSH)
+    /// - Remoto + contenedor   → `RemoteContainer` (SSH + `engine exec` allá)
+    fn resolve_source(&self) -> Source {
+        match self.isolation {
+            Isolation::Local => match (self.use_container, self.container.clone()) {
+                (true, Some(name)) => Source::Container {
                     engine: self.container_engine.clone(),
                     name,
                     label: None,
+                },
+                _ => Source::Local,
+            },
+            Isolation::Remote => {
+                let host = self.host.text();
+                let user = self.user.text();
+                match (self.use_container, self.container.clone()) {
+                    (true, Some(name)) => Source::RemoteContainer {
+                        host,
+                        user,
+                        port: self.port_num(),
+                        engine: self.container_engine.clone(),
+                        name,
+                        label: None,
+                    },
+                    _ => Source::Remote {
+                        host,
+                        user,
+                        port: self.port_num(),
+                        label: None,
+                    },
                 }
-            } else {
-                base
             }
-        } else {
-            base
-        };
+        }
+    }
+
+    /// Reconstruye el shell + matilda con el `source` que dicta el aislamiento
+    /// elegido. Pierde el shell anterior a propósito: reconfigurar el aislamiento
+    /// = ambiente nuevo.
+    fn apply_isolation(&mut self) {
+        // Rootfs unshare/bwrap LOCAL: lo preparamos para que los gestores de
+        // paquetes funcionen en un userns de un solo uid (no pueden dropear
+        // privilegios a `_apt`/`alpm`). Idempotente. En remoto el rootfs vive
+        // en el otro host — no lo tocamos desde acá.
+        if self.isolation == Isolation::Local && self.use_container {
+            if let Some(name) = self.container.clone() {
+                if matches!(self.container_engine.as_str(), "unshare" | "bwrap") {
+                    prepare_rootfs(std::path::Path::new(&name));
+                }
+            }
+        }
+        let source = self.resolve_source();
         // Container/remote arrancan en espera (hasta ContainerCreated /
         // connect_remote); local está listo de entrada.
         self.conn = if self.use_container {
@@ -1348,21 +1380,13 @@ impl Session {
         }
     }
 
-    /// Conecta el aislamiento remoto: arma `Source::Remote{host,user,port}` con
-    /// lo que hay en los campos y reconstruye el shell. Conn → Connected.
+    /// Conecta el aislamiento remoto: arma el `Source` remoto (con o sin
+    /// contenedor, vía `resolve_source`) y reconstruye el shell. Conn → Connected.
     fn connect_remote(&mut self) {
-        let host = self.host.text();
-        let user = self.user.text();
-        if host.trim().is_empty() || user.trim().is_empty() {
+        if self.host.text().trim().is_empty() || self.user.text().trim().is_empty() {
             return; // sin host/usuario no hay a dónde conectar
         }
-        let port: u16 = self.port.text().trim().parse().unwrap_or(22);
-        let source = Source::Remote {
-            host,
-            user,
-            port,
-            label: None,
-        };
+        let source = self.resolve_source();
         self.shell = Instance::shell(self.name.clone(), source.clone());
         self.matilda = Instance::matilda(self.name.clone(), source.clone());
         self.source = source;
