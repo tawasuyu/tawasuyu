@@ -2361,6 +2361,31 @@ fn surface_header<HostMsg: Clone + 'static>(
             .mono(),
         );
     }
+    // Chip "copiar": copia el bloque entero (comando + stdout + stderr) al
+    // clipboard, sin depender de una selección — paridad con el "copy command
+    // + output" de las terminales modernas. Sólo en bloques con cuerpo. Click
+    // propio (innermost-wins) para no plegar el bloque.
+    if expandable {
+        children.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(theme.bg_input)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::CopyCommandBlock(block)))
+            .text_aligned("copiar".to_string(), 10.0, theme.fg_muted, Alignment::Start)
+            .mono(),
+        );
+    }
     if let Some(st) = status {
         let (icon, color) = st.icon_color(theme);
         children.push(

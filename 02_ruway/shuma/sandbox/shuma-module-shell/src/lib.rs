@@ -1058,6 +1058,10 @@ pub enum Msg {
     /// Copia al clipboard la selección viva del cuerpo del bloque `block`
     /// (click derecho sobre el cuerpo). No-op si no hay selección.
     CopyBody(u64),
+    /// Copia al clipboard el **bloque entero** `block`: el comando (`$ …`)
+    /// envuelto junto con su salida completa (stdout **y** stderr). La dispara
+    /// el botón ⧉ del header de la card; no depende de que haya selección.
+    CopyCommandBlock(u64),
     /// Doble-click sobre el cuerpo IDE-text del bloque `block`: selecciona
     /// la palabra bajo `(x, y)` (coords locales al nodo del editor, incluyen
     /// el gutter). La dispara el `on_double_tap_at` del cuerpo.

@@ -351,6 +351,9 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::CopyBody(block) => {
             copy_body_selection(&s, block);
         }
+        Msg::CopyCommandBlock(block) => {
+            copy_command_block(&s, block);
+        }
         Msg::BodyDoubleClick { block, x, y } => {
             s = apply_body_double_click(s, block, x, y);
         }
@@ -1429,6 +1432,24 @@ pub(crate) fn copy_body_selection(s: &State, block: u64) {
     if let Some(text) = ed.selected_text() {
         set_clipboard(&text);
     }
+}
+
+/// Copia el bloque entero al clipboard: el comando (`$ …`) seguido de su
+/// salida completa (stdout y stderr en orden). A diferencia de
+/// [`copy_body_selection`], no depende de que haya una selección viva — es el
+/// "copiar comando + salida" estilo terminal moderna. No-op si el bloque no
+/// tiene ni comando ni cuerpo.
+pub(crate) fn copy_command_block(s: &State, block: u64) {
+    let mut partes: Vec<String> = Vec::new();
+    if let Some(cmd) = s.block_command.get(&block) {
+        // `block_command` guarda el texto ya con el prefijo "$ ".
+        partes.push(cmd.clone());
+    }
+    partes.extend(body_lines_for_block(s, block));
+    if partes.is_empty() {
+        return;
+    }
+    set_clipboard(&partes.join("\n"));
 }
 
 /// Bloque objetivo del menú contextual del output: el que el usuario tiene
