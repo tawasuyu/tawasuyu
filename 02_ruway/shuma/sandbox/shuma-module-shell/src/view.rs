@@ -172,6 +172,9 @@ pub fn view<HostMsg: Clone + 'static>(
     if let Some(popup) = completion_popup::<HostMsg>(state, theme) {
         children.push(popup);
     }
+    if let Some(banner) = input_focus_banner::<HostMsg>(state, theme, &lift) {
+        children.push(banner);
+    }
     children.push(input);
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
@@ -184,6 +187,7 @@ pub fn view<HostMsg: Clone + 'static>(
     }
 
     let lift_menu = lift.clone();
+    let lift_scale = lift.clone();
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -203,11 +207,57 @@ pub fn view<HostMsg: Clone + 'static>(
         ..Default::default()
     })
     .fill(theme.bg_app)
+    // Ctrl+rueda (o pinch de trackpad) sobre cualquier parte del shell = zoom
+    // del texto. Va por `on_scale` —que el runtime resuelve ANTES que el
+    // `on_scroll` de la superficie de output— para que la rueda con Ctrl no se
+    // la coma el scroll del cuerpo (era el bug del "zoom con mouse que falta").
+    // `factor` es el cambio multiplicativo incremental (>1 agranda); `ZoomBy`
+    // lo aplica igual que el pinch.
+    .on_scale(move |_phase, factor, _fx, _fy| Some(lift_scale(Msg::ZoomBy(factor))))
     // Click derecho en cualquier parte del output → menú contextual en `(x, y)`
     // (coords locales a este nodo raíz). El cuerpo IDE ya no captura el right-
     // click (lo delega acá) para que el menú gane.
     .on_right_click_at(move |x, y, _w, _h| Some(lift_menu(Msg::OpenBodyMenu { x, y })))
     .children(children)
+}
+
+/// Banner sobre la línea que avisa a qué comando vivo va el Enter (stdin),
+/// cuando el input está dirigido a un job en vez de a la línea. `None` cuando
+/// el foco es la línea (arrancar comandos). Click → vuelve a la línea.
+pub(crate) fn input_focus_banner<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Option<View<HostMsg>> {
+    let block = state.input_focus?;
+    // Sólo si el destino sigue vivo (si murió, el update ya limpió el foco; este
+    // chequeo cubre el frame intermedio).
+    let arc = state.job_by_block(block)?;
+    let cmd = arc.lock().ok().map(|g| g.command.clone())?;
+    let label = format!("→ Enter va al stdin de «{cmd}»  ·  click o mouse sobre la línea para volver a tipear comandos");
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(18.0_f32),
+            },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_input_focus)
+        .radius(3.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(Msg::FocusInput))
+        .text_aligned(label, 10.0, theme.accent, Alignment::Start)
+        .mono()
+        .max_lines(1),
+    )
 }
 
 /// Menú contextual del output (click derecho): Copiar selección · Copiar todo ·
@@ -563,7 +613,16 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
     })
     .fill(border)
     .radius(4.0)
+    // `hover_fill` necesario para que el hit-test de hover elija este nodo y
+    // dispare el `on_pointer_enter` (Llimphi sólo hoverea nodos con hover_fill).
+    // Tinte mínimo sobre el marco; el `inner` lo tapa casi entero.
+    .hover_fill(border)
     .on_click(lift(Msg::FocusInput))
+    // Pasar el mouse sobre la línea la re-foca: el Enter vuelve a arrancar
+    // comandos (deja de alimentar el stdin de un job). Es la otra mitad del
+    // "alternar foco con mousemove": mouse sobre un job vivo → le doy input;
+    // mouse sobre la línea → arranco otro comando en paralelo.
+    .on_pointer_enter(lift(Msg::FocusInput))
     .children(vec![inner])
 }
 
@@ -2329,7 +2388,40 @@ fn surface_header<HostMsg: Clone + 'static>(
     .mono()
     .max_lines(1);
 
+    let running = status == Some(CmdStatus::Running);
+    let is_input_focus = state.input_focus == Some(block);
     let mut children = vec![marker, cmd];
+    // Chip de foco de input: sólo en comandos vivos. Marca/dirige a quién le
+    // va el Enter de la línea (stdin). Click lo fija; el header entero también
+    // foca al pasar el mouse (`on_pointer_enter`, abajo). Cuando ESTE es el
+    // destino, se pinta encendido (acento) para que se vea de un vistazo a
+    // cuál de los comandos en paralelo está escuchando la línea.
+    if running {
+        let (fill, fg, label) = if is_input_focus {
+            (theme.accent, theme.bg_panel, "⌨ recibe input")
+        } else {
+            (theme.bg_input, theme.fg_muted, "⌨ dar input")
+        };
+        children.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_shrink: 0.0,
+                padding: Rect {
+                    left: length(5.0_f32),
+                    right: length(5.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(fill)
+            .radius(3.0)
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::FocusJob(block)))
+            .text_aligned(label.to_string(), 10.0, fg, Alignment::Start)
+            .mono(),
+        );
+    }
     // Chip de reprocess: alimenta el stdout de este bloque al stdin del
     // próximo comando (paridad con el `command_card` del path viejo). Clic
     // arma/desarma; el hit-test innermost-wins le da prioridad sobre el
@@ -2418,6 +2510,13 @@ fn surface_header<HostMsg: Clone + 'static>(
         );
     }
 
+    // El header del comando vivo que recibe el input se tiñe (bg_input_focus)
+    // para distinguirlo de los otros en paralelo.
+    let header_fill = if running && is_input_focus {
+        theme.bg_input_focus
+    } else {
+        theme.bg_panel
+    };
     let mut v = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(SURFACE_HEADER_H) },
@@ -2431,9 +2530,20 @@ fn surface_header<HostMsg: Clone + 'static>(
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel);
+    .fill(header_fill);
     if expandable {
         v = v.on_click(lift(Msg::ToggleBlock(block)));
+    }
+    // Mientras corre, pasar el mouse por encima dirige el input a este comando
+    // (el "mousemove" del pedido). Es no destructivo: re-focar la línea (mouse
+    // sobre el input) o hover en otro job vivo cambia el destino al instante.
+    // El `hover_fill` no es sólo cosmético: el hit-test de hover de Llimphi sólo
+    // elige nodos con `hover_fill`, así que es lo que hace que el
+    // `on_pointer_enter` dispare al pasar el mouse por el header.
+    if running {
+        v = v
+            .hover_fill(theme.bg_input_focus)
+            .on_pointer_enter(lift(Msg::FocusJob(block)));
     }
     v.children(children)
 }

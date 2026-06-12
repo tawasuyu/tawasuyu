@@ -442,6 +442,13 @@ pub struct State {
     /// el zoom-in hace que las líneas excedan el viewport — Shift+rueda
     /// mueve este valor. El gutter queda fijo; el texto se desplaza.
     pub surf_scroll_x: f32,
+    /// A qué recibe el Enter de la línea: `None` = arrancar un comando
+    /// nuevo (la "línea"); `Some(block)` = mandar la línea por stdin al
+    /// comando vivo de ese bloque. Permite responder prompts de varios
+    /// comandos en paralelo, alternando con click/hover sobre su card. Se
+    /// fija al arrancar un comando, al hacer click/hover en su card o en la
+    /// línea, y se limpia cuando ese comando cierra.
+    pub input_focus: Option<u64>,
     /// Estado de orden de las sub-secciones tipo tabla: por `(block, sec_idx)`
     /// guarda `(col, ascending)`. Sin entry = orden natural (el del output).
     /// Click en un header de columna togglea (col, true) → (col, false) →
@@ -673,6 +680,7 @@ impl State {
             section_sort: HashMap::new(),
             font_zoom: 1.0,
             surf_scroll_x: 0.0,
+            input_focus: None,
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
@@ -783,6 +791,34 @@ impl State {
     /// `true` si hay un comando ejecutándose ahora.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// Devuelve el `ActiveRun` (foreground o background) cuyo bloque es
+    /// `block`, si existe — sin importar si sigue vivo. Permite dirigir el
+    /// stdin del input a CUALQUIER comando en curso, no sólo al foreground.
+    pub(crate) fn job_by_block(&self, block: u64) -> Option<Arc<Mutex<ActiveRun>>> {
+        if let Some(r) = self.running.as_ref() {
+            if r.lock().map(|g| g.block == block).unwrap_or(false) {
+                return Some(r.clone());
+            }
+        }
+        self.bg_jobs
+            .iter()
+            .find(|j| j.lock().map(|g| g.block == block).unwrap_or(false))
+            .cloned()
+    }
+
+    /// `true` si `block` pertenece a un comando que sigue corriendo (no ha
+    /// cerrado). Lo usa el render para no plegar las ejecuciones vivas y el
+    /// `run_submitted` para no hacerlas recede al arrancar otro comando.
+    pub(crate) fn block_has_live_job(&self, block: u64) -> bool {
+        match self.job_by_block(block) {
+            Some(arc) => arc
+                .lock()
+                .map(|g| !g.handle.is_finished())
+                .unwrap_or(false),
+            None => false,
+        }
     }
 
     /// Snapshot del grafo de intenciones — el chasis lo lee cada tick
@@ -974,9 +1010,14 @@ pub enum Msg {
     /// Tecla recibida desde el chasis. Enter ejecuta, Tab completa,
     /// flechas y edición van al `LineState`.
     Key(KeyEvent),
-    /// Click sobre el input box — re-foca (sigue siendo el único
-    /// campo, pero lo mantenemos por simetría con otros módulos).
+    /// Click sobre el input box — re-foca y dirige el Enter a la "línea"
+    /// (arrancar comandos nuevos), limpiando cualquier foco de stdin a un
+    /// job vivo.
     FocusInput,
+    /// Dirige el input al stdin del comando vivo del bloque dado (click o
+    /// hover sobre su card). El Enter de la línea le manda el texto hasta
+    /// que el usuario re-foca la línea u otro job, o el comando cierra.
+    FocusJob(u64),
     /// Limpia el buffer de output — disparado por el shortcut `Clear`
     /// o el builtin `clear`.
     Clear,
@@ -2156,6 +2197,60 @@ mod tests {
             .output
             .iter()
             .any(|l| l.text.contains("[0] SIGKILL enviado")));
+    }
+
+    #[test]
+    fn input_focus_dirige_el_enter_y_no_pliega_a_los_vivos() {
+        // Modelo de input paralelo: arrancar un comando lo foca; la línea
+        // puede re-focarse para arrancar otro en paralelo; el vivo NO se
+        // pliega; y el foco se puede alternar a cualquier job vivo.
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+
+        // Foreground vivo → queda focado para recibir stdin.
+        s.input.set_text("sleep 30");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert!(s.is_running());
+        let block_a = s.current_block;
+        assert_eq!(
+            s.input_focus,
+            Some(block_a),
+            "el comando recién arrancado recibe el foco del input"
+        );
+
+        // Volver a la línea (click/hover sobre el input) → arranca comandos.
+        s = update(s, Msg::FocusInput);
+        assert_eq!(s.input_focus, None);
+
+        // Con un foreground vivo, el nuevo comando corre en paralelo (bg job)
+        // y se lleva el foco; el viejo NO se pliega (sigue activo).
+        s.input.set_text("sleep 30");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        assert_eq!(s.bg_jobs.len(), 1, "el segundo corre en paralelo");
+        let block_b = s.bg_jobs[0].lock().unwrap().block;
+        assert_eq!(s.input_focus, Some(block_b));
+        assert!(
+            !s.collapsed.contains(&block_a),
+            "una ejecución viva no se pliega al arrancar otra"
+        );
+
+        // Alternar el foco al primer job vivo (click/hover sobre su card).
+        s = update(s, Msg::FocusJob(block_a));
+        assert_eq!(s.input_focus, Some(block_a));
+
+        // Focar un bloque sin job vivo no roba el foco a la línea.
+        s = update(s, Msg::FocusInput);
+        s = update(s, Msg::FocusJob(99_999));
+        assert_eq!(s.input_focus, None, "no se foca un bloque sin job vivo");
+
+        // Limpieza: matar los jobs para no dejar sleeps colgados.
+        s.input.set_text(":kill 0");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        if let Some(arc) = s.running.take() {
+            if let Some(k) = arc.lock().unwrap().killer.as_ref() {
+                k.kill();
+            }
+        }
     }
 
     #[test]

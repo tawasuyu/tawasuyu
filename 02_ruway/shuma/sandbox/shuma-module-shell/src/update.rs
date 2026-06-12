@@ -245,6 +245,19 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::FocusInput => {
             s.focused = true;
+            // Volver a la "línea": el Enter arranca comandos nuevos, ya no
+            // alimenta el stdin de un job.
+            s.input_focus = None;
+        }
+        Msg::FocusJob(block) => {
+            s.focused = true;
+            // Sólo dirigimos el input a un comando que siga vivo; si ya
+            // cerró, el foco se queda en la línea (no apuntamos a un muerto).
+            if s.block_has_live_job(block) {
+                s.input_focus = Some(block);
+            } else if s.input_focus == Some(block) {
+                s.input_focus = None;
+            }
         }
         Msg::Clear => {
             s.clear_output();
@@ -1862,31 +1875,47 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     if trimmed.is_empty() {
         return s;
     }
-    // Si ya hay un comando vivo y el usuario NO terminó con `&` (que
-    // fuerza bg), interpretamos el Enter como respuesta al stdin del
-    // running: típico apt Y/n, sudo password, prompts custom. Escribimos
-    // `<line>\n` al stdin. El usuario aún puede arrancar un bg paralelo
-    // tipeando `cmd &`.
-    if s.running.is_some() && !trimmed.ends_with('&') {
-        let bytes = {
-            let mut v = line.clone().into_bytes();
-            v.push(b'\n');
-            v
-        };
-        if let Some(active_arc) = s.running.clone() {
-            if let Ok(guard) = active_arc.lock() {
-                guard.handle.write_input(bytes);
+    // Si el input está dirigido a un comando vivo (`input_focus`: el último
+    // arrancado, o el que el usuario eligió con click/hover sobre su card) y
+    // la línea NO termina en `&` (que fuerza un bg nuevo), el Enter le manda
+    // `<line>\n` por stdin. Así se responden prompts (apt Y/n, sudo, `read`…)
+    // de VARIOS comandos en paralelo, eligiendo a cuál sin matar a los otros.
+    // Los meta-comandos del shell (`:term`, `:kill`, `:save`, `:limit`…) NUNCA
+    // van por stdin aunque el input esté dirigido a un job: son sagrados (así
+    // se controla a los jobs sin que un programa secuestre su tipeo).
+    if let Some(block) = s.input_focus {
+        if !trimmed.ends_with('&') && !trimmed.starts_with(':') {
+            if let Some(arc) = s.job_by_block(block) {
+                let alive = arc
+                    .lock()
+                    .map(|g| !g.handle.is_finished())
+                    .unwrap_or(false);
+                if alive {
+                    let bytes = {
+                        let mut v = line.clone().into_bytes();
+                        v.push(b'\n');
+                        v
+                    };
+                    if let Ok(guard) = arc.lock() {
+                        guard.handle.write_input(bytes);
+                    }
+                    // Echo en la card del job destino (no en `current_block`):
+                    // lo enviado se lee junto a la salida de ese comando.
+                    s.push_in_block(block, OutputLine::notice(format!("← {line}")));
+                    return s;
+                }
             }
+            // El destino ya cerró: el foco vuelve a la línea y la línea se
+            // interpreta como comando nuevo (cae abajo).
+            s.input_focus = None;
         }
-        // Echo discreto de lo enviado para que el usuario vea qué tipeó.
-        s.push_output(OutputLine::notice(format!("← {line}")));
-        return s;
     }
-    // El comando que estaba en foco recede al historial: se pliega para que
-    // el nuevo nazca expandido y la vista no sea un volcado plano. Sólo los
-    // que tienen cuerpo (los sin salida no se pliegan; se ven distinto).
+    // El comando previo recede al historial: se pliega para que el nuevo nazca
+    // expandido y la vista no sea un volcado plano. Sólo los que tienen cuerpo
+    // y —clave— que YA cerraron: una ejecución viva NUNCA se pliega al arrancar
+    // otra, queda visible y activa hasta terminar (varios corriendo en paralelo).
     let prev = s.current_block;
-    if prev != 0 && !body_lines_for_block(&s, prev).is_empty() {
+    if prev != 0 && !s.block_has_live_job(prev) && !body_lines_for_block(&s, prev).is_empty() {
         s.collapsed.insert(prev);
     }
     s.push_output(OutputLine::prompt(format!("$ {trimmed}")));
@@ -2406,6 +2435,10 @@ pub(crate) fn start_bg(mut s: State, line: String) -> State {
         block: bg_block,
     };
     s.bg_jobs.push(Arc::new(Mutex::new(active)));
+    // El comando recién arrancado recibe el foco del input: el próximo Enter
+    // le va por stdin (responder su prompt sin tocar nada). No es bloqueante —
+    // el usuario re-foca la línea (click/hover) para arrancar otro en paralelo.
+    s.input_focus = Some(bg_block);
     s
 }
 
@@ -2620,6 +2653,9 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
         }
     };
     s.running = Some(Arc::new(Mutex::new(active)));
+    // El run recién arrancado recibe el foco del input (responder su prompt con
+    // el próximo Enter). No bloquea: re-focando la línea se arranca otro.
+    s.input_focus = Some(run_block);
     s
 }
 
@@ -3390,6 +3426,11 @@ pub(crate) fn drain_run(mut s: State) -> State {
         }
         s.current_run_bytes = 0;
         s.running = None;
+        // Si el input apuntaba a este run, el foco vuelve a la línea (su stdin
+        // ya no existe). Si hay cola, `start_run` de abajo lo re-apunta al nuevo.
+        if s.input_focus == Some(run_block) {
+            s.input_focus = None;
+        }
         // Si quedó algo en cola, arrancarlo ya — sin esperar otro Tick.
         if let Some(next) = s.queue.pop_front() {
             s = start_run(s, next);
@@ -3462,6 +3503,10 @@ pub(crate) fn drain_bg_jobs(mut s: State) -> State {
             };
             s.push_in_block(job_block, OutputLine::notice(notice));
             keep = false;
+            // Si el input apuntaba a este job, el foco vuelve a la línea.
+            if s.input_focus == Some(job_block) {
+                s.input_focus = None;
+            }
         }
         if keep {
             next_jobs.push(arc.clone());
