@@ -74,7 +74,7 @@ mod settings;
 use settings::*;
 
 mod model;
-pub(crate) use model::*;
+pub use model::*;
 mod update;
 #[cfg(test)]
 mod tests;
