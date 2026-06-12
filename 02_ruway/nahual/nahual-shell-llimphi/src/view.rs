@@ -248,6 +248,7 @@ pub(crate) fn shell_view(model: &Model) -> View<Msg> {
     if let Some(panel) = queue_panel(model, &theme) {
         col.push(panel);
     }
+    col.push(status_bar(model, &theme));
 
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -293,6 +294,73 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
         model.menu_active,
         model.menu_anim.value(),
     )
+}
+
+/// Barra de estado inferior (parity dOpus): siempre visible, resume el panel
+/// enfocado — total de entradas, cuántas hay marcadas + su tamaño sumado, y el
+/// elemento bajo el cursor con su tamaño. A la derecha, el modo de vista.
+pub(crate) fn status_bar(model: &Model, theme: &Theme) -> View<Msg> {
+    let nav = model.cur();
+    let total = nav.children().len();
+    let pane = model.cur_pane();
+    let marcadas = pane.marked.len();
+    // Suma de tamaños de lo marcado (los nodos cuyo id está en la marca).
+    let bytes: u64 = nav
+        .children()
+        .iter()
+        .filter(|n| pane.marked.contains(&n.id))
+        .filter_map(|n| n.size)
+        .sum();
+
+    let izq = if marcadas > 0 {
+        format!("{marcadas} de {total} seleccionadas · {}", human_size(bytes))
+    } else {
+        match nav.selected_node() {
+            Some(n) if !n.is_container => {
+                let sz = n.size.map(human_size).unwrap_or_default();
+                format!("{total} entradas · {} · {sz}", n.name)
+            }
+            Some(n) => format!("{total} entradas · {}/", n.name),
+            None => format!("{total} entradas"),
+        }
+    };
+
+    let modo = match nav.view {
+        nahual_source_core::ViewMode::List => "lista",
+        nahual_source_core::ViewMode::Details => "detalle",
+        nahual_source_core::ViewMode::Icons => "iconos",
+        nahual_source_core::ViewMode::Gallery => "galería",
+    };
+    let der_txt = if model.dual {
+        format!("dual · {modo}")
+    } else {
+        modo.to_string()
+    };
+
+    let izq_view = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(izq, 12.0, theme.fg_text);
+    let der_view = View::new(Style {
+        size: Size { width: auto(), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(der_txt, 12.0, theme.fg_muted);
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        padding: pad_h(12.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(vec![izq_view, der_view])
 }
 
 /// Overlay del command palette: la caja del módulo (ancho fijo) anclada

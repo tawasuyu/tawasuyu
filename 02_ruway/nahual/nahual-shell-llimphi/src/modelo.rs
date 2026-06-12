@@ -149,6 +149,9 @@ pub(crate) enum PromptKind {
     NewFile { parent: nahual_source_core::NodeId },
     /// Renombrar el nodo `id` (el texto arranca con su nombre actual).
     Rename { id: nahual_source_core::NodeId },
+    /// Seleccionar (marcar) por patrón: el texto es un glob (`*.png`, `foto*`).
+    /// No opera sobre el filesystem — marca los hijos visibles que matchean.
+    SelectPattern,
 }
 
 impl Prompt {
@@ -158,6 +161,7 @@ impl Prompt {
             PromptKind::NewDir { .. } => "Nueva carpeta",
             PromptKind::NewFile { .. } => "Nuevo archivo",
             PromptKind::Rename { .. } => "Renombrar",
+            PromptKind::SelectPattern => "Seleccionar por patrón (* comodín)",
         }
     }
 }
@@ -639,6 +643,16 @@ pub(crate) enum Msg {
     // ---- Command palette (Ctrl+Shift+P / Ctrl+P) ----
     /// Mensaje del módulo command-palette (abrir/cerrar/teclear/navegar/aplicar).
     Palette(PaletteMsg),
+
+    // ---- Selección (parity dOpus) ----
+    /// Marca todos los hijos visibles del panel enfocado (Ctrl+A).
+    SelectAll,
+    /// Limpia la marca del panel enfocado.
+    SelectNone,
+    /// Invierte la marca: lo marcado se desmarca y viceversa (`*`).
+    InvertSelection,
+    /// Abre el prompt de selección por patrón (glob `*.png`, `foto*`).
+    SelectByPattern,
 }
 
 impl Model {

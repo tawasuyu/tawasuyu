@@ -345,6 +345,12 @@ impl App for Shell {
             // `d` alterna panel doble; Tab cambia el foco entre los dos.
             Key::Character(c) if c == "d" => Some(Msg::ToggleDual),
             Key::Named(NamedKey::Tab) => Some(Msg::SwitchFocus),
+            // Selección (parity dOpus): Ctrl+A marca todo, `*` invierte la
+            // marca (como el numpad-* de Directory Opus).
+            Key::Character(c) if c.eq_ignore_ascii_case("a") && e.modifiers.ctrl => {
+                Some(Msg::SelectAll)
+            }
+            Key::Character(c) if c == "*" => Some(Msg::InvertSelection),
             // ---- Fase 4.3: operaciones de archivo (sólo sobre POSIX). ----
             // Marcar/desmarcar (selección múltiple) bajo el cursor.
             Key::Named(NamedKey::Insert) if _model.can_edit() => Some(Msg::ToggleMark),

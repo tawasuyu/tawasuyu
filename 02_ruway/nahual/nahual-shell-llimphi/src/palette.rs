@@ -44,6 +44,11 @@ pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
         PaletteCommand::new("file.copyToOther", "Copiar al otro panel", "Archivo").with_shortcut("F5"),
         PaletteCommand::new("file.moveToOther", "Mover al otro panel", "Archivo").with_shortcut("F6"),
         PaletteCommand::new("file.addFavorite", "Añadir a favoritos", "Archivo"),
+        // ---- Selección ----
+        PaletteCommand::new("select.all", "Seleccionar todo", "Selección").with_shortcut("Ctrl+A"),
+        PaletteCommand::new("select.none", "Deseleccionar todo", "Selección"),
+        PaletteCommand::new("select.invert", "Invertir selección", "Selección").with_shortcut("*"),
+        PaletteCommand::new("select.pattern", "Seleccionar por patrón…", "Selección"),
         // ---- Etiquetas ----
         PaletteCommand::new("label.red", "● Etiqueta roja", "Etiqueta"),
         PaletteCommand::new("label.orange", "● Etiqueta naranja", "Etiqueta"),
@@ -95,6 +100,11 @@ pub(crate) fn palette_id_to_msg(id: &str) -> Option<Msg> {
         "file.copyToOther" => Msg::CopyToOther,
         "file.moveToOther" => Msg::MoveToOther,
         "file.addFavorite" => Msg::AddPlace,
+        // Selección.
+        "select.all" => Msg::SelectAll,
+        "select.none" => Msg::SelectNone,
+        "select.invert" => Msg::InvertSelection,
+        "select.pattern" => Msg::SelectByPattern,
         // Etiquetas.
         "label.red" => Msg::SetLabel(Label::Red),
         "label.orange" => Msg::SetLabel(Label::Orange),
