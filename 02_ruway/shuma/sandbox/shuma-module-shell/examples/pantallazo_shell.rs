@@ -26,8 +26,20 @@ use llimphi_ui::llimphi_text::Typesetter;
 
 use shuma_module_shell::{ActiveRun, BackendHandle, OutputLine};
 
-const W: u32 = 1280;
-const H: u32 = 800;
+/// Tamaño del lienzo: `--width`/`--height` por args 2 y 3 (default 1280×800).
+/// Permite reproducir layouts con ventana chica (p. ej. media pantalla).
+fn shot_size() -> (u32, u32) {
+    let w = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1280);
+    let h = std::env::args()
+        .nth(3)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(800);
+    (w, h)
+}
+
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn now_secs() -> u64 {
@@ -45,6 +57,7 @@ fn main() {
     let out = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "/tmp/shots/shuma.png".to_string());
+    let (w, h) = shot_size();
     if let Some(dir) = std::path::Path::new(&out).parent() {
         let _ = std::fs::create_dir_all(dir);
     }
@@ -202,12 +215,18 @@ fn main() {
     })));
 
     // Prompt con el próximo comando a medio tipear (resaltado de sintaxis).
-    state.input.set_text("cargo test -p servidor");
+    match std::env::var("SHOT_INPUT_LINES").ok().and_then(|v| v.parse::<usize>().ok()) {
+        Some(n) if n > 1 => {
+            let lines: Vec<String> = (1..=n).map(|i| format!("echo linea {i} de un script pegado")).collect();
+            state.input.set_text(lines.join("\n"));
+        }
+        _ => state.input.set_text("cargo test -p servidor"),
+    }
 
     // Viewport medido (lo pondría el painter el frame anterior) + pinned al
     // fondo. ~680px = alto del panel de output con este chrome a 800px.
     if let Ok(mut g) = state.out_viewport_h.lock() {
-        *g = 680.0;
+        *g = (h as f32 - 94.0).max(50.0);
     }
     state.scroll_px = 0.0;
 
@@ -220,7 +239,7 @@ fn main() {
     let computed = {
         let tmap = &mounted.text_measures;
         layout
-            .compute_with_measure(mounted.root, (W as f32, H as f32), |nid, known, avail| {
+            .compute_with_measure(mounted.root, (w as f32, h as f32), |nid, known, avail| {
                 match tmap.get(&nid) {
                     Some(tm) => measure_text_node(&mut ts, tm, known, avail),
                     None => taffy::Size::ZERO,
@@ -236,8 +255,8 @@ fn main() {
     let target = hal.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("pantallazo-shell"),
         size: wgpu::Extent3d {
-            width: W,
-            height: H,
+            width: w,
+            height: h,
             depth_or_array_layers: 1,
         },
         mip_level_count: 1,
@@ -251,25 +270,25 @@ fn main() {
     });
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
     renderer
-        .render_to_view(&hal, &scene, &view, W, H, Color::from_rgba8(20, 20, 26, 255))
+        .render_to_view(&hal, &scene, &view, w, h, Color::from_rgba8(20, 20, 26, 255))
         .expect("render_to_view");
-    write_png(&hal, &target, &out);
+    write_png(&hal, &target, &out, w, h);
 
     // Bajar el sleep antes de salir (no dejar huérfanos).
     killer.kill();
     eprintln!(
-        "pantallazo_shell: {out} ({W}x{H}) — {} líneas en {blk} bloques",
+        "pantallazo_shell: {out} ({w}x{h}) — {} líneas en {blk} bloques",
         state.output.len()
     );
 }
 
-fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
-    let unpadded = (W * 4) as usize;
+fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str, w: u32, h: u32) {
+    let unpadded = (w * 4) as usize;
     let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
     let padded = unpadded.div_ceil(align) * align;
     let buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("readback"),
-        size: (padded * H as usize) as u64,
+        size: (padded * h as usize) as u64,
         usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     });
@@ -288,12 +307,12 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(padded as u32),
-                rows_per_image: Some(H),
+                rows_per_image: Some(h),
             },
         },
         wgpu::Extent3d {
-            width: W,
-            height: H,
+            width: w,
+            height: h,
             depth_or_array_layers: 1,
         },
     );
@@ -306,15 +325,15 @@ fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str) {
     hal.device.poll(wgpu::PollType::wait_indefinitely());
     rx.recv().unwrap().unwrap();
     let data = slice.get_mapped_range();
-    let mut pixels = Vec::with_capacity((W * H * 4) as usize);
-    for row in 0..H as usize {
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for row in 0..h as usize {
         let s = row * padded;
         pixels.extend_from_slice(&data[s..s + unpadded]);
     }
     drop(data);
     buf.unmap();
     let file = File::create(path).expect("png");
-    let mut enc = png::Encoder::new(BufWriter::new(file), W, H);
+    let mut enc = png::Encoder::new(BufWriter::new(file), w, h);
     enc.set_color(png::ColorType::Rgba);
     enc.set_depth(png::BitDepth::Eight);
     let mut w = enc.write_header().unwrap();

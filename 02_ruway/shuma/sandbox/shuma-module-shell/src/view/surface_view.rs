@@ -128,17 +128,52 @@ pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
     let visible_rows = total_rows.min(SECTION_TABLE_MAX_ROWS);
     let truncated = total_rows > SECTION_TABLE_MAX_ROWS;
     let mut row_views: Vec<View<HostMsg>> = Vec::with_capacity(visible_rows + 1);
+    // Stripe sutil: en vez de alternar bg_panel/transparente (saltaba a la
+    // vista), las filas pares llevan un velo apenas perceptible del fg —
+    // guía el ojo sin armar un tablero de ajedrez.
+    let stripe_tint = {
+        let c = theme.fg_text.to_rgba8();
+        Color::from_rgba8(c.r, c.g, c.b, 10)
+    };
     for (vis_idx, &ri) in order.iter().take(visible_rows).enumerate() {
         let row = &rows[ri];
         let stripe = if vis_idx % 2 == 0 {
-            theme.bg_panel
+            stripe_tint
         } else {
             Color::from_rgba8(0, 0, 0, 0) // transparente
+        };
+        // Tipo de entrada según la máscara de permisos (col "permisos"):
+        // colorea el nombre (dir = accent, ejecutable = verde, symlink =
+        // cian) — el `ls -l` se lee como un explorador.
+        let perms = columns
+            .iter()
+            .position(|c| c == "permisos")
+            .and_then(|ci| row.get(ci))
+            .map(|s| s.as_str())
+            .unwrap_or("");
+        let name_color = if perms.starts_with('d') {
+            theme.accent
+        } else if perms.starts_with('l') {
+            Color::from_rgba8(100, 200, 200, 255)
+        } else if perms.contains('x') {
+            Color::from_rgba8(130, 205, 140, 255)
+        } else {
+            theme.fg_text
         };
         let mut cells: Vec<View<HostMsg>> = Vec::with_capacity(n);
         for col in 0..n {
             let name = columns.get(col).map(|s| s.as_str()).unwrap_or("");
             let w = col_width(col, n, name);
+            // Color por columna: metadata en tonos propios, nombre según
+            // tipo — espeja el coloreo semántico del cuerpo de output.
+            let cell_color = match name {
+                "permisos" => Color::from_rgba8(140, 152, 175, 255),
+                "links" | "owner" | "group" => theme.fg_muted,
+                "size" => Color::from_rgba8(209, 154, 102, 255),
+                "fecha" => Color::from_rgba8(126, 166, 180, 255),
+                _ if col == n - 1 => name_color,
+                _ => theme.fg_text,
+            };
             let mut style = Style {
                 size: Size { width: length(w.max(40.0)), height: percent(1.0_f32) },
                 align_items: Some(AlignItems::Center),
@@ -160,7 +195,7 @@ pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
                     .text_aligned(
                         row.get(col).cloned().unwrap_or_default(),
                         11.0,
-                        theme.fg_text,
+                        cell_color,
                         Alignment::Start,
                     )
                     .mono()
@@ -560,6 +595,57 @@ fn surface_header<HostMsg: Clone + 'static>(
     v.children(children)
 }
 
+/// `true` salvo opt-out explícito (`SHUMA_FONDO_QUIETO=1`): el fondo del
+/// output respira con una deriva lenta del accent. Leído una vez por proceso.
+fn fondo_vivo_enabled() -> bool {
+    use std::sync::OnceLock;
+    static EN: OnceLock<bool> = OnceLock::new();
+    *EN.get_or_init(|| std::env::var_os("SHUMA_FONDO_QUIETO").is_none())
+}
+
+/// Pinta el **fondo vivo** sobre el panel hundido: dos lóbulos radiales del
+/// accent con alpha bajísimo (≤ 4%) cuyo centro deriva en una curva de
+/// Lissajous con períodos primos entre sí (~37 s y ~53 s) — nunca repite
+/// exactamente, nunca distrae. El texto va por encima con contraste intacto.
+fn paint_fondo_vivo(
+    scene: &mut vello::Scene,
+    rect: llimphi_ui::PaintRect,
+    accent: llimphi_ui::llimphi_raster::peniko::Color,
+) {
+    use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
+    use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Gradient};
+    use vello::kurbo::Point;
+
+    let t = now_unix_millis() as f64 / 1000.0;
+    let a = accent.to_rgba8();
+    let bounds = KurboRect::new(
+        rect.x as f64,
+        rect.y as f64,
+        (rect.x + rect.w) as f64,
+        (rect.y + rect.h) as f64,
+    );
+    // Cada lóbulo: (período x, período y, fase, alpha pico, radio relativo).
+    let lobulos: [(f64, f64, f64, u8, f64); 2] = [
+        (37.0, 53.0, 0.0, 10, 0.85),
+        (53.0, 41.0, 2.4, 7, 0.65),
+    ];
+    for (px, py, fase, alpha, rr) in lobulos {
+        let cx = rect.x as f64
+            + rect.w as f64 * (0.5 + 0.38 * (t * std::f64::consts::TAU / px + fase).sin());
+        let cy = rect.y as f64
+            + rect.h as f64 * (0.5 + 0.38 * (t * std::f64::consts::TAU / py + fase * 0.7).cos());
+        let radio = (rect.w.max(rect.h) as f64) * rr;
+        let grad = Gradient::new_radial(Point::new(cx, cy), radio as f32).with_stops(
+            [
+                Color::from_rgba8(a.r, a.g, a.b, alpha),
+                Color::from_rgba8(a.r, a.g, a.b, 0),
+            ]
+            .as_slice(),
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, &grad, None, &bounds);
+    }
+}
+
 /// `output_pane` reimplementado sobre `llimphi-widget-terminal::block_surface`.
 /// Mismo modelo de datos, virtualización real (sólo se materializa lo visible).
 pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
@@ -593,9 +679,12 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
         line_height: row_h,
         char_width: 12.0 * 0.6 * zoom,
     };
+    use llimphi_ui::llimphi_raster::peniko::Color;
     let mut palette = TermPalette::from_theme(theme);
     // La superficie entera es el panel hundido; los cuerpos se leen sobre él.
-    palette.bg = theme.sunken();
+    // El bg del widget va TRANSPARENTE: el nodo exterior pinta el hundido +
+    // el fondo vivo (deriva lenta del accent) y se ve a través del widget.
+    palette.bg = Color::from_rgba8(0, 0, 0, 0);
 
     // Refresh del cache de spilled visibles (Fase 5.11): lee desde el spill
     // file sólo si `spilled_count` cambió desde el último frame. El cache
@@ -918,12 +1007,20 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
     // Nodo flex que toma el espacio sobrante (entre header e input) y mide su
     // alto real para el próximo frame (el widget recibe un alto fijo = el
     // medido; el painter de medición vive acá, en el nodo flex-rellenado).
+    // El mismo painter pinta el **fondo vivo**: dos lóbulos radiales del
+    // accent a alpha bajísimo que derivan en Lissajous lento (~40 s de
+    // período). El chasis ya redibuja cada ~100 ms por el caret, así que el
+    // movimiento sale gratis. Opt-out: `SHUMA_FONDO_QUIETO=1`.
     let slot = Arc::clone(&state.out_viewport_h);
-    let painter = move |_scene: &mut vello::Scene,
+    let glow_accent = theme.accent;
+    let painter = move |scene: &mut vello::Scene,
                         _ts: &mut llimphi_ui::llimphi_text::Typesetter,
                         rect: llimphi_ui::PaintRect| {
         if let Ok(mut g) = slot.lock() {
             *g = rect.h;
+        }
+        if fondo_vivo_enabled() && rect.w > 1.0 && rect.h > 1.0 {
+            paint_fondo_vivo(scene, rect, glow_accent);
         }
     };
     let lift_menu = (*lift).clone();

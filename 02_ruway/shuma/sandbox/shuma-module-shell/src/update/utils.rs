@@ -155,8 +155,15 @@ pub(crate) fn open_decoration(mut s: State, kind: shuma_line::DecorationKind) ->
             // Pre-llenar `git show <sha>` — la acción más útil 99% del tiempo.
             s.input.set_text(format!("git show {sha}"));
         }
-        Dk::IssueRef(_) | Dk::BoxDraw => {
-            // Sin acción asociada.
+        Dk::IssueRef(_)
+        | Dk::BoxDraw
+        | Dk::Number
+        | Dk::DateTime
+        | Dk::Severity(_)
+        | Dk::Version
+        | Dk::Percent
+        | Dk::PermMask => {
+            // Sin acción asociada — coloreo puro.
         }
     }
     s

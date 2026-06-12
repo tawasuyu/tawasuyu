@@ -71,6 +71,30 @@ pub enum DecorationKind {
     /// con la fuente monospace + color accent para que los bordes
     /// calcen entre filas y se vean como una caja real.
     BoxDraw,
+    /// Número suelto (conteos, tamaños, ids), con sufijo de unidad
+    /// opcional (`248`, `1024K`, `1.3 GiB` captura sólo `1.3`+unidad
+    /// pegada). Sin acción de click — sólo color.
+    Number,
+    /// Fecha u hora reconocible: ISO (`2026-06-12`), hora (`10:12`,
+    /// `10:12:33`) o `mes día` estilo `ls -l` (`jun  9`). Sólo color.
+    DateTime,
+    /// Palabra de estado con carga semántica (error/warning/ok) — el
+    /// frontend la tiñe rojo/amarillo/verde para escanear de un vistazo.
+    Severity(Severity),
+    /// Versión tipo semver, con `v` opcional (`v1.2.3`, `0.7.0`).
+    Version,
+    /// Porcentaje (`85%`, `99.7%`). Sólo color.
+    Percent,
+    /// Máscara de permisos estilo `ls -l` (`drwxr-xr-x`, `-rw-r--r--+`).
+    PermMask,
+}
+
+/// Nivel semántico de una palabra de estado en el output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Severity {
+    Error,
+    Warn,
+    Ok,
 }
 
 /// Punto de entrada: detecta decoraciones para una línea. `cwd` se usa
@@ -95,6 +119,15 @@ pub fn decorate_line(line: &str, cwd: &Path) -> Vec<Decoration> {
     find_git_shas(line, &mut out);
     find_issue_refs(line, &mut out);
     find_paths(line, cwd, &mut out);
+    // Coloreo semántico de relleno — va al FINAL para que cualquier
+    // decoración accionable (path/url/sha) le gane el rango. De lo más
+    // específico a lo más genérico, cada finder respeta `overlaps_any`.
+    find_perm_masks(line, &mut out);
+    find_versions(line, &mut out);
+    find_datetimes(line, &mut out);
+    find_percents(line, &mut out);
+    find_severities(line, &mut out);
+    find_numbers(line, &mut out);
     out.sort_by_key(|d| d.start);
     let mut merged: Vec<Decoration> = Vec::with_capacity(out.len());
     for d in out {
@@ -245,6 +278,315 @@ fn is_end_boundary(line: &str, pos: usize) -> bool {
     }
     let next = bytes[pos];
     !(next.is_ascii_alphanumeric() || next == b'_')
+}
+
+// --- Coloreo semántico de relleno (números, fechas, severidades…) ---
+
+/// Máscara de permisos `ls -l`: tipo + 9 de rwx, con sufijo ACL/SELinux
+/// opcional (`+`/`.`). Muy específica, va primero entre los de relleno.
+fn find_perm_masks(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i + 10 <= n {
+        if !is_boundary(line, i) || !matches!(bytes[i], b'-' | b'd' | b'l' | b'b' | b'c' | b's' | b'p') {
+            i += 1;
+            continue;
+        }
+        let perms_ok = (1..10).all(|k| {
+            let c = bytes[i + k];
+            let esperado: &[u8] = match k % 3 {
+                1 => b"r-",
+                2 => b"w-",
+                _ => b"xsStT-",
+            };
+            esperado.contains(&c)
+        });
+        let mut end = i + 10;
+        if perms_ok {
+            if end < n && matches!(bytes[end], b'+' | b'.') {
+                end += 1;
+            }
+            if is_end_boundary(line, end) && !overlaps_any(i, end, out) {
+                out.push(Decoration { start: i, end, kind: DecorationKind::PermMask });
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Versiones semver con `v` opcional: `v1.2.3`, `0.7.0`, `1.45.0-rc1`.
+/// Exige al menos DOS puntos (un `1.5` suelto es un número decimal).
+fn find_versions(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !is_boundary(line, i) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        if j < n && bytes[j] == b'v' {
+            j += 1;
+        }
+        let mut grupos = 0;
+        loop {
+            let d0 = j;
+            while j < n && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j == d0 {
+                break;
+            }
+            grupos += 1;
+            if j < n && bytes[j] == b'.' && j + 1 < n && bytes[j + 1].is_ascii_digit() {
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        // Sufijo pre-release pegado (`-rc1`, `-beta.2`).
+        if grupos >= 3 && j < n && bytes[j] == b'-' {
+            let mut k = j + 1;
+            while k < n && (bytes[k].is_ascii_alphanumeric() || bytes[k] == b'.') {
+                k += 1;
+            }
+            if k > j + 1 {
+                j = k;
+            }
+        }
+        if grupos >= 3 && is_end_boundary(line, j) && !overlaps_any(start, j, out) {
+            out.push(Decoration { start, end: j, kind: DecorationKind::Version });
+            i = j;
+        } else {
+            i = (start + 1).max(j.min(start + 1));
+        }
+    }
+}
+
+const MESES: &[&str] = &[
+    "ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic",
+    "jan", "apr", "aug", "dec",
+];
+
+/// Fechas y horas: ISO `2026-06-12`, horas `10:12[:33]`, y `mes día`
+/// estilo `ls -l` (`jun  9`). Sólo coloreo, sin acción.
+fn find_datetimes(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    // ISO: dddd-dd-dd
+    let mut i = 0;
+    while i + 10 <= n {
+        if is_boundary(line, i)
+            && bytes[i..i + 4].iter().all(u8::is_ascii_digit)
+            && bytes[i + 4] == b'-'
+            && bytes[i + 5..i + 7].iter().all(u8::is_ascii_digit)
+            && bytes[i + 7] == b'-'
+            && bytes[i + 8..i + 10].iter().all(u8::is_ascii_digit)
+            && is_end_boundary(line, i + 10)
+            && !overlaps_any(i, i + 10, out)
+        {
+            out.push(Decoration { start: i, end: i + 10, kind: DecorationKind::DateTime });
+            i += 10;
+        } else {
+            i += 1;
+        }
+    }
+    // Hora: d?d:dd(:dd)?
+    let mut i = 0;
+    while i < n {
+        if !is_boundary(line, i) || !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        while j < n && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j - start <= 2 && j + 2 < n && bytes[j] == b':' && bytes[j + 1].is_ascii_digit() && bytes[j + 2].is_ascii_digit() {
+            let mut end = j + 3;
+            if end + 2 < n
+                && bytes[end] == b':'
+                && bytes[end + 1].is_ascii_digit()
+                && bytes[end + 2].is_ascii_digit()
+            {
+                end += 3;
+            }
+            if is_end_boundary(line, end) && !overlaps_any(start, end, out) {
+                out.push(Decoration { start, end, kind: DecorationKind::DateTime });
+            }
+            i = end;
+        } else {
+            i = j.max(start + 1);
+        }
+    }
+    // `mes día` (ls -l): palabra de 3 letras del set + espacios + 1-2 dígitos.
+    let lower = line.to_ascii_lowercase();
+    let lb = lower.as_bytes();
+    let mut i = 0;
+    while i + 3 <= n {
+        // Sólo runs ASCII alfabéticos de 3 bytes (los meses lo son); un byte
+        // no-ASCII acá sería el medio de un char multibyte — no sliceable.
+        if !is_boundary(line, i)
+            || !lb[i..i + 3].iter().all(u8::is_ascii_alphabetic)
+        {
+            i += 1;
+            continue;
+        }
+        let word = &lower[i..i + 3];
+        if MESES.contains(&word) && is_end_boundary(line, i + 3) {
+            // espacios + día
+            let mut j = i + 3;
+            while j < n && lb[j] == b' ' {
+                j += 1;
+            }
+            let d0 = j;
+            while j < n && lb[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digits = j - d0;
+            if (1..=2).contains(&digits)
+                && j - i <= 7
+                && is_end_boundary(line, j)
+                && !overlaps_any(i, j, out)
+            {
+                out.push(Decoration { start: i, end: j, kind: DecorationKind::DateTime });
+                i = j;
+                continue;
+            }
+        }
+        i += 1;
+    }
+}
+
+/// Porcentajes: `85%`, `99.7%`.
+fn find_percents(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !is_boundary(line, i) || !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        while j < n && (bytes[j].is_ascii_digit() || bytes[j] == b'.') {
+            j += 1;
+        }
+        if j < n && bytes[j] == b'%' && !overlaps_any(start, j + 1, out) {
+            out.push(Decoration { start, end: j + 1, kind: DecorationKind::Percent });
+            i = j + 1;
+        } else {
+            i = j.max(start + 1);
+        }
+    }
+}
+
+/// Palabras de estado (case-insensitive) + glifos ✔/✓/✖/✗/⚠.
+fn find_severities(line: &str, out: &mut Vec<Decoration>) {
+    const ERR: &[&str] = &[
+        "error", "err", "failed", "failure", "fail", "fatal", "panic", "denied", "abort",
+        "aborted", "rechazado", "fallo", "falló",
+    ];
+    const WARN: &[&str] = &["warning", "warn", "aviso", "deprecated", "stale"];
+    const OK: &[&str] = &[
+        "ok", "done", "success", "succeeded", "passed", "ready", "finished", "listo", "hecho",
+    ];
+    let lower = line.to_ascii_lowercase();
+    // Palabras: escaneo por tokens alfabéticos.
+    let lb = lower.as_bytes();
+    let n = lb.len();
+    let mut i = 0;
+    while i < n {
+        if !lb[i].is_ascii_alphabetic() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        while j < n && lb[j].is_ascii_alphabetic() {
+            j += 1;
+        }
+        let word = &lower[start..j];
+        let sev = if ERR.contains(&word) {
+            Some(Severity::Error)
+        } else if WARN.contains(&word) {
+            Some(Severity::Warn)
+        } else if OK.contains(&word) {
+            Some(Severity::Ok)
+        } else {
+            None
+        };
+        if let Some(sev) = sev {
+            if is_boundary(line, start) && is_end_boundary(line, j) && !overlaps_any(start, j, out)
+            {
+                out.push(Decoration { start, end: j, kind: DecorationKind::Severity(sev) });
+            }
+        }
+        i = j;
+    }
+    // Glifos sueltos.
+    for (idx, c) in line.char_indices() {
+        let sev = match c {
+            '✔' | '✓' => Severity::Ok,
+            '✖' | '✗' => Severity::Error,
+            '⚠' => Severity::Warn,
+            _ => continue,
+        };
+        let end = idx + c.len_utf8();
+        if !overlaps_any(idx, end, out) {
+            out.push(Decoration { start: idx, end, kind: DecorationKind::Severity(sev) });
+        }
+    }
+}
+
+/// Números sueltos (enteros o decimales), con sufijo de unidad corto
+/// pegado (`248`, `4096`, `1.3M`, `512KB`, `350ms`). El finder más
+/// genérico: va último y respeta todo lo ya reclamado.
+fn find_numbers(line: &str, out: &mut Vec<Decoration>) {
+    let bytes = line.as_bytes();
+    let n = bytes.len();
+    let mut i = 0;
+    while i < n {
+        if !is_boundary(line, i) || !bytes[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i;
+        let mut punto = false;
+        while j < n {
+            let c = bytes[j];
+            if c.is_ascii_digit() {
+                j += 1;
+            } else if c == b'.' && !punto && j + 1 < n && bytes[j + 1].is_ascii_digit() {
+                punto = true;
+                j += 1;
+            } else {
+                break;
+            }
+        }
+        // Sufijo de unidad pegado, hasta 3 letras (K, MB, GiB, ms, s).
+        let mut end = j;
+        let mut letras = 0;
+        while end < n && letras < 3 && bytes[end].is_ascii_alphabetic() {
+            end += 1;
+            letras += 1;
+        }
+        if end < n && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
+            end = j; // sufijo demasiado largo → no era unidad; sólo el número
+        }
+        if is_end_boundary(line, end) && !overlaps_any(start, end, out) {
+            out.push(Decoration { start, end, kind: DecorationKind::Number });
+        }
+        i = end.max(start + 1);
+    }
 }
 
 // --- URL detection ---

@@ -410,9 +410,12 @@ pub(crate) fn partition_line(
         }
         let color = match &d.kind {
             Dk::GitSha(_) => theme.fg_muted,
-            // El resto va al accent — paths, urls, grep refs, issue refs,
-            // box-drawing. Sin underline (Llimphi aún no lo soporta).
-            _ => theme.accent,
+            // Accionables van al accent — paths, urls, grep refs, issue
+            // refs, box-drawing. Sin underline (Llimphi aún no lo soporta).
+            Dk::Path { .. } | Dk::Url(_) | Dk::GrepRef { .. } | Dk::IssueRef(_)
+            | Dk::BoxDraw => theme.accent,
+            // Coloreo semántico de relleno: su propio tono suave.
+            otro => decoration_color(otro, theme),
         };
         out.push(LinePiece {
             text: text[d.start..d.end].to_string(),
@@ -500,6 +503,16 @@ pub(crate) fn decoration_color(
         Dk::GitSha(_) => Color::from_rgba8(210, 165, 120, 255),
         Dk::IssueRef(_) => Color::from_rgba8(200, 200, 140, 255),
         Dk::BoxDraw => theme.fg_muted,
+        // Coloreo semántico de relleno: tonos suaves, claramente por
+        // debajo de los accionables (paths/urls) en saturación.
+        Dk::Number => Color::from_rgba8(209, 154, 102, 255), // naranja suave
+        Dk::DateTime => Color::from_rgba8(126, 166, 180, 255), // teal apagado
+        Dk::Severity(shuma_line::Severity::Error) => theme.fg_destructive,
+        Dk::Severity(shuma_line::Severity::Warn) => Color::from_rgba8(220, 200, 120, 255),
+        Dk::Severity(shuma_line::Severity::Ok) => Color::from_rgba8(130, 205, 140, 255),
+        Dk::Version => Color::from_rgba8(187, 160, 220, 255), // violeta
+        Dk::Percent => Color::from_rgba8(100, 200, 200, 255), // cian
+        Dk::PermMask => Color::from_rgba8(140, 152, 175, 255), // gris azulado
     }
 }
 

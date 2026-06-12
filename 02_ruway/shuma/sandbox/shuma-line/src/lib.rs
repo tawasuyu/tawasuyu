@@ -36,7 +36,7 @@ pub use complete::{
     complete, flag_hints, Completion, CompletionKind, CompletionSource, StaticSource,
 };
 pub use continuation::needs_continuation;
-pub use decorate::{decorate_line, Decoration, DecorationKind};
+pub use decorate::{decorate_line, Decoration, DecorationKind, Severity};
 pub use dialect::Dialect;
 pub use editor::LineState;
 pub use ghost::ghost_suggestion;

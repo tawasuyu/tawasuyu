@@ -50,13 +50,18 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
     };
     // Multi-línea: cada `\n` agrega una línea visible y crece el alto
     // del input. El cursor cae en (línea, columna) calculadas desde el
-    // byte offset del cursor.
+    // byte offset del cursor. El alto se CAPEA a `MAX_INPUT_LINES`
+    // visibles: un paste largo no aplasta el output ni empuja el cursor
+    // fuera de la ventana — el contenido scrollea adentro, anclado a la
+    // línea del cursor (siempre visible).
+    const MAX_INPUT_LINES: usize = 12;
     let line_count = text.matches('\n').count() + 1;
+    let visible_lines = line_count.min(MAX_INPUT_LINES);
     let zoom = state.font_zoom.clamp(0.5, 3.0) as f64;
     let font_px = 13.0_f64 * zoom;
     let line_h: f64 = 18.0_f64 * zoom;
     let border_inner_h: f64 = 16.0_f64 * zoom; // padding visual sumado al alto
-    let container_h = border_inner_h + line_h * line_count as f64;
+    let container_h = border_inner_h + line_h * visible_lines as f64;
     let theme_clone = *theme;
     let focused = state.focused;
     // Parpadeo del caret: sólido el primer medio período tras la última tecla,
@@ -110,6 +115,11 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             (line_idx, cursor - line_start)
         };
 
+        // Scroll interno cuando el texto excede las líneas visibles: la
+        // ventana sigue al cursor (queda en la última fila visible al
+        // tipear al final; al subir con flechas, la ventana sube con él).
+        let scroll_lines = cursor_line_idx.saturating_sub(visible_lines - 1);
+
         // Ancho de carácter de la fuente mono: medimos un bloque de N
         // caracteres y dividimos. Avanzamos el cursor y los tokens por
         // **conteo de caracteres**, NO por medición de cada token: parley
@@ -137,7 +147,12 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
         let mut last_line_y: f64 = baseline_y;
         let mut line_byte_start = 0usize;
         for (line_idx, line_str) in text.split('\n').enumerate() {
-            let line_y = baseline_y + line_idx as f64 * line_h;
+            // Fuera de la ventana visible: ni se mide ni se pinta.
+            if line_idx < scroll_lines || line_idx >= scroll_lines + visible_lines {
+                line_byte_start += line_str.len() + 1;
+                continue;
+            }
+            let line_y = baseline_y + (line_idx - scroll_lines) as f64 * line_h;
             let mut x = line_x_start;
             // Pintar tokens sobre el slice de la línea, usando el
             // tokenizer estándar (dialect por defecto = bash).
@@ -251,6 +266,28 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
             }
         }
 
+        // Indicador de overflow: con más líneas que las visibles, un
+        // contador discreto arriba a la derecha ubica al usuario
+        // ("línea 18/40") — sin él, el cap parecería texto perdido.
+        if line_count > visible_lines {
+            let label = format!("línea {}/{}", cursor_line_idx + 1, line_count);
+            let block = TextBlock {
+                text: &label,
+                size_px: (font_px * 0.8) as f32,
+                color: theme_clone.fg_muted,
+                origin: (0.0, 0.0),
+                max_width: None,
+                alignment: TAlign::Start,
+                line_height: 1.0,
+                italic: false,
+                font_family: Some(llimphi_ui::llimphi_text::MONOSPACE.to_string()),
+            };
+            let layout = layout_block(ts, &block);
+            let w = measurement(&layout).width as f64;
+            let origin = (rect.x as f64 + rect.w as f64 - w - 10.0, rect.y as f64 + 4.0);
+            draw_layout(scene, &layout, theme_clone.fg_muted, origin);
+        }
+
         // Cursor — barra vertical de 2 px en la línea calculada, parpadeante.
         if focused && caret_on {
             use llimphi_ui::llimphi_raster::kurbo::Rect as KurboRect;
@@ -277,6 +314,9 @@ pub(crate) fn shell_input_view<HostMsg: Clone + 'static>(
     })
     .fill(bg)
     .radius(3.0)
+    // El cap de líneas visibles scrollea el contenido adentro; sin clip,
+    // una línea parcial se filtraría fuera del marco.
+    .clip(true)
     .paint_with(painter);
 
     View::new(Style {
