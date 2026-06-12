@@ -176,15 +176,45 @@ pub(crate) struct BatchRename {
     pub(crate) pattern: String,
     /// `(id, nombre_original)` de cada nodo a renombrar, en orden estable.
     pub(crate) targets: Vec<(nahual_source_core::NodeId, String)>,
+    /// Nombres **explícitos** (alineados a `targets`), cuando los propone la IA
+    /// en vez de derivarse de un patrón. `Some` desactiva el patrón: el overlay
+    /// es de revisión (old→new), no de edición de tokens.
+    pub(crate) explicit: Option<Vec<String>>,
 }
 
 impl BatchRename {
-    /// Calcula el nuevo nombre del objetivo `idx` aplicando el patrón al nombre
-    /// original. Si el resultado queda vacío, conserva el original (no se
+    /// Crea un batch por **patrón** (el flujo clásico, tokens `{name}` etc.).
+    pub(crate) fn por_patron(
+        pattern: String,
+        targets: Vec<(nahual_source_core::NodeId, String)>,
+    ) -> Self {
+        Self { pattern, targets, explicit: None }
+    }
+
+    /// Crea un batch con **nombres explícitos** (los propone la IA). `names`
+    /// debe estar alineado a `targets`.
+    pub(crate) fn explicitos(
+        targets: Vec<(nahual_source_core::NodeId, String)>,
+        names: Vec<String>,
+    ) -> Self {
+        Self { pattern: String::new(), targets, explicit: Some(names) }
+    }
+
+    /// `true` si los nombres vienen de la IA (no de un patrón) — el overlay
+    /// cambia de "editar patrón" a "revisar propuesta".
+    pub(crate) fn es_ia(&self) -> bool {
+        self.explicit.is_some()
+    }
+
+    /// Calcula el nuevo nombre del objetivo `idx`: el explícito si lo hay, o el
+    /// patrón aplicado al nombre original. Vacío conserva el original (no se
     /// renombra a "nada").
     pub(crate) fn nuevo_nombre(&self, idx: usize) -> String {
         let original = &self.targets[idx].1;
-        let out = aplicar_patron(&self.pattern, original, idx + 1);
+        let out = match &self.explicit {
+            Some(names) => names.get(idx).cloned().unwrap_or_else(|| original.clone()),
+            None => aplicar_patron(&self.pattern, original, idx + 1),
+        };
         if out.trim().is_empty() {
             original.clone()
         } else {
@@ -764,6 +794,11 @@ pub(crate) enum Msg {
     AiResult(Result<String, String>),
     /// Cierra el panel de IA.
     AiClose,
+    /// Pide a la IA nombres nuevos para la selección (marca o cursor).
+    AiRename,
+    /// Nombres propuestos por la IA: `(id, original, propuesto)` por archivo.
+    /// Abre el overlay de batch rename para revisarlos antes de aplicar.
+    AiRenameResult(Vec<(nahual_source_core::NodeId, String, String)>),
 }
 
 impl Model {
@@ -962,25 +997,41 @@ mod tests {
     #[test]
     fn batch_nuevo_nombre_respeta_vacio() {
         // Un patrón que rinde vacío conserva el original (no renombra a nada).
-        let b = BatchRename {
-            pattern: String::new(),
-            targets: vec![("/x/a.txt".into(), "a.txt".into())],
-        };
+        let b = BatchRename::por_patron(
+            String::new(),
+            vec![("/x/a.txt".into(), "a.txt".into())],
+        );
         assert_eq!(b.nuevo_nombre(0), "a.txt");
     }
 
     #[test]
     fn batch_contador_es_uno_based_y_ordenado() {
-        let b = BatchRename {
-            pattern: "f{n}".to_string(),
-            targets: vec![
+        let b = BatchRename::por_patron(
+            "f{n}".to_string(),
+            vec![
                 ("/x/a".into(), "a".into()),
                 ("/x/b".into(), "b".into()),
                 ("/x/c".into(), "c".into()),
             ],
-        };
+        );
         assert_eq!(b.nuevo_nombre(0), "f1");
         assert_eq!(b.nuevo_nombre(1), "f2");
         assert_eq!(b.nuevo_nombre(2), "f3");
+    }
+
+    #[test]
+    fn batch_explicito_usa_los_nombres_de_ia() {
+        // Nombres explícitos (propuestos por IA): alineados a targets, ignoran
+        // el patrón; un explícito vacío conserva el original.
+        let b = BatchRename::explicitos(
+            vec![
+                ("/x/IMG_001.jpg".into(), "IMG_001.jpg".into()),
+                ("/x/IMG_002.jpg".into(), "IMG_002.jpg".into()),
+            ],
+            vec!["atardecer_playa.jpg".to_string(), String::new()],
+        );
+        assert!(b.es_ia());
+        assert_eq!(b.nuevo_nombre(0), "atardecer_playa.jpg");
+        assert_eq!(b.nuevo_nombre(1), "IMG_002.jpg"); // vacío → original
     }
 }

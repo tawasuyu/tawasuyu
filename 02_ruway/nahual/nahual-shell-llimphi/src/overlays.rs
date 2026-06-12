@@ -188,6 +188,13 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
                 Msg::BatchRenameStart,
             ));
         }
+        // Renombrar por contenido con IA (marca o cursor).
+        if model.cur().selected_node().is_some() || !model.cur_pane().marked.is_empty() {
+            acciones.push((
+                ContextMenuItem::action("✦ Renombrar con IA…"),
+                Msg::AiRename,
+            ));
+        }
         acciones.push((ContextMenuItem::action("★ Añadir a favoritos"), Msg::AddPlace));
         if model.dual {
             acciones.push((ContextMenuItem::action("Copiar al otro panel"), Msg::CopyToOther));
@@ -215,6 +222,7 @@ pub(crate) fn context_menu_spec(model: &Model, x: f32, y: f32) -> ContextMenuSpe
                 Msg::OpenWith(id.clone()),
             ));
         }
+        acciones.push((ContextMenuItem::action("✦ Preguntar a la IA"), Msg::AiAsk));
         acciones.push((ContextMenuItem::action("Editar en Nada"), Msg::EditSelected));
         acciones.push((
             ContextMenuItem::action("Abrir terminal aquí"),
@@ -379,6 +387,13 @@ pub(crate) fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
         *conteo.entry(nn.as_str()).or_insert(0) += 1;
     }
 
+    // En modo IA el "input" es informativo (los nombres ya vienen propuestos);
+    // en modo patrón es el patrón en edición con cursor.
+    let input_txt = if b.es_ia() {
+        "✦ nombres propuestos por la IA — revisá abajo".to_string()
+    } else {
+        format!("{}_", b.pattern)
+    };
     let input = View::new(Style {
         size: Size { width: percent(1.0_f32), height: length(34.0_f32) },
         padding: pad(8.0),
@@ -388,7 +403,7 @@ pub(crate) fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_app)
     .radius(6.0)
     .border(1.0, theme.accent)
-    .text(format!("{}_", b.pattern), 15.0, theme.fg_text);
+    .text(input_txt, 15.0, if b.es_ia() { theme.fg_muted } else { theme.fg_text });
 
     // Filas de preview (hasta 12 visibles).
     let filas: Vec<View<Msg>> = (0..total)
@@ -441,9 +456,21 @@ pub(crate) fn batch_overlay(b: &BatchRename, theme: &Theme) -> View<Msg> {
     .radius(10.0)
     .border(1.0, theme.accent)
     .children(vec![
-        View::new(fila(30.0)).text(format!("Renombrar por lote · {total} elementos"), 16.0, theme.fg_text),
+        View::new(fila(30.0)).text(
+            if b.es_ia() {
+                format!("Renombrar con IA · {total} elementos")
+            } else {
+                format!("Renombrar por lote · {total} elementos")
+            },
+            16.0,
+            theme.fg_text,
+        ),
         View::new(fila(22.0)).text(
-            "Patrón — tokens: {name} · {ext} · {n} (contador)",
+            if b.es_ia() {
+                "Propuestas por la IA — las colisiones se marcan en rojo"
+            } else {
+                "Patrón — tokens: {name} · {ext} · {n} (contador)"
+            },
             12.0,
             theme.fg_muted,
         ),

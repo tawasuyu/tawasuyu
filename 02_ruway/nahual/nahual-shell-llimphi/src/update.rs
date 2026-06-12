@@ -703,7 +703,7 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
                 // Objetivos: la marca, o el cursor si no hay marca.
                 let targets = m.cur_pane().op_targets();
                 if !targets.is_empty() {
-                    m.batch = Some(BatchRename { pattern: "{name}".to_string(), targets });
+                    m.batch = Some(BatchRename::por_patron("{name}".to_string(), targets));
                     m.context_menu = None;
                 }
             }
@@ -878,7 +878,7 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
         }
 
         // ---- Acción LLM: todo al módulo `ai`. ----
-        Msg::AiAsk | Msg::AiResult(_) | Msg::AiClose => {
+        Msg::AiAsk | Msg::AiResult(_) | Msg::AiClose | Msg::AiRename | Msg::AiRenameResult(_) => {
             return crate::ai::apply_ai(m, msg, handle);
         }
     }

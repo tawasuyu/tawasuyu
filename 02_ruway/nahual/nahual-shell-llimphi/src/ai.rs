@@ -8,7 +8,8 @@ use std::path::Path;
 
 use llimphi_ui::Handle;
 
-use crate::modelo::{AiState, Model, Msg};
+use crate::modelo::{AiState, BatchRename, Model, Msg};
+use nahual_source_core::NodeId;
 
 /// Bytes de contenido de un archivo de texto que entran al prompt.
 const AI_SNIPPET_BYTES: usize = 4096;
@@ -118,7 +119,71 @@ pub(crate) fn ask_llm(prompt: String) -> Result<String, String> {
     })
 }
 
-/// Dispatcher de los `Msg` de IA. Lanza el worker en `AiAsk`.
+/// Sanea una propuesta de nombre de la IA para que sea un filename válido:
+/// saca rutas (`/`, `\`), recorta y colapsa espacios. Vacío → cadena vacía
+/// (el batch la trata como "conservar el original").
+fn sanear_nombre(s: &str) -> String {
+    let limpio: String = s
+        .trim()
+        // La IA a veces numera ("1. nombre") o agrega comillas/backticks.
+        .trim_start_matches(|c: char| c.is_ascii_digit() || c == '.' || c == ')' || c == ' ')
+        .trim_matches(|c| c == '"' || c == '`' || c == '\'')
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    limpio.trim().to_string()
+}
+
+/// Pide a `pluma-llm` nombres nuevos para `targets` (`(id, nombre_original)`).
+/// Un solo prompt con todos los archivos numerados; la respuesta se parsea por
+/// líneas alineadas al orden. Corre en el worker. Si algo falla, devuelve los
+/// originales (renombrados a sí mismos = no-op, el batch los descarta).
+pub(crate) fn propose_names(
+    targets: Vec<(NodeId, String)>,
+) -> Vec<(NodeId, String, String)> {
+    let mut listado = String::new();
+    for (i, (id, name)) in targets.iter().enumerate() {
+        listado.push_str(&format!("{}. {name}", i + 1));
+        // Snippet de contenido si es texto (ayuda a nombrar por significado).
+        let p = Path::new(id);
+        if p.is_file() && es_texto(p) {
+            if let Some(s) = leer_snippet(p, 600) {
+                let una_linea = s.replace('\n', " ");
+                listado.push_str(&format!("   →   {}", una_linea.chars().take(160).collect::<String>()));
+            }
+        }
+        listado.push('\n');
+    }
+    let prompt = format!(
+        "Sos un asistente que renombra archivos. Para cada archivo numerado, \
+         proponé UN nombre nuevo descriptivo en minúsculas-con-guiones-bajos, \
+         CONSERVANDO la extensión original. Respondé SÓLO los nombres, uno por \
+         línea, en el mismo orden, sin numerar y sin texto extra.\n\n{listado}"
+    );
+    let respuesta = match ask_llm(prompt) {
+        Ok(t) => t,
+        Err(_) => {
+            // Sin IA: devolvé los originales (no-op).
+            return targets.into_iter().map(|(id, n)| (id, n.clone(), n)).collect();
+        }
+    };
+    let propuestos: Vec<String> = respuesta
+        .lines()
+        .map(sanear_nombre)
+        .filter(|l| !l.is_empty())
+        .collect();
+    targets
+        .into_iter()
+        .enumerate()
+        .map(|(i, (id, original))| {
+            // Si la IA dio menos líneas que archivos, los faltantes quedan igual.
+            let propuesto = propuestos.get(i).cloned().unwrap_or_else(|| original.clone());
+            (id, original, propuesto)
+        })
+        .collect()
+}
+
+/// Dispatcher de los `Msg` de IA. Lanza el worker en `AiAsk`/`AiRename`.
 pub(crate) fn apply_ai(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     let mut m = model;
     match msg {
@@ -141,6 +206,31 @@ pub(crate) fn apply_ai(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
         Msg::AiClose => {
             m.ai = None;
         }
+        Msg::AiRename => {
+            m.context_menu = None;
+            // Sólo sobre POSIX escribible (los ids son rutas reales).
+            if m.can_edit() {
+                let targets = m.cur_pane().op_targets();
+                if !targets.is_empty() {
+                    m.ai = Some(AiState {
+                        titulo: format!("Proponiendo nombres con IA para {} archivos…", targets.len()),
+                        respuesta: None,
+                        pendiente: true,
+                    });
+                    handle.spawn(move || Msg::AiRenameResult(propose_names(targets)));
+                }
+            }
+        }
+        Msg::AiRenameResult(pares) => {
+            // Cierra el spinner y abre el overlay de batch rename para revisar.
+            m.ai = None;
+            if !pares.is_empty() {
+                let targets: Vec<(NodeId, String)> =
+                    pares.iter().map(|(id, orig, _)| (id.clone(), orig.clone())).collect();
+                let names: Vec<String> = pares.into_iter().map(|(_, _, prop)| prop).collect();
+                m.batch = Some(BatchRename::explicitos(targets, names));
+            }
+        }
         _ => {}
     }
     m
@@ -149,6 +239,22 @@ pub(crate) fn apply_ai(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// El saneo robustece el parseo de la respuesta LLM: saca numeración,
+    /// comillas/backticks, rutas y espacios sobrantes.
+    #[test]
+    fn sanear_nombre_robusto() {
+        assert_eq!(sanear_nombre("  atardecer_playa.jpg "), "atardecer_playa.jpg");
+        assert_eq!(sanear_nombre("1. informe_anual.pdf"), "informe_anual.pdf");
+        assert_eq!(sanear_nombre("`notas.md`"), "notas.md");
+        assert_eq!(sanear_nombre("\"foto final.png\""), "foto final.png");
+        // Las rutas se aplanan: ningún `/` sobrevive (no se renombra fuera del
+        // dir). El `..` inicial se recorta; las barras se vuelven `_`.
+        let aplanado = sanear_nombre("../x/y.txt");
+        assert!(!aplanado.contains('/'), "sin barras: {aplanado}");
+        assert_eq!(aplanado, "_x_y.txt");
+        assert_eq!(sanear_nombre("   "), "");
+    }
 
     /// End-to-end del plumbing con el backend por defecto (Mock sin
     /// credenciales): un prompt produce una respuesta no vacía sin colgar.
