@@ -2547,8 +2547,13 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
             }
         }
         Source::Container { engine, name, .. } => {
-            // Envuelve el spec en `<engine> exec` contra el contenedor.
-            let wrapped = wrap_spec_for_container(spec.clone(), engine, name);
+            // Envuelve el spec en `<engine> exec` contra el contenedor. El wrap
+            // ya leyó `spec.cwd` como cwd INTERIOR (lo inyecta como `cd` adentro).
+            let mut wrapped = wrap_spec_for_container(spec.clone(), engine, name);
+            // El cwd del SPAWN en el host debe ser válido y accesible: el cwd
+            // interior (p.ej. `/root`) no existe/no es accesible en el host y
+            // haría fallar el spawn. `/` siempre sirve; el chroot/bind manda.
+            wrapped.cwd = "/".to_string();
             let handle = shuma_exec::run(&wrapped);
             let killer = handle.killer();
             ActiveRun {
@@ -2782,6 +2787,15 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
         ]
     }
     let rootfs = rootfs_path.to_string();
+    // Prefijo común para TODO comando dentro del contenedor: HOME del root y
+    // `cd` al cwd interior que trackea shuma (`spec.cwd`). Sin esto el comando
+    // corría en `/` con PWD heredado del host → `pwd`/`ls`/el prompt se
+    // contradecían. `|| true` para no abortar si el dir no existe (el comando
+    // igual reporta su propio error).
+    let prelude = format!(
+        "export HOME=/root; cd {} 2>/dev/null || true; ",
+        shell_quote(&spec.cwd)
+    );
     spec.exec = match spec.exec {
         Exec::Shell { line, program: _ } => {
             // No-TUI: corremos `unshare` como UNA etapa `Exec::Direct` para
@@ -2791,13 +2805,14 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
             // comando corría sin mostrar NADA, con la card en verde/✘ sin
             // motivo. Los TUI fullscreen sí van por la rama `Exec::Pty` de
             // abajo, que sí trae su emulador.)
-            let args = base_args(&rootfs, &line);
+            let inner = format!("{prelude}{line}");
+            let args = base_args(&rootfs, &inner);
             Exec::Direct { stages: vec![StageSpec { program: "unshare".into(), args }] }
         }
         Exec::Pty { program, args, cols, rows } => {
             // Para Exec::Pty (TUI fullscreen tipo vim) armamos el `bash -c`
             // con el program + args ya quoteados.
-            let mut inner = String::new();
+            let mut inner = prelude.clone();
             inner.push_str(&shell_quote(&program));
             for a in &args {
                 inner.push(' ');
@@ -2819,7 +2834,8 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
                 }
             }
             // Pipe simple → también por `Exec::Direct` (captura por líneas).
-            let args = base_args(&rootfs, &line);
+            let inner = format!("{prelude}{line}");
+            let args = base_args(&rootfs, &inner);
             Exec::Direct { stages: vec![StageSpec { program: "unshare".into(), args }] }
         }
     };
@@ -2863,24 +2879,38 @@ fn bwrap_args(rootfs_path: &str) -> Vec<String> {
 /// `rootfs_path` es el filesystem extraído (LXC image) en disco local.
 fn wrap_spec_for_bwrap(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec {
     let base = bwrap_args(rootfs_path);
+    // Igual que unshare: HOME del root + `cd` al cwd interior trackeado.
+    let prelude = format!(
+        "export HOME=/root; cd {} 2>/dev/null || true; ",
+        shell_quote(&spec.cwd)
+    );
     spec.exec = match spec.exec {
-        Exec::Shell { line, program } => {
+        Exec::Shell { line, program: _ } => {
             // No-TUI → `Exec::Direct` (una etapa bwrap) para capturar
             // stdout/stderr por líneas y renderizar como bloques. Forzar PTY
             // sin TuiSession descartaba el output (ver wrap_spec_for_unshare).
             // Los TUI fullscreen van por la rama `Exec::Pty` de abajo.
             let mut args = base;
             args.push("--".into());
-            args.push(program);
+            args.push("bash".into());
             args.push("-c".into());
-            args.push(line);
+            args.push(format!("{prelude}{line}"));
             Exec::Direct { stages: vec![StageSpec { program: "bwrap".into(), args }] }
         }
         Exec::Pty { program, args, cols, rows } => {
+            // TUI: envolvemos en `bash -c` para poder hacer el `cd` interior.
+            let mut inner = prelude.clone();
+            inner.push_str("exec ");
+            inner.push_str(&shell_quote(&program));
+            for a in &args {
+                inner.push(' ');
+                inner.push_str(&shell_quote(a));
+            }
             let mut new_args = base;
             new_args.push("--".into());
-            new_args.push(program);
-            new_args.extend(args);
+            new_args.push("bash".into());
+            new_args.push("-c".into());
+            new_args.push(inner);
             Exec::Pty {
                 program: "bwrap".into(),
                 args: new_args,
@@ -2905,7 +2935,7 @@ fn wrap_spec_for_bwrap(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec 
             args.push("--".into());
             args.push("bash".into());
             args.push("-c".into());
-            args.push(line);
+            args.push(format!("{prelude}{line}"));
             Exec::Direct { stages: vec![StageSpec { program: "bwrap".into(), args }] }
         }
     };
@@ -3214,7 +3244,48 @@ pub(crate) fn cancel_running(mut s: State) -> State {
     s
 }
 
+/// Resuelve `.`/`..` de forma puramente léxica (sin tocar el FS ni seguir
+/// symlinks). Para el `cd` dentro de un contenedor, donde el path es del FS
+/// de adentro y `canonicalize` (host) no aplica.
+fn normalize_lexical(p: &std::path::Path) -> PathBuf {
+    use std::path::Component;
+    let mut out: Vec<std::ffi::OsString> = Vec::new();
+    for comp in p.components() {
+        match comp {
+            Component::RootDir | Component::Prefix(_) => {}
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(c) => out.push(c.to_os_string()),
+        }
+    }
+    let mut res = PathBuf::from("/");
+    for c in out {
+        res.push(c);
+    }
+    res
+}
+
 pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
+    // En un contenedor el `cd` es contra el FS de ADENTRO, no el del host:
+    // resolvemos el path de forma léxica (sin `canonicalize`, que miraría el
+    // host) y actualizamos el cwd interior. Sin verificación de existencia —
+    // el siguiente comando (que corre con `cd <cwd>` adentro) reporta el error
+    // si el dir no existe.
+    if matches!(s.source, Source::Container { .. }) {
+        let trimmed = rest.trim();
+        let base = if trimmed.is_empty() {
+            PathBuf::from("/root") // HOME del root dentro del contenedor
+        } else if trimmed.starts_with('/') {
+            PathBuf::from(trimmed)
+        } else {
+            s.cwd.join(trimmed)
+        };
+        s.cwd = normalize_lexical(&base);
+        s.completion_source = Arc::new(ShellSource::new(&s.cwd));
+        return s;
+    }
     let target = if rest.trim().is_empty() {
         // `cd` sin args → HOME (convención bash/zsh).
         match std::env::var("HOME") {

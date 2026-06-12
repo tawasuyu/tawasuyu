@@ -612,7 +612,14 @@ pub struct CommandGroup {
 
 impl State {
     pub fn new(source: Source) -> Self {
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        // Un contenedor arranca en SU interior (`/root`, el home del root con
+        // el que entramos), no en el cwd del host: tras el chroot el path del
+        // host no existe adentro y `pwd`/`ls`/el prompt se contradecían.
+        let cwd = if matches!(source, Source::Container { .. }) {
+            PathBuf::from("/root")
+        } else {
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"))
+        };
         let completion_source = Arc::new(ShellSource::new(&cwd));
         // Configuración personal: fallback silencioso a default si falta o no
         // parsea (no hay nada crítico, sólo preferencias). Las env vars del
