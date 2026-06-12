@@ -2784,10 +2784,15 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
     let rootfs = rootfs_path.to_string();
     spec.exec = match spec.exec {
         Exec::Shell { line, program: _ } => {
-            // Forzamos PTY adentro: apt/pacman/etc. usan isatty para
-            // prompts y colores. El frontend ya emula vt100.
+            // No-TUI: corremos `unshare` como UNA etapa `Exec::Direct` para
+            // capturar stdout/stderr por líneas y renderizarlas como bloques,
+            // igual que un comando local. (Antes se forzaba `Exec::Pty`, pero
+            // sin `TuiSession` el drenado descartaba los `Bytes` del PTY → el
+            // comando corría sin mostrar NADA, con la card en verde/✘ sin
+            // motivo. Los TUI fullscreen sí van por la rama `Exec::Pty` de
+            // abajo, que sí trae su emulador.)
             let args = base_args(&rootfs, &line);
-            Exec::Pty { program: "unshare".into(), args, cols: 80, rows: 24 }
+            Exec::Direct { stages: vec![StageSpec { program: "unshare".into(), args }] }
         }
         Exec::Pty { program, args, cols, rows } => {
             // Para Exec::Pty (TUI fullscreen tipo vim) armamos el `bash -c`
@@ -2813,8 +2818,9 @@ fn wrap_spec_for_unshare(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpe
                     line.push_str(&shell_quote(a));
                 }
             }
+            // Pipe simple → también por `Exec::Direct` (captura por líneas).
             let args = base_args(&rootfs, &line);
-            Exec::Pty { program: "unshare".into(), args, cols: 80, rows: 24 }
+            Exec::Direct { stages: vec![StageSpec { program: "unshare".into(), args }] }
         }
     };
     spec
@@ -2859,25 +2865,16 @@ fn wrap_spec_for_bwrap(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec 
     let base = bwrap_args(rootfs_path);
     spec.exec = match spec.exec {
         Exec::Shell { line, program } => {
-            // `bwrap <args> -- <program> -c <line>` como Exec::Pty para
-            // preservar isatty adentro (apt, pacman, etc. usan colores +
-            // prompts si detectan TTY).
-            //
-            // PTY mode = Exec::Pty: el frontend ya tiene emulador vt100
-            // (output bytes). Para mantener captura por líneas usaríamos
-            // Exec::Shell, pero apt/pacman dependen de TTY para prompts.
-            // Compromiso: PTY siempre en bwrap.
+            // No-TUI → `Exec::Direct` (una etapa bwrap) para capturar
+            // stdout/stderr por líneas y renderizar como bloques. Forzar PTY
+            // sin TuiSession descartaba el output (ver wrap_spec_for_unshare).
+            // Los TUI fullscreen van por la rama `Exec::Pty` de abajo.
             let mut args = base;
             args.push("--".into());
             args.push(program);
             args.push("-c".into());
             args.push(line);
-            Exec::Pty {
-                program: "bwrap".into(),
-                args,
-                cols: 80,
-                rows: 24,
-            }
+            Exec::Direct { stages: vec![StageSpec { program: "bwrap".into(), args }] }
         }
         Exec::Pty { program, args, cols, rows } => {
             let mut new_args = base;
@@ -2909,12 +2906,7 @@ fn wrap_spec_for_bwrap(mut spec: CommandSpec, rootfs_path: &str) -> CommandSpec 
             args.push("bash".into());
             args.push("-c".into());
             args.push(line);
-            Exec::Pty {
-                program: "bwrap".into(),
-                args,
-                cols: 80,
-                rows: 24,
-            }
+            Exec::Direct { stages: vec![StageSpec { program: "bwrap".into(), args }] }
         }
     };
     spec

@@ -1931,11 +1931,27 @@ impl App for Shell {
                             }
                         }
                     }
+                    // Sesión viva: el cambio debe TOMAR EFECTO ya (antes el
+                    // toggle no reconstruía el shell, así que desmarcar dejaba
+                    // los comandos corriendo dentro del contenedor igual).
+                    // - apagar → soltar el contenedor y volver a shell base.
+                    // - encender con uno ya elegido → re-entrar al contenedor.
+                    // - encender SIN contenedor elegido → no tocar el shell;
+                    //   se reconstruye al elegir uno (PickRootfs/Subscribe).
+                    if !s.pending {
+                        if !s.use_container {
+                            s.container = None;
+                            s.apply_isolation();
+                        } else if s.container.is_some() {
+                            s.apply_isolation();
+                        }
+                    }
                 }
                 // Poblar el select de contenedores con los podman existentes.
                 if activado {
                     spawn_list_containers(handle);
                 }
+                save_sessions(&m);
             }
             Msg::SetEngine(name) => {
                 m.dropdown_open = None;
