@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "HTTP/JSON gateway para shipote — traduce JSON ↔ postcard contra el admin socket."
+description = "HTTP/JSON + WebSocket gateway para shuma — JSON ↔ postcard y puente WS↔ExecPty."
 
 [[bin]]
 name = "shuma-gateway"
@@ -15,7 +15,9 @@ path = "src/main.rs"
 [dependencies]
 shuma-protocol = { path = "../sandbox/shuma-protocol" }
 anyhow = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+axum = { workspace = true, features = ["ws"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
