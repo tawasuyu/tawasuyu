@@ -1,0 +1,969 @@
+//! Tipos del chasis de shuma: enums, structs de estado y mensajes.
+//!
+//! Toda la definición de `Model`, `Msg`, `Session`, `Instance`, etc.
+//! vive aquí para mantener `main.rs` como punto de entrada limpio.
+
+use std::collections::HashMap;
+
+use llimphi_motion::Tween;
+use llimphi_theme::Theme;
+use llimphi_widget_text_input::TextInputState;
+use shuma_module::{ModuleContributions, Source};
+use shuma_sysmon::{Snapshot, SystemSampler};
+
+use crate::containers::{prepare_rootfs, rootfs_path_for, rootfs_listo};
+use crate::env::{default_shell_source, engine_preferido};
+use crate::hosts;
+
+// ─── Tipos de módulos conocidos ────────────────────────────────────
+
+/// Qué `Kind` puede ocupar cada slot. Una variante por módulo compilado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    Launcher,
+    CommandBar,
+    Shell,
+    Matilda,
+    Minga,
+    Canvas,
+}
+
+impl Kind {
+    /// `id` canónico.
+    #[allow(dead_code)]
+    pub(crate) fn id(self) -> &'static str {
+        match self {
+            Kind::Launcher => shuma_module_launcher::ID,
+            Kind::CommandBar => shuma_module_commandbar::ID,
+            Kind::Shell => shuma_module_shell::ID,
+            Kind::Matilda => shuma_module_matilda::ID,
+            Kind::Minga => shuma_module_minga::ID,
+            Kind::Canvas => shuma_module_canvas::ID,
+        }
+    }
+}
+
+/// Cuál de las tres instancias-módulo de una sesión direcciona un `Slot` o un `Msg`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Which {
+    Shell,
+    Canvas,
+    Matilda,
+}
+
+/// Dónde corre el shell de la sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Isolation {
+    Local,
+    Remote,
+}
+
+impl Isolation {
+    pub(crate) const ALL: [Isolation; 2] = [Isolation::Local, Isolation::Remote];
+    #[allow(dead_code)]
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Isolation::Local => "Local",
+            Isolation::Remote => "Remoto",
+        }
+    }
+}
+
+/// Estado de conexión de la sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ConnState {
+    Pending,
+    Connected,
+    #[allow(dead_code)]
+    Disconnected,
+}
+
+impl ConnState {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            ConnState::Pending => "en espera",
+            ConnState::Connected => "conectado",
+            ConnState::Disconnected => "desconectado",
+        }
+    }
+}
+
+/// La distro del aislamiento.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Distro {
+    Ubuntu,
+    Debian,
+    Alpine,
+    Arch,
+}
+
+impl Distro {
+    pub(crate) const ALL: [Distro; 4] = [Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch];
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Distro::Ubuntu => "Ubuntu",
+            Distro::Debian => "Debian",
+            Distro::Alpine => "Alpine",
+            Distro::Arch => "Arch",
+        }
+    }
+    /// Imagen OCI fully-qualified para `podman run`.
+    pub(crate) fn image(self) -> &'static str {
+        match self {
+            Distro::Ubuntu => "docker.io/library/ubuntu:latest",
+            Distro::Debian => "docker.io/library/debian:latest",
+            Distro::Alpine => "docker.io/library/alpine:latest",
+            Distro::Arch => "docker.io/library/archlinux:latest",
+        }
+    }
+}
+
+/// Distro a partir del nombre de un rootfs.
+pub(crate) fn distro_from_name(name: &str) -> Option<Distro> {
+    let n = name.to_lowercase();
+    Distro::ALL.into_iter().find(|d| d.label().to_lowercase() == n)
+}
+
+/// Campo del form de conexión remota con foco de teclado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RemoteField {
+    Host,
+    User,
+    Port,
+}
+
+/// Campo del form de creación de sesión nueva con foco.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PendingField {
+    Mount,
+}
+
+/// Estado de un container listado en la ventana gestora.
+#[derive(Debug, Clone)]
+pub(crate) struct ContainerInfo {
+    pub name: String,
+    pub status: String,
+    pub image: String,
+    /// `true` = rootfs en disco (unshare/bwrap).
+    pub rootfs: bool,
+}
+
+/// Un directorio del host montado dentro del contenedor.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Mount {
+    pub host: String,
+    pub target: String,
+    #[serde(default)]
+    pub readonly: bool,
+}
+
+/// Config persistida de un contenedor.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub(crate) struct ContainerCfg {
+    pub name: String,
+    #[serde(default = "host_local")]
+    pub host: String,
+    pub engine: String,
+    pub distro: Distro,
+    #[serde(default)]
+    pub mounts: Vec<Mount>,
+}
+
+pub(crate) fn host_local() -> String {
+    "local".to_string()
+}
+
+/// Columna de un mount con foco de teclado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MountCol {
+    Host,
+    Target,
+}
+
+/// Una fila de mount en el editor.
+#[derive(Debug, Clone)]
+pub(crate) struct MountDraft {
+    pub host: TextInputState,
+    pub target: TextInputState,
+    pub readonly: bool,
+}
+
+impl MountDraft {
+    pub(crate) fn new() -> Self {
+        Self {
+            host: TextInputState::new(),
+            target: TextInputState::new(),
+            readonly: false,
+        }
+    }
+    pub(crate) fn from_mount(m: &Mount) -> Self {
+        let mut host = TextInputState::new();
+        host.set_text(m.host.clone());
+        let mut target = TextInputState::new();
+        target.set_text(m.target.clone());
+        Self { host, target, readonly: m.readonly }
+    }
+    pub(crate) fn to_mount(&self) -> Option<Mount> {
+        let host = self.host.text();
+        let target = self.target.text();
+        if host.trim().is_empty() || target.trim().is_empty() {
+            return None;
+        }
+        Some(Mount { host, target, readonly: self.readonly })
+    }
+}
+
+/// Editor de contenedor del gestor.
+#[derive(Debug, Clone)]
+pub(crate) struct ContainerDraft {
+    pub editing: Option<String>,
+    pub host: String,
+    pub engine: String,
+    pub distro: Distro,
+    pub mounts: Vec<MountDraft>,
+    pub focus: Option<(usize, MountCol)>,
+}
+
+impl ContainerDraft {
+    pub(crate) fn new(host: String) -> Self {
+        Self {
+            editing: None,
+            host,
+            engine: engine_preferido().unwrap_or("unshare").to_string(),
+            distro: Distro::Ubuntu,
+            mounts: Vec::new(),
+            focus: None,
+        }
+    }
+    pub(crate) fn from_cfg(cfg: &ContainerCfg) -> Self {
+        Self {
+            editing: Some(cfg.name.clone()),
+            host: cfg.host.clone(),
+            engine: cfg.engine.clone(),
+            distro: cfg.distro,
+            mounts: cfg.mounts.iter().map(MountDraft::from_mount).collect(),
+            focus: None,
+        }
+    }
+    pub(crate) fn to_cfg(&self, name: String) -> ContainerCfg {
+        ContainerCfg {
+            name,
+            host: self.host.clone(),
+            engine: self.engine.clone(),
+            distro: self.distro,
+            mounts: self.mounts.iter().filter_map(MountDraft::to_mount).collect(),
+        }
+    }
+}
+
+/// Form para crear/editar un host remoto.
+#[derive(Debug, Clone)]
+pub(crate) struct HostDraft {
+    pub name: TextInputState,
+    pub host: TextInputState,
+    pub user: TextInputState,
+    pub port: TextInputState,
+    pub use_password: bool,
+    pub pem_path: TextInputState,
+    pub focused: Option<HostDraftField>,
+    pub editing: Option<String>,
+}
+
+impl HostDraft {
+    pub(crate) fn new() -> Self {
+        let mut port = TextInputState::new();
+        port.set_text("22");
+        Self {
+            name: TextInputState::new(),
+            host: TextInputState::new(),
+            user: TextInputState::new(),
+            port,
+            use_password: true,
+            pem_path: TextInputState::new(),
+            focused: Some(HostDraftField::Name),
+            editing: None,
+        }
+    }
+
+    pub(crate) fn from_host(h: &hosts::RemoteHost) -> Self {
+        let mut name = TextInputState::new();
+        name.set_text(h.name.clone());
+        let mut host = TextInputState::new();
+        host.set_text(h.host.clone());
+        let mut user = TextInputState::new();
+        user.set_text(h.user.clone());
+        let mut port = TextInputState::new();
+        port.set_text(h.port.to_string());
+        let (use_password, pem) = match &h.auth {
+            hosts::HostAuth::Password => (true, String::new()),
+            hosts::HostAuth::Key { path } => (false, path.clone()),
+        };
+        let mut pem_path = TextInputState::new();
+        pem_path.set_text(pem);
+        Self {
+            name,
+            host,
+            user,
+            port,
+            use_password,
+            pem_path,
+            focused: Some(HostDraftField::Name),
+            editing: Some(h.name.clone()),
+        }
+    }
+
+    pub(crate) fn to_host(&self) -> Option<hosts::RemoteHost> {
+        let name = self.name.text();
+        let host = self.host.text();
+        let user = self.user.text();
+        if name.trim().is_empty() || host.trim().is_empty() || user.trim().is_empty() {
+            return None;
+        }
+        let port: u16 = self.port.text().trim().parse().unwrap_or(22);
+        let auth = if self.use_password {
+            hosts::HostAuth::Password
+        } else {
+            let path = self.pem_path.text();
+            hosts::HostAuth::Key { path }
+        };
+        Some(hosts::RemoteHost { name, host, user, port, auth })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HostDraftField {
+    Name,
+    Host,
+    User,
+    Port,
+    Pem,
+}
+
+/// Cuál dropdown de la config de sesión está abierto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DropKind {
+    Isolation,
+    Distro,
+    Container,
+    Engine,
+    Host,
+}
+
+/// El tipo de una sesión.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SessionKind {
+    Draft,
+    Local,
+    #[allow(dead_code)]
+    Remote,
+}
+
+/// Las herramientas de la sesión activa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum Tool {
+    History,
+    Monitor,
+    Explorer,
+    Matilda,
+}
+
+impl Tool {
+    pub(crate) const ALL: [Tool; 4] = [Tool::History, Tool::Monitor, Tool::Explorer, Tool::Matilda];
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Tool::History => "Historial",
+            Tool::Monitor => "Monitor",
+            Tool::Explorer => "Explorer",
+            Tool::Matilda => "Matilda",
+        }
+    }
+}
+
+/// State vivo de un módulo.
+pub(crate) enum ModuleState {
+    Launcher(shuma_module_launcher::State),
+    CommandBar(shuma_module_commandbar::State),
+    Shell(shuma_module_shell::State),
+    Matilda(Box<shuma_module_matilda::State>),
+    Minga(shuma_module_minga::State),
+    Canvas(shuma_module_canvas::State),
+}
+
+/// Una instancia activa de un módulo.
+pub(crate) struct Instance {
+    pub kind: Kind,
+    #[allow(dead_code)]
+    pub label: String,
+    pub state: ModuleState,
+}
+
+impl Instance {
+    pub(crate) fn launcher(state: shuma_module_launcher::State) -> Self {
+        Self {
+            kind: Kind::Launcher,
+            label: rimay_localize::t("shuma-label-launcher"),
+            state: ModuleState::Launcher(state),
+        }
+    }
+
+    pub(crate) fn command_bar(state: shuma_module_commandbar::State) -> Self {
+        Self {
+            kind: Kind::CommandBar,
+            label: rimay_localize::t("shuma-label-command"),
+            state: ModuleState::CommandBar(state),
+        }
+    }
+
+    pub(crate) fn shell(label: String, source: Source) -> Self {
+        Self {
+            kind: Kind::Shell,
+            label,
+            state: ModuleState::Shell(shuma_module_shell::State::new(source)),
+        }
+    }
+
+    pub(crate) fn matilda(label: String, source: Source) -> Self {
+        Self::matilda_with_inventory(label, source, None)
+    }
+
+    pub(crate) fn matilda_with_inventory(
+        label: String,
+        source: Source,
+        inventory: Option<&std::path::Path>,
+    ) -> Self {
+        use crate::update::{example_inventory_fallback, load_matilda_inventory};
+        let state = match inventory {
+            Some(p) => {
+                let inv = load_matilda_inventory(p).unwrap_or_else(example_inventory_fallback);
+                shuma_module_matilda::State::with_inventory_path(source, inv, p.to_path_buf())
+            }
+            None => shuma_module_matilda::State::new(source),
+        };
+        Self {
+            kind: Kind::Matilda,
+            label,
+            state: ModuleState::Matilda(Box::new(state)),
+        }
+    }
+
+    pub(crate) fn minga(label: String, source: Source) -> Self {
+        Self {
+            kind: Kind::Minga,
+            label,
+            state: ModuleState::Minga(shuma_module_minga::State::new(source)),
+        }
+    }
+
+    pub(crate) fn canvas(label: String) -> Self {
+        Self {
+            kind: Kind::Canvas,
+            label,
+            state: ModuleState::Canvas(shuma_module_canvas::State::new()),
+        }
+    }
+}
+
+// ─── Sesión de trabajo ──────────────────────────────────────────────
+
+pub(crate) struct Session {
+    pub name: String,
+    pub kind: SessionKind,
+    pub number: Option<u32>,
+    pub isolation: Isolation,
+    pub distro: Distro,
+    pub container: Option<String>,
+    pub use_container: bool,
+    pub container_engine: String,
+    pub container_open: bool,
+    pub conn: ConnState,
+    pub host_label: Option<String>,
+    pub host: TextInputState,
+    pub user: TextInputState,
+    pub port: TextInputState,
+    pub pending: bool,
+    pub mount: TextInputState,
+    pub pending_focus: Option<PendingField>,
+    #[allow(dead_code)]
+    pub source: Source,
+    pub shell: Instance,
+    pub canvas: Instance,
+    pub matilda: Instance,
+}
+
+impl Session {
+    pub(crate) fn build(name: String, kind: SessionKind, number: Option<u32>, source: Source) -> Self {
+        Self {
+            shell: Instance::shell(name.clone(), source.clone()),
+            canvas: Instance::canvas(rimay_localize::t("shuma-label-canvas")),
+            matilda: Instance::matilda(name.clone(), source.clone()),
+            name,
+            kind,
+            number,
+            isolation: Isolation::Local,
+            distro: Distro::Ubuntu,
+            container: None,
+            use_container: false,
+            container_engine: engine_preferido().unwrap_or("bwrap").to_string(),
+            container_open: false,
+            pending: false,
+            mount: TextInputState::new(),
+            pending_focus: None,
+            conn: ConnState::Connected,
+            host_label: None,
+            host: TextInputState::new(),
+            user: TextInputState::new(),
+            port: {
+                let mut p = TextInputState::new();
+                p.set_text("22");
+                p
+            },
+            source,
+        }
+    }
+
+    pub(crate) fn draft() -> Self {
+        Self::build("draft".to_string(), SessionKind::Draft, None, default_shell_source())
+    }
+
+    pub(crate) fn new_pending(n: u32) -> Self {
+        let mut s = Self::build(
+            format!("local {n}"),
+            SessionKind::Local,
+            Some(n),
+            Source::Local,
+        );
+        s.pending = true;
+        s
+    }
+
+    pub(crate) fn host_key(&self) -> String {
+        self.host_label.clone().unwrap_or_else(|| "local".to_string())
+    }
+
+    pub(crate) fn active_data(&self) -> bool {
+        matches!(&self.shell.state, ModuleState::Shell(s) if s.is_running())
+    }
+
+    pub(crate) fn port_num(&self) -> u16 {
+        self.port.text().trim().parse().unwrap_or(22)
+    }
+
+    pub(crate) fn resolve_source(&self) -> Source {
+        match self.isolation {
+            Isolation::Local => match (self.use_container, self.container.clone()) {
+                (true, Some(name)) => Source::Container {
+                    engine: self.container_engine.clone(),
+                    name,
+                    label: None,
+                },
+                _ => Source::Local,
+            },
+            Isolation::Remote => {
+                let host = self.host.text();
+                let user = self.user.text();
+                match (self.use_container, self.container.clone()) {
+                    (true, Some(name)) => Source::RemoteContainer {
+                        host,
+                        user,
+                        port: self.port_num(),
+                        engine: self.container_engine.clone(),
+                        name,
+                        label: None,
+                    },
+                    _ => Source::Remote {
+                        host,
+                        user,
+                        port: self.port_num(),
+                        label: None,
+                    },
+                }
+            }
+        }
+    }
+
+    pub(crate) fn apply_isolation(&mut self) {
+        if self.isolation == Isolation::Local && self.use_container {
+            if let Some(name) = self.container.clone() {
+                if matches!(self.container_engine.as_str(), "unshare" | "bwrap") {
+                    prepare_rootfs(std::path::Path::new(&name));
+                }
+            }
+        }
+        let source = self.resolve_source();
+        self.conn = if self.use_container {
+            ConnState::Pending
+        } else {
+            match self.isolation {
+                Isolation::Local => ConnState::Connected,
+                Isolation::Remote => ConnState::Pending,
+            }
+        };
+        self.shell = Instance::shell(self.name.clone(), source.clone());
+        self.matilda = Instance::matilda(self.name.clone(), source.clone());
+        self.source = source;
+    }
+
+    pub(crate) fn instance(&self, w: Which) -> &Instance {
+        match w {
+            Which::Shell => &self.shell,
+            Which::Canvas => &self.canvas,
+            Which::Matilda => &self.matilda,
+        }
+    }
+
+    pub(crate) fn instance_mut(&mut self, w: Which) -> &mut Instance {
+        match w {
+            Which::Shell => &mut self.shell,
+            Which::Canvas => &mut self.canvas,
+            Which::Matilda => &mut self.matilda,
+        }
+    }
+
+    pub(crate) fn to_config(&self) -> SessionConfig {
+        SessionConfig {
+            name: self.name.clone(),
+            number: self.number,
+            isolation: self.isolation,
+            distro: self.distro,
+            container: self.container.clone(),
+            use_container: self.use_container,
+            container_engine: self.container_engine.clone(),
+            mount: self.mount.text(),
+            host_label: self.host_label.clone(),
+            host: self.host.text(),
+            user: self.user.text(),
+            port: self.port.text(),
+        }
+    }
+
+    pub(crate) fn from_config(c: SessionConfig) -> Self {
+        use crate::env::binary_disponible;
+        let kind = match c.isolation {
+            Isolation::Remote => SessionKind::Remote,
+            Isolation::Local => SessionKind::Local,
+        };
+        let source = match c.isolation {
+            Isolation::Local => Source::Local,
+            Isolation::Remote => default_shell_source(),
+        };
+        let mut s = Session::build(c.name, kind, c.number, source);
+        s.isolation = c.isolation;
+        s.distro = c.distro;
+        s.container = c.container;
+        s.use_container = c.use_container;
+        if !c.container_engine.is_empty() && binary_disponible(&c.container_engine) {
+            s.container_engine = c.container_engine;
+        } else if let Some(pref) = engine_preferido() {
+            s.container_engine = pref.to_string();
+        }
+        s.mount.set_text(c.mount);
+        s.host_label = c.host_label;
+        s.host.set_text(c.host);
+        s.user.set_text(c.user);
+        if !c.port.is_empty() {
+            s.port.set_text(c.port);
+        }
+        s.apply_isolation();
+        s
+    }
+
+    pub(crate) fn remote_field_mut(&mut self, f: RemoteField) -> &mut TextInputState {
+        match f {
+            RemoteField::Host => &mut self.host,
+            RemoteField::User => &mut self.user,
+            RemoteField::Port => &mut self.port,
+        }
+    }
+
+    pub(crate) fn connect_remote(&mut self) {
+        if self.host.text().trim().is_empty() || self.user.text().trim().is_empty() {
+            return;
+        }
+        let source = self.resolve_source();
+        self.shell = Instance::shell(self.name.clone(), source.clone());
+        self.matilda = Instance::matilda(self.name.clone(), source.clone());
+        self.source = source;
+        self.conn = ConnState::Connected;
+    }
+
+    pub(crate) fn reconnect(&mut self) {
+        if self.host_label.is_some() {
+            self.connect_remote();
+        } else {
+            self.apply_isolation();
+        }
+    }
+}
+
+// ─── Config persistible ─────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub(crate) struct SessionConfig {
+    pub name: String,
+    #[serde(default)]
+    pub number: Option<u32>,
+    pub isolation: Isolation,
+    pub distro: Distro,
+    #[serde(default)]
+    pub container: Option<String>,
+    #[serde(default)]
+    pub use_container: bool,
+    #[serde(default)]
+    pub container_engine: String,
+    #[serde(default)]
+    pub mount: String,
+    #[serde(default)]
+    pub host_label: Option<String>,
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub user: String,
+    #[serde(default)]
+    pub port: String,
+}
+
+/// Estado de chrome persistible.
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub(crate) struct ChromeState {
+    #[serde(default)]
+    pub active_tool: Option<Tool>,
+    #[serde(default = "yes")]
+    pub session_panel_open: bool,
+    #[serde(default)]
+    pub active_session: usize,
+    #[serde(default = "default_session_w")]
+    pub session_w: f32,
+    #[serde(default = "default_monitors_width")]
+    pub monitors_width: f32,
+}
+
+fn yes() -> bool { true }
+fn default_session_w() -> f32 { 240.0 }
+fn default_monitors_width() -> f32 { crate::MONITORS_INITIAL_WIDTH }
+
+impl Default for ChromeState {
+    fn default() -> Self {
+        Self {
+            active_tool: None,
+            session_panel_open: true,
+            active_session: 0,
+            session_w: default_session_w(),
+            monitors_width: default_monitors_width(),
+        }
+    }
+}
+
+/// Una **disposición guardada** (estilo "sesión de tmux").
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+pub(crate) struct LayoutSnapshot {
+    pub name: String,
+    pub sessions: Vec<SessionConfig>,
+    pub chrome: ChromeState,
+}
+
+// ─── Mensajes del chasis ────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub(crate) enum ModuleMsg {
+    Launcher(shuma_module_launcher::Msg),
+    CommandBar(shuma_module_commandbar::Msg),
+    #[allow(dead_code)]
+    Shell(shuma_module_shell::Msg),
+    Matilda(shuma_module_matilda::Msg),
+    Minga(shuma_module_minga::Msg),
+    Canvas(shuma_module_canvas::Msg),
+}
+
+/// Identifica de dónde viene un `ModuleMsg`.
+#[derive(Debug, Clone)]
+pub(crate) enum Slot {
+    TopBar,
+    BottomBar,
+    #[allow(dead_code)]
+    Main,
+    Session(usize, Which),
+}
+
+// ─── Modelo ─────────────────────────────────────────────────────────
+
+pub(crate) struct Model {
+    pub theme: Theme,
+
+    pub topbar: Option<Instance>,
+    pub bottombar: Option<Instance>,
+    pub main: Option<Instance>,
+
+    pub sessions: Vec<Session>,
+    pub active_session: usize,
+    pub hovered_session: Option<usize>,
+    pub active_tool: Option<Tool>,
+    pub session_panel_open: bool,
+    pub dropdown_open: Option<DropKind>,
+    pub containers: Vec<String>,
+    pub remote_containers: Vec<String>,
+    pub remote_new_distro: Distro,
+    pub containers_full: Vec<ContainerInfo>,
+    pub container_cfgs: Vec<ContainerCfg>,
+    pub focused_field: Option<RemoteField>,
+    pub hosts: Vec<hosts::RemoteHost>,
+    pub host_draft: Option<HostDraft>,
+    pub container_draft: Option<ContainerDraft>,
+    pub hosts_modal_open: bool,
+    pub containers_modal_open: bool,
+    pub layouts: Vec<LayoutSnapshot>,
+    pub layouts_modal_open: bool,
+    pub layout_name: TextInputState,
+    pub layout_name_focused: bool,
+    pub viewport: (f32, f32),
+
+    pub session_w: f32,
+    pub sysmon: SystemSampler,
+    pub last_snapshot: Option<Snapshot>,
+    pub monitors_width: f32,
+    pub extra_history: HashMap<String, Vec<f32>>,
+    pub extra_display: HashMap<String, String>,
+    pub _wawa_watcher: Option<wawa_config::ConfigWatcher>,
+
+    pub menu_open: Option<usize>,
+    pub menu_active: usize,
+    pub menu_anim: Tween<f32>,
+    pub ctx_menu: Option<(f32, f32)>,
+
+    pub _host: Option<pata_host::HostClient>,
+}
+
+impl Model {
+    pub(crate) fn active(&self) -> Option<&Session> {
+        self.sessions.get(self.active_session).or_else(|| self.sessions.first())
+    }
+
+    pub(crate) fn active_remote_target(&self) -> Option<(String, String, u16, String)> {
+        let s = self.active()?;
+        if s.isolation != Isolation::Remote {
+            return None;
+        }
+        let engine = if matches!(s.container_engine.as_str(), "podman" | "docker") {
+            s.container_engine.clone()
+        } else {
+            "podman".to_string()
+        };
+        Some((s.host.text(), s.user.text(), s.port_num(), engine))
+    }
+
+    pub(crate) fn session_instance(&self, idx: usize, w: Which) -> Option<&Instance> {
+        self.sessions.get(idx).map(|s| s.instance(w))
+    }
+
+    pub(crate) fn session_instance_mut(&mut self, idx: usize, w: Which) -> Option<&mut Instance> {
+        self.sessions.get_mut(idx).map(|s| s.instance_mut(w))
+    }
+}
+
+// ─── Enum de mensajes de la app ─────────────────────────────────────
+
+#[derive(Clone)]
+pub(crate) enum Msg {
+    Tick,
+    ShellTick,
+    Resized(f32, f32),
+    SelectSession(usize),
+    HoverSession(Option<usize>),
+    SelectTool(Tool),
+    ToggleDropdown(DropKind),
+    DismissDropdown,
+    SetIsolation(Isolation),
+    SetDistro(Distro),
+    Noop,
+    ToggleContainer,
+    FocusField(RemoteField),
+    RemoteKey(llimphi_ui::KeyEvent),
+    ConnectRemote,
+    ReconnectSession(usize),
+    CloseSession(usize),
+    OpenNewSessionForm,
+    ConfirmNewSession,
+    CancelNewSession,
+    FocusPendingField(PendingField),
+    PendingKey(llimphi_ui::KeyEvent),
+    RefreshContainers,
+    ContainersLoaded(Vec<String>),
+    RemoteContainersLoaded(Vec<String>),
+    SubscribeContainer(usize),
+    PickRemoteContainer(String),
+    CreateContainer,
+    ToggleUseContainer,
+    SetEngine(String),
+    PickRootfs(Distro),
+    ContainerCreated(String),
+    ContainerFailed { name: String, reason: String },
+    EnsureContainer(String),
+
+    OpenContainersWindow,
+    CloseContainersModal,
+    ContainersFullLoaded(Vec<ContainerInfo>),
+    RefreshContainersFull,
+    StartContainer(String),
+    StopContainer(String),
+    RemoveContainer(String),
+    RemoveRootfs(String),
+
+    RefreshRemoteContainers,
+    SetRemoteNewDistro(Distro),
+    CreateRemoteContainer,
+    RemoteStart(String),
+    RemoteStop(String),
+    RemoteRemove(String),
+
+    OpenHostsWindow,
+    CloseHostsModal,
+    HostDraftStart,
+    HostEdit(usize),
+    HostDraftCancel,
+    HostDraftSave,
+    HostDraftFocus(HostDraftField),
+    HostDraftKey(llimphi_ui::KeyEvent),
+    HostDraftToggleAuth,
+    HostDelete(usize),
+
+    OpenLayoutsModal,
+    CloseLayoutsModal,
+    LayoutNameFocus,
+    LayoutNameKey(llimphi_ui::KeyEvent),
+    SaveLayout,
+    RestoreLayout(usize),
+    DeleteLayout(usize),
+
+    ContainerDraftNew,
+    ContainerDraftCancel,
+    ContainerEdit(usize),
+    ContainerDraftSetEngine(String),
+    ContainerDraftSetDistro(Distro),
+    ContainerDraftAddMount,
+    ContainerDraftRemoveMount(usize),
+    ContainerDraftToggleMountRo(usize),
+    ContainerDraftFocusMount(usize, MountCol),
+    ContainerDraftSave,
+    ContainerDraftKey(llimphi_ui::KeyEvent),
+    PickHost(Option<usize>),
+    HostApply(usize),
+
+    ReorderSession(usize, usize),
+    SetSessionWidth(f32),
+    SetToolWidth(f32),
+    RunFromHistory(String),
+    RunFromHistoryNow(String),
+    Module(Slot, ModuleMsg),
+    ShortcutClicked(Slot, shuma_module::ShortcutAction),
+    WawaConfigChanged(Box<wawa_config::WawaConfig>),
+
+    MenuOpen(Option<usize>),
+    MenuNav(i32),
+    MenuActivate,
+    MenuTick,
+    MenuCommand(String),
+    ContextMenuOpen(f32, f32),
+    CloseMenus,
+
+    HostActivate(u32),
+}
