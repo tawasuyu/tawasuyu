@@ -1,0 +1,545 @@
+use super::*;
+
+/// `true` si la línea es una notice de cierre (`✔/✘/⏹`) — para que tanto
+/// `update` (que no tiene theme) como la `view` calculen el cuerpo igual.
+pub(crate) fn is_status_line(text: &str) -> bool {
+    let t = text.trim_start();
+    t.starts_with('✔') || t.starts_with('✘') || t.starts_with('⏹')
+}
+
+/// Estado de cierre de un comando, para el badge (icono + color en vez del
+/// crudo "exit N").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CmdStatus {
+    Running,
+    Ok,
+    Fail,
+    Cancelled,
+}
+
+impl CmdStatus {
+    /// Deriva el estado de la notice de cierre (`✔ exit 0`, `✘ exit N`,
+    /// `⏹ cancel…`). `None` si no es una notice de estado.
+    pub(crate) fn from_notice(text: &str) -> Option<Self> {
+        let t = text.trim_start();
+        if t.starts_with('✔') {
+            Some(Self::Ok)
+        } else if t.starts_with('⏹') {
+            Some(Self::Cancelled)
+        } else if t.starts_with('✘') {
+            Some(Self::Fail)
+        } else {
+            None
+        }
+    }
+
+    /// Icono vectorial + color del badge.
+    pub(crate) fn icon_color(
+        self,
+        theme: &Theme,
+    ) -> (llimphi_icons::Icon, llimphi_ui::llimphi_raster::peniko::Color) {
+        use llimphi_icons::Icon;
+        use llimphi_ui::llimphi_raster::peniko::Color;
+        match self {
+            CmdStatus::Ok => (Icon::Check, Color::from_rgba8(120, 200, 140, 255)),
+            CmdStatus::Fail => (Icon::X, theme.fg_destructive),
+            CmdStatus::Cancelled => (Icon::Stop, theme.fg_destructive),
+            CmdStatus::Running => (Icon::Play, theme.accent),
+        }
+    }
+}
+
+/// Formato corto de bytes para el header de un run vivo: `B/KB/MB/GB`
+/// sin decimales — entra cómodo en 96 px de slot. "0 B" tras arrancar
+/// el run, "12 KB" mientras crece, "2 MB" para outputs gordos.
+pub(crate) fn format_bytes_short(n: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    const GB: u64 = 1024 * 1024 * 1024;
+    if n < KB {
+        format!("{n} B")
+    } else if n < MB {
+        format!("{} KB", n / KB)
+    } else if n < GB {
+        format!("{} MB", n / MB)
+    } else {
+        format!("{} GB", n / GB)
+    }
+}
+
+/// Tiempo relativo legible ("hace 4 minutos", "hace 2 h", "hace 3 d"…).
+/// `then`/`now` en segundos unix. Vacío si `then == 0` (sin timestamp).
+/// Cubre del segundo al año; el foco es la lectura rápida del año en curso.
+pub(crate) fn relative_time(then: u64, now: u64) -> String {
+    if then == 0 {
+        return String::new();
+    }
+    let d = now.saturating_sub(then);
+    if d < 5 {
+        "recién".to_string()
+    } else if d < 60 {
+        format!("hace {d} s")
+    } else if d < 3600 {
+        let m = d / 60;
+        format!("hace {m} min")
+    } else if d < 86_400 {
+        let h = d / 3600;
+        format!("hace {h} h")
+    } else if d < 7 * 86_400 {
+        let days = d / 86_400;
+        format!("hace {days} d")
+    } else if d < 30 * 86_400 {
+        let w = d / (7 * 86_400);
+        format!("hace {w} sem")
+    } else if d < 365 * 86_400 {
+        let mo = d / (30 * 86_400);
+        format!("hace {mo} mes{}", if mo == 1 { "" } else { "es" })
+    } else {
+        let y = d / (365 * 86_400);
+        format!("hace {y} año{}", if y == 1 { "" } else { "s" })
+    }
+}
+
+/// Líneas del **cuerpo** de un bloque, en orden del buffer: stdout/stderr
+/// y notices que no son de cierre, excluyendo el Prompt (header) y las
+/// líneas de etapa (tee). Es exactamente lo que `command_card` pinta en el
+/// cuerpo IDE-text; `update` la usa para mapear el puntero a (línea, col)
+/// sobre el mismo texto. El editor las une con `\n`.
+pub(crate) fn body_lines_for_block(state: &State, block: u64) -> Vec<String> {
+    state
+        .output
+        .iter()
+        .filter(|l| {
+            l.block == block
+                && l.kind != OutputKind::Prompt
+                && l.stage.is_none()
+                && !is_status_line(&l.text)
+        })
+        .map(|l| l.text.clone())
+        .collect()
+}
+
+/// Kinds de las líneas del cuerpo, alineados 1:1 con
+/// [`body_lines_for_block`] — para tintar stderr sin perder el resto.
+pub(crate) fn body_kinds_for_block(state: &State, block: u64) -> Vec<OutputKind> {
+    state
+        .output
+        .iter()
+        .filter(|l| {
+            l.block == block
+                && l.kind != OutputKind::Prompt
+                && l.stage.is_none()
+                && !is_status_line(&l.text)
+        })
+        .map(|l| l.kind)
+        .collect()
+}
+
+/// Métricas del editor de cuerpo: mono 12px con `line_height` clavado a
+/// `ROW_H` para que la contabilidad de alturas del scroll (que asume
+/// ROW_H por línea) siga cuadrando.
+pub(crate) fn body_editor_metrics() -> llimphi_widget_text_editor::EditorMetrics {
+    let mut m = llimphi_widget_text_editor::EditorMetrics::for_font_size(12.0);
+    m.line_height = ROW_H;
+    m
+}
+
+/// Paleta del editor de cuerpo: fondo de la card (`bg_panel_alt`), gutter
+/// sutil, resto desde el theme.
+pub(crate) fn body_editor_palette(theme: &Theme) -> llimphi_widget_text_editor::EditorPalette {
+    let mut p = llimphi_widget_text_editor::EditorPalette::from_theme(theme);
+    p.bg = theme.bg_panel_alt;
+    // Gutter un escalón más hundido que el cuerpo: la columna de numeración se
+    // lee como gutter (look IDE), no flotando sobre el mismo fondo.
+    p.bg_gutter = mix_color(theme.bg_panel_alt, theme.sunken(), 0.6);
+    p
+}
+
+/// Reconstruye el `EditorState` read-only del cuerpo de `block` desde su
+/// texto + el cursor/selección guardado en `state.body_sel` (si es de este
+/// bloque). El buffer es la fuente de verdad (las `OutputLine`); sólo el
+/// cursor persiste entre frames. Lo comparten `view` (pintar) y `update`
+/// (mapear puntero), así la geometría coincide exacta.
+pub(crate) fn body_editor_state(
+    state: &State,
+    block: u64,
+) -> llimphi_widget_text_editor::EditorState {
+    let text = body_lines_for_block(state, block).join("\n");
+    let mut ed = llimphi_widget_text_editor::EditorState::new();
+    ed.set_text(&text);
+    if let Some((b, cur)) = &state.body_sel {
+        if *b == block {
+            ed.cursor = cur.clone();
+        }
+    }
+    ed
+}
+
+/// Panel de un PTY en **modo líneas** (sin alt-screen): pinta la pantalla
+/// del programa como text de IDE read-only (numeración + mono), no como una
+/// grilla apretada. Sin selección interactiva por ahora (el contenido viene
+/// del screen vt100, no del buffer de OutputLine). Las teclas siguen yendo
+/// al PTY (`is_tui_active`).
+pub(crate) fn pty_lines_panel<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+) -> View<HostMsg> {
+    let lines = pty_line_text(state).unwrap_or_default();
+    let n = lines.len().max(1);
+    let mut ed = llimphi_widget_text_editor::EditorState::new();
+    ed.set_text(&lines.join("\n"));
+    let metrics = body_editor_metrics();
+    let mut palette = body_editor_palette(theme);
+    palette.bg = theme.sunken();
+    palette.bg_gutter = theme.sunken();
+    let editor = llimphi_widget_text_editor::text_editor_view::<HostMsg>(
+        &ed,
+        &palette,
+        metrics,
+        n,
+        |_ev| None,
+    );
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: Dimension::auto(),
+        },
+        flex_basis: length(0.0_f32),
+        flex_grow: 1.0,
+        min_size: Size {
+            width: Dimension::auto(),
+            height: length(0.0_f32),
+        },
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(6.0_f32),
+            bottom: length(6.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.sunken())
+    .radius(3.0)
+    .clip(true)
+    .children(vec![editor])
+}
+
+/// Pinta una línea del output. Para Stdout/Stderr aplica
+/// `shuma_line::decorate_line`: pinta cada span con su color y, si la
+/// decoración es accionable (`Path`/`Url`/`GrepRef`/`GitSha`), agrega
+/// un `on_click` que dispara `Msg::OpenDecoration`. Para Prompt/Notice
+/// usa el atajo `text_aligned` plano.
+pub(crate) fn render_output_line<HostMsg: Clone + 'static>(
+    line: &OutputLine,
+    cwd: &std::path::Path,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    let line_style = Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(16.0_f32),
+        },
+        ..Default::default()
+    };
+
+    // `max_lines(1)`: el nodo es de altura fija (16px). Sin esto, una línea
+    // larga wrappea a 2+ filas y la sobrante se pinta ENCIMA de la línea de
+    // abajo (solapamiento). Cortamos a una sola fila — igual que el cuerpo IDE,
+    // que no envuelve. El resto se pierde a la derecha (clip), no se apila.
+    match line.kind {
+        OutputKind::Prompt => View::new(line_style)
+            .text_aligned(line.text.clone(), 12.0, theme.accent, Alignment::Start)
+            .mono()
+            .max_lines(1),
+        OutputKind::Notice => View::new(line_style)
+            .text_aligned(line.text.clone(), 12.0, theme.fg_muted, Alignment::Start)
+            .mono()
+            .max_lines(1),
+        OutputKind::Stdout | OutputKind::Stderr => {
+            let base = if matches!(line.kind, OutputKind::Stderr) {
+                theme.fg_destructive
+            } else {
+                theme.fg_text
+            };
+            let decorations = shuma_line::decorate_line(&line.text, cwd);
+            // Atajo: si no hubo decoraciones, una sola text_aligned alcanza.
+            if decorations.is_empty() {
+                return View::new(line_style)
+                    .text_aligned(line.text.clone(), 12.0, base, Alignment::Start)
+                    .mono()
+                    .max_lines(1);
+            }
+            let children =
+                build_span_children::<HostMsg>(&line.text, &decorations, base, theme, lift);
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(16.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            // Clip: spans en Row nowrap; si uno desborda no debe pisar la fila
+            // de abajo (misma razón que el `max_lines(1)` de las líneas planas).
+            .clip(true)
+            .children(children)
+        }
+    }
+}
+
+/// Convierte las piezas en una lista de `View`s. Las accionables
+/// (Path/Url/GrepRef/GitSha) llevan `on_click`.
+/// Mapea la categoría semántica de `shuma-line` al icono vectorial del
+/// set canónico `llimphi-icons`. Los iconos monocromos son más gruesos
+/// que los emoji (un solo `code` para todos los lenguajes, un `file_text`
+/// para todos los documentos) — la pérdida de granularidad es el precio
+/// de no depender de fuentes de emoji del sistema.
+pub(crate) fn build_span_children<HostMsg: Clone + 'static>(
+    text: &str,
+    decorations: &[shuma_line::Decoration],
+    base: llimphi_ui::llimphi_raster::peniko::Color,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Vec<View<HostMsg>> {
+    use shuma_line::DecorationKind as Dk;
+    let pieces = partition_line(text, decorations, base, theme);
+    let mut out: Vec<View<HostMsg>> = Vec::with_capacity(pieces.len());
+    for p in pieces {
+        if p.text.is_empty() {
+            continue;
+        }
+        let actionable = matches!(
+            p.deco,
+            Some(Dk::Path { .. } | Dk::Url(_) | Dk::GrepRef { .. } | Dk::GitSha(_))
+        );
+        // Texto del span. Para paths le anteponemos un icono vectorial por
+        // tipo (no emoji): así un `ls` se lee como un explorador de
+        // archivos (carpeta/imagen/código/…) sin depender de fuentes de
+        // emoji del sistema.
+        let text_view: View<HostMsg> = View::new(Style {
+            ..Default::default()
+        })
+        .text_aligned(p.text.clone(), 12.0, p.color, Alignment::Start)
+        .mono();
+        let mut span_view: View<HostMsg> = match &p.deco {
+            Some(Dk::Path {
+                abs,
+                is_dir,
+                is_executable,
+                is_symlink,
+            }) => {
+                let kind = shuma_line::file_kind(abs, *is_dir, *is_executable, *is_symlink);
+                let icon_box: View<HostMsg> = View::new(Style {
+                    size: Size {
+                        width: length(13.0_f32),
+                        height: length(13.0_f32),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .children(vec![llimphi_icons::icon_view(
+                    kind_icon(kind),
+                    p.color,
+                    1.6,
+                )]);
+                View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    align_items: Some(AlignItems::Center),
+                    gap: Size {
+                        width: length(5.0_f32),
+                        height: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .children(vec![icon_box, text_view])
+            }
+            _ => text_view,
+        };
+        if let (true, Some(kind)) = (actionable, p.deco) {
+            let l = lift.clone();
+            // Feedback de hover: el span se resalta al pasar el cursor —
+            // un `ls` se siente como un explorador donde cada archivo
+            // "responde". (Llimphi no expone cursor-icon del SO; el
+            // realce es el afford idiomático, igual que en tree/button.)
+            span_view = span_view
+                .radius(3.0)
+                .hover_fill(theme.bg_row_hover)
+                .on_click(l(Msg::OpenDecoration(kind)));
+        }
+        out.push(span_view);
+    }
+    out
+}
+
+/// Una "pieza" del partición de una línea: el texto, su color y el
+/// kind de decoración (`None` = texto base, no clickable). El render
+/// la convierte en `View`s; los tests verifican la partición sin
+/// pintar.
+#[derive(Debug, Clone)]
+pub(crate) struct LinePiece {
+    pub(crate) text: String,
+    pub(crate) color: llimphi_ui::llimphi_raster::peniko::Color,
+    pub(crate) deco: Option<shuma_line::DecorationKind>,
+}
+
+/// Divide `text` en piezas según `decorations`. Las piezas no decoradas
+/// llevan `color = base` y `deco = None`. Las decoradas llevan el
+/// color según el kind y `deco = Some(kind.clone())`.
+pub(crate) fn partition_line(
+    text: &str,
+    decorations: &[shuma_line::Decoration],
+    base: llimphi_ui::llimphi_raster::peniko::Color,
+    theme: &Theme,
+) -> Vec<LinePiece> {
+    use shuma_line::DecorationKind as Dk;
+    let mut out: Vec<LinePiece> = Vec::new();
+    let mut cursor = 0usize;
+    for d in decorations {
+        if d.start < cursor || d.end > text.len() || d.start >= d.end {
+            continue;
+        }
+        if d.start > cursor {
+            out.push(LinePiece {
+                text: text[cursor..d.start].to_string(),
+                color: base,
+                deco: None,
+            });
+        }
+        let color = match &d.kind {
+            Dk::GitSha(_) => theme.fg_muted,
+            // El resto va al accent — paths, urls, grep refs, issue refs,
+            // box-drawing. Sin underline (Llimphi aún no lo soporta).
+            _ => theme.accent,
+        };
+        out.push(LinePiece {
+            text: text[d.start..d.end].to_string(),
+            color,
+            deco: Some(d.kind.clone()),
+        });
+        cursor = d.end;
+    }
+    if cursor < text.len() {
+        out.push(LinePiece {
+            text: text[cursor..].to_string(),
+            color: base,
+            deco: None,
+        });
+    }
+    out
+}
+
+/// Mapea la categoría semántica de `shuma-line` al icono vectorial del
+/// set canónico `llimphi-icons`.
+fn kind_icon(kind: shuma_line::FileKind) -> llimphi_icons::Icon {
+    use llimphi_icons::Icon;
+    use shuma_line::FileKind as K;
+    match kind {
+        K::Folder => Icon::Folder,
+        K::Symlink => Icon::Link,
+        K::Image => Icon::Image,
+        K::Audio => Icon::Music,
+        K::Video => Icon::Film,
+        K::Archive => Icon::Archive,
+        K::Document => Icon::FileText,
+        K::Code => Icon::Code,
+        K::Data => Icon::Code,
+        K::Font => Icon::Font,
+        K::Executable => Icon::Settings,
+        K::Generic => Icon::File,
+    }
+}
+
+/// Color por tipo de archivo, estilo `ls --color` — para que el `ls` (y
+/// cualquier listado con paths) deje de verse plano.
+pub(crate) fn kind_color(
+    kind: shuma_line::FileKind,
+    theme: &Theme,
+) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use shuma_line::FileKind as K;
+    match kind {
+        K::Folder => Color::from_rgba8(100, 160, 235, 255),    // azul
+        K::Symlink => Color::from_rgba8(90, 200, 205, 255),    // cyan
+        K::Image => Color::from_rgba8(200, 140, 210, 255),     // magenta
+        K::Audio => Color::from_rgba8(210, 165, 120, 255),     // ámbar
+        K::Video => Color::from_rgba8(210, 140, 165, 255),     // rosa
+        K::Archive => Color::from_rgba8(210, 120, 110, 255),   // rojo
+        K::Document => Color::from_rgba8(205, 200, 140, 255),  // amarillo
+        K::Code => Color::from_rgba8(130, 185, 225, 255),      // azul claro
+        K::Data => Color::from_rgba8(150, 200, 160, 255),      // verde agua
+        K::Font => Color::from_rgba8(190, 170, 220, 255),      // violeta
+        K::Executable => Color::from_rgba8(130, 205, 140, 255), // verde
+        K::Generic => theme.fg_text,
+    }
+}
+
+/// Color de una decoración (path/url/grep/sha/issue/box) — el mismo
+/// vocabulario semántico que el render por-línea viejo, ahora como runs de
+/// color para el editor del cuerpo.
+pub(crate) fn decoration_color(
+    kind: &shuma_line::DecorationKind,
+    theme: &Theme,
+) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use shuma_line::DecorationKind as Dk;
+    match kind {
+        Dk::Path {
+            abs,
+            is_dir,
+            is_executable,
+            is_symlink,
+        } => kind_color(
+            shuma_line::file_kind(abs, *is_dir, *is_executable, *is_symlink),
+            theme,
+        ),
+        Dk::Url(_) => Color::from_rgba8(110, 180, 220, 255),
+        Dk::GrepRef { .. } => theme.accent,
+        Dk::GitSha(_) => Color::from_rgba8(210, 165, 120, 255),
+        Dk::IssueRef(_) => Color::from_rgba8(200, 200, 140, 255),
+        Dk::BoxDraw => theme.fg_muted,
+    }
+}
+
+/// Runs de color `(byte_start, byte_end, Color)` por cada línea del cuerpo
+/// de `block`, alimentando `text_editor_view_colored`: stderr en rojo, y
+/// las decoraciones de `shuma-line` (paths por tipo, urls, grep, sha…)
+/// coloreadas. Devuelve un vec alineado 1:1 con `body_lines_for_block`.
+pub(crate) fn body_color_runs(
+    state: &State,
+    block: u64,
+    theme: &Theme,
+) -> Vec<Vec<(usize, usize, llimphi_ui::llimphi_raster::peniko::Color)>> {
+    let lines = body_lines_for_block(state, block);
+    let kinds = body_kinds_for_block(state, block);
+    lines
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            // stderr: toda la línea en rojo (señal de error, además del tinte).
+            if matches!(kinds.get(i), Some(OutputKind::Stderr)) {
+                return vec![(0usize, text.len(), theme.fg_destructive)];
+            }
+            shuma_line::decorate_line(text, &state.cwd)
+                .into_iter()
+                .filter(|d| d.start < d.end && d.end <= text.len())
+                .map(|d| (d.start, d.end, decoration_color(&d.kind, theme)))
+                .collect()
+        })
+        .collect()
+}
+
+pub(crate) fn pretty_path(p: &std::path::Path) -> String {
+    let full = p.display().to_string();
+    if let Ok(home) = std::env::var("HOME") {
+        if full == home {
+            return "~".into();
+        }
+        if let Some(rest) = full.strip_prefix(&format!("{home}/")) {
+            return format!("~/{rest}");
+        }
+    }
+    full
+}

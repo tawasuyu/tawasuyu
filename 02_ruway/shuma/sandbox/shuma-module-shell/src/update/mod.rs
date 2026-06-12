@@ -277,6 +277,19 @@ pub fn update(state: State, msg: Msg) -> State {
         }
         Msg::FocusInput => {
             s.focused = true;
+            // Volver a la "línea": el Enter arranca comandos nuevos, ya no
+            // alimenta el stdin de un job.
+            s.input_focus = None;
+        }
+        Msg::FocusJob(block) => {
+            s.focused = true;
+            // Sólo dirigimos el input a un comando que siga vivo; si ya
+            // cerró, el foco se queda en la línea (no apuntamos a un muerto).
+            if s.block_has_live_job(block) {
+                s.input_focus = Some(block);
+            } else if s.input_focus == Some(block) {
+                s.input_focus = None;
+            }
         }
         Msg::Clear => {
             s.clear_output();
