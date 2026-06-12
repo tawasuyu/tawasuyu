@@ -924,7 +924,7 @@ pub(crate) fn open_decoration(mut s: State, kind: shuma_line::DecorationKind) ->
                 // header sin "ejecutar" un comando.
                 if abs.is_dir() {
                     s.cwd = abs;
-                    s.completion_source = Arc::new(ShellSource::new(&s.cwd));
+                    s.completion_source = crate::completion_source_for(&s.source, &s.cwd);
                 }
             } else if is_executable {
                 // Binarios → pre-llenar el input con el path; el
@@ -3283,7 +3283,7 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
             s.cwd.join(trimmed)
         };
         s.cwd = normalize_lexical(&base);
-        s.completion_source = Arc::new(ShellSource::new(&s.cwd));
+        s.completion_source = crate::completion_source_for(&s.source, &s.cwd);
         return s;
     }
     let target = if rest.trim().is_empty() {
