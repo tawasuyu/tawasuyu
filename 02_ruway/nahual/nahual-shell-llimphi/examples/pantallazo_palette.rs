@@ -2,8 +2,8 @@
 //!
 //! Renderiza el módulo `command-palette` con el catálogo real del shell
 //! nahual, anclado arriba-centro sobre un scrim, con una consulta de ejemplo
-//! ("ren") para mostrar el ranking fuzzy. Es la misma composición que
-//! `view::palette_overlay`.
+//! ("sel") para mostrar el ranking fuzzy sobre el grupo Selección. Es la misma
+//! composición que `view::palette_overlay`.
 //!
 //! `cargo run -p nahual-shell-llimphi --example pantallazo_palette --release -- [out.png]`
 #![allow(dead_code)]
@@ -48,7 +48,7 @@ fn main() {
     // (Renombrar, Renombrar por lote, …) y se vea el ranking, no la lista cruda.
     let commands = build_catalog_via_shell();
     let mut state = PaletteState::new(&commands);
-    state.input.push_str("ren");
+    state.input.push_str("sel");
     palette::refilter(&mut state, &commands);
 
     let pal = PalettePalette::from_theme(&theme);
@@ -141,8 +141,13 @@ fn build_catalog_via_shell() -> Vec<palette::Command> {
         C::new("file.mark", "Marcar / desmarcar", "Archivo").with_shortcut("Ins"),
         C::new("file.copyToOther", "Copiar al otro panel", "Archivo").with_shortcut("F5"),
         C::new("file.addFavorite", "Añadir a favoritos", "Archivo"),
+        C::new("select.all", "Seleccionar todo", "Selección").with_shortcut("Ctrl+A"),
+        C::new("select.invert", "Invertir selección", "Selección").with_shortcut("*"),
+        C::new("select.pattern", "Seleccionar por patrón…", "Selección"),
+        C::new("ai.ask", "Preguntar a la IA sobre la selección", "IA").with_shortcut("Ctrl+I"),
         C::new("source.mountNouser", "Montar Mónadas (nouser)", "Fuente").with_shortcut("m"),
         C::new("session.new", "Nueva sesión", "Sesión"),
+        C::new("tools.find", "Buscar recursivo…", "Herramientas").with_shortcut("Ctrl+F"),
         C::new("tools.terminalHere", "Abrir terminal aquí", "Herramientas"),
     ]
 }
