@@ -1,14 +1,26 @@
 //! Módulo raíz de tests — helpers compartidos + smoke tests del runtime.
     pub use super::*;
 
-    mod dom_elements;
+    // DOM: eventos, timers, bubbling, capture, dataset, event.key, Element.value
+    mod dom_events;
+    // DOM: sibling, insertBefore, createElement, appendChild, cloneNode, tagName, etc.
+    mod dom_tree;
     mod dom_style;
     mod fetch_xhr;
     mod streams_url;
     mod websocket_comms;
-    mod navigator_device;
-    mod hardware_apis;
-    mod media_canvas;
+    // Navigator: cookie, cache, permisos, geolocation, clipboard, matchMedia, screen, serviceWorker...
+    mod nav_basic;
+    // Navigator: locks, mediaSession, vibration, gamepad, credentials, payment, serial, HID, USB...
+    mod nav_device;
+    // Hardware APIs de acceso físico y P2P: Fullscreen, BT, NFC, WebAuthn, WebTransport, Push...
+    mod hw_io;
+    // Hardware APIs de red y datos: Presentation, IndexedDB, WebRTC, Workers...
+    mod hw_net;
+    // Medios codificados: WebAudio, WebCodecs, MediaRecorder, MSE, EME, MediaCapabilities
+    mod media_codecs;
+    // Canvas, WebGL, GPU, XR y APIs de UI avanzadas
+    mod canvas_gpu;
     mod lang_es2024;
 
     /// Helper para tests que crean un runtime, evalúan, y desempaquetan
