@@ -1368,6 +1368,20 @@ impl Session {
         self.source = source;
         self.conn = ConnState::Connected;
     }
+
+    /// (Re)conecta la sesión: reconstruye el shell con el `Source` que le toca
+    /// según su estado. Para un host remoto rearma `Source::Remote`; para una
+    /// sesión con contenedor reentra al contenedor; en Local simplemente forja
+    /// un shell fresco. Es la acción del botón "Conectar/Reconectar" del panel.
+    fn reconnect(&mut self) {
+        if self.host_label.is_some() {
+            self.connect_remote();
+        } else {
+            // Local o contenedor: `apply_isolation` ya resuelve el Source y deja
+            // `conn` en Connected (o Pending si el contenedor aún no está listo).
+            self.apply_isolation();
+        }
+    }
 }
 
 /// Config persistible de una sesión (lo que sobrevive a reiniciar shuma).
@@ -1661,6 +1675,9 @@ enum Msg {
     RemoteKey(KeyEvent),
     /// Conectar el aislamiento remoto con los datos del form.
     ConnectRemote,
+    /// (Re)conectar la sesión `idx`: reconstruye el shell con el `Source` que
+    /// le corresponde (remoto / contenedor / local). Botón del panel.
+    ReconnectSession(usize),
     /// Cerrar (descartar) la sesión `idx`. La draft (0) no se cierra.
     CloseSession(usize),
     /// Click en el botón `+` del rail: crea una sesión `pending` y la activa,
@@ -2143,6 +2160,13 @@ impl App for Shell {
             Msg::ConnectRemote => {
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.connect_remote();
+                }
+                m.focused_field = None;
+                save_sessions(&m);
+            }
+            Msg::ReconnectSession(idx) => {
+                if let Some(s) = m.sessions.get_mut(idx) {
+                    s.reconnect();
                 }
                 m.focused_field = None;
                 save_sessions(&m);

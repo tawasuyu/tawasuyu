@@ -469,6 +469,17 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
     // Estado de conexión de la sesión (en espera / conectado / desconectado).
     children.push(conn_pill(session.conn, theme));
 
+    // Botón Conectar/Reconectar: rearma el shell con el Source que toca. En una
+    // sesión real (no draft) siempre disponible — "Conectar" si está caída,
+    // "Reconectar" para forjar un shell fresco aunque esté viva.
+    if !es_draft {
+        let label = match session.conn {
+            ConnState::Connected => "Reconectar",
+            _ => "Conectar",
+        };
+        children.push(action_button_small(label, Msg::ReconnectSession(idx), theme));
+    }
+
     // Host: un único select (Local + remotos guardados) + botón al gestor. El
     // contenedor de abajo pertenece a ESTE host.
     children.extend(host_select(model, session, theme));
