@@ -2026,3 +2026,49 @@
         assert!(s.surf_selection.is_none());
         assert!(!s.surf_selecting);
     }
+    #[test]
+    fn output_snapshot_restore_round_trip() {
+        let mut s = State::new(Source::Local);
+        s.push_output(OutputLine::prompt("$ echo uno"));
+        s.push_output(OutputLine::stdout("uno"));
+        s.push_output(OutputLine::prompt("$ echo dos"));
+        s.push_output(OutputLine::stdout("dos"));
+        let snap = s.output_snapshot(1000);
+        assert_eq!(snap.lines.len(), 4);
+        assert_eq!(snap.block_seq, s.block_seq);
+        // JSON round-trip (lo que persiste el chasis).
+        let json = serde_json::to_string(&snap).expect("serializa");
+        let back: OutputSnapshot = serde_json::from_str(&json).expect("parsea");
+
+        let mut s2 = State::new(Source::Local);
+        s2.restore_output(back);
+        // 4 líneas + el notice separador.
+        assert_eq!(s2.output.len(), 5);
+        // El bloque viejo no-último queda plegado; el último, abierto.
+        let primero = snap.lines[0].block;
+        let ultimo = snap.lines[3].block;
+        assert!(s2.collapsed.contains(&primero));
+        assert!(!s2.collapsed.contains(&ultimo));
+        // Los ids no se reciclan: block_seq avanza desde el snapshot.
+        assert!(s2.block_seq >= snap.block_seq);
+        // Lo nuevo abre bloque nuevo, no contamina los restaurados.
+        s2.push_output(OutputLine::prompt("$ echo tres"));
+        assert!(s2.current_block > ultimo);
+    }
+
+    #[test]
+    fn output_snapshot_capea_y_conserva_metadata_de_bloques_presentes() {
+        let mut s = State::new(Source::Local);
+        for i in 0..50 {
+            s.push_output(OutputLine::prompt(format!("$ cmd {i}")));
+            s.push_output(OutputLine::stdout(format!("salida {i}")));
+        }
+        let snap = s.output_snapshot(10);
+        assert_eq!(snap.lines.len(), 10);
+        // Toda la metadata refiere a bloques presentes en el recorte.
+        let presentes: std::collections::HashSet<u64> =
+            snap.lines.iter().map(|l| l.block).collect();
+        assert!(snap.block_command.keys().all(|b| presentes.contains(b)));
+        assert!(snap.block_started.keys().all(|b| presentes.contains(b)));
+    }
+

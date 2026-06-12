@@ -1,7 +1,7 @@
 use super::*;
 
 /// Tipo de cada línea del buffer — define el color que la `view` usa.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OutputKind {
     /// El comando tal como lo tipeó el usuario (precede a su output).
     Prompt,
@@ -17,7 +17,7 @@ pub enum OutputKind {
 /// bloque de comando al que pertenece. El render agrupa las líneas con
 /// el mismo `block` en una *card* desplegable (un `$ cmd` + su salida +
 /// su exit status). `block == 0` = líneas sueltas sin comando dueño.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OutputLine {
     pub kind: OutputKind,
     pub text: String,
@@ -543,6 +543,76 @@ pub struct State {
     /// aliases se expanden en cada submit; sus env vars ya se aplicaron al
     /// proceso en [`State::new`].
     pub config: shuma_config::Config,
+}
+
+/// Snapshot serializable del output de una sesión — lo que el chasis
+/// persiste a disco cuando la sesión tiene el flag «persistir» y rehidrata
+/// al reabrir la app. Sólo datos: las asas vivas (runs, locks) no viajan.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct OutputSnapshot {
+    pub lines: Vec<OutputLine>,
+    /// Comando por bloque (headers que sobreviven al recorte del buffer).
+    pub block_command: std::collections::HashMap<u64, String>,
+    /// Momento de apertura por bloque (unix secs) — los "hace N min".
+    pub block_started: std::collections::HashMap<u64, u64>,
+    /// Contador monotónico al momento del snapshot.
+    pub block_seq: u64,
+}
+
+impl State {
+    /// Captura el output vigente como [`OutputSnapshot`], limitado a las
+    /// últimas `max_lines` líneas (cortar al medio de un bloque es válido:
+    /// el render rearma el header desde `block_command`).
+    pub fn output_snapshot(&self, max_lines: usize) -> OutputSnapshot {
+        let start = self.output.len().saturating_sub(max_lines);
+        let lines: Vec<OutputLine> = self.output[start..].to_vec();
+        // Sólo la metadata de los bloques presentes en el recorte.
+        let presentes: HashSet<u64> = lines.iter().map(|l| l.block).collect();
+        OutputSnapshot {
+            block_command: self
+                .block_command
+                .iter()
+                .filter(|(b, _)| presentes.contains(b))
+                .map(|(b, c)| (*b, c.clone()))
+                .collect(),
+            block_started: self
+                .block_started
+                .iter()
+                .filter(|(b, _)| presentes.contains(b))
+                .map(|(b, t)| (*b, *t))
+                .collect(),
+            block_seq: self.block_seq,
+            lines,
+        }
+    }
+
+    /// Rehidrata un snapshot al frente del buffer (pensado para el arranque,
+    /// con el buffer todavía vacío). Los bloques restaurados quedan
+    /// **plegados** (menos el último) para que la sesión abra compacta, y
+    /// un notice separador marca la costura.
+    pub fn restore_output(&mut self, snap: OutputSnapshot) {
+        if snap.lines.is_empty() {
+            return;
+        }
+        let ultimo = snap.lines.iter().map(|l| l.block).max().unwrap_or(0);
+        for l in &snap.lines {
+            if l.block != 0 && l.block != ultimo {
+                self.collapsed.insert(l.block);
+            }
+        }
+        self.block_command.extend(snap.block_command);
+        self.block_started.extend(snap.block_started);
+        self.block_seq = self.block_seq.max(snap.block_seq);
+        let mut restauradas = snap.lines;
+        let n = restauradas.len();
+        restauradas.push(OutputLine::notice(format!(
+            "— sesión restaurada ({n} líneas) —"
+        )));
+        restauradas.extend(std::mem::take(&mut self.output));
+        self.output = restauradas;
+        // Las líneas nuevas siguen en bloques nuevos, nunca en los viejos.
+        self.current_block = 0;
+    }
 }
 
 /// Estado del overlay de búsqueda Ctrl-R.

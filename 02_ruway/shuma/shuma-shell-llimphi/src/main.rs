@@ -167,8 +167,33 @@ impl App for Shell {
 
         let mut sessions = vec![Session::draft()];
         for c in load_sessions() {
-            sessions.push(Session::from_config(c));
+            let mut sess = Session::from_config(c);
+            // Sesión persistente: rehidratar el output guardado en el shell
+            // recién construido (los bloques viejos abren plegados).
+            if sess.persist {
+                if let Some(snap) = persist::load_session_output(&sess.name) {
+                    if let ModuleState::Shell(st) = &mut sess.shell.state {
+                        st.restore_output(snap);
+                    }
+                }
+            }
+            sessions.push(sess);
         }
+
+        // Grupos de environment: cargar env.json (garantizando el grupo
+        // «general», destino del builtin `:env`) y aplicar los activos al
+        // proceso — los shells hijos los heredan.
+        let mut env_groups = shuma_config::load_env_groups();
+        if !env_groups.iter().any(|g| g.name == "general") {
+            env_groups.insert(0, shuma_config::EnvGroup::new("general"));
+            let _ = shuma_config::save_env_groups(&env_groups);
+        }
+        for g in &env_groups {
+            if g.active {
+                shuma_config::apply_env_group(g, true);
+            }
+        }
+        let env_groups_mtime = persist::env_groups_mtime();
 
         for s in &sessions {
             if s.use_container {
@@ -220,6 +245,9 @@ impl App for Shell {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             ctx_menu: None,
+            env_groups,
+            env_groups_mtime,
+            tick_count: 0,
             _host: host,
         }
     }
@@ -298,6 +326,17 @@ impl App for Shell {
             Msg::Tick => {
                 m.last_snapshot = Some(m.sysmon.sample());
                 sample_extra_monitors(&mut m);
+                m.tick_count += 1;
+                // Autosave del output de las sesiones persistentes (cada 5 s).
+                if m.tick_count % 5 == 0 {
+                    save_session_outputs(&m);
+                }
+                // env.json cambió (builtin `:env` u otra instancia) → recargar.
+                let mtime = persist::env_groups_mtime();
+                if mtime != m.env_groups_mtime {
+                    m.env_groups_mtime = mtime;
+                    m.env_groups = shuma_config::load_env_groups();
+                }
             }
             Msg::ShellTick => {
                 drain_shell_instances(&mut m);
@@ -1024,11 +1063,44 @@ impl App for Shell {
             }
             Msg::CloseSession(idx) => {
                 if idx > 0 && idx < m.sessions.len() {
-                    m.sessions.remove(idx);
+                    let s = m.sessions.remove(idx);
+                    if s.persist {
+                        persist::remove_session_output(&s.name);
+                    }
                     m.active_session = m.active_session.min(m.sessions.len() - 1);
                 }
                 save_sessions(&m);
                 save_chrome(&m);
+            }
+            Msg::ToggleSessionPersist(idx) => {
+                if let Some(s) = m.sessions.get_mut(idx) {
+                    s.persist = !s.persist;
+                    let (persist, name) = (s.persist, s.name.clone());
+                    save_sessions(&m);
+                    if persist {
+                        // Snapshot inmediato: el flag queda respaldado ya.
+                        save_session_outputs(&m);
+                    } else {
+                        persist::remove_session_output(&name);
+                    }
+                }
+            }
+            Msg::ToggleEnvGroup(i) => {
+                if let Some(g) = m.env_groups.get_mut(i) {
+                    g.active = !g.active;
+                    let encendido = g.active;
+                    shuma_config::apply_env_group(g, encendido);
+                    if !encendido {
+                        // Re-aplicar los grupos que siguen activos: si una
+                        // variable vivía en dos grupos, recupera el valor del
+                        // que queda encendido.
+                        for og in m.env_groups.iter().filter(|og| og.active) {
+                            shuma_config::apply_env_group(og, true);
+                        }
+                    }
+                    let _ = shuma_config::save_env_groups(&m.env_groups);
+                    m.env_groups_mtime = persist::env_groups_mtime();
+                }
             }
             Msg::OpenNewSessionForm => {
                 let n = m.sessions.iter().filter(|s| s.number.is_some()).count() as u32 + 1;

@@ -229,6 +229,86 @@ impl Config {
     }
 }
 
+// ─── Grupos de environment (la config del sidebar del shell) ───────────
+//
+// Un grupo nombrado de variables que se activa/desactiva en bloque desde
+// la UI (`env.json` en el config dir). El builtin `:env` escribe al grupo
+// «general»; la app puede definir grupos por proyecto/credenciales/etc.
+
+/// Grupo de variables de entorno activable en bloque.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvGroup {
+    pub name: String,
+    /// Si el grupo está aplicado al proceso (los hijos lo heredan).
+    #[serde(default)]
+    pub active: bool,
+    /// Pares `(NOMBRE, valor)` en orden estable.
+    #[serde(default)]
+    pub vars: Vec<(String, String)>,
+}
+
+impl EnvGroup {
+    pub fn new(name: impl Into<String>) -> Self {
+        Self { name: name.into(), active: true, vars: Vec::new() }
+    }
+
+    /// Inserta o reemplaza una variable del grupo.
+    pub fn upsert(&mut self, name: &str, value: &str) {
+        match self.vars.iter_mut().find(|(n, _)| n == name) {
+            Some((_, v)) => *v = value.to_string(),
+            None => self.vars.push((name.to_string(), value.to_string())),
+        }
+    }
+
+    /// Borra una variable. Devuelve `true` si existía.
+    pub fn remove(&mut self, name: &str) -> bool {
+        let antes = self.vars.len();
+        self.vars.retain(|(n, _)| n != name);
+        self.vars.len() != antes
+    }
+}
+
+/// `$XDG_CONFIG_HOME/shuma/env.json` — el archivo de grupos.
+pub fn env_groups_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "shuma").map(|d| d.config_dir().join("env.json"))
+}
+
+/// Lee los grupos. Archivo ausente o corrupto → lista vacía (sin error:
+/// es config de conveniencia, el shell arranca igual).
+pub fn load_env_groups() -> Vec<EnvGroup> {
+    env_groups_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Persiste los grupos (atómico: tmp + rename).
+pub fn save_env_groups(groups: &[EnvGroup]) -> std::io::Result<()> {
+    let Some(path) = env_groups_path() else {
+        return Ok(());
+    };
+    let json = serde_json::to_string_pretty(groups)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, json)?;
+    std::fs::rename(&tmp, path)
+}
+
+/// Aplica/levanta un grupo del ambiente del proceso. `on = true` exporta
+/// todas sus variables; `false` las remueve. Los hijos nuevos lo heredan.
+pub fn apply_env_group(group: &EnvGroup, on: bool) {
+    for (k, v) in &group.vars {
+        if on {
+            std::env::set_var(k, v);
+        } else {
+            std::env::remove_var(k);
+        }
+    }
+}
+
 /// Upsert **quirúrgico** de `key = value_raw` en la sección `[section]`
 /// del archivo TOML en `path`: edita el TEXTO (preserva comentarios y el
 /// resto de las secciones), crea el archivo y/o la sección si faltan.

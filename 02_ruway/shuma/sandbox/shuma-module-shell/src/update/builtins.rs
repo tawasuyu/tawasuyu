@@ -107,62 +107,77 @@ pub(crate) fn apply_jobs_signal(mut s: State, rest: &str, sig: JobSignal) -> Sta
     s
 }
 
-/// `:env` — variables de ambiente **aprendibles**.
+/// `:env` — variables de ambiente **aprendibles**, organizadas en grupos
+/// (el panel «Environment» del sidebar muestra y activa/desactiva los
+/// grupos; este builtin es la vía de teclado).
 ///
-/// - `:env` lista las aprendidas (rc + sesión).
-/// - `:env NAME=VALOR` exporta al proceso (los hijos la heredan) Y la
-///   aprende al `shumarc.toml` `[env]` — sobrevive reinicios.
-/// - `:env -NAME` la olvida (proceso + rc).
+/// - `:env` lista los grupos con sus variables.
+/// - `:env NAME=VALOR [@grupo]` exporta al proceso Y la aprende al grupo
+///   (default «general») en `env.json` — sobrevive reinicios.
+/// - `:env -NAME` la olvida (proceso + todos los grupos).
 pub(crate) fn apply_env(mut s: State, rest: &str) -> State {
     let arg = rest.trim();
     if arg.is_empty() {
-        if s.config.env.is_empty() {
+        let groups = shuma_config::load_env_groups();
+        if groups.iter().all(|g| g.vars.is_empty()) {
             s.push_output(OutputLine::notice(
-                "(sin variables aprendidas — `:env NAME=valor` exporta y aprende)",
+                "(sin variables — `:env NAME=valor` exporta y aprende al grupo «general»)",
             ));
         } else {
-            let mut keys: Vec<&String> = s.config.env.keys().collect();
-            keys.sort();
-            let rows: Vec<String> = keys
-                .iter()
-                .map(|k| format!("  {k}={}", s.config.env[k.as_str()]))
-                .collect();
-            s.push_output(OutputLine::notice(format!(
-                "{} variable{} aprendida{} (en shumarc.toml [env]):",
-                rows.len(),
-                if rows.len() == 1 { "" } else { "s" },
-                if rows.len() == 1 { "" } else { "s" },
-            )));
-            for r in rows {
-                s.push_output(OutputLine::notice(r));
+            for g in &groups {
+                s.push_output(OutputLine::notice(format!(
+                    "[{}] {} — {} variable{}",
+                    if g.active { "on " } else { "off" },
+                    g.name,
+                    g.vars.len(),
+                    if g.vars.len() == 1 { "" } else { "s" },
+                )));
+                for (k, v) in &g.vars {
+                    s.push_output(OutputLine::notice(format!("    {k}={v}")));
+                }
             }
         }
         return s;
     }
-    // `:env -NAME` — olvidar.
+    // `:env -NAME` — olvidar de todos los grupos.
     if let Some(name) = arg.strip_prefix('-') {
         let name = name.trim();
         if !es_nombre_env(name) {
-            s.push_output(OutputLine::notice("uso: :env [-NAME | NAME=valor]"));
+            s.push_output(OutputLine::notice("uso: :env [-NAME | NAME=valor [@grupo]]"));
             return s;
         }
         std::env::remove_var(name);
-        let estaba = s.config.env.remove(name).is_some();
-        if let Some(rc) = shuma_config::Config::default_path() {
-            let _ = shuma_config::remove_key(&rc, "env", name);
+        let mut groups = shuma_config::load_env_groups();
+        let mut hits = 0;
+        for g in &mut groups {
+            if g.remove(name) {
+                hits += 1;
+            }
         }
-        s.push_output(OutputLine::notice(if estaba {
-            format!("✔ {name} olvidada (proceso + shumarc)")
+        if hits > 0 {
+            let _ = shuma_config::save_env_groups(&groups);
+            s.push_output(OutputLine::notice(format!(
+                "✔ {name} olvidada ({hits} grupo{})",
+                if hits == 1 { "" } else { "s" }
+            )));
         } else {
-            format!("{name} no estaba aprendida — igual se removió del proceso")
-        }));
+            s.push_output(OutputLine::notice(format!(
+                "{name} no estaba en ningún grupo — igual se removió del proceso"
+            )));
+        }
         return s;
     }
-    // `:env NAME=VALOR` — exportar + aprender.
-    let Some((name, value)) = arg.split_once('=') else {
-        s.push_output(OutputLine::notice("uso: :env            (listar)"));
-        s.push_output(OutputLine::notice("     :env NAME=valor (exportar + aprender)"));
-        s.push_output(OutputLine::notice("     :env -NAME      (olvidar)"));
+    // `:env NAME=VALOR [@grupo]` — exportar + aprender.
+    let (asign, grupo) = match arg.rsplit_once('@') {
+        Some((a, g)) if !g.trim().is_empty() && !g.contains('=') => {
+            (a.trim(), g.trim().to_string())
+        }
+        _ => (arg, "general".to_string()),
+    };
+    let Some((name, value)) = asign.split_once('=') else {
+        s.push_output(OutputLine::notice("uso: :env                      (listar grupos)"));
+        s.push_output(OutputLine::notice("     :env NAME=valor [@grupo]  (exportar + aprender)"));
+        s.push_output(OutputLine::notice("     :env -NAME                (olvidar)"));
         return s;
     };
     let (name, value) = (name.trim(), value.trim());
@@ -175,19 +190,26 @@ pub(crate) fn apply_env(mut s: State, rest: &str) -> State {
     // Valor con expansión de `$VAR` contra el ambiente vigente — permite
     // `:env PATH=$PATH:/opt/bin`.
     let value = shuma_config::expand_env(value);
-    std::env::set_var(name, &value);
-    s.config.env.insert(name.to_string(), value.clone());
-    match shuma_config::Config::default_path() {
-        Some(rc) => match shuma_config::upsert_key(&rc, "env", name, &shuma_config::toml_string(&value)) {
-            Ok(()) => s.push_output(OutputLine::notice(format!(
-                "✔ {name}={value} exportada y aprendida (shumarc.toml)"
-            ))),
-            Err(e) => s.push_output(OutputLine::notice(format!(
-                "{name}={value} exportada — pero no se pudo aprender: {e}"
-            ))),
-        },
-        None => s.push_output(OutputLine::notice(format!(
-            "{name}={value} exportada (sin directorio de config para aprenderla)"
+    let mut groups = shuma_config::load_env_groups();
+    let g = match groups.iter_mut().find(|g| g.name == grupo) {
+        Some(g) => g,
+        None => {
+            groups.push(shuma_config::EnvGroup::new(grupo.clone()));
+            groups.last_mut().expect("recién pusheado")
+        }
+    };
+    g.upsert(name, &value);
+    let activo = g.active;
+    if activo {
+        std::env::set_var(name, &value);
+    }
+    match shuma_config::save_env_groups(&groups) {
+        Ok(()) => s.push_output(OutputLine::notice(format!(
+            "✔ {name}={value} aprendida al grupo «{grupo}»{}",
+            if activo { " y exportada" } else { " (grupo inactivo — no exporta)" }
+        ))),
+        Err(e) => s.push_output(OutputLine::notice(format!(
+            "{name}={value} exportada — pero no se pudo guardar env.json: {e}"
         ))),
     }
     s
@@ -235,6 +257,10 @@ pub(crate) fn apply_persist(mut s: State, rest: &str) -> State {
             s.push_output(OutputLine::notice(format!("  · captura por comando — {spill_estado}")));
             s.push_output(OutputLine::notice(format!("  · scrollback — {scrollback}")));
             s.push_output(OutputLine::notice(format!("  · shuma-daemon — {daemon_estado}")));
+            s.push_output(OutputLine::notice(
+                "  · output de la sesión — flag «Persistir sesión» en el panel izquierdo \
+                 (guarda y restaura el historial visible al reabrir)",
+            ));
             s.push_output(OutputLine::notice(
                 "  ⚠ comandos vivos mueren con la app — PTY persistente en el daemon: pendiente",
             ));

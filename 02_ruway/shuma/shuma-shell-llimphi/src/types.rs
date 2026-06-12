@@ -484,6 +484,8 @@ pub(crate) struct Session {
     pub pending: bool,
     pub mount: TextInputState,
     pub pending_focus: Option<PendingField>,
+    /// Persistir el output del shell a disco y restaurarlo al reabrir.
+    pub persist: bool,
     #[allow(dead_code)]
     pub source: Source,
     pub shell: Instance,
@@ -509,6 +511,7 @@ impl Session {
             pending: false,
             mount: TextInputState::new(),
             pending_focus: None,
+            persist: false,
             conn: ConnState::Connected,
             host_label: None,
             host: TextInputState::new(),
@@ -634,6 +637,7 @@ impl Session {
             host: self.host.text(),
             user: self.user.text(),
             port: self.port.text(),
+            persist: self.persist,
         }
     }
 
@@ -664,6 +668,7 @@ impl Session {
         if !c.port.is_empty() {
             s.port.set_text(c.port);
         }
+        s.persist = c.persist;
         s.apply_isolation();
         s
     }
@@ -721,6 +726,8 @@ pub(crate) struct SessionConfig {
     pub user: String,
     #[serde(default)]
     pub port: String,
+    #[serde(default)]
+    pub persist: bool,
 }
 
 /// Estado de chrome persistible.
@@ -830,6 +837,15 @@ pub(crate) struct Model {
     pub menu_anim: Tween<f32>,
     pub ctx_menu: Option<(f32, f32)>,
 
+    /// Grupos de environment (env.json) — el panel del sidebar los lista
+    /// y activa/desactiva en bloque; `:env` los alimenta desde el teclado.
+    pub env_groups: Vec<shuma_config::EnvGroup>,
+    /// mtime de env.json al último load — para recargar si el builtin
+    /// (u otra instancia) lo tocó.
+    pub env_groups_mtime: Option<std::time::SystemTime>,
+    /// Contador de Msg::Tick (1 s) — debounce del autosave de outputs.
+    pub tick_count: u64,
+
     pub _host: Option<pata_host::HostClient>,
 }
 
@@ -881,6 +897,10 @@ pub(crate) enum Msg {
     ConnectRemote,
     ReconnectSession(usize),
     CloseSession(usize),
+    /// Flag «Persistir sesión» del panel: guarda/restaura el output.
+    ToggleSessionPersist(usize),
+    /// Activa/desactiva un grupo de environment (índice en `env_groups`).
+    ToggleEnvGroup(usize),
     OpenNewSessionForm,
     ConfirmNewSession,
     CancelNewSession,

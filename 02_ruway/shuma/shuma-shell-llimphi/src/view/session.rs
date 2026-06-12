@@ -221,6 +221,20 @@ pub(super) fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
         children.extend(container_picker(model, session, theme));
     }
 
+    // Persistencia: el flag guarda el output a disco (cada 5 s + al toggle)
+    // y lo restaura al reabrir la app. La draft es scratch — no aplica.
+    if !es_draft {
+        children.push(toggle_row(
+            "Persistir sesión (output al reabrir)",
+            session.persist,
+            Msg::ToggleSessionPersist(idx),
+            theme,
+        ));
+    }
+
+    // Environment: los grupos de env.json, activables en bloque.
+    children.extend(env_section(model, theme));
+
     if !es_draft {
         children.push(panel_label("cwd", theme));
         children.push(panel_note(&session_cwd(session), theme));
@@ -416,6 +430,16 @@ pub(super) fn container_picker(model: &Model, session: &Session, theme: &Theme) 
 
 /// Checkbox "Aislar en contenedor".
 pub(super) fn container_toggle(on: bool, theme: &Theme) -> View<Msg> {
+    toggle_row(
+        "Aislar con rootfs propio (sin instalar nada)",
+        on,
+        Msg::ToggleUseContainer,
+        theme,
+    )
+}
+
+/// Fila checkbox genérica del panel: cajita + label, click alterna `msg`.
+pub(super) fn toggle_row(label: &str, on: bool, msg: Msg, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
     let accent = theme.accent;
     let fg = theme.fg_text;
@@ -467,12 +491,7 @@ pub(super) fn container_toggle(on: bool, theme: &Theme) -> View<Msg> {
         flex_grow: 1.0,
         ..Default::default()
     })
-    .text_aligned(
-        "Aislar con rootfs propio (sin instalar nada)".to_string(),
-        13.0,
-        fg,
-        Alignment::Start,
-    );
+    .text_aligned(label.to_string(), 13.0, fg, Alignment::Start);
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
@@ -486,9 +505,117 @@ pub(super) fn container_toggle(on: bool, theme: &Theme) -> View<Msg> {
         },
         ..Default::default()
     })
-    .on_click(Msg::ToggleUseContainer)
+    .on_click(msg)
     .hover_fill(theme.bg_row_hover)
     .children(vec![box_view, label])
+}
+
+// ─── Environment (grupos activables) ────────────────────────────────
+
+/// Cuántas variables se listan por grupo antes de resumir con "+N más".
+const ENV_VARS_VISIBLES: usize = 6;
+
+/// Sección «Environment» del panel: cada grupo de `env.json` con su link
+/// on/off (click = activar/desactivar el grupo entero) y sus variables
+/// listadas debajo. `:env NAME=valor [@grupo]` agrega desde el teclado.
+pub(super) fn env_section(model: &Model, theme: &Theme) -> Vec<View<Msg>> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let mut out: Vec<View<Msg>> = vec![panel_label("Environment", theme)];
+    for (i, g) in model.env_groups.iter().enumerate() {
+        // Fila del grupo: [on|off] nombre · N — click alterna el grupo.
+        let (pill_fill, pill_fg, pill_txt) = if g.active {
+            (theme.accent, theme.bg_panel, "on")
+        } else {
+            (theme.bg_panel_alt, theme.fg_muted, "off")
+        };
+        let pill = View::new(Style {
+            size: Size { width: length(30.0_f32), height: length(16.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(pill_fill)
+        .radius(8.0)
+        .text_aligned(pill_txt.to_string(), 10.0, pill_fg, Alignment::Center);
+        let name_color = if g.active { theme.fg_text } else { theme.fg_muted };
+        let nombre = View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .text_aligned(g.name.clone(), 12.0, name_color, Alignment::Start);
+        let count = View::new(Style {
+            size: Size { width: length(24.0_f32), height: length(16.0_f32) },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .text_aligned(g.vars.len().to_string(), 10.0, theme.fg_muted, Alignment::End);
+        out.push(
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+                align_items: Some(AlignItems::Center),
+                gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+                margin: Rect {
+                    left: length(0.0_f32),
+                    right: length(0.0_f32),
+                    top: length(4.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .hover_fill(theme.bg_row_hover)
+            .radius(4.0)
+            .on_click(Msg::ToggleEnvGroup(i))
+            .children(vec![pill, nombre, count]),
+        );
+        // Variables del grupo, indentadas y discretas.
+        for (k, v) in g.vars.iter().take(ENV_VARS_VISIBLES) {
+            let color = if g.active { theme.fg_muted } else { theme.fg_placeholder };
+            out.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(15.0_f32) },
+                    padding: Rect {
+                        left: length(38.0_f32),
+                        right: length(0.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .text_aligned(format!("{k}={v}"), 10.0, color, Alignment::Start)
+                .mono()
+                .max_lines(1),
+            );
+        }
+        if g.vars.len() > ENV_VARS_VISIBLES {
+            out.push(panel_note(
+                &format!("    +{} más", g.vars.len() - ENV_VARS_VISIBLES),
+                theme,
+            ));
+        }
+        if g.vars.is_empty() {
+            out.push(
+                View::new(Style {
+                    size: Size { width: percent(1.0_f32), height: length(15.0_f32) },
+                    padding: Rect {
+                        left: length(38.0_f32),
+                        right: length(0.0_f32),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .text_aligned("(vacío)".to_string(), 10.0, theme.fg_placeholder, Alignment::Start),
+            );
+        }
+    }
+    out.push(panel_note(":env NAME=valor @grupo agrega una variable", theme));
+    out
 }
 
 // ─── Canvas principal ───────────────────────────────────────────────

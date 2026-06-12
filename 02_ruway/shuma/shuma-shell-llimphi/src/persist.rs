@@ -4,8 +4,75 @@
 //! `layouts.json` y `containers.json`.
 
 use crate::types::{
-    ChromeState, ContainerCfg, LayoutSnapshot, Model, SessionConfig, SessionKind,
+    ChromeState, ContainerCfg, LayoutSnapshot, Model, ModuleState, SessionConfig, SessionKind,
 };
+
+// ─── Output por sesión (flag «Persistir sesión») ────────────────────
+
+/// Tope de líneas persistidas por sesión — suficiente historial visible
+/// sin que el JSON crezca sin techo.
+const PERSIST_MAX_LINES: usize = 2000;
+
+/// `$XDG_CONFIG_HOME/shuma/outputs/<sesión>.json`.
+pub(crate) fn session_output_path(name: &str) -> Option<std::path::PathBuf> {
+    let sane: String = name
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    directories::BaseDirs::new()
+        .map(|b| b.config_dir().join("shuma").join("outputs").join(format!("{sane}.json")))
+}
+
+/// Guarda el output de TODAS las sesiones con `persist` activo. Barato:
+/// snapshot capeado + write atómico sólo si hay algo que decir.
+pub(crate) fn save_session_outputs(m: &Model) {
+    for s in &m.sessions {
+        if !s.persist || s.pending || s.kind == SessionKind::Draft {
+            continue;
+        }
+        let ModuleState::Shell(st) = &s.shell.state else {
+            continue;
+        };
+        let snap = st.output_snapshot(PERSIST_MAX_LINES);
+        if snap.lines.is_empty() {
+            continue;
+        }
+        let Some(path) = session_output_path(&s.name) else {
+            continue;
+        };
+        if let Ok(json) = serde_json::to_string(&snap) {
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let tmp = path.with_extension("json.tmp");
+            if std::fs::write(&tmp, json).is_ok() {
+                let _ = std::fs::rename(&tmp, &path);
+            }
+        }
+    }
+}
+
+/// Lee el output persistido de una sesión, si existe.
+pub(crate) fn load_session_output(name: &str) -> Option<shuma_module_shell::OutputSnapshot> {
+    let path = session_output_path(name)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Borra el output persistido (al apagar el flag o cerrar la sesión).
+pub(crate) fn remove_session_output(name: &str) {
+    if let Some(p) = session_output_path(name) {
+        let _ = std::fs::remove_file(p);
+    }
+}
+
+/// mtime de `env.json` — para detectar cambios hechos por el builtin
+/// `:env` (u otra instancia) y recargar los grupos del Model.
+pub(crate) fn env_groups_mtime() -> Option<std::time::SystemTime> {
+    shuma_config::env_groups_path()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|md| md.modified().ok())
+}
 
 // ─── Containers ────────────────────────────────────────────────────
 

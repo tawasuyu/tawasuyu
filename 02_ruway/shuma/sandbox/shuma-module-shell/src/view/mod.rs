@@ -157,7 +157,7 @@ pub fn view<HostMsg: Clone + 'static>(
     } else {
         main_panel
     };
-    let input = input_row_view(state, theme, lift.clone());
+    let input = shell_input_view(state, theme, lift.clone());
 
     let mut children = vec![header, body];
     // Banner de reprocess: el próximo comando recibe por stdin el stdout
