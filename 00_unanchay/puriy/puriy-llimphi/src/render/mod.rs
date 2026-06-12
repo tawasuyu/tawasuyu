@@ -1,0 +1,820 @@
+//! Render walk: traducción del `BoxTree` (CSS computado por puriy-engine) a la
+//! jerarquía de `View<Msg>` de Llimphi. Incluye `viewport` (entrada desde la
+//! UI), `render_box` y sus especializaciones (links, inputs, checkbox/radio,
+//! submit, select, svg, canvas), `box_style` (BoxNode→taffy Style), las
+//! decoraciones (bordes/sombras/fondos), los mappers CSS→taffy y el armado del
+//! gradiente lineal. Extraído de `lib.rs` (regla #1). Comparte todos los tipos
+//! del crate vía `use super::*`.
+use super::*;
+
+pub(crate) mod widgets;
+pub(crate) mod image;
+pub(crate) mod decorations;
+pub(crate) mod style;
+
+pub(crate) use widgets::*;
+pub(crate) use image::*;
+pub(crate) use decorations::*;
+pub(crate) use style::*;
+
+/// Estado por-frame que el render walk hila por toda la jerarquía. Lo
+/// agrupamos en un struct para que `render_box`/`render_link_subtree`
+/// no tengan 10 params; los `*_counter` se mutan por referencia.
+pub(crate) struct RenderCtx<'a> {
+    zoom: f32,
+    matcher: &'a Matcher,
+    find_current: usize,
+    find_counter: usize,
+    details_open: &'a [bool],
+    details_counter: usize,
+    inputs: &'a [TextInputState],
+    input_checks: &'a [bool],
+    focused_input: Option<usize>,
+    input_counter: usize,
+    selects: &'a [SelectState],
+    select_counter: usize,
+    /// Tiempo transcurrido (ms) desde el `anim_start_ms` de la pestaña —
+    /// `animation_overlay` lo usa para samplear el progreso de cada nodo
+    /// animado al instante actual.
+    anim_elapsed_ms: u64,
+    /// Reloj absoluto (ms desde `Model.start`) del frame actual — el tween
+    /// de `transition` en hover lo usa para samplear cada `HoverTween`.
+    now_ms: u64,
+    /// Tweens de transición en hover por `node_id` (estado de la pestaña).
+    hover_tweens: &'a std::collections::HashMap<u32, HoverTween>,
+    /// Frames de `<canvas>` 2D keyeados por `element_id` — `render_canvas`
+    /// los busca por el id del box canvas. Fase 7.196.
+    canvas_frames: &'a std::collections::HashMap<String, CanvasFrame>,
+    /// Imágenes decodificadas para `drawImage`, keyeadas por `src`. Fase 7.197b.
+    canvas_images: &'a std::collections::HashMap<String, Option<PenikoImage>>,
+}
+
+pub(crate) fn viewport(
+    t: &TabState,
+    zoom: f32,
+    matcher: &Matcher,
+    find_current: usize,
+    anim_elapsed_ms: u64,
+    now_ms: u64,
+) -> View<Msg> {
+    let Some(tree) = t.box_tree.as_ref() else {
+        let msg = if t.url == NEW_TAB_URL {
+            "(pestaña vacía · escribí una URL arriba)"
+        } else {
+            "(cargando…)"
+        };
+        return View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            padding: Rect {
+                left: length(24.0_f32),
+                right: length(24.0_f32),
+                top: length(24.0_f32),
+                bottom: length(24.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(Color::WHITE)
+        .text_aligned(msg.to_string(), 14.0 * zoom, Color::from_rgb8(120, 120, 120), Alignment::Start);
+    };
+
+    // Margen del viewport y scroll: el margen interior (24 px / 16 px) no
+    // se escala para que el "marco" del documento sea estable; lo que
+    // escala es el contenido (font_size + spacing del box tree).
+    let mut ctx = RenderCtx {
+        zoom,
+        matcher,
+        find_current,
+        find_counter: 0,
+        details_open: &t.details_open,
+        details_counter: 0,
+        inputs: &t.inputs,
+        input_checks: &t.input_checks,
+        focused_input: t.focused_input,
+        input_counter: 0,
+        selects: &t.selects,
+        select_counter: 0,
+        anim_elapsed_ms,
+        now_ms,
+        hover_tweens: &t.hover_tweens,
+        canvas_frames: &t.canvas_frames,
+        canvas_images: &t.canvas_images,
+    };
+    let content = View::new(Style {
+        position: TaffyPosition::Absolute,
+        inset: Rect {
+            left: length(24.0_f32),
+            right: length(24.0_f32),
+            top: length(16.0_f32 - t.scroll_y),
+            bottom: auto(),
+        },
+        flex_direction: FlexDirection::Column,
+        ..Default::default()
+    })
+    .children(vec![render_box(&tree.root, &mut ctx)]);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        ..Default::default()
+    })
+    .fill(Color::WHITE)
+    .clip(true)
+    .children(vec![content])
+}
+
+/// Samplea la animación CSS del nodo (`b.animation`) al instante actual
+/// (`ctx.anim_elapsed_ms`) y devuelve un clon del `BoxNode` con el overlay
+/// aplicado, o `None` si el nodo no anima o el overlay está vacío. `opacity`/
+/// `color`/`background` los pinta el flujo normal de `render_box`; `transforms`
+/// se setea para cuando el chrome los aplique (hoy no los renderiza todavía).
+pub(crate) fn animation_overlay(b: &BoxNode, ctx: &RenderCtx<'_>) -> Option<BoxNode> {
+    let inst = b.animation.as_ref()?;
+    let elapsed_s = ctx.anim_elapsed_ms as f32 / 1000.0;
+    let progress = puriy_engine::anim::animation_progress(&inst.binding, elapsed_s)?;
+    let ov = puriy_engine::anim::sample_keyframes(&inst.keyframes, progress);
+    if ov.is_empty() {
+        return None;
+    }
+    let mut nb = b.clone();
+    if let Some(o) = ov.opacity {
+        nb.opacity = o.clamp(0.0, 1.0);
+    }
+    if let Some(c) = ov.color {
+        nb.color = c;
+    }
+    if let Some(bg) = ov.background {
+        nb.background = Some(bg);
+    }
+    if let Some(ts) = ov.transforms {
+        nb.transforms = ts;
+    }
+    Some(nb)
+}
+
+/// Construye el afín 2D a partir de la lista de `transform` CSS del nodo
+/// (`translate`/`scale`/`rotate`, ya sea de la regla estática o del overlay
+/// de `@keyframes`). El compositor lo aplica alrededor del centro del rect
+/// (CSS `transform-origin: 50% 50%`), así que acá sólo componemos el afín
+/// "local" en orden de declaración: `transform: A B C` → matriz `A·B·C`.
+/// `translate` se escala por el zoom de página (es px de layout); `scale`/
+/// `rotate` son unitless. `None` si la lista está vacía → el nodo no
+/// declara transform y el compositor no toca su pintura.
+pub(crate) fn transform_affine(transforms: &[puriy_engine::style::Transform], zoom: f32) -> Option<Affine> {
+    use puriy_engine::style::Transform as T;
+    if transforms.is_empty() {
+        return None;
+    }
+    let mut a = Affine::IDENTITY;
+    for t in transforms {
+        a *= match *t {
+            T::Translate(x, y) => {
+                Affine::translate(((x * zoom) as f64, (y * zoom) as f64))
+            }
+            T::Scale(sx, sy) => Affine::scale_non_uniform(sx as f64, sy as f64),
+            T::Rotate(deg) => Affine::rotate((deg as f64).to_radians()),
+            // skew: cizalla por la tangente del ángulo en cada eje.
+            T::Skew(ax, ay) => Affine::new([
+                1.0,
+                (ay as f64).to_radians().tan(),
+                (ax as f64).to_radians().tan(),
+                1.0,
+                0.0,
+                0.0,
+            ]),
+            // matrix(a,b,c,d,e,f): afín directa; e/f (traslación) por zoom.
+            T::Matrix(a, b, c, d, e, f) => Affine::new([
+                a as f64,
+                b as f64,
+                c as f64,
+                d as f64,
+                (e * zoom) as f64,
+                (f * zoom) as f64,
+            ]),
+        };
+    }
+    Some(a)
+}
+
+pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
+    // Animación CSS: si el nodo tiene una `@keyframes` resuelta, sampleamos
+    // el overlay al instante actual y renderizamos un clon con las props
+    // animadas pisadas (el resto del flujo pinta `opacity`/`background`/
+    // `color` desde el BoxNode, así que el overlay "se ve" gratis). El clon
+    // se computa una sola vez por llamada → sin recursión.
+    let overlaid = animation_overlay(b, ctx);
+    let b = overlaid.as_ref().unwrap_or(b);
+    let zoom = ctx.zoom;
+    // <input>/<textarea>: reservar slot y devolver un text_input_view
+    // independiente del flujo normal.
+    if let Some(kind) = b.input_kind {
+        let my_idx = ctx.input_counter;
+        ctx.input_counter += 1;
+        return render_input(b, kind, my_idx, ctx);
+    }
+    // <select>: reservar slot y devolver el dropdown (header + opciones).
+    if let Some(info) = &b.select {
+        let my_idx = ctx.select_counter;
+        ctx.select_counter += 1;
+        return render_select(b, info, my_idx, ctx);
+    }
+    // <svg>: bypass del flujo normal — pinta primitivas con vello.
+    if let Some(scene) = &b.svg {
+        return render_svg(scene, zoom);
+    }
+    // <canvas>: bypass — el frame del runtime JS se interpreta a vello.
+    if let Some((cw, ch)) = b.canvas {
+        let frame = b
+            .element_id
+            .as_deref()
+            .and_then(|id| ctx.canvas_frames.get(id));
+        return render_canvas(frame, ctx.canvas_images, cw, ch, zoom);
+    }
+    let style = box_style(b, zoom);
+    let mut view = View::new(style);
+    // Si este nodo es un <details>, reservamos su slot de estado y
+    // renderizamos sólo `<summary>` (precedido de la flecha clickeable)
+    // si está cerrado. La rama de `<details>` retorna acá para no caer
+    // en el flujo normal de children.
+    if b.tag.as_deref() == Some("details") {
+        let my_idx = ctx.details_counter;
+        ctx.details_counter += 1;
+        let open = ctx.details_open.get(my_idx).copied().unwrap_or(false);
+        let mut kids: Vec<View<Msg>> = Vec::new();
+        for child in &b.children {
+            let is_summary = child.tag.as_deref() == Some("summary");
+            if is_summary {
+                let arrow = if open { "▼ " } else { "▶ " };
+                let arrow_view = View::new(Style {
+                    size: Size {
+                        width: length(16.0_f32 * zoom),
+                        height: length(child.font_size * zoom * 1.2),
+                    },
+                    margin: Rect {
+                        left: length(0.0_f32),
+                        right: length(2.0_f32 * zoom),
+                        top: length(0.0_f32),
+                        bottom: length(0.0_f32),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned(
+                    arrow.to_string(),
+                    child.font_size * zoom,
+                    Color::from_rgb8(80, 80, 95),
+                    Alignment::Start,
+                )
+                .on_click(Msg::ToggleDetails(my_idx));
+                let summary_view = render_box(child, ctx).on_click(Msg::ToggleDetails(my_idx));
+                kids.push(
+                    View::new(Style {
+                        flex_direction: FlexDirection::Row,
+                        align_items: Some(AlignItems::Center),
+                        size: Size { width: percent(1.0_f32), height: auto() },
+                        ..Default::default()
+                    })
+                    // Hover feedback sobre toda la fila (flecha + summary)
+                    // para que sea evidente que es clickeable. El CSS no
+                    // suele estilar `<summary>:hover`, así que es nuestra
+                    // contribución de chrome — un gris muy suave.
+                    .hover_fill(Color::from_rgba8(0, 0, 0, 18))
+                    .on_click(Msg::ToggleDetails(my_idx))
+                    .children(vec![arrow_view, summary_view]),
+                );
+            } else if open {
+                kids.push(render_box(child, ctx));
+            } else {
+                // Cerrado y no-summary: no renderizamos, pero sí
+                // avanzamos el counter por cada `<details>` anidado
+                // adentro para no desalinear los índices con el vector
+                // `details_open` que el Loaded prefilló en orden DFS
+                // completo. Sin esto, abrir un parent cerrado le daría
+                // a sus hijos índices que el state vector pensaba que
+                // correspondían a `<details>` posteriores.
+                skip_count_details(child, &mut ctx.details_counter);
+            }
+        }
+        return view.children(kids);
+    }
+    // Find-in-page: si la query no es vacía y este nodo es una hoja de
+    // texto que la contiene (case-insensitive), pintamos su background
+    // con un highlight. El N-ésimo match en orden DFS es el "actual"
+    // (find_current, 1-based) y pinta en naranja para destacarse —
+    // el resto en amarillo. El paint del fill normal del nodo
+    // (background CSS) se sobrescribe si hay match.
+    let find_hit = b
+        .text
+        .as_ref()
+        .map(|s| ctx.matcher.matches(s))
+        .unwrap_or(false);
+    let find_hit_color: Option<Color> = if find_hit {
+        ctx.find_counter += 1;
+        let is_current = ctx.find_current != 0 && ctx.find_counter == ctx.find_current;
+        Some(if is_current {
+            Color::from_rgba8(255, 140, 0, 240)
+        } else {
+            Color::from_rgba8(255, 230, 0, 200)
+        })
+    } else {
+        None
+    };
+
+    // visibility:hidden ocupa espacio pero no pinta. Devolvemos la view
+    // con su layout pero sin children/text/fill — sus descendientes
+    // serían computados pero también deberían ser hidden por inheritance.
+    let hidden = matches!(b.visibility, Visibility::Hidden);
+
+    // opacity multiplica el alpha del background sólido. text/border
+    // se manejan en apply_decorations/render del texto.
+    let alpha_mul = b.opacity.clamp(0.0, 1.0);
+
+    if !hidden {
+        if let Some(c) = find_hit_color {
+            view = view.fill(c);
+        } else if let Some(bg) = b.background {
+            let a = ((bg.a as f32) * alpha_mul) as u8;
+            view = view.fill(Color::from_rgba8(bg.r, bg.g, bg.b, a));
+        }
+        if let Some(hbg) = b.hover_background {
+            // ¿El nodo declara una `transition` que cubre el background? Si
+            // sí, NO usamos el swap instantáneo del compositor (`hover_fill`):
+            // tweeneamos el fill nosotros frame a frame y anclamos el reloj
+            // con `on_pointer_enter/leave`. El find-in-page (find_hit_color)
+            // gana sobre la transición — no querés tweenear un highlight.
+            let bg_transition = puriy_engine::anim::transition_for(&b.transitions, "background-color")
+                .or_else(|| puriy_engine::anim::transition_for(&b.transitions, "background"));
+            match (find_hit_color, bg_transition) {
+                (None, Some(tr)) => {
+                    let duration_ms = (tr.duration_s * 1000.0).max(0.0) as u32;
+                    // `from` = background actual; si no hay, el color de hover
+                    // pero transparente (fade-in desde nada).
+                    let base = b.background.unwrap_or(puriy_engine::Color {
+                        r: hbg.r,
+                        g: hbg.g,
+                        b: hbg.b,
+                        a: 0,
+                    });
+                    let lin = ctx
+                        .hover_tweens
+                        .get(&b.node_id)
+                        .map(|tw| tw.sample_linear(ctx.now_ms))
+                        .unwrap_or(0.0);
+                    let eased = puriy_engine::anim::apply_easing(tr.timing, lin);
+                    let cur = puriy_engine::anim::lerp_color(&base, &hbg, eased);
+                    let a = ((cur.a as f32) * alpha_mul) as u8;
+                    view = view
+                        .fill(Color::from_rgba8(cur.r, cur.g, cur.b, a))
+                        .on_pointer_enter(Msg::HoverTween {
+                            node_id: b.node_id,
+                            entering: true,
+                            duration_ms,
+                        })
+                        .on_pointer_leave(Msg::HoverTween {
+                            node_id: b.node_id,
+                            entering: false,
+                            duration_ms,
+                        });
+                }
+                _ => {
+                    let a = ((hbg.a as f32) * alpha_mul) as u8;
+                    view = view.hover_fill(Color::from_rgba8(hbg.r, hbg.g, hbg.b, a));
+                }
+            }
+        }
+        view = apply_decorations(view, b, zoom);
+    }
+    if hidden {
+        // Sin children/text — el subárbol queda invisible pero ocupando
+        // su layout. Devolvemos acá para evitar pintar nada.
+        return view;
+    }
+    // `overflow: hidden` aplica clip(true) — recorta el subárbol al
+    // borde del rect del nodo.
+    if matches!(b.overflow, Overflow::Hidden) {
+        view = view.clip(true);
+    }
+
+    let link_color = Color::from_rgb8(30, 90, 200);
+    let display_color = if b.link.is_some() {
+        link_color
+    } else {
+        Color::from_rgb8(b.color.r, b.color.g, b.color.b)
+    };
+
+    // pointer-events:none deshabilita on_click (también propaga por
+    // inheritance, así que los descendientes ya lo tienen marcado).
+    let pe_active = matches!(b.pointer_events, PointerEvents::Auto);
+
+    if let Some(target) = &b.link {
+        if pe_active {
+            // `<a download>` descarga el target en lugar de navegar. El
+            // filename hint queda en `b.link_download` (String vacío =
+            // usar nombre del path).
+            let native_msg = if let Some(filename_hint) = &b.link_download {
+                Msg::DownloadLink {
+                    url: target.clone(),
+                    filename_hint: filename_hint.clone(),
+                }
+            } else if b.link_new_tab {
+                Msg::NavigateNewTab(target.clone())
+            } else {
+                Msg::Navigate(target.clone())
+            };
+            // Fase 7.6 — cohabitación link+handler: si el `<a>` tiene
+            // `id=`, despachamos el evento JS PRIMERO y la navegación
+            // queda como fallback. El handler puede llamar
+            // `event.preventDefault()` para cancelar la nav.
+            let click_msg = if let Some(eid) = &b.element_id {
+                if !eid.is_empty() {
+                    Msg::JsDispatchEvent {
+                        element_id: eid.clone(),
+                        event_type: "click".into(),
+                        fallback: Some(Box::new(native_msg.clone())),
+                    }
+                } else {
+                    native_msg.clone()
+                }
+            } else {
+                native_msg.clone()
+            };
+            view = view
+                .on_click(click_msg)
+                .on_middle_click(Msg::NavigateNewTab(target.clone()))
+                .on_pointer_enter(Msg::HoverLink(Some(target.clone())))
+                .on_pointer_leave(Msg::HoverLink(None));
+        }
+    } else if let Some(eid) = &b.element_id {
+        // Elemento con `id=` y sin link/download/submit nativo: si JS
+        // registró handlers para 'click', el chrome los dispara. Sin
+        // handlers, `dispatch_event` devuelve count=0 y nada pasa.
+        if pe_active && !eid.is_empty() && !matches!(b.display, Display::None) {
+            view = view.on_click(Msg::JsDispatchEvent {
+                element_id: eid.clone(),
+                event_type: "click".into(),
+                fallback: None,
+            });
+        }
+    }
+
+    // <img> con imagen decodificada: arma peniko::Image, ajusta el rect
+    // del nodo al tamaño nativo (taffy luego lo clampa por el ancho del
+    // contenedor). Llimphi escala preservando aspect ratio.
+    if let Some(img) = &b.image {
+        let blob = Blob::from(img.rgba.clone());
+        let peniko = PenikoImage::new(ImageData { data: blob, format: ImageFormat::Rgba8, alpha_type: ImageAlphaType::Alpha, width: img.width, height: img.height });
+        return match b.object_fit {
+            Some(fit) => image_fit_view(b, peniko, fit, zoom),
+            None => image_view(img.width, img.height, zoom).image(peniko),
+        };
+    }
+
+    if let Some(text) = &b.text {
+        let base = if b.font_weight >= 600 { b.font_size * 1.1 } else { b.font_size };
+        let size = base * zoom;
+        // text-shadows: paint_with previo al texto. Cada shadow se pinta
+        // como una segunda capa de texto desplazada y semitransparente —
+        // peniko no expone draw text directo desde el callback, así que
+        // usamos un rect aproximado proporcional al tamaño de fuente.
+        // Aproximación suficiente para hero text decorativo.
+        if !b.text_shadows.is_empty() {
+            let shadows = b.text_shadows.clone();
+            let z = zoom as f64;
+            view = view.paint_with(move |scene, _ts, rect| {
+                for sh in &shadows {
+                    // Banda horizontal centrada de altura ≈ font_size,
+                    // desplazada por (offset_x, offset_y), expandida por
+                    // blur. Alpha proporcional al blur (más blur = más
+                    // difuso = menos opaco).
+                    let extra = sh.blur_px as f64 * 0.5 * z;
+                    let mid_y = rect.y as f64 + rect.h as f64 * 0.55;
+                    let h = size as f64 * 0.55;
+                    let r = KurboRect::new(
+                        rect.x as f64 + sh.offset_x as f64 * z - extra,
+                        mid_y - h * 0.5 + sh.offset_y as f64 * z - extra,
+                        (rect.x + rect.w) as f64 + sh.offset_x as f64 * z + extra,
+                        mid_y + h * 0.5 + sh.offset_y as f64 * z + extra,
+                    );
+                    let alpha = if sh.blur_px > 0.0 { 0.35 } else { 0.6 };
+                    let c = Color::from_rgba8(
+                        sh.color.r,
+                        sh.color.g,
+                        sh.color.b,
+                        (sh.color.a as f64 * alpha) as u8,
+                    );
+                    scene.fill(Fill::NonZero, Affine::IDENTITY, c, None, &r);
+                }
+            });
+        }
+        let italic = matches!(b.font_style, puriy_engine::FontStyle::Italic);
+        // `background-clip: text` (Fase 7.208): si la hoja trae el gradiente
+        // propagado (build), rellenamos sus glifos con él vía `paint_with` +
+        // `draw_layout_brush_xf`, y dejamos el color normal TRANSPARENTE para
+        // que la pasada de texto de llimphi (que corre después) no lo tape.
+        let grad_text =
+            if matches!(b.background_clip, puriy_engine::style::BackgroundClip::Text) {
+                b.background_gradient.clone()
+            } else {
+                None
+            };
+        let text_fill = if grad_text.is_some() {
+            Color::from_rgba8(0, 0, 0, 0)
+        } else {
+            display_color
+        };
+        if let Some(g) = grad_text {
+            let txt = text.clone();
+            let size_c = size;
+            let italic_c = italic;
+            let ff = b.font_family.clone();
+            let lh = b.line_height.unwrap_or(1.2);
+            let alpha = b.opacity.clamp(0.0, 1.0);
+            view = view.paint_with(move |scene, ts, rect| {
+                // Re-shaping idéntico al de la pasada normal (mismo
+                // size/wrap/alignment/line-height) para que las glifos del
+                // gradiente caigan exactamente sobre las transparentes.
+                let layout = ts.layout(
+                    &txt,
+                    size_c,
+                    Some(rect.w),
+                    Alignment::Start,
+                    lh,
+                    italic_c,
+                    ff.as_deref(),
+                    400.0,
+                    false,
+                    false,
+                );
+                // Gradiente en coords LOCALES (0,0)-(w,h): `draw_layout_brush_xf`
+                // lo lleva al origen del texto con la afín, alineándolo.
+                let w = layout.width().max(1.0);
+                let h = llimphi_ui::llimphi_text::measurement(&layout).height.max(1.0);
+                let local = llimphi_ui::PaintRect { x: 0.0, y: 0.0, w, h };
+                if let Some(grad) = build_linear_gradient_brush(&g, local, alpha) {
+                    let brush = llimphi_raster::peniko::Brush::Gradient(grad);
+                    llimphi_ui::llimphi_text::draw_layout_brush_xf(
+                        scene,
+                        &layout,
+                        &brush,
+                        Affine::translate((rect.x as f64, rect.y as f64)),
+                    );
+                }
+            });
+        }
+        return view
+            .text_aligned_full(
+                text.clone(),
+                size,
+                text_fill,
+                Alignment::Start,
+                italic,
+                b.font_family.clone(),
+            )
+            .line_height(b.line_height.unwrap_or(1.2));
+    }
+
+    if !b.children.is_empty() {
+        let kids: Vec<View<Msg>> = if let Some(target) = &b.link {
+            // Dentro de un <a>, los descendientes son no-interactive por
+            // contagio (ya enlazan al target del <a>). No esperamos
+            // <details> dentro de links — pero contamos por las dudas
+            // para no romper el invariante del counter.
+            let target = target.clone();
+            let new_tab = b.link_new_tab;
+            b.children
+                .iter()
+                .map(|c| render_link_subtree(c, &target, link_color, new_tab, ctx))
+                .collect()
+        } else if is_mixed_inline_context(b) {
+            // Contexto inline con más de un hijo (texto + elementos inline
+            // como <b>/<a>/<code>): partimos cada run de texto en palabras
+            // para que TODO fluya palabra-a-palabra junto a los elementos.
+            // Sin esto, el run de texto se mide como un bloque multi-línea y
+            // el elemento inline queda colgado después, no en la misma línea.
+            render_inline_flow(&b.children, ctx)
+        } else {
+            render_children_z_ordered(&b.children, ctx)
+        };
+        view = view.children(kids);
+    }
+    // Transform CSS (estático o animado por `@keyframes`): el compositor lo
+    // aplica al nodo y todo su subtree alrededor del centro de su rect. Se
+    // setea al final para que cubra fill/text/decorations/children juntos.
+    if let Some(xf) = transform_affine(&b.transforms, zoom) {
+        view = view.transform(xf);
+    }
+    view
+}
+
+/// Renderea los children aplicando z-index: in-flow primero (orden
+/// DOM), luego out-of-flow (position absolute/fixed) ordenados por
+/// z-index ascendente — mayor pinta encima de los demás. Reordenar
+/// los out-of-flow es seguro porque su layout depende de insets, no
+/// de su posición en el Vec.
+pub(crate) fn render_children_z_ordered(children: &[BoxNode], ctx: &mut RenderCtx<'_>) -> Vec<View<Msg>> {
+    let mut in_flow_idx: Vec<usize> = Vec::new();
+    let mut out_of_flow_idx: Vec<usize> = Vec::new();
+    for (i, c) in children.iter().enumerate() {
+        match c.position {
+            puriy_engine::Position::Absolute | puriy_engine::Position::Fixed => {
+                out_of_flow_idx.push(i)
+            }
+            _ => in_flow_idx.push(i),
+        }
+    }
+    // Sort estable por z-index ascending; ties mantienen orden DOM.
+    out_of_flow_idx.sort_by_key(|&i| children[i].z_index);
+    in_flow_idx
+        .into_iter()
+        .chain(out_of_flow_idx)
+        .map(|i| render_box(&children[i], ctx))
+        .collect()
+}
+
+/// ¿`b` es un contexto inline "mixto"? — todos sus hijos son inline y hay
+/// **más de uno** (p. ej. texto + `<b>` + texto). Ese es el caso donde el
+/// modelo "un run = un item flex" se rompe visualmente y conviene partir el
+/// texto en palabras. Un párrafo de un solo run de texto (`children.len()==1`)
+/// NO entra acá: se mide entero (envuelve a N líneas) y conserva el
+/// find-in-page por hoja.
+pub(crate) fn is_mixed_inline_context(b: &BoxNode) -> bool {
+    b.children.len() > 1 && has_inline_children(b)
+}
+
+/// Renderiza un contexto inline mixto partiendo cada hoja de texto en
+/// palabras: cada palabra es un item flex propio, así el `flex-wrap` del
+/// bloque rompe líneas en los límites de palabra y los elementos inline
+/// (`<b>`, `<code>`, `<a>`…) fluyen en la misma línea que el texto vecino.
+/// Las hojas no-texto (elementos inline) se renderizan como una unidad.
+pub(crate) fn render_inline_flow(children: &[BoxNode], ctx: &mut RenderCtx<'_>) -> Vec<View<Msg>> {
+    let mut out: Vec<View<Msg>> = Vec::new();
+    for c in children {
+        match &c.text {
+            // Hoja de texto: una vista por palabra (clon del nodo con el
+            // texto reemplazado), reusando el render normal — hereda
+            // color/peso/tamaño/familia/line-height sin duplicar lógica.
+            Some(text) if c.children.is_empty() => {
+                for word in split_words(text) {
+                    let mut wn = c.clone();
+                    wn.text = Some(word);
+                    out.push(render_box(&wn, ctx));
+                }
+            }
+            _ => out.push(render_box(c, ctx)),
+        }
+    }
+    out
+}
+
+/// Parte un run de texto (ya whitespace-colapsado a espacios simples) en
+/// tokens "palabra " con el espacio separador pegado, de modo que cada token
+/// mida su propio ancho (incluido el espacio) y los words se separen al
+/// fluir. Preserva un espacio inicial (separa del elemento inline anterior) y
+/// recorta el espacio final si el run no terminaba en espacio.
+pub(crate) fn split_words(s: &str) -> Vec<String> {
+    let leading = s.starts_with(' ');
+    let mut out: Vec<String> = Vec::new();
+    for (i, w) in s.split(' ').filter(|w| !w.is_empty()).enumerate() {
+        let mut tok = String::new();
+        if i == 0 && leading {
+            tok.push(' ');
+        }
+        tok.push_str(w);
+        tok.push(' ');
+        out.push(tok);
+    }
+    if !s.ends_with(' ') {
+        if let Some(last) = out.last_mut() {
+            if last.ends_with(' ') {
+                last.pop();
+            }
+        }
+    }
+    out
+}
+
+/// Recorre `b` y avanza `*counter` por cada `<details>` descendiente.
+/// Usado por el chrome cuando un `<details>` padre está cerrado: aunque
+/// no rendereamos los hijos non-summary, sí tenemos que consumir sus
+/// índices para que no se desalineen con el vector `details_open` que
+/// el Loaded prefilló en DFS completo.
+/// Si el input focado está dentro de un `<form>`, arma la URL `action?
+/// n1=v1&n2=v2&…` con los inputs que tienen `name` no vacío,
+/// urlencodeados de manera mínima. Devuelve `None` si no hay form
+/// asociado o si el form no tiene action navegable.
+pub(crate) fn build_form_submit_url(m: &Model) -> Option<Msg> {
+    let t = m.active();
+    let focused_idx = t.focused_input?;
+    let tree = t.box_tree.as_ref()?;
+    // Primer pase: identificá el form_idx del input focado.
+    let mut focused_form: Option<usize> = None;
+    let mut counter: usize = 0;
+    tree.walk(|b| {
+        if b.input_kind.is_some() {
+            if counter == focused_idx {
+                focused_form = b.form_idx;
+            }
+            counter += 1;
+        }
+    });
+    let form_idx = focused_form?;
+    // Segundo pase: junta los pares (name, value) de los inputs y
+    // `<select>`s del mismo form que tengan `name`. Texto del input vive
+    // en `t.inputs[idx]`; valor del select en `t.selects[idx].selected`
+    // → SelectInfo.options[i].value.
+    let mut pairs: Vec<(String, String)> = Vec::new();
+    let mut input_idx: usize = 0;
+    let mut select_idx: usize = 0;
+    tree.walk(|b| {
+        if let Some(kind) = b.input_kind {
+            let my_idx = input_idx;
+            input_idx += 1;
+            if b.form_idx == Some(form_idx) {
+                if let Some(name) = &b.input_name {
+                    match kind {
+                        puriy_engine::InputKind::Checkbox
+                        | puriy_engine::InputKind::Radio => {
+                            let checked = t.input_checks.get(my_idx).copied().unwrap_or(false);
+                            if checked {
+                                let val = b
+                                    .input_initial
+                                    .clone()
+                                    .unwrap_or_else(|| "on".to_string());
+                                pairs.push((name.clone(), val));
+                            }
+                            // No-checked checkbox/radio: NO se manda
+                            // (HTML spec).
+                        }
+                        puriy_engine::InputKind::Submit => {
+                            // Submit con name: contribuye su `value`/label.
+                            let val = b
+                                .input_initial
+                                .clone()
+                                .unwrap_or_else(|| "Submit".to_string());
+                            pairs.push((name.clone(), val));
+                        }
+                        _ => {
+                            let value = t
+                                .inputs
+                                .get(my_idx)
+                                .map(|s| s.text())
+                                .unwrap_or_default();
+                            pairs.push((name.clone(), value));
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(info) = &b.select {
+            let my_idx = select_idx;
+            select_idx += 1;
+            if b.form_idx == Some(form_idx) {
+                if let Some(name) = &b.input_name {
+                    let sel = t
+                        .selects
+                        .get(my_idx)
+                        .map(|s| s.selected)
+                        .unwrap_or(info.initial);
+                    let value = info
+                        .options
+                        .get(sel)
+                        .map(|o| o.value.clone())
+                        .unwrap_or_default();
+                    pairs.push((name.clone(), value));
+                }
+            }
+        }
+    });
+    let form = tree.forms.get(form_idx)?;
+    let action = form.action.clone()?;
+    // URL-encoder mínimo (espacios → '+', resto de chars unsafe → %HH).
+    fn encode(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        for &b in s.as_bytes() {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    out.push(b as char);
+                }
+                b' ' => out.push('+'),
+                _ => out.push_str(&format!("%{:02X}", b)),
+            }
+        }
+        out
+    }
+    let qs: Vec<String> = pairs.iter().map(|(k, v)| format!("{}={}", encode(k), encode(v))).collect();
+    let body = qs.join("&");
+    match form.method {
+        puriy_engine::FormMethod::Get => {
+            // Concatena action con `?…`. Si action ya tiene `?`, usamos `&`.
+            let sep = if action.contains('?') { '&' } else { '?' };
+            Some(Msg::Navigate(format!("{}{}{}", action, sep, body)))
+        }
+        puriy_engine::FormMethod::Post => Some(Msg::NavigatePost { url: action, body }),
+    }
+}
+
+pub(crate) fn skip_count_details(b: &BoxNode, counter: &mut usize) {
+    if b.tag.as_deref() == Some("details") {
+        *counter += 1;
+    }
+    for c in &b.children {
+        skip_count_details(c, counter);
+    }
+}
