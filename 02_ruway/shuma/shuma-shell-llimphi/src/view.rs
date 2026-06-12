@@ -337,41 +337,35 @@ pub(crate) fn render_tabs_with_monitors(model: &Model, theme: &Theme) -> View<Ms
 /// creación (sesión pending) y el sidebar (sesión viva), para que no vuelvan a
 /// divergir en dos UIs distintas. Elegir un host lo aplica a la sesión activa
 /// (y conecta, si ya no es pending) vía `Msg::HostApply`.
-fn host_picker(model: &Model, session: &Session, theme: &Theme) -> Vec<View<Msg>> {
+fn host_select(model: &Model, session: &Session, theme: &Theme) -> Vec<View<Msg>> {
     let pal = SelectPalette::from_theme(theme);
-    let mut out: Vec<View<Msg>> = vec![panel_label("Host remoto", theme)];
-    let host_text = session.host.text();
-    let host_sel = if host_text.trim().is_empty() {
-        None
-    } else {
-        let u = session.user.text();
-        let label = if u.trim().is_empty() {
-            host_text.clone()
-        } else {
-            format!("{u}@{host_text}")
-        };
-        Some(SelectItem::new(label))
+    let mut out: Vec<View<Msg>> = vec![panel_label("Host", theme)];
+    // Etiqueta del host actual: Local o el host remoto elegido.
+    let cur_label = match &session.host_label {
+        None => "Local (esta máquina)".to_string(),
+        Some(name) => model
+            .hosts
+            .iter()
+            .find(|h| &h.name == name)
+            .map(|h| h.display())
+            .unwrap_or_else(|| name.clone()),
     };
+    let cur_item = SelectItem::new(cur_label);
     out.push(select_trigger_view(
-        host_sel.as_ref(),
-        "Elegí un host guardado…",
+        Some(&cur_item),
+        "Elegí el host…",
         model.dropdown_open == Some(DropKind::Host),
         None,
         &pal,
         Msg::ToggleDropdown(DropKind::Host),
     ));
     if model.dropdown_open == Some(DropKind::Host) {
-        if model.hosts.is_empty() {
-            out.push(panel_note("Sin hosts guardados — usá «Gestionar hosts».", theme));
-        } else {
-            let rows: Vec<View<Msg>> = model
-                .hosts
-                .iter()
-                .enumerate()
-                .map(|(i, h)| pick_row(h.display(), Msg::HostApply(i), theme))
-                .collect();
-            out.push(inline_list(rows));
+        let mut rows: Vec<View<Msg>> =
+            vec![pick_row("Local (esta máquina)".to_string(), Msg::PickHost(None), theme)];
+        for (i, h) in model.hosts.iter().enumerate() {
+            rows.push(pick_row(h.display(), Msg::PickHost(Some(i)), theme));
         }
+        out.push(inline_list(rows));
     }
     out.push(action_button_small("Gestionar hosts…", Msg::OpenHostsWindow, theme));
     out
@@ -399,28 +393,39 @@ fn container_picker(model: &Model, session: &Session, theme: &Theme) -> Vec<View
         &pal,
         Msg::ToggleDropdown(DropKind::Container),
     ));
+    // El contenedor pertenece al HOST de la sesión. Hoy sólo el host Local tiene
+    // contenedores que corren de verdad (rootfs en disco); los de un host remoto
+    // necesitan correr el engine allá (pendiente).
+    let es_local = session.host_key() == "local";
     if model.dropdown_open == Some(DropKind::Container) {
-        let mut rows: Vec<View<Msg>> = Vec::new();
-        for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
-            if super::rootfs_listo(*distro) {
-                let d = *distro;
-                rows.push(pick_row(
-                    format!("rootfs · {}", d.label()),
-                    Msg::PickRootfs(d),
-                    theme,
-                ));
-            }
-        }
-        for (i, c) in model.containers.iter().enumerate() {
-            rows.push(pick_row(c.clone(), Msg::SubscribeContainer(i), theme));
-        }
-        if rows.is_empty() {
+        if !es_local {
             out.push(panel_note(
-                "Sin contenedores — usá «Gestionar contenedores».",
+                "Contenedores en hosts remotos: próximamente.",
                 theme,
             ));
         } else {
-            out.push(inline_list(rows));
+            let mut rows: Vec<View<Msg>> = Vec::new();
+            for distro in &[Distro::Ubuntu, Distro::Debian, Distro::Alpine, Distro::Arch] {
+                if super::rootfs_listo(*distro) {
+                    let d = *distro;
+                    rows.push(pick_row(
+                        format!("rootfs · {}", d.label()),
+                        Msg::PickRootfs(d),
+                        theme,
+                    ));
+                }
+            }
+            for (i, c) in model.containers.iter().enumerate() {
+                rows.push(pick_row(c.clone(), Msg::SubscribeContainer(i), theme));
+            }
+            if rows.is_empty() {
+                out.push(panel_note(
+                    "Sin contenedores — usá «Gestionar contenedores».",
+                    theme,
+                ));
+            } else {
+                out.push(inline_list(rows));
+            }
         }
     }
     out.push(action_button_small(
@@ -459,29 +464,14 @@ fn session_panel(model: &Model, theme: &Theme) -> View<Msg> {
 
     let titulo = if es_draft { "local · scratch".to_string() } else { session.name.clone() };
 
-    let pal = SelectPalette::from_theme(theme);
     let mut children: Vec<View<Msg>> = vec![panel_title(&titulo, theme)];
 
     // Estado de conexión de la sesión (en espera / conectado / desconectado).
     children.push(conn_pill(session.conn, theme));
 
-    // Aislamiento base: dropdown Local / Remoto.
-    children.push(panel_label("Aislamiento", theme));
-    let isos = iso_items();
-    children.push(select_trigger_view(
-        isos.get(iso_index(session.isolation)),
-        "Elegí el aislamiento…",
-        model.dropdown_open == Some(DropKind::Isolation),
-        None,
-        &pal,
-        Msg::ToggleDropdown(DropKind::Isolation),
-    ));
-
-    // Remoto: un único select de hosts guardados + botón al gestor. Sin campos
-    // host/usuario/puerto sueltos — esos viven en el gestor de hosts.
-    if session.isolation == Isolation::Remote {
-        children.extend(host_picker(model, session, theme));
-    }
+    // Host: un único select (Local + remotos guardados) + botón al gestor. El
+    // contenedor de abajo pertenece a ESTE host.
+    children.extend(host_select(model, session, theme));
 
     // Contenedor: capa OPCIONAL (encima de Local o Remoto). Mismo selector que
     // el form de creación: toggle + un único select + botón al gestor.
@@ -1290,20 +1280,9 @@ fn new_session_form(model: &Model, session: &Session, theme: &Theme) -> View<Msg
         Alignment::Start,
     );
 
-    // Aislamiento — botones radio inline (no dropdown). El dropdown
-    // dispara su overlay anclado al panel izquierdo, que en el canvas
-    // grande aparece desplazado feo. Botones directos son más claros y
-    // no tienen problema de posicionamiento.
-    let iso_label = panel_label("Aislamiento", theme);
-    let iso_trigger = iso_radio_row(session.isolation, theme);
-
-    // Cada recurso (host / contenedor) se ELIGE con un select que expande su
-    // lista inline; se CREA/gestiona con un botón que abre el gestor (modal
-    // bloqueante). Mismo selector que el sidebar (host_picker/container_picker).
-    let mut children: Vec<View<Msg>> = vec![titulo, sub, iso_label, iso_trigger];
-    if session.isolation == Isolation::Remote {
-        children.extend(host_picker(model, session, theme));
-    }
+    // Host: un único select (Local + remotos). El contenedor pertenece a él.
+    let mut children: Vec<View<Msg>> = vec![titulo, sub];
+    children.extend(host_select(model, session, theme));
 
     // Aislar en contenedor: toggle + el mismo selector único que el sidebar.
     children.push(container_toggle(session.use_container, theme));
@@ -1887,8 +1866,14 @@ fn container_draft_form(d: &ContainerDraft, theme: &Theme) -> View<Msg> {
         if editing { "Editar contenedor" } else { "Nuevo contenedor" },
         theme,
     );
+    let host_lbl = if d.host == "local" {
+        "Host: Local".to_string()
+    } else {
+        format!("Host: {}", d.host)
+    };
     let mut children = vec![
         titulo,
+        panel_note(&host_lbl, theme),
         panel_label("Engine", theme),
         engine_row,
         panel_label("Distro", theme),

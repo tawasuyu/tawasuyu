@@ -756,10 +756,18 @@ struct Mount {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 struct ContainerCfg {
     name: String,
+    /// Host al que PERTENECE el contenedor: `"local"` o el nombre de un host
+    /// remoto. El select de contenedor de una sesión sólo ofrece los de su host.
+    #[serde(default = "host_local")]
+    host: String,
     engine: String,
     distro: Distro,
     #[serde(default)]
     mounts: Vec<Mount>,
+}
+
+fn host_local() -> String {
+    "local".to_string()
 }
 
 fn containers_cfg_path() -> Option<std::path::PathBuf> {
@@ -830,6 +838,8 @@ impl MountDraft {
 #[derive(Debug, Clone)]
 struct ContainerDraft {
     editing: Option<String>,
+    /// Host al que pertenece (clave). Por ahora editable sólo al crear.
+    host: String,
     engine: String,
     distro: Distro,
     mounts: Vec<MountDraft>,
@@ -838,9 +848,11 @@ struct ContainerDraft {
 }
 
 impl ContainerDraft {
-    fn new() -> Self {
+    /// Nuevo, ligado al host `host_key` (el de la sesión activa).
+    fn new(host: String) -> Self {
         Self {
             editing: None,
+            host,
             engine: engine_preferido().unwrap_or("unshare").to_string(),
             distro: Distro::Ubuntu,
             mounts: Vec::new(),
@@ -850,6 +862,7 @@ impl ContainerDraft {
     fn from_cfg(cfg: &ContainerCfg) -> Self {
         Self {
             editing: Some(cfg.name.clone()),
+            host: cfg.host.clone(),
             engine: cfg.engine.clone(),
             distro: cfg.distro,
             mounts: cfg.mounts.iter().map(MountDraft::from_mount).collect(),
@@ -859,6 +872,7 @@ impl ContainerDraft {
     fn to_cfg(&self, name: String) -> ContainerCfg {
         ContainerCfg {
             name,
+            host: self.host.clone(),
             engine: self.engine.clone(),
             distro: self.distro,
             mounts: self.mounts.iter().filter_map(MountDraft::to_mount).collect(),
@@ -1122,6 +1136,9 @@ struct Session {
     container_open: bool,
     /// Estado de conexión de la sesión (lo refleja el panel).
     conn: ConnState,
+    /// Nombre del host remoto elegido (`None` = Local). Es la CLAVE que liga la
+    /// sesión a un host: el select de contenedor sólo ofrece los de este host.
+    host_label: Option<String>,
     /// Campos del form de conexión remota (sólo se usan con `Isolation::Remote`).
     host: TextInputState,
     user: TextInputState,
@@ -1165,6 +1182,7 @@ impl Session {
             pending_focus: None,
             // Local arranca conectado; remoto en espera hasta conectar.
             conn: ConnState::Connected,
+            host_label: None,
             host: TextInputState::new(),
             user: TextInputState::new(),
             port: {
@@ -1196,6 +1214,12 @@ impl Session {
         );
         s.pending = true;
         s
+    }
+
+    /// Clave del host de la sesión: `"local"` o el nombre del host remoto
+    /// elegido. Liga la sesión a un host: el contenedor pertenece a este host.
+    fn host_key(&self) -> String {
+        self.host_label.clone().unwrap_or_else(|| "local".to_string())
     }
 
     /// `true` si la sesión está moviendo datos ahora (comando corriendo) — para
@@ -1274,6 +1298,7 @@ impl Session {
             use_container: self.use_container,
             container_engine: self.container_engine.clone(),
             mount: self.mount.text(),
+            host_label: self.host_label.clone(),
             host: self.host.text(),
             user: self.user.text(),
             port: self.port.text(),
@@ -1303,6 +1328,7 @@ impl Session {
             s.container_engine = pref.to_string();
         }
         s.mount.set_text(c.mount);
+        s.host_label = c.host_label;
         s.host.set_text(c.host);
         s.user.set_text(c.user);
         if !c.port.is_empty() {
@@ -1360,6 +1386,8 @@ struct SessionConfig {
     container_engine: String,
     #[serde(default)]
     mount: String,
+    #[serde(default)]
+    host_label: Option<String>,
     #[serde(default)]
     host: String,
     #[serde(default)]
@@ -1744,6 +1772,9 @@ enum Msg {
     ContainerDraftSave,
     /// Tecla al input del mount focado del draft.
     ContainerDraftKey(KeyEvent),
+    /// Elegir el host de la sesión desde el select único: `None` = Local,
+    /// `Some(i)` = el host guardado `i`. Liga la sesión a ese host.
+    PickHost(Option<usize>),
     /// Aplicar un host guardado al form de la sesión actual (rellena
     /// host/user/port + dispara connect si la sesión está pending).
     HostApply(usize),
@@ -2267,10 +2298,11 @@ impl App for Shell {
                 }
             }
             Msg::OpenContainersWindow => {
-                // Modal bloqueante (no ventana del SO): arranca el draft de
-                // alta y carga la lista de containers para mostrarla debajo.
+                // Modal bloqueante: abre mostrando la LISTA (sin editor). El
+                // editor aparece al tocar "Nuevo" o una fila — así la lista
+                // siempre se ve y el "seleccionar para editar arriba" es claro.
                 m.containers_modal_open = true;
-                m.container_draft = Some(ContainerDraft::new());
+                m.container_draft = None;
                 spawn_list_containers_full(handle);
             }
             Msg::Noop => {}
@@ -2287,10 +2319,10 @@ impl App for Shell {
             Msg::RemoveContainer(name) => spawn_container_action(handle, "rm", name),
             Msg::RemoveRootfs(name) => spawn_remove_rootfs(handle, name),
             Msg::OpenHostsWindow => {
-                // Modal bloqueante (no ventana del SO): arranca el draft de
-                // alta y muestra la lista guardada debajo (con borrar).
+                // Modal bloqueante: abre mostrando la LISTA. El editor aparece
+                // al tocar "Nuevo" o una fila (mismo mecanismo que contenedores).
                 m.hosts_modal_open = true;
-                m.host_draft = Some(HostDraft::new());
+                m.host_draft = None;
             }
             Msg::CloseHostsModal => {
                 m.hosts_modal_open = false;
@@ -2381,8 +2413,14 @@ impl App for Shell {
                 }
             }
             Msg::ContainerDraftNew => {
-                // "Nuevo": deselecciona la lista y activa engine + distro.
-                m.container_draft = Some(ContainerDraft::new());
+                // "Nuevo": deselecciona la lista y activa engine + distro,
+                // ligado al host de la sesión activa.
+                let host = m
+                    .sessions
+                    .get(m.active_session)
+                    .map(|s| s.host_key())
+                    .unwrap_or_else(host_local);
+                m.container_draft = Some(ContainerDraft::new(host));
             }
             Msg::ContainerDraftCancel => {
                 m.container_draft = None;
@@ -2393,6 +2431,11 @@ impl App for Shell {
                 if let Some(info) = m.containers_full.get(idx) {
                     if info.rootfs {
                         let name = info.name.clone();
+                        let host = m
+                            .sessions
+                            .get(m.active_session)
+                            .map(|s| s.host_key())
+                            .unwrap_or_else(host_local);
                         let cfg = m
                             .container_cfgs
                             .iter()
@@ -2400,6 +2443,7 @@ impl App for Shell {
                             .cloned()
                             .unwrap_or_else(|| ContainerCfg {
                                 name: name.clone(),
+                                host,
                                 engine: engine_preferido().unwrap_or("unshare").to_string(),
                                 distro: distro_from_name(&name).unwrap_or(Distro::Ubuntu),
                                 mounts: Vec::new(),
@@ -2512,6 +2556,39 @@ impl App for Shell {
                     }
                 }
             }
+            Msg::PickHost(choice) => {
+                m.dropdown_open = None;
+                let host = choice.and_then(|i| m.hosts.get(i).cloned());
+                if let Some(s) = m.sessions.get_mut(m.active_session) {
+                    // Cambiar de host invalida el contenedor (es de OTRO host).
+                    s.container = None;
+                    match host {
+                        None => {
+                            // Local.
+                            s.isolation = Isolation::Local;
+                            s.host_label = None;
+                            if !s.pending {
+                                s.apply_isolation();
+                            } else {
+                                s.conn = ConnState::Connected;
+                            }
+                        }
+                        Some(h) => {
+                            s.isolation = Isolation::Remote;
+                            s.host_label = Some(h.name.clone());
+                            s.host.set_text(h.host);
+                            s.user.set_text(h.user);
+                            s.port.set_text(h.port.to_string());
+                            if !s.pending {
+                                s.connect_remote();
+                            } else {
+                                s.conn = ConnState::Pending;
+                            }
+                        }
+                    }
+                }
+                save_sessions(&m);
+            }
             Msg::HostApply(idx) => {
                 m.dropdown_open = None;
                 let h = match m.hosts.get(idx).cloned() {
@@ -2520,6 +2597,7 @@ impl App for Shell {
                 };
                 if let Some(s) = m.sessions.get_mut(m.active_session) {
                     s.isolation = Isolation::Remote;
+                    s.host_label = Some(h.name.clone());
                     s.host.set_text(h.host);
                     s.user.set_text(h.user);
                     s.port.set_text(h.port.to_string());
