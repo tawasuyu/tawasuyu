@@ -878,6 +878,9 @@ struct HostDraft {
     pem_path: TextInputState,
     /// Campo con foco de teclado dentro del draft (`None` = ninguno).
     focused: Option<HostDraftField>,
+    /// Nombre original si se está EDITANDO uno existente (`None` = nuevo). Sirve
+    /// para remarcar su fila y para borrar la entrada vieja si se renombra.
+    editing: Option<String>,
 }
 
 impl HostDraft {
@@ -892,6 +895,34 @@ impl HostDraft {
             use_password: true,
             pem_path: TextInputState::new(),
             focused: Some(HostDraftField::Name),
+            editing: None,
+        }
+    }
+
+    fn from_host(h: &hosts::RemoteHost) -> Self {
+        let mut name = TextInputState::new();
+        name.set_text(h.name.clone());
+        let mut host = TextInputState::new();
+        host.set_text(h.host.clone());
+        let mut user = TextInputState::new();
+        user.set_text(h.user.clone());
+        let mut port = TextInputState::new();
+        port.set_text(h.port.to_string());
+        let (use_password, pem) = match &h.auth {
+            hosts::HostAuth::Password => (true, String::new()),
+            hosts::HostAuth::Key { path } => (false, path.clone()),
+        };
+        let mut pem_path = TextInputState::new();
+        pem_path.set_text(pem);
+        Self {
+            name,
+            host,
+            user,
+            port,
+            use_password,
+            pem_path,
+            focused: Some(HostDraftField::Name),
+            editing: Some(h.name.clone()),
         }
     }
 
@@ -1674,8 +1705,10 @@ enum Msg {
     OpenHostsWindow,
     /// Cierra el modal de hosts (scrim / Esc / Listo) y descarta el draft.
     CloseHostsModal,
-    /// Empieza un draft de host nuevo (form embebido en la ventana).
+    /// "Nuevo": draft de host fresco (deselecciona la lista).
     HostDraftStart,
+    /// Elegir el host `idx` de la lista para editarlo (carga el draft).
+    HostEdit(usize),
     /// Cancela el draft del host (cierra el form).
     HostDraftCancel,
     /// Guarda el draft del host en disco + en el modelo.
@@ -2264,22 +2297,34 @@ impl App for Shell {
                 m.host_draft = None;
             }
             Msg::HostDraftStart => {
+                // "Nuevo": draft fresco (deselecciona la lista).
                 m.host_draft = Some(HostDraft::new());
+            }
+            Msg::HostEdit(idx) => {
+                if let Some(h) = m.hosts.get(idx).cloned() {
+                    m.host_draft = Some(HostDraft::from_host(&h));
+                }
             }
             Msg::HostDraftCancel => {
                 m.host_draft = None;
             }
             Msg::HostDraftSave => {
-                if let Some(draft) = &m.host_draft {
+                if let Some(draft) = m.host_draft.clone() {
                     if let Some(h) = draft.to_host() {
-                        // Reemplazar si ya hay uno con el mismo `name`.
+                        // Si renombró un host existente, borrar la entrada vieja.
+                        if let Some(old) = &draft.editing {
+                            if old != &h.name {
+                                m.hosts.retain(|x| &x.name != old);
+                            }
+                        }
                         if let Some(idx) = m.hosts.iter().position(|x| x.name == h.name) {
-                            m.hosts[idx] = h;
+                            m.hosts[idx] = h.clone();
                         } else {
-                            m.hosts.push(h);
+                            m.hosts.push(h.clone());
                         }
                         hosts::save_hosts(&m.hosts);
-                        m.host_draft = None;
+                        // Quedamos editando el guardado (remarcado en la lista).
+                        m.host_draft = Some(HostDraft::from_host(&h));
                     }
                 }
             }

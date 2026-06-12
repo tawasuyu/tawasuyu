@@ -2023,17 +2023,20 @@ fn hosts_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
         11.0, theme.fg_muted, Alignment::Start,
     );
 
-    // Form de alta si hay draft; si no, el botón para empezar uno.
-    let draft_or_button: View<Msg> = match &model.host_draft {
-        Some(d) => host_draft_form(d, theme),
-        None => action_button_small("+ Nuevo host", Msg::HostDraftStart, theme),
-    };
+    // "Nuevo" arriba (deselecciona la lista) + el editor si hay draft.
+    let nuevo_btn = action_button_small("+ Nuevo", Msg::HostDraftStart, theme);
+    let editor: Option<View<Msg>> = model.host_draft.as_ref().map(|d| host_draft_form(d, theme));
+    let editing_name: Option<&str> = model
+        .host_draft
+        .as_ref()
+        .and_then(|d| d.editing.as_deref());
 
     let mut rows: Vec<View<Msg>> = Vec::new();
     if !model.hosts.is_empty() {
         rows.push(panel_label("Guardados", theme));
         for (i, h) in model.hosts.iter().enumerate() {
-            rows.push(host_row(i, h, theme));
+            let selected = editing_name == Some(h.name.as_str());
+            rows.push(host_row(i, h, selected, theme));
         }
     }
 
@@ -2047,13 +2050,16 @@ fn hosts_modal_body(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children({
-        let mut all = vec![sub, draft_or_button];
+        let mut all = vec![sub, nuevo_btn];
+        if let Some(ed) = editor {
+            all.push(ed);
+        }
         all.extend(rows);
         all
     })
 }
 
-fn host_row(idx: usize, h: &hosts::RemoteHost, theme: &Theme) -> View<Msg> {
+fn host_row(idx: usize, h: &hosts::RemoteHost, selected: bool, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_layout::taffy::AlignItems;
     use llimphi_ui::llimphi_text::Alignment;
     let display = View::new(Style {
@@ -2068,9 +2074,9 @@ fn host_row(idx: usize, h: &hosts::RemoteHost, theme: &Theme) -> View<Msg> {
         format!("{} · {}", h.display(), h.auth.label()),
         12.0, theme.fg_text, Alignment::Start,
     );
-    let use_btn = action_button_small("→ Usar", Msg::HostApply(idx), theme);
+    // Asignar a una sesión se hace en el select del panel, no acá (CRUD puro).
     let rm_btn = action_button_small("🗑", Msg::HostDelete(idx), theme);
-    View::new(Style {
+    let mut row = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -2078,8 +2084,14 @@ fn host_row(idx: usize, h: &hosts::RemoteHost, theme: &Theme) -> View<Msg> {
         padding: Rect { left: length(8.0_f32), right: length(8.0_f32), top: length(0.0_f32), bottom: length(0.0_f32) },
         ..Default::default()
     })
+    .radius(4.0)
     .hover_fill(theme.bg_row_hover)
-    .children(vec![display, use_btn, rm_btn])
+    .children(vec![display, rm_btn])
+    .on_click(Msg::HostEdit(idx));
+    if selected {
+        row = row.fill(theme.bg_panel_alt);
+    }
+    row
 }
 
 fn host_draft_form(d: &HostDraft, theme: &Theme) -> View<Msg> {
@@ -2087,6 +2099,10 @@ fn host_draft_form(d: &HostDraft, theme: &Theme) -> View<Msg> {
     use llimphi_ui::llimphi_text::Alignment;
     let tpal = TextInputPalette::from_theme(theme);
     let mut rows: Vec<View<Msg>> = Vec::new();
+    rows.push(panel_label(
+        if d.editing.is_some() { "Editar host" } else { "Nuevo host" },
+        theme,
+    ));
     rows.push(panel_label("Nombre", theme));
     rows.push(text_input_view(
         &d.name, "ejemplo",
@@ -2137,8 +2153,9 @@ fn host_draft_form(d: &HostDraft, theme: &Theme) -> View<Msg> {
             Msg::HostDraftFocus(HostDraftField::Pem),
         ));
     }
-    // Botones Guardar / Cancelar.
-    let save = action_button_small("Guardar (Enter)", Msg::HostDraftSave, theme);
+    // Botones Guardar/Crear · Cancelar.
+    let save_label = if d.editing.is_some() { "Guardar (Enter)" } else { "Crear (Enter)" };
+    let save = action_button_small(save_label, Msg::HostDraftSave, theme);
     let cancel = action_button_small("Cancelar (Esc)", Msg::HostDraftCancel, theme);
     let buttons = View::new(Style {
         flex_direction: FlexDirection::Row,
