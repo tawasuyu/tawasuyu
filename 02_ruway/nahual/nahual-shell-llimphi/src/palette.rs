@@ -65,6 +65,7 @@ pub(crate) fn build_command_catalog() -> Vec<PaletteCommand> {
         // ---- Sesiones ----
         PaletteCommand::new("session.new", "Nueva sesión", "Sesión"),
         // ---- Herramientas ----
+        PaletteCommand::new("tools.find", "Buscar recursivo…", "Herramientas").with_shortcut("Ctrl+F"),
         PaletteCommand::new("tools.terminalHere", "Abrir terminal aquí", "Herramientas"),
         PaletteCommand::new("tools.editInNada", "Editar en Nada", "Herramientas"),
     ]
@@ -121,6 +122,7 @@ pub(crate) fn palette_id_to_msg(id: &str) -> Option<Msg> {
         // Sesiones.
         "session.new" => Msg::SessionNew,
         // Herramientas.
+        "tools.find" => Msg::FindOpen,
         "tools.terminalHere" => Msg::TerminalHere,
         "tools.editInNada" => Msg::EditSelected,
         _ => return None,

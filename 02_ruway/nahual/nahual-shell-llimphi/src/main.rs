@@ -56,6 +56,7 @@ mod modelo;
 mod helpers;
 mod overlays;
 mod palette;
+mod find;
 mod view;
 mod update;
 
@@ -180,6 +181,7 @@ impl App for Shell {
             thumbs: HashMap::new(),
             thumbs_pending: std::collections::HashSet::new(),
             thumbs_failed: std::collections::HashSet::new(),
+            find: None,
             palette: None,
             palette_commands: crate::palette::build_command_catalog(),
         }
@@ -198,6 +200,21 @@ impl App for Shell {
         if let Some(state) = _model.palette.as_ref() {
             return command_palette::on_key(state, e).map(Msg::Palette);
         }
+        // Find recursivo abierto: captura todo el teclado (modal). Tab alterna
+        // el modo (nombre ↔ contenido); Enter corre / abre; flechas navegan.
+        if _model.find.is_some() {
+            return match &e.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::FindClose),
+                Key::Named(NamedKey::Enter) => Some(Msg::FindSubmit),
+                Key::Named(NamedKey::Tab) => Some(Msg::FindToggleMode),
+                Key::Named(NamedKey::Backspace) => Some(Msg::FindBackspace),
+                Key::Named(NamedKey::ArrowDown) => Some(Msg::FindNav(1)),
+                Key::Named(NamedKey::ArrowUp) => Some(Msg::FindNav(-1)),
+                Key::Named(NamedKey::Space) => Some(Msg::FindInput(" ".to_string())),
+                Key::Character(c) => Some(Msg::FindInput(c.to_string())),
+                _ => None,
+            };
+        }
         // Ctrl+Shift+P (canónico, igual que VS Code/nada) o Ctrl+P abren el
         // palette. Va antes que cualquier captura modal-light de abajo.
         if command_palette::open_shortcut(e)
@@ -206,6 +223,13 @@ impl App for Shell {
                 && matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("p")))
         {
             return Some(Msg::Palette(PaletteMsg::Open));
+        }
+        // Ctrl+F abre el find recursivo (la `/` sigue siendo el filtro vivo
+        // de la carpeta actual — son dos cosas: filtro local vs. find de árbol).
+        if e.modifiers.ctrl
+            && matches!(&e.key, Key::Character(c) if c.eq_ignore_ascii_case("f"))
+        {
+            return Some(Msg::FindOpen);
         }
         // Prompt de nombre (nueva carpeta/archivo, renombrar): captura todo el
         // teclado. Máxima prioridad — es un modal.

@@ -864,6 +864,18 @@ pub(crate) fn shell_update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Mode
             m.prompt = Some(Prompt { kind: PromptKind::SelectPattern, text: String::new() });
             m.context_menu = None;
         }
+
+        // ---- Find recursivo (Ctrl+F): todo al módulo `find`. ----
+        Msg::FindOpen
+        | Msg::FindClose
+        | Msg::FindInput(_)
+        | Msg::FindBackspace
+        | Msg::FindSubmit
+        | Msg::FindNav(_)
+        | Msg::FindToggleMode
+        | Msg::FindResults { .. } => {
+            return crate::find::apply_find(m, msg, handle);
+        }
     }
     m
 }

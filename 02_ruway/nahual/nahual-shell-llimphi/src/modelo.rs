@@ -221,6 +221,72 @@ pub(crate) enum CanvasApp {
     Media(Box<mediamod::State>),
 }
 
+/// Modo del find recursivo: por **nombre** (glob sobre el nombre del archivo)
+/// o por **contenido** (substring dentro de archivos de texto). Tab alterna.
+/// La búsqueda **semántica** (embeddings) será un tercer modo cuando el daemon
+/// de verbo esté cableado.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FindMode {
+    Name,
+    Content,
+}
+
+impl FindMode {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            FindMode::Name => "nombre",
+            FindMode::Content => "contenido",
+        }
+    }
+    pub(crate) fn next(self) -> Self {
+        match self {
+            FindMode::Name => FindMode::Content,
+            FindMode::Content => FindMode::Name,
+        }
+    }
+}
+
+/// Un resultado del find recursivo: la ruta real + cómo mostrarla (relativa al
+/// root) + un fragmento opcional (la línea que matcheó, en modo contenido).
+#[derive(Clone)]
+pub(crate) struct FindHit {
+    pub(crate) path: PathBuf,
+    pub(crate) display: String,
+    pub(crate) snippet: Option<String>,
+}
+
+/// Estado del **find recursivo** (Ctrl+F): un modal que camina el árbol bajo
+/// `root` en un worker y lista los matches. `gen` descarta resultados de
+/// búsquedas viejas (si el usuario relanza antes de que termine la anterior).
+pub(crate) struct FindState {
+    pub(crate) query: String,
+    pub(crate) mode: FindMode,
+    pub(crate) root: PathBuf,
+    pub(crate) results: Vec<FindHit>,
+    pub(crate) selected: usize,
+    pub(crate) searching: bool,
+    /// Generación de la búsqueda en curso (monótona).
+    pub(crate) gen: u64,
+    /// El `(query, mode)` con que se lanzó la última búsqueda — para que Enter
+    /// distinga "correr" de "abrir el resultado seleccionado".
+    pub(crate) ran: Option<(String, FindMode)>,
+}
+
+impl FindState {
+    pub(crate) fn new(root: PathBuf) -> Self {
+        Self {
+            query: String::new(),
+            mode: FindMode::Name,
+            root,
+            results: Vec::new(),
+            selected: 0,
+            searching: false,
+            gen: 0,
+            ran: None,
+        }
+    }
+}
+
 /// Clipboard del sistema para el editor del canvas (mismo backend que nada).
 pub(crate) struct ShellClipboard {
     pub(crate) inner: Option<arboard::Clipboard>,
@@ -420,6 +486,9 @@ pub(crate) struct Model {
     pub(crate) thumbs_pending: HashSet<PathBuf>,
     /// Miniaturas que fallaron al generarse (se pinta un ⚠, no se reintenta).
     pub(crate) thumbs_failed: HashSet<PathBuf>,
+    /// Find recursivo (Ctrl+F): `None` cerrado. Mientras esté `Some`, captura
+    /// todo el teclado (es un modal).
+    pub(crate) find: Option<FindState>,
     /// Command palette (Ctrl+Shift+P / Ctrl+P): `None` cerrado. Mientras esté
     /// `Some`, el módulo se lleva todo el teclado.
     pub(crate) palette: Option<PaletteState>,
@@ -653,6 +722,24 @@ pub(crate) enum Msg {
     InvertSelection,
     /// Abre el prompt de selección por patrón (glob `*.png`, `foto*`).
     SelectByPattern,
+
+    // ---- Find recursivo (Ctrl+F) ----
+    /// Abre el find recursivo posado en la carpeta actual.
+    FindOpen,
+    /// Agrega texto a la consulta del find.
+    FindInput(String),
+    /// Borra el último carácter de la consulta.
+    FindBackspace,
+    /// Enter: corre la búsqueda, o abre el resultado seleccionado si ya corrió.
+    FindSubmit,
+    /// Navega la lista de resultados (+1/-1).
+    FindNav(i32),
+    /// Alterna el modo de búsqueda (nombre ↔ contenido).
+    FindToggleMode,
+    /// Resultados del worker (con su generación para descartar los viejos).
+    FindResults { gen: u64, hits: Vec<FindHit> },
+    /// Cierra el find.
+    FindClose,
 }
 
 impl Model {

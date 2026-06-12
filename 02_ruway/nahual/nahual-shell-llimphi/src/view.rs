@@ -272,6 +272,10 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
     if let Some(p) = &model.palette {
         return Some(palette_overlay(p, model));
     }
+    // Find recursivo: modal, sobre el resto.
+    if let Some(f) = &model.find {
+        return Some(find_overlay(f, &model.theme));
+    }
     // Los modales de operación (prompt de nombre, confirmación de borrado)
     // van por encima de todo.
     if let Some(p) = &model.prompt {
@@ -294,6 +298,113 @@ pub(crate) fn shell_view_overlay(model: &Model) -> Option<View<Msg>> {
         model.menu_active,
         model.menu_anim.value(),
     )
+}
+
+/// Overlay del **find recursivo** (Ctrl+F): input + modo + lista de resultados,
+/// anclado arriba-centro sobre un scrim. Mismo lenguaje visual que la palette.
+pub(crate) fn find_overlay(f: &FindState, theme: &Theme) -> View<Msg> {
+    // Cabecera: estado de la búsqueda + atajos.
+    let header_txt = if f.searching {
+        format!("buscar · {} · buscando…", f.mode.label())
+    } else if f.ran.is_some() {
+        format!(
+            "buscar · {} · {} resultados · ↓↑ navega · Enter abre · Tab modo · Esc cierra",
+            f.mode.label(),
+            f.results.len(),
+        )
+    } else {
+        format!(
+            "buscar · {} · Enter busca · Tab cambia modo (nombre/contenido) · Esc cierra",
+            f.mode.label(),
+        )
+    };
+    let header = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(18.0_f32) },
+        padding: pad_h(8.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .text(header_txt, 10.0, theme.fg_muted);
+
+    // Input (texto en edición con cursor).
+    let input = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        padding: pad_h(8.0),
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .text(format!("{}_", f.query), 14.0, theme.fg_text);
+
+    // Filas de resultados (ventaneadas alrededor del seleccionado).
+    const MAX_VIS: usize = 12;
+    let start = f.selected.saturating_sub(MAX_VIS.saturating_sub(1));
+    let end = (start + MAX_VIS).min(f.results.len());
+    let mut filas: Vec<View<Msg>> = Vec::new();
+    for i in start..end {
+        let hit = &f.results[i];
+        let selected = i == f.selected;
+        let bg = if selected { theme.bg_selected } else { theme.bg_panel };
+        let fg = if selected { theme.fg_text } else { theme.fg_muted };
+        let texto = match &hit.snippet {
+            Some(s) => format!("{}    — {s}", hit.display),
+            None => hit.display.clone(),
+        };
+        filas.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                padding: pad_h(10.0),
+                align_items: Some(AlignItems::Center),
+                flex_shrink: 0.0,
+                ..Default::default()
+            })
+            .fill(bg)
+            .text(texto, 12.0, fg),
+        );
+    }
+    if f.results.is_empty() && f.ran.is_some() && !f.searching {
+        filas.push(
+            View::new(Style {
+                size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                padding: pad_h(10.0),
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .text("sin resultados", 12.0, theme.fg_muted),
+        );
+    }
+
+    let mut hijos = vec![header, input];
+    hijos.extend(filas);
+    let caja = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(720.0_f32), height: auto() },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(10.0)
+    .border(1.0, theme.accent)
+    .children(hijos);
+
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_direction: FlexDirection::Column,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(0.0),
+            right: length(0.0),
+            top: length(64.0_f32),
+            bottom: length(0.0),
+        },
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(0, 0, 0, 120))
+    .on_click(Msg::FindClose)
+    .children(vec![caja])
 }
 
 /// Barra de estado inferior (parity dOpus): siempre visible, resume el panel
