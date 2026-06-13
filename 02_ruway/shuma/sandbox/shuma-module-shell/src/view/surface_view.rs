@@ -394,6 +394,7 @@ fn spilled_archive_header<HostMsg: Clone + 'static>(
 
 /// `has_stdout` (param 6) gatea el chip de reprocess (sin stdout, no hay
 /// nada que reprocesar).
+#[allow(clippy::too_many_arguments)]
 fn surface_header<HostMsg: Clone + 'static>(
     block: u64,
     header_text: &str,
@@ -401,6 +402,7 @@ fn surface_header<HostMsg: Clone + 'static>(
     expandable: bool,
     collapsed: bool,
     has_stdout: bool,
+    titular: Option<&str>,
     state: &State,
     theme: &Theme,
     lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
@@ -438,6 +440,34 @@ fn surface_header<HostMsg: Clone + 'static>(
     let running = status == Some(CmdStatus::Running);
     let is_input_focus = state.input_focus == Some(block);
     let mut children = vec![marker, cmd];
+    // Titular semáforo (A5): cuando el bloque está colapsado, el header gana
+    // el resumen contado del cuerpo (errores/avisos/líneas/duración). El nerdo
+    // habitual escanea la columna de headers como un log semáforo sin
+    // desplegar nada. Color = dosis de alarma: rojo si hubo errores, ámbar si
+    // sólo avisos, tenue si limpio.
+    if let Some(t) = titular {
+        let color = if titular_tiene_error(t) {
+            theme.fg_destructive
+        } else if titular_tiene_aviso(t) {
+            llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(220, 190, 120, 255)
+        } else {
+            theme.fg_muted
+        };
+        children.push(
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                // Crece con base 0 (como el comando): se lleva el espacio
+                // sobrante y el texto, alineado a la derecha, no se mide
+                // contra un ancho apretado (que lo recortaba/envolvía).
+                flex_grow: 1.0,
+                flex_basis: length(0.0_f32),
+                ..Default::default()
+            })
+            .text_aligned(t.to_string(), 10.0, color, Alignment::End)
+            .mono()
+            .max_lines(1),
+        );
+    }
     // Chip de foco de input: sólo en comandos vivos. Marca/dirige a quién le
     // va el Enter de la línea (stdin). Click lo fija; el header entero también
     // foca al pasar el mouse (`on_pointer_enter`, abajo). Cuando ESTE es el
@@ -472,8 +502,9 @@ fn surface_header<HostMsg: Clone + 'static>(
     // Chip de reprocess: alimenta el stdout de este bloque al stdin del
     // próximo comando (paridad con el `command_card` del path viejo). Clic
     // arma/desarma; el hit-test innermost-wins le da prioridad sobre el
-    // header (que pliega el bloque).
-    if has_stdout {
+    // header (que pliega el bloque). Colapsado = modo escaneo: el titular
+    // semáforo reemplaza los chips de acción para no saturar la fila.
+    if has_stdout && !collapsed {
         let armed = state.reprocess_source == Some(block);
         let (fill, fg) = if armed {
             (theme.accent, theme.bg_panel)
@@ -503,8 +534,9 @@ fn surface_header<HostMsg: Clone + 'static>(
     // Chip "copiar": copia el bloque entero (comando + stdout + stderr) al
     // clipboard, sin depender de una selección — paridad con el "copy command
     // + output" de las terminales modernas. Sólo en bloques con cuerpo. Click
-    // propio (innermost-wins) para no plegar el bloque.
-    if expandable {
+    // propio (innermost-wins) para no plegar el bloque. Oculto al colapsar
+    // (modo escaneo: manda el titular semáforo).
+    if expandable && !collapsed {
         children.push(
             View::new(Style {
                 size: Size { width: Dimension::auto(), height: length(16.0_f32) },
@@ -776,6 +808,19 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                 .any(|l| l.kind == OutputKind::Stdout && l.stage.is_none());
             let expandable = !lines.is_empty() || has_stages;
 
+            // Titular semáforo sólo cuando está colapsado y hay cuerpo: el
+            // header resume lo que el usuario no está viendo.
+            let titular = if collapsed && !lines.is_empty() {
+                let dur = state
+                    .block_ended
+                    .get(id)
+                    .zip(state.block_started.get(id))
+                    .map(|(end, s)| end.saturating_sub(*s));
+                Some(semaforo_titular(&lines, &state.cwd, dur))
+            } else {
+                None
+            };
+
             items.push(Item::chrome(
                 SURFACE_HEADER_H,
                 surface_header(
@@ -785,6 +830,7 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                     expandable,
                     collapsed,
                     has_stdout,
+                    titular.as_deref(),
                     state,
                     theme,
                     lift,

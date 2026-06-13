@@ -529,6 +529,11 @@ pub struct State {
     /// de "hace N minutos" en vez del crudo "exit N". Lo setea
     /// [`State::push_output`] (Prompt) y [`State::open_block`].
     pub block_started: std::collections::HashMap<u64, u64>,
+    /// Momento de cierre de cada bloque (unix secs) — lo setea el cierre del
+    /// run (notice `✔/✘`). Con [`block_started`] da la duración que alimenta
+    /// el titular semáforo del header colapsado. Sólo vive en memoria: no se
+    /// persiste (una sesión restaurada no muestra duración en sus bloques).
+    pub block_ended: std::collections::HashMap<u64, u64>,
     /// Texto del comando (`$ …`) por bloque. Se guarda al abrir el bloque para
     /// que el header de la card sobreviva aunque la línea Prompt se recorte del
     /// buffer en un output gigante (`MAX_OUTPUT_LINES`).
@@ -729,6 +734,7 @@ impl State {
             body_menu: None,
             body_drag_accum: (0.0, 0.0),
             block_started: std::collections::HashMap::new(),
+            block_ended: std::collections::HashMap::new(),
             block_command: std::collections::HashMap::new(),
             input_edit_at_ms: now_unix_millis(),
             config,

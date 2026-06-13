@@ -67,12 +67,18 @@ del `ShellSource` (la fuente de completion ya los tiene en memoria) +
 historial. Notice clickeable bajo el bloque: *«¿`cargo` en vez de `cagro`?
 → Enter ejecuta»*. Sin modelo, sin red.
 
-### A5. Titular de bloque al colapsar
-Al plegarse un bloque (recede automático), el header gana un resumen
-determinista contado desde las decoraciones `Severity` recién parida:
-*«✘ falló · 3 errors · 12 warnings · 4.2s»*. El nerdo habitual escanea la
-columna de headers como un log semáforo. Esfuerzo: bajo (contar runs por
-bloque en el render).
+### A5. Titular de bloque al colapsar ✅ (2026-06-13)
+Al plegarse un bloque, el header gana un resumen determinista contado desde
+las decoraciones `Severity`: *«3 errores · 3 avisos · 7 líneas · 4 s»*,
+coloreado como semáforo (rojo si hubo errores, ámbar si sólo avisos, tenue si
+limpio). El nerdo habitual escanea la columna de headers como un log
+semáforo. **Hecho:** helper `semaforo_titular` en `view/output_line.rs`
+(cuenta líneas con severidad Error/Warn + duración `block_ended − block_started`,
+campo nuevo en `State`); cableado en ambos renderers — en la superficie
+(`surface_header`, default) va right-aligned en el header y reemplaza los
+chips de acción al colapsar (modo escaneo), en el legacy (`command_card`) va
+como segunda fila *«… · clic para ver»*. Verificado headless
+(`examples/titular_a5.rs` → PNG) + 3 tests unitarios.
 
 ### A6. Aviso de comando largo terminado
 Comando > 30 s que cierra mientras el usuario está en otra sesión/diente →

@@ -496,6 +496,9 @@ pub(crate) fn drain_run(mut s: State) -> State {
             _ => unreachable!(),
         };
         s.push_in_block(run_block, OutputLine::notice(notice));
+        // Sella el cierre para el titular semáforo del header colapsado
+        // (duración = ended − started).
+        s.block_ended.insert(run_block, now_unix_secs());
         // El comando terminado queda EXPANDIDO; sólo recede (se pliega) al
         // perderse en el historial cuando arranca uno nuevo (ver
         // `recede_previous_blocks` en `run_submitted`).

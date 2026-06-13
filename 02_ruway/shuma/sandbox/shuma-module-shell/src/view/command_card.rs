@@ -573,6 +573,23 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
 
     if collapsed {
         if !body.is_empty() {
+            // Titular semáforo (A5): resumen contado de las decoraciones del
+            // cuerpo. El color es la dosis de alarma: rojo si hubo errores,
+            // ámbar si sólo avisos, tenue si limpio.
+            let dur = state
+                .block_ended
+                .get(&block)
+                .zip(state.block_started.get(&block))
+                .map(|(end, start)| end.saturating_sub(*start));
+            let texts: Vec<String> = body.iter().map(|l| l.text.clone()).collect();
+            let titular = semaforo_titular(&texts, &state.cwd, dur);
+            let titular_color = if titular_tiene_error(&titular) {
+                theme.fg_destructive
+            } else if titular_tiene_aviso(&titular) {
+                llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(220, 190, 120, 255)
+            } else {
+                theme.fg_muted
+            };
             card_children.push(
                 View::new(Style {
                     size: Size {
@@ -582,9 +599,9 @@ pub(crate) fn command_card<HostMsg: Clone + 'static>(
                     ..Default::default()
                 })
                 .text_aligned(
-                    format!("…  {} líneas ocultas · clic para ver", body.len()),
+                    format!("…  {titular} · clic para ver"),
                     11.0,
-                    theme.fg_muted,
+                    titular_color,
                     Alignment::Start,
                 )
                 .mono()
@@ -723,3 +740,4 @@ pub(crate) fn stage_color_dim(i: usize) -> llimphi_ui::llimphi_raster::peniko::C
     let (r, g, b) = STAGE_PALETTE[i % STAGE_PALETTE.len()];
     Color::from_rgba8(r, g, b, 204)
 }
+

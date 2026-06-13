@@ -135,6 +135,71 @@ pub(crate) fn body_kinds_for_block(state: &State, block: u64) -> Vec<OutputKind>
         .collect()
 }
 
+/// Titular semáforo (A5) de un bloque colapsado: resumen determinista
+/// contado desde las decoraciones `Severity` del cuerpo —
+/// *«3 errores · 12 avisos · 48 líneas · 4 s»*. El nerdo habitual escanea la
+/// columna de headers como un log semáforo sin desplegar nada. `dur_secs` es
+/// la duración del bloque (`block_ended − block_started`); se omite si < 1 s.
+/// Una línea cuenta como error si contiene alguna palabra/glifo de severidad
+/// Error; si no, como aviso si contiene alguno de Warn. El color lo decide el
+/// llamador según [`titular_tiene_error`]/[`titular_tiene_aviso`].
+pub(crate) fn semaforo_titular(lines: &[String], cwd: &std::path::Path, dur_secs: Option<u64>) -> String {
+    let mut errores = 0usize;
+    let mut avisos = 0usize;
+    for l in lines {
+        let mut linea_err = false;
+        let mut linea_warn = false;
+        for d in shuma_line::decorate::decorate_line(l, cwd) {
+            match d.kind {
+                shuma_line::decorate::DecorationKind::Severity(
+                    shuma_line::decorate::Severity::Error,
+                ) => linea_err = true,
+                shuma_line::decorate::DecorationKind::Severity(
+                    shuma_line::decorate::Severity::Warn,
+                ) => linea_warn = true,
+                _ => {}
+            }
+        }
+        if linea_err {
+            errores += 1;
+        } else if linea_warn {
+            avisos += 1;
+        }
+    }
+    let plural = |n: usize, uno: &str, varios: &str| {
+        if n == 1 {
+            format!("{n} {uno}")
+        } else {
+            format!("{n} {varios}")
+        }
+    };
+    let mut partes: Vec<String> = Vec::new();
+    if errores > 0 {
+        partes.push(plural(errores, "error", "errores"));
+    }
+    if avisos > 0 {
+        partes.push(plural(avisos, "aviso", "avisos"));
+    }
+    partes.push(plural(lines.len(), "línea", "líneas"));
+    if let Some(secs) = dur_secs {
+        if secs >= 1 {
+            partes.push(format!("{secs} s"));
+        }
+    }
+    partes.join(" · ")
+}
+
+/// `true` si el titular semáforo reporta al menos un error (→ tinte rojo).
+pub(crate) fn titular_tiene_error(titular: &str) -> bool {
+    titular.contains("error")
+}
+
+/// `true` si el titular semáforo reporta avisos (→ tinte ámbar; subordinado
+/// al rojo de error en el llamador).
+pub(crate) fn titular_tiene_aviso(titular: &str) -> bool {
+    titular.contains("aviso")
+}
+
 /// Métricas del editor de cuerpo: mono 12px con `line_height` clavado a
 /// `ROW_H` para que la contabilidad de alturas del scroll (que asume
 /// ROW_H por línea) siga cuadrando.
@@ -555,4 +620,41 @@ pub(crate) fn pretty_path(p: &std::path::Path) -> String {
         }
     }
     full
+}
+
+#[cfg(test)]
+mod a5_titular_tests {
+    use super::semaforo_titular;
+
+    fn cwd() -> std::path::PathBuf {
+        std::path::PathBuf::from("/tmp")
+    }
+
+    #[test]
+    fn cuenta_errores_avisos_y_duracion() {
+        let lines = vec![
+            "Compiling shuma v0.1.0".to_string(),
+            "error[E0308]: mismatched types".to_string(),
+            "error: could not compile".to_string(),
+            "warning: unused variable `x`".to_string(),
+            "Finished".to_string(),
+        ];
+        let t = semaforo_titular(&lines, &cwd(), Some(4));
+        assert_eq!(t, "2 errores · 1 aviso · 5 líneas · 4 s");
+    }
+
+    #[test]
+    fn limpio_sin_severidad() {
+        let lines = vec!["total 248".to_string(), "CLAUDE.md".to_string()];
+        // Sin errores/avisos y duración 0 → sólo el conteo de líneas.
+        let t = semaforo_titular(&lines, &cwd(), Some(0));
+        assert_eq!(t, "2 líneas");
+    }
+
+    #[test]
+    fn singular_un_error() {
+        let lines = vec!["error: boom".to_string()];
+        let t = semaforo_titular(&lines, &cwd(), None);
+        assert_eq!(t, "1 error · 1 línea");
+    }
 }
