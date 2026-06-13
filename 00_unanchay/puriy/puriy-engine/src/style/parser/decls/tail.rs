@@ -170,6 +170,19 @@ pub(crate) fn parse_image_resolution(s: &str) -> Option<ImageResolution> {
     }
 }
 
+/// Tamaño máximo (`max-width`/`max-height` y sus lógicos): igual que
+/// `parse_length_or_pct` pero acepta `none` (el valor *inicial* de las
+/// props max-*) → `LengthVal::Auto`, que el bridge a taffy interpreta como
+/// "sin límite". Sin esto, `max-width: none` (reset muy común) se descartaba
+/// y dejaba el máximo cascadeado previo. Fase 7.830.
+pub(crate) fn parse_max_size(s: &str) -> Option<LengthVal> {
+    if s.trim().eq_ignore_ascii_case("none") {
+        Some(LengthVal::Auto)
+    } else {
+        parse_length_or_pct(s)
+    }
+}
+
 pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("auto") {

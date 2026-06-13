@@ -198,3 +198,25 @@ fn font_variant_shorthand() {
     // Un token desconocido descarta el shorthand entero.
     assert!(decls("font-variant: small-caps bogus-token").is_empty());
 }
+
+// ── Fase 7.830 — `none` en max-width/height (y lógicos) → Auto ─────────────
+
+#[test]
+fn max_size_none_resetea_a_auto() {
+    assert!(decls("max-width: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaxWidth(LengthVal::Auto))));
+    assert!(decls("max-height: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaxHeight(LengthVal::Auto))));
+    assert!(decls("max-inline-size: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaxWidth(LengthVal::Auto))));
+    assert!(decls("max-block-size: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaxHeight(LengthVal::Auto))));
+    // Y los valores normales siguen funcionando.
+    assert!(decls("max-width: 300px")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaxWidth(LengthVal::Px(p)) if p == 300.0)));
+}

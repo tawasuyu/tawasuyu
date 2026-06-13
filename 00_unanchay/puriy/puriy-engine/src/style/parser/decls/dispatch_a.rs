@@ -32,7 +32,7 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "padding-left" => parse_length_px(value).map(DeclKind::PaddingLeft),
         "width" => parse_length_or_pct(value).map(DeclKind::Width),
         "height" => parse_length_or_pct(value).map(DeclKind::Height),
-        "max-width" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
+        "max-width" => parse_max_size(value).map(DeclKind::MaxWidth),
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
         "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
         "border-width" => parse_px_or_math(value).map(DeclKind::BorderWidth),
@@ -130,7 +130,7 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         }
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
         "min-height" => parse_length_or_pct(value).map(DeclKind::MinHeight),
-        "max-height" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
+        "max-height" => parse_max_size(value).map(DeclKind::MaxHeight),
         // `aspect-ratio: auto` resetea; `W / H` o un número crudo fijan la
         // relación. La forma `auto W/H` (auto + ratio) toma sólo el ratio.
         "aspect-ratio" => {
@@ -149,8 +149,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "block-size" => parse_length_or_pct(value).map(DeclKind::Height),
         "min-inline-size" => parse_length_or_pct(value).map(DeclKind::MinWidth),
         "min-block-size" => parse_length_or_pct(value).map(DeclKind::MinHeight),
-        "max-inline-size" => parse_length_or_pct(value).map(DeclKind::MaxWidth),
-        "max-block-size" => parse_length_or_pct(value).map(DeclKind::MaxHeight),
+        "max-inline-size" => parse_max_size(value).map(DeclKind::MaxWidth),
+        "max-block-size" => parse_max_size(value).map(DeclKind::MaxHeight),
         "overflow" | "overflow-x" | "overflow-y" => {
             parse_overflow(value).map(DeclKind::Overflow)
         }
