@@ -19,3 +19,5 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 tokio = { workspace = true }
 ulid = { workspace = true }
+# Modo raw del terminal + winsize para `shuma pty attach` (cliente full-duplex).
+libc = { workspace = true }

@@ -84,6 +84,41 @@ enum Cmd {
     /// Flow data plane (subscribirse a streams enriquecidos).
     #[command(subcommand)]
     Flow(FlowCmd),
+
+    /// Sesiones PTY persistentes (tmux-like): viven en el daemon, sobreviven
+    /// a la desconexión del cliente. Spawn / ls / attach / kill.
+    #[command(subcommand)]
+    Pty(PtyCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum PtyCmd {
+    /// Spawnear una sesión persistente y devolver su id (no se adjunta).
+    Spawn {
+        /// Etiqueta legible para listar (p. ej. "claude · repo X").
+        #[arg(long, default_value = "")]
+        label: String,
+        /// Directorio de trabajo (default: el cwd actual).
+        #[arg(long)]
+        cwd: Option<PathBuf>,
+        /// Programa a correr bajo el PTY.
+        program: String,
+        /// Argumentos del programa.
+        args: Vec<String>,
+    },
+    /// Listar las sesiones (vivas y terminadas-no-reapeadas).
+    Ls,
+    /// Adjuntarse a una sesión: terminal full-duplex. Ctrl-] desadjunta
+    /// (la sesión sigue viva); el proceso al terminar cierra la vista.
+    Attach {
+        /// ULID de la sesión.
+        session: String,
+    },
+    /// Matar (o reapear, si ya murió) una sesión y quitarla del registro.
+    Kill {
+        /// ULID de la sesión.
+        session: String,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -639,6 +674,75 @@ async fn main() -> Result<()> {
             }
         }
 
+        Cmd::Pty(PtyCmd::Spawn { label, cwd, program, args }) => {
+            let cwd = cwd
+                .or_else(|| std::env::current_dir().ok())
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "/".into());
+            let (rows, cols) = term_size();
+            let resp = round_trip(
+                &mut stream,
+                Request::PtySpawn { cwd, program, args, rows, cols, label },
+            )
+            .await?;
+            match resp {
+                Response::PtySpawned { session } => {
+                    println!("{session}");
+                    eprintln!("adjuntate con: shuma pty attach {session}");
+                }
+                Response::Error { message } => return Err(anyhow!(message)),
+                other => print_unexpected(&other),
+            }
+        }
+
+        Cmd::Pty(PtyCmd::Ls) => {
+            let resp = round_trip(&mut stream, Request::PtyList).await?;
+            match resp {
+                Response::PtyList { sessions } => {
+                    if sessions.is_empty() {
+                        println!("(sin sesiones)");
+                    }
+                    for s in sessions {
+                        let estado = if s.alive {
+                            format!("viva ({} adj)", s.attached)
+                        } else {
+                            format!("muerta (exit {})", s.exit_code.unwrap_or(-1))
+                        };
+                        let cmd = if s.args.is_empty() {
+                            s.program.clone()
+                        } else {
+                            format!("{} {}", s.program, s.args.join(" "))
+                        };
+                        println!("{}  {:<22}  {:<18}  {}", s.session, s.label, estado, cmd);
+                    }
+                }
+                Response::Error { message } => return Err(anyhow!(message)),
+                other => print_unexpected(&other),
+            }
+        }
+
+        Cmd::Pty(PtyCmd::Kill { session }) => {
+            let id = Ulid::from_string(&session).map_err(|e| anyhow!("id inválido: {e}"))?;
+            let resp = round_trip(&mut stream, Request::PtyKill { session: id }).await?;
+            match resp {
+                Response::PtyKilled { session, existed } => {
+                    if existed {
+                        println!("matada {session}");
+                    } else {
+                        eprintln!("no existía: {session}");
+                    }
+                }
+                Response::Error { message } => return Err(anyhow!(message)),
+                other => print_unexpected(&other),
+            }
+        }
+
+        Cmd::Pty(PtyCmd::Attach { session }) => {
+            let id = Ulid::from_string(&session).map_err(|e| anyhow!("id inválido: {e}"))?;
+            attach_pty(stream, id).await?;
+            return Ok(());
+        }
+
         Cmd::Discern { path } => {
             let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
             // Sample: hasta 4 KiB.
@@ -735,6 +839,154 @@ async fn tail_socket(socket: &std::path::Path) -> Result<()> {
         use std::io::Write;
         let _ = std::io::stdout().write_all(&buf[..n]);
         let _ = std::io::stdout().flush();
+    }
+    Ok(())
+}
+
+// ===================================================================
+// `shuma pty attach` — cliente full-duplex de una sesión persistente.
+// ===================================================================
+
+/// Tamaño actual del terminal `(filas, columnas)`; `(24, 80)` si no es un tty.
+fn term_size() -> (u16, u16) {
+    unsafe {
+        let mut ws: libc::winsize = std::mem::zeroed();
+        if libc::ioctl(libc::STDIN_FILENO, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_row > 0 {
+            (ws.ws_row, ws.ws_col)
+        } else {
+            (24, 80)
+        }
+    }
+}
+
+/// Pone el terminal en modo raw mientras está vivo y lo restaura al dropear
+/// (incluso si `attach_pty` retorna por error o panic).
+struct RawGuard {
+    fd: i32,
+    orig: libc::termios,
+}
+
+impl RawGuard {
+    fn enter() -> Option<Self> {
+        let fd = libc::STDIN_FILENO;
+        unsafe {
+            let mut orig: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut orig) != 0 {
+                return None;
+            }
+            let mut raw = orig;
+            libc::cfmakeraw(&mut raw);
+            if libc::tcsetattr(fd, libc::TCSANOW, &raw) != 0 {
+                return None;
+            }
+            Some(RawGuard { fd, orig })
+        }
+    }
+}
+
+impl Drop for RawGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::tcsetattr(self.fd, libc::TCSANOW, &self.orig);
+        }
+    }
+}
+
+/// Cómo terminó el attach.
+enum AttachEnd {
+    /// La sesión (su proceso) terminó con este código (`None` si fallo/EOF).
+    Exited(Option<i32>),
+    /// El usuario se desadjuntó (Ctrl-] o stdin EOF) — la sesión sigue viva.
+    Detached,
+}
+
+/// Cliente full-duplex de `PtyAttach`: terminal en raw, teclas → `PtyInput`,
+/// resizes (SIGWINCH) → `PtyResize`, y los `ExecBytes` del daemon → stdout.
+/// **Ctrl-]** (0x1d) desadjunta sin matar la sesión.
+async fn attach_pty(mut stream: UnixStream, session: Ulid) -> Result<()> {
+    use std::io::Write as _;
+    use tokio::io::AsyncReadExt as _;
+
+    let (rows, cols) = term_size();
+    write_frame(&mut stream, &Request::PtyAttach { session, rows, cols }).await?;
+
+    let raw = RawGuard::enter();
+    if raw.is_none() {
+        eprintln!("aviso: no se pudo poner el terminal en raw (¿no es un tty?)");
+    }
+
+    let (mut rd, mut wr) = tokio::io::split(stream);
+
+    // Lectora: ExecBytes → stdout; terminal → devuelve el exit code.
+    let read_task = tokio::spawn(async move {
+        loop {
+            match read_frame::<Response, _>(&mut rd).await {
+                Ok(Response::ExecBytes(b)) => {
+                    let mut out = std::io::stdout();
+                    let _ = out.write_all(&b);
+                    let _ = out.flush();
+                }
+                Ok(Response::ExecExited(c)) => return Some(c),
+                Ok(Response::ExecFailed(m)) => {
+                    let _ = writeln!(std::io::stderr(), "\r\n✘ {m}");
+                    return None;
+                }
+                Ok(_) => {}
+                Err(_) => return None,
+            }
+        }
+    });
+
+    let mut sigwinch =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::window_change())?;
+    let mut stdin = tokio::io::stdin();
+    let mut buf = [0u8; 4096];
+
+    let mut read_task = read_task; // mut para `&mut read_task` en select!
+    let end: AttachEnd;
+    loop {
+        tokio::select! {
+            res = &mut read_task => {
+                end = AttachEnd::Exited(res.unwrap_or(None));
+                break;
+            }
+            n = stdin.read(&mut buf) => {
+                match n {
+                    Ok(0) => { end = AttachEnd::Detached; break; }   // stdin EOF
+                    Ok(n) => {
+                        // Ctrl-] (0x1d) en cualquier parte del buffer = detach.
+                        if buf[..n].contains(&0x1d) {
+                            end = AttachEnd::Detached;
+                            break;
+                        }
+                        if write_frame(&mut wr, &Request::PtyInput { bytes: buf[..n].to_vec() })
+                            .await
+                            .is_err()
+                        {
+                            end = AttachEnd::Detached;
+                            break;
+                        }
+                    }
+                    Err(_) => { end = AttachEnd::Detached; break; }
+                }
+            }
+            _ = sigwinch.recv() => {
+                let (rows, cols) = term_size();
+                let _ = write_frame(&mut wr, &Request::PtyResize { rows, cols }).await;
+            }
+        }
+    }
+
+    // Restaurar el terminal antes del mensaje final.
+    drop(raw);
+    match end {
+        AttachEnd::Exited(Some(c)) => eprintln!("\r\n— sesión terminó (exit {c}) —"),
+        AttachEnd::Exited(None) => eprintln!("\r\n— sesión cerrada —"),
+        AttachEnd::Detached => {
+            // Cerrar la conexión = detach del lado del daemon (no la mata).
+            read_task.abort();
+            eprintln!("\r\n— desadjuntado (la sesión sigue viva: `shuma pty ls`) —");
+        }
     }
     Ok(())
 }

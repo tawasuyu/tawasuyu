@@ -727,7 +727,7 @@ async fn handle_pty_attach(
     // Tarea lectora: teclas/resizes del cliente → PTY. EOF/error = el
     // cliente cerró → DETACH (no matamos la sesión, sólo salimos).
     let sess_in = Arc::clone(&sess);
-    let reader = tokio::spawn(async move {
+    let mut reader = tokio::spawn(async move {
         loop {
             match read_frame::<Request, _>(&mut rd).await {
                 Ok(Request::PtyInput { bytes }) => sess_in.write_input(bytes),
@@ -756,30 +756,35 @@ async fn handle_pty_attach(
     }
     let mut rx = att.rx;
     loop {
-        match rx.recv().await {
-            Ok(SessionEvent::Bytes(b)) => {
-                if write_frame(&mut wr, &Response::ExecBytes(b.as_ref().clone()))
-                    .await
-                    .is_err()
-                {
+        tokio::select! {
+            // El cliente cerró su lado = DETACH, aun sin tráfico de salida
+            // (idle): cortamos ya para que el `attached` baje al instante.
+            _ = &mut reader => break,
+            ev = rx.recv() => match ev {
+                Ok(SessionEvent::Bytes(b)) => {
+                    if write_frame(&mut wr, &Response::ExecBytes(b.as_ref().clone()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(SessionEvent::Exited(c)) => {
+                    let _ = write_frame(&mut wr, &Response::ExecExited(c)).await;
                     break;
                 }
-            }
-            Ok(SessionEvent::Exited(c)) => {
-                let _ = write_frame(&mut wr, &Response::ExecExited(c)).await;
-                break;
-            }
-            // El cliente quedó atrás: repintamos el ring entero en vez de
-            // arrastrar bytes perdidos (corromperían el vt100).
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                if write_frame(&mut wr, &Response::ExecBytes(sess.scrollback()))
-                    .await
-                    .is_err()
-                {
-                    break;
+                // El cliente quedó atrás: repintamos el ring entero en vez de
+                // arrastrar bytes perdidos (corromperían el vt100).
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if write_frame(&mut wr, &Response::ExecBytes(sess.scrollback()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
     }
     reader.abort();
@@ -808,7 +813,7 @@ where
     let att = sess.attach();
 
     let sess_in = Arc::clone(&sess);
-    let reader = tokio::spawn(async move {
+    let mut reader = tokio::spawn(async move {
         loop {
             match rd.recv_postcard::<Request>().await {
                 Ok(Request::PtyInput { bytes }) => sess_in.write_input(bytes),
@@ -835,30 +840,34 @@ where
     }
     let mut rx = att.rx;
     loop {
-        match rx.recv().await {
-            Ok(SessionEvent::Bytes(b)) => {
-                if wr
-                    .send_postcard(&Response::ExecBytes(b.as_ref().clone()))
-                    .await
-                    .is_err()
-                {
+        tokio::select! {
+            // Detach idle: el cliente cerró su lado sin que hubiera salida.
+            _ = &mut reader => break,
+            ev = rx.recv() => match ev {
+                Ok(SessionEvent::Bytes(b)) => {
+                    if wr
+                        .send_postcard(&Response::ExecBytes(b.as_ref().clone()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Ok(SessionEvent::Exited(c)) => {
+                    let _ = wr.send_postcard(&Response::ExecExited(c)).await;
                     break;
                 }
-            }
-            Ok(SessionEvent::Exited(c)) => {
-                let _ = wr.send_postcard(&Response::ExecExited(c)).await;
-                break;
-            }
-            Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                if wr
-                    .send_postcard(&Response::ExecBytes(sess.scrollback()))
-                    .await
-                    .is_err()
-                {
-                    break;
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if wr
+                        .send_postcard(&Response::ExecBytes(sess.scrollback()))
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
         }
     }
     reader.abort();

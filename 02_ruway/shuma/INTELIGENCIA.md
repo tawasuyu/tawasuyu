@@ -153,15 +153,22 @@ declarable pero inerte hasta A6. Verificado: 1 test en shuma-config
 (matching + más-específico-gana) + 2 en shuma-module-shell (on_exit_nonzero
 una-sola-vez, on_enter_cwd dispara).
 
-### E4. Flota persistente (daemon attach/detach) — el gap real
-El caveat del `shuma-gateway` README es exacto: `ExecPty` muere con el WS.
-La pieza que falta para "control power" en serio es el **PTY persistente en
-el daemon**: `workspace` retiene el par PTY+buffer, el cliente se re-adjunta
-(`Request::PtyAttach { workspace, desde_byte }`) y recibe el backlog. Con
-eso: N claudes corriendo, attach desde el shell o desde el móvil vía
-gateway, quotas por workspace (`WorkspaceQuota` ya está en el protocolo).
-`:persist` de hoy documenta el gap; esto lo cierra. Esfuerzo: el mayor de
-la lista — es donde conviene gastar el próximo sprint de shuma.
+### E4. Flota persistente (daemon attach/detach) ✅ (2026-06-13)
+El daemon ya tenía el **registro de sesiones PTY persistentes**
+(`pty_sessions::PtyRegistry`: spawn/attach/list/kill, ring de scrollback +
+broadcast, desacoplado de la conexión) y el protocolo
+(`PtySpawn`/`PtyAttach`/`PtyList`/`PtyKill`); faltaba el **cliente para el
+nerdo de terminal**. **Hecho:** `shuma pty {spawn,ls,attach,kill}` en
+`shuma-cli`. `attach` es un cliente full-duplex real: terminal en raw
+(`RawGuard` con restauración en Drop), teclas → `PtyInput`, SIGWINCH →
+`PtyResize`, `ExecBytes` → stdout; **Ctrl-]** desadjunta sin matar la sesión.
+Verificado end-to-end contra el daemon: spawn persiste entre invocaciones,
+attach hace round-trip (eco de `cat`), detach deja la sesión `viva`. Bonus:
+arreglado el detach idle en `handle_pty_attach`/`_enc` (un `select!` sobre la
+tarea lectora corta el writer al instante → el `attached` baja a 0 sin
+esperar tráfico). Queda como pulido: el shell Llimphi montando sesiones del
+daemon (hoy corre PTY local) y el cliente móvil vía gateway (el WS ya
+soporta attach).
 
 ### E5. LLM como instrumento invocado (`:?`)
 Con `pluma-llm` enchufado (backend por env, Mock sin credenciales):
@@ -196,7 +203,9 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
    núcleos ya escritos. ✅ **hecho 2026-06-13.**
 4. **E3 + E6** (`[rules]` + `:stats`): convierten el rc en plano de control.
    ✅ **ambos hechos 2026-06-13.**
-5. **E4** (PTY persistente): sprint propio, coordinar con `shuma-gateway`
-   (el cliente Android lo está esperando).
+5. **E4** (PTY persistente): cliente `shuma pty` ✅ **hecho 2026-06-13**
+   (daemon + gateway ya estaban). Pulido pendiente: shell Llimphi sobre
+   sesiones del daemon; cliente móvil vía gateway.
 6. **E5** (LLM): al final, cuando las superficies deterministas ya estén —
-   el modelo se monta sobre refs y tablas, no sobre texto plano.
+   el modelo se monta sobre refs y tablas, no sobre texto plano. **Único
+   ítem del roadmap sin arrancar.**
