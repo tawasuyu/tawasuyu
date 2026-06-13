@@ -131,3 +131,43 @@ fn transition_longhands_componen_un_binding() {
     let d2 = dom2.find("div").unwrap();
     assert!(eng2.compute(&d2).transitions.is_empty());
 }
+
+// ── Fase 7.826-7.828 — props individuales translate/rotate/scale ──────────
+
+#[test]
+fn props_individuales_transform_parse() {
+    assert!(decls("translate: 5px")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Translate(Some(Transform::Translate(x, _))) if *x == 5.0)));
+    assert!(decls("translate: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Translate(None))));
+    // `50%` en scale = factor 0.5.
+    assert!(decls("scale: 50%")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Scale(Some(Transform::Scale(sx, _))) if (*sx - 0.5).abs() < 1e-6)));
+    // `0.5turn` = 180deg.
+    assert!(decls("rotate: 0.5turn")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Rotate(Some(Transform::Rotate(deg))) if (*deg - 180.0).abs() < 1e-3)));
+    // Eje no-Z explícito → sin rotación en el plano 2D.
+    assert!(decls("rotate: y 45deg")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Rotate(Some(Transform::Rotate(deg))) if deg == 0.0)));
+    assert!(decls("scale: garbage").is_empty());
+}
+
+#[test]
+fn props_individuales_transform_componen_en_orden() {
+    let html = r#"<div style="translate: 10px 20px; rotate: 45deg; scale: 2; transform: skewX(10deg)"></div>"#;
+    let dom = DomTree::parse(html);
+    let eng = StyleEngine::from_dom(&dom);
+    let div = dom.find("div").unwrap();
+    let t = eng.compute(&div).transforms;
+    // Orden CSS Transforms 2: translate → rotate → scale → transform-list.
+    assert_eq!(t.len(), 4);
+    assert!(matches!(t[0], Transform::Translate(x, y) if x == 10.0 && y == 20.0));
+    assert!(matches!(t[1], Transform::Rotate(d) if d == 45.0));
+    assert!(matches!(t[2], Transform::Scale(sx, sy) if sx == 2.0 && sy == 2.0));
+    assert!(matches!(t[3], Transform::Skew(_, _)));
+}

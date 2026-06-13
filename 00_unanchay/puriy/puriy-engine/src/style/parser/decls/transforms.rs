@@ -3,6 +3,72 @@
 use super::super::*;
 use super::*;
 
+/// Prop individual `translate` (CSS Transforms 2): `none | <len-pct>{1,3}`
+/// separado por espacios (no coma, a diferencia de la función `translate()`).
+/// El 3er valor (Z) se ignora en el modelo 2D. `none` → `Some(None)`.
+/// Devuelve `None` (rechazo) si algún token no parsea. Fase 7.826.
+pub(crate) fn parse_translate_prop(value: &str) -> Option<Option<Transform>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    match toks.as_slice() {
+        [x] => Some(Some(Transform::Translate(parse_length_px(x)?, 0.0))),
+        [x, y] | [x, y, _] => {
+            Some(Some(Transform::Translate(parse_length_px(x)?, parse_length_px(y)?)))
+        }
+        _ => None,
+    }
+}
+
+/// Prop individual `scale` (CSS Transforms 2): `none | <number-or-pct>{1,3}`.
+/// 1 valor → uniforme; el 3º (Z) se ignora en 2D. `50%` = `0.5`. Fase 7.828.
+pub(crate) fn parse_scale_prop(value: &str) -> Option<Option<Transform>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    fn num_or_pct(s: &str) -> Option<f32> {
+        if let Some(p) = s.strip_suffix('%') {
+            p.trim().parse::<f32>().ok().map(|n| n / 100.0)
+        } else {
+            s.parse::<f32>().ok()
+        }
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    match toks.as_slice() {
+        [s] => {
+            let n = num_or_pct(s)?;
+            Some(Some(Transform::Scale(n, n)))
+        }
+        [sx, sy] | [sx, sy, _] => {
+            Some(Some(Transform::Scale(num_or_pct(sx)?, num_or_pct(sy)?)))
+        }
+        _ => None,
+    }
+}
+
+/// Prop individual `rotate` (CSS Transforms 2): `none | <angle> |
+/// [ x | y | z | <number>{3} ] && <angle>`. En el modelo 2D sólo la
+/// rotación alrededor de Z gira en pantalla; un eje `x`/`y` explícito da
+/// `Rotate(0)` (sin efecto plano). Fase 7.827.
+pub(crate) fn parse_rotate_prop(value: &str) -> Option<Option<Transform>> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") {
+        return Some(None);
+    }
+    let toks: Vec<&str> = v.split_whitespace().collect();
+    // El ángulo es el token que parsea como tal; el resto es eje/vector.
+    let angle_tok = toks.iter().find(|t| parse_angle_degrees(t).is_some())?;
+    let deg = parse_angle_degrees(angle_tok)?;
+    // Eje explícito x/y (no-Z) → sin rotación en el plano 2D.
+    let non_z_axis = toks
+        .iter()
+        .any(|t| t.eq_ignore_ascii_case("x") || t.eq_ignore_ascii_case("y"));
+    Some(Some(Transform::Rotate(if non_z_axis { 0.0 } else { deg })))
+}
+
 /// `transform-origin` (CSS Transforms 1). Acepta 1, 2 ó 3 tokens; el
 /// 3º es siempre Z en px (sin `%`). Para el eje X/Y reusamos la misma
 /// lógica de keywords/lengths que `background-position`:

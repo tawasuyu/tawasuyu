@@ -497,6 +497,19 @@ impl StyleEngine {
                 }
             }
         }
+
+        // Props individuales `translate`/`rotate`/`scale` (CSS Transforms 2):
+        // se prependean a la lista `transform` en ese orden, así el render
+        // (que multiplica la cadena de izquierda a derecha) compone la matriz
+        // como translate·rotate·scale·transform-list. Used value.
+        if style.translate.is_some() || style.rotate.is_some() || style.scale.is_some() {
+            let mut chain = Vec::with_capacity(style.transforms.len() + 3);
+            chain.extend(style.translate);
+            chain.extend(style.rotate);
+            chain.extend(style.scale);
+            chain.append(&mut style.transforms);
+            style.transforms = chain;
+        }
         style
     }
 }

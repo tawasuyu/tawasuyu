@@ -602,6 +602,12 @@ pub(crate) enum DeclKind {
     TransitionTimingFirst(EasingFunction),
     /// `transition-delay` longhand (Fase 7.825). Segundos. NO hereda. Plumb.
     TransitionDelayFirst(f32),
+    /// Prop individual `translate` (Fase 7.826). `None` = `none`. NO hereda.
+    Translate(Option<Transform>),
+    /// Prop individual `rotate` (Fase 7.827). `None` = `none`. NO hereda.
+    Rotate(Option<Transform>),
+    /// Prop individual `scale` (Fase 7.828). `None` = `none`. NO hereda.
+    Scale(Option<Transform>),
     /// `float-defer` (Fase 7.519). NO hereda. Plumb.
     FloatDefer(FloatDefer),
     /// `float-reference` (Fase 7.520). NO hereda. Plumb.
@@ -1420,6 +1426,9 @@ impl Decl {
             DeclKind::TransitionDelayFirst(v) => {
                 transition_first(&mut s.transitions).delay_s = *v;
             }
+            DeclKind::Translate(t) => s.translate = *t,
+            DeclKind::Rotate(t) => s.rotate = *t,
+            DeclKind::Scale(t) => s.scale = *t,
             DeclKind::FloatDefer(v) => s.float_defer = *v,
             DeclKind::FloatReference(v) => s.float_reference = *v,
             DeclKind::FloatOffset(v) => s.float_offset = *v,

@@ -803,6 +803,11 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "transform" | "-webkit-transform" | "-moz-transform" | "-ms-transform" => {
             parse_transforms(value).map(DeclKind::Transforms)
         }
+        // Fase 7.826-7.828 — props individuales de transform (CSS Transforms 2).
+        // Se guardan aparte y se componen en `transforms` al cierre del compute.
+        "translate" => parse_translate_prop(value).map(DeclKind::Translate),
+        "rotate" => parse_rotate_prop(value).map(DeclKind::Rotate),
+        "scale" => parse_scale_prop(value).map(DeclKind::Scale),
         "grid-template-columns" => {
             parse_grid_template(value).map(DeclKind::GridTemplateColumns)
         }

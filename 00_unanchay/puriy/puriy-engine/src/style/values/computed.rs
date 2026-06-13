@@ -1437,8 +1437,17 @@ pub struct ComputedStyle {
     pub webkit_color_correction: Option<String>,
     pub text_shadows: Vec<TextShadow>,
     /// Cadena de transformaciones (translate/scale/rotate) aplicadas
-    /// en orden. Vacío = identidad.
+    /// en orden. Vacío = identidad. Las props individuales `translate`/
+    /// `rotate`/`scale` (Fase 7.826-7.828) se prependean acá al cierre del
+    /// compute, en el orden CSS Transforms 2 (translate→rotate→scale→list).
     pub transforms: Vec<Transform>,
+    /// Prop individual `translate` (CSS Transforms 2). `None` = sin
+    /// traslación. Se compone en `transforms` al cierre del compute.
+    pub translate: Option<Transform>,
+    /// Prop individual `rotate` (CSS Transforms 2).
+    pub rotate: Option<Transform>,
+    /// Prop individual `scale` (CSS Transforms 2).
+    pub scale: Option<Transform>,
     /// Para `display: grid` — pistas de columnas y filas.
     pub grid_template_columns: Vec<GridTrackSize>,
     pub grid_template_rows: Vec<GridTrackSize>,
