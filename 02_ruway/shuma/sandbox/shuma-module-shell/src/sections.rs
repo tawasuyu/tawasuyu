@@ -74,7 +74,249 @@ pub fn detect_sections(cmd: &str, lines: &[String]) -> Option<Vec<Section>> {
     match tokens[0] {
         "ls" => detect_ls(&tokens[1..], lines),
         ":stats" => detect_stats(lines),
+        "git" if tokens.get(1) == Some(&"status") => detect_git_status(&tokens[2..], lines),
+        "cargo" | "rustc" => detect_cargo(lines),
+        // Comandos cuya salida es una tabla con header alineado a ancho fijo:
+        // `docker ps`, `podman ps`, `kubectl get`, `systemctl list-units`,
+        // `ps aux`, `df -h`, `lsblk`… Las columnas se cortan por la posición
+        // de inicio de cada header (left-aligned, padded al ancho de la
+        // columna). El detector es seguro: si no ve un header tabular,
+        // devuelve `None` y el bloque cae al render plano.
+        "docker" | "podman" | "kubectl" | "systemctl" | "ps" | "df" | "lsblk" => {
+            header_table(lines).map(|(columns, rows)| {
+                vec![Section { title: String::new(), kind: SectionKind::Table { columns, rows } }]
+            })
+        }
         _ => None,
+    }
+}
+
+/// Tabla con header alineado a ancho fijo (`docker ps`, `kubectl get`, `ps
+/// aux`, `df`…). Toma la primera línea no vacía como header, deriva la
+/// posición de inicio de cada columna (un no-espacio precedido de ≥2
+/// espacios, o el inicio de línea) y corta cada fila por esas posiciones.
+/// Esto maneja celdas vacías (slice vacío) y valores con espacios simples
+/// (`Up 2 hours`, `2 hours ago`). `None` si no hay ≥2 columnas o ninguna
+/// fila de datos.
+fn header_table(lines: &[String]) -> Option<(Vec<String>, Vec<Vec<String>>)> {
+    let header_idx = lines.iter().position(|l| !l.trim().is_empty())?;
+    let hchars: Vec<char> = lines[header_idx].chars().collect();
+    // Posiciones (en chars) donde arranca cada columna.
+    let mut starts: Vec<usize> = Vec::new();
+    for (i, c) in hchars.iter().enumerate() {
+        if c.is_whitespace() {
+            continue;
+        }
+        let nuevo = i == 0
+            || (i >= 2 && hchars[i - 1].is_whitespace() && hchars[i - 2].is_whitespace());
+        if nuevo {
+            starts.push(i);
+        }
+    }
+    if starts.len() < 2 {
+        return None;
+    }
+    let slice = |chars: &[char], a: usize, b: Option<usize>| -> String {
+        let end = b.unwrap_or(chars.len()).min(chars.len());
+        let a = a.min(chars.len());
+        if a >= end {
+            return String::new();
+        }
+        chars[a..end].iter().collect::<String>().trim().to_string()
+    };
+    let columns: Vec<String> = (0..starts.len())
+        .map(|k| slice(&hchars, starts[k], starts.get(k + 1).copied()))
+        .collect();
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for line in &lines[header_idx + 1..] {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let rc: Vec<char> = line.chars().collect();
+        let cells: Vec<String> = (0..starts.len())
+            .map(|k| slice(&rc, starts[k], starts.get(k + 1).copied()))
+            .collect();
+        if cells.iter().all(|c| c.is_empty()) {
+            continue;
+        }
+        rows.push(cells);
+    }
+    if rows.is_empty() {
+        None
+    } else {
+        Some((columns, rows))
+    }
+}
+
+/// `git status`: en forma corta (`-s`/`--short`/`--porcelain`) una tabla
+/// `XY · estado · archivo`; en forma larga, una sección por grupo (rama,
+/// staged, modificados, sin seguimiento, conflictos).
+fn detect_git_status(args: &[&str], lines: &[String]) -> Option<Vec<Section>> {
+    let short = args.iter().any(|a| {
+        matches!(*a, "-s" | "--short" | "--porcelain")
+            || (a.starts_with('-') && !a.starts_with("--") && a.contains('s'))
+    });
+    if short {
+        detect_git_status_short(lines)
+    } else {
+        detect_git_status_long(lines)
+    }
+}
+
+/// Etiqueta legible para el código `XY` de `git status -s`.
+fn git_xy_label(xy: &str) -> String {
+    let c: Vec<char> = xy.chars().collect();
+    let x = c.first().copied().unwrap_or(' ');
+    let y = c.get(1).copied().unwrap_or(' ');
+    if x == '?' && y == '?' {
+        return "sin seguimiento".into();
+    }
+    if x == '!' && y == '!' {
+        return "ignorado".into();
+    }
+    if x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D') {
+        return "conflicto".into();
+    }
+    // El staged (X) manda para el verbo; si no, el del árbol (Y).
+    let code = if x != ' ' { x } else { y };
+    let staged = if x != ' ' && x != '?' { " (staged)" } else { "" };
+    let verbo = match code {
+        'M' => "modificado",
+        'A' => "agregado",
+        'D' => "borrado",
+        'R' => "renombrado",
+        'C' => "copiado",
+        'T' => "tipo cambiado",
+        _ => "—",
+    };
+    format!("{verbo}{staged}")
+}
+
+fn detect_git_status_short(lines: &[String]) -> Option<Vec<Section>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for l in lines {
+        // `-sb` antepone una línea de rama `## main...origin/main`.
+        if l.starts_with("##") {
+            continue;
+        }
+        let chars: Vec<char> = l.chars().collect();
+        if chars.len() < 3 {
+            continue;
+        }
+        let xy: String = chars[..2].iter().collect();
+        let file: String = chars[3..].iter().collect::<String>().trim().to_string();
+        if file.is_empty() {
+            continue;
+        }
+        rows.push(vec![xy.clone(), git_xy_label(&xy), file]);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    Some(vec![Section {
+        title: String::new(),
+        kind: SectionKind::Table {
+            columns: vec!["XY".into(), "estado".into(), "archivo".into()],
+            rows,
+        },
+    }])
+}
+
+fn detect_git_status_long(lines: &[String]) -> Option<Vec<Section>> {
+    // Título humano para cada encabezado de grupo de `git status`.
+    fn heading_of(line: &str) -> Option<&'static str> {
+        let t = line.trim_start();
+        if t.starts_with("Changes to be committed") {
+            Some("staged")
+        } else if t.starts_with("Changes not staged for commit") {
+            Some("modificados")
+        } else if t.starts_with("Untracked files") {
+            Some("sin seguimiento")
+        } else if t.starts_with("Unmerged paths") {
+            Some("conflictos")
+        } else {
+            None
+        }
+    }
+    let mut preamble: Vec<String> = Vec::new();
+    let mut sections: Vec<Section> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    let flush = |cur: &mut Option<(String, Vec<String>)>, out: &mut Vec<Section>| {
+        if let Some((title, body)) = cur.take() {
+            if !body.is_empty() {
+                out.push(Section { title, kind: SectionKind::Lines(body) });
+            }
+        }
+    };
+    for l in lines {
+        if let Some(title) = heading_of(l) {
+            flush(&mut cur, &mut sections);
+            cur = Some((title.to_string(), Vec::new()));
+            continue;
+        }
+        let t = l.trim();
+        // Las líneas de pista `(use "git …")` y las vacías no son archivos.
+        if t.is_empty() || t.starts_with('(') {
+            continue;
+        }
+        match cur.as_mut() {
+            Some((_, body)) => body.push(t.to_string()),
+            None => preamble.push(t.to_string()),
+        }
+    }
+    flush(&mut cur, &mut sections);
+    if sections.is_empty() {
+        return None;
+    }
+    // La preamble (rama / tracking) va primero para no perderla.
+    if !preamble.is_empty() {
+        sections.insert(
+            0,
+            Section { title: "rama".to_string(), kind: SectionKind::Lines(preamble) },
+        );
+    }
+    Some(sections)
+}
+
+/// Salida de `cargo`/`rustc`: una sección colapsable por diagnóstico
+/// (cada `error…`/`warning:` arranca uno; el preámbulo `Compiling…` va a
+/// «salida»). `None` si no hay ningún diagnóstico — así un `cargo run`
+/// normal cae al render plano.
+fn detect_cargo(lines: &[String]) -> Option<Vec<Section>> {
+    let is_diag = |l: &str| l.starts_with("error") || l.starts_with("warning:");
+    if !lines.iter().any(|l| is_diag(l)) {
+        return None;
+    }
+    let mut preamble: Vec<String> = Vec::new();
+    let mut diags: Vec<Section> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    for l in lines {
+        if is_diag(l) {
+            if let Some((title, body)) = cur.take() {
+                diags.push(Section { title, kind: SectionKind::Lines(body) });
+            }
+            // El título lleva la línea del diagnóstico; el body, el contexto
+            // (los `-->`, el caret, las notas). Sin duplicar la primera línea.
+            cur = Some((l.trim_end().to_string(), Vec::new()));
+        } else if let Some((_, body)) = cur.as_mut() {
+            body.push(l.clone());
+        } else {
+            preamble.push(l.clone());
+        }
+    }
+    if let Some((title, body)) = cur.take() {
+        diags.push(Section { title, kind: SectionKind::Lines(body) });
+    }
+    let mut out: Vec<Section> = Vec::new();
+    let pre: Vec<String> = preamble.into_iter().filter(|l| !l.trim().is_empty()).collect();
+    if !pre.is_empty() {
+        out.push(Section { title: "salida".to_string(), kind: SectionKind::Lines(pre) });
+    }
+    out.extend(diags);
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
     }
 }
 
@@ -362,6 +604,105 @@ mod tests {
             }
             _ => panic!("esperaba Table"),
         }
+    }
+
+    #[test]
+    fn docker_ps_se_parsea_como_tabla() {
+        let lines = vec![
+            "CONTAINER ID   IMAGE          COMMAND                  CREATED         STATUS          PORTS                    NAMES".to_string(),
+            "abc123def456   nginx:1.27     \"/docker-entrypoint.…\"   2 hours ago     Up 2 hours      0.0.0.0:80->80/tcp       web".to_string(),
+            "789aaa111bbb   postgres:16    \"docker-entrypoint.s…\"   3 days ago      Exited (0)                               db".to_string(),
+        ];
+        let secs = detect_sections("docker ps -a", &lines).expect("detect");
+        assert_eq!(secs.len(), 1);
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns.len(), 7);
+                assert_eq!(columns[0], "CONTAINER ID");
+                assert_eq!(columns[4], "STATUS");
+                assert_eq!(rows.len(), 2);
+                // Valores con espacio simple se mantienen unidos.
+                assert_eq!(rows[0][4], "Up 2 hours");
+                assert_eq!(rows[0][6], "web");
+                // Celda PORTS vacía en el segundo no descoloca NAMES.
+                assert_eq!(rows[1][5], "");
+                assert_eq!(rows[1][6], "db");
+            }
+            _ => panic!("esperaba Table"),
+        }
+    }
+
+    #[test]
+    fn git_status_corto_da_tabla_con_estado() {
+        let lines = vec![
+            "## main...origin/main".to_string(),
+            " M src/foo.rs".to_string(),
+            "A  src/bar.rs".to_string(),
+            "?? nohup.out".to_string(),
+        ];
+        let secs = detect_sections("git status -s", &lines).expect("detect");
+        assert_eq!(secs.len(), 1);
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns, &["XY", "estado", "archivo"]);
+                assert_eq!(rows.len(), 3); // la línea ## se omite
+                assert_eq!(rows[0][2], "src/foo.rs");
+                assert_eq!(rows[0][1], "modificado");
+                assert!(rows[1][1].contains("staged"));
+                assert_eq!(rows[2][1], "sin seguimiento");
+            }
+            _ => panic!("esperaba Table"),
+        }
+    }
+
+    #[test]
+    fn git_status_largo_se_parte_por_grupo() {
+        let lines = vec![
+            "On branch main".to_string(),
+            "Your branch is up to date with 'origin/main'.".to_string(),
+            "".to_string(),
+            "Changes to be committed:".to_string(),
+            "  (use \"git restore --staged <file>...\" to unstage)".to_string(),
+            "\tmodified:   a.rs".to_string(),
+            "".to_string(),
+            "Untracked files:".to_string(),
+            "  (use \"git add <file>...\" to include)".to_string(),
+            "\tnohup.out".to_string(),
+        ];
+        let secs = detect_sections("git status", &lines).expect("detect");
+        // rama + staged + sin seguimiento.
+        assert_eq!(secs.len(), 3);
+        assert_eq!(secs[0].title, "rama");
+        assert_eq!(secs[1].title, "staged");
+        assert_eq!(secs[1].as_lines_for_test().unwrap(), vec!["modified:   a.rs"]);
+        assert_eq!(secs[2].title, "sin seguimiento");
+        assert_eq!(secs[2].as_lines_for_test().unwrap(), vec!["nohup.out"]);
+    }
+
+    #[test]
+    fn cargo_diagnosticos_una_seccion_por_error() {
+        let lines = vec![
+            "   Compiling shuma v0.1.0".to_string(),
+            "error[E0308]: mismatched types".to_string(),
+            "  --> src/foo.rs:3:5".to_string(),
+            "warning: unused variable `x`".to_string(),
+            "  --> src/bar.rs:9:9".to_string(),
+            "error: could not compile `shuma`".to_string(),
+        ];
+        let secs = detect_sections("cargo build", &lines).expect("detect");
+        // salida + 3 diagnósticos.
+        assert_eq!(secs.len(), 4);
+        assert_eq!(secs[0].title, "salida");
+        assert!(secs[1].title.starts_with("error[E0308]"));
+        assert_eq!(secs[1].as_lines_for_test().unwrap(), vec!["  --> src/foo.rs:3:5"]);
+        assert!(secs[2].title.starts_with("warning"));
+        assert!(secs[3].title.starts_with("error: could not compile"));
+    }
+
+    #[test]
+    fn cargo_sin_diagnosticos_no_secciona() {
+        let lines = vec!["Hello, world!".to_string(), "   Finished in 0.1s".to_string()];
+        assert!(detect_sections("cargo run", &lines).is_none());
     }
 
     impl Section {
