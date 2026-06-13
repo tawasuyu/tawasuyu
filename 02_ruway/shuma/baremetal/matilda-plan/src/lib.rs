@@ -27,6 +27,7 @@ pub enum Resource {
     Host,
     Container,
     VHost,
+    Service,
 }
 
 impl Resource {
@@ -35,6 +36,7 @@ impl Resource {
             Resource::Host => "host",
             Resource::Container => "contenedor",
             Resource::VHost => "vhost",
+            Resource::Service => "servicio",
         }
     }
 }
@@ -127,6 +129,18 @@ pub fn plan(current: &Inventory, desired: &Inventory) -> Plan {
         }
     }
 
+    // --- Fase 2b: servicios a crear/actualizar (independientes de los
+    // contenedores; van tras ellos por prolijidad del orden) ---
+    for s in desired.services() {
+        match current.service(&s.unit) {
+            None => actions.push(Action::new(Op::Create, Resource::Service, &s.unit)),
+            Some(cur) if cur != s => {
+                actions.push(Action::new(Op::Update, Resource::Service, &s.unit))
+            }
+            Some(_) => {}
+        }
+    }
+
     // --- Fase 3: vhosts a crear/actualizar ---
     for v in desired.vhosts() {
         match current.vhost(&v.domain) {
@@ -149,6 +163,13 @@ pub fn plan(current: &Inventory, desired: &Inventory) -> Plan {
     for c in current.containers() {
         if desired.container(&c.name).is_none() {
             actions.push(Action::new(Op::Remove, Resource::Container, &c.name));
+        }
+    }
+
+    // --- Fase 5b: servicios a eliminar (dejados de declarar) ---
+    for s in current.services() {
+        if desired.service(&s.unit).is_none() {
+            actions.push(Action::new(Op::Remove, Resource::Service, &s.unit));
         }
     }
 
@@ -264,5 +285,28 @@ mod tests {
     fn describe_is_human_readable() {
         let a = Action::new(Op::Create, Resource::Container, "web");
         assert_eq!(a.describe(), "crear contenedor «web»");
+    }
+
+    #[test]
+    fn service_diff_create_update_remove() {
+        use matilda_core::Service;
+        // Crear: deseado tiene el servicio, current no.
+        let mut desired = Inventory::new();
+        desired.add_service(Service::new("nginx"));
+        let p = plan(&Inventory::new(), &desired);
+        assert_eq!(p.actions, vec![Action::new(Op::Create, Resource::Service, "nginx.service")]);
+
+        // Update: difiere el estado (active).
+        let mut current = Inventory::new();
+        current.add_service(Service::new("nginx").with_active(false));
+        let p = plan(&current, &desired);
+        assert_eq!(p.actions, vec![Action::new(Op::Update, Resource::Service, "nginx.service")]);
+
+        // Remove: current lo tiene, desired no.
+        let p = plan(&current, &Inventory::new());
+        assert_eq!(p.actions, vec![Action::new(Op::Remove, Resource::Service, "nginx.service")]);
+
+        // Igual → sin acciones.
+        assert!(plan(&desired, &desired.clone()).is_empty());
     }
 }

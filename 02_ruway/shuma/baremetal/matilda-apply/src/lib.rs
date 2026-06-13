@@ -102,6 +102,22 @@ pub fn plan_to_steps(plan: &Plan, desired: &Inventory) -> Vec<ApplyStep> {
                 ],
             }),
 
+            // --- Servicios systemd ---
+            (Op::Create | Op::Update, Resource::Service) => {
+                desired.service(&action.name).map(|svc| ApplyStep {
+                    describe,
+                    files: Vec::new(),
+                    commands: service_commands(svc),
+                })
+            }
+            (Op::Remove, Resource::Service) => Some(ApplyStep {
+                describe,
+                files: Vec::new(),
+                // Dejar de administrar un servicio = pararlo y deshabilitarlo
+                // (matilda no borra el unit file: no lo creó).
+                commands: vec![format!("systemctl disable --now {}", action.name)],
+            }),
+
             // --- Hosts: no se "aplican" (son destino de conexión) ---
             (_, Resource::Host) => None,
         };
@@ -110,6 +126,24 @@ pub fn plan_to_steps(plan: &Plan, desired: &Inventory) -> Vec<ApplyStep> {
         }
     }
     steps
+}
+
+/// Comandos `systemctl` para llevar un servicio a su estado deseado:
+/// enable/disable (boot) + start/stop (ahora). `enable --now`/`disable
+/// --now` combinan ambos cuando coinciden.
+fn service_commands(svc: &matilda_core::Service) -> Vec<String> {
+    match (svc.enabled, svc.active) {
+        (true, true) => vec![format!("systemctl enable --now {}", svc.unit)],
+        (false, false) => vec![format!("systemctl disable --now {}", svc.unit)],
+        (true, false) => vec![
+            format!("systemctl enable {}", svc.unit),
+            format!("systemctl stop {}", svc.unit),
+        ],
+        (false, true) => vec![
+            format!("systemctl disable {}", svc.unit),
+            format!("systemctl start {}", svc.unit),
+        ],
+    }
 }
 
 /// Vuelca los pasos a un script de shell único — útil para revisarlo, o
@@ -182,6 +216,30 @@ mod tests {
             .collect();
         assert!(cmds.iter().any(|c| c.contains("docker rm -f viejo")));
         assert!(cmds.iter().any(|c| c.contains("rm -f") && c.contains("viejo.com")));
+    }
+
+    #[test]
+    fn service_steps_use_systemctl() {
+        use matilda_core::Service;
+        let mut desired = Inventory::new();
+        desired.add_service(Service::new("nginx")); // enabled + active
+        desired.add_service(Service::new("debug").with_enabled(false).with_active(true));
+        let steps = plan_to_steps(&matilda_plan::plan(&Inventory::new(), &desired), &desired);
+        let all: Vec<&str> = steps.iter().flat_map(|s| s.commands.iter()).map(|s| s.as_str()).collect();
+        // enabled+active → enable --now combinado.
+        assert!(all.iter().any(|c| *c == "systemctl enable --now nginx.service"));
+        // disabled+active → disable + start.
+        assert!(all.iter().any(|c| *c == "systemctl disable debug.service"));
+        assert!(all.iter().any(|c| *c == "systemctl start debug.service"));
+
+        // Remove → disable --now.
+        let mut current = Inventory::new();
+        current.add_service(Service::new("viejo"));
+        let steps = plan_to_steps(&matilda_plan::plan(&current, &Inventory::new()), &Inventory::new());
+        assert!(steps
+            .iter()
+            .flat_map(|s| s.commands.iter())
+            .any(|c| c == "systemctl disable --now viejo.service"));
     }
 
     #[test]

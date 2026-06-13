@@ -18,9 +18,11 @@
 pub mod container;
 pub mod host;
 pub mod inventory;
+pub mod service;
 pub mod vhost;
 
 pub use container::{Container, PortMap, RestartPolicy};
 pub use host::Host;
 pub use inventory::Inventory;
+pub use service::Service;
 pub use vhost::{Upstream, VHost};

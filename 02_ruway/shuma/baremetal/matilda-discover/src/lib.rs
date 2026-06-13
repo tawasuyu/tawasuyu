@@ -15,8 +15,19 @@
 
 #![forbid(unsafe_code)]
 
-use matilda_core::{Container, Inventory, VHost};
+use matilda_core::{Container, Inventory, Service, VHost};
 use serde::{Deserialize, Serialize};
+
+/// Estado declarativo observado de un servicio systemd administrado:
+/// su unidad y si está habilitado/activo *ahora*. A diferencia de los
+/// contenedores, sólo se observan los servicios **declarados** (matilda no
+/// administra las cientos de unidades del sistema).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ObservedService {
+    pub unit: String,
+    pub enabled: bool,
+    pub active: bool,
+}
 
 /// El estado observado de un servidor — los nombres de lo que existe.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +36,10 @@ pub struct ServerState {
     pub containers: Vec<String>,
     /// Dominios de los vhosts presentes.
     pub vhosts: Vec<String>,
+    /// Estado declarativo de los servicios administrados (sólo los
+    /// declarados; vacío en el discover remoto v1).
+    #[serde(default)]
+    pub services: Vec<ObservedService>,
 }
 
 /// Estado de ejecución observado de un contenedor — el campo `{{.State}}`
@@ -272,6 +287,16 @@ pub fn observed_inventory(state: &ServerState, desired: &Inventory) -> Inventory
             None => inv.add_vhost(VHost::to_address(domain, "(desconocido)")),
         }
     }
+    // Servicios: sólo los declarados (matilda no administra todo systemd).
+    // Reflejamos su estado observado → el plan emite Update si difiere del
+    // deseado, o nada si coincide.
+    for svc in &state.services {
+        inv.add_service(
+            Service::new(svc.unit.as_str())
+                .with_enabled(svc.enabled)
+                .with_active(svc.active),
+        );
+    }
     inv
 }
 
@@ -419,7 +444,30 @@ pub fn discover_inventory(desired: &Inventory) -> Inventory {
             None => inv.add_vhost(VHost::to_address(&domain, "(huérfano)")),
         }
     }
+    // Servicios: sólo los declarados — consultamos su estado actual
+    // (`is-enabled`/`is-active`) para que el plan emita Update si difieren.
+    for svc in desired.services() {
+        let (enabled, active) = service_actual_state(&svc.unit);
+        inv.add_service(
+            Service::new(svc.unit.as_str())
+                .with_enabled(enabled)
+                .with_active(active),
+        );
+    }
     inv
+}
+
+/// Consulta el estado actual de un servicio systemd: `(enabled, active)`.
+/// `systemctl is-enabled`/`is-active` salen con código 0 sólo cuando lo
+/// están; si systemctl no existe, ambos son `false`.
+fn service_actual_state(unit: &str) -> (bool, bool) {
+    let enabled = run_local("systemctl", &["is-enabled", unit])
+        .map(|s| s.trim() == "enabled")
+        .unwrap_or(false);
+    let active = run_local("systemctl", &["is-active", unit])
+        .map(|s| s.trim() == "active")
+        .unwrap_or(false);
+    (enabled, active)
 }
 
 /// Observa el estado de *esta* máquina: `docker ps` + los sitios de
@@ -432,7 +480,7 @@ pub fn discover_local() -> ServerState {
     let vhosts = run_local("ls", &["-1", "/etc/nginx/sites-enabled"])
         .map(|t| parse_nginx_sites(&t))
         .unwrap_or_default();
-    ServerState { containers, vhosts }
+    ServerState { containers, vhosts, services: Vec::new() }
 }
 
 /// Observa el estado **runtime** de esta máquina: `docker ps -a` con el
@@ -568,7 +616,7 @@ mod tests {
         // Un contenedor presente que también se desea → sin cambios.
         let mut desired = Inventory::new();
         desired.add_container(Container::new("web", "nginx:1.27"));
-        let state = ServerState { containers: vec!["web".into()], vhosts: vec![] };
+        let state = ServerState { containers: vec!["web".into()], vhosts: vec![], services: vec![] };
         let current = observed_inventory(&state, &desired);
         let p = plan(&current, &desired);
         assert!(p.is_empty(), "presente y deseado → sin acciones");
@@ -578,7 +626,7 @@ mod tests {
     fn observed_orphan_becomes_a_removal() {
         // Un contenedor presente que NO se desea → se elimina.
         let desired = Inventory::new();
-        let state = ServerState { containers: vec!["viejo".into()], vhosts: vec![] };
+        let state = ServerState { containers: vec!["viejo".into()], vhosts: vec![], services: vec![] };
         let current = observed_inventory(&state, &desired);
         let p = plan(&current, &desired);
         assert_eq!(p.count(Op::Remove), 1);
@@ -599,7 +647,7 @@ mod tests {
     fn create_and_remove_together() {
         let mut desired = Inventory::new();
         desired.add_container(Container::new("nuevo", "img:1"));
-        let state = ServerState { containers: vec!["viejo".into()], vhosts: vec![] };
+        let state = ServerState { containers: vec!["viejo".into()], vhosts: vec![], services: vec![] };
         let p = plan(&observed_inventory(&state, &desired), &desired);
         assert_eq!(p.count(Op::Create), 1);
         assert_eq!(p.count(Op::Remove), 1);

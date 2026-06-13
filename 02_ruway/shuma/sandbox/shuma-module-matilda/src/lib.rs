@@ -760,6 +760,10 @@ async fn fetch_remote_inventory(
     let state = ServerState {
         containers: matilda_discover::parse_docker_names(&containers_text),
         vhosts: matilda_discover::parse_nginx_sites(&vhosts_text),
+        // Servicios declarativos por SSH: v1 no los consulta (cada uno sería
+        // un round-trip). El plan los verá como Create → `enable --now`, que
+        // es idempotente. Consultar el estado remoto queda pendiente.
+        services: Vec::new(),
     };
     Ok(observed_inventory(&state, desired))
 }
@@ -787,6 +791,7 @@ pub fn example_inventory() -> Inventory {
             .with_alias("www.sitio.com")
             .with_tls(),
     );
+    inv.add_service(matilda_core::Service::new("nginx"));
     inv
 }
 
@@ -944,6 +949,31 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
                     children.push(service_action_bar(&svc.name, theme, lift.clone()));
                 }
             }
+        }
+    }
+
+    // SERVICES declarados — los del inventario (deseados), con sus flags
+    // enable/active y si están corriendo ahora (cross-ref con el runtime).
+    // Es la paridad con contenedores/vhosts: el deseo se ve en el panel.
+    if state.desired.services().count() > 0 {
+        children.push(section_label(
+            &format!("SERVICES declarados ({})", state.desired.services().count()),
+            theme,
+        ));
+        for svc in state.desired.services() {
+            let corriendo = state
+                .runtime
+                .as_ref()
+                .map(|rt| rt.services.iter().any(|s| s.name == svc.unit && s.state.is_active()))
+                .unwrap_or(false);
+            let glyph = if corriendo { '●' } else { '◌' };
+            let flags = match (svc.enabled, svc.active) {
+                (true, true) => "enable+start",
+                (true, false) => "enable",
+                (false, true) => "start",
+                (false, false) => "disable+stop",
+            };
+            children.push(inv_row(&format!("  {glyph} {}   [{flags}]", svc.unit), theme));
         }
     }
 
@@ -1332,10 +1362,9 @@ mod tests {
         let s = State::new(Source::Local);
         let s = update(s, Msg::MakePlan);
         let plan = s.plan.as_ref().expect("plan se debe haber calculado");
-        // 2 containers + 1 vhost (los hosts no producen acción si no hay
-        // current, pero el example_inventory tiene 1 → cuenta como create).
-        assert_eq!(plan.count(Op::Create), 4);
-        assert_eq!(s.pending_count(), 4);
+        // 1 host + 2 containers + 1 vhost + 1 service = 5 creates.
+        assert_eq!(plan.count(Op::Create), 5);
+        assert_eq!(s.pending_count(), 5);
     }
 
     #[test]
@@ -1650,10 +1679,10 @@ mod tests {
     #[test]
     fn monitor_sampler_reflects_pending_steps() {
         let mut s = State::new(Source::Local);
-        s = update(s, Msg::MakePlan); // 4 pendientes
+        s = update(s, Msg::MakePlan); // 5 pendientes (host+2 cont+vhost+service)
         let c = contributions(&s);
         let sample = (c.monitors[0].sampler)();
-        assert_eq!(sample.value, 4.0);
-        assert_eq!(sample.display, "4 pendientes");
+        assert_eq!(sample.value, 5.0);
+        assert_eq!(sample.display, "5 pendientes");
     }
 }

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::container::Container;
 use crate::host::Host;
+use crate::service::Service;
 use crate::vhost::VHost;
 
 /// El inventario completo — la fuente de verdad declarativa.
@@ -18,6 +19,8 @@ pub struct Inventory {
     hosts: BTreeMap<String, Host>,
     containers: BTreeMap<String, Container>,
     vhosts: BTreeMap<String, VHost>,
+    #[serde(default)]
+    services: BTreeMap<String, Service>,
 }
 
 impl Inventory {
@@ -67,11 +70,28 @@ impl Inventory {
         self.vhosts.values()
     }
 
+    // --- Servicios systemd ---
+
+    pub fn add_service(&mut self, service: Service) {
+        self.services.insert(service.unit.clone(), service);
+    }
+
+    pub fn service(&self, unit: &str) -> Option<&Service> {
+        self.services.get(unit)
+    }
+
+    pub fn services(&self) -> impl Iterator<Item = &Service> {
+        self.services.values()
+    }
+
     // --- Consultas transversales ---
 
     /// `true` si el inventario no tiene nada declarado.
     pub fn is_empty(&self) -> bool {
-        self.hosts.is_empty() && self.containers.is_empty() && self.vhosts.is_empty()
+        self.hosts.is_empty()
+            && self.containers.is_empty()
+            && self.vhosts.is_empty()
+            && self.services.is_empty()
     }
 
     /// VHosts cuyo upstream apunta a un contenedor inexistente — la

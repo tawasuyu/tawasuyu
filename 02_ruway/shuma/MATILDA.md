@@ -58,13 +58,21 @@ Acciones `Logs` (`docker logs --tail 200`) y `Stats` (`docker stats
 (`-f`) a una card y series de CPU/mem en el `MonitorSpec` (history+sparkline)
 — hoy es a-pedido, no continuo.
 
-### M3. Servicios systemd ✅ (2026-06-13, runtime + acciones)
-`matilda-discover`: `ServiceState`/`ServiceStatus` + `parse_systemctl_units`
-+ `discover_services()` (running,failed); `RuntimeState.services`. El bloque
-muestra la sección SERVICES (semáforo ●/✖/○ + sub + descripción) con barra
-de acciones (`ServiceAction`: start/stop/restart/enable/disable/status).
-**Pendiente:** servicios *declarativos* (modelo en `matilda-core` + plan +
-reconciliación) — hoy es operación viva, no reconciliación.
+### M3. Servicios systemd ✅ (2026-06-13, runtime + acciones + declarativos)
+**Runtime:** `matilda-discover` `ServiceState`/`ServiceStatus` +
+`parse_systemctl_units` + `discover_services()` (running,failed);
+`RuntimeState.services`. El bloque muestra la sección SERVICES (semáforo
+●/✖/○ + sub + descripción) con barra de acciones (`ServiceAction`:
+start/stop/restart/enable/disable/status).
+**Declarativos:** `matilda_core::Service { unit, enabled, active }` +
+`Inventory.services`; `matilda-plan` `Resource::Service` (diff
+Create/Update/Remove); `matilda-apply` genera los `systemctl
+enable --now / disable / start / stop` (combina `--now` cuando enable+active
+coinciden); `matilda-discover` consulta `is-enabled`/`is-active` por unidad
+declarada para el drift (sólo administra las declaradas, no las cientos del
+sistema). El panel lista "SERVICES declarados" con sus flags y si corren. El
+loop declarar→plan→apply→runtime queda cerrado. **Pendiente:** discovery de
+estado de servicios por SSH (remoto v1 los ve como Create, idempotente).
 
 ### M4. Polling periódico real ✅ (2026-06-13, local)
 El chasis poll-ea `poll_runtime()` cada 5 s en un thread para las instancias
