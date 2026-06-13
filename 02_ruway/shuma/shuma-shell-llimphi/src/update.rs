@@ -247,6 +247,66 @@ pub(crate) fn poll_matilda_runtime(m: &Model, handle: &Handle<Msg>) {
     }
 }
 
+/// E5 — cumple las peticiones LLM pendientes de los shells montados. El
+/// módulo sólo expresa la intención (`State::llm_request`); acá la tomamos,
+/// corremos `pluma-llm` en un thread (con su propio runtime tokio) y
+/// devolvemos `Msg::LlmResult`. Sin credenciales, `from_env` cae a Mock — el
+/// `:?` funciona igual (respuesta canned), nunca se cuelga.
+pub(crate) fn fulfill_llm_requests(m: &mut Model, handle: &Handle<Msg>) {
+    fn llm_one(slot: Slot, st: &mut shuma_module_shell::State, handle: &Handle<Msg>) {
+        let Some(req) = st.take_llm_request() else {
+            return;
+        };
+        let kind = req.kind;
+        let slot_back = slot.clone();
+        handle.spawn(move || {
+            let (ok, text) = match run_llm_blocking(&req) {
+                Ok(t) => (true, t),
+                Err(e) => (false, e),
+            };
+            Msg::Module(
+                slot_back,
+                ModuleMsg::Shell(shuma_module_shell::Msg::LlmResult { kind, ok, text }),
+            )
+        });
+    }
+    if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.topbar.as_mut() {
+        llm_one(Slot::TopBar, st, handle);
+    }
+    if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.bottombar.as_mut() {
+        llm_one(Slot::BottomBar, st, handle);
+    }
+    if let Some(Instance { state: ModuleState::Shell(st), .. }) = m.main.as_mut() {
+        llm_one(Slot::Main, st, handle);
+    }
+    for (i, sess) in m.sessions.iter_mut().enumerate() {
+        if let ModuleState::Shell(st) = &mut sess.shell.state {
+            llm_one(Slot::Session(i, Which::Shell), st, handle);
+        }
+    }
+}
+
+/// Corre una petición LLM de forma **bloqueante** (en un thread del chasis):
+/// arma el `ChatRequest`, resuelve el backend por env (Mock si no hay
+/// credenciales) y devuelve el texto o un mensaje de error.
+fn run_llm_blocking(req: &shuma_module_shell::LlmRequest) -> Result<String, String> {
+    use pluma_llm::pluma_llm_core::ChatRequest;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| format!("runtime: {e}"))?;
+    rt.block_on(async {
+        let client = pluma_llm::from_env().map_err(|e| format!("sin backend LLM: {e}"))?;
+        let chat = ChatRequest::una_vuelta(req.prompt.clone(), req.max_tokens)
+            .con_sistema(req.system.clone());
+        client
+            .complete(&chat)
+            .await
+            .map(|r| r.content)
+            .map_err(|e| format!("{e}"))
+    })
+}
+
 pub(crate) fn monitor_key(slot: &Slot, spec: &MonitorSpec) -> String {
     let slot_label = match slot {
         Slot::TopBar => "topbar",

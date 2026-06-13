@@ -170,14 +170,22 @@ esperar tráfico). Queda como pulido: el shell Llimphi montando sesiones del
 daemon (hoy corre PTY local) y el cliente móvil vía gateway (el WS ya
 soporta attach).
 
-### E5. LLM como instrumento invocado (`:?`)
-Con `pluma-llm` enchufado (backend por env, Mock sin credenciales):
-- `:? <pregunta>` — lenguaje natural → línea de comando propuesta (NUNCA
-  auto-ejecutada; aparece en el input para editar/Enter).
-- `:explica %cN` — explicar el output de un bloque.
-- `:resume %cN` — titular A5 pero narrativo, para logs gigantes.
-Siempre rotulado (`🜲 llm`), siempre opt-in por invocación, local-first si
-hay Ollama. El extremo elige modelo; el habitual ni se entera de que existe.
+### E5. LLM como instrumento invocado (`:?`) ✅ (2026-06-13)
+**Hecho** con `pluma-llm` (backend por env, Mock sin credenciales):
+- `:? <pregunta>` — lenguaje natural → línea de comando propuesta, **al
+  input** (NUNCA auto-ejecutada; revisar y Enter).
+- `:explica [%cN]` — explica la salida de un bloque (la del más reciente si
+  no se da ref).
+- `:resume [%cN]` — resumen narrativo, para logs gigantes (el cuerpo se capea
+  por cabeza+cola si excede 8k).
+Siempre rotulado `🜲`, opt-in por invocación. **Arquitectura (Regla 2):** el
+módulo `shuma-module-shell` sólo expresa la intención (`State::llm_request`,
+sin dependencias de red); el **chasis** la toma (`take_llm_request`), corre
+`pluma-llm` en un thread con su runtime y devuelve `Msg::LlmResult`. Sin
+credenciales `from_env` cae a Mock (responde igual, nunca cuelga). El LLM se
+monta sobre las refs `%cN` y el scrollback ya deterministas — no sobre texto
+plano. Verificado: 3 tests del módulo (petición armada, tomada una sola vez,
+resultado al input/output); el chasis compila con el stack LLM.
 
 ### E6. `:stats` — telemetría propia, local, consultable ✅ (2026-06-13)
 **Hecho:** builtin `:stats [filtro]` (`update/builtins.rs`) sobre el historial
@@ -206,6 +214,12 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
 5. **E4** (PTY persistente): cliente `shuma pty` ✅ **hecho 2026-06-13**
    (daemon + gateway ya estaban). Pulido pendiente: shell Llimphi sobre
    sesiones del daemon; cliente móvil vía gateway.
-6. **E5** (LLM): al final, cuando las superficies deterministas ya estén —
-   el modelo se monta sobre refs y tablas, no sobre texto plano. **Único
-   ítem del roadmap sin arrancar.**
+6. **E5** (LLM): ✅ **hecho 2026-06-13** — montado sobre refs/tablas, no
+   sobre texto plano, como decía el plan.
+
+---
+
+**Roadmap completo (2026-06-13):** A1·A3·A4·A5 + E1·E2·E3·E4·E5·E6 ✅. Sin
+arrancar quedan sólo las propuestas menores A2 (alias por longitud×frecuencia)
+y A6 (aviso de comando largo) — y el pulido de E4 (shell Llimphi montando
+sesiones del daemon; cliente móvil vía gateway).

@@ -52,6 +52,10 @@ directories = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }
 wawa-config = { path = "../../../shared/wawa-config" }
 wawa-config-llimphi = { path = "../../../shared/wawa-config-llimphi" }
+# E5 — LLM como instrumento invocado (`:?`/`:explica`/`:resume`). El módulo
+# sólo expresa la intención; el chasis corre pluma-llm en un thread.
+pluma-llm = { path = "../../../00_unanchay/pluma/pluma-llm" }
+tokio = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

@@ -103,6 +103,9 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":macro" => return apply_macro(s, rest),
             ":macros" => return list_macros(s),
             ":stats" => return apply_stats(s, rest),
+            ":?" => return apply_ask(s, rest),
+            ":explica" | ":explain" => return apply_explain(s, rest, false),
+            ":resume" | ":resumen" => return apply_explain(s, rest, true),
             _ => {}
         }
     }

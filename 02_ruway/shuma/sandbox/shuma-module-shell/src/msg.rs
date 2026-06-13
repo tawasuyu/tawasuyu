@@ -212,4 +212,14 @@ pub enum Msg {
     /// Togglea case-insensitive (botón `Aa` o atajo). Re-busca con la
     /// nueva política.
     FindToggleCase,
+    /// E5 — resultado de una invocación al LLM (`:?`/`:explica`/`:resume`).
+    /// Lo dispatcha el host (chasis) tras correr `pluma-llm` en un thread;
+    /// el módulo sólo expresó la intención (`State::llm_request`). `kind`
+    /// decide el destino: `Command` → al input (revisar y Enter, NUNCA
+    /// auto-ejecuta), `Text` → al output del bloque.
+    LlmResult {
+        kind: LlmKind,
+        ok: bool,
+        text: String,
+    },
 }

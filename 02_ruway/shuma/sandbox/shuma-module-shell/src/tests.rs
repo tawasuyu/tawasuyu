@@ -145,6 +145,57 @@
     }
 
     #[test]
+    fn ask_builtin_arma_request_y_host_la_toma_una_vez() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.input.set_text(":? listar archivos por tamaño");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        // El builtin armó la petición (Command) y avisó.
+        let req = s.llm_request.clone().expect("hay petición");
+        assert!(matches!(req.kind, crate::LlmKind::Command));
+        assert!(req.prompt.contains("listar archivos"));
+        assert!(s.output.iter().any(|l| l.text.contains("🜲")));
+        // El host la toma una sola vez (queda en vuelo).
+        assert!(s.take_llm_request().is_some());
+        assert!(s.llm_inflight);
+        assert!(s.take_llm_request().is_none());
+    }
+
+    #[test]
+    fn llm_result_command_va_al_input_sin_ejecutar() {
+        let mut s = State::new(Source::Local);
+        s.llm_inflight = true;
+        s = update(
+            s,
+            Msg::LlmResult {
+                kind: crate::LlmKind::Command,
+                ok: true,
+                text: "`ls -la --sort=size`".into(),
+            },
+        );
+        // Backticks limpiados, en el input, NO ejecutado.
+        assert_eq!(s.input.text(), "ls -la --sort=size");
+        assert!(!s.is_running());
+        assert!(!s.llm_inflight);
+    }
+
+    #[test]
+    fn explica_arma_request_text_con_la_salida_del_bloque() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        // Sembramos un bloque 7 con stdout.
+        let mut l = OutputLine::stdout("error: algo falló");
+        l.block = 7;
+        s.output.push(l);
+        s.input.set_text(":explica %c7");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        let req = s.llm_request.clone().expect("hay petición");
+        assert!(matches!(req.kind, crate::LlmKind::Text));
+        assert!(req.prompt.contains("algo falló"));
+        assert!(req.prompt.contains("%c7"));
+    }
+
+    #[test]
     fn long_running_command_does_not_block_update() {
         // `sleep 0.3` debería volver de `update` inmediatamente (no
         // bloquear ~300 ms como con `Command::output`). Si el spawn es

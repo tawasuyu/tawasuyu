@@ -568,6 +568,36 @@ pub struct State {
     /// E3 — guarda de re-entrada de `[rules].on_enter_cwd`: evita que el
     /// comando de una regla de cwd que a su vez haga `cd` re-dispare reglas.
     pub in_cwd_rule: bool,
+    /// E5 — petición al LLM pendiente que el host (chasis) debe cumplir:
+    /// el módulo no habla con la red, sólo expresa la intención (`:?`/
+    /// `:explica`/`:resume`). El chasis la toma con [`State::take_llm_request`],
+    /// corre `pluma-llm` en un thread y devuelve `Msg::LlmResult`. `None`
+    /// salvo entre la invocación y su resultado.
+    pub llm_request: Option<LlmRequest>,
+    /// `true` mientras una petición LLM está en vuelo (la tomó el host) —
+    /// evita que el host la re-dispare en cada tick.
+    pub llm_inflight: bool,
+}
+
+/// E5 — qué hacer con la respuesta del LLM.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LlmKind {
+    /// `:?` — la respuesta es una línea de comando: va al input para que el
+    /// usuario la revise y ejecute (NUNCA se auto-ejecuta).
+    Command,
+    /// `:explica`/`:resume` — la respuesta es texto informativo: va al
+    /// output del bloque.
+    Text,
+}
+
+/// E5 — una invocación al LLM que el host debe cumplir. Campos públicos para
+/// que el chasis los lea y arme el `ChatRequest` (system + prompt + tope).
+#[derive(Debug, Clone)]
+pub struct LlmRequest {
+    pub kind: LlmKind,
+    pub system: String,
+    pub prompt: String,
+    pub max_tokens: u32,
 }
 
 /// Snapshot serializable del output de una sesión — lo que el chasis
@@ -763,7 +793,21 @@ impl State {
             config,
             exit_rule_fired: false,
             in_cwd_rule: false,
+            llm_request: None,
+            llm_inflight: false,
         }
+    }
+
+    /// E5 — el host toma la petición LLM pendiente (si la hay y no hay otra
+    /// en vuelo), marcándola en vuelo. Devuelve `None` si no hay nada que
+    /// hacer. El host la corre y responde con `Msg::LlmResult`.
+    pub fn take_llm_request(&mut self) -> Option<LlmRequest> {
+        if self.llm_inflight {
+            return None;
+        }
+        let req = self.llm_request.take()?;
+        self.llm_inflight = true;
+        Some(req)
     }
 
     /// Empuja una línea al buffer asignándole bloque. Cada `Prompt` abre

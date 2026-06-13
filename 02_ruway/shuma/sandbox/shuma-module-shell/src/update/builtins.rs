@@ -882,6 +882,109 @@ fn humanizar_hace(secs: u64) -> String {
     }
 }
 
+// ─────────────────────────── E5 · LLM como instrumento ─────────────────────
+
+/// `:?  <pregunta>` — lenguaje natural → línea de comando propuesta. El
+/// módulo sólo arma la petición (`State::llm_request`); el host corre el LLM
+/// y devuelve `Msg::LlmResult`. La respuesta va al **input** para revisar y
+/// Enter — NUNCA se auto-ejecuta. Rotulado `🜲 llm`, opt-in por invocación.
+pub(crate) fn apply_ask(mut s: State, rest: &str) -> State {
+    let q = rest.trim();
+    if q.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :? <qué querés hacer> — el LLM propone una línea de comando (no la ejecuta)",
+        ));
+        return s;
+    }
+    let system = "Sos un asistente de shell en Linux. El usuario describe lo que quiere lograr. \
+        Respondé EXCLUSIVAMENTE con UNA sola línea de comando de shell que lo cumpla — sin \
+        explicación, sin markdown, sin backticks, sin comentarios. Una sola línea."
+        .to_string();
+    s.llm_request = Some(LlmRequest {
+        kind: LlmKind::Command,
+        system,
+        prompt: q.to_string(),
+        max_tokens: 200,
+    });
+    s.push_output(OutputLine::notice(format!("🜲 llm · pensando una línea para: {q}")));
+    s
+}
+
+/// `:explica [%cN]` / `:resume [%cN]` — explica o resume la salida de un
+/// bloque (la del más reciente si no se da ref). El resultado va al output,
+/// rotulado `🜲`. `summarize=true` → `:resume`.
+pub(crate) fn apply_explain(mut s: State, rest: &str, summarize: bool) -> State {
+    let Some(block) = parse_block_ref(&s, rest) else {
+        s.push_output(OutputLine::notice(
+            "uso: :explica %cN  (o sin ref, sobre el bloque más reciente con salida)",
+        ));
+        return s;
+    };
+    let body = gather_block_stdout(&s, block);
+    if body.trim().is_empty() {
+        s.push_output(OutputLine::notice(format!(
+            "el bloque %c{block} no tiene salida para {}",
+            if summarize { "resumir" } else { "explicar" }
+        )));
+        return s;
+    }
+    // Cap del cuerpo para no inflar el prompt (los logs gigantes se truncan).
+    let body = cap_prompt_body(&body, 8000);
+    let (system, verbo) = if summarize {
+        (
+            "Sos un asistente de shell. Resumí en español, en pocas líneas y conciso, la salida \
+             de un comando. Destacá lo importante; nada de relleno.",
+            "resumiendo",
+        )
+    } else {
+        (
+            "Sos un asistente de shell. Explicá en español, claro y breve, qué dice la salida de \
+             un comando y si hay algo que atender (errores, avisos). Sin relleno.",
+            "explicando",
+        )
+    };
+    s.llm_request = Some(LlmRequest {
+        kind: LlmKind::Text,
+        system: system.to_string(),
+        prompt: format!("Salida del bloque %c{block}:\n\n{body}"),
+        max_tokens: 600,
+    });
+    s.push_output(OutputLine::notice(format!("🜲 llm · {verbo} el bloque %c{block}…")));
+    s
+}
+
+/// Resuelve el bloque objetivo de `:explica`/`:resume`: un `%cN`/`%pN`, un
+/// número pelado, o —sin ref— el bloque más reciente con stdout.
+fn parse_block_ref(s: &State, rest: &str) -> Option<u64> {
+    let t = rest.trim();
+    if !t.is_empty() {
+        let t = t
+            .strip_prefix("%c")
+            .or_else(|| t.strip_prefix("%p"))
+            .unwrap_or(t);
+        return t.trim().parse::<u64>().ok();
+    }
+    // Sin ref: el bloque del stdout más reciente.
+    s.output
+        .iter()
+        .rev()
+        .find(|l| l.kind == OutputKind::Stdout && l.stage.is_none())
+        .map(|l| l.block)
+}
+
+/// Trunca un cuerpo a `max` chars por el medio (cabeza + cola), preservando
+/// el principio y el final — lo más útil de un log para resumir/explicar.
+fn cap_prompt_body(body: &str, max: usize) -> String {
+    if body.len() <= max {
+        return body.to_string();
+    }
+    let head = max * 2 / 3;
+    let tail = max - head;
+    let start: String = body.chars().take(head).collect();
+    let end: String = body.chars().rev().take(tail).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("{start}\n…[recortado]…\n{end}")
+}
+
 /// Reconstruye el stdout de un bloque (su card) uniendo las líneas
 /// `Stdout` sin etapa — para alimentarlo como stdin de un reprocess.
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {

@@ -573,6 +573,39 @@ pub fn update(state: State, msg: Msg) -> State {
             }
             s = recompute_find(s);
         }
+        Msg::LlmResult { kind, ok, text } => {
+            s.llm_inflight = false;
+            if !ok {
+                s.push_output(OutputLine::notice(format!("🜲 llm · {text}")));
+            } else {
+                match kind {
+                    LlmKind::Command => {
+                        // Una sola línea, sin backticks/markdown que el modelo
+                        // pueda colar. Va al input — el usuario revisa y Enter.
+                        let line = text
+                            .lines()
+                            .map(|l| l.trim().trim_matches('`'))
+                            .find(|l| !l.is_empty())
+                            .unwrap_or("")
+                            .to_string();
+                        if line.is_empty() {
+                            s.push_output(OutputLine::notice("🜲 llm · sin propuesta"));
+                        } else {
+                            s.input.set_text(&line);
+                            s.focused = true;
+                            s.push_output(OutputLine::notice(
+                                "🜲 llm · propuesta en el input — revisá y Enter (no se ejecutó)",
+                            ));
+                        }
+                    }
+                    LlmKind::Text => {
+                        for l in text.lines() {
+                            s.push_output(OutputLine::notice(format!("🜲 {l}")));
+                        }
+                    }
+                }
+            }
+        }
     }
     s
 }

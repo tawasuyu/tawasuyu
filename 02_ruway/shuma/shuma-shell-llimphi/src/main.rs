@@ -343,6 +343,9 @@ impl App for Shell {
             }
             Msg::ShellTick => {
                 drain_shell_instances(&mut m);
+                // E5 — despachar peticiones LLM pendientes (`:?`/`:explica`/
+                // `:resume`) a un thread; el resultado vuelve por LlmResult.
+                update::fulfill_llm_requests(&mut m, handle);
             }
             Msg::Resized(w, h) => {
                 if w > 0.0 && h > 0.0 {
