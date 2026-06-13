@@ -42,7 +42,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
 use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
-use matilda_apply::plan_to_steps;
+use matilda_apply::{plan_to_steps, ContainerAction};
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
 use matilda_discover::{
     discover_inventory, discover_runtime, observed_inventory, RuntimeState, ServerState,
@@ -76,6 +76,9 @@ pub struct State {
     /// `None` hasta el primer discover. Es la base del monitoreo en vivo,
     /// distinto del inventario declarativo (`desired`/`current`).
     pub runtime: Option<RuntimeState>,
+    /// Contenedor seleccionado en el panel — abre la barra de acciones
+    /// (start/stop/restart/logs/rm). `None` = nada seleccionado.
+    pub selected_container: Option<String>,
     pending_steps: Arc<Mutex<usize>>,
     /// `(up, down)` compartido con el sampler del monitor de runtime.
     runtime_counts: Arc<Mutex<(usize, usize)>>,
@@ -98,6 +101,7 @@ impl State {
             split_width: 380.0,
             inventory_path: None,
             runtime: None,
+            selected_container: None,
             pending_steps: Arc::new(Mutex::new(0)),
             runtime_counts: Arc::new(Mutex::new((0, 0))),
         }
@@ -168,6 +172,12 @@ pub enum Msg {
     SetDesired(Inventory),
     /// Drag del splitter inventario|plan.
     ResizeSplit(f32),
+    /// Click en un contenedor: lo selecciona (toggle) y abre su barra de
+    /// acciones. Re-clickear el mismo lo deselecciona.
+    SelectContainer(String),
+    /// Acción de ciclo de vida sobre un contenedor (start/stop/restart/
+    /// logs/rm). Local sincrónico; remoto delegado al chasis.
+    ContainerActionMsg { name: String, action: ContainerAction },
 }
 
 /// Mapea el `action_id` de un `ShortcutAction::ModuleAction` al `Msg`
@@ -358,8 +368,99 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::ResizeSplit(dx) => {
             s.split_width = (s.split_width + dx).clamp(220.0, 720.0);
         }
+        Msg::SelectContainer(name) => {
+            s.selected_container = if s.selected_container.as_deref() == Some(name.as_str()) {
+                None
+            } else {
+                Some(name)
+            };
+        }
+        Msg::ContainerActionMsg { name, action } => {
+            if s.source.is_remote() {
+                // El remoto necesita SSH + thread: lo corre el chasis y
+                // reenvía el log por `Msg::LogLine` (ver
+                // `container_action_remote_blocking`).
+                s.log.push(format!(
+                    "→ {} {name} remoto delegado al chasis",
+                    action.label()
+                ));
+            } else {
+                let cmd = action.command(&name);
+                s.log.push(format!("$ {cmd}"));
+                let (ok, out) = run_shell_capture(&cmd);
+                for line in out.into_iter().take(30) {
+                    s.log.push(format!("   {line}"));
+                }
+                s.log.push(if ok {
+                    format!("✔ {} {name}", action.label())
+                } else {
+                    format!("✘ {} {name} falló", action.label())
+                });
+                // Una acción mutante cambia el runtime: lo re-observamos para
+                // que el semáforo del panel quede al día sin pulsar Discover.
+                if ok && action.is_mutating() {
+                    s.set_runtime(discover_runtime());
+                }
+            }
+            cap_log(&mut s.log);
+        }
     }
     s
+}
+
+/// Ejecuta un comando de shell local y captura stdout+stderr como líneas.
+/// Devuelve `(éxito, líneas)`. Usado por las acciones de ciclo de vida de
+/// contenedores (`docker start/stop/…`); el remoto va por `Linker`.
+fn run_shell_capture(cmd: &str) -> (bool, Vec<String>) {
+    match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
+        Ok(out) => {
+            let mut lines: Vec<String> = Vec::new();
+            for l in String::from_utf8_lossy(&out.stdout).lines() {
+                lines.push(l.to_string());
+            }
+            for l in String::from_utf8_lossy(&out.stderr).lines() {
+                lines.push(l.to_string());
+            }
+            (out.status.success(), lines)
+        }
+        Err(e) => (false, vec![format!("no se pudo ejecutar: {e}")]),
+    }
+}
+
+/// Ejecuta una acción de ciclo de vida en el servidor remoto por SSH.
+/// **Bloqueante** — pensado para que el chasis lo corra en un thread y
+/// reenvíe las líneas por `Msg::LogLine`. Devuelve las líneas del log.
+pub fn container_action_remote_blocking(
+    source: &Source,
+    name: &str,
+    action: ContainerAction,
+) -> Result<Vec<String>, String> {
+    let cmd = action.command(name);
+    match source {
+        Source::Local | Source::Daemon { .. } | Source::DaemonTcp { .. } | Source::Container { .. } => {
+            let (ok, mut out) = run_shell_capture(&cmd);
+            out.insert(0, format!("$ {cmd}"));
+            out.push(if ok { format!("✔ {} {name}", action.label()) } else { format!("✘ {} {name} falló", action.label()) });
+            Ok(out)
+        }
+        Source::Remote { .. } | Source::RemoteContainer { .. } => {
+            let config = ssh_config_for(source)?;
+            let rt = blocking_runtime()?;
+            rt.block_on(async move {
+                let linker = Linker::connect(&config)
+                    .await
+                    .map_err(|e| format!("ssh connect: {e}"))?;
+                let text = linker
+                    .exec(&format!("{cmd} 2>&1"))
+                    .await
+                    .map_err(|e| format!("{cmd}: {e}"))?;
+                let mut lines = vec![format!("$ {cmd}")];
+                lines.extend(text.lines().take(30).map(str::to_string));
+                lines.push(format!("✔ {} {name} (remoto)", action.label()));
+                Ok(lines)
+            })
+        }
+    }
 }
 
 fn cap_log(log: &mut Vec<String>) {
@@ -645,7 +746,7 @@ pub fn view<HostMsg: Clone + Send + Sync + 'static>(
 ) -> View<HostMsg> {
     let header = matilda_header(state, theme);
 
-    let inv_pane = inventory_pane(state, theme);
+    let inv_pane = inventory_pane(state, theme, lift.clone());
     let plan_pane = plan_and_log_pane(state, theme);
 
     let splitter_palette = SplitterPalette::from_theme(theme);
@@ -701,11 +802,14 @@ fn matilda_header<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> Vie
     .text_aligned(label, 12.0, theme.fg_text, Alignment::Start)
 }
 
-/// Panel izquierdo: el inventario deseado en 3 secciones (hosts /
-/// containers / vhosts). Compuesto como Views planos — el
-/// `llimphi-widget-list` exigiría un `on_click` por fila, y en este
-/// tab las filas son informativas (no se seleccionan todavía).
-fn inventory_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
+/// Panel izquierdo: el inventario en 3 secciones (hosts / containers /
+/// vhosts). Las filas de contenedor son **clickeables**: seleccionan el
+/// contenedor y abren la barra de acciones (start/stop/restart/logs/rm).
+fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
     let mut children: Vec<View<HostMsg>> = Vec::new();
 
     children.push(section_label(
@@ -732,14 +836,38 @@ fn inventory_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> Vie
     children.push(section_label(&cont_label, theme));
     for c in state.desired.containers() {
         let status = state.runtime.as_ref().and_then(|rt| rt.container(&c.name));
-        children.push(container_row(&c.name, &c.image, status, theme));
+        // M6 — drift visible: el discover marca el contenedor desviado con
+        // imagen "(desviado)" en `current`. Lo mostramos como chip.
+        let drift = matches!(
+            state.current.as_ref().and_then(|inv| inv.container(&c.name)),
+            Some(cur) if cur.image == "(desviado)"
+        );
+        children.push(container_row(
+            &c.name,
+            &c.image,
+            status,
+            drift,
+            state.selected_container.as_deref() == Some(c.name.as_str()),
+            theme,
+            lift.clone(),
+        ));
+        // Barra de acciones bajo el contenedor seleccionado.
+        if state.selected_container.as_deref() == Some(c.name.as_str()) {
+            children.push(container_action_bar(&c.name, theme, lift.clone()));
+        }
     }
     // Huérfanos: contenedores que corren pero no están en el inventario
-    // deseado — el operador los ve sin tener que ir a la terminal.
+    // deseado — el operador los ve y los opera sin ir a la terminal.
     if let Some(rt) = &state.runtime {
         for cs in &rt.containers {
             if state.desired.container(&cs.name).is_none() {
-                children.push(container_row(&cs.name, &cs.image, Some(cs), theme));
+                let sel = state.selected_container.as_deref() == Some(cs.name.as_str());
+                children.push(container_row(
+                    &cs.name, &cs.image, Some(cs), false, sel, theme, lift.clone(),
+                ));
+                if sel {
+                    children.push(container_action_bar(&cs.name, theme, lift.clone()));
+                }
             }
         }
     }
@@ -789,14 +917,19 @@ fn inv_row<HostMsg: Clone + 'static>(text: &str, theme: &Theme) -> View<HostMsg>
     text_row(text, theme.fg_text, theme)
 }
 
-/// Fila de contenedor con semáforo runtime. Sin estado observado pinta un
-/// `◌` tenue (no descubierto aún); con estado, el glifo coloreado (verde
-/// vivo / tenue parado) + el `status` de Docker (`Up 2 hours`).
-fn container_row<HostMsg: Clone + 'static>(
+/// Fila de contenedor con semáforo runtime, clickeable. Sin estado
+/// observado pinta `◌` tenue; con estado, el glifo coloreado (verde vivo /
+/// tenue parado) + el `status` de Docker. `drift` agrega un chip ⚠; el
+/// click selecciona el contenedor (abre la barra de acciones).
+#[allow(clippy::too_many_arguments)]
+fn container_row<HostMsg: Clone + Send + Sync + 'static>(
     name: &str,
     image: &str,
     status: Option<&matilda_discover::ContainerStatus>,
+    drift: bool,
+    selected: bool,
     theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
 ) -> View<HostMsg> {
     use llimphi_ui::llimphi_raster::peniko::Color;
     let (glyph, color, tail) = match status {
@@ -810,11 +943,69 @@ fn container_row<HostMsg: Clone + 'static>(
         }
         None => ('◌', theme.fg_muted, String::new()),
     };
-    text_row(
-        &format!("{glyph} {name}   {image}{tail}"),
+    let prefix = if selected { "▸ " } else { "  " };
+    let drift_chip = if drift { "  ⚠ drift" } else { "" };
+    let mut row = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::SelectContainer(name.to_string())))
+    .text_aligned(
+        format!("{prefix}{glyph} {name}   {image}{tail}{drift_chip}"),
+        11.0,
         color,
-        theme,
-    )
+        Alignment::Start,
+    );
+    if selected {
+        row = row.fill(theme.bg_row_hover);
+    }
+    row
+}
+
+/// Barra de acciones para el contenedor seleccionado: un botón por
+/// `ContainerAction` (Start/Stop/Restart/Logs/Remove).
+fn container_action_bar<HostMsg: Clone + Send + Sync + 'static>(
+    name: &str,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let mut buttons: Vec<View<HostMsg>> = Vec::new();
+    for action in ContainerAction::all() {
+        // Remove en rojo tenue (es destructivo); el resto en accent.
+        let color = if matches!(action, ContainerAction::Remove) {
+            Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF)
+        } else {
+            theme.accent
+        };
+        buttons.push(
+            View::new(Style {
+                size: Size { width: length(64.0_f32), height: length(18.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::ContainerActionMsg {
+                name: name.to_string(),
+                action,
+            }))
+            .text_aligned(action.label().to_string(), 11.0, color, Alignment::Start),
+        );
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(2.0_f32),
+        },
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(buttons)
 }
 
 fn plan_and_log_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
@@ -1159,6 +1350,37 @@ mod tests {
         // `viejo` no está en el inventario deseado → es huérfano observado.
         assert!(s.desired.container("viejo").is_none());
         assert!(s.log.iter().any(|l| l.contains("1 up") && l.contains("1 down")));
+    }
+
+    #[test]
+    fn select_container_es_toggle() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::SelectContainer("web".into()));
+        assert_eq!(s.selected_container.as_deref(), Some("web"));
+        // Re-click deselecciona.
+        s = update(s, Msg::SelectContainer("web".into()));
+        assert!(s.selected_container.is_none());
+        // Otro contenedor reemplaza.
+        s = update(s, Msg::SelectContainer("a".into()));
+        s = update(s, Msg::SelectContainer("b".into()));
+        assert_eq!(s.selected_container.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn container_action_local_loguea_comando() {
+        // Sin docker en el entorno de test, el comando falla — pero el log
+        // debe contener la línea del comando y un cierre. (No depende de
+        // que docker exista; sólo del path de ejecución local.)
+        let mut s = State::new(Source::Local);
+        s = update(
+            s,
+            Msg::ContainerActionMsg {
+                name: "web".into(),
+                action: ContainerAction::Start,
+            },
+        );
+        assert!(s.log.iter().any(|l| l.contains("docker start web")));
+        assert!(s.log.iter().any(|l| l.contains("Start web")));
     }
 
     #[test]

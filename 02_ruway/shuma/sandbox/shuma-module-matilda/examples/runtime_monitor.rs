@@ -52,6 +52,9 @@ fn main() {
         vhosts: vec![],
     };
     state = update(state, Msg::SetRuntime(rt));
+    // Seleccionamos `web` para que la barra de acciones (start/stop/restart/
+    // logs/rm) sea visible en la captura.
+    state = update(state, Msg::SelectContainer("web".to_string()));
 
     let v = shuma_module_matilda::view::<()>(&state, &theme, |_m| ());
     let mut layout = LayoutTree::new();
