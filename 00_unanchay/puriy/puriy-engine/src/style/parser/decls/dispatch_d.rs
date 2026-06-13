@@ -813,6 +813,37 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "animation" | "-webkit-animation" | "-moz-animation" => parse_animation(value),
         // Fase 7.767 — `-moz-transition` alias vendor del shorthand `transition`.
         "transition" | "-webkit-transition" | "-moz-transition" => parse_transition(value),
+        // Fase 7.822-7.825 — longhands `transition-*` (faltaban; sólo el
+        // shorthand `transition` los clasificaba). Editan el 1er binding de la
+        // lista (modelo de binding único, ver `transition_first` en decl.rs).
+        // Tomamos la 1ª de la lista separada por coma (`first_comma`); alias
+        // vendor `-webkit-`/`-moz-`.
+        "transition-property"
+        | "-webkit-transition-property"
+        | "-moz-transition-property" => {
+            let v = first_comma(value.trim());
+            if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::TransitionPropertyFirst(None))
+            } else if v.is_empty() {
+                None
+            } else {
+                Some(DeclKind::TransitionPropertyFirst(Some(v.to_ascii_lowercase())))
+            }
+        }
+        "transition-duration"
+        | "-webkit-transition-duration"
+        | "-moz-transition-duration" => {
+            parse_time(first_comma(value.trim())).map(DeclKind::TransitionDurationFirst)
+        }
+        "transition-delay" | "-webkit-transition-delay" | "-moz-transition-delay" => {
+            parse_time(first_comma(value.trim())).map(DeclKind::TransitionDelayFirst)
+        }
+        "transition-timing-function"
+        | "-webkit-transition-timing-function"
+        | "-moz-transition-timing-function" => {
+            parse_easing(&first_comma(value.trim()).to_ascii_lowercase())
+                .map(DeclKind::TransitionTimingFirst)
+        }
         // `grid-gap` (legacy) = `gap`.
         "grid-gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
         "grid-row-gap" => parse_length_px(value).map(DeclKind::RowGap),

@@ -283,6 +283,28 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             "both" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Both)),
             _ => None,
         },
+        // Fase 7.816 — `animation-direction` longhand (faltaba; sólo el shorthand
+        // `animation` lo clasificaba). Mismo destino `AnimationBinding.direction`.
+        // Alias `-webkit-animation-direction`. Toma la 1ª de la lista (first_comma).
+        "animation-direction" | "-webkit-animation-direction" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+            "normal" => Some(DeclKind::AnimationDirection(AnimationDirection::Normal)),
+            "reverse" => Some(DeclKind::AnimationDirection(AnimationDirection::Reverse)),
+            "alternate" => Some(DeclKind::AnimationDirection(AnimationDirection::Alternate)),
+            "alternate-reverse" => {
+                Some(DeclKind::AnimationDirection(AnimationDirection::AlternateReverse))
+            }
+            _ => None,
+        },
+        // Fase 7.817 — `animation-play-state` longhand. Alias `-webkit-`.
+        "animation-play-state" | "-webkit-animation-play-state" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+            "running" => Some(DeclKind::AnimationPlayState(AnimationPlayState::Running)),
+            "paused" => Some(DeclKind::AnimationPlayState(AnimationPlayState::Paused)),
+            _ => None,
+        },
+        // Fase 7.818 — `animation-delay` longhand. Alias `-webkit-`. Segundos.
+        "animation-delay" | "-webkit-animation-delay" => {
+            parse_time_seconds(first_comma(value.trim())).map(DeclKind::AnimationDelay)
+        }
         // Fase 7.519 — `float-defer` (CSS Page Floats 3). `none|last|<int>`.
         "float-defer" => {
             let v = value.trim().to_ascii_lowercase();

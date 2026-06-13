@@ -585,6 +585,23 @@ pub(crate) enum DeclKind {
     AnimationIterationCount(AnimationIterations),
     /// `animation-fill-mode` (Fase 7.518). NO hereda. Plumb.
     AnimationFillMode(AnimationFillMode),
+    /// `animation-direction` (Fase 7.816). NO hereda. Plumb.
+    AnimationDirection(AnimationDirection),
+    /// `animation-play-state` (Fase 7.817). NO hereda. Plumb.
+    AnimationPlayState(AnimationPlayState),
+    /// `animation-delay` (Fase 7.818). Segundos. NO hereda. Plumb.
+    AnimationDelay(f32),
+    /// `transition-property` longhand (Fase 7.822). `None` = `none` (limpia
+    /// la lista de transiciones); `Some(prop)` fija la propiedad del 1er
+    /// binding. NO hereda. Plumb.
+    TransitionPropertyFirst(Option<String>),
+    /// `transition-duration` longhand (Fase 7.823). Segundos sobre el 1er
+    /// binding. NO hereda. Plumb.
+    TransitionDurationFirst(f32),
+    /// `transition-timing-function` longhand (Fase 7.824). NO hereda. Plumb.
+    TransitionTimingFirst(EasingFunction),
+    /// `transition-delay` longhand (Fase 7.825). Segundos. NO hereda. Plumb.
+    TransitionDelayFirst(f32),
     /// `float-defer` (Fase 7.519). NO hereda. Plumb.
     FloatDefer(FloatDefer),
     /// `float-reference` (Fase 7.520). NO hereda. Plumb.
@@ -1378,6 +1395,31 @@ impl Decl {
                 let b = s.animation.get_or_insert_with(AnimationBinding::default);
                 b.fill_mode = *v;
             }
+            DeclKind::AnimationDirection(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.direction = *v;
+            }
+            DeclKind::AnimationPlayState(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.play_state = *v;
+            }
+            DeclKind::AnimationDelay(v) => {
+                let b = s.animation.get_or_insert_with(AnimationBinding::default);
+                b.delay_s = *v;
+            }
+            DeclKind::TransitionPropertyFirst(p) => match p {
+                None => s.transitions.clear(),
+                Some(name) => transition_first(&mut s.transitions).property = name.clone(),
+            },
+            DeclKind::TransitionDurationFirst(v) => {
+                transition_first(&mut s.transitions).duration_s = *v;
+            }
+            DeclKind::TransitionTimingFirst(v) => {
+                transition_first(&mut s.transitions).timing = *v;
+            }
+            DeclKind::TransitionDelayFirst(v) => {
+                transition_first(&mut s.transitions).delay_s = *v;
+            }
             DeclKind::FloatDefer(v) => s.float_defer = *v,
             DeclKind::FloatReference(v) => s.float_reference = *v,
             DeclKind::FloatOffset(v) => s.float_offset = *v,
@@ -1560,4 +1602,20 @@ impl Decl {
             DeclKind::CurrentColor(target) => s.current_color.push(*target),
         }
     }
+}
+
+/// Devuelve el 1er `TransitionBinding` de la lista, creándolo con defaults
+/// (`property: all`) si está vacía. Los longhands `transition-*` (Fase
+/// 7.822-7.825) editan este binding — espejo de cómo los longhands
+/// `animation-*` usan `get_or_insert_with` sobre un único binding.
+fn transition_first(t: &mut Vec<TransitionBinding>) -> &mut TransitionBinding {
+    if t.is_empty() {
+        t.push(TransitionBinding {
+            property: "all".to_string(),
+            duration_s: 0.0,
+            timing: EasingFunction::default(),
+            delay_s: 0.0,
+        });
+    }
+    &mut t[0]
 }

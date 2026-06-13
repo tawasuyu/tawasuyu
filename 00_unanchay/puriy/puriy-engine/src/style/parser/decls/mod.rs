@@ -445,6 +445,63 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_font_shorthand(value, important));
             continue;
         }
+        // Fase 7.819-7.820 — shorthands `grid-row` / `grid-column`
+        // (CSS Grid §8.3): `<start> [ / <end> ]?`. Reparte en los longhands
+        // `grid-{row,column}-{start,end}` ya existentes (parse opaco). Al
+        // omitir el end, un `<custom-ident>` de start se replica; un
+        // `<integer>`/`span` deja `auto`.
+        if prop.eq_ignore_ascii_case("grid-row") || prop.eq_ignore_ascii_case("grid-column") {
+            let is_col = prop.eq_ignore_ascii_case("grid-column");
+            let mut it = value.splitn(2, '/');
+            let start_raw = it.next().unwrap_or("").trim();
+            if start_raw.is_empty() {
+                continue;
+            }
+            let end_raw = it.next().map(str::trim);
+            let start = grid_line_opt(start_raw);
+            let end = match end_raw {
+                Some(e) => grid_line_opt(e),
+                None if grid_line_is_custom_ident(start_raw) => start.clone(),
+                None => None,
+            };
+            if is_col {
+                out.push(Decl { kind: DeclKind::GridColumnStart(start), important });
+                out.push(Decl { kind: DeclKind::GridColumnEnd(end), important });
+            } else {
+                out.push(Decl { kind: DeclKind::GridRowStart(start), important });
+                out.push(Decl { kind: DeclKind::GridRowEnd(end), important });
+            }
+            continue;
+        }
+        // Fase 7.821 — shorthand `grid-area` (CSS Grid §8.4):
+        // `<row-start> [ / <col-start> [ / <row-end> [ / <col-end> ]?]?]?`.
+        // Reglas de omisión: al faltar col-start, si row-start es custom-ident
+        // los cuatro toman ese valor; al faltar row-end/col-end, si el start
+        // del mismo eje es custom-ident se replica, sino `auto`.
+        if prop.eq_ignore_ascii_case("grid-area") {
+            let parts: Vec<&str> = value.split('/').map(str::trim).collect();
+            let rs_raw = parts.first().copied().unwrap_or("");
+            if rs_raw.is_empty() {
+                continue;
+            }
+            let rs_ident = grid_line_is_custom_ident(rs_raw);
+            let cs_raw = parts
+                .get(1)
+                .copied()
+                .unwrap_or(if rs_ident { rs_raw } else { "auto" });
+            let re_raw = parts
+                .get(2)
+                .copied()
+                .unwrap_or(if rs_ident { rs_raw } else { "auto" });
+            let ce_raw = parts.get(3).copied().unwrap_or(
+                if grid_line_is_custom_ident(cs_raw) { cs_raw } else { "auto" },
+            );
+            out.push(Decl { kind: DeclKind::GridRowStart(grid_line_opt(rs_raw)), important });
+            out.push(Decl { kind: DeclKind::GridColumnStart(grid_line_opt(cs_raw)), important });
+            out.push(Decl { kind: DeclKind::GridRowEnd(grid_line_opt(re_raw)), important });
+            out.push(Decl { kind: DeclKind::GridColumnEnd(grid_line_opt(ce_raw)), important });
+            continue;
+        }
         // `margin` shorthand: ruteado acá (no por decl_kind_from_pair) para
         // soportar `auto` por lado (`margin: 0 auto` = centrado horizontal).
         if prop.eq_ignore_ascii_case("margin") {
@@ -696,6 +753,35 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         }
     }
     out
+}
+
+/// Normaliza un `<grid-line>` a `Option<String>`: `auto`/vacío → `None`
+/// (el resolver de grid lo trata como colocación automática), el resto se
+/// guarda opaco (`3`, `span 2`, `header`, `span header`...).
+fn grid_line_opt(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+/// `true` si el `<grid-line>` es un `<custom-ident>` puro — el caso en que,
+/// al omitir el lado opuesto del shorthand, el ident se replica (CSS Grid
+/// §8.3). No lo es `auto`, un `<integer>` (con signo) ni nada que empiece
+/// por `span`.
+fn grid_line_is_custom_ident(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() || t.eq_ignore_ascii_case("auto") {
+        return false;
+    }
+    let first = t.split_whitespace().next().unwrap_or("");
+    if first.eq_ignore_ascii_case("span") {
+        return false;
+    }
+    let head = first.trim_start_matches(['+', '-']);
+    !head.chars().next().is_none_or(|c| c.is_ascii_digit())
 }
 
 /// Si `value` termina en `!important` (con o sin espacios), devuelve la
