@@ -548,6 +548,22 @@ impl Session {
         matches!(&self.shell.state, ModuleState::Shell(s) if s.is_running())
     }
 
+    /// A6 — comandos largos terminados pendientes de acuse en esta sesión (la
+    /// badge del diente). `0` si no es un shell o no hay nada pendiente.
+    pub(crate) fn long_alerts(&self) -> usize {
+        match &self.shell.state {
+            ModuleState::Shell(s) => s.long_alerts(),
+            _ => 0,
+        }
+    }
+
+    /// A6 — el usuario miró esta sesión: limpia la badge de comando largo.
+    pub(crate) fn ack_long_alerts(&mut self) {
+        if let ModuleState::Shell(s) = &mut self.shell.state {
+            s.ack_long_alerts();
+        }
+    }
+
     pub(crate) fn port_num(&self) -> u16 {
         self.port.text().trim().parse().unwrap_or(22)
     }

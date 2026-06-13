@@ -423,6 +423,12 @@ pub struct State {
     /// línea original. Un notice clickeable bajo el bloque la lleva al input.
     /// Sólo en memoria.
     pub did_you_mean: std::collections::HashMap<u64, String>,
+    /// A6 — cuántos comandos largos (≥ `[rules].on_long_command_secs`)
+    /// terminaron **sin que el usuario los acuse**. El chasis lo lee para pintar
+    /// la badge en el diente de la sesión cuando no está activa, y lo pone en
+    /// cero al volver a ella ([`State::ack_long_alerts`]). `0` = nada pendiente.
+    /// Sólo en memoria.
+    pub long_alerts: usize,
     /// Tope de captura de stdout por run, en bytes. `0` = sin tope. Lo fija
     /// el builtin `:limit <MB>`.
     pub capture_limit_bytes: usize,
@@ -759,6 +765,7 @@ impl State {
             dismissed_choreo: std::collections::HashSet::new(),
             dismissed_alias: std::collections::HashSet::new(),
             did_you_mean: std::collections::HashMap::new(),
+            long_alerts: 0,
             // Política de captura inicial desde el rc (los builtins `:limit` /
             // `:spill` la sobreescriben en vivo). `0` MiB = sin tope.
             capture_limit_bytes: config.capture.limit_mb.saturating_mul(1024 * 1024),
@@ -884,6 +891,18 @@ impl State {
     /// `true` si hay un comando ejecutándose ahora.
     pub fn is_running(&self) -> bool {
         self.running.is_some()
+    }
+
+    /// A6 — comandos largos terminados pendientes de acuse (los que el chasis
+    /// badgea en el diente de la sesión cuando no está activa).
+    pub fn long_alerts(&self) -> usize {
+        self.long_alerts
+    }
+
+    /// A6 — el usuario volvió a esta sesión: limpia la badge de comando largo.
+    /// Lo llama el chasis al activar la sesión (y por Tick mientras es la activa).
+    pub fn ack_long_alerts(&mut self) {
+        self.long_alerts = 0;
     }
 
     /// Devuelve el `ActiveRun` (foreground o background) cuyo bloque es

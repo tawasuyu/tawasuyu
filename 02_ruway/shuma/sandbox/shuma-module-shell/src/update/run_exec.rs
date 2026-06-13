@@ -564,7 +564,10 @@ pub(crate) fn drain_run(mut s: State) -> State {
         s.push_in_block(run_block, OutputLine::notice(notice));
         // Sella el cierre para el titular semáforo del header colapsado
         // (duración = ended − started).
-        s.block_ended.insert(run_block, now_unix_secs());
+        let ended = now_unix_secs();
+        s.block_ended.insert(run_block, ended);
+        // A6 — comando largo terminado.
+        register_long_command(&mut s, run_block, ended);
         // A4 — si falló por `command not found`, ofrecé la corrección.
         if !ok {
             detect_did_you_mean(&mut s, run_block);
@@ -694,6 +697,82 @@ pub(crate) fn cancel_running(mut s: State) -> State {
     }
     s.push_in_block(run_block, OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
     s
+}
+
+/// A6 — registra un comando largo terminado: si duró ≥
+/// `[rules].on_long_command_secs` (`0` = apagado), suma una alerta para la badge
+/// del diente (que el chasis pinta cuando la sesión no está activa) y deja un
+/// rastro `⏲` en el bloque. Sin notificaciones del sistema: el chasis es la
+/// superficie. Puro sobre el `State` — sin la maquinaria de spawn — para poder
+/// testearlo directo. `ended` es el cierre en segundos unix.
+pub(crate) fn register_long_command(s: &mut State, block: u64, ended: u64) {
+    let umbral = s.config.rules.on_long_command_secs;
+    if umbral == 0 {
+        return;
+    }
+    let Some(&started) = s.block_started.get(&block) else {
+        return;
+    };
+    let dur = ended.saturating_sub(started);
+    if dur < umbral {
+        return;
+    }
+    s.long_alerts += 1;
+    s.push_in_block(
+        block,
+        OutputLine::notice(format!("⏲ comando largo — terminó tras {dur}s")),
+    );
+}
+
+#[cfg(test)]
+mod a6_long_command_tests {
+    use super::*;
+
+    /// State con `on_long_command_secs = umbral` y un bloque que arrancó hace
+    /// `dur` segundos (ended − started = dur).
+    fn state_con_bloque_durado(umbral: u64, dur: u64) -> (State, u64, u64) {
+        let mut s = State::new(shuma_module::Source::Local);
+        s.config.rules.on_long_command_secs = umbral;
+        let block = 7;
+        let started = 1_000_000;
+        s.block_started.insert(block, started);
+        (s, block, started + dur)
+    }
+
+    #[test]
+    fn comando_largo_suma_alerta_y_rastro() {
+        let (mut s, block, ended) = state_con_bloque_durado(30, 45);
+        register_long_command(&mut s, block, ended);
+        assert_eq!(s.long_alerts(), 1);
+        // Dejó el rastro ⏲ en el bloque.
+        assert!(s
+            .output
+            .iter()
+            .any(|l| l.block == block && l.text.contains("⏲") && l.text.contains("45s")));
+    }
+
+    #[test]
+    fn comando_corto_no_alerta() {
+        let (mut s, block, ended) = state_con_bloque_durado(30, 5);
+        register_long_command(&mut s, block, ended);
+        assert_eq!(s.long_alerts(), 0);
+    }
+
+    #[test]
+    fn umbral_cero_apaga_la_funcion() {
+        let (mut s, block, ended) = state_con_bloque_durado(0, 9999);
+        register_long_command(&mut s, block, ended);
+        assert_eq!(s.long_alerts(), 0);
+    }
+
+    #[test]
+    fn ack_limpia_la_badge() {
+        let (mut s, block, ended) = state_con_bloque_durado(30, 60);
+        register_long_command(&mut s, block, ended);
+        assert_eq!(s.long_alerts(), 1);
+        s.ack_long_alerts();
+        assert_eq!(s.long_alerts(), 0);
+    }
 }
 
 #[cfg(test)]

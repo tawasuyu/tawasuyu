@@ -343,6 +343,13 @@ impl App for Shell {
             }
             Msg::ShellTick => {
                 drain_shell_instances(&mut m);
+                // A6 — la sesión activa no badgea (el usuario la está viendo):
+                // acusá sus comandos largos en cuanto terminan, así no aparece
+                // una badge stale al cambiar de diente después de verlos vivos.
+                let activa = m.active_session;
+                if let Some(s) = m.sessions.get_mut(activa) {
+                    s.ack_long_alerts();
+                }
                 // E5 — despachar peticiones LLM pendientes (`:?`/`:explica`/
                 // `:resume`) a un thread; el resultado vuelve por LlmResult.
                 update::fulfill_llm_requests(&mut m, handle);
@@ -364,6 +371,9 @@ impl App for Shell {
                         m.active_session = i;
                         m.session_panel_open = true;
                     }
+                    // A6 — el usuario está mirando esta sesión: limpia su badge
+                    // de comando largo.
+                    m.sessions[i].ack_long_alerts();
                     save_chrome(&m);
                 }
             }

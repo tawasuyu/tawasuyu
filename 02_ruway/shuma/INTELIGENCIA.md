@@ -109,11 +109,23 @@ chips de acción al colapsar (modo escaneo), en el legacy (`command_card`) va
 como segunda fila *«… · clic para ver»*. Verificado headless
 (`examples/titular_a5.rs` → PNG) + 3 tests unitarios.
 
-### A6. Aviso de comando largo terminado
-Comando > 30 s que cierra mientras el usuario está en otra sesión/diente →
-badge en el diente del rail (el LED de actividad ya existe en
-`session_tooth_icon`) + notice. Nada de notificaciones del sistema: el
-chasis es la superficie.
+### A6. Aviso de comando largo terminado ✅ (2026-06-13)
+Comando ≥ `[rules].on_long_command_secs` (default 30 s) que cierra mientras el
+usuario está en otra sesión/diente → badge en el diente del rail + rastro en el
+bloque. Nada de notificaciones del sistema: el chasis es la superficie. **Hecho
+— por fin consume el `on_long_command_secs` que quedaba inerte:** módulo —
+`register_long_command` (`update/run_exec.rs`, puro y testeable) corre al cerrar
+cada comando externo; si `ended − block_started ≥ umbral` (`0` = apagado) suma a
+`State.long_alerts` y deja un notice `⏲ comando largo — terminó tras Ns` en el
+bloque. `State::long_alerts()`/`ack_long_alerts()` lo exponen. Chasis
+(`shuma-shell-llimphi`) — `Session::long_alerts()`/`ack_long_alerts()` puentean
+al módulo; `session_tooth_icon` gana un parámetro `alert` que pinta un **punto
+ámbar con halo** en la esquina opuesta al LED verde, **sólo en sesiones no
+activas** (`!activa && long_alerts() > 0`); se acusa al `SelectSession` (volvés
+a mirarla) y por `ShellTick` sobre la sesión activa (un comando largo en primer
+plano no deja badge stale al cambiar de diente). Verificado: 4 tests del módulo
+(suma con umbral, corto no alerta, umbral-0 apaga, ack limpia) + build release
+del chasis. La badge en sí es espejo del LED de actividad ya existente.
 
 ## B — El nerdo extremo: superficies direccionables y programables
 
@@ -242,8 +254,6 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
 
 ---
 
-**Roadmap completo (2026-06-13):** A1·A2·A3·A4·A5 + E1·E2·E3·E4·E5·E6 ✅. Sin
-arrancar queda sólo A6 (aviso de comando largo terminado — `on_long_command_secs`
-ya declarable en `[rules]` pero inerte; necesita la badge en el diente del rail,
-que vive en el chasis `shuma-shell-llimphi`) — y el pulido de E4 (cliente móvil
-vía gateway).
+**Roadmap COMPLETO (2026-06-13):** A1·A2·A3·A4·A5·A6 + E1·E2·E3·E4·E5·E6 ✅ —
+toda la lista de inteligencia, cerrada. Pendiente sólo el pulido de E4 (cliente
+móvil vía gateway: el WS ya soporta attach, falta el cliente).

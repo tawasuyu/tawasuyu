@@ -29,7 +29,11 @@ pub(super) fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
             let fill = if activa { theme.bg_selected } else { theme.bg_panel_alt };
             let icon_color = if activa { theme.accent } else { theme.fg_muted };
             let badge = s.number.map(|n| n.to_string()).unwrap_or_default();
-            let icon = session_tooth_icon(s.kind, s.active_data(), 22.0, icon_color);
+            // A6 — badge de comando largo: sólo en sesiones NO activas (en la
+            // activa el usuario ya está mirando). Avisa que algo largo terminó
+            // mientras estabas en otro diente.
+            let alerta_larga = !activa && s.long_alerts() > 0;
+            let icon = session_tooth_icon(s.kind, s.active_data(), alerta_larga, 22.0, icon_color);
             let num = View::new(Style {
                 size: Size { width: percent(1.0_f32), height: length(12.0_f32) },
                 align_items: Some(AlignItems::Center),
@@ -117,8 +121,15 @@ pub(super) fn session_rail(model: &Model, theme: &Theme) -> View<Msg> {
     .children(teeth)
 }
 
-/// Icono vectorial del diente de una sesión según su tipo.
-fn session_tooth_icon(kind: SessionKind, active_data: bool, size: f32, color: Color) -> View<Msg> {
+/// Icono vectorial del diente de una sesión según su tipo. `alert` (A6) pinta
+/// una badge ámbar cuando un comando largo terminó en una sesión no-activa.
+fn session_tooth_icon(
+    kind: SessionKind,
+    active_data: bool,
+    alert: bool,
+    size: f32,
+    color: Color,
+) -> View<Msg> {
     View::new(Style {
         size: Size { width: length(size), height: length(size) },
         align_items: Some(AlignItems::Center),
@@ -177,6 +188,22 @@ fn session_tooth_icon(kind: SessionKind, active_data: bool, size: f32, color: Co
             None,
             &Circle::new((cx + r * 1.05, cy - r * 1.05), (r * 0.32).max(1.5)),
         );
+        // A6 — badge de comando largo: punto ámbar en la esquina opuesta al LED
+        // (abajo-izquierda), con un halo tenue para que cante un poco más.
+        if alert {
+            let ambar = PColor::from_rgb8(0xf7, 0xc8, 0x7a);
+            let bx = cx - r * 1.05;
+            let by = cy + r * 1.05;
+            let rad = (r * 0.36).max(1.8);
+            scene.fill(
+                Fill::NonZero,
+                Affine::IDENTITY,
+                ambar.with_alpha(0.30),
+                None,
+                &Circle::new((bx, by), rad * 1.9),
+            );
+            scene.fill(Fill::NonZero, Affine::IDENTITY, ambar, None, &Circle::new((bx, by), rad));
+        }
     })
 }
 
