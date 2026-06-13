@@ -13,8 +13,9 @@ pub(crate) use crate::env::{
     unshare_disponible,
 };
 
-use crate::types::{ContainerInfo, Distro, Msg};
+use crate::types::{ContainerInfo, Distro, ExplorerEntry, Msg};
 use llimphi_ui::Handle;
+use shuma_module::Source;
 
 // ─── Rootfs (unshare / bwrap) ───────────────────────────────────────
 
@@ -441,4 +442,155 @@ pub(crate) fn spawn_create_remote_container(
             .output();
         Msg::RefreshRemoteContainers
     });
+}
+
+// ─── Spawn: listado del Explorer (cwd remoto por SSH) ───────────────
+
+/// Lista el `cwd` de una sesión remota (Remote / RemoteContainer) por `ssh`
+/// (BatchMode, igual que el gestor de contenedores remotos) y entrega el
+/// resultado por `Msg::ExplorerLoaded`. El trabajo de red va off-thread:
+/// `read_dir` local no alcanza al filesystem del host remoto.
+pub(crate) fn spawn_explorer_list(
+    handle: &Handle<Msg>,
+    session: usize,
+    source: Source,
+    cwd: String,
+) {
+    handle.spawn(move || {
+        let result = explorer_list_blocking(&source, &cwd);
+        Msg::ExplorerLoaded { session, path: cwd, result }
+    });
+}
+
+/// Construye el comando `ls`, lo manda por SSH al host de `source` y parsea
+/// la salida. Sólo Remote / RemoteContainer; otras fuentes son un bug del
+/// llamador (el panel local usa `read_dir`).
+fn explorer_list_blocking(source: &Source, cwd: &str) -> Result<Vec<ExplorerEntry>, String> {
+    let (host, user, port, remote_cmd) = match source {
+        Source::Remote { host, user, port, .. } => {
+            // `ls -1Ap`: una entrada por línea, incluye ocultos (sin ./..),
+            // y sufija `/` a los directorios — así sabemos el tipo sin `stat`.
+            let cmd = if cwd.starts_with('/') {
+                format!("ls -1Ap -- {}", shell_quote_arg(cwd))
+            } else {
+                "ls -1Ap".to_string() // cwd "~"/relativo → home de la sesión SSH
+            };
+            (host.as_str(), user.as_str(), *port, cmd)
+        }
+        Source::RemoteContainer { host, user, port, engine, name, .. } => {
+            (host.as_str(), user.as_str(), *port, remote_container_ls_cmd(engine, name, cwd))
+        }
+        _ => return Err("la sesión no es remota".into()),
+    };
+    let out = ssh_capture(host, user, port, &remote_cmd)?;
+    Ok(parse_ls_output(&out))
+}
+
+/// Comando que, ejecutado **en el host remoto**, lista el cwd interior de un
+/// contenedor de ese host. Espejo mínimo de `remote_container_command` del
+/// shell: `<engine> exec` para podman/docker, `chroot` para rootfs.
+fn remote_container_ls_cmd(engine: &str, name: &str, cwd: &str) -> String {
+    let inner = if cwd.starts_with('/') {
+        format!("cd {} 2>/dev/null; ls -1Ap", shell_quote_arg(cwd))
+    } else {
+        "ls -1Ap".to_string()
+    };
+    match engine {
+        "unshare" | "bwrap" => format!(
+            "chroot {} /bin/sh -lc {}",
+            shell_quote_arg(name),
+            shell_quote_arg(&inner)
+        ),
+        eng => format!(
+            "{eng} exec -i {} /bin/sh -lc {}",
+            shell_quote_arg(name),
+            shell_quote_arg(&inner)
+        ),
+    }
+}
+
+/// Corre `remote_cmd` en `user@host:port` por `ssh` y devuelve su stdout, o
+/// la primera línea de stderr como error. BatchMode evita prompts colgados.
+fn ssh_capture(host: &str, user: &str, port: u16, remote_cmd: &str) -> Result<String, String> {
+    let target = format!("{user}@{host}");
+    let out = std::process::Command::new("ssh")
+        .args([
+            "-p",
+            &port.to_string(),
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            &target,
+            remote_cmd,
+        ])
+        .output()
+        .map_err(|e| format!("no pude ejecutar ssh: {e}"))?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        let err = String::from_utf8_lossy(&out.stderr);
+        Err(err
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("ssh falló")
+            .to_string())
+    }
+}
+
+/// Parsea la salida de `ls -1Ap`: directorios sufijados con `/`, ordenados
+/// con dirs primero y acotados a 200 (igual que el panel local).
+fn parse_ls_output(out: &str) -> Vec<ExplorerEntry> {
+    let mut entradas: Vec<ExplorerEntry> = out
+        .lines()
+        .map(|l| l.trim_end_matches('\r'))
+        .filter(|l| !l.is_empty())
+        .map(|l| match l.strip_suffix('/') {
+            Some(n) => ExplorerEntry { is_dir: true, name: n.to_string() },
+            None => ExplorerEntry { is_dir: false, name: l.to_string() },
+        })
+        .collect();
+    entradas.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
+    entradas.truncate(200);
+    entradas
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ls_separates_dirs_and_sorts() {
+        // `ls -1Ap` sufija `/` a los dirs; el resto son archivos. Incluye un
+        // `\r` colgado y una línea vacía para validar el trim/filtro.
+        let out = "zeta.txt\nsrc/\n.config\nbin/\nalpha.md\r\n\n";
+        let e = parse_ls_output(out);
+        // Dirs primero (alfabético), luego archivos (alfabético, ocultos incl.).
+        let got: Vec<(bool, &str)> = e.iter().map(|x| (x.is_dir, x.name.as_str())).collect();
+        assert_eq!(
+            got,
+            vec![
+                (true, "bin"),
+                (true, "src"),
+                (false, ".config"),
+                (false, "alpha.md"),
+                (false, "zeta.txt"),
+            ]
+        );
+    }
+
+    #[test]
+    fn remote_container_ls_uses_engine_exec_or_chroot() {
+        // podman/docker → `<engine> exec`. El cwd interior va dentro del `-lc`
+        // (las comillas internas quedan escapadas por el quoting anidado, así
+        // que verificamos el contenido lógico, no la forma exacta del escape).
+        let podman = remote_container_ls_cmd("podman", "caja", "/work");
+        assert!(podman.starts_with("podman exec -i 'caja' /bin/sh -lc"));
+        assert!(podman.contains("/work") && podman.contains("ls -1Ap"));
+        // rootfs (unshare/bwrap) → chroot al path.
+        let rootfs = remote_container_ls_cmd("bwrap", "/home/u/.local/share/shuma/rootfs/arch", "~");
+        assert!(rootfs.starts_with("chroot '/home/u/.local/share/shuma/rootfs/arch' /bin/sh -lc"));
+        // cwd "~" (no absoluto) → sin `cd`, lista el home del contenedor.
+        assert!(!rootfs.contains("cd "));
+    }
 }

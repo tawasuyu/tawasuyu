@@ -231,6 +231,7 @@ impl App for Shell {
             containers_modal_open: false,
             layouts: load_layouts(),
             layouts_modal_open: false,
+            explorer: ExplorerCache::default(),
             layout_name: TextInputState::new(),
             layout_name_focused: false,
             viewport: (1280.0, 800.0),
@@ -353,6 +354,8 @@ impl App for Shell {
                 // E5 — despachar peticiones LLM pendientes (`:?`/`:explica`/
                 // `:resume`) a un thread; el resultado vuelve por LlmResult.
                 update::fulfill_llm_requests(&mut m, handle);
+                // El cwd remoto pudo cambiar tras un `cd`: re-listar si hace falta.
+                reconcile_explorer(&mut m, handle);
             }
             Msg::Resized(w, h) => {
                 if w > 0.0 && h > 0.0 {
@@ -375,6 +378,7 @@ impl App for Shell {
                     // de comando largo.
                     m.sessions[i].ack_long_alerts();
                     save_chrome(&m);
+                    reconcile_explorer(&mut m, handle);
                 }
             }
             Msg::HoverSession(idx) => {
@@ -383,6 +387,7 @@ impl App for Shell {
             Msg::SelectTool(t) => {
                 m.active_tool = if m.active_tool == Some(t) { None } else { Some(t) };
                 save_chrome(&m);
+                reconcile_explorer(&mut m, handle);
             }
             Msg::RunFromHistory(cmd) => {
                 let slot = Slot::Session(m.active_session, Which::Shell);
@@ -489,6 +494,20 @@ impl App for Shell {
             }
             Msg::RefreshContainers => spawn_list_containers(handle),
             Msg::ContainersLoaded(v) => m.containers = v,
+            Msg::ExplorerLoaded { session, path, result } => {
+                // Aceptar sólo si sigue siendo la (sesión, cwd) que pedimos —
+                // si el usuario cambió de sesión o de dir, este listado es viejo.
+                if m.explorer.key.as_ref().is_some_and(|(s, p)| *s == session && p == &path) {
+                    m.explorer.state = match result {
+                        Ok(entries) => ExplorerState::Loaded(entries),
+                        Err(e) => ExplorerState::Error(e),
+                    };
+                }
+            }
+            Msg::RefreshExplorer => {
+                m.explorer = ExplorerCache::default();
+                reconcile_explorer(&mut m, handle);
+            }
             Msg::RemoteContainersLoaded(v) => m.remote_containers = v,
             Msg::SubscribeContainer(i) => {
                 m.dropdown_open = None;

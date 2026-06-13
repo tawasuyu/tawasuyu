@@ -285,9 +285,27 @@ pub(super) fn history_row(cmd: &str, count: usize, theme: &Theme) -> View<Msg> {
 
 // ─── Explorer ───────────────────────────────────────────────────────
 
-/// Panel Explorer: lista los archivos del cwd de la sesión (local).
+/// Panel Explorer: lista los archivos del cwd de la sesión. Para sesiones
+/// remotas (Remote / RemoteContainer) el listado viene del cache
+/// `model.explorer` (lo trae `reconcile_explorer` off-thread por SSH);
+/// para locales lee el filesystem directamente con `read_dir`.
 pub(super) fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
-    use llimphi_ui::llimphi_text::Alignment;
+    let remoto = model.active().and_then(|s| match &s.shell.state {
+        ModuleState::Shell(sh)
+            if matches!(sh.source, Source::Remote { .. } | Source::RemoteContainer { .. }) =>
+        {
+            Some(sh.cwd.display().to_string())
+        }
+        _ => None,
+    });
+    match remoto {
+        Some(cwd) => explorer_panel_remote(model, &cwd, theme),
+        None => explorer_panel_local(model, theme),
+    }
+}
+
+/// Explorer de una sesión local: `read_dir` directo del cwd.
+fn explorer_panel_local(model: &Model, theme: &Theme) -> View<Msg> {
     let cwd = model
         .active()
         .and_then(|s| match &s.shell.state {
@@ -296,8 +314,7 @@ pub(super) fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
         })
         .unwrap_or_else(|| ".".to_string());
 
-    let mut filas: Vec<View<Msg>> =
-        vec![tool_header(&format!("Explorer · {cwd}"), theme)];
+    let mut filas: Vec<View<Msg>> = vec![tool_header(&format!("Explorer · {cwd}"), theme)];
     match std::fs::read_dir(&cwd) {
         Ok(rd) => {
             let mut entradas: Vec<(bool, String)> = rd
@@ -310,51 +327,131 @@ pub(super) fn explorer_panel(model: &Model, theme: &Theme) -> View<Msg> {
             entradas.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
             entradas.truncate(200);
             for (dir, name) in entradas {
-                let etiqueta = if dir { format!("{name}/") } else { name.clone() };
-                let cmd = if dir { format!("cd {name}") } else { name.clone() };
-                filas.push(
-                    View::new(Style {
-                        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-                        padding: Rect {
-                            left: length(12.0_f32),
-                            right: length(8.0_f32),
-                            top: length(0.0_f32),
-                            bottom: length(0.0_f32),
-                        },
-                        align_items: Some(AlignItems::Center),
-                        ..Default::default()
-                    })
-                    .hover_fill(theme.bg_row_hover)
-                    .on_click(Msg::RunFromHistory(cmd))
-                    .text_aligned(
-                        etiqueta,
-                        12.0,
-                        if dir { theme.accent } else { theme.fg_text },
-                        Alignment::Start,
-                    ),
-                );
+                filas.push(explorer_row(dir, &name, theme));
             }
         }
-        Err(_) => filas.push(
-            View::new(Style {
-                size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
-                padding: Rect {
-                    left: length(12.0_f32),
-                    right: length(8.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
-                align_items: Some(AlignItems::Center),
-                ..Default::default()
-            })
-            .text_aligned(
-                "(cwd inaccesible · SFTP remoto pendiente)".to_string(),
-                11.0,
-                theme.fg_muted,
-                Alignment::Start,
-            ),
-        ),
+        Err(_) => filas.push(explorer_note("(cwd inaccesible)", theme)),
     }
+    explorer_column(filas)
+}
+
+/// Explorer de una sesión remota: renderiza el cache `model.explorer`.
+fn explorer_panel_remote(model: &Model, cwd: &str, theme: &Theme) -> View<Msg> {
+    let mut filas: Vec<View<Msg>> = vec![explorer_remote_header(cwd, theme)];
+    // Sin conexión no listamos nada (reconcile_explorer tampoco spawnea).
+    let conectada = model.active().map(|s| s.conn == ConnState::Connected).unwrap_or(false);
+    if !conectada {
+        filas.push(explorer_note("(sesión no conectada)", theme));
+        return explorer_column(filas);
+    }
+    // El cache vale sólo si su clave coincide con la sesión + cwd de ahora.
+    let vigente = model
+        .explorer
+        .key
+        .as_ref()
+        .is_some_and(|(s, p)| *s == model.active_session && p == cwd);
+    if vigente {
+        match &model.explorer.state {
+            ExplorerState::Loaded(entries) if entries.is_empty() => {
+                filas.push(explorer_note("(vacío)", theme));
+            }
+            ExplorerState::Loaded(entries) => {
+                for e in entries {
+                    filas.push(explorer_row(e.is_dir, &e.name, theme));
+                }
+            }
+            ExplorerState::Error(err) => filas.push(explorer_note(&format!("✘ {err}"), theme)),
+            _ => filas.push(explorer_note("cargando…", theme)),
+        }
+    } else {
+        filas.push(explorer_note("cargando…", theme));
+    }
+    explorer_column(filas)
+}
+
+/// Header del Explorer remoto: título + botón ↻ para re-listar.
+fn explorer_remote_header(cwd: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let titulo = View::new(Style {
+        size: Size { width: length(0.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(4.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text_aligned(format!("Explorer · {cwd}"), 11.0, theme.fg_muted, Alignment::Start);
+    let refrescar = View::new(Style {
+        size: Size { width: length(24.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_button_hover)
+    .text_aligned("↻".to_string(), 12.0, theme.accent, Alignment::Center)
+    .on_click(Msg::RefreshExplorer);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        align_items: Some(AlignItems::Center),
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![titulo, refrescar])
+}
+
+/// Una fila del Explorer: click en un dir → `cd`, en un archivo → inserta su
+/// nombre en el input. Compartida por el panel local y el remoto.
+fn explorer_row(dir: bool, name: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    let etiqueta = if dir { format!("{name}/") } else { name.to_string() };
+    let cmd = if dir { format!("cd {name}") } else { name.to_string() };
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(Msg::RunFromHistory(cmd))
+    .text_aligned(
+        etiqueta,
+        12.0,
+        if dir { theme.accent } else { theme.fg_text },
+        Alignment::Start,
+    )
+}
+
+/// Una línea de nota tenue del Explorer (vacío / cargando / error).
+fn explorer_note(text: &str, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_text::Alignment;
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+        padding: Rect {
+            left: length(12.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(text.to_string(), 11.0, theme.fg_muted, Alignment::Start)
+}
+
+/// El contenedor en columna del panel Explorer.
+fn explorer_column(filas: Vec<View<Msg>>) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },

@@ -148,6 +148,39 @@ pub(crate) struct ContainerInfo {
     pub rootfs: bool,
 }
 
+/// Una entrada del listado del Explorer (un archivo o directorio del cwd).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ExplorerEntry {
+    pub is_dir: bool,
+    pub name: String,
+}
+
+/// Estado del listado remoto del Explorer.
+#[derive(Default)]
+pub(crate) enum ExplorerState {
+    /// Nada pedido todavía.
+    #[default]
+    Idle,
+    /// Listado en curso (off-thread por SSH).
+    Loading,
+    /// Listado listo.
+    Loaded(Vec<ExplorerEntry>),
+    /// El listado falló (mensaje para mostrar).
+    Error(String),
+}
+
+/// Cache del listado del Explorer para sesiones **remotas** (Remote /
+/// RemoteContainer). `read_dir` local no alcanza al filesystem del host
+/// remoto, así que el contenido se trae off-thread por SSH y se cachea acá.
+/// La `key` ata el contenido a una `(sesión, cwd)` concreta — al cambiar
+/// cualquiera de los dos, el reconciliador dispara un listado nuevo.
+#[derive(Default)]
+pub(crate) struct ExplorerCache {
+    /// `(índice de sesión, cwd)` que refleja `state`; `None` = vacío.
+    pub key: Option<(usize, String)>,
+    pub state: ExplorerState,
+}
+
 /// Un directorio del host montado dentro del contenedor.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Mount {
@@ -836,6 +869,8 @@ pub(crate) struct Model {
     pub containers_modal_open: bool,
     pub layouts: Vec<LayoutSnapshot>,
     pub layouts_modal_open: bool,
+    /// Listado del Explorer para sesiones remotas (off-thread por SSH).
+    pub explorer: ExplorerCache,
     pub layout_name: TextInputState,
     pub layout_name_focused: bool,
     pub viewport: (f32, f32),
@@ -924,6 +959,14 @@ pub(crate) enum Msg {
     PendingKey(llimphi_ui::KeyEvent),
     RefreshContainers,
     ContainersLoaded(Vec<String>),
+    /// Resultado de listar el cwd de una sesión remota (off-thread por SSH).
+    ExplorerLoaded {
+        session: usize,
+        path: String,
+        result: Result<Vec<ExplorerEntry>, String>,
+    },
+    /// Fuerza re-listar el cwd remoto del Explorer (botón ↻).
+    RefreshExplorer,
     RemoteContainersLoaded(Vec<String>),
     SubscribeContainer(usize),
     PickRemoteContainer(String),

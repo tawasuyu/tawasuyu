@@ -22,6 +22,46 @@ pub(crate) fn instance_for_slot_mut<'a>(m: &'a mut Model, slot: &Slot) -> Option
     }
 }
 
+/// Mantiene el cache del Explorer (`m.explorer`) coherente con la sesión y
+/// el cwd actuales **cuando el panel está abierto sobre una sesión remota**.
+/// Para sesiones locales limpia el cache (el panel cae a `read_dir` directo).
+/// Idempotente: sólo dispara un listado off-thread cuando la clave
+/// `(sesión, cwd)` cambia — se puede llamar en cada tick sin re-spawnear.
+pub(crate) fn reconcile_explorer(m: &mut Model, handle: &Handle<Msg>) {
+    if m.active_tool != Some(Tool::Explorer) {
+        return;
+    }
+    // ¿La sesión activa se lista por la vía remota (SSH)? Sólo si está
+    // conectada — si no, evitamos intentos de ssh inútiles.
+    let remoto = m.active().and_then(|s| {
+        if s.conn != ConnState::Connected {
+            return None;
+        }
+        match &s.shell.state {
+            ModuleState::Shell(sh)
+                if matches!(sh.source, Source::Remote { .. } | Source::RemoteContainer { .. }) =>
+            {
+                Some((sh.source.clone(), sh.cwd.display().to_string()))
+            }
+            _ => None,
+        }
+    });
+    let Some((source, cwd)) = remoto else {
+        // Local / no conectada: el panel usa `read_dir`; tiramos cache viejo.
+        if m.explorer.key.is_some() {
+            m.explorer = ExplorerCache::default();
+        }
+        return;
+    };
+    let key = (m.active_session, cwd.clone());
+    if m.explorer.key.as_ref() == Some(&key) {
+        return; // ya cargado/cargando para esta (sesión, cwd)
+    }
+    m.explorer.key = Some(key);
+    m.explorer.state = ExplorerState::Loading;
+    spawn_explorer_list(handle, m.active_session, source, cwd);
+}
+
 /// Enruta un `ModuleMsg` al `update` del módulo correspondiente, y se
 /// encarga de interceptar mensajes que el chasis quiera promocionar
 /// (p. ej. el click en la command bar abre el drawer).
