@@ -100,6 +100,14 @@ impl ShumaState {
 /// recibe `FocusInput` por su propio `on_click` interno.
 pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
     let input = shuma_module_shell::input_view(&state.inner, theme, Msg::ShumaShell);
+    let mut children = vec![input];
+    // A6 — aviso de comando largo: cuando el drawer está plegado (no estás
+    // mirando la salida) y terminó algún comando largo, el cabezal gana un punto
+    // ámbar. Es el equivalente en pata de la badge del diente del chasis; al
+    // abrir el drawer se acusa y desaparece. Sin notificaciones del sistema.
+    if !state.open && state.inner.long_alerts() > 0 {
+        children.push(long_alert_badge());
+    }
     View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
@@ -123,7 +131,36 @@ pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .on_click(Msg::ShumaToggle)
-    .children(vec![input])
+    .children(children)
+}
+
+/// A6 — el punto ámbar con halo del cabezal: «terminó un comando largo». Mismo
+/// lenguaje visual que la badge del diente del chasis (`session_tooth_icon`).
+fn long_alert_badge() -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(16.0_f32), height: length(16.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .paint_with(|scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Circle};
+        use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
+        if rect.w <= 0.0 || rect.h <= 0.0 {
+            return;
+        }
+        let cx = (rect.x + rect.w * 0.5) as f64;
+        let cy = (rect.y + rect.h * 0.5) as f64;
+        let ambar = Color::from_rgb8(0xf7, 0xc8, 0x7a);
+        let rad = (rect.w.min(rect.h) as f64 * 0.22).max(2.5);
+        scene.fill(
+            Fill::NonZero,
+            Affine::IDENTITY,
+            ambar.with_alpha(0.30),
+            None,
+            &Circle::new((cx, cy), rad * 1.9),
+        );
+        scene.fill(Fill::NonZero, Affine::IDENTITY, ambar, None, &Circle::new((cx, cy), rad));
+    })
 }
 
 /// El drawer desplegado (path **winit**): scrim que cierra al click + panel

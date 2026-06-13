@@ -878,6 +878,11 @@ impl App for PataApp {
                 if model.shuma.present {
                     model.shuma.open = !model.shuma.open;
                     let destino = if model.shuma.open { 1.0 } else { 0.0 };
+                    // A6 — al abrir el drawer estás mirando la salida: acusá el
+                    // aviso de comando largo (apaga el punto ámbar del cabezal).
+                    if model.shuma.open {
+                        model.shuma.inner.ack_long_alerts();
+                    }
                     model.animar_shuma(destino, handle);
                 }
             }
@@ -887,9 +892,18 @@ impl App for PataApp {
                 // sea visible. Idempotente: si el drawer ya está abierto, no
                 // hace nada extra.
                 let focusing = matches!(m, shuma_module_shell::Msg::FocusInput);
+                // A6 — mientras el drawer está abierto, el usuario está mirando:
+                // un comando largo que termina ahí no debe dejar badge stale al
+                // plegar después. Lo acusamos en cada Tick del shell con drawer
+                // abierto (equivalente al ShellTick del chasis sobre la activa).
+                let es_tick = matches!(m, shuma_module_shell::Msg::Tick);
                 model.shuma.inner = shuma_module_shell::update(model.shuma.inner.clone(), m);
+                if es_tick && model.shuma.open {
+                    model.shuma.inner.ack_long_alerts();
+                }
                 if focusing && model.shuma.present && !model.shuma.open {
                     model.shuma.open = true;
+                    model.shuma.inner.ack_long_alerts();
                     model.animar_shuma(1.0, handle);
                 }
             }
