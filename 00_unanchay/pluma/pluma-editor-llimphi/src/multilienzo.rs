@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
-use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Cap, Circle, Join, Stroke};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use uuid::Uuid;
@@ -52,6 +52,9 @@ pub struct MultilienzoConfig {
     pub alto_header: f32,
     /// Grosor del trazo de las hebras, en px.
     pub grosor_hebra: f32,
+    /// Tamaño de fuente del preview de párrafo dentro de cada bloque, en px.
+    /// La cabecera de columna usa ~0.85 de este valor.
+    pub font_size: f32,
 }
 
 impl Default for MultilienzoConfig {
@@ -64,6 +67,31 @@ impl Default for MultilienzoConfig {
             padding_top: 12.0,
             alto_header: 28.0,
             grosor_hebra: 2.0,
+            font_size: 13.0,
+        }
+    }
+}
+
+impl MultilienzoConfig {
+    /// Deriva una configuración escalada uniformemente del default. `escala`
+    /// = 1.0 devuelve el default; > 1.0 agranda todo (bloques más altos,
+    /// columnas más anchas, fuente mayor) de forma proporcional. Es el
+    /// resorte del zoom: la app guarda un nivel de escala y reconstruye el
+    /// `MultilienzoConfig` desde acá en cada frame.
+    pub fn con_escala(escala: f32) -> Self {
+        let e = escala.clamp(0.5, 3.0);
+        let base = Self::default();
+        Self {
+            altura_atom: base.altura_atom * e,
+            gap_atom: base.gap_atom * e,
+            ancho_cuerpo: base.ancho_cuerpo * e,
+            ancho_carril: base.ancho_carril * e,
+            alto_header: base.alto_header * e,
+            font_size: base.font_size * e,
+            // Padding y grosor del trazo crecen más despacio que la caja:
+            // un trazo proporcional al zoom se vería tosco al ampliar.
+            padding_top: base.padding_top,
+            grosor_hebra: base.grosor_hebra * (1.0 + (e - 1.0) * 0.5),
         }
     }
 }
@@ -119,6 +147,10 @@ struct HebraPintada {
     /// Si la hebra va punteada (stale o baja confianza). Una sola variable
     /// porque el patrón es uniforme: 6 px on, 4 px off.
     punteada: bool,
+    /// Confianza del alineamiento en `[0, 1]`. Modula el grosor del trazo
+    /// y el radio de los nodos en los extremos — una hebra fuerte se ve
+    /// más sólida que una tentativa.
+    fuerza: f32,
 }
 
 /// Construye la vista multilienzo completa. El nodo raíz es un HStack con
@@ -306,7 +338,7 @@ fn columna_cuerpo<Msg: Clone + 'static>(
         ..Default::default()
     })
     .fill(palette.bg_panel)
-    .text_aligned(header_text, 11.0, palette.fg_muted, Alignment::Start);
+    .text_aligned(header_text, (cfg.font_size * 0.85).max(9.0), palette.fg_muted, Alignment::Start);
 
     let mut bloques: Vec<View<Msg>> = Vec::with_capacity(cuerpo.orden.len());
     let resaltar_lc = if resaltar.is_empty() {
@@ -385,7 +417,7 @@ fn bloque_atom<Msg: Clone + 'static>(
     })
     .fill(fondo)
     .radius(4.0)
-    .text_aligned(preview.to_string(), 13.0, palette.fg_text, Alignment::Start);
+    .text_aligned(preview.to_string(), cfg.font_size, palette.fg_text, Alignment::Start);
     if let Some(msg) = click_msg {
         v = v.on_click(msg);
     }
@@ -434,14 +466,48 @@ fn carril_hebras<Msg: Clone + 'static>(
         return nodo;
     }
     nodo.paint_with(move |scene, _ts, rect| {
-        let stroke_solido = Stroke::new(grosor as f64);
-        let stroke_punteado = Stroke::new(grosor as f64).with_dashes(0.0, [6.0, 4.0]);
         for h in &hebras {
+            // --- Geometría: curva en S con tangentes horizontales en ambos
+            // extremos, para que la hebra "salga" del párrafo izquierdo y
+            // "entre" al derecho en perpendicular a la columna (look de
+            // diagrama Sankey/git-graph, no diagonal cruda). ---
+            let x0 = rect.x as f64;
+            let y0 = (rect.y + h.y_izq) as f64;
+            let x1 = (rect.x + rect.w) as f64;
+            let y1 = (rect.y + h.y_der) as f64;
+            let tirante = (x1 - x0) * 0.5;
             let mut path = BezPath::new();
-            path.move_to((rect.x as f64, (rect.y + h.y_izq) as f64));
-            path.line_to(((rect.x + rect.w) as f64, (rect.y + h.y_der) as f64));
-            let s = if h.punteada { &stroke_punteado } else { &stroke_solido };
-            scene.stroke(s, Affine::IDENTITY, h.color, None, &path);
+            path.move_to((x0, y0));
+            path.curve_to((x0 + tirante, y0), (x1 - tirante, y1), (x1, y1));
+
+            // Grosor modulado por confianza: una hebra fuerte se ve más
+            // sólida. Rango [0.7·g, 1.6·g].
+            let g = grosor as f64;
+            let ancho = g * (0.7 + 0.9 * h.fuerza.clamp(0.0, 1.0) as f64);
+
+            // --- Halo/glow: una pasada ancha y muy translúcida por debajo
+            // del trazo nítido. Da profundidad y hace que las hebras se
+            // "iluminen" sin necesidad de un blur real. ---
+            let glow = Stroke::new(ancho * 3.2)
+                .with_caps(Cap::Round)
+                .with_join(Join::Round);
+            scene.stroke(&glow, Affine::IDENTITY, atenuar_alpha(h.color, 0.16), None, &path);
+
+            // --- Trazo principal nítido. Punteado si stale/tentativa. ---
+            let principal = if h.punteada {
+                Stroke::new(ancho)
+                    .with_caps(Cap::Round)
+                    .with_dashes(0.0, [6.0, 4.0])
+            } else {
+                Stroke::new(ancho).with_caps(Cap::Round).with_join(Join::Round)
+            };
+            scene.stroke(&principal, Affine::IDENTITY, h.color, None, &path);
+
+            // --- Nodos en los extremos: discos pequeños que anclan la
+            // hebra al párrafo. Radio crece con la confianza. ---
+            let r = (ancho * 0.85 + 1.4).max(2.0);
+            scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &Circle::new((x0, y0), r));
+            scene.fill(Fill::NonZero, Affine::IDENTITY, h.color, None, &Circle::new((x1, y1), r));
         }
     })
 }
@@ -511,6 +577,7 @@ fn precomputar_hebras(
             y_der: centro(i_der),
             color,
             punteada: !h.fresco,
+            fuerza: h.fuerza,
         });
     }
     out

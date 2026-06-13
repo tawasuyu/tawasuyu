@@ -31,6 +31,9 @@ pluma-llm-core = { path = "../pluma-llm-core" }
 pluma-llm-mock = { path = "../pluma-llm-mock" }
 pluma-store = { path = "../pluma-store" }
 llimphi-widget-button = { path = "../../../02_ruway/llimphi/widgets/button" }
+llimphi-widget-toolbar = { path = "../../../02_ruway/llimphi/widgets/toolbar" }
+llimphi-icons = { path = "../../../02_ruway/llimphi/llimphi-icons" }
+foreign-docx = { path = "../foreign-docx" }
 rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
 rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }
 rimay-verbo-daemon = { path = "../../rimay/rimay-verbo-daemon" }
