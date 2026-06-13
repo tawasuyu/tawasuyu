@@ -42,8 +42,9 @@ pub(crate) fn ancho_contenido(n: usize) -> f32 {
 /// que recibe. Encadenados de la fuente (lienzo activo) al sumidero, generan
 /// una **línea de lienzo** nueva. Los tres primeros son transformaciones LLM
 /// (las mismas que el diente Modelo); `Concepto` es un filtro semántico que
-/// retiene sólo los párrafos afines a un término — MVP léxico (substring),
-/// con el daemon de embeddings (rimay-verbo) como evolución natural.
+/// retiene sólo los párrafos afines a un término — por similitud coseno de
+/// embeddings vía el verbo-daemon (rimay-verbo), con fallback léxico (substring)
+/// si el socket no está disponible.
 #[derive(Clone, Debug)]
 pub(crate) enum Filtro {
     Traducir(String),

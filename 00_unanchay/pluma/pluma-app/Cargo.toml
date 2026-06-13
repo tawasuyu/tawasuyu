@@ -25,6 +25,10 @@ pluma-transform = { path = "../pluma-transform" }
 pluma-transform-llm = { path = "../pluma-transform-llm" }
 pluma-llm = { path = "../pluma-llm" }
 pluma-llm-core = { path = "../pluma-llm-core" }
+# Filtro Concepto del diente Grafo: scoring semántico por embeddings vía el
+# verbo-daemon (fallback léxico si el socket no está).
+rimay-verbo-core = { path = "../../rimay/rimay-verbo-core" }
+rimay-verbo-daemon = { path = "../../rimay/rimay-verbo-daemon" }
 llimphi-ui = { workspace = true }
 # Rail hospedado: pluma puede prestar sus secciones (Documentos/LLM/Buscar/Diff)
 # al rail de pata y colapsar sus columnas (PLUMA_DELEGATE_SIDEBAR).
@@ -49,3 +53,7 @@ arboard = { workspace = true }
 # Sólo para el subcomando `--dump <out.png>`: render headless de la vista.
 png = { workspace = true }
 pollster = { workspace = true }
+
+[dev-dependencies]
+# Provider de embeddings determinista para testear el filtro Concepto sin daemon.
+rimay-verbo-mock = { path = "../../rimay/rimay-verbo-mock" }

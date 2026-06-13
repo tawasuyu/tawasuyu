@@ -3,6 +3,7 @@
 //! find-in-page, y el trabajo LLM lanzado en un thread aparte.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_ui::{DragPhase, Handle};
@@ -18,6 +19,8 @@ use pluma_transform::{TipoTransformacion, Transformacion};
 use pluma_transform_llm::{
     EjecutorReescribirLlm, EjecutorResumirLlm, EjecutorTonoLlm, EjecutorTraducirLlm,
 };
+use rimay_verbo_core::Provider;
+use rimay_verbo_daemon::DaemonClient;
 use uuid::Uuid;
 
 use crate::model::{Filtro, Model, Msg, NodoFiltro, BACKENDS, METRICS, VISIBLE_LINES};
@@ -1265,18 +1268,26 @@ fn build_idx(atoms: &[NarrativeAtom]) -> HashMap<Uuid, &NarrativeAtom> {
     atoms.iter().map(|a| (a.id, a)).collect()
 }
 
-/// Filtro semántico (MVP léxico): deriva un cuerpo que conserva sólo los
-/// átomos cuyo contenido contiene `term` (case-insensitive). Comparte los
-/// `Uuid` de los átomos retenidos — no crea átomos nuevos. Si nada matchea,
-/// conserva el orden completo (no devolvemos una línea vacía). La evolución
-/// natural es puntuar por embeddings (rimay-verbo) en vez de substring.
-fn filtrar_concepto(
+/// Margen de similitud coseno respecto del mejor átomo. El filtro Concepto
+/// por embeddings conserva los átomos cuya cercanía al concepto cae dentro de
+/// este margen del máximo: un criterio **relativo** (al átomo más on-topic del
+/// lienzo), agnóstico del modelo y de su escala absoluta de coseno.
+const CONCEPTO_MARGEN: f32 = 0.12;
+
+/// Filtro semántico del diente Grafo. Con un `provider` de embeddings (el
+/// verbo-daemon) puntúa cada átomo por similitud coseno al `term` y conserva
+/// los más cercanos al concepto; sin provider —o si el embedding falla— cae al
+/// MVP léxico (substring case-insensitive). En ambos casos comparte los `Uuid`
+/// de los átomos retenidos (no crea átomos nuevos) y nunca devuelve una línea
+/// vacía: si nada matchea, conserva el orden completo.
+async fn filtrar_concepto(
     cuerpo: &Cuerpo,
     idx: &HashMap<Uuid, &NarrativeAtom>,
     term: &str,
     ahora: u64,
+    provider: Option<&dyn Provider>,
 ) -> Cuerpo {
-    let term_lc = term.trim().to_lowercase();
+    let term_t = term.trim();
     let mut hija = Cuerpo::nuevo(
         format!("{}~c", cuerpo.branch_id),
         format!("{} · concepto", cuerpo.metadatos.nombre_legible),
@@ -1284,15 +1295,19 @@ fn filtrar_concepto(
         ahora,
     );
     hija.metadatos.derivado_de = Some(cuerpo.id);
-    for id in &cuerpo.orden {
-        let keep = term_lc.is_empty()
-            || idx
-                .get(id)
-                .map(|a| a.content.to_lowercase().contains(&term_lc))
-                .unwrap_or(false);
-        if keep {
-            hija.agregar(*id, ahora);
-        }
+
+    let retener: Vec<Uuid> = if term_t.is_empty() {
+        cuerpo.orden.clone()
+    } else {
+        let por_embeddings = match provider {
+            Some(p) => retener_por_embeddings(cuerpo, idx, term_t, p).await,
+            None => None,
+        };
+        por_embeddings.unwrap_or_else(|| retener_lexico(cuerpo, idx, term_t))
+    };
+
+    for id in &retener {
+        hija.agregar(*id, ahora);
     }
     if hija.orden.is_empty() {
         for id in &cuerpo.orden {
@@ -1300,6 +1315,99 @@ fn filtrar_concepto(
         }
     }
     hija
+}
+
+/// Retención léxica (MVP): los átomos cuyo contenido contiene `term`
+/// (case-insensitive), en el orden del cuerpo madre.
+fn retener_lexico(
+    cuerpo: &Cuerpo,
+    idx: &HashMap<Uuid, &NarrativeAtom>,
+    term: &str,
+) -> Vec<Uuid> {
+    let term_lc = term.to_lowercase();
+    cuerpo
+        .orden
+        .iter()
+        .copied()
+        .filter(|id| {
+            idx.get(id)
+                .map(|a| a.content.to_lowercase().contains(&term_lc))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+/// Retención por embeddings: puntúa cada átomo por coseno al concepto y
+/// conserva los que caen dentro de [`CONCEPTO_MARGEN`] del mejor. Devuelve
+/// `None` ante cualquier fallo (sin átomos con contenido, o error de embedding/
+/// coseno) para que el caller caiga al criterio léxico.
+async fn retener_por_embeddings(
+    cuerpo: &Cuerpo,
+    idx: &HashMap<Uuid, &NarrativeAtom>,
+    term: &str,
+    provider: &dyn Provider,
+) -> Option<Vec<Uuid>> {
+    let ids: Vec<Uuid> = cuerpo
+        .orden
+        .iter()
+        .copied()
+        .filter(|id| idx.contains_key(id))
+        .collect();
+    if ids.is_empty() {
+        return None;
+    }
+    let term_vec = provider.embed(term).await.ok()?;
+    let textos: Vec<String> = ids.iter().map(|id| idx[id].content.to_string()).collect();
+    let vecs = provider.embed_batch(&textos).await.ok()?;
+    if vecs.len() != ids.len() {
+        return None;
+    }
+    let mut sims: Vec<(Uuid, f32)> = Vec::with_capacity(ids.len());
+    let mut top = f32::MIN;
+    for (id, v) in ids.iter().zip(vecs.iter()) {
+        let sim = v.cosine(&term_vec).ok()?;
+        if sim > top {
+            top = sim;
+        }
+        sims.push((*id, sim));
+    }
+    let umbral = top - CONCEPTO_MARGEN;
+    Some(
+        sims.into_iter()
+            .filter(|(_, s)| *s >= umbral)
+            .map(|(id, _)| id)
+            .collect(),
+    )
+}
+
+/// Ruta del socket del `verbo-daemon`, alineada con `rimay-verbo-daemon-bin`:
+/// `$XDG_RUNTIME_DIR/verbo.sock`, con fallback a `/tmp/verbo-{uid}.sock`.
+fn socket_verbo_default() -> std::path::PathBuf {
+    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+        return std::path::PathBuf::from(xdg).join("verbo.sock");
+    }
+    let uid = std::fs::read_to_string("/proc/self/loginuid")
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|&u| u != u32::MAX)
+        .unwrap_or(1000);
+    std::path::PathBuf::from(format!("/tmp/verbo-{uid}.sock"))
+}
+
+/// Conecta al verbo-daemon si su socket existe. `None` si no hay socket o si
+/// la conexión falla — el filtro Concepto cae entonces al criterio léxico.
+async fn conectar_verbo() -> Option<Arc<dyn Provider>> {
+    let path = socket_verbo_default();
+    if !path.exists() {
+        return None;
+    }
+    match DaemonClient::connect(&path).await {
+        Ok(c) => Some(Arc::new(c) as Arc<dyn Provider>),
+        Err(e) => {
+            eprintln!("pluma grafo :: verbo-daemon en {} falló: {e}", path.display());
+            None
+        }
+    }
 }
 
 /// Corre el grafo de filtros sobre el lienzo activo, encadenando cada etapa
@@ -1360,11 +1468,19 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
         let mut actual = madre.clone();
 
         let resultado: Result<Cuerpo, String> = rt.block_on(async {
+            // Sólo intentamos conectar al verbo-daemon si hay algún filtro
+            // Concepto que lo use (si no, ni tocamos el socket).
+            let provider = if filtros.iter().any(|f| matches!(f, Filtro::Concepto(_))) {
+                conectar_verbo().await
+            } else {
+                None
+            };
             for filtro in &filtros {
                 match filtro {
                     Filtro::Concepto(term) => {
                         let idx = build_idx(&atoms_owned);
-                        actual = filtrar_concepto(&actual, &idx, term, ahora);
+                        actual =
+                            filtrar_concepto(&actual, &idx, term, ahora, provider.as_deref()).await;
                     }
                     Filtro::Traducir(l) => {
                         let prod = {
@@ -1462,4 +1578,72 @@ fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
             Err(e) => Msg::LlmError(e),
         }
     });
+}
+
+#[cfg(test)]
+mod tests_concepto {
+    use super::*;
+    use rimay_verbo_mock::MockProvider;
+
+    fn cuerpo_con(atoms: &[NarrativeAtom]) -> Cuerpo {
+        let mut c = Cuerpo::nuevo("main", "doc", Intencion::Anotacion, 0);
+        for a in atoms {
+            c.agregar(a.id, 0);
+        }
+        c
+    }
+
+    fn block_on<F: std::future::Future>(f: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(f)
+    }
+
+    #[test]
+    fn embeddings_retiene_el_atomo_del_concepto() {
+        // El MockProvider embebe por texto de forma determinista: el átomo
+        // cuyo contenido == término tiene coseno ≈ 1 (es el tope) y se retiene;
+        // uno claramente ajeno cae bajo el umbral relativo.
+        let on_topic = NarrativeAtom::new("batalla", "main");
+        let off_topic = NarrativeAtom::new("un jardín tranquilo en primavera", "main");
+        let atoms = vec![on_topic.clone(), off_topic.clone()];
+        let idx = build_idx(&atoms);
+        let cuerpo = cuerpo_con(&atoms);
+        let p = MockProvider::default();
+        let ids = block_on(retener_por_embeddings(&cuerpo, &idx, "batalla", &p)).unwrap();
+        assert!(ids.contains(&on_topic.id), "el átomo del concepto debe quedar");
+        assert!(!ids.contains(&off_topic.id), "el ajeno debe filtrarse");
+    }
+
+    #[test]
+    fn cuerpo_sin_atomos_devuelve_none() {
+        let atoms: Vec<NarrativeAtom> = vec![];
+        let idx = build_idx(&atoms);
+        let cuerpo = Cuerpo::nuevo("main", "doc", Intencion::Anotacion, 0);
+        let p = MockProvider::default();
+        assert!(block_on(retener_por_embeddings(&cuerpo, &idx, "x", &p)).is_none());
+    }
+
+    #[test]
+    fn lexico_filtra_por_substring_case_insensitive() {
+        let a1 = NarrativeAtom::new("la Batalla final", "main");
+        let a2 = NarrativeAtom::new("paz y calma", "main");
+        let atoms = vec![a1.clone(), a2.clone()];
+        let idx = build_idx(&atoms);
+        let cuerpo = cuerpo_con(&atoms);
+        assert_eq!(retener_lexico(&cuerpo, &idx, "batalla"), vec![a1.id]);
+    }
+
+    #[test]
+    fn sin_provider_filtrar_concepto_usa_lexico() {
+        let a1 = NarrativeAtom::new("el dragón ataca", "main");
+        let a2 = NarrativeAtom::new("merienda con té", "main");
+        let atoms = vec![a1.clone(), a2.clone()];
+        let idx = build_idx(&atoms);
+        let cuerpo = cuerpo_con(&atoms);
+        let hija = block_on(filtrar_concepto(&cuerpo, &idx, "dragón", 0, None));
+        assert_eq!(hija.orden, vec![a1.id]);
+    }
 }
