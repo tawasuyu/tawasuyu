@@ -13,6 +13,7 @@ shuma-exec = { path = "../shuma-exec" }
 shuma-remote-exec = { path = "../shuma-remote-exec" }
 shuma-protocol = { path = "../shuma-protocol" }
 shuma-link = { path = "../shuma-link" }
+ulid = { workspace = true }
 shuma-line = { path = "../shuma-line" }
 shuma-history = { path = "../shuma-history" }
 shuma-config = { path = "../shuma-config" }

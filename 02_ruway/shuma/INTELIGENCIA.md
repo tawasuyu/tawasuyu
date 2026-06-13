@@ -166,9 +166,18 @@ Verificado end-to-end contra el daemon: spawn persiste entre invocaciones,
 attach hace round-trip (eco de `cat`), detach deja la sesión `viva`. Bonus:
 arreglado el detach idle en `handle_pty_attach`/`_enc` (un `select!` sobre la
 tarea lectora corta el writer al instante → el `attached` baja a 0 sin
-esperar tráfico). Queda como pulido: el shell Llimphi montando sesiones del
-daemon (hoy corre PTY local) y el cliente móvil vía gateway (el WS ya
-soporta attach).
+esperar tráfico).
+
+**Pulido — el shell sobre sesiones del daemon** ✅ (2026-06-13):
+`shuma-remote-exec` ganó `spawn_session`/`attach_session`/`list_sessions`/
+`kill_session` (el `RemoteRunHandle` que devuelven es idéntico al de
+`run_pty`, así el shell las rinde igual). El shell tiene builtins
+`:spawn <cmd>` (corre en el daemon, **sobrevive a cerrar shuma**, se adjunta
+y rinde como TUI), `:sessions` (lista), `:attach <id>` (re-adjunta), y
+`:kill-session <id>`. Cerrar shuma = detach (la sesión vive); reconectás con
+`:attach` o `shuma pty attach`. Verificado e2e contra daemon vivo
+(`examples/session_smoke`: spawn→list→attach lee scrollback→detach-sigue-viva
+→kill). Queda sólo el cliente móvil vía gateway (el WS ya soporta attach).
 
 ### E5. LLM como instrumento invocado (`:?`) ✅ (2026-06-13)
 **Hecho** con `pluma-llm` (backend por env, Mock sin credenciales):

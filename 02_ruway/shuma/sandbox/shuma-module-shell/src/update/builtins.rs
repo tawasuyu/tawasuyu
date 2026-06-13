@@ -985,6 +985,169 @@ fn cap_prompt_body(body: &str, max: usize) -> String {
     format!("{start}\n…[recortado]…\n{end}")
 }
 
+// ─────────── E4 · sesiones PTY persistentes del daemon (sobreviven la app) ──
+
+/// Socket del daemon a usar: el de `Source::Daemon` si la sesión corre contra
+/// uno, o el default (`$XDG_RUNTIME_DIR/shuma.sock`) — así `:spawn`/`:sessions`
+/// funcionan también en modo Local si hay un daemon corriendo.
+fn daemon_socket_for(s: &State) -> std::path::PathBuf {
+    match &s.source {
+        Source::Daemon { socket, .. } => {
+            socket.clone().unwrap_or_else(shuma_protocol::default_socket_path)
+        }
+        _ => shuma_protocol::default_socket_path(),
+    }
+}
+
+/// Monta un asa remota + TUI como el run de foreground activo, en un bloque
+/// nuevo. Compartido por `:spawn` y `:attach` — ambos rinden una sesión del
+/// daemon como si fuera un comando TUI local, pero sobreviven a cerrar shuma.
+fn mount_session_run(
+    mut s: State,
+    handle: shuma_remote_exec::RemoteRunHandle,
+    program: &str,
+    prompt: String,
+    rows: u16,
+    cols: u16,
+) -> State {
+    // El comando previo con cuerpo recede (se pliega), como en run_submitted.
+    let prev = s.current_block;
+    if prev != 0 && !body_lines_for_block(&s, prev).is_empty() {
+        s.collapsed.insert(prev);
+    }
+    let block = s.open_block();
+    s.push_in_block(block, OutputLine::prompt(prompt));
+    let tui = TuiSession::new(program, rows, cols);
+    s.running = Some(std::sync::Arc::new(std::sync::Mutex::new(ActiveRun {
+        handle: BackendHandle::Remote(handle),
+        killer: None,
+        command: program.to_string(),
+        tui: Some(tui),
+        block,
+    })));
+    s.current_block = block;
+    s.focused = true;
+    s
+}
+
+/// `:spawn <cmd>` — corre `<cmd>` como **sesión PTY persistente** del daemon:
+/// vive en el daemon, **sobrevive a cerrar shuma**. Se adjunta y la renderiza
+/// como un TUI; cerrar shuma (o Ctrl-C) la desadjunta sin matarla
+/// (`:sessions` / `shuma pty attach <id>` para reconectar).
+pub(crate) fn apply_spawn_session(mut s: State, rest: &str) -> State {
+    let cmd = rest.trim();
+    if cmd.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :spawn <comando> — corre en el daemon, sobrevive a cerrar shuma",
+        ));
+        return s;
+    }
+    let sock = daemon_socket_for(&s);
+    let (rows, cols) = (40u16, 120u16);
+    let spec = shuma_exec::CommandSpec {
+        exec: shuma_exec::Exec::Pty {
+            program: "bash".into(),
+            args: vec!["-lc".into(), cmd.to_string()],
+            cols,
+            rows,
+        },
+        cwd: s.cwd.display().to_string(),
+        capture_limit: 0,
+        spill_path: None,
+        stdin_data: None,
+        capture_stages: false,
+    };
+    match shuma_remote_exec::spawn_session(&spec, &sock, cmd) {
+        Ok((session, handle)) => {
+            s = mount_session_run(
+                s,
+                handle,
+                "bash",
+                format!("$ :spawn {cmd}  ·  sesión {session} (sobrevive a cerrar shuma)"),
+                rows,
+                cols,
+            );
+        }
+        Err(e) => {
+            s.push_output(OutputLine::notice(format!(
+                "✘ :spawn — ¿hay un shuma-daemon corriendo? ({e})"
+            )));
+        }
+    }
+    s
+}
+
+/// `:sessions` — lista las sesiones PTY persistentes del daemon.
+pub(crate) fn apply_sessions(mut s: State, _rest: &str) -> State {
+    let sock = daemon_socket_for(&s);
+    match shuma_remote_exec::list_sessions(&sock) {
+        Ok(sessions) => {
+            if sessions.is_empty() {
+                s.push_output(OutputLine::notice(
+                    "(sin sesiones persistentes — `:spawn <cmd>` crea una)",
+                ));
+                return s;
+            }
+            for ss in &sessions {
+                let estado = if ss.alive {
+                    format!("viva · {} adj", ss.attached)
+                } else {
+                    format!("muerta · exit {}", ss.exit_code.unwrap_or(-1))
+                };
+                s.push_output(OutputLine::notice(format!(
+                    "{}  {:<20}  [{estado}]  {}",
+                    ss.session, ss.label, ss.program
+                )));
+            }
+            s.push_output(OutputLine::notice(
+                ":attach <id> para verla · :kill-session <id> para matarla",
+            ));
+        }
+        Err(e) => s.push_output(OutputLine::notice(format!(
+            "✘ :sessions — ¿hay un shuma-daemon corriendo? ({e})"
+        ))),
+    }
+    s
+}
+
+/// `:attach <id>` — se re-adjunta a una sesión persistente y la renderiza.
+pub(crate) fn apply_attach_session(mut s: State, rest: &str) -> State {
+    let Ok(id) = ulid::Ulid::from_string(rest.trim()) else {
+        s.push_output(OutputLine::notice("uso: :attach <ULID>  (`:sessions` las lista)"));
+        return s;
+    };
+    let sock = daemon_socket_for(&s);
+    let (rows, cols) = (40u16, 120u16);
+    // Programa para el skin del TUI: lo sacamos de la lista si está.
+    let program = shuma_remote_exec::list_sessions(&sock)
+        .ok()
+        .and_then(|v| v.into_iter().find(|x| x.session == id))
+        .map(|x| x.program)
+        .unwrap_or_else(|| "bash".into());
+    match shuma_remote_exec::attach_session(&sock, id, rows, cols) {
+        Ok(handle) => {
+            s = mount_session_run(s, handle, &program, format!("$ :attach {id}"), rows, cols);
+        }
+        Err(e) => s.push_output(OutputLine::notice(format!("✘ :attach — {e}"))),
+    }
+    s
+}
+
+/// `:kill-session <id>` — mata (o reapea) una sesión persistente.
+pub(crate) fn apply_kill_session(mut s: State, rest: &str) -> State {
+    let Ok(id) = ulid::Ulid::from_string(rest.trim()) else {
+        s.push_output(OutputLine::notice("uso: :kill-session <ULID>"));
+        return s;
+    };
+    let sock = daemon_socket_for(&s);
+    match shuma_remote_exec::kill_session(&sock, id) {
+        Ok(true) => s.push_output(OutputLine::notice(format!("✔ sesión {id} matada"))),
+        Ok(false) => s.push_output(OutputLine::notice(format!("no existía: {id}"))),
+        Err(e) => s.push_output(OutputLine::notice(format!("✘ {e}"))),
+    }
+    s
+}
+
 /// Reconstruye el stdout de un bloque (su card) uniendo las líneas
 /// `Stdout` sin etapa — para alimentarlo como stdin de un reprocess.
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {

@@ -136,6 +136,10 @@ pub enum RemoteExecError {
     ConnectTcp(String, std::io::Error),
     #[error("PTY remoto aún no soportado — usá el modo local para comandos TUI (vim, htop, etc.)")]
     PtyNotSupported,
+    /// Error de protocolo con el daemon (respuesta inesperada, framing, etc.)
+    /// — usado por las sesiones PTY persistentes (E4).
+    #[error("protocolo: {0}")]
+    Protocol(String),
 }
 
 /// Lanza `spec` contra el daemon en `socket` y devuelve un asa cuyos
@@ -457,6 +461,183 @@ pub fn run_pty(
     });
 
     Ok(RemoteRunHandle { rx, finished: false, cancel, pty_out: Some(out_tx) })
+}
+
+// ===================================================================
+// Sesiones PTY persistentes (E4): el proceso vive en el daemon y
+// sobrevive a la desconexión del cliente. `spawn_session` lo crea y se
+// adjunta; `attach_session` se re-adjunta a uno existente; `list`/`kill`
+// son request/response 1:1. El `RemoteRunHandle` que devuelven es idéntico
+// al de `run_pty` — el shell los drena igual. Cerrar la conexión = DETACH
+// (la sesión sigue viva), no kill.
+// ===================================================================
+
+/// Un round-trip 1:1 con el daemon por el socket Unix (para PtyList/PtyKill/
+/// PtySpawn): conecta, escribe `req`, lee una `Response`. Bloqueante.
+fn daemon_roundtrip(
+    socket: &std::path::Path,
+    req: Request,
+) -> Result<Response, RemoteExecError> {
+    let std_stream = std::os::unix::net::UnixStream::connect(socket)
+        .map_err(|e| RemoteExecError::Connect(socket.to_path_buf(), e))?;
+    std_stream
+        .set_nonblocking(true)
+        .map_err(|e| RemoteExecError::Connect(socket.to_path_buf(), e))?;
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| RemoteExecError::Protocol(format!("runtime: {e}")))?;
+    rt.block_on(async move {
+        let mut stream = tokio::net::UnixStream::from_std(std_stream)
+            .map_err(|e| RemoteExecError::Protocol(format!("from_std: {e}")))?;
+        write_frame(&mut stream, &req)
+            .await
+            .map_err(|e| RemoteExecError::Protocol(format!("write: {e}")))?;
+        read_frame::<Response, _>(&mut stream)
+            .await
+            .map_err(|e| RemoteExecError::Protocol(format!("read: {e}")))
+    })
+}
+
+/// Lista las sesiones PTY persistentes del daemon.
+pub fn list_sessions(
+    socket: &std::path::Path,
+) -> Result<Vec<shuma_protocol::PtySessionInfo>, RemoteExecError> {
+    match daemon_roundtrip(socket, Request::PtyList)? {
+        Response::PtyList { sessions } => Ok(sessions),
+        Response::Error { message } => Err(RemoteExecError::Protocol(message)),
+        other => Err(RemoteExecError::Protocol(format!("respuesta inesperada: {other:?}"))),
+    }
+}
+
+/// Mata (o reapea) una sesión persistente. `Ok(false)` si no existía.
+pub fn kill_session(
+    socket: &std::path::Path,
+    session: ulid::Ulid,
+) -> Result<bool, RemoteExecError> {
+    match daemon_roundtrip(socket, Request::PtyKill { session })? {
+        Response::PtyKilled { existed, .. } => Ok(existed),
+        Response::Error { message } => Err(RemoteExecError::Protocol(message)),
+        other => Err(RemoteExecError::Protocol(format!("respuesta inesperada: {other:?}"))),
+    }
+}
+
+/// Crea una sesión persistente (PtySpawn, request/response 1:1) y devuelve
+/// su id. El proceso queda vivo en el daemon aunque nadie esté adjunto.
+pub fn spawn_session_id(
+    spec: &CommandSpec,
+    socket: &std::path::Path,
+    label: &str,
+) -> Result<ulid::Ulid, RemoteExecError> {
+    let Some((program, args, rows, cols)) = pty_fields(spec) else {
+        return Err(RemoteExecError::PtyNotSupported);
+    };
+    let req = Request::PtySpawn {
+        cwd: spec.cwd.clone(),
+        program,
+        args,
+        rows,
+        cols,
+        label: label.to_string(),
+    };
+    match daemon_roundtrip(socket, req)? {
+        Response::PtySpawned { session } => Ok(session),
+        Response::Error { message } => Err(RemoteExecError::Protocol(message)),
+        other => Err(RemoteExecError::Protocol(format!("respuesta inesperada: {other:?}"))),
+    }
+}
+
+/// Se re-adjunta a una sesión existente: full-duplex como [`run_pty`], pero
+/// cerrar la conexión es DETACH (no mata la sesión). El daemon repinta el
+/// scrollback al adjuntar, así la pantalla se reconstruye.
+pub fn attach_session(
+    socket: &std::path::Path,
+    session: ulid::Ulid,
+    rows: u16,
+    cols: u16,
+) -> Result<RemoteRunHandle, RemoteExecError> {
+    let (tx, rx) = std::sync::mpsc::channel::<RunEvent>();
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::unbounded_channel::<Request>();
+    let cancel = Arc::new(Notify::new());
+    let cancel_thread = cancel.clone();
+    let socket_owned = socket.to_path_buf();
+    let req = Request::PtyAttach { session, rows, cols };
+
+    let std_stream = std::os::unix::net::UnixStream::connect(&socket_owned)
+        .map_err(|e| RemoteExecError::Connect(socket_owned.clone(), e))?;
+    std_stream
+        .set_nonblocking(true)
+        .map_err(|e| RemoteExecError::Connect(socket_owned.clone(), e))?;
+
+    std::thread::spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+            Ok(r) => r,
+            Err(e) => {
+                let _ = tx.send(RunEvent::Failed(format!("runtime: {e}")));
+                return;
+            }
+        };
+        rt.block_on(async move {
+            let stream = match tokio::net::UnixStream::from_std(std_stream) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = tx.send(RunEvent::Failed(format!("from_std: {e}")));
+                    return;
+                }
+            };
+            let (mut rd, mut wr) = tokio::io::split(stream);
+            if let Err(e) = write_frame(&mut wr, &req).await {
+                let _ = tx.send(RunEvent::Failed(format!("write attach: {e}")));
+                return;
+            }
+            let writer = tokio::spawn(async move {
+                while let Some(msg) = out_rx.recv().await {
+                    if write_frame(&mut wr, &msg).await.is_err() {
+                        break;
+                    }
+                }
+            });
+            loop {
+                tokio::select! {
+                    biased;
+                    _ = cancel_thread.notified() => break,
+                    res = read_frame::<Response, _>(&mut rd) => {
+                        let resp = match res {
+                            Ok(r) => r,
+                            Err(_) => break,
+                        };
+                        let terminal = resp.is_exec_terminal();
+                        if let Some(ev) = response_to_event(resp) {
+                            if tx.send(ev).is_err() {
+                                break;
+                            }
+                        }
+                        if terminal {
+                            break;
+                        }
+                    }
+                }
+            }
+            writer.abort();
+            // Drop de rd/wr = cerrar la conexión = DETACH (la sesión vive).
+        });
+    });
+
+    Ok(RemoteRunHandle { rx, finished: false, cancel, pty_out: Some(out_tx) })
+}
+
+/// Crea una sesión persistente y se adjunta de una: devuelve `(id, asa)`.
+/// El asa rinde la salida del PTY como en `run_pty`; la sesión sobrevive si
+/// el asa se dropea (detach).
+pub fn spawn_session(
+    spec: &CommandSpec,
+    socket: &std::path::Path,
+    label: &str,
+) -> Result<(ulid::Ulid, RemoteRunHandle), RemoteExecError> {
+    let session = spawn_session_id(spec, socket, label)?;
+    let (_program, _args, rows, cols) = pty_fields(spec).unwrap_or((String::new(), vec![], 24, 80));
+    let handle = attach_session(socket, session, rows, cols)?;
+    Ok((session, handle))
 }
 
 /// Variante autenticada y cifrada vía Noise XK sobre TCP — espejo de

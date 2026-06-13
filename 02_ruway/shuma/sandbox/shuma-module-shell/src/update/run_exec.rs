@@ -106,6 +106,10 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":?" => return apply_ask(s, rest),
             ":explica" | ":explain" => return apply_explain(s, rest, false),
             ":resume" | ":resumen" => return apply_explain(s, rest, true),
+            ":spawn" => return apply_spawn_session(s, rest),
+            ":sessions" => return apply_sessions(s, rest),
+            ":attach" => return apply_attach_session(s, rest),
+            ":kill-session" => return apply_kill_session(s, rest),
             _ => {}
         }
     }
