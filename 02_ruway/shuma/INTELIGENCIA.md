@@ -128,21 +128,30 @@ solo se re-muestra con `cat`. Tiene prioridad sobre el reprocess del chip
 al input. Combinado con las secciones-tabla, un `ls -l` viejo es una tabla
 consultable. 4 tests (ref como fuente, ref sola→cat, %pN, línea sin ref).
 
-### E3. Reglas declarativas en el rc (`[rules]`) — el plano de control
-El shumarc deja de ser sólo preferencias y gana gatillos deterministas:
+### E3. Reglas declarativas en el rc (`[rules]`) — el plano de control ✅ (2026-06-13)
+El shumarc gana gatillos deterministas (`shuma_config::RulesConfig`):
 
 ```toml
 [rules]
 on_exit_nonzero = ":jobs"                 # qué correr cuando algo falla
-on_enter_cwd."~/proyectos/wawa" = ":env RUST_BACKTRACE=1"
 on_pattern_score = 3                      # umbral de A1 (0 = nunca ofrecer)
-on_long_command_secs = 30                 # umbral de A6
+on_long_command_secs = 30                 # umbral de A6 (aún sin consumidor)
+
+[rules.on_enter_cwd]
+"~/proyectos/wawa" = ":env RUST_BACKTRACE=1"
 ```
 
-Las propuestas de la lista A se vuelven **políticas editables**: lo que el
-habitual acepta con un click, el extremo lo gobierna por archivo. Motor:
-un match determinista en `update` (sin DSL turing-completo; eso ya lo cubre
-Rhai en pluma si algún día hace falta).
+**Hecho:** `on_exit_nonzero` corre el comando declarado cuando un comando
+externo cierra con exit ≠ 0 (guarda `exit_rule_fired` re-armada por submit
+del usuario → el propio comando de la regla no la re-dispara). `on_enter_cwd`
+(mapa prefijo→comando, `~` expandido, gana el prefijo más largo;
+`RulesConfig::command_for_cwd`) corre al `cd` local exitoso (guarda
+`in_cwd_rule` contra recursión). `on_pattern_score` gobierna el umbral de A1
+(`choreography_suggestion`; `0` lo apaga). Motor: match determinista en
+`update`/`apply_cd`, sin DSL turing-completo. `on_long_command_secs` queda
+declarable pero inerte hasta A6. Verificado: 1 test en shuma-config
+(matching + más-específico-gana) + 2 en shuma-module-shell (on_exit_nonzero
+una-sola-vez, on_enter_cwd dispara).
 
 ### E4. Flota persistente (daemon attach/detach) — el gap real
 El caveat del `shuma-gateway` README es exacto: `ExecPty` muere con el WS.
@@ -186,7 +195,7 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
 3. **E1 + E2** (`:macro` + `%cN`): desbloquean el techo del extremo con
    núcleos ya escritos. ✅ **hecho 2026-06-13.**
 4. **E3 + E6** (`[rules]` + `:stats`): convierten el rc en plano de control.
-   E6 ✅ **hecho 2026-06-13**; falta E3.
+   ✅ **ambos hechos 2026-06-13.**
 5. **E4** (PTY persistente): sprint propio, coordinar con `shuma-gateway`
    (el cliente Android lo está esperando).
 6. **E5** (LLM): al final, cuando las superficies deterministas ya estén —

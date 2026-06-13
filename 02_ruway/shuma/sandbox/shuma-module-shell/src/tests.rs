@@ -109,6 +109,42 @@
     }
 
     #[test]
+    fn rule_on_exit_nonzero_corre_el_comando_una_vez() {
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.config.rules.on_exit_nonzero = Some(":jobs".into());
+        s.input.set_text("false");
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        s = drain_until_idle(s);
+        // El builtin de la regla (`:jobs`) corrió al fallar `false`…
+        let veces = s
+            .output
+            .iter()
+            .filter(|l| l.text.contains("sin jobs en background"))
+            .count();
+        // …y sólo una vez (la guarda de re-entrada evita el re-disparo).
+        assert_eq!(veces, 1, "la regla on_exit_nonzero debe correr exactamente una vez");
+    }
+
+    #[test]
+    fn rule_on_enter_cwd_corre_el_comando() {
+        let tmp = std::fs::canonicalize(std::env::temp_dir()).unwrap();
+        let mut s = State::new(Source::Local);
+        s.cwd = PathBuf::from("/");
+        s.config
+            .rules
+            .on_enter_cwd
+            .insert(tmp.display().to_string(), ":jobs".into());
+        s.input.set_text(&format!("cd {}", tmp.display()));
+        s = update(s, Msg::Key(ev(Key::Named(NamedKey::Enter), None)));
+        s = drain_until_idle(s);
+        assert!(
+            s.output.iter().any(|l| l.text.contains("sin jobs en background")),
+            "la regla on_enter_cwd debe correr al entrar al directorio"
+        );
+    }
+
+    #[test]
     fn long_running_command_does_not_block_update() {
         // `sleep 0.3` debería volver de `update` inmediatamente (no
         // bloquear ~300 ms como con `Command::output`). Si el spawn es

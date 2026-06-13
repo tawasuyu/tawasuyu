@@ -561,6 +561,13 @@ pub struct State {
     /// aliases se expanden en cada submit; sus env vars ya se aplicaron al
     /// proceso en [`State::new`].
     pub config: shuma_config::Config,
+    /// E3 — guarda de re-entrada de `[rules].on_exit_nonzero`: se arma en
+    /// cada submit del usuario y se desarma al disparar la regla, para que
+    /// el propio comando de la regla (si también falla) no la re-dispare.
+    pub exit_rule_fired: bool,
+    /// E3 — guarda de re-entrada de `[rules].on_enter_cwd`: evita que el
+    /// comando de una regla de cwd que a su vez haga `cd` re-dispare reglas.
+    pub in_cwd_rule: bool,
 }
 
 /// Snapshot serializable del output de una sesión — lo que el chasis
@@ -754,6 +761,8 @@ impl State {
             block_command: std::collections::HashMap::new(),
             input_edit_at_ms: now_unix_millis(),
             config,
+            exit_rule_fired: false,
+            in_cwd_rule: false,
         }
     }
 

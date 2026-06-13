@@ -57,6 +57,7 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
         Ok(canonical) => {
             if canonical.is_dir() {
                 s.cwd = canonical;
+                s = maybe_fire_cwd_rule(s);
             } else {
                 s.push_output(OutputLine::notice(format!(
                     "cd: no es un directorio: {}",
@@ -66,6 +67,31 @@ pub(crate) fn apply_cd(mut s: State, rest: &str) -> State {
         }
         Err(e) => {
             s.push_output(OutputLine::notice(format!("cd: {}: {e}", target.display())));
+        }
+    }
+    s
+}
+
+/// E3 — `[rules].on_enter_cwd`: tras un `cd` local exitoso, si el nuevo cwd
+/// matchea un prefijo declarado, corre el comando asociado (típicamente
+/// `:env …`). La guarda `in_cwd_rule` evita recursión si la regla hace `cd`.
+fn maybe_fire_cwd_rule(mut s: State) -> State {
+    if s.in_cwd_rule || s.config.rules.on_enter_cwd.is_empty() {
+        return s;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let cwd = s.cwd.display().to_string();
+    let cmd = s
+        .config
+        .rules
+        .command_for_cwd(&cwd, &home)
+        .map(|c| c.trim().to_string());
+    if let Some(cmd) = cmd {
+        if !cmd.is_empty() {
+            s.in_cwd_rule = true;
+            s.input.set_text(&cmd);
+            s = run_submitted(s);
+            s.in_cwd_rule = false;
         }
     }
     s

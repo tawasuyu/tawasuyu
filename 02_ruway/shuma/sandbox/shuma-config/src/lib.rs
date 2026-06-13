@@ -149,6 +149,82 @@ pub struct Config {
     pub capture: CaptureConfig,
     #[serde(default)]
     pub scrollback: ScrollbackConfig,
+    /// Reglas declarativas — el plano de control determinista (E3). Lo que
+    /// el nerdo habitual acepta con un click, el extremo lo gobierna acá.
+    #[serde(default)]
+    pub rules: RulesConfig,
+}
+
+/// `[rules]` del shumarc: gatillos deterministas que el shell evalúa en
+/// `update` (sin DSL turing-completo). Todo opcional; vacío = sin reglas.
+///
+/// ```toml
+/// [rules]
+/// on_exit_nonzero = ":jobs"          # qué correr cuando un comando falla
+/// on_pattern_score = 3               # umbral de oferta de coreografía (A1)
+/// on_long_command_secs = 30          # umbral de "comando largo"
+///
+/// [rules.on_enter_cwd]
+/// "~/proyectos/wawa" = ":env RUST_BACKTRACE=1"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RulesConfig {
+    /// Comando a correr cuando un comando externo cierra con exit ≠ 0.
+    #[serde(default)]
+    pub on_exit_nonzero: Option<String>,
+    /// Mapa prefijo-de-cwd → comando a correr al entrar a ese directorio
+    /// (o un hijo). El prefijo admite `~` (se expande a `$HOME`).
+    #[serde(default)]
+    pub on_enter_cwd: HashMap<String, String>,
+    /// Umbral de ocurrencias para que el shell ofrezca guardar una
+    /// coreografía (A1). `0` = nunca ofrecer.
+    #[serde(default = "default_pattern_score")]
+    pub on_pattern_score: u32,
+    /// Segundos a partir de los cuales un comando se considera "largo" (A6).
+    #[serde(default = "default_long_secs")]
+    pub on_long_command_secs: u64,
+}
+
+fn default_pattern_score() -> u32 {
+    3
+}
+
+fn default_long_secs() -> u64 {
+    30
+}
+
+impl Default for RulesConfig {
+    fn default() -> Self {
+        Self {
+            on_exit_nonzero: None,
+            on_enter_cwd: HashMap::new(),
+            on_pattern_score: default_pattern_score(),
+            on_long_command_secs: default_long_secs(),
+        }
+    }
+}
+
+impl RulesConfig {
+    /// Resuelve el comando a correr al entrar a `cwd`, si algún prefijo
+    /// declarado lo matchea. `home` expande el `~` de los prefijos. Elige
+    /// el prefijo **más largo** que matchee (el más específico gana).
+    pub fn command_for_cwd(&self, cwd: &str, home: &str) -> Option<&str> {
+        let mut best: Option<(&str, usize)> = None;
+        for (prefix, cmd) in &self.on_enter_cwd {
+            let expanded = if let Some(rest) = prefix.strip_prefix('~') {
+                format!("{home}{rest}")
+            } else {
+                prefix.clone()
+            };
+            if cwd == expanded || cwd.starts_with(&format!("{expanded}/")) {
+                let len = expanded.len();
+                if best.map(|(_, l)| len > l).unwrap_or(true) {
+                    best = Some((cmd.as_str(), len));
+                }
+            }
+        }
+        best.map(|(cmd, _)| cmd)
+    }
 }
 
 impl Config {
@@ -564,6 +640,39 @@ mod tests {
         let d = tempdir().unwrap();
         let c = Config::load(d.path().join("nope.toml")).unwrap();
         assert_eq!(c, Config::default());
+    }
+
+    #[test]
+    fn rules_defaults_and_cwd_matching() {
+        // Defaults sin sección [rules].
+        let r = RulesConfig::default();
+        assert_eq!(r.on_pattern_score, 3);
+        assert_eq!(r.on_long_command_secs, 30);
+        assert!(r.on_exit_nonzero.is_none());
+
+        let toml = r#"
+[rules]
+on_exit_nonzero = ":jobs"
+on_pattern_score = 5
+
+[rules.on_enter_cwd]
+"~/proy/wawa" = ":env RUST_BACKTRACE=1"
+"~/proy" = ":env GENERAL=1"
+"#;
+        let c: Config = toml::from_str(toml).unwrap();
+        assert_eq!(c.rules.on_exit_nonzero.as_deref(), Some(":jobs"));
+        assert_eq!(c.rules.on_pattern_score, 5);
+        // El prefijo más específico (más largo) gana.
+        assert_eq!(
+            c.rules.command_for_cwd("/home/u/proy/wawa/sub", "/home/u"),
+            Some(":env RUST_BACKTRACE=1")
+        );
+        assert_eq!(
+            c.rules.command_for_cwd("/home/u/proy/otro", "/home/u"),
+            Some(":env GENERAL=1")
+        );
+        // Fuera de todo prefijo → nada.
+        assert_eq!(c.rules.command_for_cwd("/tmp", "/home/u"), None);
     }
 
     #[test]

@@ -96,18 +96,24 @@ fn pattern_trigger(p: &shuma_infer::EmergingPattern) -> Vec<String> {
     common
 }
 
-/// Umbral de ocurrencias para ofrecer una coreografía como grupo (A1): la
-/// hiciste al menos esto seguido para que valga la pena guardarla.
+/// Umbral de ocurrencias por defecto para ofrecer una coreografía como grupo
+/// (A1): la hiciste al menos esto seguido para que valga la pena guardarla.
+/// El shumarc lo gobierna con `[rules].on_pattern_score` (E3); `0` = nunca.
 pub(crate) const CHOREO_OFFER_THRESHOLD: usize = 3;
 
 /// A1 — la coreografía que vale la pena ofrecer como grupo: el patrón de
-/// mayor score (los `patterns` vienen ordenados desc) con ≥ [`CHOREO_OFFER_THRESHOLD`]
+/// mayor score (los `patterns` vienen ordenados desc) con ≥ umbral
 /// ocurrencias que el usuario no descartó y que todavía no está guardado como
-/// grupo (mismas líneas). `None` si no hay ninguno. El shell propone, el
-/// usuario acepta con un click o ignora.
+/// grupo (mismas líneas). El umbral sale de `[rules].on_pattern_score` (E3);
+/// `0` lo apaga. `None` si no hay ninguno. El shell propone, el usuario acepta
+/// con un click o ignora.
 pub(crate) fn choreography_suggestion(s: &State) -> Option<&shuma_infer::EmergingPattern> {
+    let threshold = s.config.rules.on_pattern_score as usize;
+    if threshold == 0 {
+        return None; // regla apagada por el shumarc
+    }
     s.patterns.iter().find(|p| {
-        p.occurrences >= CHOREO_OFFER_THRESHOLD
+        p.occurrences >= threshold
             && !s.dismissed_choreo.contains(&p.signature)
             && !s.groups.iter().any(|g| g.lines == p.example)
     })

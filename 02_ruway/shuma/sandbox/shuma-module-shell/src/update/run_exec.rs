@@ -27,6 +27,9 @@ pub(crate) fn run_submitted(mut s: State) -> State {
         s.push_output(OutputLine::notice(format!("← {line}")));
         return s;
     }
+    // E3 — cada submit del usuario re-arma la regla on_exit_nonzero. (El
+    // comando de la regla la re-desarma después de su run.)
+    s.exit_rule_fired = false;
     // El comando que estaba en foco recede al historial: se pliega para que
     // el nuevo nazca expandido y la vista no sea un volcado plano. Sólo los
     // que tienen cuerpo (los sin salida no se pliegan; se ven distinto).
@@ -572,6 +575,20 @@ pub(crate) fn drain_run(mut s: State) -> State {
         // Si quedó algo en cola, arrancarlo ya — sin esperar otro Tick.
         if let Some(next) = s.queue.pop_front() {
             s = start_run(s, next);
+        }
+        // E3 — [rules].on_exit_nonzero: si el comando falló y la regla está
+        // armada, corré el comando declarado (típicamente un builtin como
+        // `:jobs`). La guarda evita que el propio comando de la regla la
+        // re-dispare. Sólo si no quedó otro corriendo de la cola.
+        if !ok && !s.exit_rule_fired && s.running.is_none() {
+            if let Some(cmd) = s.config.rules.on_exit_nonzero.clone() {
+                let cmd = cmd.trim().to_string();
+                if !cmd.is_empty() {
+                    s.input.set_text(&cmd);
+                    s = run_submitted(s);
+                    s.exit_rule_fired = true;
+                }
+            }
         }
     }
     // Drenado de jobs background — cada uno aporta sus líneas
