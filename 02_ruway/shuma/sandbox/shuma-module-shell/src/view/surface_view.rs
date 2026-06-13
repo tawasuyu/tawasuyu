@@ -60,6 +60,8 @@ pub(crate) fn section_table_view<HostMsg: Clone + 'static>(
             "size" => 80.0,
             "fecha" => 100.0,
             "comando" => 200.0, // :stats — nombres de binario + flags cortas
+            "variable" => 180.0, // env — nombres de variable
+            "hash" => 90.0, // git log --oneline
             _ if idx == n - 1 => 0.0, // última = flex
             _ => 90.0,
         }

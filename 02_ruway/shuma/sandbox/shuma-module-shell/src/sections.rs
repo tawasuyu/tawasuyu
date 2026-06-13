@@ -75,6 +75,10 @@ pub fn detect_sections(cmd: &str, lines: &[String]) -> Option<Vec<Section>> {
         "ls" => detect_ls(&tokens[1..], lines),
         ":stats" => detect_stats(lines),
         "git" if tokens.get(1) == Some(&"status") => detect_git_status(&tokens[2..], lines),
+        "git" if tokens.get(1) == Some(&"diff") => detect_diff(lines),
+        "git" if tokens.get(1) == Some(&"log") => detect_git_log(lines),
+        "diff" => detect_diff(lines),
+        "env" | "printenv" => detect_env(lines),
         "cargo" | "rustc" => detect_cargo(lines),
         // Comandos cuya salida es una tabla con header alineado a ancho fijo:
         // `docker ps`, `podman ps`, `kubectl get`, `systemctl list-units`,
@@ -276,6 +280,146 @@ fn detect_git_status_long(lines: &[String]) -> Option<Vec<Section>> {
         );
     }
     Some(sections)
+}
+
+/// `git diff` / `diff` unificado: una sección colapsable por archivo. Corta
+/// en cada `diff --git a/… b/…` (preferido) o, si no hay, en cada par
+/// `--- …`. El título es el path del archivo. `None` si no se ve estructura.
+fn detect_diff(lines: &[String]) -> Option<Vec<Section>> {
+    let starts_file = |l: &str| l.starts_with("diff --git ") || l.starts_with("diff -");
+    let has_git_headers = lines.iter().any(|l| starts_file(l));
+    let mut sections: Vec<Section> = Vec::new();
+    let mut preamble: Vec<String> = Vec::new();
+    let mut cur: Option<(String, Vec<String>)> = None;
+    let flush = |cur: &mut Option<(String, Vec<String>)>, out: &mut Vec<Section>| {
+        if let Some((title, body)) = cur.take() {
+            out.push(Section { title, kind: SectionKind::Lines(body) });
+        }
+    };
+    for l in lines {
+        // Header de archivo: `diff --git a/x b/x` → título = el path b/.
+        let is_header = if has_git_headers {
+            starts_file(l)
+        } else {
+            // Sin `diff --git`: cortamos en `+++ b/path` (segunda mitad del par).
+            l.starts_with("+++ ")
+        };
+        if is_header {
+            flush(&mut cur, &mut sections);
+            let title = diff_title(l);
+            cur = Some((title, vec![l.clone()]));
+        } else if let Some((_, body)) = cur.as_mut() {
+            body.push(l.clone());
+        } else {
+            preamble.push(l.clone());
+        }
+    }
+    flush(&mut cur, &mut sections);
+    if sections.is_empty() {
+        return None;
+    }
+    let pre: Vec<String> = preamble.into_iter().filter(|l| !l.trim().is_empty()).collect();
+    if !pre.is_empty() {
+        sections.insert(0, Section { title: "resumen".into(), kind: SectionKind::Lines(pre) });
+    }
+    Some(sections)
+}
+
+/// Extrae el path de un header de diff (`diff --git a/x b/x` o `+++ b/x`).
+fn diff_title(line: &str) -> String {
+    if let Some(rest) = line.strip_prefix("diff --git ") {
+        // `a/path b/path` → preferimos el lado b (destino).
+        if let Some((_, b)) = rest.split_once(" b/") {
+            return b.trim().to_string();
+        }
+        return rest.trim().to_string();
+    }
+    if let Some(rest) = line.strip_prefix("+++ ") {
+        return rest.trim().trim_start_matches("b/").to_string();
+    }
+    line.trim().to_string()
+}
+
+/// `git log` (formato completo): una sección colapsable por commit (corta en
+/// cada línea `commit <hash>`). En formato `--oneline` (`<hash> asunto`) cae a
+/// una tabla `hash · asunto`. `None` si no se ve ninguno de los dos.
+fn detect_git_log(lines: &[String]) -> Option<Vec<Section>> {
+    let first = lines.iter().find(|l| !l.trim().is_empty())?;
+    if first.starts_with("commit ") {
+        // Formato completo: secciones por commit.
+        let mut sections: Vec<Section> = Vec::new();
+        let mut cur: Option<(String, Vec<String>)> = None;
+        for l in lines {
+            if l.starts_with("commit ") {
+                if let Some((title, body)) = cur.take() {
+                    sections.push(Section { title, kind: SectionKind::Lines(body) });
+                }
+                let short = l.strip_prefix("commit ").unwrap_or("").trim();
+                let short = short.get(..short.len().min(10)).unwrap_or(short);
+                cur = Some((format!("commit {short}"), vec![l.clone()]));
+            } else if let Some((_, body)) = cur.as_mut() {
+                body.push(l.clone());
+            }
+        }
+        if let Some((title, body)) = cur.take() {
+            sections.push(Section { title, kind: SectionKind::Lines(body) });
+        }
+        return if sections.is_empty() { None } else { Some(sections) };
+    }
+    // Formato --oneline: `<hash> asunto`. Tabla hash · asunto.
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for l in lines {
+        let l = l.trim();
+        if l.is_empty() {
+            continue;
+        }
+        let Some((hash, subject)) = l.split_once(char::is_whitespace) else {
+            return None;
+        };
+        let is_hash = (7..=40).contains(&hash.len())
+            && hash.chars().all(|c| c.is_ascii_hexdigit());
+        if !is_hash {
+            return None;
+        }
+        rows.push(vec![hash.to_string(), subject.trim().to_string()]);
+    }
+    if rows.is_empty() {
+        return None;
+    }
+    Some(vec![Section {
+        title: String::new(),
+        kind: SectionKind::Table { columns: vec!["hash".into(), "asunto".into()], rows },
+    }])
+}
+
+/// `env` / `printenv`: tabla `variable · valor` partiendo cada línea por el
+/// primer `=`. Las líneas de continuación (valores multilínea) se ignoran.
+fn detect_env(lines: &[String]) -> Option<Vec<Section>> {
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut no_vacias = 0usize;
+    for l in lines {
+        if l.trim().is_empty() {
+            continue;
+        }
+        no_vacias += 1;
+        let Some((key, val)) = l.split_once('=') else {
+            continue;
+        };
+        // Una clave de env válida no tiene espacios — filtra basura.
+        if key.is_empty() || key.contains(char::is_whitespace) {
+            continue;
+        }
+        rows.push(vec![key.to_string(), val.to_string()]);
+    }
+    // Guarda contra falsos positivos (`env FOO=bar cmd` cuya salida no es
+    // KEY=VAL): exigimos que la mayoría de las líneas sean asignaciones.
+    if rows.is_empty() || rows.len() * 5 < no_vacias * 3 {
+        return None;
+    }
+    Some(vec![Section {
+        title: String::new(),
+        kind: SectionKind::Table { columns: vec!["variable".into(), "valor".into()], rows },
+    }])
 }
 
 /// Salida de `cargo`/`rustc`: una sección colapsable por diagnóstico
@@ -703,6 +847,77 @@ mod tests {
     fn cargo_sin_diagnosticos_no_secciona() {
         let lines = vec!["Hello, world!".to_string(), "   Finished in 0.1s".to_string()];
         assert!(detect_sections("cargo run", &lines).is_none());
+    }
+
+    #[test]
+    fn git_diff_una_seccion_por_archivo() {
+        let lines = vec![
+            "diff --git a/src/foo.rs b/src/foo.rs".to_string(),
+            "index 111..222 100644".to_string(),
+            "@@ -1,3 +1,4 @@".to_string(),
+            "+nueva línea".to_string(),
+            "diff --git a/README.md b/README.md".to_string(),
+            "@@ -10,2 +10,2 @@".to_string(),
+            "-vieja".to_string(),
+            "+nueva".to_string(),
+        ];
+        let secs = detect_sections("git diff", &lines).expect("detect");
+        assert_eq!(secs.len(), 2);
+        assert_eq!(secs[0].title, "src/foo.rs");
+        assert_eq!(secs[1].title, "README.md");
+    }
+
+    #[test]
+    fn git_log_oneline_es_tabla_y_full_secciones() {
+        let oneline = vec![
+            "a1b2c3d arregla el parser".to_string(),
+            "9f8e7d6 agrega tests".to_string(),
+        ];
+        let secs = detect_sections("git log --oneline", &oneline).expect("detect");
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns, &["hash", "asunto"]);
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0][1], "arregla el parser");
+            }
+            _ => panic!("oneline esperaba tabla"),
+        }
+        let full = vec![
+            "commit a1b2c3d4e5f6a7b8".to_string(),
+            "Author: Sergio <x@y>".to_string(),
+            "    arregla el parser".to_string(),
+            "commit 0011223344556677".to_string(),
+            "    otro commit".to_string(),
+        ];
+        let secs = detect_sections("git log", &full).expect("detect");
+        assert_eq!(secs.len(), 2);
+        assert!(secs[0].title.starts_with("commit a1b2c3d4"));
+    }
+
+    #[test]
+    fn env_es_tabla_y_no_secciona_salida_libre() {
+        let lines = vec![
+            "PATH=/usr/bin:/bin".to_string(),
+            "HOME=/home/u".to_string(),
+            "SHELL=/bin/zsh".to_string(),
+        ];
+        let secs = detect_sections("env", &lines).expect("detect");
+        match &secs[0].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns, &["variable", "valor"]);
+                assert_eq!(rows.len(), 3);
+                assert_eq!(rows[0], vec!["PATH", "/usr/bin:/bin"]);
+            }
+            _ => panic!("esperaba tabla"),
+        }
+        // `env FOO=bar prog` cuya salida es texto libre → no se secciona.
+        let libre = vec![
+            "FOO=bar".to_string(),
+            "esto es salida del programa".to_string(),
+            "otra línea cualquiera de log".to_string(),
+            "y otra más".to_string(),
+        ];
+        assert!(detect_sections("env", &libre).is_none());
     }
 
     impl Section {
