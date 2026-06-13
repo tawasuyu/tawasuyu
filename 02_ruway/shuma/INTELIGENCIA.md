@@ -117,12 +117,16 @@ existente — `:macro save deploy cargo build --bin %1 && scp %1 %2:/srv`,
 ascensor de A1: el patrón emergente se promociona a macro con parámetros
 explícitos. 3 tests (sustitución, instanciación multipaso, macro inexistente).
 
-### E2. El scrollback como base de datos (`%cN` en la línea)
-`shuma-intent::parse` ya entiende refs `%cN`/`%pN`; el shell ya tiene
-`gather_block_stdout`. Cablear: `grep error %c12 | sort` materializa el
-stdout del bloque 12 como stdin. Combinado con las secciones-tabla, un
-`ls -l` viejo es una **tabla consultable**, no píxeles muertos. El chip
-`» stdin` actual es el caso degenerado (sólo "el próximo comando").
+### E2. El scrollback como base de datos (`%cN` en la línea) ✅ (2026-06-13)
+**Hecho:** `resolve_injects` (`update/run_exec.rs`) parsea la línea con
+`shuma_intent::Intention`; una etapa-ref `%cN`/`%pN` materializa el stdout del
+bloque `N` (`gather_block_stdout`) como **stdin** del resto del pipeline —
+`%c12 | grep error | sort` corre `grep error | sort` sobre el bloque 12; `%c12`
+solo se re-muestra con `cat`. Tiene prioridad sobre el reprocess del chip
+`» stdin` (su caso degenerado). Tag `%cN` clickeable en el header
+(`surface_header` + `Msg::InsertBlockRef`) hace visible el número y lo inserta
+al input. Combinado con las secciones-tabla, un `ls -l` viejo es una tabla
+consultable. 4 tests (ref como fuente, ref sola→cat, %pN, línea sin ref).
 
 ### E3. Reglas declarativas en el rc (`[rules]`) — el plano de control
 El shumarc deja de ser sólo preferencias y gana gatillos deterministas:
@@ -172,7 +176,7 @@ red: los datos no salen de la máquina.
    todo el material ya está en memoria. ✅ **hecho 2026-06-13.**
 2. **A3 + A4** (ghost por cwd + quisiste-decir): afinan el día a día. ✅ **hecho 2026-06-13.**
 3. **E1 + E2** (`:macro` + `%cN`): desbloquean el techo del extremo con
-   núcleos ya escritos.
+   núcleos ya escritos. ✅ **hecho 2026-06-13.**
 4. **E3 + E6** (`[rules]` + `:stats`): convierten el rc en plano de control.
 5. **E4** (PTY persistente): sprint propio, coordinar con `shuma-gateway`
    (el cliente Android lo está esperando).

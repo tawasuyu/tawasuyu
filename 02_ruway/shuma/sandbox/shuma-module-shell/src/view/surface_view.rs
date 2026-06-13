@@ -477,7 +477,30 @@ fn surface_header<HostMsg: Clone + 'static>(
 
     let running = status == Some(CmdStatus::Running);
     let is_input_focus = state.input_focus == Some(block);
-    let mut children = vec![marker, cmd];
+    // E2 — tag `%cN` clickeable: hace visible el número del bloque (para
+    // referenciarlo en `%cN | grep …`) y, al click, inserta la ref en el
+    // input. Sólo en bloques con stdout (los que son fuente de datos útil).
+    let mut children = if has_stdout {
+        let ref_tag = View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(14.0_f32) },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(3.0_f32),
+                right: length(3.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .radius(3.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(Msg::InsertBlockRef(block)))
+        .text_aligned(format!("%c{block}"), 9.0, theme.fg_muted, Alignment::Start)
+        .mono();
+        vec![marker, ref_tag, cmd]
+    } else {
+        vec![marker, cmd]
+    };
     // Titular semáforo (A5): cuando el bloque está colapsado, el header gana
     // el resumen contado del cuerpo (errores/avisos/líneas/duración). El nerdo
     // habitual escanea la columna de headers como un log semáforo sin

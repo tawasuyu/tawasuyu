@@ -401,6 +401,16 @@ pub fn update(state: State, msg: Msg) -> State {
                 s.input.set_text(&corregida);
             }
         }
+        Msg::InsertBlockRef(block) => {
+            // Apila la ref al final de lo ya tipeado: `grep error ` + `%c12`.
+            let actual = s.input.text().to_string();
+            let sep = if actual.is_empty() || actual.ends_with(' ') {
+                ""
+            } else {
+                " "
+            };
+            s.input.set_text(&format!("{actual}{sep}%c{block} "));
+        }
         Msg::BodyPointer { block, ev } => {
             s = apply_body_pointer(s, block, ev);
         }

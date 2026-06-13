@@ -167,9 +167,54 @@ pub(crate) fn start_bg(mut s: State, line: String) -> State {
     s
 }
 
+/// E2 — el scrollback como base de datos: resuelve las etapas-referencia
+/// `%cN`/`%pN` de una línea materializando el stdout de esos bloques. Devuelve
+/// `(línea_ejecutable, stdin_inyectado)`:
+/// - `%c12 | grep error | sort` → ejecuta `grep error | sort` con el stdout del
+///   bloque 12 como stdin (la ref es la fuente de datos del pipeline).
+/// - `%c12` solo → `cat` con ese stdin (re-muestra el bloque, consultable).
+/// - sin refs → la línea tal cual, sin inyección.
+///
+/// Tanto `%cN` (comando) como `%pN` (buffer) referencian el stdout del bloque
+/// `N`; el shell no materializa buffers intermedios aparte. El chip `» stdin`
+/// (reprocess) es el caso degenerado de esto.
+pub(crate) fn resolve_injects(s: &State, line: &str) -> (String, Option<String>) {
+    let intention = shuma_intent::Intention::parse(line);
+    let tiene_ref = intention
+        .stages
+        .iter()
+        .any(|st| matches!(st, shuma_intent::Stage::Inject(_)));
+    if !tiene_ref {
+        return (line.to_string(), None);
+    }
+    let mut data = String::new();
+    let mut exec_stages: Vec<String> = Vec::new();
+    for st in &intention.stages {
+        match st {
+            shuma_intent::Stage::Inject(r) => {
+                let block = match r {
+                    shuma_intent::Ref::Command(n) | shuma_intent::Ref::Buffer(n) => *n as u64,
+                };
+                data.push_str(&gather_block_stdout(s, block));
+            }
+            shuma_intent::Stage::Exec(cmd) => exec_stages.push(cmd.clone()),
+        }
+    }
+    // Sólo refs (sin comando) → `cat` re-muestra el contenido inyectado.
+    let exec_line = if exec_stages.is_empty() {
+        "cat".to_string()
+    } else {
+        exec_stages.join(" | ")
+    };
+    (exec_line, Some(data))
+}
+
 pub(crate) fn start_run(mut s: State, line: String) -> State {
     let cwd_str = s.cwd.display().to_string();
-    let (mut spec, tui) = build_spec(&line, &cwd_str);
+    // E2 — resolución de `%cN`/`%pN`: la línea ejecutable puede diferir de la
+    // tipeada (las refs se sacan del pipe y su stdout va al stdin).
+    let (exec_line, injected_stdin) = resolve_injects(&s, &line);
+    let (mut spec, tui) = build_spec(&exec_line, &cwd_str);
     // Config de captura y reprocess sólo aplican a runs no-PTY (los TUI
     // capturan a vt100, no a buffer, y no consumen stdin reprocesado).
     if tui.is_none() {
@@ -181,8 +226,16 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
                 s.current_block
             ))
         });
-        // Reprocess armado: el stdout del bloque fuente alimenta el stdin.
-        if let Some(src) = s.reprocess_source.take() {
+        // E2 — stdin inyectado por `%cN`/`%pN` (tiene prioridad sobre el
+        // reprocess del chip). Si la línea trajo refs, ya desarmamos cualquier
+        // reprocess pendiente: la fuente explícita manda.
+        if let Some(data) = injected_stdin {
+            if !data.is_empty() {
+                spec.stdin_data = Some(data);
+            }
+            s.reprocess_source = None;
+        } else if let Some(src) = s.reprocess_source.take() {
+            // Reprocess armado: el stdout del bloque fuente alimenta el stdin.
             let data = gather_block_stdout(&s, src);
             if !data.is_empty() {
                 spec.stdin_data = Some(data);
@@ -616,4 +669,51 @@ pub(crate) fn cancel_running(mut s: State) -> State {
     }
     s.push_in_block(run_block, OutputLine::notice("⏹ cancel (SIGKILL enviado)"));
     s
+}
+
+#[cfg(test)]
+mod e2_inject_tests {
+    use super::*;
+
+    fn state_con_bloque(block: u64, lineas: &[&str]) -> State {
+        let mut s = State::new(shuma_module::Source::Local);
+        for t in lineas {
+            let mut l = OutputLine::stdout(*t);
+            l.block = block;
+            s.output.push(l);
+        }
+        s
+    }
+
+    #[test]
+    fn ref_como_fuente_alimenta_el_pipe() {
+        let s = state_con_bloque(5, &["foo", "error bar", "baz"]);
+        let (exec, stdin) = resolve_injects(&s, "%c5 | grep error");
+        assert_eq!(exec, "grep error");
+        assert_eq!(stdin.as_deref(), Some("foo\nerror bar\nbaz\n"));
+    }
+
+    #[test]
+    fn ref_sola_se_remuestra_con_cat() {
+        let s = state_con_bloque(12, &["línea uno", "línea dos"]);
+        let (exec, stdin) = resolve_injects(&s, "%c12");
+        assert_eq!(exec, "cat");
+        assert_eq!(stdin.as_deref(), Some("línea uno\nlínea dos\n"));
+    }
+
+    #[test]
+    fn pn_aliasa_al_stdout_del_bloque() {
+        let s = state_con_bloque(3, &["a", "b"]);
+        let (exec, stdin) = resolve_injects(&s, "%p3 | sort");
+        assert_eq!(exec, "sort");
+        assert_eq!(stdin.as_deref(), Some("a\nb\n"));
+    }
+
+    #[test]
+    fn linea_sin_ref_pasa_intacta() {
+        let s = State::new(shuma_module::Source::Local);
+        let (exec, stdin) = resolve_injects(&s, "ls -la | grep foo");
+        assert_eq!(exec, "ls -la | grep foo");
+        assert!(stdin.is_none());
+    }
 }

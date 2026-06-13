@@ -98,6 +98,10 @@ pub enum Msg {
     /// la línea corregida al input (para revisarla y ejecutar con Enter) y
     /// limpia la oferta. La dispara el click en su notice.
     AcceptDidYouMean(u64),
+    /// E2 — inserta la referencia `%cN` del bloque `block` al final del input
+    /// (su stdout se materializa como fuente del pipe). La dispara el click en
+    /// el tag `%cN` del header.
+    InsertBlockRef(u64),
     /// Mouse sobre el cuerpo (IDE-text) de la card del bloque `block`:
     /// click posiciona el caret, drag extiende la selección. La dispara el
     /// `on_pointer` del `text-editor` del cuerpo.
