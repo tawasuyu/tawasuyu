@@ -406,6 +406,9 @@ pub struct State {
     /// secuencia predicha (no sólo el historial reciente). Vacío al
     /// arrancar y hasta tener suficiente historial.
     pub patterns: Vec<shuma_infer::EmergingPattern>,
+    /// A1 — firmas de coreografías que el usuario **descartó** (chip «descartar»):
+    /// no se vuelven a ofrecer como grupo en esta sesión. Sólo en memoria.
+    pub dismissed_choreo: std::collections::HashSet<Vec<String>>,
     /// Tope de captura de stdout por run, en bytes. `0` = sin tope. Lo fija
     /// el builtin `:limit <MB>`.
     pub capture_limit_bytes: usize,
@@ -701,6 +704,7 @@ impl State {
             input_focus: None,
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
+            dismissed_choreo: std::collections::HashSet::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
             // `:spill` la sobreescriben en vivo). `0` MiB = sin tope.
             capture_limit_bytes: config.capture.limit_mb.saturating_mul(1024 * 1024),

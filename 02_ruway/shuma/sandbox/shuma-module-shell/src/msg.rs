@@ -87,6 +87,13 @@ pub enum Msg {
     /// Ejecuta el grupo guardado de índice `idx` (0-based). La dispara el
     /// click en su card del panel de grupos (equivale a la tecla F{idx+1}).
     RunGroup(usize),
+    /// A1 — acepta la coreografía emergente (identificada por su `signature`):
+    /// la guarda como grupo ejecutable (F-key) con su nombre sugerido. La
+    /// dispara el chip «guardar» sobre el input.
+    AcceptChoreography(Vec<String>),
+    /// A1 — descarta la oferta de coreografía (por `signature`): no se vuelve
+    /// a ofrecer en la sesión. La dispara el chip «descartar».
+    DismissChoreography(Vec<String>),
     /// Mouse sobre el cuerpo (IDE-text) de la card del bloque `block`:
     /// click posiciona el caret, drag extiende la selección. La dispara el
     /// `on_pointer` del `text-editor` del cuerpo.

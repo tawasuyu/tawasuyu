@@ -197,6 +197,10 @@ pub fn view<HostMsg: Clone + 'static>(
     if let Some(banner) = input_focus_banner::<HostMsg>(state, theme, &lift) {
         children.push(banner);
     }
+    // A1 — oferta de coreografía: discreta, justo sobre el input.
+    if let Some(chip) = choreography_chip::<HostMsg>(state, theme, &lift) {
+        children.push(chip);
+    }
     children.push(input);
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
@@ -279,5 +283,94 @@ pub(crate) fn input_focus_banner<HostMsg: Clone + 'static>(
         .text_aligned(label, 10.0, theme.accent, Alignment::Start)
         .mono()
         .max_lines(1),
+    )
+}
+
+/// A1 — chip de coreografía sobre el input: cuando una secuencia repetida
+/// supera el umbral, ofrece guardarla como grupo ejecutable. El shell propone,
+/// el usuario acepta con un click («guardar» → F-key) o la descarta. `None`
+/// si no hay ninguna coreografía que ofrecer. Discreto y descartable: nunca
+/// bloquea, nunca ejecuta nada solo.
+pub(crate) fn choreography_chip<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Option<View<HostMsg>> {
+    let p = choreography_suggestion(state)?;
+    let name = p.suggested_name();
+    let preview = p.example.join(" → ");
+    let label = format!(
+        "↻ lo corriste {} veces · guardar «{name}» como grupo?  ({preview})",
+        p.occurrences
+    );
+    let sig = p.signature.clone();
+
+    // Chip de acción reutilizable (innermost-wins: gana el click sobre el banner).
+    let action = |text: &str,
+                  fill: llimphi_ui::llimphi_raster::peniko::Color,
+                  fg: llimphi_ui::llimphi_raster::peniko::Color,
+                  msg: Msg|
+     -> View<HostMsg> {
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(7.0_f32),
+                right: length(7.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(fill)
+        .radius(3.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(msg))
+        .text_aligned(text.to_string(), 10.0, fg, Alignment::Start)
+        .mono()
+    };
+
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(20.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_input)
+        .radius(4.0)
+        .children(vec![
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_grow: 1.0,
+                ..Default::default()
+            })
+            .text_aligned(label, 10.0, theme.accent, Alignment::Start)
+            .mono()
+            .max_lines(1),
+            action(
+                "guardar",
+                theme.accent,
+                theme.bg_panel,
+                Msg::AcceptChoreography(sig.clone()),
+            ),
+            action(
+                "descartar",
+                theme.bg_input,
+                theme.fg_muted,
+                Msg::DismissChoreography(sig),
+            ),
+        ]),
     )
 }

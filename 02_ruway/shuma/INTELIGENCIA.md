@@ -21,7 +21,7 @@ con fallback a Mock) sólo entra explícitamente invocado y rotulado.
 
 | Pieza | Crate | Estado |
 |---|---|---|
-| Patrones emergentes (coreografías repetidas → abstracción con `Varies`) | `sandbox/shuma-infer` | vivo; hoy sólo alimenta el ghost |
+| Patrones emergentes (coreografías repetidas → abstracción con `Varies`) | `sandbox/shuma-infer` | vivo; alimenta el ghost **y** el chip de coreografía (A1, 2026-06-13) |
 | Ghost predictivo (prefijo → sufijo del corpus) | `sandbox/shuma-line::ghost` | vivo en el input |
 | Grafo de intenciones (`%cN`/`%pN`, nodos por comando) | `sandbox/shuma-intent::SessionGraph` | vivo; lo pinta `shuma-module-canvas` |
 | Macros parametrizables | `sandbox/shuma-intent::MacroBook` | **núcleo listo, sin UI ni builtin** |
@@ -44,12 +44,20 @@ Principio: cero configuración, cero prompt engineering. El shell propone,
 el usuario acepta con una tecla o ignora. Toda propuesta es descartable y
 **aprendible al shumarc** (la infraestructura `upsert_key` ya existe).
 
-### A1. Coreografías que se ofrecen como grupo (cablear `shuma-infer` a UI)
-Hoy `detect_patterns` corre tras cada comando y muere en el ghost. Cuando un
-`EmergingPattern` supere un umbral (score ≥ 3 repeticiones), mostrar un chip
-discreto sobre el input: *«esto lo hiciste 3 veces — ¿guardar como grupo F3?
-(`pull → build → test`)»*. Click o tecla → `:save` con `suggested_name()`.
-Esfuerzo: bajo (el patrón, el score y el nombre ya existen).
+### A1. Coreografías que se ofrecen como grupo (cablear `shuma-infer` a UI) ✅ (2026-06-13)
+`detect_patterns` corre tras cada comando y alimentaba sólo el ghost. Ahora,
+cuando un `EmergingPattern` supera el umbral (`CHOREO_OFFER_THRESHOLD = 3`
+ocurrencias), un chip discreto sobre el input ofrece guardarlo:
+*«↻ lo corriste 3 veces · guardar «git+cargo+cargo» como grupo? (git pull →
+cargo build → cargo test) [guardar] [descartar]»*. **Hecho:**
+`choreography_suggestion` / `accept_choreography` en `update/patterns.rs`
+(promueve el patrón a `CommandGroup` con `suggested_name()` + las líneas reales
+de la última ocurrencia, ejecutable por F-key); `choreography_chip` en
+`view/mod.rs` sobre el input; Msgs `AcceptChoreography`/`DismissChoreography`;
+descartes en memoria (`State.dismissed_choreo`). Verificado headless
+(`examples/choreo_chip.rs` → PNG) + 3 tests unitarios. **Pendiente menor:** el
+chip vive en `view()` (shell standalone); falta llevarlo a la barra de pata
+(`body_view` no incluye el input).
 
 ### A2. Alias sugerido por longitud × frecuencia
 Línea > 40 chars repetida ≥ 3 veces sin variación → ofrecer alias corto
@@ -150,7 +158,7 @@ red: los datos no salen de la máquina.
 ## Orden propuesto
 
 1. **A5 + A1** (titular semáforo + chip de coreografía): máximo efecto/LOC,
-   todo el material ya está en memoria.
+   todo el material ya está en memoria. ✅ **hecho 2026-06-13.**
 2. **A3 + A4** (ghost por cwd + quisiste-decir): afinan el día a día.
 3. **E1 + E2** (`:macro` + `%cN`): desbloquean el techo del extremo con
    núcleos ya escritos.

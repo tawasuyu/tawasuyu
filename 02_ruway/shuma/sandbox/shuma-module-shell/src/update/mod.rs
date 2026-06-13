@@ -390,6 +390,12 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::RunGroup(idx) => {
             s = run_group(s, idx);
         }
+        Msg::AcceptChoreography(signature) => {
+            s = accept_choreography(s, &signature);
+        }
+        Msg::DismissChoreography(signature) => {
+            s.dismissed_choreo.insert(signature);
+        }
         Msg::BodyPointer { block, ev } => {
             s = apply_body_pointer(s, block, ev);
         }
