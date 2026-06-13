@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub mod lifecycle;
-pub use lifecycle::ContainerAction;
+pub use lifecycle::{ContainerAction, ServiceAction};
 
 use matilda_config::{docker_run_command, nginx_server_block};
 use matilda_core::Inventory;

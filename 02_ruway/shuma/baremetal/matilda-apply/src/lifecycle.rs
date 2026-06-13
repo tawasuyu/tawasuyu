@@ -62,9 +62,72 @@ impl ContainerAction {
     }
 }
 
+/// Acción de ciclo de vida sobre un servicio systemd.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceAction {
+    Start,
+    Stop,
+    Restart,
+    Enable,
+    Disable,
+    /// Estado detallado (lectura, no muta).
+    Status,
+}
+
+impl ServiceAction {
+    pub fn label(self) -> &'static str {
+        match self {
+            ServiceAction::Start => "Start",
+            ServiceAction::Stop => "Stop",
+            ServiceAction::Restart => "Restart",
+            ServiceAction::Enable => "Enable",
+            ServiceAction::Disable => "Disable",
+            ServiceAction::Status => "Status",
+        }
+    }
+
+    pub fn is_mutating(self) -> bool {
+        !matches!(self, ServiceAction::Status)
+    }
+
+    /// Comando `systemctl` para la acción sobre `unit`. Puro. Las acciones
+    /// mutantes suelen requerir privilegios; si fallan, el caller lo loguea.
+    pub fn command(self, unit: &str) -> String {
+        match self {
+            ServiceAction::Start => format!("systemctl start {unit}"),
+            ServiceAction::Stop => format!("systemctl stop {unit}"),
+            ServiceAction::Restart => format!("systemctl restart {unit}"),
+            ServiceAction::Enable => format!("systemctl enable {unit}"),
+            ServiceAction::Disable => format!("systemctl disable {unit}"),
+            ServiceAction::Status => format!("systemctl status {unit} --no-pager --lines=20"),
+        }
+    }
+
+    pub fn all() -> [ServiceAction; 6] {
+        [
+            ServiceAction::Start,
+            ServiceAction::Stop,
+            ServiceAction::Restart,
+            ServiceAction::Enable,
+            ServiceAction::Disable,
+            ServiceAction::Status,
+        ]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn comandos_systemctl_por_accion() {
+        assert_eq!(ServiceAction::Start.command("sshd"), "systemctl start sshd");
+        assert_eq!(ServiceAction::Enable.command("nginx"), "systemctl enable nginx");
+        assert!(ServiceAction::Status.command("x").contains("--no-pager"));
+        assert!(!ServiceAction::Status.is_mutating());
+        assert!(ServiceAction::Restart.is_mutating());
+    }
 
     #[test]
     fn comandos_docker_por_accion() {

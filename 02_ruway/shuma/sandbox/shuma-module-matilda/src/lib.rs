@@ -42,7 +42,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{DragPhase, View};
 use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
-use matilda_apply::{plan_to_steps, ContainerAction};
+use matilda_apply::{plan_to_steps, ContainerAction, ServiceAction};
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
 use matilda_discover::{
     discover_inventory, discover_runtime, observed_inventory, RuntimeState, ServerState,
@@ -79,6 +79,8 @@ pub struct State {
     /// Contenedor seleccionado en el panel — abre la barra de acciones
     /// (start/stop/restart/logs/rm). `None` = nada seleccionado.
     pub selected_container: Option<String>,
+    /// Servicio systemd seleccionado — abre su barra de acciones.
+    pub selected_service: Option<String>,
     pending_steps: Arc<Mutex<usize>>,
     /// `(up, down)` compartido con el sampler del monitor de runtime.
     runtime_counts: Arc<Mutex<(usize, usize)>>,
@@ -102,6 +104,7 @@ impl State {
             inventory_path: None,
             runtime: None,
             selected_container: None,
+            selected_service: None,
             pending_steps: Arc::new(Mutex::new(0)),
             runtime_counts: Arc::new(Mutex::new((0, 0))),
         }
@@ -178,6 +181,11 @@ pub enum Msg {
     /// Acción de ciclo de vida sobre un contenedor (start/stop/restart/
     /// logs/rm). Local sincrónico; remoto delegado al chasis.
     ContainerActionMsg { name: String, action: ContainerAction },
+    /// Click en un servicio systemd: lo selecciona (toggle).
+    SelectService(String),
+    /// Acción sobre un servicio systemd (start/stop/restart/enable/disable/
+    /// status). Local sincrónico; remoto delegado al chasis.
+    ServiceActionMsg { name: String, action: ServiceAction },
 }
 
 /// Mapea el `action_id` de un `ShortcutAction::ModuleAction` al `Msg`
@@ -398,6 +406,37 @@ pub fn update(state: State, msg: Msg) -> State {
                 });
                 // Una acción mutante cambia el runtime: lo re-observamos para
                 // que el semáforo del panel quede al día sin pulsar Discover.
+                if ok && action.is_mutating() {
+                    s.set_runtime(discover_runtime());
+                }
+            }
+            cap_log(&mut s.log);
+        }
+        Msg::SelectService(name) => {
+            s.selected_service = if s.selected_service.as_deref() == Some(name.as_str()) {
+                None
+            } else {
+                Some(name)
+            };
+        }
+        Msg::ServiceActionMsg { name, action } => {
+            if s.source.is_remote() {
+                s.log.push(format!(
+                    "→ {} {name} remoto delegado al chasis",
+                    action.label()
+                ));
+            } else {
+                let cmd = action.command(&name);
+                s.log.push(format!("$ {cmd}"));
+                let (ok, out) = run_shell_capture(&cmd);
+                for line in out.into_iter().take(30) {
+                    s.log.push(format!("   {line}"));
+                }
+                s.log.push(if ok {
+                    format!("✔ {} {name}", action.label())
+                } else {
+                    format!("✘ {} {name} falló (¿privilegios?)", action.label())
+                });
                 if ok && action.is_mutating() {
                     s.set_runtime(discover_runtime());
                 }
@@ -872,6 +911,28 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
         }
     }
 
+    // SERVICES — systemd (running/failed), runtime puro + acciones.
+    if let Some(rt) = &state.runtime {
+        if !rt.services.is_empty() {
+            children.push(section_label(
+                &format!(
+                    "SERVICES ({}) · {} activos · {} fallados",
+                    rt.services.len(),
+                    rt.services_active(),
+                    rt.services_failed()
+                ),
+                theme,
+            ));
+            for svc in &rt.services {
+                let sel = state.selected_service.as_deref() == Some(svc.name.as_str());
+                children.push(service_row(svc, sel, theme, lift.clone()));
+                if sel {
+                    children.push(service_action_bar(&svc.name, theme, lift.clone()));
+                }
+            }
+        }
+    }
+
     children.push(section_label(
         &format!("VHOSTS ({})", state.desired.vhosts().count()),
         theme,
@@ -987,6 +1048,88 @@ fn container_action_bar<HostMsg: Clone + Send + Sync + 'static>(
             })
             .hover_fill(theme.bg_row_hover)
             .on_click(lift(Msg::ContainerActionMsg {
+                name: name.to_string(),
+                action,
+            }))
+            .text_aligned(action.label().to_string(), 11.0, color, Alignment::Start),
+        );
+    }
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(20.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(2.0_f32),
+        },
+        gap: Size { width: length(4.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(buttons)
+}
+
+/// Fila de servicio systemd con semáforo (●/✖/○) + `sub` + descripción,
+/// clickeable para abrir su barra de acciones.
+fn service_row<HostMsg: Clone + Send + Sync + 'static>(
+    svc: &matilda_discover::ServiceStatus,
+    selected: bool,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use matilda_discover::ServiceState;
+    let color = match svc.state {
+        ServiceState::Active | ServiceState::Activating => Color::from_rgba8(0x82, 0xCD, 0x8C, 0xFF),
+        ServiceState::Failed => Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF),
+        _ => theme.fg_muted,
+    };
+    let prefix = if selected { "▸ " } else { "  " };
+    let desc = if svc.description.is_empty() {
+        String::new()
+    } else {
+        format!("  · {}", svc.description)
+    };
+    let mut row = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::SelectService(svc.name.clone())))
+    .text_aligned(
+        format!("{prefix}{} {}  ({}){desc}", svc.state.glyph(), svc.name, svc.sub),
+        11.0,
+        color,
+        Alignment::Start,
+    );
+    if selected {
+        row = row.fill(theme.bg_row_hover);
+    }
+    row
+}
+
+/// Barra de acciones del servicio seleccionado.
+fn service_action_bar<HostMsg: Clone + Send + Sync + 'static>(
+    name: &str,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let mut buttons: Vec<View<HostMsg>> = Vec::new();
+    for action in ServiceAction::all() {
+        let color = if matches!(action, ServiceAction::Stop | ServiceAction::Disable) {
+            Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF)
+        } else {
+            theme.accent
+        };
+        buttons.push(
+            View::new(Style {
+                size: Size { width: length(60.0_f32), height: length(18.0_f32) },
+                align_items: Some(AlignItems::Center),
+                ..Default::default()
+            })
+            .hover_fill(theme.bg_row_hover)
+            .on_click(lift(Msg::ServiceActionMsg {
                 name: name.to_string(),
                 action,
             }))
@@ -1341,6 +1484,7 @@ mod tests {
                     ports: String::new(),
                 },
             ],
+            services: vec![],
             vhosts: vec![],
         };
         s = update(s, Msg::SetRuntime(rt));
@@ -1381,6 +1525,21 @@ mod tests {
         );
         assert!(s.log.iter().any(|l| l.contains("docker start web")));
         assert!(s.log.iter().any(|l| l.contains("Start web")));
+    }
+
+    #[test]
+    fn service_action_local_loguea_comando() {
+        let mut s = State::new(Source::Local);
+        s = update(s, Msg::SelectService("sshd.service".into()));
+        assert_eq!(s.selected_service.as_deref(), Some("sshd.service"));
+        s = update(
+            s,
+            Msg::ServiceActionMsg {
+                name: "sshd.service".into(),
+                action: ServiceAction::Restart,
+            },
+        );
+        assert!(s.log.iter().any(|l| l.contains("systemctl restart sshd.service")));
     }
 
     #[test]

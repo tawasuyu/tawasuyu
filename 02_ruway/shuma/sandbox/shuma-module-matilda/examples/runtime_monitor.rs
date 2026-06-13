@@ -17,12 +17,14 @@ use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
 
-use matilda_discover::{ContainerStatus, RunState, RuntimeState};
+use matilda_discover::{
+    ContainerStatus, RunState, RuntimeState, ServiceState, ServiceStatus,
+};
 use shuma_module::Source;
 use shuma_module_matilda::{update, Msg, State};
 
 const W: u32 = 1040;
-const H: u32 = 460;
+const H: u32 = 560;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn cs(name: &str, image: &str, state: RunState, status: &str, ports: &str) -> ContainerStatus {
@@ -49,12 +51,33 @@ fn main() {
             cs("api", "ghcr.io/ejemplo/api:1.0", RunState::Exited, "Exited (1) 5 min ago", ""),
             cs("legacy", "redis:6", RunState::Running, "Up 9 days", "6379/tcp"),
         ],
+        services: vec![
+            ServiceStatus {
+                name: "sshd.service".into(),
+                state: ServiceState::Active,
+                sub: "running".into(),
+                description: "OpenSSH server daemon".into(),
+            },
+            ServiceStatus {
+                name: "nginx.service".into(),
+                state: ServiceState::Active,
+                sub: "running".into(),
+                description: "A high performance web server".into(),
+            },
+            ServiceStatus {
+                name: "backup.service".into(),
+                state: ServiceState::Failed,
+                sub: "failed".into(),
+                description: "Nightly backup".into(),
+            },
+        ],
         vhosts: vec![],
     };
     state = update(state, Msg::SetRuntime(rt));
-    // Seleccionamos `web` para que la barra de acciones (start/stop/restart/
-    // logs/rm) sea visible en la captura.
+    // Seleccionamos `web` (barra de acciones de contenedor) y un servicio
+    // fallado (barra de acciones de servicio) para que ambas se vean.
     state = update(state, Msg::SelectContainer("web".to_string()));
+    state = update(state, Msg::SelectService("backup.service".to_string()));
 
     let v = shuma_module_matilda::view::<()>(&state, &theme, |_m| ());
     let mut layout = LayoutTree::new();

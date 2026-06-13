@@ -85,11 +85,64 @@ pub struct ContainerStatus {
     pub ports: String,
 }
 
-/// Foto runtime del servidor: contenedores con su estado + vhosts.
+/// Estado `ACTIVE` de un servicio systemd, normalizado.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ServiceState {
+    Active,
+    Inactive,
+    Activating,
+    Deactivating,
+    Failed,
+    Unknown,
+}
+
+impl ServiceState {
+    pub fn from_systemd(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "active" => ServiceState::Active,
+            "inactive" => ServiceState::Inactive,
+            "activating" => ServiceState::Activating,
+            "deactivating" => ServiceState::Deactivating,
+            "failed" => ServiceState::Failed,
+            _ => ServiceState::Unknown,
+        }
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, ServiceState::Active | ServiceState::Activating)
+    }
+
+    /// Glifo de semáforo: ● activo, ◐ transición, ✖ fallado, ○ parado.
+    pub fn glyph(self) -> char {
+        match self {
+            ServiceState::Active => '●',
+            ServiceState::Activating | ServiceState::Deactivating => '◐',
+            ServiceState::Failed => '✖',
+            ServiceState::Inactive => '○',
+            ServiceState::Unknown => '◌',
+        }
+    }
+}
+
+/// Estado runtime de un servicio systemd (una fila de `systemctl
+/// list-units --type=service`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ServiceStatus {
+    /// Nombre de la unidad — `sshd.service`.
+    pub name: String,
+    pub state: ServiceState,
+    /// El campo `SUB` de systemd: `running`, `exited`, `dead`, `failed`.
+    pub sub: String,
+    pub description: String,
+}
+
+/// Foto runtime del servidor: contenedores + servicios + vhosts.
 /// Distinta del `Inventory` declarativo — esto es lo *observado vivo*.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeState {
     pub containers: Vec<ContainerStatus>,
+    pub services: Vec<ServiceStatus>,
     pub vhosts: Vec<String>,
 }
 
@@ -108,6 +161,45 @@ impl RuntimeState {
     pub fn container(&self, name: &str) -> Option<&ContainerStatus> {
         self.containers.iter().find(|c| c.name == name)
     }
+
+    /// Cuenta de servicios activos.
+    pub fn services_active(&self) -> usize {
+        self.services.iter().filter(|s| s.state.is_active()).count()
+    }
+
+    /// Cuenta de servicios fallados.
+    pub fn services_failed(&self) -> usize {
+        self.services
+            .iter()
+            .filter(|s| s.state == ServiceState::Failed)
+            .count()
+    }
+}
+
+/// Parsea `systemctl list-units --type=service --no-legend --plain`: una
+/// fila `UNIT LOAD ACTIVE SUB DESCRIPTION…` por servicio. La descripción
+/// (resto de la línea) puede tener espacios. Puro y testeable.
+pub fn parse_systemctl_units(text: &str) -> Vec<ServiceStatus> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let mut f = line.split_whitespace();
+            let name = f.next()?.to_string();
+            let _load = f.next()?;
+            let active = f.next()?;
+            let sub = f.next()?.to_string();
+            let description = f.collect::<Vec<_>>().join(" ");
+            Some(ServiceStatus {
+                name,
+                state: ServiceState::from_systemd(active),
+                sub,
+                description,
+            })
+        })
+        .collect()
 }
 
 /// Formato rico que pedimos a Docker/Podman para el monitoreo: una fila
@@ -351,10 +443,29 @@ pub fn discover_runtime() -> RuntimeState {
     let containers = run_local("docker", &["ps", "-a", "--format", DOCKER_PS_FORMAT])
         .map(|t| parse_docker_ps(&t))
         .unwrap_or_default();
+    let services = discover_services();
     let vhosts = run_local("ls", &["-1", "/etc/nginx/sites-enabled"])
         .map(|t| parse_nginx_sites(&t))
         .unwrap_or_default();
-    RuntimeState { containers, vhosts }
+    RuntimeState { containers, services, vhosts }
+}
+
+/// Observa los servicios systemd **operativamente interesantes**: los que
+/// están corriendo o fallaron (no las cientos de unidades inactivas). Es
+/// la base del monitoreo de servicios. Vacío si no hay systemctl.
+pub fn discover_services() -> Vec<ServiceStatus> {
+    run_local(
+        "systemctl",
+        &[
+            "list-units",
+            "--type=service",
+            "--state=running,failed",
+            "--no-legend",
+            "--plain",
+        ],
+    )
+    .map(|t| parse_systemctl_units(&t))
+    .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -405,12 +516,29 @@ mod tests {
                     ports: String::new(),
                 },
             ],
+            services: vec![],
             vhosts: vec![],
         };
         assert_eq!(rs.up_count(), 2); // running + restarting
         assert_eq!(rs.down_count(), 1);
         assert_eq!(rs.container("b").unwrap().state, RunState::Exited);
         assert!(rs.container("nope").is_none());
+    }
+
+    #[test]
+    fn parse_systemctl_units_y_conteos() {
+        let text = "sshd.service        loaded active running OpenSSH server daemon\n\
+                    nginx.service       loaded active running A high performance web server\n\
+                    backup.service      loaded failed failed  Nightly backup\n";
+        let svcs = parse_systemctl_units(text);
+        assert_eq!(svcs.len(), 3);
+        assert_eq!(svcs[0].name, "sshd.service");
+        assert_eq!(svcs[0].state, ServiceState::Active);
+        assert_eq!(svcs[0].description, "OpenSSH server daemon");
+        assert_eq!(svcs[2].state, ServiceState::Failed);
+        let rs = RuntimeState { containers: vec![], services: svcs, vhosts: vec![] };
+        assert_eq!(rs.services_active(), 2);
+        assert_eq!(rs.services_failed(), 1);
     }
 
     #[test]
