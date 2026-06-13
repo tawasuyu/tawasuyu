@@ -45,47 +45,46 @@ Primer ladrillo entregado:
 
 Ordenado por palanca. Todo determinista; nada exige LLM.
 
-### M1. Acciones por contenedor (lifecycle dirigido) — la más pedida
-Hoy todo es reconciliación todo-o-nada. Falta operar **un** recurso: filas
-clickeables → menú `start / stop / restart / logs / inspect / rm`. La
-ejecución reusa el patrón de `matilda-apply` (`docker start <n>` etc.);
-local sincrónico, remoto por `matilda-linker`. Sin esto, "administrar
-contenedores" obliga a bajar a la terminal.
+### M1. Acciones por contenedor (lifecycle dirigido) ✅ (2026-06-13)
+`matilda-apply::lifecycle::ContainerAction` (Start/Stop/Restart/Logs/Stats/
+Remove) con `command()`/`is_mutating()` puros. El bloque hace las filas
+clickeables → barra de acciones; ejecución local (`sh -c`, captura al log) +
+`container_action_remote_blocking` (SSH) para el chasis; tras acción mutante
+re-observa el runtime.
 
-### M2. Logs y stats en vivo
-- `docker logs --tail N -f <n>` como stream a una card (reusa la superficie
-  de streaming de shuma — el `%cN` y las secciones ya existen).
-- `docker stats --no-stream --format …` → CPU/mem/red por contenedor,
-  parseado como `RuntimeState` extendido. El monitor pasa de "#up" a series
-  reales de CPU/mem (el `MonitorSpec` ya soporta history + sparkline).
+### M2. Logs y stats en vivo ✅ (2026-06-13, on-demand)
+Acciones `Logs` (`docker logs --tail 200`) y `Stats` (`docker stats
+--no-stream`) vuelcan al log del bloque. **Pendiente:** stream continuo
+(`-f`) a una card y series de CPU/mem en el `MonitorSpec` (history+sparkline)
+— hoy es a-pedido, no continuo.
 
-### M3. Servicios systemd (el "servicios" que falta en el modelo)
-`matilda-core` modela contenedores y vhosts, **no servicios**. Agregar
-`Service { name, enabled, state }` + discover por `systemctl
-list-units --type=service` (el detector de tabla genérico de shuma ya parsea
-esa salida) + acciones `start/stop/enable/restart`. Cierra "administrar
-servicios".
+### M3. Servicios systemd ✅ (2026-06-13, runtime + acciones)
+`matilda-discover`: `ServiceState`/`ServiceStatus` + `parse_systemctl_units`
++ `discover_services()` (running,failed); `RuntimeState.services`. El bloque
+muestra la sección SERVICES (semáforo ●/✖/○ + sub + descripción) con barra
+de acciones (`ServiceAction`: start/stop/restart/enable/disable/status).
+**Pendiente:** servicios *declarativos* (modelo en `matilda-core` + plan +
+reconciliación) — hoy es operación viva, no reconciliación.
 
-### M4. Polling periódico real
-El `MonitorSpec` tiene `period_secs: 5.0` pero hoy el runtime sólo se
-refresca al pulsar Discover. El chasis debería `spawn_periodic` un
-`discover_runtime()` (local) / `docker ps` por SSH (remoto) y dispatchar
-`Msg::SetRuntime` — el monitoreo se vuelve **vivo**, no a-pedido.
+### M4. Polling periódico real ✅ (2026-06-13, local)
+El chasis poll-ea `poll_runtime()` cada 5 s en un thread para las instancias
+matilda Local (topbar/bottombar/main) → `Msg::SetRuntimeQuiet`. El semáforo
+queda vivo sin pulsar Discover. **Pendiente:** polling remoto (SSH por tick).
 
-### M5. Multi-host fan-out
-`Inventory` ya tiene N hosts pero discover/apply apuntan al único `Source`.
-Falta iterar hosts y agregar el runtime de todos (una grilla "host × estado").
-Es el salto de "una caja" a "una flota".
+### M5. Multi-host fan-out (pendiente — el más grande)
+`Inventory` ya tiene N hosts pero discover/apply/runtime apuntan al único
+`Source`. Falta iterar hosts y agregar el runtime de todos (grilla "host ×
+estado"). Cambia el modelo de "una caja" a "una flota" — su propio sprint,
+toca cómo el chasis crea instancias por host.
 
-### M6. Drift visible en la UI
-El drift ya se calcula (`container_drift`) pero sólo aparece como un `Update`
-en el plan. Marcar la fila del contenedor desviado con un chip "⚠ drift:
-imagen" para que el operador lo vea sin leer el plan.
+### M6. Drift visible en la UI ✅ (2026-06-13)
+El contenedor que el discover marcó `(desviado)` lleva un chip `⚠ drift` en
+su fila — el operador lo ve sin leer el plan.
 
-## Orden sugerido
+## Estado
 
-1. **M1 + M4** (acciones por contenedor + polling): convierten el tab de
-   "visor declarativo" en "consola de operación viva". Máxima palanca.
-2. **M2** (logs/stats): el monitoreo deja de ser binario up/down.
-3. **M3** (systemd): suma la dimensión "servicios" que el nombre promete.
-4. **M5 + M6** (flota + drift visible): escala y pulido.
+M1/M2/M3/M4/M6 entregados 2026-06-13 (M2/M3/M4 con el alcance acotado anotado
+arriba). El tab pasó de "visor declarativo" a **consola de operación viva**:
+ves qué corre, qué se cayó, y lo operás sin bajar a la terminal. Lo que queda:
+**M5 (multi-host)** y los "pendientes" de M2/M3/M4 (stream continuo, servicios
+declarativos, polling remoto).

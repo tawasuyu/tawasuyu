@@ -15,6 +15,8 @@ pub enum ContainerAction {
     Restart,
     /// Muestra las últimas líneas del log (lectura, no muta el contenedor).
     Logs,
+    /// CPU/mem/red de un snapshot (`docker stats --no-stream`, lectura).
+    Stats,
     /// Detiene y elimina (`rm -f`).
     Remove,
 }
@@ -27,6 +29,7 @@ impl ContainerAction {
             ContainerAction::Stop => "Stop",
             ContainerAction::Restart => "Restart",
             ContainerAction::Logs => "Logs",
+            ContainerAction::Stats => "Stats",
             ContainerAction::Remove => "Remove",
         }
     }
@@ -34,7 +37,7 @@ impl ContainerAction {
     /// `true` si la acción cambia el estado del contenedor (vs. sólo leer).
     /// El caller refresca el runtime después de una acción mutante.
     pub fn is_mutating(self) -> bool {
-        !matches!(self, ContainerAction::Logs)
+        !matches!(self, ContainerAction::Logs | ContainerAction::Stats)
     }
 
     /// Comando de shell que ejecuta la acción sobre `name`. Puro.
@@ -46,17 +49,19 @@ impl ContainerAction {
             ContainerAction::Stop => format!("docker stop {name}"),
             ContainerAction::Restart => format!("docker restart {name}"),
             ContainerAction::Logs => format!("docker logs --tail 200 {name}"),
+            ContainerAction::Stats => format!("docker stats --no-stream {name}"),
             ContainerAction::Remove => format!("docker rm -f {name}"),
         }
     }
 
     /// Todas las acciones, en el orden en que la UI las pinta.
-    pub fn all() -> [ContainerAction; 5] {
+    pub fn all() -> [ContainerAction; 6] {
         [
             ContainerAction::Start,
             ContainerAction::Stop,
             ContainerAction::Restart,
             ContainerAction::Logs,
+            ContainerAction::Stats,
             ContainerAction::Remove,
         ]
     }

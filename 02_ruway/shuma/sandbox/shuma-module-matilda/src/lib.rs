@@ -1056,7 +1056,7 @@ fn container_action_bar<HostMsg: Clone + Send + Sync + 'static>(
         };
         buttons.push(
             View::new(Style {
-                size: Size { width: length(64.0_f32), height: length(18.0_f32) },
+                size: Size { width: length(54.0_f32), height: length(18.0_f32) },
                 align_items: Some(AlignItems::Center),
                 ..Default::default()
             })
