@@ -19,3 +19,7 @@ tokio = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
+
+[dev-dependencies]
+pollster = { workspace = true }
+png = { workspace = true }

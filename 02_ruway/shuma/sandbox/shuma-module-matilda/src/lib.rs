@@ -44,7 +44,9 @@ use llimphi_theme::Theme;
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use matilda_apply::plan_to_steps;
 use matilda_core::{Container, Host, Inventory, RestartPolicy, VHost};
-use matilda_discover::{discover_inventory, observed_inventory, ServerState};
+use matilda_discover::{
+    discover_inventory, discover_runtime, observed_inventory, RuntimeState, ServerState,
+};
 use matilda_ghost::{apply, dry_run, ApplyReport};
 use matilda_linker::{Linker, SshAuth, SshConfig};
 use matilda_plan::{plan, Op, Plan};
@@ -70,7 +72,13 @@ pub struct State {
     /// expone para que el chasis sepa de dónde recargar al pulsar
     /// «Reload»; el módulo mismo no hace IO, sólo recibe `SetDesired`.
     pub inventory_path: Option<PathBuf>,
+    /// Estado runtime observado (qué corre AHORA: estado, status, puertos).
+    /// `None` hasta el primer discover. Es la base del monitoreo en vivo,
+    /// distinto del inventario declarativo (`desired`/`current`).
+    pub runtime: Option<RuntimeState>,
     pending_steps: Arc<Mutex<usize>>,
+    /// `(up, down)` compartido con el sampler del monitor de runtime.
+    runtime_counts: Arc<Mutex<(usize, usize)>>,
 }
 
 impl State {
@@ -89,7 +97,9 @@ impl State {
             log: Vec::new(),
             split_width: 380.0,
             inventory_path: None,
+            runtime: None,
             pending_steps: Arc::new(Mutex::new(0)),
+            runtime_counts: Arc::new(Mutex::new((0, 0))),
         }
     }
 
@@ -111,6 +121,13 @@ impl State {
     pub fn pending_count(&self) -> usize {
         self.plan.as_ref().map(|p| p.len()).unwrap_or(0)
     }
+
+    /// Fija el estado runtime observado y publica `(up, down)` al sampler
+    /// del monitor (el thread de polling lee el `Arc` sin tocar el UI).
+    pub fn set_runtime(&mut self, rt: RuntimeState) {
+        *self.runtime_counts.lock().unwrap() = (rt.up_count(), rt.down_count());
+        self.runtime = Some(rt);
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +147,9 @@ pub enum Msg {
     /// resultado del discover remoto desde el chasis (cuando el SSH
     /// terminó en un thread aparte).
     SetCurrent(Inventory),
+    /// Inyecta el estado runtime observado — usado para el discover remoto
+    /// (el chasis corre `docker ps` por SSH en un thread y reenvía esto).
+    SetRuntime(RuntimeState),
     /// Línea informativa para el log — útil para que el chasis avise
     /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
     LogLine(String),
@@ -177,6 +197,15 @@ pub fn update(state: State, msg: Msg) -> State {
                     current.vhosts().count()
                 ));
                 s.current = Some(current);
+                // Además del inventario declarativo, capturamos el estado
+                // runtime (qué corre, parado, sus puertos) para el monitoreo.
+                let rt = discover_runtime();
+                s.log.push(format!(
+                    "  runtime: {} up · {} down",
+                    rt.up_count(),
+                    rt.down_count()
+                ));
+                s.set_runtime(rt);
             }
             Source::Remote { host, .. } | Source::RemoteContainer { host, .. } => {
                 // El discover remoto necesita un runtime tokio y vive
@@ -302,6 +331,14 @@ pub fn update(state: State, msg: Msg) -> State {
                 inv.vhosts().count()
             ));
             s.current = Some(inv);
+        }
+        Msg::SetRuntime(rt) => {
+            s.log.push(format!(
+                "✔ runtime: {} up · {} down",
+                rt.up_count(),
+                rt.down_count()
+            ));
+            s.set_runtime(rt);
         }
         Msg::LogLine(line) => {
             s.log.push(line);
@@ -679,12 +716,32 @@ fn inventory_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> Vie
         children.push(inv_row(&format!("  {}   {}", h.name, h.address), theme));
     }
 
-    children.push(section_label(
-        &format!("CONTAINERS ({})", state.desired.containers().count()),
-        theme,
-    ));
+    // CONTAINERS — con estado runtime (●/○ + status) cuando hay discover.
+    let cont_label = match &state.runtime {
+        Some(rt) => format!(
+            "CONTAINERS ({}) · {} up · {} down",
+            state.desired.containers().count(),
+            rt.up_count(),
+            rt.down_count()
+        ),
+        None => format!(
+            "CONTAINERS ({}) · sin discover",
+            state.desired.containers().count()
+        ),
+    };
+    children.push(section_label(&cont_label, theme));
     for c in state.desired.containers() {
-        children.push(inv_row(&format!("  {}   {}", c.name, c.image), theme));
+        let status = state.runtime.as_ref().and_then(|rt| rt.container(&c.name));
+        children.push(container_row(&c.name, &c.image, status, theme));
+    }
+    // Huérfanos: contenedores que corren pero no están en el inventario
+    // deseado — el operador los ve sin tener que ir a la terminal.
+    if let Some(rt) = &state.runtime {
+        for cs in &rt.containers {
+            if state.desired.container(&cs.name).is_none() {
+                children.push(container_row(&cs.name, &cs.image, Some(cs), theme));
+            }
+        }
     }
 
     children.push(section_label(
@@ -730,6 +787,34 @@ fn describe_upstream(u: &matilda_core::Upstream) -> String {
 
 fn inv_row<HostMsg: Clone + 'static>(text: &str, theme: &Theme) -> View<HostMsg> {
     text_row(text, theme.fg_text, theme)
+}
+
+/// Fila de contenedor con semáforo runtime. Sin estado observado pinta un
+/// `◌` tenue (no descubierto aún); con estado, el glifo coloreado (verde
+/// vivo / tenue parado) + el `status` de Docker (`Up 2 hours`).
+fn container_row<HostMsg: Clone + 'static>(
+    name: &str,
+    image: &str,
+    status: Option<&matilda_discover::ContainerStatus>,
+    theme: &Theme,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let (glyph, color, tail) = match status {
+        Some(cs) => {
+            let color = if cs.state.is_up() {
+                Color::from_rgba8(0x82, 0xCD, 0x8C, 0xFF) // verde vivo
+            } else {
+                theme.fg_muted
+            };
+            (cs.state.glyph(), color, format!("  · {}", cs.status))
+        }
+        None => ('◌', theme.fg_muted, String::new()),
+    };
+    text_row(
+        &format!("{glyph} {name}   {image}{tail}"),
+        color,
+        theme,
+    )
 }
 
 fn plan_and_log_pane<HostMsg: Clone + 'static>(state: &State, theme: &Theme) -> View<HostMsg> {
@@ -827,8 +912,23 @@ pub fn contributions(state: &State) -> ModuleContributions {
         }),
     };
 
+    // Monitor de runtime: contenedores vivos (la serie es el #up; el
+    // detalle lleva up/down). Es el monitoreo en vivo del servidor.
+    let counts = state.runtime_counts.clone();
+    let runtime_monitor = MonitorSpec {
+        id: "matilda.runtime",
+        label: format!("matilda · {} · up", state.source.label()),
+        accent: Rgb::new(0x82, 0xCD, 0x8C),
+        history_capacity: 60,
+        period_secs: 5.0,
+        sampler: Box::new(move || {
+            let (up, down) = *counts.lock().unwrap();
+            Sample::new(up as f32, format!("{up} up · {down} down"))
+        }),
+    };
+
     ModuleContributions {
-        monitors: vec![monitor],
+        monitors: vec![monitor, runtime_monitor],
         shortcuts: vec![
             ShortcutSpec::module_action("Discover", "matilda.discover")
                 .with_hint("Lee el estado actual del servidor"),
@@ -1017,13 +1117,48 @@ mod tests {
     fn contributions_expose_monitor_and_five_shortcuts() {
         let s = State::new(Source::Local);
         let c = contributions(&s);
-        assert_eq!(c.monitors.len(), 1);
+        // pending + runtime.
+        assert_eq!(c.monitors.len(), 2);
+        assert_eq!(c.monitors[1].id, "matilda.runtime");
         assert_eq!(c.shortcuts.len(), 5);
         assert_eq!(c.shortcuts[0].label, "Discover");
         assert_eq!(c.shortcuts[1].label, "Plan");
         assert_eq!(c.shortcuts[2].label, "Dry-run");
         assert_eq!(c.shortcuts[3].label, "Apply");
         assert_eq!(c.shortcuts[4].label, "Reload");
+    }
+
+    #[test]
+    fn set_runtime_actualiza_estado_y_contadores() {
+        use matilda_discover::{ContainerStatus, RunState, RuntimeState};
+        let mut s = State::new(Source::Local);
+        assert!(s.runtime.is_none());
+        let rt = RuntimeState {
+            containers: vec![
+                ContainerStatus {
+                    name: "web".into(),
+                    image: "nginx:1.27".into(),
+                    state: RunState::Running,
+                    status: "Up 2 hours".into(),
+                    ports: "0.0.0.0:80->80/tcp".into(),
+                },
+                ContainerStatus {
+                    name: "viejo".into(),
+                    image: "img".into(),
+                    state: RunState::Exited,
+                    status: "Exited (0)".into(),
+                    ports: String::new(),
+                },
+            ],
+            vhosts: vec![],
+        };
+        s = update(s, Msg::SetRuntime(rt));
+        let rt = s.runtime.as_ref().expect("runtime fijado");
+        assert_eq!(rt.up_count(), 1);
+        assert_eq!(rt.down_count(), 1);
+        // `viejo` no está en el inventario deseado → es huérfano observado.
+        assert!(s.desired.container("viejo").is_none());
+        assert!(s.log.iter().any(|l| l.contains("1 up") && l.contains("1 down")));
     }
 
     #[test]

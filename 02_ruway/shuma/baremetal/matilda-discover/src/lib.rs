@@ -27,6 +27,118 @@ pub struct ServerState {
     pub vhosts: Vec<String>,
 }
 
+/// Estado de ejecución observado de un contenedor — el campo `{{.State}}`
+/// de Docker, normalizado. Lo que distingue "monitoreo" de "inventario":
+/// no *qué debería haber* sino *qué está pasando ahora*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RunState {
+    Created,
+    Restarting,
+    Running,
+    Paused,
+    Exited,
+    Dead,
+    Unknown,
+}
+
+impl RunState {
+    /// Mapea el `{{.State}}` de Docker/Podman a la variante.
+    pub fn from_docker(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "created" => RunState::Created,
+            "restarting" => RunState::Restarting,
+            "running" | "up" => RunState::Running,
+            "paused" => RunState::Paused,
+            "exited" | "stopped" => RunState::Exited,
+            "dead" => RunState::Dead,
+            _ => RunState::Unknown,
+        }
+    }
+
+    /// `true` si el contenedor está vivo (corriendo o reiniciándose).
+    pub fn is_up(self) -> bool {
+        matches!(self, RunState::Running | RunState::Restarting)
+    }
+
+    /// Glifo de semáforo para la UI: ● vivo, ◐ transición, ○ parado.
+    pub fn glyph(self) -> char {
+        match self {
+            RunState::Running => '●',
+            RunState::Restarting | RunState::Paused | RunState::Created => '◐',
+            RunState::Exited | RunState::Dead => '○',
+            RunState::Unknown => '◌',
+        }
+    }
+}
+
+/// Estado runtime observado de un contenedor — la fila de `docker ps`
+/// rica (no sólo el nombre). Es la unidad del monitoreo en vivo.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerStatus {
+    pub name: String,
+    pub image: String,
+    pub state: RunState,
+    /// Texto crudo de Docker: `Up 2 hours`, `Exited (0) 3 days ago`.
+    pub status: String,
+    /// Mapeos de puerto tal como los reporta Docker.
+    pub ports: String,
+}
+
+/// Foto runtime del servidor: contenedores con su estado + vhosts.
+/// Distinta del `Inventory` declarativo — esto es lo *observado vivo*.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeState {
+    pub containers: Vec<ContainerStatus>,
+    pub vhosts: Vec<String>,
+}
+
+impl RuntimeState {
+    /// Cuenta de contenedores vivos.
+    pub fn up_count(&self) -> usize {
+        self.containers.iter().filter(|c| c.state.is_up()).count()
+    }
+
+    /// Cuenta de contenedores parados/muertos.
+    pub fn down_count(&self) -> usize {
+        self.containers.iter().filter(|c| !c.state.is_up()).count()
+    }
+
+    /// Busca el estado runtime de un contenedor por nombre.
+    pub fn container(&self, name: &str) -> Option<&ContainerStatus> {
+        self.containers.iter().find(|c| c.name == name)
+    }
+}
+
+/// Formato rico que pedimos a Docker/Podman para el monitoreo: una fila
+/// tab-separada por contenedor. Reutilizable por el discover local y el
+/// remoto (SSH).
+pub const DOCKER_PS_FORMAT: &str = "{{.Names}}\t{{.Image}}\t{{.State}}\t{{.Status}}\t{{.Ports}}";
+
+/// Parsea la salida de `docker ps -a --format DOCKER_PS_FORMAT`: una fila
+/// tab-separada por contenedor. Tolera campos faltantes (los rellena
+/// vacíos) y descarta líneas sin nombre. Puro y testeable.
+pub fn parse_docker_ps(text: &str) -> Vec<ContainerStatus> {
+    text.lines()
+        .filter_map(|line| {
+            let line = line.trim_end_matches(['\r', '\n']);
+            if line.trim().is_empty() {
+                return None;
+            }
+            let mut f = line.split('\t');
+            let name = f.next()?.trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let image = f.next().unwrap_or("").trim().to_string();
+            let state = RunState::from_docker(f.next().unwrap_or(""));
+            let status = f.next().unwrap_or("").trim().to_string();
+            let ports = f.next().unwrap_or("").trim().to_string();
+            Some(ContainerStatus { name, image, state, status, ports })
+        })
+        .collect()
+}
+
 /// Parsea la salida de `docker ps -a --format '{{.Names}}'` — un nombre
 /// por línea.
 pub fn parse_docker_names(text: &str) -> Vec<String> {
@@ -231,10 +343,85 @@ pub fn discover_local() -> ServerState {
     ServerState { containers, vhosts }
 }
 
+/// Observa el estado **runtime** de esta máquina: `docker ps -a` con el
+/// formato rico (estado + status + puertos) y los sitios de nginx. Es la
+/// fuente del monitoreo en vivo del bloque de matilda. Si docker no está,
+/// la lista de contenedores queda vacía (no es error).
+pub fn discover_runtime() -> RuntimeState {
+    let containers = run_local("docker", &["ps", "-a", "--format", DOCKER_PS_FORMAT])
+        .map(|t| parse_docker_ps(&t))
+        .unwrap_or_default();
+    let vhosts = run_local("ls", &["-1", "/etc/nginx/sites-enabled"])
+        .map(|t| parse_nginx_sites(&t))
+        .unwrap_or_default();
+    RuntimeState { containers, vhosts }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use matilda_plan::{plan, Op};
+
+    #[test]
+    fn parse_docker_ps_rico() {
+        let text = "web\tnginx:1.27\trunning\tUp 2 hours\t0.0.0.0:80->80/tcp\n\
+                    db\tpostgres:16\texited\tExited (0) 3 days ago\t\n";
+        let cs = parse_docker_ps(text);
+        assert_eq!(cs.len(), 2);
+        assert_eq!(cs[0].name, "web");
+        assert_eq!(cs[0].state, RunState::Running);
+        assert!(cs[0].state.is_up());
+        assert_eq!(cs[0].status, "Up 2 hours");
+        assert_eq!(cs[0].ports, "0.0.0.0:80->80/tcp");
+        assert_eq!(cs[1].state, RunState::Exited);
+        assert!(!cs[1].state.is_up());
+        // Campos faltantes (sin ports) no rompen el parseo.
+        assert_eq!(cs[1].ports, "");
+    }
+
+    #[test]
+    fn runtime_state_cuenta_up_down() {
+        let rs = RuntimeState {
+            containers: vec![
+                ContainerStatus {
+                    name: "a".into(),
+                    image: "x".into(),
+                    state: RunState::Running,
+                    status: "Up".into(),
+                    ports: String::new(),
+                },
+                ContainerStatus {
+                    name: "b".into(),
+                    image: "y".into(),
+                    state: RunState::Exited,
+                    status: "Exited".into(),
+                    ports: String::new(),
+                },
+                ContainerStatus {
+                    name: "c".into(),
+                    image: "z".into(),
+                    state: RunState::Restarting,
+                    status: "Restarting".into(),
+                    ports: String::new(),
+                },
+            ],
+            vhosts: vec![],
+        };
+        assert_eq!(rs.up_count(), 2); // running + restarting
+        assert_eq!(rs.down_count(), 1);
+        assert_eq!(rs.container("b").unwrap().state, RunState::Exited);
+        assert!(rs.container("nope").is_none());
+    }
+
+    #[test]
+    fn run_state_glyphs_y_mapeo() {
+        assert_eq!(RunState::from_docker("RUNNING"), RunState::Running);
+        assert_eq!(RunState::from_docker("up"), RunState::Running);
+        assert_eq!(RunState::from_docker("dead"), RunState::Dead);
+        assert_eq!(RunState::from_docker("???"), RunState::Unknown);
+        assert_eq!(RunState::Running.glyph(), '●');
+        assert_eq!(RunState::Exited.glyph(), '○');
+    }
 
     #[test]
     fn parses_docker_names() {
