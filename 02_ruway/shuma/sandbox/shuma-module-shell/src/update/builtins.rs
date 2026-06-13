@@ -720,6 +720,168 @@ pub(crate) fn list_macros(mut s: State) -> State {
     s
 }
 
+// ─────────────────────────── E6 · :stats (telemetría local) ────────────────
+
+/// Agregado por binario para el reporte de `:stats`.
+struct StatRow {
+    binario: String,
+    veces: u64,
+    fallos: u64,
+    durs: Vec<u64>,
+    ultimo_started: u64,
+}
+
+impl StatRow {
+    /// Percentil `p` (0.0..=1.0) de las duraciones registradas, en ms.
+    /// `None` si ningún run del binario reportó duración.
+    fn percentil(&self, p: f64) -> Option<u64> {
+        if self.durs.is_empty() {
+            return None;
+        }
+        let mut v = self.durs.clone();
+        v.sort_unstable();
+        let idx = ((v.len() as f64 - 1.0) * p).round() as usize;
+        v.get(idx).copied()
+    }
+}
+
+/// `:stats [filtro]` — telemetría propia, local, consultable (E6). Lee el
+/// historial durable (`line`/`exit`/`started`/`duration_ms`) y arma una tabla
+/// por binario: veces, fallos, %fallo, p50/p95 de duración, último uso. La
+/// tabla se renderiza con el mismo widget ordenable que `ls -l` (el detector
+/// de `sections.rs` reconoce `:stats` y parsea las filas tab-separadas). Cero
+/// red: los datos nunca salen de la máquina. Alimenta los rankings de A3/A4.
+///
+/// `:stats foo` filtra a los binarios cuyo nombre contiene `foo`.
+pub(crate) fn apply_stats(mut s: State, rest: &str) -> State {
+    let filtro = rest.trim();
+    // Snapshot del historial para no retener el lock mientras pusheamos.
+    let entries: Vec<shuma_history::Entry> = match s.history.lock() {
+        Ok(h) => h.entries().to_vec(),
+        Err(p) => p.into_inner().entries().to_vec(),
+    };
+    if entries.is_empty() {
+        s.push_output(OutputLine::notice(
+            "(historial vacío — corré algunos comandos y volvé a `:stats`)",
+        ));
+        return s;
+    }
+    let now_s = now_unix_millis() / 1000;
+    match compute_stats(&entries, filtro, now_s) {
+        Some(lines) => {
+            for l in lines {
+                s.push_output(OutputLine::stdout(l));
+            }
+        }
+        None => s.push_output(OutputLine::notice(if filtro.is_empty() {
+            "(sin binarios medibles en el historial)".to_string()
+        } else {
+            format!("(ningún binario contiene «{filtro}»)")
+        })),
+    }
+    s
+}
+
+/// Corazón puro de `:stats`: de un slice de entradas del historial deriva las
+/// líneas de salida (1 de resumen sin tab + header + filas tab-separadas que
+/// `sections::detect_stats` parsea como tabla ordenable). `None` si no hay
+/// ningún binario medible (todo builtins o nada matchea el filtro). `now_s` se
+/// inyecta para que el «hace cuánto» sea determinista en tests.
+pub(crate) fn compute_stats(
+    entries: &[shuma_history::Entry],
+    filtro: &str,
+    now_s: u64,
+) -> Option<Vec<String>> {
+    // Agregación por binario (primera palabra de la línea). Los meta-comandos
+    // del shell (`:save`, `:stats`…) se omiten: no son procesos medibles.
+    let mut por_bin: std::collections::HashMap<String, StatRow> = std::collections::HashMap::new();
+    let total_lineas = entries.len();
+    let mut con_exit = 0u64;
+    let mut horas = [0u64; 24];
+    for e in entries {
+        let Some(bin) = e.line.split_whitespace().next() else {
+            continue;
+        };
+        if bin.starts_with(':') {
+            continue;
+        }
+        if !filtro.is_empty() && !bin.contains(filtro) {
+            continue;
+        }
+        horas[((e.started / 3600) % 24) as usize] += 1;
+        let row = por_bin.entry(bin.to_string()).or_insert_with(|| StatRow {
+            binario: bin.to_string(),
+            veces: 0,
+            fallos: 0,
+            durs: Vec::new(),
+            ultimo_started: 0,
+        });
+        row.veces += 1;
+        if let Some(code) = e.exit {
+            con_exit += 1;
+            if code != 0 {
+                row.fallos += 1;
+            }
+        }
+        if let Some(d) = e.duration_ms {
+            row.durs.push(d);
+        }
+        row.ultimo_started = row.ultimo_started.max(e.started);
+    }
+    if por_bin.is_empty() {
+        return None;
+    }
+    // Orden por defecto: más usados primero (la columna es re-ordenable en UI).
+    let mut filas: Vec<StatRow> = por_bin.into_values().collect();
+    filas.sort_by(|a, b| b.veces.cmp(&a.veces).then(a.binario.cmp(&b.binario)));
+    let distintos = filas.len();
+    let pico = horas
+        .iter()
+        .enumerate()
+        .max_by_key(|(_, n)| **n)
+        .filter(|(_, n)| **n > 0)
+        .map(|(h, _)| h);
+
+    let pico_txt = pico
+        .map(|h| format!(" · pico {h:02}–{:02}h UTC", (h + 1) % 24))
+        .unwrap_or_default();
+    let alcance = if filtro.is_empty() {
+        String::new()
+    } else {
+        format!(" (filtro «{filtro}»)")
+    };
+    let mut out = Vec::with_capacity(filas.len() + 2);
+    // Resumen (sin tab → el detector lo deja como sección «resumen»).
+    out.push(format!(
+        "{total_lineas} comandos en historial · {distintos} binarios distintos · \
+         {con_exit} con código de salida{pico_txt}{alcance}"
+    ));
+    // Tabla tab-separada: header + una fila por binario.
+    out.push("comando\tveces\tfallos\t%fallo\tp50ms\tp95ms\túltimo".to_string());
+    for f in filas.iter().take(200) {
+        let pct = if f.veces > 0 { (f.fallos * 100) / f.veces } else { 0 };
+        let p50 = f.percentil(0.50).map(|v| v.to_string()).unwrap_or_else(|| "-".into());
+        let p95 = f.percentil(0.95).map(|v| v.to_string()).unwrap_or_else(|| "-".into());
+        let ultimo = humanizar_hace(now_s.saturating_sub(f.ultimo_started));
+        out.push(format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            f.binario, f.veces, f.fallos, pct, p50, p95, ultimo
+        ));
+    }
+    Some(out)
+}
+
+/// «hace cuánto», compacto, desde segundos transcurridos: `ahora` / `Nm` /
+/// `Nh` / `Nd`. Determinista, sin formato de fecha (la celda es angosta).
+fn humanizar_hace(secs: u64) -> String {
+    match secs {
+        0..=59 => "ahora".to_string(),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
+}
+
 /// Reconstruye el stdout de un bloque (su card) uniendo las líneas
 /// `Stdout` sin etapa — para alimentarlo como stdin de un reprocess.
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
@@ -804,5 +966,63 @@ mod e1_macro_tests {
         s = apply_macro(s, "run no_existe foo");
         assert!(s.output.iter().any(|l| l.text.contains("no existe")));
         assert!(!s.is_running());
+    }
+}
+
+#[cfg(test)]
+mod e6_stats_tests {
+    use super::*;
+    use shuma_history::Entry;
+
+    /// Entry con exit + duración (el `finalize` real las setea aparte).
+    fn ent(line: &str, started: u64, exit: i32, dur: u64) -> Entry {
+        let mut e = Entry::new(line, "/tmp", started);
+        e.exit = Some(exit);
+        e.duration_ms = Some(dur);
+        e
+    }
+
+    #[test]
+    fn agrega_por_binario_con_fallos_y_percentiles() {
+        let entries = vec![
+            ent("cargo build", 100, 0, 1000),
+            ent("cargo test", 200, 1, 3000),
+            ent("cargo build", 300, 0, 2000),
+            ent("git status", 400, 0, 50),
+            // builtin: se ignora.
+            Entry::new(":stats", "/tmp", 500),
+        ];
+        let out = compute_stats(&entries, "", 1_000).expect("hay binarios");
+        // Resumen + header + 2 filas (cargo, git).
+        assert!(out[0].contains("5 comandos en historial"));
+        assert!(out[0].contains("2 binarios distintos"));
+        assert_eq!(out[1], "comando\tveces\tfallos\t%fallo\tp50ms\tp95ms\túltimo");
+        // cargo va primero (3 usos > 1 de git).
+        let cargo = &out[2];
+        let cols: Vec<&str> = cargo.split('\t').collect();
+        assert_eq!(cols[0], "cargo");
+        assert_eq!(cols[1], "3"); // veces
+        assert_eq!(cols[2], "1"); // fallos
+        assert_eq!(cols[3], "33"); // %fallo (1/3)
+    }
+
+    #[test]
+    fn filtro_restringe_a_binarios_que_contienen() {
+        let entries = vec![ent("cargo build", 100, 0, 10), ent("git log", 200, 0, 10)];
+        let out = compute_stats(&entries, "car", 1_000).expect("matchea cargo");
+        // Sólo cargo: resumen + header + 1 fila.
+        assert_eq!(out.len(), 3);
+        assert!(out[2].starts_with("cargo\t"));
+        // Filtro que no matchea nada → None.
+        assert!(compute_stats(&entries, "zzz", 1_000).is_none());
+    }
+
+    #[test]
+    fn humaniza_hace_en_tramos() {
+        assert_eq!(humanizar_hace(0), "ahora");
+        assert_eq!(humanizar_hace(59), "ahora");
+        assert_eq!(humanizar_hace(120), "2m");
+        assert_eq!(humanizar_hace(7200), "2h");
+        assert_eq!(humanizar_hace(172_800), "2d");
     }
 }

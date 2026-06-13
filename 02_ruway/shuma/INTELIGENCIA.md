@@ -163,12 +163,20 @@ Con `pluma-llm` enchufado (backend por env, Mock sin credenciales):
 Siempre rotulado (`🜲 llm`), siempre opt-in por invocación, local-first si
 hay Ollama. El extremo elige modelo; el habitual ni se entera de que existe.
 
-### E6. `:stats` — telemetría propia, local, consultable
-El historial + `block_started` + exit codes ya contienen todo: `:stats`
-responde frecuencias, tasas de fallo por binario, duraciones p50/p95, horas
-pico. Render como sección-tabla ordenable (la misma de `ls -l`). Alimenta
-los rankings de A3/A4 y le da al extremo el espejo de su propio uso. Cero
-red: los datos no salen de la máquina.
+### E6. `:stats` — telemetría propia, local, consultable ✅ (2026-06-13)
+**Hecho:** builtin `:stats [filtro]` (`update/builtins.rs`) sobre el historial
+durable (`line`/`exit`/`started`/`duration_ms`). Agrega por binario (primera
+palabra; los `:` builtins se omiten) → veces, fallos, %fallo, p50/p95 de
+duración, último uso (`hace Nm/Nh/Nd`); resumen con total, distintos, con-exit
+y hora pico (UTC). Corazón puro `compute_stats(entries, filtro, now_s)` →
+líneas; emite 1 línea de resumen sin tab + tabla tab-separada que
+`sections::detect_stats` reconoce y parte en sección «resumen» (Lines) +
+«por comando» (Table **ordenable**, el mismo widget que `ls -l`; columna
+`comando` ensanchada en `section_table_view`). `:stats foo` filtra a binarios
+que contienen `foo`. Cero red: los datos no salen de la máquina; alimenta los
+rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 tests
+(agregación con fallos/percentiles, filtro + None, round-trip detector,
+`humanizar_hace`).
 
 ## Orden propuesto
 
@@ -178,6 +186,7 @@ red: los datos no salen de la máquina.
 3. **E1 + E2** (`:macro` + `%cN`): desbloquean el techo del extremo con
    núcleos ya escritos. ✅ **hecho 2026-06-13.**
 4. **E3 + E6** (`[rules]` + `:stats`): convierten el rc en plano de control.
+   E6 ✅ **hecho 2026-06-13**; falta E3.
 5. **E4** (PTY persistente): sprint propio, coordinar con `shuma-gateway`
    (el cliente Android lo está esperando).
 6. **E5** (LLM): al final, cuando las superficies deterministas ya estén —

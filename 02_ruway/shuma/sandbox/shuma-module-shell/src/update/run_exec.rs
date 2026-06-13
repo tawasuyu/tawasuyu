@@ -99,6 +99,7 @@ pub(crate) fn run_submitted(mut s: State) -> State {
             ":groups" => return apply_groups_list(s),
             ":macro" => return apply_macro(s, rest),
             ":macros" => return list_macros(s),
+            ":stats" => return apply_stats(s, rest),
             _ => {}
         }
     }

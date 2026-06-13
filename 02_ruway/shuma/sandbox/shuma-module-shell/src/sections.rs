@@ -73,8 +73,48 @@ pub fn detect_sections(cmd: &str, lines: &[String]) -> Option<Vec<Section>> {
     }
     match tokens[0] {
         "ls" => detect_ls(&tokens[1..], lines),
+        ":stats" => detect_stats(lines),
         _ => None,
     }
+}
+
+/// Detecta el reporte de `:stats` (E6): líneas de resumen sin tabulador y un
+/// bloque tab-separado (header + filas). Devuelve dos secciones: «resumen»
+/// (las líneas sin tab) y «por comando» (la tabla ordenable). El productor es
+/// [`crate::update::apply_stats`]; el delimitador `\t` no aparece en nombres
+/// de binario ni en los enteros que emite, así que el ida-y-vuelta es estable.
+fn detect_stats(lines: &[String]) -> Option<Vec<Section>> {
+    let mut resumen: Vec<String> = Vec::new();
+    let mut header: Option<Vec<String>> = None;
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for line in lines {
+        if !line.contains('\t') {
+            if !line.trim().is_empty() {
+                resumen.push(line.clone());
+            }
+            continue;
+        }
+        let cells: Vec<String> = line.split('\t').map(|c| c.to_string()).collect();
+        match &header {
+            None => header = Some(cells),
+            Some(h) if cells.len() == h.len() => rows.push(cells),
+            // Fila desalineada: la ignoramos en vez de romper la tabla.
+            Some(_) => {}
+        }
+    }
+    let columns = header?;
+    let mut sections = Vec::new();
+    if !resumen.is_empty() {
+        sections.push(Section {
+            title: "resumen".to_string(),
+            kind: SectionKind::Lines(resumen),
+        });
+    }
+    sections.push(Section {
+        title: "por comando".to_string(),
+        kind: SectionKind::Table { columns, rows },
+    });
+    Some(sections)
 }
 
 /// Detecta el output de `ls` con `-l` y/o `-R` y devuelve secciones:
@@ -298,6 +338,30 @@ mod tests {
         assert!(matches!(secs[0].kind, SectionKind::Table { .. }));
         assert!(matches!(secs[1].kind, SectionKind::Table { .. }));
         assert_eq!(secs[1].title, "./d");
+    }
+
+    #[test]
+    fn stats_se_parte_en_resumen_y_tabla() {
+        let lines = vec![
+            "120 comandos en historial · 8 binarios distintos · 100 con código de salida".to_string(),
+            "comando\tveces\tfallos\t%fallo\tp50ms\tp95ms\túltimo".to_string(),
+            "cargo\t30\t2\t6\t1500\t4200\t2m".to_string(),
+            "git\t12\t0\t0\t40\t90\t1h".to_string(),
+        ];
+        let secs = detect_sections(":stats", &lines).expect("detect");
+        assert_eq!(secs.len(), 2);
+        assert_eq!(secs[0].title, "resumen");
+        assert!(matches!(secs[0].kind, SectionKind::Lines(_)));
+        assert_eq!(secs[1].title, "por comando");
+        match &secs[1].kind {
+            SectionKind::Table { columns, rows } => {
+                assert_eq!(columns.len(), 7);
+                assert_eq!(rows.len(), 2);
+                assert_eq!(rows[0][0], "cargo");
+                assert_eq!(rows[0][1], "30");
+            }
+            _ => panic!("esperaba Table"),
+        }
     }
 
     impl Section {
