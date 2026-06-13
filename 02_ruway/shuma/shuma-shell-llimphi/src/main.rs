@@ -330,6 +330,9 @@ impl App for Shell {
                 // Autosave del output de las sesiones persistentes (cada 5 s).
                 if m.tick_count % 5 == 0 {
                     save_session_outputs(&m);
+                    // M4 — polling del runtime de matilda (si hay instancia
+                    // Local montada): refresca el semáforo sin pulsar Discover.
+                    update::poll_matilda_runtime(&m, handle);
                 }
                 // env.json cambió (builtin `:env` u otra instancia) → recargar.
                 let mtime = persist::env_groups_mtime();

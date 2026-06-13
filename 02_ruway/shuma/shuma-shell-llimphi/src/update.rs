@@ -217,6 +217,36 @@ pub(crate) fn drain_shell_instances(m: &mut Model) {
 }
 
 
+/// M4 — polling de runtime de matilda. Si hay una instancia matilda
+/// **Local** montada (slots fijos topbar/bottombar/main), re-observa el
+/// runtime (`docker ps` + `systemctl`) en un thread y lo reenvía como
+/// `Msg::SetRuntime`. Llamado desde el `Tick` a cadencia lenta (cada 5 s).
+/// El remoto no se poll-ea todavía (necesita SSH por tick — futuro).
+pub(crate) fn poll_matilda_runtime(m: &Model, handle: &Handle<Msg>) {
+    for slot in [Slot::TopBar, Slot::BottomBar, Slot::Main] {
+        let inst = match slot {
+            Slot::TopBar => m.topbar.as_ref(),
+            Slot::BottomBar => m.bottombar.as_ref(),
+            Slot::Main => m.main.as_ref(),
+            _ => None,
+        };
+        if let Some(inst) = inst {
+            if let ModuleState::Matilda(st) = &inst.state {
+                if !st.source.is_remote() {
+                    let slot_back = slot.clone();
+                    handle.spawn(move || {
+                        let rt = shuma_module_matilda::poll_runtime();
+                        Msg::Module(
+                            slot_back,
+                            ModuleMsg::Matilda(shuma_module_matilda::Msg::SetRuntimeQuiet(rt)),
+                        )
+                    });
+                }
+            }
+        }
+    }
+}
+
 pub(crate) fn monitor_key(slot: &Slot, spec: &MonitorSpec) -> String {
     let slot_label = match slot {
         Slot::TopBar => "topbar",

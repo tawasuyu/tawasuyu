@@ -157,6 +157,9 @@ pub enum Msg {
     /// Inyecta el estado runtime observado — usado para el discover remoto
     /// (el chasis corre `docker ps` por SSH en un thread y reenvía esto).
     SetRuntime(RuntimeState),
+    /// Como `SetRuntime` pero **sin loguear** — para el polling periódico
+    /// (M4), que no debe spamear el log cada 5 s.
+    SetRuntimeQuiet(RuntimeState),
     /// Línea informativa para el log — útil para que el chasis avise
     /// "conectando", "fallo de SSH", etc., sin acoplarse al módulo.
     LogLine(String),
@@ -358,6 +361,9 @@ pub fn update(state: State, msg: Msg) -> State {
             ));
             s.set_runtime(rt);
         }
+        Msg::SetRuntimeQuiet(rt) => {
+            s.set_runtime(rt);
+        }
         Msg::LogLine(line) => {
             s.log.push(line);
             cap_log(&mut s.log);
@@ -511,6 +517,14 @@ fn cap_log(log: &mut Vec<String>) {
 }
 
 // ─── Discover y dry-run remotos ─────────────────────────────────────
+
+/// Re-observa el estado runtime local (`docker ps` + `systemctl`). El
+/// chasis lo llama en un thread a cadencia lenta (M4 — polling) y reenvía
+/// el resultado por `Msg::SetRuntime`. Es lo más barato del discover (no
+/// corre `docker inspect` por contenedor como `discover_inventory`).
+pub fn poll_runtime() -> RuntimeState {
+    discover_runtime()
+}
 
 /// Ruta default de la clave SSH del usuario; coincide con el matilda CLI.
 fn default_ssh_key() -> PathBuf {
