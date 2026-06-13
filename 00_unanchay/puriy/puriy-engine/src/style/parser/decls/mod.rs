@@ -445,6 +445,78 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_font_shorthand(value, important));
             continue;
         }
+        // Fase 7.829 — shorthand `font-variant` (CSS Fonts 4). `normal`/`none`
+        // resetean los longhands; sino se reparten los tokens por grupo
+        // (caps/position/numeric/ligatures/east-asian) — los conjuntos de
+        // keywords no se solapan, así que clasificamos cada token probando el
+        // sub-parser de cada longhand. Un token desconocido descarta el
+        // shorthand entero. No cubre stylistic()/swash()/etc. (raros).
+        if prop.eq_ignore_ascii_case("font-variant") {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("normal") || v.eq_ignore_ascii_case("none") {
+                let lig = if v.eq_ignore_ascii_case("none") { "none" } else { "normal" };
+                if let Some(c) = parse_font_variant_caps("normal") {
+                    out.push(Decl { kind: DeclKind::FontVariantCaps(c), important });
+                }
+                if let Some(n) = parse_font_variant_numeric("normal") {
+                    out.push(Decl { kind: DeclKind::FontVariantNumeric(n), important });
+                }
+                if let Some(l) = parse_font_variant_ligatures(lig) {
+                    out.push(Decl { kind: DeclKind::FontVariantLigatures(l), important });
+                }
+                if let Some(e) = parse_font_variant_east_asian("normal") {
+                    out.push(Decl { kind: DeclKind::FontVariantEastAsian(e), important });
+                }
+                if let Some(p) = parse_font_variant_position("normal") {
+                    out.push(Decl { kind: DeclKind::FontVariantPosition(p), important });
+                }
+                continue;
+            }
+            let (mut caps, mut numeric, mut lig, mut ea, mut pos) =
+                (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+            let mut ok = true;
+            for tok in v.split_whitespace() {
+                if parse_font_variant_caps(tok).is_some() {
+                    caps.push(tok);
+                } else if parse_font_variant_position(tok).is_some() {
+                    pos.push(tok);
+                } else if parse_font_variant_numeric(tok).is_some() {
+                    numeric.push(tok);
+                } else if parse_font_variant_ligatures(tok).is_some() {
+                    lig.push(tok);
+                } else if parse_font_variant_east_asian(tok).is_some() {
+                    ea.push(tok);
+                } else {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                continue;
+            }
+            if let Some(c) = caps.first().and_then(|t| parse_font_variant_caps(t)) {
+                out.push(Decl { kind: DeclKind::FontVariantCaps(c), important });
+            }
+            if let Some(p) = pos.first().and_then(|t| parse_font_variant_position(t)) {
+                out.push(Decl { kind: DeclKind::FontVariantPosition(p), important });
+            }
+            if !numeric.is_empty() {
+                if let Some(n) = parse_font_variant_numeric(&numeric.join(" ")) {
+                    out.push(Decl { kind: DeclKind::FontVariantNumeric(n), important });
+                }
+            }
+            if !lig.is_empty() {
+                if let Some(l) = parse_font_variant_ligatures(&lig.join(" ")) {
+                    out.push(Decl { kind: DeclKind::FontVariantLigatures(l), important });
+                }
+            }
+            if !ea.is_empty() {
+                if let Some(e) = parse_font_variant_east_asian(&ea.join(" ")) {
+                    out.push(Decl { kind: DeclKind::FontVariantEastAsian(e), important });
+                }
+            }
+            continue;
+        }
         // Fase 7.819-7.820 — shorthands `grid-row` / `grid-column`
         // (CSS Grid §8.3): `<start> [ / <end> ]?`. Reparte en los longhands
         // `grid-{row,column}-{start,end}` ya existentes (parse opaco). Al

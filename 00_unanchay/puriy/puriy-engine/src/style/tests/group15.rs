@@ -171,3 +171,30 @@ fn props_individuales_transform_componen_en_orden() {
     assert!(matches!(t[2], Transform::Scale(sx, sy) if sx == 2.0 && sy == 2.0));
     assert!(matches!(t[3], Transform::Skew(_, _)));
 }
+
+// ── Fase 7.829 — shorthand font-variant ───────────────────────────────────
+
+#[test]
+fn font_variant_shorthand() {
+    // Caso dominante: caps.
+    assert!(decls("font-variant: small-caps")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontVariantCaps(FontVariantCaps::SmallCaps))));
+    // Reparto multi-grupo: caps + numeric (dos tokens) + position.
+    let d = decls("font-variant: small-caps tabular-nums oldstyle-nums super");
+    assert!(d
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontVariantCaps(FontVariantCaps::SmallCaps))));
+    assert!(d
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::FontVariantNumeric(n) if n.tabular_nums && n.oldstyle_nums)));
+    assert!(d
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontVariantPosition(FontVariantPosition::Super))));
+    // `normal` resetea (emite varios longhands a default).
+    assert!(decls("font-variant: normal")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontVariantCaps(FontVariantCaps::Normal))));
+    // Un token desconocido descarta el shorthand entero.
+    assert!(decls("font-variant: small-caps bogus-token").is_empty());
+}
