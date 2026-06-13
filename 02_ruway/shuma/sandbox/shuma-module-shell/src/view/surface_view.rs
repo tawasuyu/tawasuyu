@@ -394,6 +394,44 @@ fn spilled_archive_header<HostMsg: Clone + 'static>(
 
 /// `has_stdout` (param 6) gatea el chip de reprocess (sin stdout, no hay
 /// nada que reprocesar).
+/// Alto del notice «¿quisiste decir…?» (A4).
+const DID_YOU_MEAN_H: f32 = 18.0;
+
+/// A4 — fila clickeable bajo un bloque fallido: *«¿`cargo build` en vez de
+/// `cagro build`? → click lo lleva al input»*. No ejecuta nada solo; deja la
+/// línea corregida lista para revisar y Enter.
+fn did_you_mean_notice<HostMsg: Clone + 'static>(
+    block: u64,
+    corregida: &str,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> View<HostMsg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(DID_YOU_MEAN_H) },
+        flex_shrink: 0.0,
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_input)
+    .radius(3.0)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::AcceptDidYouMean(block)))
+    .text_aligned(
+        format!("¿quisiste decir «{corregida}»?  ·  click lo lleva al input"),
+        10.0,
+        theme.accent,
+        Alignment::Start,
+    )
+    .mono()
+    .max_lines(1)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn surface_header<HostMsg: Clone + 'static>(
     block: u64,
@@ -915,6 +953,16 @@ pub(crate) fn output_pane_surface<HostMsg: Clone + 'static>(
                     }
                     items.push(Item::lines(start, store.len()));
                 }
+            }
+
+            // A4 — notice «¿quisiste decir…?»: si el bloque falló por
+            // `command not found` y hay una corrección, una fila clickeable que
+            // lleva la línea corregida al input. Aparece esté o no colapsado.
+            if let Some(corregida) = state.did_you_mean.get(id) {
+                items.push(Item::chrome(
+                    DID_YOU_MEAN_H,
+                    did_you_mean_notice(*id, corregida, theme, lift),
+                ));
             }
         } else {
             // Líneas sueltas (notices iniciales sin bloque dueño) — cuerpo sin

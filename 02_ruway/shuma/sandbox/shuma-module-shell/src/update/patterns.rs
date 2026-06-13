@@ -168,21 +168,171 @@ pub(crate) fn predicted_sequence(s: &State) -> Option<String> {
     Some(next.join(" && "))
 }
 
+/// Distancia de Damerau-Levenshtein restringida (optimal string alignment)
+/// entre `a` y `b`: inserción/borrado/sustitución **y transposición de dos
+/// caracteres adyacentes**, todas costo 1. La transposición barata atrapa el
+/// typo clásico (`cagro` → `cargo`, distancia 1; en Levenshtein plano serían
+/// 2). DP O(|a|·|b|) sobre caracteres Unicode, sin dependencias.
+pub(crate) fn damerau_levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let (na, nb) = (a.len(), b.len());
+    if na == 0 {
+        return nb;
+    }
+    if nb == 0 {
+        return na;
+    }
+    // `d[i][j]` = distancia entre `a[..i]` y `b[..j]`. Necesitamos `i-2`/`j-2`
+    // para la transposición, así que mantenemos la matriz completa.
+    let mut d = vec![vec![0usize; nb + 1]; na + 1];
+    for (i, row) in d.iter_mut().enumerate() {
+        row[0] = i;
+    }
+    for j in 0..=nb {
+        d[0][j] = j;
+    }
+    for i in 1..=na {
+        for j in 1..=nb {
+            let cost = if a[i - 1] == b[j - 1] { 0 } else { 1 };
+            let mut m = (d[i - 1][j] + 1)
+                .min(d[i][j - 1] + 1)
+                .min(d[i - 1][j - 1] + cost);
+            if i > 1 && j > 1 && a[i - 1] == b[j - 2] && a[i - 2] == b[j - 1] {
+                m = m.min(d[i - 2][j - 2] + 1);
+            }
+            d[i][j] = m;
+        }
+    }
+    d[na][nb]
+}
+
+/// El candidato más cercano a `bad` dentro de `cands` con distancia en
+/// `1..=umbral` (excluye 0 = el mismo token). Empata por menor distancia y,
+/// a igual distancia, por orden lexicográfico (determinista). `None` si
+/// ninguno entra en el umbral.
+fn closest_within<'a>(bad: &str, umbral: usize, cands: impl Iterator<Item = &'a str>) -> Option<String> {
+    let mut best: Option<(usize, &str)> = None;
+    for cand in cands {
+        if cand == bad || cand.is_empty() {
+            continue;
+        }
+        let dd = damerau_levenshtein(bad, cand);
+        if dd == 0 || dd > umbral {
+            continue;
+        }
+        let better = match best {
+            None => true,
+            Some((bd, bc)) => dd < bd || (dd == bd && cand < bc),
+        };
+        if better {
+            best = Some((dd, cand));
+        }
+    }
+    best.map(|(_, c)| c.to_string())
+}
+
+/// A4 — detecta el caso «¿quisiste decir…?» al cerrar un comando: si su salida
+/// trae `command not found`, busca el binario más cercano al primer token de
+/// la línea. **Prioriza el historial** (lo que el usuario realmente corre)
+/// sobre el PATH crudo; ambos con umbral `max(1, len/3)`. Si hay candidato,
+/// guarda en `s.did_you_mean[block]` la línea corregida. Sin modelo, sin red.
+pub(crate) fn detect_did_you_mean(s: &mut State, block: u64) {
+    let has_cnf = s.output.iter().any(|l| {
+        l.block == block
+            && l.kind == OutputKind::Stderr
+            && l.text.to_ascii_lowercase().contains("command not found")
+    });
+    if !has_cnf {
+        return;
+    }
+    // Línea original (sin el prefijo "$ " del header).
+    let Some(raw) = s.block_command.get(&block).cloned() else {
+        return;
+    };
+    let cmd = raw.trim_start_matches("$ ").trim();
+    let mut toks = cmd.splitn(2, char::is_whitespace);
+    let Some(bad) = toks.next() else {
+        return;
+    };
+    let rest = toks.next().unwrap_or("");
+    // Un path explícito (`./x`, `/usr/bin/x`) no es un typo de binario del PATH.
+    if bad.is_empty() || bad.contains('/') {
+        return;
+    }
+    let umbral = (bad.chars().count() / 3).max(1);
+
+    // 1) Historial: primer token de cada línea (sin paths), señal fuerte.
+    let hist_bins: Vec<String> = match s.history.lock() {
+        Ok(h) => h
+            .entries()
+            .iter()
+            .filter_map(|e| e.line.split_whitespace().next())
+            .filter(|t| !t.contains('/'))
+            .map(String::from)
+            .collect(),
+        Err(_) => Vec::new(),
+    };
+    let pick = closest_within(bad, umbral, hist_bins.iter().map(String::as_str))
+        // 2) Fallback: binarios del PATH.
+        .or_else(|| {
+            use shuma_line::CompletionSource;
+            let path_bins = s.completion_source.commands();
+            closest_within(bad, umbral, path_bins.iter().map(String::as_str))
+        });
+
+    if let Some(cand) = pick {
+        let corregida = if rest.is_empty() {
+            cand
+        } else {
+            format!("{cand} {rest}")
+        };
+        s.did_you_mean.insert(block, corregida);
+    }
+}
+
+/// `true` si `entry_cwd` cae dentro de `base` (es el mismo directorio o un
+/// hijo) — el criterio de "contexto" del ghost por cwd (A3).
+fn cwd_within(entry_cwd: &str, base: &str) -> bool {
+    entry_cwd == base
+        || entry_cwd
+            .strip_prefix(base)
+            .is_some_and(|rest| rest.starts_with('/'))
+}
+
 /// Sugerencia "ghost" para la línea actual — la secuencia predicha por el
 /// motor de patrones (si aplica) y, tras ella, el prefijo histórico más
 /// reciente que extiende el texto que ya está tipeado.
+///
+/// A3 — **ghost contextual por cwd:** el historial se rankea en dos tramos,
+/// primero las entradas del directorio actual (y sus hijos), después lo
+/// global. En un monorepo el ghost deja de sugerir comandos de otro proyecto:
+/// `cargo b…` en `cosmos/` completa al último build de cosmos, no al de wawa.
+/// Dentro de cada tramo, lo más reciente primero.
 pub(crate) fn current_ghost(s: &State) -> Option<String> {
     let text = s.input.text();
     if text.is_empty() || s.input.cursor() != text.len() {
         return None;
     }
-    // Corpus por prioridad: secuencia predicha primero, luego historial.
+    // Corpus por prioridad: secuencia predicha primero, luego historial
+    // (local al cwd antes que global).
     let mut corpus: Vec<String> = Vec::new();
     if let Some(seq) = predicted_sequence(s) {
         corpus.push(seq);
     }
     if let Ok(history) = s.history.lock() {
-        corpus.extend(history.entries().iter().rev().map(|e| e.line.clone()));
+        let base = s.cwd.to_string_lossy();
+        let mut local: Vec<String> = Vec::new();
+        let mut global: Vec<String> = Vec::new();
+        for e in history.entries().iter().rev() {
+            if cwd_within(&e.cwd, &base) {
+                local.push(e.line.clone());
+            } else {
+                global.push(e.line.clone());
+            }
+        }
+        corpus.extend(local);
+        corpus.extend(global);
     }
     shuma_line::ghost_suggestion(text, &corpus)
 }
@@ -245,5 +395,88 @@ mod a1_choreo_tests {
         let sig = choreography_suggestion(&s).unwrap().signature.clone();
         s.dismissed_choreo.insert(sig);
         assert!(choreography_suggestion(&s).is_none());
+    }
+}
+
+#[cfg(test)]
+mod a3_ghost_cwd_tests {
+    use super::*;
+
+    #[test]
+    fn cwd_within_reconoce_mismo_dir_e_hijos() {
+        assert!(cwd_within("/repo", "/repo"));
+        assert!(cwd_within("/repo/sub", "/repo"));
+        assert!(cwd_within("/repo/a/b", "/repo"));
+        assert!(!cwd_within("/repo-otro", "/repo")); // prefijo de string, no de path
+        assert!(!cwd_within("/otro", "/repo"));
+    }
+
+    #[test]
+    fn ghost_prefiere_el_cwd_actual_sobre_lo_mas_reciente() {
+        let mut s = State::new(shuma_module::Source::Local);
+        s.cwd = std::path::PathBuf::from("/repo");
+        {
+            let mut h = s.history.lock().unwrap();
+            // Local al cwd, más viejo.
+            let _ = h.append(shuma_history::Entry::new("cargo build --debug", "/repo", 1));
+            // Global (otro proyecto), más reciente → ganaría por recencia.
+            let _ = h.append(shuma_history::Entry::new("cargo build --release", "/otro", 2));
+        }
+        s.input.set_text("cargo bu");
+        // A3: el del cwd actual manda, aunque sea más viejo.
+        assert_eq!(current_ghost(&s).as_deref(), Some("ild --debug"));
+    }
+}
+
+#[cfg(test)]
+mod a4_did_you_mean_tests {
+    use super::*;
+
+    #[test]
+    fn damerau_atrapa_transposicion() {
+        assert_eq!(damerau_levenshtein("cagro", "cargo"), 1); // transposición
+        assert_eq!(damerau_levenshtein("cargo", "cargo"), 0);
+        assert_eq!(damerau_levenshtein("gti", "git"), 1);
+        assert_eq!(damerau_levenshtein("ls", "ls"), 0);
+    }
+
+    fn state_con_fallo(cmd: &str) -> State {
+        let mut s = State::new(shuma_module::Source::Local);
+        // El usuario ya corrió el binario bueno antes (señal del historial).
+        {
+            let mut h = s.history.lock().unwrap();
+            let _ = h.append(shuma_history::Entry::new("cargo build", "/repo", 1));
+        }
+        // Bloque 5 con el comando tipeado y su stderr de "command not found".
+        s.block_command.insert(5, format!("$ {cmd}"));
+        let mut err = OutputLine::stderr("zsh: command not found: cagro");
+        err.block = 5;
+        s.output.push(err);
+        s
+    }
+
+    #[test]
+    fn ofrece_correccion_desde_historial() {
+        let mut s = state_con_fallo("cagro build --release");
+        detect_did_you_mean(&mut s, 5);
+        assert_eq!(s.did_you_mean.get(&5).map(String::as_str), Some("cargo build --release"));
+    }
+
+    #[test]
+    fn no_ofrece_sin_command_not_found() {
+        let mut s = State::new(shuma_module::Source::Local);
+        s.block_command.insert(5, "$ cagro build".to_string());
+        let mut err = OutputLine::stderr("error: some other failure");
+        err.block = 5;
+        s.output.push(err);
+        detect_did_you_mean(&mut s, 5);
+        assert!(s.did_you_mean.get(&5).is_none());
+    }
+
+    #[test]
+    fn no_ofrece_para_un_path_explicito() {
+        let mut s = state_con_fallo("./cagro build");
+        detect_did_you_mean(&mut s, 5);
+        assert!(s.did_you_mean.get(&5).is_none());
     }
 }

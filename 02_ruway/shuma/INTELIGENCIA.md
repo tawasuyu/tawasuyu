@@ -63,17 +63,24 @@ chip vive en `view()` (shell standalone); falta llevarlo a la barra de pata
 Línea > 40 chars repetida ≥ 3 veces sin variación → ofrecer alias corto
 (`[aliases]` del rc vía `upsert_key`). Mismo chip que A1, otra fuente.
 
-### A3. Ghost contextual por cwd
-El historial ya guarda `cwd` por entrada. Rankear el corpus del ghost:
-primero entradas del cwd actual (y sus hijos), después lo global. En un
-monorepo el ghost deja de sugerir comandos de otro proyecto. Esfuerzo: bajo
-(orden del corpus en `current_ghost`).
+### A3. Ghost contextual por cwd ✅ (2026-06-13)
+El historial guarda `cwd` por entrada. **Hecho:** `current_ghost`
+(`update/patterns.rs`) rankea el corpus en dos tramos — primero las entradas
+del cwd actual y sus hijos (`cwd_within`), después lo global; dentro de cada
+tramo, lo más reciente primero. En un monorepo `cargo b…` en `cosmos/`
+completa al build de cosmos, no al de wawa. Test: el del cwd manda aunque sea
+más viejo que uno global.
 
-### A4. "¿Quisiste decir…?" determinista
-Exit ≠ 0 con stderr `command not found` → Levenshtein contra los binarios
-del `ShellSource` (la fuente de completion ya los tiene en memoria) +
-historial. Notice clickeable bajo el bloque: *«¿`cargo` en vez de `cagro`?
-→ Enter ejecuta»*. Sin modelo, sin red.
+### A4. "¿Quisiste decir…?" determinista ✅ (2026-06-13)
+**Hecho:** al cerrar un comando con `command not found`, `detect_did_you_mean`
+(`update/patterns.rs`) busca el binario más cercano por **Damerau-Levenshtein**
+(transposición = 1, atrapa `cagro`→`cargo`), **priorizando el historial** sobre
+el PATH (`ShellSource::commands`). Notice clickeable bajo el bloque
+(`did_you_mean_notice` en `surface_view`): *«¿quisiste decir «cargo build
+--release»? · click lo lleva al input»* (`Msg::AcceptDidYouMean` rellena el
+input para revisar y Enter — nunca auto-ejecuta). `State.did_you_mean` por
+bloque. Sin modelo, sin red. Verificado headless (`examples/did_you_mean.rs`)
++ 6 tests (Damerau, corrección desde historial, gates de no-oferta).
 
 ### A5. Titular de bloque al colapsar ✅ (2026-06-13)
 Al plegarse un bloque, el header gana un resumen determinista contado desde
@@ -159,7 +166,7 @@ red: los datos no salen de la máquina.
 
 1. **A5 + A1** (titular semáforo + chip de coreografía): máximo efecto/LOC,
    todo el material ya está en memoria. ✅ **hecho 2026-06-13.**
-2. **A3 + A4** (ghost por cwd + quisiste-decir): afinan el día a día.
+2. **A3 + A4** (ghost por cwd + quisiste-decir): afinan el día a día. ✅ **hecho 2026-06-13.**
 3. **E1 + E2** (`:macro` + `%cN`): desbloquean el techo del extremo con
    núcleos ya escritos.
 4. **E3 + E6** (`[rules]` + `:stats`): convierten el rc en plano de control.

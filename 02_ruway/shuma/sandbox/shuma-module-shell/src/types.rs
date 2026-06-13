@@ -409,6 +409,11 @@ pub struct State {
     /// A1 — firmas de coreografías que el usuario **descartó** (chip «descartar»):
     /// no se vuelven a ofrecer como grupo en esta sesión. Sólo en memoria.
     pub dismissed_choreo: std::collections::HashSet<Vec<String>>,
+    /// A4 — corrección «¿quisiste decir…?» por bloque: cuando un comando falla
+    /// con `command not found`, el binario más cercano (Levenshtein) sobre la
+    /// línea original. Un notice clickeable bajo el bloque la lleva al input.
+    /// Sólo en memoria.
+    pub did_you_mean: std::collections::HashMap<u64, String>,
     /// Tope de captura de stdout por run, en bytes. `0` = sin tope. Lo fija
     /// el builtin `:limit <MB>`.
     pub capture_limit_bytes: usize,
@@ -705,6 +710,7 @@ impl State {
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             dismissed_choreo: std::collections::HashSet::new(),
+            did_you_mean: std::collections::HashMap::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
             // `:spill` la sobreescriben en vivo). `0` MiB = sin tope.
             capture_limit_bytes: config.capture.limit_mb.saturating_mul(1024 * 1024),

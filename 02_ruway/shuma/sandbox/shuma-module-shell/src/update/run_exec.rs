@@ -499,6 +499,10 @@ pub(crate) fn drain_run(mut s: State) -> State {
         // Sella el cierre para el titular semáforo del header colapsado
         // (duración = ended − started).
         s.block_ended.insert(run_block, now_unix_secs());
+        // A4 — si falló por `command not found`, ofrecé la corrección.
+        if !ok {
+            detect_did_you_mean(&mut s, run_block);
+        }
         // El comando terminado queda EXPANDIDO; sólo recede (se pliega) al
         // perderse en el historial cuando arranca uno nuevo (ver
         // `recede_previous_blocks` en `run_submitted`).

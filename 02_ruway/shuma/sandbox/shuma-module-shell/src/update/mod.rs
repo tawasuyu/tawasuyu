@@ -396,6 +396,11 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::DismissChoreography(signature) => {
             s.dismissed_choreo.insert(signature);
         }
+        Msg::AcceptDidYouMean(block) => {
+            if let Some(corregida) = s.did_you_mean.remove(&block) {
+                s.input.set_text(&corregida);
+            }
+        }
         Msg::BodyPointer { block, ev } => {
             s = apply_body_pointer(s, block, ev);
         }

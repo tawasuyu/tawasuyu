@@ -94,6 +94,10 @@ pub enum Msg {
     /// A1 — descarta la oferta de coreografía (por `signature`): no se vuelve
     /// a ofrecer en la sesión. La dispara el chip «descartar».
     DismissChoreography(Vec<String>),
+    /// A4 — acepta la corrección «¿quisiste decir…?» del bloque `block`: lleva
+    /// la línea corregida al input (para revisarla y ejecutar con Enter) y
+    /// limpia la oferta. La dispara el click en su notice.
+    AcceptDidYouMean(u64),
     /// Mouse sobre el cuerpo (IDE-text) de la card del bloque `block`:
     /// click posiciona el caret, drag extiende la selección. La dispara el
     /// `on_pointer` del `text-editor` del cuerpo.
