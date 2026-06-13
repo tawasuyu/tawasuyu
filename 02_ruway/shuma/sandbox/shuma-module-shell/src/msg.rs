@@ -94,6 +94,12 @@ pub enum Msg {
     /// A1 — descarta la oferta de coreografía (por `signature`): no se vuelve
     /// a ofrecer en la sesión. La dispara el chip «descartar».
     DismissChoreography(Vec<String>),
+    /// A2 — acepta el alias para una línea larga repetida: lo agrega a la config
+    /// viva y lo aprende al shumarc (`[aliases]`). La dispara el chip «aliasar».
+    AcceptAlias(String),
+    /// A2 — descarta la oferta de alias (por la línea): no se vuelve a ofrecer
+    /// en la sesión. La dispara el chip «descartar» del alias.
+    DismissAlias(String),
     /// A4 — acepta la corrección «¿quisiste decir…?» del bloque `block`: lleva
     /// la línea corregida al input (para revisarla y ejecutar con Enter) y
     /// limpia la oferta. La dispara el click en su notice.

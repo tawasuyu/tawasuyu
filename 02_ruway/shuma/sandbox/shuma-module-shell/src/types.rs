@@ -414,6 +414,10 @@ pub struct State {
     /// A1 — firmas de coreografías que el usuario **descartó** (chip «descartar»):
     /// no se vuelven a ofrecer como grupo en esta sesión. Sólo en memoria.
     pub dismissed_choreo: std::collections::HashSet<Vec<String>>,
+    /// A2 — líneas largas para las que el usuario **descartó** el alias ofrecido:
+    /// no se vuelven a ofrecer en esta sesión. Sólo en memoria (el aceptado, en
+    /// cambio, queda aprendido al shumarc).
+    pub dismissed_alias: std::collections::HashSet<String>,
     /// A4 — corrección «¿quisiste decir…?» por bloque: cuando un comando falla
     /// con `command not found`, el binario más cercano (Levenshtein) sobre la
     /// línea original. Un notice clickeable bajo el bloque la lleva al input.
@@ -753,6 +757,7 @@ impl State {
             expanded_stages: HashSet::new(),
             patterns: Vec::new(),
             dismissed_choreo: std::collections::HashSet::new(),
+            dismissed_alias: std::collections::HashSet::new(),
             did_you_mean: std::collections::HashMap::new(),
             // Política de captura inicial desde el rc (los builtins `:limit` /
             // `:spill` la sobreescriben en vivo). `0` MiB = sin tope.

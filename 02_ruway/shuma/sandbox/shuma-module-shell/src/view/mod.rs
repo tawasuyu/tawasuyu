@@ -197,8 +197,12 @@ pub fn view<HostMsg: Clone + 'static>(
     if let Some(banner) = input_focus_banner::<HostMsg>(state, theme, &lift) {
         children.push(banner);
     }
-    // A1 — oferta de coreografía: discreta, justo sobre el input.
+    // A1 — oferta de coreografía: discreta, justo sobre el input. A2 — oferta
+    // de alias para una línea larga repetida: el gemelo de A1, pero sólo si no
+    // hay coreografía pendiente (una sola oferta a la vez, sin apilar chips).
     if let Some(chip) = choreography_chip::<HostMsg>(state, theme, &lift) {
+        children.push(chip);
+    } else if let Some(chip) = alias_chip::<HostMsg>(state, theme, &lift) {
         children.push(chip);
     }
     children.push(input);
@@ -370,6 +374,93 @@ pub(crate) fn choreography_chip<HostMsg: Clone + 'static>(
                 theme.bg_input,
                 theme.fg_muted,
                 Msg::DismissChoreography(sig),
+            ),
+        ]),
+    )
+}
+
+/// A2 — chip de alias sobre el input: cuando una **línea larga** se repitió
+/// varias veces idéntica, ofrece bautizarla con un nombre corto (`[aliases]`
+/// del shumarc, vía `upsert_key`). Mismo molde que la coreografía (A1), otra
+/// fuente: A1 abstrae una *secuencia*, A2 acorta *una* línea. El shell propone,
+/// el usuario acepta con un click («aliasar» → aprendido al rc) o la descarta.
+/// `None` si no hay ninguna línea que valga acortar.
+pub(crate) fn alias_chip<HostMsg: Clone + 'static>(
+    state: &State,
+    theme: &Theme,
+    lift: &(impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static),
+) -> Option<View<HostMsg>> {
+    let sug = alias_suggestion(state)?;
+    let label = format!(
+        "⌁ lo tecleaste {} veces · acortar a «{}»?  ({})",
+        sug.count, sug.name, sug.line
+    );
+    let line = sug.line.clone();
+
+    let action = |text: &str,
+                  fill: llimphi_ui::llimphi_raster::peniko::Color,
+                  fg: llimphi_ui::llimphi_raster::peniko::Color,
+                  msg: Msg|
+     -> View<HostMsg> {
+        View::new(Style {
+            size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+            flex_shrink: 0.0,
+            padding: Rect {
+                left: length(7.0_f32),
+                right: length(7.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(fill)
+        .radius(3.0)
+        .hover_fill(theme.bg_row_hover)
+        .on_click(lift(msg))
+        .text_aligned(text.to_string(), 10.0, fg, Alignment::Start)
+        .mono()
+    };
+
+    Some(
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(20.0_f32),
+            },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+            padding: Rect {
+                left: length(8.0_f32),
+                right: length(8.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(theme.bg_input)
+        .radius(4.0)
+        .children(vec![
+            View::new(Style {
+                size: Size { width: Dimension::auto(), height: length(16.0_f32) },
+                flex_grow: 1.0,
+                ..Default::default()
+            })
+            .text_aligned(label, 10.0, theme.accent, Alignment::Start)
+            .mono()
+            .max_lines(1),
+            action(
+                "aliasar",
+                theme.accent,
+                theme.bg_panel,
+                Msg::AcceptAlias(line.clone()),
+            ),
+            action(
+                "descartar",
+                theme.bg_input,
+                theme.fg_muted,
+                Msg::DismissAlias(line),
             ),
         ]),
     )

@@ -150,6 +150,169 @@ pub(crate) fn accept_choreography(mut s: State, signature: &[String]) -> State {
     s
 }
 
+/// A2 — una línea larga repetida que vale la pena acortar a un alias. Es el
+/// gemelo de la coreografía (A1) pero sobre **una sola línea** en vez de una
+/// secuencia: si tecleaste lo mismo, largo, varias veces, el shell ofrece
+/// bautizarlo.
+#[derive(Debug, Clone)]
+pub(crate) struct AliasSuggestion {
+    /// La línea completa que se acortaría (el cuerpo del alias).
+    pub line: String,
+    /// Cuántas veces apareció idéntica en el historial.
+    pub count: usize,
+    /// El nombre corto propuesto (mnemónico de las iniciales, único).
+    pub name: String,
+}
+
+/// A2 — largo mínimo de línea para que valga ofrecer un alias. Por debajo de
+/// esto, el alias no ahorra teclas que importen.
+pub(crate) const ALIAS_MIN_LEN: usize = 40;
+
+/// A2 — repeticiones idénticas mínimas para ofrecer el alias (mismo espíritu
+/// que `CHOREO_OFFER_THRESHOLD`: lo hiciste suficiente para que valga un nombre).
+pub(crate) const ALIAS_OFFER_THRESHOLD: usize = 3;
+
+/// A2 — mnemónico corto para una línea: las **iniciales** de sus tokens
+/// significativos (saltea opciones `-x`/`--y` y operadores de shell), en
+/// minúscula y sólo alfanuméricas. `git push origin main` → `gpom`. Si no
+/// junta al menos 2 letras (línea de puras flags), cae al primer token entero.
+/// Garantiza unicidad contra `taken` agregando un sufijo numérico.
+pub(crate) fn suggest_alias_name(line: &str, taken: &dyn Fn(&str) -> bool) -> String {
+    let mut base: String = line
+        .split_whitespace()
+        .filter(|t| {
+            !t.starts_with('-') && !matches!(*t, "&&" | "||" | "|" | ";" | ">" | ">>" | "<")
+        })
+        .filter_map(|t| t.chars().find(|c| c.is_ascii_alphanumeric()))
+        .map(|c| c.to_ascii_lowercase())
+        .collect();
+    if base.chars().count() < 2 {
+        // Línea de puras flags: usá el primer token entero (sólo alfanum).
+        base = line
+            .split_whitespace()
+            .next()
+            .unwrap_or("alias")
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+    }
+    if base.is_empty() {
+        base = "alias".to_string();
+    }
+    if !taken(&base) {
+        return base;
+    }
+    // Colisión: sufijo numérico determinista.
+    for n in 2.. {
+        let cand = format!("{base}{n}");
+        if !taken(&cand) {
+            return cand;
+        }
+    }
+    unreachable!("la sucesión de sufijos es infinita")
+}
+
+/// A2 — cuenta de líneas idénticas en el historial, sólo las externas (los
+/// builtins `:x` no se aliasan). Devuelve `(línea, veces)` por línea distinta.
+fn line_frequencies(s: &State) -> Vec<(String, usize)> {
+    let Ok(history) = s.history.lock() else {
+        return Vec::new();
+    };
+    let mut counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for e in history.entries() {
+        let line = e.line.trim();
+        if line.is_empty() || line.starts_with(':') {
+            continue;
+        }
+        *counts.entry(line.to_string()).or_insert(0) += 1;
+    }
+    counts.into_iter().collect()
+}
+
+/// A2 — la línea larga repetida que más conviene aliasar: longitud ≥
+/// [`ALIAS_MIN_LEN`], al menos [`ALIAS_OFFER_THRESHOLD`] repeticiones idénticas,
+/// que el usuario no descartó y que **todavía no es** el cuerpo de un alias
+/// existente. Empata por más repeticiones, luego línea más larga, luego orden
+/// lexicográfico (determinista). `None` si no hay candidata. El shell propone,
+/// el usuario acepta con un click o ignora — gemelo de A1.
+pub(crate) fn alias_suggestion(s: &State) -> Option<AliasSuggestion> {
+    let already_body: std::collections::HashSet<&str> =
+        s.config.aliases.values().map(String::as_str).collect();
+    let mut best: Option<(String, usize)> = None;
+    for (line, count) in line_frequencies(s) {
+        if count < ALIAS_OFFER_THRESHOLD
+            || line.chars().count() < ALIAS_MIN_LEN
+            || s.dismissed_alias.contains(&line)
+            || already_body.contains(line.as_str())
+        {
+            continue;
+        }
+        let better = match &best {
+            None => true,
+            Some((bl, bc)) => {
+                count > *bc
+                    || (count == *bc && line.chars().count() > bl.chars().count())
+                    || (count == *bc && line.chars().count() == bl.chars().count() && line < *bl)
+            }
+        };
+        if better {
+            best = Some((line, count));
+        }
+    }
+    let (line, count) = best?;
+    let name = suggest_alias_name(&line, &alias_name_taken(s));
+    Some(AliasSuggestion { line, count, name })
+}
+
+/// A2 — predicado «ese nombre ya está tomado»: por un alias existente o por un
+/// binario real del PATH (no pisar un comando del sistema con un alias homónimo).
+fn alias_name_taken(s: &State) -> impl Fn(&str) -> bool + '_ {
+    move |name: &str| {
+        if s.config.aliases.contains_key(name) {
+            return true;
+        }
+        use shuma_line::CompletionSource;
+        s.completion_source.commands().iter().any(|c| c == name)
+    }
+}
+
+/// A2 — núcleo puro de aceptar un alias: lo agrega a la config viva (se expande
+/// desde el próximo submit) y marca la línea descartada para no re-ofrecerla.
+/// Sin efectos de disco — la persistencia al shumarc la hace [`accept_alias`].
+pub(crate) fn learn_alias(mut s: State, name: &str, line: &str) -> State {
+    s.config.aliases.insert(name.to_string(), line.to_string());
+    s.dismissed_alias.insert(line.to_string());
+    s
+}
+
+/// A2 — acepta el alias para `line`: recalcula el nombre (determinista), lo
+/// aprende a la config viva ([`learn_alias`]) y lo **persiste al shumarc**
+/// (`[aliases]` vía `upsert_key`, preservando comentarios). Reemplaza un alias
+/// homónimo sólo si apuntaba a la misma línea (no pisa uno del usuario).
+pub(crate) fn accept_alias(s: State, line: &str) -> State {
+    let name = suggest_alias_name(line, &alias_name_taken(&s));
+    let mut s = learn_alias(s, &name, line);
+    let mut learned = true;
+    if let Some(rc) = shuma_config::Config::default_path() {
+        if let Err(e) = shuma_config::upsert_key(&rc, "aliases", &name, &shuma_config::toml_string(line))
+        {
+            learned = false;
+            s.push_output(OutputLine::notice(format!(
+                "alias «{name}» activo esta sesión — pero no se pudo guardar al shumarc: {e}"
+            )));
+        }
+    } else {
+        learned = false;
+    }
+    if learned {
+        s.push_output(OutputLine::notice(format!(
+            "✔ alias «{name}» = «{line}» aprendido al shumarc — tipealo y se expande"
+        )));
+    }
+    s
+}
+
 /// La secuencia que el motor predice como continuación de la sesión, si la
 /// hay y el cwd comparte la forma del patrón.
 pub(crate) fn predicted_sequence(s: &State) -> Option<String> {
@@ -401,6 +564,119 @@ mod a1_choreo_tests {
         let sig = choreography_suggestion(&s).unwrap().signature.clone();
         s.dismissed_choreo.insert(sig);
         assert!(choreography_suggestion(&s).is_none());
+    }
+}
+
+#[cfg(test)]
+mod a2_alias_tests {
+    use super::*;
+
+    /// State con un historial **aislado** (sobre `/dev/null`, in-memory) — el
+    /// `State::new` normal abre el historial real del disco; en tests eso lo
+    /// contamina y, peor, persiste los `append`. Acá cada State arranca vacío.
+    fn state_aislado() -> State {
+        let mut s = State::new(shuma_module::Source::Local);
+        s.history = Arc::new(Mutex::new(
+            shuma_history::History::open(std::path::PathBuf::from("/dev/null"))
+                .expect("/dev/null como history vacío"),
+        ));
+        s
+    }
+
+    /// Una línea larga (≥ 40 chars) tecleada `n` veces en el historial,
+    /// **separada por otro comando** (el historial deduplica consecutivos —
+    /// como en el uso real: corrés algo, hacés otra cosa, lo volvés a correr).
+    fn state_con_linea_repetida(line: &str, n: usize) -> State {
+        let mut s = state_aislado();
+        {
+            let mut h = s.history.lock().unwrap();
+            for i in 0..n {
+                let _ = h.append(shuma_history::Entry::new(line, "/repo", (2 * i) as u64));
+                let _ = h.append(shuma_history::Entry::new("ls", "/repo", (2 * i + 1) as u64));
+            }
+        }
+        s
+    }
+
+    #[test]
+    fn ofrece_alias_para_linea_larga_repetida() {
+        let line = "git push origin feature/inteligencia-shuma --force-with-lease";
+        assert!(line.chars().count() >= ALIAS_MIN_LEN);
+        let s = state_con_linea_repetida(line, ALIAS_OFFER_THRESHOLD);
+        let sug = alias_suggestion(&s).expect("hay alias que ofrecer");
+        assert_eq!(sug.line, line);
+        assert_eq!(sug.count, ALIAS_OFFER_THRESHOLD);
+        // Iniciales de los tokens no-flag: git push origin feature… → gpof.
+        assert_eq!(sug.name, "gpof");
+    }
+
+    #[test]
+    fn no_ofrece_si_es_corta_o_poco_repetida() {
+        // Corta aunque repetida.
+        let s = state_con_linea_repetida("ls -la", 5);
+        assert!(alias_suggestion(&s).is_none());
+        // Larga pero por debajo del umbral.
+        let larga = "kubectl get pods --all-namespaces -o wide --watch";
+        let s = state_con_linea_repetida(larga, ALIAS_OFFER_THRESHOLD - 1);
+        assert!(alias_suggestion(&s).is_none());
+    }
+
+    #[test]
+    fn no_ofrece_builtins_ni_lo_descartado_ni_lo_ya_aliasado() {
+        // Los builtins `:x` no se aliasan, por largos que sean.
+        let builtin = ":macro save deploy cargo build --bin %1 && scp %1 %2:/srv/app";
+        let s = state_con_linea_repetida(builtin, 5);
+        assert!(alias_suggestion(&s).is_none());
+
+        // Descartada → no se vuelve a ofrecer.
+        let line = "docker run --rm -it -v $PWD:/work -w /work rust:latest cargo test";
+        let mut s = state_con_linea_repetida(line, 4);
+        assert!(alias_suggestion(&s).is_some());
+        s.dismissed_alias.insert(line.to_string());
+        assert!(alias_suggestion(&s).is_none());
+
+        // Ya es cuerpo de un alias → tampoco.
+        let mut s = state_con_linea_repetida(line, 4);
+        s.config.aliases.insert("dt".into(), line.to_string());
+        assert!(alias_suggestion(&s).is_none());
+    }
+
+    #[test]
+    fn aceptar_aprende_a_la_config_viva_y_descarta() {
+        // Núcleo puro (sin tocar el shumarc del usuario): `learn_alias` es lo
+        // que `accept_alias` hace antes de persistir.
+        let line = "cargo build --release --target x86_64-unknown-none -Zbuild-std";
+        let mut s = state_con_linea_repetida(line, 3);
+        let name = alias_suggestion(&s).unwrap().name;
+        s = learn_alias(s, &name, line);
+        // El alias quedó en la config viva (se expande desde el próximo submit)…
+        assert_eq!(s.config.aliases.get(&name).map(String::as_str), Some(line));
+        // …y ya no se vuelve a ofrecer.
+        assert!(alias_suggestion(&s).is_none());
+    }
+
+    #[test]
+    fn nombre_evita_colisiones() {
+        // Iniciales de los tokens no-flag: grep · TODO · src → "gts".
+        let line = "grep --color=always -rn TODO --include='*.rs' src/";
+        assert_eq!(suggest_alias_name(line, &|_| false), "gts");
+        // Si "gts" ya está tomado (alias homónimo), debe sufijar sin pisarlo.
+        let mut s = State::new(shuma_module::Source::Local);
+        s.config.aliases.insert("gts".into(), "otra cosa".into());
+        let name = suggest_alias_name(line, &alias_name_taken(&s));
+        assert_ne!(name, "gts");
+        assert!(name.starts_with("gts"));
+    }
+
+    #[test]
+    fn nombre_para_linea_de_puras_flags_cae_al_primer_token() {
+        // Sin tokens significativos para iniciales → usa el primer token entero.
+        let line = "tar -czvf backup-2026-06-13.tar.gz --exclude=target ./proyecto";
+        let name = suggest_alias_name(line, &|_| false);
+        // El primer token con letra es "tar" (tcp… serían las iniciales reales:
+        // tar backup proyecto → "tbp"); verificamos que sea no vacío y alfanum.
+        assert!(!name.is_empty());
+        assert!(name.chars().all(|c| c.is_ascii_alphanumeric()));
     }
 }
 

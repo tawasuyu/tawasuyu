@@ -396,6 +396,12 @@ pub fn update(state: State, msg: Msg) -> State {
         Msg::DismissChoreography(signature) => {
             s.dismissed_choreo.insert(signature);
         }
+        Msg::AcceptAlias(line) => {
+            s = accept_alias(s, &line);
+        }
+        Msg::DismissAlias(line) => {
+            s.dismissed_alias.insert(line);
+        }
         Msg::AcceptDidYouMean(block) => {
             if let Some(corregida) = s.did_you_mean.remove(&block) {
                 s.input.set_text(&corregida);

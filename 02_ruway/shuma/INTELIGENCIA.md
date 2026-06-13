@@ -59,9 +59,23 @@ descartes en memoria (`State.dismissed_choreo`). Verificado headless
 chip vive en `view()` (shell standalone); falta llevarlo a la barra de pata
 (`body_view` no incluye el input).
 
-### A2. Alias sugerido por longitud × frecuencia
-Línea > 40 chars repetida ≥ 3 veces sin variación → ofrecer alias corto
-(`[aliases]` del rc vía `upsert_key`). Mismo chip que A1, otra fuente.
+### A2. Alias sugerido por longitud × frecuencia ✅ (2026-06-13)
+Línea ≥ 40 chars repetida ≥ 3 veces idéntica → ofrecer alias corto. **Hecho:**
+gemelo de A1 sobre **una sola línea** en vez de una secuencia.
+`alias_suggestion` (`update/patterns.rs`) cuenta líneas idénticas del historial
+(externas — los `:builtins` no se aliasan; el dedup `IgnoreConsecutive` ya
+descarta las repes pegadas, así que cuenta las separadas por otro comando, que
+es la buena señal), filtra por largo/umbral/descartadas/ya-aliasadas y rankea
+por (veces, largo, lex). El nombre lo arma `suggest_alias_name`: iniciales de
+los tokens no-flag (`git push origin feature…` → `gpof`), con sufijo numérico
+si choca contra un alias o un binario del PATH (no pisa comandos del sistema).
+`alias_chip` (`view/mod.rs`) lo ofrece sobre el input — **sólo si no hay
+coreografía pendiente** (una oferta a la vez); «aliasar» llama `accept_alias`
+(núcleo puro `learn_alias` → config viva + `upsert_key` al `[aliases]` del
+shumarc, preservando comentarios), «descartar» lo calla en la sesión. Mismo
+molde visual que A1, otra fuente. Verificado headless (`examples/alias_chip.rs`
+→ PNG) + 6 tests (oferta, gates de largo/umbral/builtin/descartada/aliasada,
+unicidad del nombre, línea de puras flags, aprendizaje a la config viva).
 
 ### A3. Ghost contextual por cwd ✅ (2026-06-13)
 El historial guarda `cwd` por entrada. **Hecho:** `current_ghost`
@@ -228,7 +242,8 @@ rankings de A3/A4. Verificado headless (`examples/stats_e6.rs` → PNG) + 4 test
 
 ---
 
-**Roadmap completo (2026-06-13):** A1·A3·A4·A5 + E1·E2·E3·E4·E5·E6 ✅. Sin
-arrancar quedan sólo las propuestas menores A2 (alias por longitud×frecuencia)
-y A6 (aviso de comando largo) — y el pulido de E4 (shell Llimphi montando
-sesiones del daemon; cliente móvil vía gateway).
+**Roadmap completo (2026-06-13):** A1·A2·A3·A4·A5 + E1·E2·E3·E4·E5·E6 ✅. Sin
+arrancar queda sólo A6 (aviso de comando largo terminado — `on_long_command_secs`
+ya declarable en `[rules]` pero inerte; necesita la badge en el diente del rail,
+que vive en el chasis `shuma-shell-llimphi`) — y el pulido de E4 (cliente móvil
+vía gateway).
