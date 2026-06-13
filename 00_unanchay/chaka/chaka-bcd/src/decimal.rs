@@ -204,6 +204,25 @@ impl Decimal {
         Ok(Decimal { mantissa: m, scale: result_scale })
     }
 
+    /// Exponenciación COBOL `**`. El exponente se **trunca a entero** y sólo
+    /// se admite el rango `0..=256` (fuera de él devuelve `1`); la potencia se
+    /// calcula por multiplicación repetida desde `1`, así el resultado es
+    /// exacto para exponentes enteros. Es la misma semántica que valida el
+    /// shadow-interpreter de chaka, para que el Rust transpilado y el
+    /// intérprete coincidan. (Exponentes negativos o fraccionarios no están
+    /// soportados todavía — caen al `1` del guard.)
+    pub fn pow(&self, exp: &Decimal) -> Decimal {
+        let e = exp.rescale(0, Rounding::Truncate).mantissa;
+        if !(0..=256).contains(&e) {
+            return Decimal::from_integer(1);
+        }
+        let mut acc = Decimal::from_integer(1);
+        for _ in 0..e {
+            acc = acc.mul(self);
+        }
+        acc
+    }
+
     /// `true` si el valor entra en el campo `pic` sin perder dígitos
     /// enteros (la parte fraccionaria se ajusta, no desborda).
     pub fn fits(&self, pic: &Picture) -> bool {
@@ -295,6 +314,29 @@ mod tests {
         assert!(Decimal::parse("").is_err());
         assert!(Decimal::parse("1.2.3").is_err());
         assert!(Decimal::parse("-").is_err());
+    }
+
+    #[test]
+    fn pow_integer_exponent_is_exact() {
+        // 2 ** 10 = 1024
+        assert_eq!(d("2").pow(&d("10")), d("1024"));
+        // 3 ** 4 = 81
+        assert_eq!(d("3").pow(&d("4")), d("81"));
+        // x ** 0 = 1 (cualquier base)
+        assert_eq!(d("5").pow(&d("0")), d("1"));
+        assert_eq!(d("123.45").pow(&d("0")), d("1"));
+        // 1 ** 1 = 1 (la base intacta)
+        assert_eq!(d("7").pow(&d("1")), d("7"));
+        // Base fraccionaria: 1.5 ** 2 = 2.25 (exacto)
+        assert_eq!(d("1.5").pow(&d("2")), d("2.25"));
+    }
+
+    #[test]
+    fn pow_truncates_exponent_and_guards_range() {
+        // El exponente se trunca a entero: 2 ** 3.9 = 2 ** 3 = 8.
+        assert_eq!(d("2").pow(&d("3.9")), d("8"));
+        // Fuera de 0..=256 (p.ej. negativo) → guard a 1 (no soportado aún).
+        assert_eq!(d("2").pow(&d("-1")), d("1"));
     }
 
     #[test]

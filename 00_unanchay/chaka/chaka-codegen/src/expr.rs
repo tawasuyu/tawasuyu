@@ -128,7 +128,7 @@ pub(crate) fn emit_expr(sym: &Symbols, e: &Expr) -> String {
                 BinOp::Div => format!(
                     "({l}).div(&({r}), 9, Rounding::Truncate).unwrap_or_else(|_| Decimal::zero())"
                 ),
-                BinOp::Pow => "Decimal::zero() /* chaka: ** no soportado */".to_string(),
+                BinOp::Pow => format!("({l}).pow(&({r}))"),
             }
         }
     }

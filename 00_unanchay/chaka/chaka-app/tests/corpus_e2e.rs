@@ -146,3 +146,4 @@ e2e!(corpus_24_copy, "24-copy");
 e2e!(corpus_25_inspect_set, "25-inspect-set");
 e2e!(corpus_26_indexed, "26-indexed");
 e2e!(corpus_27_relative, "27-relative");
+e2e!(corpus_28_potencia, "28-potencia");

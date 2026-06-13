@@ -150,7 +150,7 @@ de lo automatizable.
 | **llimphi** (85) | *(deadlock ya resuelto)* — repasar que no haya regresión | 🤝 |
 | **nada** (82) | Multi-ventana / split de editores | 🧑 (UX) + 🤖 (plumbing) |
 | **cosmos** (82) | **Edición rica de cartas in-situ** (hoy vía JSON manual) | 🧑 — es UX, tu terreno |
-| **chaka** (80) | REPLACE + ficheros indexed/relative | 🤖 |
+| **chaka** (80) | ~~REPLACE + ficheros indexed/relative~~ ✅ (verif. 2026-06-13, ya estaban: `chaka-lexer` expande COPY+REPLACE/REPLACING/OFF, `chaka-runtime::file` tiene Organization::{Indexed,Relative}). Fix nuevo: exponenciación COBOL `**` en codegen (emitía `Decimal::zero()`); ahora `Decimal::pow` compartido por codegen y shadow-interp + corpus `28-potencia`. | 🤖 |
 | **tullpu** (80) | Nodegraph visual + tiling (espera `llimphi-surface`) | 🤝 |
 
 ### 2B. Hueco de core claro (60–78%) — donde está el trabajo real

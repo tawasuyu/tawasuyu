@@ -136,6 +136,7 @@ mod tests {
     corpus_test!(corpus_25_inspect_set, "25-inspect-set");
     corpus_test!(corpus_26_indexed, "26-indexed");
     corpus_test!(corpus_27_relative, "27-relative");
+    corpus_test!(corpus_28_potencia, "28-potencia");
 
     #[test]
     fn corpus_24_copy() {

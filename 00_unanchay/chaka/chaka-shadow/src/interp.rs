@@ -1066,7 +1066,7 @@ impl<'a> Machine<'a> {
                     BinOp::Sub => l.sub(&r),
                     BinOp::Mul => l.mul(&r),
                     BinOp::Div => divide(l, r, DIV_SCALE),
-                    BinOp::Pow => pow(&l, &r),
+                    BinOp::Pow => l.pow(&r),
                 }
             }
         }
@@ -1175,18 +1175,6 @@ fn divide(num: Decimal, den: Decimal, scale: u8) -> Decimal {
 }
 
 /// Potencia con exponente entero no negativo; en otro caso da 1.
-fn pow(base: &Decimal, exp: &Decimal) -> Decimal {
-    let e = exp.rescale(0, Rounding::Truncate).mantissa();
-    if !(0..=256).contains(&e) {
-        return Decimal::from_integer(1);
-    }
-    let mut acc = Decimal::from_integer(1);
-    for _ in 0..e {
-        acc = acc.mul(base);
-    }
-    acc
-}
-
 /// El texto que representa una constante figurativa.
 fn figurative_text(f: Figurative) -> &'static str {
     match f {
