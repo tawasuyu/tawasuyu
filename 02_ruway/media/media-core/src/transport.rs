@@ -103,6 +103,11 @@ impl<S: FrameSource> FrameSource for PausableVideo<S> {
     fn pts(&self) -> Option<Duration> {
         self.inner.pts()
     }
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        // El frame stepping ignora la pausa a propósito (es para avanzar
+        // cuadro a cuadro **estando** pausado).
+        self.inner.step_frame(buf)
+    }
 }
 
 // ============================================================
@@ -344,6 +349,14 @@ impl FrameSource for VideoSwitcher {
         let n = self.sources.len();
         let i = self.switch.get() % n;
         self.sources[i].pts()
+    }
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        if self.sources.is_empty() {
+            return None;
+        }
+        let n = self.sources.len();
+        let i = self.switch.get() % n;
+        self.sources[i].step_frame(buf)
     }
 }
 

@@ -451,16 +451,26 @@ impl App for MediaApp {
             let dt = wall_dt;
             let audio_pos = current_audio_position();
 
+            // Frame stepping (M4): un pedido de "cuadro siguiente" tira del
+            // próximo frame exacto vía step_frame (sin acumulador, sin reloj),
+            // y se presenta aunque estemos en pausa.
+            let step_fwd = crate::estado::FRAME_STEP_FWD.swap(false, Ordering::Relaxed);
             let force = SEEK_FORCE.load(Ordering::Relaxed);
-            let do_tick = !crate::estado::pause().is_paused() || force;
+            let do_tick = !crate::estado::pause().is_paused() || force || step_fwd;
 
             let mut buf = pipe.buf.lock();
             let mut src = pipe.source.lock();
             if do_tick {
-                if let Some((w, h)) = src.tick(dt, &mut buf) {
+                let produced = if step_fwd {
+                    src.step_frame(&mut buf)
+                } else {
+                    src.tick(dt, &mut buf)
+                };
+                if let Some((w, h)) = produced {
                     let frame_pts = src.pts();
                     drop(src);
-                    let present = force
+                    let present = step_fwd
+                        || force
                         || match (audio_pos, frame_pts) {
                             (Some(audio), Some(pts)) => {
                                 !matches!(pipe.sync.lock().plan(audio, pts), FramePlan::Drop)
@@ -470,7 +480,7 @@ impl App for MediaApp {
                     if present {
                         pipe.surface.upload(&buf, w, h);
                         *pipe.last_dim.lock() = (w, h);
-                        if force {
+                        if force || step_fwd {
                             SEEK_FORCE.store(false, Ordering::Relaxed);
                         }
                     }

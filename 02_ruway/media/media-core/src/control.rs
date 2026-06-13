@@ -57,6 +57,12 @@ pub enum MediaCommand {
     SpeedStep { dir: i32 },
     /// Fija la velocidad absoluta (p.ej. 1.0 para resetear).
     SetSpeed { mult: f32 },
+    /// Avanza/retrocede **exactamente un cuadro** y pausa (frame stepping,
+    /// el `.`/`,` de mpv). `dir > 0` adelanta tirando del próximo frame
+    /// decodificado (preciso); `dir < 0` retrocede con un seek de un
+    /// intervalo de cuadro (aproximado al keyframe en la ruta ffmpeg). M4
+    /// de PARIDAD.md.
+    FrameStep { dir: i32 },
     /// Cicla el modo de repetición (Off/One/All).
     CycleRepeat,
     /// Alterna reproducción aleatoria.
@@ -190,6 +196,8 @@ impl MediaCommand {
             SpeedStep { dir } if *dir < 0 => "Velocidad más lenta".to_string(),
             SpeedStep { .. } => "Velocidad más rápida".to_string(),
             SetSpeed { mult } => format!("Velocidad {mult:.2}×"),
+            FrameStep { dir } if *dir < 0 => "Cuadro anterior".to_string(),
+            FrameStep { .. } => "Cuadro siguiente".to_string(),
             CycleRepeat => "Ciclar repetición".to_string(),
             ToggleShuffle => "Alternar aleatorio".to_string(),
             Snapshot => "Captura de pantalla".to_string(),
@@ -440,6 +448,8 @@ pub fn default_keymap(volume_step: f32, seek_step_secs: i64) -> Keymap {
             b(KeyChord::key("]"), SpeedStep { dir: 1 }),
             b(KeyChord::key("["), SpeedStep { dir: -1 }),
             b(KeyChord::key("="), SetSpeed { mult: 1.0 }),
+            b(KeyChord::key("."), FrameStep { dir: 1 }),
+            b(KeyChord::key(","), FrameStep { dir: -1 }),
             b(KeyChord::key("c"), ToggleRecord),
             b(KeyChord::shift("s"), Snapshot),
             b(KeyChord::key("e"), EqToggle),

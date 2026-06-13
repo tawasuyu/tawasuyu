@@ -348,6 +348,16 @@ impl FrameSource for Av1VideoSource {
         self.accum -= interval;
         self.decode_emit(buf)
     }
+
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        if self.exhausted {
+            return None;
+        }
+        // Frame stepping: decodificá el próximo cuadro sin esperar la
+        // cadencia y dejá el acumulador limpio (sin ráfaga al reanudar).
+        self.accum = Duration::ZERO;
+        self.decode_emit(buf)
+    }
 }
 
 impl Seekable for Av1VideoSource {

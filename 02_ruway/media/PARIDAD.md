@@ -45,7 +45,7 @@ FreeTube es navegación (`shared/foreign-youtube`), no el reproductor (ver
 `FREETUBE.md`). `cargo test -p media-core` = 97 verde, `--workspace` verde.
 
 **Estado:** los ítems aislados y testeables en CI del plan ya están casi todos
-cerrados (A1,A4,A5 · M1 · R1,R2 · S1,S4,S5 · V3,V4 · todo CONTROLES.md). Lo
+cerrados (A1,A4,A5 · M1,M4 · R1,R2 · S1,S4,S5 · V3,V4 · todo CONTROLES.md). Lo
 que **queda necesita correr la app/GPU o hardware** para verificarse, así que
 conviene retomarlo con pantalla:
 
@@ -154,7 +154,16 @@ Ordenados por impacto. Cada fase es un bloque committeable.
   ffmpeg `-hwaccel` en el puente primero.
 - **M3 — Seek frame-accurate / por keyframe** en la ruta ffmpeg (hoy
   respawnea el proceso por seek).
-- **M4 — Frame stepping** (cuadro a cuadro, `.`/`,` de mpv).
+- **M4 — Frame stepping** (cuadro a cuadro, `.`/`,` de mpv). ✅ *Cerrado
+  (2026-06-13).* Primitivo `FrameSource::step_frame` que tira del próximo
+  cuadro exacto ignorando el acumulador de cadencia y lo deja limpio (sin
+  ráfaga al reanudar) — override en `FfmpegVideoSource`/`Av1VideoSource`/
+  `GifSource`/`TestCard`, reenviado por los wrappers (`ColorVideo`,
+  `TransformVideo`, `PausableVideo`, `VideoSwitcher`, `Box`). En `media-app`:
+  `MediaCommand::FrameStep{dir}` (`.`/`,`) pausa y, hacia adelante, presenta
+  el siguiente cuadro vía `step_frame`; hacia atrás reposiciona un intervalo
+  de cuadro (seek de la sesión ffmpeg compartida — en nativo AV1/GIF mueve
+  sólo el audio, aproximación de MVP). +3 tests en `media-core`.
 - **M5 — Pitch-correct speed** en ruta ffmpeg (`atempo`). ✅ *Núcleo cerrado
   (2026-06-02).* `foreign-av::atempo_chain(speed)` arma la cadena de filtros
   `atempo` (encadena factores en `[0.5,2]` cuando la velocidad se sale del

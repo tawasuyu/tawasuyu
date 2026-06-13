@@ -12,8 +12,8 @@ use foreign_av::FfmpegVideoSource;
 use parking_lot::Mutex;
 
 use crate::estado::{
-    color, config_slot, ffmpeg_session_slot, pipeline_slot, transform, video_path_slot,
-    TESTCARD_W, TESTCARD_H, TESTCARD_FPS,
+    color, config_slot, ffmpeg_session_slot, pipeline_slot, set_video_fps, transform,
+    video_path_slot, TESTCARD_W, TESTCARD_H, TESTCARD_FPS,
 };
 use crate::tipos::{Msg, VideoKind};
 
@@ -33,7 +33,10 @@ pub(crate) fn new_testcard() -> Box<dyn FrameSource + Send> {
 pub(crate) fn build_video_source() -> Box<dyn FrameSource + Send> {
     let cfg = config_slot().get().expect("config set");
     match cfg.kind {
-        VideoKind::Testcard => new_testcard(),
+        VideoKind::Testcard => {
+            set_video_fps(TESTCARD_FPS);
+            new_testcard()
+        }
         VideoKind::Gif => {
             let path = video_path_slot().get().expect("video path set");
             match GifSource::from_path(path) {
@@ -67,7 +70,10 @@ pub(crate) fn build_video_source() -> Box<dyn FrameSource + Send> {
                     FfmpegVideoSource::from_session(s.clone())
                         .map_err(|e| e.to_string())
                 }) {
-                Ok(s) => Box::new(s),
+                Ok(s) => {
+                    set_video_fps(s.fps());
+                    Box::new(s)
+                }
                 Err(e) => {
                     eprintln!("media-app: ffmpeg video: {e} — caigo a testcard");
                     new_testcard()
@@ -77,7 +83,10 @@ pub(crate) fn build_video_source() -> Box<dyn FrameSource + Send> {
         VideoKind::Av1 => {
             let path = video_path_slot().get().expect("video path set");
             match media_source_av1::Av1VideoSource::open(path) {
-                Ok(s) => Box::new(s),
+                Ok(s) => {
+                    set_video_fps(s.fps());
+                    Box::new(s)
+                }
                 Err(e) => {
                     eprintln!("media-app: AV1 nativo {path:?}: {e} — caigo a testcard");
                     new_testcard()

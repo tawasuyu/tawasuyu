@@ -798,28 +798,17 @@ impl FfmpegVideoSource {
             }
         }
     }
-}
 
-impl FrameSource for FfmpegVideoSource {
-    fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
-        self.refresh_if_needed();
-        if self.exhausted {
-            return None;
-        }
-        self.accum_since_frame += dt;
-        let frame_interval = Duration::from_secs_f32(1.0 / self.fps.max(1.0));
-        if self.accum_since_frame < frame_interval {
-            return None;
-        }
-        self.accum_since_frame -= frame_interval;
-
+    /// Lee un frame crudo del pipe a `buf` y avanza el contador. Compartido
+    /// por `tick` (tras pasar el acumulador de cadencia) y `step_frame`
+    /// (frame stepping, sin acumulador). Devuelve `None` en EOF (marca
+    /// `exhausted`).
+    fn read_one_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
         let frame_bytes = (self.width as usize) * (self.height as usize) * 4;
         if self.raw_buf.len() != frame_bytes {
             self.raw_buf.resize(frame_bytes, 0);
         }
-        let Some(pipe) = self.pipe.as_mut() else {
-            return None;
-        };
+        let pipe = self.pipe.as_mut()?;
         match pipe.read_exact(&mut self.raw_buf) {
             Ok(()) => {
                 if buf.len() != frame_bytes {
@@ -834,6 +823,22 @@ impl FrameSource for FfmpegVideoSource {
                 None
             }
         }
+    }
+}
+
+impl FrameSource for FfmpegVideoSource {
+    fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        self.refresh_if_needed();
+        if self.exhausted {
+            return None;
+        }
+        self.accum_since_frame += dt;
+        let frame_interval = Duration::from_secs_f32(1.0 / self.fps.max(1.0));
+        if self.accum_since_frame < frame_interval {
+            return None;
+        }
+        self.accum_since_frame -= frame_interval;
+        self.read_one_frame(buf)
     }
 
     /// PTS del último frame emitido por `tick`, asumiendo CFR (constant
@@ -850,6 +855,17 @@ impl FrameSource for FfmpegVideoSource {
     /// avanzado nada.
     fn pts(&self) -> Option<Duration> {
         pts_after_emit(self.start_offset, self.frames_emitted, self.fps)
+    }
+
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        self.refresh_if_needed();
+        if self.exhausted {
+            return None;
+        }
+        // Frame stepping: tirá del siguiente cuadro decodificado sin tocar
+        // el acumulador de cadencia (queda en 0 → sin ráfaga al reanudar).
+        self.accum_since_frame = Duration::ZERO;
+        self.read_one_frame(buf)
     }
 }
 

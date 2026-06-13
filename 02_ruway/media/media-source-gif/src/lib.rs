@@ -185,4 +185,21 @@ impl FrameSource for GifSource {
         buf.copy_from_slice(rgba);
         Some((self.width, self.height))
     }
+
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        // Frame stepping: avanzá exactamente un cuadro del GIF, sin
+        // depender del acumulador de tiempo (lo dejamos en 0).
+        if !self.emitted_first {
+            self.emitted_first = true;
+        } else {
+            self.idx = (self.idx + 1) % self.frames.len();
+        }
+        self.accum = Duration::ZERO;
+        let rgba = &self.frames[self.idx].0;
+        if buf.len() != rgba.len() {
+            buf.resize(rgba.len(), 0);
+        }
+        buf.copy_from_slice(rgba);
+        Some((self.width, self.height))
+    }
 }

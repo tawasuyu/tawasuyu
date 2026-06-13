@@ -363,6 +363,15 @@ impl<S: FrameSource> FrameSource for ColorVideo<S> {
     fn pts(&self) -> Option<std::time::Duration> {
         self.inner.pts()
     }
+
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        let dims = self.inner.step_frame(buf)?;
+        self.sync();
+        if self.enabled {
+            self.adjust.process(buf);
+        }
+        Some(dims)
+    }
 }
 
 #[cfg(test)]

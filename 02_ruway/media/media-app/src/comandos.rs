@@ -52,6 +52,8 @@ pub(crate) fn build_command_catalog(s: &ControlSettings) -> (Vec<PaletteCommand>
         (SpeedStep { dir: 1 }, "Velocidad"),
         (SpeedStep { dir: -1 }, "Velocidad"),
         (SetSpeed { mult: 1.0 }, "Velocidad"),
+        (FrameStep { dir: 1 }, "Transporte"),
+        (FrameStep { dir: -1 }, "Transporte"),
         (EqToggle, "Ecualizador"),
         (EqReset, "Ecualizador"),
         (AvSyncBy { ms: -50 }, "Sync A/V"),
@@ -243,6 +245,22 @@ pub(crate) fn apply_command(cmd: MediaCommand) {
         SetSpeed { mult } => {
             set_speed_abs(mult);
             osd_flash(osd::format_speed(player_speed() as f32));
+        }
+        FrameStep { dir } => {
+            // El stepping siempre deja el reproductor en pausa.
+            pause().pause();
+            if dir < 0 {
+                // Hacia atrás: reposicioná un intervalo de cuadro antes. En la
+                // ruta ffmpeg el seek respawnea la sesión compartida y mueve
+                // también el video; en fuentes nativas (AV1/GIF) sólo mueve el
+                // audio (aproximación de MVP). El destino se pinta vía el
+                // step_frame que dispara FRAME_STEP_FWD tras el respawn.
+                let frame_dt = Duration::from_secs_f64(1.0 / crate::estado::video_fps() as f64);
+                let pos = playback_snapshot().position;
+                seek_audio_to_pos(pos.saturating_sub(frame_dt));
+            }
+            crate::estado::FRAME_STEP_FWD.store(true, Ordering::Relaxed);
+            osd_flash(if dir < 0 { "◂ Cuadro" } else { "Cuadro ▸" });
         }
         CycleRepeat => {
             if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {

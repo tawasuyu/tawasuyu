@@ -22,6 +22,21 @@ use std::time::Duration;
 pub trait FrameSource {
     fn tick(&mut self, dt: Duration, buf: &mut Vec<u8>) -> Option<(u32, u32)>;
 
+    /// Tira del **próximo cuadro exacto** ignorando el acumulador de
+    /// cadencia, y deja el acumulador limpio para no descalibrar la
+    /// reproducción posterior. Es el primitivo del frame stepping (`.`
+    /// de mpv, [`crate::control::MediaCommand::FrameStep`]): en pausa
+    /// pedimos un cuadro sin depender del reloj de pared.
+    ///
+    /// El default lo aproxima con un `tick` de un `dt` enorme — basta
+    /// para fuentes sin cadencia interna (una imagen fija). Las fuentes
+    /// con acumulador (video real, GIF) lo **sobreescriben** para tirar
+    /// de un solo cuadro y resetear su acumulador, evitando que tras el
+    /// step la reproducción dispare frames a destajo.
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        self.tick(Duration::from_secs(86_400), buf)
+    }
+
     /// PTS (presentation timestamp) del último frame que `tick` dejó en
     /// `buf`, si la fuente lo conoce: el momento, desde el inicio del
     /// stream, en que ese frame debe mostrarse. Lo consume la política de
@@ -43,6 +58,9 @@ impl<T: FrameSource + ?Sized> FrameSource for Box<T> {
     }
     fn pts(&self) -> Option<Duration> {
         (**self).pts()
+    }
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        (**self).step_frame(buf)
     }
 }
 
@@ -193,6 +211,13 @@ impl FrameSource for TestCard {
     fn pts(&self) -> Option<Duration> {
         self.last_pts
     }
+
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        // Fuerza la emisión del próximo cuadro: saturar el acumulador
+        // hace que `tick` lo libere y lo deje en 0 (sin drift posterior).
+        self.accum_since_frame = f32::INFINITY;
+        self.tick(Duration::ZERO, buf)
+    }
 }
 
 #[cfg(test)]
@@ -242,6 +267,31 @@ mod tests_frame_pts {
         let mut b: Box<dyn FrameSource + Send> = Box::new(TestCard::new(16, 16, 10.0));
         let mut buf = Vec::new();
         b.tick(Duration::from_millis(100), &mut buf);
+        assert_eq!(b.pts(), Some(Duration::ZERO));
+    }
+
+    #[test]
+    fn step_frame_emite_un_cuadro_sin_drift() {
+        // M4: step_frame tira de un cuadro exacto sin depender del reloj…
+        let mut tc = TestCard::new(16, 16, 10.0);
+        let mut buf = Vec::new();
+        assert!(tc.step_frame(&mut buf).is_some());
+        assert_eq!(tc.pts(), Some(Duration::ZERO));
+        // …y deja el acumulador limpio: un tick corto (dt < intervalo) NO
+        // dispara un cuadro. (Un step ingenuo con dt enorme dejaría el
+        // acumulador saturado y este tick emitiría → ráfaga.)
+        assert!(tc.tick(Duration::from_millis(10), &mut buf).is_none());
+        // Otro step avanza exactamente un cuadro más (PTS = 1/10 s).
+        assert!(tc.step_frame(&mut buf).is_some());
+        let p = tc.pts().unwrap();
+        assert!((p.as_secs_f32() - 0.1).abs() < 1e-4, "pts={p:?}");
+    }
+
+    #[test]
+    fn box_dyn_reenvia_step_frame() {
+        let mut b: Box<dyn FrameSource + Send> = Box::new(TestCard::new(16, 16, 10.0));
+        let mut buf = Vec::new();
+        assert!(b.step_frame(&mut buf).is_some());
         assert_eq!(b.pts(), Some(Duration::ZERO));
     }
 }

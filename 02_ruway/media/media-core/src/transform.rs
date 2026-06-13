@@ -290,6 +290,17 @@ impl<S: FrameSource> FrameSource for TransformVideo<S> {
     fn pts(&self) -> Option<std::time::Duration> {
         self.inner.pts()
     }
+
+    fn step_frame(&mut self, buf: &mut Vec<u8>) -> Option<(u32, u32)> {
+        let (w, h) = self.inner.step_frame(buf)?;
+        self.sync();
+        if self.transform.is_identity() {
+            return Some((w, h));
+        }
+        let dims = transform_rgba(buf, w, h, self.transform, &mut self.scratch);
+        std::mem::swap(buf, &mut self.scratch);
+        Some(dims)
+    }
 }
 
 #[cfg(test)]

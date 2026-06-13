@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -37,6 +37,28 @@ pub(crate) const PROBE_CAPACITY: usize = 8192;
 /// al consultar el cue activo (`subtitle_strip`). Tope ±60 s.
 pub(crate) static SEEK_FORCE: AtomicBool = AtomicBool::new(false);
 pub(crate) static SUB_DELAY_MS: AtomicI64 = AtomicI64::new(0);
+/// Pedido de "avanzar un cuadro" pendiente (frame stepping `.`, M4): la
+/// vista lo consume tirando del próximo frame vía `FrameSource::step_frame`.
+pub(crate) static FRAME_STEP_FWD: AtomicBool = AtomicBool::new(false);
+/// FPS del video actual (bits de un `f32`), para calcular el salto de un
+/// cuadro en el frame stepping hacia atrás. Lo fija el armado del pipeline;
+/// 0.0 (default) ⇒ se asume 30 fps.
+pub(crate) static VIDEO_FPS: AtomicU32 = AtomicU32::new(0);
+
+/// FPS del video actual, o `30.0` si todavía no se conoce.
+pub(crate) fn video_fps() -> f32 {
+    let f = f32::from_bits(VIDEO_FPS.load(Ordering::Relaxed));
+    if f.is_finite() && f >= 1.0 {
+        f
+    } else {
+        30.0
+    }
+}
+
+/// Registra el FPS del video que arma el pipeline.
+pub(crate) fn set_video_fps(fps: f32) {
+    VIDEO_FPS.store(fps.to_bits(), Ordering::Relaxed);
+}
 pub(crate) const MAX_SUB_DELAY_MS: i64 = media_core::SubtitleTrack::MAX_DELAY_MS;
 
 /// Settings de control (pasos + keymap) cargados al arrancar desde RON
