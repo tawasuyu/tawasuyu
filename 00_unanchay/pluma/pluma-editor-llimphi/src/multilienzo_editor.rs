@@ -311,10 +311,12 @@ where
         palette_lienzo.bg_app
     };
     // Ancho fijo → columna rígida que desborda (scroll del caller). Elástico
-    // → flex_grow reparte el viewport entre columnas.
+    // → `flex-basis: 0` + `flex-grow: 1`: las columnas se reparten el viewport
+    // en partes iguales. (Con `width: 100%` como basis, N columnas pedirían
+    // N×100% y solo la primera entraría — las demás se irían de pantalla.)
     let (ancho_wrapper, flex_wrapper) = match cfg.ancho_cuerpo {
         Some(w) => (length(w), 0.0),
-        None => (percent(1.0_f32), 1.0),
+        None => (length(0.0_f32), 1.0),
     };
     let wrapper = View::new(Style {
         flex_direction: FlexDirection::Column,
