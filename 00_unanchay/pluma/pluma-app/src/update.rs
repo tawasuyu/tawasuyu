@@ -5,9 +5,10 @@
 use std::collections::HashMap;
 
 use llimphi_motion::{animate, motion, Tween};
-use llimphi_ui::Handle;
+use llimphi_ui::{DragPhase, Handle};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
 use llimphi_widget_text_editor::PointerEvent;
+use llimphi_widget_text_input::TextInputState;
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
@@ -19,8 +20,9 @@ use pluma_transform_llm::{
 };
 use uuid::Uuid;
 
-use crate::model::{Model, Msg, BACKENDS, METRICS, VISIBLE_LINES};
+use crate::model::{Filtro, Model, Msg, NodoFiltro, BACKENDS, METRICS, VISIBLE_LINES};
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
+use crate::view::etiqueta_filtro;
 
 pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     match msg {
@@ -254,6 +256,59 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 model.presets.remove(i);
                 crate::util::guardar_presets(&model.presets);
             }
+        }
+
+        // --- Diente Grafo: grafo semántico de filtros ---
+        Msg::GrafoInputKey(ev) => {
+            model.grafo_input.apply_key(&ev);
+        }
+        Msg::FocusGrafo => {
+            model.grafo_input_focused = true;
+        }
+        Msg::DefocusGrafo => {
+            model.grafo_input_focused = false;
+        }
+        Msg::GrafoAdd(filtro) => {
+            // Pipeline vertical (cabe en el sidebar angosto): fuente arriba,
+            // filtros apilados hacia abajo, sumidero al final.
+            const PASO: f32 = 70.0;
+            let i = model.grafo.len();
+            let x = model.grafo_src.0;
+            let y = model.grafo_src.1 + (i as f32 + 1.0) * PASO;
+            model.grafo.push(NodoFiltro { filtro, x, y });
+            let n = model.grafo.len();
+            model.grafo_sink = (x, model.grafo_src.1 + (n as f32 + 1.0) * PASO);
+            // Limpiar el input tras agregar (sobre todo para Concepto).
+            model.grafo_input = TextInputState::new();
+            model.grafo_input_focused = false;
+        }
+        Msg::GrafoDel(id) => {
+            let idx = (id as usize).saturating_sub(1);
+            if id >= 1 && idx < model.grafo.len() {
+                model.grafo.remove(idx);
+            }
+        }
+        Msg::GrafoDrag(id, phase, dx, dy) => {
+            if matches!(phase, DragPhase::Move) {
+                let n = model.grafo.len() as u32;
+                if id == 0 {
+                    model.grafo_src.0 += dx;
+                    model.grafo_src.1 += dy;
+                } else if id == n + 1 {
+                    model.grafo_sink.0 += dx;
+                    model.grafo_sink.1 += dy;
+                } else if let Some(nf) = model.grafo.get_mut((id - 1) as usize) {
+                    nf.x += dx;
+                    nf.y += dy;
+                }
+            }
+        }
+        Msg::GrafoLimpiar => {
+            model.grafo.clear();
+            model.ultimo_status = "grafo vacío".into();
+        }
+        Msg::GenerarLinea => {
+            generar_linea(&mut model, handle);
         }
 
         // --- Menú principal + menú de edición contextual ---
@@ -1196,6 +1251,215 @@ fn lanzar(model: &mut Model, handle: &Handle<Msg>, trabajo: TrabajoLlm) {
                 transformacion,
             },
             Err(e) => Msg::LlmError(format!("{e:?}")),
+        }
+    });
+}
+
+// ---------------------------------------------------------------------
+// Diente Grafo: corre el pipeline de filtros y genera una línea de lienzo
+// ---------------------------------------------------------------------
+
+/// Índice por `Uuid` de un slice de átomos prestados — el formato que comen
+/// los ejecutores LLM.
+fn build_idx(atoms: &[NarrativeAtom]) -> HashMap<Uuid, &NarrativeAtom> {
+    atoms.iter().map(|a| (a.id, a)).collect()
+}
+
+/// Filtro semántico (MVP léxico): deriva un cuerpo que conserva sólo los
+/// átomos cuyo contenido contiene `term` (case-insensitive). Comparte los
+/// `Uuid` de los átomos retenidos — no crea átomos nuevos. Si nada matchea,
+/// conserva el orden completo (no devolvemos una línea vacía). La evolución
+/// natural es puntuar por embeddings (rimay-verbo) en vez de substring.
+fn filtrar_concepto(
+    cuerpo: &Cuerpo,
+    idx: &HashMap<Uuid, &NarrativeAtom>,
+    term: &str,
+    ahora: u64,
+) -> Cuerpo {
+    let term_lc = term.trim().to_lowercase();
+    let mut hija = Cuerpo::nuevo(
+        format!("{}~c", cuerpo.branch_id),
+        format!("{} · concepto", cuerpo.metadatos.nombre_legible),
+        Intencion::Anotacion,
+        ahora,
+    );
+    hija.metadatos.derivado_de = Some(cuerpo.id);
+    for id in &cuerpo.orden {
+        let keep = term_lc.is_empty()
+            || idx
+                .get(id)
+                .map(|a| a.content.to_lowercase().contains(&term_lc))
+                .unwrap_or(false);
+        if keep {
+            hija.agregar(*id, ahora);
+        }
+    }
+    if hija.orden.is_empty() {
+        for id in &cuerpo.orden {
+            hija.agregar(*id, ahora);
+        }
+    }
+    hija
+}
+
+/// Corre el grafo de filtros sobre el lienzo activo, encadenando cada etapa
+/// (la salida de una alimenta la entrada de la siguiente), y emite la línea
+/// resultante como un cuerpo derivado nuevo vía `Msg::LlmListo` (reusa el
+/// mismo camino de alta de columna que las transformaciones del diente Modelo).
+fn generar_linea(model: &mut Model, handle: &Handle<Msg>) {
+    if model.en_curso {
+        return;
+    }
+    if model.grafo.is_empty() {
+        model.ultimo_status = "agregá filtros al grafo".into();
+        return;
+    }
+    let Some(activo_id) = model.activo else {
+        model.ultimo_status = "sin doc activo".into();
+        return;
+    };
+    // Volcar ediciones sin guardar para que los filtros vean el texto vivo.
+    guardar_activo(model);
+    let madre = match model.cuerpos.iter().find(|c| c.id == activo_id) {
+        Some(c) => c.clone(),
+        None => {
+            model.ultimo_error = Some("doc activo desapareció".into());
+            return;
+        }
+    };
+    if madre.orden.is_empty() {
+        model.ultimo_status = "lienzo activo vacío".into();
+        return;
+    }
+
+    let filtros: Vec<Filtro> = model.grafo.iter().map(|nf| nf.filtro.clone()).collect();
+    let desc = filtros
+        .iter()
+        .map(etiqueta_filtro)
+        .collect::<Vec<_>>()
+        .join(" · ");
+    let atoms_owned: Vec<NarrativeAtom> = model.atoms.values().cloned().collect();
+    let chat = model.chat.clone();
+    let ahora = ahora_unix();
+
+    model.en_curso = true;
+    model.ultimo_error = None;
+    model.ultimo_status = format!("grafo » {desc}");
+
+    let madre_para_carta = madre.clone();
+    handle.spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => return Msg::LlmError(format!("runtime tokio: {e}")),
+        };
+        let mut atoms_owned = atoms_owned;
+        let mut acumulados: Vec<NarrativeAtom> = Vec::new();
+        let mut actual = madre.clone();
+
+        let resultado: Result<Cuerpo, String> = rt.block_on(async {
+            for filtro in &filtros {
+                match filtro {
+                    Filtro::Concepto(term) => {
+                        let idx = build_idx(&atoms_owned);
+                        actual = filtrar_concepto(&actual, &idx, term, ahora);
+                    }
+                    Filtro::Traducir(l) => {
+                        let prod = {
+                            let idx = build_idx(&atoms_owned);
+                            let ej = EjecutorTraducirLlm::from_arc(chat.clone(), l.clone());
+                            let t = Transformacion::nueva(
+                                actual.id,
+                                Uuid::new_v4(),
+                                TipoTransformacion::Traducir { lengua_destino: l.clone() },
+                                "grafo",
+                                ahora,
+                            );
+                            ej.aplicar_con_atoms(&t, &actual, &idx, ahora)
+                                .await
+                                .map_err(|e| format!("{e:?}"))?
+                        };
+                        atoms_owned.extend(prod.atoms_nuevos.iter().cloned());
+                        acumulados.extend(prod.atoms_nuevos);
+                        actual = prod.hija;
+                    }
+                    Filtro::Tono(etiq) => {
+                        let prod = {
+                            let idx = build_idx(&atoms_owned);
+                            let ej = EjecutorTonoLlm::from_arc(chat.clone(), etiq.clone());
+                            let t = Transformacion::nueva(
+                                actual.id,
+                                Uuid::new_v4(),
+                                TipoTransformacion::Tono { etiqueta: etiq.clone() },
+                                "grafo",
+                                ahora,
+                            );
+                            ej.aplicar_con_atoms(&t, &actual, &idx, ahora)
+                                .await
+                                .map_err(|e| format!("{e:?}"))?
+                        };
+                        atoms_owned.extend(prod.atoms_nuevos.iter().cloned());
+                        acumulados.extend(prod.atoms_nuevos);
+                        actual = prod.hija;
+                    }
+                    Filtro::Resumir(p) => {
+                        let prod = {
+                            let idx = build_idx(&atoms_owned);
+                            let ej = EjecutorResumirLlm::from_arc(chat.clone(), *p);
+                            let t = Transformacion::nueva(
+                                actual.id,
+                                Uuid::new_v4(),
+                                TipoTransformacion::Resumir { palabras_objetivo: *p },
+                                "grafo",
+                                ahora,
+                            );
+                            ej.aplicar_con_atoms(&t, &actual, &idx, ahora)
+                                .await
+                                .map_err(|e| format!("{e:?}"))?
+                        };
+                        atoms_owned.extend(prod.atoms_nuevos.iter().cloned());
+                        acumulados.extend(prod.atoms_nuevos);
+                        actual = prod.hija;
+                    }
+                }
+            }
+            Ok(actual.clone())
+        });
+
+        match resultado {
+            Ok(mut hija) => {
+                hija.metadatos.derivado_de = Some(madre_para_carta.id);
+                hija.metadatos.fresco_hasta = Some(ahora);
+                hija.metadatos.nombre_legible = format!("línea: {desc}");
+                hija.metadatos.intencion = Intencion::Custom { kind: "grafo".into() };
+                let carta = pluma_align::alinear_uno_a_uno(
+                    &madre_para_carta,
+                    &hija,
+                    pluma_align::OrigenAlineamiento::Derivado {
+                        transformacion: Uuid::new_v4(),
+                        timestamp: ahora,
+                    },
+                );
+                let transformacion = Transformacion::nueva(
+                    madre_para_carta.id,
+                    hija.id,
+                    TipoTransformacion::Custom {
+                        kind: "grafo".into(),
+                        rhai_script: desc.clone(),
+                    },
+                    "grafo",
+                    ahora,
+                );
+                Msg::LlmListo {
+                    hija,
+                    atoms_nuevos: acumulados,
+                    carta,
+                    transformacion,
+                }
+            }
+            Err(e) => Msg::LlmError(e),
         }
     });
 }

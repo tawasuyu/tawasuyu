@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use llimphi_ui::KeyEvent;
+use llimphi_ui::{DragPhase, KeyEvent};
 use llimphi_widget_text_editor::{EditorMetrics, PointerEvent};
 use llimphi_widget_text_input::TextInputState;
 use pluma_align::CartaHebras;
@@ -36,6 +36,29 @@ pub(crate) fn ancho_contenido(n: usize) -> f32 {
     } else {
         n as f32 * ANCHO_COL + (n as f32 - 1.0) * ANCHO_CARRIL
     }
+}
+
+/// Un filtro del grafo semántico: una etapa que transforma o acota el lienzo
+/// que recibe. Encadenados de la fuente (lienzo activo) al sumidero, generan
+/// una **línea de lienzo** nueva. Los tres primeros son transformaciones LLM
+/// (las mismas que el diente Modelo); `Concepto` es un filtro semántico que
+/// retiene sólo los párrafos afines a un término — MVP léxico (substring),
+/// con el daemon de embeddings (rimay-verbo) como evolución natural.
+#[derive(Clone, Debug)]
+pub(crate) enum Filtro {
+    Traducir(String),
+    Tono(String),
+    Resumir(Option<u32>),
+    Concepto(String),
+}
+
+/// Un nodo-filtro posicionado en el lienzo del grafo (canvas coords del
+/// nodegraph). El orden en `Model::grafo` es el orden del pipeline.
+#[derive(Clone, Debug)]
+pub(crate) struct NodoFiltro {
+    pub(crate) filtro: Filtro,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
 }
 
 pub(crate) const BACKENDS: [BackendKind; 6] = [
@@ -128,6 +151,23 @@ pub(crate) enum Msg {
         transformacion: Transformacion,
     },
     LlmError(String),
+
+    // --- Diente Grafo: grafo semántico de filtros → línea de lienzo ---
+    /// Agrega un nodo-filtro al final del pipeline.
+    GrafoAdd(Filtro),
+    /// Borra el nodo-filtro cuyo `NodeId` se pasa (right-click). La fuente
+    /// (id 0) y el sumidero no se pueden borrar — se ignoran.
+    GrafoDel(u32),
+    /// Arrastra un nodo del grafo: `NodeId`, fase, delta (dx, dy).
+    GrafoDrag(u32, DragPhase, f32, f32),
+    /// Teclas hacia el input del término del filtro Concepto.
+    GrafoInputKey(KeyEvent),
+    FocusGrafo,
+    DefocusGrafo,
+    /// Corre el pipeline de filtros sobre el activo y agrega la línea generada.
+    GenerarLinea,
+    /// Vacía el grafo de filtros.
+    GrafoLimpiar,
     /// Arrastra el divisor entre el panel del diente y el centro.
     ResizePanel(f32),
 
@@ -201,6 +241,17 @@ pub(crate) struct Model {
     pub(crate) preset_focused: bool,
     /// Prompts guardados reutilizables. Persisten en `presets.txt` junto al sled.
     pub(crate) presets: Vec<String>,
+
+    // --- Diente Grafo ---
+    /// Pipeline de filtros (orden = fuente → ... → sumidero).
+    pub(crate) grafo: Vec<NodoFiltro>,
+    /// Posición del nodo fuente en el canvas del grafo (arrastrable).
+    pub(crate) grafo_src: (f32, f32),
+    /// Posición del nodo sumidero "→ nueva línea".
+    pub(crate) grafo_sink: (f32, f32),
+    /// Input del término para el filtro Concepto.
+    pub(crate) grafo_input: TextInputState,
+    pub(crate) grafo_input_focused: bool,
 
     pub(crate) chat: Arc<dyn ChatClient>,
     pub(crate) backend_idx: usize,

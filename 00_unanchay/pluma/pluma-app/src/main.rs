@@ -88,6 +88,7 @@ impl App for Pluma {
                 pata_host::HostedTooth::new(1, "folder", "Lienzos"),
                 pata_host::HostedTooth::new(2, "tools", "Derivar"),
                 pata_host::HostedTooth::new(3, "tools", "Modelo"),
+                pata_host::HostedTooth::new(4, "tools", "Grafo"),
             ];
             let h = handle.clone();
             m._host = pata_host::HostClient::connect("tawasuyu.pluma", "Pluma", teeth, move |id| {
@@ -144,6 +145,13 @@ impl App for Pluma {
                 return Some(Msg::CrearAlterno);
             }
             return Some(Msg::PresetInputKey(event.clone()));
+        }
+        // Input del término del filtro Concepto (diente Grafo).
+        if model.grafo_input_focused {
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::DefocusGrafo);
+            }
+            return Some(Msg::GrafoInputKey(event.clone()));
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
         let shift = event.modifiers.shift;

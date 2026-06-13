@@ -18,6 +18,9 @@ use llimphi_widget_edit_menu::{self as editmenu, EditFlags};
 use llimphi_widget_menubar::{
     menubar_overlay_animated, menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H,
 };
+use llimphi_widget_nodegraph::{
+    nodegraph_view_ex, NodeSpec, NodegraphMetrics, NodegraphPalette, Wire,
+};
 use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_text_editor::{EditorPalette as TEPalette, Language};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
@@ -33,7 +36,7 @@ use pluma_transform::Transformacion;
 use uuid::Uuid;
 
 use crate::model::{
-    ancho_contenido, Model, Msg, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
+    ancho_contenido, Filtro, Model, Msg, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
 };
 use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
@@ -45,11 +48,12 @@ const VIEWPORT: (f32, f32) = (1600.0, 900.0);
 /// Icono vectorial y nombre de los cuatro dientes del rail. El icono lo pinta
 /// `llimphi-icons` (mismo set canónico que cosmos — sin tofu); el nombre
 /// completo va en la cabecera del panel.
-const DIENTES: [(Icon, &str); 4] = [
+const DIENTES: [(Icon, &str); 5] = [
     (Icon::File, "Archivo"),
     (Icon::Folder, "Lienzos"),
     (Icon::Edit, "Derivar"),
     (Icon::Settings, "Modelo"),
+    (Icon::Link, "Grafo"),
 ];
 
 /// Arma el `MenuBarSpec` compartido entre `menubar_view` (barra) y
@@ -237,7 +241,8 @@ fn panel_diente(model: &Model, theme: &Theme) -> View<Msg> {
         0 => panel_archivo(model, theme),
         1 => panel_lienzos(model, theme),
         2 => panel_derivar(model, theme),
-        _ => panel_modelo(model, theme),
+        3 => panel_modelo(model, theme),
+        _ => panel_grafo(model, theme),
     };
     let nombre = DIENTES
         .get(model.diente_activo)
@@ -742,6 +747,184 @@ fn seccion_historial(model: &Model, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .children(filas)
+}
+
+// ---------------------------------------------------------------------------
+// Diente Grafo: grafo semántico de filtros → línea de lienzo
+// ---------------------------------------------------------------------------
+
+/// Rótulo corto de un filtro, para el título del nodo y los botones.
+pub(crate) fn etiqueta_filtro(f: &Filtro) -> String {
+    match f {
+        Filtro::Traducir(l) => format!("traducir → {l}"),
+        Filtro::Tono(e) => format!("tono: {e}"),
+        Filtro::Resumir(Some(n)) => format!("resumir ≈{n}p"),
+        Filtro::Resumir(None) => "resumir".to_string(),
+        Filtro::Concepto(t) if t.is_empty() => "concepto".to_string(),
+        Filtro::Concepto(t) => format!("concepto: {t}"),
+    }
+}
+
+/// Panel del diente Grafo: botonera para agregar filtros + input del término
+/// Concepto + correr/limpiar, y debajo el grafo (nodegraph) del pipeline.
+fn panel_grafo(model: &Model, theme: &Theme) -> View<Msg> {
+    let palette_btn = ButtonPalette::from_theme(theme);
+    let palette_input = TextInputPalette::from_theme(theme);
+
+    let fila = |hijos: Vec<View<Msg>>| {
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: length(28.0_f32),
+            },
+            gap: Size {
+                width: length(6.0_f32),
+                height: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .children(hijos)
+    };
+
+    let fila_add = fila(vec![
+        button_view::<Msg>("+ →qu", &palette_btn, Msg::GrafoAdd(Filtro::Traducir("qu".into()))),
+        button_view::<Msg>("+ →en", &palette_btn, Msg::GrafoAdd(Filtro::Traducir("en".into()))),
+        button_view::<Msg>("+ tono", &palette_btn, Msg::GrafoAdd(Filtro::Tono("formal".into()))),
+        button_view::<Msg>("+ resumir", &palette_btn, Msg::GrafoAdd(Filtro::Resumir(Some(30)))),
+    ]);
+
+    // Filtro semántico Concepto: input del término + botón que lo agrega.
+    let input = text_input_view::<Msg>(
+        &model.grafo_input,
+        "concepto: río, tensión… (filtra párrafos)",
+        model.grafo_input_focused,
+        &palette_input,
+        Msg::FocusGrafo,
+    );
+    let input_wrap = View::new(Style {
+        flex_grow: 1.0,
+        flex_shrink: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(28.0_f32),
+        },
+        min_size: Size {
+            width: length(0.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![input]);
+    let termino = model.grafo_input.text().trim().to_string();
+    let fila_concepto = fila(vec![
+        input_wrap,
+        button_view::<Msg>("+ concepto", &palette_btn, Msg::GrafoAdd(Filtro::Concepto(termino))),
+    ]);
+
+    let fila_run = fila(vec![
+        button_view::<Msg>("generar línea  »", &palette_btn, Msg::GenerarLinea),
+        button_view::<Msg>("limpiar", &palette_btn, Msg::GrafoLimpiar),
+    ]);
+
+    let pista = encabezado("grafo · arrastrá nodos · click derecho borra un filtro", theme);
+    let canvas = grafo_canvas(model, theme);
+
+    columna(vec![fila_add, fila_concepto, fila_run, divider(theme), pista, canvas])
+}
+
+/// El canvas del nodegraph: nodo fuente (lienzo activo) → un nodo por filtro
+/// → nodo sumidero "nueva línea", unidos por cables. `NodeId`: 0 = fuente,
+/// `i+1` = filtro `i`, `len+1` = sumidero.
+fn grafo_canvas(model: &Model, theme: &Theme) -> View<Msg> {
+    let palette = NodegraphPalette::from_theme(theme);
+    let metrics = NodegraphMetrics::default();
+
+    let nombre_activo = model
+        .activo
+        .and_then(|id| model.cuerpos.iter().find(|c| c.id == id))
+        .map(|c| recortar(&c.metadatos.nombre_legible, 18))
+        .unwrap_or_else(|| "(sin activo)".to_string());
+
+    let n = model.grafo.len();
+    let mut nodes: Vec<NodeSpec> = Vec::with_capacity(n + 2);
+    let mut wires: Vec<Wire> = Vec::with_capacity(n + 1);
+
+    nodes.push(NodeSpec {
+        id: 0,
+        label: format!("fuente: {nombre_activo}"),
+        x: model.grafo_src.0,
+        y: model.grafo_src.1,
+        inputs: Vec::new(),
+        outputs: vec!["línea".into()],
+    });
+    let mut prev: u32 = 0;
+    for (i, nf) in model.grafo.iter().enumerate() {
+        let id = (i + 1) as u32;
+        nodes.push(NodeSpec {
+            id,
+            label: etiqueta_filtro(&nf.filtro),
+            x: nf.x,
+            y: nf.y,
+            inputs: vec!["entra".into()],
+            outputs: vec!["sale".into()],
+        });
+        wires.push(Wire {
+            from_node: prev,
+            from_output: 0,
+            to_node: id,
+            to_input: 0,
+        });
+        prev = id;
+    }
+    let sink = (n + 1) as u32;
+    nodes.push(NodeSpec {
+        id: sink,
+        label: "→ nueva línea".into(),
+        x: model.grafo_sink.0,
+        y: model.grafo_sink.1,
+        inputs: vec!["pipe".into()],
+        outputs: Vec::new(),
+    });
+    wires.push(Wire {
+        from_node: prev,
+        from_output: 0,
+        to_node: sink,
+        to_input: 0,
+    });
+
+    let grafo = nodegraph_view_ex::<Msg, _, _, _>(
+        &nodes,
+        &wires,
+        &palette,
+        &metrics,
+        |nid: u32, phase, dx, dy| Some(Msg::GrafoDrag(nid, phase, dx, dy)),
+        |_a: u32, _ap: u16, _b: u32, _bp: u16| None,
+        Some(move |nid: u32| {
+            // Sólo los filtros (1..=n) se borran; fuente y sumidero no.
+            if nid >= 1 && nid <= n as u32 {
+                Some(Msg::GrafoDel(nid))
+            } else {
+                None
+            }
+        }),
+    );
+
+    View::new(Style {
+        position: Position::Relative,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_grow: 1.0,
+        min_size: Size {
+            width: length(0.0_f32),
+            height: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![grafo])
 }
 
 // ---------------------------------------------------------------------------

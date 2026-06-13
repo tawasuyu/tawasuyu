@@ -129,7 +129,7 @@ fn modelo_sintetico(diente: usize) -> Model {
     })
     .expect("mock");
 
-    Model {
+    let mut m = Model {
         store,
         cuerpos: vec![es, qu, en],
         atoms,
@@ -154,6 +154,11 @@ fn modelo_sintetico(diente: usize) -> Model {
             "Hacelo más poético".into(),
             "Tono noticiero, frases cortas".into(),
         ],
+        grafo: Vec::new(),
+        grafo_src: (24.0, 96.0),
+        grafo_sink: (24.0, 240.0),
+        grafo_input: llimphi_widget_text_input::TextInputState::new(),
+        grafo_input_focused: false,
         chat,
         backend_idx: 0,
         en_curso: false,
@@ -173,7 +178,20 @@ fn modelo_sintetico(diente: usize) -> Model {
         edit_anim: llimphi_motion::Tween::idle(1.0),
         delegated: false,
         _host: None,
+    };
+    // Para el pantallazo del diente Grafo: sembrar un pipeline de ejemplo
+    // (concepto → traducir → resumir) para que el nodegraph muestre nodos+cables.
+    if diente == 4 {
+        use crate::model::{Filtro, NodoFiltro};
+        m.grafo_src = (20.0, 16.0);
+        m.grafo = vec![
+            NodoFiltro { filtro: Filtro::Concepto("río".into()), x: 20.0, y: 86.0 },
+            NodoFiltro { filtro: Filtro::Traducir("en".into()), x: 20.0, y: 156.0 },
+            NodoFiltro { filtro: Filtro::Resumir(Some(30)), x: 20.0, y: 226.0 },
+        ];
+        m.grafo_sink = (20.0, 296.0);
     }
+    m
 }
 
 fn render_png(model: &Model, out: &str) {
