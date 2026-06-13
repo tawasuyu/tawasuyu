@@ -356,6 +356,11 @@ pub struct State {
     /// contexto (`shuma-module-canvas`). Cada `start_run` registra un
     /// nodo `%cN` y `drain_run` lo cierra con el status del exit.
     pub intent_graph: SessionGraph,
+    /// E1 — libro de macros parametrizables (`:macro`). Cargado de
+    /// `~/.config/shuma/macros.toml` al arrancar; cada `:macro save`/`rm`
+    /// lo reescribe. Las macros se instancian sustituyendo `%1..%9` por los
+    /// argumentos de `:macro run`.
+    pub macro_book: shuma_intent::MacroBook,
     /// `%cN` del run en foreground actual; `None` cuando no hay nada
     /// corriendo. Se setea en `start_run` y se consume en `drain_run`.
     pub current_run_node: Option<u32>,
@@ -696,6 +701,7 @@ impl State {
             vim_metrics: Arc::new(Mutex::new((0.0, 0.0))),
             bg_jobs: Vec::new(),
             intent_graph: SessionGraph::new(),
+            macro_book: load_macro_book(),
             current_run_node: None,
             current_run_bytes: 0,
             vim_sel: None,

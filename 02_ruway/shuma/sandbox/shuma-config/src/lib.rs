@@ -273,6 +273,12 @@ pub fn env_groups_path() -> Option<PathBuf> {
     directories::ProjectDirs::from("", "", "shuma").map(|d| d.config_dir().join("env.json"))
 }
 
+/// `$XDG_CONFIG_HOME/shuma/macros.toml` — el libro de macros (`:macro`). El
+/// tipo (`shuma_intent::MacroBook`) vive en otro crate; acá sólo la ruta.
+pub fn macros_path() -> Option<PathBuf> {
+    directories::ProjectDirs::from("", "", "shuma").map(|d| d.config_dir().join("macros.toml"))
+}
+
 /// Lee los grupos. Archivo ausente o corrupto → lista vacía (sin error:
 /// es config de conveniencia, el shell arranca igual).
 pub fn load_env_groups() -> Vec<EnvGroup> {

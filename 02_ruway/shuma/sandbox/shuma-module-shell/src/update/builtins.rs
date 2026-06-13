@@ -539,6 +539,187 @@ pub(crate) fn apply_groups_list(mut s: State) -> State {
     s
 }
 
+// ─────────────────────────── E1 · Macros parametrizables ───────────────────
+
+/// Carga el libro de macros de `~/.config/shuma/macros.toml`. Ausente o
+/// corrupto → libro vacío (config de conveniencia, el shell arranca igual).
+pub(crate) fn load_macro_book() -> shuma_intent::MacroBook {
+    shuma_config::macros_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| toml::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Persiste el libro de macros (atómico: tmp + rename).
+pub(crate) fn save_macro_book(book: &shuma_intent::MacroBook) {
+    let Some(path) = shuma_config::macros_path() else {
+        return;
+    };
+    let Ok(text) = toml::to_string_pretty(book) else {
+        return;
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let tmp = path.with_extension("toml.tmp");
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
+    }
+}
+
+/// Sustituye los huecos `%1..%9` de una plantilla de macro por los argumentos
+/// posicionales, y `%*` por todos unidos por espacio. Un `%` sin dígito válido
+/// detrás se deja literal. Un hueco sin argumento se reemplaza por vacío.
+pub(crate) fn substitute_macro_params(template: &str, args: &[&str]) -> String {
+    let mut out = String::with_capacity(template.len());
+    let mut chars = template.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('*') => {
+                chars.next();
+                out.push_str(&args.join(" "));
+            }
+            Some(d) if d.is_ascii_digit() && *d != '0' => {
+                let idx = (*d as u8 - b'1') as usize;
+                chars.next();
+                if let Some(a) = args.get(idx) {
+                    out.push_str(a);
+                }
+            }
+            // `%` solo o seguido de algo que no es hueco: literal.
+            _ => out.push('%'),
+        }
+    }
+    out
+}
+
+/// `:macro [save <nombre> <plantilla> | run <nombre> args… | rm <nombre> |
+/// list]` — el plano de control de las macros parametrizables. Sin subcomando
+/// (o `list`) las lista.
+pub(crate) fn apply_macro(s: State, rest: &str) -> State {
+    let mut parts = rest.trim().splitn(2, char::is_whitespace);
+    let sub = parts.next().unwrap_or("");
+    let arg = parts.next().unwrap_or("").trim();
+    match sub {
+        "" | "list" | "ls" => list_macros(s),
+        "save" | "set" => macro_save(s, arg),
+        "run" => macro_run(s, arg),
+        "rm" | "del" | "delete" => macro_rm(s, arg),
+        other => {
+            let mut s = s;
+            s.push_output(OutputLine::notice(format!(
+                "macro: subcomando «{other}» desconocido — usá save | run | rm | list"
+            )));
+            s
+        }
+    }
+}
+
+/// `:macro save <nombre> <plantilla>` — guarda (o reemplaza) una macro. La
+/// plantilla es todo lo que sigue al nombre y puede tener huecos `%1..%9`.
+fn macro_save(mut s: State, arg: &str) -> State {
+    let mut it = arg.splitn(2, char::is_whitespace);
+    let name = it.next().unwrap_or("").trim();
+    let template = it.next().unwrap_or("").trim();
+    if name.is_empty() || template.is_empty() {
+        s.push_output(OutputLine::notice(
+            "uso: :macro save <nombre> <plantilla con %1 %2…>",
+        ));
+        return s;
+    }
+    s.macro_book
+        .insert(shuma_intent::Macro::new(name).step(template));
+    save_macro_book(&s.macro_book);
+    s.push_output(OutputLine::notice(format!(
+        "✔ macro «{name}» guardada — `:macro run {name} …` la corre"
+    )));
+    s
+}
+
+/// `:macro run <nombre> arg1 arg2 …` — instancia la macro sustituyendo
+/// `%1..%9` por los argumentos y la ejecuta (varios pasos → `a && b && …`).
+fn macro_run(mut s: State, arg: &str) -> State {
+    let mut it = arg.split_whitespace();
+    let Some(name) = it.next() else {
+        s.push_output(OutputLine::notice("uso: :macro run <nombre> [args…]"));
+        return s;
+    };
+    let args: Vec<&str> = it.collect();
+    let Some(m) = s.macro_book.by_name(name) else {
+        s.push_output(OutputLine::notice(format!(
+            "macro «{name}» no existe — `:macros` las lista"
+        )));
+        return s;
+    };
+    let joined = instantiate_macro(m, &args);
+    if joined.trim().is_empty() {
+        return s;
+    }
+    s.input.set_text(&joined);
+    run_submitted(s)
+}
+
+/// Instancia una macro: sustituye `%1..%9`/`%*` en cada paso por `args` y une
+/// los pasos con `&&` (una sola línea ejecutable). Puro — sin tocar el State
+/// ni disco; el corazón testeable de `:macro run`.
+pub(crate) fn instantiate_macro(m: &shuma_intent::Macro, args: &[&str]) -> String {
+    m.intentions
+        .iter()
+        .map(|t| substitute_macro_params(t, args))
+        .collect::<Vec<_>>()
+        .join(" && ")
+}
+
+/// `:macro rm <nombre>` — borra una macro del libro.
+fn macro_rm(mut s: State, arg: &str) -> State {
+    let name = arg.trim();
+    if name.is_empty() {
+        s.push_output(OutputLine::notice("uso: :macro rm <nombre>"));
+        return s;
+    }
+    let mut book = shuma_intent::MacroBook::new();
+    let mut removed = false;
+    for m in s.macro_book.all() {
+        if m.name == name {
+            removed = true;
+        } else {
+            book.insert(m.clone());
+        }
+    }
+    if removed {
+        s.macro_book = book;
+        save_macro_book(&s.macro_book);
+        s.push_output(OutputLine::notice(format!("✔ macro «{name}» borrada")));
+    } else {
+        s.push_output(OutputLine::notice(format!("macro «{name}» no existe")));
+    }
+    s
+}
+
+/// `:macros` / `:macro list` — lista las macros guardadas con su plantilla.
+pub(crate) fn list_macros(mut s: State) -> State {
+    if s.macro_book.is_empty() {
+        s.push_output(OutputLine::notice(
+            "(sin macros — `:macro save <nombre> <plantilla %1 %2>` guarda una)",
+        ));
+        return s;
+    }
+    let rows: Vec<String> = s
+        .macro_book
+        .all()
+        .iter()
+        .map(|m| format!("• {}  →  {}", m.name, m.intentions.join(" && ")))
+        .collect();
+    for r in rows {
+        s.push_output(OutputLine::notice(r));
+    }
+    s
+}
+
 /// Reconstruye el stdout de un bloque (su card) uniendo las líneas
 /// `Stdout` sin etapa — para alimentarlo como stdin de un reprocess.
 pub(crate) fn gather_block_stdout(s: &State, block: u64) -> String {
@@ -581,4 +762,47 @@ pub(crate) fn run_group(s: State, idx: usize) -> State {
     let mut s = s;
     s.input.set_text(joined);
     run_submitted(s)
+}
+
+#[cfg(test)]
+mod e1_macro_tests {
+    use super::*;
+
+    #[test]
+    fn sustituye_huecos_posicionales() {
+        assert_eq!(
+            substitute_macro_params("deploy %1 to %2", &["app", "prod"]),
+            "deploy app to prod"
+        );
+        // %* = todos los args.
+        assert_eq!(
+            substitute_macro_params("run %*", &["a", "b", "c"]),
+            "run a b c"
+        );
+        // Hueco sin argumento → vacío.
+        assert_eq!(substitute_macro_params("x %1 %2", &["uno"]), "x uno ");
+        // `%` literal (sin dígito válido detrás) se conserva.
+        assert_eq!(substitute_macro_params("50%% done", &[]), "50%% done");
+        assert_eq!(substitute_macro_params("%0 no es hueco", &["z"]), "%0 no es hueco");
+    }
+
+    #[test]
+    fn instancia_macro_multipaso() {
+        let m = shuma_intent::Macro::new("deploy")
+            .step("cargo build --release --bin %1")
+            .step("scp target/release/%1 %2:/srv");
+        let line = instantiate_macro(&m, &["app", "host"]);
+        assert_eq!(
+            line,
+            "cargo build --release --bin app && scp target/release/app host:/srv"
+        );
+    }
+
+    #[test]
+    fn run_de_macro_inexistente_avisa_y_no_corre() {
+        let mut s = State::new(shuma_module::Source::Local);
+        s = apply_macro(s, "run no_existe foo");
+        assert!(s.output.iter().any(|l| l.text.contains("no existe")));
+        assert!(!s.is_running());
+    }
 }

@@ -106,12 +106,16 @@ chasis es la superficie.
 Principio: el shell expone sus entrañas como **datos direccionables** y
 **puntos de enganche declarativos**. Nada se ofrece solo: todo se invoca.
 
-### E1. Macros con parámetros (`:macro`) — darle UI al MacroBook
-`shuma-intent::MacroBook` ya modela macros parametrizables; falta el puente:
-`:macro save deploy %1 %2` captura la intención vigente con huecos,
-`:macro run deploy prod v2` la instancia, `:macros` lista. Persistencia en
-`~/.config/shuma/macros.toml`. Es el ascensor natural de A1: el patrón
-emergente se promociona a macro con nombre y parámetros explícitos.
+### E1. Macros con parámetros (`:macro`) — darle UI al MacroBook ✅ (2026-06-13)
+**Hecho:** builtin `:macro` en `update/builtins.rs` sobre el `MacroBook` ya
+existente — `:macro save deploy cargo build --bin %1 && scp %1 %2:/srv`,
+`:macro run deploy app host` instancia (`substitute_macro_params`: `%1..%9` +
+`%*`, `instantiate_macro` une los pasos con `&&` y reusa `run_submitted`),
+`:macro rm`, `:macros`/`:macro list`. Persistencia en
+`~/.config/shuma/macros.toml` (`load/save_macro_book`, atómico tmp+rename;
+`shuma_config::macros_path`); `State.macro_book` cargado al arrancar. Es el
+ascensor de A1: el patrón emergente se promociona a macro con parámetros
+explícitos. 3 tests (sustitución, instanciación multipaso, macro inexistente).
 
 ### E2. El scrollback como base de datos (`%cN` en la línea)
 `shuma-intent::parse` ya entiende refs `%cN`/`%pN`; el shell ya tiene
