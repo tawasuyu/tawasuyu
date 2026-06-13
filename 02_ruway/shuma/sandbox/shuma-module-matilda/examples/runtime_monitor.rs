@@ -24,7 +24,7 @@ use shuma_module::Source;
 use shuma_module_matilda::{update, Msg, State};
 
 const W: u32 = 1040;
-const H: u32 = 560;
+const H: u32 = 780;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn cs(name: &str, image: &str, state: RunState, status: &str, ports: &str) -> ContainerStatus {
@@ -44,7 +44,11 @@ fn main() {
     // Inventario de ejemplo (web + api deseados) + estado runtime observado:
     // web corriendo, api caído, y un `legacy` huérfano que corre fuera del
     // inventario. La UI lo refleja todo.
-    let mut state = State::new(Source::Local);
+    // Inventario con varios hosts para mostrar la flota (M5).
+    let mut inv = shuma_module_matilda::example_inventory();
+    inv.add_host(matilda_core::Host::new("db-1", "10.0.0.2").with_tag("db"));
+    inv.add_host(matilda_core::Host::new("edge-2", "10.0.0.3"));
+    let mut state = State::with_inventory(Source::Local, inv);
     let rt = RuntimeState {
         containers: vec![
             cs("web", "nginx:1.27", RunState::Running, "Up 2 hours", "0.0.0.0:8080->80/tcp"),
@@ -74,6 +78,30 @@ fn main() {
         vhosts: vec![],
     };
     state = update(state, Msg::SetRuntime(rt));
+
+    // Flota (M5): edge-1 alcanzado (con su runtime), db-1 caído, edge-2 aún
+    // consultando. edge-1 seleccionado → expande sus contenedores/servicios.
+    state = update(state, Msg::RefreshFleet);
+    let edge1 = RuntimeState {
+        containers: vec![
+            cs("web", "nginx:1.27", RunState::Running, "Up 6 days", "0.0.0.0:80->80/tcp"),
+            cs("worker", "ghcr.io/ejemplo/worker:2", RunState::Exited, "Exited (137)", ""),
+        ],
+        services: vec![ServiceStatus {
+            name: "sshd.service".into(),
+            state: ServiceState::Active,
+            sub: "running".into(),
+            description: "OpenSSH server daemon".into(),
+        }],
+        vhosts: vec![],
+    };
+    state = update(state, Msg::SetHostRuntime { host: "edge-1".into(), runtime: edge1 });
+    state = update(state, Msg::SetHostError {
+        host: "db-1".into(),
+        error: "ssh connect: connection timed out".into(),
+    });
+    state = update(state, Msg::SelectHost("edge-1".to_string()));
+
     // Seleccionamos `web` (barra de acciones de contenedor) y un servicio
     // fallado (barra de acciones de servicio) para que ambas se vean.
     state = update(state, Msg::SelectContainer("web".to_string()));

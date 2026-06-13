@@ -56,6 +56,16 @@ use std::sync::{Arc, Mutex};
 
 pub const ID: &str = "matilda";
 
+/// Estado de un host de la flota (M5): el runtime observado de un servidor
+/// declarado, o un error si no se pudo alcanzar. `Pending` mientras el
+/// fetch por SSH está en vuelo (lo corre el chasis en un thread por host).
+#[derive(Debug, Clone)]
+pub enum FleetEntry {
+    Pending,
+    Ready(RuntimeState),
+    Failed(String),
+}
+
 /// Estado del módulo. El `desired` se llena con un ejemplo arrancable
 /// hasta que el bloque 5 cablee `--inventory` desde el shumarc. El
 /// `pending_steps` se comparte por `Arc<Mutex<>>` para que el sampler
@@ -81,6 +91,11 @@ pub struct State {
     pub selected_container: Option<String>,
     /// Servicio systemd seleccionado — abre su barra de acciones.
     pub selected_service: Option<String>,
+    /// Flota (M5): runtime por host declarado (`name` → estado). Lo llena el
+    /// chasis vía SSH, un host por thread. Vacío hasta el primer Refresh.
+    pub fleet: std::collections::BTreeMap<String, FleetEntry>,
+    /// Host de la flota seleccionado — expande sus contenedores/servicios.
+    pub selected_host: Option<String>,
     pending_steps: Arc<Mutex<usize>>,
     /// `(up, down)` compartido con el sampler del monitor de runtime.
     runtime_counts: Arc<Mutex<(usize, usize)>>,
@@ -105,6 +120,8 @@ impl State {
             runtime: None,
             selected_container: None,
             selected_service: None,
+            fleet: std::collections::BTreeMap::new(),
+            selected_host: None,
             pending_steps: Arc::new(Mutex::new(0)),
             runtime_counts: Arc::new(Mutex::new((0, 0))),
         }
@@ -189,6 +206,17 @@ pub enum Msg {
     /// Acción sobre un servicio systemd (start/stop/restart/enable/disable/
     /// status). Local sincrónico; remoto delegado al chasis.
     ServiceActionMsg { name: String, action: ServiceAction },
+    /// M5 — refrescar la flota: marca cada host declarado como `Pending`.
+    /// El chasis spawnea el fetch por SSH (uno por host) y reenvía
+    /// `SetHostRuntime`/`SetHostError`.
+    RefreshFleet,
+    /// Resultado del fetch de un host de la flota.
+    SetHostRuntime { host: String, runtime: RuntimeState },
+    /// Error al alcanzar un host de la flota.
+    SetHostError { host: String, error: String },
+    /// Click en un host de la flota: lo selecciona (toggle) y expande su
+    /// runtime (contenedores + servicios).
+    SelectHost(String),
 }
 
 /// Mapea el `action_id` de un `ShortcutAction::ModuleAction` al `Msg`
@@ -449,8 +477,80 @@ pub fn update(state: State, msg: Msg) -> State {
             }
             cap_log(&mut s.log);
         }
+        Msg::RefreshFleet => {
+            // Marcamos cada host declarado como Pending; el chasis dispara el
+            // fetch por SSH (un thread por host) y reenvía los resultados.
+            s.fleet.clear();
+            for h in s.desired.hosts() {
+                s.fleet.insert(h.name.clone(), FleetEntry::Pending);
+            }
+            s.log.push(format!("→ refrescando flota ({} hosts)…", s.fleet.len()));
+            cap_log(&mut s.log);
+        }
+        Msg::SetHostRuntime { host, runtime } => {
+            s.log.push(format!(
+                "✔ {host}: {} up · {} down · {} svc",
+                runtime.up_count(),
+                runtime.down_count(),
+                runtime.services.len()
+            ));
+            s.fleet.insert(host, FleetEntry::Ready(runtime));
+            cap_log(&mut s.log);
+        }
+        Msg::SetHostError { host, error } => {
+            s.log.push(format!("✘ {host}: {error}"));
+            s.fleet.insert(host, FleetEntry::Failed(error));
+            cap_log(&mut s.log);
+        }
+        Msg::SelectHost(name) => {
+            s.selected_host = if s.selected_host.as_deref() == Some(name.as_str()) {
+                None
+            } else {
+                Some(name)
+            };
+        }
     }
     s
+}
+
+/// M5 — fetch del runtime de un host de la flota por SSH. **Bloqueante**:
+/// conecta por SSH (usuario/puerto del `Host`, clave default) y corre
+/// `docker ps` + `systemctl` + `ls sites-enabled`, parseando con los mismos
+/// parsers del discover local. Pensado para que el chasis lo corra en un
+/// thread por host y reenvíe `Msg::SetHostRuntime`/`SetHostError`.
+pub fn host_runtime_remote_blocking(host: &Host) -> Result<RuntimeState, String> {
+    let auth = SshAuth::Key { path: default_ssh_key(), passphrase: None };
+    let mut config = SshConfig::new(host.address.as_str(), host.ssh_user(), auth);
+    config.port = host.ssh_port();
+    let rt = blocking_runtime()?;
+    rt.block_on(async move {
+        let linker = Linker::connect(&config)
+            .await
+            .map_err(|e| format!("ssh connect: {e}"))?;
+        let ps = linker
+            .exec(&format!(
+                "docker ps -a --format '{}' 2>/dev/null || true",
+                matilda_discover::DOCKER_PS_FORMAT
+            ))
+            .await
+            .map_err(|e| format!("docker ps: {e}"))?;
+        let svc = linker
+            .exec(
+                "systemctl list-units --type=service --state=running,failed \
+                 --no-legend --plain 2>/dev/null || true",
+            )
+            .await
+            .map_err(|e| format!("systemctl: {e}"))?;
+        let nginx = linker
+            .exec("ls -1 /etc/nginx/sites-enabled 2>/dev/null || true")
+            .await
+            .map_err(|e| format!("ls sites-enabled: {e}"))?;
+        Ok(RuntimeState {
+            containers: matilda_discover::parse_docker_ps(&ps),
+            services: matilda_discover::parse_systemctl_units(&svc),
+            vhosts: matilda_discover::parse_nginx_sites(&nginx),
+        })
+    })
 }
 
 /// Ejecuta un comando de shell local y captura stdout+stderr como líneas.
@@ -870,12 +970,29 @@ fn inventory_pane<HostMsg: Clone + Send + Sync + 'static>(
 ) -> View<HostMsg> {
     let mut children: Vec<View<HostMsg>> = Vec::new();
 
+    // FLEET (M5) — los hosts declarados con su runtime por SSH. Cada host es
+    // clickeable: lo selecciona y expande sus contenedores/servicios.
     children.push(section_label(
-        &format!("HOSTS ({})", state.desired.hosts().count()),
+        &format!("FLEET ({} hosts)", state.desired.hosts().count()),
         theme,
     ));
     for h in state.desired.hosts() {
-        children.push(inv_row(&format!("  {}   {}", h.name, h.address), theme));
+        let entry = state.fleet.get(&h.name);
+        let sel = state.selected_host.as_deref() == Some(h.name.as_str());
+        children.push(host_row(h, entry, sel, theme, lift.clone()));
+        // Expandido: el runtime del host (contenedores + servicios, read-only).
+        if sel {
+            if let Some(FleetEntry::Ready(rt)) = entry {
+                for c in &rt.containers {
+                    children.push(fleet_status_row(c.state.glyph(), &c.name, &c.status, c.state.is_up(), theme));
+                }
+                for svc in &rt.services {
+                    use matilda_discover::ServiceState;
+                    let ok = svc.state == ServiceState::Active;
+                    children.push(fleet_status_row(svc.state.glyph(), &svc.name, &svc.sub, ok, theme));
+                }
+            }
+        }
     }
 
     // CONTAINERS — con estado runtime (●/○ + status) cuando hay discover.
@@ -1020,6 +1137,83 @@ fn describe_upstream(u: &matilda_core::Upstream) -> String {
 
 fn inv_row<HostMsg: Clone + 'static>(text: &str, theme: &Theme) -> View<HostMsg> {
     text_row(text, theme.fg_text, theme)
+}
+
+/// Fila de un host de la flota (M5): semáforo (● alcanzable / ◐ consultando
+/// / ✖ error / ◌ sin consultar) + nombre + dirección + resumen up/down/svc
+/// o el error. Clickeable → selecciona y expande su runtime.
+fn host_row<HostMsg: Clone + Send + Sync + 'static>(
+    host: &Host,
+    entry: Option<&FleetEntry>,
+    selected: bool,
+    theme: &Theme,
+    lift: impl Fn(Msg) -> HostMsg + Clone + Send + Sync + 'static,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let green = Color::from_rgba8(0x82, 0xCD, 0x8C, 0xFF);
+    let red = Color::from_rgba8(0xE0, 0x6C, 0x6C, 0xFF);
+    let (glyph, color, summary) = match entry {
+        None => ('◌', theme.fg_muted, "· sin consultar (pulsá «Fleet»)".to_string()),
+        Some(FleetEntry::Pending) => ('◐', theme.fg_muted, "· consultando…".to_string()),
+        Some(FleetEntry::Ready(rt)) => {
+            let c = if rt.down_count() == 0 && rt.services_failed() == 0 { green } else { red };
+            (
+                '●',
+                c,
+                format!(
+                    "· {} up · {} down · {} svc",
+                    rt.up_count(),
+                    rt.down_count(),
+                    rt.services.len()
+                ),
+            )
+        }
+        Some(FleetEntry::Failed(e)) => {
+            let short: String = e.chars().take(40).collect();
+            ('✖', red, format!("· ✘ {short}"))
+        }
+    };
+    let prefix = if selected { "▸ " } else { "  " };
+    let mut row = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(16.0_f32) },
+        ..Default::default()
+    })
+    .hover_fill(theme.bg_row_hover)
+    .on_click(lift(Msg::SelectHost(host.name.clone())))
+    .text_aligned(
+        format!("{prefix}{glyph} {}  {}  {summary}", host.name, host.address),
+        11.0,
+        color,
+        Alignment::Start,
+    );
+    if selected {
+        row = row.fill(theme.bg_row_hover);
+    }
+    row
+}
+
+/// Fila read-only de un recurso dentro de un host expandido de la flota:
+/// glifo + nombre + detalle, indentada. Sin acciones (el v1 de la flota es
+/// monitoreo; operar va por el Source montado).
+fn fleet_status_row<HostMsg: Clone + 'static>(
+    glyph: char,
+    name: &str,
+    detail: &str,
+    ok: bool,
+    theme: &Theme,
+) -> View<HostMsg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let color = if ok {
+        Color::from_rgba8(0x82, 0xCD, 0x8C, 0xFF)
+    } else {
+        theme.fg_muted
+    };
+    let tail = if detail.is_empty() {
+        String::new()
+    } else {
+        format!("  · {detail}")
+    };
+    text_row(&format!("      {glyph} {name}{tail}"), color, theme)
 }
 
 /// Fila de contenedor con semáforo runtime, clickeable. Sin estado
@@ -1316,6 +1510,8 @@ pub fn contributions(state: &State) -> ModuleContributions {
                 .with_hint("Previsualiza los pasos sin aplicar"),
             ShortcutSpec::module_action("Apply", "matilda.apply")
                 .with_hint("Reconcilia el servidor con el inventario deseado"),
+            ShortcutSpec::module_action("Fleet", "matilda.fleet")
+                .with_hint("Consulta el runtime de todos los hosts por SSH"),
             ShortcutSpec::module_action("Reload", "matilda.reload")
                 .with_hint("Relee el inventario JSON desde disco"),
         ],
@@ -1497,12 +1693,13 @@ mod tests {
         // pending + runtime.
         assert_eq!(c.monitors.len(), 2);
         assert_eq!(c.monitors[1].id, "matilda.runtime");
-        assert_eq!(c.shortcuts.len(), 5);
+        assert_eq!(c.shortcuts.len(), 6);
         assert_eq!(c.shortcuts[0].label, "Discover");
         assert_eq!(c.shortcuts[1].label, "Plan");
         assert_eq!(c.shortcuts[2].label, "Dry-run");
         assert_eq!(c.shortcuts[3].label, "Apply");
-        assert_eq!(c.shortcuts[4].label, "Reload");
+        assert_eq!(c.shortcuts[4].label, "Fleet");
+        assert_eq!(c.shortcuts[5].label, "Reload");
     }
 
     #[test]
@@ -1583,6 +1780,36 @@ mod tests {
             },
         );
         assert!(s.log.iter().any(|l| l.contains("systemctl restart sshd.service")));
+    }
+
+    #[test]
+    fn fleet_refresh_marca_pending_y_resultados_aterrizan() {
+        use matilda_discover::RuntimeState;
+        let mut s = State::new(Source::Local); // example tiene 1 host: edge-1
+        s = update(s, Msg::RefreshFleet);
+        assert!(matches!(s.fleet.get("edge-1"), Some(FleetEntry::Pending)));
+        // Aterriza el runtime de ese host.
+        let rt = RuntimeState {
+            containers: vec![matilda_discover::ContainerStatus {
+                name: "web".into(),
+                image: "nginx".into(),
+                state: matilda_discover::RunState::Running,
+                status: "Up".into(),
+                ports: String::new(),
+            }],
+            services: vec![],
+            vhosts: vec![],
+        };
+        s = update(s, Msg::SetHostRuntime { host: "edge-1".into(), runtime: rt });
+        assert!(matches!(s.fleet.get("edge-1"), Some(FleetEntry::Ready(_))));
+        // Y un error en otro.
+        s = update(s, Msg::SetHostError { host: "edge-1".into(), error: "timeout".into() });
+        assert!(matches!(s.fleet.get("edge-1"), Some(FleetEntry::Failed(_))));
+        // Selección toggle.
+        s = update(s, Msg::SelectHost("edge-1".into()));
+        assert_eq!(s.selected_host.as_deref(), Some("edge-1"));
+        s = update(s, Msg::SelectHost("edge-1".into()));
+        assert!(s.selected_host.is_none());
     }
 
     #[test]

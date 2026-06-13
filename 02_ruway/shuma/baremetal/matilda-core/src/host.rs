@@ -11,11 +11,24 @@ pub struct Host {
     pub address: String,
     /// Etiquetas libres — `"prod"`, `"db"`, `"edge"`.
     pub tags: Vec<String>,
+    /// Usuario SSH para administrar el host (default `root`). Opcional para
+    /// que los inventarios viejos sigan parseando.
+    #[serde(default)]
+    pub user: Option<String>,
+    /// Puerto SSH (default 22).
+    #[serde(default)]
+    pub port: Option<u16>,
 }
 
 impl Host {
     pub fn new(name: impl Into<String>, address: impl Into<String>) -> Self {
-        Self { name: name.into(), address: address.into(), tags: Vec::new() }
+        Self {
+            name: name.into(),
+            address: address.into(),
+            tags: Vec::new(),
+            user: None,
+            port: None,
+        }
     }
 
     /// Añade una etiqueta (encadenable). No duplica.
@@ -27,9 +40,31 @@ impl Host {
         self
     }
 
+    /// Fija el usuario SSH (encadenable).
+    pub fn with_user(mut self, user: impl Into<String>) -> Self {
+        self.user = Some(user.into());
+        self
+    }
+
+    /// Fija el puerto SSH (encadenable).
+    pub fn with_port(mut self, port: u16) -> Self {
+        self.port = Some(port);
+        self
+    }
+
     /// `true` si el host lleva la etiqueta `tag`.
     pub fn has_tag(&self, tag: &str) -> bool {
         self.tags.iter().any(|t| t == tag)
+    }
+
+    /// Usuario SSH efectivo (default `root`).
+    pub fn ssh_user(&self) -> &str {
+        self.user.as_deref().unwrap_or("root")
+    }
+
+    /// Puerto SSH efectivo (default 22).
+    pub fn ssh_port(&self) -> u16 {
+        self.port.unwrap_or(22)
     }
 }
 

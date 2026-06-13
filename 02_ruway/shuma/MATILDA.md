@@ -79,11 +79,17 @@ El chasis poll-ea `poll_runtime()` cada 5 s en un thread para las instancias
 matilda Local (topbar/bottombar/main) → `Msg::SetRuntimeQuiet`. El semáforo
 queda vivo sin pulsar Discover. **Pendiente:** polling remoto (SSH por tick).
 
-### M5. Multi-host fan-out (pendiente — el más grande)
-`Inventory` ya tiene N hosts pero discover/apply/runtime apuntan al único
-`Source`. Falta iterar hosts y agregar el runtime de todos (grilla "host ×
-estado"). Cambia el modelo de "una caja" a "una flota" — su propio sprint,
-toca cómo el chasis crea instancias por host.
+### M5. Multi-host fan-out ✅ (2026-06-13, monitoreo de flota)
+`matilda_core::Host` gana `user`/`port` SSH (default root/22). El bloque tiene
+`fleet: BTreeMap<nombre, FleetEntry{Pending|Ready(RuntimeState)|Failed}>` +
+`selected_host`; el shortcut **Fleet** hace que el chasis spawnee un thread
+por host declarado (`host_runtime_remote_blocking`: SSH + `docker ps` +
+`systemctl` + `ls sites-enabled`, reusando los parsers) y reenvíe
+`SetHostRuntime`/`SetHostError`. La sección FLEET pinta cada host con
+semáforo (●/◐/✖/◌) + resumen up/down/svc o el error, y al seleccionarlo
+expande sus contenedores/servicios (grilla "host × estado", read-only).
+**Pendiente:** acciones sobre recursos de un host de la flota (hoy operar va
+por el `Source` montado) y polling de la flota (hoy es a-pedido por «Fleet»).
 
 ### M6. Drift visible en la UI ✅ (2026-06-13)
 El contenedor que el discover marcó `(desviado)` lleva un chip `⚠ drift` en
@@ -91,8 +97,10 @@ su fila — el operador lo ve sin leer el plan.
 
 ## Estado
 
-M1/M2/M3/M4/M6 entregados 2026-06-13 (M2/M3/M4 con el alcance acotado anotado
-arriba). El tab pasó de "visor declarativo" a **consola de operación viva**:
-ves qué corre, qué se cayó, y lo operás sin bajar a la terminal. Lo que queda:
-**M5 (multi-host)** y los "pendientes" de M2/M3/M4 (stream continuo, servicios
-declarativos, polling remoto).
+M1–M6 entregados 2026-06-13 (varios con el alcance acotado anotado arriba). El
+tab pasó de "visor declarativo" a **consola de operación viva de una flota**:
+ves qué corre y qué se cayó en cada host, operás el host montado sin bajar a la
+terminal, y reconciliás contenedores/vhosts/servicios declarativamente. Lo que
+queda son los "pendientes" acotados de cada M: stream de logs `-f` continuo +
+series CPU/mem (M2), servicios remotos por SSH (M3), polling remoto (M4),
+acciones sobre recursos de la flota + polling de flota (M5).

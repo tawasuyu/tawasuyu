@@ -314,6 +314,38 @@ pub(crate) fn handle_shortcut(
                     );
                 }
             }
+            // M5 — Fleet: consulta el runtime de cada host declarado por SSH,
+            // un thread por host, y reenvía SetHostRuntime/SetHostError.
+            if action_id == "matilda.fleet" {
+                let hosts: Vec<matilda_core::Host> =
+                    match instance_for_slot(&m, &slot).map(|i| &i.state) {
+                        Some(ModuleState::Matilda(st)) => st.desired.hosts().cloned().collect(),
+                        _ => Vec::new(),
+                    };
+                // Marca cada host como Pending en el módulo.
+                m = apply_module_msg(
+                    m,
+                    slot.clone(),
+                    ModuleMsg::Matilda(shuma_module_matilda::Msg::RefreshFleet),
+                );
+                for host in hosts {
+                    let slot_back = slot.clone();
+                    handle.spawn(move || {
+                        let msg = match shuma_module_matilda::host_runtime_remote_blocking(&host) {
+                            Ok(runtime) => shuma_module_matilda::Msg::SetHostRuntime {
+                                host: host.name.clone(),
+                                runtime,
+                            },
+                            Err(error) => shuma_module_matilda::Msg::SetHostError {
+                                host: host.name.clone(),
+                                error,
+                            },
+                        };
+                        Msg::Module(slot_back, ModuleMsg::Matilda(msg))
+                    });
+                }
+                return m;
+            }
             // Hooks remotos: ciertas acciones de matilda necesitan
             // SSH + tokio. Las delegamos a un thread (`Handle::spawn`)
             // que al volver dispatcha un Msg con el resultado.
