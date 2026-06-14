@@ -270,3 +270,42 @@ fn keyword_fixes_varios() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::OutlineStyle(true))));
 }
+
+// ── Fase 7.837-7.838 — border-width/-color multi-valor (TRBL) ─────────────
+
+#[test]
+fn border_width_multivalor_y_keywords() {
+    // 1 token keyword (antes se descartaba) → global.
+    assert!(decls("border-width: thick")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::BorderWidth(w) if w == 5.0)));
+    // 3 valores con keywords → top/horiz/bottom per-side.
+    let d = decls("border-width: thin medium thick");
+    let w = |e: BorderEdge| {
+        d.iter().find_map(|d| match d.kind {
+            DeclKind::BorderSideWidth(side, v) if side == e => Some(v),
+            _ => None,
+        })
+    };
+    assert_eq!(w(BorderEdge::Top), Some(1.0));
+    assert_eq!(w(BorderEdge::Right), Some(3.0));
+    assert_eq!(w(BorderEdge::Bottom), Some(5.0));
+    assert_eq!(w(BorderEdge::Left), Some(3.0)); // = right (horiz)
+}
+
+#[test]
+fn border_color_multivalor() {
+    // 2 valores → vert/horiz.
+    let d = decls("border-color: red blue");
+    let n_sides = d
+        .iter()
+        .filter(|d| matches!(d.kind, DeclKind::BorderSideColor(_, _)))
+        .count();
+    assert_eq!(n_sides, 4);
+    // currentColor por lado se respeta.
+    assert!(decls("border-color: red currentColor")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::CurrentColor(ColorTarget::BorderSide(_)))));
+    // Token inválido descarta el shorthand entero.
+    assert!(decls("border-color: red notacolor").is_empty());
+}

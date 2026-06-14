@@ -63,6 +63,55 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_border_shorthand(value, important));
             continue;
         }
+        // Fase 7.837 — `border-width: <1-4>` (TRBL) con keywords thin/medium/
+        // thick. >1 token → per-side; 1 token → global (ahora también acepta
+        // los keywords, que antes se descartaban).
+        if prop.eq_ignore_ascii_case("border-width") {
+            let toks: Vec<&str> = value.split_whitespace().collect();
+            if toks.len() >= 2 {
+                if let Some(sides) = expand_trbl_f32(&toks, parse_border_width_token) {
+                    for (edge, w) in sides {
+                        out.push(Decl { kind: DeclKind::BorderSideWidth(edge, w), important });
+                    }
+                }
+                continue;
+            }
+            if let Some(w) = parse_border_width_token(toks.first().copied().unwrap_or("")) {
+                out.push(Decl { kind: DeclKind::BorderWidth(w), important });
+            }
+            continue;
+        }
+        // Fase 7.838 — `border-color: <1-4>` (TRBL), con `currentColor` por
+        // lado. 1 token cae al path global (dispatch_a). Rechazo total si algún
+        // token no es color válido.
+        if prop.eq_ignore_ascii_case("border-color") {
+            let toks: Vec<&str> = value.split_whitespace().collect();
+            if toks.len() >= 2 {
+                let idx: [usize; 4] = match toks.len() {
+                    2 => [0, 1, 0, 1],
+                    3 => [0, 1, 2, 1],
+                    4 => [0, 1, 2, 3],
+                    _ => continue, // >4 inválido
+                };
+                if toks.iter().any(|t| !is_current_color(t) && parse_color(t).is_none()) {
+                    continue;
+                }
+                let edges =
+                    [BorderEdge::Top, BorderEdge::Right, BorderEdge::Bottom, BorderEdge::Left];
+                for (e, &i) in edges.iter().zip(idx.iter()) {
+                    let tok = toks[i];
+                    if is_current_color(tok) {
+                        out.push(Decl {
+                            kind: DeclKind::CurrentColor(ColorTarget::BorderSide(*e)),
+                            important,
+                        });
+                    } else if let Some(c) = parse_color(tok) {
+                        out.push(Decl { kind: DeclKind::BorderSideColor(*e, c), important });
+                    }
+                }
+                continue;
+            }
+        }
         // `border-style` (todos los lados): togglea enabled + fija el patrón.
         if prop.eq_ignore_ascii_case("border-style") {
             if let Some(on) = parse_border_style(value) {

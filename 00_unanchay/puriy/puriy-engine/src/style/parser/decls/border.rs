@@ -53,6 +53,44 @@ pub(crate) fn parse_border_shorthand(value: &str, important: bool) -> Vec<Decl> 
     out
 }
 
+/// `border-width` token: keywords `thin`/`medium`/`thick` (1/3/5px, los
+/// valores de referencia de los browsers) o cualquier length/calc. Fase 7.837.
+pub(crate) fn parse_border_width_token(s: &str) -> Option<f32> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "thin" => Some(1.0),
+        "medium" => Some(3.0),
+        "thick" => Some(5.0),
+        other => parse_px_or_math(other),
+    }
+}
+
+/// Expande 1-4 valores a los 4 lados con la regla TRBL de CSS (1→todos,
+/// 2→vert/horiz, 3→top/horiz/bottom, 4→top/right/bottom/left). `f` parsea
+/// cada token; si alguno falla → `None` (shorthand inválido, no parcial).
+/// Fase 7.837.
+pub(crate) fn expand_trbl_f32(
+    toks: &[&str],
+    f: impl Fn(&str) -> Option<f32>,
+) -> Option<[(BorderEdge, f32); 4]> {
+    let vals: Vec<f32> = toks.iter().filter_map(|t| f(t)).collect();
+    if vals.is_empty() || vals.len() != toks.len() {
+        return None;
+    }
+    let (t, r, b, l) = match vals.as_slice() {
+        [a] => (*a, *a, *a, *a),
+        [a, b] => (*a, *b, *a, *b),
+        [a, b, c] => (*a, *b, *c, *b),
+        [a, b, c, d] => (*a, *b, *c, *d),
+        _ => return None,
+    };
+    Some([
+        (BorderEdge::Top, t),
+        (BorderEdge::Right, r),
+        (BorderEdge::Bottom, b),
+        (BorderEdge::Left, l),
+    ])
+}
+
 /// Match propiedades `border-{top|right|bottom|left}{suffix}`. `suffix`
 /// puede ser "" (shorthand), "-width", "-color", o "-style". Devuelve
 /// el `BorderEdge` matcheado, o `None` si no aplica.
