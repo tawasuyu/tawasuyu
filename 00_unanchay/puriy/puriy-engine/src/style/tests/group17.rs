@@ -1281,3 +1281,31 @@ fn text_underline_position_dos_valores() {
     // `left right` es inválido (mutuamente excluyentes) → drop.
     assert!(decls("text-underline-position: left right").is_empty());
 }
+
+// ── Fase 7.910 — writing-mode legacy SVG + counter-styles -formal ─────────
+
+#[test]
+fn writing_mode_legacy_svg() {
+    let wm = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::WritingMode(v) => Some(v),
+        _ => None,
+    });
+    assert_eq!(wm("writing-mode: lr"), Some(WritingMode::HorizontalTb));
+    assert_eq!(wm("writing-mode: rl-tb"), Some(WritingMode::HorizontalTb));
+    assert_eq!(wm("writing-mode: tb"), Some(WritingMode::VerticalRl));
+    assert_eq!(wm("writing-mode: tb-rl"), Some(WritingMode::VerticalRl));
+    assert_eq!(wm("writing-mode: tb-lr"), Some(WritingMode::VerticalLr));
+    // los modernos siguen.
+    assert_eq!(wm("writing-mode: vertical-rl"), Some(WritingMode::VerticalRl));
+}
+
+#[test]
+fn list_style_type_formal_extra() {
+    for v in ["trad-chinese-formal", "simp-chinese-formal", "korean-hanja-formal",
+              "cjk-heavenly-stem", "ethiopic-numeric"] {
+        assert!(decls(&format!("list-style-type: {v}"))
+            .iter()
+            .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Decimal))),
+            "{v} debería mapear a Decimal");
+    }
+}

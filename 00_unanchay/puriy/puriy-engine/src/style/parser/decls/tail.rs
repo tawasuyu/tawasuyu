@@ -98,7 +98,11 @@ pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
         "decimal-leading-zero" | "cjk-decimal" | "arabic-indic" | "armenian"
         | "georgian" | "hebrew" | "cjk-ideographic" | "japanese-informal"
         | "japanese-formal" | "korean-hangul-formal" | "simp-chinese-informal"
-        | "trad-chinese-informal" => Some(ListStyleType::Decimal),
+        | "trad-chinese-informal"
+        // Fase 7.910 — variantes -formal/-hanja restantes (CSS Counter Styles 3).
+        | "simp-chinese-formal" | "trad-chinese-formal" | "korean-hanja-formal"
+        | "korean-hanja-informal" | "korean-hangul" | "cjk-heavenly-stem"
+        | "cjk-earthly-branch" | "ethiopic-numeric" => Some(ListStyleType::Decimal),
         "lower-greek" | "lower-armenian" => Some(ListStyleType::LowerAlpha),
         "upper-armenian" | "upper-greek" | "upper-latin-symbol" => {
             Some(ListStyleType::UpperAlpha)

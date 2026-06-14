@@ -767,8 +767,8 @@ use super::super::*;
         assert_eq!(parse_writing_mode("vertical-lr"), Some(WritingMode::VerticalLr));
         assert_eq!(parse_writing_mode("sideways-rl"), Some(WritingMode::SidewaysRl));
         assert_eq!(parse_writing_mode("sideways-lr"), Some(WritingMode::SidewaysLr));
-        // Aliases legacy fuera de scope.
-        assert_eq!(parse_writing_mode("lr-tb"), None);
+        // Fase 7.910 — aliases legacy SVG 1.1 ahora SÍ se mapean.
+        assert_eq!(parse_writing_mode("lr-tb"), Some(WritingMode::HorizontalTb));
         assert_eq!(parse_writing_mode("nope"), None);
 
         let html = r##"<html><head><style>

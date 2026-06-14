@@ -300,7 +300,12 @@ pub(crate) fn parse_writing_mode(value: &str) -> Option<WritingMode> {
         "vertical-lr" => Some(WritingMode::VerticalLr),
         "sideways-rl" => Some(WritingMode::SidewaysRl),
         "sideways-lr" => Some(WritingMode::SidewaysLr),
-        // Aliases legacy (`lr-tb`, `tb-rl`, `tb-lr`) y `tb` quedan fuera.
+        // Fase 7.910 — aliases legacy SVG 1.1 (`writing-mode` con valores
+        // `lr`/`rl`/`tb`): `lr`/`lr-tb`/`rl`/`rl-tb` = horizontal; `tb`/`tb-rl`
+        // = vertical-rl; `tb-lr` = vertical-lr.
+        "lr" | "lr-tb" | "rl" | "rl-tb" => Some(WritingMode::HorizontalTb),
+        "tb" | "tb-rl" => Some(WritingMode::VerticalRl),
+        "tb-lr" => Some(WritingMode::VerticalLr),
         _ => None,
     }
 }
