@@ -81,6 +81,7 @@
 //! - [`export`] — volcado a CSV/Markdown en el cwd.
 
 mod backend;
+mod caja;
 mod camera;
 mod charts;
 mod chrome;
@@ -349,6 +350,19 @@ enum Msg {
     HojaScroll { dcol: i32, drow: i32 },
     /// Exporta la hoja entera a `./nakui-hoja.csv`.
     HojaExportCsv,
+
+    // --- Área Caja (terminal del cajero / POS). ---
+    /// Toca un botón de producto: lo suma al ticket (o +1 si ya está).
+    CajaAddProduct { id: Uuid, name: String, price: f64 },
+    /// +1 / −1 a la cantidad de la línea `i` del ticket.
+    CajaInc(usize),
+    CajaDec(usize),
+    /// Vacía el ticket.
+    CajaClear,
+    /// Cobra el ticket: siembra Venta + LineaVenta y descuenta stock.
+    CajaCharge,
+    /// Elige el método de pago del ticket.
+    CajaSetMethod(String),
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -471,6 +485,10 @@ struct Model {
     dock_w: f32,
     /// Estado de la hoja de cálculo del área Hoja.
     sheet: SheetView,
+    /// Ticket en curso del área Caja (carrito del cajero).
+    cart: Vec<caja::CartLine>,
+    /// Método de pago elegido en la Caja.
+    caja_method: String,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -679,6 +697,8 @@ impl App for NakuiApp {
             area_anim: Tween::idle(1.0),
             dock_w: 240.0,
             sheet: SheetView::new(),
+            cart: Vec::new(),
+            caja_method: "efectivo".into(),
         }
     }
 
@@ -1226,6 +1246,41 @@ impl App for NakuiApp {
             }
             Msg::HojaExportCsv => {
                 m.toast = Some(export_hoja_csv(&m.sheet));
+            }
+
+            // --- Área Caja. ---
+            Msg::CajaAddProduct { id, name, price } => {
+                if let Some(line) = m.cart.iter_mut().find(|l| l.product_id == id) {
+                    line.qty += 1;
+                } else {
+                    m.cart.push(caja::CartLine { product_id: id, name, price, qty: 1 });
+                }
+            }
+            Msg::CajaInc(i) => {
+                if let Some(line) = m.cart.get_mut(i) {
+                    line.qty += 1;
+                }
+            }
+            Msg::CajaDec(i) => {
+                if let Some(line) = m.cart.get_mut(i) {
+                    line.qty = line.qty.saturating_sub(1);
+                    if line.qty == 0 {
+                        m.cart.remove(i);
+                    }
+                }
+            }
+            Msg::CajaClear => {
+                m.cart.clear();
+            }
+            Msg::CajaSetMethod(met) => {
+                m.caja_method = met;
+            }
+            Msg::CajaCharge => {
+                let (ok, toast) = caja::charge(&m);
+                if ok {
+                    m.cart.clear();
+                }
+                m.toast = Some(toast);
             }
         }
         m

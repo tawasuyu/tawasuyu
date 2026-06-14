@@ -40,6 +40,8 @@ mod tablero;
 mod widgets;
 #[path = "../src/chrome.rs"]
 mod chrome;
+#[path = "../src/caja.rs"]
+mod caja;
 #[path = "../src/hoja.rs"]
 mod hoja;
 
@@ -294,6 +296,12 @@ enum Msg {
     HojaRedo,
     HojaScroll { dcol: i32, drow: i32 },
     HojaExportCsv,
+    CajaAddProduct { id: Uuid, name: String, price: f64 },
+    CajaInc(usize),
+    CajaDec(usize),
+    CajaClear,
+    CajaCharge,
+    CajaSetMethod(String),
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -408,6 +416,8 @@ struct Model {
     area_anim: Tween<f32>,
     dock_w: f32,
     sheet: SheetView,
+    cart: Vec<caja::CartLine>,
+    caja_method: String,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -774,6 +784,7 @@ fn modelo_demo() -> Model {
         area: match std::env::var("NAKUI_SHOT_AREA").as_deref() {
             Ok("hoja") => Area::Hoja,
             Ok("grafo") => Area::Grafo,
+            Ok("caja") => Area::Caja,
             _ => Area::Erp,
         },
         dock_left_active: DockPanel::Nav,
@@ -781,12 +792,29 @@ fn modelo_demo() -> Model {
         area_anim: Tween::idle(1.0),
         dock_w: 240.0,
         sheet: SheetView::new(),
+        cart: Vec::new(),
+        caja_method: "efectivo".into(),
     };
     // Para el pantallazo de edición in-cell: abre el editor sobre la celda
     // activa con un valor de muestra.
     if std::env::var("NAKUI_SHOT_EDIT").is_ok() {
         model.sheet.editing = true;
         model.sheet.bar.set_text("=B2*C2");
+    }
+    // Para el pantallazo de la Caja: pre-cargá el ticket con un par de
+    // productos del módulo activo.
+    if matches!(model.area, Area::Caja) {
+        let prods = model
+            .backend
+            .lock()
+            .ok()
+            .map(|b| b.list_records("Producto"))
+            .unwrap_or_default();
+        for (id, rec) in prods.iter().take(3) {
+            let name = rec.get("nombre").and_then(|v| v.as_str()).unwrap_or("¿?").to_string();
+            let price = rec.get("precio").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            model.cart.push(caja::CartLine { product_id: *id, name, price, qty: 2 });
+        }
     }
     model
 }

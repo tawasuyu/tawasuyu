@@ -529,3 +529,44 @@
         let (down, up) = graph_cone(0, &wires, 5);
         assert!(down.is_empty() && up.is_empty());
     }
+
+    /// La Caja cobra el ticket: siembra una Venta + una LineaVenta por
+    /// ítem y descuenta el stock del Producto.
+    #[test]
+    fn caja_charge_creates_sale_and_decrements_stock() {
+        use std::collections::BTreeMap;
+        use std::sync::{Arc, Mutex};
+
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let (mut backend, _status) =
+            NakuiBackend::open(tmp.path().to_path_buf(), 50, BTreeMap::new());
+
+        // Producto con stock 10.
+        let mut prod = serde_json::Map::new();
+        prod.insert("nombre".into(), json!("Café"));
+        prod.insert("precio".into(), json!(20));
+        prod.insert("stock".into(), json!(10));
+        let pid = backend.seed("Producto", prod).unwrap().id.unwrap();
+
+        let backend = Arc::new(Mutex::new(backend));
+        let cart = vec![crate::caja::CartLine {
+            product_id: pid,
+            name: "Café".into(),
+            price: 20.0,
+            qty: 3,
+        }];
+
+        let (ok, _toast) = crate::caja::charge_cart(&backend, &cart, "efectivo");
+        assert!(ok, "cobrar debería tener éxito");
+
+        let b = backend.lock().unwrap();
+        assert_eq!(b.list_records("Venta").len(), 1, "creó la venta");
+        assert_eq!(b.list_records("LineaVenta").len(), 1, "creó una línea");
+        let stock = b
+            .load_record("Producto", pid)
+            .unwrap()
+            .get("stock")
+            .and_then(|v| v.as_f64())
+            .unwrap();
+        assert_eq!(stock, 7.0, "descontó 3 del stock");
+    }

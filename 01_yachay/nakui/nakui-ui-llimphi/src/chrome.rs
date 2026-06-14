@@ -33,6 +33,9 @@ pub(crate) enum Area {
     Hoja,
     /// Grafo de morfismos del módulo activo.
     Grafo,
+    /// Caja del cajero (POS): botones grandes + ticket. Sólo útil cuando el
+    /// módulo activo es un Punto de Venta.
+    Caja,
 }
 
 /// Diente activo del rail izquierdo (qué panel acoplable se muestra).
@@ -71,7 +74,25 @@ impl DockPanel {
 pub(crate) fn build_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
     let palette = ToolbarPalette::from_theme(theme);
 
+    // ¿El módulo activo es un POS? (habilita la Caja).
+    let is_pos = model
+        .selected_module
+        .and_then(|i| model.modules.get(i))
+        .map(crate::caja::module_is_pos)
+        .unwrap_or(false);
+
     // Grupo 1: conmutador de vistas (con resaltado del activo).
+    let mut caja_btn = ToolbarItem::new(
+        |_s, c| icon_view(Icon::Archive, c, 1.7),
+        Msg::SwitchArea(Area::Caja),
+    )
+    .with_label("Caja")
+    .active(model.area == Area::Caja)
+    .enabled(is_pos);
+    if !is_pos {
+        // Sin POS activo, el botón queda atenuado y sin click.
+        caja_btn = caja_btn.enabled(false);
+    }
     let switch = ToolbarGroup::new(vec![
         ToolbarItem::new(|_s, c| icon_view(Icon::Table, c, 1.7), Msg::SwitchArea(Area::Erp))
             .with_label("ERP")
@@ -82,6 +103,7 @@ pub(crate) fn build_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         ToolbarItem::new(|_s, c| icon_view(Icon::Link, c, 1.7), Msg::SwitchArea(Area::Grafo))
             .with_label("Grafo")
             .active(model.area == Area::Grafo),
+        caja_btn,
     ]);
 
     // Grupo 2: mostrar/ocultar el sidebar de dientes.
@@ -96,6 +118,7 @@ pub(crate) fn build_toolbar(model: &Model, theme: &Theme) -> View<Msg> {
         Area::Erp => erp_actions(model),
         Area::Hoja => hoja_actions(),
         Area::Grafo => grafo_actions(),
+        Area::Caja => caja_actions(),
     };
 
     toolbar_view(vec![switch, dock, actions], TOOLBAR_H, &palette)
@@ -167,6 +190,13 @@ fn hoja_actions() -> ToolbarGroup<Msg> {
         ToolbarItem::new(|_s, c| icon_view(Icon::SkipForward, c, 1.7), Msg::HojaRedo).with_label("Rehacer"),
         ToolbarItem::new(|_s, c| icon_view(Icon::Trash, c, 1.7), Msg::HojaClear).with_label("Limpiar"),
         ToolbarItem::new(|_s, c| icon_view(Icon::FileText, c, 1.7), Msg::HojaExportCsv).with_label("CSV"),
+    ])
+}
+
+fn caja_actions() -> ToolbarGroup<Msg> {
+    ToolbarGroup::new(vec![
+        ToolbarItem::new(|_s, c| icon_view(Icon::Check, c, 1.8), Msg::CajaCharge).with_label("Cobrar"),
+        ToolbarItem::new(|_s, c| icon_view(Icon::Trash, c, 1.7), Msg::CajaClear).with_label("Vaciar"),
     ])
 }
 
@@ -321,6 +351,14 @@ fn nav_panel(model: &Model, theme: &Theme) -> View<Msg> {
             ],
             6.0,
         ),
+        Area::Caja => column(
+            vec![
+                text_line("Caja".into(), 14.0, theme.fg_text),
+                text_line("Tocá un producto para sumarlo al ticket.".into(), 11.5, theme.fg_muted),
+                text_line("− / + ajustan la cantidad; COBRAR cierra la venta.".into(), 11.0, theme.fg_muted),
+            ],
+            6.0,
+        ),
     }
 }
 
@@ -329,6 +367,7 @@ fn inspector_panel(model: &Model, theme: &Theme) -> View<Msg> {
     let mut children = vec![text_line("Inspector".into(), 14.0, theme.fg_text)];
     match model.area {
         Area::Hoja => children.extend(crate::hoja::inspector(&model.sheet, theme)),
+        Area::Caja => children.extend(crate::caja::inspector(model, theme)),
         Area::Erp => {
             let label = active_view_info(model)
                 .and_then(|v| v.entity)
@@ -355,7 +394,26 @@ fn area_main(model: &Model, theme: &Theme) -> View<Msg> {
         Area::Erp => crate::layout::build_main(model, theme),
         Area::Hoja => crate::hoja::build_hoja(model, theme),
         Area::Grafo => grafo_main(model, theme),
+        Area::Caja => caja_wrap(model, theme),
     }
+}
+
+/// La caja con el mismo padding que las demás áreas.
+fn caja_wrap(model: &Model, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        padding: Rect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_app)
+    .children(vec![crate::caja::build_caja(model, theme)])
 }
 
 /// Vista grafo: el DAG de morfismos del módulo activo.
