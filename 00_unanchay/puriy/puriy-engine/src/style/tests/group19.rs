@@ -2,9 +2,26 @@
 //! parse de reglas globales que antes se salteaban en bloque. Verificado vía
 //! `StyleEngine::from_sheets_with_viewport` + accessor `font_faces()`.
 use super::super::*;
+use crate::dom::DomTree;
 
 fn engine(css: &str) -> StyleEngine {
     StyleEngine::from_sheets_with_viewport(&[css.to_string()], DEFAULT_VIEWPORT)
+}
+
+/// Computa el color del primer `<p>` de un documento cuyo `<style>` contiene
+/// `css`. Verifica que reglas dentro de `@layer` SÍ entran a la cascada.
+fn p_color(css: &str) -> (u8, u8, u8) {
+    let html = format!("<html><head><style>{css}</style></head><body><p></p></body></html>");
+    let dom = DomTree::parse(&html);
+    let eng = StyleEngine::from_dom(&dom);
+    let mut p = None;
+    crate::dom::walk(&dom.document(), &mut |n| {
+        if crate::dom::element_name(n).as_deref() == Some("p") {
+            p = Some(n.clone());
+        }
+    });
+    let cs = eng.compute(p.as_ref().expect("hay <p>"));
+    (cs.color.r, cs.color.g, cs.color.b)
 }
 
 // ── Fase 7.922 — @font-face (descriptores) ─────────────────────────────────
@@ -282,4 +299,44 @@ fn page_ignora_margin_at_rules_anidadas() {
     assert_eq!(p[0].size.as_deref(), Some("A4"));
     // ningún par contiene basura de la at-rule anidada.
     assert!(p[0].declarations.iter().all(|(k, _)| !k.contains('@') && !k.contains('{')));
+}
+
+// ── Fase 7.926 — @layer (Cascade Layers): aplanado, ya no se dropea ─────────
+
+#[test]
+fn layer_bloque_aplica_reglas() {
+    // Antes: las reglas dentro de @layer se dropeaban (p quedaba negro).
+    // Ahora: se aplanan y aplican.
+    assert_eq!(p_color("@layer base { p { color: rgb(10, 20, 30); } }"), (10, 20, 30));
+}
+
+#[test]
+fn layer_anonimo_y_anidado() {
+    // capa anónima
+    assert_eq!(p_color("@layer { p { color: rgb(1, 2, 3); } }"), (1, 2, 3));
+    // capas anidadas
+    assert_eq!(
+        p_color("@layer outer { @layer inner { p { color: rgb(4, 5, 6); } } }"),
+        (4, 5, 6)
+    );
+}
+
+#[test]
+fn layer_statement_no_rompe() {
+    // La forma statement `@layer a, b;` (sólo declara orden) no aporta reglas
+    // pero no debe romper el parseo de las reglas que siguen.
+    assert_eq!(
+        p_color("@layer reset, base; @layer base { p { color: rgb(7, 8, 9); } }"),
+        (7, 8, 9)
+    );
+}
+
+#[test]
+fn layer_convive_con_regla_normal() {
+    // Una regla normal posterior pisa la de la capa (simplificación: orden de
+    // fuente, no prioridad de capa — documentado).
+    assert_eq!(
+        p_color("@layer base { p { color: rgb(10, 10, 10); } } p { color: rgb(99, 99, 99); }"),
+        (99, 99, 99)
+    );
 }

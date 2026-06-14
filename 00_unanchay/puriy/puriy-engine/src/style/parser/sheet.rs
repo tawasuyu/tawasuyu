@@ -413,6 +413,19 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
                 }
                 continue;
             }
+            // `@layer name { ... }` (Cascade Layers): APLANAMOS el bloque — sus
+            // reglas se aplican en orden de fuente como reglas normales. NO
+            // modelamos la prioridad de capa (spec: unlayered gana a layered, y
+            // entre capas gana la declarada después) — simplificación documentada
+            // que es estrictamente mejor que dropear las reglas. La forma
+            // statement `@layer a, b;` (sólo declara orden, sin `{`) se ignora.
+            if lower.starts_with("@layer") {
+                if chunk.contains('{') {
+                    let body = parse_at_rule_body(chunk);
+                    out.extend(parse_rules_block(body, vars, viewport));
+                }
+                continue;
+            }
             // @-rule desconocido: lo saltamos sin parsear.
             continue;
         }
