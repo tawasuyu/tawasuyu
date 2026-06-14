@@ -742,6 +742,17 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             parse_justify_tracks(value).map(DeclKind::JustifyTracks)
         }
         "align-tracks" => parse_align_tracks(value).map(DeclKind::AlignTracks),
+        // `page` (CSS Paged Media 3): `auto | <custom-ident>`. NO hereda.
+        "page" => {
+            let v = value.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::Page(None))
+            } else if !v.is_empty() && !v.contains(char::is_whitespace) {
+                Some(DeclKind::Page(Some(v.to_string())))
+            } else {
+                None
+            }
+        }
         "text-anchor" => parse_text_anchor(value).map(DeclKind::TextAnchor),
         "color-rendering" => {
             parse_color_rendering(value).map(DeclKind::ColorRendering)

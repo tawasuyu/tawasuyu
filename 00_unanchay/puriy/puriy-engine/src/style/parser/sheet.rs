@@ -784,6 +784,30 @@ pub(crate) fn parse_easing(s: &str) -> Option<EasingFunction> {
             .unwrap_or(false);
         return Some(EasingFunction::Steps(n, jump_start));
     }
+    // `linear(<stop>#)` (CSS Easing 2): cada stop es `<number> <percentage>{0,2}`.
+    // Lo validamos pero, como el runtime de tween todavía no anima, colapsamos
+    // al keyword `linear` (plumb lossy: descartamos la curva por tramos).
+    if let Some(args) = t.strip_prefix("linear(").and_then(|r| r.strip_suffix(')')) {
+        let mut any = false;
+        for stop in args.split(',') {
+            let mut toks = stop.split_whitespace();
+            // Primer token: el output (número). Obligatorio.
+            let out: f32 = toks.next()?.parse().ok()?;
+            let _ = out;
+            // Tokens restantes: hasta 2 posiciones en porcentaje.
+            let mut pcts = 0;
+            for tok in toks {
+                let p = tok.strip_suffix('%')?;
+                p.trim().parse::<f32>().ok()?;
+                pcts += 1;
+                if pcts > 2 {
+                    return None;
+                }
+            }
+            any = true;
+        }
+        return if any { Some(EasingFunction::Linear) } else { None };
+    }
     None
 }
 

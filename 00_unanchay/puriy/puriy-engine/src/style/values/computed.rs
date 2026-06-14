@@ -916,6 +916,10 @@ pub struct ComputedStyle {
     /// `clear` (CSS2.1 §9.5.2). Baja el borde de margen por debajo de los
     /// floats del lado pedido. Default `None`. NO hereda. Plumb.
     pub clear: Clear,
+    /// `page` (CSS Paged Media 3): el `@page` con nombre al que pertenece el
+    /// elemento al fragmentar para impresión. `None` = `auto`. NO hereda
+    /// (pero se propaga al árbol de fragmentación, fuera de alcance). Plumb.
+    pub page: Option<String>,
     /// `d` (SVG 2 §6) como prop CSS. `None` = `none`; `Some(raw)` guarda el
     /// `path(...)` crudo (parse opaco). Default `None`. NO hereda. Plumb.
     pub d: Option<String>,

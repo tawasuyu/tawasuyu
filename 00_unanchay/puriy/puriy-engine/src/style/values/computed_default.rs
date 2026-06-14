@@ -334,6 +334,7 @@ impl Default for ComputedStyle {
             text_emphasis_skip: TextEmphasisSkip::Spaces,
             float: Float::None,
             clear: Clear::None,
+            page: None,
             d: None,
             masonry_auto_flow: MasonryAutoFlow::default(),
             justify_tracks: Vec::new(),

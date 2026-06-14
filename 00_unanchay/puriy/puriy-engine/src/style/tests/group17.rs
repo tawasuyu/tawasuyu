@@ -692,3 +692,27 @@ fn d_svg_geometry_como_css() {
     // Valor inválido dropea (no es path() ni none).
     assert!(decls("d: 5px").is_empty());
 }
+
+// ── Lote data-driven (cont.): linear() easing + page ──────────────────────
+
+#[test]
+fn linear_easing_y_page() {
+    // `linear(...)` valida y colapsa al keyword Linear (plumb lossy).
+    assert!(decls("transition-timing-function: linear(0, 0.5 50%, 1)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TransitionTimingFirst(EasingFunction::Linear))));
+    assert!(decls("animation-timing-function: linear(0, 1)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AnimationTimingFunction(EasingFunction::Linear))));
+    // linear() vacío o con basura dropea.
+    assert!(decls("transition-timing-function: linear()").is_empty());
+    assert!(decls("transition-timing-function: linear(foo)").is_empty());
+    assert!(decls("transition-timing-function: linear(0 10% 20% 30%)").is_empty());
+    // `page`: auto → None; <custom-ident> → Some.
+    assert!(decls("page: auto").iter().any(|d| matches!(d.kind, DeclKind::Page(None))));
+    assert!(decls("page: chapter")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Page(Some(n)) if n == "chapter")));
+    // multi-word inválido.
+    assert!(decls("page: a b").is_empty());
+}
