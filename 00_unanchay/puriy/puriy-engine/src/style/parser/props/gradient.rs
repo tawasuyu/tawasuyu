@@ -85,7 +85,9 @@ pub(crate) fn parse_background_size(value: &str) -> Option<DeclKind> {
         "auto" => return Some(DeclKind::BackgroundSize(BackgroundSize::Auto)),
         _ => {}
     }
-    let toks: Vec<&str> = v.split_whitespace().collect();
+    // Fase 7.877 — tokeniza respetando paréntesis (calc).
+    let toks_owned = split_top_level_ws(v);
+    let toks: Vec<&str> = toks_owned.iter().map(String::as_str).collect();
     let sz = match toks.as_slice() {
         [x] => BackgroundSize::Explicit {
             x: parse_length_or_pct(x)?,
@@ -172,7 +174,9 @@ pub(crate) fn parse_background_position(value: &str) -> Option<DeclKind> {
             other => parse_length_or_pct(other).map(|l| (l, None)),
         }
     }
-    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    // Fase 7.877 — tokeniza respetando paréntesis (calc con espacios internos).
+    let toks_owned = split_top_level_ws(value.trim());
+    let toks: Vec<&str> = toks_owned.iter().map(String::as_str).collect();
     let pos = match toks.as_slice() {
         [a] => {
             let (la, axis) = token(a)?;

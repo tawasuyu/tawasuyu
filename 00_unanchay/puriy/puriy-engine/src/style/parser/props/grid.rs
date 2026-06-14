@@ -44,7 +44,15 @@ pub(crate) fn parse_grid_template(value: &str) -> Option<Vec<GridTrackSize>> {
             let Some((count_raw, track_raw)) = split_first_top_comma(inner) else {
                 continue;
             };
-            let track = parse_one_grid_track(track_raw.trim())?;
+            // Fase 7.877 — el cuerpo de `repeat` puede tener VARIOS tracks
+            // (`repeat(2, 100px 1fr)`); se repite la lista completa.
+            let body: Vec<GridTrackSize> = split_top_level_ws(track_raw.trim())
+                .iter()
+                .map(|t| parse_one_grid_track(t))
+                .collect::<Option<Vec<_>>>()?;
+            if body.is_empty() {
+                continue;
+            }
             let count = match count_raw.trim().to_ascii_lowercase().as_str() {
                 // Fase 7.859 — `auto-fill`/`auto-fit`: sin ancho de container
                 // al parsear, estimamos N = viewport / min-track (si el min es
@@ -53,7 +61,7 @@ pub(crate) fn parse_grid_template(value: &str) -> Option<Vec<GridTrackSize>> {
                 other => other.parse::<i32>().ok()?,
             };
             for _ in 0..count.max(0) {
-                out.push(track);
+                out.extend(body.iter().copied());
             }
         } else if let Some(t) = parse_one_grid_track(&tok) {
             out.push(t);

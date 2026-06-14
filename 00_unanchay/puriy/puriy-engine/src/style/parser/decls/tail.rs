@@ -138,6 +138,13 @@ pub(crate) fn first_comma(s: &str) -> &str {
 /// Fase 7.515.
 pub(crate) fn parse_time_seconds(s: &str) -> Option<f32> {
     let s = s.trim();
+    // Fase 7.877 — `calc()` sobre tiempos (el evaluador da segundos).
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Number(n) if n.is_finite() => Some(n),
+            _ => None,
+        };
+    }
     if let Some(num) = s.strip_suffix("ms") {
         return num.trim().parse::<f32>().ok().map(|n| n / 1000.0);
     }
@@ -663,7 +670,24 @@ fn classify_calc_num(t: &str) -> Option<CalcVal> {
     if let Some(deg) = token_angle_degrees(t) {
         return Some(CalcVal::Number(deg));
     }
+    // Fase 7.877 — `<time>` dentro de calc → `Number(segundos)`. Mismo modelo
+    // que los ángulos: un calc de tiempo da segundos.
+    if let Some(secs) = token_time_seconds(t) {
+        return Some(CalcVal::Number(secs));
+    }
     parse_length_px(t).map(|px| CalcVal::Length { px, pct: 0.0 })
+}
+
+/// `<time>` con unidad → segundos. `ms` antes que `s` (sufijo solapado).
+/// Sin aceptar calc (evita recursión). Fase 7.877.
+fn token_time_seconds(t: &str) -> Option<f32> {
+    if let Some(r) = t.strip_suffix("ms") {
+        return r.trim().parse::<f32>().ok().map(|v| v / 1000.0);
+    }
+    if let Some(r) = t.strip_suffix('s') {
+        return r.trim().parse::<f32>().ok();
+    }
+    None
 }
 
 /// `<angle>` con unidad → grados, sin aceptar calc (para evitar recursión

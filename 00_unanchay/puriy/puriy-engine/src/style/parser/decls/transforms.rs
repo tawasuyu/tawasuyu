@@ -90,7 +90,9 @@ pub(crate) fn parse_transform_origin(value: &str) -> Option<TransformOrigin> {
             other => parse_length_or_pct(other).map(|l| (l, None)),
         }
     }
-    let toks: Vec<&str> = value.trim().split_whitespace().collect();
+    // Fase 7.877 — tokeniza respetando paréntesis (calc en X/Y).
+    let toks_owned = split_top_level_ws(value.trim());
+    let toks: Vec<&str> = toks_owned.iter().map(String::as_str).collect();
     let (x, y, z_tok) = match toks.as_slice() {
         [a] => {
             let (la, axis) = axis_token(a)?;

@@ -39,6 +39,29 @@ pub(crate) fn parse_display(s: &str) -> Option<Display> {
         "grid" => Some(Display::Grid),
         "inline-grid" => Some(Display::InlineGrid),
         "none" => Some(Display::None),
+        // Fase 7.877 — valores que el modelo no distingue (sin BFC explícito,
+        // table layout, ni "sin caja"). Aproximaciones al variant más cercano:
+        // `flow-root`/`list-item`/`contents` y la familia table → Block;
+        // inline-table → InlineBlock. (`contents` debería no generar caja; sin
+        // eso, Block mantiene los hijos visibles — divergencia documentada.)
+        "flow-root" | "list-item" | "contents" | "table" | "table-row"
+        | "table-cell" | "table-row-group" | "table-header-group"
+        | "table-footer-group" | "table-column" | "table-column-group"
+        | "table-caption" | "ruby" => Some(Display::Block),
+        "inline-table" => Some(Display::InlineBlock),
+        // Sintaxis de dos valores `<outside> <inside>` (CSS Display 3): el
+        // `outside` decide el variant; `flow-root` interior con `inline` → BFC
+        // inline ≈ inline-block.
+        other if other.contains(' ') => {
+            let parts: Vec<&str> = other.split_whitespace().collect();
+            let inline = parts.contains(&"inline");
+            let flow_root = parts.contains(&"flow-root");
+            Some(match (inline, flow_root) {
+                (true, true) => Display::InlineBlock,
+                (true, false) => Display::Inline,
+                (false, _) => Display::Block,
+            })
+        }
         _ => None,
     }
 }

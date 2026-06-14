@@ -55,8 +55,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "border-style" => parse_border_style(value).map(DeclKind::BorderEnabled),
         // Fase 7.727 — `-webkit-border-radius` alias vendor de `border-radius`.
         // Fase 7.764 — `-moz-border-radius` alias vendor legacy.
+        // Fase 7.877 — un valor único acepta calc() (el multivalor lo
+        // intercepta `parse_declarations`).
         "border-radius" | "-webkit-border-radius" | "-moz-border-radius" => {
-            parse_length_px(value).map(DeclKind::BorderRadius)
+            parse_px_or_math(value).map(DeclKind::BorderRadius)
         }
         "z-index" => {
             // `auto` → 0; sino int (Fase 7.872: o `calc()` → entero). Negativos OK.
@@ -223,7 +225,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         }
         "outline-color" => parse_color(value).map(DeclKind::OutlineColor),
         "outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
-        "outline-offset" => parse_length_px(value).map(DeclKind::OutlineOffset),
+        // Fase 7.877 — acepta calc().
+        "outline-offset" => parse_px_or_math(value).map(DeclKind::OutlineOffset),
         "background-image" => parse_background_image(value),
         // Fase 7.811 — `-webkit-background-size` / `-moz-background-size` alias vendor legacy.
         // Fase 7.866 — los longhands aceptan listas por coma (multi-capa); el

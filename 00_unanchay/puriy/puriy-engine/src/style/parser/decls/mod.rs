@@ -83,7 +83,9 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         if (prop.eq_ignore_ascii_case("border-radius")
             || prop.eq_ignore_ascii_case("-webkit-border-radius")
             || prop.eq_ignore_ascii_case("-moz-border-radius"))
-            && (value.contains('/') || value.split_whitespace().count() > 1)
+            // Fase 7.877 — cuenta tokens de nivel superior (un `calc()` con
+            // espacios internos NO es multivalor; cae al dispatch single).
+            && (value.contains('/') || split_top_level_ws(value).len() > 1)
         {
             out.extend(parse_border_radius_shorthand(value, important));
             continue;
@@ -92,7 +94,9 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         // thick. >1 token → per-side; 1 token → global (ahora también acepta
         // los keywords, que antes se descartaban).
         if prop.eq_ignore_ascii_case("border-width") {
-            let toks: Vec<&str> = value.split_whitespace().collect();
+            // Fase 7.877 — tokeniza respetando paréntesis (calc con espacios).
+            let toks_owned = split_top_level_ws(value);
+            let toks: Vec<&str> = toks_owned.iter().map(String::as_str).collect();
             if toks.len() >= 2 {
                 if let Some(sides) = expand_trbl_f32(&toks, parse_border_width_token) {
                     for (edge, w) in sides {

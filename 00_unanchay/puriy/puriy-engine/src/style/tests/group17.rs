@@ -504,3 +504,27 @@ fn varios_876() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::PointerEvents(PointerEvents::Auto))));
 }
+
+// ── Fase 7.878 — color relativo rgb()/hsl() from ───────────────────────────
+
+#[test]
+fn color_relativo_rgb_y_hsl() {
+    let col = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Color(c) => Some(c),
+        _ => None,
+    });
+    // Identidad: rgb(from red r g b) = red.
+    assert_eq!(col("color: rgb(from red r g b)"), Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    // Cambiar sólo alpha.
+    assert_eq!(
+        col("color: rgb(from red r g b / 50%)"),
+        Some(Color { r: 255, g: 0, b: 0, a: 128 })
+    );
+    // calc sobre un canal: rgb(from #336699 r g calc(b / 2)) → b=153/2≈76.
+    let c = col("color: rgb(from #336699 r g calc(b / 2))").unwrap();
+    assert_eq!((c.r, c.g), (0x33, 0x66));
+    assert!((c.b as i32 - 76).abs() <= 1, "b = {}", c.b);
+    // hsl identidad: hsl(from blue h s l) ≈ blue (round-trip HSL).
+    let hb = col("color: hsl(from blue h s l)").unwrap();
+    assert!(hb.b > 250 && hb.r < 5 && hb.g < 5, "hsl from blue = {hb:?}");
+}

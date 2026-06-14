@@ -100,6 +100,13 @@ pub(crate) fn strip_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {
 /// + `/ alpha`). Cada canal RGB tolera entero 0-255 o porcentaje. El
 /// alpha tolera fracción 0-1 o porcentaje.
 pub(crate) fn parse_rgb_func(args: &str) -> Option<Color> {
+    // Fase 7.878 — sintaxis de color relativo `rgb(from <color> r g b [/ a])`
+    // (CSS Color 5). Los keywords `r`/`g`/`b`/`alpha` quedan ligados a los
+    // canales del color origen y cada componente puede ser ese keyword, un
+    // número, un % o un `calc()` que los referencie.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_rgb_relative(rest);
+    }
     let (rgb, alpha) = split_color_args(args)?;
     if rgb.len() != 3 {
         return None;
@@ -117,6 +124,10 @@ pub(crate) fn parse_rgb_func(args: &str) -> Option<Color> {
 /// Parsea `hsl(…)` / `hsla(…)`. H = grados (0-360, se wrappea), S/L =
 /// porcentaje (0-100). Alpha igual que rgba.
 pub(crate) fn parse_hsl_func(args: &str) -> Option<Color> {
+    // Fase 7.878 — color relativo `hsl(from <color> h s l [/ a])`.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_hsl_relative(rest);
+    }
     let (parts, alpha) = split_color_args(args)?;
     if parts.len() != 3 {
         return None;
@@ -132,32 +143,228 @@ pub(crate) fn parse_hsl_func(args: &str) -> Option<Color> {
     Some(Color { r, g, b, a })
 }
 
+/// Si `args` arranca con el keyword `from `, devuelve el resto (el color
+/// origen + los componentes). Fase 7.878.
+fn strip_from_prefix(args: &str) -> Option<&str> {
+    let a = args.trim_start();
+    let rest = a.strip_prefix("from").or_else(|| a.strip_prefix("FROM"))?;
+    // Debe seguir un separador (no `fromage`).
+    rest.starts_with(char::is_whitespace).then(|| rest.trim_start())
+}
+
+/// Sustituye apariciones de cada keyword (run de letras EXACTO) por su valor
+/// numérico, para resolver expresiones de color relativo. Fase 7.878.
+fn substitute_channel_idents(expr: &str, binds: &[(&str, f32)]) -> String {
+    let bytes = expr.as_bytes();
+    let mut out = String::with_capacity(expr.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_alphabetic() {
+            let start = i;
+            while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+            }
+            let word = &expr[start..i];
+            match binds.iter().find(|(k, _)| k.eq_ignore_ascii_case(word)) {
+                Some((_, v)) => out.push_str(&format!("{v}")),
+                None => out.push_str(word),
+            }
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Resuelve un componente de color relativo a un escalar: keyword (ya
+/// sustituido), número, `%` o `calc()`. `pct_full` = valor del 100%.
+fn resolve_rel_component(expr: &str, binds: &[(&str, f32)], pct_full: f32) -> Option<f32> {
+    let sub = substitute_channel_idents(expr.trim(), binds);
+    let sub = sub.trim();
+    if is_math_fn(sub) {
+        return match eval_calc(sub)? {
+            CalcVal::Number(n) if n.is_finite() => Some(n),
+            CalcVal::Length { px, pct } if px == 0.0 => Some(pct / 100.0 * pct_full),
+            CalcVal::Length { px, pct } if pct == 0.0 => Some(px),
+            _ => None,
+        };
+    }
+    if let Some(p) = sub.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|v| v / 100.0 * pct_full);
+    }
+    sub.parse::<f32>().ok()
+}
+
+/// `rgb(from <color> <r> <g> <b> [/ <a>])`. Fase 7.878.
+fn parse_rgb_relative(rest: &str) -> Option<Color> {
+    let (origin, comps) = split_origin_and_components(rest)?;
+    let o = parse_color(origin)?;
+    let binds = [
+        ("r", o.r as f32),
+        ("g", o.g as f32),
+        ("b", o.b as f32),
+        ("alpha", o.a as f32 / 255.0),
+    ];
+    let (parts, alpha) = split_color_args(comps)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let chan = |e: &str| resolve_rel_component(e, &binds, 255.0).map(|v| v.clamp(0.0, 255.0).round() as u8);
+    let r = chan(parts[0])?;
+    let g = chan(parts[1])?;
+    let b = chan(parts[2])?;
+    let a = match alpha {
+        Some(e) => (resolve_rel_component(e, &binds, 1.0)? * 255.0).clamp(0.0, 255.0).round() as u8,
+        None => o.a,
+    };
+    Some(Color { r, g, b, a })
+}
+
+/// `hsl(from <color> <h> <s> <l> [/ <a>])`. Fase 7.878.
+fn parse_hsl_relative(rest: &str) -> Option<Color> {
+    let (origin, comps) = split_origin_and_components(rest)?;
+    let o = parse_color(origin)?;
+    let (h0, s0, l0) = rgb_to_hsl(o.r, o.g, o.b);
+    let binds = [
+        ("h", h0),
+        ("s", s0),
+        ("l", l0),
+        ("alpha", o.a as f32 / 255.0),
+    ];
+    let (parts, alpha) = split_color_args(comps)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let h = resolve_rel_component(parts[0], &binds, 360.0)?;
+    let s = resolve_rel_component(parts[1], &binds, 100.0)?.clamp(0.0, 100.0);
+    let l = resolve_rel_component(parts[2], &binds, 100.0)?.clamp(0.0, 100.0);
+    // `hsl_to_rgb` espera s/l como fracción 0-1 (los keywords s/l vienen en
+    // escala 0-100, como porcentaje).
+    let (r, g, b) = hsl_to_rgb(h, s / 100.0, l / 100.0);
+    let a = match alpha {
+        Some(e) => (resolve_rel_component(e, &binds, 1.0)? * 255.0).clamp(0.0, 255.0).round() as u8,
+        None => o.a,
+    };
+    Some(Color { r, g, b, a })
+}
+
+/// Separa el color origen (1er token, respetando paréntesis de `rgb(...)`
+/// anidado) del resto de componentes. Fase 7.878.
+fn split_origin_and_components(rest: &str) -> Option<(&str, &str)> {
+    let rest = rest.trim();
+    let bytes = rest.as_bytes();
+    let mut depth = 0i32;
+    let mut i = 0;
+    // Avanza hasta el 1er whitespace de nivel superior tras el color origen.
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            c if (c as char).is_ascii_whitespace() && depth == 0 => break,
+            _ => {}
+        }
+        i += 1;
+    }
+    if i >= bytes.len() {
+        return None;
+    }
+    Some((rest[..i].trim(), rest[i..].trim()))
+}
+
+/// RGB (0-255) → HSL (h grados 0-360, s/l en 0-100). Fase 7.878.
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (rf, gf, bf) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+    let max = rf.max(gf).max(bf);
+    let min = rf.min(gf).min(bf);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d == 0.0 {
+        return (0.0, 0.0, l * 100.0);
+    }
+    let s = d / (1.0 - (2.0 * l - 1.0).abs());
+    let h = if max == rf {
+        60.0 * (((gf - bf) / d).rem_euclid(6.0))
+    } else if max == gf {
+        60.0 * ((bf - rf) / d + 2.0)
+    } else {
+        60.0 * ((rf - gf) / d + 4.0)
+    };
+    (h.rem_euclid(360.0), s * 100.0, l * 100.0)
+}
+
 /// Tokeniza los args de un color function. Devuelve `(canales, alpha?)`.
 /// Resuelve coma vs whitespace y la sintaxis moderna `r g b / a`.
 pub(crate) fn split_color_args(args: &str) -> Option<(Vec<&str>, Option<&str>)> {
     let args = args.trim();
-    // Sintaxis moderna: `R G B / A`. La barra separa el alpha.
-    if let Some(slash) = args.find('/') {
+    // Fase 7.878 — el `/` del alpha y los separadores se buscan a NIVEL
+    // SUPERIOR (un `calc(b / 2)` lleva `/` y espacios internos que no deben
+    // partir los componentes).
+    // Sintaxis moderna: `R G B / A`. La barra (top-level) separa el alpha.
+    if let Some(slash) = find_top_level_byte(args, b'/') {
         let main = args[..slash].trim();
         let alpha = args[slash + 1..].trim();
-        let parts: Vec<&str> = main.split_whitespace().collect();
+        let parts = split_top_level_byte(main, b' ');
         if parts.is_empty() {
             return None;
         }
         return Some((parts, Some(alpha)));
     }
-    // Legacy: comas separan TODO (incluido el alpha).
-    if args.contains(',') {
-        let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    // Legacy: comas (top-level) separan TODO (incluido el alpha).
+    if find_top_level_byte(args, b',').is_some() {
+        let parts = split_top_level_byte(args, b',');
         if parts.len() == 4 {
             let (rgb, a) = parts.split_at(3);
             return Some((rgb.to_vec(), Some(a[0])));
         }
         return Some((parts, None));
     }
-    // Moderna sin alpha: solo whitespace.
-    let parts: Vec<&str> = args.split_whitespace().collect();
+    // Moderna sin alpha: solo whitespace (top-level).
+    let parts = split_top_level_byte(args, b' ');
     Some((parts, None))
+}
+
+/// Índice del 1er byte `sep` a profundidad de paréntesis 0. Fase 7.878.
+fn find_top_level_byte(s: &str, sep: u8) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    for (i, &c) in bytes.iter().enumerate() {
+        match c {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            c if c == sep && depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Trocea `s` por `sep` a profundidad 0 (`b' '` agrupa runs de whitespace),
+/// descartando vacíos y trimeando. Devuelve slices del original. Fase 7.878.
+fn split_top_level_byte(s: &str, sep: u8) -> Vec<&str> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0usize;
+    for i in 0..bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            c if depth == 0 && (c == sep || (sep == b' ' && c.is_ascii_whitespace())) => {
+                let seg = s[start..i].trim();
+                if !seg.is_empty() {
+                    out.push(seg);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let seg = s[start..].trim();
+    if !seg.is_empty() {
+        out.push(seg);
+    }
+    out
 }
 
 /// Canal RGB: entero 0-255 o porcentaje 0%-100%.

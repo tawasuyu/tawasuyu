@@ -122,9 +122,10 @@ pub(crate) fn match_border_side_prop(prop: &str, suffix: &str) -> Option<BorderE
 pub(crate) fn parse_border_radius_shorthand(value: &str, important: bool) -> Vec<Decl> {
     // El eje vertical (tras `/`) no se modela: nos quedamos con el horizontal.
     let horiz = value.split('/').next().unwrap_or(value).trim();
-    let vals: Vec<f32> = horiz
-        .split_whitespace()
-        .map(parse_length_px)
+    // Fase 7.877 — tokeniza respetando paréntesis y acepta calc por esquina.
+    let vals: Vec<f32> = split_top_level_ws(horiz)
+        .iter()
+        .map(|t| parse_px_or_math(t))
         .collect::<Option<Vec<_>>>()
         .unwrap_or_default();
     let (tl, tr, br, bl) = match vals.as_slice() {

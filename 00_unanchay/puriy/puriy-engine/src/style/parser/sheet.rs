@@ -734,6 +734,13 @@ pub(crate) fn parse_keyframe_declarations(inner: &str) -> Vec<(String, String)> 
 /// no se confunde con una duración al clasificar el shorthand).
 pub(crate) fn parse_time(s: &str) -> Option<f32> {
     let s = s.trim();
+    // Fase 7.877 — `calc()` sobre tiempos (el evaluador da segundos).
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Number(n) if n.is_finite() => Some(n),
+            _ => None,
+        };
+    }
     if let Some(num) = s.strip_suffix("ms") {
         return num.trim().parse::<f32>().ok().map(|v| v / 1000.0);
     }
