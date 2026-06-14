@@ -429,14 +429,34 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.529 — `speak-as` (CSS Speech 1). HEREDA.
-        "speak-as" => match value.trim().to_ascii_lowercase().as_str() {
-            "normal" => Some(DeclKind::SpeakAs(SpeakAs::Normal)),
-            "spell-out" => Some(DeclKind::SpeakAs(SpeakAs::SpellOut)),
-            "digits" => Some(DeclKind::SpeakAs(SpeakAs::Digits)),
-            "literal-punctuation" => Some(DeclKind::SpeakAs(SpeakAs::LiteralPunctuation)),
-            "no-punctuation" => Some(DeclKind::SpeakAs(SpeakAs::NoPunctuation)),
-            _ => None,
-        },
+        // `speak-as` (CSS Speech 1) acepta una combinación de keywords
+        // (`spell-out || digits || [literal-punctuation | no-punctuation]`).
+        // El modelo es un enum único: validamos todos los tokens y nos
+        // quedamos con el primer keyword no-`normal` (degradado). Fase 7.919.
+        "speak-as" => {
+            let low = value.trim().to_ascii_lowercase();
+            let kw = |t: &str| match t {
+                "normal" => Some(SpeakAs::Normal),
+                "spell-out" => Some(SpeakAs::SpellOut),
+                "digits" => Some(SpeakAs::Digits),
+                "literal-punctuation" => Some(SpeakAs::LiteralPunctuation),
+                "no-punctuation" => Some(SpeakAs::NoPunctuation),
+                _ => None,
+            };
+            let mut primary: Option<SpeakAs> = None;
+            let mut all_ok = !low.is_empty();
+            for tok in low.split_whitespace() {
+                match kw(tok) {
+                    Some(v) => {
+                        if primary.is_none() || primary == Some(SpeakAs::Normal) {
+                            primary = Some(v);
+                        }
+                    }
+                    None => { all_ok = false; break; }
+                }
+            }
+            if all_ok { primary.map(DeclKind::SpeakAs) } else { None }
+        }
         // Fase 7.530 — `voice-balance` (CSS Speech 1). -100..100. HEREDA.
         // Keywords `left|center|right|leftwards|rightwards` → -100/0/100/-50/50.
         "voice-balance" => match value.trim().to_ascii_lowercase().as_str() {
@@ -478,6 +498,35 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::VoiceVolume(None))
             } else {
                 Some(DeclKind::VoiceVolume(Some(v.to_string())))
+            }
+        }
+        // Fase 7.919 — `voice-{family,stress,duration}` (CSS Speech 1).
+        // Parse opaco — keyword identidad reservado a None.
+        "voice-family" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("preserve") {
+                Some(DeclKind::VoiceFamily(None))
+            } else {
+                Some(DeclKind::VoiceFamily(Some(v.to_string())))
+            }
+        }
+        "voice-stress" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::VoiceStress(None))
+            } else {
+                Some(DeclKind::VoiceStress(Some(v.to_string())))
+            }
+        }
+        "voice-duration" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::VoiceDuration(None))
+            } else {
+                Some(DeclKind::VoiceDuration(Some(v.to_string())))
             }
         }
         // Fase 7.534-7.537 — `pause-{before,after}` y `rest-{before,after}`

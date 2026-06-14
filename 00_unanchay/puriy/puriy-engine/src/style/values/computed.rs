@@ -1005,6 +1005,15 @@ pub struct ComputedStyle {
     /// `voice-volume` (Fase 7.533). CSS Speech 1. Parse opaco — `None` =
     /// `medium`. **HEREDA**. Plumb.
     pub voice_volume: Option<String>,
+    /// `voice-family` (Fase 7.919). CSS Speech 1. Parse opaco — `None` =
+    /// `preserve`. Plumb.
+    pub voice_family: Option<String>,
+    /// `voice-stress` (Fase 7.919). CSS Speech 1. Parse opaco — `None` =
+    /// `normal`. Plumb.
+    pub voice_stress: Option<String>,
+    /// `voice-duration` (Fase 7.919). CSS Speech 1. Parse opaco — `None` =
+    /// `auto`. Plumb.
+    pub voice_duration: Option<String>,
     /// `pause-before` (Fase 7.534). CSS Speech 1: pausa antes del
     /// elemento. Parse opaco — `None` = `none`. **HEREDA**. Plumb.
     pub pause_before: Option<String>,

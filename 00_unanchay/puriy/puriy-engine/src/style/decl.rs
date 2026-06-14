@@ -701,6 +701,12 @@ pub(crate) enum DeclKind {
     VoiceRate(Option<String>),
     /// `voice-volume` (Fase 7.533). `None` = `medium`. HEREDA. Plumb.
     VoiceVolume(Option<String>),
+    /// `voice-family` (Fase 7.919). `None` = `preserve`. Plumb opaco. CSS Speech 1.
+    VoiceFamily(Option<String>),
+    /// `voice-stress` (Fase 7.919). `None` = `normal`. Plumb opaco. CSS Speech 1.
+    VoiceStress(Option<String>),
+    /// `voice-duration` (Fase 7.919). `None` = `auto`. Plumb opaco. CSS Speech 1.
+    VoiceDuration(Option<String>),
     /// `pause-before` (Fase 7.534). `None` = `none`. HEREDA. Plumb.
     PauseBefore(Option<String>),
     /// `pause-after` (Fase 7.535). `None` = `none`. HEREDA. Plumb.
@@ -1538,6 +1544,9 @@ impl Decl {
             DeclKind::VoicePitch(v) => s.voice_pitch = v.clone(),
             DeclKind::VoiceRate(v) => s.voice_rate = v.clone(),
             DeclKind::VoiceVolume(v) => s.voice_volume = v.clone(),
+            DeclKind::VoiceFamily(v) => s.voice_family = v.clone(),
+            DeclKind::VoiceStress(v) => s.voice_stress = v.clone(),
+            DeclKind::VoiceDuration(v) => s.voice_duration = v.clone(),
             DeclKind::PauseBefore(v) => s.pause_before = v.clone(),
             DeclKind::PauseAfter(v) => s.pause_after = v.clone(),
             DeclKind::RestBefore(v) => s.rest_before = v.clone(),

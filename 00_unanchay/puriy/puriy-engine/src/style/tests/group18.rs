@@ -115,3 +115,60 @@ fn corner_shape_longhands() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::CornerShape(None))));
 }
+
+// ── Fase 7.919 — CSS Speech (Ola C) ────────────────────────────────────────
+
+#[test]
+fn voice_family_stress_duration() {
+    assert!(decls("voice-family: female")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::VoiceFamily(Some(s)) if s == "female")));
+    assert!(decls("voice-family: preserve")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::VoiceFamily(None))));
+    assert!(decls("voice-stress: strong")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::VoiceStress(Some(s)) if s == "strong")));
+    assert!(decls("voice-stress: normal")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::VoiceStress(None))));
+    assert!(decls("voice-duration: 2s")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::VoiceDuration(Some(s)) if s == "2s")));
+    assert!(decls("voice-duration: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::VoiceDuration(None))));
+}
+
+#[test]
+fn speak_as_combinacion() {
+    // combo `spell-out digits` válido → primer keyword no-normal (degradado).
+    assert!(decls("speak-as: spell-out digits")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SpeakAs(SpeakAs::SpellOut))));
+    assert!(decls("speak-as: digits literal-punctuation")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SpeakAs(SpeakAs::Digits))));
+    // un solo keyword sigue funcionando
+    assert!(decls("speak-as: no-punctuation")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SpeakAs(SpeakAs::NoPunctuation))));
+    // token inválido rechaza todo
+    assert!(decls("speak-as: spell-out foobar").is_empty());
+}
+
+#[test]
+fn pause_rest_shorthands() {
+    // `pause: 20ms 40ms` → before=20ms, after=40ms.
+    let p = decls("pause: 20ms 40ms");
+    assert!(p.iter().any(|d| matches!(&d.kind, DeclKind::PauseBefore(Some(s)) if s == "20ms")));
+    assert!(p.iter().any(|d| matches!(&d.kind, DeclKind::PauseAfter(Some(s)) if s == "40ms")));
+    // 1 valor → ambos lados iguales.
+    let p1 = decls("pause: weak");
+    assert!(p1.iter().any(|d| matches!(&d.kind, DeclKind::PauseBefore(Some(s)) if s == "weak")));
+    assert!(p1.iter().any(|d| matches!(&d.kind, DeclKind::PauseAfter(Some(s)) if s == "weak")));
+    // `rest` análogo, con `none` → None.
+    let r = decls("rest: none 1s");
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RestBefore(None))));
+    assert!(r.iter().any(|d| matches!(&d.kind, DeclKind::RestAfter(Some(s)) if s == "1s")));
+}

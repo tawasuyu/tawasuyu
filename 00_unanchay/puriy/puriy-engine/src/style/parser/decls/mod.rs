@@ -224,6 +224,28 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `pause`/`rest` shorthands (CSS Speech 1, Fase 7.919): cada lado es
+        // un token opaco (`<time>` o keyword o `none`). 1 token → ambos lados;
+        // 2 → before, after. Más de 2 tokens rechaza el shorthand entero.
+        if prop.eq_ignore_ascii_case("pause") || prop.eq_ignore_ascii_case("rest") {
+            let is_pause = prop.eq_ignore_ascii_case("pause");
+            let parts: Vec<&str> = value.split_whitespace().collect();
+            if parts.len() == 1 || parts.len() == 2 {
+                let opaque = |t: &str| -> Option<String> {
+                    if t.eq_ignore_ascii_case("none") { None } else { Some(t.to_string()) }
+                };
+                let before = opaque(parts[0]);
+                let after = if parts.len() == 2 { opaque(parts[1]) } else { before.clone() };
+                if is_pause {
+                    out.push(Decl { kind: DeclKind::PauseBefore(before), important });
+                    out.push(Decl { kind: DeclKind::PauseAfter(after), important });
+                } else {
+                    out.push(Decl { kind: DeclKind::RestBefore(before), important });
+                    out.push(Decl { kind: DeclKind::RestAfter(after), important });
+                }
+            }
+            continue;
+        }
         // `scroll-margin-block: <start> [<end>]` (Fase 7.417). En LTR
         // horizontal: start=top, end=bottom. Con 1 valor se aplica a
         // ambos lados; con 2, primero start, después end. Si falla algún
