@@ -176,10 +176,12 @@ fn paint_map(
     }
 }
 
-/// Chip "✛ nombrar zona" anclado a pantalla — calco de `name_region_chip` +
-/// `pinned` (src/map.rs), sin el on_click porque acá nadie clickea.
-fn chip_nombrar(sx: f32, sy: f32, theme: &Theme) -> View<()> {
-    let (w, h) = (132.0_f32, 24.0_f32);
+/// Chip "✛ {nombre}" anclado a pantalla — calco de `name_region_chip` +
+/// `pinned` (src/map.rs), sin el on_click porque acá nadie clickea. El
+/// nombre es el topónimo propuesto del clúster (asignación automática del
+/// #3): el bautizo arranca con la sugerencia ya cargada.
+fn chip_nombrar(sx: f32, sy: f32, name: &str, theme: &Theme) -> View<()> {
+    let (w, h) = (160.0_f32, 24.0_f32);
     let chip = View::<()>::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         align_items: Some(AlignItems::Center),
@@ -188,7 +190,7 @@ fn chip_nombrar(sx: f32, sy: f32, theme: &Theme) -> View<()> {
     })
     .fill(theme.bg_button)
     .radius(12.0)
-    .text_aligned("✛ nombrar zona".to_string(), 11.0, theme.fg_muted, Alignment::Center);
+    .text_aligned(format!("✛ {name}"), 11.0, theme.fg_muted, Alignment::Center);
     View::new(Style {
         position: Position::Absolute,
         inset: Rect {
@@ -264,11 +266,12 @@ fn main() {
         (sel, (-160.0, -10.0), 0.24),
     ];
 
-    // El chip de bautizo sobre el centroide del clúster denso sin nombre.
+    // El chip de bautizo sobre el centroide del clúster denso sin nombre,
+    // ya con el topónimo propuesto del contenido (asignación automática).
     // Coordenadas de pantalla con el rect del lienzo (ventana menos padding 4).
     let (cw, ch) = (W as f32 - 8.0, H as f32 - 8.0);
     let (chip_sx, chip_sy) = world_to_local(-52.0, 247.0, cw, ch);
-    let chip = chip_nombrar(chip_sx, chip_sy - 46.0, &theme);
+    let chip = chip_nombrar(chip_sx, chip_sy - 46.0, "Cocina", &theme);
 
     // Misma composición que `gravity_panel`: panel con padding 4 + canvas
     // `bg_panel_alt` que pinta el mapa, con los overlays como hijos.

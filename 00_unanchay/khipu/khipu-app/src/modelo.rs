@@ -249,8 +249,9 @@ pub(crate) enum Msg {
     Deselect,
     /// Escape en el mapa: cierra lo de más arriba.
     EscapeMap,
-    /// Empieza a bautizar una región en la coordenada de mundo `(x, y)`.
-    BeginNaming(f32, f32),
+    /// Empieza a bautizar una región en la coordenada de mundo `(x, y)`,
+    /// precargando el input con el nombre propuesto del clúster.
+    BeginNaming(f32, f32, String),
     /// Confirma el bautizo: crea la región con el texto tipeado.
     CommitNaming,
     /// Cancela el bautizo sin crear región.

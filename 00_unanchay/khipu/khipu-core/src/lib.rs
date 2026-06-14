@@ -8,6 +8,8 @@
 //! - [`note`] — el modelo [`Note`].
 //! - [`links`] — el parser de wiki-links `[[...]]`.
 //! - [`store`] — el [`NoteStore`] y el grafo de enlaces.
+//! - [`region`] — regiones emergentes del mapa: detección de clústeres
+//!   densos + propuesta de topónimo (el #3 del mapa mental).
 //!
 //! La gravedad semántica (clustering por afinidad de embeddings) vive en
 //! `khipu_app-gravity`; las lentes visuales, en los crates de frontend.
@@ -16,8 +18,10 @@
 
 pub mod links;
 pub mod note;
+pub mod region;
 pub mod store;
 
 pub use links::parse_links;
 pub use note::{Note, NoteId};
+pub use region::{emergent_regions, propose_region_name, EmergentRegion, REGION_MATCH_DIST, REGION_MIN_MEMBERS};
 pub use store::NoteStore;

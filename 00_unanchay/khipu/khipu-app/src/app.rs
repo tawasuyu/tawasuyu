@@ -27,8 +27,8 @@ use crate::estado::{
     now_secs,
 };
 use crate::map::{
-    gravity_panel, name_region_chip, naming_input, node_card, node_screen_pos, overlay_left,
-    overlay_right, pick_note, pinned, unnamed_cluster_centroids, world_screen, place_note,
+    emergent_regions, gravity_panel, name_region_chip, naming_input, node_card, node_screen_pos,
+    overlay_left, overlay_right, pick_note, pinned, world_screen, place_note,
 };
 use crate::menu::{app_menu, focused_edit_flags, focused_editor, menubar_spec};
 use crate::modelo::{Embedder, Focus, Model, Msg, EDITOR_OVERLAY_W, LIST_WIDTH, ZOOM_INJECT};
@@ -505,9 +505,12 @@ impl App for KhipuApp {
                 deselect(&mut model);
                 persist(&model);
             }
-            Msg::BeginNaming(x, y) => {
+            Msg::BeginNaming(x, y, suggestion) => {
                 model.naming = Some((x, y));
-                model.region_input.clear();
+                // Precarga el nombre propuesto del clúster: el bautizo
+                // arranca con la asignación automática, lista para aceptar
+                // (Enter) o editar.
+                model.region_input.set_text(suggestion);
                 model.focus = Focus::Region;
             }
             Msg::CommitNaming => {
@@ -583,15 +586,17 @@ impl App for KhipuApp {
             let editor = editor_panel(model, &input_palette, &editor_palette);
             injected.push(node_card(editor, nx, ny, model.canvas_size, &model.theme));
         }
-        // Sugerencias de bautizo de clústeres sin nombre.
+        // Sugerencias de bautizo de clústeres sin nombre, ya con el
+        // topónimo propuesto del contenido.
         if inplace.is_none() {
-            for (wx, wy) in unnamed_cluster_centroids(model) {
+            for region in emergent_regions(model) {
+                let (wx, wy) = region.centroid;
                 let (sx, sy) = world_screen(model, wx, wy);
                 injected.push(pinned(
-                    name_region_chip(wx, wy, &model.theme),
+                    name_region_chip(wx, wy, &region.suggested_name, &model.theme),
                     sx,
                     sy,
-                    132.0,
+                    160.0,
                     24.0,
                     model.canvas_size,
                 ));

@@ -34,7 +34,7 @@ El lienzo de pensamientos ocupa toda la ventana; lista y editor son overlays que
 - **Ancla persistida**: cada nota se domicilia una sola vez (`Note.pos`) en el baricentro de su parentela semántica (afinidad coseno) con separación mínima — los clústeres emergen y nada se reacomoda solo, así la memoria espacial puede recordar dónde vive cada cosa. Cámara con pan/zoom sobre lienzo infinito.
 - **El mapa respira**: el render usa la masa viva (`khipu-gravity`) para tamaño y brillo — lo reciente arde, lo abandonado se apaga. Al seleccionar, filamentos de activación por difusión.
 - **Zoom semántico**: cerca (zoom ≥ 1.6) el nodo deja de ser un punto y se abre *en su lugar del mapa* como tarjeta editable que viaja con pan/zoom; lejos, el editor cae al panel lateral.
-- **Regiones emergentes**: cuando un clúster denso junta ≥3 notas visibles sin topónimo cerca, el mapa ofrece un chip «✛ nombrar zona» en su centroide; el nombre queda como landmark tenue detrás de los nodos (pertenencia por vecindad, no carpeta). Se bautiza *después* de ver el patrón.
+- **Regiones emergentes**: cuando un clúster denso junta ≥3 notas visibles sin topónimo cerca, el mapa ofrece en su centroide un chip «✛ {nombre}» con un topónimo **propuesto del contenido** (el término más recurrente y saliente de los títulos y etiquetas del clúster). Al pinchar arranca el bautizo con la sugerencia ya cargada — se acepta con Enter o se edita. El nombre queda como landmark tenue detrás de los nodos (pertenencia por vecindad, no carpeta). Se bautiza *después* de ver el patrón. La detección de clústeres densos y la propuesta de nombre son lógica agnóstica en `khipu-core` (`region::{emergent_regions, propose_region_name}`), no del painter.
 
 ## Gravedad semántica (embeddings)
 
@@ -72,7 +72,7 @@ La lógica vive en `khipu-share`: `net` (transporte TCP), `discovery` (baliza UD
 
 - `khipu-core` (modelo de nota + store) + `khipu-gravity` (masa/decay con refuerzo por acceso).
 - `khipu-app`: UI Llimphi sobre el core, con menú principal y contextual; partida en módulos (`main` / `map` / `panels` / `net`).
-- Rediseño mapa mental completo: canvas-raíz (lista/editor flotan), ancla persistida con cámara pan/zoom, masa viva como tamaño/brillo, zoom semántico in-situ y regiones emergentes bautizables.
+- Rediseño mapa mental completo: canvas-raíz (lista/editor flotan), ancla persistida con cámara pan/zoom, masa viva como tamaño/brillo, zoom semántico in-situ y regiones emergentes con topónimo propuesto del contenido (detección + nombre en `khipu-core::region`, bautizo en la UI).
 - Gravedad semántica: clustering por embeddings del `verbo-daemon` (rimay), con fallback trigram 16d offline; cálculo en worker que no bloquea la UI.
 - Compartir vía agora (`khipu-share`): sobres firmados Ed25519 + direccionados BLAKE3, identidad cifrada (Argon2id + ChaCha20-Poly1305 en keystore), compartir selectivo + procedencia del autor; transporte TCP/LAN + descubrimiento por baliza UDP (15 tests + integración loopback).
 - WAN/P2P (`khipu-brahman` sobre libp2p/BrahmanNet): stream cifrado Noise, NAT traversal (Circuit Relay v2 + DCUtR), AutoNAT, descubrimiento por DHT Kademlia (4 tests e2e localhost).

@@ -16,7 +16,7 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::{draw_block, Alignment, TextBlock};
 use llimphi_ui::{DragPhase, View};
 use llimphi_widget_text_input::{text_input_view, TextInputPalette};
-use khipu_core::NoteId;
+use khipu_core::{EmergentRegion, NoteId};
 
 use crate::panels::button;
 use crate::estado::{current_mass, now_secs};
@@ -246,52 +246,43 @@ pub(crate) fn node_screen_pos(model: &Model, id: NoteId) -> Option<(f32, f32)> {
     Some(world_screen(model, wx, wy))
 }
 
-/// Mínimo de notas para que un clúster cuente como región candidata.
-pub(crate) const REGION_MIN_MEMBERS: usize = 3;
-/// Distancia de mundo dentro de la cual una región ya "posee" un clúster:
-/// si hay un topónimo así de cerca del centroide, no se vuelve a ofrecer.
-pub(crate) const REGION_MATCH_DIST: f32 = 140.0;
-
-/// Centroides (mundo) de los clústeres densos que todavía no tienen una
-/// región cerca — los lugares que el mapa ofrece bautizar. Sólo cuentan
-/// miembros colocados y visibles.
-pub(crate) fn unnamed_cluster_centroids(model: &Model) -> Vec<(f32, f32)> {
+/// Regiones emergentes que el mapa ofrece bautizar: clústeres densos sin
+/// topónimo cerca, ya con un nombre propuesto del contenido. La detección
+/// y la propuesta de nombre viven en `khipu-core` (lógica agnóstica); acá
+/// sólo armamos el sustrato espacial (notas visibles + colocadas) y los
+/// topónimos ya existentes (incluido el bautizo en curso, que cuenta como
+/// "ya ofrecido" para no duplicar el chip).
+pub(crate) fn emergent_regions(model: &Model) -> Vec<EmergentRegion> {
     let now = now_secs();
-    let mut out = Vec::new();
-    for cluster in model.field.clusters(CLUSTER_THRESHOLD) {
-        let pts: Vec<(f32, f32)> = cluster
-            .iter()
-            .filter_map(|id| {
-                let n = model.store.get(*id)?;
-                let p = n.pos?;
-                let m = current_mass(&model.gravity, n, now);
-                (model.show_archive || model.gravity.is_visible(m)).then_some(p)
-            })
-            .collect();
-        if pts.len() < REGION_MIN_MEMBERS {
-            continue;
-        }
-        let (sx, sy) = pts.iter().fold((0.0, 0.0), |(ax, ay), (x, y)| (ax + x, ay + y));
-        let c = (sx / pts.len() as f32, sy / pts.len() as f32);
-        let d2 = REGION_MATCH_DIST * REGION_MATCH_DIST;
-        let near_named = model
-            .regions
-            .iter()
-            .any(|r| (r.x - c.0).powi(2) + (r.y - c.1).powi(2) <= d2);
-        let naming_here = model
-            .naming
-            .map(|(nx, ny)| (nx - c.0).powi(2) + (ny - c.1).powi(2) <= d2)
-            .unwrap_or(false);
-        if !near_named && !naming_here {
-            out.push(c);
-        }
+    // Notas visibles y colocadas — el filtro de masa/horizonte (física
+    // temporal) se aplica acá, antes de pasar al core puramente espacial.
+    let placed: Vec<&khipu_core::Note> = model
+        .store
+        .iter()
+        .filter(|n| {
+            n.pos.is_some()
+                && (model.show_archive || model.gravity.is_visible(current_mass(&model.gravity, n, now)))
+        })
+        .collect();
+    let clusters = model.field.clusters(CLUSTER_THRESHOLD);
+    // Topónimos que ya "poseen" una zona: los bautizados + el bautizo en curso.
+    let mut named_spots: Vec<(f32, f32)> = model.regions.iter().map(|r| (r.x, r.y)).collect();
+    if let Some(spot) = model.naming {
+        named_spots.push(spot);
     }
-    out
+    khipu_core::emergent_regions(
+        &placed,
+        &clusters,
+        &named_spots,
+        khipu_core::REGION_MIN_MEMBERS,
+        khipu_core::REGION_MATCH_DIST,
+    )
 }
 
-/// Chip clickeable "✛ nombrar zona" que ofrece bautizar el clúster denso
-/// en `(wx, wy)`. Al click abre el input de bautizo en esa coordenada.
-pub(crate) fn name_region_chip(wx: f32, wy: f32, theme: &Theme) -> View<Msg> {
+/// Chip clickeable que ofrece bautizar el clúster denso en `(wx, wy)` con
+/// el nombre propuesto (`✛ {name}`). Al click abre el input de bautizo en
+/// esa coordenada, ya precargado con la sugerencia.
+pub(crate) fn name_region_chip(wx: f32, wy: f32, name: &str, theme: &Theme) -> View<Msg> {
     View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -304,8 +295,8 @@ pub(crate) fn name_region_chip(wx: f32, wy: f32, theme: &Theme) -> View<Msg> {
     .fill(theme.bg_button)
     .radius(12.0)
     .hover_fill(theme.bg_button_hover)
-    .text_aligned("✛ nombrar zona", 11.0, theme.fg_muted, Alignment::Center)
-    .on_click(Msg::BeginNaming(wx, wy))
+    .text_aligned(format!("✛ {name}"), 11.0, theme.fg_muted, Alignment::Center)
+    .on_click(Msg::BeginNaming(wx, wy, name.to_string()))
 }
 
 /// Mini-input del bautizo en curso: una tarjeta con el campo de texto
