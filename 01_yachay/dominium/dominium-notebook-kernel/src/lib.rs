@@ -18,7 +18,7 @@
 //! | `dominium-tick`   | `"N"` o vacío                | Corre N ticks (default 1); output = stats post.              |
 //! | `dominium-stats`  | (vacío)                      | Lee `WorldStats` sin tick.                                   |
 //! | `dominium-param`  | `"NAME=VALUE"` por línea     | Setea uno o más campos `f32` de `SimParams`.                 |
-//! | `dominium-render` | `"W H [SCALE]"` (px)         | Rasteriza grid + lemmings a PNG, output `OutputPayload::Image`. |
+//! | `dominium-render` | `"W H [SCALE]"` (px)         | Rasteriza grid + lemmings a PNG (`SCALE`≥1 multiplica la resolución), output `OutputPayload::Image`. |
 //!
 //! Cualquier otra `language` devuelve `KernelError::Runtime` con
 //! mensaje claro.
@@ -312,17 +312,25 @@ fn exec_render(
         })
         .transpose()?
         .unwrap_or(256);
-    // SCALE futuro (zoom > 1.0); por ahora se acepta y se ignora.
-    let _scale: f32 = it
+    // SCALE (zoom ≥ 1.0): multiplica la resolución de salida. `rasterize_world`
+    // mapea TODO el grid al lienzo, así que más píxeles = misma vista del mundo
+    // con más detalle (cada celda ocupa más píxeles). Valor inválido/≤0 → 1.0.
+    let scale: f32 = it
         .next()
         .map(|s| s.parse::<f32>().unwrap_or(1.0))
         .unwrap_or(1.0);
+    let scale = if scale.is_finite() && scale > 0.0 { scale } else { 1.0 };
 
     if w_px == 0 || h_px == 0 || w_px > 4096 || h_px > 4096 {
         return Err(KernelError::Runtime(format!(
             "WIDTH/HEIGHT debe estar en [1, 4096], llegó {w_px}x{h_px}"
         )));
     }
+
+    // Dimensiones finales tras aplicar el zoom, clampeadas al techo de 4096
+    // por lado (evita que un SCALE grande dispare una asignación enorme).
+    let out_w = (((w_px as f32) * scale).round() as u32).clamp(1, 4096);
+    let out_h = (((h_px as f32) * scale).round() as u32).clamp(1, 4096);
 
     let s = lock(state)?;
     let world = s
@@ -331,13 +339,13 @@ fn exec_render(
         .ok_or_else(|| KernelError::Runtime(
             "no hay world: llamá a dominium-world WxH primero".into(),
         ))?;
-    let png = rasterize_world(world, w_px, h_px);
+    let png = rasterize_world(world, out_w, out_h);
     Ok(CellOutput {
-        stdout: format!("rasterizado {w_px}×{h_px} px ({} bytes PNG)", png.len()),
-        value: Some(format!("{}x{}", w_px, h_px)),
+        stdout: format!("rasterizado {out_w}×{out_h} px ({} bytes PNG)", png.len()),
+        value: Some(format!("{}x{}", out_w, out_h)),
         payload: OutputPayload::Image {
-            width: w_px,
-            height: h_px,
+            width: out_w,
+            height: out_h,
             mime: "image/png".to_string(),
             bytes: png,
         },
@@ -708,6 +716,35 @@ mod tests {
                 );
             }
             other => panic!("se esperaba Image, llegó {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn render_scale_multiplica_la_resolucion() {
+        let k = kernel();
+        k.execute("16 16", "dominium-world").await.unwrap();
+        // 64×64 base con SCALE 2.0 → 128×128 de salida.
+        let out = k.execute("64 64 2.0", "dominium-render").await.unwrap();
+        match out.payload {
+            OutputPayload::Image { width, height, .. } => {
+                assert_eq!(width, 128);
+                assert_eq!(height, 128);
+            }
+            other => panic!("se esperaba Image, llegó {other:?}"),
+        }
+        assert_eq!(out.value.as_deref(), Some("128x128"));
+    }
+
+    #[tokio::test]
+    async fn render_scale_clampea_al_techo() {
+        let k = kernel();
+        k.execute("8 8", "dominium-world").await.unwrap();
+        // 4096 base × 2 → clamp a 4096 (no 8192).
+        let out = k.execute("4096 4096 2", "dominium-render").await.unwrap();
+        if let OutputPayload::Image { width, height, .. } = out.payload {
+            assert_eq!((width, height), (4096, 4096));
+        } else {
+            panic!("se esperaba Image");
         }
     }
 
