@@ -169,7 +169,9 @@ use super::super::*;
             parse_container_type("inline-size"),
             Some(ContainerType::InlineSize)
         );
-        assert_eq!(parse_container_type("scroll-state"), None);
+        // Fase 7.908 — `scroll-state` (CSS Conditional 5) → Normal (degrada;
+        // no establece contenedor de tamaño).
+        assert_eq!(parse_container_type("scroll-state"), Some(ContainerType::Normal));
 
         let html = r##"<html><head><style>
             body { container-type: inline-size }

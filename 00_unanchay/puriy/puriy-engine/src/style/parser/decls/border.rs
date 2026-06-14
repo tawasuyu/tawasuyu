@@ -236,22 +236,34 @@ pub(crate) fn parse_logical_border(prop: &str, value: &str, important: bool) -> 
     } else {
         (vec![axis.0, axis.1], after)
     };
+    // Fase 7.908 — los sub-shorthands `-width`/`-style`/`-color` de ambos
+    // lados aceptan DOS valores (`border-inline-color: red blue` = start, end).
+    // Repartimos token[i]→edge[i] cuando hay 2 tokens y 2 lados; si no, el
+    // value entero va a cada lado. El shorthand pleno (`sub == ""`) NO se
+    // parte (es `<width> || <style> || <color>`, no por-lado).
+    let two_vals = if sub.is_empty() {
+        None
+    } else {
+        let toks = split_top_level_ws(value.trim());
+        (edges.len() == 2 && toks.len() == 2).then_some(toks)
+    };
     let mut out = Vec::new();
-    for edge in edges {
+    for (i, edge) in edges.iter().copied().enumerate() {
+        let v = two_vals.as_ref().map_or(value, |t| t[i].as_str());
         match sub {
             "" => out.extend(parse_border_side_shorthand(edge, value, important)),
             "-width" => {
-                if let Some(w) = parse_length_px(value) {
+                if let Some(w) = parse_length_px(v) {
                     out.push(Decl { kind: DeclKind::BorderSideWidth(edge, w), important });
                 }
             }
             "-color" => {
-                if let Some(c) = parse_color(value) {
+                if let Some(c) = parse_color(v) {
                     out.push(Decl { kind: DeclKind::BorderSideColor(edge, c), important });
                 }
             }
             "-style" => {
-                if let Some(s) = parse_border_style(value) {
+                if let Some(s) = parse_border_style(v) {
                     out.push(Decl { kind: DeclKind::BorderSideStyle(edge, s), important });
                 }
             }

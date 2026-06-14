@@ -424,12 +424,16 @@ pub(crate) fn parse_mask_composite(value: &str) -> Option<MaskComposite> {
     }
 }
 
-/// `container-type`: `normal | size | inline-size`. Fase 7.407.
+/// `container-type`: `normal | size | inline-size | scroll-state`. Fase 7.407.
 pub(crate) fn parse_container_type(value: &str) -> Option<ContainerType> {
     match value.trim().to_ascii_lowercase().as_str() {
         "normal" => Some(ContainerType::Normal),
         "size" => Some(ContainerType::Size),
         "inline-size" => Some(ContainerType::InlineSize),
+        // Fase 7.908 — `scroll-state` (CSS Conditional 5): contenedor de
+        // scroll-state queries. No establece contenedor de tamaño → como
+        // `normal` para layout (las queries de scroll-state no se evalúan).
+        "scroll-state" => Some(ContainerType::Normal),
         _ => None,
     }
 }

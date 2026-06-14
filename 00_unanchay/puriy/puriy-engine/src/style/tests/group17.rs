@@ -1204,3 +1204,43 @@ fn color_relativo_lab_lch() {
     // alpha relativo.
     assert!(matches!(col("color: lab(from red l a b / 0.5)"), Some(c) if c.a == 128));
 }
+
+// ── Fase 7.908 — border lógico de dos valores + container-type scroll-state ─
+
+#[test]
+fn border_logico_dos_valores() {
+    // border-inline-color: start=red, end=blue → left/right.
+    let d = decls("border-inline-color: red blue");
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::BorderSideColor(BorderEdge::Left, c) if c.r == 255 && c.b == 0)));
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::BorderSideColor(BorderEdge::Right, c) if c.b == 255 && c.r == 0)));
+    // border-block-style: dos valores → top/bottom (el estilo se guarda como
+    // bool "visible"; solid y dashed son ambos visibles).
+    let d = decls("border-block-style: solid dashed");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderSideStyle(BorderEdge::Top, true))));
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderSideStyle(BorderEdge::Bottom, true))));
+    // start=none, end=solid → top invisible, bottom visible.
+    let d = decls("border-block-style: none solid");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderSideStyle(BorderEdge::Top, false))));
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderSideStyle(BorderEdge::Bottom, true))));
+    // border-inline-width: dos valores px.
+    let d = decls("border-inline-width: 1px 2px");
+    assert!(d.iter().any(|x| matches!(x.kind,
+        DeclKind::BorderSideWidth(BorderEdge::Left, w) if (w - 1.0).abs() < 1e-6)));
+    assert!(d.iter().any(|x| matches!(x.kind,
+        DeclKind::BorderSideWidth(BorderEdge::Right, w) if (w - 2.0).abs() < 1e-6)));
+    // Un valor sigue aplicando a ambos lados.
+    let d = decls("border-inline-color: red");
+    assert_eq!(d.iter().filter(|x| matches!(x.kind, DeclKind::BorderSideColor(..))).count(), 2);
+    // Color con función (espacios internos) NO se parte como dos valores.
+    let d = decls("border-inline-color: rgb(1 2 3)");
+    assert_eq!(d.iter().filter(|x| matches!(x.kind, DeclKind::BorderSideColor(..))).count(), 2);
+}
+
+#[test]
+fn container_type_scroll_state() {
+    assert!(decls("container-type: scroll-state")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ContainerType(ContainerType::Normal))));
+}
