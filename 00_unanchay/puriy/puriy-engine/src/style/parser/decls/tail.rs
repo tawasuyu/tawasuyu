@@ -215,6 +215,18 @@ pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     if s.eq_ignore_ascii_case("auto") {
         return Some(LengthVal::Auto);
     }
+    // Fase 7.906 — `calc-size(<basis>, <calc>)` (CSS Sizing 4, interpolate-size).
+    // Sin interpolación real, resolvemos al tamaño base (1er argumento).
+    if s.len() > 10 && s[..10].eq_ignore_ascii_case("calc-size(") {
+        if let Some(body) = s[10..].strip_suffix(')') {
+            let basis = first_comma(body).trim();
+            // `any` como basis = sin restricción → `auto`.
+            if basis.eq_ignore_ascii_case("any") {
+                return Some(LengthVal::Auto);
+            }
+            return parse_length_or_pct(basis);
+        }
+    }
     // Fase 7.849 — keywords de tamaño intrínseco. `fit-content(<len>)` (forma
     // funcional) cae también a `FitContent` (el argumento no se modela aún).
     if s.eq_ignore_ascii_case("min-content") {

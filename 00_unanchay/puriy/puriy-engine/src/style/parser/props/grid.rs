@@ -52,10 +52,13 @@ pub(crate) fn parse_grid_template(value: &str) -> Option<Vec<GridTrackSize>> {
             };
             // Fase 7.877 — el cuerpo de `repeat` puede tener VARIOS tracks
             // (`repeat(2, 100px 1fr)`); se repite la lista completa.
+            // Fase 7.906 — los tokens de línea nombrada (`[a]`) se descartan
+            // (plumb opaco), igual que en el track-list de nivel superior.
             let body: Vec<GridTrackSize> = split_top_level_ws(track_raw.trim())
                 .iter()
-                .map(|t| parse_one_grid_track(t))
-                .collect::<Option<Vec<_>>>()?;
+                .filter(|t| !t.starts_with('['))
+                .filter_map(|t| parse_one_grid_track(t))
+                .collect();
             if body.is_empty() {
                 continue;
             }

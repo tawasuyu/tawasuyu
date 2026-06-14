@@ -258,8 +258,16 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.736 — alias `-webkit-animation-duration` → estándar.
-        "animation-duration" | "-webkit-animation-duration" => parse_time_seconds(first_comma(value.trim()))
-            .map(DeclKind::AnimationDuration),
+        "animation-duration" | "-webkit-animation-duration" => {
+            // Fase 7.906 — `auto` (CSS Animations 2 / scroll-driven): la
+            // duración la fija el timeline. Sin scroll-timeline, degrada a 0s.
+            let v = first_comma(value.trim());
+            if v.eq_ignore_ascii_case("auto") {
+                Some(DeclKind::AnimationDuration(0.0))
+            } else {
+                parse_time_seconds(v).map(DeclKind::AnimationDuration)
+            }
+        }
         // Fase 7.737 — alias `-webkit-animation-timing-function` → estándar.
         // Fase 7.855 — usa `parse_easing` (no `_keyword`): acepta también
         // `cubic-bezier(...)` y `steps(...)`, igual que `transition-timing-function`.

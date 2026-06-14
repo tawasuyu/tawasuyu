@@ -259,6 +259,78 @@ fn parse_hsl_relative(rest: &str) -> Option<Color> {
     Some(Color { r, g, b, a })
 }
 
+/// `hwb(from <color> h w b [/ a])` (CSS Color 5). Fase 7.906.
+fn parse_hwb_relative(rest: &str) -> Option<Color> {
+    let (origin, comps) = split_origin_and_components(rest)?;
+    let o = parse_color(origin)?;
+    let (h0, _s, _l) = rgb_to_hsl(o.r, o.g, o.b);
+    let w0 = o.r.min(o.g).min(o.b) as f32 / 255.0 * 100.0;
+    let bl0 = (1.0 - o.r.max(o.g).max(o.b) as f32 / 255.0) * 100.0;
+    let binds = [("h", h0), ("w", w0), ("b", bl0), ("alpha", o.a as f32 / 255.0)];
+    let (parts, alpha) = split_color_args(comps)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let h = resolve_rel_component(parts[0], &binds, 360.0)?;
+    let w = resolve_rel_component(parts[1], &binds, 100.0)?.clamp(0.0, 100.0) / 100.0;
+    let bl = resolve_rel_component(parts[2], &binds, 100.0)?.clamp(0.0, 100.0) / 100.0;
+    let a = match alpha {
+        Some(e) => (resolve_rel_component(e, &binds, 1.0)? * 255.0).clamp(0.0, 255.0).round() as u8,
+        None => o.a,
+    };
+    let to_u8 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    if w + bl >= 1.0 {
+        let gray = if w + bl > 0.0 { w / (w + bl) } else { 0.0 };
+        let g = to_u8(gray);
+        return Some(Color { r: g, g, b: g, a });
+    }
+    let (hr, hg, hb) = hue_to_rgb_pure(h);
+    let mix = |c: f32| c * (1.0 - w - bl) + w;
+    Some(Color { r: to_u8(mix(hr)), g: to_u8(mix(hg)), b: to_u8(mix(hb)), a })
+}
+
+/// `oklab(from <c> l a b [/a])` y `oklch(from <c> l c h [/a])` (CSS Color 5).
+/// `polar` distingue oklch (c/h) de oklab (a/b). Fase 7.906.
+fn parse_oklab_relative(rest: &str, polar: bool) -> Option<Color> {
+    let (origin, comps) = split_origin_and_components(rest)?;
+    let o = parse_color(origin)?;
+    let lin = |c: u8| srgb_to_linear(c as f32 / 255.0);
+    let (l0, a0, b0) = linear_srgb_to_oklab(lin(o.r), lin(o.g), lin(o.b));
+    let (parts, alpha) = split_color_args(comps)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let (l, a, b);
+    if polar {
+        let c0 = (a0 * a0 + b0 * b0).sqrt();
+        // Polar: a = c·cos(h), b = c·sin(h) ⇒ h = atan2(b, a). Fase 7.906.
+        let h0 = b0.atan2(a0).to_degrees().rem_euclid(360.0);
+        let binds = [("l", l0), ("c", c0), ("h", h0), ("alpha", o.a as f32 / 255.0)];
+        l = resolve_rel_component(parts[0], &binds, 1.0)?;
+        let c = resolve_rel_component(parts[1], &binds, 0.4)?;
+        let h = resolve_rel_component(parts[2], &binds, 360.0)?.to_radians();
+        a = c * h.cos();
+        b = c * h.sin();
+    } else {
+        let binds = [("l", l0), ("a", a0), ("b", b0), ("alpha", o.a as f32 / 255.0)];
+        l = resolve_rel_component(parts[0], &binds, 1.0)?;
+        a = resolve_rel_component(parts[1], &binds, 0.4)?;
+        b = resolve_rel_component(parts[2], &binds, 0.4)?;
+    }
+    let al = match alpha {
+        Some(e) => (resolve_rel_component(e, &binds_alpha(&o), 1.0)? * 255.0).clamp(0.0, 255.0).round() as u8,
+        None => o.a,
+    };
+    let (r, g, bb) = oklab_to_linear_srgb(l, a, b);
+    Some(linear_srgb_to_color(r, g, bb, al))
+}
+
+/// Bind sólo del alpha del color origen (para el `/ a` de los relativos
+/// oklab/oklch, que no referencian los canales). Fase 7.906.
+fn binds_alpha(o: &Color) -> [(&'static str, f32); 1] {
+    [("alpha", o.a as f32 / 255.0)]
+}
+
 /// Separa el color origen (1er token, respetando paréntesis de `rgb(...)`
 /// anidado) del resto de componentes. Fase 7.878.
 fn split_origin_and_components(rest: &str) -> Option<(&str, &str)> {
@@ -529,6 +601,10 @@ fn linear_srgb_to_color(r: f32, g: f32, b: f32, a: u8) -> Color {
 /// `hwb(H W B [/ A])` (CSS Color 4). H = `<angle>`, W/B = porcentaje de
 /// blancura/negrura. Si W+B ≥ 100% el resultado es el gris W/(W+B).
 pub(crate) fn parse_hwb_func(args: &str) -> Option<Color> {
+    // Fase 7.906 — color relativo `hwb(from <color> h w b [/ a])`.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_hwb_relative(rest);
+    }
     let (parts, alpha) = split_color_args(args)?;
     if parts.len() != 3 {
         return None;
@@ -613,6 +689,10 @@ fn oklab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
 
 /// `oklab(L a b [/ A])` (CSS Color 4). L 0..1 (o %), a/b número (o % de 0.4).
 pub(crate) fn parse_oklab_func(args: &str) -> Option<Color> {
+    // Fase 7.906 — color relativo `oklab(from <color> l a b [/ a])`.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_oklab_relative(rest, false);
+    }
     let (parts, alpha) = split_color_args(args)?;
     if parts.len() != 3 {
         return None;
@@ -630,6 +710,10 @@ pub(crate) fn parse_oklab_func(args: &str) -> Option<Color> {
 
 /// `oklch(L C H [/ A])` (CSS Color 4). C → a/b polar; resto como `oklab`.
 pub(crate) fn parse_oklch_func(args: &str) -> Option<Color> {
+    // Fase 7.906 — color relativo `oklch(from <color> l c h [/ a])`.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_oklab_relative(rest, true);
+    }
     let (parts, alpha) = split_color_args(args)?;
     if parts.len() != 3 {
         return None;

@@ -1091,3 +1091,55 @@ fn overlay_y_dynamic_range_limit() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::DynamicRangeLimit(DynamicRangeLimit::Standard))));
 }
+
+// ── Fase 7.906 — color relativo extra, grid named-lines en repeat, ────────
+//    calc-size(), animation-duration auto ───────────────────────────────────
+
+#[test]
+fn color_relativo_hwb_oklab_oklch() {
+    let col = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Color(c) => Some(c),
+        _ => None,
+    });
+    let near = |a: Color, b: Color| {
+        (a.r as i32 - b.r as i32).abs() <= 3
+            && (a.g as i32 - b.g as i32).abs() <= 3
+            && (a.b as i32 - b.b as i32).abs() <= 3
+    };
+    let red = Color::rgb(255, 0, 0);
+    // Round-trip: reconstruir el origen sin cambios.
+    assert!(near(col("color: hwb(from red h w b)").unwrap(), red));
+    assert!(near(col("color: oklab(from red l a b)").unwrap(), red));
+    assert!(near(col("color: oklch(from red l c h)").unwrap(), red));
+    // Tweak: subir whiteness aclara hacia el rosa (g y b suben).
+    let lighter = col("color: hwb(from red h calc(w + 40) b)").unwrap();
+    assert!(lighter.g > 0 && lighter.b > 0);
+    // alpha relativo.
+    assert!(matches!(col("color: oklch(from red l c h / 0.5)"), Some(c) if c.a == 128));
+}
+
+#[test]
+fn grid_repeat_named_lines() {
+    // `[a]`/`[b]` se descartan; quedan 2 tracks × 2 repeticiones = 4.
+    assert!(decls("grid-template-columns: repeat(2, [a] 1fr [b] 2fr)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::GridTemplateColumns(v) if v.len() == 4)));
+}
+
+#[test]
+fn calc_size_y_animation_duration_auto() {
+    // calc-size(<basis>, …) resuelve al basis.
+    assert!(decls("width: calc-size(max-content, size)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::MaxContent))));
+    assert!(decls("width: calc-size(auto, size)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::Auto))));
+    assert!(decls("width: calc-size(any, size + 10px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::Auto))));
+    // animation-duration: auto → 0s (sin scroll-timeline).
+    assert!(decls("animation-duration: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AnimationDuration(s) if s == 0.0)));
+}
