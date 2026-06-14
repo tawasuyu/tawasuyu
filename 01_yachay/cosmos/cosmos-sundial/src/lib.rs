@@ -21,6 +21,9 @@
 
 #![forbid(unsafe_code)]
 
+mod dial;
+pub use dial::{dial_layout, hour_line_angle_deg, style_height_deg, DialKind, DialLayout, HourLine};
+
 use cosmos_core::Location;
 use cosmos_skywatch::{sky_position, Body, SkyPosition};
 use cosmos_time::TDB;
