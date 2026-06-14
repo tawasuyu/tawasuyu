@@ -96,6 +96,59 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
             )),
             _ => None,
         },
+        // Fase 7.839 — funciones 3D proyectadas al plano 2D (no hay pipeline
+        // de perspectiva real). Antes, una sola de éstas en la cadena tiraba el
+        // `transform` entero. Aproximamos: se conserva la componente que SÍ vive
+        // en 2D y las puramente fuera-de-plano quedan en identidad.
+        "translate3d" => match parts.as_slice() {
+            [x, y, _z] => {
+                Some(Transform::Translate(parse_length_px(x)?, parse_length_px(y)?))
+            }
+            _ => None,
+        },
+        "translatez" => parse_length_px(parts.first()?).map(|_| Transform::Translate(0.0, 0.0)),
+        "scale3d" => match parts.as_slice() {
+            [sx, sy, _sz] => Some(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
+            _ => None,
+        },
+        "scalez" => parts.first()?.parse::<f32>().ok().map(|_| Transform::Scale(1.0, 1.0)),
+        // Rotación fuera del plano (X/Y): validamos el ángulo pero sin giro 2D.
+        "rotatex" | "rotatey" => parse_hue(parts.first()?).map(|_| Transform::Rotate(0.0)),
+        "rotatez" => parse_hue(parts.first()?).map(Transform::Rotate),
+        "rotate3d" => match parts.as_slice() {
+            [x, y, z, a] => {
+                let (x, y, z) =
+                    (x.parse::<f32>().ok()?, y.parse::<f32>().ok()?, z.parse::<f32>().ok()?);
+                let deg = parse_hue(a)?;
+                // Sólo el eje Z gira en el plano; X/Y → identidad.
+                if x == 0.0 && y == 0.0 && z != 0.0 {
+                    Some(Transform::Rotate(deg))
+                } else {
+                    Some(Transform::Rotate(0.0))
+                }
+            }
+            _ => None,
+        },
+        // `perspective(<len>|none)` sola no produce matriz 2D → identidad
+        // (validamos el argumento para no tragar basura).
+        "perspective" => {
+            let a = parts.first()?.trim();
+            if a.eq_ignore_ascii_case("none") || parse_length_px(a).is_some() {
+                Some(Transform::Scale(1.0, 1.0))
+            } else {
+                None
+            }
+        }
+        // `matrix3d(<16>)`: proyección de la 4×4 a la afín 2D (m11,m12,m21,m22
+        // y la traslación x/y de la 4ª columna; column-major).
+        "matrix3d" => {
+            if parts.len() == 16 {
+                let p = |i: usize| parts[i].parse::<f32>().ok();
+                Some(Transform::Matrix(p(0)?, p(1)?, p(4)?, p(5)?, p(12)?, p(13)?))
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }

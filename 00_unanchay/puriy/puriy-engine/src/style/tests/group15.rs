@@ -309,3 +309,27 @@ fn border_color_multivalor() {
     // Token inválido descarta el shorthand entero.
     assert!(decls("border-color: red notacolor").is_empty());
 }
+
+// ── Fase 7.839 — funciones 3D de transform proyectadas a 2D ───────────────
+
+#[test]
+fn transform_3d_no_tira_la_decl() {
+    let d = decls("transform: translate3d(10px, 20px, 30px)");
+    assert!(d
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(v) if v == &vec![Transform::Translate(10.0, 20.0)])));
+    // perspective + rotateX: ambas se conservan (identidad) en vez de tirar todo.
+    let p = decls("transform: perspective(500px) rotateX(45deg)");
+    assert!(p.iter().any(|d| matches!(&d.kind, DeclKind::Transforms(v) if v.len() == 2)));
+    // rotate3d sobre Z gira; sobre X no.
+    assert!(decls("transform: rotate3d(0, 0, 1, 90deg)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(v) if v == &vec![Transform::Rotate(90.0)])));
+    assert!(decls("transform: rotate3d(1, 0, 0, 90deg)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(v) if v == &vec![Transform::Rotate(0.0)])));
+    // matrix3d identidad → afín identidad.
+    assert!(decls("transform: matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 5,6,0,1)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(v) if v == &vec![Transform::Matrix(1.0,0.0,0.0,1.0,5.0,6.0)])));
+}
