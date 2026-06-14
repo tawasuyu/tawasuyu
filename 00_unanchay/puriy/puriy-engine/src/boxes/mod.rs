@@ -16,7 +16,7 @@ use crate::style::{
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BlendMode, BorderLineStyle,
     BoxShadow, BoxSizing, ComputedStyle, Corners, Cursor, Direction,
     FilterFn, FlexDirection, FlexWrap, FontFeatureSetting, FontKerning, FontVariationSetting,
-    GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, LengthVal, LinearGradient,
+    GridAutoFlow, GridTrackSize, Hyphens, ImageRendering, Isolation, JustifyContent, LengthVal, LinearGradient,
     ListStyleType, ObjectFit, Outline, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents,
     Position, Resize, ScrollBehavior, ScrollSnapType, Sides, StyleEngine, TabSize, TextAlign,
     TextDecorationLine, TextDecorationStyle, TextOrientation, TextOverflow, TextRendering,

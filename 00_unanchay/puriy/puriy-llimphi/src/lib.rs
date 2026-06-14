@@ -23,7 +23,10 @@ use llimphi_layout::taffy::prelude::{
     FlexDirection, FlexWrap, JustifyContent, LengthPercentageAuto, Position as TaffyPosition, Rect,
     Size, Style,
 };
-use llimphi_layout::taffy::{Display as TaffyDisplay, GridTemplateComponent, TrackSizingFunction};
+use llimphi_layout::taffy::{
+    Display as TaffyDisplay, GridAutoFlow as TaffyGridAutoFlow, GridPlacement, GridTemplateComponent,
+    Line as TaffyLine, TrackSizingFunction,
+};
 use llimphi_raster::kurbo::{
     Affine, BezPath as KurboBezPath, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
 };
@@ -52,7 +55,7 @@ use puriy_engine::{
     AlignItems as CssAlignItems, AlignSelf as CssAlignSelf,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderLineStyle, BoxNode, BoxShadow,
     BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
-    AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridTrackSize,
+    AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridAutoFlow, GridTrackSize,
     JustifyContent as CssJustifyContent, LengthVal,
     LinearGradient, Overflow, PointerEvents, Position as CssPosition, TextAlign,
     TextDecorationLine, TextDecorationStyle, VerticalAlign, Visibility,

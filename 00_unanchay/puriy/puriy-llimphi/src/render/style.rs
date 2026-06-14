@@ -103,9 +103,9 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         None
     };
 
-    // gap: aplica a flex (y a futuros grid). Taffy lo expone como
+    // gap: aplica a flex Y a grid. Taffy lo expone como
     // `Size { width: column-gap, height: row-gap }`.
-    let gap = if is_flex {
+    let gap = if is_flex || is_grid {
         Size {
             width: length(b.gap_column * zoom),
             height: length(b.gap_row * zoom),
@@ -175,6 +175,26 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
     let grid_template_rows: Vec<GridTemplateComponent<String>> =
         if is_grid { b.grid_template_rows.iter().map(|t| map_grid_track(t, zoom)).collect() } else { Vec::new() };
 
+    // Pistas implícitas (auto-rows/columns) y dirección de auto-colocación —
+    // sólo relevantes para un contenedor grid.
+    let grid_auto_rows: Vec<TrackSizingFunction> =
+        if is_grid { b.grid_auto_rows.iter().map(|t| map_grid_track_sizing(t, zoom)).collect() } else { Vec::new() };
+    let grid_auto_columns: Vec<TrackSizingFunction> =
+        if is_grid { b.grid_auto_columns.iter().map(|t| map_grid_track_sizing(t, zoom)).collect() } else { Vec::new() };
+    let grid_auto_flow = map_grid_auto_flow(b.grid_auto_flow);
+
+    // Colocación del ítem en su grilla padre (`grid-row`/`grid-column`). Vale
+    // para cualquier nodo (es el padre quien decide si es grid item); taffy lo
+    // ignora si el padre no es grid. `auto`/None → sin colocación explícita.
+    let grid_row = TaffyLine {
+        start: map_grid_line(&b.grid_row_start),
+        end: map_grid_line(&b.grid_row_end),
+    };
+    let grid_column = TaffyLine {
+        start: map_grid_line(&b.grid_column_start),
+        end: map_grid_line(&b.grid_column_end),
+    };
+
     Style {
         display: taffy_display,
         flex_direction,
@@ -214,18 +234,67 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         },
         grid_template_columns: grid_template_columns.into(),
         grid_template_rows: grid_template_rows.into(),
+        grid_auto_rows: grid_auto_rows.into(),
+        grid_auto_columns: grid_auto_columns.into(),
+        grid_auto_flow,
+        grid_row,
+        grid_column,
         ..Default::default()
     }
 }
 
 pub(crate) fn map_grid_track(t: &GridTrackSize, zoom: f32) -> GridTemplateComponent<String> {
-    let single: TrackSizingFunction = match t {
+    GridTemplateComponent::Single(map_grid_track_sizing(t, zoom))
+}
+
+/// Una pista de grid como `TrackSizingFunction` (sin envolver en
+/// `GridTemplateComponent`). Lo usan las pistas implícitas
+/// `grid-auto-{rows,columns}`, que taffy modela como `Vec<TrackSizingFunction>`
+/// y no admiten `repeat()`/named lines.
+pub(crate) fn map_grid_track_sizing(t: &GridTrackSize, zoom: f32) -> TrackSizingFunction {
+    match t {
         GridTrackSize::Auto => auto(),
         GridTrackSize::Px(v) => length(*v * zoom),
         GridTrackSize::Pct(v) => percent(*v / 100.0),
         GridTrackSize::Fr(v) => fr(*v),
+    }
+}
+
+/// `grid-auto-flow` CSS → taffy. Las variantes calzan 1:1.
+pub(crate) fn map_grid_auto_flow(f: GridAutoFlow) -> TaffyGridAutoFlow {
+    match f {
+        GridAutoFlow::Row => TaffyGridAutoFlow::Row,
+        GridAutoFlow::Column => TaffyGridAutoFlow::Column,
+        GridAutoFlow::RowDense => TaffyGridAutoFlow::RowDense,
+        GridAutoFlow::ColumnDense => TaffyGridAutoFlow::ColumnDense,
+    }
+}
+
+/// Resuelve un `<grid-line>` opaco (`"2"`, `"-1"`, `"span 3"`, `auto`/None,
+/// o nombre) a un `GridPlacement` de taffy. Las líneas nombradas degradan a
+/// `Auto` (taffy las soporta pero el template no plumb-ea sus nombres aún).
+pub(crate) fn map_grid_line(s: &Option<String>) -> GridPlacement<String> {
+    let raw = match s {
+        Some(v) => v.trim(),
+        None => return GridPlacement::Auto,
     };
-    GridTemplateComponent::Single(single)
+    if raw.is_empty() || raw.eq_ignore_ascii_case("auto") {
+        return GridPlacement::Auto;
+    }
+    // `span <n>` o `span <name>` → span de n pistas (nombre → 1).
+    if let Some(rest) = raw.strip_prefix("span").filter(|r| {
+        r.is_empty() || r.starts_with(char::is_whitespace)
+    }) {
+        let n = rest.trim().parse::<u16>().unwrap_or(1).max(1);
+        return GridPlacement::Span(n);
+    }
+    // Índice de línea entero (puede ser negativo: cuenta desde el final).
+    if let Ok(idx) = raw.parse::<i16>() {
+        if idx != 0 {
+            return GridPlacement::Line(idx.into());
+        }
+    }
+    GridPlacement::Auto
 }
 
 /// `length-percentage-auto`: para insets (top/right/bottom/left) que

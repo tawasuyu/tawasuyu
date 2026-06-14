@@ -244,6 +244,19 @@ pub struct BoxNode {
     pub transforms: Vec<Transform>,
     pub grid_template_columns: Vec<GridTrackSize>,
     pub grid_template_rows: Vec<GridTrackSize>,
+    /// `grid-auto-flow` — dirección de auto-colocación de ítems implícitos.
+    pub grid_auto_flow: GridAutoFlow,
+    /// `grid-auto-columns`/`grid-auto-rows` — tamaño de las pistas implícitas
+    /// que el algoritmo de grid crea al desbordar el template explícito.
+    pub grid_auto_columns: Vec<GridTrackSize>,
+    pub grid_auto_rows: Vec<GridTrackSize>,
+    /// Colocación del ítem en la grilla (`grid-row`/`grid-column` →
+    /// start/end). Strings opacos `<grid-line>` (`"2"`, `"span 3"`, `auto`);
+    /// el puente a taffy los resuelve. `None` = `auto`.
+    pub grid_row_start: Option<String>,
+    pub grid_row_end: Option<String>,
+    pub grid_column_start: Option<String>,
+    pub grid_column_end: Option<String>,
     /// Texto plano del nodo (sólo para hojas de texto). Para nodos con
     /// hijos el texto vive en los hijos.
     pub text: Option<String>,
