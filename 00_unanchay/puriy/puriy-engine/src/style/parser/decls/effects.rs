@@ -870,6 +870,11 @@ pub(crate) fn parse_text_emphasis_style(value: &str) -> Option<TextEmphasisStyle
 /// el lado, default `right`; si falta el eje, default `over`. Fase 7.311.
 pub(crate) fn parse_text_emphasis_position(value: &str) -> Option<TextEmphasisPosition> {
     let v = value.trim().to_ascii_lowercase();
+    // Fase 7.931 — `auto` (CSS Text Decor 4): la UA decide; lo aproximamos al
+    // default `over right`.
+    if v == "auto" {
+        return Some(TextEmphasisPosition { over: true, right: true });
+    }
     let mut over: Option<bool> = None;
     let mut right: Option<bool> = None;
     for tok in v.split_whitespace() {

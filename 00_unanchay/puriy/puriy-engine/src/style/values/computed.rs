@@ -1154,6 +1154,14 @@ pub struct ComputedStyle {
     /// `pitch-range` (Fase 7.930). CSS 2.1 aural: variación de tono 0–100
     /// (50 = normal). HEREDA. Plumb.
     pub pitch_range: f32,
+    /// `margin-trim` (CSS Box 4, Fase 7.931). `None` = `none`. NO hereda. Plumb.
+    pub margin_trim: Option<String>,
+    /// `margin-break` (CSS Fragmentation 4, Fase 7.931). `None` = `auto`. Plumb.
+    pub margin_break: Option<String>,
+    /// `input-security` (CSS UI 4, Fase 7.931). `None` = `auto`. NO hereda. Plumb.
+    pub input_security: Option<String>,
+    /// `border-boundary` (CSS Round Display 1, Fase 7.931). `None` = `none`. Plumb.
+    pub border_boundary: Option<String>,
     /// `stress` (Fase 7.568). CSS 2.1 aural: énfasis de la entonación
     /// (0–100). Default `50.0`. HEREDA. Plumb.
     pub stress: f32,

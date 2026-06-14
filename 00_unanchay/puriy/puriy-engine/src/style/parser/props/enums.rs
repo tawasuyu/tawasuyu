@@ -276,6 +276,9 @@ pub(crate) fn parse_white_space(s: &str) -> Option<WhiteSpace> {
         // Fase 7.843 — `break-spaces` ≈ pre-wrap (difiere sólo en el manejo de
         // los espacios al final de línea, que no modelamos): aproximación.
         "break-spaces" => return Some(WhiteSpace::PreWrap),
+        // Fase 7.931 — `white-space: wrap` (CSS Text 4, forma corta de
+        // `collapse wrap`) ≈ `normal`.
+        "wrap" => return Some(WhiteSpace::Normal),
         _ => {}
     }
     // Fase 7.904 — forma de dos valores (CSS Text 4): `<white-space-collapse>

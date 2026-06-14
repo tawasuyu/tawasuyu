@@ -4,6 +4,20 @@
 use super::super::*;
 use super::*;
 
+/// Parse opaco plumb con sentinel inicial: `Some(None)` para el sentinel
+/// (`none`/`auto`), `Some(Some(value))` para el resto, `None` si vacío.
+/// Fase 7.931.
+fn opaque_plumb(value: &str, sentinel: &str) -> Option<Option<String>> {
+    let v = value.trim();
+    if v.is_empty() {
+        None
+    } else if v.eq_ignore_ascii_case(sentinel) {
+        Some(None)
+    } else {
+        Some(Some(v.to_string()))
+    }
+}
+
 pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
     match p {
         // Fase 7.669 — `-webkit-min-logical-width` (min-inline-size). `auto` → None.
@@ -685,9 +699,17 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             }
             _ => None,
         },
-        "text-box-edge" => {
+        // Fase 7.931 — `text-edge` es el nombre legacy de `text-box-edge`.
+        "text-box-edge" | "text-edge" => {
             parse_text_box_edge(value).map(DeclKind::TextBoxEdge)
         }
+        // Fase 7.931 — props plumb-opacas con sentinel inicial:
+        // `margin-trim` (CSS Box 4), `margin-break` (CSS Fragmentation 4),
+        // `input-security` (CSS UI 4), `border-boundary` (CSS Round Display).
+        "margin-trim" => opaque_plumb(value, "none").map(DeclKind::MarginTrim),
+        "margin-break" => opaque_plumb(value, "auto").map(DeclKind::MarginBreak),
+        "input-security" => opaque_plumb(value, "auto").map(DeclKind::InputSecurity),
+        "border-boundary" => opaque_plumb(value, "none").map(DeclKind::BorderBoundary),
         "anchor-name" => parse_ident_list_or_none(value).map(DeclKind::AnchorName),
         "position-anchor" => {
             parse_ident_or_auto(value).map(DeclKind::PositionAnchor)

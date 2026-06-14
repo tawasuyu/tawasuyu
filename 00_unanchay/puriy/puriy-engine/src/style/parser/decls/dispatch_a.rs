@@ -55,7 +55,11 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // descartaba. `None` ya modela "normal" (font-dependent ~1.2) en el
         // ComputedStyle; lo reseteamos explícito para no heredar un número.
         "line-height" => {
-            if value.trim().eq_ignore_ascii_case("normal") {
+            // Fase 7.931 — `-moz-block-height` (keyword interno de Firefox) se
+            // comporta como `normal` para nuestro propósito.
+            if value.trim().eq_ignore_ascii_case("normal")
+                || value.trim().eq_ignore_ascii_case("-moz-block-height")
+            {
                 Some(DeclKind::LineHeightNormal)
             } else {
                 parse_line_height(value).map(DeclKind::LineHeight)

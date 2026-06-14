@@ -370,3 +370,38 @@ fn interest_delay_shorthand_y_aliases() {
         .iter()
         .any(|d| matches!(&d.kind, DeclKind::InterestDelayStart(Some(s)) if s == "1s")));
 }
+
+// ── Fase 7.931 — CSS Box 4 margin-trim, Fragmentation margin-break, misc ───
+
+#[test]
+fn margin_trim_y_break_input_security_border_boundary() {
+    assert!(decls("margin-trim: block")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::MarginTrim(Some(s)) if s == "block")));
+    assert!(decls("margin-trim: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MarginTrim(None))));
+    assert!(decls("margin-break: keep")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::MarginBreak(Some(s)) if s == "keep")));
+    assert!(decls("input-security: none")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::InputSecurity(Some(s)) if s == "none")));
+    assert!(decls("border-boundary: parent")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::BorderBoundary(Some(s)) if s == "parent")));
+}
+
+#[test]
+fn value_gaps_lote7() {
+    // text-emphasis-position: auto
+    assert!(!decls("text-emphasis-position: auto").is_empty());
+    // text-edge alias de text-box-edge
+    assert!(decls("text-edge: cap alphabetic")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextBoxEdge(_))));
+    // white-space: wrap → Normal
+    assert!(decls("white-space: wrap")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WhiteSpace(WhiteSpace::Normal))));
+}
