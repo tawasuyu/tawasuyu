@@ -820,6 +820,12 @@ pub(crate) enum DeclKind {
     InputSecurity(Option<String>),
     /// `border-boundary` (CSS Round Display 1). `None` = `none`. NO hereda. Plumb.
     BorderBoundary(Option<String>),
+    /// `shape-inside` (CSS Shapes 2). `None` = `auto`. NO hereda. Plumb. Fase 7.932.
+    ShapeInside(Option<String>),
+    /// `speak-punctuation` (CSS 2.1 aural). `None` = `none`. HEREDA. Plumb. Fase 7.932.
+    SpeakPunctuation(Option<String>),
+    /// `speak-numeral` (CSS 2.1 aural). `None` = `continuous`. HEREDA. Plumb. Fase 7.932.
+    SpeakNumeral(Option<String>),
     /// `play-during` (Fase 7.573). `None` = `auto`. NO hereda. Plumb.
     PlayDuring(Option<String>),
     /// `text-decoration-skip` (Fase 7.574). `None` = `auto`. HEREDA. Plumb.
@@ -1633,6 +1639,9 @@ impl Decl {
             DeclKind::MarginBreak(v) => s.margin_break = v.clone(),
             DeclKind::InputSecurity(v) => s.input_security = v.clone(),
             DeclKind::BorderBoundary(v) => s.border_boundary = v.clone(),
+            DeclKind::ShapeInside(v) => s.shape_inside = v.clone(),
+            DeclKind::SpeakPunctuation(v) => s.speak_punctuation = v.clone(),
+            DeclKind::SpeakNumeral(v) => s.speak_numeral = v.clone(),
             DeclKind::Stress(v) => s.stress = *v,
             DeclKind::Pitch(v) => s.pitch = v.clone(),
             DeclKind::SpeechRate(v) => s.speech_rate = v.clone(),

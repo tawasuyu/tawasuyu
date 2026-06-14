@@ -405,3 +405,24 @@ fn value_gaps_lote7() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::WhiteSpace(WhiteSpace::Normal))));
 }
+
+// ── Fase 7.932 — shape-inside + aural speak-punctuation/speak-numeral ──────
+
+#[test]
+fn shape_inside_y_speak_punct_numeral() {
+    assert!(decls("shape-inside: circle(50%)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::ShapeInside(Some(s)) if s == "circle(50%)")));
+    assert!(decls("shape-inside: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ShapeInside(None))));
+    assert!(decls("speak-punctuation: code")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::SpeakPunctuation(Some(s)) if s == "code")));
+    assert!(decls("speak-numeral: digits")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::SpeakNumeral(Some(s)) if s == "digits")));
+    assert!(decls("speak-numeral: continuous")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SpeakNumeral(None))));
+}

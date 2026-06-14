@@ -1162,6 +1162,12 @@ pub struct ComputedStyle {
     pub input_security: Option<String>,
     /// `border-boundary` (CSS Round Display 1, Fase 7.931). `None` = `none`. Plumb.
     pub border_boundary: Option<String>,
+    /// `shape-inside` (CSS Shapes 2, Fase 7.932). `None` = `auto`. NO hereda. Plumb.
+    pub shape_inside: Option<String>,
+    /// `speak-punctuation` (CSS 2.1 aural, Fase 7.932). `None` = `none`. HEREDA. Plumb.
+    pub speak_punctuation: Option<String>,
+    /// `speak-numeral` (CSS 2.1 aural, Fase 7.932). `None` = `continuous`. HEREDA. Plumb.
+    pub speak_numeral: Option<String>,
     /// `stress` (Fase 7.568). CSS 2.1 aural: énfasis de la entonación
     /// (0–100). Default `50.0`. HEREDA. Plumb.
     pub stress: f32,

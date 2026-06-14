@@ -710,6 +710,11 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "margin-break" => opaque_plumb(value, "auto").map(DeclKind::MarginBreak),
         "input-security" => opaque_plumb(value, "auto").map(DeclKind::InputSecurity),
         "border-boundary" => opaque_plumb(value, "none").map(DeclKind::BorderBoundary),
+        // Fase 7.932 — `shape-inside` (CSS Shapes 2) + aural CSS 2.1
+        // `speak-punctuation`/`speak-numeral`.
+        "shape-inside" => opaque_plumb(value, "auto").map(DeclKind::ShapeInside),
+        "speak-punctuation" => opaque_plumb(value, "none").map(DeclKind::SpeakPunctuation),
+        "speak-numeral" => opaque_plumb(value, "continuous").map(DeclKind::SpeakNumeral),
         "anchor-name" => parse_ident_list_or_none(value).map(DeclKind::AnchorName),
         "position-anchor" => {
             parse_ident_or_auto(value).map(DeclKind::PositionAnchor)
