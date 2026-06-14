@@ -51,6 +51,10 @@ pub struct StyleEngine {
     /// `font-family` computado con `FontFaceRule::family`. Hoy sólo se parsean
     /// y se exponen vía [`Self::font_faces`].
     font_faces: Vec<FontFaceRule>,
+    /// Definiciones `@property --name { ... }` (Houdini). Las consumiría la
+    /// cascada de variables (valor inicial registrado + control de herencia);
+    /// hoy sólo se parsean y se exponen vía [`Self::registered_properties`].
+    registered_properties: Vec<PropertyRule>,
 }
 
 impl StyleEngine {
@@ -103,10 +107,16 @@ impl StyleEngine {
             let cleaned = strip_comments(sheet);
             extract_font_faces(&cleaned, &mut font_faces);
         }
+        // Cuarta pasada: recoger `@property --name` (Houdini). Globales.
+        let mut registered_properties: Vec<PropertyRule> = Vec::new();
+        for sheet in sheets {
+            let cleaned = strip_comments(sheet);
+            extract_at_properties(&cleaned, &mut registered_properties);
+        }
         for sheet in sheets {
             rules.extend(parse_stylesheet(sheet, &vars, vp));
         }
-        Self { rules, vars, keyframes, font_faces }
+        Self { rules, vars, keyframes, font_faces, registered_properties }
     }
 
     /// Tabla de `@keyframes` parseados (name → definición). Vacía si el
@@ -121,6 +131,13 @@ impl StyleEngine {
     /// la cruzará con `ComputedStyle::font_family`; hoy es sólo lectura.
     pub fn font_faces(&self) -> &[FontFaceRule] {
         &self.font_faces
+    }
+
+    /// Lista de `@property --name` registrados, en orden de documento. La
+    /// cascada de variables (trabajo futuro) la cruzará con los `var(--name)`;
+    /// hoy es sólo lectura.
+    pub fn registered_properties(&self) -> &[PropertyRule] {
+        &self.registered_properties
     }
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →

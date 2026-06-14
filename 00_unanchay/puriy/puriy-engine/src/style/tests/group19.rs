@@ -113,3 +113,63 @@ fn font_face_convive_con_reglas_normales() {
     // y la regla `p` sigue presente (no se tragó el parser de at-rule).
     assert_eq!(eng.font_faces()[0].family, "Brand");
 }
+
+// ── Fase 7.923 — @property (Houdini) ───────────────────────────────────────
+
+#[test]
+fn at_property_basico() {
+    let css = r#"
+        @property --my-color {
+            syntax: "<color>";
+            inherits: false;
+            initial-value: rebeccapurple;
+        }
+    "#;
+    let p = engine(css).registered_properties().to_vec();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].name, "--my-color");
+    assert_eq!(p[0].syntax, "<color>");
+    assert!(!p[0].inherits);
+    assert_eq!(p[0].initial_value.as_deref(), Some("rebeccapurple"));
+}
+
+#[test]
+fn at_property_universal_sin_initial() {
+    // syntax "*" no exige initial-value.
+    let css = r#"@property --x { syntax: "*"; inherits: true; }"#;
+    let p = engine(css).registered_properties().to_vec();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].syntax, "*");
+    assert!(p[0].inherits);
+    assert!(p[0].initial_value.is_none());
+}
+
+#[test]
+fn at_property_invalido_se_descarta() {
+    // nombre sin `--` → no es custom property → descartado.
+    assert!(engine(r#"@property foo { syntax: "<length>"; inherits: false; initial-value: 0px; }"#)
+        .registered_properties()
+        .is_empty());
+    // falta syntax → descartado.
+    assert!(engine("@property --x { inherits: false; }")
+        .registered_properties()
+        .is_empty());
+    // syntax tipado sin initial-value → descartado.
+    assert!(engine(r#"@property --x { syntax: "<length>"; inherits: false; }"#)
+        .registered_properties()
+        .is_empty());
+}
+
+#[test]
+fn at_property_y_font_face_coexisten() {
+    let css = r#"
+        @font-face { font-family: F; src: url(f.woff2); }
+        @property --gap { syntax: "<length>"; inherits: false; initial-value: 8px; }
+        @property --hue { syntax: "<angle>"; inherits: true; initial-value: 0deg; }
+    "#;
+    let eng = engine(css);
+    assert_eq!(eng.font_faces().len(), 1);
+    assert_eq!(eng.registered_properties().len(), 2);
+    assert_eq!(eng.registered_properties()[0].name, "--gap");
+    assert_eq!(eng.registered_properties()[1].initial_value.as_deref(), Some("0deg"));
+}

@@ -784,6 +784,25 @@ pub struct FontFaceRule {
     pub size_adjust: Option<String>,
 }
 
+/// Definición de un `@property --name { ... }` (CSS Properties & Values API /
+/// Houdini). Registra una custom property tipada. Se recoge globalmente y se
+/// expone para la cascada de variables — que con `inherits`/`initial-value`
+/// podría dar un valor inicial registrado a un `var(--name)` sin declarar y
+/// controlar su herencia. Hoy sólo se parsea y se expone vía
+/// [`super::super::StyleEngine::registered_properties`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PropertyRule {
+    /// El nombre incluyendo el `--` (`--my-color`).
+    pub name: String,
+    /// `syntax` — la gramática registrada (`"<color>"`, `"<length>+"`, `"*"`).
+    /// Sin comillas. `*` = universal (acepta cualquier token).
+    pub syntax: String,
+    /// `inherits` — `true`/`false` (descriptor obligatorio en la spec).
+    pub inherits: bool,
+    /// `initial-value` — el valor inicial. Obligatorio salvo `syntax: "*"`.
+    pub initial_value: Option<String>,
+}
+
 /// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
 /// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
 /// constante (1280×800 — desktop típico). Cuando puriy soporte resize

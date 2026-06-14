@@ -752,6 +752,71 @@ pub(crate) fn parse_font_src_list(value: &str) -> Vec<FontSrc> {
     out
 }
 
+/// Pasada análoga a [`extract_font_faces`] pero para `@property --name { ... }`
+/// (CSS Properties & Values API). Acumula una [`PropertyRule`] por bloque con
+/// `name` (`--…`) y `syntax` válidos. Un `@property` sin `syntax`, o cuyo
+/// `syntax` no sea universal (`*`) y le falte `initial-value`, es inválido por
+/// spec → se descarta.
+pub(crate) fn extract_at_properties(css: &str, out: &mut Vec<PropertyRule>) {
+    let lower = css.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find('@') {
+        let at = from + rel;
+        if !lower[at..].starts_with("@property") {
+            from = at + 1;
+            continue;
+        }
+        let after = &css[at + "@property".len()..];
+        let Some(brace_rel) = after.find('{') else { break };
+        let name = after[..brace_rel].trim().to_string();
+        let body_start = at + "@property".len() + brace_rel + 1;
+        let Some(close) = matching_close_brace(&css[body_start..]) else {
+            break;
+        };
+        let body = &css[body_start..body_start + close];
+        from = body_start + close + 1;
+        if !name.starts_with("--") {
+            continue;
+        }
+        if let Some(rule) = parse_at_property_body(&name, body) {
+            out.push(rule);
+        }
+    }
+}
+
+/// Parsea el cuerpo de un `@property`. `None` si falta `syntax`, o si el syntax
+/// no es universal (`*`) y falta `initial-value`.
+pub(crate) fn parse_at_property_body(name: &str, body: &str) -> Option<PropertyRule> {
+    let mut syntax: Option<String> = None;
+    let mut inherits: Option<bool> = None;
+    let mut initial_value: Option<String> = None;
+    for (desc, value) in parse_keyframe_declarations(body) {
+        let v = value.trim();
+        match desc.as_str() {
+            "syntax" => syntax = Some(unquote(v).to_string()),
+            "inherits" => {
+                inherits = match v.to_ascii_lowercase().as_str() {
+                    "true" => Some(true),
+                    "false" => Some(false),
+                    _ => None,
+                }
+            }
+            "initial-value" => initial_value = Some(v.to_string()),
+            _ => {}
+        }
+    }
+    let syntax = syntax?;
+    if syntax != "*" && initial_value.is_none() {
+        return None;
+    }
+    Some(PropertyRule {
+        name: name.to_string(),
+        syntax,
+        inherits: inherits.unwrap_or(false),
+        initial_value,
+    })
+}
+
 /// `name( ... )` → contenido interno (case-insensitive del nombre). `None` si
 /// `s` no es exactamente esa función.
 fn strip_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {

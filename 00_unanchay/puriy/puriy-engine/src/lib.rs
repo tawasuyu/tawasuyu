@@ -44,7 +44,7 @@ pub use style::{
     BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
     FlexDirection, FlexWrap, FontFaceRule, FontSrc, FontStyle, GradientStop, GridAutoFlow, GridTrackBreadth, GridTrackSize, JustifyContent, KeyframeStep,
     Keyframes, LengthVal, LinearGradient, ObjectFit, Outline, Overflow, PointerEvents, Position,
-    PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextDecorationStyle,
+    PropertyRule, PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextShadow, TextTransform,
     Transform, TransitionBinding, VerticalAlign, Viewport, Visibility, WhiteSpace, DEFAULT_VIEWPORT,
     evaluate_media_query, parse_color,
