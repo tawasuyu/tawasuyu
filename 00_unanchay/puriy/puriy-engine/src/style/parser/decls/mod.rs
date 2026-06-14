@@ -1044,6 +1044,49 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // CSS Gap Decorations 1 (Fase 7.920): `row-rule` (shorthand del eje
+        // filas), `rule` (ambos ejes) y sus sub-shorthands `rule-{width,
+        // style,color}`. `row-rule-style` espeja `column-rule-style`.
+        if prop.eq_ignore_ascii_case("row-rule") {
+            out.extend(parse_rule_shorthand(value, important, &[RuleAxis::Row]));
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("rule") {
+            out.extend(parse_rule_shorthand(value, important, &[RuleAxis::Column, RuleAxis::Row]));
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("row-rule-style") || prop.eq_ignore_ascii_case("rule-style") {
+            let axes: &[RuleAxis] = if prop.eq_ignore_ascii_case("rule-style") {
+                &[RuleAxis::Column, RuleAxis::Row]
+            } else {
+                &[RuleAxis::Row]
+            };
+            if let Some(on) = parse_border_style(value) {
+                let ls = parse_border_line_style(value);
+                for &ax in axes {
+                    out.push(Decl { kind: rule_style_active_decl(ax, on), important });
+                    if let Some(ls) = ls {
+                        out.push(Decl { kind: rule_style_pattern_decl(ax, ls), important });
+                    }
+                }
+            }
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("rule-width") {
+            if let Some(w) = parse_length_px(value) {
+                out.push(Decl { kind: DeclKind::ColumnRuleWidth(w), important });
+                out.push(Decl { kind: DeclKind::RowRuleWidth(w), important });
+            }
+            continue;
+        }
+        if prop.eq_ignore_ascii_case("rule-color") {
+            let c = if is_current_color(value) { Some(None) } else { parse_color(value).map(Some) };
+            if let Some(c) = c {
+                out.push(Decl { kind: DeclKind::ColumnRuleColor(c), important });
+                out.push(Decl { kind: DeclKind::RowRuleColor(c), important });
+            }
+            continue;
+        }
         // Fase 7.800 — shorthand `-webkit-text-stroke`: `<width> || <color>`, orden
         // libre. Reparte en los longhands `-webkit-text-stroke-width/color` (Fase
         // 7.579-7.580). El primer token reconocible como ancho fija el ancho; el

@@ -464,6 +464,17 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // `column-rule-style` y `column-rule` van por `parse_declarations`.
+        // Fase 7.920 — `row-rule-width` / `row-rule-color` (CSS Gap Decorations 1).
+        // `row-rule-style`, `row-rule` y los shorthands `rule*` van por
+        // `parse_declarations` (multi-decl).
+        "row-rule-width" => parse_length_px(value).map(DeclKind::RowRuleWidth),
+        "row-rule-color" => {
+            if is_current_color(value) {
+                Some(DeclKind::RowRuleColor(None))
+            } else {
+                parse_color(value).map(|c| DeclKind::RowRuleColor(Some(c)))
+            }
+        }
         // Fase 7.796 — `-moz-column-fill` alias vendor legacy.
         "column-fill" | "-moz-column-fill" => parse_column_fill(value).map(DeclKind::ColumnFill),
         // Fase 7.779 — `-moz-column-span` alias vendor legacy.

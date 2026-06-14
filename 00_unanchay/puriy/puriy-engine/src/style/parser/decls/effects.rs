@@ -206,10 +206,49 @@ pub(crate) fn parse_column_count(value: &str) -> Option<u32> {
     v.parse::<u32>().ok().filter(|n| *n > 0)
 }
 
+/// Eje de una regla de hueco (CSS Gap Decorations 1). `Both` cubre el
+/// shorthand `rule`, que fija filas y columnas a la vez. Fase 7.920.
+#[derive(Clone, Copy)]
+pub(crate) enum RuleAxis {
+    Column,
+    Row,
+}
+
+fn rule_width_decl(axis: RuleAxis, w: f32) -> DeclKind {
+    match axis {
+        RuleAxis::Column => DeclKind::ColumnRuleWidth(w),
+        RuleAxis::Row => DeclKind::RowRuleWidth(w),
+    }
+}
+fn rule_color_decl(axis: RuleAxis, c: Option<Color>) -> DeclKind {
+    match axis {
+        RuleAxis::Column => DeclKind::ColumnRuleColor(c),
+        RuleAxis::Row => DeclKind::RowRuleColor(c),
+    }
+}
+pub(crate) fn rule_style_active_decl(axis: RuleAxis, on: bool) -> DeclKind {
+    match axis {
+        RuleAxis::Column => DeclKind::ColumnRuleStyleActive(on),
+        RuleAxis::Row => DeclKind::RowRuleStyleActive(on),
+    }
+}
+pub(crate) fn rule_style_pattern_decl(axis: RuleAxis, ls: BorderLineStyle) -> DeclKind {
+    match axis {
+        RuleAxis::Column => DeclKind::ColumnRuleStylePattern(ls),
+        RuleAxis::Row => DeclKind::RowRuleStylePattern(ls),
+    }
+}
+
 /// `column-rule` shorthand: `<width> <style> <color>` (orden libre,
-/// igual que `outline`). Tokens en cualquier orden — `currentColor`
-/// emite `ColumnRuleColor(None)`. Fase 7.280.
+/// igual que `outline`). Fase 7.280.
 pub(crate) fn parse_column_rule_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    parse_rule_shorthand(value, important, &[RuleAxis::Column])
+}
+
+/// Shorthand de regla de hueco genérico, emitido sobre uno o varios ejes.
+/// `column-rule` → `[Column]`, `row-rule` → `[Row]`, `rule` → ambos. Misma
+/// gramática `<width> || <style> || <color>` (orden libre). Fase 7.920.
+pub(crate) fn parse_rule_shorthand(value: &str, important: bool, axes: &[RuleAxis]) -> Vec<Decl> {
     let mut width: Option<f32> = None;
     let mut color: Option<Color> = None;
     let mut current: bool = false;
@@ -243,22 +282,26 @@ pub(crate) fn parse_column_rule_shorthand(value: &str, important: bool) -> Vec<D
     let mut out = Vec::new();
     let active = style_active.unwrap_or(true);
     if !active {
-        out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(false), important });
+        for &ax in axes {
+            out.push(Decl { kind: rule_style_active_decl(ax, false), important });
+        }
         return out;
     }
-    if let Some(w) = width {
-        out.push(Decl { kind: DeclKind::ColumnRuleWidth(w), important });
-    }
-    if current {
-        out.push(Decl { kind: DeclKind::ColumnRuleColor(None), important });
-    } else if let Some(c) = color {
-        out.push(Decl { kind: DeclKind::ColumnRuleColor(Some(c)), important });
-    }
-    if style_active.is_some() {
-        out.push(Decl { kind: DeclKind::ColumnRuleStyleActive(true), important });
-    }
-    if let Some(ls) = line_style {
-        out.push(Decl { kind: DeclKind::ColumnRuleStylePattern(ls), important });
+    for &ax in axes {
+        if let Some(w) = width {
+            out.push(Decl { kind: rule_width_decl(ax, w), important });
+        }
+        if current {
+            out.push(Decl { kind: rule_color_decl(ax, None), important });
+        } else if let Some(c) = color {
+            out.push(Decl { kind: rule_color_decl(ax, Some(c)), important });
+        }
+        if style_active.is_some() {
+            out.push(Decl { kind: rule_style_active_decl(ax, true), important });
+        }
+        if let Some(ls) = line_style {
+            out.push(Decl { kind: rule_style_pattern_decl(ax, ls), important });
+        }
     }
     out
 }

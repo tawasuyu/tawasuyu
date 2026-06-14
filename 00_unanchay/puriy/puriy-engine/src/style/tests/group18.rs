@@ -172,3 +172,49 @@ fn pause_rest_shorthands() {
     assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RestBefore(None))));
     assert!(r.iter().any(|d| matches!(&d.kind, DeclKind::RestAfter(Some(s)) if s == "1s")));
 }
+
+// ── Fase 7.920 — CSS Gap Decorations: row-rule + rule shorthands (Ola D) ────
+
+#[test]
+fn row_rule_longhands() {
+    assert!(decls("row-rule-width: 2px")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::RowRuleWidth(w) if (w - 2.0).abs() < 0.01)));
+    assert!(decls("row-rule-color: red")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::RowRuleColor(Some(_)))));
+    assert!(decls("row-rule-color: currentColor")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::RowRuleColor(None))));
+    // row-rule-style activa + patrón
+    let s = decls("row-rule-style: dashed");
+    assert!(s.iter().any(|d| matches!(d.kind, DeclKind::RowRuleStyleActive(true))));
+    assert!(s.iter().any(|d| matches!(d.kind, DeclKind::RowRuleStylePattern(BorderLineStyle::Dashed))));
+}
+
+#[test]
+fn row_rule_shorthand() {
+    let r = decls("row-rule: 2px solid red");
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RowRuleWidth(w) if (w - 2.0).abs() < 0.01)));
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RowRuleColor(Some(_)))));
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RowRuleStyleActive(true))));
+    // no toca el eje de columnas
+    assert!(!r.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleWidth(_))));
+}
+
+#[test]
+fn rule_shorthand_ambos_ejes() {
+    // `rule` fija filas Y columnas.
+    let r = decls("rule: 3px dotted blue");
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleWidth(w) if (w - 3.0).abs() < 0.01)));
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RowRuleWidth(w) if (w - 3.0).abs() < 0.01)));
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleStylePattern(BorderLineStyle::Dotted))));
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RowRuleStylePattern(BorderLineStyle::Dotted))));
+    // sub-shorthands `rule-width` / `rule-color`
+    let w = decls("rule-width: 4px");
+    assert!(w.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleWidth(v) if (v - 4.0).abs() < 0.01)));
+    assert!(w.iter().any(|d| matches!(d.kind, DeclKind::RowRuleWidth(v) if (v - 4.0).abs() < 0.01)));
+    let c = decls("rule-color: red");
+    assert!(c.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleColor(Some(_)))));
+    assert!(c.iter().any(|d| matches!(d.kind, DeclKind::RowRuleColor(Some(_)))));
+}

@@ -292,6 +292,13 @@ pub(crate) enum DeclKind {
     ColumnRuleStyleActive(bool),
     /// Patrón visual del column-rule (`dashed`/`dotted`/`double`/`solid`).
     ColumnRuleStylePattern(BorderLineStyle),
+    /// CSS Gap Decorations 1 (Fase 7.920) — espejo de `column-rule-*` para el
+    /// eje de filas. `RowRule{Width,Color,StyleActive,StylePattern}`.
+    RowRuleWidth(f32),
+    /// `None` = `row-rule-color: currentColor`.
+    RowRuleColor(Option<Color>),
+    RowRuleStyleActive(bool),
+    RowRuleStylePattern(BorderLineStyle),
     ColumnFill(ColumnFill),
     ColumnSpan(ColumnSpan),
     BreakInside(BreakInside),
@@ -1244,6 +1251,10 @@ impl Decl {
             DeclKind::ColumnRuleColor(c) => s.column_rule_color = *c,
             DeclKind::ColumnRuleStyleActive(on) => s.column_rule_style_active = *on,
             DeclKind::ColumnRuleStylePattern(p) => s.column_rule_style = *p,
+            DeclKind::RowRuleWidth(v) => s.row_rule_width = *v,
+            DeclKind::RowRuleColor(c) => s.row_rule_color = *c,
+            DeclKind::RowRuleStyleActive(on) => s.row_rule_style_active = *on,
+            DeclKind::RowRuleStylePattern(p) => s.row_rule_style = *p,
             DeclKind::ColumnFill(f) => s.column_fill = *f,
             DeclKind::ColumnSpan(sp) => s.column_span = *sp,
             DeclKind::BreakInside(b) => s.break_inside = *b,

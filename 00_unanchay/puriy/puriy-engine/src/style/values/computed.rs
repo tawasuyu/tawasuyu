@@ -347,6 +347,12 @@ pub struct ComputedStyle {
     pub column_rule_color: Option<Color>,
     pub column_rule_style: BorderLineStyle,
     pub column_rule_style_active: bool,
+    /// CSS Gap Decorations 1 (Fase 7.920) — `row-rule-*`, espejo del eje de
+    /// columnas. NO heredable. Plumb.
+    pub row_rule_width: f32,
+    pub row_rule_color: Option<Color>,
+    pub row_rule_style: BorderLineStyle,
+    pub row_rule_style_active: bool,
     /// `column-fill` (Fase 7.281). Default `Balance`. NO heredable. Plumb.
     pub column_fill: ColumnFill,
     /// `column-span` (Fase 7.282). Default `None`. NO heredable. Plumb.
