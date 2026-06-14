@@ -179,23 +179,36 @@ fn border_radius_slash_usa_horizontal() {
 // ── Fase 7.859 — minmax / fit-content / auto-fill en grid ──────────────────
 
 #[test]
-fn grid_minmax_toma_el_max() {
-    // minmax(100px, 1fr) → aproxima al max (1fr).
+fn grid_minmax_preserva_ambos_lados() {
+    // Fase 7.916 — minmax(100px, 1fr) preserva min=100px y max=1fr (fidelidad
+    // real; antes se aplanaba al max).
     let d = decls("grid-template-columns: minmax(100px, 1fr)");
     assert!(d.iter().any(|x| matches!(&x.kind,
-        DeclKind::GridTemplateColumns(v) if v == &vec![GridTrackSize::Fr(1.0)])));
-    // minmax(100px, 200px) → max px.
-    let d2 = decls("grid-template-columns: minmax(100px, 200px)");
+        DeclKind::GridTemplateColumns(v) if v == &vec![
+            GridTrackSize::Minmax(GridTrackBreadth::Px(100.0), GridTrackBreadth::Fr(1.0))])));
+    // minmax(min-content, 200px).
+    let d2 = decls("grid-template-columns: minmax(min-content, 200px)");
     assert!(d2.iter().any(|x| matches!(&x.kind,
-        DeclKind::GridTemplateColumns(v) if v == &vec![GridTrackSize::Px(200.0)])));
+        DeclKind::GridTemplateColumns(v) if v == &vec![
+            GridTrackSize::Minmax(GridTrackBreadth::MinContent, GridTrackBreadth::Px(200.0))])));
+}
+
+#[test]
+fn grid_min_max_content_y_fit_content() {
+    // Tracks intrínsecos sueltos → variantes reales (antes → Auto).
+    let d = decls("grid-template-columns: min-content max-content fit-content(150px)");
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridTemplateColumns(v) if v == &vec![
+            GridTrackSize::MinContent, GridTrackSize::MaxContent, GridTrackSize::FitContent(150.0)])));
 }
 
 #[test]
 fn grid_auto_fill_estima_columnas() {
-    // repeat(auto-fill, minmax(200px, 1fr)) → floor(1280/200)=6 tracks de 1fr.
+    // repeat(auto-fill, minmax(200px, 1fr)) → floor(1280/200)=6 tracks minmax.
     let d = decls("grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))");
     assert!(d.iter().any(|x| matches!(&x.kind,
-        DeclKind::GridTemplateColumns(v) if v.len() == 6 && v.iter().all(|t| *t == GridTrackSize::Fr(1.0)))));
+        DeclKind::GridTemplateColumns(v) if v.len() == 6 && v.iter().all(|t|
+            *t == GridTrackSize::Minmax(GridTrackBreadth::Px(200.0), GridTrackBreadth::Fr(1.0))))));
 }
 
 // ── Fase 7.860 — background-position por borde (3-4 tokens) ─────────────────

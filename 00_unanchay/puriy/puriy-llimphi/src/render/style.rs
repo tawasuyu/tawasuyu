@@ -277,6 +277,39 @@ pub(crate) fn map_grid_track_sizing(t: &GridTrackSize, zoom: f32) -> TrackSizing
         GridTrackSize::Px(v) => length(*v * zoom),
         GridTrackSize::Pct(v) => percent(*v / 100.0),
         GridTrackSize::Fr(v) => fr(*v),
+        GridTrackSize::MinContent => min_content(),
+        GridTrackSize::MaxContent => max_content(),
+        // `fit-content(<len>)`: helper genérico de taffy con el length como tope.
+        GridTrackSize::FitContent(px) => {
+            let lp: TaffyLengthPercentage = length(*px * zoom);
+            fit_content(lp)
+        }
+        GridTrackSize::Minmax(min, max) => minmax(breadth_to_min(min, zoom), breadth_to_max(max, zoom)),
+    }
+}
+
+/// `<track-breadth>` → componente `min` de un track de taffy. `Fr` no es válido
+/// como mínimo en CSS → degrada a `auto`. Los helpers genéricos infieren el
+/// tipo `MinTrackSizingFunction` por el retorno.
+fn breadth_to_min(b: &GridTrackBreadth, zoom: f32) -> TaffyMinTrack {
+    match b {
+        GridTrackBreadth::Auto | GridTrackBreadth::Fr(_) => auto(),
+        GridTrackBreadth::Px(v) => length(*v * zoom),
+        GridTrackBreadth::Pct(v) => percent(*v / 100.0),
+        GridTrackBreadth::MinContent => min_content(),
+        GridTrackBreadth::MaxContent => max_content(),
+    }
+}
+
+/// `<track-breadth>` → componente `max` de un track de taffy (admite `fr`).
+fn breadth_to_max(b: &GridTrackBreadth, zoom: f32) -> TaffyMaxTrack {
+    match b {
+        GridTrackBreadth::Auto => auto(),
+        GridTrackBreadth::Px(v) => length(*v * zoom),
+        GridTrackBreadth::Pct(v) => percent(*v / 100.0),
+        GridTrackBreadth::Fr(v) => fr(*v),
+        GridTrackBreadth::MinContent => min_content(),
+        GridTrackBreadth::MaxContent => max_content(),
     }
 }
 

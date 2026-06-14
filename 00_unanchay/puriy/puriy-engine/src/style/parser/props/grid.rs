@@ -83,50 +83,72 @@ pub(crate) fn parse_grid_template(value: &str) -> Option<Vec<GridTrackSize>> {
     }
 }
 
+/// Parsea una `<track-breadth>` (cada lado de `minmax` o track suelto sin
+/// función). `min-content`/`max-content`/`fr` van a sus variantes reales.
+fn parse_track_breadth(s: &str) -> Option<GridTrackBreadth> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(GridTrackBreadth::Auto);
+    }
+    if s.eq_ignore_ascii_case("min-content") {
+        return Some(GridTrackBreadth::MinContent);
+    }
+    if s.eq_ignore_ascii_case("max-content") {
+        return Some(GridTrackBreadth::MaxContent);
+    }
+    if let Some(num) = s.strip_suffix("fr") {
+        let v: f32 = num.trim().parse().ok()?;
+        return Some(GridTrackBreadth::Fr(v));
+    }
+    match parse_length_or_pct(s)? {
+        LengthVal::Px(v) => Some(GridTrackBreadth::Px(v)),
+        LengthVal::Pct(v) => Some(GridTrackBreadth::Pct(v)),
+        LengthVal::MinContent => Some(GridTrackBreadth::MinContent),
+        LengthVal::MaxContent => Some(GridTrackBreadth::MaxContent),
+        LengthVal::Auto | LengthVal::FitContent => Some(GridTrackBreadth::Auto),
+    }
+}
+
 pub(crate) fn parse_one_grid_track(s: &str) -> Option<GridTrackSize> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("auto") {
         return Some(GridTrackSize::Auto);
     }
-    // Fase 7.859 — `minmax(min, max)`. El modelo es de tamaño único: tomamos
-    // el `max` (el tamaño "ideal" al que crece el track, p.ej. `1fr`); si el
-    // max es intrínseco/auto, caemos al `min`; si ambos lo son, `auto`. Es la
-    // aproximación que mejor refleja el patrón usual `minmax(<px>, 1fr)`.
+    // Fase 7.916 — `minmax(min, max)` con fidelidad real (taffy lo soporta
+    // nativo): cada lado se parsea como `<track-breadth>` y se preserva.
     if let Some(inner) = strip_fn(s, "minmax") {
-        let Some((min_raw, max_raw)) = split_first_top_comma(inner) else {
-            return None;
-        };
-        let max = parse_one_grid_track(max_raw.trim());
-        if let Some(m) = max {
-            if !matches!(m, GridTrackSize::Auto) {
-                return Some(m);
-            }
-        }
-        return parse_one_grid_track(min_raw.trim());
+        let (min_raw, max_raw) = split_first_top_comma(inner)?;
+        let min = parse_track_breadth(min_raw.trim())?;
+        let max = parse_track_breadth(max_raw.trim())?;
+        return Some(GridTrackSize::Minmax(min, max));
     }
-    // Fase 7.859 — `fit-content(<len>)` ≈ track con tope = ese length → lo
-    // aproximamos al length (clamp superior implícito que no modelamos).
+    // Fase 7.916 — `fit-content(<len>)` con tope real. Sólo px (los % de
+    // fit-content necesitan el container, fuera de alcance → degrada a max-content).
     if let Some(inner) = strip_fn(s, "fit-content") {
-        return parse_one_grid_track(inner.trim());
+        return Some(match parse_length_or_pct(inner.trim()) {
+            Some(LengthVal::Px(v)) => GridTrackSize::FitContent(v),
+            _ => GridTrackSize::MaxContent,
+        });
     }
     if let Some(num) = s.strip_suffix("fr") {
         let v: f32 = num.trim().parse().ok()?;
         return Some(GridTrackSize::Fr(v));
     }
-    // `min-content`/`max-content` como track entero → auto (sin layout intrínseco).
-    if s.eq_ignore_ascii_case("min-content") || s.eq_ignore_ascii_case("max-content") {
-        return Some(GridTrackSize::Auto);
+    // Fase 7.916 — `min-content`/`max-content` como track entero → variante real.
+    if s.eq_ignore_ascii_case("min-content") {
+        return Some(GridTrackSize::MinContent);
+    }
+    if s.eq_ignore_ascii_case("max-content") {
+        return Some(GridTrackSize::MaxContent);
     }
     if let Some(lv) = parse_length_or_pct(s) {
         return Some(match lv {
             LengthVal::Px(v) => GridTrackSize::Px(v),
             LengthVal::Pct(v) => GridTrackSize::Pct(v),
-            // Fase 7.849 — tracks intrínsecos (min/max/fit-content) aún no se
-            // modelan en `GridTrackSize`; aproximamos a `auto`.
-            LengthVal::Auto
-            | LengthVal::MinContent
-            | LengthVal::MaxContent
-            | LengthVal::FitContent => GridTrackSize::Auto,
+            LengthVal::MinContent => GridTrackSize::MinContent,
+            LengthVal::MaxContent => GridTrackSize::MaxContent,
+            // `fit-content` sin arg como keyword suelto no es válido en track → auto.
+            LengthVal::Auto | LengthVal::FitContent => GridTrackSize::Auto,
         });
     }
     None

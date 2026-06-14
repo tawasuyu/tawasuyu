@@ -168,6 +168,29 @@ fn parse_areas_calcula_coordenadas() {
 }
 
 #[test]
+fn grid_minmax_respeta_piso_y_crece() {
+    // 1 columna minmax(100px, 1fr) en un grid de 300px → el track crece a 1fr
+    // = 300px (mayor que el piso). En un grid de 60px → el track respeta el
+    // PISO de 100px (no se encoge bajo el mínimo). Antes (flatten a 1fr) el
+    // track de 60px habría medido 60, perdiendo el piso.
+    let mk = |w: u32| {
+        let html = format!(
+            r##"<html><head><style>
+              .g {{ display:grid; width:{w}px; grid-template-columns: minmax(100px, 1fr); }}
+              .c {{ height:20px; }}
+            </style></head><body><div class="g"><div class="c">x</div></div></body></html>"##
+        );
+        let tree = parse(&html);
+        let cont = find_tag(&tree.root, "div").expect("grid").clone();
+        layout_at(box_to_view(&cont), (400.0, 400.0), &[0]).size.width
+    };
+    let ancho = mk(300);
+    let angosto = mk(60);
+    assert!((ancho - 300.0).abs() < 1.0, "minmax crece a 1fr=300, mide {ancho}");
+    assert!((angosto - 100.0).abs() < 1.0, "minmax respeta el piso 100px, mide {angosto}");
+}
+
+#[test]
 fn margin_top_auto_empuja_en_flex() {
     // Contenedor flex column de 200px de alto; el ítem (30px alto) con
     // `margin-top: auto` se empuja al fondo (y ≈ 200 − 30 = 170). En block

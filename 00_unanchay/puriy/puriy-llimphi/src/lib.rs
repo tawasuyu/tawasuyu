@@ -19,13 +19,15 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use llimphi_layout::taffy::prelude::{
-    auto, fr, length, percent, AlignContent, AlignItems, AlignSelf, BoxSizing, Dimension,
-    FlexDirection, FlexWrap, JustifyContent, LengthPercentageAuto, Position as TaffyPosition, Rect,
-    Size, Style,
+    auto, fit_content, fr, length, max_content, min_content, minmax, percent, AlignContent,
+    AlignItems, AlignSelf, BoxSizing, Dimension, FlexDirection, FlexWrap, JustifyContent,
+    LengthPercentage as TaffyLengthPercentage, LengthPercentageAuto, Position as TaffyPosition,
+    Rect, Size, Style,
 };
 use llimphi_layout::taffy::{
     Display as TaffyDisplay, GridAutoFlow as TaffyGridAutoFlow, GridPlacement, GridTemplateArea,
-    GridTemplateComponent, Line as TaffyLine, TrackSizingFunction,
+    GridTemplateComponent, Line as TaffyLine, MaxTrackSizingFunction as TaffyMaxTrack,
+    MinTrackSizingFunction as TaffyMinTrack, TrackSizingFunction,
 };
 use llimphi_raster::kurbo::{
     Affine, BezPath as KurboBezPath, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
@@ -55,7 +57,7 @@ use puriy_engine::{
     AlignItems as CssAlignItems, AlignSelf as CssAlignSelf,
     BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderLineStyle, BoxNode, BoxShadow,
     BoxSizing as CssBoxSizing, BoxTree, Display, Engine, FlexDirection as CssFlexDirection,
-    AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridAutoFlow, GridTrackSize,
+    AlignContent as CssAlignContent, FlexWrap as CssFlexWrap, GridAutoFlow, GridTrackBreadth, GridTrackSize,
     JustifyContent as CssJustifyContent, LengthVal,
     LinearGradient, Overflow, PointerEvents, Position as CssPosition, TextAlign,
     TextDecorationLine, TextDecorationStyle, VerticalAlign, Visibility,

@@ -570,14 +570,35 @@ pub enum Transform {
     Matrix(f32, f32, f32, f32, f32, f32),
 }
 
+/// Una "breadth" de track: el componente que va en cada lado de `minmax()` o
+/// como track suelto (salvo las funciones). NO anida — la gramática CSS de
+/// `minmax()` no admite `minmax`/`fit-content` adentro, así que se mantiene
+/// `Copy` sin `Box`. `Fr` sólo es válido como `max` (en `min` degrada a auto).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum GridTrackBreadth {
+    Auto,
+    Px(f32),
+    Pct(f32),
+    Fr(f32),
+    MinContent,
+    MaxContent,
+}
+
 /// Tamaño de track para `display: grid`. `Fr(N)` = fracción del espacio
-/// remanente (CSS unit `fr`).
+/// remanente (CSS unit `fr`). `Minmax`/`FitContent`/`Min·MaxContent` se
+/// mapean a los track-sizing nativos de taffy en el puente (Fase 7.916).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GridTrackSize {
     Auto,
     Px(f32),
     Pct(f32),
     Fr(f32),
+    MinContent,
+    MaxContent,
+    /// `fit-content(<len-px>)` — clamp al length dado.
+    FitContent(f32),
+    /// `minmax(<min>, <max>)`.
+    Minmax(GridTrackBreadth, GridTrackBreadth),
 }
 
 /// Función de easing de una `transition`/`animation`. El runtime de
