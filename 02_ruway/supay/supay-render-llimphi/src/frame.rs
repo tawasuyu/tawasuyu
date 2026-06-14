@@ -139,6 +139,17 @@ pub(crate) fn render_frame(
     };
     let world_lights_ref: &[WorldLight] = &world_lights;
 
+    // Fase 3.54: occlusion culling por subsector. Caminamos el BSP
+    // front-to-back acumulando los rangos angulares tapados por paredes
+    // sólidas; `visible[ss] == false` autoriza a saltar los planos del
+    // subsector y los sprites que caen en él. `None` ⇒ stub sin BSP o
+    // toggle apagado → todo visible (comportamiento histórico).
+    let visible_subs: Option<Vec<bool>> = if cfg.occlusion_cull && use_subsectors {
+        compute_visible_subsectors(snap, &cam, cfg.near)
+    } else {
+        None
+    };
+
     let cap = snap.walls.len() * (cfg.wall_bands as usize * 2 + 2)
         + snap.subsectors.len() * 2
         + snap.sprites.len();
@@ -146,6 +157,13 @@ pub(crate) fn render_frame(
 
     if use_subsectors {
         for (idx, sub) in snap.subsectors.iter().enumerate() {
+            // Fase 3.54: subsector tapado por paredes sólidas → no emitir
+            // sus planos de piso/techo.
+            if let Some(vis) = &visible_subs {
+                if !vis.get(idx).copied().unwrap_or(true) {
+                    continue;
+                }
+            }
             let bsp_depth = bsp_order_depths.get(idx).copied().flatten();
             let bsp_rank = bsp_ranks.get(idx).copied().unwrap_or(0);
             gather_subsector_planes(
@@ -180,6 +198,16 @@ pub(crate) fn render_frame(
         );
     }
     for sprite in snap.sprites.iter() {
+        // Fase 3.54: sprite cuyo punto cae en un subsector tapado por
+        // paredes sólidas → descartar (queda íntegramente detrás de un
+        // muro opaco de piso a techo).
+        if let Some(vis) = &visible_subs {
+            if let Some(ss) = subsector_at_point(&snap.nodes, sprite.x, sprite.y) {
+                if !vis.get(ss as usize).copied().unwrap_or(true) {
+                    continue;
+                }
+            }
+        }
         gather_sprite(
             &mut renderables,
             sprite,

@@ -265,6 +265,15 @@ pub struct SegSnap {
     pub y1: f32,
     pub x2: f32,
     pub y2: f32,
+    /// **Fase 3.54** — `true` si el seg pertenece a una pared sólida
+    /// one-sided (`backsector == NULL` en el motor): ocluye visión de
+    /// piso a techo sin dejar ver nada detrás. Los portales two-sided
+    /// (puertas, ventanas, escalones) son `false` — el renderer ve a
+    /// través de ellos. Lo consume el occlusion culling por subsector
+    /// para descartar planos/sprites tapados por paredes sólidas más
+    /// cercanas. En modo stub (sin BSP) no hay segs, así que el flag
+    /// nunca se evalúa.
+    pub solid: bool,
 }
 
 /// Flag de Doom: si un `NodeSnap::children[i]` tiene este bit set, el

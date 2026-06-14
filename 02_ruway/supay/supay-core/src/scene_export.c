@@ -402,7 +402,8 @@ int supay_scene_num_segs(void) {
 }
 
 int supay_scene_seg(int i,
-                    float *x1, float *y1, float *x2, float *y2) {
+                    float *x1, float *y1, float *x2, float *y2,
+                    int *solid) {
     if (i < 0 || i >= numsegs || !segs) {
         return 0;
     }
@@ -411,6 +412,10 @@ int supay_scene_seg(int i,
     *y1 = ftox(s->v1->y);
     *x2 = ftox(s->v2->x);
     *y2 = ftox(s->v2->y);
+    /* Fase 3.54: pared sólida one-sided ⇒ backsector == NULL. Estos segs
+     * ocluyen visión por completo; el culling por subsector los usa como
+     * bloqueadores. Los portales two-sided dejan ver detrás. */
+    *solid = (s->backsector == NULL) ? 1 : 0;
     return 1;
 }
 

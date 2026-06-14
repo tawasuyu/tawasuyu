@@ -176,6 +176,221 @@ pub(crate) fn walk_bsp(nodes: &[NodeSnap], child: u16, view_x: f32, view_y: f32,
     walk_bsp(nodes, near_child, view_x, view_y, out);
 }
 
+// =====================================================================
+// Fase 3.54 — occlusion culling por subsector
+// =====================================================================
+//
+// El renderer ordena correctamente (Fase 3.13b) pero pinta TODO: un
+// subsector tapado por una pared sólida más cercana igual emite sus
+// polígonos de piso/techo y sus sprites, que luego quedan cubiertos por
+// overdraw. Es fill desperdiciado — el pendiente declarado en el SDD.
+//
+// Esto lo evita con la idea clásica de R_RenderBSPNode (cliprange /
+// solidsegs) pero a granularidad de **subsector** en vez de columna,
+// porque el renderer es por polígonos (vello), no por columnas. Caminamos
+// el BSP front-to-back acumulando los rangos angulares ocluidos por
+// paredes sólidas; un subsector cuyo span angular queda completamente
+// tapado se descarta.
+//
+// **Conservador por diseño** — nunca descarta algo visible:
+//   - Sólo cuenta como bloqueador una pared sólida one-sided (`seg.solid`)
+//     con AMBOS extremos delante del near plane (sub-ocluye, jamás
+//     sobre-ocluye).
+//   - Sólo descarta un subsector si TODOS sus extremos están delante y su
+//     span angular (con un margen de seguridad) cae dentro de lo ya
+//     ocluido. Si algún extremo está detrás del near, lo deja visible.
+
+/// Margen angular de seguridad (rad, ~3°) que se exige a la oclusión por
+/// encima del span real del subsector antes de descartarlo. Cubre el caso
+/// de que la cadena de segs de un subsector no represente su polígono
+/// convexo completo (lados de partición BSP sin seg) y su extensión
+/// angular real sea un poco mayor que la de sus vértices de seg.
+const CULL_ANGLE_MARGIN: f32 = 0.05;
+
+/// Conjunto de intervalos angulares ocluidos (rad), mantenidos disjuntos y
+/// fusionados, ordenados por extremo inferior. Los ángulos viven en el
+/// dominio cam-space `atan2(y_cam, x_cam)` con `x_cam > 0` ⇒ `(-π/2, π/2)`,
+/// sin wraparound (sólo se insertan/consultan puntos delante de cámara).
+#[derive(Default)]
+pub(crate) struct OcclusionSet {
+    ivals: Vec<(f32, f32)>,
+}
+
+impl OcclusionSet {
+    /// Inserta `[lo, hi]` fusionando con los intervalos que toque.
+    pub(crate) fn insert(&mut self, lo: f32, hi: f32) {
+        if !(lo <= hi) {
+            return; // NaN o invertido: ignorar.
+        }
+        let (mut lo, mut hi) = (lo, hi);
+        let mut merged: Vec<(f32, f32)> = Vec::with_capacity(self.ivals.len() + 1);
+        let mut inserted = false;
+        for &(a, b) in &self.ivals {
+            if b < lo {
+                merged.push((a, b)); // entero a la izquierda
+            } else if a > hi {
+                if !inserted {
+                    merged.push((lo, hi));
+                    inserted = true;
+                }
+                merged.push((a, b)); // entero a la derecha
+            } else {
+                // solapa: absorber.
+                lo = lo.min(a);
+                hi = hi.max(b);
+            }
+        }
+        if !inserted {
+            merged.push((lo, hi));
+        }
+        self.ivals = merged;
+    }
+
+    /// `true` si `[lo, hi]` está íntegramente contenido en algún intervalo
+    /// ocluido (como están fusionados, basta con uno solo).
+    pub(crate) fn covers(&self, lo: f32, hi: f32) -> bool {
+        self.ivals.iter().any(|&(a, b)| a <= lo && b >= hi)
+    }
+}
+
+/// Camina el BSP front-to-back (subtree cercano primero) desde `child`,
+/// agregando los subsectores hoja a `out`. Inverso de [`walk_bsp`]: el
+/// primero en salir es el más cercano al viewer. Lo necesita el culling
+/// para acumular bloqueadores cercanos antes de testear los lejanos.
+pub(crate) fn walk_bsp_front_to_back(
+    nodes: &[NodeSnap],
+    child: u16,
+    view_x: f32,
+    view_y: f32,
+    out: &mut Vec<u32>,
+) {
+    if child & NF_SUBSECTOR != 0 {
+        out.push((child & !NF_SUBSECTOR) as u32);
+        return;
+    }
+    let Some(node) = nodes.get(child as usize) else {
+        return;
+    };
+    let side = node.partition_dx * (view_y - node.partition_y)
+        - node.partition_dy * (view_x - node.partition_x);
+    let (near_child, far_child) = if side > 0.0 {
+        (node.children[0], node.children[1])
+    } else {
+        (node.children[1], node.children[0])
+    };
+    walk_bsp_front_to_back(nodes, near_child, view_x, view_y, out);
+    walk_bsp_front_to_back(nodes, far_child, view_x, view_y, out);
+}
+
+/// Span angular `[min, max]` (rad, cam-space) de los segs de un subsector,
+/// o `None` si: no tiene segs, o algún extremo cae detrás del near plane
+/// (caso en que el span no es confiable → no descartar). El span sólo se
+/// usa para *decidir si descartar*, así que devolver `None` es el lado
+/// seguro (se trata como visible).
+fn subsector_angular_span(
+    sub: &SubsectorSnap,
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    near: f32,
+) -> Option<(f32, f32)> {
+    let first = sub.first_seg as usize;
+    let count = sub.num_segs as usize;
+    if count == 0 {
+        return None;
+    }
+    let segs: &[SegSnap] = snap.segs.get(first..first + count)?;
+    let mut lo = f32::INFINITY;
+    let mut hi = f32::NEG_INFINITY;
+    for s in segs {
+        for (wx, wy) in [(s.x1, s.y1), (s.x2, s.y2)] {
+            let (x_cam, y_cam) = cam.to_cam_2d(wx, wy);
+            if x_cam <= near {
+                return None; // extremo detrás → span no confiable.
+            }
+            let a = y_cam.atan2(x_cam);
+            lo = lo.min(a);
+            hi = hi.max(a);
+        }
+    }
+    if lo.is_finite() && hi.is_finite() {
+        Some((lo, hi))
+    } else {
+        None
+    }
+}
+
+/// Agrega al [`OcclusionSet`] los rangos angulares de las paredes sólidas
+/// (`seg.solid`) del subsector cuyos dos extremos estén delante del near.
+fn add_subsector_occluders(
+    sub: &SubsectorSnap,
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    near: f32,
+    occ: &mut OcclusionSet,
+) {
+    let first = sub.first_seg as usize;
+    let count = sub.num_segs as usize;
+    let Some(segs) = snap.segs.get(first..first + count) else {
+        return;
+    };
+    for s in segs {
+        if !s.solid {
+            continue; // portal two-sided: no bloquea visión.
+        }
+        let (x1, y1) = cam.to_cam_2d(s.x1, s.y1);
+        let (x2, y2) = cam.to_cam_2d(s.x2, s.y2);
+        if x1 <= near || x2 <= near {
+            continue; // parte detrás del near → no lo usamos como bloqueador.
+        }
+        let a1 = y1.atan2(x1);
+        let a2 = y2.atan2(x2);
+        occ.insert(a1.min(a2), a1.max(a2));
+    }
+}
+
+/// **Fase 3.54** — calcula, por subsector, si es visible desde la cámara
+/// tras descartar los tapados por paredes sólidas más cercanas. Devuelve
+/// `None` si el snapshot no tiene BSP (modo stub) — el caller trata todo
+/// como visible (comportamiento histórico).
+///
+/// El bit `visible[ss] == false` autoriza a saltar los polígonos de plano
+/// del subsector `ss` y los sprites cuyo punto cae en él. Las paredes no
+/// se descartan (son los propios bloqueadores y su costo es menor).
+pub(crate) fn compute_visible_subsectors(
+    snap: &SceneSnapshot,
+    cam: &Camera,
+    near: f32,
+) -> Option<Vec<bool>> {
+    if snap.nodes.is_empty() || snap.subsectors.is_empty() || snap.segs.is_empty() {
+        return None;
+    }
+    let n = snap.subsectors.len();
+    let mut visible = vec![true; n];
+    let mut order: Vec<u32> = Vec::with_capacity(n);
+    let root = (snap.nodes.len() - 1) as u16;
+    walk_bsp_front_to_back(&snap.nodes, root, cam.px, cam.py, &mut order);
+
+    let mut occ = OcclusionSet::default();
+    for &ss in &order {
+        let Some(sub) = snap.subsectors.get(ss as usize) else {
+            continue;
+        };
+        // 1. Testear visibilidad contra lo ya ocluido por subsectores más
+        //    cercanos. Sólo descartar con span confiable + margen.
+        if let Some((lo, hi)) = subsector_angular_span(sub, snap, cam, near) {
+            if occ.covers(lo - CULL_ANGLE_MARGIN, hi + CULL_ANGLE_MARGIN) {
+                if let Some(slot) = visible.get_mut(ss as usize) {
+                    *slot = false;
+                }
+            }
+        }
+        // 2. Aportar las paredes sólidas de este subsector como nuevos
+        //    bloqueadores para los subsectores que vienen detrás.
+        add_subsector_occluders(sub, snap, cam, near, &mut occ);
+    }
+    Some(visible)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn gather_subsector_planes(
     out: &mut Vec<Renderable>,

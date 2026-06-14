@@ -70,8 +70,9 @@ use llimphi_ui::llimphi_raster::vello::Scene;
 use llimphi_ui::{PaintRect, View};
 use llimphi_ui::llimphi_text::{self as text, Alignment, TextBlock, Typesetter};
 use supay_scene::{
-    interpolate, NodeSnap, PlayerOverlays, PlayerStats, SceneSnapshot, SectorSnap, SnapshotPair,
-    SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, ML_DONTPEGBOTTOM, ML_DONTPEGTOP,
+    interpolate, NodeSnap, PlayerOverlays, PlayerStats, SceneSnapshot, SectorSnap, SegSnap,
+    SnapshotPair, SpriteSnap, SubsectorSnap, WallSeg, WeaponSpriteSnap, ML_DONTPEGBOTTOM,
+    ML_DONTPEGTOP,
     NF_SUBSECTOR, NO_SECTOR, NO_SKY_PIC,
 };
 

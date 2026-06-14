@@ -38,11 +38,17 @@ cargo run --release -p supay-doom-llimphi --example dump_frame
 - **Legal WAD:** only shareware `doom1.wad` is referenced; others come from you.
 - `vendor/doomgeneric/`: clone it from upstream before build (`build.rs` detects).
 - **`FEATURE_SOUND=0`** stays: audio doesn't come from the C engine but from `supay-audio` (Rust), which already synthesizes WAD SFX + MUS music and bridges `takiy` (`AudioEngine::play_takiy_score`).
-- Simplified 3D rendering: BSP-correct painter's ordering (Phase 3.13b) but no per-column BSP occlusion clipping yet — see "Status" below.
+- Simplified 3D rendering: BSP-correct painter's ordering (Phase 3.13b) plus per-subsector occlusion culling (Phase 3.54: subsectors fully hidden behind solid walls skip their planes/sprites); no per-column clipping of partially-hidden geometry yet — see "Status" below.
 
-## Status (2026-05-31)
+## Status (2026-06-14)
 
 ### Done
+
+- **Per-subsector occlusion culling (Phase 3.54)**: a front-to-back BSP walk accumulates
+  the angular ranges blocked by solid one-sided walls; subsectors fully behind them skip
+  their floor/ceiling polygons and sprites. Conservative (only culls what it proves fully
+  hidden, never clips visible geometry), toggleable via `cfg.occlusion_cull`. Cuts the
+  overdraw the renderer used to waste.
 
 - **Mature software 3D renderer over vello**: textured walls (TEXTURE1+PNAMES,
   textureoffset/rowoffset alignment + pegging), per-triangle perspective-correct
@@ -78,10 +84,14 @@ cargo run --release -p supay-doom-llimphi --example dump_frame
 
 ### Pending
 
-- **Visibility BSP-walking** (exact occlusion). The *ordering* is already BSP-correct
-  (Phase 3.13b, see above), but *visibility* is still resolved by painter's overdraw:
-  there is no per-column clipping of solid segments like the original R_RenderBSPNode,
-  so geometry that would be hidden is still drawn. It works, but wastes fill.
+- **Per-column visibility clipping** (exact occlusion). Phase 3.54 added *per-subsector*
+  occlusion culling (front-to-back BSP walk accumulating the angular ranges blocked by
+  solid one-sided walls; a subsector whose whole angular span is hidden skips its
+  floor/ceiling polygons and its sprites — conservative, never clips visible geometry).
+  What's still missing is *per-column* clipping of **partially** hidden geometry like the
+  original `R_RenderBSPNode`: a half-occluded subsector is still drawn whole, and walls
+  themselves are never culled (they are the occluders). Less wasted fill than before, not
+  zero.
 - **`FEATURE_SOUND` of the C engine at 0**: audio does not come from `doomgeneric` (C) but
   from `supay-audio` (Rust), which already synthesizes SFX + music and **already bridges `takiy`**
   (`AudioEngine::play_takiy_score` renders a `takiy_core::Score` and queues it as one

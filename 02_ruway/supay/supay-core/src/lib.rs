@@ -248,6 +248,7 @@ extern "C" {
         y1: *mut f32,
         x2: *mut f32,
         y2: *mut f32,
+        solid: *mut std::ffi::c_int,
     ) -> std::ffi::c_int;
     fn supay_scene_sky_pic() -> u16;
     /// Resuelve un `pic_idx` (índice de flat) al nombre del lump.
@@ -926,6 +927,7 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
         let mut y1 = 0.0_f32;
         let mut x2 = 0.0_f32;
         let mut y2 = 0.0_f32;
+        let mut solid = 0_i32;
         // SAFETY: idem.
         let ok = unsafe {
             supay_scene_seg(
@@ -934,10 +936,17 @@ fn capture_scene_real(tick: u64) -> SceneSnapshot {
                 &mut y1,
                 &mut x2,
                 &mut y2,
+                &mut solid,
             )
         };
         if ok != 0 {
-            segs_vec.push(SegSnap { x1, y1, x2, y2 });
+            segs_vec.push(SegSnap {
+                x1,
+                y1,
+                x2,
+                y2,
+                solid: solid != 0,
+            });
         }
     }
     // Nodos BSP (Fase 3.13). Vacío hasta que cargue el mapa.

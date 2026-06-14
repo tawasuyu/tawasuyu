@@ -1009,3 +1009,104 @@
             real_cyber, estimate_56
         );
     }
+    // =================================================================
+    // Fase 3.54 — Occlusion culling por subsector
+    // =================================================================
+
+    #[test]
+    fn occlusion_set_merge_and_covers() {
+        // Inserciones solapadas se fusionan; covers exige contención total.
+        let mut occ = OcclusionSet::default();
+        occ.insert(-0.5, 0.0);
+        occ.insert(-0.1, 0.5); // solapa con la anterior → un solo intervalo.
+        assert!(occ.covers(-0.4, 0.4), "rango interior cubierto");
+        assert!(occ.covers(-0.5, 0.5), "rango exacto cubierto");
+        assert!(!occ.covers(-0.6, 0.0), "se escapa por la izquierda");
+        assert!(!occ.covers(0.0, 0.6), "se escapa por la derecha");
+
+        // Dos intervalos disjuntos no cubren un rango que cruza el hueco.
+        let mut occ2 = OcclusionSet::default();
+        occ2.insert(-0.8, -0.4);
+        occ2.insert(0.4, 0.8);
+        assert!(occ2.covers(-0.7, -0.5));
+        assert!(occ2.covers(0.5, 0.7));
+        assert!(!occ2.covers(-0.5, 0.5), "el hueco central no está cubierto");
+    }
+
+    /// Construye un snapshot de dos subsectores en línea: el cercano (A, a
+    /// X≈100) con una pared frontal; el lejano (B, a X≈200) detrás de A.
+    /// `a_solid` controla si la pared de A es sólida (ocluye) o portal.
+    fn two_subsector_occlusion_snap(a_solid: bool) -> SceneSnapshot {
+        let mut snap = SceneSnapshot::empty(0);
+        snap.sectors = Arc::from(vec![SectorSnap {
+            floor_height: 0.0,
+            ceiling_height: 128.0,
+            light_level: 200,
+            floor_pic: 0,
+            ceiling_pic: 0,
+        }]);
+        snap.subsectors = Arc::from(vec![
+            // A = near (índice 0): seg frontal ancho a X=100.
+            SubsectorSnap { sector: 0, first_seg: 0, num_segs: 1 },
+            // B = far (índice 1): seg angosto a X=200.
+            SubsectorSnap { sector: 0, first_seg: 1, num_segs: 1 },
+        ]);
+        snap.segs = Arc::from(vec![
+            // Pared de A: cruza todo el campo de visión frontal.
+            SegSnap { x1: 100.0, y1: -60.0, x2: 100.0, y2: 60.0, solid: a_solid },
+            // Seg de B: angosto, detrás de A (su span cae dentro del de A).
+            SegSnap { x1: 200.0, y1: -30.0, x2: 200.0, y2: 30.0, solid: false },
+        ]);
+        // Partición vertical a X=150: viewer en origen (X=0 < 150) cae al
+        // front (children[0]) ⇒ A es near, B es far.
+        snap.nodes = Arc::from(vec![NodeSnap {
+            partition_x: 150.0,
+            partition_y: 0.0,
+            partition_dx: 0.0,
+            partition_dy: 1.0,
+            children: [NF_SUBSECTOR | 0, NF_SUBSECTOR | 1],
+        }]);
+        snap
+    }
+
+    #[test]
+    fn cull_hides_subsector_behind_solid_wall() {
+        // Jugador en origen mirando +X (angle 0). La pared sólida de A
+        // tapa angularmente a B → B se descarta, A queda visible.
+        let snap = two_subsector_occlusion_snap(true);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
+        assert_eq!(vis.len(), 2);
+        assert!(vis[0], "A (la pared cercana) es visible");
+        assert!(!vis[1], "B detrás de la pared sólida se descarta");
+    }
+
+    #[test]
+    fn portal_does_not_cull_behind_it() {
+        // Misma geometría pero la pared de A es un portal two-sided
+        // (solid=false): no ocluye, así que B sigue visible.
+        let snap = two_subsector_occlusion_snap(false);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
+        assert!(vis[0], "A visible");
+        assert!(vis[1], "B visible a través del portal");
+    }
+
+    #[test]
+    fn cull_none_without_bsp() {
+        // Sin nodos BSP (modo stub) devuelve None → el caller pinta todo.
+        let snap = SceneSnapshot::empty(0);
+        let cam = Camera::new(0.0, 0.0, 40.0, 0.0);
+        assert!(compute_visible_subsectors(&snap, &cam, 4.0).is_none());
+    }
+
+    #[test]
+    fn cull_keeps_subsector_when_looking_away() {
+        // Mirando -X (angle π): la pared de A queda detrás del near plane
+        // para ambos extremos → no se usa como bloqueador y el span de B
+        // tampoco es confiable → todo queda visible (lado seguro).
+        let snap = two_subsector_occlusion_snap(true);
+        let cam = Camera::new(0.0, 0.0, 40.0, std::f32::consts::PI);
+        let vis = compute_visible_subsectors(&snap, &cam, 4.0).expect("hay BSP");
+        assert!(vis[0] && vis[1], "nada se descarta mirando al lado opuesto");
+    }

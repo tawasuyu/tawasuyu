@@ -263,6 +263,18 @@ pub struct RenderConfig {
     /// sin paredes en el snapshot, modo stub) el charco se dibuja como el
     /// quad completo de 3.48. Sólo afecta a los decals `horizontal`.
     pub decal_clip_walls: bool,
+    /// **Fase 3.54 — occlusion culling por subsector**. Si `true` (y hay
+    /// BSP), antes de juntar primitivas se camina el árbol front-to-back
+    /// acumulando los rangos angulares ocluidos por paredes sólidas
+    /// one-sided; los subsectores cuyo span angular queda íntegramente
+    /// tapado **no** emiten sus polígonos de piso/techo ni sus sprites.
+    /// Reduce el overdraw/fill de geometría que de todas formas quedaría
+    /// cubierta (el pendiente "Visibility BSP-walking" del SDD). Es
+    /// conservador: sólo descarta lo que comprueba completamente tapado,
+    /// nunca recorta algo visible. Las paredes no se descartan (son los
+    /// propios bloqueadores). Cuando `false`, o en modo stub sin BSP, se
+    /// pinta todo — comportamiento 3.53 bit-equivalente. Default `true`.
+    pub occlusion_cull: bool,
 }
 
 impl Default for RenderConfig {
@@ -296,6 +308,7 @@ impl Default for RenderConfig {
             decals: Vec::new(),
             decal_rim_directional: true,
             decal_clip_walls: true,
+            occlusion_cull: true,
         }
     }
 }
