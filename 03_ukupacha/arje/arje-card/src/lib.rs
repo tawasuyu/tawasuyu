@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 pub use card_core::{
+    AttestPolicy,
     Capability,
     CardError,
     Card as EntityCard,

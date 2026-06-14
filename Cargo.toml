@@ -447,6 +447,7 @@ members = [
     "03_ukupacha/arje/init/arje-snapshot",
     "03_ukupacha/arje/init/arje-soma",
     "03_ukupacha/arje/init/arje-zero",
+    "03_ukupacha/arje/runtime/arje-attest",
     "03_ukupacha/arje/runtime/arje-brain",
     "03_ukupacha/arje/runtime/arje-brain-audit",
     "03_ukupacha/arje/runtime/arje-brain-cognitive",

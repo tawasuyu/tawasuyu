@@ -15,6 +15,7 @@
 //!   - `events`      : tipos de eventos del bucle primordial
 //!   - crates externos del workspace para CAS, soma, wasm, snapshot, kernel.
 
+mod attest_gate;
 mod brain_glue;
 mod bus;
 mod events;
@@ -389,6 +390,14 @@ async fn primordial_loop(
         }
     }
 
+    // Atestación al arranque (A2): verificar los binarios críticos contra el
+    // manifiesto firmado del seed ANTES de incarnar el target. Con política
+    // `Halt` un fallo aborta acá (antes del genesis); los veredictos se vuelcan
+    // al audit log una vez que el brain existe (más abajo). `seed_card` se mueve
+    // al grafo en la línea siguiente, así que capturamos la política antes.
+    let attest_policy = seed_card.attest_policy;
+    let attest_verdicts = attest_gate::run(&seed_card)?;
+
     let mut graph = EnteGraph::new(seed_card);
     graph.instantiate_seed_dependencies(&graph_tx).await?;
 
@@ -426,6 +435,21 @@ async fn primordial_loop(
                 threshold: brain.params, // mismo threshold que crystals manuales
             },
         );
+    }
+
+    // Volcado de la atestación al arranque (A2) a la cadena de audit, ahora
+    // que el brain existe. Quedan ancladas al CAS y son auditables con
+    // `verify_chain_from_cas` / `brainctl audit --kind attestation-check`.
+    if !attest_verdicts.is_empty() {
+        let mut audit = brain.audit.write().await;
+        for v in &attest_verdicts {
+            audit.append(AuditAction::AttestationCheck {
+                binary: v.binary.clone(),
+                got_hash: v.got_hash,
+                verdict: v.verdict.motivo().to_string(),
+                policy: format!("{:?}", attest_policy),
+            });
+        }
     }
 
     // Brain restore: si hay --restore <path>, cargamos el snapshot adjunto

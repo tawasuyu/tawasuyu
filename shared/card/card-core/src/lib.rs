@@ -162,6 +162,24 @@ pub struct Card {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub priority_contexts: BTreeMap<String, ContextBias>,
 
+    /// Manifiesto de atestación al arranque (A1): una `ConcesionCapacidad`
+    /// firmada por binario crítico, sobre `(blake3(binario), permisos)` bajo
+    /// la rootkey del seed. `arje-zero` las verifica antes de incarnar el
+    /// target gráfico. Vacío = sin atestación (compat con Cards previas).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attest: Vec<format::ConcesionCapacidad>,
+
+    /// Llave pública (Ed25519) de la rootkey que firmó `attest`. El gate
+    /// exige que cada concesión la declare como `autor`; `None` = no se pinó
+    /// (el gate sólo valida firma + hash, no la procedencia de la rootkey).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attest_rootkey: Option<format::AgoraId>,
+
+    /// Qué hacer cuando un binario crítico no atesta. Default `Warn` (sólo
+    /// registra): la atestación arranca observando y el operador la endurece.
+    #[serde(default)]
+    pub attest_policy: AttestPolicy,
+
     /// Campos JSON/TOML desconocidos preservados durante I/O de archivos
     /// (forward-compat). **No se transmiten por wire (postcard)** — la
     /// proyección a [`WireCard`] los descarta porque `serde_json::Value`
@@ -169,6 +187,23 @@ pub struct Card {
     /// sobreviven leer/escribir Cards en disco.
     #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extensions: BTreeMap<String, JsonValue>,
+}
+
+/// Política de atestación al arranque: qué hace `arje-zero` cuando un binario
+/// crítico no casa con su `ConcesionCapacidad` (firma inválida, autor no
+/// confiable, o hash distinto del atestado).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AttestPolicy {
+    /// Sólo registra el veredicto en el audit log; el boot continúa normal.
+    /// Default seguro: estrenar la atestación no debe poder dejar sin arranque.
+    #[default]
+    Warn,
+    /// Levanta el target igual, pero marca comprometida la unidad fallida
+    /// (queda visible en el brain / la shell).
+    Degraded,
+    /// Aborta la incarnación del target si un binario crítico no atesta.
+    Halt,
 }
 
 impl Default for Card {
@@ -203,6 +238,9 @@ impl Default for Card {
             kind: CardKind::default(),
             data: None,
             priority_contexts: BTreeMap::new(),
+            attest: Vec::new(),
+            attest_rootkey: None,
+            attest_policy: AttestPolicy::default(),
             extensions: BTreeMap::new(),
         }
     }
@@ -896,6 +934,12 @@ pub struct WireCard {
     pub data: Option<DataFacet>,
     #[serde(default)]
     pub priority_contexts: BTreeMap<String, ContextBias>,
+    #[serde(default)]
+    pub attest: Vec<format::ConcesionCapacidad>,
+    #[serde(default)]
+    pub attest_rootkey: Option<format::AgoraId>,
+    #[serde(default)]
+    pub attest_policy: AttestPolicy,
 }
 
 impl From<Card> for WireCard {
@@ -920,6 +964,9 @@ impl From<Card> for WireCard {
             kind: c.kind,
             data: c.data,
             priority_contexts: c.priority_contexts,
+            attest: c.attest,
+            attest_rootkey: c.attest_rootkey,
+            attest_policy: c.attest_policy,
         }
     }
 }
@@ -946,6 +993,9 @@ impl From<WireCard> for Card {
             kind: w.kind,
             data: w.data,
             priority_contexts: w.priority_contexts,
+            attest: w.attest,
+            attest_rootkey: w.attest_rootkey,
+            attest_policy: w.attest_policy,
             extensions: BTreeMap::new(),
         }
     }
@@ -1183,6 +1233,53 @@ mod tests {
         let c_back: Card = wire.into();
         assert_eq!(c_back.label, "x");
         assert!(c_back.extensions.is_empty(), "extensions sobreviven al wire");
+    }
+
+    #[test]
+    fn attest_fields_roundtrip_json_y_wire() {
+        let concesion = format::ConcesionCapacidad {
+            bytecode: [1u8; 32],
+            permisos: 0b101,
+            autor: [2u8; 32],
+            firma: [3u8; 64],
+        };
+        let mut c = Card::new("seed-atestado");
+        c.attest = vec![concesion.clone()];
+        c.attest_rootkey = Some([2u8; 32]);
+        c.attest_policy = AttestPolicy::Halt;
+
+        // JSON: los tres campos sobreviven.
+        let json = serde_json::to_string(&c).unwrap();
+        let back: Card = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.attest, vec![concesion.clone()]);
+        assert_eq!(back.attest_rootkey, Some([2u8; 32]));
+        assert_eq!(back.attest_policy, AttestPolicy::Halt);
+
+        // Wire (postcard vía WireCard): también cruzan.
+        let wire: WireCard = c.into();
+        let bytes = postcard::to_allocvec(&wire).unwrap();
+        let wire_back: WireCard = postcard::from_bytes(&bytes).unwrap();
+        let c_back: Card = wire_back.into();
+        assert_eq!(c_back.attest, vec![concesion]);
+        assert_eq!(c_back.attest_rootkey, Some([2u8; 32]));
+        assert_eq!(c_back.attest_policy, AttestPolicy::Halt);
+    }
+
+    #[test]
+    fn attest_default_vacio_y_compat() {
+        // Una Card sin campos attest (JSON viejo) deserializa con defaults
+        // seguros: sin manifiesto y política Warn.
+        let src = r#"{
+            "schema_version": 1,
+            "id": "01HQAR53D4M2NBV8KZTYXFGS01",
+            "label": "vieja",
+            "payload": "Virtual",
+            "supervision": "OneShot"
+        }"#;
+        let c = Card::from_json(src).unwrap();
+        assert!(c.attest.is_empty());
+        assert_eq!(c.attest_rootkey, None);
+        assert_eq!(c.attest_policy, AttestPolicy::Warn);
     }
 
     #[test]

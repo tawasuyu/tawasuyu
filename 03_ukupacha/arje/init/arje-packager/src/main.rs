@@ -51,12 +51,19 @@ struct Args {
     seed: PathBuf,
     out: PathBuf,
     bins: BTreeMap<String, PathBuf>,
+    /// Rootkey del seed para firmar el manifiesto de atestación (A1). 32 bytes
+    /// raw. Si no se pasa, el seed se empaqueta sin `attest` (boot sin gate).
+    rootkey: Option<PathBuf>,
+    /// Si la rootkey no existe, generarla (32 bytes de `/dev/urandom`, 0600).
+    gen_rootkey: bool,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
     let mut seed: Option<PathBuf> = None;
     let mut out: Option<PathBuf> = None;
     let mut bins: BTreeMap<String, PathBuf> = BTreeMap::new();
+    let mut rootkey: Option<PathBuf> = None;
+    let mut gen_rootkey = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
@@ -66,6 +73,12 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "--out" => {
                 out = Some(it.next().context("--out requiere path")?.into());
+            }
+            "--rootkey" => {
+                rootkey = Some(it.next().context("--rootkey requiere path")?.into());
+            }
+            "--gen-rootkey" => {
+                gen_rootkey = true;
             }
             "--bin" => {
                 let kv = it.next().context("--bin requiere label=path")?;
@@ -86,6 +99,8 @@ fn parse_args() -> anyhow::Result<Args> {
         seed: seed.ok_or_else(|| anyhow!("falta --seed"))?,
         out: out.ok_or_else(|| anyhow!("falta --out"))?,
         bins,
+        rootkey,
+        gen_rootkey,
     })
 }
 
@@ -101,6 +116,10 @@ OPCIONES:
     --bin    Mapea un label del genesis a un binario del host. Repetible.
              El packager exige una entrada por cada Payload::Native del fractal.
              Para el Ente raíz se asume label=\"arje-zero\".
+    --rootkey <FILE>  Rootkey (32 bytes raw) para FIRMAR el manifiesto de
+             atestación al arranque (A1): una ConcesionCapacidad por binario
+             crítico sobre su BLAKE3. Sin esta opción el seed va sin attest.
+    --gen-rootkey     Si --rootkey no existe, generarla (/dev/urandom, 0600).
     -h, --help   Esta ayuda.
 ";
 
@@ -116,7 +135,7 @@ fn main() -> ExitCode {
 
 fn run() -> anyhow::Result<()> {
     let args = parse_args()?;
-    let card = EntityCard::from_path(&args.seed)
+    let mut card = EntityCard::from_path(&args.seed)
         .with_context(|| format!("cargando seed {}", args.seed.display()))?;
 
     // Recolectamos todos los exec paths declarados por payloads Native del
@@ -135,6 +154,27 @@ fn run() -> anyhow::Result<()> {
         let data = std::fs::read(src)
             .with_context(|| format!("leyendo binario {label} desde {}", src.display()))?;
         tree.insert(dest_rel.clone(), data);
+    }
+
+    // Atestación al arranque (A1): si hay rootkey, firmamos una
+    // ConcesionCapacidad por cada binario crítico sobre su BLAKE3 y la
+    // anclamos en la seed (`attest` + `attest_rootkey`). `arje-zero` las
+    // verifica al boot (A2). Iteramos `tree` (ya ordenado por BTreeMap) para
+    // que el manifiesto sea reproducible. `permisos = 0`: esto es atestación
+    // de integridad, no concesión de capacidades (mapear card.permissions →
+    // format::Permisos queda como follow-up).
+    if let Some(rootkey_path) = &args.rootkey {
+        let seed = load_or_gen_rootkey(rootkey_path, args.gen_rootkey)?;
+        let items: Vec<(Vec<u8>, u32)> =
+            tree.values().map(|bytes| (bytes.clone(), 0u32)).collect();
+        let (pubkey, concesiones) = arje_attest::firmar_binarios(seed, &items);
+        let n = concesiones.len();
+        card.attest = concesiones;
+        card.attest_rootkey = Some(pubkey);
+        eprintln!(
+            "arje-packager :: atestación: {n} binarios firmados bajo rootkey {}",
+            hex32(&pubkey)
+        );
     }
 
     // Emitimos el archive.
@@ -192,6 +232,54 @@ fn run() -> anyhow::Result<()> {
         out_size,
     );
     Ok(())
+}
+
+/// Carga la rootkey (32 bytes raw) desde `path`, o la genera si no existe y
+/// `gen` es `true` (32 bytes de `/dev/urandom`, permisos 0600). La rootkey es
+/// el secreto soberano del seed; el packager nunca la embebe en el archive,
+/// sólo deriva su pubkey para `attest_rootkey`.
+fn load_or_gen_rootkey(path: &std::path::Path, gen: bool) -> anyhow::Result<[u8; 32]> {
+    if path.exists() {
+        let bytes = std::fs::read(path)
+            .with_context(|| format!("leyendo rootkey {}", path.display()))?;
+        bytes.as_slice().try_into().map_err(|_| {
+            anyhow!(
+                "rootkey {} debe ser exactamente 32 bytes (son {})",
+                path.display(),
+                bytes.len()
+            )
+        })
+    } else if gen {
+        use std::io::Read;
+        let mut seed = [0u8; 32];
+        std::fs::File::open("/dev/urandom")
+            .context("abriendo /dev/urandom")?
+            .read_exact(&mut seed)
+            .context("leyendo 32 bytes de /dev/urandom")?;
+        std::fs::write(path, seed)
+            .with_context(|| format!("escribiendo rootkey {}", path.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        eprintln!("arje-packager :: rootkey nueva generada en {}", path.display());
+        Ok(seed)
+    } else {
+        bail!(
+            "rootkey {} no existe (pasá --gen-rootkey para crearla)",
+            path.display()
+        )
+    }
+}
+
+/// Hex de una clave/hash de 32 bytes, para logs legibles.
+fn hex32(bytes: &[u8; 32]) -> String {
+    let mut s = String::with_capacity(64);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Recorre `genesis` en DFS y registra cada exec declarado por un

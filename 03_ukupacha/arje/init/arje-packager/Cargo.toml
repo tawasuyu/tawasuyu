@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 arje-card = { path = "../../arje-card" }
+arje-attest = { path = "../../runtime/arje-attest" }   # firma del manifiesto de atestación (A1)
 flate2 = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

@@ -57,6 +57,17 @@ pub enum AuditAction {
         kind: String,
         interactive: bool,
     },
+    /// Veredicto de la atestación al arranque (A2) para un binario crítico:
+    /// `arje-zero` computó el BLAKE3 del binario vivo y lo contrastó contra el
+    /// manifiesto firmado del seed. Queda en la cadena anclada al CAS para que
+    /// el boot sea auditable. `verdict`/`policy` son las formas legibles de
+    /// `arje_attest::Veredicto` y `card_core::AttestPolicy`.
+    AttestationCheck {
+        binary: String,
+        got_hash: [u8; 32],
+        verdict: String,
+        policy: String,
+    },
 }
 
 /// Tag plano de un `AuditAction`, serializable y comparable sin payload.
@@ -72,6 +83,7 @@ pub enum AuditActionKind {
     RunCard,
     BrainInhibit,
     PowerMgmt,
+    AttestationCheck,
 }
 
 impl AuditActionKind {
@@ -88,6 +100,7 @@ impl AuditActionKind {
             Self::RunCard => "run-card",
             Self::BrainInhibit => "brain-inhibit",
             Self::PowerMgmt => "power-mgmt",
+            Self::AttestationCheck => "attestation-check",
         }
     }
 
@@ -101,6 +114,7 @@ impl AuditActionKind {
             "run-card" => Some(Self::RunCard),
             "brain-inhibit" => Some(Self::BrainInhibit),
             "power-mgmt" => Some(Self::PowerMgmt),
+            "attestation-check" => Some(Self::AttestationCheck),
             _ => None,
         }
     }
@@ -117,6 +131,7 @@ impl AuditAction {
             Self::RunCard { .. } => AuditActionKind::RunCard,
             Self::BrainInhibit { .. } => AuditActionKind::BrainInhibit,
             Self::PowerMgmt { .. } => AuditActionKind::PowerMgmt,
+            Self::AttestationCheck { .. } => AuditActionKind::AttestationCheck,
         }
     }
 }
@@ -488,7 +503,8 @@ pub fn replay_chain(
             | AuditAction::SpawnCardFromDisk { .. }
             | AuditAction::RunCard { .. }
             | AuditAction::BrainInhibit { .. }
-            | AuditAction::PowerMgmt { .. } => {
+            | AuditAction::PowerMgmt { .. }
+            | AuditAction::AttestationCheck { .. } => {
                 // Acciones del bus son auditoría narrativa, no estado del
                 // motor de reglas. El replay las preserva en la cadena CAS
                 // (vía sha encadenado) pero no las aplica — no tienen

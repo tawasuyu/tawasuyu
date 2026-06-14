@@ -88,12 +88,28 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
 ### A.5 Fases
 
 1. **A0** — `arje-cas` → BLAKE3 (prerrequisito). ✅
-2. **A1** — Campo `attest: Vec<ConcesionCapacidad>` en la Seed Card + firmador en `arje-packager`
-   (firma las concesiones al empaquetar con la rootkey del seed).
+2. **A1** — Campo `attest: Vec<ConcesionCapacidad>` en la Seed Card + firmador en `arje-packager`. ✅
+   (2026-06-14) `card-core::Card` gana `attest` + `attest_rootkey: Option<AgoraId>` +
+   `attest_policy: AttestPolicy{Warn,Degraded,Halt}` (con `WireCard`/From/Default y default seguro
+   `Warn`, compat con seeds previos vía `#[serde(default)]`). `arje-packager --rootkey <FILE>`
+   (`--gen-rootkey` para crearla desde `/dev/urandom`, 0600) firma una concesión por binario
+   crítico sobre su BLAKE3 y la ancla en la seed. La firma vive en el crate nuevo
+   **`arje-attest`** (`firmar_binarios`), que reusa `agora_channel::firmar_capacidad` — cero
+   criptografía nueva.
 3. **A2** — Gate en `arje-zero`: verificar antes del target gráfico, emitir `AuditEntry`,
-   aplicar política `halt`/`degraded`.
+   aplicar política `halt`/`degraded`. ✅ (2026-06-14) `attest_gate::run` corre tras `spawn_bus` y
+   **antes** de `instantiate_seed_dependencies` (el genesis/target): por cada binario crítico
+   (genesis Native/Legacy + `arje-zero` mismo) computa el BLAKE3 vivo y lo busca en `attest`
+   (`arje_attest::atestar_bytes`); `Halt` aborta el boot ahí, `Warn`/`Degraded` siguen. Los
+   veredictos se vuelcan a `AuditAction::AttestationCheck` (cadena anclada al CAS, filtrable con
+   `--kind attestation-check`) una vez que el brain existe. `arje-attest` tiene 7 tests del
+   núcleo (roundtrip, tampering, re-firma de atacante, firma corrupta, binding por hash); el gate
+   3 (no-op, Warn detecta tampering, Halt aborta); `card-core` 2 (roundtrip JSON/wire + compat).
+   **Resta soberano (operador):** anclar una rootkey fuera de la propia Card (pubkey compilada /
+   TPM) y flipear la política a `Halt` — sin ancla externa, un seed reescrito por completo podría
+   re-firmar (igual que el flip a estricto de agora §14.1.3). Por eso el default es `Warn`.
 4. **A3** — Card de escritorio (`arje-card-llimphi`): mostrar el veredicto de atestación por
-   unidad (verde/comprometido) en el panel del brain que ya existe.
+   unidad (verde/comprometido) en el panel del brain que ya existe. ⬜ pendiente.
 
 ---
 
