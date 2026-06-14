@@ -163,11 +163,22 @@ pub struct BoxShadow {
 
 /// Valor longitud de CSS reducido al subset que soportamos: `auto`,
 /// `Npx`, `N%`. `em`/`rem` se resuelven a px en parse time.
+///
+/// Fase 7.849 — keywords de tamaño intrínseco (`min-content`/`max-content`/
+/// `fit-content`). taffy 0.9 no las modela en `Dimension`, así que el puente
+/// (`puriy-llimphi::box_style`) las aproxima a *shrink-to-fit* (la caja se
+/// encoge a su contenido en lugar de llenar el contenedor). La distinción
+/// fina entre min/max/fit (cuán agresivo es el wrap) NO se modela: las tres
+/// caen al mismo ancho-según-contenido, que es la corrección visible respecto
+/// del bug previo (un bloque `width: max-content` llenaba el ancho completo).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum LengthVal {
     Auto,
     Px(f32),
     Pct(f32),
+    MinContent,
+    MaxContent,
+    FitContent,
 }
 
 /// 4 valores por lado (top/right/bottom/left). Lo usan `margin` y

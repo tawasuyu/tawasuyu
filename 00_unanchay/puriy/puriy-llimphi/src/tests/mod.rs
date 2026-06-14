@@ -4,6 +4,7 @@ mod grupo_02;
 mod grupo_03;
 mod grupo_04;
 mod grupo_05;
+mod grupo_06;
 
 use super::*;
     // Helpers del canvas extraídos a `canvas.rs` (pub(crate) para estos tests).

@@ -72,7 +72,12 @@ pub(crate) fn parse_one_grid_track(s: &str) -> Option<GridTrackSize> {
         return Some(match lv {
             LengthVal::Px(v) => GridTrackSize::Px(v),
             LengthVal::Pct(v) => GridTrackSize::Pct(v),
-            LengthVal::Auto => GridTrackSize::Auto,
+            // Fase 7.849 — tracks intrínsecos (min/max/fit-content) aún no se
+            // modelan en `GridTrackSize`; aproximamos a `auto`.
+            LengthVal::Auto
+            | LengthVal::MinContent
+            | LengthVal::MaxContent
+            | LengthVal::FitContent => GridTrackSize::Auto,
         });
     }
     None

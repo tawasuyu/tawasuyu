@@ -124,13 +124,27 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
     // vertical-align mapea a align_self (con prioridad sobre el de
     // align-self CSS) cuando es inline/inline-block — no es lo mismo en
     // CSS spec pero alcanza para el subset que nos importa.
-    let align_self = match b.vertical_align {
+    let mut align_self = match b.vertical_align {
         VerticalAlign::Baseline => map_align_self(b.align_self),
         VerticalAlign::Top => Some(AlignSelf::Start),
         VerticalAlign::Middle => Some(AlignSelf::Center),
         VerticalAlign::Bottom | VerticalAlign::Sub => Some(AlignSelf::End),
         VerticalAlign::Super => Some(AlignSelf::Start),
     };
+    // Fase 7.849 — `width` intrínseca (min/max/fit-content): el width ya cayó
+    // a `auto`, pero el padre (flex column/row) estira al hijo en el eje
+    // cruzado por su `align-items: stretch` default y la caja volvería a
+    // ocupar el ancho completo. Forzamos `align_self: Start` para que se
+    // encoja al contenido — salvo que el autor pidiera un alineamiento
+    // explícito (align-self / vertical-align), que respetamos. `align_self`
+    // gobierna cómo se ubica ESTE nodo en SU padre, así que aplica por igual
+    // sea el nodo bloque o contenedor flex.
+    if is_intrinsic_size(b.width)
+        && matches!(b.align_self, CssAlignSelf::Auto)
+        && matches!(b.vertical_align, VerticalAlign::Baseline)
+    {
+        align_self = Some(AlignSelf::Start);
+    }
     let flex_basis: Dimension = length_to_taffy(b.flex_basis, zoom).unwrap_or_else(auto);
 
     // Position + insets (top/right/bottom/left).
@@ -239,9 +253,10 @@ pub(crate) fn margin_right_lpa(b: &BoxNode, zoom: f32, extra: f32) -> LengthPerc
 
 pub(crate) fn length_to_inset(v: LengthVal, zoom: f32) -> LengthPercentageAuto {
     match v {
-        LengthVal::Auto => auto(),
         LengthVal::Px(px) => length(px * zoom),
         LengthVal::Pct(pct) => percent(pct / 100.0),
+        // Keywords intrínsecos no son válidos en `inset`: tratamos como auto.
+        _ => auto(),
     }
 }
 
@@ -279,7 +294,8 @@ pub(crate) fn build_linear_gradient_brush(
         match v {
             LengthVal::Pct(p) => origin + span * (p as f64) / 100.0,
             LengthVal::Px(px) => origin + px as f64,
-            LengthVal::Auto => origin + span * 0.5,
+            // Auto y keywords intrínsecos (inválidos acá) → centro.
+            _ => origin + span * 0.5,
         }
     };
 
@@ -348,7 +364,8 @@ pub(crate) fn build_linear_gradient_brush(
             LengthVal::Px(px) => {
                 if axis_len > 0.0 { (px as f64) / axis_len } else { 0.0 }
             }
-            LengthVal::Auto => 0.0,
+            // Auto y keywords intrínsecos (inválidos en un stop) → 0.
+            _ => 0.0,
         }
     };
 
@@ -506,7 +523,22 @@ pub(crate) fn length_to_taffy(v: LengthVal, zoom: f32) -> Option<llimphi_layout:
         LengthVal::Auto => None,
         LengthVal::Px(px) => Some(length(px * zoom)),
         LengthVal::Pct(pct) => Some(percent(pct / 100.0)),
+        // Fase 7.849 — tamaño intrínseco. taffy 0.9 no lo modela en
+        // `Dimension`; lo mapeamos a `auto` (= dimensiona por contenido).
+        // Devolvemos `Some` —no `None`— a propósito: así SOBREESCRIBE el
+        // default de display (un bloque vale `percent(1.0)` = ancho lleno; con
+        // `auto` se encoge al contenido). La supresión del stretch del padre
+        // la hace `box_style` vía `align_self: Start`.
+        LengthVal::MinContent | LengthVal::MaxContent | LengthVal::FitContent => Some(auto()),
     }
+}
+
+/// `true` si el `LengthVal` es un keyword de tamaño intrínseco (Fase 7.849).
+pub(crate) fn is_intrinsic_size(v: LengthVal) -> bool {
+    matches!(
+        v,
+        LengthVal::MinContent | LengthVal::MaxContent | LengthVal::FitContent
+    )
 }
 
 /// `true` si todos los hijos directos son inline o inline-block. Si los

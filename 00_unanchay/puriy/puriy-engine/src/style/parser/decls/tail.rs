@@ -190,6 +190,19 @@ pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     if s.eq_ignore_ascii_case("auto") {
         return Some(LengthVal::Auto);
     }
+    // Fase 7.849 — keywords de tamaño intrínseco. `fit-content(<len>)` (forma
+    // funcional) cae también a `FitContent` (el argumento no se modela aún).
+    if s.eq_ignore_ascii_case("min-content") {
+        return Some(LengthVal::MinContent);
+    }
+    if s.eq_ignore_ascii_case("max-content") {
+        return Some(LengthVal::MaxContent);
+    }
+    if s.eq_ignore_ascii_case("fit-content")
+        || s.to_ascii_lowercase().starts_with("fit-content(")
+    {
+        return Some(LengthVal::FitContent);
+    }
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
     }

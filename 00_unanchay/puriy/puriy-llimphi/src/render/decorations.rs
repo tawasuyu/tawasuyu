@@ -84,7 +84,8 @@ pub(crate) fn paint_background_image(
         match lv {
             LengthVal::Px(n) => Some(n as f64),
             LengthVal::Pct(p) => Some(basis * p as f64 / 100.0),
-            LengthVal::Auto => None,
+            // Auto y keywords intrínsecos (inválidos en background-size) → natural.
+            _ => None,
         }
     };
     let (tw, th) = match size {
@@ -113,7 +114,8 @@ pub(crate) fn paint_background_image(
         match lv {
             LengthVal::Px(n) => n as f64,
             LengthVal::Pct(p) => (basis - tile) * p as f64 / 100.0,
-            LengthVal::Auto => 0.0,
+            // Auto y keywords intrínsecos (inválidos en background-position) → 0.
+            _ => 0.0,
         }
     };
     let ox = pos_off(position.x, rw, tw);

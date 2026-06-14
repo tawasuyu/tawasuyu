@@ -117,3 +117,35 @@ fn grid_con_auto_flow_no_expande() {
     // emitir templates espurios.
     assert!(decls("grid: auto-flow / 1fr").is_empty());
 }
+
+// ── Fase 7.849 — keywords de tamaño intrínseco ─────────────────────────────
+
+#[test]
+fn intrinsic_size_keywords_parsean() {
+    for (val, expected) in [
+        ("min-content", LengthVal::MinContent),
+        ("max-content", LengthVal::MaxContent),
+        ("fit-content", LengthVal::FitContent),
+        ("fit-content(200px)", LengthVal::FitContent),
+    ] {
+        let d = decls(&format!("width: {val}"));
+        assert!(
+            d.iter().any(|d| matches!(d.kind, DeclKind::Width(lv) if lv == expected)),
+            "width: {val} → {expected:?}"
+        );
+    }
+    // También en height, min-* y max-* (este último vía parse_max_size).
+    assert!(decls("height: min-content")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Height(LengthVal::MinContent))));
+    assert!(decls("min-width: max-content")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MinWidth(LengthVal::MaxContent))));
+    assert!(decls("max-width: fit-content")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaxWidth(LengthVal::FitContent))));
+    // Y por el alias lógico inline-size (despachado a Width).
+    assert!(decls("inline-size: max-content")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::MaxContent))));
+}

@@ -113,7 +113,8 @@ pub(crate) fn image_fit_view(
             match lv {
                 puriy_engine::style::LengthVal::Px(n) => n as f64 * z,
                 puriy_engine::style::LengthVal::Pct(p) => free * p as f64 / 100.0,
-                puriy_engine::style::LengthVal::Auto => free * 0.5,
+                // Auto y keywords intrínsecos (inválidos en object-position) → centro.
+                _ => free * 0.5,
             }
         };
         let tx = rect.x as f64 + off(obj_pos.x, rw - dw);
