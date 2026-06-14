@@ -113,8 +113,13 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    renderiza las entradas `AuditAction::AttestationCheck` del audit log en el panel "Audit log" por
    unidad: `atestación <binario> ✓` (verde) o `atestación <binario> ✗ <motivo>` (comprometido). +2
    tests. El panel ya leía `recent_audit` vía `ListAudit`; sólo se enriqueció el formateo, así que
-   los veredictos que `arje-zero` vuelca (A2) aparecen en vivo. (Una vista dedicada con filtro
-   `--kind attestation-check` y resumen N✓/M✗ queda como pulido posterior.)
+   los veredictos que `arje-zero` vuelca (A2) aparecen en vivo. **Pulido cerrado (2026-06-14):**
+   `query_brain` hace una segunda `ListAudit` con `filter.kinds = [AttestationCheck]` (filtro
+   server-side, el mismo que `--kind attestation-check`) y `resumir_atestacion` deriva el estado
+   **vivo** por binario (deduplicado al `seq` más alto, comprometidos primero) + el conteo N✓/M✗.
+   Se pinta como una stat card dedicada "Atestación" (verde si `fail==0`, roja si hay comprometidos),
+   arriba del "Audit log". +3 tests (conteo, dedup por re-boot, vacío→None). Degrada a no-mostrar si
+   el brain es viejo y no entiende el filtro.
 
 ---
 

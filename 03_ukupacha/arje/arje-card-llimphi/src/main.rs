@@ -26,7 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arje_brain::audit::AuditAction;
+use arje_brain::audit::{AuditAction, AuditActionKind, AuditFilter};
 use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
 use arje_incarnate::caps::{CapabilitySet, CgroupStatus, NsKind, UserNsStatus};
 use card_core::{Card, Payload, Supervision};
@@ -141,6 +141,24 @@ struct BrainSnapshot {
     head_seq: Option<u64>,
     /// Últimas entradas del audit, más recientes primero.
     recent_audit: Vec<String>,
+    /// Resumen de la atestación al arranque (A3): veredicto vivo por binario
+    /// crítico, deduplicado al último seq. `None` si el boot no atestó nada
+    /// (seed sin manifiesto / brain arrancado a mano).
+    attest: Option<AttestSummary>,
+}
+
+/// Estado de la atestación al arranque, derivado de las entradas
+/// `AttestationCheck` del audit log. Es la **vista dedicada** (filtro
+/// `attestation-check` + resumen N✓/M✗) que cierra A3.
+#[derive(Clone)]
+struct AttestSummary {
+    /// Binarios cuyo último veredicto fue `ok`.
+    ok: usize,
+    /// Binarios cuyo último veredicto fue comprometido (≠ `ok`).
+    fail: usize,
+    /// Una línea por binario (estado vivo, deduplicado), comprometidos primero
+    /// para que un `✗` no quede enterrado.
+    lines: Vec<String>,
 }
 
 /// Estado del brain en el modelo: aún consultando, caído/no-corriendo, o vivo.
@@ -212,6 +230,26 @@ fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
             .rev()
             .map(|e| formatear_entrada(e.seq, &e.action))
             .collect();
+        // Vista dedicada de atestación: pedir sólo las entradas
+        // `attestation-check` (filtro server-side) con un límite generoso para
+        // cubrir todos los binarios críticos del último boot.
+        let attest = match call(
+            path,
+            IntrospectRequest::ListAudit {
+                limit: 64,
+                filter: AuditFilter {
+                    kinds: vec![AuditActionKind::AttestationCheck],
+                    since_seq: None,
+                },
+            },
+        )
+        .await
+        {
+            Ok(IntrospectResponse::AuditEntries(v)) => resumir_atestacion(&v),
+            // Un brain viejo sin el filtro, o cualquier fallo blando: la vista
+            // simplemente no aparece, sin tumbar el resto del snapshot.
+            _ => None,
+        };
         Ok(BrainSnapshot {
             rules,
             entropy_bits,
@@ -219,7 +257,56 @@ fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
             distinct_kinds,
             head_seq,
             recent_audit,
+            attest,
         })
+    })
+}
+
+/// Resume las entradas `AttestationCheck` del audit en el estado **vivo** de la
+/// atestación: un veredicto por binario crítico (deduplicado al `seq` más
+/// alto, porque un re-boot puede dejar varias entradas del mismo binario) y el
+/// conteo N✓/M✗. Devuelve `None` si no hay ninguna entrada de atestación — el
+/// boot no atestó (seed sin manifiesto) y la vista dedicada no tiene sentido.
+fn resumir_atestacion(entries: &[arje_brain::audit::AuditEntry]) -> Option<AttestSummary> {
+    // binary → (seq más alto visto, último veredicto, basename legible).
+    let mut por_binario: std::collections::HashMap<&str, (u64, &str, &str)> =
+        std::collections::HashMap::new();
+    for e in entries {
+        if let AuditAction::AttestationCheck { binary, verdict, .. } = &e.action {
+            let nombre = binary.rsplit('/').next().unwrap_or(binary);
+            por_binario
+                .entry(binary.as_str())
+                .and_modify(|cur| {
+                    if e.seq >= cur.0 {
+                        *cur = (e.seq, verdict.as_str(), nombre);
+                    }
+                })
+                .or_insert((e.seq, verdict.as_str(), nombre));
+        }
+    }
+    if por_binario.is_empty() {
+        return None;
+    }
+    let mut filas: Vec<(bool, String)> = por_binario
+        .values()
+        .map(|(_, verdict, nombre)| {
+            let ok = *verdict == "ok";
+            let linea = if ok {
+                format!("{nombre}  ✓")
+            } else {
+                format!("{nombre}  ✗ {verdict}")
+            };
+            (ok, linea)
+        })
+        .collect();
+    // Comprometidos primero; dentro de cada grupo, alfabético estable.
+    filas.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let ok = filas.iter().filter(|(o, _)| *o).count();
+    let fail = filas.len() - ok;
+    Some(AttestSummary {
+        ok,
+        fail,
+        lines: filas.into_iter().map(|(_, l)| l).collect(),
     })
 }
 
@@ -848,6 +935,31 @@ impl App for ArjeCard {
                     &stat_palette,
                 ));
 
+                // Vista dedicada de atestación al arranque (A3): resumen N✓/M✗
+                // + veredicto por unidad. Sólo aparece si el boot atestó algo.
+                if let Some(a) = &b.attest {
+                    // Verde si todo casó; rojo si hay al menos un comprometido.
+                    let accent_attest = if a.fail == 0 {
+                        Color::from_rgba8(0x7c, 0xb3, 0x42, 0xff)
+                    } else {
+                        Color::from_rgba8(0xd0, 0x4a, 0x4a, 0xff)
+                    };
+                    let valor = format!("{}✓ / {}✗", a.ok, a.fail);
+                    let glosa = if a.fail == 0 {
+                        "atestación al arranque — todos los binarios críticos casan"
+                    } else {
+                        "atestación al arranque — hay binarios comprometidos"
+                    };
+                    body_children.push(stat_card_view::<Msg>(
+                        "Atestación",
+                        valor,
+                        glosa,
+                        accent_attest,
+                        &a.lines,
+                        &stat_palette,
+                    ));
+                }
+
                 body_children.push(stat_card_view::<Msg>(
                     "Audit log",
                     b.head_seq
@@ -1092,6 +1204,65 @@ mod tests {
     fn formatea_otras_acciones_por_kind() {
         let a = AuditAction::BrainInhibit { reason: "x".into() };
         assert_eq!(formatear_entrada(3, &a), "#3  brain-inhibit");
+    }
+
+    // Helper: una AuditEntry de atestación con seq dado (sha/prev/ts dummy).
+    fn attest_entry(seq: u64, binary: &str, verdict: &str) -> arje_brain::audit::AuditEntry {
+        arje_brain::audit::AuditEntry {
+            seq,
+            timestamp_ms: 0,
+            prev_sha: None,
+            sha: [0u8; 32],
+            action: AuditAction::AttestationCheck {
+                binary: binary.into(),
+                got_hash: [0u8; 32],
+                verdict: verdict.into(),
+                policy: "Halt".into(),
+            },
+        }
+    }
+
+    #[test]
+    fn resumen_atestacion_cuenta_ok_y_fail() {
+        let entries = vec![
+            attest_entry(1, "/sbin/arje-zero", "ok"),
+            attest_entry(2, "/usr/bin/mirada", "hash no casa"),
+            attest_entry(3, "/usr/bin/shuma", "ok"),
+        ];
+        let r = resumir_atestacion(&entries).expect("hay atestación");
+        assert_eq!(r.ok, 2);
+        assert_eq!(r.fail, 1);
+        // Comprometidos primero: la primera línea es el ✗.
+        assert!(r.lines[0].contains("mirada") && r.lines[0].contains('✗'));
+        assert_eq!(r.lines.len(), 3);
+    }
+
+    #[test]
+    fn resumen_atestacion_dedup_al_seq_mas_alto() {
+        // El mismo binario atestado dos veces (re-boot): gana el seq mayor.
+        let entries = vec![
+            attest_entry(1, "/usr/bin/mirada", "hash no casa"),
+            attest_entry(5, "/usr/bin/mirada", "ok"),
+        ];
+        let r = resumir_atestacion(&entries).expect("hay atestación");
+        assert_eq!(r.ok, 1);
+        assert_eq!(r.fail, 0);
+        assert_eq!(r.lines.len(), 1);
+        assert!(r.lines[0].contains('✓'));
+    }
+
+    #[test]
+    fn resumen_atestacion_sin_entradas_es_none() {
+        assert!(resumir_atestacion(&[]).is_none());
+        // Entradas que no son de atestación tampoco cuentan.
+        let otra = arje_brain::audit::AuditEntry {
+            seq: 1,
+            timestamp_ms: 0,
+            prev_sha: None,
+            sha: [0u8; 32],
+            action: AuditAction::BrainInhibit { reason: "x".into() },
+        };
+        assert!(resumir_atestacion(&[otra]).is_none());
     }
 
     #[test]
