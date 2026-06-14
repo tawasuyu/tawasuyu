@@ -108,32 +108,11 @@ pub enum Msg {
     /// (su stdout se materializa como fuente del pipe). La dispara el click en
     /// el tag `%cN` del header.
     InsertBlockRef(u64),
-    /// Mouse sobre el cuerpo (IDE-text) de la card del bloque `block`:
-    /// click posiciona el caret, drag extiende la selección. La dispara el
-    /// `on_pointer` del `text-editor` del cuerpo.
-    BodyPointer {
-        block: u64,
-        ev: llimphi_widget_text_editor::PointerEvent,
-    },
-    /// Copia al clipboard la selección viva del cuerpo del bloque `block`
-    /// (click derecho sobre el cuerpo). No-op si no hay selección.
-    CopyBody(u64),
     /// Copia al clipboard el **bloque entero** `block`: el comando (`$ …`)
     /// envuelto junto con su salida completa (stdout **y** stderr). La dispara
-    /// el botón ⧉ del header de la card; no depende de que haya selección.
+    /// el botón ⧉ del header del bloque en la superficie; no depende de que
+    /// haya selección.
     CopyCommandBlock(u64),
-    /// Doble-click sobre el cuerpo IDE-text del bloque `block`: selecciona
-    /// la palabra bajo `(x, y)` (coords locales al nodo del editor, incluyen
-    /// el gutter). La dispara el `on_double_tap_at` del cuerpo.
-    BodyDoubleClick { block: u64, x: f32, y: f32 },
-    /// Click derecho sobre el output: abre el menú contextual en `(x, y)`
-    /// (coords del nodo raíz del shell = espacio de su view). Las acciones
-    /// operan sobre el bloque seleccionado (o el más reciente).
-    OpenBodyMenu { x: f32, y: f32 },
-    /// Elegir un item del menú contextual del output (índice 0-based).
-    BodyMenuPick(usize),
-    /// Cerrar el menú contextual del output (scrim / Esc).
-    BodyMenuDismiss,
     /// Click sobre el panel de un TUI bajo PTY (htop/less/btop/…). Si el
     /// programa habilitó mouse (`vt100::MouseProtocolMode != None`), encodea
     /// el click en xterm-mouse y lo escribe al stdin del PTY. `button` es 0

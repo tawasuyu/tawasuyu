@@ -50,10 +50,8 @@ fn now_secs() -> u64 {
 }
 
 fn main() {
-    // Activar la superficie virtualizada ANTES del primer `view()` (el flag
-    // se lee una sola vez).
-    std::env::set_var("SHUMA_TERMINAL_SURFACE", "1");
-
+    // La superficie virtualizada es la única vía de output desde la Fase 5
+    // (ya no hay flag ni `output_pane` legacy que activar).
     let out = std::env::args()
         .nth(1)
         .unwrap_or_else(|| "/tmp/shots/shuma.png".to_string());

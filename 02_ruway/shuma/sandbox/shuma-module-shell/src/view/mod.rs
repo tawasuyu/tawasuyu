@@ -1,4 +1,3 @@
-use llimphi_ui::llimphi_layout::taffy::prelude::auto;
 use llimphi_ui::llimphi_layout::taffy::style::Position;
 use super::*;
 
@@ -6,11 +5,9 @@ mod input;
 mod tui;
 mod ansi;
 mod history_panel;
-mod output_pane;
 mod surface_view;
 mod command_card;
 mod output_line;
-mod chrome;
 #[cfg(test)]
 mod gpu_grid_tests;
 
@@ -18,11 +15,9 @@ pub(crate) use input::*;
 pub(crate) use tui::*;
 pub(crate) use ansi::*;
 pub(crate) use history_panel::*;
-pub(crate) use output_pane::*;
 pub(crate) use surface_view::*;
 pub(crate) use command_card::*;
 pub(crate) use output_line::*;
-pub(crate) use chrome::*;
 
 /// Vista pública del **input vivo** del shell, aislado del resto del shell. Lo
 /// usan los frontends que quieren hospedar la línea de entrada en su propio
@@ -51,10 +46,8 @@ pub fn body_view<HostMsg: Clone + 'static>(
         tui_panel::<HostMsg>(state, theme, lift.clone())
     } else if is_tui_active(state) {
         pty_lines_panel::<HostMsg>(state, theme)
-    } else if terminal_surface_enabled() {
-        output_pane_surface::<HostMsg>(state, theme, &lift)
     } else {
-        output_pane::<HostMsg>(state, theme, &lift)
+        output_pane_surface::<HostMsg>(state, theme, &lift)
     };
     let body: View<HostMsg> = if !state.groups.is_empty() && !is_tui_active(state) {
         View::new(Style {
@@ -84,9 +77,6 @@ pub fn body_view<HostMsg: Clone + 'static>(
     let mut children = vec![header, body];
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
-    }
-    if let Some(menu) = body_context_menu::<HostMsg>(state, theme, &lift) {
-        children.push(menu);
     }
 
     View::new(Style {
@@ -124,11 +114,11 @@ pub fn view<HostMsg: Clone + 'static>(
         tui_panel::<HostMsg>(state, theme, lift.clone())
     } else if is_tui_active(state) {
         pty_lines_panel::<HostMsg>(state, theme)
-    } else if terminal_surface_enabled() {
-        // Experimental, detrás de SHUMA_TERMINAL_SURFACE (A/B con el viejo).
-        output_pane_surface::<HostMsg>(state, theme, &lift)
     } else {
-        output_pane::<HostMsg>(state, theme, &lift)
+        // El output va por la superficie de terminal virtualizada (única vía
+        // desde la Fase 5 del SDD-TERMINAL: el `output_pane` viejo + las cards
+        // per-comando IDE fueron borrados).
+        output_pane_surface::<HostMsg>(state, theme, &lift)
     };
     // Panel de grupos [RUN] a la izquierda (rescate del shell GPUI): cada
     // grupo guardado (`:save`) es una card clickable que lo ejecuta, con su
@@ -209,14 +199,10 @@ pub fn view<HostMsg: Clone + 'static>(
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
     }
-    // Menú contextual del output (click derecho): overlay por encima de todo,
-    // sin clip — por eso va último en los children del root. Sus coords son del
-    // nodo raíz (este mismo), así que el `anchor` cae donde se hizo click.
-    if let Some(menu) = body_context_menu::<HostMsg>(state, theme, &lift) {
-        children.push(menu);
-    }
+    // El menú contextual del output (click derecho) lo arma y pinta la propia
+    // superficie (`surf_context_menu`, dentro de `output_pane_surface`), sobre
+    // su selección del stream — ya no hay un menú legacy a nivel del root.
 
-    let lift_menu = lift.clone();
     let lift_scale = lift.clone();
     View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -244,10 +230,6 @@ pub fn view<HostMsg: Clone + 'static>(
     // `factor` es el cambio multiplicativo incremental (>1 agranda); `ZoomBy`
     // lo aplica igual que el pinch.
     .on_scale(move |_phase, factor, _fx, _fy| Some(lift_scale(Msg::ZoomBy(factor))))
-    // Click derecho en cualquier parte del output → menú contextual en `(x, y)`
-    // (coords locales a este nodo raíz). El cuerpo IDE ya no captura el right-
-    // click (lo delega acá) para que el menú gane.
-    .on_right_click_at(move |x, y, _w, _h| Some(lift_menu(Msg::OpenBodyMenu { x, y })))
     .children(children)
 }
 

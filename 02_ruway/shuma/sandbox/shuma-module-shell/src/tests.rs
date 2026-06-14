@@ -1025,48 +1025,6 @@
     }
 
     #[test]
-    fn open_body_menu_targets_a_block_with_body() {
-        // Click derecho sobre el output abre el menú apuntando al bloque con
-        // cuerpo más reciente (no hay selección previa).
-        let mut s = State::new(Source::Local);
-        s.push_output(OutputLine::prompt("$ echo hi"));
-        s.push_output(OutputLine::stdout("hola mundo"));
-        s = update(s, Msg::OpenBodyMenu { x: 10.0, y: 20.0 });
-        match s.body_menu {
-            Some((x, y, b)) => {
-                assert_eq!((x, y), (10.0, 20.0));
-                assert_ne!(b, 0, "el bloque objetivo no es huérfano");
-            }
-            None => panic!("el menú debería abrirse"),
-        }
-    }
-
-    #[test]
-    fn body_menu_select_all_then_pick_closes() {
-        let mut s = State::new(Source::Local);
-        s.push_output(OutputLine::prompt("$ ls"));
-        s.push_output(OutputLine::stdout("linea uno"));
-        s.push_output(OutputLine::stdout("linea dos"));
-        s = update(s, Msg::OpenBodyMenu { x: 0.0, y: 0.0 });
-        assert!(s.body_menu.is_some());
-        // Item 2 = "Seleccionar todo".
-        s = update(s, Msg::BodyMenuPick(2));
-        assert!(s.body_sel.is_some(), "seleccionar todo deja selección viva");
-        assert!(s.body_menu.is_none(), "elegir un item cierra el menú");
-    }
-
-    #[test]
-    fn body_menu_dismiss_clears_it() {
-        let mut s = State::new(Source::Local);
-        s.push_output(OutputLine::prompt("$ x"));
-        s.push_output(OutputLine::stdout("y"));
-        s = update(s, Msg::OpenBodyMenu { x: 0.0, y: 0.0 });
-        assert!(s.body_menu.is_some());
-        s = update(s, Msg::BodyMenuDismiss);
-        assert!(s.body_menu.is_none());
-    }
-
-    #[test]
     fn jobs_builtin_lists_background_jobs() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
@@ -1162,27 +1120,6 @@
         s.input.set_text("cargo bu");
         s = update(s, Msg::Key(ev(Key::Named(NamedKey::ArrowRight), None)));
         assert_eq!(s.input.text(), "cargo build --release");
-    }
-
-    #[test]
-    fn partition_line_segments_a_line_with_a_url() {
-        use shuma_line::{Decoration, DecorationKind};
-        let theme = Theme::dark();
-        let text = "abrí https://tawasuyu.net y mirá";
-        let url_start = text.find("https").unwrap();
-        let url_end = url_start + "https://tawasuyu.net".len();
-        let decs = vec![Decoration {
-            start: url_start,
-            end: url_end,
-            kind: DecorationKind::Url(text[url_start..url_end].to_string()),
-        }];
-        let pieces = partition_line(text, &decs, theme.fg_text, &theme);
-        assert_eq!(pieces.len(), 3, "pre, url, post: {pieces:?}");
-        assert_eq!(pieces[0].color, theme.fg_text);
-        assert!(pieces[0].deco.is_none());
-        assert_eq!(pieces[1].color, theme.accent);
-        assert!(matches!(pieces[1].deco, Some(DecorationKind::Url(_))));
-        assert_eq!(pieces[2].color, theme.fg_text);
     }
 
     #[test]
@@ -1375,29 +1312,6 @@
     }
 
     #[test]
-    fn body_pointer_click_then_drag_selects_text() {
-        use llimphi_widget_text_editor::PointerEvent;
-        let mut s = State::new(Source::Local);
-        s.push_output(OutputLine::prompt("$ echo"));
-        let blk = s.current_block;
-        s.push_output(OutputLine::stdout("hola mundo"));
-        s.push_output(OutputLine::stdout("segunda"));
-        // Click al inicio (línea 0, col 0) ancla el caret.
-        s = update(s, Msg::BodyPointer { block: blk, ev: PointerEvent::Click { x: 0.0, y: 0.0 } });
-        // Drag hasta ~col 4 de la línea 0 (char_width 7.2 ⇒ x≈30) extiende.
-        s = update(
-            s,
-            Msg::BodyPointer {
-                block: blk,
-                ev: PointerEvent::Drag { initial_x: 0.0, initial_y: 0.0, dx: 30.0, dy: 2.0 },
-            },
-        );
-        let ed = body_editor_state(&s, blk);
-        let sel = ed.selected_text().expect("hay selección tras el drag");
-        assert_eq!(sel, "hola", "seleccionó las primeras 4 columnas, fue {sel:?}");
-    }
-
-    #[test]
     fn finished_command_stays_expanded_then_recedes_on_next() {
         let mut s = State::new(Source::Local);
         s.cwd = PathBuf::from("/");
@@ -1433,26 +1347,13 @@
     #[test]
     fn word_range_picks_the_word_under_the_column() {
         // "foo bar_baz qux" — col dentro de "bar_baz" selecciona toda la
-        // palabra (incluye `_`); sobre el espacio no selecciona.
+        // palabra (incluye `_`); sobre el espacio no selecciona. La usa el
+        // doble-click de la superficie de terminal.
         let t = "foo bar_baz qux";
         assert_eq!(word_range_at(t, 5), (4, 11)); // dentro de bar_baz
         assert_eq!(word_range_at(t, 0), (0, 3)); // foo
         assert_eq!(word_range_at(t, 3), (0, 3)); // justo después de foo
         assert_eq!(word_range_at(t, 11), (4, 11)); // justo después de bar_baz
-    }
-
-    #[test]
-    fn double_click_selects_word_in_body() {
-        let mut s = State::new(Source::Local);
-        s.push_output(OutputLine::prompt("$ echo"));
-        let blk = s.current_block;
-        s.push_output(OutputLine::stdout("hola mundo cruel"));
-        // Doble-click sobre "mundo": col≈7 ⇒ x = 7*char_width + gutter.
-        let metrics = body_editor_metrics();
-        let x = metrics.gutter_width + 7.0 * metrics.char_width + 1.0;
-        s = update(s, Msg::BodyDoubleClick { block: blk, x, y: 2.0 });
-        let ed = body_editor_state(&s, blk);
-        assert_eq!(ed.selected_text().as_deref(), Some("mundo"));
     }
 
     #[test]

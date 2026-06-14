@@ -24,8 +24,8 @@ const H: u32 = 640;
 const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 fn main() {
-    // Activar la superficie ANTES del primer `view()` (el flag se lee una vez).
-    std::env::set_var("SHUMA_TERMINAL_SURFACE", "1");
+    // La superficie virtualizada es la única vía de output desde la Fase 5
+    // (ya no hay flag ni `output_pane` legacy que activar).
 
     let out = std::env::args().nth(1).unwrap_or_else(|| "surface.png".to_string());
     let theme = llimphi_theme::Theme::default();

@@ -532,22 +532,6 @@ pub struct State {
     /// `Arc<Mutex<>>` para que la closure de paint (Send+Sync+'static)
     /// pueda accederlos.
     pub gpu_grid: Arc<Mutex<Option<GpuGridResources>>>,
-    /// Selección viva en el cuerpo (IDE-text) de una card: `(block,
-    /// cursor)`. El cuerpo de cada comando se pinta con
-    /// `llimphi-widget-text-editor` read-only (numeración + selección +
-    /// copiar); acá vive el cursor/selección del bloque que el usuario
-    /// está seleccionando con el mouse. `None` = sin selección. La `view`
-    /// reconstruye el `EditorState` por frame desde las `OutputLine` +
-    /// este cursor (la fuente de verdad sigue siendo el buffer de output).
-    pub body_sel: Option<(u64, llimphi_widget_text_editor::Cursor)>,
-    /// Menú contextual del output abierto: `(x, y, bloque_objetivo)` en coords
-    /// del nodo raíz del shell. `None` = cerrado. Lo abre el click derecho; sus
-    /// acciones (copiar / copiar todo / seleccionar todo) operan sobre el
-    /// `bloque_objetivo`.
-    pub body_menu: Option<(f32, f32, u64)>,
-    /// Acumulador del drag de selección del cuerpo (el `PointerEvent::Drag`
-    /// del editor entrega deltas; hay que acumularlos contra el press).
-    pub body_drag_accum: (f32, f32),
     /// Momento de creación de cada bloque (unix secs) — alimenta el badge
     /// de "hace N minutos" en vez del crudo "exit N". Lo setea
     /// [`State::push_output`] (Prompt) y [`State::open_block`].
@@ -795,9 +779,6 @@ impl State {
             surf_history: Arc::new(Mutex::new(build_surf_history(&config))),
             surf_spilled_visible: Arc::new(Mutex::new(SurfSpilledCache::default())),
             gpu_grid: Arc::new(Mutex::new(None)),
-            body_sel: None,
-            body_menu: None,
-            body_drag_accum: (0.0, 0.0),
             block_started: std::collections::HashMap::new(),
             block_ended: std::collections::HashMap::new(),
             block_command: std::collections::HashMap::new(),

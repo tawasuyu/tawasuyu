@@ -260,21 +260,39 @@ vt100); se mueve a la superficie como `BlockKind`.
   `text-editor` a compartido; selección global; copy; Ctrl+F.
 - **Fase 4 — GPU directo grilla.** Atlas de glifos + celdas instanciadas para el modo
   grilla (TUI). Bench vs el grid vt100 actual. Híbrido.
-- **Fase 5 — Pulido + migración.** Anclaje estable bajo append, scroll inertial,
-  borrar el `output_pane`/per-command-editor viejo. Spill a disco.
+- **Fase 5 — Pulido + migración. ✅** Anclaje estable bajo append, scroll inertial,
+  spill a disco, y **borrado del `output_pane`/per-command-editor viejo**
+  (2026-06-14): la superficie es la **única** vía de output (salvo PTY/TUI
+  fullscreen). Se eliminaron `view/output_pane.rs`, la fn `command_card` +
+  `pipe_stages_row`, `render_output_line` + sus helpers exclusivos
+  (`build_span_children`/`kind_icon`/`partition_line`/`LinePiece`), el menú
+  legacy (`view/chrome.rs::body_context_menu`), la maquinaria del editor IDE
+  per-comando (`body_sel`/`body_menu`/`body_drag_accum`, `apply_body_pointer`,
+  `apply_body_double_click`, `body_editor_state`, los `Msg`
+  `BodyPointer`/`BodyDoubleClick`/`CopyBody`/`OpenBodyMenu`/`BodyMenu{Pick,Dismiss}`)
+  y el flag `terminal_surface_enabled`/`SHUMA_TERMINAL_LEGACY`. Quedan, ahora
+  como helpers compartidos por la superficie, `stage_capture_rows`,
+  `copy_command_block`+`Msg::CopyCommandBlock`, `word_range_at`, `mix_color`,
+  `ROW_H`/`STAGES_H`/`COLLAPSE_ANIM`, `pty_lines_panel` y `body_editor_metrics`/
+  `body_editor_palette`. `cargo check --workspace` verde; 181 tests pasan
+  (los 2 que fallan ya fallaban en `main`, sin relación con esto).
 
 Cada fase es un commit (o pocos) verificado con render headless + viewport medido, y
 deja el shell funcionando (flag de migración hasta la Fase 5).
 
-## Cómo reemplaza al `output_pane` (sin romper)
+## Cómo reemplazó al `output_pane` (sin romper)
 
-- Fases 1–4 conviven con el `output_pane` actual detrás de un flag
-  (`SHUMA_TERMINAL_SURFACE=1`), para A/B y rollback inmediato.
-- El modelo de datos no cambia de raíz: las `OutputLine` + `block_command` +
+- Fases 1–4 convivieron con el `output_pane` viejo detrás de un flag
+  (`SHUMA_TERMINAL_SURFACE` / opt-out `SHUMA_TERMINAL_LEGACY`), para A/B y
+  rollback inmediato.
+- El modelo de datos no cambió de raíz: las `OutputLine` + `block_command` +
   `expanded_stages` se mapean a bloques de la superficie. El emulador vt100 y la
   detección de alt-screen se reusan.
-- La Fase 5 borra el camino viejo sólo cuando el nuevo tenga **paridad verificada**
-  (no antes — Regla: no afirmar paridad sin evidencia).
+- La **Fase 5 borró el camino viejo** (2026-06-14) una vez verificada la
+  paridad: la superficie tiene su propia selección/copy/find/menú sobre el
+  stream (`surf_*`), así que el editor IDE per-comando y su menú legacy ya no
+  aportaban nada. Ya no hay flag: la superficie es el único path (salvo PTY/TUI
+  fullscreen).
 
 ## Anti-features (rechazadas con motivo)
 
@@ -310,17 +328,17 @@ deja el shell funcionando (flag de migración hasta la Fase 5).
 
 ## Estado
 
-**Implementado al 2026-06-07.** Fases 0-5 ✅ (foundation, virtualización, bloques, selección + copy + find, GPU grid behind `SHUMA_GPU_GRID=1`, pulido y migración con default flippeado a surface). La superficie es **el path por defecto**; el legacy queda accesible con `SHUMA_TERMINAL_LEGACY=1` mientras la paridad final cierra.
+**Implementado al 2026-06-07; migración cerrada el 2026-06-14.** Fases 0-5 ✅ (foundation, virtualización, bloques, selección + copy + find, GPU grid behind `SHUMA_GPU_GRID=1`, pulido y migración). La superficie es **el único path** de output (salvo PTY/TUI fullscreen): el `output_pane` viejo + las cards per-comando IDE + su menú legacy + el flag `SHUMA_TERMINAL_LEGACY` fueron **borrados** (no hay más opt-out).
 
 **Cerrado en Fase 5**:
 - Anclaje estable bajo append (no más jiggle al recibir output mientras se lee historia).
 - Doble-click select-word + triple-click select-line.
 - Scroll inercial (touchpad/wheel decay).
-- Menú contextual right-click (Copiar / Copiar todo / Seleccionar todo).
+- Menú contextual right-click (Copiar / Copiar todo / Seleccionar todo) sobre el stream (`surf_*`).
 - Spill a disco: configurable vía `[scrollback]` en `shumarc.toml`, archive automático al recortar el frente, chip de status en UI, builtin `:scrollback open` para abrirlo con `$EDITOR`.
+- **Borrado del `output_pane`/per-command-editor viejo** (2026-06-14): ver el detalle en la lista de Fases (Fase 5). Migración de `view()`/`body_view()` a `output_pane_surface` incondicional; eliminados los módulos/funciones/`Msg`/campos de `State` legacy; helpers compartidos reubicados. `cargo check --workspace` verde, downstream (`shuma-shell-llimphi`, `pata-llimphi`, `shuma-cli`) compila, 181 tests pasan (2 fallos pre-existentes en `main`).
 
 **Pendiente** (post-Fase 5):
 - Integrar líneas spilled al view (servirlas cuando el usuario scrollea way up — requiere extender el virtualizador para id < dropped via spill async/cache). Hoy el archive se ve mediante `:scrollback open` (fuera del shell).
-- Borrar el `output_pane` viejo + per-command-editor cuando el opt-out `SHUMA_TERMINAL_LEGACY` quede sin uso reportado. Conservador hasta verificar paridad en uso real.
 
 Decisión de construir tomada con el usuario 2026-06-05; ejecución completa de Fase 0 a 5.10 entre 2026-06-06 y 2026-06-07. El control nuevo se justifica por el techo arquitectónico de ~500 líneas del path viejo y por la eficiencia GPU-directo en grilla/TUI.

@@ -417,30 +417,8 @@ pub fn update(state: State, msg: Msg) -> State {
             };
             s.input.set_text(&format!("{actual}{sep}%c{block} "));
         }
-        Msg::BodyPointer { block, ev } => {
-            s = apply_body_pointer(s, block, ev);
-        }
-        Msg::CopyBody(block) => {
-            copy_body_selection(&s, block);
-        }
         Msg::CopyCommandBlock(block) => {
             copy_command_block(&s, block);
-        }
-        Msg::BodyDoubleClick { block, x, y } => {
-            s = apply_body_double_click(s, block, x, y);
-        }
-        Msg::OpenBodyMenu { x, y } => {
-            // Bloque objetivo: el que el usuario seleccionó, o el más reciente
-            // con cuerpo. Si no hay ninguno, no abrimos (nada que copiar).
-            if let Some(block) = menu_target_block(&s) {
-                s.body_menu = Some((x, y, block));
-            }
-        }
-        Msg::BodyMenuDismiss => {
-            s.body_menu = None;
-        }
-        Msg::BodyMenuPick(idx) => {
-            s = apply_body_menu_pick(s, idx);
         }
         Msg::Tick => {
             s = drain_run(s);

@@ -1,9 +1,9 @@
 use super::*;
 
-// ── Camino experimental: superficie de terminal virtualizada (Fase 2 del SDD) ──
+// ── Superficie de terminal virtualizada (la ÚNICA vía de output desde la Fase 5) ──
 //
-// Detrás del flag `SHUMA_TERMINAL_SURFACE` (A/B con el `output_pane` de arriba,
-// que queda intacto para rollback inmediato). Mapea el modelo del shell
+// El `output_pane` viejo + las cards per-comando IDE fueron borrados; esta es la
+// única superficie de output (salvo PTY/TUI fullscreen). Mapea el modelo del shell
 // (`OutputLine` + bloques + `collapsed` + `block_command`) al modelo de bloques
 // de `llimphi-widget-terminal`: cada comando = un header (chrome) + su cuerpo
 // (rango de líneas en un `Scrollback`); colapsar = no emitir el cuerpo. El
@@ -339,26 +339,6 @@ fn section_header<HostMsg: Clone + 'static>(
     .hover_fill(theme.bg_row_hover)
     .on_click(lift(Msg::ToggleSection { block, idx }))
     .children(vec![marker, title_v, count])
-}
-
-/// `true` si el output va por la **superficie nueva** (modo por defecto
-/// tras Fase 5.6). Se lee una sola vez por proceso vía `OnceLock`.
-///
-/// Política:
-/// - **Default**: superficie ON. Todas las features de Fase 1-5 (store
-///   virtualizado, anclaje estable, selección + copy + find, scroll
-///   inercial, GPU grid opt-in, spill a disco opt-in) están activas.
-/// - **Opt-OUT explícito**: setear `SHUMA_TERMINAL_LEGACY=1` (o cualquier
-///   valor) vuelve al `output_pane` viejo + per-command IDE editor (rama
-///   con `BodyPointer`, `BodyDoubleClick`, multi-cursor del text-editor).
-///   Es el botón de pánico para usuarios que necesiten esas features
-///   específicas hasta cerrar paridad.
-/// - **Opt-IN histórico**: `SHUMA_TERMINAL_SURFACE=1` (sin LEGACY) sigue
-///   funcionando como antes — no-op si ya es default.
-pub(crate) fn terminal_surface_enabled() -> bool {
-    use std::sync::OnceLock;
-    static EN: OnceLock<bool> = OnceLock::new();
-    *EN.get_or_init(|| std::env::var_os("SHUMA_TERMINAL_LEGACY").is_none())
 }
 
 /// Header de un comando como **chrome** de la superficie: chevron + `$ comando`
