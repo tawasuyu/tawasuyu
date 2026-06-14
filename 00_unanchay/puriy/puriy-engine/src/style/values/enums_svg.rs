@@ -599,6 +599,60 @@ pub enum TextEmphasisSkip {
     Narrow,
 }
 
+/// `float` (CSS2.1 §9.5 + Logical Properties). Saca la caja del flujo y la
+/// pega a un lado. `InlineStart`/`InlineEnd` son los valores lógicos (en LTR
+/// horizontal mapean a `Left`/`Right`). Default `None`. NO hereda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Float {
+    #[default]
+    None,
+    Left,
+    Right,
+    InlineStart,
+    InlineEnd,
+}
+
+/// `clear` (CSS2.1 §9.5.2 + Logical Properties). Pide que el borde del margen
+/// del elemento quede por debajo de los floats del lado indicado. `Both` cubre
+/// ambos lados. `InlineStart`/`InlineEnd` son lógicos. Default `None`. NO hereda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Clear {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+    InlineStart,
+    InlineEnd,
+}
+
+/// Componente de colocación de `masonry-auto-flow` (CSS Grid 3 draft).
+/// `Pack` rellena huecos; `Next` respeta el orden de la pista. Default `Pack`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MasonryPlacement {
+    #[default]
+    Pack,
+    Next,
+}
+
+/// Componente de orden de `masonry-auto-flow` (CSS Grid 3 draft).
+/// `DefiniteFirst` coloca primero los ítems con posición definida; `Ordered`
+/// respeta el orden del documento. Default `DefiniteFirst`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MasonryOrder {
+    #[default]
+    DefiniteFirst,
+    Ordered,
+}
+
+/// `masonry-auto-flow` (CSS Grid 3 draft): `[ pack | next ] ||
+/// [ definite-first | ordered ]`. Default `pack definite-first`. NO hereda.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MasonryAutoFlow {
+    pub placement: MasonryPlacement,
+    pub order: MasonryOrder,
+}
+
 /// `float-defer` (CSS Page Floats 3). `None` = `none` (sin diferir);
 /// `Last` = `last`; `By(n)` = diferir N fragmentos. Default `None`.
 /// Fase 7.519.

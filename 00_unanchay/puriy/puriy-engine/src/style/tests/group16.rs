@@ -112,10 +112,12 @@ fn grid_template_rows_slash_columns() {
 }
 
 #[test]
-fn grid_con_auto_flow_no_expande() {
-    // La forma con `auto-flow` (sólo `grid`) está fuera de alcance: no debe
-    // emitir templates espurios.
-    assert!(decls("grid: auto-flow / 1fr").is_empty());
+fn grid_con_auto_flow_expande_a_longhands() {
+    // La forma `auto-flow` del shorthand `grid` ahora SÍ se expande a
+    // grid-auto-flow + grid-auto-{rows,cols} + grid-template-{cols,rows}.
+    let d = decls("grid: auto-flow / 1fr");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::GridAutoFlow(GridAutoFlow::Row))));
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateColumns(t) if t.len() == 1)));
 }
 
 // ── Fase 7.849 — keywords de tamaño intrínseco ─────────────────────────────

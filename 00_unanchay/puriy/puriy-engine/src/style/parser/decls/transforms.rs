@@ -596,23 +596,66 @@ pub(crate) fn parse_place_self(
     }
 }
 
-/// `animation-timeline`: `auto | none | <dashed-ident>`. Fase 7.339.
+/// `animation-timeline`: `auto | none | <dashed-ident> | scroll(...) |
+/// view(...)`. Fase 7.339 + notaciones funcionales anónimas.
 pub(crate) fn parse_timeline_ref(value: &str) -> Option<TimelineRef> {
     let v = value.trim();
-    match v.to_ascii_lowercase().as_str() {
-        "auto" => Some(TimelineRef::Auto),
-        "none" => Some(TimelineRef::None),
-        _ => {
-            // Aceptamos cualquier `<custom-ident>` (validamos solo
-            // que no esté vacío y no tenga espacios internos — el
-            // lexer ya separó por whitespace, pero filtramos por
-            // las dudas).
-            if v.is_empty() || v.contains(char::is_whitespace) {
-                return None;
-            }
-            Some(TimelineRef::Named(v.to_string()))
-        }
+    let lower = v.to_ascii_lowercase();
+    match lower.as_str() {
+        "auto" => return Some(TimelineRef::Auto),
+        "none" => return Some(TimelineRef::None),
+        _ => {}
     }
+    // `scroll([<scroller>] || [<axis>])` — orden libre, hasta 2 tokens.
+    if let Some(inner) = fn_inner(&lower, "scroll") {
+        let mut scroller = ScrollScroller::Nearest;
+        let mut axis = TimelineAxis::Block;
+        for tok in inner.split_whitespace() {
+            match tok {
+                "nearest" => scroller = ScrollScroller::Nearest,
+                "root" => scroller = ScrollScroller::Root,
+                "self" => scroller = ScrollScroller::SelfElement,
+                _ => match parse_timeline_axis(tok) {
+                    Some(a) => axis = a,
+                    None => return None,
+                },
+            }
+        }
+        return Some(TimelineRef::Scroll { scroller, axis });
+    }
+    // `view([<axis>] || [<inset>])` — el primer token-axis fija el eje;
+    // el resto (longitudes/`auto`) se guarda opaco como inset.
+    if let Some(inner) = fn_inner(&lower, "view") {
+        let mut axis = TimelineAxis::Block;
+        let mut inset_toks: Vec<&str> = Vec::new();
+        for tok in inner.split_whitespace() {
+            match parse_timeline_axis(tok) {
+                Some(a) => axis = a,
+                None => inset_toks.push(tok),
+            }
+        }
+        let inset = if inset_toks.is_empty() {
+            None
+        } else {
+            Some(inset_toks.join(" "))
+        };
+        return Some(TimelineRef::View { axis, inset });
+    }
+    // `<custom-ident>` (validamos no-vacío y sin espacios internos —
+    // el lexer ya separó por whitespace, pero filtramos por las dudas).
+    if v.is_empty() || v.contains(char::is_whitespace) {
+        return None;
+    }
+    Some(TimelineRef::Named(v.to_string()))
+}
+
+/// Si `v` es `name(<inner>)`, devuelve el `<inner>` recortado (puede ser
+/// vacío para `view()`); si no, `None`.
+fn fn_inner<'a>(v: &'a str, name: &str) -> Option<&'a str> {
+    let rest = v.strip_prefix(name)?;
+    let rest = rest.trim_start();
+    let inner = rest.strip_prefix('(')?.strip_suffix(')')?;
+    Some(inner.trim())
 }
 
 /// `scroll-timeline-name` / `view-timeline-name`: `none | <dashed-ident>`.
@@ -638,6 +681,57 @@ pub(crate) fn parse_timeline_axis(value: &str) -> Option<TimelineAxis> {
         "y" => Some(TimelineAxis::Y),
         _ => None,
     }
+}
+
+/// `masonry-auto-flow` (CSS Grid 3 draft): `[ pack | next ] ||
+/// [ definite-first | ordered ]`. Orden libre, 1-2 tokens, sin repetir
+/// componente.
+pub(crate) fn parse_masonry_auto_flow(value: &str) -> Option<MasonryAutoFlow> {
+    let mut placement: Option<MasonryPlacement> = None;
+    let mut order: Option<MasonryOrder> = None;
+    for tok in value.trim().to_ascii_lowercase().split_whitespace() {
+        match tok {
+            "pack" if placement.is_none() => placement = Some(MasonryPlacement::Pack),
+            "next" if placement.is_none() => placement = Some(MasonryPlacement::Next),
+            "definite-first" if order.is_none() => order = Some(MasonryOrder::DefiniteFirst),
+            "ordered" if order.is_none() => order = Some(MasonryOrder::Ordered),
+            _ => return None,
+        }
+    }
+    if placement.is_none() && order.is_none() {
+        return None; // valor vacío
+    }
+    Some(MasonryAutoFlow {
+        placement: placement.unwrap_or_default(),
+        order: order.unwrap_or_default(),
+    })
+}
+
+/// `justify-tracks` (CSS Grid 3 draft): lista por coma de
+/// `<content-distribution> | <content-position>`, uno por track de masonry.
+/// Reusa `parse_justify_content`. Lista vacía → `None` (drop).
+pub(crate) fn parse_justify_tracks(value: &str) -> Option<Vec<JustifyContent>> {
+    let mut out = Vec::new();
+    for item in value.split(',') {
+        out.push(parse_justify_content(item.trim())?);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
+}
+
+/// `align-tracks` (CSS Grid 3 draft): igual que `justify-tracks` pero sobre
+/// el eje block. Reusa `parse_align_content`.
+pub(crate) fn parse_align_tracks(value: &str) -> Option<Vec<AlignContent>> {
+    let mut out = Vec::new();
+    for item in value.split(',') {
+        out.push(parse_align_content(item.trim())?);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
 }
 
 /// `white-space-collapse`: `collapse | preserve | preserve-breaks |

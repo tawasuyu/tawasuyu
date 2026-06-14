@@ -309,6 +309,27 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         "animation-delay" | "-webkit-animation-delay" => {
             parse_time_seconds(first_comma(value.trim())).map(DeclKind::AnimationDelay)
         }
+        // `float` (CSS2.1 §9.5 + Logical Properties). `none|left|right|
+        // inline-start|inline-end`. NO hereda.
+        "float" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::Float(Float::None)),
+            "left" => Some(DeclKind::Float(Float::Left)),
+            "right" => Some(DeclKind::Float(Float::Right)),
+            "inline-start" => Some(DeclKind::Float(Float::InlineStart)),
+            "inline-end" => Some(DeclKind::Float(Float::InlineEnd)),
+            _ => None,
+        },
+        // `clear` (CSS2.1 §9.5.2 + Logical Properties). `none|left|right|both|
+        // inline-start|inline-end`. NO hereda.
+        "clear" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::Clear(Clear::None)),
+            "left" => Some(DeclKind::Clear(Clear::Left)),
+            "right" => Some(DeclKind::Clear(Clear::Right)),
+            "both" => Some(DeclKind::Clear(Clear::Both)),
+            "inline-start" => Some(DeclKind::Clear(Clear::InlineStart)),
+            "inline-end" => Some(DeclKind::Clear(Clear::InlineEnd)),
+            _ => None,
+        },
         // Fase 7.519 — `float-defer` (CSS Page Floats 3). `none|last|<int>`.
         "float-defer" => {
             let v = value.trim().to_ascii_lowercase();

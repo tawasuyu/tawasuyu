@@ -722,6 +722,26 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "vector-effect" => {
             parse_vector_effect(value).map(DeclKind::VectorEffect)
         }
+        // `d` (SVG 2 §6) como propiedad CSS: `none | path(<string>)`.
+        // Plumb opaco (no parseamos el path-data). NO hereda.
+        "d" => {
+            let raw = value.trim();
+            if raw.eq_ignore_ascii_case("none") {
+                Some(DeclKind::D(None))
+            } else if raw.to_ascii_lowercase().starts_with("path(") && raw.ends_with(')') {
+                Some(DeclKind::D(Some(raw.to_string())))
+            } else {
+                None
+            }
+        }
+        // CSS Grid 3 (masonry, draft). NO heredan.
+        "masonry-auto-flow" => {
+            parse_masonry_auto_flow(value).map(DeclKind::MasonryAutoFlow)
+        }
+        "justify-tracks" => {
+            parse_justify_tracks(value).map(DeclKind::JustifyTracks)
+        }
+        "align-tracks" => parse_align_tracks(value).map(DeclKind::AlignTracks),
         "text-anchor" => parse_text_anchor(value).map(DeclKind::TextAnchor),
         "color-rendering" => {
             parse_color_rendering(value).map(DeclKind::ColorRendering)

@@ -629,6 +629,24 @@ pub(crate) enum DeclKind {
     Rotate(Option<Transform>),
     /// Prop individual `scale` (Fase 7.828). `None` = `none`. NO hereda.
     Scale(Option<Transform>),
+    /// `float` (CSS2.1 §9.5). NO hereda. Plumb.
+    Float(Float),
+    /// `clear` (CSS2.1 §9.5.2). NO hereda. Plumb.
+    Clear(Clear),
+    /// `d` (SVG 2 §6) como prop CSS. `None` = `none`; `Some(raw)` = `path(...)`.
+    /// NO hereda. Plumb opaco.
+    D(Option<String>),
+    /// `masonry-auto-flow` (CSS Grid 3 draft). NO hereda. Plumb.
+    MasonryAutoFlow(MasonryAutoFlow),
+    /// `justify-tracks` (CSS Grid 3 draft). NO hereda. Plumb.
+    JustifyTracks(Vec<JustifyContent>),
+    /// `align-tracks` (CSS Grid 3 draft). NO hereda. Plumb.
+    AlignTracks(Vec<AlignContent>),
+    /// `grid-template-columns: subgrid` (CSS Grid 2). Flag plumb (la
+    /// maquinaria de subgrid de layout no está). NO hereda.
+    GridTemplateColumnsSubgrid(bool),
+    /// `grid-template-rows: subgrid` (CSS Grid 2). Flag plumb. NO hereda.
+    GridTemplateRowsSubgrid(bool),
     /// `float-defer` (Fase 7.519). NO hereda. Plumb.
     FloatDefer(FloatDefer),
     /// `float-reference` (Fase 7.520). NO hereda. Plumb.
@@ -1451,6 +1469,14 @@ impl Decl {
             DeclKind::Translate(t) => s.translate = *t,
             DeclKind::Rotate(t) => s.rotate = *t,
             DeclKind::Scale(t) => s.scale = *t,
+            DeclKind::Float(v) => s.float = *v,
+            DeclKind::Clear(v) => s.clear = *v,
+            DeclKind::D(v) => s.d = v.clone(),
+            DeclKind::MasonryAutoFlow(v) => s.masonry_auto_flow = *v,
+            DeclKind::JustifyTracks(v) => s.justify_tracks = v.clone(),
+            DeclKind::AlignTracks(v) => s.align_tracks = v.clone(),
+            DeclKind::GridTemplateColumnsSubgrid(v) => s.grid_template_columns_subgrid = *v,
+            DeclKind::GridTemplateRowsSubgrid(v) => s.grid_template_rows_subgrid = *v,
             DeclKind::FloatDefer(v) => s.float_defer = *v,
             DeclKind::FloatReference(v) => s.float_reference = *v,
             DeclKind::FloatOffset(v) => s.float_offset = *v,
@@ -1623,8 +1649,14 @@ impl Decl {
             DeclKind::LetterSpacing(v) => s.letter_spacing = *v,
             DeclKind::TextShadows(shadows) => s.text_shadows = shadows.clone(),
             DeclKind::Transforms(tr) => s.transforms = tr.clone(),
-            DeclKind::GridTemplateColumns(t) => s.grid_template_columns = t.clone(),
-            DeclKind::GridTemplateRows(t) => s.grid_template_rows = t.clone(),
+            DeclKind::GridTemplateColumns(t) => {
+                s.grid_template_columns = t.clone();
+                s.grid_template_columns_subgrid = false;
+            }
+            DeclKind::GridTemplateRows(t) => {
+                s.grid_template_rows = t.clone();
+                s.grid_template_rows_subgrid = false;
+            }
             DeclKind::Animation(a) => s.animation = a.clone(),
             DeclKind::Transitions(t) => s.transitions = t.clone(),
             // No resolvemos acá: el `color` final del elemento puede no

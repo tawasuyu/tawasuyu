@@ -910,6 +910,27 @@ pub struct ComputedStyle {
     /// caracteres saltea la marca de énfasis. Default `Spaces`. **HEREDA**.
     /// Plumb.
     pub text_emphasis_skip: TextEmphasisSkip,
+    /// `float` (CSS2.1 §9.5). Saca la caja del flujo a un lado. Default
+    /// `None`. NO hereda. Plumb (la maquinaria de layout de floats no está).
+    pub float: Float,
+    /// `clear` (CSS2.1 §9.5.2). Baja el borde de margen por debajo de los
+    /// floats del lado pedido. Default `None`. NO hereda. Plumb.
+    pub clear: Clear,
+    /// `d` (SVG 2 §6) como prop CSS. `None` = `none`; `Some(raw)` guarda el
+    /// `path(...)` crudo (parse opaco). Default `None`. NO hereda. Plumb.
+    pub d: Option<String>,
+    /// `masonry-auto-flow` (CSS Grid 3 draft). Default `pack definite-first`.
+    /// NO hereda. Plumb.
+    pub masonry_auto_flow: MasonryAutoFlow,
+    /// `justify-tracks` (CSS Grid 3 draft). Default vacío. NO hereda. Plumb.
+    pub justify_tracks: Vec<JustifyContent>,
+    /// `align-tracks` (CSS Grid 3 draft). Default vacío. NO hereda. Plumb.
+    pub align_tracks: Vec<AlignContent>,
+    /// `grid-template-columns: subgrid` (CSS Grid 2). Default `false`. NO
+    /// hereda. Plumb (sin maquinaria de layout subgrid).
+    pub grid_template_columns_subgrid: bool,
+    /// `grid-template-rows: subgrid` (CSS Grid 2). Default `false`. NO hereda.
+    pub grid_template_rows_subgrid: bool,
     /// `float-defer` (Fase 7.519). CSS Page Floats 3: cuántas regiones
     /// difiere el flotador. Default `None`. NO hereda. Plumb.
     pub float_defer: FloatDefer,

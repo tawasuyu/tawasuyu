@@ -528,3 +528,167 @@ fn color_relativo_rgb_y_hsl() {
     let hb = col("color: hsl(from blue h s l)").unwrap();
     assert!(hb.b > 250 && hb.r < 5 && hb.g < 5, "hsl from blue = {hb:?}");
 }
+
+// ── Lote data-driven: float/clear, grid auto-flow, masonry, subgrid, ──────
+//    animation-timeline scroll()/view(), text-box shorthand, d (SVG) ───────
+
+#[test]
+fn float_y_clear_incluyen_logicos() {
+    let f = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Float(v) => Some(v),
+        _ => None,
+    });
+    let c = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Clear(v) => Some(v),
+        _ => None,
+    });
+    assert_eq!(f("float: left"), Some(Float::Left));
+    assert_eq!(f("float: right"), Some(Float::Right));
+    assert_eq!(f("float: inline-start"), Some(Float::InlineStart));
+    assert_eq!(f("float: inline-end"), Some(Float::InlineEnd));
+    assert_eq!(f("float: none"), Some(Float::None));
+    assert_eq!(c("clear: both"), Some(Clear::Both));
+    assert_eq!(c("clear: left"), Some(Clear::Left));
+    assert_eq!(c("clear: inline-end"), Some(Clear::InlineEnd));
+    // Valores inválidos dropean.
+    assert!(decls("float: middle").is_empty());
+    assert!(decls("clear: everything").is_empty());
+}
+
+#[test]
+fn grid_shorthand_auto_flow() {
+    // `auto-flow` a la izquierda → flujo row, template = columnas.
+    let d = decls("grid: auto-flow / 1fr 1fr");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::GridAutoFlow(GridAutoFlow::Row))));
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridAutoRows(t) if t.is_empty())));
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridTemplateColumns(t) if t.len() == 2
+            && matches!(t[0], GridTrackSize::Fr(f) if (f - 1.0).abs() < 1e-6))));
+    // `auto-flow dense <tracks>` a la izquierda.
+    let d = decls("grid: auto-flow dense 50px / 1fr");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::GridAutoFlow(GridAutoFlow::RowDense))));
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridAutoRows(t) if matches!(t.as_slice(), [GridTrackSize::Px(p)] if (*p - 50.0).abs() < 1e-6))));
+    // `auto-flow` a la derecha → flujo column, template = filas, auto-columns.
+    let d = decls("grid: 1fr 1fr / auto-flow 100px");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::GridAutoFlow(GridAutoFlow::Column))));
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridAutoColumns(t) if matches!(t.as_slice(), [GridTrackSize::Px(p)] if (*p - 100.0).abs() < 1e-6))));
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateRows(t) if t.len() == 2)));
+}
+
+#[test]
+fn masonry_auto_flow_y_tracks() {
+    let maf = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::MasonryAutoFlow(v) => Some(v),
+        _ => None,
+    });
+    assert_eq!(
+        maf("masonry-auto-flow: pack"),
+        Some(MasonryAutoFlow { placement: MasonryPlacement::Pack, order: MasonryOrder::DefiniteFirst })
+    );
+    assert_eq!(
+        maf("masonry-auto-flow: next ordered"),
+        Some(MasonryAutoFlow { placement: MasonryPlacement::Next, order: MasonryOrder::Ordered })
+    );
+    // Orden libre.
+    assert_eq!(
+        maf("masonry-auto-flow: ordered next"),
+        Some(MasonryAutoFlow { placement: MasonryPlacement::Next, order: MasonryOrder::Ordered })
+    );
+    // Componente repetido dropea.
+    assert!(decls("masonry-auto-flow: pack next").is_empty());
+    assert!(decls("masonry-auto-flow: bogus").is_empty());
+    // justify-tracks / align-tracks: listas por coma.
+    assert!(decls("justify-tracks: center").iter().any(|d| matches!(&d.kind,
+        DeclKind::JustifyTracks(v) if v.as_slice() == [JustifyContent::Center])));
+    assert!(decls("justify-tracks: start, end, center").iter().any(|d| matches!(&d.kind,
+        DeclKind::JustifyTracks(v) if v.len() == 3 && v[1] == JustifyContent::End)));
+    assert!(decls("align-tracks: end").iter().any(|d| matches!(&d.kind,
+        DeclKind::AlignTracks(v) if v.as_slice() == [AlignContent::End])));
+}
+
+#[test]
+fn grid_template_subgrid() {
+    let d = decls("grid-template-columns: subgrid");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::GridTemplateColumnsSubgrid(true))));
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateColumns(t) if t.is_empty())));
+    // Líneas nombradas se descartan pero el subgrid se reconoce.
+    let d = decls("grid-template-rows: subgrid [line-a] [line-b]");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::GridTemplateRowsSubgrid(true))));
+    // Un track-list normal NO marca subgrid (y, vía apply, lo resetea).
+    assert!(decls("grid-template-columns: 1fr 1fr")
+        .iter()
+        .all(|x| !matches!(x.kind, DeclKind::GridTemplateColumnsSubgrid(_))));
+}
+
+#[test]
+fn animation_timeline_scroll_y_view() {
+    let tl = |s: &str| decls(s).iter().find_map(|d| match &d.kind {
+        DeclKind::AnimationTimeline(v) => Some(v.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        tl("animation-timeline: scroll(root block)"),
+        Some(TimelineRef::Scroll { scroller: ScrollScroller::Root, axis: TimelineAxis::Block })
+    );
+    // scroll() vacío → defaults nearest/block.
+    assert_eq!(
+        tl("animation-timeline: scroll()"),
+        Some(TimelineRef::Scroll { scroller: ScrollScroller::Nearest, axis: TimelineAxis::Block })
+    );
+    // view(axis) sin inset.
+    assert_eq!(
+        tl("animation-timeline: view(inline)"),
+        Some(TimelineRef::View { axis: TimelineAxis::Inline, inset: None })
+    );
+    // view(axis inset) guarda inset opaco.
+    assert_eq!(
+        tl("animation-timeline: view(block auto)"),
+        Some(TimelineRef::View { axis: TimelineAxis::Block, inset: Some("auto".to_string()) })
+    );
+    // <dashed-ident> sigue funcionando.
+    assert_eq!(tl("animation-timeline: --mi-tl"), Some(TimelineRef::Named("--mi-tl".to_string())));
+    // scroll con eje inválido dropea.
+    assert!(tl("animation-timeline: scroll(diagonal)").is_none());
+}
+
+#[test]
+fn text_box_shorthand() {
+    let pair = |s: &str| {
+        let d = decls(s);
+        let t = d.iter().find_map(|x| match x.kind {
+            DeclKind::TextBoxTrim(v) => Some(v),
+            _ => None,
+        });
+        let e = d.iter().find_map(|x| match x.kind {
+            DeclKind::TextBoxEdge(v) => Some(v),
+            _ => None,
+        });
+        (t, e)
+    };
+    // trim + edge (2 keywords de edge).
+    assert_eq!(
+        pair("text-box: trim-both cap alphabetic"),
+        (Some(TextBoxTrim::TrimBoth), Some(TextBoxEdge::Edge { over: TextEdge::Cap, under: TextEdge::Alphabetic }))
+    );
+    // solo trim → edge auto.
+    assert_eq!(pair("text-box: trim-both"), (Some(TextBoxTrim::TrimBoth), Some(TextBoxEdge::Auto)));
+    // solo edge → trim none.
+    assert_eq!(
+        pair("text-box: cap alphabetic"),
+        (Some(TextBoxTrim::None), Some(TextBoxEdge::Edge { over: TextEdge::Cap, under: TextEdge::Alphabetic }))
+    );
+    // normal → ambos default.
+    assert_eq!(pair("text-box: normal"), (Some(TextBoxTrim::None), Some(TextBoxEdge::Auto)));
+}
+
+#[test]
+fn d_svg_geometry_como_css() {
+    assert!(decls("d: path(\"M0 0 L10 10\")")
+        .iter()
+        .any(|x| matches!(&x.kind, DeclKind::D(Some(p)) if p.starts_with("path("))));
+    assert!(decls("d: none").iter().any(|x| matches!(x.kind, DeclKind::D(None))));
+    // Valor inválido dropea (no es path() ni none).
+    assert!(decls("d: 5px").is_empty());
+}

@@ -951,14 +951,32 @@ impl Default for ImageOrientation {
 /// `animation-timeline` (CSS Animations 2 / Scroll-driven Animations 1).
 /// `Auto` usa el monotonic timer del documento (el default
 /// implícito); `None` desactiva la animación; `Named(s)` la enlaza a
-/// un scroll/view-timeline declarado en otro lado. NO hereda.
-/// Fase 7.339.
+/// un scroll/view-timeline declarado en otro lado. `Scroll`/`View` son
+/// las notaciones funcionales anónimas (`scroll()` / `view()`). NO hereda.
+/// Fases 7.339, scroll/view nuevos.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum TimelineRef {
     #[default]
     Auto,
     None,
     Named(String),
+    /// `scroll([<scroller>] [<axis>])`: timeline anónimo anclado al scroll
+    /// de un contenedor (`nearest`/`root`/`self`, default `nearest`) sobre
+    /// un eje (default `Block`).
+    Scroll { scroller: ScrollScroller, axis: TimelineAxis },
+    /// `view([<axis>] [<inset>])`: timeline anónimo de visibilidad. `inset`
+    /// se guarda opaco (`Option<String>`).
+    View { axis: TimelineAxis, inset: Option<String> },
+}
+
+/// Contenedor de scroll para `scroll()` de `animation-timeline`.
+/// Default `Nearest`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScrollScroller {
+    #[default]
+    Nearest,
+    Root,
+    SelfElement,
 }
 
 /// `scroll-timeline-axis` / `view-timeline-axis` (CSS Scroll-driven

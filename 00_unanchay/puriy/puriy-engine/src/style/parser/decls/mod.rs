@@ -676,8 +676,17 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
                 out.push(Decl { kind: DeclKind::GridTemplateAreas(None), important });
                 continue;
             }
-            // `auto-flow` (sólo `grid`) y strings de áreas: fuera de alcance.
+            // Forma `auto-flow` (sólo `grid`): un lado lleva `[auto-flow &&
+            // dense?] <auto-tracks>?` y el otro un template. `auto-flow` a la
+            // IZQUIERDA → flujo por filas (row), template a la derecha es de
+            // columnas; a la DERECHA → flujo por columnas (column), template
+            // a la izquierda es de filas. Strings de áreas siguen fuera.
             if !value.contains('"') && value.to_ascii_lowercase().contains("auto-flow") {
+                if let Some((left, right)) = value.split_once('/') {
+                    let (left, right) = (left.trim(), right.trim());
+                    let left_af = left.to_ascii_lowercase().contains("auto-flow");
+                    out.extend(expand_grid_auto_flow_form(left, right, left_af, important));
+                }
                 continue;
             }
             if let Some((rows_raw, cols_raw)) = value.split_once('/') {
@@ -689,6 +698,59 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
                         out.push(Decl { kind: DeclKind::GridTemplateRows(rows), important });
                         out.push(Decl { kind: DeclKind::GridTemplateColumns(cols), important });
                     }
+                }
+            }
+            continue;
+        }
+        // `grid-template-columns/rows: subgrid [<line-name-list>]` (CSS Grid 2).
+        // Emite track-list vacío (subgrid toma las pistas del padre) + flag de
+        // subgrid; el orden importa porque el track-list resetea el flag. Las
+        // líneas nombradas se descartan (plumb opaco).
+        if (prop.eq_ignore_ascii_case("grid-template-columns")
+            || prop.eq_ignore_ascii_case("grid-template-rows"))
+            && value.split_whitespace().next().map(|t| t.eq_ignore_ascii_case("subgrid"))
+                == Some(true)
+        {
+            let cols = prop.eq_ignore_ascii_case("grid-template-columns");
+            if cols {
+                out.push(Decl { kind: DeclKind::GridTemplateColumns(Vec::new()), important });
+                out.push(Decl { kind: DeclKind::GridTemplateColumnsSubgrid(true), important });
+            } else {
+                out.push(Decl { kind: DeclKind::GridTemplateRows(Vec::new()), important });
+                out.push(Decl { kind: DeclKind::GridTemplateRowsSubgrid(true), important });
+            }
+            continue;
+        }
+        // `text-box` shorthand (CSS Inline 3): `normal | <'text-box-trim'> ||
+        // <'text-box-edge'>`. `normal` resetea ambos longhands a su default.
+        // Si no, el primer token que matchee `text-box-trim` fija el trim y el
+        // resto se intenta como `text-box-edge` (1-2 tokens).
+        if prop.eq_ignore_ascii_case("text-box") {
+            if value.eq_ignore_ascii_case("normal") {
+                out.push(Decl { kind: DeclKind::TextBoxTrim(TextBoxTrim::None), important });
+                out.push(Decl { kind: DeclKind::TextBoxEdge(TextBoxEdge::Auto), important });
+                continue;
+            }
+            let toks: Vec<&str> = value.split_whitespace().collect();
+            // Probá consumir el primer token como trim; el resto como edge.
+            let (trim, edge_toks): (Option<TextBoxTrim>, &[&str]) =
+                match toks.first().and_then(|t| parse_text_box_trim(t)) {
+                    Some(t) => (Some(t), &toks[1..]),
+                    None => (None, &toks[..]),
+                };
+            let edge = if edge_toks.is_empty() {
+                Some(TextBoxEdge::Auto)
+            } else {
+                parse_text_box_edge(&edge_toks.join(" "))
+            };
+            // Al menos uno de los dos componentes debe estar presente y parsear.
+            if let Some(edge) = edge {
+                if trim.is_some() || !edge_toks.is_empty() {
+                    out.push(Decl {
+                        kind: DeclKind::TextBoxTrim(trim.unwrap_or(TextBoxTrim::None)),
+                        important,
+                    });
+                    out.push(Decl { kind: DeclKind::TextBoxEdge(edge), important });
                 }
             }
             continue;
@@ -942,6 +1004,56 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         if let Some(kind) = decl_kind_from_pair(prop, value) {
             out.push(Decl { kind, important });
         }
+    }
+    out
+}
+
+/// Expande la forma `auto-flow` del shorthand `grid` a sus longhands. Un lado
+/// (`af_side`) lleva `[auto-flow && dense?] <auto-tracks>?` y el otro
+/// (`tmpl_side`) un template explícito. `left_af` indica si el lado `auto-flow`
+/// es el izquierdo (→ flujo `row`, template = columnas) o el derecho (→ flujo
+/// `column`, template = filas). Si algún lado no parsea, no emite nada.
+fn expand_grid_auto_flow_form(
+    left: &str,
+    right: &str,
+    left_af: bool,
+    important: bool,
+) -> Vec<Decl> {
+    let (af_side, tmpl_side) = if left_af { (left, right) } else { (right, left) };
+    // Lado auto-flow: extraer `dense` y las pistas implícitas (resto de tokens).
+    let mut dense = false;
+    let mut track_toks: Vec<&str> = Vec::new();
+    for tok in af_side.split_whitespace() {
+        let low = tok.to_ascii_lowercase();
+        match low.as_str() {
+            "auto-flow" => {}
+            "dense" => dense = true,
+            _ => track_toks.push(tok),
+        }
+    }
+    let auto_tracks = if track_toks.is_empty() {
+        Vec::new() // sin pistas implícitas explícitas → `auto`
+    } else {
+        match parse_grid_template(&track_toks.join(" ")) {
+            Some(t) => t,
+            None => return Vec::new(),
+        }
+    };
+    let template = match parse_grid_template(tmpl_side) {
+        Some(t) => t,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    if left_af {
+        let flow = if dense { GridAutoFlow::RowDense } else { GridAutoFlow::Row };
+        out.push(Decl { kind: DeclKind::GridAutoFlow(flow), important });
+        out.push(Decl { kind: DeclKind::GridAutoRows(auto_tracks), important });
+        out.push(Decl { kind: DeclKind::GridTemplateColumns(template), important });
+    } else {
+        let flow = if dense { GridAutoFlow::ColumnDense } else { GridAutoFlow::Column };
+        out.push(Decl { kind: DeclKind::GridAutoFlow(flow), important });
+        out.push(Decl { kind: DeclKind::GridAutoColumns(auto_tracks), important });
+        out.push(Decl { kind: DeclKind::GridTemplateRows(template), important });
     }
     out
 }
