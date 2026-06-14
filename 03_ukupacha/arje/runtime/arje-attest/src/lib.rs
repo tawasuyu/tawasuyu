@@ -28,13 +28,46 @@
 
 use agora_channel::{firmar_capacidad, verificar_capacidad};
 use agora_core::Keypair;
-use format::{hash as blake3, AgoraId, ConcesionCapacidad, Permisos};
+use format::{hash as blake3, ConcesionCapacidad, Permisos};
+
+/// Identidad pública Ed25519 (`[u8; 32]`), reexportada para que los callers del
+/// gate (arje-zero) tipen la rootkey soberana sin depender de `format`.
+pub use format::AgoraId;
 
 /// BLAKE3 de unos bytes — el mismo hash que `format`/agora/wawa usan como
 /// identidad de contenido. Reexportado para que los callers registren el hash
 /// vivo (p. ej. en el audit log) sin depender de `format` directamente.
 pub fn hash_de(bytes: &[u8]) -> [u8; 32] {
     blake3(bytes)
+}
+
+/// Parsea una **rootkey soberana** desde su representación hex (64 chars = 32
+/// bytes). Tolera whitespace envolvente y un prefijo `0x`. Es la forma en que
+/// el operador ancla la rootkey fuera de la Card: compilada en `arje-zero`
+/// (`ARJE_ATTEST_ROOTKEY`) o en un archivo confiable. Devuelve `None` si no son
+/// exactamente 32 bytes hex válidos.
+pub fn rootkey_desde_hex(s: &str) -> Option<AgoraId> {
+    let s = s.trim();
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Render hex (64 chars, minúsculas, sin prefijo) de una rootkey. Lo usa
+/// `arje-packager` para imprimir la pubkey que el operador debe anclar en
+/// `arje-zero` / `/etc/arje/rootkey.pub`. Inverso de [`rootkey_desde_hex`].
+pub fn rootkey_a_hex(k: &AgoraId) -> String {
+    let mut s = String::with_capacity(64);
+    for b in k {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 /// Firma una [`ConcesionCapacidad`] por cada binario crítico, sobre
@@ -219,6 +252,19 @@ mod tests {
         assert_eq!(atestar_bytes(&cs, &a_malo, Some(rootkey)), Veredicto::NoAtestada);
         // Manifiesto vacío → nada atesta.
         assert_eq!(atestar_bytes(&[], &a, Some(rootkey)), Veredicto::NoAtestada);
+    }
+
+    #[test]
+    fn rootkey_hex_roundtrip_y_tolerancias() {
+        let (rootkey, _) = firmar_binarios(SEED, &[(b"x".to_vec(), PERM)]);
+        let hex = rootkey_a_hex(&rootkey);
+        assert_eq!(hex.len(), 64);
+        assert_eq!(rootkey_desde_hex(&hex), Some(rootkey));
+        // Tolera whitespace y prefijo 0x.
+        assert_eq!(rootkey_desde_hex(&format!("  0x{hex}\n")), Some(rootkey));
+        // Longitud incorrecta o no-hex → None.
+        assert_eq!(rootkey_desde_hex("dead"), None);
+        assert_eq!(rootkey_desde_hex(&"z".repeat(64)), None);
     }
 
     #[test]

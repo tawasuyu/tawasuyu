@@ -105,9 +105,18 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    `--kind attestation-check`) una vez que el brain existe. `arje-attest` tiene 7 tests del
    núcleo (roundtrip, tampering, re-firma de atacante, firma corrupta, binding por hash); el gate
    3 (no-op, Warn detecta tampering, Halt aborta); `card-core` 2 (roundtrip JSON/wire + compat).
-   **Resta soberano (operador):** anclar una rootkey fuera de la propia Card (pubkey compilada /
-   TPM) y flipear la política a `Halt` — sin ancla externa, un seed reescrito por completo podría
-   re-firmar (igual que el flip a estricto de agora §14.1.3). Por eso el default es `Warn`.
+   **Ancla soberana — ✅ HECHO (2026-06-14).** El gate (`attest_gate::ancla_externa`) resuelve una
+   rootkey anclada **fuera de la Card**, en orden de confianza: (1) compilada en `arje-zero`
+   (`ARJE_ATTEST_ROOTKEY=<hex64>` al build — viaja dentro del binario que el gate también atesta),
+   (2) archivo confiable (`/etc/arje/rootkey.pub` o `ARJE_ATTEST_ROOTKEY_FILE`, 32 bytes raw o hex).
+   La rootkey efectiva = `ancla.or(seed.attest_rootkey)`: **si hay ancla, manda ella** — las
+   concesiones del seed deben estar firmadas por la soberana, no por la que el seed declare. Así un
+   seed reescrito por completo que también cambió su `attest_rootkey` cae en `AutorNoConfiable` (la
+   firma no es del ancla) → con `Halt` aborta. `arje-attest` gana `rootkey_desde_hex`/`rootkey_a_hex`
+   (+test roundtrip); `arje-packager` imprime la pubkey y la receta de anclado. Test estrella:
+   `ancla_externa_vence_a_un_seed_reescrito` demuestra que SIN ancla el seed reescrito se auto-valida
+   y CON ancla legítima es rechazado. **Resta sólo al operador:** generar la rootkey, anclarla por una
+   de las dos vías, y flipear `attest_policy` a `Halt` en su seed — ya no hay hueco de diseño.
 4. **A3** — Card de escritorio (`arje-card-llimphi`): mostrar el veredicto de atestación por
    unidad (verde/comprometido) en el panel del brain que ya existe. ✅ (2026-06-14) `formatear_entrada`
    renderiza las entradas `AuditAction::AttestationCheck` del audit log en el panel "Audit log" por

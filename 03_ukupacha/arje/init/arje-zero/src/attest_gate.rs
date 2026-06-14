@@ -17,9 +17,58 @@
 //! poder dejar una máquina sin arranque; el operador la endurece a `Halt`
 //! cuando el manifiesto está completo y ancla una rootkey soberana.
 
-use arje_attest::{atestar_bytes, hash_de, Veredicto};
+use arje_attest::{atestar_bytes, hash_de, rootkey_desde_hex, AgoraId, Veredicto};
 use arje_card::{AttestPolicy, EntityCard, Payload};
 use tracing::{info, warn};
+
+/// Path por defecto del ancla soberana en disco, si no se compiló una rootkey
+/// en el binario ni se pasó `ARJE_ATTEST_ROOTKEY_FILE`.
+const ANCLA_FILE_DEFAULT: &str = "/etc/arje/rootkey.pub";
+
+/// Resuelve la **rootkey soberana anclada fuera de la Card**, en orden de
+/// confianza decreciente:
+///
+/// 1. **compilada** en el propio binario de `arje-zero`
+///    (`ARJE_ATTEST_ROOTKEY=<hex64>` al build) — la más fuerte, porque viaja
+///    *dentro* del binario que el gate también atesta: reescribir la Card no la
+///    toca;
+/// 2. **archivo** en path confiable (`ARJE_ATTEST_ROOTKEY_FILE`, default
+///    [`ANCLA_FILE_DEFAULT`]) — 32 bytes crudos o 64 chars hex.
+///
+/// `None` si no hay ancla externa: el gate cae a la rootkey **auto-declarada**
+/// del seed (`Card::attest_rootkey`), que es el modelo débil — un seed reescrito
+/// por completo podría también reemplazar su rootkey. El ancla externa es lo que
+/// cierra ese hueco (la "resta soberano" de A2).
+fn ancla_externa() -> Option<AgoraId> {
+    // (1) compilada en el binario.
+    if let Some(hex) = option_env!("ARJE_ATTEST_ROOTKEY") {
+        match rootkey_desde_hex(hex) {
+            Some(k) => return Some(k),
+            None => warn!(
+                "ARJE_ATTEST_ROOTKEY compilada no es hex de 32 bytes — se ignora"
+            ),
+        }
+    }
+    // (2) archivo en disco.
+    let path = std::env::var("ARJE_ATTEST_ROOTKEY_FILE")
+        .unwrap_or_else(|_| ANCLA_FILE_DEFAULT.into());
+    match std::fs::read(&path) {
+        Ok(bytes) if bytes.len() == 32 => {
+            let mut k = [0u8; 32];
+            k.copy_from_slice(&bytes);
+            Some(k)
+        }
+        Ok(bytes) => match rootkey_desde_hex(&String::from_utf8_lossy(&bytes)) {
+            Some(k) => Some(k),
+            None => {
+                warn!(%path, "ancla de rootkey en disco no es 32 bytes ni hex válido — se ignora");
+                None
+            }
+        },
+        // Ausente es el caso normal mientras el operador no ancla nada.
+        Err(_) => None,
+    }
+}
 
 /// Veredicto de un binario crítico, listo para auditar.
 pub struct AttestVerdict {
@@ -69,15 +118,44 @@ pub fn run(seed: &EntityCard) -> anyhow::Result<Vec<AttestVerdict>> {
 }
 
 /// Núcleo del gate sobre un conjunto explícito de paths (separado de [`run`]
-/// para poder testear la política sin depender de `current_exe`).
+/// para poder testear la política sin depender de `current_exe`). Resuelve el
+/// ancla soberana externa y delega en [`run_inner`].
 fn run_with_paths(seed: &EntityCard, paths: Vec<String>) -> anyhow::Result<Vec<AttestVerdict>> {
-    let trust = seed.attest_rootkey;
-    if trust.is_none() {
-        warn!(
-            "atestación: el seed no ancla una rootkey (attest_rootkey=None) — \
-             se valida firma+hash pero NO la procedencia; un seed reescrito por \
-             completo podría re-firmar. Ancla una rootkey soberana para endurecer."
-        );
+    run_inner(seed, paths, ancla_externa())
+}
+
+/// Núcleo del gate con el ancla externa ya resuelta (parámetro explícito para
+/// testear el override sin tocar env/disco).
+///
+/// **La rootkey efectiva = `ancla.or(seed.attest_rootkey)`.** Si hay ancla
+/// externa, *manda ella*: las concesiones del seed deben estar firmadas por la
+/// rootkey soberana, no por la que el seed declare. Así un seed reescrito por
+/// completo que también cambió su `attest_rootkey` cae en `AutorNoConfiable`
+/// (la firma no es del ancla) — el ataque que A2 dejaba abierto.
+fn run_inner(
+    seed: &EntityCard,
+    paths: Vec<String>,
+    ancla: Option<AgoraId>,
+) -> anyhow::Result<Vec<AttestVerdict>> {
+    let trust = ancla.or(seed.attest_rootkey);
+    match (ancla, seed.attest_rootkey) {
+        (Some(a), Some(s)) if a != s => warn!(
+            "atestación: el ancla soberana externa ≠ attest_rootkey del seed — \
+             el seed declara otra rootkey; se EXIGE la soberana (un seed reescrito \
+             no puede re-firmar). Las concesiones del seed van a fallar si no las \
+             firmó el ancla."
+        ),
+        (Some(_), _) => info!("atestación: anclada a rootkey soberana externa"),
+        (None, None) => warn!(
+            "atestación: sin ancla soberana externa y el seed no declara rootkey \
+             (attest_rootkey=None) — se valida firma+hash pero NO la procedencia. \
+             Compilá ARJE_ATTEST_ROOTKEY o poné /etc/arje/rootkey.pub para endurecer."
+        ),
+        (None, Some(_)) => warn!(
+            "atestación: sin ancla soberana externa — se confía en la rootkey \
+             auto-declarada del seed, que un seed reescrito podría reemplazar. \
+             Ancla una rootkey soberana (ARJE_ATTEST_ROOTKEY / rootkey.pub) para cerrar el hueco."
+        ),
     }
 
     info!(
@@ -174,14 +252,15 @@ mod tests {
         let (dir, path) = fake_bin("warn", &bytes);
         let seed = seed_con_attest([3u8; 32], &bytes, AttestPolicy::Warn);
 
-        // Intacto → Ok.
-        let v = run_with_paths(&seed, vec![path.clone()]).expect("warn no aborta");
+        // Intacto → Ok. (run_inner con ancla None = modelo seed-declarado,
+        // hermético: no consulta env/disco.)
+        let v = run_inner(&seed, vec![path.clone()], None).expect("warn no aborta");
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].verdict, Veredicto::Ok);
 
         // Alterado en disco → su hash no está en el manifiesto → NoAtestada.
         std::fs::write(&path, b"binario + backdoor").unwrap();
-        let v2 = run_with_paths(&seed, vec![path.clone()]).expect("warn nunca aborta");
+        let v2 = run_inner(&seed, vec![path.clone()], None).expect("warn nunca aborta");
         assert_eq!(v2[0].verdict, Veredicto::NoAtestada);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -194,12 +273,54 @@ mod tests {
         let seed = seed_con_attest([4u8; 32], &bytes, AttestPolicy::Halt);
 
         // Intacto + Halt → no aborta.
-        assert!(run_with_paths(&seed, vec![path.clone()]).is_ok());
+        assert!(run_inner(&seed, vec![path.clone()], None).is_ok());
 
         // Alterado + Halt → aborta el arranque (Err).
         std::fs::write(&path, b"tampered").unwrap();
-        assert!(run_with_paths(&seed, vec![path.clone()]).is_err());
+        assert!(run_inner(&seed, vec![path.clone()], None).is_err());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// El ancla soberana externa cierra el ataque de "seed reescrito por
+    /// completo": un atacante re-empaqueta el seed firmando los binarios con SU
+    /// propia llave y pone su propia pubkey en `attest_rootkey`. Sin ancla, eso
+    /// pasa (el seed es internamente consistente). Con ancla = la rootkey
+    /// legítima, las concesiones del atacante caen en AutorNoConfiable → Halt
+    /// aborta.
+    #[test]
+    fn ancla_externa_vence_a_un_seed_reescrito() {
+        use arje_attest::firmar_binarios;
+
+        let bytes = b"binario critico real".to_vec();
+        let (dir, path) = fake_bin("ancla", &bytes);
+
+        // Llave legítima del operador (la que va anclada en arje-zero / disco).
+        let (rootkey_legitima, _) = firmar_binarios([1u8; 32], &[(bytes.clone(), 0u32)]);
+
+        // El atacante reescribe el seed entero con SU llave [66;32] y declara su
+        // propia pubkey como attest_rootkey — un seed auto-consistente.
+        let seed_atacante = seed_con_attest([66u8; 32], &bytes, AttestPolicy::Halt);
+
+        // (a) SIN ancla externa: el seed reescrito pasa (su rootkey auto-declarada
+        //     valida sus propias firmas). Este es exactamente el hueco de A2.
+        assert!(
+            run_inner(&seed_atacante, vec![path.clone()], None).is_ok(),
+            "sin ancla, un seed reescrito se auto-valida"
+        );
+
+        // (b) CON ancla = la rootkey legítima: las concesiones del atacante no
+        //     fueron firmadas por ella → AutorNoConfiable → Halt aborta.
+        let r = run_inner(&seed_atacante, vec![path.clone()], Some(rootkey_legitima));
+        assert!(r.is_err(), "el ancla soberana rechaza el seed reescrito");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// rootkey_desde_hex acepta el formato que el operador anclaría a mano.
+    #[test]
+    fn ancla_parsea_hex_del_operador() {
+        let k = rootkey_desde_hex(&"ab".repeat(32)).expect("64 hex chars");
+        assert_eq!(k, [0xabu8; 32]);
     }
 }

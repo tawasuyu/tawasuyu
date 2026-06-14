@@ -171,9 +171,15 @@ fn run() -> anyhow::Result<()> {
         let n = concesiones.len();
         card.attest = concesiones;
         card.attest_rootkey = Some(pubkey);
+        let pubhex = hex32(&pubkey);
+        eprintln!("arje-packager :: atestación: {n} binarios firmados bajo rootkey {pubhex}");
+        // Guía soberana: la rootkey en la propia Card es el modelo débil (un
+        // seed reescrito la reemplaza). Para endurecer a Halt hay que ANCLARLA
+        // fuera de la Card — compilada en arje-zero o en disco confiable.
         eprintln!(
-            "arje-packager :: atestación: {n} binarios firmados bajo rootkey {}",
-            hex32(&pubkey)
+            "arje-packager :: para endurecer (política Halt) anclá esta pubkey FUERA del seed:\n  \
+             · compilá arje-zero con  ARJE_ATTEST_ROOTKEY={pubhex}\n  \
+             · o escribila en  /etc/arje/rootkey.pub  (o ARJE_ATTEST_ROOTKEY_FILE), 32 bytes raw o el hex de arriba"
         );
     }
 
