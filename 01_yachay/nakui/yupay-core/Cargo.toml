@@ -1,0 +1,10 @@
+[package]
+name = "yupay-core"
+version = "0.1.0"
+edition = "2021"
+description = "Motor de fórmulas estilo Excel: álgebra de hoja (CellRef/SheetValue) + lenguaje (lex/parse/eval) bilingüe. Núcleo agnóstico, sin I/O."
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+rust_decimal = { version = "1.36", default-features = false, features = ["serde-str", "std"] }

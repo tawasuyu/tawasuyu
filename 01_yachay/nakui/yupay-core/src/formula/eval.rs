@@ -9,7 +9,6 @@
 //! celda errónea contamina todo lo que la lee, sin tumbar la hoja.
 
 use super::ast::{BinaryOp, FormulaArg, FormulaExpr, UnaryOp};
-use super::funcs;
 use crate::cell::CellRef;
 use crate::value::{SheetError, SheetValue};
 use rust_decimal::Decimal;
@@ -29,7 +28,20 @@ impl CellResolver for std::collections::HashMap<CellRef, SheetValue> {
     }
 }
 
-pub fn eval_formula(expr: &FormulaExpr, resolver: &dyn CellResolver) -> SheetValue {
+/// Despachador de funciones builtin. `yupay-core` define el lenguaje pero
+/// **no conoce ninguna función concreta** — el catálogo (`SUMA`, `BUSCARV`…)
+/// vive en `yupay-fns` y entra por este trait. Recibe el nombre tal cual lo
+/// escribió el usuario (ya normalizado a mayúsculas por el lexer) y los
+/// argumentos ya evaluados; devuelve el valor (o `#NAME?` si no existe).
+pub trait FuncDispatch {
+    fn call(&self, name: &str, args: &[FormulaArg]) -> SheetValue;
+}
+
+pub fn eval_formula(
+    expr: &FormulaExpr,
+    resolver: &dyn CellResolver,
+    funcs: &dyn FuncDispatch,
+) -> SheetValue {
     match expr {
         FormulaExpr::Number(n) => SheetValue::Number(*n),
         FormulaExpr::Text(t) => SheetValue::Text(t.clone()),
@@ -43,16 +55,16 @@ pub fn eval_formula(expr: &FormulaExpr, resolver: &dyn CellResolver) -> SheetVal
             // suelto, lo marcamos como #VALUE!.
             SheetValue::Error(SheetError::Value)
         }
-        FormulaExpr::Unary(op, inner) => eval_unary(*op, eval_formula(inner, resolver)),
+        FormulaExpr::Unary(op, inner) => eval_unary(*op, eval_formula(inner, resolver, funcs)),
         FormulaExpr::Binary(op, lhs, rhs) => {
-            let l = eval_formula(lhs, resolver);
-            let r = eval_formula(rhs, resolver);
+            let l = eval_formula(lhs, resolver, funcs);
+            let r = eval_formula(rhs, resolver, funcs);
             eval_binary(*op, l, r)
         }
         FormulaExpr::Call(name, args) => {
             let args_evaluated: Vec<FormulaArg> =
-                args.iter().map(|a| eval_arg(a, resolver)).collect();
-            funcs::dispatch(name, &args_evaluated)
+                args.iter().map(|a| eval_arg(a, resolver, funcs)).collect();
+            funcs.call(name, &args_evaluated)
         }
     }
 }
@@ -60,14 +72,18 @@ pub fn eval_formula(expr: &FormulaExpr, resolver: &dyn CellResolver) -> SheetVal
 /// Evalúa una sub-expresión que va a ser argumento de función. Un
 /// `Range(...)` literal se materializa como `FormulaArg::Range` con
 /// shape `rows × cols`; el resto como `FormulaArg::Value`.
-fn eval_arg(expr: &FormulaExpr, resolver: &dyn CellResolver) -> FormulaArg {
+fn eval_arg(
+    expr: &FormulaExpr,
+    resolver: &dyn CellResolver,
+    funcs: &dyn FuncDispatch,
+) -> FormulaArg {
     if let FormulaExpr::Range(r) = expr {
         let rows = (r.end.row - r.start.row + 1) as usize;
         let cols = (r.end.col - r.start.col + 1) as usize;
         let values: Vec<SheetValue> = r.iter().map(|c| resolver.resolve(c)).collect();
         FormulaArg::Range { values, rows, cols }
     } else {
-        FormulaArg::Value(eval_formula(expr, resolver))
+        FormulaArg::Value(eval_formula(expr, resolver, funcs))
     }
 }
 
@@ -237,8 +253,18 @@ mod tests {
         Decimal::from_str(s).unwrap()
     }
 
+    /// Despachador trivial: estos tests ejercen sólo aritmética/refs/
+    /// comparación, nunca llamadas a función. El catálogo real se prueba
+    /// en `yupay-fns`. Cualquier `Call` aquí debe dar `#NAME?`.
+    struct SinFunciones;
+    impl FuncDispatch for SinFunciones {
+        fn call(&self, _name: &str, _args: &[FormulaArg]) -> SheetValue {
+            SheetValue::Error(SheetError::Name)
+        }
+    }
+
     fn eval(src: &str, env: &HashMap<CellRef, SheetValue>) -> SheetValue {
-        eval_formula(&compile(src).unwrap(), env)
+        eval_formula(&compile(src).unwrap(), env, &SinFunciones)
     }
 
     #[test]

@@ -3,22 +3,27 @@
 //! para `SheetValue` (numérico exacto vía `rust_decimal`).
 //!
 //! Diseño en tres capas:
-//!   1. `value` + `cell`: tipos puros, sin estado, sin I/O.
-//!   2. `formula` (Bloque 2): parser + evaluador estilo Excel.
+//!   1. `value` + `cell`: tipos puros, sin estado, sin I/O — viven ahora en
+//!      `yupay-core` y se re-exportan aquí por compatibilidad.
+//!   2. `formula` (Bloque 2): parser + evaluador estilo Excel — extraído a
+//!      `yupay-core` (lenguaje) + `yupay-fns` (catálogo bilingüe); `formula`
+//!      es un shim que cablea el catálogo por defecto.
 //!   3. `graph` (Bloque 3): dependencias dinámicas + propagación.
 //!
 //! La integración con el WAL/executor de nakui-core llega en el Bloque 4
 //! como un morfismo único parametrizado, no como N morfismos en el
 //! manifiesto.
 
-pub mod cell;
+// `cell` y `value` viven en yupay-core; re-exportados para que `crate::cell::…`
+// y `crate::value::…` sigan resolviendo en todo nakui-sheet.
+pub use yupay_core::{cell, value};
+
 pub mod csv_io;
 pub mod formula;
 pub mod graph;
 pub mod pivot;
 pub mod sheet;
 pub mod sink;
-pub mod value;
 pub mod workbook;
 
 pub use cell::{CellRange, CellRangeError, CellRef, CellRefError};

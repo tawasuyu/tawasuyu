@@ -1,0 +1,9 @@
+[package]
+name = "yupay-fns"
+version = "0.1.0"
+edition = "2021"
+description = "Catálogo de funciones de hoja para yupay (SUMA, BUSCARV, SI…), con nombres bilingües es/qu/en sobre el lenguaje de yupay-core."
+
+[dependencies]
+yupay-core = { path = "../yupay-core" }
+rust_decimal = { version = "1.36", default-features = false, features = ["serde-str", "std"] }

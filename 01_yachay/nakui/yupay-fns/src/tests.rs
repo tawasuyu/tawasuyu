@@ -1,17 +1,15 @@
     use super::*;
-    use crate::cell::CellRef;
-    use crate::formula::compile;
-    use crate::formula::eval::eval_formula;
     use rust_decimal::Decimal;
     use std::collections::HashMap;
     use std::str::FromStr;
+    use yupay_core::{compile, eval_formula, CellRef};
 
     fn dec(s: &str) -> Decimal {
         Decimal::from_str(s).unwrap()
     }
 
     fn run(src: &str, env: &HashMap<CellRef, SheetValue>) -> SheetValue {
-        eval_formula(&compile(src).unwrap(), env)
+        eval_formula(&compile(src).unwrap(), env, &Funcs)
     }
 
     #[test]

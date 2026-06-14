@@ -159,6 +159,8 @@ members = [
     "01_yachay/iniy/iniy-wiki",
     "01_yachay/nakui/nakui-core",
     "01_yachay/nakui/nakui-backend",
+    "01_yachay/nakui/yupay-core",
+    "01_yachay/nakui/yupay-fns",
     "01_yachay/nakui/nakui-explorer-llimphi",
     "01_yachay/nakui/nakui-sheet",
     "01_yachay/nakui/nakui-sheet-llimphi",

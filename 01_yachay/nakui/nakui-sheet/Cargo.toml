@@ -9,6 +9,8 @@ publish.workspace = true
 description = "Nakui — motor de hojas de cálculo determinista: SheetValue (Decimal), parser de fórmulas estilo Excel, grafo dinámico de dependencias y propagación reactiva sobre el kernel de nakui-core."
 
 [dependencies]
+yupay-core = { path = "../yupay-core" }
+yupay-fns = { path = "../yupay-fns" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }

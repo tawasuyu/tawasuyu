@@ -14,14 +14,13 @@
 
 pub mod ast;
 pub mod eval;
-pub mod funcs;
 pub mod lex;
 pub mod parse;
 pub mod render;
 pub mod rewrite;
 
 pub use ast::{BinaryOp, FormulaArg, FormulaExpr, UnaryOp};
-pub use eval::{eval_formula, CellResolver};
+pub use eval::{eval_formula, CellResolver, FuncDispatch};
 pub use lex::{LexError, Token};
 pub use parse::{parse_formula, ParseError};
 pub use render::render;
