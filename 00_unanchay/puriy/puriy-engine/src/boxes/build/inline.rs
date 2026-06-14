@@ -107,6 +107,7 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         grid_auto_flow: style.grid_auto_flow,
         grid_auto_columns: style.grid_auto_columns.clone(),
         grid_auto_rows: style.grid_auto_rows.clone(),
+        grid_template_areas: style.grid_template_areas.clone(),
         grid_row_start: style.grid_row_start.clone(),
         grid_row_end: style.grid_row_end.clone(),
         grid_column_start: style.grid_column_start.clone(),

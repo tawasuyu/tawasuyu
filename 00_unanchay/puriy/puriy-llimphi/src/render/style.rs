@@ -182,6 +182,10 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
     let grid_auto_columns: Vec<TrackSizingFunction> =
         if is_grid { b.grid_auto_columns.iter().map(|t| map_grid_track_sizing(t, zoom)).collect() } else { Vec::new() };
     let grid_auto_flow = map_grid_auto_flow(b.grid_auto_flow);
+    let grid_template_areas: Vec<GridTemplateArea<String>> = match (&b.grid_template_areas, is_grid) {
+        (Some(s), true) => parse_grid_template_areas(s),
+        _ => Vec::new(),
+    };
 
     // Colocación del ítem en su grilla padre (`grid-row`/`grid-column`). Vale
     // para cualquier nodo (es el padre quien decide si es grid item); taffy lo
@@ -237,6 +241,7 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         grid_auto_rows: grid_auto_rows.into(),
         grid_auto_columns: grid_auto_columns.into(),
         grid_auto_flow,
+        grid_template_areas: grid_template_areas.into(),
         grid_row,
         grid_column,
         ..Default::default()
@@ -271,8 +276,11 @@ pub(crate) fn map_grid_auto_flow(f: GridAutoFlow) -> TaffyGridAutoFlow {
 }
 
 /// Resuelve un `<grid-line>` opaco (`"2"`, `"-1"`, `"span 3"`, `auto`/None,
-/// o nombre) a un `GridPlacement` de taffy. Las líneas nombradas degradan a
-/// `Auto` (taffy las soporta pero el template no plumb-ea sus nombres aún).
+/// nombre de línea o de área) a un `GridPlacement` de taffy. Un nombre suelto
+/// se emite como `NamedLine(name, 1)`: taffy resuelve el sufijo implícito
+/// `-start`/`-end` según el lado del `Line` en que cae (ver
+/// `NamedLineResolver` de taffy), así que `grid-area: header` aterriza en el
+/// área nombrada del template.
 pub(crate) fn map_grid_line(s: &Option<String>) -> GridPlacement<String> {
     let raw = match s {
         Some(v) => v.trim(),
@@ -293,8 +301,80 @@ pub(crate) fn map_grid_line(s: &Option<String>) -> GridPlacement<String> {
         if idx != 0 {
             return GridPlacement::Line(idx.into());
         }
+        return GridPlacement::Auto;
     }
-    GridPlacement::Auto
+    // Nombre de línea/área. `<custom-ident> <integer>` (p.ej. `col 2`) toma
+    // el ident; un nombre solo cuenta como la 1ª línea de ese nombre.
+    let mut it = raw.split_whitespace();
+    let name = it.next().unwrap_or("").to_string();
+    let nth = it.next().and_then(|t| t.parse::<i16>().ok()).unwrap_or(1);
+    if name.is_empty() {
+        return GridPlacement::Auto;
+    }
+    GridPlacement::NamedLine(name, nth)
+}
+
+/// Parsea `grid-template-areas` (`"a a" "b c"`) a la lista de áreas nombradas
+/// de taffy con coordenadas de línea 1-based. Cada nombre toma el rectángulo
+/// que lo encierra; `.` (celda nula) se ignora. Filas con distinto número de
+/// columnas o áreas no-rectangulares se toleran (bounding box).
+pub(crate) fn parse_grid_template_areas(s: &str) -> Vec<GridTemplateArea<String>> {
+    // Extrae cada fila entre comillas; tolera comillas simples o dobles.
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let q = bytes[i];
+        if q == b'"' || q == b'\'' {
+            let start = i + 1;
+            let mut j = start;
+            while j < bytes.len() && bytes[j] != q {
+                j += 1;
+            }
+            let row = &s[start..j.min(s.len())];
+            rows.push(row.split_whitespace().map(|t| t.to_string()).collect());
+            i = j + 1;
+        } else {
+            i += 1;
+        }
+    }
+    // name → (min_row, max_row, min_col, max_col), 0-based.
+    use std::collections::HashMap;
+    let mut bounds: HashMap<String, (usize, usize, usize, usize)> = HashMap::new();
+    let mut order: Vec<String> = Vec::new();
+    for (r, row) in rows.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            if cell == "." {
+                continue;
+            }
+            bounds
+                .entry(cell.clone())
+                .and_modify(|b| {
+                    b.0 = b.0.min(r);
+                    b.1 = b.1.max(r);
+                    b.2 = b.2.min(c);
+                    b.3 = b.3.max(c);
+                })
+                .or_insert_with(|| {
+                    order.push(cell.clone());
+                    (r, r, c, c)
+                });
+        }
+    }
+    order
+        .into_iter()
+        .map(|name| {
+            let (r0, r1, c0, c1) = bounds[&name];
+            GridTemplateArea {
+                name,
+                // 1-based; el final es la línea DESPUÉS de la última celda.
+                row_start: (r0 + 1) as u16,
+                row_end: (r1 + 2) as u16,
+                column_start: (c0 + 1) as u16,
+                column_end: (c1 + 2) as u16,
+            }
+        })
+        .collect()
 }
 
 /// `length-percentage-auto`: para insets (top/right/bottom/left) que

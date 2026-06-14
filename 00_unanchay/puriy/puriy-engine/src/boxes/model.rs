@@ -250,6 +250,9 @@ pub struct BoxNode {
     /// que el algoritmo de grid crea al desbordar el template explícito.
     pub grid_auto_columns: Vec<GridTrackSize>,
     pub grid_auto_rows: Vec<GridTrackSize>,
+    /// `grid-template-areas` — string opaco (`"a a" "b c"`). El puente a taffy
+    /// lo parsea a áreas nombradas con coordenadas de línea. `None` = `none`.
+    pub grid_template_areas: Option<String>,
     /// Colocación del ítem en la grilla (`grid-row`/`grid-column` →
     /// start/end). Strings opacos `<grid-line>` (`"2"`, `"span 3"`, `auto`);
     /// el puente a taffy los resuelve. `None` = `auto`.

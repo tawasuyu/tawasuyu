@@ -120,6 +120,54 @@ fn auto_flow_column_apila_en_columnas() {
 }
 
 #[test]
+fn grid_template_areas_coloca_por_nombre() {
+    // Grilla 2×2 (50px cols, 30px rows) con áreas nombradas:
+    //   "head head"
+    //   "side main"
+    // El ítem en `grid-area: main` aterriza en la celda inferior-derecha
+    // (x≈50, y≈30). El ítem `head` ocupa la fila superior entera (ancho≈100).
+    let html = r##"<html><head><style>
+        .g { display:grid; grid-template-columns: 50px 50px; grid-template-rows: 30px 30px;
+             grid-template-areas: "head head" "side main"; }
+        .h { grid-area: head; } .m { grid-area: main; }
+      </style></head><body><div class="g">
+        <div class="h">h</div>
+        <div class="m">m</div>
+      </div></body></html>"##;
+    let tree = parse(html);
+    let cont = find_tag(&tree.root, "div").expect("contenedor grid");
+    // Sanity: el engine parseó las áreas al BoxNode (con comillas crudas).
+    assert!(
+        cont.grid_template_areas.as_deref().unwrap_or("").contains("head"),
+        "el engine debe dejar grid-template-areas en el BoxNode"
+    );
+    let view = box_to_view(cont);
+
+    let head = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(head.location.x < 1.0 && head.location.y < 1.0, "head arriba-izq, está en ({},{})", head.location.x, head.location.y);
+    assert!((head.size.width - 100.0).abs() < 0.5, "head ocupa ambas columnas (ancho≈100), mide {}", head.size.width);
+
+    // Re-parsear para un View fresco (el View se consumió en el mount).
+    let view2 = box_to_view(cont);
+    let main = layout_at(view2, (400.0, 400.0), &[1]);
+    assert!((main.location.x - 50.0).abs() < 0.5, "main en 2ª columna (x≈50), está en {}", main.location.x);
+    assert!((main.location.y - 30.0).abs() < 0.5, "main en 2ª fila (y≈30), está en {}", main.location.y);
+}
+
+#[test]
+fn parse_areas_calcula_coordenadas() {
+    // Verificación directa del parser de áreas (sin layout).
+    let areas = parse_grid_template_areas("\"head head\" \"side main\"");
+    let get = |n: &str| areas.iter().find(|a| a.name == n).expect(n);
+    let head = get("head");
+    assert_eq!((head.row_start, head.row_end), (1, 2), "head: fila 1");
+    assert_eq!((head.column_start, head.column_end), (1, 3), "head: cols 1..3");
+    let main = get("main");
+    assert_eq!((main.row_start, main.row_end), (2, 3), "main: fila 2");
+    assert_eq!((main.column_start, main.column_end), (2, 3), "main: col 2");
+}
+
+#[test]
 fn grid_column_coloca_item_explicito() {
     // Grilla de 3 columnas de 40px. El 1er ítem pide `grid-column: 3` → salta
     // a la 3ª columna (x ≈ 80). Antes del puente la colocación se ignoraba y

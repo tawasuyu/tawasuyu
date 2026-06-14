@@ -24,8 +24,8 @@ use llimphi_layout::taffy::prelude::{
     Size, Style,
 };
 use llimphi_layout::taffy::{
-    Display as TaffyDisplay, GridAutoFlow as TaffyGridAutoFlow, GridPlacement, GridTemplateComponent,
-    Line as TaffyLine, TrackSizingFunction,
+    Display as TaffyDisplay, GridAutoFlow as TaffyGridAutoFlow, GridPlacement, GridTemplateArea,
+    GridTemplateComponent, Line as TaffyLine, TrackSizingFunction,
 };
 use llimphi_raster::kurbo::{
     Affine, BezPath as KurboBezPath, Line, Point, Rect as KurboRect, RoundedRect, Stroke,
