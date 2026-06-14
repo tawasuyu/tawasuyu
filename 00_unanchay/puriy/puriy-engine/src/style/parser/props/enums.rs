@@ -57,8 +57,23 @@ pub(crate) fn parse_flex_wrap(s: &str) -> Option<FlexWrap> {
     }
 }
 
+/// Quita los qualifiers de overflow-alignment (`safe`/`unsafe`, cuyo
+/// comportamiento de seguridad no implementamos) y colapsa `first baseline`/
+/// `last baseline` → `baseline`. Devuelve el keyword núcleo en minúsculas.
+/// Fase 7.840 — lo aplican todos los parsers de align-*/justify-*.
+fn normalize_alignment(s: &str) -> String {
+    let s = s.trim().to_ascii_lowercase();
+    if s == "first baseline" || s == "last baseline" {
+        return "baseline".to_string();
+    }
+    if let Some(rest) = s.strip_prefix("safe ").or_else(|| s.strip_prefix("unsafe ")) {
+        return rest.trim().to_string();
+    }
+    s
+}
+
 pub(crate) fn parse_justify_content(s: &str) -> Option<JustifyContent> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    match normalize_alignment(s).as_str() {
         "start" | "flex-start" | "left" => Some(JustifyContent::Start),
         "center" => Some(JustifyContent::Center),
         "end" | "flex-end" | "right" => Some(JustifyContent::End),
@@ -70,7 +85,7 @@ pub(crate) fn parse_justify_content(s: &str) -> Option<JustifyContent> {
 }
 
 pub(crate) fn parse_align_items(s: &str) -> Option<AlignItems> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    match normalize_alignment(s).as_str() {
         "start" | "flex-start" => Some(AlignItems::Start),
         "center" => Some(AlignItems::Center),
         "end" | "flex-end" => Some(AlignItems::End),
@@ -84,7 +99,7 @@ pub(crate) fn parse_align_items(s: &str) -> Option<AlignItems> {
 /// taffy ≈ stretch); el resto mapea directo. `start`/`end` aceptan también
 /// la variante `flex-*`.
 pub(crate) fn parse_align_content(s: &str) -> Option<AlignContent> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    match normalize_alignment(s).as_str() {
         "normal" | "baseline" => Some(AlignContent::Normal),
         "start" | "flex-start" => Some(AlignContent::Start),
         "center" => Some(AlignContent::Center),
@@ -101,7 +116,7 @@ pub(crate) fn parse_align_content(s: &str) -> Option<AlignContent> {
 /// `left`/`right` (que en escritura LTR equivalen a start/end). `normal`
 /// se descarta → queda el default None. `auto`/`legacy` también.
 pub(crate) fn parse_justify_items(s: &str) -> Option<AlignItems> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    match normalize_alignment(s).as_str() {
         "left" => Some(AlignItems::Start),
         "right" => Some(AlignItems::End),
         other => parse_align_items(other),
@@ -110,7 +125,7 @@ pub(crate) fn parse_justify_items(s: &str) -> Option<AlignItems> {
 
 /// `justify-self` (grid item). Reusa `align-self` + `left`/`right`.
 pub(crate) fn parse_justify_self(s: &str) -> Option<AlignSelf> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    match normalize_alignment(s).as_str() {
         "left" => Some(AlignSelf::Start),
         "right" => Some(AlignSelf::End),
         other => parse_align_self(other),
@@ -238,7 +253,7 @@ pub(crate) fn parse_opacity(s: &str) -> Option<f32> {
 }
 
 pub(crate) fn parse_align_self(s: &str) -> Option<AlignSelf> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    match normalize_alignment(s).as_str() {
         "auto" => Some(AlignSelf::Auto),
         "start" | "flex-start" => Some(AlignSelf::Start),
         "center" => Some(AlignSelf::Center),

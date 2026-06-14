@@ -333,3 +333,27 @@ fn transform_3d_no_tira_la_decl() {
         .iter()
         .any(|d| matches!(&d.kind, DeclKind::Transforms(v) if v == &vec![Transform::Matrix(1.0,0.0,0.0,1.0,5.0,6.0)])));
 }
+
+// ── Fase 7.840 — qualifiers safe/unsafe + first/last baseline ─────────────
+
+#[test]
+fn alignment_qualifiers() {
+    // safe/unsafe se ignoran (no implementamos overflow-alignment) → keyword núcleo.
+    assert!(decls("align-items: safe center")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AlignItems(AlignItems::Center))));
+    assert!(decls("justify-content: unsafe end")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::JustifyContent(JustifyContent::End))));
+    // first/last baseline → baseline.
+    assert!(decls("align-items: first baseline")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AlignItems(AlignItems::Baseline))));
+    assert!(decls("align-self: last baseline")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AlignSelf(AlignSelf::Baseline))));
+    // safe + left en justify-items sigue resolviendo el eje.
+    assert!(decls("justify-items: safe left")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Start))));
+}
