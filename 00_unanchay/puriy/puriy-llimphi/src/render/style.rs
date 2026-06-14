@@ -234,6 +234,17 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
             top: length(b.margin.top * zoom),
             bottom: length(b.margin.bottom * zoom),
         },
+        // border: el ancho del borde reserva espacio en el box model (igual
+        // que padding). Sin esto el contenido quedaba a `padding` del borde
+        // externo mientras `decorations.rs` insetea fondo/contenido por
+        // `border+padding` → el borde se pintaba ENCIMA del contenido. Con
+        // `box-sizing: border-box` taffy además descuenta el borde del size.
+        border: Rect {
+            left: length(b.border_widths.left * zoom),
+            right: length(b.border_widths.right * zoom),
+            top: length(b.border_widths.top * zoom),
+            bottom: length(b.border_widths.bottom * zoom),
+        },
         padding: Rect {
             left: length(b.padding.left * zoom),
             right: length(b.padding.right * zoom),

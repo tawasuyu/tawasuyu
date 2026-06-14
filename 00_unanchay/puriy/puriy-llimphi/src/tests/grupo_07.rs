@@ -168,6 +168,45 @@ fn parse_areas_calcula_coordenadas() {
 }
 
 #[test]
+fn border_reserva_espacio_en_layout() {
+    // Caja con border:10px + padding:5px; su único hijo debe arrancar a
+    // 15px del borde externo (no a 5px). Antes el borde no se reservaba en
+    // taffy y el hijo quedaba a 5px (el borde se pintaba encima).
+    let html = r##"<html><head><style>
+        .outer { width:200px; border:10px solid black; padding:5px; }
+        .inner { width:50px; height:20px; }
+      </style></head><body><div class="outer"><div class="inner">x</div></div></body></html>"##;
+    let tree = parse(html);
+    let outer = find_tag(&tree.root, "div").expect("outer");
+    let view = box_to_view(outer);
+    let inner = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(
+        (inner.location.x - 15.0).abs() < 0.5 && (inner.location.y - 15.0).abs() < 0.5,
+        "hijo a border(10)+padding(5)=15 del borde, está en ({},{})",
+        inner.location.x, inner.location.y
+    );
+}
+
+#[test]
+fn border_box_descuenta_borde_del_ancho() {
+    // box-sizing:border-box + width:200px + border:20px → el área de contenido
+    // mide 200 − 2·20 = 160. El hijo a 100% llena 160, no 200.
+    let html = r##"<html><head><style>
+        .outer { width:200px; box-sizing:border-box; border:20px solid black; }
+        .inner { width:100%; height:10px; }
+      </style></head><body><div class="outer"><div class="inner">x</div></div></body></html>"##;
+    let tree = parse(html);
+    let outer = find_tag(&tree.root, "div").expect("outer");
+    let view = box_to_view(outer);
+    let inner = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(
+        (inner.size.width - 160.0).abs() < 0.5,
+        "contenido = 200 − 2·20 = 160, mide {}",
+        inner.size.width
+    );
+}
+
+#[test]
 fn grid_align_items_alinea_en_celda() {
     // Celda de 40×80; el ítem (auto, mide 40×30 por su contenido fijo) con
     // `align-items: end` en el contenedor se baja al fondo de la celda
