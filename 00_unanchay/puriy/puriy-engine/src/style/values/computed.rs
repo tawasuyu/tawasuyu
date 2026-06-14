@@ -916,6 +916,9 @@ pub struct ComputedStyle {
     /// `clear` (CSS2.1 §9.5.2). Baja el borde de margen por debajo de los
     /// floats del lado pedido. Default `None`. NO hereda. Plumb.
     pub clear: Clear,
+    /// `clip` (CSS2.1, deprecada): rect de recorte para cajas posicionadas.
+    /// Default `Auto`. NO hereda. Plumb (el recorte de render no está).
+    pub clip: Clip,
     /// `page` (CSS Paged Media 3): el `@page` con nombre al que pertenece el
     /// elemento al fragmentar para impresión. `None` = `auto`. NO hereda
     /// (pero se propaga al árbol de fragmentación, fuera de alcance). Plumb.

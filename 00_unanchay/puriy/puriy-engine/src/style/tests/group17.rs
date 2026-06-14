@@ -716,3 +716,40 @@ fn linear_easing_y_page() {
     // multi-word inválido.
     assert!(decls("page: a b").is_empty());
 }
+
+// ── Lote data-driven (cont.): clip (CSS2.1) + alias -webkit-text-decoration-line ─
+
+#[test]
+fn clip_rect_y_auto() {
+    let cl = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Clip(v) => Some(v),
+        _ => None,
+    });
+    assert_eq!(cl("clip: auto"), Some(Clip::Auto));
+    // Forma canónica con coma.
+    assert_eq!(
+        cl("clip: rect(1px, 2px, 3px, 4px)"),
+        Some(Clip::Rect { top: Some(1.0), right: Some(2.0), bottom: Some(3.0), left: Some(4.0) })
+    );
+    // Forma legacy sin coma + el patrón a11y visually-hidden.
+    assert_eq!(
+        cl("clip: rect(0 0 0 0)"),
+        Some(Clip::Rect { top: Some(0.0), right: Some(0.0), bottom: Some(0.0), left: Some(0.0) })
+    );
+    // `auto` por lado → None.
+    assert_eq!(
+        cl("clip: rect(0, auto, auto, 0)"),
+        Some(Clip::Rect { top: Some(0.0), right: None, bottom: None, left: Some(0.0) })
+    );
+    // Inválidos dropean.
+    assert!(decls("clip: rect(0 0 0)").is_empty());
+    assert!(decls("clip: circle(50%)").is_empty());
+}
+
+#[test]
+fn webkit_text_decoration_line_alias() {
+    // El alias vendor mapea al mismo DeclKind que el estándar.
+    assert!(decls("-webkit-text-decoration-line: underline")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextDecoration(TextDecorationLine::Underline))));
+}

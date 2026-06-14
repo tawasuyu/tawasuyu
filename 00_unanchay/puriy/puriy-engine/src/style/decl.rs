@@ -636,6 +636,8 @@ pub(crate) enum DeclKind {
     /// `page` (CSS Paged Media 3). `None` = `auto`; `Some(name)` = `@page`
     /// nombrado. NO hereda. Plumb.
     Page(Option<String>),
+    /// `clip` (CSS2.1, deprecada). NO hereda. Plumb.
+    Clip(Clip),
     /// `d` (SVG 2 §6) como prop CSS. `None` = `none`; `Some(raw)` = `path(...)`.
     /// NO hereda. Plumb opaco.
     D(Option<String>),
@@ -1475,6 +1477,7 @@ impl Decl {
             DeclKind::Float(v) => s.float = *v,
             DeclKind::Clear(v) => s.clear = *v,
             DeclKind::Page(v) => s.page = v.clone(),
+            DeclKind::Clip(v) => s.clip = *v,
             DeclKind::D(v) => s.d = v.clone(),
             DeclKind::MasonryAutoFlow(v) => s.masonry_auto_flow = *v,
             DeclKind::JustifyTracks(v) => s.justify_tracks = v.clone(),

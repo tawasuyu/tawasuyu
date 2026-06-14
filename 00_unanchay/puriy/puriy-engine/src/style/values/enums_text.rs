@@ -101,6 +101,22 @@ pub enum TextOverflow {
     Ellipsis,
 }
 
+/// `clip` (CSS2.1 §11.1.2, deprecada pero viva en el patrón a11y
+/// "visually-hidden"). Sólo aplica a elementos `position: absolute/fixed`.
+/// `Auto` = sin recorte. `Rect` lleva los 4 offsets (`None` = `auto` por
+/// lado), medidos desde el borde superior/izquierdo de la caja. NO hereda.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum Clip {
+    #[default]
+    Auto,
+    Rect {
+        top: Option<f32>,
+        right: Option<f32>,
+        bottom: Option<f32>,
+        left: Option<f32>,
+    },
+}
+
 /// `scroll-behavior` — animación del scroll programático
 /// (`element.scrollTo`, jump por `#anchor`...). Fase 7.242.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -181,6 +181,39 @@ pub(crate) fn parse_text_overflow(value: &str) -> Option<TextOverflow> {
     }
 }
 
+/// `clip` (CSS2.1, deprecada): `auto | rect(<t>, <r>, <b>, <l>)`. Cada lado
+/// es `<length> | auto` (`auto` → `None`). Acepta el separador con coma (forma
+/// canónica) y sin coma (forma legacy `rect(0 0 0 0)`). Case-insensitive.
+pub(crate) fn parse_clip(value: &str) -> Option<Clip> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("auto") {
+        return Some(Clip::Auto);
+    }
+    let lower = v.to_ascii_lowercase();
+    let inner = lower.strip_prefix("rect(")?.strip_suffix(')')?.trim();
+    let parts: Vec<&str> = if inner.contains(',') {
+        inner.split(',').map(|p| p.trim()).collect()
+    } else {
+        inner.split_whitespace().collect()
+    };
+    if parts.len() != 4 {
+        return None;
+    }
+    let side = |s: &str| -> Option<Option<f32>> {
+        if s.eq_ignore_ascii_case("auto") {
+            Some(None)
+        } else {
+            parse_length_px(s).map(Some)
+        }
+    };
+    Some(Clip::Rect {
+        top: side(parts[0])?,
+        right: side(parts[1])?,
+        bottom: side(parts[2])?,
+        left: side(parts[3])?,
+    })
+}
+
 /// `scroll-behavior`: `auto` (instant) | `smooth` (animado).
 pub(crate) fn parse_scroll_behavior(value: &str) -> Option<ScrollBehavior> {
     match value.trim().to_ascii_lowercase().as_str() {

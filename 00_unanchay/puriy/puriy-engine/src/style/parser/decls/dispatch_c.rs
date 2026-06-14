@@ -5,6 +5,8 @@ use super::*;
 
 pub(crate) fn dispatch_c(p: &str, value: &str) -> Option<DeclKind> {
     match p {
+        // `clip` (CSS2.1 §11.1.2, deprecada): `auto | rect(...)`. NO hereda.
+        "clip" => parse_clip(value).map(DeclKind::Clip),
         // Fase 7.566 — `elevation` (CSS 2.1 aural). Parse opaco; `level` → None.
         "elevation" => {
             let v = value.trim();

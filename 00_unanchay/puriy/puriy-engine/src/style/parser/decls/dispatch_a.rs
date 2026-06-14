@@ -81,7 +81,7 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             Some(DeclKind::BoxShadows(parse_box_shadows(value)))
         }
         // `text-decoration` (shorthand) se expande en `parse_declarations`.
-        "text-decoration-line" => {
+        "text-decoration-line" | "-webkit-text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
         }
         "text-decoration-color" if is_current_color(value) => {
