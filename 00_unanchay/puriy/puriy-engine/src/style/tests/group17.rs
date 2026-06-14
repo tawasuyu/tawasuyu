@@ -825,3 +825,29 @@ fn animation_composition_lista() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::AnimationComposition(AnimationComposition::Accumulate))));
 }
+
+// ── Lote data-driven: offset shorthand (CSS Motion Path 1) ────────────────
+
+#[test]
+fn offset_shorthand() {
+    // Sólo posición: `offset: 50% 50%` → offset-position.
+    let d = decls("offset: 50% 50%");
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::OffsetPosition(Some(_)))));
+    assert!(!d.is_empty());
+    // path + distance.
+    let d = decls("offset: path('M0 0') 50%");
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::OffsetPath(Some(p)) if p.starts_with("path("))));
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::OffsetDistance(LengthVal::Pct(p)) if (p - 50.0).abs() < 1e-6)));
+    // path + distance + rotate.
+    let d = decls("offset: path('M0 0') 40px auto");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::OffsetDistance(LengthVal::Px(p)) if (p - 40.0).abs() < 1e-6)));
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::OffsetRotate(_))));
+    // con anchor tras `/`.
+    let d = decls("offset: ray(45deg) / center");
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::OffsetPath(Some(p)) if p.starts_with("ray("))));
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::OffsetAnchor(Some(_)))));
+    // none como path.
+    assert!(decls("offset: none")
+        .iter()
+        .any(|x| matches!(x.kind, DeclKind::OffsetPath(None))));
+}

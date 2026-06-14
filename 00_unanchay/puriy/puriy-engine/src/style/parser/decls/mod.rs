@@ -794,6 +794,11 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `offset` shorthand (CSS Motion Path 1) → longhands offset-*.
+        if prop.eq_ignore_ascii_case("offset") {
+            out.extend(parse_offset_shorthand(value, important));
+            continue;
+        }
         // `margin` shorthand: ruteado acá (no por decl_kind_from_pair) para
         // soportar `auto` por lado (`margin: 0 auto` = centrado horizontal).
         if prop.eq_ignore_ascii_case("margin") {
@@ -1095,6 +1100,116 @@ fn expand_grid_auto_flow_form(
         out.push(Decl { kind: DeclKind::GridTemplateRows(template), important });
     }
     out
+}
+
+/// Expande el shorthand `offset` (CSS Motion Path 1):
+/// `[ <offset-position>? [ <offset-path> [ <offset-distance> || <offset-rotate>
+/// ]? ]? ]! [ / <offset-anchor> ]?`. Reusa los parsers de los longhands. Si un
+/// componente presente no parsea, no emite nada (rechazo total).
+fn parse_offset_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    // 1) Separar el `/ <anchor>` (slash de nivel superior, paren-aware).
+    let (main, anchor_raw) = split_top_level_slash(value);
+    let main = main.trim();
+    let mut out: Vec<Decl> = Vec::new();
+
+    // 2) Tokenizar el lado principal respetando paréntesis.
+    let toks = split_top_level_ws(main);
+    // El offset-path es el token funcional (`path()`/`ray()`/`url()`/basic-shape)
+    // o el keyword `none`.
+    let path_idx = toks.iter().position(|t| {
+        t.eq_ignore_ascii_case("none") || (t.contains('(') && t.ends_with(')'))
+    });
+
+    if let Some(i) = path_idx {
+        // position = tokens antes del path (si hay).
+        if i > 0 {
+            let pos = toks[..i].join(" ");
+            match offset_position_decl(&pos) {
+                Some(d) => out.push(Decl { kind: d, important }),
+                None => return Vec::new(),
+            }
+        }
+        // offset-path opaco.
+        let path = &toks[i];
+        out.push(Decl {
+            kind: if path.eq_ignore_ascii_case("none") {
+                DeclKind::OffsetPath(None)
+            } else {
+                DeclKind::OffsetPath(Some(path.clone()))
+            },
+            important,
+        });
+        // El resto: `<distance> || <rotate>` en cualquier orden.
+        let mut distance: Option<LengthVal> = None;
+        let mut rotate_toks: Vec<&str> = Vec::new();
+        for tok in &toks[i + 1..] {
+            if distance.is_none() {
+                if let Some(d) = parse_length_or_pct(tok) {
+                    distance = Some(d);
+                    continue;
+                }
+            }
+            rotate_toks.push(tok.as_str());
+        }
+        if let Some(d) = distance {
+            out.push(Decl { kind: DeclKind::OffsetDistance(d), important });
+        }
+        if !rotate_toks.is_empty() {
+            match parse_offset_rotate(&rotate_toks.join(" ")) {
+                Some(r) => out.push(Decl { kind: DeclKind::OffsetRotate(r), important }),
+                None => return Vec::new(),
+            }
+        }
+    } else if !main.is_empty() {
+        // Sin path: todo el lado principal es <offset-position>.
+        match offset_position_decl(main) {
+            Some(d) => out.push(Decl { kind: d, important }),
+            None => return Vec::new(),
+        }
+    }
+
+    // 3) offset-anchor tras el slash.
+    if let Some(anchor) = anchor_raw {
+        let a = anchor.trim();
+        if a.eq_ignore_ascii_case("auto") {
+            out.push(Decl { kind: DeclKind::OffsetAnchor(None), important });
+        } else {
+            match parse_background_position(a) {
+                Some(DeclKind::BackgroundPosition(p)) => {
+                    out.push(Decl { kind: DeclKind::OffsetAnchor(Some(p)), important });
+                }
+                _ => return Vec::new(),
+            }
+        }
+    }
+    out
+}
+
+/// `offset-position` desde un substring: `auto`/`normal` → `None`, si no
+/// `<position>` vía `parse_background_position`.
+fn offset_position_decl(s: &str) -> Option<DeclKind> {
+    if s.eq_ignore_ascii_case("auto") || s.eq_ignore_ascii_case("normal") {
+        return Some(DeclKind::OffsetPosition(None));
+    }
+    match parse_background_position(s) {
+        Some(DeclKind::BackgroundPosition(p)) => Some(DeclKind::OffsetPosition(Some(p))),
+        _ => None,
+    }
+}
+
+/// Parte un valor en `(antes, Some(después))` por el PRIMER `/` de nivel
+/// superior (fuera de paréntesis). Sin slash → `(todo, None)`.
+fn split_top_level_slash(s: &str) -> (&str, Option<&str>) {
+    let mut depth: i32 = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '/' if depth == 0 => return (&s[..i], Some(&s[i + 1..])),
+            _ => {}
+        }
+    }
+    (s, None)
 }
 
 /// Normaliza un `<grid-line>` a `Option<String>`: `auto`/vacío → `None`
