@@ -83,10 +83,15 @@
 mod backend;
 mod camera;
 mod charts;
+mod chrome;
 mod export;
+mod hoja;
 mod panels;
 mod tablero;
 mod widgets;
+
+use chrome::{Area, DockPanel};
+use hoja::SheetView;
 
 use crate::charts::*;
 use crate::export::*;
@@ -110,7 +115,6 @@ use llimphi_ui::{
     App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, PaintRect, View,
     WheelDelta,
 };
-use llimphi_widget_app_header::{app_header, AppHeaderPalette};
 use llimphi_widget_banner::{banner_view, BannerKind};
 use llimphi_widget_button::{button_styled, ButtonPalette};
 use llimphi_widget_field::{field_view, FieldPalette, FieldSpec as FieldWidgetSpec};
@@ -150,7 +154,6 @@ use crate::camera::{
     ZOOM_MIN,
 };
 
-const SIDEBAR_WIDTH: f32 = 240.0;
 const ROW_HEIGHT: f32 = 22.0;
 /// Tope de records ofrecidos en un selector `EntityRef` (evita pintar
 /// miles de botones). Si la entity tiene más, se avisa al usuario.
@@ -308,6 +311,40 @@ enum Msg {
     EditNav(i32),
     /// Ejecuta la fila activa del menú de edición (Enter).
     EditActivate,
+
+    // --- Shell unificado: conmutador de áreas + sidebars de dientes. ---
+    /// Conmuta la vista grande (ERP / Hoja / Grafo) con fade-in.
+    SwitchArea(Area),
+    /// Activa un diente del rail izquierdo (qué panel acoplable mostrar).
+    SetDockPanel(DockPanel),
+    /// Muestra/oculta el sidebar de dientes.
+    ToggleDock,
+    /// Tick de animación de la transición de área (sólo re-render).
+    AreaTick,
+
+    // --- Área Hoja (Excel sobre nakui-sheet). ---
+    /// Click sobre una celda de la grilla.
+    HojaSelectCell { col: u32, row: u32 },
+    /// Mueve la selección por delta (flechas / Tab).
+    HojaMove { dcol: i32, drow: i32 },
+    /// Foco a la barra de fórmula (no-op: la hoja siempre tiene el teclado).
+    HojaFocusBar,
+    /// Tecla ruteada al buffer de la barra de fórmula.
+    HojaFormulaKey(KeyEvent),
+    /// Entra a edición sustituyendo el buffer por el texto tipeado.
+    HojaEditWith(String),
+    /// Aplica la barra a la celda activa (Enter).
+    HojaCommit,
+    /// Revierte la barra al valor real y sale de edición (Esc).
+    HojaCancel,
+    /// Limpia el contenido de la celda activa (Delete / toolbar).
+    HojaClear,
+    HojaUndo,
+    HojaRedo,
+    /// Desplaza el viewport de la grilla (rueda).
+    HojaScroll { dcol: i32, drow: i32 },
+    /// Exporta la hoja entera a `./nakui-hoja.csv`.
+    HojaExportCsv,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -416,6 +453,17 @@ struct Model {
     edit_anim: Tween<f32>,
     /// Clipboard del sistema para el menú de edición (cut/copy/paste).
     clipboard: SystemClipboard,
+
+    /// Vista grande activa del shell (ERP / Hoja / Grafo).
+    area: Area,
+    /// Diente activo del rail izquierdo.
+    dock_left_active: DockPanel,
+    /// Si el sidebar de dientes está expandido (panel visible).
+    dock_left_open: bool,
+    /// Animación de fade-in del contenido al cambiar de área.
+    area_anim: Tween<f32>,
+    /// Estado de la hoja de cálculo del área Hoja.
+    sheet: SheetView,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -618,6 +666,11 @@ impl App for NakuiApp {
             edit_active: usize::MAX,
             edit_anim: Tween::idle(1.0),
             clipboard: SystemClipboard::new(),
+            area: Area::Erp,
+            dock_left_active: DockPanel::Nav,
+            dock_left_open: true,
+            area_anim: Tween::idle(1.0),
+            sheet: SheetView::new(),
         }
     }
 
@@ -1099,6 +1152,67 @@ impl App for NakuiApp {
                 m.edit_menu = None;
                 m.edit_active = usize::MAX;
             }
+
+            // --- Shell unificado. ---
+            Msg::SwitchArea(area) => {
+                if m.area != area {
+                    m.area = area;
+                    // Fade-in del contenido nuevo.
+                    m.area_anim = Tween::new(0.0, 1.0, motion::NORMAL, motion::ease_out_cubic);
+                    animate(handle, motion::NORMAL, || Msg::AreaTick);
+                }
+            }
+            Msg::SetDockPanel(panel) => {
+                // Re-clickear el diente activo colapsa el sidebar; otro lo
+                // abre en ese panel (feel de activity-bar).
+                if m.dock_left_open && m.dock_left_active == panel {
+                    m.dock_left_open = false;
+                } else {
+                    m.dock_left_open = true;
+                    m.dock_left_active = panel;
+                }
+            }
+            Msg::ToggleDock => {
+                m.dock_left_open = !m.dock_left_open;
+            }
+            Msg::AreaTick => {}
+
+            // --- Área Hoja. ---
+            Msg::HojaSelectCell { col, row } => {
+                m.sheet.select(col, row);
+            }
+            Msg::HojaMove { dcol, drow } => {
+                m.sheet.move_by(dcol, drow);
+            }
+            Msg::HojaFocusBar => {}
+            Msg::HojaFormulaKey(ev) => {
+                m.sheet.bar.apply_key(&ev);
+            }
+            Msg::HojaEditWith(text) => {
+                m.sheet.editing = true;
+                m.sheet.bar.set_text(text);
+            }
+            Msg::HojaCommit => {
+                m.sheet.commit();
+            }
+            Msg::HojaCancel => {
+                m.sheet.cancel();
+            }
+            Msg::HojaClear => {
+                m.sheet.clear_active();
+            }
+            Msg::HojaUndo => {
+                m.sheet.undo();
+            }
+            Msg::HojaRedo => {
+                m.sheet.redo();
+            }
+            Msg::HojaScroll { dcol, drow } => {
+                m.sheet.scroll(dcol, drow);
+            }
+            Msg::HojaExportCsv => {
+                m.toast = Some(export_hoja_csv(&m.sheet));
+            }
         }
         m
     }
@@ -1141,6 +1255,11 @@ impl App for NakuiApp {
             }
             return None;
         }
+        // Área Hoja: la hoja siempre tiene el teclado (no hay otros campos
+        // de texto en esa vista). Se rutea a su handler dedicado.
+        if model.area == Area::Hoja {
+            return hoja::on_key(&model.sheet, event);
+        }
         // Edición in-situ de un campo de la ficha: Esc cancela, Enter
         // confirma (salvo multiline, donde Enter inserta salto), y el
         // resto de teclas se rutean al buffer si es un kind de texto.
@@ -1182,6 +1301,15 @@ impl App for NakuiApp {
         cursor: (f32, f32),
         _modifiers: Modifiers,
     ) -> Option<Msg> {
+        // En el área Hoja la rueda scrollea la grilla (3 líneas por tick).
+        if model.area == Area::Hoja {
+            let drow = (delta.y * 3.0).round() as i32;
+            let dcol = (delta.x * 3.0).round() as i32;
+            if drow == 0 && dcol == 0 {
+                return None;
+            }
+            return Some(Msg::HojaScroll { dcol, drow });
+        }
         // Sólo la vista grafo consume la rueda, y sólo si el cursor cae
         // sobre su lienzo (en otra vista o panel, dejamos pasar).
         active_graph_module(model)?;
@@ -1200,19 +1328,12 @@ impl App for NakuiApp {
     fn view(model: &Model) -> View<Msg> {
         let theme = Theme::dark();
         let menubar = menubar_view(&menubar_spec(&app_menu(model), model, &theme));
-        let header = app_header::<Msg>(
-            rimay_localize::t_args(
-                "nakui-header",
-                &[("count", model.modules.len().to_string().into())],
-            ),
-            Vec::new(),
-            &AppHeaderPalette::from_theme(&theme),
-        );
+        let toolbar = chrome::build_toolbar(model, &theme);
 
         let banners = build_banners(model);
-        let body = build_body(model, &theme);
+        let body = chrome::body(model, &theme);
 
-        let mut children: Vec<View<Msg>> = vec![menubar, header];
+        let mut children: Vec<View<Msg>> = vec![menubar, toolbar];
         children.extend(banners);
         children.push(body);
 
@@ -1394,6 +1515,32 @@ struct ActiveViewInfo {
     entity: Option<String>,
     is_list: bool,
     is_report: bool,
+}
+
+/// Clave de la vista activa del módulo (para los export del menú/toolbar).
+fn active_view_key(model: &Model) -> Option<String> {
+    let module = model.modules.get(model.selected_module?)?;
+    let item = module.menu.get(model.selected_menu?)?;
+    Some(item.view.clone())
+}
+
+/// Exporta la hoja activa a `./nakui-hoja.csv` (raw). Devuelve el toast.
+fn export_hoja_csv(sheet: &SheetView) -> Toast {
+    use nakui_sheet::{csv_io, ExportMode};
+    let path = std::path::Path::new("./nakui-hoja.csv");
+    let result = std::fs::File::create(path)
+        .map_err(|e| e.to_string())
+        .and_then(|f| csv_io::export_csv(&sheet.wb, ExportMode::Raw, f).map_err(|e| e.to_string()));
+    match result {
+        Ok(()) => Toast {
+            kind: BannerKind::Success,
+            text: format!("hoja exportada a {}", path.display()),
+        },
+        Err(e) => Toast {
+            kind: BannerKind::Error,
+            text: format!("no pude exportar la hoja: {e}"),
+        },
+    }
 }
 
 fn active_view_info(model: &Model) -> Option<ActiveViewInfo> {

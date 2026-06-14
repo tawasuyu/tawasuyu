@@ -38,8 +38,14 @@ mod panels;
 mod tablero;
 #[path = "../src/widgets.rs"]
 mod widgets;
+#[path = "../src/chrome.rs"]
+mod chrome;
+#[path = "../src/hoja.rs"]
+mod hoja;
 
+use chrome::{Area, DockPanel};
 use form::*;
+use hoja::SheetView;
 use io::*;
 use layout::*;
 
@@ -268,6 +274,24 @@ enum Msg {
     EditNav(i32),
     /// Ejecuta la fila activa del menú de edición (Enter).
     EditActivate,
+
+    // --- Shell unificado (calcado de src/main.rs). ---
+    SwitchArea(Area),
+    SetDockPanel(DockPanel),
+    ToggleDock,
+    AreaTick,
+    HojaSelectCell { col: u32, row: u32 },
+    HojaMove { dcol: i32, drow: i32 },
+    HojaFocusBar,
+    HojaFormulaKey(KeyEvent),
+    HojaEditWith(String),
+    HojaCommit,
+    HojaCancel,
+    HojaClear,
+    HojaUndo,
+    HojaRedo,
+    HojaScroll { dcol: i32, drow: i32 },
+    HojaExportCsv,
 }
 
 /// Sesión de edición de un formulario. Vive en el `Model` porque cada
@@ -376,6 +400,11 @@ struct Model {
     edit_anim: Tween<f32>,
     /// Clipboard del sistema para el menú de edición (cut/copy/paste).
     clipboard: SystemClipboard,
+    area: Area,
+    dock_left_active: DockPanel,
+    dock_left_open: bool,
+    area_anim: Tween<f32>,
+    sheet: SheetView,
 }
 
 /// Filtro de drill-down: la lista de `entity` se recorta a los records
@@ -736,26 +765,37 @@ fn modelo_demo() -> Model {
         edit_active: usize::MAX,
         edit_anim: Tween::idle(1.0),
         clipboard: SystemClipboard::new(),
+        area: match std::env::var("NAKUI_SHOT_AREA").as_deref() {
+            Ok("hoja") => Area::Hoja,
+            Ok("grafo") => Area::Grafo,
+            _ => Area::Erp,
+        },
+        dock_left_active: DockPanel::Nav,
+        dock_left_open: true,
+        area_anim: Tween::idle(1.0),
+        sheet: SheetView::new(),
     }
+}
+
+/// Calcado de `src/main.rs::active_view_key` para el chrome del shell.
+fn active_view_key(model: &Model) -> Option<String> {
+    let module = model.modules.get(model.selected_module?)?;
+    let item = module.menu.get(model.selected_menu?)?;
+    Some(item.view.clone())
 }
 
 /// Misma composición que el `view()` de `NakuiApp`: menubar + header +
 /// banners + cuerpo (sidebar de módulos + área principal) — los mismos
 /// builders reales (`build_banners` / `build_body` de src/layout.rs).
 fn vista(model: &Model, theme: &Theme) -> View<Msg> {
+    // Misma composición que el `view()` real: menubar + toolbar (conmutador
+    // de áreas + acciones) + banners + cuerpo (dientes + panel + área).
     let menubar = menubar_view(&menubar_spec(&app_menu(model), model, theme));
-    let header = app_header::<Msg>(
-        rimay_localize::t_args(
-            "nakui-header",
-            &[("count", model.modules.len().to_string().into())],
-        ),
-        Vec::new(),
-        &AppHeaderPalette::from_theme(theme),
-    );
+    let toolbar = chrome::build_toolbar(model, theme);
     let banners = build_banners(model);
-    let body = build_body(model, theme);
+    let body = chrome::body(model, theme);
 
-    let mut children: Vec<View<Msg>> = vec![menubar, header];
+    let mut children: Vec<View<Msg>> = vec![menubar, toolbar];
     children.extend(banners);
     children.push(body);
 

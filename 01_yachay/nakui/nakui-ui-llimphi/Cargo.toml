@@ -8,6 +8,7 @@ description = "Nakui — runtime Llimphi de la metainterfaz. Carga module.json d
 [dependencies]
 nakui-core = { path = "../nakui-core" }
 nakui-backend = { path = "../nakui-backend" }
+nakui-sheet = { path = "../nakui-sheet" }
 nahual-meta-schema = { path = "../../../02_ruway/nahual/libs/meta-schema" }
 nahual-meta-runtime = { path = "../../../02_ruway/nahual/libs/meta-runtime" }
 cards = { path = "../../../02_ruway/cards" }
@@ -21,6 +22,9 @@ llimphi-widget-button = { workspace = true }
 llimphi-widget-field = { workspace = true }
 llimphi-widget-text-input = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
+llimphi-widget-toolbar = { workspace = true }
+llimphi-widget-dock-rail = { workspace = true }
+llimphi-icons = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
 llimphi-widget-context-menu = { workspace = true }

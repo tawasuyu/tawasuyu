@@ -16,22 +16,6 @@ pub(crate) fn build_banners(model: &Model) -> Vec<View<Msg>> {
     out
 }
 
-pub(crate) fn build_body(model: &Model, theme: &Theme) -> View<Msg> {
-    let sidebar = build_sidebar(model, theme);
-    let main = build_main(model, theme);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        flex_grow: 1.0,
-        ..Default::default()
-    })
-    .children(vec![sidebar, main])
-}
-
 pub(crate) fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     let palette = ListPalette::from_theme(theme);
 
@@ -91,12 +75,11 @@ pub(crate) fn build_sidebar(model: &Model, theme: &Theme) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(SIDEBAR_WIDTH),
+            width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
         ..Default::default()
     })
-    .fill(theme.bg_panel)
     .children(vec![modules_panel, menu_panel])
 }
 
