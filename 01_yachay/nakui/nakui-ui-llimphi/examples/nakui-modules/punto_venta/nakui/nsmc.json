@@ -1,0 +1,41 @@
+{
+  "module": "punto_venta",
+  "schemas": ["schema.ncl"],
+  "morphisms": [
+    {
+      "name": "alta_producto",
+      "inputs": [],
+      "reads": [],
+      "writes": ["Producto"],
+      "script": "scripts/alta_producto.rhai"
+    },
+    {
+      "name": "reponer",
+      "inputs": [{ "role": "producto", "entity": "Producto" }],
+      "reads": ["Producto"],
+      "writes": ["producto.stock"],
+      "script": "scripts/reponer.rhai"
+    },
+    {
+      "name": "vender",
+      "inputs": [{ "role": "producto", "entity": "Producto" }],
+      "reads": ["Producto", "producto.stock"],
+      "writes": ["producto.stock", "LineaVenta"],
+      "script": "scripts/vender.rhai"
+    },
+    {
+      "name": "cobrar_venta",
+      "inputs": [{ "role": "venta", "entity": "Venta" }],
+      "reads": ["LineaVenta"],
+      "writes": ["venta.total"],
+      "script": "scripts/cobrar_venta.rhai"
+    },
+    {
+      "name": "cerrar_caja",
+      "inputs": [{ "role": "venta", "entity": "Venta" }],
+      "reads": ["venta.total"],
+      "writes": ["venta.estado"],
+      "script": "scripts/cerrar_caja.rhai"
+    }
+  ]
+}

@@ -319,6 +319,8 @@ enum Msg {
     SetDockPanel(DockPanel),
     /// Muestra/oculta el sidebar de dientes.
     ToggleDock,
+    /// Redimensiona el panel de dientes (delta del divisor).
+    SetDockWidth(f32),
     /// Tick de animación de la transición de área (sólo re-render).
     AreaTick,
 
@@ -333,6 +335,8 @@ enum Msg {
     HojaFormulaKey(KeyEvent),
     /// Entra a edición sustituyendo el buffer por el texto tipeado.
     HojaEditWith(String),
+    /// Entra a edición in-cell preservando el valor actual (F2 / doble click).
+    HojaEditStart,
     /// Aplica la barra a la celda activa (Enter).
     HojaCommit,
     /// Revierte la barra al valor real y sale de edición (Esc).
@@ -462,6 +466,9 @@ struct Model {
     dock_left_open: bool,
     /// Animación de fade-in del contenido al cambiar de área.
     area_anim: Tween<f32>,
+    /// Ancho del panel de dientes (px), redimensionable arrastrando el
+    /// divisor entre el panel y el contenido.
+    dock_w: f32,
     /// Estado de la hoja de cálculo del área Hoja.
     sheet: SheetView,
 }
@@ -670,6 +677,7 @@ impl App for NakuiApp {
             dock_left_active: DockPanel::Nav,
             dock_left_open: true,
             area_anim: Tween::idle(1.0),
+            dock_w: 240.0,
             sheet: SheetView::new(),
         }
     }
@@ -1175,6 +1183,9 @@ impl App for NakuiApp {
             Msg::ToggleDock => {
                 m.dock_left_open = !m.dock_left_open;
             }
+            Msg::SetDockWidth(dx) => {
+                m.dock_w = (m.dock_w + dx).clamp(170.0, 540.0);
+            }
             Msg::AreaTick => {}
 
             // --- Área Hoja. ---
@@ -1191,6 +1202,9 @@ impl App for NakuiApp {
             Msg::HojaEditWith(text) => {
                 m.sheet.editing = true;
                 m.sheet.bar.set_text(text);
+            }
+            Msg::HojaEditStart => {
+                m.sheet.editing = true;
             }
             Msg::HojaCommit => {
                 m.sheet.commit();

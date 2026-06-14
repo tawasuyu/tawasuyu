@@ -323,12 +323,33 @@ fn header_cell(label: String, width: f32, theme: &Theme) -> View<Msg> {
 fn data_cell(s: &SheetView, col: u32, row: u32, theme: &Theme) -> View<Msg> {
     let cr = CellRef::new(col, row);
     let selected = s.sel == cr;
-    // Mientras se edita, la celda activa muestra el buffer en curso.
-    let display = if selected && s.editing {
-        s.bar.text().to_string()
-    } else {
-        s.wb.formatted(cr)
-    };
+
+    // Edición in-cell: la celda activa en modo edición monta un text-input
+    // real (caret + foco) sobre el buffer de la barra; las teclas ya viajan
+    // por `HojaFormulaKey`. Fuera de edición, valor calculado estático.
+    if selected && s.editing {
+        let mut pal = TextInputPalette::from_theme(theme);
+        pal.bg = theme.bg_input_focus;
+        pal.border = theme.accent;
+        pal.border_focus = theme.accent;
+        return View::new(Style {
+            size: Size {
+                width: length(CELL_W),
+                height: length(CELL_H),
+            },
+            flex_shrink: 0.0,
+            ..Default::default()
+        })
+        .children(vec![text_input_view(
+            &s.bar,
+            "",
+            true,
+            &pal,
+            Msg::HojaFocusBar,
+        )]);
+    }
+
+    let display = s.wb.formatted(cr);
     let (bg, fg) = if selected {
         (theme.accent, theme.bg_app)
     } else {
@@ -353,7 +374,12 @@ fn data_cell(s: &SheetView, col: u32, row: u32, theme: &Theme) -> View<Msg> {
     .fill(bg)
     .hover_fill(if selected { bg } else { theme.bg_row_hover })
     .text_aligned(display, 11.5, fg, Alignment::Start)
-    .on_click(Msg::HojaSelectCell { col, row })
+    // Click en la celda activa entra a edición in-cell; en otra, la selecciona.
+    .on_click(if selected {
+        Msg::HojaEditStart
+    } else {
+        Msg::HojaSelectCell { col, row }
+    })
 }
 
 /// Teclado de la hoja (sólo cuando el área Hoja está activa y ningún menú
@@ -376,6 +402,7 @@ pub(crate) fn on_key(s: &SheetView, ev: &KeyEvent) -> Option<Msg> {
     match &ev.key {
         Key::Named(NamedKey::Enter) => Some(Msg::HojaCommit),
         Key::Named(NamedKey::Escape) => Some(Msg::HojaCancel),
+        Key::Named(NamedKey::F2) if !s.editing => Some(Msg::HojaEditStart),
         Key::Named(NamedKey::Delete) if !s.editing => Some(Msg::HojaClear),
         Key::Named(NamedKey::ArrowUp) if !s.editing => Some(Msg::HojaMove { dcol: 0, drow: -1 }),
         Key::Named(NamedKey::ArrowDown) if !s.editing => Some(Msg::HojaMove { dcol: 0, drow: 1 }),

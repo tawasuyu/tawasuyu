@@ -28,7 +28,7 @@
 use std::sync::Arc;
 
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, Dimension, FlexDirection, Size, Style},
+    prelude::{length, percent, FlexDirection, Size, Style},
     Rect,
 };
 use llimphi_ui::llimphi_raster::peniko::Color;
@@ -126,11 +126,16 @@ where
 }
 
 fn wrap_pane<Msg>(view: View<Msg>, direction: Direction, size: PaneSize) -> View<Msg> {
+    // El panel Flex usa flex-basis 0 en el eje principal (no `auto`): así su
+    // tamaño es la porción de espacio libre que le toca por `flex_grow`, en
+    // vez del tamaño de su contenido. Con `auto` un hijo que desborda (p.ej.
+    // una grilla con flex-wrap o contenido ancho) volvía el panel
+    // content-sized y rompía el wrap / desbordaba horizontalmente.
     let (width, height, flex_grow) = match (direction, size) {
         (Direction::Row, PaneSize::Fixed(px)) => (length(px), percent(1.0_f32), 0.0),
-        (Direction::Row, PaneSize::Flex) => (Dimension::auto(), percent(1.0_f32), 1.0),
+        (Direction::Row, PaneSize::Flex) => (length(0.0_f32), percent(1.0_f32), 1.0),
         (Direction::Column, PaneSize::Fixed(px)) => (percent(1.0_f32), length(px), 0.0),
-        (Direction::Column, PaneSize::Flex) => (percent(1.0_f32), Dimension::auto(), 1.0),
+        (Direction::Column, PaneSize::Flex) => (percent(1.0_f32), length(0.0_f32), 1.0),
     };
     View::new(Style {
         size: Size { width, height },

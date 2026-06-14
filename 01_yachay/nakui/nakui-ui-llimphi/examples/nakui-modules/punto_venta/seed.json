@@ -1,0 +1,40 @@
+{
+  "seed": [
+    {
+      "entity": "Producto",
+      "records": [
+        { "handle": "cafe",      "data": { "nombre": "Café",      "precio": 20, "stock": 40 } },
+        { "handle": "te",        "data": { "nombre": "Té",        "precio": 15, "stock": 30 } },
+        { "handle": "medialuna", "data": { "nombre": "Medialuna", "precio": 8,  "stock": 60 } },
+        { "handle": "agua",      "data": { "nombre": "Agua",      "precio": 12, "stock": 50 } },
+        { "handle": "jugo",      "data": { "nombre": "Jugo",      "precio": 18, "stock": 25 } }
+      ]
+    },
+    {
+      "entity": "Venta",
+      "records": [
+        { "handle": "v1", "data": { "fecha": "2026-01-05", "total": 92,  "metodo": "efectivo",      "pagado": true,  "estado": "cerrada" } },
+        { "handle": "v2", "data": { "fecha": "2026-01-05", "total": 54,  "metodo": "tarjeta",       "pagado": true,  "estado": "cerrada" } },
+        { "handle": "v3", "data": { "fecha": "2026-02-12", "total": 136, "metodo": "efectivo",      "pagado": true,  "estado": "cerrada" } },
+        { "handle": "v4", "data": { "fecha": "2026-02-20", "total": 36,  "metodo": "transferencia", "pagado": false, "estado": "abierta" } },
+        { "handle": "v5", "data": { "fecha": "2026-03-03", "total": 180, "metodo": "tarjeta",       "pagado": true,  "estado": "cerrada" } },
+        { "handle": "v6", "data": { "fecha": "2026-03-18", "total": 24,  "metodo": "efectivo",      "pagado": true,  "estado": "cerrada" } }
+      ]
+    },
+    {
+      "entity": "LineaVenta",
+      "records": [
+        { "data": { "venta": "@v1", "producto": "@cafe",      "cantidad": 3, "importe": 60 } },
+        { "data": { "venta": "@v1", "producto": "@medialuna", "cantidad": 4, "importe": 32 } },
+        { "data": { "venta": "@v2", "producto": "@te",        "cantidad": 2, "importe": 30 } },
+        { "data": { "venta": "@v2", "producto": "@agua",      "cantidad": 2, "importe": 24 } },
+        { "data": { "venta": "@v3", "producto": "@cafe",      "cantidad": 5, "importe": 100 } },
+        { "data": { "venta": "@v3", "producto": "@jugo",      "cantidad": 2, "importe": 36 } },
+        { "data": { "venta": "@v4", "producto": "@agua",      "cantidad": 3, "importe": 36 } },
+        { "data": { "venta": "@v5", "producto": "@cafe",      "cantidad": 6, "importe": 120 } },
+        { "data": { "venta": "@v5", "producto": "@te",        "cantidad": 4, "importe": 60 } },
+        { "data": { "venta": "@v6", "producto": "@medialuna", "cantidad": 3, "importe": 24 } }
+      ]
+    }
+  ]
+}

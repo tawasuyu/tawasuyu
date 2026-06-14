@@ -15,12 +15,12 @@ use super::*;
 use llimphi_ui::llimphi_layout::taffy::style::Position;
 use llimphi_icons::{icon_view, Icon};
 use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_toolbar::{toolbar_view, ToolbarGroup, ToolbarItem, ToolbarPalette};
+use llimphi_ui::DragPhase;
 
 /// Ancho del rail de dientes (px).
 const RAIL_W: f32 = 44.0;
-/// Ancho del panel acoplable abierto al costado del rail (px).
-const DOCK_PANEL_W: f32 = 240.0;
 /// Alto de la barra de herramientas (px).
 const TOOLBAR_H: f32 = 40.0;
 
@@ -191,12 +191,6 @@ fn grafo_actions() -> ToolbarGroup<Msg> {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn body(model: &Model, theme: &Theme) -> View<Msg> {
-    let mut row: Vec<View<Msg>> = Vec::new();
-
-    if model.dock_left_open {
-        row.push(dock_panel(model, theme));
-    }
-
     // El contenido del área, con margen izquierdo para no quedar bajo el
     // rail flotante, y con fade-in al cambiar de área.
     let main = View::new(Style {
@@ -229,18 +223,24 @@ pub(crate) fn body(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .children(vec![main, rail_overlay(model, theme)]);
 
-    row.push(center);
-
-    View::new(Style {
-        flex_direction: FlexDirection::Row,
-        size: Size {
-            width: percent(1.0_f32),
-            height: percent(1.0_f32),
-        },
-        flex_grow: 1.0,
-        ..Default::default()
-    })
-    .children(row)
+    // Con el sidebar abierto, panel y centro quedan separados por un divisor
+    // redimensionable (drag → SetDockWidth); cerrado, sólo el centro.
+    if model.dock_left_open {
+        splitter_two(
+            Direction::Row,
+            dock_panel(model, theme),
+            PaneSize::Fixed(model.dock_w),
+            center,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetDockWidth(dx)),
+                DragPhase::End => None,
+            },
+            &SplitterPalette::from_theme(theme),
+        )
+    } else {
+        center
+    }
 }
 
 /// El rail de dientes como overlay absoluto pegado al borde interno.
@@ -290,10 +290,9 @@ fn dock_panel(model: &Model, theme: &Theme) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
-            width: length(DOCK_PANEL_W),
+            width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
-        flex_shrink: 0.0,
         padding: Rect {
             left: length(10.0_f32),
             right: length(6.0_f32),

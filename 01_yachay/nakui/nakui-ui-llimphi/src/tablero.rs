@@ -395,6 +395,9 @@ pub(crate) fn build_dashboard_panel(
             height: auto(),
         },
         align_content: Some(llimphi_ui::llimphi_layout::taffy::AlignContent::Start),
+        // Top-align cada línea: una card de KPI escalar no se estira a la
+        // altura de la card de gráfico que cae a su lado.
+        align_items: Some(AlignItems::FlexStart),
         gap: Size {
             width: length(12.0),
             height: length(12.0),

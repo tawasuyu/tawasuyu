@@ -404,13 +404,23 @@
             .join("nakui-modules");
         let (modules, skipped) = load_ui_modules(&dir).expect("el módulo demo carga");
         assert!(skipped.is_empty(), "no debería skipear cards: {skipped:?}");
-        // Dos demos: 'ventas' (meta-form completo) y 'tesoro' (vista grafo).
-        assert_eq!(modules.len(), 2);
+        // Tres demos: 'ventas' (meta-form completo), 'tesoro' (vista grafo)
+        // y 'punto_venta' (POS: meta-form + morfismos).
+        assert_eq!(modules.len(), 3);
         let tesoro = modules.iter().find(|m| m.id == "tesoro").expect("tesoro");
         assert!(
             matches!(tesoro.views.get("flujo"), Some(ModuleView::Graph(_))),
             "tesoro expone la vista grafo 'flujo'"
         );
+        // El POS carga, valida y expone su grafo de morfismos.
+        let pos = modules
+            .iter()
+            .find(|m| m.id == "punto_venta")
+            .expect("punto_venta");
+        assert!(matches!(pos.views.get("flujo"), Some(ModuleView::Graph(_))));
+        assert!(find_form_view(pos, "Producto").is_some());
+        assert!(find_form_view(pos, "Venta").is_some());
+        assert!(find_form_view(pos, "LineaVenta").is_some());
         let m = modules.iter().find(|m| m.id == "ventas").expect("ventas");
         // Tiene un Form para cada entity (customers + orders).
         assert!(find_form_view(m, "Customer").is_some());

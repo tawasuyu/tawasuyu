@@ -1,0 +1,220 @@
+{
+  "id": "punto_venta",
+  "label": "Punto de Venta",
+  "description": "POS: productos con stock, ventas y líneas de venta. Tablero de facturación, ficha 360 de producto y el grafo del DAG de morfismos (alta → vender → cobrar → cerrar) que corre sobre el core nakui.",
+  "nakui_module_dir": "nakui",
+  "entities": [
+    { "name": "Producto", "label": "Producto", "fields": [] },
+    { "name": "Venta", "label": "Venta", "fields": [] },
+    { "name": "LineaVenta", "label": "Línea de venta", "fields": [] }
+  ],
+  "menu": [
+    { "label": "Tablero", "view": "tablero", "icon": "▦" },
+    { "label": "Reporte", "view": "reporte", "icon": "▤" },
+    { "label": "Productos", "view": "productos_list", "icon": "📦" },
+    { "label": "+ Producto", "view": "productos_form", "icon": "＋" },
+    { "label": "Ventas", "view": "ventas_list", "icon": "🧾" },
+    { "label": "+ Venta", "view": "ventas_form", "icon": "＋" },
+    { "label": "Líneas", "view": "lineas_list", "icon": "≣" },
+    { "label": "+ Línea", "view": "lineas_form", "icon": "＋" },
+    { "label": "Flujo de morfismos", "view": "flujo", "icon": "⌗" }
+  ],
+  "views": {
+    "tablero": {
+      "kind": "dashboard",
+      "title": "Tablero de ventas",
+      "cards": [
+        { "label": "Productos", "entity": "Producto", "metric": { "kind": "count" } },
+        { "label": "Stock total", "entity": "Producto", "metric": { "kind": "sum", "field": "stock" } },
+        { "label": "Ventas", "entity": "Venta", "metric": { "kind": "count" } },
+        { "label": "Facturado", "entity": "Venta", "metric": { "kind": "sum", "field": "total" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Cobrado", "entity": "Venta", "metric": { "kind": "sum", "field": "total" }, "filter": { "field": "pagado", "equals": "true" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Ticket promedio", "entity": "Venta", "metric": { "kind": "avg", "field": "total" }, "format": { "kind": "currency", "symbol": "$" } },
+        {
+          "label": "Facturación por producto",
+          "entity": "LineaVenta",
+          "metric": { "kind": "sum_by", "group": "producto", "value": "importe" },
+          "group_ref": "Producto",
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "pie",
+          "limit": 6
+        },
+        {
+          "label": "Unidades por producto",
+          "entity": "LineaVenta",
+          "metric": { "kind": "sum_by", "group": "producto", "value": "cantidad" },
+          "group_ref": "Producto",
+          "chart": "columns",
+          "limit": 6
+        },
+        {
+          "label": "Facturación por día",
+          "entity": "Venta",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "line",
+          "bucket": "day"
+        },
+        {
+          "label": "Ventas por método de pago",
+          "entity": "Venta",
+          "metric": { "kind": "group_by", "field": "metodo" },
+          "chart": "donut"
+        }
+      ]
+    },
+    "reporte": {
+      "kind": "report",
+      "title": "Reporte de caja",
+      "subtitle": "Resumen de ventas — exportable a Markdown",
+      "cards": [
+        { "label": "Facturado total", "entity": "Venta", "metric": { "kind": "sum", "field": "total" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Ventas pendientes de cobro", "entity": "Venta", "metric": { "kind": "count" }, "filter": { "field": "pagado", "op": "eq", "value": "false" } },
+        {
+          "label": "Facturación por producto",
+          "entity": "LineaVenta",
+          "metric": { "kind": "sum_by", "group": "producto", "value": "importe" },
+          "group_ref": "Producto",
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "columns",
+          "limit": 8
+        },
+        {
+          "label": "Facturación por día",
+          "entity": "Venta",
+          "metric": { "kind": "sum_by", "group": "fecha", "value": "total" },
+          "format": { "kind": "currency", "symbol": "$" },
+          "chart": "line",
+          "bucket": "day"
+        }
+      ],
+      "toggles": [
+        { "label": "Solo cobradas", "entity": "Venta", "filter": { "field": "pagado", "op": "eq", "value": "true" } },
+        { "label": "Tickets ≥ 100", "entity": "Venta", "filter": { "field": "total", "op": "gte", "value": "100" } }
+      ]
+    },
+    "productos_list": {
+      "kind": "list",
+      "title": "Productos",
+      "entity": "Producto",
+      "row_detail": "producto_detail",
+      "search_in": ["nombre"],
+      "columns": [
+        { "field": "nombre", "label": "Producto" },
+        { "field": "precio", "label": "Precio", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "stock", "label": "Stock" }
+      ]
+    },
+    "producto_detail": {
+      "kind": "detail",
+      "title": "Ficha de producto",
+      "entity": "Producto",
+      "fields": [
+        { "field": "nombre", "label": "Producto" },
+        { "field": "precio", "label": "Precio", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "stock", "label": "Stock" }
+      ],
+      "related": [
+        {
+          "title": "Líneas de venta",
+          "entity": "LineaVenta",
+          "via_field": "producto",
+          "columns": [
+            { "field": "cantidad", "label": "Cant." },
+            { "field": "importe", "label": "Importe", "format": { "kind": "currency", "symbol": "$" } }
+          ]
+        }
+      ],
+      "metrics": [
+        { "label": "Unidades vendidas", "entity": "LineaVenta", "via_field": "producto", "metric": { "kind": "sum", "field": "cantidad" } },
+        { "label": "Facturado", "entity": "LineaVenta", "via_field": "producto", "metric": { "kind": "sum", "field": "importe" }, "format": { "kind": "currency", "symbol": "$" } },
+        { "label": "Líneas", "entity": "LineaVenta", "via_field": "producto", "metric": { "kind": "count" } }
+      ]
+    },
+    "productos_form": {
+      "kind": "form",
+      "title": "Producto",
+      "entity": "Producto",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "nombre", "label": "Nombre", "kind": "text", "required": true, "help": "Nombre del producto" },
+        { "name": "precio", "label": "Precio", "kind": "number", "required": true },
+        { "name": "stock", "label": "Stock", "kind": "number", "required": true, "default": "0" }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Producto", "next_view": "productos_list" }
+    },
+    "ventas_list": {
+      "kind": "list",
+      "title": "Ventas",
+      "entity": "Venta",
+      "search_in": ["fecha", "metodo"],
+      "columns": [
+        { "field": "fecha", "label": "Fecha" },
+        { "field": "total", "label": "Total", "format": { "kind": "currency", "symbol": "$" } },
+        { "field": "metodo", "label": "Método" },
+        { "field": "pagado", "label": "Cobrado" },
+        { "field": "estado", "label": "Estado" }
+      ]
+    },
+    "ventas_form": {
+      "kind": "form",
+      "title": "Venta",
+      "entity": "Venta",
+      "fields": [
+        { "name": "id", "label": "Id", "kind": "auto_id" },
+        { "name": "fecha", "label": "Fecha", "kind": "date", "required": true, "help": "YYYY-MM-DD" },
+        { "name": "total", "label": "Total", "kind": "number", "required": true },
+        {
+          "name": "metodo",
+          "label": "Método de pago",
+          "kind": "select",
+          "options": [
+            { "value": "efectivo", "label": "Efectivo" },
+            { "value": "tarjeta", "label": "Tarjeta" },
+            { "value": "transferencia", "label": "Transferencia" }
+          ]
+        },
+        { "name": "pagado", "label": "Cobrado", "kind": "boolean", "default": "true" },
+        {
+          "name": "estado",
+          "label": "Estado",
+          "kind": "select",
+          "default": "abierta",
+          "options": [
+            { "value": "abierta", "label": "Abierta" },
+            { "value": "cerrada", "label": "Cerrada" }
+          ]
+        }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "Venta", "next_view": "ventas_list" }
+    },
+    "lineas_list": {
+      "kind": "list",
+      "title": "Líneas de venta",
+      "entity": "LineaVenta",
+      "columns": [
+        { "field": "venta", "label": "Venta", "ref_entity": "Venta" },
+        { "field": "producto", "label": "Producto", "ref_entity": "Producto" },
+        { "field": "cantidad", "label": "Cant." },
+        { "field": "importe", "label": "Importe", "format": { "kind": "currency", "symbol": "$" } }
+      ]
+    },
+    "lineas_form": {
+      "kind": "form",
+      "title": "Línea de venta",
+      "entity": "LineaVenta",
+      "fields": [
+        { "name": "venta", "label": "Venta", "kind": "entity_ref", "ref_entity": "Venta", "required": true },
+        { "name": "producto", "label": "Producto", "kind": "entity_ref", "ref_entity": "Producto", "required": true },
+        { "name": "cantidad", "label": "Cantidad", "kind": "number", "required": true },
+        { "name": "importe", "label": "Importe", "kind": "number", "required": true }
+      ],
+      "on_submit": { "kind": "seed_entity", "entity": "LineaVenta", "next_view": "lineas_list" }
+    },
+    "flujo": {
+      "kind": "graph",
+      "title": "Flujo de morfismos POS",
+      "subtitle": "alta_producto → vender → cobrar_venta → cerrar_caja, con reponer alimentando el stock. Cada nodo corre sobre el Executor de nakui-core."
+    }
+  }
+}

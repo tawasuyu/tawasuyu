@@ -279,12 +279,14 @@ enum Msg {
     SwitchArea(Area),
     SetDockPanel(DockPanel),
     ToggleDock,
+    SetDockWidth(f32),
     AreaTick,
     HojaSelectCell { col: u32, row: u32 },
     HojaMove { dcol: i32, drow: i32 },
     HojaFocusBar,
     HojaFormulaKey(KeyEvent),
     HojaEditWith(String),
+    HojaEditStart,
     HojaCommit,
     HojaCancel,
     HojaClear,
@@ -404,6 +406,7 @@ struct Model {
     dock_left_active: DockPanel,
     dock_left_open: bool,
     area_anim: Tween<f32>,
+    dock_w: f32,
     sheet: SheetView,
 }
 
@@ -723,10 +726,13 @@ fn modelo_demo() -> Model {
     // órdenes) — vía el mismo `seed_demo_data` que usa la app al arrancar.
     let initial_toast = seed_demo_data(&mut backend, &modules, &modules_dir);
 
-    // Módulo Tesorería activo, con el primer Dashboard de su menú.
+    // Módulo activo: `NAKUI_SHOT_MODULE` (id) o Tesorería por defecto, con
+    // el primer Dashboard de su menú.
+    let want = std::env::var("NAKUI_SHOT_MODULE").unwrap_or_else(|_| "tesoro".into());
     let selected_module = modules
         .iter()
-        .position(|m| m.id == "tesoro")
+        .position(|m| m.id == want)
+        .or_else(|| modules.iter().position(|m| m.id == "tesoro"))
         .or_else(|| (!modules.is_empty()).then_some(0));
     let selected_menu = selected_module.and_then(|i| {
         let m = &modules[i];
@@ -736,7 +742,7 @@ fn modelo_demo() -> Model {
             .or_else(|| (!m.menu.is_empty()).then_some(0))
     });
 
-    Model {
+    let mut model = Model {
         modules,
         backend: Arc::new(Mutex::new(backend)),
         initial_toast,
@@ -773,8 +779,16 @@ fn modelo_demo() -> Model {
         dock_left_active: DockPanel::Nav,
         dock_left_open: true,
         area_anim: Tween::idle(1.0),
+        dock_w: 240.0,
         sheet: SheetView::new(),
+    };
+    // Para el pantallazo de edición in-cell: abre el editor sobre la celda
+    // activa con un valor de muestra.
+    if std::env::var("NAKUI_SHOT_EDIT").is_ok() {
+        model.sheet.editing = true;
+        model.sheet.bar.set_text("=B2*C2");
     }
+    model
 }
 
 /// Calcado de `src/main.rs::active_view_key` para el chrome del shell.

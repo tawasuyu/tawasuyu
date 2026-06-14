@@ -24,6 +24,7 @@ llimphi-widget-text-input = { workspace = true }
 llimphi-widget-nodegraph = { workspace = true }
 llimphi-widget-toolbar = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
+llimphi-widget-splitter = { workspace = true }
 llimphi-icons = { workspace = true }
 llimphi-widget-menubar = { workspace = true }
 llimphi-widget-edit-menu = { workspace = true }
