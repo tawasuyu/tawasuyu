@@ -53,36 +53,40 @@ impl FuncDispatch for Funcs {
 /// (y los desconocidos) pasan sin cambio — el `match` de [`dispatch`] decide
 /// si existen. Entra en UPPERCASE (lo garantiza el lexer/parser).
 pub fn canonical(name: &str) -> &str {
+    // Los nombres Excel-es genuinos llevan punto (`SUMAR.SI`) y acentos
+    // (`AÑO`, `MÁXIMO`); el lexer de yupay-core ya los acepta. Mantenemos
+    // además variantes dot-free / sin-acento (`SUMARSI`, `ANIO`) como
+    // tolerancia para quien las teclee. El quechua es semilla (YUPAY/YAPAY).
     match name {
         // --- Agregadas ---
         "SUMA" | "YAPAY" => "SUM",
         "PROMEDIO" => "AVERAGE",
-        "MINIMO" => "MIN",
-        "MAXIMO" => "MAX",
+        "MÍNIMO" | "MINIMO" => "MIN",
+        "MÁXIMO" | "MAXIMO" => "MAX",
         "CONTAR" | "YUPAY" => "COUNT",
         "CONTARA" => "COUNTA",
-        "SUMARSI" => "SUMIF",
-        "CONTARSI" => "COUNTIF",
-        "PROMEDIOSI" => "AVERAGEIF",
-        "SUMARSICONJUNTO" => "SUMIFS",
-        "CONTARSICONJUNTO" => "COUNTIFS",
-        "PROMEDIOSICONJUNTO" => "AVERAGEIFS",
+        "SUMAR.SI" | "SUMARSI" => "SUMIF",
+        "CONTAR.SI" | "CONTARSI" => "COUNTIF",
+        "PROMEDIO.SI" | "PROMEDIOSI" => "AVERAGEIF",
+        "SUMAR.SI.CONJUNTO" | "SUMARSICONJUNTO" => "SUMIFS",
+        "CONTAR.SI.CONJUNTO" | "CONTARSICONJUNTO" => "COUNTIFS",
+        "PROMEDIO.SI.CONJUNTO" | "PROMEDIOSICONJUNTO" => "AVERAGEIFS",
         // --- Escalares / numéricas ---
         "REDONDEAR" => "ROUND",
         "ENTERO" => "INT",
         "RESIDUO" => "MOD",
         // --- Lógicas ---
         "SI" => "IF",
-        "SIERROR" => "IFERROR",
-        "SIND" => "IFNA",
+        "SI.ERROR" | "SIERROR" => "IFERROR",
+        "SI.ND" | "SIND" => "IFNA",
         "Y" => "AND",
         "O" => "OR",
         "NO" => "NOT",
-        "ESERROR" => "ISERROR",
-        "ESNUMERO" => "ISNUMBER",
-        "ESTEXTO" => "ISTEXT",
-        "ESBLANCO" => "ISBLANK",
-        "ESLOGICO" => "ISLOGICAL",
+        "ES.ERROR" | "ESERROR" => "ISERROR",
+        "ES.NUMERO" | "ESNUMERO" => "ISNUMBER",
+        "ES.TEXTO" | "ESTEXTO" => "ISTEXT",
+        "ES.BLANCO" | "ESBLANCO" => "ISBLANK",
+        "ES.LOGICO" | "ESLOGICO" => "ISLOGICAL",
         // --- Texto ---
         "CONCATENAR" => "CONCAT",
         "LARGO" => "LEN",
@@ -94,17 +98,17 @@ pub fn canonical(name: &str) -> &str {
         "ESPACIOS" => "TRIM",
         // --- Búsqueda ---
         "BUSCARV" => "VLOOKUP",
-        "INDICE" => "INDEX",
+        "ÍNDICE" | "INDICE" => "INDEX",
         "COINCIDIR" => "MATCH",
         // --- Fecha ---
         "FECHA" => "DATE",
         "HOY" => "TODAY",
         "AHORA" => "NOW",
-        "ANIO" => "YEAR",
+        "AÑO" | "ANIO" => "YEAR",
         "MES" => "MONTH",
-        "DIA" => "DAY",
+        "DÍA" | "DIA" => "DAY",
         "ALEATORIO" => "RAND",
-        "ALEATORIOENTRE" => "RANDBETWEEN",
+        "ALEATORIO.ENTRE" | "ALEATORIOENTRE" => "RANDBETWEEN",
         // En inglés o desconocido: tal cual.
         other => other,
     }
@@ -223,5 +227,19 @@ mod bilingue {
     #[test]
     fn funcion_inexistente_da_name_error() {
         assert_eq!(run("=NOEXISTE(A1)"), SheetValue::Error(SheetError::Name));
+    }
+
+    #[test]
+    fn nombres_excel_es_con_punto_y_acento() {
+        // El lexer ahora acepta punto (SUMAR.SI) y acentos (MÁXIMO, AÑO).
+        assert_eq!(run("=MÁXIMO(A1:A3)"), SheetValue::Number(Decimal::from(30)));
+        assert_eq!(run("=MÍNIMO(A1:A3)"), SheetValue::Number(Decimal::from(10)));
+        // SUMAR.SI(rango, criterio, [rango_suma]) — suma A1:A3 donde >15.
+        assert_eq!(
+            run(r#"=SUMAR.SI(A1:A3, ">15")"#),
+            SheetValue::Number(Decimal::from(50))
+        );
+        // El `.5` de un número sigue siendo número, no se pega al ident.
+        assert_eq!(run("=A1*0.5"), SheetValue::Number(Decimal::from(5)));
     }
 }

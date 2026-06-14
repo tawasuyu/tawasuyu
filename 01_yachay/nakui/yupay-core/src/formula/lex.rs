@@ -128,16 +128,32 @@ pub fn tokenize(src: &str) -> Result<Vec<Token>, LexError> {
             continue;
         }
 
-        // Identificadores: comienzan con letra o `_`, continúan con
-        // letras, dígitos y `_`. Las referencias de celda (`A1`,
-        // `AB12`) caen aquí — el parser las reconoce.
-        if c.is_ascii_alphabetic() || c == b'_' {
+        // Identificadores: comienzan con letra (Unicode) o `_`, continúan
+        // con letras, dígitos, `_` y `.`. Las referencias de celda (`A1`,
+        // `AB12`) caen aquí — el parser las reconoce. Iteramos por chars
+        // para que letras no-ASCII (`AÑO`, `MÁXIMO`) y nombres de función
+        // Excel-es con punto (`SUMAR.SI`, `CONTAR.SI`) entren intactos. El
+        // `.` sólo une si lo sigue una letra: así `SUMAR.SI` es un ident
+        // pero el `.5` de `A1*0.5` lo toma el lexer de números, y un `.`
+        // suelto no se pega a una referencia (`A1.` no come el punto).
+        let first = src[i..].chars().next().unwrap();
+        if first == '_' || first.is_alphabetic() {
             let start = i;
-            while i < bytes.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_')
-            {
-                i += 1;
+            let mut end = i;
+            for (off, ch) in src[i..].char_indices() {
+                let is_word = ch == '_' || ch.is_alphanumeric();
+                let is_dot_join = ch == '.'
+                    && src[i + off + 1..]
+                        .chars()
+                        .next()
+                        .is_some_and(|n| n.is_alphabetic());
+                if is_word || is_dot_join {
+                    end = i + off + ch.len_utf8();
+                } else {
+                    break;
+                }
             }
+            i = end;
             tokens.push(Token::Ident(src[start..i].to_string()));
             continue;
         }

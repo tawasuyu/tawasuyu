@@ -36,14 +36,16 @@ las celdas.
 ## Bilingüe — estado
 
 `=SUMA(A1:A10)`, `=SUM(A1:A10)` y `=YAPAY(A1:A10)` rutean a la misma
-implementación. Cobertura actual: **inglés** (canónico) + **español** completo
-(dot-free ASCII: `SUMA`, `PROMEDIO`, `SI`, `BUSCARV`, `CONTAR`, `REDONDEAR`…) +
-**semilla quechua** (`YUPAY`→COUNT, `YAPAY`→SUM).
+implementación. Cobertura: **inglés** (canónico) + **español** completo con los
+nombres Excel-es **genuinos** — punto y acento incluidos: `SUMAR.SI`,
+`CONTAR.SI.CONJUNTO`, `AÑO`, `MÁXIMO`, `ÍNDICE`, `SI.ERROR`… (más variantes
+dot-free/sin-acento como tolerancia) + **semilla quechua** (`YUPAY`→COUNT,
+`YAPAY`→SUM).
 
-Limitación del arranque: el lexer sólo acepta identificadores ASCII sin punto,
-así que los nombres Excel-es con punto o acento (`SUMAR.SI`, `AÑO`) todavía no
-lexean — el alias es `SUMARSI`/`ANIO`. Soportar los nombres con punto/acento es
-un follow-up que extiende el lexer de `yupay-core` a Unicode + `.`.
+El lexer de `yupay-core` acepta identificadores Unicode (`AÑO`, `MÁXIMO`) y `.`
+dentro de nombres de función (`SUMAR.SI`), uniendo el punto sólo cuando lo sigue
+una letra — así `SUMAR.SI` es un ident pero el `.5` de `A1*0.5` lo toma el lexer
+de números y un `.` suelto no se pega a una referencia.
 
 ## Quién lo usa
 
