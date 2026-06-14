@@ -2,6 +2,15 @@
 //! Extraído de `boxes/build.rs` (regla #1). Sin cambios de lógica.
 use super::*;
 
+/// `true` si el padre establece un contexto flex/grid — único caso en que
+/// `margin-top/bottom: auto` centra (en block flow CSS lo computa a 0).
+fn parent_is_flex_grid(p: Option<&ComputedStyle>) -> bool {
+    matches!(
+        p.map(|s| s.display),
+        Some(Display::Flex | Display::InlineFlex | Display::Grid | Display::InlineGrid)
+    )
+}
+
 pub(crate) fn empty_root() -> BoxNode {
     BoxNode {
         display: Display::Block,
@@ -14,6 +23,8 @@ pub(crate) fn empty_root() -> BoxNode {
         margin: Sides::all(0.0),
         margin_left_auto: false,
         margin_right_auto: false,
+        margin_top_auto: false,
+        margin_bottom_auto: false,
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
         height: LengthVal::Auto,
@@ -479,6 +490,10 @@ pub(crate) fn build_node(
                 margin: effective_margin,
                 margin_left_auto: style.margin_left_auto,
                 margin_right_auto: style.margin_right_auto,
+                // Resolución contra el contexto: el auto vertical sólo centra
+                // si el padre es flex/grid (block flow → 0).
+                margin_top_auto: style.margin_top_auto && parent_is_flex_grid(parent_style),
+                margin_bottom_auto: style.margin_bottom_auto && parent_is_flex_grid(parent_style),
                 padding: style.padding,
                 width: style.width,
                 height: style.height,
@@ -685,6 +700,8 @@ pub(crate) fn build_node(
                 margin: Sides::all(0.0),
                 margin_left_auto: false,
                 margin_right_auto: false,
+                margin_top_auto: false,
+                margin_bottom_auto: false,
                 padding: Sides::all(0.0),
                 width: LengthVal::Auto,
                 height: LengthVal::Auto,

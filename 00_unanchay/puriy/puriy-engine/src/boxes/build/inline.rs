@@ -17,6 +17,8 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         margin: Sides::all(0.0),
         margin_left_auto: false,
         margin_right_auto: false,
+        margin_top_auto: false,
+        margin_bottom_auto: false,
         padding: Sides::all(0.0),
         width: LengthVal::Auto,
         height: LengthVal::Auto,

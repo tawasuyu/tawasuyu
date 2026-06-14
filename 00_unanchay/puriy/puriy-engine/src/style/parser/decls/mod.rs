@@ -848,10 +848,12 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         }
         if prop.eq_ignore_ascii_case("margin-top") && value.eq_ignore_ascii_case("auto") {
             out.push(Decl { kind: DeclKind::MarginTop(0.0), important });
+            out.push(Decl { kind: DeclKind::MarginTopAuto(true), important });
             continue;
         }
         if prop.eq_ignore_ascii_case("margin-bottom") && value.eq_ignore_ascii_case("auto") {
             out.push(Decl { kind: DeclKind::MarginBottom(0.0), important });
+            out.push(Decl { kind: DeclKind::MarginBottomAuto(true), important });
             continue;
         }
         if prop.eq_ignore_ascii_case("inset") {

@@ -68,6 +68,12 @@ pub struct BoxNode {
     /// `margin-left/right: auto` — centrado horizontal en block flow.
     pub margin_left_auto: bool,
     pub margin_right_auto: bool,
+    /// `margin-top/bottom: auto` — centrado/empuje vertical. YA resuelto contra
+    /// el contexto: sólo es `true` si el padre es flex/grid (en block flow CSS
+    /// lo computa a 0, así que el build lo apaga). El puente lo emite como
+    /// `auto()` a taffy.
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
     pub padding: Sides<f32>,
     /// Ancho explícito CSS (`auto` por defecto).
     pub width: LengthVal,

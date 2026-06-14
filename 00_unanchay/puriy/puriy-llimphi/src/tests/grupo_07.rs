@@ -168,6 +168,46 @@ fn parse_areas_calcula_coordenadas() {
 }
 
 #[test]
+fn margin_top_auto_empuja_en_flex() {
+    // Contenedor flex column de 200px de alto; el ítem (30px alto) con
+    // `margin-top: auto` se empuja al fondo (y ≈ 200 − 30 = 170). En block
+    // flow el mismo margin-top:auto computaría a 0 (ver el control abajo).
+    let html = r##"<html><head><style>
+        .f { display:flex; flex-direction:column; height:200px; }
+        .i { height:30px; margin-top:auto; }
+      </style></head><body><div class="f"><div class="i">x</div></div></body></html>"##;
+    let tree = parse(html);
+    let cont = find_tag(&tree.root, "div").expect("flex");
+    // El engine resolvió el flag contra el padre flex.
+    let item = cont.children.iter().find(|c| c.text.is_none()).expect("item");
+    assert!(item.margin_top_auto, "el flag debe sobrevivir bajo padre flex");
+    let view = box_to_view(cont);
+    let l = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(
+        (l.location.y - 170.0).abs() < 1.0,
+        "margin-top:auto empuja al fondo (y≈170), está en {}",
+        l.location.y
+    );
+}
+
+#[test]
+fn margin_top_auto_no_centra_en_block() {
+    // Control: en block flow `margin-top:auto` NO centra (CSS lo computa a 0).
+    // El build apaga el flag porque el padre no es flex/grid.
+    let html = r##"<html><head><style>
+        .b { height:200px; }
+        .i { height:30px; margin-top:auto; }
+      </style></head><body><div class="b"><div class="i">x</div></div></body></html>"##;
+    let tree = parse(html);
+    let cont = find_tag(&tree.root, "div").expect("block");
+    let item = cont.children.iter().find(|c| c.text.is_none()).expect("item");
+    assert!(!item.margin_top_auto, "en block flow el flag se apaga en el build");
+    let view = box_to_view(cont);
+    let l = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(l.location.y < 1.0, "block: el ítem queda arriba (y≈0), está en {}", l.location.y);
+}
+
+#[test]
 fn border_reserva_espacio_en_layout() {
     // Caja con border:10px + padding:5px; su único hijo debe arrancar a
     // 15px del borde externo (no a 5px). Antes el borde no se reservaba en

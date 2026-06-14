@@ -231,8 +231,8 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         margin: Rect {
             left: margin_left_lpa(b, zoom),
             right: margin_right_lpa(b, zoom, 0.0),
-            top: length(b.margin.top * zoom),
-            bottom: length(b.margin.bottom * zoom),
+            top: margin_top_lpa(b, zoom),
+            bottom: margin_bottom_lpa(b, zoom),
         },
         // border: el ancho del borde reserva espacio en el box model (igual
         // que padding). Sin esto el contenido quedaba a `padding` del borde
@@ -412,6 +412,25 @@ pub(crate) fn margin_right_lpa(b: &BoxNode, zoom: f32, extra: f32) -> LengthPerc
         auto()
     } else {
         length(b.margin.right * zoom + extra)
+    }
+}
+
+/// Margen superior/inferior; `auto()` cuando el flag (ya resuelto contra el
+/// padre flex/grid en el build) está puesto → taffy absorbe el espacio libre
+/// para centrar/empujar en el eje de bloque.
+pub(crate) fn margin_top_lpa(b: &BoxNode, zoom: f32) -> LengthPercentageAuto {
+    if b.margin_top_auto {
+        auto()
+    } else {
+        length(b.margin.top * zoom)
+    }
+}
+
+pub(crate) fn margin_bottom_lpa(b: &BoxNode, zoom: f32) -> LengthPercentageAuto {
+    if b.margin_bottom_auto {
+        auto()
+    } else {
+        length(b.margin.bottom * zoom)
     }
 }
 

@@ -103,6 +103,11 @@ pub(crate) enum DeclKind {
     /// `margin-left/right: auto` — flag de centrado horizontal.
     MarginLeftAuto(bool),
     MarginRightAuto(bool),
+    /// `margin-top/bottom: auto` — flag de centrado/empuje vertical. Sólo tiene
+    /// efecto cuando el padre es flex/grid (en block flow CSS lo computa a 0);
+    /// la resolución contra el contexto se hace al construir el box.
+    MarginTopAuto(bool),
+    MarginBottomAuto(bool),
     Padding(Sides<f32>),
     PaddingTop(f32),
     PaddingRight(f32),
@@ -1050,19 +1055,29 @@ impl Decl {
                 s.margin = *v;
                 s.margin_left_auto = false;
                 s.margin_right_auto = false;
+                s.margin_top_auto = false;
+                s.margin_bottom_auto = false;
             }
-            DeclKind::MarginTop(v) => s.margin.top = *v,
+            DeclKind::MarginTop(v) => {
+                s.margin.top = *v;
+                s.margin_top_auto = false;
+            }
             DeclKind::MarginRight(v) => {
                 s.margin.right = *v;
                 s.margin_right_auto = false;
             }
-            DeclKind::MarginBottom(v) => s.margin.bottom = *v,
+            DeclKind::MarginBottom(v) => {
+                s.margin.bottom = *v;
+                s.margin_bottom_auto = false;
+            }
             DeclKind::MarginLeft(v) => {
                 s.margin.left = *v;
                 s.margin_left_auto = false;
             }
             DeclKind::MarginLeftAuto(v) => s.margin_left_auto = *v,
             DeclKind::MarginRightAuto(v) => s.margin_right_auto = *v,
+            DeclKind::MarginTopAuto(v) => s.margin_top_auto = *v,
+            DeclKind::MarginBottomAuto(v) => s.margin_bottom_auto = *v,
             DeclKind::Padding(v) => s.padding = *v,
             DeclKind::PaddingTop(v) => s.padding.top = *v,
             DeclKind::PaddingRight(v) => s.padding.right = *v,

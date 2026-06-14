@@ -436,7 +436,8 @@ enum MarginSide {
 /// numérico genérico la resuelve). Fase 7.857.
 fn parse_logical_margin_auto(lower: &str, value: &str, important: bool) -> Option<Vec<Decl>> {
     use DeclKind::{
-        MarginBottom, MarginLeft, MarginLeftAuto, MarginRight, MarginRightAuto, MarginTop,
+        MarginBottom, MarginBottomAuto, MarginLeft, MarginLeftAuto, MarginRight, MarginRightAuto,
+        MarginTop, MarginTopAuto,
     };
     // (lado_start, lado_end?) — `None` en end = prop de un solo lado.
     let sides: (MarginSide, Option<MarginSide>) = match lower {
@@ -471,8 +472,11 @@ fn parse_logical_margin_auto(lower: &str, value: &str, important: bool) -> Optio
                 out.push(Decl { kind: MarginRightAuto(true), important });
             }
             MarginSide::Block(_) if is_auto => {
-                let ctor = if matches!(side, MarginSide::Block(true)) { MarginBottom } else { MarginTop };
+                let is_end = matches!(side, MarginSide::Block(true));
+                let ctor = if is_end { MarginBottom } else { MarginTop };
+                let auto_ctor = if is_end { MarginBottomAuto } else { MarginTopAuto };
                 out.push(Decl { kind: ctor(0.0), important });
+                out.push(Decl { kind: auto_ctor(true), important });
             }
             _ => {
                 // Token de longitud: parsea o señala fallo.
@@ -650,9 +654,10 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
 }
 
 /// Shorthand `margin:` con soporte de `auto` por lado (centrado). Emite
-/// longhands px (auto→0) más los flags `MarginLeftAuto`/`MarginRightAuto`.
-/// El `auto` vertical no centra en block flow: se trata como 0. Vacío si
-/// algún token no parsea como px ni `auto`.
+/// longhands px (auto→0) más los flags `MarginLeftAuto`/`MarginRightAuto` y
+/// `MarginTopAuto`/`MarginBottomAuto` (el auto vertical sólo centra en
+/// flex/grid; la resolución contra el contexto la hace el build del box).
+/// Vacío si algún token no parsea como px ni `auto`.
 pub(crate) fn parse_margin_shorthand(value: &str, important: bool) -> Vec<Decl> {
     // Fase 7.847 — tokeniza respetando paréntesis para no partir `calc(…)`.
     let toks = split_top_level_ws(value);
@@ -687,6 +692,8 @@ pub(crate) fn parse_margin_shorthand(value: &str, important: bool) -> Vec<Decl> 
         Decl { kind: DeclKind::MarginLeft(l.0), important },
         Decl { kind: DeclKind::MarginLeftAuto(l.1), important },
         Decl { kind: DeclKind::MarginRightAuto(r.1), important },
+        Decl { kind: DeclKind::MarginTopAuto(t.1), important },
+        Decl { kind: DeclKind::MarginBottomAuto(b.1), important },
     ]
 }
 

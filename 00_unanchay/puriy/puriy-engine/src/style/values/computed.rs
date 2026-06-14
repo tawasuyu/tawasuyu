@@ -19,10 +19,14 @@ pub struct ComputedStyle {
     pub font_family: Option<String>,
     pub margin: Sides<f32>,
     /// `margin-left/right: auto` — centrado horizontal en block flow. No
-    /// hereda; default `false`. (El auto vertical no centra en block flow,
-    /// se trata como 0 y por eso no se rastrea.)
+    /// hereda; default `false`.
     pub margin_left_auto: bool,
     pub margin_right_auto: bool,
+    /// `margin-top/bottom: auto` — centrado/empuje vertical. Sólo tiene efecto
+    /// cuando el padre es flex/grid (block flow → 0); la resolución contra el
+    /// contexto se hace al construir el box. No hereda; default `false`.
+    pub margin_top_auto: bool,
+    pub margin_bottom_auto: bool,
     pub padding: Sides<f32>,
     /// Ancho explícito. `Auto` = el default block-fills-parent.
     pub width: LengthVal,
