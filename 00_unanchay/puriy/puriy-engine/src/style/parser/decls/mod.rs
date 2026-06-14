@@ -1051,15 +1051,19 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_rule_shorthand(value, important, &[RuleAxis::Row]));
             continue;
         }
-        if prop.eq_ignore_ascii_case("rule") {
+        // `rule` y `gap-rule` (alias del draft) fijan ambos ejes. Fase 7.929.
+        if prop.eq_ignore_ascii_case("rule") || prop.eq_ignore_ascii_case("gap-rule") {
             out.extend(parse_rule_shorthand(value, important, &[RuleAxis::Column, RuleAxis::Row]));
             continue;
         }
-        if prop.eq_ignore_ascii_case("row-rule-style") || prop.eq_ignore_ascii_case("rule-style") {
-            let axes: &[RuleAxis] = if prop.eq_ignore_ascii_case("rule-style") {
-                &[RuleAxis::Column, RuleAxis::Row]
-            } else {
+        if prop.eq_ignore_ascii_case("row-rule-style")
+            || prop.eq_ignore_ascii_case("rule-style")
+            || prop.eq_ignore_ascii_case("gap-rule-style")
+        {
+            let axes: &[RuleAxis] = if prop.eq_ignore_ascii_case("row-rule-style") {
                 &[RuleAxis::Row]
+            } else {
+                &[RuleAxis::Column, RuleAxis::Row]
             };
             if let Some(on) = parse_border_style(value) {
                 let ls = parse_border_line_style(value);
@@ -1072,14 +1076,14 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
-        if prop.eq_ignore_ascii_case("rule-width") {
+        if prop.eq_ignore_ascii_case("rule-width") || prop.eq_ignore_ascii_case("gap-rule-width") {
             if let Some(w) = parse_length_px(value) {
                 out.push(Decl { kind: DeclKind::ColumnRuleWidth(w), important });
                 out.push(Decl { kind: DeclKind::RowRuleWidth(w), important });
             }
             continue;
         }
-        if prop.eq_ignore_ascii_case("rule-color") {
+        if prop.eq_ignore_ascii_case("rule-color") || prop.eq_ignore_ascii_case("gap-rule-color") {
             let c = if is_current_color(value) { Some(None) } else { parse_color(value).map(Some) };
             if let Some(c) = c {
                 out.push(Decl { kind: DeclKind::ColumnRuleColor(c), important });

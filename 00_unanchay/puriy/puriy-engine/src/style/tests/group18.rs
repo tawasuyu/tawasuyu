@@ -312,3 +312,23 @@ fn scroll_start_family() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::ScrollStartTarget(None))));
 }
+
+// ── Fase 7.929 — CSS Gap Decorations: gap-rule* aliases de rule* ───────────
+
+#[test]
+fn gap_rule_aliases() {
+    // `gap-rule` fija ambos ejes (como `rule`).
+    let r = decls("gap-rule: 2px solid red");
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleWidth(w) if (w - 2.0).abs() < 0.01)));
+    assert!(r.iter().any(|d| matches!(d.kind, DeclKind::RowRuleWidth(w) if (w - 2.0).abs() < 0.01)));
+    // sub-shorthands
+    assert!(decls("gap-rule-color: red")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::RowRuleColor(Some(_)))));
+    assert!(decls("gap-rule-width: 3px")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ColumnRuleWidth(w) if (w - 3.0).abs() < 0.01)));
+    let s = decls("gap-rule-style: solid");
+    assert!(s.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleStyleActive(true))));
+    assert!(s.iter().any(|d| matches!(d.kind, DeclKind::RowRuleStyleActive(true))));
+}
