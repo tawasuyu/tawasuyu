@@ -163,7 +163,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.834 — `overflow: <x> [<y>]` de dos valores. El modelo es de
         // campo único (no separamos ejes todavía), así que tomamos el 1er
         // token (eje x). `overflow-x`/`-y` directos caen igual acá.
-        "overflow" | "overflow-x" | "overflow-y" => {
+        // Fase 7.846 — `overflow-inline`/`overflow-block` lógicos. Bajo el
+        // modelo de campo único (sin ejes separados) y escritura horizontal
+        // LTR caen al mismo `Overflow` que sus físicos x/y.
+        "overflow" | "overflow-x" | "overflow-y" | "overflow-inline" | "overflow-block" => {
             let first = value.split_whitespace().next().unwrap_or(value);
             parse_overflow(first).map(DeclKind::Overflow)
         }

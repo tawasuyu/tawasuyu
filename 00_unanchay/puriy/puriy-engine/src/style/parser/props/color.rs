@@ -613,10 +613,12 @@ fn mix_colors(space: &str, c1: Color, c2: Color, w1: f32, w2: f32) -> Color {
 /// Parsea un value tipo `margin: <1..4 longitudes>`. Devuelve `None` si
 /// algún token no es longitud válida o si hay menos de 1 / más de 4.
 pub(crate) fn parse_sides(value: &str) -> Option<Sides<f32>> {
-    let parts: Vec<&str> = value.split_whitespace().collect();
+    // Fase 7.847 — tokeniza respetando paréntesis para no partir `calc(…)`
+    // por sus espacios internos; cada token acepta calc/min/max/clamp.
+    let parts = split_top_level_ws(value);
     let parsed: Vec<f32> = parts
         .iter()
-        .map(|t| parse_length_px(t))
+        .map(|t| parse_length_px_or_calc(t))
         .collect::<Option<Vec<_>>>()?;
     Some(match parsed.as_slice() {
         [a] => Sides::all(*a),

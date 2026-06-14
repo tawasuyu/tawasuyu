@@ -395,6 +395,22 @@ pub(crate) fn calcval_to_length(v: CalcVal) -> Option<LengthVal> {
     }
 }
 
+/// Parsea un token a píxeles aceptando `calc()`/`min()`/`max()`/`clamp()`
+/// además de las longitudes simples de [`parse_length_px`]. Un calc con
+/// componente `%` cae a `None` (los campos f32 de margin/padding no modelan
+/// porcentaje). Fase 7.847.
+pub(crate) fn parse_length_px_or_calc(t: &str) -> Option<f32> {
+    let t = t.trim();
+    if is_math_fn(t) {
+        return match eval_calc(t)? {
+            CalcVal::Number(n) if n == 0.0 => Some(0.0),
+            CalcVal::Length { px, pct } if pct == 0.0 => Some(px),
+            _ => None,
+        };
+    }
+    parse_length_px(t)
+}
+
 /// Evalúa una expresión matemática CSS (`calc`/`min`/`max`/`clamp`, con
 /// anidamiento, precedencia `*`/`/` sobre `+`/`-` y paréntesis) a un
 /// `CalcVal`. `None` si la sintaxis es inválida.

@@ -633,6 +633,34 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.push(Decl { kind: DeclKind::GridColumnEnd(grid_line_opt(ce_raw)), important });
             continue;
         }
+        // Fase 7.848 — shorthands `grid-template` y `grid` (CSS Grid §7.4/§7.8).
+        // Subset soportado: `none` (resetea explicit grid) y la forma
+        // `<rows> / <columns>` (track-lists). La sintaxis con strings de áreas
+        // y la forma con `auto-flow` (que sólo aplica a `grid`) no se expanden.
+        if prop.eq_ignore_ascii_case("grid-template") || prop.eq_ignore_ascii_case("grid") {
+            if value.eq_ignore_ascii_case("none") {
+                out.push(Decl { kind: DeclKind::GridTemplateRows(Vec::new()), important });
+                out.push(Decl { kind: DeclKind::GridTemplateColumns(Vec::new()), important });
+                out.push(Decl { kind: DeclKind::GridTemplateAreas(None), important });
+                continue;
+            }
+            // `auto-flow` (sólo `grid`) y strings de áreas: fuera de alcance.
+            if !value.contains('"') && value.to_ascii_lowercase().contains("auto-flow") {
+                continue;
+            }
+            if let Some((rows_raw, cols_raw)) = value.split_once('/') {
+                if !rows_raw.contains('"') {
+                    if let (Some(rows), Some(cols)) = (
+                        parse_grid_template(rows_raw.trim()),
+                        parse_grid_template(cols_raw.trim()),
+                    ) {
+                        out.push(Decl { kind: DeclKind::GridTemplateRows(rows), important });
+                        out.push(Decl { kind: DeclKind::GridTemplateColumns(cols), important });
+                    }
+                }
+            }
+            continue;
+        }
         // `margin` shorthand: ruteado acá (no por decl_kind_from_pair) para
         // soportar `auto` por lado (`margin: 0 auto` = centrado horizontal).
         if prop.eq_ignore_ascii_case("margin") {

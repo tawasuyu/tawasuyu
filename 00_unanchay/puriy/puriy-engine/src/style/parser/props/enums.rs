@@ -519,7 +519,8 @@ pub(crate) fn parse_outline_shorthand(value: &str, important: bool) -> Vec<Decl>
 /// El `auto` vertical no centra en block flow: se trata como 0. Vacío si
 /// algún token no parsea como px ni `auto`.
 pub(crate) fn parse_margin_shorthand(value: &str, important: bool) -> Vec<Decl> {
-    let toks: Vec<&str> = value.split_whitespace().collect();
+    // Fase 7.847 — tokeniza respetando paréntesis para no partir `calc(…)`.
+    let toks = split_top_level_ws(value);
     if toks.is_empty() || toks.len() > 4 {
         return Vec::new();
     }
@@ -528,7 +529,7 @@ pub(crate) fn parse_margin_shorthand(value: &str, important: bool) -> Vec<Decl> 
     for t in &toks {
         if t.eq_ignore_ascii_case("auto") {
             sides.push((0.0, true));
-        } else if let Some(px) = parse_length_px(t) {
+        } else if let Some(px) = parse_length_px_or_calc(t) {
             sides.push((px, false));
         } else {
             return Vec::new();
