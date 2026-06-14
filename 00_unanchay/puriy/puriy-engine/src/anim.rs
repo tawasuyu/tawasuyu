@@ -390,6 +390,9 @@ pub fn lerp_transforms(a: &Vec<Transform>, b: &Vec<Transform>, t: f32) -> Vec<Tr
             (Transform::Translate(ax, ay), Transform::Translate(bx, by)) => {
                 Transform::Translate(ax + (bx - ax) * t, ay + (by - ay) * t)
             }
+            (Transform::TranslatePct(ax, ay), Transform::TranslatePct(bx, by)) => {
+                Transform::TranslatePct(ax + (bx - ax) * t, ay + (by - ay) * t)
+            }
             (Transform::Scale(ax, ay), Transform::Scale(bx, by)) => {
                 Transform::Scale(ax + (bx - ax) * t, ay + (by - ay) * t)
             }

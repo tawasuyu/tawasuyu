@@ -45,6 +45,7 @@ impl<Msg> View<Msg> {
             semantics: None,
             hero: None,
             transform: None,
+            transform_rel: None,
             tooltip: None,
             cursor: None,
             ripple: None,
@@ -396,6 +397,17 @@ impl<Msg> View<Msg> {
     /// `@keyframes` CSS de puriy. `Affine::IDENTITY` equivale a no setear.
     pub fn transform(mut self, xf: Affine) -> Self {
         self.transform = Some(xf);
+        self
+    }
+
+    /// Traslación relativa al tamaño del propio nodo: `(fx, fy)` desplaza
+    /// `(fx · w, fy · h)` px, resueltos contra el rect computado en `paint`.
+    /// Es el `translate(<%>)` de CSS que no cabe en un `Affine` fijo (p. ej.
+    /// el centrado `translate(-50%, -50%)` ⇒ `transform_rel((-0.5, -0.5))`).
+    /// Compone con `transform` (si está) como factor más externo. Ver
+    /// [`View::transform`]. `(0.0, 0.0)` equivale a no setear.
+    pub fn transform_rel(mut self, frac: (f64, f64)) -> Self {
+        self.transform_rel = Some(frac);
         self
     }
 

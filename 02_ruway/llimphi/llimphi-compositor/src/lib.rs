@@ -546,6 +546,16 @@ pub struct View<Msg> {
     /// el afín, y la posición local que reciben los handlers `*_at` se
     /// reporta en espacio de pantalla, no en el espacio local del nodo.
     pub transform: Option<Affine>,
+    /// Traslación RELATIVA al tamaño del propio nodo, en fracciones de su rect
+    /// computado: `(fx, fy)` ⇒ desplaza `(fx · w, fy · h)` px. Se resuelve en
+    /// `paint`/`hit_test` (única instancia donde se conoce el tamaño usado) y
+    /// se compone como el factor más externo del afín del nodo, ANTES del
+    /// centrado por `transform-origin`. Pensado para el `translate(<%>)` de CSS
+    /// (p. ej. el truco de centrado `translate(-50%, -50%)` ⇒ `(-0.5, -0.5)`),
+    /// que no es expresable como `Affine` fijo porque el % depende del layout.
+    /// `None` = sin traslación relativa (la abrumadora mayoría). Compone con
+    /// `transform` (afín fijo) si ambos están: `T_rel · transform`.
+    pub transform_rel: Option<(f64, f64)>,
     /// Texto de **tooltip**: si está, el runtime/cliente puede mostrar un
     /// rótulo flotante cuando el cursor se posa sobre este nodo. Llimphi sólo
     /// transporta el dato hasta el [`MountedNode`]; *quién* lo pinta (un overlay
@@ -767,6 +777,9 @@ pub struct MountedNode<Msg> {
     /// Transformación afín 2D del nodo (alrededor del centro de su rect).
     /// Ver [`View::transform`]. `paint` la compone con la del padre.
     pub transform: Option<Affine>,
+    /// Traslación relativa al tamaño del nodo (fracciones de su rect). Ver
+    /// [`View::transform_rel`]. `paint`/`hit_test` la resuelven contra el rect.
+    pub transform_rel: Option<(f64, f64)>,
     /// Texto de tooltip de este nodo (ver [`View::tooltip`]). El consumidor lo
     /// lee tras un hit-test de hover para pintar el rótulo flotante.
     pub tooltip: Option<String>,

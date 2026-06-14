@@ -33,47 +33,87 @@ pub(crate) fn parse_transforms(value: &str) -> Option<Vec<Transform>> {
         }
         let close = close?;
         let args = &rest[open + 1..open + 1 + close];
-        let tr = parse_transform_fn(&name, args)?;
-        out.push(tr);
+        out.extend(parse_transform_fn(&name, args)?);
         rest = &rest[open + 1 + close + 1..];
     }
     Some(out)
 }
 
-pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
+/// Parsea un eje de `translate` (`<length-percentage>`) en `(px, pct)`:
+/// exactamente uno es no-cero (o ambos cero). El `%` no es una longitud, así
+/// que `parse_length_px` lo rechaza — lo capturamos primero. `pct` en %
+/// (50.0 = 50%). `None` si no parsea.
+fn translate_axis(s: &str) -> Option<(f32, f32)> {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|n| (0.0, n));
+    }
+    parse_length_px(s).map(|px| (px, 0.0))
+}
+
+/// Construye los `Transform` de un `translate` a partir de sus componentes px
+/// y %: como las traslaciones conmutan, separar la parte px (`Translate`) de
+/// la % (`TranslatePct`) en dos entradas adyacentes es equivalente a la
+/// traslación combinada. `translate(0,0)` emite un `Translate(0,0)` (no-op).
+fn build_translate((px, py): (f32, f32), (pctx, pcty): (f32, f32)) -> Vec<Transform> {
+    let mut v = Vec::new();
+    if pctx != 0.0 || pcty != 0.0 {
+        v.push(Transform::TranslatePct(pctx, pcty));
+    }
+    if px != 0.0 || py != 0.0 || v.is_empty() {
+        v.push(Transform::Translate(px, py));
+    }
+    v
+}
+
+/// Devuelve 0..N `Transform` para una función (translate puede dar 2; el resto
+/// 1). `parse_transforms` aplana con `extend`.
+pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Vec<Transform>> {
     let parts: Vec<&str> = args.split(',').map(|s| s.trim()).collect();
+    let one = |t: Transform| Some(vec![t]);
     match name {
         "translate" => match parts.as_slice() {
-            [x] => Some(Transform::Translate(parse_length_px(x)?, 0.0)),
-            [x, y] => Some(Transform::Translate(parse_length_px(x)?, parse_length_px(y)?)),
+            [x] => {
+                let (xpx, xpct) = translate_axis(x)?;
+                Some(build_translate((xpx, 0.0), (xpct, 0.0)))
+            }
+            [x, y] => {
+                let (xpx, xpct) = translate_axis(x)?;
+                let (ypx, ypct) = translate_axis(y)?;
+                Some(build_translate((xpx, ypx), (xpct, ypct)))
+            }
             _ => None,
         },
-        "translatex" => Some(Transform::Translate(parse_length_px(parts[0])?, 0.0)),
-        "translatey" => Some(Transform::Translate(0.0, parse_length_px(parts[0])?)),
+        "translatex" => {
+            let (px, pct) = translate_axis(parts[0])?;
+            Some(build_translate((px, 0.0), (pct, 0.0)))
+        }
+        "translatey" => {
+            let (px, pct) = translate_axis(parts[0])?;
+            Some(build_translate((0.0, px), (0.0, pct)))
+        }
         "scale" => match parts.as_slice() {
             [s] => {
                 let v = s.parse::<f32>().ok()?;
-                Some(Transform::Scale(v, v))
+                one(Transform::Scale(v, v))
             }
-            [sx, sy] => {
-                Some(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?))
-            }
+            [sx, sy] => one(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
             _ => None,
         },
-        "scalex" => Some(Transform::Scale(parts[0].parse().ok()?, 1.0)),
-        "scaley" => Some(Transform::Scale(1.0, parts[0].parse().ok()?)),
+        "scalex" => one(Transform::Scale(parts[0].parse().ok()?, 1.0)),
+        "scaley" => one(Transform::Scale(1.0, parts[0].parse().ok()?)),
         // Fase 7.875 — `parse_hue` cubre deg/rad/grad/turn, `none`, sin-unidad
         // (→deg) y ahora `calc()`. Reemplaza el strip manual.
-        "rotate" => parse_hue(parts[0]).map(Transform::Rotate),
+        "rotate" => one(Transform::Rotate(parse_hue(parts[0])?)),
         "skew" => match parts.as_slice() {
-            [x] => Some(Transform::Skew(parse_hue(x)?, 0.0)),
-            [x, y] => Some(Transform::Skew(parse_hue(x)?, parse_hue(y)?)),
+            [x] => one(Transform::Skew(parse_hue(x)?, 0.0)),
+            [x, y] => one(Transform::Skew(parse_hue(x)?, parse_hue(y)?)),
             _ => None,
         },
-        "skewx" => Some(Transform::Skew(parse_hue(parts[0])?, 0.0)),
-        "skewy" => Some(Transform::Skew(0.0, parse_hue(parts[0])?)),
+        "skewx" => one(Transform::Skew(parse_hue(parts[0])?, 0.0)),
+        "skewy" => one(Transform::Skew(0.0, parse_hue(parts[0])?)),
         "matrix" => match parts.as_slice() {
-            [a, b, c, d, e, f] => Some(Transform::Matrix(
+            [a, b, c, d, e, f] => one(Transform::Matrix(
                 a.parse().ok()?,
                 b.parse().ok()?,
                 c.parse().ok()?,
@@ -89,19 +129,21 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
         // en 2D y las puramente fuera-de-plano quedan en identidad.
         "translate3d" => match parts.as_slice() {
             [x, y, _z] => {
-                Some(Transform::Translate(parse_length_px(x)?, parse_length_px(y)?))
+                let (xpx, xpct) = translate_axis(x)?;
+                let (ypx, ypct) = translate_axis(y)?;
+                Some(build_translate((xpx, ypx), (xpct, ypct)))
             }
             _ => None,
         },
-        "translatez" => parse_length_px(parts.first()?).map(|_| Transform::Translate(0.0, 0.0)),
+        "translatez" => parse_length_px(parts.first()?).map(|_| vec![Transform::Translate(0.0, 0.0)]),
         "scale3d" => match parts.as_slice() {
-            [sx, sy, _sz] => Some(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
+            [sx, sy, _sz] => one(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
             _ => None,
         },
-        "scalez" => parts.first()?.parse::<f32>().ok().map(|_| Transform::Scale(1.0, 1.0)),
+        "scalez" => parts.first()?.parse::<f32>().ok().map(|_| vec![Transform::Scale(1.0, 1.0)]),
         // Rotación fuera del plano (X/Y): validamos el ángulo pero sin giro 2D.
-        "rotatex" | "rotatey" => parse_hue(parts.first()?).map(|_| Transform::Rotate(0.0)),
-        "rotatez" => parse_hue(parts.first()?).map(Transform::Rotate),
+        "rotatex" | "rotatey" => parse_hue(parts.first()?).map(|_| vec![Transform::Rotate(0.0)]),
+        "rotatez" => one(Transform::Rotate(parse_hue(parts.first()?)?)),
         "rotate3d" => match parts.as_slice() {
             [x, y, z, a] => {
                 let (x, y, z) =
@@ -109,9 +151,9 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
                 let deg = parse_hue(a)?;
                 // Sólo el eje Z gira en el plano; X/Y → identidad.
                 if x == 0.0 && y == 0.0 && z != 0.0 {
-                    Some(Transform::Rotate(deg))
+                    one(Transform::Rotate(deg))
                 } else {
-                    Some(Transform::Rotate(0.0))
+                    one(Transform::Rotate(0.0))
                 }
             }
             _ => None,
@@ -121,7 +163,7 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
         "perspective" => {
             let a = parts.first()?.trim();
             if a.eq_ignore_ascii_case("none") || parse_length_px(a).is_some() {
-                Some(Transform::Scale(1.0, 1.0))
+                one(Transform::Scale(1.0, 1.0))
             } else {
                 None
             }
@@ -131,7 +173,7 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
         "matrix3d" => {
             if parts.len() == 16 {
                 let p = |i: usize| parts[i].parse::<f32>().ok();
-                Some(Transform::Matrix(p(0)?, p(1)?, p(4)?, p(5)?, p(12)?, p(13)?))
+                one(Transform::Matrix(p(0)?, p(1)?, p(4)?, p(5)?, p(12)?, p(13)?))
             } else {
                 None
             }

@@ -59,6 +59,7 @@ pub fn mount_recursive<Msg: Clone>(
         semantics,
         hero,
         transform,
+        transform_rel,
         tooltip,
         cursor,
         ripple,
@@ -110,6 +111,7 @@ pub fn mount_recursive<Msg: Clone>(
         semantics,
         hero,
         transform,
+        transform_rel,
         tooltip,
         cursor,
         ripple,
@@ -325,6 +327,30 @@ pub struct BackdropBlur {
     pub rect: (f32, f32, f32, f32),
 }
 
+/// Resuelve el afín efectivo de un nodo a partir de su `transform` (afín fijo)
+/// y/o `transform_rel` (traslación en fracción de su tamaño), centrado por
+/// `transform-origin: 50% 50%` contra su rect computado `r`. El `transform_rel`
+/// entra como factor más externo (`T_rel · transform`), igual que un
+/// `translate(<%>)` al frente de la lista CSS. `None` si el nodo no tiene
+/// ninguno de los dos (caso mayoritario → no se toca el stack de transform).
+/// Lo usan `paint_range` y los walks de hit-test para mantenerse en sincronía.
+pub(crate) fn resolve_node_transform(
+    transform: Option<Affine>,
+    transform_rel: Option<(f64, f64)>,
+    r: llimphi_layout::Rect,
+) -> Option<Affine> {
+    if transform.is_none() && transform_rel.is_none() {
+        return None;
+    }
+    let mut local = transform.unwrap_or(Affine::IDENTITY);
+    if let Some((fx, fy)) = transform_rel {
+        local = Affine::translate((fx * r.w as f64, fy * r.h as f64)) * local;
+    }
+    let cx = (r.x + r.w * 0.5) as f64;
+    let cy = (r.y + r.h * 0.5) as f64;
+    Some(Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy)))
+}
+
 /// Pinta el rango de nodos `[start, end)` de `mounted` en `scene`, partiendo de
 /// la transformación acumulada `base_xf`. [`paint`] lo llama con todo el árbol
 /// (`0..len`, `IDENTITY`). El rango permite **capturar un subárbol** en una
@@ -390,11 +416,7 @@ pub fn paint_range<Msg>(
         // (`transform-origin: 50% 50%`) y se compone sobre la del padre. Se
         // empuja ANTES del alpha/fill para que toda la pintura del subtree
         // (incl. la capa de alpha y el clip) caiga en el espacio transformado.
-        if let Some(local) = node.transform {
-            let cx = (r.x + r.w * 0.5) as f64;
-            let cy = (r.y + r.h * 0.5) as f64;
-            let centered =
-                Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy));
+        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
         }
@@ -770,11 +792,7 @@ where
         // Componé el transform de este nodo igual que `paint`, ANTES de
         // resolver el punto local (su propio rect ya cae en el espacio
         // transformado).
-        if let Some(local) = node.transform {
-            let cx = (r.x + r.w * 0.5) as f64;
-            let cy = (r.y + r.h * 0.5) as f64;
-            let centered =
-                Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy));
+        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
         }
@@ -943,11 +961,7 @@ pub fn hit_test_scroll_chain<Msg>(
             idx += 1;
             continue;
         };
-        if let Some(local) = node.transform {
-            let cx = (r.x + r.w * 0.5) as f64;
-            let cy = (r.y + r.h * 0.5) as f64;
-            let centered =
-                Affine::translate((cx, cy)) * local * Affine::translate((-cx, -cy));
+        if let Some(centered) = resolve_node_transform(node.transform, node.transform_rel, r) {
             xf_stack.push((node.subtree_end, cur_xf));
             cur_xf *= centered;
         }
@@ -1183,6 +1197,47 @@ mod tests {
     fn escala_cero_es_inalcanzable() {
         let (m, c) = fixture(Some(Affine::scale(0.0)));
         assert_eq!(hit_test_click(&m, &c, 50.0, 50.0), None);
+    }
+
+    /// Como `fixture` pero seteando `transform_rel` (traslación en fracción
+    /// del tamaño del nodo) en vez del afín fijo.
+    fn fixture_rel(
+        rel: (f64, f64),
+    ) -> (crate::Mounted<()>, llimphi_layout::ComputedLayout) {
+        let child = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(100.0) },
+            ..Default::default()
+        })
+        .on_click(())
+        .transform_rel(rel);
+        let root = View::<()>::new(Style {
+            align_items: Some(AlignItems::FlexStart),
+            justify_content: Some(JustifyContent::FlexStart),
+            ..Default::default()
+        })
+        .children(vec![child]);
+        let mut layout = LayoutTree::new();
+        let mounted = mount(&mut layout, root);
+        let computed = layout.compute(mounted.root, (400.0, 400.0)).expect("layout");
+        (mounted, computed)
+    }
+
+    #[test]
+    fn transform_rel_resuelve_contra_el_tamano_del_nodo() {
+        // El nodo es 100×100 en (0,0). `transform_rel(-0.5,-0.5)` =
+        // `translate(-50%,-50%)` = correr -50px,-50px (la mitad de 100). El
+        // área pintada pasa a (-50,-50)..(50,50): el centro del rect original
+        // (50,50) queda ahora en (0,0).
+        let (m, c) = fixture_rel((-0.5, -0.5));
+        // Donde se ve ahora (el viejo centro corrido a 0,0; y la esquina
+        // inferior-derecha del original (100,100) ahora en (50,50)).
+        assert_eq!(hit_test_click(&m, &c, 25.0, 25.0), Some(1)); // dentro del corrido
+        assert_eq!(hit_test_click(&m, &c, 49.0, 49.0), Some(1)); // casi esquina nueva
+        // Donde estaba antes pero ya NO (el rect se corrió fuera de ahí).
+        assert_eq!(hit_test_click(&m, &c, 75.0, 75.0), None);
+        // Sin transform_rel ese mismo punto SÍ caería dentro (control).
+        let (m0, c0) = fixture_rel((0.0, 0.0)); // (0,0) = no-op
+        assert_eq!(hit_test_click(&m0, &c0, 75.0, 75.0), Some(1));
     }
 
     #[test]

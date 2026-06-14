@@ -51,7 +51,8 @@
 
     #[test]
     fn transform_affine_vacio_es_none() {
-        assert!(transform_affine(&[], 1.0).is_none());
+        let (xf, rel) = transform_affine(&[], 1.0);
+        assert!(xf.is_none() && rel.is_none());
     }
 
     #[test]
@@ -119,7 +120,7 @@
     #[test]
     fn transform_affine_translate_escala_por_zoom() {
         use puriy_engine::style::Transform as T;
-        let a = transform_affine(&[T::Translate(10.0, 20.0)], 2.0).unwrap();
+        let a = transform_affine(&[T::Translate(10.0, 20.0)], 2.0).0.unwrap();
         // translate(10,20) @ zoom 2 → mueve el origen a (20, 40).
         let p = a * Point::new(0.0, 0.0);
         assert!((p.x - 20.0).abs() < 1e-6, "x = {}", p.x);
@@ -129,7 +130,7 @@
     #[test]
     fn transform_affine_scale_no_depende_del_zoom() {
         use puriy_engine::style::Transform as T;
-        let a = transform_affine(&[T::Scale(3.0, 4.0)], 2.0).unwrap();
+        let a = transform_affine(&[T::Scale(3.0, 4.0)], 2.0).0.unwrap();
         let p = a * Point::new(1.0, 1.0);
         assert!((p.x - 3.0).abs() < 1e-6, "x = {}", p.x);
         assert!((p.y - 4.0).abs() < 1e-6, "y = {}", p.y);
@@ -138,7 +139,7 @@
     #[test]
     fn transform_affine_rotate_90_grados() {
         use puriy_engine::style::Transform as T;
-        let a = transform_affine(&[T::Rotate(90.0)], 1.0).unwrap();
+        let a = transform_affine(&[T::Rotate(90.0)], 1.0).0.unwrap();
         // rotate(90°) horario en pantalla: (1,0) → (0,1).
         let p = a * Point::new(1.0, 0.0);
         assert!(p.x.abs() < 1e-6, "x = {}", p.x);
@@ -151,9 +152,26 @@
         // `transform: translate(10,0) scale(2)` → matriz T·S: el punto (1,0)
         // se escala a (2,0) y luego se traslada a (12,0).
         let a = transform_affine(&[T::Translate(10.0, 0.0), T::Scale(2.0, 2.0)], 1.0)
+            .0
             .unwrap();
         let p = a * Point::new(1.0, 0.0);
         assert!((p.x - 12.0).abs() < 1e-6, "x = {}", p.x);
+    }
+
+    #[test]
+    fn transform_affine_translate_pct_va_a_rel_no_al_afin() {
+        use puriy_engine::style::Transform as T;
+        // translate(-50%,-50%) → sin afín fijo, rel = (-0.5, -0.5).
+        let (xf, rel) = transform_affine(&[T::TranslatePct(-50.0, -50.0)], 1.0);
+        assert!(xf.is_none());
+        assert_eq!(rel, Some((-0.5, -0.5)));
+        // Mixto: translate(10px,50%) → afín fijo (px) + rel (la %).
+        let (xf, rel) = transform_affine(
+            &[T::TranslatePct(0.0, 50.0), T::Translate(10.0, 0.0)],
+            1.0,
+        );
+        assert!(xf.is_some());
+        assert_eq!(rel, Some((0.0, 0.5)));
     }
 
     #[test]

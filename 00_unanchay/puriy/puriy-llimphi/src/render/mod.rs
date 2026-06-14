@@ -158,14 +158,40 @@ pub(crate) fn animation_overlay(b: &BoxNode, ctx: &RenderCtx<'_>) -> Option<BoxN
 /// `translate` se escala por el zoom de página (es px de layout); `scale`/
 /// `rotate` son unitless. `None` si la lista está vacía → el nodo no
 /// declara transform y el compositor no toca su pintura.
-pub(crate) fn transform_affine(transforms: &[puriy_engine::style::Transform], zoom: f32) -> Option<Affine> {
+/// Convierte la lista de `Transform` de puriy en (afín fijo, traslación
+/// relativa al tamaño). Las `TranslatePct` (`translate(<%>)`) NO caben en un
+/// afín fijo —el % resuelve contra el tamaño usado del nodo, que sólo se
+/// conoce en composición— así que se acumulan aparte como fracciones y se
+/// devuelven para pasarlas a `View::transform_rel`. El resto (px translate,
+/// scale, rotate, skew, matrix) va al afín fijo. **Limitación documentada:**
+/// las `%` se aplican como factor más externo (al frente de la lista) en
+/// Llimphi; si una `translate(<%>)` viene DESPUÉS de un rotate/scale en la
+/// lista CSS, el orden se aproxima (caso raro — el patrón usual es
+/// `translate(-50%,-50%)` al frente o solo).
+pub(crate) fn transform_affine(
+    transforms: &[puriy_engine::style::Transform],
+    zoom: f32,
+) -> (Option<Affine>, Option<(f64, f64)>) {
     use puriy_engine::style::Transform as T;
     if transforms.is_empty() {
-        return None;
+        return (None, None);
     }
     let mut a = Affine::IDENTITY;
+    let mut has_fixed = false;
+    let mut rel = (0.0_f64, 0.0_f64);
+    let mut has_rel = false;
     for t in transforms {
+        // `TranslatePct` se desvía a las fracciones relativas (Llimphi las
+        // resuelve contra el rect); el resto compone el afín fijo.
+        if let T::TranslatePct(px, py) = *t {
+            rel.0 += px as f64 / 100.0;
+            rel.1 += py as f64 / 100.0;
+            has_rel = true;
+            continue;
+        }
+        has_fixed = true;
         a *= match *t {
+            T::TranslatePct(..) => unreachable!(),
             T::Translate(x, y) => {
                 Affine::translate(((x * zoom) as f64, (y * zoom) as f64))
             }
@@ -191,7 +217,10 @@ pub(crate) fn transform_affine(transforms: &[puriy_engine::style::Transform], zo
             ]),
         };
     }
-    Some(a)
+    (
+        if has_fixed { Some(a) } else { None },
+        if has_rel { Some(rel) } else { None },
+    )
 }
 
 pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
@@ -596,9 +625,15 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     }
     // Transform CSS (estático o animado por `@keyframes`): el compositor lo
     // aplica al nodo y todo su subtree alrededor del centro de su rect. Se
-    // setea al final para que cubra fill/text/decorations/children juntos.
-    if let Some(xf) = transform_affine(&b.transforms, zoom) {
+    // setea al final para que cubra fill/text/decorations/children juntos. El
+    // afín fijo va por `transform`; las `translate(<%>)` (que dependen del
+    // tamaño usado) por `transform_rel`, que Llimphi resuelve en composición.
+    let (xf, rel) = transform_affine(&b.transforms, zoom);
+    if let Some(xf) = xf {
         view = view.transform(xf);
+    }
+    if let Some(rel) = rel {
+        view = view.transform_rel(rel);
     }
     view
 }

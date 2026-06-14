@@ -554,6 +554,11 @@ pub struct TextShadow {
 pub enum Transform {
     /// Pixeles X/Y.
     Translate(f32, f32),
+    /// Traslación en PORCENTAJE del tamaño usado del propio elemento (X% del
+    /// ancho, Y% del alto) — p. ej. `translate(-50%, -50%)`. Los valores son
+    /// porcentajes (50.0 = 50%); se resuelven contra la caja en tiempo de
+    /// composición (puriy-llimphi los pasa como `transform_rel` a Llimphi).
+    TranslatePct(f32, f32),
     /// Factores X/Y (uno solo si CSS da un valor).
     Scale(f32, f32),
     /// Grados (sentido horario en pantalla = sentido CSS).

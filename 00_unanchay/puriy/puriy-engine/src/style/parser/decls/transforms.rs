@@ -12,12 +12,32 @@ pub(crate) fn parse_translate_prop(value: &str) -> Option<Option<Transform>> {
     if v.eq_ignore_ascii_case("none") {
         return Some(None);
     }
+    // Eje `<length-percentage>` → (px, pct): el `%` no es longitud, lo
+    // capturamos aparte. Igual que en la función `translate()`.
+    fn axis(s: &str) -> Option<(f32, f32)> {
+        let s = s.trim();
+        if let Some(p) = s.strip_suffix('%') {
+            return p.trim().parse::<f32>().ok().map(|n| (0.0, n));
+        }
+        parse_length_px(s).map(|px| (px, 0.0))
+    }
+    // La prop individual `translate` guarda UN solo Transform (se prepende a
+    // la cadena en compute). Soportamos los casos puros (todo px → Translate,
+    // todo % → TranslatePct); mezclar px y % en un mismo `translate:` es raro
+    // y queda fuera (devuelve None → drop).
+    fn pick((xpx, xpct): (f32, f32), (ypx, ypct): (f32, f32)) -> Option<Option<Transform>> {
+        if xpct == 0.0 && ypct == 0.0 {
+            Some(Some(Transform::Translate(xpx, ypx)))
+        } else if xpx == 0.0 && ypx == 0.0 {
+            Some(Some(Transform::TranslatePct(xpct, ypct)))
+        } else {
+            None // mezcla px/% en la prop individual: fuera de alcance
+        }
+    }
     let toks: Vec<&str> = v.split_whitespace().collect();
     match toks.as_slice() {
-        [x] => Some(Some(Transform::Translate(parse_length_px(x)?, 0.0))),
-        [x, y] | [x, y, _] => {
-            Some(Some(Transform::Translate(parse_length_px(x)?, parse_length_px(y)?)))
-        }
+        [x] => pick(axis(x)?, (0.0, 0.0)),
+        [x, y] | [x, y, _] => pick(axis(x)?, axis(y)?),
         _ => None,
     }
 }

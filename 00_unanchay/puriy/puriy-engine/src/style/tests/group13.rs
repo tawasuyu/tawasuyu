@@ -125,6 +125,30 @@ use super::super::*;
     }
 
     #[test]
+    fn parsea_translate_porcentaje() {
+        // El truco de centrado: translate(-50%, -50%) → TranslatePct(-50,-50).
+        let t = parse_transforms("translate(-50%, -50%)").unwrap();
+        assert_eq!(t, vec![Transform::TranslatePct(-50.0, -50.0)]);
+        // Mixto px/% → dos transforms (conmutan): TranslatePct + Translate.
+        let t = parse_transforms("translate(10px, 50%)").unwrap();
+        assert_eq!(t, vec![Transform::TranslatePct(0.0, 50.0), Transform::Translate(10.0, 0.0)]);
+        // translateY(%) y combinado con otra función.
+        let t = parse_transforms("translate(-50%, -50%) rotate(45deg)").unwrap();
+        assert_eq!(t[0], Transform::TranslatePct(-50.0, -50.0));
+        assert_eq!(t[1], Transform::Rotate(45.0));
+        // translateX(%) → eje X.
+        let t = parse_transforms("translateX(100%)").unwrap();
+        assert_eq!(t, vec![Transform::TranslatePct(100.0, 0.0)]);
+        // Pura px sigue dando Translate.
+        let t = parse_transforms("translate(10px, 20px)").unwrap();
+        assert_eq!(t, vec![Transform::Translate(10.0, 20.0)]);
+        // La prop individual `translate:` también: pura % → TranslatePct.
+        let t = parse_declarations("translate: -50% -50%", &HashMap::new());
+        assert!(t.iter().any(|d| matches!(d.kind,
+            DeclKind::Translate(Some(Transform::TranslatePct(x, y))) if x == -50.0 && y == -50.0)));
+    }
+
+    #[test]
     fn parsea_transforms_skew_y_matrix() {
         // skew(x), skew(x, y), skewX, skewY (ángulos con unidad).
         let t = parse_transforms("skew(10deg) skew(10deg, 20deg) skewX(0.25turn) skewY(15deg)").unwrap();
