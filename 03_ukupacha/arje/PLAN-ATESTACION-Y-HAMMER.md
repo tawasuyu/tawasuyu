@@ -109,7 +109,12 @@ del target gráfico. La verificación es síncrona y rápida (BLAKE3 sobre un pu
    TPM) y flipear la política a `Halt` — sin ancla externa, un seed reescrito por completo podría
    re-firmar (igual que el flip a estricto de agora §14.1.3). Por eso el default es `Warn`.
 4. **A3** — Card de escritorio (`arje-card-llimphi`): mostrar el veredicto de atestación por
-   unidad (verde/comprometido) en el panel del brain que ya existe. ⬜ pendiente.
+   unidad (verde/comprometido) en el panel del brain que ya existe. ✅ (2026-06-14) `formatear_entrada`
+   renderiza las entradas `AuditAction::AttestationCheck` del audit log en el panel "Audit log" por
+   unidad: `atestación <binario> ✓` (verde) o `atestación <binario> ✗ <motivo>` (comprometido). +2
+   tests. El panel ya leía `recent_audit` vía `ListAudit`; sólo se enriqueció el formateo, así que
+   los veredictos que `arje-zero` vuelca (A2) aparecen en vivo. (Una vista dedicada con filtro
+   `--kind attestation-check` y resumen N✓/M✗ queda como pulido posterior.)
 
 ---
 

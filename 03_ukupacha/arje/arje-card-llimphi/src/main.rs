@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use arje_brain::audit::AuditAction;
 use arje_brain::introspect::{call, IntrospectRequest, IntrospectResponse};
 use arje_incarnate::caps::{CapabilitySet, CgroupStatus, NsKind, UserNsStatus};
 use card_core::{Card, Payload, Supervision};
@@ -209,7 +210,7 @@ fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
         let recent_audit = recent
             .iter()
             .rev()
-            .map(|e| format!("#{}  {}", e.seq, e.action.kind().as_str()))
+            .map(|e| formatear_entrada(e.seq, &e.action))
             .collect();
         Ok(BrainSnapshot {
             rules,
@@ -220,6 +221,24 @@ fn query_brain(path: &Path) -> Result<BrainSnapshot, String> {
             recent_audit,
         })
     })
+}
+
+/// Formatea una entrada del audit log para el panel. Las entradas de
+/// **atestación al arranque** (A3) se muestran por unidad con su veredicto y un
+/// marcador verde/comprometido (`✓`/`✗`); el resto cae al tag de su `kind`.
+fn formatear_entrada(seq: u64, action: &AuditAction) -> String {
+    match action {
+        AuditAction::AttestationCheck { binary, verdict, .. } => {
+            // Sólo el basename para que entre en el ancho del panel.
+            let nombre = binary.rsplit('/').next().unwrap_or(binary);
+            if verdict == "ok" {
+                format!("#{seq}  atestación {nombre} ✓")
+            } else {
+                format!("#{seq}  atestación {nombre} ✗ {verdict}")
+            }
+        }
+        otra => format!("#{seq}  {}", otra.kind().as_str()),
+    }
 }
 
 /// Pide al brain verificar la integridad de la cadena del audit log
@@ -1046,6 +1065,34 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formatea_atestacion_por_unidad() {
+        let ok = AuditAction::AttestationCheck {
+            binary: "/sbin/arje-zero".into(),
+            got_hash: [0u8; 32],
+            verdict: "ok".into(),
+            policy: "Halt".into(),
+        };
+        assert_eq!(formatear_entrada(7, &ok), "#7  atestación arje-zero ✓");
+
+        let mal = AuditAction::AttestationCheck {
+            binary: "/usr/bin/mirada".into(),
+            got_hash: [0u8; 32],
+            verdict: "hash no casa".into(),
+            policy: "Warn".into(),
+        };
+        assert_eq!(
+            formatear_entrada(9, &mal),
+            "#9  atestación mirada ✗ hash no casa"
+        );
+    }
+
+    #[test]
+    fn formatea_otras_acciones_por_kind() {
+        let a = AuditAction::BrainInhibit { reason: "x".into() };
+        assert_eq!(formatear_entrada(3, &a), "#3  brain-inhibit");
+    }
 
     #[test]
     fn detect_snapshot_no_panic() {
