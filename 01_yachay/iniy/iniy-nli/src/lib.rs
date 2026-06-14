@@ -58,13 +58,47 @@ pub fn relacion_lexica(a: &str, b: &str, umbral: f32) -> RelacionNli {
     }
     // Score en [0.4, 0.95] proporcional al overlap por encima del umbral.
     let score = (0.4 + (jacc - umbral) / (1.0 - umbral) * 0.55).clamp(0.4, 0.95);
-    let neg_a = tiene_negacion(a);
-    let neg_b = tiene_negacion(b);
-    if neg_a != neg_b {
+    // Contradicción por dos vías combinables: (a) flip de negación ("X" vs
+    // "no X"), (b) oposición antonímica ("X reduce Y" vs "X aumenta Y"). Si
+    // ambas ocurren se cancelan ("no reduce" ≈ "aumenta" → coinciden), por eso
+    // es un XOR.
+    let neg_flip = tiene_negacion(a) != tiene_negacion(b);
+    let anton_flip = oposicion_antonimica(&ta, &tb);
+    if neg_flip ^ anton_flip {
         RelacionNli { entailment: 0.0, contradiction: score, neutral: 1.0 - score }
     } else {
         RelacionNli { entailment: score, contradiction: 0.0, neutral: 1.0 - score }
     }
+}
+
+/// Pares de antónimos por *stem* (prefijo). Si una aserción contiene un stem de
+/// un lado y la otra del lado opuesto, se oponen aunque no haya negación
+/// explícita. Los stems son prefijos largos (≥4 chars salvo casos seguros) para
+/// acotar colisiones; el matcheo es por `starts_with` sobre tokens de contenido.
+/// Heurística MVP — el día que entre un modelo NLI real (DeBERTa/XNLI) esto pasa
+/// a ser un fallback.
+const ANTONIMOS: &[(&[&str], &[&str])] = &[
+    (&["reduc", "disminu", "decrec", "merma"], &["aument", "increment", "eleva"]),
+    (&["mejor"], &["empeor", "deterior"]),
+    (&["segur", "inocu", "saludable"], &["peligr", "riesgos", "nociv", "tóxic", "toxic", "dañin", "dañ", "perjudic"]),
+    (&["benefic", "favorab", "positiv", "ventaj"], &["perjudic", "negativ", "contraproduc", "desventaj"]),
+    (&["permit", "autoriz", "habilit"], &["prohib", "impid"]),
+    (&["verdad", "cierto", "correct", "válid", "valid"], &["fals", "incorrect", "erróne", "errón", "inválid", "invalid"]),
+    (&["acept", "aprob", "respald"], &["rechaz", "refut", "desmient"]),
+    (&["crec", "expand"], &["decrec", "contrae", "encog"]),
+];
+
+/// ¿Algún token arranca con alguno de los stems?
+fn tokens_match_any(toks: &HashSet<String>, stems: &[&str]) -> bool {
+    toks.iter().any(|t| stems.iter().any(|s| t.starts_with(s)))
+}
+
+/// `true` si A toca un lado de un par de antónimos y B el opuesto.
+fn oposicion_antonimica(a: &HashSet<String>, b: &HashSet<String>) -> bool {
+    ANTONIMOS.iter().any(|(lado1, lado2)| {
+        (tokens_match_any(a, lado1) && tokens_match_any(b, lado2))
+            || (tokens_match_any(a, lado2) && tokens_match_any(b, lado1))
+    })
 }
 
 const STOPWORDS: &[&str] = &[
@@ -149,6 +183,53 @@ mod tests {
         );
         assert!(r.entailment > 0.3, "esperaba entailment moderado, got {:?}", r);
         assert_eq!(r.contradiction, 0.0);
+    }
+
+    #[test]
+    fn antonimo_alta_overlap_es_contradiccion() {
+        // Mismo sujeto/objeto, verbo antónimo (reduce ↔ aumenta), sin negación:
+        // el motor viejo lo daba como entailment; ahora es contradicción.
+        let r = relacion_lexica(
+            "El café reduce el riesgo de enfermedad cardiovascular",
+            "El café aumenta el riesgo de enfermedad cardiovascular",
+            0.30,
+        );
+        assert!(r.contradiction > 0.4, "esperaba contradicción por antónimo, got {:?}", r);
+        assert_eq!(r.entailment, 0.0);
+    }
+
+    #[test]
+    fn antonimo_seguro_peligroso_es_contradiccion() {
+        let r = relacion_lexica(
+            "La cafeína es segura para los adultos sanos",
+            "La cafeína es peligrosa para los adultos",
+            0.30,
+        );
+        assert!(r.contradiction > 0.0, "esperaba contradicción seguro/peligroso, got {:?}", r);
+    }
+
+    #[test]
+    fn negacion_mas_antonimo_se_cancela_a_entailment() {
+        // "no reduce" ≈ "aumenta": doble flip → coinciden (XOR).
+        let r = relacion_lexica(
+            "El café no reduce el riesgo de enfermedad cardiovascular",
+            "El café aumenta el riesgo de enfermedad cardiovascular",
+            0.30,
+        );
+        assert!(r.entailment > 0.0, "doble flip debía coincidir, got {:?}", r);
+        assert_eq!(r.contradiction, 0.0);
+    }
+
+    #[test]
+    fn mismo_lado_antonimo_no_es_contradiccion() {
+        // Ambas en el lado "aumenta": no hay oposición.
+        let r = relacion_lexica(
+            "El café aumenta el riesgo de enfermedad cardiovascular",
+            "El café incrementa el riesgo de enfermedad cardiovascular",
+            0.30,
+        );
+        assert_eq!(r.contradiction, 0.0, "mismo lado no debe contradecir, got {:?}", r);
+        assert!(r.entailment > 0.0);
     }
 
     #[test]
