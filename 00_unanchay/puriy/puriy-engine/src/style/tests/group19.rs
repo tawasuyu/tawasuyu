@@ -173,3 +173,58 @@ fn at_property_y_font_face_coexisten() {
     assert_eq!(eng.registered_properties()[0].name, "--gap");
     assert_eq!(eng.registered_properties()[1].initial_value.as_deref(), Some("0deg"));
 }
+
+// ── Fase 7.924 — @counter-style ────────────────────────────────────────────
+
+#[test]
+fn counter_style_cyclic() {
+    let css = r#"
+        @counter-style thumbs {
+            system: cyclic;
+            symbols: "\1F44D";
+            suffix: " ";
+        }
+    "#;
+    let c = engine(css).counter_styles().to_vec();
+    assert_eq!(c.len(), 1);
+    assert_eq!(c[0].name, "thumbs");
+    assert_eq!(c[0].system.as_deref(), Some("cyclic"));
+    assert_eq!(c[0].symbols.as_deref(), Some("\"\\1F44D\""));
+    assert_eq!(c[0].suffix.as_deref(), Some("\" \""));
+}
+
+#[test]
+fn counter_style_additive_y_range() {
+    let css = r#"
+        @counter-style roman {
+            system: additive;
+            additive-symbols: 10 X, 5 V, 1 I;
+            range: 1 49;
+            pad: 2 "0";
+            negative: "-";
+            fallback: decimal;
+            speak-as: numbers;
+        }
+    "#;
+    let c = engine(css).counter_styles().to_vec();
+    let r = &c[0];
+    assert_eq!(r.system.as_deref(), Some("additive"));
+    assert_eq!(r.additive_symbols.as_deref(), Some("10 X, 5 V, 1 I"));
+    assert_eq!(r.range.as_deref(), Some("1 49"));
+    assert_eq!(r.pad.as_deref(), Some("2 \"0\""));
+    assert_eq!(r.negative.as_deref(), Some("\"-\""));
+    assert_eq!(r.fallback.as_deref(), Some("decimal"));
+    assert_eq!(r.speak_as.as_deref(), Some("numbers"));
+}
+
+#[test]
+fn counter_style_invalido_se_descarta() {
+    // sin system/symbols/additive-symbols → no define nada → descartado.
+    assert!(engine("@counter-style x { suffix: \".\"; }")
+        .counter_styles()
+        .is_empty());
+    // nombre con `--` no es un counter-style válido (reservado a @property).
+    assert!(engine("@counter-style --x { system: cyclic; symbols: \"a\"; }")
+        .counter_styles()
+        .is_empty());
+}

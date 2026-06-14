@@ -817,6 +817,63 @@ pub(crate) fn parse_at_property_body(name: &str, body: &str) -> Option<PropertyR
     })
 }
 
+/// Pasada análoga a [`extract_at_properties`] pero para `@counter-style name`
+/// (CSS Counter Styles 3). Acumula una [`CounterStyleRule`] por bloque con
+/// `name` válido y al menos un `system` o `symbols`/`additive-symbols`.
+pub(crate) fn extract_counter_styles(css: &str, out: &mut Vec<CounterStyleRule>) {
+    let lower = css.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find('@') {
+        let at = from + rel;
+        if !lower[at..].starts_with("@counter-style") {
+            from = at + 1;
+            continue;
+        }
+        let after = &css[at + "@counter-style".len()..];
+        let Some(brace_rel) = after.find('{') else { break };
+        let name = after[..brace_rel].trim().to_string();
+        let body_start = at + "@counter-style".len() + brace_rel + 1;
+        let Some(close) = matching_close_brace(&css[body_start..]) else {
+            break;
+        };
+        let body = &css[body_start..body_start + close];
+        from = body_start + close + 1;
+        if name.is_empty() || name.starts_with("--") {
+            continue;
+        }
+        if let Some(rule) = parse_counter_style_body(&name, body) {
+            out.push(rule);
+        }
+    }
+}
+
+/// Parsea el cuerpo de un `@counter-style`. `None` si no trae ningún
+/// descriptor definitorio (`system`, `symbols` o `additive-symbols`).
+pub(crate) fn parse_counter_style_body(name: &str, body: &str) -> Option<CounterStyleRule> {
+    let mut rule = CounterStyleRule { name: name.to_string(), ..Default::default() };
+    for (desc, value) in parse_keyframe_declarations(body) {
+        let v = value.trim().to_string();
+        match desc.as_str() {
+            "system" => rule.system = Some(v),
+            "symbols" => rule.symbols = Some(v),
+            "additive-symbols" => rule.additive_symbols = Some(v),
+            "negative" => rule.negative = Some(v),
+            "prefix" => rule.prefix = Some(v),
+            "suffix" => rule.suffix = Some(v),
+            "range" => rule.range = Some(v),
+            "pad" => rule.pad = Some(v),
+            "speak-as" => rule.speak_as = Some(v),
+            "fallback" => rule.fallback = Some(v),
+            _ => {}
+        }
+    }
+    if rule.system.is_some() || rule.symbols.is_some() || rule.additive_symbols.is_some() {
+        Some(rule)
+    } else {
+        None
+    }
+}
+
 /// `name( ... )` → contenido interno (case-insensitive del nombre). `None` si
 /// `s` no es exactamente esa función.
 fn strip_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {

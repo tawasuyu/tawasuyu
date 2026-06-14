@@ -41,7 +41,7 @@ pub use fetch::{decode_base64, encode_base64, fetch, fetch_full, FetchError, Fet
 pub use style::{
     AlignContent, AlignItems, AlignSelf, AnimationBinding, AnimationDirection, AnimationFillMode,
     AnimationIterations, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderLineStyle,
-    BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
+    BoxShadow, BoxSizing, ComputedStyle, ContentItem, CounterStyleRule, EasingFunction,
     FlexDirection, FlexWrap, FontFaceRule, FontSrc, FontStyle, GradientStop, GridAutoFlow, GridTrackBreadth, GridTrackSize, JustifyContent, KeyframeStep,
     Keyframes, LengthVal, LinearGradient, ObjectFit, Outline, Overflow, PointerEvents, Position,
     PropertyRule, PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextDecorationStyle,

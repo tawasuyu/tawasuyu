@@ -803,6 +803,38 @@ pub struct PropertyRule {
     pub initial_value: Option<String>,
 }
 
+/// Definición de un `@counter-style name { ... }` (CSS Counter Styles 3 /
+/// Lists 3). Registra un estilo de marcador de lista / contador. Se recoge
+/// globalmente y se expone para que `list-style-type: <name>` lo resuelva
+/// (trabajo futuro). Los descriptores se guardan crudos. Hoy sólo se parsea y
+/// se expone vía [`super::super::StyleEngine::counter_styles`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct CounterStyleRule {
+    /// El nombre (custom-ident, sin `--`).
+    pub name: String,
+    /// `system` — `cyclic|numeric|alphabetic|symbolic|additive|fixed|
+    /// extends <name>`.
+    pub system: Option<String>,
+    /// `symbols` — la lista de símbolos (`"0" "1" "2"` o `url(...)`).
+    pub symbols: Option<String>,
+    /// `additive-symbols` — pares `<peso> <símbolo>` (sistema `additive`).
+    pub additive_symbols: Option<String>,
+    /// `negative` — prefijo/sufijo para negativos.
+    pub negative: Option<String>,
+    /// `prefix` — antepuesto a la representación.
+    pub prefix: Option<String>,
+    /// `suffix` — pospuesto (default `. `).
+    pub suffix: Option<String>,
+    /// `range` — el rango de valores que cubre (`1 10` o `infinite`).
+    pub range: Option<String>,
+    /// `pad` — relleno a ancho mínimo (`3 "0"`).
+    pub pad: Option<String>,
+    /// `speak-as` — cómo lo lee un screen reader.
+    pub speak_as: Option<String>,
+    /// `fallback` — estilo de reserva si un valor cae fuera de `range`.
+    pub fallback: Option<String>,
+}
+
 /// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
 /// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
 /// constante (1280×800 — desktop típico). Cuando puriy soporte resize

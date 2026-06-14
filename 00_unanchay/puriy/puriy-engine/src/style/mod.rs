@@ -55,6 +55,10 @@ pub struct StyleEngine {
     /// cascada de variables (valor inicial registrado + control de herencia);
     /// hoy sólo se parsean y se exponen vía [`Self::registered_properties`].
     registered_properties: Vec<PropertyRule>,
+    /// Definiciones `@counter-style name { ... }`. Las consumiría
+    /// `list-style-type: <name>` (trabajo futuro); hoy sólo se parsean y se
+    /// exponen vía [`Self::counter_styles`].
+    counter_styles: Vec<CounterStyleRule>,
 }
 
 impl StyleEngine {
@@ -113,10 +117,16 @@ impl StyleEngine {
             let cleaned = strip_comments(sheet);
             extract_at_properties(&cleaned, &mut registered_properties);
         }
+        // Quinta pasada: recoger `@counter-style`. Globales.
+        let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
+        for sheet in sheets {
+            let cleaned = strip_comments(sheet);
+            extract_counter_styles(&cleaned, &mut counter_styles);
+        }
         for sheet in sheets {
             rules.extend(parse_stylesheet(sheet, &vars, vp));
         }
-        Self { rules, vars, keyframes, font_faces, registered_properties }
+        Self { rules, vars, keyframes, font_faces, registered_properties, counter_styles }
     }
 
     /// Tabla de `@keyframes` parseados (name → definición). Vacía si el
@@ -138,6 +148,13 @@ impl StyleEngine {
     /// hoy es sólo lectura.
     pub fn registered_properties(&self) -> &[PropertyRule] {
         &self.registered_properties
+    }
+
+    /// Lista de `@counter-style` definidos, en orden de documento. La
+    /// resolución de `list-style-type: <name>` (trabajo futuro) la cruzará;
+    /// hoy es sólo lectura.
+    pub fn counter_styles(&self) -> &[CounterStyleRule] {
+        &self.counter_styles
     }
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →
