@@ -835,6 +835,30 @@ pub struct CounterStyleRule {
     pub fallback: Option<String>,
 }
 
+/// Definición de un `@page [<selector>] { ... }` (CSS Paged Media 3). Describe
+/// la caja de página para impresión. Se recoge globalmente y se expone para el
+/// pipeline de paginado (trabajo futuro). Los descriptores de página propios
+/// (`size`/`marks`/`bleed`/`page-orientation`) se extraen aparte; el resto de
+/// declaraciones (margin/padding/…) quedan crudas en `declarations`. Las
+/// margin-at-rules anidadas (`@top-center { … }`) NO se modelan todavía.
+/// Expuesto vía [`super::super::StyleEngine::page_rules`].
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PageRule {
+    /// El selector tras `@page` (`:left`/`:right`/`:first`/`:blank` o un
+    /// nombre de página, o `""` para el `@page` sin selector).
+    pub selector: String,
+    /// `size` — `A4|letter|<length>{1,2}|portrait|landscape|auto`.
+    pub size: Option<String>,
+    /// `marks` — `none | crop || cross`.
+    pub marks: Option<String>,
+    /// `bleed` — `auto | <length>`.
+    pub bleed: Option<String>,
+    /// `page-orientation` — `upright|rotate-left|rotate-right`.
+    pub page_orientation: Option<String>,
+    /// El resto de declaraciones del bloque (margin/padding/…), crudas.
+    pub declarations: Vec<(String, String)>,
+}
+
 /// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
 /// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
 /// constante (1280×800 — desktop típico). Cuando puriy soporte resize

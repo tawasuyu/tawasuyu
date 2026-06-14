@@ -874,6 +874,59 @@ pub(crate) fn parse_counter_style_body(name: &str, body: &str) -> Option<Counter
     }
 }
 
+/// Pasada análoga para `@page [<sel>] { ... }` (CSS Paged Media 3). Acumula
+/// una [`PageRule`] por bloque. El selector (`:left`/nombre/vacío) va entre
+/// `@page` y `{`.
+pub(crate) fn extract_page_rules(css: &str, out: &mut Vec<PageRule>) {
+    let lower = css.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find('@') {
+        let at = from + rel;
+        if !lower[at..].starts_with("@page") {
+            from = at + 1;
+            continue;
+        }
+        // Evita falsos positivos como `@page-foo` (no existe, pero defensivo):
+        // el char tras `@page` debe ser whitespace o `{`.
+        let next = css[at + "@page".len()..].chars().next();
+        if !matches!(next, Some(c) if c.is_whitespace() || c == '{') {
+            from = at + 1;
+            continue;
+        }
+        let after = &css[at + "@page".len()..];
+        let Some(brace_rel) = after.find('{') else { break };
+        let selector = after[..brace_rel].trim().to_string();
+        let body_start = at + "@page".len() + brace_rel + 1;
+        let Some(close) = matching_close_brace(&css[body_start..]) else {
+            break;
+        };
+        let body = &css[body_start..body_start + close];
+        from = body_start + close + 1;
+        out.push(parse_page_body(&selector, body));
+    }
+}
+
+/// Parsea el cuerpo de un `@page`: descriptores de página propios a campos +
+/// el resto de declaraciones crudas. Las margin-at-rules anidadas
+/// (`@top-center { … }`) se ignoran (pares con `{`/`@` se descartan).
+pub(crate) fn parse_page_body(selector: &str, body: &str) -> PageRule {
+    let mut rule = PageRule { selector: selector.to_string(), ..Default::default() };
+    for (desc, value) in parse_keyframe_declarations(body) {
+        if desc.contains('{') || desc.contains('@') || value.contains('{') || value.contains('}') {
+            continue;
+        }
+        let v = value.trim().to_string();
+        match desc.as_str() {
+            "size" => rule.size = Some(v),
+            "marks" => rule.marks = Some(v),
+            "bleed" => rule.bleed = Some(v),
+            "page-orientation" => rule.page_orientation = Some(v),
+            _ => rule.declarations.push((desc, v)),
+        }
+    }
+    rule
+}
+
 /// `name( ... )` → contenido interno (case-insensitive del nombre). `None` si
 /// `s` no es exactamente esa función.
 fn strip_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {

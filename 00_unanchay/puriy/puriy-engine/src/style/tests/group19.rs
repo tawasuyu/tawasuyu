@@ -228,3 +228,58 @@ fn counter_style_invalido_se_descarta() {
         .counter_styles()
         .is_empty());
 }
+
+// ── Fase 7.925 — @page (Paged Media) ───────────────────────────────────────
+
+#[test]
+fn page_sin_selector() {
+    let css = r#"
+        @page {
+            size: A4 landscape;
+            margin: 2cm;
+            marks: crop cross;
+            bleed: 6pt;
+        }
+    "#;
+    let p = engine(css).page_rules().to_vec();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].selector, "");
+    assert_eq!(p[0].size.as_deref(), Some("A4 landscape"));
+    assert_eq!(p[0].marks.as_deref(), Some("crop cross"));
+    assert_eq!(p[0].bleed.as_deref(), Some("6pt"));
+    // margin queda en declarations crudas.
+    assert!(p[0].declarations.iter().any(|(k, v)| k == "margin" && v == "2cm"));
+}
+
+#[test]
+fn page_con_selector_y_orientacion() {
+    let css = r#"
+        @page :first { margin-top: 10cm; }
+        @page chapter { size: letter; page-orientation: rotate-left; }
+    "#;
+    let p = engine(css).page_rules().to_vec();
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[0].selector, ":first");
+    assert!(p[0].declarations.iter().any(|(k, v)| k == "margin-top" && v == "10cm"));
+    assert_eq!(p[1].selector, "chapter");
+    assert_eq!(p[1].size.as_deref(), Some("letter"));
+    assert_eq!(p[1].page_orientation.as_deref(), Some("rotate-left"));
+}
+
+#[test]
+fn page_ignora_margin_at_rules_anidadas() {
+    // Las margin-at-rules anidadas no se modelan pero NO deben ensuciar
+    // declarations ni romper el parseo del resto del bloque.
+    let css = r#"
+        @page {
+            size: A4;
+            @top-center { content: "título"; }
+            margin: 1cm;
+        }
+    "#;
+    let p = engine(css).page_rules().to_vec();
+    assert_eq!(p.len(), 1);
+    assert_eq!(p[0].size.as_deref(), Some("A4"));
+    // ningún par contiene basura de la at-rule anidada.
+    assert!(p[0].declarations.iter().all(|(k, _)| !k.contains('@') && !k.contains('{')));
+}

@@ -59,6 +59,10 @@ pub struct StyleEngine {
     /// `list-style-type: <name>` (trabajo futuro); hoy sólo se parsean y se
     /// exponen vía [`Self::counter_styles`].
     counter_styles: Vec<CounterStyleRule>,
+    /// Definiciones `@page [<sel>] { ... }` (Paged Media). Las consumiría el
+    /// pipeline de impresión/paginado (trabajo futuro); hoy sólo se parsean y
+    /// se exponen vía [`Self::page_rules`].
+    page_rules: Vec<PageRule>,
 }
 
 impl StyleEngine {
@@ -123,10 +127,24 @@ impl StyleEngine {
             let cleaned = strip_comments(sheet);
             extract_counter_styles(&cleaned, &mut counter_styles);
         }
+        // Sexta pasada: recoger `@page`. Globales.
+        let mut page_rules: Vec<PageRule> = Vec::new();
+        for sheet in sheets {
+            let cleaned = strip_comments(sheet);
+            extract_page_rules(&cleaned, &mut page_rules);
+        }
         for sheet in sheets {
             rules.extend(parse_stylesheet(sheet, &vars, vp));
         }
-        Self { rules, vars, keyframes, font_faces, registered_properties, counter_styles }
+        Self {
+            rules,
+            vars,
+            keyframes,
+            font_faces,
+            registered_properties,
+            counter_styles,
+            page_rules,
+        }
     }
 
     /// Tabla de `@keyframes` parseados (name → definición). Vacía si el
@@ -155,6 +173,12 @@ impl StyleEngine {
     /// hoy es sólo lectura.
     pub fn counter_styles(&self) -> &[CounterStyleRule] {
         &self.counter_styles
+    }
+
+    /// Lista de `@page` definidos, en orden de documento. El pipeline de
+    /// paginado (trabajo futuro) los consumirá; hoy es sólo lectura.
+    pub fn page_rules(&self) -> &[PageRule] {
+        &self.page_rules
     }
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →
