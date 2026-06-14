@@ -159,6 +159,11 @@ async fn handle_conn(stream: UnixStream, graph_tx: mpsc::Sender<GraphEvent>) -> 
                         response: resp,
                     }).await;
                 }
+                BusPayload::Event(ev) => {
+                    // Los eventos son sólo server→cliente. Un cliente que los
+                    // envía está fuera de protocolo; lo ignoramos con warn.
+                    warn!(?ev, "cliente envió un BusEvent — ignorado (eventos son server→cliente)");
+                }
             }
         }
     }).await;

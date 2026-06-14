@@ -217,6 +217,14 @@ impl EnteGraph {
                 };
                 let _ = reply.send(resp);
             }
+            BusRequest::Subscribe => {
+                // Observabilidad anónima: la conexión pasa a recibir eventos
+                // de ciclo de vida. Guardamos su `outbound` —el writer task
+                // de `handle_conn` los serializa al socket—. La purga de
+                // suscriptores muertos ocurre perezosamente en `broadcast_lifecycle`.
+                self.lifecycle_subscribers.push(outbound);
+                let _ = reply.send(BusResponse::Ok);
+            }
         }
     }
 

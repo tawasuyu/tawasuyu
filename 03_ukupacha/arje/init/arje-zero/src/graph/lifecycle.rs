@@ -5,7 +5,7 @@
 
 use super::{EnteGraph, Incarnated};
 use crate::events::{ExitStatus, GraphEvent};
-use arje_bus::{BusMessage, BusPayload, BusRequest};
+use arje_bus::{BusEvent, BusMessage, BusPayload, BusRequest, LifecycleStatus};
 use arje_card::{Capability, EntityCard, Payload, Supervision};
 use sandokan_lifecycle::Backoff;
 use std::time::Instant;
@@ -120,6 +120,22 @@ impl EnteGraph {
         }
         info!(label = %inc.card.label, ?status, "Ente disuelto");
 
+        // Vocabulario de ciclo de vida para los suscriptores del bus (la capa
+        // de IA de hammer reacciona a `EnteCrashed` → su propio `CRASHED`).
+        // Capturamos label/status antes de mover `inc.card` en el Restart.
+        let label = inc.card.label.clone();
+        let wire_status = match &status {
+            ExitStatus::Exit(code) => LifecycleStatus::Exited(*code),
+            ExitStatus::Killed(sig) => LifecycleStatus::Killed(*sig as i32),
+        };
+        if wire_status.is_crash() {
+            self.broadcast_lifecycle(BusEvent::EnteCrashed {
+                id,
+                label: label.clone(),
+                status: wire_status.clone(),
+            });
+        }
+
         match inc.card.supervision.clone() {
             Supervision::Restart { initial, max } => {
                 // Política: si el Ente sobrevivió al menos `max` (su propio cap
@@ -141,10 +157,16 @@ impl EnteGraph {
                     backoff.reset();
                 }
                 let delay = backoff.next_delay();
+                let delay_ms = delay.as_millis() as u64;
                 info!(
-                    label = %inc.card.label, delay_ms = delay.as_millis() as u64,
+                    label = %inc.card.label, delay_ms,
                     "Restart programado"
                 );
+                self.broadcast_lifecycle(BusEvent::EnteRestarting {
+                    id,
+                    label: label.clone(),
+                    delay_ms,
+                });
                 // No bloquear el bucle primordial: el restart vuelve como
                 // SpawnRequest tras el delay. El requester es la Semilla
                 // (autorizada para Capability::Spawn).
@@ -161,11 +183,41 @@ impl EnteGraph {
                     }
                 });
             }
-            Supervision::OneShot => {}
+            Supervision::OneShot => {
+                if !wire_status.is_crash() {
+                    self.broadcast_lifecycle(BusEvent::EnteExited { id, label });
+                }
+            }
             Supervision::Delegate => {
                 self.notify_lineage_of_death(&inc, &status);
+                if !wire_status.is_crash() {
+                    self.broadcast_lifecycle(BusEvent::EnteExited { id, label });
+                }
             }
         }
+    }
+
+    /// Difunde un evento de ciclo de vida a las conexiones suscritas
+    /// (`BusRequest::Subscribe`). Fire-and-forget: empuja por el `outbound` de
+    /// cada suscriptor y **purga** los que ya cerraron su extremo. Un canal
+    /// lleno (suscriptor lento) NO se purga —se prefiere perder un frame a
+    /// desconectar a un observador transitoriamente atascado—. `seq = 0`
+    /// porque los eventos no se correlacionan con ninguna request.
+    pub(in crate::graph) fn broadcast_lifecycle(&mut self, ev: BusEvent) {
+        if self.lifecycle_subscribers.is_empty() {
+            return;
+        }
+        let msg = BusMessage {
+            from: None,
+            seq: 0,
+            payload: BusPayload::Event(ev),
+        };
+        self.lifecycle_subscribers.retain(|tx| {
+            !matches!(
+                tx.try_send(msg.clone()),
+                Err(mpsc::error::TrySendError::Closed(_))
+            )
+        });
     }
 
     /// Fire-and-forget: si el parent tiene conexión al bus, le forwardeamos
@@ -233,5 +285,135 @@ mod tests {
         b.next_delay();
         b.reset();
         assert_eq!(b.next_delay(), Duration::from_millis(100));
+    }
+}
+
+#[cfg(test)]
+mod broadcast_tests {
+    //! La fuente real del `CRASHED` (hammer Fase 5 / B.2): `on_death` difunde
+    //! `BusEvent`s a los suscriptores del bus. Verificamos el mapeo
+    //! muerte→evento sin levantar el bus completo: insertamos un Ente en el
+    //! grafo a mano, enchufamos un suscriptor y disparamos `on_death`.
+    use crate::events::ExitStatus;
+    use crate::graph::{EnteGraph, Incarnated};
+    use arje_bus::{BusEvent, BusMessage, BusPayload, LifecycleStatus};
+    use arje_card::{EntityCard, Supervision};
+    use nix::sys::signal::Signal;
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+    use ulid::Ulid;
+
+    fn grafo_con_suscriptor() -> (EnteGraph, mpsc::Receiver<BusMessage>) {
+        let seed = EntityCard::new("seed-test");
+        let mut g = EnteGraph::new(seed);
+        let (tx, rx) = mpsc::channel::<BusMessage>(16);
+        g.lifecycle_subscribers.push(tx);
+        (g, rx)
+    }
+
+    /// Inserta un Ente "vivo" (sin proceso) directamente en el grafo y
+    /// devuelve su id, para luego matarlo con `on_death`.
+    fn encarnar(g: &mut EnteGraph, label: &str, sup: Supervision) -> Ulid {
+        let mut card = EntityCard::new(label);
+        card.supervision = sup;
+        let id = card.id;
+        g.incarnated.insert(id, Incarnated {
+            card,
+            pid: None,
+            dynamic_provides: BTreeSet::new(),
+        });
+        id
+    }
+
+    fn evento(msg: BusMessage) -> BusEvent {
+        match msg.payload {
+            BusPayload::Event(ev) => ev,
+            other => panic!("esperaba BusPayload::Event, fue {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_killed_difunde_crashed_y_restarting() {
+        let (mut g, mut rx) = grafo_con_suscriptor();
+        let sup = Supervision::Restart {
+            initial: Duration::from_millis(10),
+            max: Duration::from_secs(60),
+        };
+        let id = encarnar(&mut g, "demonio", sup);
+        let (gtx, _grx) = mpsc::channel(16);
+
+        g.on_death(id, ExitStatus::Killed(Signal::SIGSEGV), &gtx).await;
+
+        // Primero el crash, luego el reinicio programado.
+        match evento(rx.try_recv().expect("debía haber EnteCrashed")) {
+            BusEvent::EnteCrashed { id: i, label, status } => {
+                assert_eq!(i, id);
+                assert_eq!(label, "demonio");
+                assert_eq!(status, LifecycleStatus::Killed(Signal::SIGSEGV as i32));
+                assert!(status.is_crash());
+            }
+            other => panic!("esperaba EnteCrashed, fue {other:?}"),
+        }
+        match evento(rx.try_recv().expect("debía haber EnteRestarting")) {
+            BusEvent::EnteRestarting { id: i, label, delay_ms } => {
+                assert_eq!(i, id);
+                assert_eq!(label, "demonio");
+                assert_eq!(delay_ms, 10);
+            }
+            other => panic!("esperaba EnteRestarting, fue {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn oneshot_exit_limpio_difunde_exited_y_nunca_crashed() {
+        let (mut g, mut rx) = grafo_con_suscriptor();
+        let id = encarnar(&mut g, "tarea", Supervision::OneShot);
+        let (gtx, _grx) = mpsc::channel(16);
+
+        g.on_death(id, ExitStatus::Exit(0), &gtx).await;
+
+        match evento(rx.try_recv().expect("debía haber EnteExited")) {
+            BusEvent::EnteExited { id: i, label } => {
+                assert_eq!(i, id);
+                assert_eq!(label, "tarea");
+            }
+            other => panic!("esperaba EnteExited, fue {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "exit limpio no debe emitir nada más");
+    }
+
+    #[tokio::test]
+    async fn oneshot_exit_anomalo_difunde_crashed() {
+        let (mut g, mut rx) = grafo_con_suscriptor();
+        let id = encarnar(&mut g, "tarea-rota", Supervision::OneShot);
+        let (gtx, _grx) = mpsc::channel(16);
+
+        g.on_death(id, ExitStatus::Exit(42), &gtx).await;
+
+        match evento(rx.try_recv().expect("debía haber EnteCrashed")) {
+            BusEvent::EnteCrashed { status, .. } => {
+                assert_eq!(status, LifecycleStatus::Exited(42));
+            }
+            other => panic!("esperaba EnteCrashed, fue {other:?}"),
+        }
+        // OneShot anómalo: sólo el crash, sin reinicio.
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn suscriptor_cerrado_se_purga() {
+        let (mut g, rx) = grafo_con_suscriptor();
+        drop(rx); // el receptor se va: el sender quedó muerto.
+        assert_eq!(g.lifecycle_subscribers.len(), 1);
+
+        let id = encarnar(&mut g, "x", Supervision::OneShot);
+        let (gtx, _grx) = mpsc::channel(16);
+        g.on_death(id, ExitStatus::Exit(0), &gtx).await;
+
+        assert!(
+            g.lifecycle_subscribers.is_empty(),
+            "el suscriptor con receptor cerrado debió purgarse"
+        );
     }
 }

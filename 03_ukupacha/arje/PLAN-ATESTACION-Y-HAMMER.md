@@ -164,6 +164,20 @@ de IA de alto nivel *encima*. Los tipos de protocolo de hammer (`hammer-core::pr
 comparten; el wire de transporte es `arje-bus`. Un solo `SO_PEERCRED`, una sola política de
 capacidades.
 
+**Fuente del `CRASHED` → ✅ cableada (2026-06-14).** `arje-bus` ganó el vocabulario de
+observabilidad de ciclo de vida que faltaba: `BusRequest::Subscribe` (anónimo, como
+`ListEntes`) + `BusPayload::Event(BusEvent)`. `arje-zero` registra los suscriptores
+(`lifecycle_subscribers`) y difunde en `on_death` —el punto único de detección de muerte—
+`EnteCrashed{id,label,status}` (exit≠0 o señal), `EnteRestarting{id,label,delay_ms}` (tras
+backoff) y `EnteExited{id,label}` (exit 0), purgando perezosamente los suscriptores con el
+extremo cerrado. 4 tests en `graph/lifecycle.rs::broadcast_tests`. Del lado hammer, el sink
+`hammerd::crashes` (3 tests) traduce la señal normalizada → `Event::Crashed` y la bombea a su
+`EventBus` → `agent.sock`. **Resta el adaptador de transporte** (un thread hammerd que conecte
+a `$ARJE_BUS_SOCK`, mande `Subscribe` y reenvíe cada `BusEvent` a `crashes::pump` vía
+`BusClient::{subscribe,next_event}`) + la decisión de cómo comparten el wire los dos repos
+(dep directa a `arje-bus` vs. crate de proto compartido vs. relectura del frame postcard) —
+único tramo que necesita un init vivo para validarse end-to-end.
+
 ### B.3 Modelo de confianza en capas (el puente elegante)
 
 Los dos modelos no compiten, se encadenan:
@@ -182,9 +196,11 @@ que ninguno de los dos sepa de criptografía del otro.
 ### B.4 Roadmap conjunto
 
 - hammer *Track posterior → init propio* = **adoptar arje**. arje entrega el `CRASHED` real
-  (supervisión) que la Fase 5 de hammer dejó diferido.
+  (supervisión) que la Fase 5 de hammer dejó diferido — **fuente y sink ya cableados (B.2),
+  resta el adaptador de transporte** (ver §B.2).
 - `arje-cas` → BLAKE3 (A0) desbloquea el CAS compartido (hammer ya usa prefijo `b3:`).
-- Bus unificado (B.2) antes de que hammerd corra bajo arje.
+- Bus unificado (B.2) antes de que hammerd corra bajo arje — vocabulario de eventos ✅; falta
+  el cable de transporte arje-bus ↔ hammerd.
 
 ### B.5 Caveat estratégico (no diluir el norte)
 

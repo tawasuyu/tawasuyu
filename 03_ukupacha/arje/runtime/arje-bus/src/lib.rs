@@ -61,6 +61,45 @@ pub struct BusMessage {
 pub enum BusPayload {
     Request(BusRequest),
     Response(BusResponse),
+    /// Notificación difundida por arje-zero hacia las conexiones suscritas
+    /// (`BusRequest::Subscribe`). A diferencia de Request/Response, no lleva
+    /// `seq` correlacionable ni espera contestación: es fire-and-forget
+    /// server→cliente. Es el vocabulario de observabilidad de ciclo de vida
+    /// que permite que un supervisor externo (p. ej. la capa de IA de hammer,
+    /// `hammerd`) reaccione a un crash sin pollear `ListEntes`.
+    Event(BusEvent),
+}
+
+/// Estado terminal de un Ente, en forma serializable para el wire.
+/// Espejo de `arje-zero`'s `ExitStatus` sin depender de `nix::Signal`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum LifecycleStatus {
+    /// Terminó con `exit(code)`. `0` = limpio; cualquier otro = anómalo.
+    Exited(i32),
+    /// Murió por señal POSIX (número crudo, p. ej. 9 = SIGKILL, 11 = SIGSEGV).
+    Killed(i32),
+}
+
+impl LifecycleStatus {
+    /// `true` si la terminación fue anómala (exit≠0 o cualquier señal).
+    pub fn is_crash(&self) -> bool {
+        !matches!(self, LifecycleStatus::Exited(0))
+    }
+}
+
+/// Evento de ciclo de vida difundido a los suscriptores del bus. Es la
+/// **fuente real** del `CRASHED` que la capa de IA esperaba (hammer roadmap
+/// Fase 5 / B.2): arje supervisa, detecta la muerte en `on_death`, y la
+/// difunde aquí; el suscriptor la traduce a su propio protocolo.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum BusEvent {
+    /// Un Ente supervisado terminó de forma anómala (exit≠0 o señal).
+    EnteCrashed { id: Ulid, label: String, status: LifecycleStatus },
+    /// arje programó un reinicio del Ente tras el backoff. `delay_ms` es la
+    /// espera antes del próximo intento.
+    EnteRestarting { id: Ulid, label: String, delay_ms: u64 },
+    /// Un Ente terminó de forma limpia (exit 0) y no será reiniciado.
+    EnteExited { id: Ulid, label: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +167,13 @@ pub enum BusRequest {
     /// memoria residente + nº de hilos. Anónimo. `Error` si el Ente no vive o
     /// no tiene PID (Virtual/Wasm).
     EnteTelemetry { target: Ulid },
+
+    /// Suscribe esta conexión al stream de eventos de ciclo de vida
+    /// (`BusEvent`). Tras un `Ok`, arje-zero empuja un `BusPayload::Event`
+    /// por cada muerte/crash/reinicio de Ente. Anónimo (observabilidad, como
+    /// `ListEntes`): no requiere identidad autenticada. La conexión deja de
+    /// servir para request-response — pasa a ser un canal de sólo-eventos.
+    Subscribe,
 }
 
 /// Estado de vida de un Ente, tal como lo conoce arje-zero.
@@ -237,6 +283,7 @@ impl BusServer {
             BusPayload::Response(BusResponse::Ok) => Ok(()),
             BusPayload::Response(other) => anyhow::bail!("Announce rechazado: {other:?}"),
             BusPayload::Request(_) => anyhow::bail!("expected Response, got Request"),
+            BusPayload::Event(_) => anyhow::bail!("expected Response, got Event"),
         }
     }
 
@@ -253,6 +300,7 @@ impl BusServer {
                     BusResponse::Error(format!("BusServer no maneja {other:?}"))
                 }
                 BusPayload::Response(_) => continue,
+                BusPayload::Event(_) => continue,
             };
             let out = BusMessage {
                 from: Some(self.self_id),
@@ -291,6 +339,30 @@ impl BusClient {
         match resp.payload {
             BusPayload::Response(r) => Ok(r),
             BusPayload::Request(_) => anyhow::bail!("expected response, got request"),
+            BusPayload::Event(_) => anyhow::bail!("expected response, got event"),
+        }
+    }
+
+    /// Suscribe esta conexión al stream de eventos de ciclo de vida. Tras un
+    /// `Ok` del servidor, la conexión pasa a modo sólo-eventos: usá
+    /// [`next_event`](Self::next_event) para drenarlos. No mezclar con `call`.
+    pub async fn subscribe(&mut self) -> anyhow::Result<()> {
+        match self.call(BusRequest::Subscribe).await? {
+            BusResponse::Ok => Ok(()),
+            other => anyhow::bail!("Subscribe rechazado: {other:?}"),
+        }
+    }
+
+    /// Bloquea hasta el próximo `BusEvent` difundido por arje-zero. Ignora
+    /// cualquier frame que no sea un evento (no debería llegar otra cosa por
+    /// una conexión suscrita). Devuelve error si la conexión se cierra.
+    pub async fn next_event(&mut self) -> anyhow::Result<BusEvent> {
+        loop {
+            let msg = read_frame(&mut self.stream).await?;
+            match msg.payload {
+                BusPayload::Event(ev) => return Ok(ev),
+                _ => continue,
+            }
         }
     }
 }

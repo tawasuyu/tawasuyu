@@ -50,6 +50,12 @@ pub struct EnteGraph {
     /// Conexiones del bus indexadas por la identidad anunciada y verificada
     /// con SO_PEERCRED. El value es el extremo de escritura del writer task.
     pub(in crate::graph) bus_connections: HashMap<Ulid, mpsc::Sender<BusMessage>>,
+    /// Conexiones suscritas al stream de eventos de ciclo de vida
+    /// (`BusRequest::Subscribe`). A diferencia de `bus_connections`, no se
+    /// indexan por identidad —un suscriptor puede ser anónimo, como un
+    /// supervisor externo (la capa de IA de hammer). Se purgan al difundir
+    /// cuando el receptor cerró su extremo. Ver `on_death` → `broadcast_lifecycle`.
+    pub(in crate::graph) lifecycle_subscribers: Vec<mpsc::Sender<BusMessage>>,
     /// Invokes forwardeados pendientes de respuesta del proveedor.
     pub(in crate::graph) pending_invokes: HashMap<u64, oneshot::Sender<BusResponse>>,
     pub(in crate::graph) next_invoke_seq: u64,
@@ -164,6 +170,7 @@ impl EnteGraph {
             pending_genesis,
             children: HashMap::new(),
             bus_connections: HashMap::new(),
+            lifecycle_subscribers: Vec::new(),
             pending_invokes: HashMap::new(),
             next_invoke_seq: 0,
             restart_state: HashMap::new(),
