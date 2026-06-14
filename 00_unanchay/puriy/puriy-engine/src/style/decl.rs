@@ -42,6 +42,24 @@ pub(crate) enum WideProp {
 }
 
 impl WideProp {
+    /// Todas las propiedades del subset curado. Lo consume el shorthand `all`
+    /// (Fase 7.851) para expandir `all: <wide-kw>` a un `Wide` por longhand.
+    pub(crate) const ALL: [WideProp; 13] = [
+        WideProp::Color,
+        WideProp::Background,
+        WideProp::FontSize,
+        WideProp::FontWeight,
+        WideProp::FontStyle,
+        WideProp::FontFamily,
+        WideProp::LineHeight,
+        WideProp::TextAlign,
+        WideProp::TextDecoration,
+        WideProp::Visibility,
+        WideProp::Display,
+        WideProp::BoxSizing,
+        WideProp::BorderColor,
+    ];
+
     /// `true` si la propiedad hereda por defecto (define qué hace `unset`).
     pub(crate) fn is_inherited(self) -> bool {
         matches!(

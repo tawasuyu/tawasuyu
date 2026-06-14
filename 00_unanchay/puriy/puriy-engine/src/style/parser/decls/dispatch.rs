@@ -6,7 +6,7 @@ use super::*;
 
 /// Keyword CSS-wide (`inherit`/`initial`/`unset`/`revert`). `revert` se
 /// aproxima como `unset`. Fase 7.225.
-fn wide_keyword(value: &str) -> Option<WideKw> {
+pub(crate) fn wide_keyword(value: &str) -> Option<WideKw> {
     match value.trim().to_ascii_lowercase().as_str() {
         "inherit" => Some(WideKw::Inherit),
         "initial" => Some(WideKw::Initial),

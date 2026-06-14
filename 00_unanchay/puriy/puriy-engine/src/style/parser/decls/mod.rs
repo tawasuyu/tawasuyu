@@ -59,6 +59,17 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         // cheap si el value no contiene `var(` (early-out al primer find).
         let substituted = substitute_vars(value, vars);
         let value = substituted.as_str();
+        // Fase 7.851 — shorthand CSS-wide `all: inherit|initial|unset|revert`.
+        // Expande a un `Wide{prop, kw}` por cada propiedad del subset curado
+        // (`WideProp::ALL`). Sólo acepta keywords wide; `all: <otro>` se dropea.
+        if prop.eq_ignore_ascii_case("all") {
+            if let Some(kw) = wide_keyword(value) {
+                for prop in WideProp::ALL {
+                    out.push(Decl { kind: DeclKind::Wide { prop, kw }, important });
+                }
+            }
+            continue;
+        }
         if prop.eq_ignore_ascii_case("border") {
             out.extend(parse_border_shorthand(value, important));
             continue;

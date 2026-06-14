@@ -149,3 +149,64 @@ fn intrinsic_size_keywords_parsean() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::MaxContent))));
 }
+
+// ── Fase 7.850 — light-dark() (CSS Color Adjustment) ───────────────────────
+
+#[test]
+fn light_dark_resuelve_a_claro() {
+    // El motor reporta `prefers-color-scheme: light`, así que light-dark()
+    // resuelve al PRIMER argumento (el de esquema claro).
+    let d = decls("background-color: light-dark(white, black)");
+    assert!(
+        d.iter().any(|dd| matches!(
+            dd.kind,
+            DeclKind::Background(Color { r: 255, g: 255, b: 255, .. })
+        )),
+        "light-dark(white, black) → white (esquema claro). Got: {:?}",
+        d.iter().map(|x| &x.kind).collect::<Vec<_>>()
+    );
+    // Anidado con otra función de color en el arg claro.
+    let d2 = decls("color: light-dark(rgb(10 20 30), black)");
+    assert!(d2.iter().any(|dd| matches!(
+        dd.kind,
+        DeclKind::Color(Color { r: 10, g: 20, b: 30, .. })
+    )));
+    // Argumentos inválidos → se descarta la declaración entera.
+    assert!(decls("color: light-dark(notacolor, black)").is_empty());
+    assert!(decls("color: light-dark(red)").is_empty());
+}
+// ── Fase 7.851 — shorthand `all` (CSS Cascade) ─────────────────────────────
+
+#[test]
+fn all_expande_a_todas_las_wideprops() {
+    // `all: <wide-kw>` debe emitir un `Wide` por cada propiedad del subset
+    // curado (mismo conjunto que `wide_prop`). Verificamos cobertura por
+    // cantidad y que un par representativo esté.
+    let d = decls("all: initial");
+    assert!(d.len() >= 13, "all: initial debe expandir a ≥13 longhands, got {}", d.len());
+    assert!(d.iter().all(|dd| matches!(dd.kind, DeclKind::Wide { kw: WideKw::Initial, .. })));
+    assert!(d.iter().any(|dd| matches!(
+        dd.kind,
+        DeclKind::Wide { prop: WideProp::Color, .. }
+    )));
+    assert!(d.iter().any(|dd| matches!(
+        dd.kind,
+        DeclKind::Wide { prop: WideProp::Display, .. }
+    )));
+
+    // inherit / unset también.
+    assert!(decls("all: inherit")
+        .iter()
+        .all(|dd| matches!(dd.kind, DeclKind::Wide { kw: WideKw::Inherit, .. })));
+    assert!(decls("all: unset")
+        .iter()
+        .all(|dd| matches!(dd.kind, DeclKind::Wide { kw: WideKw::Unset, .. })));
+
+    // `revert` se aproxima como `unset` (igual que en props individuales).
+    assert!(decls("all: revert")
+        .iter()
+        .all(|dd| matches!(dd.kind, DeclKind::Wide { kw: WideKw::Unset, .. })));
+
+    // Valor no-wide → se descarta (no hay `all: red`).
+    assert!(decls("all: red").is_empty());
+}

@@ -66,6 +66,15 @@ pub fn parse_color(s: &str) -> Option<Color> {
     if let Some(args) = strip_fn(s, "color-mix") {
         return parse_color_mix(args);
     }
+    // Fase 7.850 — `light-dark(<claro>, <oscuro>)` (CSS Color Adjustment 1).
+    // La resolución correcta depende del color-scheme USADO del elemento, que
+    // `parse_color` (context-free) no conoce. El motor reporta
+    // `prefers-color-scheme: light` (ver `props/media.rs`), así que
+    // resolvemos al primer argumento (esquema claro). El switch a oscuro no
+    // está cableado todavía.
+    if let Some(args) = strip_fn(s, "light-dark") {
+        return parse_light_dark(args);
+    }
     if let Some(args) = strip_fn(s, "color") {
         return parse_color_func(args);
     }
@@ -489,6 +498,21 @@ fn linear_srgb_to_oklab(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
 /// espacios de mezcla más usados en la web moderna: `srgb`, `srgb-linear`,
 /// `oklab`, `oklch` (los demás degradan a `srgb`). El método de hue de
 /// `oklch` es el default (arco más corto).
+/// `light-dark(<claro>, <oscuro>)`. Resuelve al argumento claro (primero) —
+/// ver la nota en [`parse_color`]. Exige exactamente 2 colores válidos; si
+/// alguno no parsea, la declaración entera se descarta. Fase 7.850.
+pub(crate) fn parse_light_dark(args: &str) -> Option<Color> {
+    let segments = split_top_level_comma(args);
+    if segments.len() != 2 {
+        return None;
+    }
+    // Validamos ambos (el oscuro debe ser un color real aunque no lo usemos),
+    // pero devolvemos el claro.
+    let light = parse_color(segments[0].trim())?;
+    let _dark = parse_color(segments[1].trim())?;
+    Some(light)
+}
+
 pub(crate) fn parse_color_mix(args: &str) -> Option<Color> {
     let segments = split_top_level_comma(args);
     if segments.len() != 3 {
