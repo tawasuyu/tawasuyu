@@ -11,6 +11,7 @@ description = "pluma — backend Llimphi del editor DAG: pinta un RenderPlan com
 pluma-render-plan = { path = "../pluma-render-plan" }
 pluma-core = { path = "../pluma-core" }
 pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-outline = { path = "../pluma-outline" }
 pluma-align = { path = "../pluma-align" }
 pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
 llimphi-ui = { workspace = true }

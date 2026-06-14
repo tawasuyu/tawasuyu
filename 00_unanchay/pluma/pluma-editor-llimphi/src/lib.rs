@@ -12,6 +12,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cuerpo_ide;
+pub mod lienzos;
 pub mod multilienzo;
 pub mod multilienzo_editor;
 
