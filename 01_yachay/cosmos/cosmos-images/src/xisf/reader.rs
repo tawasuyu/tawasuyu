@@ -323,26 +323,7 @@ impl<R: Read + Seek> XisfFile<R> {
         self.reader.seek(SeekFrom::Start(info.location.offset))?;
         let mut buffer = vec![0u8; info.location.size as usize];
         self.reader.read_exact(&mut buffer)?;
-
-        // Decompress if needed
-        match info.compression {
-            XisfCompression::None => Ok(buffer),
-            XisfCompression::Lz4 | XisfCompression::Lz4Hc => {
-                lz4_flex::decompress_size_prepended(&buffer).map_err(|e| {
-                    XisfError::InvalidFormat(format!("LZ4 decompression failed: {}", e))
-                })
-            }
-            XisfCompression::Zlib => {
-                use flate2::read::ZlibDecoder;
-                let mut decoder = ZlibDecoder::new(&buffer[..]);
-                let mut decompressed = Vec::new();
-                decoder.read_to_end(&mut decompressed)?;
-                Ok(decompressed)
-            }
-            XisfCompression::Zstd => Err(XisfError::InvalidFormat(
-                "Zstd decompression not yet implemented".to_string(),
-            )),
-        }
+        decompress_block(info.compression, buffer)
     }
 
     pub fn read_image_data_typed<T>(&mut self, index: usize) -> Result<Vec<T>>
@@ -393,10 +374,65 @@ fn copy_sample(dst: &mut [u8], src: &[u8], dst_offset: usize, src_offset: usize,
     dst[dst_offset..dst_offset + len].copy_from_slice(&src[src_offset..src_offset + len]);
 }
 
+/// Descomprime un bloque de datos de pixel según su códec XISF. `None` pasa
+/// el buffer tal cual; LZ4/Zlib/Zstd lo expanden. Aislado del lector para
+/// poder testear cada códec sin armar un archivo XISF completo.
+fn decompress_block(compression: XisfCompression, buffer: Vec<u8>) -> Result<Vec<u8>> {
+    match compression {
+        XisfCompression::None => Ok(buffer),
+        XisfCompression::Lz4 | XisfCompression::Lz4Hc => {
+            lz4_flex::decompress_size_prepended(&buffer).map_err(|e| {
+                XisfError::InvalidFormat(format!("LZ4 decompression failed: {}", e))
+            })
+        }
+        XisfCompression::Zlib => {
+            use flate2::read::ZlibDecoder;
+            let mut decoder = ZlibDecoder::new(&buffer[..]);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            Ok(decompressed)
+        }
+        XisfCompression::Zstd => {
+            // Los frames Zstd son auto-descriptivos (el tamaño sin comprimir
+            // vive en el header del frame), así que `decode_all` procesa todo
+            // el buffer sin que llevemos el tamaño aparte — misma forma que la
+            // rama Zlib.
+            zstd::decode_all(&buffer[..]).map_err(|e| {
+                XisfError::InvalidFormat(format!("Zstd decompression failed: {}", e))
+            })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn decompress_block_zstd_roundtrip() {
+        // Un payload con estructura (no aleatorio) para que comprima de verdad.
+        let payload: Vec<u8> = (0..4096u32).map(|i| (i % 251) as u8).collect();
+        let compressed = zstd::encode_all(&payload[..], 3).expect("zstd encode");
+        assert!(compressed.len() < payload.len(), "debería comprimir");
+        let out = decompress_block(XisfCompression::Zstd, compressed).expect("zstd decode");
+        assert_eq!(out, payload, "el roundtrip Zstd debe ser exacto");
+    }
+
+    #[test]
+    fn decompress_block_zstd_garbage_es_error() {
+        let basura = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x01];
+        assert!(decompress_block(XisfCompression::Zstd, basura).is_err());
+    }
+
+    #[test]
+    fn decompress_block_none_pasa_intacto() {
+        let data = vec![1u8, 2, 3, 4, 5];
+        assert_eq!(
+            decompress_block(XisfCompression::None, data.clone()).unwrap(),
+            data
+        );
+    }
 
     fn create_valid_xisf_xml() -> String {
         r#"<?xml version="1.0" encoding="UTF-8"?>
