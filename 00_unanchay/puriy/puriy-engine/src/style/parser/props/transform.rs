@@ -51,6 +51,16 @@ fn translate_axis(s: &str) -> Option<(f32, f32)> {
     parse_length_px(s).map(|px| (px, 0.0))
 }
 
+/// Factor de escala de `scale()`/`scaleX/Y()` (CSS Transforms 2): número
+/// (`0.5`) o porcentaje (`50%` = 0.5). Fase 7.907.
+fn parse_scale_factor(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(p) = s.strip_suffix('%') {
+        return p.trim().parse::<f32>().ok().map(|n| n / 100.0);
+    }
+    s.parse::<f32>().ok()
+}
+
 /// Construye los `Transform` de un `translate` a partir de sus componentes px
 /// y %: como las traslaciones conmutan, separar la parte px (`Translate`) de
 /// la % (`TranslatePct`) en dos entradas adyacentes es equivalente a la
@@ -94,14 +104,14 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Vec<Transform
         }
         "scale" => match parts.as_slice() {
             [s] => {
-                let v = s.parse::<f32>().ok()?;
+                let v = parse_scale_factor(s)?;
                 one(Transform::Scale(v, v))
             }
-            [sx, sy] => one(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
+            [sx, sy] => one(Transform::Scale(parse_scale_factor(sx)?, parse_scale_factor(sy)?)),
             _ => None,
         },
-        "scalex" => one(Transform::Scale(parts[0].parse().ok()?, 1.0)),
-        "scaley" => one(Transform::Scale(1.0, parts[0].parse().ok()?)),
+        "scalex" => one(Transform::Scale(parse_scale_factor(parts[0])?, 1.0)),
+        "scaley" => one(Transform::Scale(1.0, parse_scale_factor(parts[0])?)),
         // Fase 7.875 — `parse_hue` cubre deg/rad/grad/turn, `none`, sin-unidad
         // (→deg) y ahora `calc()`. Reemplaza el strip manual.
         "rotate" => one(Transform::Rotate(parse_hue(parts[0])?)),
@@ -137,7 +147,7 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Vec<Transform
         },
         "translatez" => parse_length_px(parts.first()?).map(|_| vec![Transform::Translate(0.0, 0.0)]),
         "scale3d" => match parts.as_slice() {
-            [sx, sy, _sz] => one(Transform::Scale(sx.parse().ok()?, sy.parse().ok()?)),
+            [sx, sy, _sz] => one(Transform::Scale(parse_scale_factor(sx)?, parse_scale_factor(sy)?)),
             _ => None,
         },
         "scalez" => parts.first()?.parse::<f32>().ok().map(|_| vec![Transform::Scale(1.0, 1.0)]),

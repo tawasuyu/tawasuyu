@@ -761,8 +761,74 @@ fn lab_to_linear_srgb(l: f32, a: f32, b: f32) -> (f32, f32, f32) {
     )
 }
 
+/// sRGB(0-255) → CIE Lab(D50). Inverso de [`lab_to_linear_srgb`]: aplica gamma
+/// inversa, sRGB-lineal → XYZ(D65), Bradford D65→D50 y XYZ(D50) → Lab.
+/// Fase 7.907 (habilita color relativo `lab/lch(from …)`).
+fn srgb_to_lab(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    const KAPPA: f32 = 24389.0 / 27.0;
+    const EPS: f32 = 216.0 / 24389.0;
+    const XN: f32 = 0.964_295_7;
+    const YN: f32 = 1.0;
+    const ZN: f32 = 0.825_104_6;
+    let (rl, gl, bl) = (
+        srgb_to_linear(r as f32 / 255.0),
+        srgb_to_linear(g as f32 / 255.0),
+        srgb_to_linear(b as f32 / 255.0),
+    );
+    // sRGB lineal → XYZ(D65).
+    let x65 = 0.412_390_8 * rl + 0.357_584_34 * gl + 0.180_480_8 * bl;
+    let y65 = 0.212_639 * rl + 0.715_168_65 * gl + 0.072_192_32 * bl;
+    let z65 = 0.019_330_818 * rl + 0.119_194_78 * gl + 0.950_532_2 * bl;
+    // Bradford D65 → D50 (inverso de la matriz D50→D65 de lab_to_linear_srgb).
+    let x = 1.047_929_8 * x65 + 0.022_946_793 * y65 - 0.050_192_23 * z65;
+    let y = 0.029_627_816 * x65 + 0.990_434_5 * y65 - 0.017_073_825 * z65;
+    let z = -0.009_243_058 * x65 + 0.015_055_145 * y65 + 0.751_874_3 * z65;
+    // XYZ(D50) → Lab.
+    let f = |t: f32| if t > EPS { t.cbrt() } else { (KAPPA * t + 16.0) / 116.0 };
+    let (fx, fy, fz) = (f(x / XN), f(y / YN), f(z / ZN));
+    (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+}
+
+/// `lab(from <c> l a b [/a])` y `lch(from <c> l c h [/a])` (CSS Color 5).
+/// `polar` distingue lch (c/h) de lab (a/b). Fase 7.907.
+fn parse_lab_relative(rest: &str, polar: bool) -> Option<Color> {
+    let (origin, comps) = split_origin_and_components(rest)?;
+    let o = parse_color(origin)?;
+    let (l0, a0, b0) = srgb_to_lab(o.r, o.g, o.b);
+    let (parts, alpha) = split_color_args(comps)?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let (l, a, b);
+    if polar {
+        let c0 = (a0 * a0 + b0 * b0).sqrt();
+        let h0 = b0.atan2(a0).to_degrees().rem_euclid(360.0);
+        let binds = [("l", l0), ("c", c0), ("h", h0), ("alpha", o.a as f32 / 255.0)];
+        l = resolve_rel_component(parts[0], &binds, 100.0)?;
+        let c = resolve_rel_component(parts[1], &binds, 150.0)?;
+        let h = resolve_rel_component(parts[2], &binds, 360.0)?.to_radians();
+        a = c * h.cos();
+        b = c * h.sin();
+    } else {
+        let binds = [("l", l0), ("a", a0), ("b", b0), ("alpha", o.a as f32 / 255.0)];
+        l = resolve_rel_component(parts[0], &binds, 100.0)?;
+        a = resolve_rel_component(parts[1], &binds, 125.0)?;
+        b = resolve_rel_component(parts[2], &binds, 125.0)?;
+    }
+    let al = match alpha {
+        Some(e) => (resolve_rel_component(e, &binds_alpha(&o), 1.0)? * 255.0).clamp(0.0, 255.0).round() as u8,
+        None => o.a,
+    };
+    let (r, g, bb) = lab_to_linear_srgb(l, a, b);
+    Some(linear_srgb_to_color(r, g, bb, al))
+}
+
 /// `lab(L a b [/ A])` (CSS Color 4). L 0..100 (o %), a/b número (o % de 125).
 pub(crate) fn parse_lab_func(args: &str) -> Option<Color> {
+    // Fase 7.907 — color relativo `lab(from <color> l a b [/ a])`.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_lab_relative(rest, false);
+    }
     let (parts, alpha) = split_color_args(args)?;
     if parts.len() != 3 {
         return None;
@@ -780,6 +846,10 @@ pub(crate) fn parse_lab_func(args: &str) -> Option<Color> {
 
 /// `lch(L C H [/ A])` (CSS Color 4). C → a/b polar; resto como `lab`.
 pub(crate) fn parse_lch_func(args: &str) -> Option<Color> {
+    // Fase 7.907 — color relativo `lch(from <color> l c h [/ a])`.
+    if let Some(rest) = strip_from_prefix(args) {
+        return parse_lab_relative(rest, true);
+    }
     let (parts, alpha) = split_color_args(args)?;
     if parts.len() != 3 {
         return None;

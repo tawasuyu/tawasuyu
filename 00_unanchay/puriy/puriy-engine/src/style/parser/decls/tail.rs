@@ -252,12 +252,47 @@ pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
     }
+    // Fase 7.907 — `attr()` (fuera de content), `anchor()` y `anchor-size()`
+    // necesitan DOM/geometría que el parser no tiene. Si traen un FALLBACK
+    // (último argumento de nivel superior) lo resolvemos; sin fallback, drop.
+    for fname in ["attr", "anchor-size", "anchor"] {
+        if let Some(inner) = strip_named_fn(s, fname) {
+            return last_top_comma(inner).and_then(|fb| parse_length_or_pct(fb.trim()));
+        }
+    }
     // Funciones matemáticas: `calc()`/`min()`/`max()`/`clamp()` (anidables,
     // con precedencia `*`/`/` sobre `+`/`-` y paréntesis).
     if is_math_fn(s) {
         return eval_calc(s).and_then(calcval_to_length);
     }
     parse_length_px(s).map(LengthVal::Px)
+}
+
+/// Si `s` es `name(...)` (case-insensitive, sin espacio antes del `(`),
+/// devuelve los argumentos internos sin los paréntesis. Fase 7.907.
+fn strip_named_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    let s = s.trim();
+    if s.len() <= name.len() + 1 || !s[..name.len()].eq_ignore_ascii_case(name) {
+        return None;
+    }
+    s[name.len()..].trim_start().strip_prefix('(')?.strip_suffix(')')
+}
+
+/// Parte tras la ÚLTIMA coma de nivel superior (el fallback de `attr()`/
+/// `anchor()`). `None` si no hay coma a nivel superior. Fase 7.907.
+fn last_top_comma(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    let mut depth = 0i32;
+    let mut last = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b',' if depth == 0 => last = Some(i),
+            _ => {}
+        }
+    }
+    last.map(|i| &s[i + 1..])
 }
 
 /// Parsea el value de `content:` para pseudo-elements. Soporta una

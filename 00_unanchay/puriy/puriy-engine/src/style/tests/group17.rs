@@ -1143,3 +1143,64 @@ fn calc_size_y_animation_duration_auto() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::AnimationDuration(s) if s == 0.0)));
 }
+
+// ── Fase 7.907 — attr/anchor fallback, scale(%), lab/lch relativo ─────────
+
+#[test]
+fn attr_anchor_fallback_en_longitud() {
+    // attr()/anchor()/anchor-size() fuera de su contexto resuelven al fallback.
+    assert!(decls("width: attr(data-w px, 100px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::Px(p)) if (p - 100.0).abs() < 1e-6)));
+    assert!(decls("width: attr(data-w type(<length>), 50px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Width(LengthVal::Px(p)) if (p - 50.0).abs() < 1e-6)));
+    assert!(decls("height: anchor-size(--a height, 200px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Height(LengthVal::Px(p)) if (p - 200.0).abs() < 1e-6)));
+    assert!(decls("top: anchor(--a bottom, 10px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::InsetTop(LengthVal::Px(p)) if (p - 10.0).abs() < 1e-6)));
+    // Sin fallback → drop (necesita DOM/geometría).
+    assert!(decls("width: attr(data-w px)").is_empty());
+    assert!(decls("left: anchor(--a right)").is_empty());
+}
+
+#[test]
+fn transform_scale_porcentaje() {
+    let sc = |s: &str| decls(s).iter().find_map(|d| match &d.kind {
+        DeclKind::Transforms(t) => t.iter().find_map(|x| match x {
+            Transform::Scale(a, b) => Some((*a, *b)),
+            _ => None,
+        }),
+        _ => None,
+    });
+    // 50% = 0.5.
+    assert_eq!(sc("transform: scale(50%)"), Some((0.5, 0.5)));
+    assert_eq!(sc("transform: scale(50%, 200%)"), Some((0.5, 2.0)));
+    assert_eq!(sc("transform: scaleX(150%)"), Some((1.5, 1.0)));
+    // número crudo sigue valiendo.
+    assert_eq!(sc("transform: scale(2)"), Some((2.0, 2.0)));
+}
+
+#[test]
+fn color_relativo_lab_lch() {
+    let col = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Color(c) => Some(c),
+        _ => None,
+    });
+    let near = |a: Color, b: Color| {
+        (a.r as i32 - b.r as i32).abs() <= 3
+            && (a.g as i32 - b.g as i32).abs() <= 3
+            && (a.b as i32 - b.b as i32).abs() <= 3
+    };
+    let red = Color::rgb(255, 0, 0);
+    // Round-trip a través de Lab/LCH reconstruye el origen.
+    assert!(near(col("color: lab(from red l a b)").unwrap(), red));
+    assert!(near(col("color: lch(from red l c h)").unwrap(), red));
+    // Tweak de lightness: subir L aclara (sin volverse negro).
+    let lighter = col("color: lch(from red calc(l + 20) c h)").unwrap();
+    assert!(lighter.r >= red.r || lighter.g > 0 || lighter.b > 0);
+    // alpha relativo.
+    assert!(matches!(col("color: lab(from red l a b / 0.5)"), Some(c) if c.a == 128));
+}
