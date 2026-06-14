@@ -168,6 +168,47 @@ fn parse_areas_calcula_coordenadas() {
 }
 
 #[test]
+fn grid_align_items_alinea_en_celda() {
+    // Celda de 40×80; el ítem (auto, mide 40×30 por su contenido fijo) con
+    // `align-items: end` en el contenedor se baja al fondo de la celda
+    // (y ≈ 80 − 30 = 50). Antes del fix align-items se ignoraba en grid y el
+    // ítem quedaba arriba (y ≈ 0, estirado o al tope).
+    let html = r##"<html><head><style>
+        .g { display:grid; grid-template-columns: 40px; grid-template-rows: 80px; align-items: end; }
+        .c { width:40px; height:30px; }
+      </style></head><body><div class="g"><div class="c">x</div></div></body></html>"##;
+    let tree = parse(html);
+    let cont = find_tag(&tree.root, "div").expect("grid");
+    let view = box_to_view(cont);
+    let item = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(
+        (item.location.y - 50.0).abs() < 1.0,
+        "align-items:end baja el ítem al fondo (y≈50), está en {}",
+        item.location.y
+    );
+}
+
+#[test]
+fn grid_justify_content_distribuye_pistas() {
+    // 1 columna de 40px en un grid de 200px de ancho con `justify-content: end`
+    // → la pista se empuja a la derecha (x ≈ 200 − 40 = 160). Sin el fix la
+    // pista quedaba a la izquierda (x ≈ 0).
+    let html = r##"<html><head><style>
+        .g { display:grid; width:200px; grid-template-columns: 40px; justify-content: end; }
+        .c { width:40px; height:30px; }
+      </style></head><body><div class="g"><div class="c">x</div></div></body></html>"##;
+    let tree = parse(html);
+    let cont = find_tag(&tree.root, "div").expect("grid");
+    let view = box_to_view(cont);
+    let item = layout_at(view, (400.0, 400.0), &[0]);
+    assert!(
+        (item.location.x - 160.0).abs() < 1.0,
+        "justify-content:end empuja la pista a la derecha (x≈160), está en {}",
+        item.location.x
+    );
+}
+
+#[test]
 fn grid_column_coloca_item_explicito() {
     // Grilla de 3 columnas de 40px. El 1er ítem pide `grid-column: 3` → salta
     // a la 3ª columna (x ≈ 80). Antes del puente la colocación se ignoraba y

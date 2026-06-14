@@ -73,10 +73,14 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         }),
     };
 
-    // justify/align: si es flex, vienen del autor; sino, sólo derivamos
-    // `justify_content` de `text-align` sobre bloques con inlines (el
-    // viejo comportamiento heredado).
-    let justify_content = if is_flex {
+    // justify/align: flex y grid los toman del autor. En grid, `justify-content`
+    // distribuye las PISTAS en el eje inline cuando no llenan el contenedor, y
+    // `align-items` fija la alineación default de los ítems dentro de su celda
+    // (eje de bloque). Para bloques con inlines derivamos `justify_content` de
+    // `text-align` (comportamiento heredado). Los defaults del engine
+    // (Start/Stretch) coinciden con los de taffy, así que esto sólo altera el
+    // layout cuando el autor pone un valor explícito.
+    let justify_content = if is_flex || is_grid {
         Some(map_justify(b.justify_content))
     } else if block_inline_wrap {
         match b.text_align {
@@ -88,7 +92,7 @@ pub(crate) fn box_style(b: &BoxNode, zoom: f32) -> Style {
         None
     };
 
-    let align_items = if is_flex {
+    let align_items = if is_flex || is_grid {
         Some(map_align(b.align_items))
     } else {
         None
