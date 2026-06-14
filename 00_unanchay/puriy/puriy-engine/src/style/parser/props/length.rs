@@ -62,7 +62,8 @@ pub(crate) fn parse_vertical_align(s: &str) -> Option<VerticalAlign> {
     match s.trim().to_ascii_lowercase().as_str() {
         "baseline" => Some(VerticalAlign::Baseline),
         "top" | "text-top" => Some(VerticalAlign::Top),
-        "middle" => Some(VerticalAlign::Middle),
+        // Fase 7.842 — `-webkit-baseline-middle` (alias legacy WebKit) ≈ middle.
+        "middle" | "-webkit-baseline-middle" => Some(VerticalAlign::Middle),
         "bottom" | "text-bottom" => Some(VerticalAlign::Bottom),
         "super" => Some(VerticalAlign::Super),
         "sub" => Some(VerticalAlign::Sub),
@@ -82,8 +83,12 @@ pub(crate) fn parse_visibility(s: &str) -> Option<Visibility> {
 
 pub(crate) fn parse_pointer_events(s: &str) -> Option<PointerEvents> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(PointerEvents::Auto),
         "none" => Some(PointerEvents::None),
+        // Fase 7.841 — los valores SVG (`visiblePainted`/`painted`/`fill`/
+        // `stroke`/`all`/`visible`…) significan todos "recibe eventos de
+        // puntero"; en nuestro modelo binario (Auto|None) colapsan a Auto.
+        "auto" | "all" | "visible" | "visiblepainted" | "visiblefill"
+        | "visiblestroke" | "painted" | "fill" | "stroke" => Some(PointerEvents::Auto),
         _ => None,
     }
 }

@@ -86,8 +86,10 @@ pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
 
 pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {
     match s.trim().to_ascii_lowercase().as_str() {
-        "left" | "start" => Some(TextAlign::Left),
-        "center" => Some(TextAlign::Center),
+        // Fase 7.845 — `match-parent` (sin contexto de dirección, en LTR ≈
+        // start = left) y alias vendor `-webkit-center`/`-moz-center` → center.
+        "left" | "start" | "match-parent" => Some(TextAlign::Left),
+        "center" | "-webkit-center" | "-moz-center" => Some(TextAlign::Center),
         "right" | "end" => Some(TextAlign::Right),
         "justify" => Some(TextAlign::Justify),
         _ => None,

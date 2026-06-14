@@ -29,8 +29,13 @@ pub(crate) fn parse_display(s: &str) -> Option<Display> {
         "block" => Some(Display::Block),
         "inline" => Some(Display::Inline),
         "inline-block" => Some(Display::InlineBlock),
-        "flex" => Some(Display::Flex),
-        "inline-flex" => Some(Display::InlineFlex),
+        // Fase 7.844 — alias vendor del flexbox viejo: `-webkit-flex`/`-webkit-box`
+        // → flex; `-webkit-inline-flex` → inline-flex (aprox, sin la sintaxis
+        // box-orient/box-flex de 2009).
+        "flex" | "-webkit-flex" | "-webkit-box" => Some(Display::Flex),
+        "inline-flex" | "-webkit-inline-flex" | "-webkit-inline-box" => {
+            Some(Display::InlineFlex)
+        }
         "grid" => Some(Display::Grid),
         "inline-grid" => Some(Display::InlineGrid),
         "none" => Some(Display::None),
@@ -228,6 +233,9 @@ pub(crate) fn parse_white_space(s: &str) -> Option<WhiteSpace> {
         "pre" => Some(WhiteSpace::Pre),
         "pre-wrap" => Some(WhiteSpace::PreWrap),
         "pre-line" => Some(WhiteSpace::PreLine),
+        // Fase 7.843 — `break-spaces` ≈ pre-wrap (difiere sólo en el manejo de
+        // los espacios al final de línea, que no modelamos): aproximación.
+        "break-spaces" => Some(WhiteSpace::PreWrap),
         _ => None,
     }
 }

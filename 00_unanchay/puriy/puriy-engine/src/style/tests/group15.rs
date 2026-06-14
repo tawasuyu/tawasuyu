@@ -357,3 +357,43 @@ fn alignment_qualifiers() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Start))));
 }
+
+// ── Fase 7.841-7.845 — value-keywords/aliases a variantes existentes ──────
+
+#[test]
+fn pointer_events_svg_y_aliases_varios() {
+    // pointer-events SVG → Auto (recibe eventos); none → None.
+    for v in ["all", "visiblePainted", "visibleFill", "painted", "fill", "stroke", "visible"] {
+        assert!(
+            decls(&format!("pointer-events: {v}"))
+                .iter()
+                .any(|d| matches!(d.kind, DeclKind::PointerEvents(PointerEvents::Auto))),
+            "pointer-events: {v}"
+        );
+    }
+    assert!(decls("pointer-events: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PointerEvents(PointerEvents::None))));
+    // white-space: break-spaces ≈ pre-wrap.
+    assert!(decls("white-space: break-spaces")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WhiteSpace(WhiteSpace::PreWrap))));
+    // vertical-align: -webkit-baseline-middle → middle.
+    assert!(decls("vertical-align: -webkit-baseline-middle")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::VerticalAlign(VerticalAlign::Middle))));
+    // display vendor flex.
+    assert!(decls("display: -webkit-flex")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Display(Display::Flex))));
+    assert!(decls("display: -webkit-inline-flex")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Display(Display::InlineFlex))));
+    // text-align vendor center + match-parent.
+    assert!(decls("text-align: -webkit-center")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextAlign(TextAlign::Center))));
+    assert!(decls("text-align: match-parent")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextAlign(TextAlign::Left))));
+}
