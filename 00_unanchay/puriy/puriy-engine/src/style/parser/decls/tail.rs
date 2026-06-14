@@ -657,7 +657,30 @@ fn classify_calc_num(t: &str) -> Option<CalcVal> {
     if let Ok(n) = t.parse::<f32>() {
         return Some(CalcVal::Number(n));
     }
+    // Fase 7.875 — `<angle>` dentro de calc → `Number(grados)`. Conviven con
+    // los números puros (un calc de ángulo da grados); en un contexto de
+    // longitud el `Number` resultante se rechaza igual (no es una length).
+    if let Some(deg) = token_angle_degrees(t) {
+        return Some(CalcVal::Number(deg));
+    }
     parse_length_px(t).map(|px| CalcVal::Length { px, pct: 0.0 })
+}
+
+/// `<angle>` con unidad → grados, sin aceptar calc (para evitar recursión
+/// dentro del propio evaluador). `deg`/`rad`/`grad`/`turn`. Fase 7.875.
+fn token_angle_degrees(t: &str) -> Option<f32> {
+    let (num, unit) = if let Some(r) = t.strip_suffix("deg") {
+        (r, 1.0)
+    } else if let Some(r) = t.strip_suffix("grad") {
+        (r, 360.0 / 400.0)
+    } else if let Some(r) = t.strip_suffix("rad") {
+        (r, 180.0 / std::f32::consts::PI)
+    } else if let Some(r) = t.strip_suffix("turn") {
+        (r, 360.0)
+    } else {
+        return None;
+    };
+    num.trim().parse::<f32>().ok().map(|n| n * unit)
 }
 
 /// `font-size`: distingue valores absolutos (px/rem/vw/`calc`/`clamp` y los

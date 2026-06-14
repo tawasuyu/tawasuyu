@@ -453,3 +453,54 @@ fn border_style_multivalor_toma_primero() {
     assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderEnabled(true))));
     assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderStyleKind(BorderLineStyle::Solid))));
 }
+
+// ── Fase 7.875 — calc() con ángulos ────────────────────────────────────────
+
+#[test]
+fn rotate_prop_acepta_calc_angulos() {
+    // 0.25turn (90°) + 30deg = 120°.
+    let deg = |s: &str| {
+        decls(s).iter().find_map(|d| match d.kind {
+            DeclKind::Rotate(Some(Transform::Rotate(deg))) => Some(deg),
+            _ => None,
+        })
+    };
+    assert!((deg("rotate: calc(0.25turn + 30deg)").unwrap() - 120.0).abs() < 0.01);
+    assert!((deg("rotate: calc(90deg / 2)").unwrap() - 45.0).abs() < 0.01);
+    assert!((deg("rotate: max(45deg, 90deg)").unwrap() - 90.0).abs() < 0.01);
+    // 1rad ≈ 57.2958°.
+    assert!((deg("rotate: calc(1rad)").unwrap() - 57.2958).abs() < 0.01);
+}
+
+#[test]
+fn transform_y_hue_aceptan_calc_angulos() {
+    // transform: rotate(calc(45deg + 45deg)) = 90°.
+    assert!(decls("transform: rotate(calc(45deg + 45deg))")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(t)
+            if t.iter().any(|x| matches!(x, Transform::Rotate(deg) if (deg - 90.0).abs() < 0.01)))));
+    // skew(calc(10deg)) parsea.
+    assert!(decls("transform: skew(calc(10deg))")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(_))));
+    // hue-rotate vía parse_hue calc-aware (filter).
+    assert!(!decls("filter: hue-rotate(calc(90deg + 90deg))").is_empty());
+}
+
+// ── Fase 7.876 — aspect-ratio auto sufijo, rgb(none), pointer-events ───────
+
+#[test]
+fn varios_876() {
+    // aspect-ratio: 4 / 3 auto → ratio 4/3 (auto sufijo descartado).
+    assert!(decls("aspect-ratio: 4 / 3 auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AspectRatio(Some(r)) if (r - 4.0 / 3.0).abs() < 1e-6)));
+    // rgb(none none none) → negro (none = 0).
+    assert!(decls("color: rgb(none none none)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Color(c) if c.r == 0 && c.g == 0 && c.b == 0)));
+    // pointer-events: bounding-box → Auto.
+    assert!(decls("pointer-events: bounding-box")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PointerEvents(PointerEvents::Auto))));
+}

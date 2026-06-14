@@ -115,8 +115,11 @@ pub(crate) fn parse_pointer_events(s: &str) -> Option<PointerEvents> {
         // Fase 7.841 — los valores SVG (`visiblePainted`/`painted`/`fill`/
         // `stroke`/`all`/`visible`…) significan todos "recibe eventos de
         // puntero"; en nuestro modelo binario (Auto|None) colapsan a Auto.
+        // Fase 7.876 — `bounding-box` (SVG2) también recibe eventos → Auto.
         "auto" | "all" | "visible" | "visiblepainted" | "visiblefill"
-        | "visiblestroke" | "painted" | "fill" | "stroke" => Some(PointerEvents::Auto),
+        | "visiblestroke" | "painted" | "fill" | "stroke" | "bounding-box" => {
+            Some(PointerEvents::Auto)
+        }
         _ => None,
     }
 }

@@ -58,10 +58,12 @@ pub(crate) fn parse_rotate_prop(value: &str) -> Option<Option<Transform>> {
     if v.eq_ignore_ascii_case("none") {
         return Some(None);
     }
-    let toks: Vec<&str> = v.split_whitespace().collect();
+    // Fase 7.875 — tokeniza respetando paréntesis para no partir `calc(…)`
+    // (que lleva espacios internos) en el eje del ángulo.
+    let toks = split_top_level_ws(v);
     // El ángulo es el token que parsea como tal; el resto es eje/vector.
-    let angle_tok = toks.iter().find(|t| parse_angle_degrees(t).is_some())?;
-    let deg = parse_angle_degrees(angle_tok)?;
+    let angle_tok = toks.iter().find(|t| parse_angle_degrees(t.as_str()).is_some())?;
+    let deg = parse_angle_degrees(angle_tok.as_str())?;
     // Eje explícito x/y (no-Z) → sin rotación en el plano 2D.
     let non_z_axis = toks
         .iter()
@@ -505,8 +507,18 @@ pub(crate) fn parse_image_orientation(value: &str) -> Option<ImageOrientation> {
 
 /// `<angle>` → grados. Soporta `deg`, `rad`, `grad`, `turn`. Sin
 /// unidad descarta (CSS exige unidad excepto cuando el valor es 0).
-fn parse_angle_degrees(s: &str) -> Option<f32> {
+///
+/// Fase 7.875 — acepta también `calc()`/min/max/clamp sobre ángulos: el
+/// evaluador trata cada `<angle>` como `Number(grados)` (ver
+/// `classify_calc_num`), así que un resultado `Number` ES los grados.
+pub(crate) fn parse_angle_degrees(s: &str) -> Option<f32> {
     let t = s.trim();
+    if is_math_fn(t) {
+        return match eval_calc(t)? {
+            CalcVal::Number(n) if n.is_finite() => Some(n),
+            _ => None,
+        };
+    }
     if t == "0" {
         return Some(0.0);
     }

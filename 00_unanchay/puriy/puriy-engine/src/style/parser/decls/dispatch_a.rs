@@ -155,8 +155,12 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             if v.eq_ignore_ascii_case("auto") {
                 Some(DeclKind::AspectRatio(None))
             } else {
-                // Descarta un prefijo `auto` opcional (`auto 16/9`).
+                // Fase 7.876 — `auto` puede ir como prefijo O sufijo del ratio
+                // (`auto 16/9` o `4 / 3 auto`); en ambos casos sólo nos importa
+                // el ratio (el `auto` permite encoger por contenido, que no
+                // modelamos aparte).
                 let v = v.strip_prefix("auto").map(str::trim).unwrap_or(v);
+                let v = v.strip_suffix("auto").map(str::trim).unwrap_or(v);
                 parse_aspect_ratio(v).map(|r| DeclKind::AspectRatio(Some(r)))
             }
         }

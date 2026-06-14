@@ -62,22 +62,9 @@ pub(crate) fn parse_transform_fn(name: &str, args: &str) -> Option<Transform> {
         },
         "scalex" => Some(Transform::Scale(parts[0].parse().ok()?, 1.0)),
         "scaley" => Some(Transform::Scale(1.0, parts[0].parse().ok()?)),
-        "rotate" => {
-            let arg = parts[0];
-            let deg = if let Some(n) = arg.strip_suffix("deg") {
-                n.trim().parse::<f32>().ok()?
-            } else if let Some(n) = arg.strip_suffix("rad") {
-                let v: f32 = n.trim().parse().ok()?;
-                v.to_degrees()
-            } else if let Some(n) = arg.strip_suffix("turn") {
-                let v: f32 = n.trim().parse().ok()?;
-                v * 360.0
-            } else {
-                // Sin unidad: asumir deg.
-                arg.parse::<f32>().ok()?
-            };
-            Some(Transform::Rotate(deg))
-        }
+        // Fase 7.875 — `parse_hue` cubre deg/rad/grad/turn, `none`, sin-unidad
+        // (→deg) y ahora `calc()`. Reemplaza el strip manual.
+        "rotate" => parse_hue(parts[0]).map(Transform::Rotate),
         "skew" => match parts.as_slice() {
             [x] => Some(Transform::Skew(parse_hue(x)?, 0.0)),
             [x, y] => Some(Transform::Skew(parse_hue(x)?, parse_hue(y)?)),

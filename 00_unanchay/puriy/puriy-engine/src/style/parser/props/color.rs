@@ -163,6 +163,10 @@ pub(crate) fn split_color_args(args: &str) -> Option<(Vec<&str>, Option<&str>)> 
 /// Canal RGB: entero 0-255 o porcentaje 0%-100%.
 pub(crate) fn parse_color_chan(s: &str) -> Option<u8> {
     let s = s.trim();
+    // Fase 7.876 — `none` (CSS Color 4, componente faltante) → 0 al componer.
+    if s.eq_ignore_ascii_case("none") {
+        return Some(0);
+    }
     if let Some(num) = s.strip_suffix('%') {
         let pct: f32 = num.trim().parse().ok()?;
         return Some((pct.clamp(0.0, 100.0) * 2.55).round() as u8);
@@ -191,6 +195,15 @@ pub(crate) fn parse_hue(s: &str) -> Option<f32> {
     let s = s.trim();
     if s.eq_ignore_ascii_case("none") {
         return Some(0.0);
+    }
+    // Fase 7.875 — `calc()`/min/max/clamp sobre ángulos (el evaluador trata
+    // cada `<angle>` como grados; ver `classify_calc_num`). Beneficia
+    // hue-rotate/skew/gradient-angles que pasan por acá.
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Number(n) if n.is_finite() => Some(n),
+            _ => None,
+        };
     }
     // `grad` antes que `rad` (sufijo solapado) y `turn`/`rad`/`deg`.
     if let Some(n) = s.strip_suffix("grad") {
