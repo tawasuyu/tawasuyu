@@ -626,6 +626,24 @@ pub enum Clear {
     InlineEnd,
 }
 
+/// `baseline-shift` (SVG 1.1 / CSS Inline 3): desplaza la línea base del
+/// texto. `Baseline` = sin desplazamiento (0); `Sub`/`Super` = subíndice/
+/// superíndice; `Length` = desplazamiento explícito (length o %). Default
+/// `Baseline`. NO hereda.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum BaselineShift {
+    Baseline,
+    Sub,
+    Super,
+    Length(LengthVal),
+}
+
+impl Default for BaselineShift {
+    fn default() -> Self {
+        BaselineShift::Baseline
+    }
+}
+
 /// Componente de colocación de `masonry-auto-flow` (CSS Grid 3 draft).
 /// `Pack` rellena huecos; `Next` respeta el orden de la pista. Default `Pack`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

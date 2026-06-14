@@ -525,6 +525,16 @@ pub(crate) enum DeclKind {
     Rx(LengthVal),
     /// `ry` (Fase 7.478). Radio elipse SVG. `Auto` = `auto`. NO hereda. Plumb.
     Ry(LengthVal),
+    /// `x` (SVG 2). Posición SVG como prop CSS. NO hereda. Plumb.
+    X(LengthVal),
+    /// `y` (SVG 2). Posición SVG como prop CSS. NO hereda. Plumb.
+    Y(LengthVal),
+    /// `baseline-shift` (SVG / CSS Inline 3). NO hereda. Plumb.
+    BaselineShift(BaselineShift),
+    /// `solid-color` (SVG 2 `<solidcolor>`). NO hereda. Plumb.
+    SolidColor(Color),
+    /// `solid-opacity` (SVG 2 `<solidcolor>`). Alpha 0-1. NO hereda. Plumb.
+    SolidOpacity(f32),
     /// `order` (Fase 7.479). Orden flex/grid. Default 0. NO hereda. Plumb.
     Order(i32),
     /// `path-length` (Fase 7.480). SVG. `None` = `none`. NO hereda. Plumb.
@@ -1382,6 +1392,11 @@ impl Decl {
             DeclKind::Interactivity(i) => s.interactivity = *i,
             DeclKind::Cx(v) => s.cx = *v,
             DeclKind::Cy(v) => s.cy = *v,
+            DeclKind::X(v) => s.x = *v,
+            DeclKind::Y(v) => s.y = *v,
+            DeclKind::BaselineShift(v) => s.baseline_shift = *v,
+            DeclKind::SolidColor(v) => s.solid_color = *v,
+            DeclKind::SolidOpacity(v) => s.solid_opacity = *v,
             DeclKind::R(v) => s.r = *v,
             DeclKind::Rx(v) => s.rx = *v,
             DeclKind::Ry(v) => s.ry = *v,

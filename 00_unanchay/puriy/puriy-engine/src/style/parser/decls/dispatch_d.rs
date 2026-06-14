@@ -742,6 +742,9 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             parse_justify_tracks(value).map(DeclKind::JustifyTracks)
         }
         "align-tracks" => parse_align_tracks(value).map(DeclKind::AlignTracks),
+        // SVG 2 `<solidcolor>`. NO heredan.
+        "solid-color" => parse_color(value).map(DeclKind::SolidColor),
+        "solid-opacity" => parse_svg_opacity(value).map(DeclKind::SolidOpacity),
         // `page` (CSS Paged Media 3): `auto | <custom-ident>`. NO hereda.
         "page" => {
             let v = value.trim();

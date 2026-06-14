@@ -789,6 +789,16 @@ pub struct ComputedStyle {
     /// `ry` (Fase 7.478). Radio elipse eje Y (`<ellipse>`/`<rect>`).
     /// Default `LengthVal::Auto`. NO hereda. Plumb.
     pub ry: LengthVal,
+    /// `x` (SVG 2). Posición SVG como prop CSS. Default `Px(0)`. NO hereda.
+    pub x: LengthVal,
+    /// `y` (SVG 2). Posición SVG como prop CSS. Default `Px(0)`. NO hereda.
+    pub y: LengthVal,
+    /// `baseline-shift` (SVG / CSS Inline 3). Default `Baseline`. NO hereda.
+    pub baseline_shift: BaselineShift,
+    /// `solid-color` (SVG 2 `<solidcolor>`). Default negro. NO hereda. Plumb.
+    pub solid_color: Color,
+    /// `solid-opacity` (SVG 2 `<solidcolor>`). Default `1.0`. NO hereda. Plumb.
+    pub solid_opacity: f32,
     /// `order` (Fase 7.479). Reordena ítems en flex/grid sin alterar el DOM.
     /// Default `0`. Negativos = antes del bloque. NO hereda. Plumb.
     pub order: i32,

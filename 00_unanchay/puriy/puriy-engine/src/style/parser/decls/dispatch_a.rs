@@ -678,6 +678,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "r" => parse_length_or_pct(value).map(DeclKind::R),
         "rx" => parse_length_or_pct(value).map(DeclKind::Rx),
         "ry" => parse_length_or_pct(value).map(DeclKind::Ry),
+        // `x` / `y` (SVG 2): posición de `<rect>`/`<image>`/`<foreignObject>`
+        // como props CSS. `<length-percentage>`. Default `Px(0)`. NO heredan.
+        "x" => parse_length_or_pct(value).map(DeclKind::X),
+        "y" => parse_length_or_pct(value).map(DeclKind::Y),
         // Fase 7.479 — `order` (CSS Flexbox/Grid). `<integer>`. Default 0.
         // Fase 7.715 — `-webkit-order` / Fase 7.802 — `-ms-flex-order` (IE10) alias de `order`.
         // Fase 7.872 — acepta `calc()` que resuelva a entero.
@@ -701,8 +705,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
                     .map(|n| DeclKind::PathLength(Some(n)))
             }
         }
-        // Fase 7.481 — `animation-composition` (CSS Animations 2).
-        "animation-composition" => match value.trim().to_ascii_lowercase().as_str() {
+        // Fase 7.481 — `animation-composition` (CSS Animations 2). Es una
+        // lista por coma (una entrada por animación); guardamos la 1ª, igual
+        // que el resto de longhands de animation.
+        "animation-composition" => match first_comma(value).trim().to_ascii_lowercase().as_str() {
             "replace" => Some(DeclKind::AnimationComposition(AnimationComposition::Replace)),
             "add" => Some(DeclKind::AnimationComposition(AnimationComposition::Add)),
             "accumulate" => Some(DeclKind::AnimationComposition(

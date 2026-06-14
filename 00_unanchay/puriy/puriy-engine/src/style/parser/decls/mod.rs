@@ -755,6 +755,45 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // `caret` shorthand (CSS UI 4): `<'caret-color'> || <'caret-shape'>`.
+        // Los tokens `bar|block|underscore` son la forma; el resto (color o
+        // `auto`) es el color. `caret: auto` → ambos `auto`. Si los tokens de
+        // color no parsean, se rechaza el shorthand entero.
+        if prop.eq_ignore_ascii_case("caret") {
+            let mut shape: Option<CaretShape> = None;
+            let mut color_toks: Vec<&str> = Vec::new();
+            for tok in value.split_whitespace() {
+                match tok.to_ascii_lowercase().as_str() {
+                    "bar" | "block" | "underscore" if shape.is_none() => {
+                        shape = parse_caret_shape(tok);
+                    }
+                    _ => color_toks.push(tok),
+                }
+            }
+            // Color: vacío o `auto` → None (auto/currentColor); si no, parsear.
+            let color = if color_toks.is_empty() {
+                Some(None)
+            } else {
+                let joined = color_toks.join(" ");
+                if joined.eq_ignore_ascii_case("auto") || joined.eq_ignore_ascii_case("currentcolor")
+                {
+                    Some(None) // auto/currentColor → None (válidos)
+                } else {
+                    // parse_color directo: parse_caret_color devuelve None tanto
+                    // para currentColor (ya cubierto) como para basura, así que
+                    // acá distinguimos válido (Some) de inválido (rechaza).
+                    parse_color(&joined).map(Some)
+                }
+            };
+            if let Some(color) = color {
+                out.push(Decl { kind: DeclKind::CaretColor(color), important });
+                out.push(Decl {
+                    kind: DeclKind::CaretShape(shape.unwrap_or(CaretShape::Auto)),
+                    important,
+                });
+            }
+            continue;
+        }
         // `margin` shorthand: ruteado acá (no por decl_kind_from_pair) para
         // soportar `auto` por lado (`margin: 0 auto` = centrado horizontal).
         if prop.eq_ignore_ascii_case("margin") {

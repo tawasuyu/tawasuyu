@@ -753,3 +753,75 @@ fn webkit_text_decoration_line_alias() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::TextDecoration(TextDecorationLine::Underline))));
 }
+
+// ── Lote data-driven: SVG x/y, baseline-shift, solid-color/opacity, ───────
+//    caret shorthand, animation-composition list ──────────────────────────
+
+#[test]
+fn svg_x_y_geometry() {
+    assert!(decls("x: 10px").iter().any(|d| matches!(d.kind, DeclKind::X(LengthVal::Px(p)) if (p - 10.0).abs() < 1e-6)));
+    assert!(decls("y: 50%").iter().any(|d| matches!(d.kind, DeclKind::Y(LengthVal::Pct(p)) if (p - 50.0).abs() < 1e-6)));
+    assert!(decls("x: banana").is_empty());
+}
+
+#[test]
+fn baseline_shift_valores() {
+    let bs = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::BaselineShift(v) => Some(v),
+        _ => None,
+    });
+    assert_eq!(bs("baseline-shift: sub"), Some(BaselineShift::Sub));
+    assert_eq!(bs("baseline-shift: super"), Some(BaselineShift::Super));
+    assert_eq!(bs("baseline-shift: baseline"), Some(BaselineShift::Baseline));
+    assert_eq!(bs("baseline-shift: 2px"), Some(BaselineShift::Length(LengthVal::Px(2.0))));
+    assert!(matches!(bs("baseline-shift: 10%"), Some(BaselineShift::Length(LengthVal::Pct(_)))));
+}
+
+#[test]
+fn solid_color_y_opacity() {
+    assert!(decls("solid-color: red")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SolidColor(c) if c.r == 255 && c.g == 0)));
+    assert!(decls("solid-opacity: 0.5")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SolidOpacity(o) if (o - 0.5).abs() < 1e-6)));
+    assert!(decls("solid-opacity: notanumber").is_empty());
+}
+
+#[test]
+fn caret_shorthand() {
+    let pair = |s: &str| {
+        let d = decls(s);
+        let col = d.iter().find_map(|x| match x.kind {
+            DeclKind::CaretColor(c) => Some(c),
+            _ => None,
+        });
+        let sh = d.iter().find_map(|x| match x.kind {
+            DeclKind::CaretShape(c) => Some(c),
+            _ => None,
+        });
+        (col, sh)
+    };
+    // color + shape.
+    let (c, s) = pair("caret: red underscore");
+    assert!(matches!(c, Some(Some(col)) if col.r == 255));
+    assert_eq!(s, Some(CaretShape::Underscore));
+    // sólo shape → color auto (None).
+    assert_eq!(pair("caret: block"), (Some(None), Some(CaretShape::Block)));
+    // sólo color → shape auto.
+    let (c, s) = pair("caret: blue");
+    assert!(matches!(c, Some(Some(col)) if col.b == 255));
+    assert_eq!(s, Some(CaretShape::Auto));
+    // auto → ambos auto.
+    assert_eq!(pair("caret: auto"), (Some(None), Some(CaretShape::Auto)));
+    // valor inválido (width no existe en caret) dropea.
+    assert!(decls("caret: red 2px").is_empty());
+}
+
+#[test]
+fn animation_composition_lista() {
+    // Lista por coma → guarda la 1ª entrada.
+    assert!(decls("animation-composition: accumulate, replace")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AnimationComposition(AnimationComposition::Accumulate))));
+}

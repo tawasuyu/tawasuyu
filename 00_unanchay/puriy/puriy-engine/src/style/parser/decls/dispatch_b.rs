@@ -330,6 +330,14 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             "inline-end" => Some(DeclKind::Clear(Clear::InlineEnd)),
             _ => None,
         },
+        // `baseline-shift` (SVG / CSS Inline 3): `baseline | sub | super |
+        // <length-percentage>`. NO hereda.
+        "baseline-shift" => match value.trim().to_ascii_lowercase().as_str() {
+            "baseline" => Some(DeclKind::BaselineShift(BaselineShift::Baseline)),
+            "sub" => Some(DeclKind::BaselineShift(BaselineShift::Sub)),
+            "super" => Some(DeclKind::BaselineShift(BaselineShift::Super)),
+            _ => parse_length_or_pct(value).map(|l| DeclKind::BaselineShift(BaselineShift::Length(l))),
+        },
         // Fase 7.519 — `float-defer` (CSS Page Floats 3). `none|last|<int>`.
         "float-defer" => {
             let v = value.trim().to_ascii_lowercase();
