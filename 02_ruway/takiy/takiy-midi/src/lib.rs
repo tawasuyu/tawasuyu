@@ -208,14 +208,10 @@ fn midi_channel_for_track(track_idx: usize) -> u8 {
 /// modela automatización de tempo).
 pub fn from_smf(bytes: &[u8]) -> Result<Score, ParseError> {
     let smf = Smf::parse(bytes)?;
-    let ppq = match smf.header.timing {
-        Timing::Metrical(p) => p.as_int() as u32,
-        Timing::Timecode(_, _) => return Err(ParseError::SmpteTiming),
-    };
-    let ppq = ppq.max(1);
 
     // Buscamos el primer tempo en la pista 0 (formato 1) o en la única
-    // pista (formato 0); default 120 bpm si no aparece.
+    // pista (formato 0); default 120 bpm si no aparece. Va antes que el PPQ
+    // porque el timing SMPTE lo necesita para convertir a negras.
     let mut tempo_bpm = 120.0_f32;
     if let Some(track) = smf.tracks.first() {
         for ev in track {
@@ -228,6 +224,20 @@ pub fn from_smf(bytes: &[u8]) -> Result<Score, ParseError> {
             }
         }
     }
+
+    // Ticks por negra (PPQ). Con timing **métrico** el header lo da directo.
+    // Con timing **SMPTE** el header da una tasa ABSOLUTA de ticks por
+    // segundo (`fps × ticks_por_frame`); la convertimos a "ticks por negra"
+    // con el tempo —`ppq = ticks/seg × seg/negra = fps·tpf × 60/bpm`— para
+    // que el resto del pipeline (que trabaja en negras = tick/ppq) no cambie.
+    let ppq = match smf.header.timing {
+        Timing::Metrical(p) => p.as_int() as u32,
+        Timing::Timecode(fps, ticks_per_frame) => {
+            let ticks_per_sec = fps.as_f32() * ticks_per_frame as f32;
+            (ticks_per_sec * 60.0 / tempo_bpm.max(1e-6)).round() as u32
+        }
+    };
+    let ppq = ppq.max(1);
 
     let mut score = Score::new(tempo_bpm);
 
@@ -484,17 +494,51 @@ mod tests {
     }
 
     #[test]
-    fn smpte_timing_is_rejected() {
-        // Construyo un SMF con timing SMPTE para verificar el rechazo.
-        let header = Header::new(Format::Parallel, Timing::Timecode(midly::Fps::Fps25, 40));
-        let smf = Smf { header, tracks: vec![vec![TrackEvent {
-            delta: u28::new(0),
-            kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
-        }]] };
+    fn smpte_timing_se_parsea_a_negras() {
+        // SMF con timing SMPTE: Fps25 × 40 ticks/frame = 1000 ticks/seg
+        // (1 tick = 1 ms). Con tempo 120 bpm (2 negras/seg) el conversor da
+        // ppq = 1000·60/120 = 500 ticks por negra. Una nota de 500 ticks
+        // debe leerse como 1.0 negra exacta.
+        let header = Header::new(Format::SingleTrack, Timing::Timecode(midly::Fps::Fps25, 40));
+        // 120 bpm = 500_000 µs por negra.
+        let track = vec![
+            TrackEvent {
+                delta: u28::new(0),
+                kind: TrackEventKind::Meta(MetaMessage::Tempo(u24::new(500_000))),
+            },
+            TrackEvent {
+                delta: u28::new(0),
+                kind: TrackEventKind::Midi {
+                    channel: u4::new(0),
+                    message: MidiMessage::NoteOn { key: u7::new(60), vel: u7::new(100) },
+                },
+            },
+            TrackEvent {
+                delta: u28::new(500),
+                kind: TrackEventKind::Midi {
+                    channel: u4::new(0),
+                    message: MidiMessage::NoteOff { key: u7::new(60), vel: u7::new(0) },
+                },
+            },
+            TrackEvent {
+                delta: u28::new(0),
+                kind: TrackEventKind::Meta(MetaMessage::EndOfTrack),
+            },
+        ];
+        let smf = Smf { header, tracks: vec![track] };
         let mut buf = Vec::new();
         smf.write(&mut buf).unwrap();
-        let err = from_smf(&buf).unwrap_err();
-        assert!(matches!(err, ParseError::SmpteTiming));
+
+        let score = from_smf(&buf).expect("SMPTE ya no se rechaza");
+        assert!((score.tempo_bpm - 120.0).abs() < 0.5);
+        let notes: Vec<_> = score.tracks().iter().flat_map(|t| t.notes()).collect();
+        assert_eq!(notes.len(), 1, "una sola nota");
+        assert!(notes[0].start.abs() < 1e-3, "start={}", notes[0].start);
+        assert!(
+            (notes[0].duration - 1.0).abs() < 0.02,
+            "duración SMPTE→negras = {} (esperaba ≈1.0)",
+            notes[0].duration
+        );
     }
 
     #[test]
