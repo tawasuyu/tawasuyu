@@ -99,7 +99,8 @@ fn main() {
         ancho_cuerpo: None,
     };
 
-    let multi = lienzos_multi_view::<(), _>(&[&es, &qu], &idx, &palette, &cfg, 0, None, |_| ());
+    let multi =
+        lienzos_multi_view::<(), _>(&[&es, &qu], &idx, &palette, &cfg, 0, None, None, |_| ());
 
     let header = View::<()>::new(Style {
         size: Size {

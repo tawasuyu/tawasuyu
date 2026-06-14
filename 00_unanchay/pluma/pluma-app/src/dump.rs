@@ -65,8 +65,11 @@ fn modelo_sintetico(diente: usize) -> Model {
         "español (original)",
         Intencion::Original,
         &[
+            "# El amanecer en el valle",
             "El cóndor cruzó el cielo del valle al amanecer.",
+            "## Los animales",
             "Las llamas pastaban entre los pastizales del altiplano.",
+            "## El telar",
             "Una mujer joven tejía un telar bajo el alero.",
         ],
     );
@@ -76,8 +79,11 @@ fn modelo_sintetico(diente: usize) -> Model {
         "quechua",
         Intencion::Traduccion,
         &[
+            "# Wayqupi pacha paqariy",
             "Kuntur wayqu hanaqpachata pacha paqarinpi pasarqa.",
+            "## Uywakuna",
             "Llamaqakuna qulla suyup q'achupinpi mikhusharqaku.",
+            "## Away",
             "Sipas warmiq away wasiq hawanpi awayta ruwasharqa.",
         ],
     );
@@ -88,8 +94,11 @@ fn modelo_sintetico(diente: usize) -> Model {
         "english",
         Intencion::Traduccion,
         &[
+            "# Dawn in the valley",
             "The condor crossed the valley sky at dawn.",
+            "## The animals",
             "The llamas grazed among the highland grasslands.",
+            "## The loom",
             "A young woman wove on a loom beneath the eaves.",
         ],
     );
@@ -137,6 +146,9 @@ fn modelo_sintetico(diente: usize) -> Model {
         transformaciones: Vec::new(),
         activo,
         ide,
+        modo: crate::model::Modo::Plano,
+        editando: None,
+        recorrido_state: pluma_deck_core::RecorridoState::new(),
         seleccionados,
         orden_lienzos,
         ides_ro,
@@ -190,6 +202,27 @@ fn modelo_sintetico(diente: usize) -> Model {
             NodoFiltro { filtro: Filtro::Resumir(Some(30)), x: 20.0, y: 226.0 },
         ];
         m.grafo_sink = (20.0, 296.0);
+    }
+    // Modo del centro por env: PLUMA_DUMP_MODO=lienzos|presentar|plano.
+    match std::env::var("PLUMA_DUMP_MODO").ok().as_deref() {
+        Some("lienzos") => m.modo = crate::model::Modo::Lienzos,
+        Some("presentar") => {
+            m.modo = crate::model::Modo::Presentar;
+            // Encuadre inicial aproximado (no hay panel registrado en headless).
+            if let Some(c) = m.activo.and_then(|a| m.cuerpos.iter().find(|c| c.id == a)) {
+                let rec = pluma_deck_outline::recorrido_desde_cuerpo(c, |id| {
+                    m.atoms.get(&id).map(|a| a.content.to_string())
+                });
+                let panel = pluma_deck_core::Rect::new(
+                    (m.panel_w + crate::model::RAIL_W) as f64,
+                    60.0,
+                    (W as f32 - m.panel_w - crate::model::RAIL_W) as f64,
+                    (H as f32 - 90.0) as f64,
+                );
+                m.recorrido_state.saltar_a_paso(&rec, 0, panel);
+            }
+        }
+        _ => {}
     }
     m
 }

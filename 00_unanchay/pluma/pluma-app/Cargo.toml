@@ -20,6 +20,12 @@ foreign-docx = { path = "../foreign-docx" }
 pluma-align = { path = "../pluma-align" }
 pluma-editor-cuerpo = { path = "../pluma-editor-cuerpo" }
 pluma-editor-llimphi = { path = "../pluma-editor-llimphi" }
+pluma-outline = { path = "../pluma-outline" }
+# Modo Presentar: el documento se vuela como un deck (cámara Prezi) usando el
+# árbol de secciones como marcos espaciales.
+pluma-deck-core = { path = "../pluma-deck-core" }
+pluma-deck-outline = { path = "../pluma-deck-outline" }
+pluma-deck-recorrido-llimphi = { path = "../pluma-deck-recorrido-llimphi" }
 pluma-store = { path = "../pluma-store" }
 pluma-transform = { path = "../pluma-transform" }
 pluma-transform-llm = { path = "../pluma-transform-llm" }

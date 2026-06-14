@@ -28,15 +28,21 @@ use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_editor_llimphi::multilienzo::PaletaHebras;
+use pluma_editor_llimphi::lienzos::{lienzos_multi_view, ConfigLienzos, EdicionLienzo};
 use pluma_editor_llimphi::multilienzo_editor::{
     multilienzo_editor_view, ConfigMultilienzoEditor,
 };
 use pluma_editor_llimphi::Palette as MultPalette;
+use pluma_deck_recorrido_llimphi::recorrido_view;
+use pluma_deck_outline::recorrido_desde_cuerpo;
+use pluma_core::NarrativeAtom;
 use pluma_transform::Transformacion;
+use std::collections::HashMap;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::model::{
-    ancho_contenido, Filtro, Model, Msg, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
+    ancho_contenido, Filtro, Modo, Model, Msg, ANCHO_COL, BACKENDS, METRICS, RAIL_W, VISIBLE_LINES,
 };
 use crate::update::{contar_stale_del_activo, menu_principal};
 use crate::util::{etiqueta_backend, etiqueta_intencion, etiqueta_tipo, recortar};
@@ -209,7 +215,8 @@ fn barra_status(model: &Model, theme: &Theme) -> View<Msg> {
         "·"
     };
     let texto = format!(
-        "pluma · {nombre} · {n_sel} lienzo(s) · backend {backend} · {estado} {}",
+        "pluma · [{}] · {nombre} · {n_sel} lienzo(s) · backend {backend} · {estado} {}  (Ctrl+M cambia modo)",
+        model.modo.etiqueta(),
         model.ultimo_status
     );
     View::new(Style {
@@ -931,7 +938,127 @@ fn grafo_canvas(model: &Model, theme: &Theme) -> View<Msg> {
 // Centro: multilienzo de los lienzos seleccionados
 // ---------------------------------------------------------------------------
 
+/// Despacha el centro según el modo unificado: lienzos jerárquicos (editar
+/// in-situ), presentar (deck) o el editor plano clásico.
 fn centro_multilienzo(model: &Model, theme: &Theme) -> View<Msg> {
+    match model.modo {
+        Modo::Plano => centro_plano(model, theme),
+        Modo::Lienzos => envolver_centro(model, centro_lienzos(model, theme)),
+        Modo::Presentar => envolver_centro(model, centro_presentar(model, theme)),
+    }
+}
+
+/// Envoltorio común para los modos nuevos: deja el hueco del rail a la izquierda
+/// (los dientes sobresalen) y llena el alto. El modo Plano ya trae su propio
+/// envoltorio con scroll/find.
+fn envolver_centro(model: &Model, interior: View<Msg>) -> View<Msg> {
+    let pad_rail = if model.delegated { 0.0 } else { RAIL_W };
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: Rect {
+            left: length(pad_rail),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .clip(true)
+    .children(vec![interior])
+}
+
+/// Modo Lienzos: el documento como cajas anidadas (títulos que contienen su
+/// contenido), editable in-situ, multilienzo. Click en una caja abre su editor.
+fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
+    let palette_lienzo = MultPalette::from_theme(theme);
+    let editor_palette = TEPalette::default();
+    let cfg = ConfigLienzos::default();
+
+    let ids: Vec<Uuid> = if model.solo_activo {
+        model.activo.into_iter().collect()
+    } else {
+        model
+            .orden_lienzos
+            .iter()
+            .copied()
+            .filter(|id| model.seleccionados.contains(id))
+            .collect()
+    };
+    let cuerpos_sel: Vec<&Cuerpo> = ids
+        .iter()
+        .filter_map(|id| model.cuerpos.iter().find(|c| c.id == *id))
+        .collect();
+    if cuerpos_sel.is_empty() {
+        return View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(palette_lienzo.bg_app);
+    }
+    let activo_idx = model
+        .activo
+        .and_then(|a| cuerpos_sel.iter().position(|c| c.id == a))
+        .unwrap_or(0);
+
+    let atoms: HashMap<Uuid, &NarrativeAtom> =
+        model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+
+    let edicion = model.editando.as_ref().map(|(atom, state)| EdicionLienzo {
+        atom: *atom,
+        state,
+        palette: &editor_palette,
+        on_pointer: Arc::new(Msg::LienzoEditPointer)
+            as Arc<dyn Fn(_) -> Msg + Send + Sync>,
+    });
+
+    lienzos_multi_view::<Msg, _>(
+        &cuerpos_sel,
+        &atoms,
+        &palette_lienzo,
+        &cfg,
+        activo_idx,
+        None,
+        edicion.as_ref(),
+        Msg::LienzoSelect,
+    )
+}
+
+/// Modo Presentar: vuela por las secciones del documento con la cámara del deck
+/// (tipo Prezi). Construye el recorrido desde el árbol del cuerpo activo.
+fn centro_presentar(model: &Model, _theme: &Theme) -> View<Msg> {
+    let activo = model
+        .activo
+        .and_then(|a| model.cuerpos.iter().find(|c| c.id == a));
+    let Some(cuerpo) = activo else {
+        return View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            ..Default::default()
+        });
+    };
+    let atoms = &model.atoms;
+    let rec = recorrido_desde_cuerpo(cuerpo, |id| atoms.get(&id).map(|a| a.content.to_string()));
+    let inner = recorrido_view::<Msg>(&rec, &model.recorrido_state);
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![inner])
+}
+
+fn centro_plano(model: &Model, theme: &Theme) -> View<Msg> {
     let editor_palette = TEPalette::default();
     let palette_lienzo = MultPalette::from_theme(theme);
     let paleta_hebras = PaletaHebras::default();

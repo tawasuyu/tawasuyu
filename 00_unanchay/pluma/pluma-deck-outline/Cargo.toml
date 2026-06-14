@@ -1,0 +1,15 @@
+[package]
+name = "pluma-deck-outline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — adapta el outline jerárquico de un Cuerpo a un Recorrido del deck: una sección de nivel raíz = un marco que se sobrevuela tipo Prezi."
+
+[dependencies]
+pluma-outline = { path = "../pluma-outline" }
+pluma-deck-core = { path = "../pluma-deck-core" }
+pluma-cuerpo = { path = "../pluma-cuerpo" }
+pluma-core = { path = "../pluma-core" }
+uuid = { workspace = true, features = ["serde"] }

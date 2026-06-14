@@ -8,11 +8,13 @@ use std::sync::Arc;
 use llimphi_motion::{animate, motion, Tween};
 use llimphi_ui::{DragPhase, Handle};
 use llimphi_widget_edit_menu::{self as editmenu, EditAction, EditFlags};
-use llimphi_widget_text_editor::PointerEvent;
+use llimphi_widget_text_editor::{EditorState, PointerEvent};
 use llimphi_widget_text_input::TextInputState;
 use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::{Cuerpo, Intencion};
+use pluma_deck_core::{Recorrido, Rect as DeckRect};
+use pluma_deck_outline::recorrido_desde_cuerpo;
 use pluma_editor_cuerpo::CambioAtom;
 use pluma_llm::{build_client, LlmConfig};
 use pluma_transform::{TipoTransformacion, Transformacion};
@@ -23,7 +25,7 @@ use rimay_verbo_core::Provider;
 use rimay_verbo_daemon::DaemonClient;
 use uuid::Uuid;
 
-use crate::model::{Filtro, Model, Msg, NodoFiltro, BACKENDS, METRICS, VISIBLE_LINES};
+use crate::model::{Filtro, Modo, Model, Msg, NodoFiltro, BACKENDS, METRICS, VISIBLE_LINES};
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
 use crate::view::etiqueta_filtro;
 
@@ -371,6 +373,71 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 return aplicar_edit_menu(model, action);
             }
         }
+
+        // --- Unificación: modos Lienzos / Presentar / Plano ---
+        Msg::CicloModo => {
+            cerrar_edicion_lienzo(&mut model);
+            model.modo = model.modo.siguiente();
+            model.ultimo_status = format!("modo: {}", model.modo.etiqueta());
+            if model.modo == Modo::Presentar {
+                posicionar_presentar(&mut model);
+            }
+        }
+        Msg::SetModo(m) => {
+            cerrar_edicion_lienzo(&mut model);
+            model.modo = m;
+            model.ultimo_status = format!("modo: {}", model.modo.etiqueta());
+            if model.modo == Modo::Presentar {
+                posicionar_presentar(&mut model);
+            }
+        }
+        Msg::LienzoSelect(atom) => {
+            iniciar_edicion_lienzo(&mut model, atom);
+        }
+        Msg::LienzoEditKey(ev) => {
+            if let Some((_, state)) = model.editando.as_mut() {
+                state.apply_key(&ev);
+                state.ensure_caret_visible(80);
+            }
+        }
+        Msg::LienzoEditPointer(ev) => {
+            if let Some((_, state)) = model.editando.as_mut() {
+                let scroll = state.scroll_offset;
+                match ev {
+                    PointerEvent::Click { x, y } => {
+                        let (l, c) = METRICS.screen_to_pos(x, y, scroll);
+                        state.set_caret_at(l, c);
+                    }
+                    PointerEvent::Drag {
+                        initial_x,
+                        initial_y,
+                        dx,
+                        dy,
+                    } => {
+                        let (l, c) =
+                            METRICS.screen_to_pos(initial_x + dx, initial_y + dy, scroll);
+                        state.extend_selection_to(l, c);
+                    }
+                }
+            }
+        }
+        Msg::LienzoCommit => {
+            cerrar_edicion_lienzo(&mut model);
+        }
+        Msg::PresSiguiente => {
+            navegar_presentar(&mut model, 1);
+        }
+        Msg::PresAnterior => {
+            navegar_presentar(&mut model, -1);
+        }
+        Msg::PresVistaGeneral => {
+            let rec = recorrido_actual(&model);
+            let panel = panel_presentar(&model);
+            if let Some(bbox) = rec.bbox() {
+                model.recorrido_state.camara =
+                    pluma_deck_core::Camara::fit(bbox, 0.0, panel);
+            }
+        }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.
@@ -486,6 +553,37 @@ pub(crate) fn menu_principal(model: &Model) -> app_bus::AppMenu {
                 .item(sel_all),
         )
         .menu(
+            Menu::new("Vista")
+                .item(MenuItem::new("Ciclar modo", "vista.ciclo").shortcut("Ctrl+M"))
+                .item(
+                    MenuItem::new(
+                        if model.modo == Modo::Lienzos {
+                            "● Lienzos (jerárquico)"
+                        } else {
+                            "Lienzos (jerárquico)"
+                        },
+                        "vista.lienzos",
+                    )
+                    .separated(),
+                )
+                .item(MenuItem::new(
+                    if model.modo == Modo::Presentar {
+                        "● Presentar (deck)"
+                    } else {
+                        "Presentar (deck)"
+                    },
+                    "vista.presentar",
+                ))
+                .item(MenuItem::new(
+                    if model.modo == Modo::Plano {
+                        "● Plano (editor clásico)"
+                    } else {
+                        "Plano (editor clásico)"
+                    },
+                    "vista.plano",
+                )),
+        )
+        .menu(
             Menu::new("Buscar")
                 .item(MenuItem::new("Buscar en documento", "search.find").shortcut("Ctrl+F")),
         )
@@ -537,6 +635,10 @@ fn ejecutar_menu_command(mut model: Model, command: String, handle: &Handle<Msg>
         "edit.copy" => Some(Msg::EditMenuAction(EditAction::Copy)),
         "edit.paste" => Some(Msg::EditMenuAction(EditAction::Paste)),
         "edit.selectall" => Some(Msg::EditMenuAction(EditAction::SelectAll)),
+        "vista.ciclo" => Some(Msg::CicloModo),
+        "vista.lienzos" => Some(Msg::SetModo(Modo::Lienzos)),
+        "vista.presentar" => Some(Msg::SetModo(Modo::Presentar)),
+        "vista.plano" => Some(Msg::SetModo(Modo::Plano)),
         "search.find" => Some(Msg::FindToggle),
         "mult.diff" => Some(Msg::DiffToggle),
         "mult.hover" => Some(Msg::ToggleFocoHover),
@@ -630,6 +732,114 @@ fn reconstruir_ides_ro(model: &mut Model) {
         }
     }
     model.ides_ro = nuevos;
+}
+
+// ---------------------------------------------------------------------
+// Unificación: edición in-situ (modo Lienzos) + navegación (modo Presentar)
+// ---------------------------------------------------------------------
+
+/// Empieza la edición in-situ del átomo `atom`: hace activo su cuerpo y abre un
+/// editor cargado con su texto. Si ya había una edición abierta, la cierra
+/// guardando primero.
+fn iniciar_edicion_lienzo(model: &mut Model, atom: Uuid) {
+    cerrar_edicion_lienzo(model);
+    if let Some(c) = model.cuerpos.iter().find(|c| c.orden.contains(&atom)) {
+        let id = c.id;
+        cambiar_activo(model, id);
+    }
+    let texto = model
+        .atoms
+        .get(&atom)
+        .map(|a| a.content.to_string())
+        .unwrap_or_default();
+    let mut state = EditorState::new();
+    state.set_text(&texto);
+    model.editando = Some((atom, state));
+}
+
+/// Cierra la edición in-situ guardando el texto en el átomo (y persistiendo).
+/// La jerarquía se re-deriva sola en el próximo render: si el `#` cambió, el
+/// átomo cambia de nivel y la caja se re-anida. No-op si no se editaba nada.
+fn cerrar_edicion_lienzo(model: &mut Model) {
+    let Some((atom_id, state)) = model.editando.take() else {
+        return;
+    };
+    let nuevo = state.text();
+    let mut cambio = false;
+    if let Some(a) = model.atoms.get_mut(&atom_id) {
+        if a.content.as_str() != nuevo.as_str() {
+            a.set_content(nuevo.as_str());
+            let _ = model.store.put_atom(a);
+            let _ = model.store.flush();
+            cambio = true;
+        }
+    }
+    if cambio {
+        refrescar_ides(model);
+    }
+}
+
+/// Recarga el editor activo y los read-only desde los atoms actuales — para que
+/// el modo Plano refleje un cambio hecho in-situ en modo Lienzos.
+fn refrescar_ides(model: &mut Model) {
+    if let Some(id) = model.activo {
+        if let Some(cuerpo) = model.cuerpos.iter().find(|c| c.id == id).cloned() {
+            let idx: HashMap<Uuid, &NarrativeAtom> =
+                model.atoms.iter().map(|(k, v)| (*k, v)).collect();
+            model.ide.recargar(&cuerpo, &idx);
+        }
+    }
+    reconstruir_ides_ro(model);
+}
+
+/// Construye el recorrido (deck) del cuerpo activo a partir de su árbol de
+/// secciones. Vacío si no hay activo.
+fn recorrido_actual(model: &Model) -> Recorrido {
+    match model.activo.and_then(|a| model.cuerpos.iter().find(|c| c.id == a)) {
+        Some(c) => recorrido_desde_cuerpo(c, |id| {
+            model.atoms.get(&id).map(|a| a.content.to_string())
+        }),
+        None => Recorrido::new(),
+    }
+}
+
+/// El rectángulo del panel donde se pinta el recorrido. Usa el que registró el
+/// último frame (`panel_actual`); si todavía no se pintó, lo aproxima desde el
+/// viewport (panel del diente + rail a la izquierda, menubar+status arriba).
+fn panel_presentar(model: &Model) -> DeckRect {
+    if let Some(r) = pluma_deck_recorrido_llimphi::panel_actual() {
+        return r;
+    }
+    let left = model.panel_w + crate::model::RAIL_W as f32;
+    let top = 60.0_f32;
+    let w = (model.viewport.0 - left).max(1.0);
+    let h = (model.viewport.1 - top).max(1.0);
+    DeckRect::new(left as f64, top as f64, w as f64, h as f64)
+}
+
+/// Salta `dir` pasos (instantáneo, sin animación) en el modo Presentar.
+fn navegar_presentar(model: &mut Model, dir: i32) {
+    let rec = recorrido_actual(model);
+    let n = rec.n_pasos();
+    if n == 0 {
+        return;
+    }
+    let panel = panel_presentar(model);
+    let actual = model.recorrido_state.paso as i64;
+    let nuevo = (actual + dir as i64).clamp(0, n as i64 - 1) as usize;
+    model.recorrido_state.saltar_a_paso(&rec, nuevo, panel);
+}
+
+/// Encuadra el paso actual al entrar al modo Presentar.
+fn posicionar_presentar(model: &mut Model) {
+    let rec = recorrido_actual(model);
+    let n = rec.n_pasos();
+    if n == 0 {
+        return;
+    }
+    let panel = panel_presentar(model);
+    let paso = model.recorrido_state.paso.min(n - 1);
+    model.recorrido_state.saltar_a_paso(&rec, paso, panel);
 }
 
 fn crear_doc_nuevo(model: &mut Model) {

@@ -44,7 +44,7 @@ use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, Whee
 use llimphi_ui::View;
 
 use crate::init::init_modelo;
-use crate::model::{Model, Msg};
+use crate::model::{Modo, Model, Msg};
 use crate::update::actualizar;
 use crate::view::{vista, vista_overlay};
 
@@ -152,6 +152,38 @@ impl App for Pluma {
                 return Some(Msg::DefocusGrafo);
             }
             return Some(Msg::GrafoInputKey(event.clone()));
+        }
+        // Ctrl+M cicla el modo del centro (Lienzos → Presentar → Plano), en
+        // cualquier contexto que no sea un input de texto.
+        if event.modifiers.ctrl || event.modifiers.meta {
+            if let Key::Character(s) = &event.key {
+                if s.eq_ignore_ascii_case("m") {
+                    return Some(Msg::CicloModo);
+                }
+            }
+        }
+        // Edición in-situ de un lienzo (modo Lienzos): las teclas van a ese
+        // editor; Esc guarda y cierra.
+        if model.editando.is_some() {
+            if matches!(&event.key, Key::Named(NamedKey::Escape)) {
+                return Some(Msg::LienzoCommit);
+            }
+            return Some(Msg::LienzoEditKey(event.clone()));
+        }
+        // Modo Presentar: navegación por teclado (flechas vuelan; Home/Esc =
+        // vista general). No edita texto.
+        if model.modo == Modo::Presentar {
+            return match &event.key {
+                Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowDown)
+                | Key::Named(NamedKey::Enter) => Some(Msg::PresSiguiente),
+                Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowUp) => {
+                    Some(Msg::PresAnterior)
+                }
+                Key::Named(NamedKey::Home) | Key::Named(NamedKey::Escape) => {
+                    Some(Msg::PresVistaGeneral)
+                }
+                _ => None,
+            };
         }
         let ctrl = event.modifiers.ctrl || event.modifiers.meta;
         let shift = event.modifiers.shift;

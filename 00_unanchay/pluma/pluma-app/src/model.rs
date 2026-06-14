@@ -62,6 +62,37 @@ pub(crate) struct NodoFiltro {
     pub(crate) y: f32,
 }
 
+/// Modo del centro: las tres caras unificadas de pluma sobre el mismo
+/// documento. `Lienzos` es la superficie por defecto (títulos como cajas
+/// anidadas, editable in-situ, con tamaño de fuente por nivel); `Presentar`
+/// vuela por las secciones con la cámara del deck; `Plano` es el editor
+/// multilienzo clásico (text-editor por cuerpo).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Modo {
+    Lienzos,
+    Presentar,
+    Plano,
+}
+
+impl Modo {
+    /// Cicla Lienzos → Presentar → Plano → Lienzos.
+    pub(crate) fn siguiente(self) -> Modo {
+        match self {
+            Modo::Lienzos => Modo::Presentar,
+            Modo::Presentar => Modo::Plano,
+            Modo::Plano => Modo::Lienzos,
+        }
+    }
+
+    pub(crate) fn etiqueta(self) -> &'static str {
+        match self {
+            Modo::Lienzos => "Lienzos",
+            Modo::Presentar => "Presentar",
+            Modo::Plano => "Plano",
+        }
+    }
+}
+
 pub(crate) const BACKENDS: [BackendKind; 6] = [
     BackendKind::Mock,
     BackendKind::Gemini,
@@ -193,6 +224,26 @@ pub(crate) enum Msg {
     EditMenuAction(llimphi_widget_edit_menu::EditAction),
     /// Cierra cualquier menú abierto (dropdown o edición).
     CloseMenus,
+
+    // --- Unificación: modos (Lienzos / Presentar / Plano) ---
+    /// Cicla el modo del centro.
+    CicloModo,
+    /// Fija un modo concreto del centro.
+    SetModo(Modo),
+    /// Click en una caja de lienzo (modo Lienzos): empieza la edición in-situ
+    /// de ese átomo.
+    LienzoSelect(Uuid),
+    /// Tecla hacia el editor in-situ del átomo en edición.
+    LienzoEditKey(KeyEvent),
+    /// Click/drag dentro del editor in-situ (mover caret / selección).
+    LienzoEditPointer(PointerEvent),
+    /// Cierra la edición in-situ guardando el cambio del átomo (y re-deriva la
+    /// jerarquía si el `#` cambió).
+    LienzoCommit,
+    /// Presentar: vuela al paso siguiente / anterior / vista general.
+    PresSiguiente,
+    PresAnterior,
+    PresVistaGeneral,
 }
 
 pub(crate) struct Model {
@@ -205,6 +256,13 @@ pub(crate) struct Model {
     /// si la lista de cuerpos está vacía — el init siembra uno para evitarlo.
     pub(crate) activo: Option<Uuid>,
     pub(crate) ide: CuerpoIde,
+    /// Modo del centro (Lienzos / Presentar / Plano). Ver [`Modo`].
+    pub(crate) modo: Modo,
+    /// Edición in-situ en modo Lienzos: `(átomo, estado del editor)`. `None`
+    /// cuando no se está editando ninguna caja.
+    pub(crate) editando: Option<(Uuid, llimphi_widget_text_editor::EditorState)>,
+    /// Estado de la cámara del deck para el modo Presentar (paso + zoom/pan).
+    pub(crate) recorrido_state: pluma_deck_core::RecorridoState,
     /// Conjunto de cuerpos visibles en el multilienzo (membresía). Siempre
     /// contiene al `activo`. El ORDEN de columnas lo da `orden_lienzos`, no
     /// este vector.

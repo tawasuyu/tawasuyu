@@ -17,6 +17,7 @@
 //! sí es puro; no posee estado de edición.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{
     auto, length, percent, FlexDirection, Rect, Size, Style,
@@ -24,6 +25,9 @@ use llimphi_ui::llimphi_layout::taffy::prelude::{
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+use llimphi_widget_text_editor::{
+    text_editor_view, EditorMetrics, EditorPalette, PointerEvent,
+};
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
 use pluma_outline::{font_size_por_nivel, proyectar, Nodo, Seccion};
@@ -31,6 +35,24 @@ use uuid::Uuid;
 
 use crate::multilienzo_editor::color_seccion;
 use crate::Palette;
+
+/// Líneas máximas que dibuja el editor in-situ de un átomo (cap del viewport).
+const VISIBLE_INLINE: usize = 80;
+
+/// Contexto de edición in-situ: qué átomo se está editando, con qué estado de
+/// editor, y a dónde mandar sus eventos de puntero. Cuando el render topa con
+/// `atom`, en vez del texto estático pinta el widget text-editor cargado con
+/// `state` (a la fuente del nivel del átomo: un `#` se edita grande).
+pub struct EdicionLienzo<'a, Msg> {
+    /// Átomo en edición.
+    pub atom: Uuid,
+    /// Estado del editor (buffer + caret + undo) del átomo en edición.
+    pub state: &'a llimphi_widget_text_editor::EditorState,
+    /// Paleta del text-editor.
+    pub palette: &'a EditorPalette,
+    /// Click/drag dentro del editor in-situ → Msg (el caller mueve el caret).
+    pub on_pointer: Arc<dyn Fn(PointerEvent) -> Msg + Send + Sync>,
+}
 
 /// Geometría del render de lienzos.
 #[derive(Debug, Clone, Copy)]
@@ -68,6 +90,7 @@ pub fn lienzos_cuerpo_view<Msg, FSel>(
     palette: &Palette,
     cfg: &ConfigLienzos,
     seleccionado: Option<Uuid>,
+    edicion: Option<&EdicionLienzo<Msg>>,
     on_select: FSel,
 ) -> View<Msg>
 where
@@ -84,6 +107,7 @@ where
         palette,
         cfg,
         seleccionado,
+        edicion,
         &on_select,
     );
 
@@ -121,6 +145,7 @@ pub fn lienzos_multi_view<Msg, FSel>(
     cfg: &ConfigLienzos,
     activo: usize,
     seleccionado: Option<Uuid>,
+    edicion: Option<&EdicionLienzo<Msg>>,
     on_select: FSel,
 ) -> View<Msg>
 where
@@ -158,8 +183,15 @@ where
             Alignment::Start,
         );
 
-        let cuerpo_view =
-            lienzos_cuerpo_view(cuerpo, atoms, palette, cfg, seleccionado, on_select.clone());
+        let cuerpo_view = lienzos_cuerpo_view(
+            cuerpo,
+            atoms,
+            palette,
+            cfg,
+            seleccionado,
+            edicion,
+            on_select.clone(),
+        );
 
         let (ancho, flex) = match cfg.ancho_cuerpo {
             Some(w) => (length(w), 0.0),
@@ -206,6 +238,7 @@ fn render_nodos<Msg, FSel>(
     palette: &Palette,
     cfg: &ConfigLienzos,
     seleccionado: Option<Uuid>,
+    edicion: Option<&EdicionLienzo<Msg>>,
     on_select: &FSel,
 ) -> Vec<View<Msg>>
 where
@@ -215,25 +248,74 @@ where
     nodos
         .iter()
         .map(|n| match n {
-            Nodo::Parrafo { atom } => render_parrafo(*atom, atoms, palette, cfg, seleccionado, on_select),
-            Nodo::Seccion(s) => render_seccion(s, atoms, palette, cfg, seleccionado, on_select),
+            Nodo::Parrafo { atom } => {
+                render_parrafo(*atom, atoms, palette, cfg, seleccionado, edicion, on_select)
+            }
+            Nodo::Seccion(s) => {
+                render_seccion(s, atoms, palette, cfg, seleccionado, edicion, on_select)
+            }
         })
         .collect()
 }
 
-/// Un párrafo de cuerpo: caja de texto clickeable a `font_base`.
+/// `true` + el editor in-situ si `edicion` apunta a `atom`; `None` si no.
+/// `font` es el tamaño de fuente con el que editar (nivel del átomo).
+fn editor_si_corresponde<Msg>(
+    atom: Uuid,
+    font: f32,
+    edicion: Option<&EdicionLienzo<Msg>>,
+) -> Option<View<Msg>>
+where
+    Msg: Clone + 'static,
+{
+    let e = edicion?;
+    if e.atom != atom {
+        return None;
+    }
+    let onp = e.on_pointer.clone();
+    let editor = text_editor_view::<Msg>(
+        e.state,
+        e.palette,
+        EditorMetrics::for_font_size(font),
+        VISIBLE_INLINE,
+        move |ev| Some((onp)(ev)),
+    );
+    Some(
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            min_size: Size {
+                width: length(0.0_f32),
+                height: length(font * 1.6),
+            },
+            ..Default::default()
+        })
+        .fill(e.palette.bg)
+        .radius(3.0)
+        .children(vec![editor]),
+    )
+}
+
+/// Un párrafo de cuerpo: caja de texto clickeable a `font_base` — o el editor
+/// in-situ si es el átomo en edición.
 fn render_parrafo<Msg, FSel>(
     atom: Uuid,
     atoms: &HashMap<Uuid, &NarrativeAtom>,
     palette: &Palette,
     cfg: &ConfigLienzos,
     seleccionado: Option<Uuid>,
+    edicion: Option<&EdicionLienzo<Msg>>,
     on_select: &FSel,
 ) -> View<Msg>
 where
     Msg: Clone + 'static,
     FSel: Fn(Uuid) -> Msg + Clone + 'static,
 {
+    if let Some(ed) = editor_si_corresponde(atom, cfg.font_base, edicion) {
+        return ed;
+    }
     let texto = atoms
         .get(&atom)
         .map(|a| a.content.to_string())
@@ -270,6 +352,7 @@ fn render_seccion<Msg, FSel>(
     palette: &Palette,
     cfg: &ConfigLienzos,
     seleccionado: Option<Uuid>,
+    edicion: Option<&EdicionLienzo<Msg>>,
     on_select: &FSel,
 ) -> View<Msg>
 where
@@ -280,27 +363,32 @@ where
     let font_titulo = font_size_por_nivel(s.nivel, cfg.font_base);
     let resaltado = seleccionado == Some(s.titulo_atom);
 
-    // Cabecera: el título, grande, clickeable.
-    let titulo_color = if resaltado {
-        palette.border_strong
+    // Cabecera: el editor in-situ del título (a su fuente de nivel) si es el
+    // átomo en edición; si no, el título estático, grande, clickeable.
+    let cabecera = if let Some(ed) = editor_si_corresponde(s.titulo_atom, font_titulo, edicion) {
+        ed
     } else {
-        palette.fg_text
+        let titulo_color = if resaltado {
+            palette.border_strong
+        } else {
+            palette.fg_text
+        };
+        View::new(Style {
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            padding: Rect {
+                left: length(6.0_f32),
+                right: length(6.0_f32),
+                top: length(2.0_f32),
+                bottom: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .text_aligned(s.titulo.clone(), font_titulo, titulo_color, Alignment::Start)
+        .on_click(on_select(s.titulo_atom))
     };
-    let cabecera = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: auto(),
-        },
-        padding: Rect {
-            left: length(6.0_f32),
-            right: length(6.0_f32),
-            top: length(2.0_f32),
-            bottom: length(4.0_f32),
-        },
-        ..Default::default()
-    })
-    .text_aligned(s.titulo.clone(), font_titulo, titulo_color, Alignment::Start)
-    .on_click(on_select(s.titulo_atom));
 
     // Contenido anidado.
     let mut hijos: Vec<View<Msg>> = Vec::with_capacity(s.hijos.len() + 1);
@@ -311,6 +399,7 @@ where
         palette,
         cfg,
         seleccionado,
+        edicion,
         on_select,
     ));
 
@@ -381,6 +470,7 @@ mod pruebas {
             &Palette::default(),
             &ConfigLienzos::default(),
             None,
+            None,
             |_| (),
         );
     }
@@ -394,6 +484,7 @@ mod pruebas {
             &Palette::default(),
             &ConfigLienzos::default(),
             0,
+            None,
             None,
             |_| (),
         );
@@ -411,6 +502,7 @@ mod pruebas {
             &Palette::default(),
             &ConfigLienzos::default(),
             0,
+            None,
             None,
             |_| (),
         );
