@@ -655,13 +655,30 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.553 — `mask-border-repeat` (CSS Masking 1); Fase 7.613 alias.
-        "mask-border-repeat" | "-webkit-mask-box-image-repeat" => match value.trim().to_ascii_lowercase().as_str() {
-            "stretch" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Stretch)),
-            "repeat" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Repeat)),
-            "round" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Round)),
-            "space" => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Space)),
-            _ => None,
-        },
+        // Fase 7.909 — admite dos valores (horizontal vertical); el modelo
+        // guarda uno solo → tomamos el 1º (horizontal).
+        "mask-border-repeat" | "-webkit-mask-box-image-repeat" => {
+            match value.trim().split_whitespace().next().map(str::to_ascii_lowercase).as_deref() {
+                Some("stretch") => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Stretch)),
+                Some("repeat") => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Repeat)),
+                Some("round") => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Round)),
+                Some("space") => Some(DeclKind::MaskBorderRepeat(MaskBorderRepeat::Space)),
+                _ => None,
+            }
+        }
+        // Fase 7.909 — shorthand `mask-border` (+ alias legacy
+        // `-webkit-mask-box-image`). Parse opaco (igual que `border-image`);
+        // un resolver de máscara consume el string.
+        "mask-border" | "-webkit-mask-box-image" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("none") {
+                Some(DeclKind::MaskBorder(None))
+            } else {
+                Some(DeclKind::MaskBorder(Some(v.to_string())))
+            }
+        }
         // Fase 7.554 — `mask-border-mode` (CSS Masking 1).
         "mask-border-mode" => match value.trim().to_ascii_lowercase().as_str() {
             "luminance" => Some(DeclKind::MaskBorderMode(MaskBorderMode::Luminance)),

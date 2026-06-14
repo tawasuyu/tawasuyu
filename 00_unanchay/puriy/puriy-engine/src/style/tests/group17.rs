@@ -1244,3 +1244,40 @@ fn container_type_scroll_state() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::ContainerType(ContainerType::Normal))));
 }
+
+// ── Fase 7.909 — mask-border shorthand + repeat 2-val + underline-position 2-val ─
+
+#[test]
+fn mask_border_shorthand_y_repeat() {
+    // shorthand opaco.
+    assert!(decls("mask-border: url(b.png) 25 / 35px / 6 repeat")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::MaskBorder(Some(s)) if s.starts_with("url("))));
+    // alias legacy -webkit-mask-box-image.
+    assert!(decls("-webkit-mask-box-image: url(b.png) 25")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::MaskBorder(Some(_)))));
+    // none.
+    assert!(decls("mask-border: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaskBorder(None))));
+    // repeat de dos valores → toma el 1º (horizontal).
+    assert!(decls("mask-border-repeat: round stretch")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MaskBorderRepeat(MaskBorderRepeat::Round))));
+}
+
+#[test]
+fn text_underline_position_dos_valores() {
+    let p = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::TextUnderlinePosition(v) => Some(v),
+        _ => None,
+    });
+    // `under left`/`under right` (texto vertical) → prioriza el eje.
+    assert_eq!(p("text-underline-position: under left"), Some(TextUnderlinePosition::Left));
+    assert_eq!(p("text-underline-position: right under"), Some(TextUnderlinePosition::Right));
+    // un valor sigue valiendo.
+    assert_eq!(p("text-underline-position: under"), Some(TextUnderlinePosition::Under));
+    // `left right` es inválido (mutuamente excluyentes) → drop.
+    assert!(decls("text-underline-position: left right").is_empty());
+}

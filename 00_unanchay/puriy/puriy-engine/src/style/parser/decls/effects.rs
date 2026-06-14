@@ -541,14 +541,32 @@ pub(crate) fn parse_quotes(value: &str) -> Quotes {
 /// `text-underline-position`: `auto | from-font | under | left | right`.
 /// Fase 7.299.
 pub(crate) fn parse_text_underline_position(value: &str) -> Option<TextUnderlinePosition> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "auto" => Some(TextUnderlinePosition::Auto),
-        "from-font" => Some(TextUnderlinePosition::FromFont),
-        "under" => Some(TextUnderlinePosition::Under),
-        "left" => Some(TextUnderlinePosition::Left),
-        "right" => Some(TextUnderlinePosition::Right),
-        _ => None,
+    let lc = value.trim().to_ascii_lowercase();
+    match lc.as_str() {
+        "auto" => return Some(TextUnderlinePosition::Auto),
+        "from-font" => return Some(TextUnderlinePosition::FromFont),
+        "under" => return Some(TextUnderlinePosition::Under),
+        "left" => return Some(TextUnderlinePosition::Left),
+        "right" => return Some(TextUnderlinePosition::Right),
+        _ => {}
     }
+    // Fase 7.909 — forma de dos valores `under || [ left | right ]` (CSS Text
+    // 4, p.ej. texto vertical CJK). `left`/`right` son mutuamente excluyentes
+    // (`left right` es inválido → drop). El modelo es enum de un valor:
+    // priorizamos el eje left/right cuando está presente (pierde el `under`).
+    let toks: Vec<&str> = lc.split_whitespace().collect();
+    if toks.len() == 2 {
+        let has_under = toks.contains(&"under");
+        let left = toks.contains(&"left");
+        let right = toks.contains(&"right");
+        if has_under && left {
+            return Some(TextUnderlinePosition::Left);
+        }
+        if has_under && right {
+            return Some(TextUnderlinePosition::Right);
+        }
+    }
+    None
 }
 
 /// `text-justify`: `auto | none | inter-word | inter-character | distribute`.

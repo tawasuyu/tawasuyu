@@ -738,6 +738,9 @@ pub(crate) enum DeclKind {
     MaskBorderRepeat(MaskBorderRepeat),
     /// `mask-border-mode` (Fase 7.554). NO hereda. Plumb.
     MaskBorderMode(MaskBorderMode),
+    /// `mask-border` shorthand (Fase 7.909). `None` = `none`. Parse opaco
+    /// (igual que `border-image`). NO hereda. Plumb.
+    MaskBorder(Option<String>),
     /// `caret-animation` (Fase 7.555). HEREDA. Plumb.
     CaretAnimation(CaretAnimation),
     /// `scroll-marker-group` (Fase 7.556). NO hereda. Plumb.
@@ -1541,6 +1544,7 @@ impl Decl {
             DeclKind::MaskBorderOutset(v) => s.mask_border_outset = v.clone(),
             DeclKind::MaskBorderRepeat(v) => s.mask_border_repeat = *v,
             DeclKind::MaskBorderMode(v) => s.mask_border_mode = *v,
+            DeclKind::MaskBorder(v) => s.mask_border = v.clone(),
             DeclKind::CaretAnimation(v) => s.caret_animation = *v,
             DeclKind::ScrollMarkerGroup(v) => s.scroll_marker_group = *v,
             DeclKind::ScrollInitialTarget(v) => s.scroll_initial_target = *v,

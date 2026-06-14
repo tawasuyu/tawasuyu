@@ -385,6 +385,7 @@ impl Default for ComputedStyle {
             mask_border_outset: None,
             mask_border_repeat: MaskBorderRepeat::Stretch,
             mask_border_mode: MaskBorderMode::Alpha,
+            mask_border: None,
             caret_animation: CaretAnimation::Auto,
             scroll_marker_group: ScrollMarkerGroup::None,
             scroll_initial_target: ScrollInitialTarget::None,

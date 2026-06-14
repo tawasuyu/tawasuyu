@@ -1070,6 +1070,8 @@ pub struct ComputedStyle {
     /// interpreta por luminancia o por alpha. Default `Alpha`. NO hereda.
     /// Plumb.
     pub mask_border_mode: MaskBorderMode,
+    /// `mask-border` shorthand (Fase 7.909). Opaco. Default `None`. NO hereda.
+    pub mask_border: Option<String>,
     /// `caret-animation` (Fase 7.555). CSS UI 4: si el caret parpadea
     /// (`auto`) o queda fijo (`manual`). Default `Auto`. HEREDA. Plumb.
     pub caret_animation: CaretAnimation,
