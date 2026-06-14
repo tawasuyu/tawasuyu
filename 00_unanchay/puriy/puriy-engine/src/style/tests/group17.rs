@@ -279,3 +279,102 @@ fn outline_color_invert() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::CurrentColor(ColorTarget::Outline))));
 }
+
+// ── Fase 7.865 — line-height: calc() ───────────────────────────────────────
+
+#[test]
+fn line_height_calc() {
+    // calc(1.5) número crudo = multiplicador 1.5.
+    assert!(decls("line-height: calc(1.5)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6)));
+    // calc(24px) px → /16 = 1.5.
+    assert!(decls("line-height: calc(20px + 4px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6)));
+}
+
+// ── Fase 7.866 — background longhands con listas por coma ───────────────────
+
+#[test]
+fn background_longhands_comma_toman_primera_capa() {
+    // background-size: cover, contain → toma `cover`.
+    assert!(decls("background-size: cover, contain")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::BackgroundSize(BackgroundSize::Cover))));
+    // background-repeat: no-repeat, repeat → toma `no-repeat`.
+    assert!(decls("background-repeat: no-repeat, repeat")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::BackgroundRepeat(_))));
+    // background-position: 50% 50%, top right → toma la 1ª capa.
+    assert!(decls("background-position: 50% 50%, top right")
+        .iter()
+        .any(|d| matches!(d.kind,
+            DeclKind::BackgroundPosition(BackgroundPosition { x: LengthVal::Pct(px), y: LengthVal::Pct(py) })
+                if px == 50.0 && py == 50.0)));
+}
+
+// ── Fase 7.867 — list-style-type estilos extra → aproximación ──────────────
+
+#[test]
+fn list_style_type_extra_keywords() {
+    let lst = |s: &str| {
+        decls(s).iter().find_map(|d| match d.kind {
+            DeclKind::ListStyleType(t) => Some(t),
+            _ => None,
+        })
+    };
+    assert_eq!(lst("list-style-type: georgian"), Some(ListStyleType::Decimal));
+    assert_eq!(lst("list-style-type: decimal-leading-zero"), Some(ListStyleType::Decimal));
+    assert_eq!(lst("list-style-type: lower-greek"), Some(ListStyleType::LowerAlpha));
+    assert_eq!(lst("list-style-type: disclosure-open"), Some(ListStyleType::Disc));
+}
+
+// ── Fase 7.868 — color() gamut amplio ──────────────────────────────────────
+
+#[test]
+fn color_func_gamut_amplio() {
+    // rec2020 rojo puro ≈ rojo sRGB saturado (clamp). No debe descartarse.
+    assert!(decls("color: color(rec2020 1 0 0)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Color(_))));
+    // xyz: el rojo sRGB tiene XYZ ≈ (0.4124, 0.2126, 0.0193).
+    let c = decls("color: color(xyz 0.4124 0.2126 0.0193)")
+        .iter()
+        .find_map(|d| match d.kind { DeclKind::Color(c) => Some(c), _ => None });
+    let c = c.unwrap();
+    assert!(c.r > 200 && c.g < 60 && c.b < 60, "xyz rojo dio {c:?}");
+    // a98-rgb / prophoto-rgb parsean.
+    assert!(!decls("color: color(a98-rgb 1 0 0)").is_empty());
+    assert!(!decls("color: color(prophoto-rgb 1 0 0)").is_empty());
+}
+
+// ── Fase 7.869 — env() ─────────────────────────────────────────────────────
+
+#[test]
+fn env_resuelve_a_cero_o_fallback() {
+    // env(safe-area-inset-top) → 0px.
+    assert!(decls("padding-top: env(safe-area-inset-top)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PaddingTop(v) if v == 0.0)));
+    // Con fallback → el fallback.
+    assert!(decls("padding-top: env(safe-area-inset-top, 20px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PaddingTop(v) if (v - 20.0).abs() < 0.01)));
+    // Dentro de calc.
+    assert!(decls("padding-top: calc(env(safe-area-inset-top, 10px) + 5px)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PaddingTop(v) if (v - 15.0).abs() < 0.01)));
+}
+
+// ── Fase 7.870 — image-set() / cross-fade() ────────────────────────────────
+
+#[test]
+fn image_set_y_cross_fade_toman_primera_url() {
+    assert!(decls("background-image: image-set(url(a.png) 1x, url(b.png) 2x)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::BackgroundImageUrl(u) if u == "a.png")));
+    assert!(decls("background-image: cross-fade(url(x.png), url(y.png))")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::BackgroundImageUrl(u) if u == "x.png")));
+}

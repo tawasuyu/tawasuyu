@@ -39,8 +39,33 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
         }
         return Some(DeclKind::BackgroundImageUrl(url.to_string()));
     }
-    // `cross-fade`/`image-set`/`paint()` no soportados — silencio.
+    // Fase 7.870 — `image-set(...)` (elige por resolución/tipo) y
+    // `cross-fade(...)` (mezcla de imágenes). Sin pipeline para elegir/mezclar,
+    // tomamos la PRIMERA `url(...)` de los argumentos (el candidato base).
+    for fname in ["image-set", "-webkit-image-set", "cross-fade", "-webkit-cross-fade"] {
+        if let Some(args) = strip_fn(v, fname) {
+            if let Some(url) = first_url_in(args) {
+                return Some(DeclKind::BackgroundImageUrl(url));
+            }
+        }
+    }
+    // `paint()`/`element()` no soportados — silencio.
     None
+}
+
+/// Extrae la 1ª `url(...)` que aparezca dentro de `s` (desquotada). `None` si
+/// no hay ninguna. Usada por `image-set`/`cross-fade`. Fase 7.870.
+fn first_url_in(s: &str) -> Option<String> {
+    let start = s.find("url(")?;
+    let after = &s[start + 4..];
+    let close = after.find(')')?;
+    let raw = after[..close].trim();
+    let unquoted = raw
+        .strip_prefix('"').and_then(|x| x.strip_suffix('"'))
+        .or_else(|| raw.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
+        .unwrap_or(raw)
+        .trim();
+    (!unquoted.is_empty()).then(|| unquoted.to_string())
 }
 
 /// Marca un gradiente como `repeating-*` (Fase 7.228).

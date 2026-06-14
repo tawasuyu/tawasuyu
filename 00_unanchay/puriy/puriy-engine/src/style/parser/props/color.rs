@@ -475,9 +475,51 @@ pub(crate) fn parse_color_func(args: &str) -> Option<Color> {
                 -0.019_636_242 * lr - 0.078_637_2 * lg + 1.098_273_4 * lb,
             )
         }
+        // Fase 7.868 — espacios de gamut amplio vía pivote XYZ(D65). El gamma
+        // exacto de cada espacio (rec2020/a98/prophoto tienen el suyo) se
+        // aproxima con el de sRGB; los D50 (prophoto/xyz-d50) no se adaptan
+        // cromáticamente (se tratan como D65). Aproximación documentada.
+        "rec2020" => {
+            let (lr, lg, lb) = (srgb_to_linear(c0), srgb_to_linear(c1), srgb_to_linear(c2));
+            let (x, y, z) = (
+                0.636_958 * lr + 0.144_617 * lg + 0.168_881 * lb,
+                0.262_700 * lr + 0.677_998 * lg + 0.059_302 * lb,
+                0.028_073 * lg + 1.060_985 * lb,
+            );
+            xyz_d65_to_linear_srgb(x, y, z)
+        }
+        "a98-rgb" => {
+            let (lr, lg, lb) = (srgb_to_linear(c0), srgb_to_linear(c1), srgb_to_linear(c2));
+            let (x, y, z) = (
+                0.576_731 * lr + 0.185_554 * lg + 0.188_185 * lb,
+                0.297_377 * lr + 0.627_349 * lg + 0.075_274 * lb,
+                0.027_034 * lr + 0.070_687 * lg + 0.991_109 * lb,
+            );
+            xyz_d65_to_linear_srgb(x, y, z)
+        }
+        "prophoto-rgb" => {
+            let (lr, lg, lb) = (srgb_to_linear(c0), srgb_to_linear(c1), srgb_to_linear(c2));
+            let (x, y, z) = (
+                0.797_675 * lr + 0.135_192 * lg + 0.031_353 * lb,
+                0.288_040 * lr + 0.711_874 * lg + 0.000_086 * lb,
+                0.825_210 * lb,
+            );
+            xyz_d65_to_linear_srgb(x, y, z)
+        }
+        "xyz" | "xyz-d65" | "xyz-d50" => xyz_d65_to_linear_srgb(c0, c1, c2),
         _ => return None,
     };
     Some(linear_srgb_to_color(r, g, b, al))
+}
+
+/// XYZ(D65) → sRGB lineal (matriz estándar CSS Color 4). Pivote común de los
+/// espacios de gamut amplio en [`parse_color_func`]. Fase 7.868.
+fn xyz_d65_to_linear_srgb(x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+    (
+        3.240_454_2 * x - 1.537_138_5 * y - 0.498_531_4 * z,
+        -0.969_266 * x + 1.876_010_8 * y + 0.041_556_1 * z,
+        0.055_643_4 * x - 0.204_025_9 * y + 1.057_225_2 * z,
+    )
 }
 
 /// sRGB lineal → OKLab (inversa de `oklab_to_linear_srgb`). Para mezclar

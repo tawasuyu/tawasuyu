@@ -211,9 +211,14 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "outline-offset" => parse_length_px(value).map(DeclKind::OutlineOffset),
         "background-image" => parse_background_image(value),
         // Fase 7.811 — `-webkit-background-size` / `-moz-background-size` alias vendor legacy.
-        "background-size" | "-webkit-background-size" | "-moz-background-size" => parse_background_size(value),
-        "background-position" => parse_background_position(value),
-        "background-repeat" => parse_background_repeat(value),
+        // Fase 7.866 — los longhands aceptan listas por coma (multi-capa); el
+        // modelo guarda sólo la capa 0 en el campo base, así que tomamos el 1er
+        // segmento (las capas 2..N las setea el shorthand `background`).
+        "background-size" | "-webkit-background-size" | "-moz-background-size" => {
+            parse_background_size(first_comma(value))
+        }
+        "background-position" => parse_background_position(first_comma(value)),
+        "background-repeat" => parse_background_repeat(first_comma(value)),
         "background-origin" => parse_background_origin(value),
         // `-webkit-background-clip: text` es el spelling dominante en la web
         // para texto con gradiente — lo tratamos igual que el sin-prefijo.

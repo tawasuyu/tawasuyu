@@ -80,6 +80,21 @@ pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
         "upper-alpha" | "upper-latin" => Some(ListStyleType::UpperAlpha),
         "lower-roman" => Some(ListStyleType::LowerRoman),
         "upper-roman" => Some(ListStyleType::UpperRoman),
+        // Fase 7.867 — estilos de contador adicionales (CSS Counter Styles 3).
+        // El enum no los modela uno a uno; los aproximamos al pariente más
+        // cercano que SÍ pintamos: los numéricos → `Decimal`, los alfabéticos
+        // de otros alfabetos → `LowerAlpha`/`UpperAlpha`, los triángulos de
+        // `<details>` → `Disc`. Mejor que descartar (que dejaría el marker
+        // heredado).
+        "decimal-leading-zero" | "cjk-decimal" | "arabic-indic" | "armenian"
+        | "georgian" | "hebrew" | "cjk-ideographic" | "japanese-informal"
+        | "japanese-formal" | "korean-hangul-formal" | "simp-chinese-informal"
+        | "trad-chinese-informal" => Some(ListStyleType::Decimal),
+        "lower-greek" | "lower-armenian" => Some(ListStyleType::LowerAlpha),
+        "upper-armenian" | "upper-greek" | "upper-latin-symbol" => {
+            Some(ListStyleType::UpperAlpha)
+        }
+        "disclosure-open" | "disclosure-closed" => Some(ListStyleType::Disc),
         _ => None,
     }
 }
@@ -833,6 +848,15 @@ fn clamp_calc(lo: CalcVal, val: CalcVal, hi: CalcVal) -> Option<CalcVal> {
 /// salen como ya están). Imperfecto pero alcanza para Fase 4.
 pub(crate) fn parse_line_height(s: &str) -> Option<f32> {
     let s = s.trim();
+    // Fase 7.865 — `calc()`/min/max/clamp. Un número crudo es el multiplicador;
+    // una longitud px se normaliza a múltiplo del font-size base (16px).
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Number(n) => Some(n),
+            CalcVal::Length { px, pct } if pct == 0.0 => Some(px / 16.0),
+            _ => None,
+        };
+    }
     if let Some(num) = s.strip_suffix("px") {
         let v: f32 = num.trim().parse().ok()?;
         return Some(v / 16.0);

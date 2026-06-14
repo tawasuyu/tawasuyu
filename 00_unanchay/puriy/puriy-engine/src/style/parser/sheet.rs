@@ -1058,6 +1058,53 @@ pub(crate) fn substitute_vars(value: &str, vars: &HashMap<String, String>) -> St
     out
 }
 
+/// Sustituye `env(<name>[, <fallback>])` (CSS Env 1) por su valor. Sin un
+/// dispositivo real con áreas seguras / barras de título, los `env()`
+/// conocidos (`safe-area-inset-*`, `titlebar-area-*`, `keyboard-inset-*`)
+/// valen `0px`; cualquier otro usa el fallback si existe, o `0px`. Mismo
+/// motor textual que [`substitute_vars`] (respeta nesting). Fase 7.869.
+pub(crate) fn substitute_env(value: &str) -> String {
+    if !value.contains("env(") {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find("env(") {
+        out.push_str(&rest[..start]);
+        let inside_start = start + 4;
+        let bytes = rest[inside_start..].as_bytes();
+        let mut depth = 1usize;
+        let mut close_pos: Option<usize> = None;
+        for (i, &c) in bytes.iter().enumerate() {
+            match c {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close_pos = Some(i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close_pos else {
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        let args = &rest[inside_start..inside_start + close];
+        // El nombre puede traer índices (`env(viewport-segment-width 0 0)`);
+        // sólo nos importa separar el fallback tras la 1ª coma top-level.
+        let fallback = args.split_once(',').map(|(_, f)| f.trim().to_string());
+        let replacement = fallback.unwrap_or_else(|| "0px".to_string());
+        // Recursión: el fallback puede contener más env().
+        out.push_str(&substitute_env(&replacement));
+        rest = &rest[inside_start + close + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Parsea un selector encadenado. Soporta:
 /// - simples compound: `*`, `tag`, `.class`, `#id`, `a.btn`, `p#hero.alert`
 /// - selectores de atributo: `[href]`, `[type="text"]`, `[href^="https"]`,

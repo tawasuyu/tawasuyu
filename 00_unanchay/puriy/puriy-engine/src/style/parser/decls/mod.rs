@@ -58,6 +58,9 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         // Sustituye `var(--name)` antes de parsear. `substitute_vars` es
         // cheap si el value no contiene `var(` (early-out al primer find).
         let substituted = substitute_vars(value, vars);
+        // Fase 7.869 — resuelve `env(...)` (áreas seguras → 0px / fallback)
+        // tras `var()`. Early-out si no hay `env(`.
+        let substituted = substitute_env(&substituted);
         let value = substituted.as_str();
         // Fase 7.851 — shorthand CSS-wide `all: inherit|initial|unset|revert`.
         // Expande a un `Wide{prop, kw}` por cada propiedad del subset curado

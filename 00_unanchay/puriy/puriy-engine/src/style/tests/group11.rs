@@ -59,7 +59,10 @@ use super::super::*;
         assert_eq!(parse_list_style_type("lower-latin"), Some(ListStyleType::LowerAlpha));
         assert_eq!(parse_list_style_type("UPPER-ROMAN"), Some(ListStyleType::UpperRoman));
         assert_eq!(parse_list_style_type("none"), Some(ListStyleType::None));
-        assert_eq!(parse_list_style_type("georgian"), None);
+        // Fase 7.867 — `georgian` ya no se descarta: se aproxima a `Decimal`
+        // (estilo numérico). Un keyword realmente desconocido sí da None.
+        assert_eq!(parse_list_style_type("georgian"), Some(ListStyleType::Decimal));
+        assert_eq!(parse_list_style_type("no-existe-tal-estilo"), None);
     }
 
 #[test]
@@ -214,8 +217,12 @@ use super::super::*;
         assert_eq!(parse_color("color(display-p3 0 1 0)").unwrap(), Color::rgb(0, 255, 0));
         // Alpha.
         assert_eq!(parse_color("color(srgb 1 0 0 / 0.5)").unwrap(), Color { r: 255, g: 0, b: 0, a: 128 });
-        // Espacio no soportado ⇒ None (degrada, no rompe el parseo).
-        assert!(parse_color("color(rec2020 1 0 0)").is_none());
+        // Fase 7.868 — rec2020/a98/prophoto/xyz ahora SÍ se resuelven (vía
+        // pivote XYZ). rec2020 rojo puro recorta al gamut sRGB ≈ rojo saturado.
+        let r2020 = parse_color("color(rec2020 1 0 0)").unwrap();
+        assert!(r2020.r > 200 && r2020.g < 60 && r2020.b < 60, "rec2020 rojo: {r2020:?}");
+        // Un espacio realmente inexistente sigue dando None.
+        assert!(parse_color("color(no-tal-espacio 1 0 0)").is_none());
     }
 
     #[test]
