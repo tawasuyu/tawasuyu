@@ -118,10 +118,11 @@ pub enum ImportPsdError {
     /// El parser de `psd` rechazó el archivo. Mensaje del crate envuelto.
     #[error("psd inválido: {0}")]
     Psd(String),
-    /// El archivo parseó pero no tiene capas — PSD "flat" (sólo image data
-    /// global). Aún no soportado: requeriría tomar el composite final como
-    /// única capa raster, decisión que dejamos al caller a futuro.
-    #[error("el PSD no tiene capas explícitas (PSD flat); este puente requiere layer info")]
+    /// El archivo es un PSD "flat" (sin layer info) y ni siquiera su imagen
+    /// compuesta global tiene el tamaño esperado, así que no hay nada que
+    /// extraer. Un PSD flat con composite válido SÍ se importa (como una
+    /// única capa de fondo); este error es sólo el caso degenerado.
+    #[error("el PSD es flat y su imagen compuesta no tiene el tamaño esperado")]
     SinCapas,
 }
 
@@ -143,12 +144,36 @@ pub fn importar_psd(bytes: &[u8]) -> Result<DocumentoPsdImportado, ImportPsdErro
     let width = psd.width();
     let height = psd.height();
     let layers = psd.layers();
-    let n_capas = layers.len();
-    if n_capas == 0 {
-        return Err(ImportPsdError::SinCapas);
-    }
-    let grupos = psd.groups();
     let esperado = (width as usize) * (height as usize) * 4;
+
+    // PSD "flat": sin layer info explícita, sólo la imagen compuesta global.
+    // La tomamos (`psd.rgba()`, RGBA8 width×height) como una única capa raster
+    // de fondo — así el puente no rebota archivos perfectamente válidos que
+    // simplemente no preservaron capas (export aplanado, "Maximize Compatibility"
+    // sin capas, etc.). Si ni el composite tiene el tamaño esperado, no hay
+    // nada que extraer → SinCapas.
+    if layers.is_empty() {
+        let rgba = psd.rgba();
+        if rgba.len() != esperado {
+            return Err(ImportPsdError::SinCapas);
+        }
+        let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
+        let hash = hash_bytes(&rgba);
+        buffers.insert(hash, rgba);
+        let mut lienzo = Lienzo::nuevo(width, height);
+        lienzo.apilar(Capa::raster("composición", hash));
+        let informe = InformeImportacion {
+            capas_importadas: 1,
+            ..InformeImportacion::default()
+        };
+        return Ok(DocumentoPsdImportado {
+            lienzo,
+            buffers,
+            informe,
+        });
+    }
+
+    let grupos = psd.groups();
 
     let mut buffers: HashMap<Hash, Vec<u8>> = HashMap::new();
     let mut informe = InformeImportacion::default();
@@ -548,6 +573,42 @@ fn nombre_blend(disc: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Arma en memoria un PSD **flat** (sin layer info) de 1×1 px con la imagen
+    /// compuesta `(r,g,b)` en raw. Formato PSD mínimo: header + secciones de
+    /// color/recursos/capas en cero + image data raw planar. Sirve para probar
+    /// el camino flat de `importar_psd` sin un fixture binario en disco.
+    fn psd_flat_1x1(r: u8, g: u8, b: u8) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(b"8BPS"); // signature
+        v.extend_from_slice(&1u16.to_be_bytes()); // version
+        v.extend_from_slice(&[0u8; 6]); // reserved
+        v.extend_from_slice(&3u16.to_be_bytes()); // channels (RGB)
+        v.extend_from_slice(&1u32.to_be_bytes()); // height
+        v.extend_from_slice(&1u32.to_be_bytes()); // width
+        v.extend_from_slice(&8u16.to_be_bytes()); // depth
+        v.extend_from_slice(&3u16.to_be_bytes()); // color mode = RGB
+        v.extend_from_slice(&0u32.to_be_bytes()); // color mode data len
+        v.extend_from_slice(&0u32.to_be_bytes()); // image resources len
+        v.extend_from_slice(&0u32.to_be_bytes()); // layer & mask len = 0 (flat)
+        v.extend_from_slice(&0u16.to_be_bytes()); // compression = 0 (raw)
+        v.extend_from_slice(&[r, g, b]); // planar R, G, B (1 px c/u)
+        v
+    }
+
+    #[test]
+    fn flat_psd_se_importa_como_una_capa_de_fondo() {
+        let bytes = psd_flat_1x1(0x22, 0xcc, 0x33);
+        let doc = importar_psd(&bytes).expect("un PSD flat válido debe importar");
+        assert_eq!(doc.lienzo.capas.len(), 1, "una sola capa de fondo");
+        assert_eq!(doc.informe.capas_importadas, 1);
+        // El composite quedó en el mapa de buffers como RGBA 1×1 opaco.
+        assert_eq!(doc.buffers.len(), 1);
+        let buf = doc.buffers.values().next().unwrap();
+        assert_eq!(buf.len(), 4, "RGBA de 1×1");
+        assert_eq!(&buf[..3], &[0x22, 0xcc, 0x33], "RGB del composite");
+        assert_eq!(buf[3], 255, "alpha sintetizada opaca");
+    }
 
     /// PSD `two-layers-red-green-1x1.psd` del corpus de tests del crate `psd`
     /// (MIT/Apache, redistribución permitida). 1×1 píxel, dos capas opacas:
