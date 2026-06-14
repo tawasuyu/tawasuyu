@@ -834,6 +834,28 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::InterestDelayEnd(Some(v.to_string())))
             }
         }
+        // Fase 7.930 — aliases legacy del draft de interest invokers:
+        // `interest-target-show-delay` = `interest-delay-start`,
+        // `interest-target-hide-delay` = `interest-delay-end`. El shorthand
+        // `interest-target-delay`/`interest-delay` va por `parse_declarations`.
+        "interest-target-show-delay" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::InterestDelayStart(None))
+            } else {
+                Some(DeclKind::InterestDelayStart(Some(v.to_string())))
+            }
+        }
+        "interest-target-hide-delay" => {
+            let v = value.trim();
+            if v.is_empty() { None }
+            else if v.eq_ignore_ascii_case("normal") {
+                Some(DeclKind::InterestDelayEnd(None))
+            } else {
+                Some(DeclKind::InterestDelayEnd(Some(v.to_string())))
+            }
+        }
         // Fase 7.565 — `azimuth` (CSS 2.1 aural). Parse opaco; `center` → None.
         "azimuth" => {
             let v = value.trim();

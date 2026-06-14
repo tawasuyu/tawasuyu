@@ -332,3 +332,41 @@ fn gap_rule_aliases() {
     assert!(s.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleStyleActive(true))));
     assert!(s.iter().any(|d| matches!(d.kind, DeclKind::RowRuleStyleActive(true))));
 }
+
+// ── Fase 7.930 — aural CSS2 (speak-header, pitch-range) + interest delays ──
+
+#[test]
+fn aural_speak_header_pitch_range() {
+    assert!(decls("speak-header: always")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::SpeakHeader(Some(s)) if s == "always")));
+    assert!(decls("speak-header: once")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::SpeakHeader(None))));
+    assert!(decls("pitch-range: 50")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PitchRange(n) if (n - 50.0).abs() < 0.01)));
+    // clamp fuera de rango
+    assert!(decls("pitch-range: 200")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::PitchRange(n) if (n - 100.0).abs() < 0.01)));
+}
+
+#[test]
+fn interest_delay_shorthand_y_aliases() {
+    // shorthand: un valor fija ambos extremos
+    let r = decls("interest-delay: 0.5s");
+    assert!(r.iter().any(|d| matches!(&d.kind, DeclKind::InterestDelayStart(Some(s)) if s == "0.5s")));
+    assert!(r.iter().any(|d| matches!(&d.kind, DeclKind::InterestDelayEnd(Some(s)) if s == "0.5s")));
+    // alias legacy
+    let t = decls("interest-target-delay: 0.5s");
+    assert!(t.iter().any(|d| matches!(&d.kind, DeclKind::InterestDelayStart(Some(s)) if s == "0.5s")));
+    // dos valores
+    let two = decls("interest-delay: 1s 2s");
+    assert!(two.iter().any(|d| matches!(&d.kind, DeclKind::InterestDelayStart(Some(s)) if s == "1s")));
+    assert!(two.iter().any(|d| matches!(&d.kind, DeclKind::InterestDelayEnd(Some(s)) if s == "2s")));
+    // show/hide aliases longhand
+    assert!(decls("interest-target-show-delay: 1s")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::InterestDelayStart(Some(s)) if s == "1s")));
+}

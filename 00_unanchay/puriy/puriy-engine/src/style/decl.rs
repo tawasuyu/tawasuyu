@@ -808,6 +808,10 @@ pub(crate) enum DeclKind {
     Volume(Option<String>),
     /// `speak` (Fase 7.572). HEREDA. Plumb.
     Speak(Speak),
+    /// `speak-header` (CSS 2.1 aural). `None` = `once`. HEREDA. Plumb. Fase 7.930.
+    SpeakHeader(Option<String>),
+    /// `pitch-range` (CSS 2.1 aural). 0–100. HEREDA. Plumb. Fase 7.930.
+    PitchRange(f32),
     /// `play-during` (Fase 7.573). `None` = `auto`. NO hereda. Plumb.
     PlayDuring(Option<String>),
     /// `text-decoration-skip` (Fase 7.574). `None` = `auto`. HEREDA. Plumb.
@@ -1615,6 +1619,8 @@ impl Decl {
             DeclKind::Azimuth(v) => s.azimuth = v.clone(),
             DeclKind::Elevation(v) => s.elevation = v.clone(),
             DeclKind::Richness(v) => s.richness = *v,
+            DeclKind::SpeakHeader(v) => s.speak_header = v.clone(),
+            DeclKind::PitchRange(v) => s.pitch_range = *v,
             DeclKind::Stress(v) => s.stress = *v,
             DeclKind::Pitch(v) => s.pitch = v.clone(),
             DeclKind::SpeechRate(v) => s.speech_rate = v.clone(),

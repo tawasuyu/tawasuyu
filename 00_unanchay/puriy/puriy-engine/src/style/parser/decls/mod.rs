@@ -1044,6 +1044,23 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
+        // Fase 7.930 — `interest-delay` (shorthand) y su alias legacy
+        // `interest-target-delay`: `<time> [<time>]?` → start [end]. Un solo
+        // valor fija ambos extremos.
+        if prop.eq_ignore_ascii_case("interest-delay")
+            || prop.eq_ignore_ascii_case("interest-target-delay")
+        {
+            let mut it = value.split_whitespace();
+            if let Some(start) = it.next() {
+                let end = it.next().unwrap_or(start);
+                let to_opt = |t: &str| {
+                    if t.eq_ignore_ascii_case("normal") { None } else { Some(t.to_string()) }
+                };
+                out.push(Decl { kind: DeclKind::InterestDelayStart(to_opt(start)), important });
+                out.push(Decl { kind: DeclKind::InterestDelayEnd(to_opt(end)), important });
+            }
+            continue;
+        }
         // CSS Gap Decorations 1 (Fase 7.920): `row-rule` (shorthand del eje
         // filas), `rule` (ambos ejes) y sus sub-shorthands `rule-{width,
         // style,color}`. `row-rule-style` espeja `column-rule-style`.

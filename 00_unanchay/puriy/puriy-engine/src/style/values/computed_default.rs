@@ -417,6 +417,8 @@ impl Default for ComputedStyle {
             azimuth: None,
             elevation: None,
             richness: 50.0,
+            speak_header: None,
+            pitch_range: 50.0,
             stress: 50.0,
             pitch: None,
             speech_rate: None,

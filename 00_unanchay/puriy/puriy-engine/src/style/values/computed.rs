@@ -1148,6 +1148,12 @@ pub struct ComputedStyle {
     /// `richness` (Fase 7.567). CSS 2.1 aural: brillo/riqueza de la voz
     /// (0–100). Default `50.0`. HEREDA. Plumb.
     pub richness: f32,
+    /// `speak-header` (Fase 7.930). CSS 2.1 aural: cómo se anuncian las
+    /// cabeceras de tabla. `None` = `once`. HEREDA. Plumb.
+    pub speak_header: Option<String>,
+    /// `pitch-range` (Fase 7.930). CSS 2.1 aural: variación de tono 0–100
+    /// (50 = normal). HEREDA. Plumb.
+    pub pitch_range: f32,
     /// `stress` (Fase 7.568). CSS 2.1 aural: énfasis de la entonación
     /// (0–100). Default `50.0`. HEREDA. Plumb.
     pub stress: f32,

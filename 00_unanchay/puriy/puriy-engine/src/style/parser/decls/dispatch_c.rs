@@ -29,6 +29,26 @@ pub(crate) fn dispatch_c(p: &str, value: &str) -> Option<DeclKind> {
             .parse::<f32>()
             .ok()
             .map(|n| DeclKind::Stress(n.clamp(0.0, 100.0))),
+        // Fase 7.930 — `pitch-range` (CSS 2.1 aural). Número 0–100, clamp.
+        "pitch-range" => value
+            .trim()
+            .parse::<f32>()
+            .ok()
+            .map(|n| DeclKind::PitchRange(n.clamp(0.0, 100.0))),
+        // Fase 7.930 — `speak-header` (CSS 2.1 aural). `once | always`;
+        // `once` (inicial) → None.
+        "speak-header" => {
+            let v = value.trim();
+            if v.is_empty() {
+                None
+            } else if v.eq_ignore_ascii_case("once") {
+                Some(DeclKind::SpeakHeader(None))
+            } else if v.eq_ignore_ascii_case("always") {
+                Some(DeclKind::SpeakHeader(Some("always".to_string())))
+            } else {
+                None
+            }
+        }
         // Fase 7.569-7.571 — `pitch`/`speech-rate`/`volume` (CSS 2.1 aural).
         // Parse opaco; `medium` → None.
         "pitch" => {
