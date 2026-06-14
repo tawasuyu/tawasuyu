@@ -779,6 +779,15 @@ pub(crate) enum DeclKind {
     HyphenateLimitZone(Option<String>),
     /// `interest-target` (Fase 7.562). `None` = sin target. NO hereda. Plumb.
     InterestTarget(Option<String>),
+    /// `scroll-start` y sus longhands lógicos (CSS Scroll Snap 2). `None` =
+    /// `auto`. NO hereda. Plumb (no se consume en el scroll). Fase 7.928.
+    ScrollStart(Option<String>),
+    ScrollStartBlock(Option<String>),
+    ScrollStartInline(Option<String>),
+    /// `scroll-start-target` + longhands lógicos. `None` = `none`. Fase 7.928.
+    ScrollStartTarget(Option<String>),
+    ScrollStartTargetBlock(Option<String>),
+    ScrollStartTargetInline(Option<String>),
     /// `interest-delay-start` (Fase 7.563). `None` = `normal`. NO hereda. Plumb.
     InterestDelayStart(Option<String>),
     /// `interest-delay-end` (Fase 7.564). `None` = `normal`. NO hereda. Plumb.
@@ -1595,6 +1604,12 @@ impl Decl {
             DeclKind::HyphenateLimitLast(v) => s.hyphenate_limit_last = *v,
             DeclKind::HyphenateLimitZone(v) => s.hyphenate_limit_zone = v.clone(),
             DeclKind::InterestTarget(v) => s.interest_target = v.clone(),
+            DeclKind::ScrollStart(v) => s.scroll_start = v.clone(),
+            DeclKind::ScrollStartBlock(v) => s.scroll_start_block = v.clone(),
+            DeclKind::ScrollStartInline(v) => s.scroll_start_inline = v.clone(),
+            DeclKind::ScrollStartTarget(v) => s.scroll_start_target = v.clone(),
+            DeclKind::ScrollStartTargetBlock(v) => s.scroll_start_target_block = v.clone(),
+            DeclKind::ScrollStartTargetInline(v) => s.scroll_start_target_inline = v.clone(),
             DeclKind::InterestDelayStart(v) => s.interest_delay_start = v.clone(),
             DeclKind::InterestDelayEnd(v) => s.interest_delay_end = v.clone(),
             DeclKind::Azimuth(v) => s.azimuth = v.clone(),

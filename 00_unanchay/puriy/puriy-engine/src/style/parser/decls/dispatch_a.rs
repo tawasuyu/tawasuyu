@@ -3,6 +3,20 @@
 //! los brazos (props únicas) para preservar el comportamiento.
 use super::*;
 
+/// Parse opaco de valor con un sentinel inicial (`auto`/`none`): devuelve
+/// `Some(None)` para el sentinel, `Some(Some(value))` para el resto, y `None`
+/// si está vacío (la declaración se dropea). Fase 7.928.
+fn opaque_or_sentinel(value: &str, sentinel: &str) -> Option<Option<String>> {
+    let v = value.trim();
+    if v.is_empty() {
+        None
+    } else if v.eq_ignore_ascii_case(sentinel) {
+        Some(None)
+    } else {
+        Some(Some(v.to_string()))
+    }
+}
+
 pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
     match p {
         // `color: currentColor` = heredar el color (default), así que lo
@@ -265,6 +279,18 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "cursor" => parse_cursor(value).map(DeclKind::Cursor),
         "text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
         "scroll-behavior" => parse_scroll_behavior(value).map(DeclKind::ScrollBehavior),
+        // Fase 7.928 — CSS Scroll Snap 2: `scroll-start` + longhands lógicos.
+        // Parse opaco (plumb): el sentinel inicial (`auto`/`none`) → `None`.
+        "scroll-start" => opaque_or_sentinel(value, "auto").map(DeclKind::ScrollStart),
+        "scroll-start-block" => opaque_or_sentinel(value, "auto").map(DeclKind::ScrollStartBlock),
+        "scroll-start-inline" => opaque_or_sentinel(value, "auto").map(DeclKind::ScrollStartInline),
+        "scroll-start-target" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollStartTarget),
+        "scroll-start-target-block" => {
+            opaque_or_sentinel(value, "none").map(DeclKind::ScrollStartTargetBlock)
+        }
+        "scroll-start-target-inline" => {
+            opaque_or_sentinel(value, "none").map(DeclKind::ScrollStartTargetInline)
+        }
         "tab-size" | "-moz-tab-size" => parse_tab_size(value).map(DeclKind::TabSize),
         // CSS UI 4 — `user-select` con sus prefijos legacy.
         "user-select" | "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" => {

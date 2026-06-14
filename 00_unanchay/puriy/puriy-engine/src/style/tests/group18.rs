@@ -283,3 +283,32 @@ fn list_style_type_comilla_simple() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));
 }
+
+// ── Fase 7.928 — CSS Scroll Snap 2: scroll-start + scroll-start-target ──────
+
+#[test]
+fn scroll_start_family() {
+    assert!(decls("scroll-start: 100px")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::ScrollStart(Some(s)) if s == "100px")));
+    assert!(decls("scroll-start-block: center")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::ScrollStartBlock(Some(s)) if s == "center")));
+    assert!(decls("scroll-start-inline: start")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::ScrollStartInline(Some(s)) if s == "start")));
+    // sentinel inicial → None
+    assert!(decls("scroll-start: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ScrollStart(None))));
+    // scroll-start-target: sentinel `none`
+    assert!(decls("scroll-start-target: auto")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::ScrollStartTarget(Some(s)) if s == "auto")));
+    assert!(decls("scroll-start-target-block: auto")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::ScrollStartTargetBlock(Some(s)) if s == "auto")));
+    assert!(decls("scroll-start-target: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ScrollStartTarget(None))));
+}

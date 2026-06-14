@@ -1124,6 +1124,15 @@ pub struct ComputedStyle {
     /// `interest-target` (Fase 7.562). HTML/CSS interest invokers: id del
     /// elemento que recibe el interés. `None` = sin target. NO hereda. Plumb.
     pub interest_target: Option<String>,
+    /// `scroll-start` + longhands lógicos (CSS Scroll Snap 2). Posición inicial
+    /// del scroll. `None` = `auto`. NO hereda. Plumb. Fase 7.928.
+    pub scroll_start: Option<String>,
+    pub scroll_start_block: Option<String>,
+    pub scroll_start_inline: Option<String>,
+    /// `scroll-start-target` + longhands lógicos. `None` = `none`. Fase 7.928.
+    pub scroll_start_target: Option<String>,
+    pub scroll_start_target_block: Option<String>,
+    pub scroll_start_target_inline: Option<String>,
     /// `interest-delay-start` (Fase 7.563). Retardo antes de mostrar el
     /// interés. `None` = `normal`. NO hereda. Plumb.
     pub interest_delay_start: Option<String>,
