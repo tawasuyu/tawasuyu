@@ -59,12 +59,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             parse_length_px(value).map(DeclKind::BorderRadius)
         }
         "z-index" => {
-            // `auto` → 0; sino int. Negativos OK.
+            // `auto` → 0; sino int (Fase 7.872: o `calc()` → entero). Negativos OK.
             let v = value.trim();
             if v.eq_ignore_ascii_case("auto") {
                 Some(DeclKind::ZIndex(0))
             } else {
-                v.parse::<i32>().ok().map(DeclKind::ZIndex)
+                v.parse::<i32>()
+                    .ok()
+                    .or_else(|| parse_number_or_calc(v).map(|n| n.round() as i32))
+                    .map(DeclKind::ZIndex)
             }
         }
         "content" => Some(DeclKind::Content(parse_content_value(value))),
@@ -185,21 +188,29 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             parse_align_self(value).map(DeclKind::AlignSelf)
         }
         // Fase 7.803 — `-ms-flex-positive` (IE10) → `flex-grow` (número idéntico).
+        // Fase 7.872 — acepta `calc()` que resuelva a número.
         "flex-grow" | "-webkit-flex-grow" | "-ms-flex-positive" => {
-            value.trim().parse::<f32>().ok().map(DeclKind::FlexGrow)
+            parse_number_or_calc(value).map(DeclKind::FlexGrow)
         }
         // Fase 7.804 — `-ms-flex-negative` (IE10) → `flex-shrink` (número idéntico).
         "flex-shrink" | "-webkit-flex-shrink" | "-ms-flex-negative" => {
-            value.trim().parse::<f32>().ok().map(DeclKind::FlexShrink)
+            parse_number_or_calc(value).map(DeclKind::FlexShrink)
         }
         // Fase 7.805 — `-ms-flex-preferred-size` (IE10) → `flex-basis` (length idéntico).
+        // Fase 7.872 — `flex-basis: content` → Auto (dimensiona por contenido).
         "flex-basis" | "-webkit-flex-basis" | "-ms-flex-preferred-size" => {
-            parse_length_or_pct(value).map(DeclKind::FlexBasis)
+            if value.trim().eq_ignore_ascii_case("content") {
+                Some(DeclKind::FlexBasis(LengthVal::Auto))
+            } else {
+                parse_length_or_pct(value).map(DeclKind::FlexBasis)
+            }
         }
         // `flex` y `outline` son shorthands múltiples — se expanden en
         // `parse_declarations` antes de llegar acá.
         "flex" | "outline" => None,
-        "outline-width" => parse_length_px(value).map(DeclKind::OutlineWidth),
+        // Fase 7.873 — `outline-width` acepta thin/medium/thick (igual que
+        // border-width) además de length/calc.
+        "outline-width" => parse_border_width_token(value).map(DeclKind::OutlineWidth),
         // Fase 7.864 — `invert` (CSS UI; invierte los píxeles del fondo) no es
         // representable sin leer el framebuffer; lo aproximamos a `currentColor`
         // (un outline visible que sigue al color del texto).
@@ -662,8 +673,14 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "ry" => parse_length_or_pct(value).map(DeclKind::Ry),
         // Fase 7.479 — `order` (CSS Flexbox/Grid). `<integer>`. Default 0.
         // Fase 7.715 — `-webkit-order` / Fase 7.802 — `-ms-flex-order` (IE10) alias de `order`.
+        // Fase 7.872 — acepta `calc()` que resuelva a entero.
         "order" | "-webkit-order" | "-ms-flex-order" => {
-            value.trim().parse::<i32>().ok().map(DeclKind::Order)
+            value
+                .trim()
+                .parse::<i32>()
+                .ok()
+                .or_else(|| parse_number_or_calc(value).map(|n| n.round() as i32))
+                .map(DeclKind::Order)
         }
         // Fase 7.480 — `path-length` (SVG2). `none | <number>`. NO hereda.
         "path-length" => {

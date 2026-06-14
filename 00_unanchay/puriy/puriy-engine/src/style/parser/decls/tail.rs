@@ -405,9 +405,14 @@ pub(crate) enum CalcVal {
 pub(crate) fn is_math_fn(s: &str) -> bool {
     let l = s.trim_start().to_ascii_lowercase();
     // Fase 7.854 — funciones de paso (CSS Values 4): `round`/`mod`/`rem`.
-    ["calc(", "min(", "max(", "clamp(", "round(", "mod(", "rem("]
-        .iter()
-        .any(|p| l.starts_with(p))
+    // Fase 7.871 — exponenciales/signo: `abs`/`sign`/`sqrt`/`pow`/`hypot`/
+    // `exp`/`log`.
+    [
+        "calc(", "min(", "max(", "clamp(", "round(", "mod(", "rem(", "abs(", "sign(", "sqrt(",
+        "pow(", "hypot(", "exp(", "log(",
+    ]
+    .iter()
+    .any(|p| l.starts_with(p))
 }
 
 /// Convierte un `CalcVal` final a `LengthVal`. Un número crudo sólo es
@@ -541,7 +546,15 @@ impl CalcCtx<'_> {
             let mut name = self.src[start..self.i].to_ascii_lowercase();
             // CSS no permite whitespace entre el nombre y `(`.
             if self.peek() != Some(b'(') {
-                return None;
+                // Fase 7.871 — constantes numéricas de calc (CSS Values 4):
+                // `pi`, `e`, `infinity`, `-infinity` (sin signo acá), `NaN`.
+                return match name.as_str() {
+                    "pi" => Some(CalcVal::Number(std::f32::consts::PI)),
+                    "e" => Some(CalcVal::Number(std::f32::consts::E)),
+                    "infinity" => Some(CalcVal::Number(f32::INFINITY)),
+                    "nan" => Some(CalcVal::Number(f32::NAN)),
+                    _ => None,
+                };
             }
             self.i += 1;
             // Fase 7.854 — `round(<strategy>, A, B)` con estrategia opcional
@@ -746,7 +759,75 @@ fn apply_math_fn(name: &str, args: &[CalcVal]) -> Option<CalcVal> {
         }
         "mod" if args.len() == 2 => modrem(args[0], args[1], true),
         "rem" if args.len() == 2 => modrem(args[0], args[1], false),
+        // Fase 7.871 — `abs` preserva dimensión; `sign` devuelve número puro.
+        "abs" if args.len() == 1 => Some(rebuild_like(args[0], scalar_of(args[0]).abs())),
+        "sign" if args.len() == 1 => Some(CalcVal::Number(scalar_of(args[0]).signum_css())),
+        // Exponenciales/raíz: operan sobre NÚMEROS puros (sin dimensión).
+        "sqrt" if args.len() == 1 => num_fn(args, |a| a[0].sqrt()),
+        "exp" if args.len() == 1 => num_fn(args, |a| a[0].exp()),
+        "pow" if args.len() == 2 => num_fn(args, |a| a[0].powf(a[1])),
+        "log" if args.len() == 1 => num_fn(args, |a| a[0].ln()),
+        "log" if args.len() == 2 => num_fn(args, |a| a[0].log(a[1])),
+        // `hypot(a, b, ...)`: misma dimensión que el 1er arg.
+        "hypot" if !args.is_empty() => {
+            if !all_comparable(args) {
+                return None;
+            }
+            let sum: f32 = args.iter().map(|v| scalar_of(*v).powi(2)).sum();
+            Some(rebuild_like(args[0], sum.sqrt()))
+        }
         _ => None,
+    }
+}
+
+/// Número crudo o `calc()`/min/max/... que resuelva a un NÚMERO puro (sin
+/// dimensión). Para props que toman `<number>` (opacity/flex-grow/order/
+/// z-index). Un resultado con dimensión (px/%) → `None`. Fase 7.872.
+pub(crate) fn parse_number_or_calc(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if is_math_fn(s) {
+        return match eval_calc(s)? {
+            CalcVal::Number(n) => Some(n),
+            _ => None,
+        };
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Escalar de un `CalcVal` (px+pct con uno en 0, o el número).
+fn scalar_of(v: CalcVal) -> f32 {
+    match v {
+        CalcVal::Number(n) => n,
+        CalcVal::Length { px, pct } => px + pct,
+    }
+}
+
+/// Aplica `f` exigiendo que TODOS los args sean números puros (dimensionless).
+fn num_fn(args: &[CalcVal], f: impl Fn(&[f32]) -> f32) -> Option<CalcVal> {
+    let nums: Vec<f32> = args
+        .iter()
+        .map(|v| match v {
+            CalcVal::Number(n) => Some(*n),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(CalcVal::Number(f(&nums)))
+}
+
+trait SignumCss {
+    /// `sign()` de CSS: -1/0/+1 (a diferencia de `f32::signum`, que para 0.0
+    /// devuelve +1.0). `NaN` → 0.
+    fn signum_css(self) -> f32;
+}
+impl SignumCss for f32 {
+    fn signum_css(self) -> f32 {
+        if self.is_nan() || self == 0.0 {
+            0.0
+        } else if self > 0.0 {
+            1.0
+        } else {
+            -1.0
+        }
     }
 }
 
@@ -856,6 +937,11 @@ pub(crate) fn parse_line_height(s: &str) -> Option<f32> {
             CalcVal::Length { px, pct } if pct == 0.0 => Some(px / 16.0),
             _ => None,
         };
+    }
+    // Fase 7.873 — `line-height: <percentage>`. Relativo al font-size; como
+    // multiplicador, `150%` = 1.5.
+    if let Some(num) = s.strip_suffix('%') {
+        return num.trim().parse::<f32>().ok().map(|p| p / 100.0);
     }
     if let Some(num) = s.strip_suffix("px") {
         let v: f32 = num.trim().parse().ok()?;

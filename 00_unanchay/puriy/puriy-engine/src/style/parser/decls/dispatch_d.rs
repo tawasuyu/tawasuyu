@@ -788,7 +788,16 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "stop-opacity" => parse_svg_opacity(value).map(DeclKind::StopOpacity),
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
-        "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
+        // Fase 7.873 — `text-indent: <len> && hanging? && each-line?`. Sólo
+        // modelamos la longitud; las flags `hanging`/`each-line` se aceptan y
+        // se ignoran (el layout no las aplica todavía).
+        "text-indent" => {
+            let len_tok = value
+                .split_whitespace()
+                .find(|t| !matches!(t.to_ascii_lowercase().as_str(), "hanging" | "each-line"))
+                .unwrap_or(value.trim());
+            parse_px_or_math(len_tok).map(DeclKind::TextIndent)
+        }
         // Fase 7.856 — `word-spacing: normal` (valor inicial) = 0px, igual
         // que `letter-spacing` abajo.
         "word-spacing" => {

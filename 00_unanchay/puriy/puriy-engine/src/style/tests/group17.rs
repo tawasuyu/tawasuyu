@@ -378,3 +378,78 @@ fn image_set_y_cross_fade_toman_primera_url() {
         .iter()
         .any(|d| matches!(&d.kind, DeclKind::BackgroundImageUrl(u) if u == "x.png")));
 }
+
+// ── Fase 7.871 — funciones math abs/sign/sqrt/pow/hypot + constantes ───────
+
+#[test]
+fn math_abs_sign_y_constantes() {
+    // abs(-10px) = 10px.
+    assert_eq!(width_px("width: abs(-10px)"), Some(10.0));
+    assert_eq!(width_px("width: calc(abs(-10px) + 5px)"), Some(15.0));
+    // sign(-3) = -1 → * 10px = -10px.
+    assert_eq!(width_px("width: calc(sign(-3) * 10px)"), Some(-10.0));
+    // pi * 10px ≈ 31.4.
+    assert!((width_px("width: calc(10px * pi)").unwrap() - 31.4159).abs() < 0.01);
+    // e: 100 / e ≈ 36.8.
+    assert!((width_px("width: calc(100px / e)").unwrap() - 36.7879).abs() < 0.01);
+}
+
+#[test]
+fn math_sqrt_pow_hypot() {
+    assert_eq!(width_px("width: calc(sqrt(16) * 1px)"), Some(4.0));
+    assert_eq!(width_px("width: calc(pow(2, 3) * 1px)"), Some(8.0));
+    // hypot(3px, 4px) = 5px.
+    assert_eq!(width_px("width: hypot(3px, 4px)"), Some(5.0));
+}
+
+// ── Fase 7.872 — props <number> aceptan calc + flex-basis: content ─────────
+
+#[test]
+fn props_numero_aceptan_calc() {
+    assert!(decls("opacity: calc(1 / 4)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Opacity(v) if (v - 0.25).abs() < 1e-6)));
+    assert!(decls("z-index: calc(2 + 3)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ZIndex(5))));
+    assert!(decls("flex-grow: calc(1 + 1)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FlexGrow(v) if v == 2.0)));
+    assert!(decls("flex-basis: content")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FlexBasis(LengthVal::Auto))));
+    assert!(decls("order: calc(0 - 1)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Order(-1))));
+}
+
+// ── Fase 7.873 — line-height %, outline-width kw, text-indent kw, t-transform ─
+
+#[test]
+fn varios_873() {
+    // line-height: 150% = 1.5.
+    assert!(decls("line-height: 150%")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6)));
+    // outline-width: thin = 1px.
+    assert!(decls("outline-width: thin")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::OutlineWidth(v) if v == 1.0)));
+    // text-indent: 2em hanging → toma 2em (32px), ignora keyword.
+    assert!(decls("text-indent: 2em hanging")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextIndent(v) if (v - 32.0).abs() < 0.01)));
+    // text-transform: full-width → None (no-op, no se descarta).
+    assert!(decls("text-transform: full-width")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextTransform(TextTransform::None))));
+}
+
+// ── Fase 7.874 — border-style multi-valor → 1er token ──────────────────────
+
+#[test]
+fn border_style_multivalor_toma_primero() {
+    let d = decls("border-style: solid dotted");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderEnabled(true))));
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::BorderStyleKind(BorderLineStyle::Solid))));
+}

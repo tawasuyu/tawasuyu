@@ -248,6 +248,10 @@ pub(crate) fn parse_text_transform(s: &str) -> Option<TextTransform> {
         "uppercase" => Some(TextTransform::Uppercase),
         "lowercase" => Some(TextTransform::Lowercase),
         "capitalize" => Some(TextTransform::Capitalize),
+        // Fase 7.873 — `full-width`/`full-size-kana`/`math-auto` transforman
+        // ancho/forma de glifos, no el caso; el shaper no lo aplica, así que
+        // colapsan a `None` (no-op) en vez de descartar la declaración.
+        "full-width" | "full-size-kana" | "math-auto" => Some(TextTransform::None),
         _ => None,
     }
 }
@@ -259,7 +263,8 @@ pub(crate) fn parse_opacity(s: &str) -> Option<f32> {
         let pct: f32 = num.trim().parse().ok()?;
         return Some((pct / 100.0).clamp(0.0, 1.0));
     }
-    s.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0))
+    // Fase 7.872 — acepta `calc()`/min/max/clamp que resuelva a número.
+    parse_number_or_calc(s).map(|v| v.clamp(0.0, 1.0))
 }
 
 pub(crate) fn parse_align_self(s: &str) -> Option<AlignSelf> {

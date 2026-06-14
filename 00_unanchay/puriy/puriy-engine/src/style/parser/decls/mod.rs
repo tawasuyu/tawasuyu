@@ -138,10 +138,13 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
         }
         // `border-style` (todos los lados): togglea enabled + fija el patrón.
+        // Fase 7.874 — acepta multi-valor (`solid dotted`, regla TRBL per-side);
+        // como el modelo de patrón es uniforme, tomamos el 1er token.
         if prop.eq_ignore_ascii_case("border-style") {
-            if let Some(on) = parse_border_style(value) {
+            let first = value.split_whitespace().next().unwrap_or(value);
+            if let Some(on) = parse_border_style(first) {
                 out.push(Decl { kind: DeclKind::BorderEnabled(on), important });
-                if let Some(ls) = parse_border_line_style(value) {
+                if let Some(ls) = parse_border_line_style(first) {
                     out.push(Decl { kind: DeclKind::BorderStyleKind(ls), important });
                 }
             }
