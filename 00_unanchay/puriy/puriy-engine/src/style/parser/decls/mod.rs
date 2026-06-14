@@ -74,6 +74,17 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_border_shorthand(value, important));
             continue;
         }
+        // Fase 7.858 — `border-radius` (+ alias vendor) acepta 1-4 valores y
+        // la forma `/` (horiz / vert). Se expande a las 4 esquinas; el caso
+        // de 1 valor sin `/` lo sigue tomando el dispatch (vía `BorderRadius`).
+        if (prop.eq_ignore_ascii_case("border-radius")
+            || prop.eq_ignore_ascii_case("-webkit-border-radius")
+            || prop.eq_ignore_ascii_case("-moz-border-radius"))
+            && (value.contains('/') || value.split_whitespace().count() > 1)
+        {
+            out.extend(parse_border_radius_shorthand(value, important));
+            continue;
+        }
         // Fase 7.837 — `border-width: <1-4>` (TRBL) con keywords thin/medium/
         // thick. >1 token → per-side; 1 token → global (ahora también acepta
         // los keywords, que antes se descartaban).

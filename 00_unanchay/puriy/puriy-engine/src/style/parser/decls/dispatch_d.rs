@@ -789,7 +789,15 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         // `columns` shorthand: ver `parse_declarations`.
         // `place-items`, `place-content`, `place-self`: ver `parse_declarations`.
         "text-indent" => parse_px_or_math(value).map(DeclKind::TextIndent),
-        "word-spacing" => parse_px_or_math(value).map(DeclKind::WordSpacing),
+        // Fase 7.856 — `word-spacing: normal` (valor inicial) = 0px, igual
+        // que `letter-spacing` abajo.
+        "word-spacing" => {
+            if value.trim().eq_ignore_ascii_case("normal") {
+                Some(DeclKind::WordSpacing(0.0))
+            } else {
+                parse_px_or_math(value).map(DeclKind::WordSpacing)
+            }
+        }
         "letter-spacing" => {
             // `normal` = sin tracking extra (0px).
             if value.trim().eq_ignore_ascii_case("normal") {

@@ -193,10 +193,12 @@ pub(crate) fn parse_gap(value: &str) -> Option<(f32, f32)> {
         if s.eq_ignore_ascii_case("normal") {
             Some(0.0)
         } else {
-            parse_length_px(s)
+            // Fase 7.853 — acepta `calc()`/`min()`/`max()`/`clamp()`; el split
+            // top-level respeta los espacios internos de la función.
+            parse_length_px_or_calc(s)
         }
     }
-    let parts: Vec<&str> = value.split_whitespace().collect();
+    let parts = split_top_level_ws(value);
     match parts.as_slice() {
         [v] => {
             let v = gap_token(v)?;
@@ -325,6 +327,13 @@ pub(crate) fn parse_logical_box(prop: &str, value: &str, important: bool) -> Opt
                 .unwrap_or_default(),
         );
     }
+    // Fase 7.857 — `margin-*` lógicos con `auto`. El eje inline (left/right)
+    // mapea a los flags de centrado (igual que los longhands físicos en
+    // `parse_declarations`); el eje block (top/bottom) no centra → 0. Se
+    // resuelve acá antes del camino numérico genérico (que descarta `auto`).
+    if let Some(decls) = parse_logical_margin_auto(&lower, value, important) {
+        return Some(decls);
+    }
     // Lados emparejados (1–2 valores): (start_ctor, end_ctor).
     let two: Option<(fn(f32) -> DeclKind, fn(f32) -> DeclKind)> = match lower.as_str() {
         "margin-inline" => Some((MarginLeft, MarginRight)),
@@ -363,6 +372,83 @@ pub(crate) fn parse_logical_box(prop: &str, value: &str, important: bool) -> Opt
             .map(|v| vec![Decl { kind: ctor(v), important }])
             .unwrap_or_default(),
     )
+}
+
+/// Lado físico que un margen lógico edita, con su naturaleza de centrado.
+enum MarginSide {
+    Left,
+    Right,
+    /// Eje block (top/bottom): `auto` → 0, no centra.
+    Block(bool), // true = bottom
+}
+
+/// Maneja `margin-*` lógicos cuando el valor incluye `auto`. Devuelve `None`
+/// si la prop no es un margen lógico o no contiene ningún `auto` (→ el camino
+/// numérico genérico la resuelve). Fase 7.857.
+fn parse_logical_margin_auto(lower: &str, value: &str, important: bool) -> Option<Vec<Decl>> {
+    use DeclKind::{
+        MarginBottom, MarginLeft, MarginLeftAuto, MarginRight, MarginRightAuto, MarginTop,
+    };
+    // (lado_start, lado_end?) — `None` en end = prop de un solo lado.
+    let sides: (MarginSide, Option<MarginSide>) = match lower {
+        "margin-inline" => (MarginSide::Left, Some(MarginSide::Right)),
+        "margin-block" => (MarginSide::Block(false), Some(MarginSide::Block(true))),
+        "margin-inline-start" => (MarginSide::Left, None),
+        "margin-inline-end" => (MarginSide::Right, None),
+        "margin-block-start" => (MarginSide::Block(false), None),
+        "margin-block-end" => (MarginSide::Block(true), None),
+        _ => return None,
+    };
+    let parts: Vec<&str> = value.split_whitespace().collect();
+    let has_auto = parts.iter().any(|p| p.eq_ignore_ascii_case("auto"));
+    if !has_auto {
+        return None; // sin `auto` → camino numérico genérico.
+    }
+    // Un solo lado no admite 2 valores; pares admiten 1 (replica) ó 2.
+    let (start_tok, end_tok) = match (parts.as_slice(), &sides.1) {
+        ([s], _) => (*s, *s),
+        ([s, e], Some(_)) => (*s, *e),
+        _ => return Some(Vec::new()), // forma inválida → descartar
+    };
+    let emit = |side: &MarginSide, tok: &str, out: &mut Vec<Decl>| -> bool {
+        let is_auto = tok.eq_ignore_ascii_case("auto");
+        match side {
+            MarginSide::Left if is_auto => {
+                out.push(Decl { kind: MarginLeft(0.0), important });
+                out.push(Decl { kind: MarginLeftAuto(true), important });
+            }
+            MarginSide::Right if is_auto => {
+                out.push(Decl { kind: MarginRight(0.0), important });
+                out.push(Decl { kind: MarginRightAuto(true), important });
+            }
+            MarginSide::Block(_) if is_auto => {
+                let ctor = if matches!(side, MarginSide::Block(true)) { MarginBottom } else { MarginTop };
+                out.push(Decl { kind: ctor(0.0), important });
+            }
+            _ => {
+                // Token de longitud: parsea o señala fallo.
+                let Some(px) = parse_length_px_or_calc(tok) else { return false };
+                let kind = match side {
+                    MarginSide::Left => MarginLeft(px),
+                    MarginSide::Right => MarginRight(px),
+                    MarginSide::Block(true) => MarginBottom(px),
+                    MarginSide::Block(false) => MarginTop(px),
+                };
+                out.push(Decl { kind, important });
+            }
+        }
+        true
+    };
+    let mut out = Vec::new();
+    if !emit(&sides.0, start_tok, &mut out) {
+        return Some(Vec::new());
+    }
+    if let Some(end) = &sides.1 {
+        if !emit(end, end_tok, &mut out) {
+            return Some(Vec::new());
+        }
+    }
+    Some(out)
 }
 
 /// `inset: <t> [r] [b] [l]` — 1..4 valores con la distribución de `margin`
@@ -565,12 +651,16 @@ pub(crate) fn parse_margin_shorthand(value: &str, important: bool) -> Vec<Decl> 
 /// (no tenemos esos ejes todavía).
 pub(crate) fn parse_font_shorthand(value: &str, important: bool) -> Vec<Decl> {
     let v = value.trim();
-    // Palabras de fuente de sistema: no soportadas.
-    if matches!(
-        v.to_ascii_lowercase().as_str(),
-        "caption" | "icon" | "menu" | "message-box" | "small-caption" | "status-bar"
-    ) {
-        return Vec::new();
+    // Fase 7.863 — palabras de fuente de sistema (`caption`/`menu`/…). Sin un
+    // tema de UA que aporte la familia/tamaño reales, aplicamos el efecto más
+    // útil: fijar el `font-size` al de una fuente de UI estándar (13px, o 11px
+    // para `small-caption`). La familia queda en el default del runtime.
+    match v.to_ascii_lowercase().as_str() {
+        "small-caption" => return vec![Decl { kind: DeclKind::FontSize(11.0), important }],
+        "caption" | "icon" | "menu" | "message-box" | "status-bar" => {
+            return vec![Decl { kind: DeclKind::FontSize(13.0), important }];
+        }
+        _ => {}
     }
     // El `/` separa size de line-height (`16px/1.5` o `16px / 1.5`). Lo
     // rodeamos de espacios para tokenizar uniforme; font-family no usa `/`.

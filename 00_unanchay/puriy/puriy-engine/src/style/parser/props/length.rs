@@ -1,44 +1,65 @@
 use super::*;
 
 /// Acepta `12px`, `1.5rem` (tratada como em*16), `0`. Sin unidad → px.
-/// `Nvw`/`Nvh`/`Nvmin`/`Nvmax` resuelven contra el viewport activo
-/// ([`resolve_viewport`]): el real bajo un `ViewportScope` (carga normal),
-/// `DEFAULT_VIEWPORT` fuera de él (parsers sueltos en tests).
+///
+/// Modelo: separa el número de la unidad alfabética del sufijo (en vez de
+/// probar `strip_suffix` por unidad, que no escala — `svh` colisiona con
+/// `vh`, `cqmin` con `in`, etc.). Si el sufijo no es una unidad conocida,
+/// cae a `s.parse()` para no regresar números crudos / notación científica.
+///
+/// Cobertura de unidades (Fase 7.852 — lote data-driven de cobertura CSS):
+/// - **Absolutas**: `px`, `cm`, `mm`, `q`, `in`, `pt`, `pc` (1in = 96px).
+/// - **Font-relativas**: `em`/`rem` (em fijo a 16px — simplificación previa),
+///   `ch`/`ex` (≈ 0.5em = 8px; sin métricas de fuente reales).
+/// - **Viewport**: `vw`/`vh`/`vmin`/`vmax` y las variantes de UA dinámica
+///   `svw|lvw|dvw` / `svh|lvh|dvh` / `svmin|…` / `svmax|…`. Sin barras de UI
+///   que aparezcan/desaparezcan, small=large=dynamic colapsan al viewport.
+/// - **Container query**: `cqw|cqh|cqi|cqb|cqmin|cqmax`. Sin un container
+///   real en este punto del pipeline, se resuelven contra el viewport
+///   (`cqi`=inline≈ancho, `cqb`=block≈alto) — aproximación documentada.
+///
+/// Resuelven contra el viewport activo ([`resolve_viewport`]): el real bajo
+/// un `ViewportScope` (carga normal), `DEFAULT_VIEWPORT` fuera de él.
 pub(crate) fn parse_length_px(s: &str) -> Option<f32> {
     let s = s.trim();
     if s == "0" {
         return Some(0.0);
     }
-    if let Some(num) = s.strip_suffix("px") {
-        return num.trim().parse().ok();
-    }
-    if let Some(num) = s.strip_suffix("rem") {
-        let v: f32 = num.trim().parse().ok()?;
-        return Some(v * 16.0);
-    }
-    if let Some(num) = s.strip_suffix("em") {
-        let v: f32 = num.trim().parse().ok()?;
-        return Some(v * 16.0);
-    }
-    if let Some(num) = s.strip_suffix("vmin") {
-        let v: f32 = num.trim().parse().ok()?;
-        let vp = resolve_viewport();
-        return Some(v * vp.width.min(vp.height) / 100.0);
-    }
-    if let Some(num) = s.strip_suffix("vmax") {
-        let v: f32 = num.trim().parse().ok()?;
-        let vp = resolve_viewport();
-        return Some(v * vp.width.max(vp.height) / 100.0);
-    }
-    if let Some(num) = s.strip_suffix("vw") {
-        let v: f32 = num.trim().parse().ok()?;
-        return Some(v * resolve_viewport().width / 100.0);
-    }
-    if let Some(num) = s.strip_suffix("vh") {
-        let v: f32 = num.trim().parse().ok()?;
-        return Some(v * resolve_viewport().height / 100.0);
-    }
-    s.parse().ok()
+    // La unidad es el sufijo alfabético; el número, todo lo previo.
+    let unit_start = s.char_indices().find(|(_, c)| c.is_ascii_alphabetic());
+    let Some((idx, _)) = unit_start else {
+        // Sin unidad alfabética: número crudo (px) o notación científica.
+        return s.parse().ok();
+    };
+    let num: f32 = match s[..idx].trim().parse() {
+        Ok(n) => n,
+        // Prefijo no numérico (p.ej. notación científica `1e3`): reintenta
+        // el string entero antes de rendirse.
+        Err(_) => return s.parse().ok(),
+    };
+    let vp = resolve_viewport();
+    let v = match s[idx..].trim().to_ascii_lowercase().as_str() {
+        "px" => num,
+        "rem" | "em" => num * 16.0,
+        "ch" | "ex" => num * 8.0,
+        "cm" => num * 96.0 / 2.54,
+        "mm" => num * 96.0 / 25.4,
+        "q" => num * 96.0 / 25.4 / 4.0, // 1q = 1/40 cm
+        "in" => num * 96.0,
+        "pt" => num * 96.0 / 72.0,
+        "pc" => num * 16.0, // 1pc = 12pt = 16px
+        "vw" | "svw" | "lvw" | "dvw" => num * vp.width / 100.0,
+        "vh" | "svh" | "lvh" | "dvh" => num * vp.height / 100.0,
+        "vmin" | "svmin" | "lvmin" | "dvmin" => num * vp.width.min(vp.height) / 100.0,
+        "vmax" | "svmax" | "lvmax" | "dvmax" => num * vp.width.max(vp.height) / 100.0,
+        // Container query units → viewport (sin container real acá).
+        "cqw" | "cqi" => num * vp.width / 100.0,
+        "cqh" | "cqb" => num * vp.height / 100.0,
+        "cqmin" => num * vp.width.min(vp.height) / 100.0,
+        "cqmax" => num * vp.width.max(vp.height) / 100.0,
+        _ => return s.parse().ok(),
+    };
+    Some(v)
 }
 
 /// `length`, `%` o `auto`. Variante para insets que sí admiten `auto`.
@@ -67,7 +88,14 @@ pub(crate) fn parse_vertical_align(s: &str) -> Option<VerticalAlign> {
         "bottom" | "text-bottom" => Some(VerticalAlign::Bottom),
         "super" => Some(VerticalAlign::Super),
         "sub" => Some(VerticalAlign::Sub),
-        _ => None,
+        // Fase 7.861 — `vertical-align: <length>|<percentage>` es un corrimiento
+        // numérico de la baseline. El modelo es enum de keywords (mapea a
+        // alignment de taffy), sin offset numérico — colapsa a `Baseline` para
+        // no descartar la declaración (divergencia documentada).
+        other => {
+            let is_pct = other.strip_suffix('%').is_some_and(|n| n.trim().parse::<f32>().is_ok());
+            (parse_length_px(other).is_some() || is_pct).then_some(VerticalAlign::Baseline)
+        }
     }
 }
 

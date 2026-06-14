@@ -1,0 +1,281 @@
+//! Tests del lote data-driven Fase 7.852-7.860 (sondeo de cobertura CSS):
+//! unidades de longitud completas (absolutas/viewport-dinámicas/container),
+//! funciones matemáticas extra (`round`/`mod`/`rem`) y en más props, `minmax`
+//! en grid, `border-radius` multivalor, `background-position` por borde, y
+//! varios keywords/funciones que faltaban.
+use super::super::*;
+
+fn decls(s: &str) -> Vec<Decl> {
+    parse_declarations(s, &HashMap::new())
+}
+
+/// Helper: primer `Width` como px (resuelto contra DEFAULT_VIEWPORT 1280×800).
+fn width_px(s: &str) -> Option<f32> {
+    decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Width(LengthVal::Px(v)) => Some(v),
+        _ => None,
+    })
+}
+
+// ── Fase 7.852 — unidades de longitud ──────────────────────────────────────
+
+#[test]
+fn unidades_absolutas() {
+    // 1in = 96px; 1cm = 96/2.54; 1pt = 96/72; 1pc = 16px.
+    assert_eq!(width_px("width: 1in"), Some(96.0));
+    assert!((width_px("width: 1cm").unwrap() - 96.0 / 2.54).abs() < 0.01);
+    assert!((width_px("width: 10mm").unwrap() - 96.0 / 2.54).abs() < 0.01); // 10mm = 1cm
+    assert_eq!(width_px("width: 1pc"), Some(16.0));
+    assert!((width_px("width: 72pt").unwrap() - 96.0).abs() < 0.01); // 72pt = 1in
+    assert!((width_px("width: 40q").unwrap() - 96.0 / 2.54).abs() < 0.01); // 40q = 1cm
+}
+
+#[test]
+fn unidades_font_relativas_ch_ex() {
+    // ch/ex ≈ 0.5em = 8px (sin métricas reales de fuente).
+    assert_eq!(width_px("width: 1ch"), Some(8.0));
+    assert_eq!(width_px("width: 2ex"), Some(16.0));
+}
+
+#[test]
+fn unidades_viewport_dinamicas() {
+    // svh/lvh/dvh colapsan a vh (sin UI dinámica). 50dvh de 800 = 400.
+    assert_eq!(width_px("width: 50dvh"), Some(400.0));
+    assert_eq!(width_px("width: 50svh"), Some(400.0));
+    assert_eq!(width_px("width: 50lvh"), Some(400.0));
+    // 50dvw de 1280 = 640.
+    assert_eq!(width_px("width: 50dvw"), Some(640.0));
+}
+
+#[test]
+fn unidades_container_query() {
+    // Sin container real → viewport. cqw=ancho, cqh=alto, cqi=inline(ancho),
+    // cqb=block(alto), cqmin/cqmax.
+    assert_eq!(width_px("width: 10cqw"), Some(128.0)); // 10% de 1280
+    assert_eq!(width_px("width: 10cqi"), Some(128.0));
+    assert_eq!(width_px("width: 10cqh"), Some(80.0)); // 10% de 800
+    assert_eq!(width_px("width: 10cqb"), Some(80.0));
+    assert_eq!(width_px("width: 10cqmin"), Some(80.0)); // min(1280,800)=800
+    assert_eq!(width_px("width: 10cqmax"), Some(128.0)); // max=1280
+}
+
+// ── Fase 7.853 — math fns en margin/padding/gap ────────────────────────────
+
+#[test]
+fn margin_top_acepta_max() {
+    // max(0px, 1rem) = max(0, 16) = 16.
+    assert!(decls("margin-top: max(0px, 1rem)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::MarginTop(v) if (v - 16.0).abs() < 0.01)));
+}
+
+#[test]
+fn gap_acepta_min_y_normal() {
+    // min(10px, 20px) = 10 en ambos ejes.
+    let g = decls("gap: min(10px, 20px)");
+    assert!(g
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Gap { row, column } if row == 10.0 && column == 10.0)));
+    // `normal` → 0.
+    assert!(decls("row-gap: normal")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::RowGap(v) if v == 0.0)));
+}
+
+// ── Fase 7.854 — round / mod / rem ─────────────────────────────────────────
+
+#[test]
+fn round_nearest() {
+    // round(98px, 8px): múltiplos 96 y 104; 98 está más cerca de 96.
+    assert_eq!(width_px("width: round(98px, 8px)"), Some(96.0));
+    // Equidistante (100 entre 96 y 104): nearest redondea hacia +∞ = 104.
+    assert_eq!(width_px("width: round(100px, 8px)"), Some(104.0));
+    // round(up, 98px, 8px) = 104; round(down, 98px, 8px) = 96.
+    assert_eq!(width_px("width: round(up, 98px, 8px)"), Some(104.0));
+    assert_eq!(width_px("width: round(down, 98px, 8px)"), Some(96.0));
+}
+
+#[test]
+fn mod_y_rem() {
+    // mod(18px, 5px) = 3; rem(18px, 5px) = 3.
+    assert_eq!(width_px("width: mod(18px, 5px)"), Some(3.0));
+    assert_eq!(width_px("width: rem(18px, 5px)"), Some(3.0));
+}
+
+// ── Fase 7.855 — animation-timing-function: cubic-bezier/steps ──────────────
+
+#[test]
+fn animation_timing_cubic_bezier_y_steps() {
+    assert!(decls("animation-timing-function: cubic-bezier(0.1, 0.7, 1, 0.1)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AnimationTimingFunction(EasingFunction::CubicBezier(..)))));
+    assert!(decls("animation-timing-function: steps(4, end)")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AnimationTimingFunction(EasingFunction::Steps(4, _)))));
+}
+
+// ── Fase 7.856 — text-align: justify-all + word-spacing: normal ─────────────
+
+#[test]
+fn justify_all_y_word_spacing_normal() {
+    assert!(decls("text-align: justify-all")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextAlign(TextAlign::Justify))));
+    assert!(decls("word-spacing: normal")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WordSpacing(v) if v == 0.0)));
+}
+
+// ── Fase 7.857 — margin-inline/-block: auto ────────────────────────────────
+
+#[test]
+fn margin_inline_auto_centra() {
+    let d = decls("margin-inline: auto");
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::MarginLeftAuto(true))));
+    assert!(d.iter().any(|x| matches!(x.kind, DeclKind::MarginRightAuto(true))));
+    // margin-block: auto → top/bottom 0 (no centra).
+    let b = decls("margin-block: auto");
+    assert!(b.iter().any(|x| matches!(x.kind, DeclKind::MarginTop(v) if v == 0.0)));
+    assert!(b.iter().any(|x| matches!(x.kind, DeclKind::MarginBottom(v) if v == 0.0)));
+    // Mezcla: margin-inline: auto 10px → left auto, right 10px.
+    let m = decls("margin-inline: auto 10px");
+    assert!(m.iter().any(|x| matches!(x.kind, DeclKind::MarginLeftAuto(true))));
+    assert!(m.iter().any(|x| matches!(x.kind, DeclKind::MarginRight(v) if (v - 10.0).abs() < 0.01)));
+}
+
+// ── Fase 7.858 — border-radius multivalor + slash ──────────────────────────
+
+#[test]
+fn border_radius_dos_valores() {
+    // 8px 16px → TL/BR=8, TR/BL=16.
+    let d = decls("border-radius: 8px 16px");
+    let r = |c: BorderCorner| {
+        d.iter().find_map(|x| match x.kind {
+            DeclKind::BorderCornerRadius(corner, v) if corner == c => Some(v),
+            _ => None,
+        })
+    };
+    assert_eq!(r(BorderCorner::TopLeft), Some(8.0));
+    assert_eq!(r(BorderCorner::BottomRight), Some(8.0));
+    assert_eq!(r(BorderCorner::TopRight), Some(16.0));
+    assert_eq!(r(BorderCorner::BottomLeft), Some(16.0));
+}
+
+#[test]
+fn border_radius_slash_usa_horizontal() {
+    // 10px / 20px → el eje vertical se ignora; todas las esquinas = 10.
+    let d = decls("border-radius: 10px / 20px");
+    assert!(d
+        .iter()
+        .filter(|x| matches!(x.kind, DeclKind::BorderCornerRadius(..)))
+        .count()
+        == 4);
+    assert!(d.iter().all(|x| match x.kind {
+        DeclKind::BorderCornerRadius(_, v) => (v - 10.0).abs() < 0.01,
+        _ => true,
+    }));
+}
+
+// ── Fase 7.859 — minmax / fit-content / auto-fill en grid ──────────────────
+
+#[test]
+fn grid_minmax_toma_el_max() {
+    // minmax(100px, 1fr) → aproxima al max (1fr).
+    let d = decls("grid-template-columns: minmax(100px, 1fr)");
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridTemplateColumns(v) if v == &vec![GridTrackSize::Fr(1.0)])));
+    // minmax(100px, 200px) → max px.
+    let d2 = decls("grid-template-columns: minmax(100px, 200px)");
+    assert!(d2.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridTemplateColumns(v) if v == &vec![GridTrackSize::Px(200.0)])));
+}
+
+#[test]
+fn grid_auto_fill_estima_columnas() {
+    // repeat(auto-fill, minmax(200px, 1fr)) → floor(1280/200)=6 tracks de 1fr.
+    let d = decls("grid-template-columns: repeat(auto-fill, minmax(200px, 1fr))");
+    assert!(d.iter().any(|x| matches!(&x.kind,
+        DeclKind::GridTemplateColumns(v) if v.len() == 6 && v.iter().all(|t| *t == GridTrackSize::Fr(1.0)))));
+}
+
+// ── Fase 7.860 — background-position por borde (3-4 tokens) ─────────────────
+
+#[test]
+fn background_position_cuatro_valores() {
+    // right 10px bottom 20px → esquina inferior-derecha (offsets px → borde).
+    let d = decls("background-position: right 10px bottom 20px");
+    assert!(d.iter().any(|x| matches!(x.kind,
+        DeclKind::BackgroundPosition(BackgroundPosition { x: LengthVal::Pct(px), y: LengthVal::Pct(py) })
+            if px == 100.0 && py == 100.0)));
+    // left 25% top → x=25%, y=0.
+    let d2 = decls("background-position: left 25% top");
+    assert!(d2.iter().any(|x| matches!(x.kind,
+        DeclKind::BackgroundPosition(BackgroundPosition { x: LengthVal::Pct(px), y: LengthVal::Pct(py) })
+            if px == 25.0 && py == 0.0)));
+}
+
+// ── Fase 7.861 — stretch / fill-available + vertical-align numérico ─────────
+
+#[test]
+fn width_stretch_y_fill_available() {
+    for s in ["width: stretch", "width: -webkit-fill-available", "width: -moz-available"] {
+        assert!(decls(s).iter().any(|d| matches!(d.kind, DeclKind::Width(LengthVal::Auto))), "{s}");
+    }
+}
+
+#[test]
+fn vertical_align_numerico_colapsa_a_baseline() {
+    for s in ["vertical-align: 10px", "vertical-align: 50%", "vertical-align: -0.5em"] {
+        assert!(decls(s)
+            .iter()
+            .any(|d| matches!(d.kind, DeclKind::VerticalAlign(VerticalAlign::Baseline))), "{s}");
+    }
+    // Un keyword sigue funcionando.
+    assert!(decls("vertical-align: middle")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::VerticalAlign(VerticalAlign::Middle))));
+    // Basura no parsea.
+    assert!(decls("vertical-align: garbage").is_empty());
+}
+
+// ── Fase 7.862 — colores de sistema ────────────────────────────────────────
+
+#[test]
+fn colores_de_sistema() {
+    let color_of = |s: &str| {
+        decls(s).iter().find_map(|d| match d.kind {
+            DeclKind::Color(c) => Some(c),
+            _ => None,
+        })
+    };
+    assert_eq!(color_of("color: Canvas"), Some(Color::WHITE));
+    assert_eq!(color_of("color: CanvasText"), Some(Color::BLACK));
+    assert_eq!(color_of("color: ActiveText"), Some(Color::rgb_const(255, 0, 0)));
+    // Case-insensitive.
+    assert_eq!(color_of("color: buttonface"), Some(Color::rgb_const(240, 240, 240)));
+}
+
+// ── Fase 7.863 — fuentes de sistema en el shorthand `font` ──────────────────
+
+#[test]
+fn font_system_keywords() {
+    assert!(decls("font: caption")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontSize(v) if v == 13.0)));
+    assert!(decls("font: small-caption")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontSize(v) if v == 11.0)));
+    // El shorthand normal sigue andando.
+    assert!(decls("font: italic bold 16px/1.5 serif")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontSize(v) if v == 16.0)));
+}
+
+// ── Fase 7.864 — outline-color: invert ─────────────────────────────────────
+
+#[test]
+fn outline_color_invert() {
+    assert!(decls("outline-color: invert")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::CurrentColor(ColorTarget::Outline))));
+}

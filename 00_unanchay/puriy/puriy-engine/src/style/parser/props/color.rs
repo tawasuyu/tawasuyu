@@ -807,4 +807,28 @@ const NAMED_COLORS: &[(&str, Color)] = &[
     ("whitesmoke", Color::rgb_const(245, 245, 245)),
     ("yellow", Color::rgb_const(255, 255, 0)),
     ("yellowgreen", Color::rgb_const(154, 205, 50)),
+    // Fase 7.862 — colores de sistema (CSS Color 4 §System Colors). Sin tema
+    // de UA real, los resolvemos a valores fijos de un esquema claro estándar.
+    // Cubren los `<system-color>` que aparecen en hojas modernas y resets.
+    ("canvas", Color::WHITE),
+    ("canvastext", Color::BLACK),
+    ("linktext", Color::rgb_const(0, 0, 238)),
+    ("visitedtext", Color::rgb_const(85, 26, 139)),
+    ("activetext", Color::rgb_const(255, 0, 0)),
+    ("buttonface", Color::rgb_const(240, 240, 240)),
+    ("buttontext", Color::BLACK),
+    ("buttonborder", Color::rgb_const(118, 118, 118)),
+    ("field", Color::WHITE),
+    ("fieldtext", Color::BLACK),
+    ("highlight", Color::rgb_const(51, 153, 255)),
+    ("highlighttext", Color::WHITE),
+    ("selecteditem", Color::rgb_const(51, 153, 255)),
+    ("selecteditemtext", Color::WHITE),
+    ("mark", Color::rgb_const(255, 255, 0)),
+    ("marktext", Color::BLACK),
+    ("graytext", Color::rgb_const(128, 128, 128)),
+    ("accentcolor", Color::rgb_const(51, 153, 255)),
+    ("accentcolortext", Color::WHITE),
+    ("windowtext", Color::BLACK),
+    ("window", Color::WHITE),
 ];

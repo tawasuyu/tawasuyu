@@ -112,6 +112,35 @@ pub(crate) fn match_border_side_prop(prop: &str, suffix: &str) -> Option<BorderE
     None
 }
 
+/// `border-radius: <1-4 horiz> [ / <1-4 vert> ]` (CSS Backgrounds 3).
+/// Distribución de esquinas estilo spec: 1→todas; 2→TL+BR / TR+BL; 3→TL /
+/// TR+BL / BR; 4→TL/TR/BR/BL. Devuelve las 4 decls `BorderCornerRadius`.
+///
+/// Divergencia: el modelo es de radio **circular** (un `f32` por esquina),
+/// así que el componente vertical tras `/` se ignora (sólo se usa el
+/// horizontal). Lista vacía si algún token horizontal no parsea. Fase 7.858.
+pub(crate) fn parse_border_radius_shorthand(value: &str, important: bool) -> Vec<Decl> {
+    // El eje vertical (tras `/`) no se modela: nos quedamos con el horizontal.
+    let horiz = value.split('/').next().unwrap_or(value).trim();
+    let vals: Vec<f32> = horiz
+        .split_whitespace()
+        .map(parse_length_px)
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_default();
+    let (tl, tr, br, bl) = match vals.as_slice() {
+        [a] => (*a, *a, *a, *a),
+        [a, b] => (*a, *b, *a, *b),
+        [a, b, c] => (*a, *b, *c, *b),
+        [a, b, c, d] => (*a, *b, *c, *d),
+        _ => return Vec::new(),
+    };
+    use BorderCorner::{BottomLeft, BottomRight, TopLeft, TopRight};
+    [(TopLeft, tl), (TopRight, tr), (BottomRight, br), (BottomLeft, bl)]
+        .into_iter()
+        .map(|(corner, r)| Decl { kind: DeclKind::BorderCornerRadius(corner, r), important })
+        .collect()
+}
+
 /// Match propiedades `border-{top|bottom}-{left|right}-radius` y sus
 /// equivalentes lógicos `border-{start|end}-{start|end}-radius` (Fase
 /// 7.409-7.412). En LTR horizontal: `block-start = top`, `block-end =

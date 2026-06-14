@@ -725,8 +725,9 @@ use super::super::*;
         assert_eq!(c.font_weight, 300);
         assert_eq!(c.font_size, 32.0);
         assert_eq!(c.font_family.as_deref(), Some("monospace"));
-        // .d — fuente de sistema: shorthand ignorado, size queda en default UA.
-        assert_eq!(eng.compute(&ps[3]).font_size, 16.0);
+        // .d — fuente de sistema (`font: caption`): Fase 7.863 aplica el
+        // tamaño de una fuente de UI estándar (13px), ya no se descarta.
+        assert_eq!(eng.compute(&ps[3]).font_size, 13.0);
     }
 
     #[test]

@@ -169,9 +169,68 @@ pub(crate) fn parse_background_position(value: &str) -> Option<DeclKind> {
                 BackgroundPosition { x: la, y: lb }
             }
         }
-        _ => return None,
+        // Fase 7.860 — forma de 3-4 tokens con offset por borde
+        // (`right 10px bottom 20px`, `left 25% top`). Cada eje es un keyword
+        // de borde + un offset opcional.
+        _ => return parse_bg_position_edges(&toks),
     };
     Some(DeclKind::BackgroundPosition(pos))
+}
+
+/// `<position>` de 3-4 tokens: `[ left|right|center ] [<len-pct>]? &&
+/// [ top|bottom|center ] [<len-pct>]?`. El offset desde un borde a `100%`
+/// (`right`/`bottom`): si es `%` se invierte (`right 20%` → `80%`); si es
+/// `px` no es representable como un único `LengthVal` (haría falta
+/// `calc(100% - px)`) y se aproxima al borde. Fase 7.860.
+fn parse_bg_position_edges(toks: &[&str]) -> Option<DeclKind> {
+    fn edge_val(at_end: bool, off: Option<LengthVal>) -> LengthVal {
+        match off {
+            None => LengthVal::Pct(if at_end { 100.0 } else { 0.0 }),
+            Some(LengthVal::Pct(p)) => LengthVal::Pct(if at_end { 100.0 - p } else { p }),
+            // Offset px desde left/top → directo; desde right/bottom → borde.
+            Some(l) if !at_end => l,
+            Some(_) => LengthVal::Pct(100.0),
+        }
+    }
+    let lower: Vec<String> = toks.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let mut x: Option<LengthVal> = None;
+    let mut y: Option<LengthVal> = None;
+    let mut center_pending = 0u8;
+    let mut i = 0;
+    while i < lower.len() {
+        match lower[i].as_str() {
+            "left" | "right" => {
+                let at_end = lower[i] == "right";
+                let off = toks.get(i + 1).and_then(|t| parse_length_or_pct(t));
+                if off.is_some() {
+                    i += 1;
+                }
+                x = Some(edge_val(at_end, off));
+            }
+            "top" | "bottom" => {
+                let at_end = lower[i] == "bottom";
+                let off = toks.get(i + 1).and_then(|t| parse_length_or_pct(t));
+                if off.is_some() {
+                    i += 1;
+                }
+                y = Some(edge_val(at_end, off));
+            }
+            "center" => center_pending += 1,
+            _ => return None, // length suelta en forma de 4 valores → inválido
+        }
+        i += 1;
+    }
+    // Los `center` rellenan los ejes que quedaron libres.
+    if center_pending > 0 && x.is_none() {
+        x = Some(LengthVal::Pct(50.0));
+    }
+    if center_pending > 0 && y.is_none() {
+        y = Some(LengthVal::Pct(50.0));
+    }
+    Some(DeclKind::BackgroundPosition(BackgroundPosition {
+        x: x.unwrap_or(LengthVal::Pct(50.0)),
+        y: y.unwrap_or(LengthVal::Pct(50.0)),
+    }))
 }
 
 /// Las piezas de UNA capa de `background` ya clasificadas. Los longhands

@@ -261,8 +261,12 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         "animation-duration" | "-webkit-animation-duration" => parse_time_seconds(first_comma(value.trim()))
             .map(DeclKind::AnimationDuration),
         // Fase 7.737 — alias `-webkit-animation-timing-function` → estándar.
-        "animation-timing-function" | "-webkit-animation-timing-function" => parse_easing_keyword(first_comma(value.trim()))
-            .map(DeclKind::AnimationTimingFunction),
+        // Fase 7.855 — usa `parse_easing` (no `_keyword`): acepta también
+        // `cubic-bezier(...)` y `steps(...)`, igual que `transition-timing-function`.
+        "animation-timing-function" | "-webkit-animation-timing-function" => {
+            parse_easing(&first_comma(value.trim()).to_ascii_lowercase())
+                .map(DeclKind::AnimationTimingFunction)
+        }
         // Fase 7.738 — alias `-webkit-animation-iteration-count` → estándar.
         "animation-iteration-count" | "-webkit-animation-iteration-count" => {
             let t = first_comma(value.trim());

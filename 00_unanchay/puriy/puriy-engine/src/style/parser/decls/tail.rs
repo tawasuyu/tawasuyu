@@ -91,7 +91,9 @@ pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {
         "left" | "start" | "match-parent" => Some(TextAlign::Left),
         "center" | "-webkit-center" | "-moz-center" => Some(TextAlign::Center),
         "right" | "end" => Some(TextAlign::Right),
-        "justify" => Some(TextAlign::Justify),
+        // Fase 7.856 — `justify-all` fuerza justificar también la última
+        // línea; sin esa distinción en el modelo, colapsa a `Justify`.
+        "justify" | "justify-all" => Some(TextAlign::Justify),
         _ => None,
     }
 }
@@ -103,10 +105,18 @@ pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {
 /// coma, devuelve el string completo. Espacios al borde recortados.
 /// Fase 7.514+ (longhands animation que sólo guardan el primer item).
 pub(crate) fn first_comma(s: &str) -> &str {
-    match s.find(',') {
-        Some(i) => s[..i].trim(),
-        None => s.trim(),
+    // Fase 7.855 — sólo cuenta una coma de NIVEL SUPERIOR; las internas de
+    // `cubic-bezier(a, b, c, d)`/`steps(n, end)` no parten el primer item.
+    let mut depth: i32 = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => return s[..i].trim(),
+            _ => {}
+        }
     }
+    s.trim()
 }
 
 /// Parsea `<time>` CSS: `<n>s` o `<n>ms`. Devuelve segundos.
@@ -120,22 +130,6 @@ pub(crate) fn parse_time_seconds(s: &str) -> Option<f32> {
         return num.trim().parse::<f32>().ok();
     }
     None
-}
-
-/// Parsea `<easing-function>` por keyword (sin cubic-bezier/steps por
-/// ahora — un parser completo vive en parser/sheet.rs si lo necesitás).
-/// Fase 7.516.
-pub(crate) fn parse_easing_keyword(s: &str) -> Option<EasingFunction> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "linear" => Some(EasingFunction::Linear),
-        "ease" => Some(EasingFunction::Ease),
-        "ease-in" => Some(EasingFunction::EaseIn),
-        "ease-out" => Some(EasingFunction::EaseOut),
-        "ease-in-out" => Some(EasingFunction::EaseInOut),
-        "step-start" => Some(EasingFunction::StepStart),
-        "step-end" => Some(EasingFunction::StepEnd),
-        _ => None,
-    }
 }
 
 /// Parsea `image-resolution: [ from-image || <resolution> ] && snap?`.
@@ -202,6 +196,15 @@ pub(crate) fn parse_length_or_pct(s: &str) -> Option<LengthVal> {
         || s.to_ascii_lowercase().starts_with("fit-content(")
     {
         return Some(LengthVal::FitContent);
+    }
+    // Fase 7.861 — `stretch` (CSS Sizing 4) y sus alias vendor de "llená el
+    // espacio disponible": en un bloque eso es justo lo que hace `auto`.
+    if s.eq_ignore_ascii_case("stretch")
+        || s.eq_ignore_ascii_case("-webkit-fill-available")
+        || s.eq_ignore_ascii_case("-moz-available")
+        || s.eq_ignore_ascii_case("fill-available")
+    {
+        return Some(LengthVal::Auto);
     }
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(LengthVal::Pct);
@@ -386,7 +389,10 @@ pub(crate) enum CalcVal {
 /// `max`/`clamp`) seguida de `(`.
 pub(crate) fn is_math_fn(s: &str) -> bool {
     let l = s.trim_start().to_ascii_lowercase();
-    ["calc(", "min(", "max(", "clamp("].iter().any(|p| l.starts_with(p))
+    // Fase 7.854 — funciones de paso (CSS Values 4): `round`/`mod`/`rem`.
+    ["calc(", "min(", "max(", "clamp(", "round(", "mod(", "rem("]
+        .iter()
+        .any(|p| l.starts_with(p))
 }
 
 /// Convierte un `CalcVal` final a `LengthVal`. Un número crudo sólo es
@@ -517,16 +523,57 @@ impl CalcCtx<'_> {
             while self.i < self.b.len() && self.b[self.i].is_ascii_alphabetic() {
                 self.i += 1;
             }
-            let name = self.src[start..self.i].to_ascii_lowercase();
+            let mut name = self.src[start..self.i].to_ascii_lowercase();
             // CSS no permite whitespace entre el nombre y `(`.
             if self.peek() != Some(b'(') {
                 return None;
             }
             self.i += 1;
+            // Fase 7.854 — `round(<strategy>, A, B)` con estrategia opcional
+            // (`nearest`/`up`/`down`/`to-zero`). Se consume acá porque es un
+            // keyword, no una expresión; se anexa al name como `round:<strat>`.
+            if name == "round" {
+                if let Some(strat) = self.try_round_strategy() {
+                    name = format!("round:{strat}");
+                }
+            }
             let args = self.args()?;
             return apply_math_fn(&name, &args);
         }
         self.number()
+    }
+
+    /// Intenta leer una estrategia de `round()` (`nearest`/`up`/`down`/
+    /// `to-zero`) seguida de coma. Si lo que sigue NO es una de esas, no
+    /// consume nada (devuelve `None`) y el primer arg se parsea como expr.
+    fn try_round_strategy(&mut self) -> Option<&'static str> {
+        let save = self.i;
+        self.ws();
+        let start = self.i;
+        while self.i < self.b.len()
+            && (self.b[self.i].is_ascii_alphabetic() || self.b[self.i] == b'-')
+        {
+            self.i += 1;
+        }
+        let word = self.src[start..self.i].to_ascii_lowercase();
+        let strat = match word.as_str() {
+            "nearest" => "nearest",
+            "up" => "up",
+            "down" => "down",
+            "to-zero" => "to-zero",
+            _ => {
+                self.i = save;
+                return None;
+            }
+        };
+        self.ws();
+        if self.peek() == Some(b',') {
+            self.i += 1;
+            Some(strat)
+        } else {
+            self.i = save;
+            None
+        }
     }
 
     /// Lista de expresiones separadas por coma hasta el `)`.
@@ -676,7 +723,70 @@ fn apply_math_fn(name: &str, args: &[CalcVal]) -> Option<CalcVal> {
         "min" => reduce_minmax(args, true),
         "max" => reduce_minmax(args, false),
         "clamp" if args.len() == 3 => clamp_calc(args[0], args[1], args[2]),
+        // Fase 7.854 — funciones de paso. `round` con estrategia opcional
+        // (`round:<strat>`); `mod`/`rem` toman exactamente 2 args.
+        "round" if args.len() == 2 => stepped(args[0], args[1], "nearest"),
+        n if n.starts_with("round:") && args.len() == 2 => {
+            stepped(args[0], args[1], &n["round:".len()..])
+        }
+        "mod" if args.len() == 2 => modrem(args[0], args[1], true),
+        "rem" if args.len() == 2 => modrem(args[0], args[1], false),
         _ => None,
+    }
+}
+
+/// Aplica una función de dos args dimensionalmente comparables (`round`/`mod`/
+/// `rem`), operando sobre el escalar resuelto y reconstruyendo el `CalcVal`
+/// con la dimensión del primer arg. `None` si son incomparables o el paso es 0.
+fn stepped(a: CalcVal, b: CalcVal, op: &str) -> Option<CalcVal> {
+    let (va, vb) = comparable_scalars(a, b)?;
+    if vb == 0.0 {
+        return None; // round/mod/rem con paso 0 → indefinido (NaN en spec).
+    }
+    let r = match op {
+        "nearest" => (va / vb).round() * vb,
+        "up" => (va / vb).ceil() * vb,
+        "down" => (va / vb).floor() * vb,
+        "to-zero" => (va / vb).trunc() * vb,
+        _ => return None,
+    };
+    Some(rebuild_like(a, r))
+}
+
+fn modrem(a: CalcVal, b: CalcVal, is_mod: bool) -> Option<CalcVal> {
+    let (va, vb) = comparable_scalars(a, b)?;
+    if vb == 0.0 {
+        return None;
+    }
+    // `mod`: resultado con el signo del divisor (euclídeo-CSS). `rem`: signo
+    // del dividendo (el `%` de Rust).
+    let r = if is_mod {
+        let m = va % vb;
+        if m != 0.0 && (m < 0.0) != (vb < 0.0) { m + vb } else { m }
+    } else {
+        va % vb
+    };
+    Some(rebuild_like(a, r))
+}
+
+/// Extrae los escalares de dos `CalcVal` si son comparables (misma dimensión).
+fn comparable_scalars(a: CalcVal, b: CalcVal) -> Option<(f32, f32)> {
+    if !all_comparable(&[a, b]) {
+        return None;
+    }
+    let scalar = |v: CalcVal| match v {
+        CalcVal::Number(n) => n,
+        CalcVal::Length { px, pct } => px + pct, // uno es 0 (all_comparable)
+    };
+    Some((scalar(a), scalar(b)))
+}
+
+/// Reconstruye un `CalcVal` con la dimensión de `like` y el escalar `r`.
+fn rebuild_like(like: CalcVal, r: f32) -> CalcVal {
+    match like {
+        CalcVal::Number(_) => CalcVal::Number(r),
+        CalcVal::Length { pct, .. } if pct == 0.0 => CalcVal::Length { px: r, pct: 0.0 },
+        CalcVal::Length { .. } => CalcVal::Length { px: 0.0, pct: r },
     }
 }
 

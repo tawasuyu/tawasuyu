@@ -21,15 +21,18 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "font-style" => parse_font_style(value).map(DeclKind::FontStyle),
         "font-family" => Some(DeclKind::FontFamily(value.trim().to_string())),
         "margin" => parse_sides(value).map(DeclKind::Margin),
-        "margin-top" => parse_length_px(value).map(DeclKind::MarginTop),
-        "margin-right" => parse_length_px(value).map(DeclKind::MarginRight),
-        "margin-bottom" => parse_length_px(value).map(DeclKind::MarginBottom),
-        "margin-left" => parse_length_px(value).map(DeclKind::MarginLeft),
+        // Fase 7.853 — longhands de margin/padding aceptan funciones
+        // matemáticas (`calc`/`min`/`max`/`clamp`), igual que el shorthand
+        // `parse_sides` desde la Fase 7.847.
+        "margin-top" => parse_length_px_or_calc(value).map(DeclKind::MarginTop),
+        "margin-right" => parse_length_px_or_calc(value).map(DeclKind::MarginRight),
+        "margin-bottom" => parse_length_px_or_calc(value).map(DeclKind::MarginBottom),
+        "margin-left" => parse_length_px_or_calc(value).map(DeclKind::MarginLeft),
         "padding" => parse_sides(value).map(DeclKind::Padding),
-        "padding-top" => parse_length_px(value).map(DeclKind::PaddingTop),
-        "padding-right" => parse_length_px(value).map(DeclKind::PaddingRight),
-        "padding-bottom" => parse_length_px(value).map(DeclKind::PaddingBottom),
-        "padding-left" => parse_length_px(value).map(DeclKind::PaddingLeft),
+        "padding-top" => parse_length_px_or_calc(value).map(DeclKind::PaddingTop),
+        "padding-right" => parse_length_px_or_calc(value).map(DeclKind::PaddingRight),
+        "padding-bottom" => parse_length_px_or_calc(value).map(DeclKind::PaddingBottom),
+        "padding-left" => parse_length_px_or_calc(value).map(DeclKind::PaddingLeft),
         "width" => parse_length_or_pct(value).map(DeclKind::Width),
         "height" => parse_length_or_pct(value).map(DeclKind::Height),
         "max-width" => parse_max_size(value).map(DeclKind::MaxWidth),
@@ -128,10 +131,12 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "justify-items" => parse_justify_items(value).map(DeclKind::JustifyItems),
         "justify-self" => parse_justify_self(value).map(DeclKind::JustifySelf),
         "gap" => parse_gap(value).map(|(r, c)| DeclKind::Gap { row: r, column: c }),
-        "row-gap" => parse_length_px(value).map(DeclKind::RowGap),
+        // Fase 7.853 — `row-gap`/`column-gap` aceptan `normal` (→0) y
+        // funciones matemáticas, vía `parse_gap` (que ya hace ambas).
+        "row-gap" => parse_gap(value).map(|(r, _)| DeclKind::RowGap(r)),
         // Fase 7.689 — `-webkit-column-gap` / Fase 7.770 — `-moz-column-gap` alias vendor de `column-gap`.
         "column-gap" | "-webkit-column-gap" | "-moz-column-gap" => {
-            parse_length_px(value).map(DeclKind::ColumnGap)
+            parse_gap(value).map(|(c, _)| DeclKind::ColumnGap(c))
         }
         // Fase 7.728 — `-webkit-box-sizing` / Fase 7.763 — `-moz-box-sizing` alias vendor de `box-sizing`.
         "box-sizing" | "-webkit-box-sizing" | "-moz-box-sizing" => {
@@ -195,7 +200,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // `parse_declarations` antes de llegar acá.
         "flex" | "outline" => None,
         "outline-width" => parse_length_px(value).map(DeclKind::OutlineWidth),
-        "outline-color" if is_current_color(value) => {
+        // Fase 7.864 — `invert` (CSS UI; invierte los píxeles del fondo) no es
+        // representable sin leer el framebuffer; lo aproximamos a `currentColor`
+        // (un outline visible que sigue al color del texto).
+        "outline-color" if is_current_color(value) || value.trim().eq_ignore_ascii_case("invert") => {
             Some(DeclKind::CurrentColor(ColorTarget::Outline))
         }
         "outline-color" => parse_color(value).map(DeclKind::OutlineColor),
