@@ -1,0 +1,11 @@
+[package]
+name = "pluma-outline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "pluma — proyección jerárquica: convierte la lista plana de átomos de un Cuerpo en un árbol de secciones (títulos como lienzos que contienen su contenido) + escala de fuente por nivel. No muta el modelo: es una vista derivada."
+
+[dependencies]
+uuid = { workspace = true, features = ["serde"] }
