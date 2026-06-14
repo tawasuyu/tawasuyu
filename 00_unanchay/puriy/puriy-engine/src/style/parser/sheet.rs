@@ -661,6 +661,116 @@ pub(crate) fn extract_keyframes(css: &str, out: &mut HashMap<String, Keyframes>)
     }
 }
 
+/// Pasada análoga a [`extract_keyframes`] pero para `@font-face` (CSS Fonts 4).
+/// Escanea el CSS crudo buscando `@font-face { ... }`, parsea sus descriptores
+/// y acumula una [`FontFaceRule`] por bloque (con `font-family` válido). A
+/// diferencia de `@keyframes`, NO hay clave única: dos `@font-face` con el
+/// mismo `family` son válidos (cubren rangos/pesos distintos) → lista, no mapa.
+pub(crate) fn extract_font_faces(css: &str, out: &mut Vec<FontFaceRule>) {
+    let lower = css.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(rel) = lower[from..].find('@') {
+        let at = from + rel;
+        if !lower[at..].starts_with("@font-face") {
+            from = at + 1;
+            continue;
+        }
+        let after = &css[at + "@font-face".len()..];
+        let Some(brace_rel) = after.find('{') else { break };
+        let body_start = at + "@font-face".len() + brace_rel + 1;
+        let Some(close) = matching_close_brace(&css[body_start..]) else {
+            break;
+        };
+        let body = &css[body_start..body_start + close];
+        from = body_start + close + 1;
+        if let Some(rule) = parse_font_face_body(body) {
+            out.push(rule);
+        }
+    }
+}
+
+/// Parsea el cuerpo de un `@font-face`: pares `descriptor: value` (reusa el
+/// splitter de keyframes). Devuelve `None` si falta `font-family` (descriptor
+/// obligatorio) o si no hay ningún `src` válido.
+pub(crate) fn parse_font_face_body(body: &str) -> Option<FontFaceRule> {
+    let mut rule = FontFaceRule::default();
+    let mut has_family = false;
+    for (desc, value) in parse_keyframe_declarations(body) {
+        let v = value.trim().to_string();
+        match desc.as_str() {
+            "font-family" => {
+                rule.family = v.trim_matches('"').trim_matches('\'').to_string();
+                has_family = !rule.family.is_empty();
+            }
+            "src" => rule.sources = parse_font_src_list(&v),
+            "font-weight" => rule.weight = Some(v),
+            "font-style" => rule.style = Some(v),
+            "font-stretch" | "font-width" => rule.stretch = Some(v),
+            "font-display" => rule.display = Some(v.to_ascii_lowercase()),
+            "unicode-range" => rule.unicode_range = Some(v),
+            "font-feature-settings" => rule.feature_settings = Some(v),
+            "font-variation-settings" => rule.variation_settings = Some(v),
+            "ascent-override" => rule.ascent_override = Some(v),
+            "descent-override" => rule.descent_override = Some(v),
+            "line-gap-override" => rule.line_gap_override = Some(v),
+            "size-adjust" => rule.size_adjust = Some(v),
+            _ => {}
+        }
+    }
+    if has_family && !rule.sources.is_empty() {
+        Some(rule)
+    } else {
+        None
+    }
+}
+
+/// Parsea la lista `src:` de un `@font-face` — entradas separadas por coma de
+/// nivel superior, cada una `url(...) | local(...)` con `format(...)`/`tech(...)`
+/// opcionales. Las entradas sin url ni local se descartan.
+pub(crate) fn parse_font_src_list(value: &str) -> Vec<FontSrc> {
+    let mut out = Vec::new();
+    for entry in split_top_level_comma(value) {
+        let mut src = FontSrc::default();
+        for tok in split_top_level_ws(&entry) {
+            let low = tok.to_ascii_lowercase();
+            if let Some(inner) = strip_fn(&tok, "url") {
+                src.url = Some(unquote(inner).to_string());
+            } else if let Some(inner) = strip_fn(&tok, "local") {
+                src.local = Some(unquote(inner).to_string());
+            } else if let Some(inner) = strip_fn(&tok, "format") {
+                src.format = Some(unquote(inner).to_ascii_lowercase());
+            } else if let Some(inner) = strip_fn(&tok, "tech") {
+                src.tech = Some(unquote(inner).to_ascii_lowercase());
+            } else {
+                let _ = low;
+            }
+        }
+        if src.url.is_some() || src.local.is_some() {
+            out.push(src);
+        }
+    }
+    out
+}
+
+/// `name( ... )` → contenido interno (case-insensitive del nombre). `None` si
+/// `s` no es exactamente esa función.
+fn strip_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    let s = s.trim();
+    if s.len() <= name.len() + 1 || !s[..name.len()].eq_ignore_ascii_case(name) {
+        return None;
+    }
+    s[name.len()..].trim_start().strip_prefix('(')?.strip_suffix(')')
+}
+
+/// Quita comillas envolventes (`"x"` / `'x'`) y espacios.
+fn unquote(s: &str) -> &str {
+    let s = s.trim();
+    s.strip_prefix('"').and_then(|x| x.strip_suffix('"'))
+        .or_else(|| s.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
+        .unwrap_or(s)
+        .trim()
+}
+
 /// Parsea el cuerpo de un `@keyframes`: una secuencia de bloques
 /// `selector { decls }` donde `selector` es una lista de offsets
 /// (`from`/`to`/`N%`) separados por coma. Los pasos quedan ordenados por

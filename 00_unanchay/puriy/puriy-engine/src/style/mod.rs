@@ -46,6 +46,11 @@ pub struct StyleEngine {
     /// no implementado) cruzando el `name` de un `AnimationBinding` con
     /// esta tabla. Hoy sólo se parsean y se exponen vía [`Self::keyframes`].
     keyframes: HashMap<String, Keyframes>,
+    /// Definiciones `@font-face { ... }` recogidas de todos los stylesheets.
+    /// Las consumiría el cargador de fuentes (aún no implementado) cruzando el
+    /// `font-family` computado con `FontFaceRule::family`. Hoy sólo se parsean
+    /// y se exponen vía [`Self::font_faces`].
+    font_faces: Vec<FontFaceRule>,
 }
 
 impl StyleEngine {
@@ -90,10 +95,18 @@ impl StyleEngine {
             let cleaned = strip_comments(sheet);
             extract_keyframes(&cleaned, &mut keyframes);
         }
+        // Tercera pasada: recoger `@font-face` de todas las hojas. Como
+        // `@keyframes`, son globales y no caen en la cascada por selector;
+        // pero admiten duplicados de `family` (rangos distintos) → lista.
+        let mut font_faces: Vec<FontFaceRule> = Vec::new();
+        for sheet in sheets {
+            let cleaned = strip_comments(sheet);
+            extract_font_faces(&cleaned, &mut font_faces);
+        }
         for sheet in sheets {
             rules.extend(parse_stylesheet(sheet, &vars, vp));
         }
-        Self { rules, vars, keyframes }
+        Self { rules, vars, keyframes, font_faces }
     }
 
     /// Tabla de `@keyframes` parseados (name → definición). Vacía si el
@@ -101,6 +114,13 @@ impl StyleEngine {
     /// la cruzará con `ComputedStyle::animation`; hoy es sólo lectura.
     pub fn keyframes(&self) -> &HashMap<String, Keyframes> {
         &self.keyframes
+    }
+
+    /// Lista de `@font-face` parseados, en orden de documento. Vacía si el
+    /// documento no declara fuentes. El cargador de fuentes (trabajo futuro)
+    /// la cruzará con `ComputedStyle::font_family`; hoy es sólo lectura.
+    pub fn font_faces(&self) -> &[FontFaceRule] {
+        &self.font_faces
     }
 
     /// Computa el estilo de un nodo Element. Aplica en orden: UA →

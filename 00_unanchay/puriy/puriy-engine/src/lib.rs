@@ -42,7 +42,7 @@ pub use style::{
     AlignContent, AlignItems, AlignSelf, AnimationBinding, AnimationDirection, AnimationFillMode,
     AnimationIterations, BackgroundPosition, BackgroundRepeat, BackgroundSize, BorderLineStyle,
     BoxShadow, BoxSizing, ComputedStyle, ContentItem, EasingFunction,
-    FlexDirection, FlexWrap, FontStyle, GradientStop, GridAutoFlow, GridTrackBreadth, GridTrackSize, JustifyContent, KeyframeStep,
+    FlexDirection, FlexWrap, FontFaceRule, FontSrc, FontStyle, GradientStop, GridAutoFlow, GridTrackBreadth, GridTrackSize, JustifyContent, KeyframeStep,
     Keyframes, LengthVal, LinearGradient, ObjectFit, Outline, Overflow, PointerEvents, Position,
     PseudoElement, Sides, StyleEngine, TextAlign, TextDecorationLine, TextDecorationStyle,
     TextShadow, TextTransform,

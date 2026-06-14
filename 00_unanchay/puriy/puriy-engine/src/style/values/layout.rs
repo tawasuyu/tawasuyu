@@ -730,6 +730,60 @@ pub struct Keyframes {
     pub steps: Vec<KeyframeStep>,
 }
 
+/// Una entrada de la lista `src:` de un `@font-face` (CSS Fonts 4). O bien una
+/// fuente externa (`url(...)`), o una instalada en el sistema (`local(...)`).
+/// `format`/`tech` son las pistas opcionales (`format("woff2")`,
+/// `tech(color-COLRv1)`) que el cargador usa para elegir/descartar sin bajar.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FontSrc {
+    /// `url(...)` sin las comillas ni la función — la URL cruda a resolver.
+    pub url: Option<String>,
+    /// `local(...)` — nombre de una familia instalada en el sistema.
+    pub local: Option<String>,
+    /// `format(...)` — `woff2`/`truetype`/`opentype`/… (sin comillas).
+    pub format: Option<String>,
+    /// `tech(...)` — capacidad requerida (`color-COLRv1`, `variations`, …).
+    pub tech: Option<String>,
+}
+
+/// Definición de un `@font-face { ... }` (CSS Fonts 4). Se recoge globalmente
+/// (como `@keyframes`) y se expone para el cargador de fuentes — que cruzará
+/// `family` con el `font-family` computado y, si matchea, bajará la primera
+/// `src` compatible y la registrará en parley. Hoy sólo se parsea y se expone
+/// vía [`super::super::StyleEngine::font_faces`]; el cargador es trabajo futuro.
+/// Los descriptores tipográficos (weight/style/stretch/unicode-range/…) se
+/// guardan crudos (`Option<String>`) — el matcher los interpretará al cargar.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FontFaceRule {
+    /// `font-family` — la clave bajo la que esta fuente se referencia. Requerida
+    /// (un `@font-face` sin family se descarta).
+    pub family: String,
+    /// `src:` — lista de fuentes candidatas en orden de preferencia.
+    pub sources: Vec<FontSrc>,
+    /// `font-weight` — un peso (`700`) o un rango (`100 900`).
+    pub weight: Option<String>,
+    /// `font-style` — `normal`/`italic`/`oblique [<angle>]?`.
+    pub style: Option<String>,
+    /// `font-stretch` / `font-width` — `condensed`/`75%`/rango.
+    pub stretch: Option<String>,
+    /// `font-display` — `auto|block|swap|fallback|optional`.
+    pub display: Option<String>,
+    /// `unicode-range` — el subset cubierto (`U+0000-00FF, U+2000-206F`).
+    pub unicode_range: Option<String>,
+    /// `font-feature-settings`.
+    pub feature_settings: Option<String>,
+    /// `font-variation-settings`.
+    pub variation_settings: Option<String>,
+    /// `ascent-override` — métrica forzada (`90%`).
+    pub ascent_override: Option<String>,
+    /// `descent-override`.
+    pub descent_override: Option<String>,
+    /// `line-gap-override`.
+    pub line_gap_override: Option<String>,
+    /// `size-adjust` — escala del glyph (`110%`).
+    pub size_adjust: Option<String>,
+}
+
 /// Viewport asumido por el parser para resolver unidades `vw`/`vh`/
 /// `vmin`/`vmax` y para evaluar `@media` queries. Por ahora es
 /// constante (1280×800 — desktop típico). Cuando puriy soporte resize
