@@ -252,17 +252,38 @@ pub(crate) fn parse_overflow(s: &str) -> Option<Overflow> {
 }
 
 pub(crate) fn parse_white_space(s: &str) -> Option<WhiteSpace> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "normal" => Some(WhiteSpace::Normal),
-        "nowrap" => Some(WhiteSpace::NoWrap),
-        "pre" => Some(WhiteSpace::Pre),
-        "pre-wrap" => Some(WhiteSpace::PreWrap),
-        "pre-line" => Some(WhiteSpace::PreLine),
+    let t = s.trim().to_ascii_lowercase();
+    match t.as_str() {
+        "normal" => return Some(WhiteSpace::Normal),
+        "nowrap" => return Some(WhiteSpace::NoWrap),
+        "pre" => return Some(WhiteSpace::Pre),
+        "pre-wrap" => return Some(WhiteSpace::PreWrap),
+        "pre-line" => return Some(WhiteSpace::PreLine),
         // Fase 7.843 — `break-spaces` ≈ pre-wrap (difiere sólo en el manejo de
         // los espacios al final de línea, que no modelamos): aproximación.
-        "break-spaces" => Some(WhiteSpace::PreWrap),
-        _ => None,
+        "break-spaces" => return Some(WhiteSpace::PreWrap),
+        _ => {}
     }
+    // Fase 7.904 — forma de dos valores (CSS Text 4): `<white-space-collapse>
+    // || <text-wrap-mode>`. Mapeamos la combinación al enum clásico.
+    let toks: Vec<&str> = t.split_whitespace().collect();
+    if toks.len() == 2 {
+        let collapse = toks.iter().copied().find(|w| {
+            matches!(*w, "collapse" | "preserve" | "preserve-breaks" | "preserve-spaces")
+        })?;
+        let wrap = toks.iter().copied().find(|w| matches!(*w, "wrap" | "nowrap"))?;
+        return Some(match (collapse, wrap) {
+            ("collapse", "wrap") => WhiteSpace::Normal,
+            ("collapse", "nowrap") => WhiteSpace::NoWrap,
+            ("preserve", "wrap") => WhiteSpace::PreWrap,
+            ("preserve", "nowrap") => WhiteSpace::Pre,
+            ("preserve-breaks", _) => WhiteSpace::PreLine,
+            // preserve-spaces y demás → aproximación pre-wrap/pre por wrap.
+            (_, "nowrap") => WhiteSpace::Pre,
+            (_, _) => WhiteSpace::PreWrap,
+        });
+    }
+    None
 }
 
 pub(crate) fn parse_text_transform(s: &str) -> Option<TextTransform> {

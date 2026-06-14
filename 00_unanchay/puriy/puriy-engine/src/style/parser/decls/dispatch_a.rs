@@ -97,7 +97,9 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             _ => parse_length_px(value).map(|p| DeclKind::TextDecorationThickness(Some(p))),
         },
         "text-underline-offset" => match value.trim().to_ascii_lowercase().as_str() {
-            "auto" => Some(DeclKind::TextUnderlineOffset(None)),
+            // Fase 7.904 — `from-font` deriva el offset de las métricas de la
+            // fuente; sin métricas reales lo tratamos como `auto` (None).
+            "auto" | "from-font" => Some(DeclKind::TextUnderlineOffset(None)),
             _ => parse_length_px(value).map(|p| DeclKind::TextUnderlineOffset(Some(p))),
         },
         "list-style-type" => parse_list_style_type(value).map(DeclKind::ListStyleType),
@@ -288,7 +290,9 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         }
         "direction" => parse_direction(value).map(DeclKind::Direction),
         "unicode-bidi" => parse_unicode_bidi(value).map(DeclKind::UnicodeBidi),
-        "font-stretch" => parse_font_stretch(value).map(DeclKind::FontStretch),
+        // Fase 7.904 — `font-width` es el nombre nuevo (CSS Fonts 4) de
+        // `font-stretch`; mismo parser y DeclKind.
+        "font-stretch" | "font-width" => parse_font_stretch(value).map(DeclKind::FontStretch),
         "image-rendering" => parse_image_rendering(value).map(DeclKind::ImageRendering),
         "mix-blend-mode" => parse_blend_mode(value).map(DeclKind::MixBlendMode),
         "background-blend-mode" => {

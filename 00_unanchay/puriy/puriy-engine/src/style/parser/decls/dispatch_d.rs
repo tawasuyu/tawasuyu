@@ -653,6 +653,23 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "field-sizing" => {
             parse_field_sizing(value).map(DeclKind::FieldSizing)
         }
+        // Fase 7.905 — overlay (CSS Position 4) y dynamic-range-limit (CSS
+        // Color HDR 1). Plumb opaco.
+        "overlay" => match value.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(DeclKind::Overlay(Overlay::None)),
+            "auto" => Some(DeclKind::Overlay(Overlay::Auto)),
+            _ => None,
+        },
+        "dynamic-range-limit" => match value.trim().to_ascii_lowercase().as_str() {
+            "standard" => Some(DeclKind::DynamicRangeLimit(DynamicRangeLimit::Standard)),
+            "no-limit" => Some(DeclKind::DynamicRangeLimit(DynamicRangeLimit::NoLimit)),
+            "high" => Some(DeclKind::DynamicRangeLimit(DynamicRangeLimit::High)),
+            "constrained" => Some(DeclKind::DynamicRangeLimit(DynamicRangeLimit::Constrained)),
+            "constrained-high" => {
+                Some(DeclKind::DynamicRangeLimit(DynamicRangeLimit::ConstrainedHigh))
+            }
+            _ => None,
+        },
         "text-box-edge" => {
             parse_text_box_edge(value).map(DeclKind::TextBoxEdge)
         }

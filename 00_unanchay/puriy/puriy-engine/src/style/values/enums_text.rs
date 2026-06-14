@@ -1105,6 +1105,29 @@ pub enum FieldSizing {
     Content,
 }
 
+/// `overlay` (CSS Position 4). Propiedad controlada por el UA (sólo
+/// animable); indica si el elemento está en la top-layer. NO hereda.
+/// Default `None`. Fase 7.905 — plumb opaco (no afecta layout en puriy).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Overlay {
+    #[default]
+    None,
+    Auto,
+}
+
+/// `dynamic-range-limit` (CSS Color HDR 1): techo de luminancia HDR del
+/// contenido. HEREDA. Default `NoLimit`. Fase 7.905 — plumb opaco (puriy no
+/// hace tone-mapping HDR).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DynamicRangeLimit {
+    Standard,
+    #[default]
+    NoLimit,
+    High,
+    Constrained,
+    ConstrainedHigh,
+}
+
 /// `text-box-edge` (CSS Inline Layout 3). `Auto` deja al browser elegir
 /// según script/fuente. Caso con 1 o 2 keywords (`<text-edge> [<text-edge>]?`).
 /// `Edge { over, under }` cubre el caso de 1 keyword (over==under) o 2

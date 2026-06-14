@@ -193,6 +193,12 @@ pub(crate) fn parse_svg_paint(value: &str) -> Option<SvgPaint> {
     if v.eq_ignore_ascii_case("currentcolor") {
         return Some(SvgPaint::CurrentColor);
     }
+    // Fase 7.904 — `context-fill`/`context-stroke` (SVG 2): heredan el paint
+    // del elemento que referencia. Sin pipeline de contexto, degradan a
+    // `currentColor`. Divergencia documentada.
+    if v.eq_ignore_ascii_case("context-fill") || v.eq_ignore_ascii_case("context-stroke") {
+        return Some(SvgPaint::CurrentColor);
+    }
     // `url(...)` — opcional fallback ignorado.
     let lower = v.to_ascii_lowercase();
     if let Some(open) = lower.strip_prefix("url(") {
@@ -793,25 +799,52 @@ pub(crate) fn parse_ruby_align(value: &str) -> Option<RubyAlign> {
     }
 }
 
-/// `background-position-x: left | center | right | <length-or-pct>`. Sólo
-/// eje X — los offsets con keyword (`right 10%`) no se soportan. Fase 7.439.
+/// `background-position-x: left | center | right | <length-or-pct>`.
+/// Fase 7.904 — admite además `<edge> <offset>` (`right 10px`, `left 20%`).
 pub(crate) fn parse_background_position_x(value: &str) -> Option<LengthVal> {
     match value.trim().to_ascii_lowercase().as_str() {
         "left" => Some(LengthVal::Pct(0.0)),
         "center" => Some(LengthVal::Pct(50.0)),
         "right" => Some(LengthVal::Pct(100.0)),
-        other => parse_length_or_pct(other),
+        other => parse_pos_edge_offset(other, "left", "right")
+            .or_else(|| parse_length_or_pct(other)),
     }
 }
 
-/// `background-position-y: top | center | bottom | <length-or-pct>`. Sólo
-/// eje Y — los offsets con keyword (`bottom 10%`) no se soportan. Fase 7.440.
+/// `background-position-y: top | center | bottom | <length-or-pct>`.
+/// Fase 7.904 — admite además `<edge> <offset>` (`bottom 20%`, `top 5px`).
 pub(crate) fn parse_background_position_y(value: &str) -> Option<LengthVal> {
     match value.trim().to_ascii_lowercase().as_str() {
         "top" => Some(LengthVal::Pct(0.0)),
         "center" => Some(LengthVal::Pct(50.0)),
         "bottom" => Some(LengthVal::Pct(100.0)),
-        other => parse_length_or_pct(other),
+        other => parse_pos_edge_offset(other, "top", "bottom")
+            .or_else(|| parse_length_or_pct(other)),
+    }
+}
+
+/// `<edge> <offset>` de `background-position-{x,y}`: `near`=origen (`left`/
+/// `top`), `far`=borde opuesto (`right`/`bottom`). Desde el borde cercano el
+/// offset es directo; desde el lejano, `100% − <offset>` si es porcentaje (un
+/// offset en px contra el borde lejano no se modela → degrada al borde 100%).
+/// Fase 7.904.
+fn parse_pos_edge_offset(value: &str, near: &str, far: &str) -> Option<LengthVal> {
+    let mut it = value.split_whitespace();
+    let edge = it.next()?;
+    let offset = it.next()?;
+    if it.next().is_some() {
+        return None;
+    }
+    let off = parse_length_or_pct(offset)?;
+    if edge.eq_ignore_ascii_case(near) {
+        Some(off)
+    } else if edge.eq_ignore_ascii_case(far) {
+        match off {
+            LengthVal::Pct(p) => Some(LengthVal::Pct(100.0 - p)),
+            _ => Some(LengthVal::Pct(100.0)),
+        }
+    } else {
+        None
     }
 }
 

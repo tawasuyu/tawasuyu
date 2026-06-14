@@ -366,6 +366,10 @@ pub(crate) enum DeclKind {
     MathDepth(MathDepth),
     MathShift(MathShift),
     FieldSizing(FieldSizing),
+    /// `overlay` (CSS Position 4). NO hereda. Plumb opaco. Fase 7.905.
+    Overlay(Overlay),
+    /// `dynamic-range-limit` (CSS Color HDR 1). HEREDA. Plumb opaco. Fase 7.905.
+    DynamicRangeLimit(DynamicRangeLimit),
     TextBoxEdge(TextBoxEdge),
     /// `anchor-name`. Vec vacío = `none`.
     AnchorName(Vec<String>),
@@ -1286,6 +1290,8 @@ impl Decl {
             DeclKind::MathDepth(m) => s.math_depth = *m,
             DeclKind::MathShift(m) => s.math_shift = *m,
             DeclKind::FieldSizing(f) => s.field_sizing = *f,
+            DeclKind::Overlay(o) => s.overlay = *o,
+            DeclKind::DynamicRangeLimit(d) => s.dynamic_range_limit = *d,
             DeclKind::TextBoxEdge(e) => s.text_box_edge = *e,
             DeclKind::AnchorName(n) => s.anchor_name = n.clone(),
             DeclKind::PositionAnchor(a) => s.position_anchor = a.clone(),

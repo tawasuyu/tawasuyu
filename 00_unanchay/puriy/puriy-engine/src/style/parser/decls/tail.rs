@@ -70,7 +70,16 @@ pub(crate) fn parse_text_decoration_shorthand(value: &str, important: bool) -> V
 /// Keywords no soportados (`georgian`, `hebrew`, …) caen a `None` y la
 /// declaración se ignora — el caller mantiene el valor anterior.
 pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
-    match s.trim().to_ascii_lowercase().as_str() {
+    let raw = s.trim();
+    // Fase 7.904 — marcador string (`list-style-type: "→"`) o `symbols(...)`
+    // (CSS Counter Styles 3): marcadores custom que el enum no modela; los
+    // aproximamos a `Disc`. Mejor que descartar (dejaría el marker heredado).
+    if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
+        || raw.to_ascii_lowercase().starts_with("symbols(")
+    {
+        return Some(ListStyleType::Disc);
+    }
+    match raw.to_ascii_lowercase().as_str() {
         "none" => Some(ListStyleType::None),
         "disc" => Some(ListStyleType::Disc),
         "circle" => Some(ListStyleType::Circle),
@@ -734,6 +743,9 @@ pub(crate) fn parse_font_size(value: &str) -> Option<DeclKind> {
         "x-large" => return Some(DeclKind::FontSize(24.0)),
         "xx-large" => return Some(DeclKind::FontSize(32.0)),
         "xxx-large" => return Some(DeclKind::FontSize(48.0)),
+        // Fase 7.904 — `math` (CSS Fonts 4 / MathML): escalado automático por
+        // nivel de script. Sin MathML, degrada a heredado (×1).
+        "math" => return Some(DeclKind::FontSizeRel(1.0)),
         _ => {}
     }
     // `%` → multiplicador relativo al heredado.

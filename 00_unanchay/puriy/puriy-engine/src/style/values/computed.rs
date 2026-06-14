@@ -542,6 +542,11 @@ pub struct ComputedStyle {
     /// `field-sizing` (Fase 7.352). Default `Fixed`. NO hereda.
     /// Plumb: `<input>`/`<textarea>` siempre fixed-size.
     pub field_sizing: FieldSizing,
+    /// `overlay` (Fase 7.905). Default `None`. NO hereda. Plumb opaco.
+    pub overlay: Overlay,
+    /// `dynamic-range-limit` (Fase 7.905). Default `NoLimit`. **Heredable**.
+    /// Plumb opaco (sin tone-mapping HDR).
+    pub dynamic_range_limit: DynamicRangeLimit,
     /// `text-box-edge` (Fase 7.353). Default `Auto`. **Heredable**.
     /// Plumb.
     pub text_box_edge: TextBoxEdge,

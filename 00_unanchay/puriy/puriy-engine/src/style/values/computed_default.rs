@@ -198,6 +198,8 @@ impl Default for ComputedStyle {
             math_depth: MathDepth::Auto,
             math_shift: MathShift::Normal,
             field_sizing: FieldSizing::Fixed,
+            overlay: Overlay::None,
+            dynamic_range_limit: DynamicRangeLimit::NoLimit,
             text_box_edge: TextBoxEdge::Auto,
             anchor_name: Vec::new(),
             position_anchor: None,

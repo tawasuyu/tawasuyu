@@ -320,6 +320,9 @@ impl StyleEngine {
             style.math_depth = p.math_depth;
             style.math_shift = p.math_shift;
             style.text_box_edge = p.text_box_edge;
+            // CSS Color HDR 1 — dynamic-range-limit hereda. CSS Position 4 —
+            // overlay NO hereda. Fase 7.905.
+            style.dynamic_range_limit = p.dynamic_range_limit;
             // CSS Anchor Positioning 1 — anchor-scope hereda;
             // anchor-name y position-anchor NO heredan.
             // CSS View Transitions — view-transition-name y

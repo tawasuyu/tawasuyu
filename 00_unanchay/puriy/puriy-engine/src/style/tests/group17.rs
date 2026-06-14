@@ -978,3 +978,116 @@ fn calc_trig() {
         .iter()
         .any(|d| matches!(&d.kind, DeclKind::Transforms(_))));
 }
+
+// ── Fase 7.904 — extensiones de valor sobre props existentes ──────────────
+
+#[test]
+fn text_underline_offset_from_font() {
+    // `from-font` ≈ auto (None) sin métricas reales.
+    assert!(decls("text-underline-offset: from-font")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::TextUnderlineOffset(None))));
+}
+
+#[test]
+fn font_width_alias_de_font_stretch() {
+    // `font-width` (CSS Fonts 4) mapea al mismo DeclKind que `font-stretch`.
+    assert!(decls("font-width: condensed")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontStretch(_))));
+    assert_eq!(
+        decls("font-width: 75%").iter().find_map(|d| match d.kind {
+            DeclKind::FontStretch(m) => Some(m),
+            _ => None,
+        }),
+        decls("font-stretch: 75%").iter().find_map(|d| match d.kind {
+            DeclKind::FontStretch(m) => Some(m),
+            _ => None,
+        })
+    );
+}
+
+#[test]
+fn svg_paint_context() {
+    // context-fill/context-stroke degradan a currentColor.
+    assert!(decls("fill: context-fill")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Fill(SvgPaint::CurrentColor))));
+    assert!(decls("stroke: context-stroke")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Stroke(SvgPaint::CurrentColor))));
+}
+
+#[test]
+fn font_size_math_keyword() {
+    // `math` degrada a heredado (×1).
+    assert!(decls("font-size: math")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::FontSizeRel(r) if (r - 1.0).abs() < 1e-6)));
+}
+
+#[test]
+fn list_style_type_string_y_symbols() {
+    // marcador string y symbols() → Disc (custom no modelado).
+    assert!(decls("list-style-type: \"→\"")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));
+    assert!(decls("list-style-type: symbols(cyclic \"*\")")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));
+}
+
+#[test]
+fn background_position_edge_offset() {
+    let x = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::BackgroundPositionX(v) => Some(v),
+        _ => None,
+    });
+    let y = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::BackgroundPositionY(v) => Some(v),
+        _ => None,
+    });
+    // borde lejano + % → 100−%.
+    assert_eq!(y("background-position-y: bottom 20%"), Some(LengthVal::Pct(80.0)));
+    // borde lejano + px → degrada al 100%.
+    assert_eq!(x("background-position-x: right 10px"), Some(LengthVal::Pct(100.0)));
+    // borde cercano + offset directo.
+    assert_eq!(x("background-position-x: left 30%"), Some(LengthVal::Pct(30.0)));
+    assert_eq!(y("background-position-y: top 5px"), Some(LengthVal::Px(5.0)));
+}
+
+#[test]
+fn white_space_dos_valores() {
+    let ws = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::WhiteSpace(w) => Some(w),
+        _ => None,
+    });
+    assert_eq!(ws("white-space: preserve nowrap"), Some(WhiteSpace::Pre));
+    assert_eq!(ws("white-space: collapse wrap"), Some(WhiteSpace::Normal));
+    assert_eq!(ws("white-space: preserve wrap"), Some(WhiteSpace::PreWrap));
+    assert_eq!(ws("white-space: collapse nowrap"), Some(WhiteSpace::NoWrap));
+    // sigue valiendo la forma de un valor.
+    assert_eq!(ws("white-space: pre"), Some(WhiteSpace::Pre));
+}
+
+// ── Fase 7.905 — overlay y dynamic-range-limit (props nuevas, plumb) ──────
+
+#[test]
+fn overlay_y_dynamic_range_limit() {
+    assert!(decls("overlay: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Overlay(Overlay::Auto))));
+    assert!(decls("overlay: none")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Overlay(Overlay::None))));
+    assert!(decls("overlay: banana").is_empty());
+    assert!(decls("dynamic-range-limit: high")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::DynamicRangeLimit(DynamicRangeLimit::High))));
+    assert!(decls("dynamic-range-limit: constrained-high")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::DynamicRangeLimit(DynamicRangeLimit::ConstrainedHigh))));
+    assert!(decls("dynamic-range-limit: standard")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::DynamicRangeLimit(DynamicRangeLimit::Standard))));
+}
