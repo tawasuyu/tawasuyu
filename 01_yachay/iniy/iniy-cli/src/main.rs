@@ -116,9 +116,12 @@ enum Cmd {
         #[arg(long, default_value_t = 20)]
         ann_k: usize,
     },
-    /// Imprime las N aserciones más contradictorias entre sí.
+    /// Imprime las N aserciones más contradictorias entre sí. Si `doc_id` se
+    /// omite, recorre TODO el corpus (cross-doc) — necesario para ver las
+    /// contradicciones que cruzan fuentes distintas, que es el caso interesante
+    /// de una auditoría (igual que `nli`, que ya es cross-doc por default).
     Contradictions {
-        doc_id: String,
+        doc_id: Option<String>,
         #[arg(long, default_value_t = 10)]
         top: usize,
     },
@@ -618,14 +621,29 @@ async fn main() -> Result<()> {
             println!("persistido. reputaciones recalculadas: {n_reps} fuentes.");
         }
         Cmd::Contradictions { doc_id, top } => {
-            let doc_id = parse_doc_id(&doc_id)?;
-            let aserciones = store.cargar_aserciones(doc_id)?;
-            if aserciones.is_empty() {
-                anyhow::bail!("doc sin aserciones (corre `iniy extract` y luego `iniy nli`)");
-            }
-            let imps = store.cargar_implicaciones_del_doc(doc_id)?;
+            let (aserciones, imps, alcance) = match doc_id {
+                Some(d) => {
+                    let id = parse_doc_id(&d)?;
+                    let a = store.cargar_aserciones(id)?;
+                    if a.is_empty() {
+                        anyhow::bail!("doc sin aserciones (corre `iniy extract` y luego `iniy nli`)");
+                    }
+                    (a, store.cargar_implicaciones_del_doc(id)?, format!("doc {}", id.0))
+                }
+                None => {
+                    let a: Vec<_> = store
+                        .cargar_aserciones_atribuidas_todas()?
+                        .into_iter()
+                        .map(|x| x.asercion)
+                        .collect();
+                    if a.is_empty() {
+                        anyhow::bail!("corpus sin aserciones (corre `iniy extract` y luego `iniy nli`)");
+                    }
+                    (a, store.cargar_implicaciones_todas()?, "todo el corpus (cross-doc)".to_string())
+                }
+            };
             if imps.is_empty() {
-                anyhow::bail!("doc sin implicaciones (corre `iniy nli` primero)");
+                anyhow::bail!("sin implicaciones (corre `iniy nli` primero)");
             }
             let textos: HashMap<_, _> = aserciones.iter().map(|a| (a.id, a.texto.clone())).collect();
             let mut grafo = GrafoCreencias::nuevo();
@@ -639,7 +657,7 @@ async fn main() -> Result<()> {
             if topn.is_empty() {
                 println!("(sin contradicciones detectadas — el corpus parece coherente bajo el motor léxico)");
             } else {
-                println!("top {} contradicciones (de {} aserciones):", topn.len(), grafo.cantidad_aserciones());
+                println!("top {} contradicciones en {} (de {} aserciones):", topn.len(), alcance, grafo.cantidad_aserciones());
                 for (k, imp) in topn.iter().enumerate() {
                     let p = textos.get(&imp.premisa).cloned().unwrap_or_default();
                     let h = textos.get(&imp.hipotesis).cloned().unwrap_or_default();
