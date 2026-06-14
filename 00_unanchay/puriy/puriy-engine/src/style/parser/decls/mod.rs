@@ -676,6 +676,35 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
                 out.push(Decl { kind: DeclKind::GridTemplateAreas(None), important });
                 continue;
             }
+            // Fase 7.902 — forma con áreas: `"a b" 1fr "c d" 2fr [/ <cols>]`.
+            // Cada string es una fila de áreas; el token tras cada string (si
+            // lo hay) es el tamaño de esa fila; tras `/` van las columnas.
+            if value.contains('"') {
+                let (rows_part, cols_part) = split_top_level_slash(value);
+                let mut areas = String::new();
+                let mut row_tracks: Vec<GridTrackSize> = Vec::new();
+                for tok in split_grid_template_tokens(rows_part) {
+                    if let Some(inner) = tok
+                        .strip_prefix('"')
+                        .and_then(|s| s.strip_suffix('"'))
+                    {
+                        if !areas.is_empty() {
+                            areas.push(' ');
+                        }
+                        areas.push_str(inner.trim());
+                    } else if let Some(t) = parse_grid_template(&tok).and_then(|v| v.into_iter().next()) {
+                        row_tracks.push(t);
+                    }
+                }
+                if !areas.is_empty() {
+                    out.push(Decl { kind: DeclKind::GridTemplateAreas(Some(areas)), important });
+                    out.push(Decl { kind: DeclKind::GridTemplateRows(row_tracks), important });
+                    if let Some(cols) = cols_part.and_then(|c| parse_grid_template(c.trim())) {
+                        out.push(Decl { kind: DeclKind::GridTemplateColumns(cols), important });
+                    }
+                }
+                continue;
+            }
             // Forma `auto-flow` (sólo `grid`): un lado lleva `[auto-flow &&
             // dense?] <auto-tracks>?` y el otro un template. `auto-flow` a la
             // IZQUIERDA → flujo por filas (row), template a la derecha es de
@@ -1199,6 +1228,48 @@ fn offset_position_decl(s: &str) -> Option<DeclKind> {
 
 /// Parte un valor en `(antes, Some(después))` por el PRIMER `/` de nivel
 /// superior (fuera de paréntesis). Sin slash → `(todo, None)`.
+/// Tokeniza el lado de filas del shorthand `grid-template` con áreas: cada
+/// string entrecomillada es un token (con comillas) y cada run sin espacios
+/// fuera de comillas/paréntesis es otro. Fase 7.902.
+fn split_grid_template_tokens(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_str = false;
+    let mut depth = 0i32;
+    let flush = |cur: &mut String, out: &mut Vec<String>| {
+        if !cur.trim().is_empty() {
+            out.push(cur.trim().to_string());
+        }
+        cur.clear();
+    };
+    for c in s.chars() {
+        match c {
+            '"' if in_str => {
+                cur.push(c);
+                out.push(std::mem::take(&mut cur));
+                in_str = false;
+            }
+            '"' => {
+                flush(&mut cur, &mut out);
+                cur.push(c);
+                in_str = true;
+            }
+            '(' if !in_str => {
+                depth += 1;
+                cur.push(c);
+            }
+            ')' if !in_str => {
+                depth -= 1;
+                cur.push(c);
+            }
+            c if c.is_whitespace() && !in_str && depth == 0 => flush(&mut cur, &mut out),
+            _ => cur.push(c),
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
 fn split_top_level_slash(s: &str) -> (&str, Option<&str>) {
     let mut depth: i32 = 0;
     for (i, c) in s.char_indices() {

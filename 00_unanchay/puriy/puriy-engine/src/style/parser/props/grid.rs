@@ -11,6 +11,12 @@ pub(crate) fn parse_grid_template(value: &str) -> Option<Vec<GridTrackSize>> {
     if v.eq_ignore_ascii_case("none") {
         return Some(Vec::new());
     }
+    // Fase 7.901 — `masonry` (CSS Grid 3 draft): el eje se dispone en masonry.
+    // Sin layout masonry real, degradamos a lista de tracks vacía (auto) para
+    // no descartar la declaración. Divergencia documentada.
+    if v.eq_ignore_ascii_case("masonry") {
+        return Some(Vec::new());
+    }
     let mut out: Vec<GridTrackSize> = Vec::new();
     // Tokenize: respeta nesting de paréntesis para repeat(N, X).
     let mut tokens: Vec<String> = Vec::new();

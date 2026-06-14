@@ -405,6 +405,10 @@ pub(crate) fn is_valid_counter_name(s: &str) -> bool {
 pub(crate) enum CalcVal {
     Number(f32),
     Length { px: f32, pct: f32 },
+    /// Ángulo en grados (Fase 7.903). Lo producen los tokens `deg`/`rad`/
+    /// `grad`/`turn` y las trig inversas; las trig directas (`sin`/`cos`/
+    /// `tan`) lo consumen y devuelven `Number`.
+    Angle(f32),
 }
 
 /// `true` si `s` arranca con una función matemática CSS (`calc`/`min`/
@@ -414,9 +418,12 @@ pub(crate) fn is_math_fn(s: &str) -> bool {
     // Fase 7.854 — funciones de paso (CSS Values 4): `round`/`mod`/`rem`.
     // Fase 7.871 — exponenciales/signo: `abs`/`sign`/`sqrt`/`pow`/`hypot`/
     // `exp`/`log`.
+    // Fase 7.903 — trigonométricas (CSS Values 4): `sin`/`cos`/`tan` y sus
+    // inversas `asin`/`acos`/`atan`/`atan2`.
     [
         "calc(", "min(", "max(", "clamp(", "round(", "mod(", "rem(", "abs(", "sign(", "sqrt(",
-        "pow(", "hypot(", "exp(", "log(",
+        "pow(", "hypot(", "exp(", "log(", "sin(", "cos(", "tan(", "asin(", "acos(", "atan(",
+        "atan2(",
     ]
     .iter()
     .any(|p| l.starts_with(p))
@@ -429,7 +436,7 @@ pub(crate) fn is_math_fn(s: &str) -> bool {
 pub(crate) fn calcval_to_length(v: CalcVal) -> Option<LengthVal> {
     match v {
         CalcVal::Number(n) if n == 0.0 => Some(LengthVal::Px(0.0)),
-        CalcVal::Number(_) => None,
+        CalcVal::Number(_) | CalcVal::Angle(_) => None,
         CalcVal::Length { px, pct } => {
             if pct == 0.0 {
                 Some(LengthVal::Px(px))
@@ -547,7 +554,8 @@ impl CalcCtx<'_> {
         }
         if c.is_ascii_alphabetic() {
             let start = self.i;
-            while self.i < self.b.len() && self.b[self.i].is_ascii_alphabetic() {
+            // Tras la 1ª letra el nombre admite dígitos (`atan2`). Fase 7.903.
+            while self.i < self.b.len() && self.b[self.i].is_ascii_alphanumeric() {
                 self.i += 1;
             }
             let mut name = self.src[start..self.i].to_ascii_lowercase();
@@ -668,7 +676,7 @@ fn classify_calc_num(t: &str) -> Option<CalcVal> {
     // los números puros (un calc de ángulo da grados); en un contexto de
     // longitud el `Number` resultante se rechaza igual (no es una length).
     if let Some(deg) = token_angle_degrees(t) {
-        return Some(CalcVal::Number(deg));
+        return Some(CalcVal::Angle(deg));
     }
     // Fase 7.877 — `<time>` dentro de calc → `Number(segundos)`. Mismo modelo
     // que los ángulos: un calc de tiempo da segundos.
@@ -765,7 +773,8 @@ fn calc_add(a: CalcVal, b: CalcVal, sign: f32) -> Option<CalcVal> {
         (CalcVal::Length { px: p1, pct: q1 }, CalcVal::Length { px: p2, pct: q2 }) => {
             Some(CalcVal::Length { px: p1 + sign * p2, pct: q1 + sign * q2 })
         }
-        // Sumar número + longitud es inválido en CSS.
+        (CalcVal::Angle(x), CalcVal::Angle(y)) => Some(CalcVal::Angle(x + sign * y)),
+        // Sumar número + longitud (o dimensiones distintas) es inválido en CSS.
         _ => None,
     }
 }
@@ -777,7 +786,10 @@ fn calc_mul(a: CalcVal, b: CalcVal) -> Option<CalcVal> {
         | (CalcVal::Length { px, pct }, CalcVal::Number(x)) => {
             Some(CalcVal::Length { px: px * x, pct: pct * x })
         }
-        // longitud * longitud es inválido.
+        (CalcVal::Number(x), CalcVal::Angle(a)) | (CalcVal::Angle(a), CalcVal::Number(x)) => {
+            Some(CalcVal::Angle(a * x))
+        }
+        // dimensión * dimensión (longitud²/ángulo²) es inválido.
         _ => None,
     }
 }
@@ -788,6 +800,9 @@ fn calc_div(a: CalcVal, b: CalcVal) -> Option<CalcVal> {
         (CalcVal::Length { px, pct }, CalcVal::Number(y)) if y != 0.0 => {
             Some(CalcVal::Length { px: px / y, pct: pct / y })
         }
+        (CalcVal::Angle(a), CalcVal::Number(y)) if y != 0.0 => Some(CalcVal::Angle(a / y)),
+        // ángulo / ángulo = número adimensional (CSS Values 4).
+        (CalcVal::Angle(a), CalcVal::Angle(b)) if b != 0.0 => Some(CalcVal::Number(a / b)),
         _ => None,
     }
 }
@@ -815,6 +830,20 @@ fn apply_math_fn(name: &str, args: &[CalcVal]) -> Option<CalcVal> {
         "pow" if args.len() == 2 => num_fn(args, |a| a[0].powf(a[1])),
         "log" if args.len() == 1 => num_fn(args, |a| a[0].ln()),
         "log" if args.len() == 2 => num_fn(args, |a| a[0].log(a[1])),
+        // Fase 7.903 — trig directas: arg `<angle>` (grados) o `<number>`
+        // (radianes); devuelven número puro. `tan(90deg)` → ±∞.
+        "sin" if args.len() == 1 => Some(CalcVal::Number(trig_angle_rad(args[0]).sin())),
+        "cos" if args.len() == 1 => Some(CalcVal::Number(trig_angle_rad(args[0]).cos())),
+        "tan" if args.len() == 1 => Some(CalcVal::Number(trig_angle_rad(args[0]).tan())),
+        // Inversas: arg número puro; devuelven `<angle>` en grados.
+        "asin" if args.len() == 1 => num_arg(args[0]).map(|n| CalcVal::Angle(n.asin().to_degrees())),
+        "acos" if args.len() == 1 => num_arg(args[0]).map(|n| CalcVal::Angle(n.acos().to_degrees())),
+        "atan" if args.len() == 1 => num_arg(args[0]).map(|n| CalcVal::Angle(n.atan().to_degrees())),
+        // `atan2(y, x)`: dos args de la misma dimensión; ángulo en grados.
+        "atan2" if args.len() == 2 => {
+            let (y, x) = comparable_scalars(args[0], args[1])?;
+            Some(CalcVal::Angle(y.atan2(x).to_degrees()))
+        }
         // `hypot(a, b, ...)`: misma dimensión que el 1er arg.
         "hypot" if !args.is_empty() => {
             if !all_comparable(args) {
@@ -846,6 +875,26 @@ fn scalar_of(v: CalcVal) -> f32 {
     match v {
         CalcVal::Number(n) => n,
         CalcVal::Length { px, pct } => px + pct,
+        CalcVal::Angle(a) => a,
+    }
+}
+
+/// Argumento de una trig directa → radianes. Un `Angle` (grados) se convierte;
+/// un `Number` puro ya está en radianes (CSS Values 4 §10). Una longitud cae a
+/// su escalar (caso inválido que el caller no debería producir). Fase 7.903.
+fn trig_angle_rad(v: CalcVal) -> f32 {
+    match v {
+        CalcVal::Angle(deg) => deg.to_radians(),
+        other => scalar_of(other),
+    }
+}
+
+/// Escalar si el arg es un número puro; `None` si tiene dimensión. Para las
+/// trig inversas, que sólo aceptan `<number>`. Fase 7.903.
+fn num_arg(v: CalcVal) -> Option<f32> {
+    match v {
+        CalcVal::Number(n) => Some(n),
+        _ => None,
     }
 }
 
@@ -917,17 +966,14 @@ fn comparable_scalars(a: CalcVal, b: CalcVal) -> Option<(f32, f32)> {
     if !all_comparable(&[a, b]) {
         return None;
     }
-    let scalar = |v: CalcVal| match v {
-        CalcVal::Number(n) => n,
-        CalcVal::Length { px, pct } => px + pct, // uno es 0 (all_comparable)
-    };
-    Some((scalar(a), scalar(b)))
+    Some((scalar_of(a), scalar_of(b)))
 }
 
 /// Reconstruye un `CalcVal` con la dimensión de `like` y el escalar `r`.
 fn rebuild_like(like: CalcVal, r: f32) -> CalcVal {
     match like {
         CalcVal::Number(_) => CalcVal::Number(r),
+        CalcVal::Angle(_) => CalcVal::Angle(r),
         CalcVal::Length { pct, .. } if pct == 0.0 => CalcVal::Length { px: r, pct: 0.0 },
         CalcVal::Length { .. } => CalcVal::Length { px: 0.0, pct: r },
     }
@@ -937,6 +983,7 @@ fn rebuild_like(like: CalcVal, r: f32) -> CalcVal {
 /// número, todos px puro, o todos pct puro.
 fn all_comparable(vs: &[CalcVal]) -> bool {
     vs.iter().all(|v| matches!(v, CalcVal::Number(_)))
+        || vs.iter().all(|v| matches!(v, CalcVal::Angle(_)))
         || vs.iter().all(|v| matches!(v, CalcVal::Length { pct, .. } if *pct == 0.0))
         || vs.iter().all(|v| matches!(v, CalcVal::Length { px, .. } if *px == 0.0))
 }
@@ -949,16 +996,8 @@ fn reduce_minmax(args: &[CalcVal], is_min: bool) -> Option<CalcVal> {
     if !all_comparable(args) {
         return Some(first); // incomparable → degradar
     }
-    let scalar = |v: &CalcVal| match v {
-        CalcVal::Number(n) => *n,
-        CalcVal::Length { px, pct } => px + pct, // uno es 0 (all_comparable)
-    };
-    let best = args.iter().map(scalar).reduce(pick)?;
-    Some(match first {
-        CalcVal::Number(_) => CalcVal::Number(best),
-        CalcVal::Length { pct, .. } if pct == 0.0 => CalcVal::Length { px: best, pct: 0.0 },
-        CalcVal::Length { .. } => CalcVal::Length { px: 0.0, pct: best },
-    })
+    let best = args.iter().map(|v| scalar_of(*v)).reduce(pick)?;
+    Some(rebuild_like(first, best))
 }
 
 /// `clamp(lo, val, hi)` = `max(lo, min(val, hi))`. Si los tres no son

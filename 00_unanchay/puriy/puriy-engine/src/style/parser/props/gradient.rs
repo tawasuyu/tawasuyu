@@ -55,17 +55,33 @@ pub(crate) fn parse_background_image(value: &str) -> Option<DeclKind> {
 
 /// Extrae la 1ª `url(...)` que aparezca dentro de `s` (desquotada). `None` si
 /// no hay ninguna. Usada por `image-set`/`cross-fade`. Fase 7.870.
+/// Fase 7.900 — `image-set("a.png" 1x, …)` admite el URL como string pelado
+/// sin `url(...)`; si no hay `url(`, tomamos la 1ª string entrecomillada.
 fn first_url_in(s: &str) -> Option<String> {
-    let start = s.find("url(")?;
-    let after = &s[start + 4..];
-    let close = after.find(')')?;
-    let raw = after[..close].trim();
-    let unquoted = raw
-        .strip_prefix('"').and_then(|x| x.strip_suffix('"'))
-        .or_else(|| raw.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
-        .unwrap_or(raw)
-        .trim();
-    (!unquoted.is_empty()).then(|| unquoted.to_string())
+    if let Some(start) = s.find("url(") {
+        let after = &s[start + 4..];
+        let close = after.find(')')?;
+        let raw = after[..close].trim();
+        let unquoted = raw
+            .strip_prefix('"').and_then(|x| x.strip_suffix('"'))
+            .or_else(|| raw.strip_prefix('\'').and_then(|x| x.strip_suffix('\'')))
+            .unwrap_or(raw)
+            .trim();
+        return (!unquoted.is_empty()).then(|| unquoted.to_string());
+    }
+    // Sin `url(...)`: 1ª string entrecomillada (sintaxis moderna de image-set).
+    for quote in ['"', '\''] {
+        if let Some(open) = s.find(quote) {
+            let after = &s[open + 1..];
+            if let Some(close) = after.find(quote) {
+                let inner = after[..close].trim();
+                if !inner.is_empty() {
+                    return Some(inner.to_string());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Marca un gradiente como `repeating-*` (Fase 7.228).

@@ -537,7 +537,10 @@ pub(crate) fn parse_angle_degrees(s: &str) -> Option<f32> {
     let t = s.trim();
     if is_math_fn(t) {
         return match eval_calc(t)? {
-            CalcVal::Number(n) if n.is_finite() => Some(n),
+            // Un resultado de ángulo (Fase 7.903) ya está en grados. Un número
+            // puro sólo vale si es 0 (un `<number>` no-cero no es `<angle>`).
+            CalcVal::Angle(n) if n.is_finite() => Some(n),
+            CalcVal::Number(n) if n == 0.0 => Some(0.0),
             _ => None,
         };
     }

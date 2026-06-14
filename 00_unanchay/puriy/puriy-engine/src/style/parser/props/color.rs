@@ -75,6 +75,16 @@ pub fn parse_color(s: &str) -> Option<Color> {
     if let Some(args) = strip_fn(s, "light-dark") {
         return parse_light_dark(args);
     }
+    // Fase 7.899 — `device-cmyk(C M Y K [/ A])` (CSS Color 5). Conversión
+    // naïve a sRGB del propio spec (sin perfil ICC).
+    if let Some(args) = strip_fn(s, "device-cmyk") {
+        return parse_device_cmyk(args);
+    }
+    // Fase 7.899 — `contrast-color(<color>)` (CSS Color 5): blanco o negro,
+    // el que más contraste contra el color dado.
+    if let Some(args) = strip_fn(s, "contrast-color") {
+        return parse_contrast_color(args);
+    }
     if let Some(args) = strip_fn(s, "color") {
         return parse_color_func(args);
     }
@@ -408,7 +418,9 @@ pub(crate) fn parse_hue(s: &str) -> Option<f32> {
     // hue-rotate/skew/gradient-angles que pasan por acá.
     if is_math_fn(s) {
         return match eval_calc(s)? {
-            CalcVal::Number(n) if n.is_finite() => Some(n),
+            // Fase 7.903 — un resultado `Angle` ya está en grados; un `Number`
+            // crudo se interpreta como grados (hue admite número implícito).
+            CalcVal::Angle(n) | CalcVal::Number(n) if n.is_finite() => Some(n),
             _ => None,
         };
     }
@@ -537,6 +549,41 @@ pub(crate) fn parse_hwb_func(args: &str) -> Option<Color> {
     let (hr, hg, hb) = hue_to_rgb_pure(h);
     let mix = |c: f32| c * (1.0 - w - bl) + w;
     Some(Color { r: to_u8(mix(hr)), g: to_u8(mix(hg)), b: to_u8(mix(hb)), a })
+}
+
+/// `device-cmyk(C M Y K [/ A])` (CSS Color 5). C/M/Y/K son número 0..1 o
+/// porcentaje. Conversión naïve a sRGB del propio spec (sin perfil de
+/// dispositivo): `componente = 1 - min(1, x·(1-k) + k)`.
+pub(crate) fn parse_device_cmyk(args: &str) -> Option<Color> {
+    let (parts, alpha) = split_color_args(args)?;
+    if parts.len() != 4 {
+        return None;
+    }
+    let c = parse_num_or_pct(parts[0], 1.0)?;
+    let m = parse_num_or_pct(parts[1], 1.0)?;
+    let y = parse_num_or_pct(parts[2], 1.0)?;
+    let k = parse_num_or_pct(parts[3], 1.0)?;
+    let a = match alpha {
+        Some(s) => parse_alpha(s)?,
+        None => 255,
+    };
+    let comp = |x: f32| 1.0 - (x * (1.0 - k) + k).min(1.0);
+    let to_u8 = |v: f32| (v * 255.0).round().clamp(0.0, 255.0) as u8;
+    Some(Color { r: to_u8(comp(c)), g: to_u8(comp(m)), b: to_u8(comp(y)), a })
+}
+
+/// `contrast-color(<color>)` (CSS Color 5). Devuelve blanco o negro, el de
+/// mayor contraste contra el color base. Umbral por luminancia relativa WCAG
+/// (corte ≈0.179 = √(1.05·0.05)−0.05).
+pub(crate) fn parse_contrast_color(args: &str) -> Option<Color> {
+    let base = parse_color(args.trim())?;
+    let chan = |c: u8| srgb_to_linear(c as f32 / 255.0);
+    let lum = 0.2126 * chan(base.r) + 0.7152 * chan(base.g) + 0.0722 * chan(base.b);
+    Some(if lum > 0.179 {
+        Color::rgb(0, 0, 0)
+    } else {
+        Color::rgb(255, 255, 255)
+    })
 }
 
 /// Porcentaje 0%-100% → 0..1, o `none` ⇒ 0. (Variante de `parse_pct` que

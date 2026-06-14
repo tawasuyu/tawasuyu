@@ -42,6 +42,16 @@ pub(crate) fn parse_length_px(s: &str) -> Option<f32> {
         "px" => num,
         "rem" | "em" => num * 16.0,
         "ch" | "ex" => num * 8.0,
+        // Fase 7.898 — unidades font-relativas restantes (CSS Values 4). Sin
+        // métricas reales de fuente, se aproximan contra el em=16:
+        //  · rex/rch = ex/ch del root (mismo 16px) ≈ 0.5em = 8px.
+        //  · cap/rcap = altura de mayúsculas ≈ 0.7em = 11.2px.
+        //  · ic/ric = avance ideográfico (glifo CJK full-width) ≈ 1em = 16px.
+        //  · lh/rlh = altura de línea `normal` ≈ 1.2em = 19.2px.
+        "rex" | "rch" => num * 8.0,
+        "cap" | "rcap" => num * 11.2,
+        "ic" | "ric" => num * 16.0,
+        "lh" | "rlh" => num * 19.2,
         "cm" => num * 96.0 / 2.54,
         "mm" => num * 96.0 / 25.4,
         "q" => num * 96.0 / 25.4 / 4.0, // 1q = 1/40 cm
@@ -50,6 +60,10 @@ pub(crate) fn parse_length_px(s: &str) -> Option<f32> {
         "pc" => num * 16.0, // 1pc = 12pt = 16px
         "vw" | "svw" | "lvw" | "dvw" => num * vp.width / 100.0,
         "vh" | "svh" | "lvh" | "dvh" => num * vp.height / 100.0,
+        // Fase 7.898 — viewport inline/block. En modo de escritura horizontal
+        // (el único acá) inline = ancho y block = alto.
+        "vi" | "svi" | "lvi" | "dvi" => num * vp.width / 100.0,
+        "vb" | "svb" | "lvb" | "dvb" => num * vp.height / 100.0,
         "vmin" | "svmin" | "lvmin" | "dvmin" => num * vp.width.min(vp.height) / 100.0,
         "vmax" | "svmax" | "lvmax" | "dvmax" => num * vp.width.max(vp.height) / 100.0,
         // Container query units → viewport (sin container real acá).

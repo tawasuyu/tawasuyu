@@ -851,3 +851,130 @@ fn offset_shorthand() {
         .iter()
         .any(|x| matches!(x.kind, DeclKind::OffsetPath(None))));
 }
+
+// ── Fase 7.898 — unidades font/viewport restantes (CSS Values 4) ──────────
+
+#[test]
+fn unidades_font_y_viewport_extra() {
+    // rex/rch = ex/ch del root ≈ 0.5em = 8px.
+    assert_eq!(width_px("width: 1rex"), Some(8.0));
+    assert_eq!(width_px("width: 2rch"), Some(16.0));
+    // cap/rcap ≈ 0.7em = 11.2px.
+    assert!((width_px("width: 1cap").unwrap() - 11.2).abs() < 0.01);
+    assert!((width_px("width: 1rcap").unwrap() - 11.2).abs() < 0.01);
+    // ic/ric = avance ideográfico ≈ 1em = 16px.
+    assert_eq!(width_px("width: 1ic"), Some(16.0));
+    assert_eq!(width_px("width: 1ric"), Some(16.0));
+    // lh/rlh = línea normal ≈ 1.2em = 19.2px.
+    assert!((width_px("width: 1lh").unwrap() - 19.2).abs() < 0.01);
+    assert!((width_px("width: 1rlh").unwrap() - 19.2).abs() < 0.01);
+    // vi/vb: inline=ancho, block=alto (modo horizontal). 50vi de 1280 = 640.
+    assert_eq!(width_px("width: 50vi"), Some(640.0));
+    assert_eq!(width_px("width: 50vb"), Some(400.0));
+    // Variantes svi/dvb colapsan igual.
+    assert_eq!(width_px("width: 50dvi"), Some(640.0));
+    assert_eq!(width_px("width: 50svb"), Some(400.0));
+}
+
+// ── Fase 7.899 — device-cmyk() y contrast-color() (CSS Color 5) ────────────
+
+#[test]
+fn color_device_cmyk() {
+    let col = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Color(c) => Some(c),
+        _ => None,
+    });
+    // device-cmyk(0 0 0 0) = blanco; (0 0 0 1) = negro.
+    assert_eq!(col("color: device-cmyk(0 0 0 0)"), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+    assert_eq!(col("color: device-cmyk(0 0 0 1)"), Some(Color { r: 0, g: 0, b: 0, a: 255 }));
+    // cian puro (1 0 0 0) → (0, 255, 255).
+    assert_eq!(col("color: device-cmyk(1 0 0 0)"), Some(Color { r: 0, g: 255, b: 255, a: 255 }));
+    // porcentajes + alpha.
+    assert!(matches!(col("color: device-cmyk(0% 0% 0% 0% / 50%)"), Some(c) if c.a == 128));
+    // 3 componentes dropea.
+    assert!(decls("color: device-cmyk(0 0 0)").is_empty());
+}
+
+#[test]
+fn color_contrast_color() {
+    let col = |s: &str| decls(s).iter().find_map(|d| match d.kind {
+        DeclKind::Color(c) => Some(c),
+        _ => None,
+    });
+    // Sobre negro → blanco; sobre blanco → negro.
+    assert_eq!(col("color: contrast-color(black)"), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+    assert_eq!(col("color: contrast-color(white)"), Some(Color { r: 0, g: 0, b: 0, a: 255 }));
+    // Color claro (amarillo) → negro; oscuro (navy) → blanco.
+    assert_eq!(col("color: contrast-color(yellow)"), Some(Color { r: 0, g: 0, b: 0, a: 255 }));
+    assert_eq!(col("color: contrast-color(navy)"), Some(Color { r: 255, g: 255, b: 255, a: 255 }));
+}
+
+// ── Fase 7.900 — image-set() con URL string pelado ────────────────────────
+
+#[test]
+fn image_set_string_url() {
+    // `image-set("a.png" 1x, …)` toma la 1ª URL aunque sea string sin url().
+    assert!(decls("background-image: image-set(\"a.png\" 1x, \"b.png\" 2x)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::BackgroundImageUrl(u) if u == "a.png")));
+    // Forma con url() sigue funcionando.
+    assert!(decls("background-image: image-set(url(c.png) 1x)")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::BackgroundImageUrl(u) if u == "c.png")));
+}
+
+// ── Fase 7.901 — grid-template-rows/columns: masonry (CSS Grid 3) ──────────
+
+#[test]
+fn grid_template_masonry() {
+    // `masonry` degrada a track-list vacío pero NO dropea la declaración.
+    assert!(decls("grid-template-rows: masonry")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::GridTemplateRows(v) if v.is_empty())));
+    assert!(decls("grid-template-columns: masonry")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::GridTemplateColumns(v) if v.is_empty())));
+}
+
+// ── Fase 7.902 — grid-template/grid shorthand con áreas ───────────────────
+
+#[test]
+fn grid_template_areas_shorthand() {
+    let d = decls("grid-template: \"a b\" 1fr \"c d\" 2fr / auto 1fr");
+    // Áreas concatenadas.
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateAreas(Some(a)) if a == "a b c d")));
+    // Filas (2 tracks) y columnas (2 tracks) presentes y no vacías.
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateRows(r) if r.len() == 2)));
+    assert!(d.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateColumns(c) if c.len() == 2)));
+    // Sin barra de columnas también vale.
+    let d2 = decls("grid-template: \"hd hd\" \"main side\"");
+    assert!(d2.iter().any(|x| matches!(&x.kind, DeclKind::GridTemplateAreas(Some(a)) if a == "hd hd main side")));
+}
+
+// ── Fase 7.903 — funciones trigonométricas en calc() (CSS Values 4) ───────
+
+#[test]
+fn calc_trig() {
+    // deg(): primer Transforms con el ángulo resuelto.
+    let rot = |s: &str| decls(s).iter().find_map(|d| match &d.kind {
+        DeclKind::Rotate(Some(Transform::Rotate(deg))) => Some(*deg),
+        _ => None,
+    });
+    // sin(45deg)=0.707…; *1turn(360) ≈ 254.6°.
+    assert!((rot("rotate: calc(sin(45deg) * 1turn)").unwrap() - 254.6).abs() < 0.5);
+    // cos(0deg)=1; *90deg = 90°.
+    assert!((rot("rotate: calc(cos(0deg) * 90deg)").unwrap() - 90.0).abs() < 0.01);
+    // atan2(1,1) = 45° (con dígito en el nombre de la función).
+    assert!((rot("rotate: atan2(1, 1)").unwrap() - 45.0).abs() < 0.01);
+    // asin(1) = 90°.
+    assert!((rot("rotate: asin(1)").unwrap() - 90.0).abs() < 0.01);
+    // Número crudo a sin() = radianes: sin(0.5) ≈ 0.479 → como número puro
+    // NO es un ángulo, así que `rotate: sin(0.5)` (sin unidad) dropea.
+    assert!(decls("rotate: sin(0.5)").is_empty());
+    // ángulo / ángulo = número adimensional → no es un ángulo válido para rotate.
+    assert!(decls("rotate: calc(90deg / 45deg)").is_empty());
+    // tan(45deg) ≈ 1, dentro de transform: rotate(...).
+    assert!(decls("transform: rotate(calc(tan(45deg) * 45deg))")
+        .iter()
+        .any(|d| matches!(&d.kind, DeclKind::Transforms(_))));
+}
