@@ -218,3 +218,23 @@ fn rule_shorthand_ambos_ejes() {
     assert!(c.iter().any(|d| matches!(d.kind, DeclKind::ColumnRuleColor(Some(_)))));
     assert!(c.iter().any(|d| matches!(d.kind, DeclKind::RowRuleColor(Some(_)))));
 }
+
+// ── Fase 7.921 — justify-items legacy (Ola E) ──────────────────────────────
+
+#[test]
+fn justify_items_legacy() {
+    assert!(decls("justify-items: legacy center")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Center))));
+    assert!(decls("justify-items: legacy left")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Start))));
+    // orden inverso
+    assert!(decls("justify-items: right legacy")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::End))));
+    // valores normales intactos
+    assert!(decls("justify-items: center")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Center))));
+}

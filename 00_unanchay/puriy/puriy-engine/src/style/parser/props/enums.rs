@@ -144,7 +144,21 @@ pub(crate) fn parse_align_content(s: &str) -> Option<AlignContent> {
 /// `left`/`right` (que en escritura LTR equivalen a start/end). `normal`
 /// se descarta → queda el default None. `auto`/`legacy` también.
 pub(crate) fn parse_justify_items(s: &str) -> Option<AlignItems> {
-    match normalize_alignment(s).as_str() {
+    let norm = normalize_alignment(s);
+    // CSS Box Alignment 3: `legacy && [ left | right | center ]` (Fase 7.921).
+    // `legacy center` → Center, `legacy left/right` → Start/End (orden libre).
+    // `legacy` a secas queda en default (None, como hasta ahora).
+    let toks: Vec<&str> = norm.split_whitespace().collect();
+    if toks.len() == 2 && toks.contains(&"legacy") {
+        let pos = if toks[0] == "legacy" { toks[1] } else { toks[0] };
+        return match pos {
+            "left" => Some(AlignItems::Start),
+            "right" => Some(AlignItems::End),
+            "center" => Some(AlignItems::Center),
+            _ => None,
+        };
+    }
+    match norm.as_str() {
         "left" => Some(AlignItems::Start),
         "right" => Some(AlignItems::End),
         other => parse_align_items(other),
