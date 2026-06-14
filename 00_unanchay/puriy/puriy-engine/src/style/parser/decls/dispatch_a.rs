@@ -34,7 +34,16 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "height" => parse_length_or_pct(value).map(DeclKind::Height),
         "max-width" => parse_max_size(value).map(DeclKind::MaxWidth),
         "text-align" => parse_text_align(value).map(DeclKind::TextAlign),
-        "line-height" => parse_line_height(value).map(DeclKind::LineHeight),
+        // Fase 7.831 — `line-height: normal` (valor inicial, comunísimo) se
+        // descartaba. `None` ya modela "normal" (font-dependent ~1.2) en el
+        // ComputedStyle; lo reseteamos explícito para no heredar un número.
+        "line-height" => {
+            if value.trim().eq_ignore_ascii_case("normal") {
+                Some(DeclKind::LineHeightNormal)
+            } else {
+                parse_line_height(value).map(DeclKind::LineHeight)
+            }
+        }
         "border-width" => parse_px_or_math(value).map(DeclKind::BorderWidth),
         "border-color" if is_current_color(value) => {
             Some(DeclKind::CurrentColor(ColorTarget::BorderAll))
@@ -151,8 +160,12 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "min-block-size" => parse_length_or_pct(value).map(DeclKind::MinHeight),
         "max-inline-size" => parse_max_size(value).map(DeclKind::MaxWidth),
         "max-block-size" => parse_max_size(value).map(DeclKind::MaxHeight),
+        // Fase 7.834 — `overflow: <x> [<y>]` de dos valores. El modelo es de
+        // campo único (no separamos ejes todavía), así que tomamos el 1er
+        // token (eje x). `overflow-x`/`-y` directos caen igual acá.
         "overflow" | "overflow-x" | "overflow-y" => {
-            parse_overflow(value).map(DeclKind::Overflow)
+            let first = value.split_whitespace().next().unwrap_or(value);
+            parse_overflow(first).map(DeclKind::Overflow)
         }
         "white-space" => parse_white_space(value).map(DeclKind::WhiteSpace),
         "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),

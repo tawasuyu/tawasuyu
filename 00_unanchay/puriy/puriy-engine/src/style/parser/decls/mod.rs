@@ -75,6 +75,16 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         }
         // `outline-style`: togglea style_active + fija el patrón visual.
         if prop.eq_ignore_ascii_case("outline-style") {
+            // Fase 7.836 — `auto` (anillo de foco por defecto del navegador):
+            // outline visible con patrón sólido (aproximación; no dibujamos el
+            // anillo nativo del SO).
+            if value.trim().eq_ignore_ascii_case("auto") {
+                out.push(Decl { kind: DeclKind::OutlineStyle(true), important });
+                if let Some(ls) = parse_border_line_style("solid") {
+                    out.push(Decl { kind: DeclKind::OutlineStylePattern(ls), important });
+                }
+                continue;
+            }
             if let Some(on) = parse_border_style(value) {
                 out.push(Decl { kind: DeclKind::OutlineStyle(on), important });
                 if let Some(ls) = parse_border_line_style(value) {

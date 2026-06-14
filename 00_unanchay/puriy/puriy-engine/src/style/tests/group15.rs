@@ -220,3 +220,53 @@ fn max_size_none_resetea_a_auto() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::MaxWidth(LengthVal::Px(p)) if p == 300.0)));
 }
+
+// ── Fase 7.831-7.836 — value-keywords en props existentes ─────────────────
+
+#[test]
+fn line_height_normal_resetea_a_none() {
+    assert!(decls("line-height: normal")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::LineHeightNormal)));
+    // Un número sigue produciendo LineHeight(f32).
+    assert!(decls("line-height: 1.5")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::LineHeight(v) if (v - 1.5).abs() < 1e-6)));
+    // Computa a None (normal) end-to-end.
+    let html = r#"<p style="line-height: normal">x</p>"#;
+    let dom = DomTree::parse(html);
+    let eng = StyleEngine::from_dom(&dom);
+    let p = dom.find("p").unwrap();
+    assert_eq!(eng.compute(&p).line_height, None);
+}
+
+#[test]
+fn overflow_overlay_y_dos_valores() {
+    // overlay = alias legacy de auto → Hidden.
+    assert!(decls("overflow: overlay")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Overflow(Overflow::Hidden))));
+    // Dos valores: tomamos el 1er token (eje x) en el modelo de campo único.
+    assert!(decls("overflow: hidden visible")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Overflow(Overflow::Hidden))));
+    assert!(decls("overflow: visible hidden")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Overflow(Overflow::Visible))));
+}
+
+#[test]
+fn keyword_fixes_varios() {
+    // position: -webkit-sticky → sticky.
+    assert!(decls("position: -webkit-sticky")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Position(Position::Sticky))));
+    // gap: normal → 0.
+    assert!(decls("gap: normal")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Gap { row, column } if row == 0.0 && column == 0.0)));
+    // outline-style: auto → visible (OutlineStyle(true)).
+    assert!(decls("outline-style: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::OutlineStyle(true))));
+}

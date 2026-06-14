@@ -52,7 +52,8 @@ pub(crate) fn parse_position(s: &str) -> Option<Position> {
         "relative" => Some(Position::Relative),
         "absolute" => Some(Position::Absolute),
         "fixed" => Some(Position::Fixed),
-        "sticky" => Some(Position::Sticky),
+        // Fase 7.832 — `-webkit-sticky` alias vendor legacy (Safari) de `sticky`.
+        "sticky" | "-webkit-sticky" => Some(Position::Sticky),
         _ => None,
     }
 }

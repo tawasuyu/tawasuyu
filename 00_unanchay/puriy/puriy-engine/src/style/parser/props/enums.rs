@@ -167,13 +167,22 @@ pub(crate) fn parse_place_self_shorthand(value: &str, important: bool) -> Vec<De
 /// `gap: V` ⇒ row=V, column=V. `gap: R C` ⇒ row=R, column=C. Coincide
 /// con la semántica CSS shorthand (primer valor = row, segundo = column).
 pub(crate) fn parse_gap(value: &str) -> Option<(f32, f32)> {
+    // Fase 7.835 — `normal` (valor inicial de row/column-gap) → 0 en nuestro
+    // modelo (sin gap). Cada token puede ser `normal` o una length.
+    fn gap_token(s: &str) -> Option<f32> {
+        if s.eq_ignore_ascii_case("normal") {
+            Some(0.0)
+        } else {
+            parse_length_px(s)
+        }
+    }
     let parts: Vec<&str> = value.split_whitespace().collect();
     match parts.as_slice() {
         [v] => {
-            let v = parse_length_px(v)?;
+            let v = gap_token(v)?;
             Some((v, v))
         }
-        [r, c] => Some((parse_length_px(r)?, parse_length_px(c)?)),
+        [r, c] => Some((gap_token(r)?, gap_token(c)?)),
         _ => None,
     }
 }
@@ -191,7 +200,8 @@ pub(crate) fn parse_overflow(s: &str) -> Option<Overflow> {
         "visible" => Some(Overflow::Visible),
         // hidden/clip/auto/scroll todos los tratamos como Hidden por
         // ahora (no soportamos scroll real; clip y hidden cortan igual).
-        "hidden" | "clip" | "auto" | "scroll" => Some(Overflow::Hidden),
+        // Fase 7.833 — `overlay` (alias legacy de `auto`) → Hidden.
+        "hidden" | "clip" | "auto" | "scroll" | "overlay" => Some(Overflow::Hidden),
         _ => None,
     }
 }

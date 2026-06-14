@@ -95,6 +95,9 @@ pub(crate) enum DeclKind {
     MaxWidth(LengthVal),
     TextAlign(TextAlign),
     LineHeight(f32),
+    /// `line-height: normal` (Fase 7.831). Resetea a `None` (≈1.2,
+    /// font-dependent). NO es lo mismo que un número — por eso variante aparte.
+    LineHeightNormal,
     BorderWidth(f32),
     BorderColor(Color),
     /// `border-style: solid` activa el dibujo del border; `none`/`hidden`
@@ -1012,6 +1015,7 @@ impl Decl {
             DeclKind::MaxWidth(v) => s.max_width = *v,
             DeclKind::TextAlign(a) => s.text_align = *a,
             DeclKind::LineHeight(v) => s.line_height = Some(*v),
+            DeclKind::LineHeightNormal => s.line_height = None,
             DeclKind::BorderWidth(v) => s.border_widths = Sides::all(*v),
             DeclKind::BorderColor(c) => s.border_colors = Sides::all(Some(*c)),
             DeclKind::BorderEnabled(on) => {
