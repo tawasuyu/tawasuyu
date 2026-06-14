@@ -168,6 +168,9 @@ pub(crate) fn parse_background_clip(value: &str) -> Option<DeclKind> {
         "padding-box" => BackgroundClip::PaddingBox,
         "content-box" => BackgroundClip::ContentBox,
         "text" => BackgroundClip::Text,
+        // CSS Backgrounds 4: `border-area` recorta al área del borde; sin
+        // renderer dedicado lo tratamos como `border-box`. Fase 7.917.
+        "border-area" => BackgroundClip::BorderBox,
         _ => return None,
     };
     Some(DeclKind::BackgroundClip(c))

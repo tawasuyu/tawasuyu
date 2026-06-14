@@ -13,6 +13,9 @@ pub(crate) fn parse_text_decoration(value: &str) -> Option<TextDecorationLine> {
             "underline" => return Some(TextDecorationLine::Underline),
             "line-through" => return Some(TextDecorationLine::LineThrough),
             "overline" => return Some(TextDecorationLine::Overline),
+            // CSS Text Decoration 4: las líneas de corrección se aceptan y se
+            // pintan como subrayado sólido (sin la squiggle nativa). Fase 7.917.
+            "spelling-error" | "grammar-error" => return Some(TextDecorationLine::Underline),
             _ => {}
         }
     }

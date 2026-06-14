@@ -168,6 +168,9 @@ pub enum WordBreak {
     Normal,
     BreakAll,
     KeepAll,
+    /// CSS Text 4: quiebre por frase (japonés). El shaper aún no lo aplica;
+    /// se modela el valor para fidelidad de cascada. Fase 7.917.
+    AutoPhrase,
 }
 
 /// `hyphens`: control de hyphenation. `Auto` requeriría diccionarios por

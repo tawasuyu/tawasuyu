@@ -109,6 +109,12 @@ pub(crate) fn parse_alignment_baseline(value: &str) -> Option<AlignmentBaseline>
         "bottom" => Some(AlignmentBaseline::Bottom),
         "center" => Some(AlignmentBaseline::Center),
         "top" => Some(AlignmentBaseline::Top),
+        // SVG 1.1 edge keywords (deprecados por SVG 2 pero parseables): en
+        // horizontal mapean a sus equivalentes de borde. Fase 7.917.
+        "text-before-edge" => Some(AlignmentBaseline::TextTop),
+        "text-after-edge" => Some(AlignmentBaseline::TextBottom),
+        "before-edge" => Some(AlignmentBaseline::Top),
+        "after-edge" => Some(AlignmentBaseline::Bottom),
         _ => None,
     }
 }

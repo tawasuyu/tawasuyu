@@ -259,6 +259,7 @@ pub(crate) fn parse_word_break(value: &str) -> Option<WordBreak> {
         "normal" => Some(WordBreak::Normal),
         "break-all" => Some(WordBreak::BreakAll),
         "keep-all" => Some(WordBreak::KeepAll),
+        "auto-phrase" => Some(WordBreak::AutoPhrase), // CSS Text 4 (Fase 7.917)
         "break-word" => Some(WordBreak::Normal),
         _ => None,
     }
