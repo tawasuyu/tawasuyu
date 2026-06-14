@@ -1,0 +1,34 @@
+# =============================================================================
+#  tawasuyu :: foreign-xlsx — puente Excel ↔ hoja nativa (nakui-sheet + yupay)
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los formatos ajenos entran por puentes `shared/foreign-*`,
+#  nunca al núcleo de las apps. Este crate IMPORTA/EXPORTA un `.xlsx`
+#  (SpreadsheetML, un zip de XML) al modelo nativo `nakui_sheet::Sheet`, cuyas
+#  fórmulas las parsea/evalúa `yupay`. Las fórmulas de Excel viajan en inglés
+#  canónico (SUM, VLOOKUP…) con refs A1 → mapean directo al lenguaje de yupay.
+#
+#  Espejo conceptual de `shared/foreign-psd`: ingestar lo legible al modelo
+#  nativo y dejar el formato fancy al editor. MVP: primera hoja, tipos de celda
+#  comunes (número/texto/bool/error/fórmula) + shared strings. Post-MVP: estilos
+#  ricos, múltiples hojas, gráficos, tablas dinámicas, canonicalización es→en de
+#  fórmulas al exportar.
+# =============================================================================
+
+[package]
+name = "foreign-xlsx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "tawasuyu/foreign-xlsx — importa/exporta `.xlsx` (Excel) como nakui_sheet::Sheet nativa; fórmulas por el motor yupay."
+
+[dependencies]
+nakui-sheet = { path = "../../01_yachay/nakui/nakui-sheet" }
+yupay-core = { path = "../../01_yachay/nakui/yupay-core" }
+zip = { workspace = true, features = ["deflate"] }
+quick-xml = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+rust_decimal = { version = "1.36", default-features = false, features = ["std"] }
