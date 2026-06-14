@@ -799,6 +799,35 @@ pub enum Speak {
     Normal,
     None,
     SpellOut,
+    // CSS Speech 1 (redefinición moderna de `speak`): `auto | never | always`.
+    // Conviven con los keywords CSS 2.1 en el mismo enum. Fase 7.927.
+    Auto,
+    Never,
+    Always,
+}
+
+/// `wrap-before` / `wrap-after` (CSS Text 4 §7.1): controlan si se permite
+/// (o evita) una rotura de línea suave antes/después de la caja.
+/// `auto | avoid | avoid-line | avoid-flex | line | flex`. Default `Auto`.
+/// Fase 7.927.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WrapBetween {
+    #[default]
+    Auto,
+    Avoid,
+    AvoidLine,
+    AvoidFlex,
+    Line,
+    Flex,
+}
+
+/// `wrap-inside` (CSS Text 4 §7.1): permite o evita que la caja se parta en
+/// dos líneas. `auto | avoid`. Default `Auto`. Fase 7.927.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WrapInside {
+    #[default]
+    Auto,
+    Avoid,
 }
 
 /// `text-decoration-skip-box` (CSS Text Decor 4). Default `None`. Fase 7.575.

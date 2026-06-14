@@ -652,6 +652,10 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "text-wrap-style" => {
             parse_text_wrap_style(value).map(DeclKind::TextWrapStyle)
         }
+        // Fase 7.927 — CSS Text 4 §7.1: control de rotura entre/dentro de cajas.
+        "wrap-before" => parse_wrap_between(value).map(DeclKind::WrapBefore),
+        "wrap-after" => parse_wrap_between(value).map(DeclKind::WrapAfter),
+        "wrap-inside" => parse_wrap_inside(value).map(DeclKind::WrapInside),
         "text-spacing-trim" => {
             parse_text_spacing_trim(value).map(DeclKind::TextSpacingTrim)
         }

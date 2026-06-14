@@ -791,6 +791,29 @@ pub(crate) fn parse_text_wrap_style(value: &str) -> Option<TextWrapStyle> {
     }
 }
 
+/// `wrap-before` / `wrap-after` (CSS Text 4 §7.1):
+/// `auto | avoid | avoid-line | avoid-flex | line | flex`. Fase 7.927.
+pub(crate) fn parse_wrap_between(value: &str) -> Option<WrapBetween> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(WrapBetween::Auto),
+        "avoid" => Some(WrapBetween::Avoid),
+        "avoid-line" => Some(WrapBetween::AvoidLine),
+        "avoid-flex" => Some(WrapBetween::AvoidFlex),
+        "line" => Some(WrapBetween::Line),
+        "flex" => Some(WrapBetween::Flex),
+        _ => None,
+    }
+}
+
+/// `wrap-inside` (CSS Text 4 §7.1): `auto | avoid`. Fase 7.927.
+pub(crate) fn parse_wrap_inside(value: &str) -> Option<WrapInside> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(WrapInside::Auto),
+        "avoid" => Some(WrapInside::Avoid),
+        _ => None,
+    }
+}
+
 /// `text-spacing-trim`: `normal | space-all | space-first | trim-start`.
 /// Fase 7.347.
 pub(crate) fn parse_text_spacing_trim(value: &str) -> Option<TextSpacingTrim> {

@@ -238,3 +238,48 @@ fn justify_items_legacy() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::JustifyItems(AlignItems::Center))));
 }
+
+// ── Fase 7.927 — CSS Text 4 wrap-* + Speech speak moderno + list-style ' ────
+
+#[test]
+fn wrap_between_y_inside() {
+    assert!(decls("wrap-before: avoid")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WrapBefore(WrapBetween::Avoid))));
+    assert!(decls("wrap-after: avoid-flex")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WrapAfter(WrapBetween::AvoidFlex))));
+    assert!(decls("wrap-before: line")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WrapBefore(WrapBetween::Line))));
+    assert!(decls("wrap-inside: avoid")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::WrapInside(WrapInside::Avoid))));
+    // valor inválido se dropea
+    assert!(decls("wrap-inside: line").is_empty());
+}
+
+#[test]
+fn speak_moderno_css_speech() {
+    assert!(decls("speak: never")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Speak(Speak::Never))));
+    assert!(decls("speak: always")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Speak(Speak::Always))));
+    assert!(decls("speak: auto")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Speak(Speak::Auto))));
+    // CSS 2.1 sigue válido
+    assert!(decls("speak: spell-out")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::Speak(Speak::SpellOut))));
+}
+
+#[test]
+fn list_style_type_comilla_simple() {
+    // marcador string con comilla simple (antes sólo doble).
+    assert!(decls("list-style-type: '→'")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));
+}

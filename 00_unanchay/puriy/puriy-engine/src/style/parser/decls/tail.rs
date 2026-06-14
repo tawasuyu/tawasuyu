@@ -78,6 +78,7 @@ pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
     // (CSS Counter Styles 3): marcadores custom que el enum no modela; los
     // aproximamos a `Disc`. Mejor que descartar (dejaría el marker heredado).
     if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
+        || (raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2)
         || raw.to_ascii_lowercase().starts_with("symbols(")
     {
         return Some(ListStyleType::Disc);

@@ -63,6 +63,10 @@ pub(crate) fn dispatch_c(p: &str, value: &str) -> Option<DeclKind> {
             "normal" => Some(DeclKind::Speak(Speak::Normal)),
             "none" => Some(DeclKind::Speak(Speak::None)),
             "spell-out" => Some(DeclKind::Speak(Speak::SpellOut)),
+            // Fase 7.927 — redefinición CSS Speech 1: `auto | never | always`.
+            "auto" => Some(DeclKind::Speak(Speak::Auto)),
+            "never" => Some(DeclKind::Speak(Speak::Never)),
+            "always" => Some(DeclKind::Speak(Speak::Always)),
             _ => None,
         },
         // Fase 7.573 — `play-during` (CSS 2.1 aural). Parse opaco; `auto` → None.

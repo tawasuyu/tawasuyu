@@ -534,6 +534,12 @@ pub struct ComputedStyle {
     /// `text-wrap-style` (Fase 7.346). Default `Auto`. **Heredable**.
     /// Plumb.
     pub text_wrap_style: TextWrapStyle,
+    /// `wrap-before` / `wrap-after` (CSS Text 4). Default `Auto`. NO hereda.
+    /// Plumb: no se consume en el quiebre de línea. Fase 7.927.
+    pub wrap_before: WrapBetween,
+    pub wrap_after: WrapBetween,
+    /// `wrap-inside` (CSS Text 4). Default `Auto`. NO hereda. Plumb. Fase 7.927.
+    pub wrap_inside: WrapInside,
     /// `text-spacing-trim` (Fase 7.347). Default `Normal`.
     /// **Heredable**. Plumb: el shaper no recorta puntuación CJK.
     pub text_spacing_trim: TextSpacingTrim,
