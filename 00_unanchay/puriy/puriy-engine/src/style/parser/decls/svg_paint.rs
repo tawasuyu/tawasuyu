@@ -115,6 +115,9 @@ pub(crate) fn parse_alignment_baseline(value: &str) -> Option<AlignmentBaseline>
         "text-after-edge" => Some(AlignmentBaseline::TextBottom),
         "before-edge" => Some(AlignmentBaseline::Top),
         "after-edge" => Some(AlignmentBaseline::Bottom),
+        // SVG 1.1 también lista `hanging` para alignment-baseline; sin glifo
+        // colgante real lo aproximamos a `text-top`. Fase 7.918.
+        "hanging" => Some(AlignmentBaseline::TextTop),
         _ => None,
     }
 }

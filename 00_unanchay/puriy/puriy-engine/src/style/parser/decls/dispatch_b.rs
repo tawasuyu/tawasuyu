@@ -706,7 +706,19 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         },
         // Fase 7.558 — `corner-shape` (CSS Borders 4). Parse opaco —
         // `round` reservado a None.
-        "corner-shape" => {
+        // Fase 7.918 — además del shorthand, los longhands por esquina (físicos,
+        // por-lado y lógicos) de CSS Borders 4. Sin renderer dedicado, todos
+        // colapsan al único campo opaco `corner_shape` (degradado: last-wins,
+        // sólo completitud de parseo — no se modela por-esquina todavía).
+        "corner-shape"
+        | "corner-top-left-shape" | "corner-top-right-shape"
+        | "corner-bottom-left-shape" | "corner-bottom-right-shape"
+        | "corner-top-shape" | "corner-right-shape"
+        | "corner-bottom-shape" | "corner-left-shape"
+        | "corner-block-start-shape" | "corner-block-end-shape"
+        | "corner-inline-start-shape" | "corner-inline-end-shape"
+        | "corner-start-start-shape" | "corner-start-end-shape"
+        | "corner-end-start-shape" | "corner-end-end-shape" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("round") {

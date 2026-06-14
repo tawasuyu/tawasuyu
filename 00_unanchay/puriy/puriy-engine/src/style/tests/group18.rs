@@ -75,3 +75,43 @@ fn background_clip_border_area() {
         .iter()
         .any(|d| matches!(d.kind, DeclKind::BackgroundClip(BackgroundClip::Text))));
 }
+
+// ── Fase 7.918 — alignment-baseline hanging + corner-shape longhands (Ola B) ─
+
+#[test]
+fn alignment_baseline_hanging() {
+    // SVG 1.1: `hanging` aceptado (aprox. a text-top).
+    assert!(decls("alignment-baseline: hanging")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::AlignmentBaseline(AlignmentBaseline::TextTop))));
+}
+
+#[test]
+fn corner_shape_longhands() {
+    // Los longhands por esquina (físicos, por-lado, lógicos) se aceptan y
+    // colapsan al campo opaco corner_shape. Antes dropeaban.
+    let longhands = [
+        "corner-top-left-shape",
+        "corner-bottom-right-shape",
+        "corner-top-shape",
+        "corner-left-shape",
+        "corner-block-start-shape",
+        "corner-inline-end-shape",
+        "corner-start-start-shape",
+        "corner-end-end-shape",
+    ];
+    for lh in longhands {
+        let css = format!("{lh}: bevel");
+        assert!(
+            decls(&css).iter().any(|d| matches!(
+                &d.kind,
+                DeclKind::CornerShape(Some(s)) if s == "bevel"
+            )),
+            "{lh} debería aceptarse como CornerShape opaco"
+        );
+    }
+    // `round` sigue colapsando a None en un longhand
+    assert!(decls("corner-top-left-shape: round")
+        .iter()
+        .any(|d| matches!(d.kind, DeclKind::CornerShape(None))));
+}
