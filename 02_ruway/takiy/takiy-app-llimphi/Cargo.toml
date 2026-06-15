@@ -25,6 +25,7 @@ path = "examples/pantallazo_takiy.rs"
 
 [dependencies]
 takiy-core = { path = "../takiy-core" }
+takiy-editor-core = { path = "../takiy-editor-core" }
 takiy-synth = { path = "../takiy-synth" }
 takiy-midi = { path = "../takiy-midi" }
 takiy-playback = { path = "../takiy-playback" }

@@ -1,0 +1,14 @@
+[package]
+name = "takiy-editor-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "takiy-editor-core — estado editable del piano roll: EditorState + EditMsg con undo/redo, snap, clipboard y automación. Lógica pura del editor, agnóstica de audio y de UI; cualquier frontend (Llimphi, CLI, web) la consume y le manda EditMsg."
+
+[dependencies]
+takiy-core = { path = "../takiy-core" }
+
+[dev-dependencies]
+serde_json = { workspace = true }

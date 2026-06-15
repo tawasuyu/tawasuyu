@@ -18,7 +18,6 @@ pub mod demo;
 pub mod geometry;
 pub mod gm;
 pub mod io;
-pub mod model;
 
 pub use demo::{demo_score, load_score_or_demo};
 pub use geometry::{
@@ -26,7 +25,11 @@ pub use geometry::{
 };
 pub use gm::{gm_program_for_track_name, gm_program_name};
 pub use io::{default_save_path as default_save_path_for_save, load_score, write_score, LoadError};
-pub use model::{
+// La lógica editable agnóstica (EditorState/EditMsg con undo/redo) vive en el
+// core `takiy-editor-core` (Regla 2: frontend sobre core agnóstico). Se
+// re-exporta acá para que el binario y los examples la sigan viendo como
+// `takiy_app::*` sin cambios.
+pub use takiy_editor_core::{
     describe_key, describe_master_delay, describe_master_reverb, describe_track_automation,
     find_note_idx, EditMsg, EditorState, Snap, MAX_UNDO,
 };

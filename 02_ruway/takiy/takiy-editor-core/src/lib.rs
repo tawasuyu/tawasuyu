@@ -1,12 +1,16 @@
-//! Estado editable del piano roll — Score + selección + pista activa.
+//! `takiy-editor-core` — estado editable del piano roll (Score + selección +
+//! pista activa).
 //!
-//! Es la lógica pura del editor: cero audio, cero UI. El binario Llimphi
-//! le manda [`EditMsg`]s; el example `smoke` lo ejerce headless en CI.
+//! Es la lógica pura del editor: cero audio, cero UI. Cualquier frontend
+//! (el binario Llimphi, una CLI, web) lo consume y le manda [`EditMsg`]s; el
+//! example `smoke` de `takiy-app-llimphi` lo ejerce headless en CI.
 //!
-//! El módulo está partido en: este archivo (Snap + EditorState + EditMsg +
+//! El crate está partido en: este archivo (Snap + EditorState + EditMsg +
 //! constructores), [`apply`] (el motor `apply` con undo/redo y cada
 //! operación de edición), [`describe`] (helpers de presentación y modos de
 //! tonalidad) y `tests`.
+
+#![forbid(unsafe_code)]
 
 use std::path::PathBuf;
 

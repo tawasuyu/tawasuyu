@@ -22,7 +22,7 @@ defecto de clase que tenía shuma.
 | # | Crate | Severidad | Tipo | Estado |
 |---|-------|-----------|------|--------|
 | 1 | `02_ruway/nahual/nahual-shell-llimphi` | **ALTA** | (a)+(c) fat binary, motor de búsqueda+IA atrapado, sin `-shell-core` | ⬜ pendiente |
-| 2 | `02_ruway/takiy/takiy-app-llimphi` (`model/`) | **MEDIA** | (a) `EditorState`/undo-redo agnóstico atrapado en el binario | ⬜ pendiente |
+| 2 | `02_ruway/takiy/takiy-app-llimphi` (`model/`) | **MEDIA** | (a) `EditorState`/undo-redo agnóstico atrapado en el binario | ✅ hecho — extraído a `takiy-editor-core` |
 | 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | ⬜ pendiente |
 | 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | ⬜ pendiente |
 | 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | ⬜ pendiente |
