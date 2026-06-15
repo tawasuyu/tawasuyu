@@ -97,6 +97,7 @@ mod drm_backend;
 mod menu;
 mod screencopy;
 mod foreign_toplevel;
+mod switcher;
 mod text;
 
 mod estado;

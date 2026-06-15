@@ -40,6 +40,26 @@ impl DrmState {
                                 st.running = false;
                                 return FilterResult::Intercept(());
                             }
+                            // Switcher visual (Alt-Tab): se maneja acá, NO por el
+                            // keybind FocusNext, para mostrar el overlay y
+                            // confirmar al soltar Alt. `combo_string` ordena los
+                            // modificadores Super+Ctrl+Shift+Alt, de ahí
+                            // «Shift+Alt+Tab» para el sentido inverso.
+                            match combo.as_str() {
+                                "Alt+Tab" => {
+                                    st.switcher_step = Some(true);
+                                    return FilterResult::Intercept(());
+                                }
+                                "Shift+Alt+Tab" => {
+                                    st.switcher_step = Some(false);
+                                    return FilterResult::Intercept(());
+                                }
+                                "Escape" if st.switcher.is_some() => {
+                                    st.switcher_cancel = true;
+                                    return FilterResult::Intercept(());
+                                }
+                                _ => {}
+                            }
                             if st.grabs.contains(&combo) {
                                 st.pending_keybind = Some(combo);
                                 return FilterResult::Intercept(());
@@ -66,6 +86,26 @@ impl DrmState {
                 if let Some(vt) = self.app.pending_vt.take() {
                     if let Err(e) = self.session.change_vt(vt) {
                         eprintln!("mirada-compositor · no pude conmutar a VT{vt}: {e}");
+                    }
+                }
+                // Switcher visual (Alt-Tab): aplicar el paso pedido, cancelar si
+                // Esc, y CONFIRMAR cuando se suelta Alt (el filtro no ve el
+                // release de un modificador, así que lo chequeamos acá).
+                if let Some(forward) = self.app.switcher_step.take() {
+                    crate::switcher::advance(&mut self.app, forward);
+                }
+                if self.app.switcher_cancel {
+                    self.app.switcher_cancel = false;
+                    crate::switcher::cancel(&mut self.app);
+                }
+                if self.app.switcher.is_some() {
+                    let alt_held = self
+                        .app
+                        .keyboard
+                        .as_ref()
+                        .is_some_and(|kb| kb.modifier_state().alt);
+                    if !alt_held {
+                        crate::switcher::commit(&mut self.app);
                     }
                 }
             }

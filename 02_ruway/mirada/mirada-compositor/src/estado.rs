@@ -364,6 +364,14 @@ pub(crate) struct App {
     /// Diagnóstico opt-in (`MIRADA_DEBUG_KEYS=1`): loguea cada combo con
     /// modificador que se reenvía por no estar en [`grabs`](Self::grabs).
     pub(crate) debug_keys: bool,
+    /// Switcher visual de ventanas (Alt-Tab) en curso, o `None`. Ver
+    /// [`crate::switcher`].
+    pub(crate) switcher: Option<crate::switcher::Switcher>,
+    /// Señal del filtro de teclado al bucle: adelantar (`Some(true)`) o
+    /// retroceder (`Some(false)`) el switcher tras procesar la tecla.
+    pub(crate) switcher_step: Option<bool>,
+    /// Señal del filtro: cancelar el switcher (Esc) tras procesar la tecla.
+    pub(crate) switcher_cancel: bool,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
     /// Permisos de capacidad por ejecutable que fija el Cerebro. El filtro del

@@ -242,6 +242,98 @@ impl DrmState {
         )));
     }
 
+    /// Emite el overlay del **switcher de ventanas** (Alt-Tab): un panel
+    /// centrado con la lista de ventanas, la seleccionada resaltada. Sólo
+    /// mientras hay una sesión de switcher viva. Mismo text rendering que el HUD.
+    fn emit_switcher(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        const SW_PX: f32 = 18.0;
+        const SW_ROW_H: i32 = 36;
+        const SW_PAD: i32 = 18;
+        const SW_TEXT: [u8; 4] = [225, 228, 235, 255];
+        const SW_TEXT_SEL: [u8; 4] = [255, 255, 255, 255];
+        const SW_BG: [f32; 4] = [0.08, 0.08, 0.11, 0.94];
+        const SW_SEL_BG: [f32; 4] = [0.20, 0.40, 0.85, 0.95];
+
+        let (order, sel) = match &self.app.switcher {
+            Some(sw) if !sw.order.is_empty() => (sw.order.clone(), sw.sel),
+            _ => return,
+        };
+        // Etiquetas (owned) ANTES de tomar el text renderer, para no chocar
+        // préstamos con `&mut self.renderer` más abajo (igual que el HUD).
+        let rows: Vec<(String, bool)> = order
+            .iter()
+            .enumerate()
+            .map(|(i, &id)| (crate::switcher::etiqueta(&self.app, id), i == sel))
+            .collect();
+        let Some(tr) = &self.text else { return };
+        let mut rasters: Vec<(crate::text::Rasterized, bool)> = Vec::new();
+        for (label, s) in &rows {
+            let color = if *s { SW_TEXT_SEL } else { SW_TEXT };
+            if let Some(r) = tr.rasterize(label, SW_PX, color) {
+                rasters.push((r, *s));
+            }
+        }
+        if rasters.is_empty() {
+            return;
+        }
+
+        let max_tw = rasters.iter().map(|(r, _)| r.width).max().unwrap_or(0);
+        let inner_w = max_tw.max(180);
+        let panel_w = inner_w + 2 * SW_PAD;
+        let n = rasters.len() as i32;
+        let panel_h = n * SW_ROW_H + 2 * SW_PAD;
+        let panel_x = ((rect.w - panel_w) / 2).max(0);
+        let panel_y = ((rect.h - panel_h) / 2).max(0);
+
+        // Textos (al frente). El orden front-to-back: primero lo de arriba.
+        for (i, (r, _)) in rasters.iter().enumerate() {
+            let row_y = panel_y + SW_PAD + i as i32 * SW_ROW_H;
+            let tx = panel_x + SW_PAD;
+            let ty = row_y + (SW_ROW_H - r.height) / 2;
+            let buf = MemoryRenderBuffer::from_slice(
+                &r.rgba,
+                Fourcc::Argb8888,
+                (r.width, r.height),
+                1,
+                Transform::Normal,
+                None,
+            );
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                (tx as f64, ty as f64),
+                &buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Text(el));
+            }
+        }
+        // Resalte de la fila seleccionada (detrás del texto, delante del panel).
+        let hl_idx = rasters.iter().position(|(_, s)| *s).unwrap_or(0) as i32;
+        let hl_y = panel_y + SW_PAD + hl_idx * SW_ROW_H;
+        let mut hl = SolidColorBuffer::default();
+        hl.update((panel_w - 16, SW_ROW_H - 4), SW_SEL_BG);
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &hl,
+            (panel_x + 8, hl_y + 2),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        )));
+        // Fondo del panel (al fondo).
+        let mut bg = SolidColorBuffer::default();
+        bg.update((panel_w, panel_h), SW_BG);
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &bg,
+            (panel_x, panel_y),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        )));
+    }
+
     /// Emite el overlay de zonas de arrastre (drag-to-zone) — visible sólo
     /// durante un arrastre Move/Tile. Las zonas se escalan al monitor bajo
     /// el puntero y se emiten traducidas a coords locales de `rect`. Si las
@@ -520,9 +612,10 @@ impl DrmState {
             // 1. Cursor (si el puntero cae sobre esta salida).
             self.emit_cursor(rect, &mut out);
 
-            // 2. HUD del preset (primaria por ahora; centrado en su rect).
+            // 2. HUD del preset + switcher de ventanas (primaria; centrados).
             if is_primary {
                 self.emit_hud(rect, &mut out);
+                self.emit_switcher(rect, &mut out);
             }
 
             // 3. Zonas de arrastre — en la salida bajo el puntero durante
