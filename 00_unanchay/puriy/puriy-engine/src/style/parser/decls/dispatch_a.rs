@@ -464,6 +464,16 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "scroll-snap-points-y" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapPointsY),
         "scroll-snap-destination" => opaque_or_sentinel(value, "0px 0px").map(DeclKind::ScrollSnapDestination),
         "scroll-snap-coordinate" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapCoordinate),
+        // === Fase 7.1035-7.1042 — Gecko -moz- propiedades reales (plumb opaco) ===
+        // Sentinel = valor initial de cada propiedad → None.
+        "-moz-orient" => opaque_or_sentinel(value, "inline").map(DeclKind::MozOrient),
+        "-moz-user-focus" => opaque_or_sentinel(value, "none").map(DeclKind::MozUserFocus),
+        "-moz-user-input" => opaque_or_sentinel(value, "auto").map(DeclKind::MozUserInput),
+        "-moz-window-dragging" => opaque_or_sentinel(value, "default").map(DeclKind::MozWindowDragging),
+        "-moz-float-edge" => opaque_or_sentinel(value, "content-box").map(DeclKind::MozFloatEdge),
+        "-moz-force-broken-image-icon" => opaque_or_sentinel(value, "0").map(DeclKind::MozForceBrokenImageIcon),
+        "-moz-image-region" => opaque_or_sentinel(value, "auto").map(DeclKind::MozImageRegion),
+        "-moz-binding" => opaque_or_sentinel(value, "none").map(DeclKind::MozBinding),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

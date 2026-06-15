@@ -1688,5 +1688,25 @@ pub struct ComputedStyle {
     /// `scroll-snap-coordinate` (CSS Scroll Snap v0). `None` = `none`.
     /// NO hereda. Plumb. Fase 7.1034.
     pub scroll_snap_coordinate: Option<String>,
+    // === Fase 7.1035-7.1042 — Gecko -moz- propiedades reales (plumb opaco) ===
+    /// `-moz-orient` (Gecko). `None` = `inline`. NO hereda. Plumb. Fase 7.1035.
+    pub moz_orient: Option<String>,
+    /// `-moz-user-focus` (Gecko). `None` = `none`. HEREDA. Plumb. Fase 7.1036.
+    pub moz_user_focus: Option<String>,
+    /// `-moz-user-input` (Gecko). `None` = `auto`. HEREDA. Plumb. Fase 7.1037.
+    pub moz_user_input: Option<String>,
+    /// `-moz-window-dragging` (Gecko chrome). `None` = `default`. NO hereda.
+    /// Plumb. Fase 7.1038.
+    pub moz_window_dragging: Option<String>,
+    /// `-moz-float-edge` (Gecko). `None` = `content-box`. NO hereda. Plumb. Fase 7.1039.
+    pub moz_float_edge: Option<String>,
+    /// `-moz-force-broken-image-icon` (Gecko). `None` = `0`. NO hereda.
+    /// Plumb. Fase 7.1040.
+    pub moz_force_broken_image_icon: Option<String>,
+    /// `-moz-image-region` (Gecko XUL). `None` = `auto`. HEREDA. Plumb. Fase 7.1041.
+    pub moz_image_region: Option<String>,
+    /// `-moz-binding` (Gecko XBL, removido). `None` = `none`. NO hereda.
+    /// Plumb. Fase 7.1042.
+    pub moz_binding: Option<String>,
 }
 

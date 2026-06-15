@@ -614,3 +614,39 @@ use super::super::*;
         assert_eq!(style_of("scroll-snap-coordinate: none").scroll_snap_coordinate, None);
         assert_eq!(style_of("scroll-snap-destination: 0px 0px").scroll_snap_destination, None);
     }
+
+    #[test]
+    fn moz_gecko_props_plumb_fase_7_1035_1042() {
+        let html = r#"<html><body><div style="
+            -moz-orient: vertical;
+            -moz-user-focus: ignore;
+            -moz-user-input: disabled;
+            -moz-window-dragging: drag;
+            -moz-float-edge: margin-box;
+            -moz-force-broken-image-icon: 1;
+            -moz-image-region: rect(0 8px 8px 0);
+            -moz-binding: url(b.xml#x)
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.moz_orient.as_deref(), Some("vertical"));
+        assert_eq!(t.moz_user_focus.as_deref(), Some("ignore"));
+        assert_eq!(t.moz_user_input.as_deref(), Some("disabled"));
+        assert_eq!(t.moz_window_dragging.as_deref(), Some("drag"));
+        assert_eq!(t.moz_float_edge.as_deref(), Some("margin-box"));
+        assert_eq!(t.moz_force_broken_image_icon.as_deref(), Some("1"));
+        assert_eq!(t.moz_image_region.as_deref(), Some("rect(0 8px 8px 0)"));
+        assert_eq!(t.moz_binding.as_deref(), Some("url(b.xml#x)"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-moz-orient: inline").moz_orient, None);
+        assert_eq!(style_of("-moz-float-edge: content-box").moz_float_edge, None);
+        // -moz-user-focus / -moz-user-input / -moz-image-region HEREDAN;
+        // el resto NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.moz_user_focus.as_deref(), Some("ignore"));
+        assert_eq!(span.moz_user_input.as_deref(), Some("disabled"));
+        assert_eq!(span.moz_image_region.as_deref(), Some("rect(0 8px 8px 0)"));
+        assert_eq!(span.moz_orient, None);
+        assert_eq!(span.moz_binding, None);
+    }

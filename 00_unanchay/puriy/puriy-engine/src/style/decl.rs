@@ -1118,6 +1118,15 @@ pub(crate) enum DeclKind {
     ScrollSnapPointsY(Option<String>),
     ScrollSnapDestination(Option<String>),
     ScrollSnapCoordinate(Option<String>),
+    // === Fase 7.1035-7.1042 — Gecko -moz- propiedades reales (plumb opaco) ===
+    MozOrient(Option<String>),
+    MozUserFocus(Option<String>),
+    MozUserInput(Option<String>),
+    MozWindowDragging(Option<String>),
+    MozFloatEdge(Option<String>),
+    MozForceBrokenImageIcon(Option<String>),
+    MozImageRegion(Option<String>),
+    MozBinding(Option<String>),
 }
 
 impl Decl {
@@ -1873,6 +1882,15 @@ impl Decl {
             DeclKind::ScrollSnapPointsY(v) => s.scroll_snap_points_y = v.clone(),
             DeclKind::ScrollSnapDestination(v) => s.scroll_snap_destination = v.clone(),
             DeclKind::ScrollSnapCoordinate(v) => s.scroll_snap_coordinate = v.clone(),
+            // Fase 7.1035-7.1042 — Gecko -moz-, plumb opaco.
+            DeclKind::MozOrient(v) => s.moz_orient = v.clone(),
+            DeclKind::MozUserFocus(v) => s.moz_user_focus = v.clone(),
+            DeclKind::MozUserInput(v) => s.moz_user_input = v.clone(),
+            DeclKind::MozWindowDragging(v) => s.moz_window_dragging = v.clone(),
+            DeclKind::MozFloatEdge(v) => s.moz_float_edge = v.clone(),
+            DeclKind::MozForceBrokenImageIcon(v) => s.moz_force_broken_image_icon = v.clone(),
+            DeclKind::MozImageRegion(v) => s.moz_image_region = v.clone(),
+            DeclKind::MozBinding(v) => s.moz_binding = v.clone(),
         }
     }
 }

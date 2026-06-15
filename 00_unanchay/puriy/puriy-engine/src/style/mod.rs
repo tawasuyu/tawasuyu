@@ -470,6 +470,12 @@ impl StyleEngine {
             style.text_height = p.text_height.clone();
             style.block_progression = p.block_progression.clone();
             style.snap_height = p.snap_height.clone();
+            // Fase 7.1036/7.1037/7.1041 — -moz-user-focus, -moz-user-input
+            // y -moz-image-region heredan en Gecko. El resto del bloque
+            // -moz- (7.1035/7.1038-7.1040/7.1042) NO hereda.
+            style.moz_user_focus = p.moz_user_focus.clone();
+            style.moz_user_input = p.moz_user_input.clone();
+            style.moz_image_region = p.moz_image_region.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

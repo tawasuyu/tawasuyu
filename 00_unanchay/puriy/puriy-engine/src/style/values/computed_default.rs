@@ -605,6 +605,15 @@ impl Default for ComputedStyle {
             scroll_snap_points_y: None,
             scroll_snap_destination: None,
             scroll_snap_coordinate: None,
+            // Fase 7.1035-7.1042 — Gecko -moz-, plumb opaco, default None.
+            moz_orient: None,
+            moz_user_focus: None,
+            moz_user_input: None,
+            moz_window_dragging: None,
+            moz_float_edge: None,
+            moz_force_broken_image_icon: None,
+            moz_image_region: None,
+            moz_binding: None,
         }
     }
 }
