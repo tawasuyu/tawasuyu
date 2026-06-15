@@ -480,6 +480,18 @@ impl StyleEngine {
             // heredan en Gecko. El resto del bloque misc NO hereda.
             style.moz_context_properties = p.moz_context_properties.clone();
             style.moz_text_blink = p.moz_text_blink.clone();
+            // Fase 7.1063-7.1072 — CSS Fill and Stroke 3: las stroke-*
+            // heredan (igual que el resto de fill/stroke, tradición SVG).
+            style.stroke_align = p.stroke_align.clone();
+            style.stroke_break = p.stroke_break.clone();
+            style.stroke_color_css = p.stroke_color_css.clone();
+            style.stroke_image = p.stroke_image.clone();
+            style.stroke_origin = p.stroke_origin.clone();
+            style.stroke_position = p.stroke_position.clone();
+            style.stroke_repeat = p.stroke_repeat.clone();
+            style.stroke_size = p.stroke_size.clone();
+            style.stroke_dash_corner = p.stroke_dash_corner.clone();
+            style.stroke_dash_justify = p.stroke_dash_justify.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

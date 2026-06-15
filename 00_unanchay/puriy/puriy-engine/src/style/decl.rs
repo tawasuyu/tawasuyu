@@ -1151,6 +1151,17 @@ pub(crate) enum DeclKind {
     MozTextBlink(Option<String>),
     MozDefaultAppearance(Option<String>),
     MozBoxFlexgroup(Option<String>),
+    // === Fase 7.1063-7.1072 — CSS Fill and Stroke 3 stroke-* (plumb opaco) ===
+    StrokeAlign(Option<String>),
+    StrokeBreak(Option<String>),
+    StrokeColorCss(Option<String>),
+    StrokeImage(Option<String>),
+    StrokeOrigin(Option<String>),
+    StrokePosition(Option<String>),
+    StrokeRepeat(Option<String>),
+    StrokeSize(Option<String>),
+    StrokeDashCorner(Option<String>),
+    StrokeDashJustify(Option<String>),
 }
 
 impl Decl {
@@ -1939,6 +1950,17 @@ impl Decl {
             DeclKind::MozTextBlink(v) => s.moz_text_blink = v.clone(),
             DeclKind::MozDefaultAppearance(v) => s.moz_default_appearance = v.clone(),
             DeclKind::MozBoxFlexgroup(v) => s.moz_box_flexgroup = v.clone(),
+            // Fase 7.1063-7.1072 — CSS Fill and Stroke 3 stroke-*, plumb opaco.
+            DeclKind::StrokeAlign(v) => s.stroke_align = v.clone(),
+            DeclKind::StrokeBreak(v) => s.stroke_break = v.clone(),
+            DeclKind::StrokeColorCss(v) => s.stroke_color_css = v.clone(),
+            DeclKind::StrokeImage(v) => s.stroke_image = v.clone(),
+            DeclKind::StrokeOrigin(v) => s.stroke_origin = v.clone(),
+            DeclKind::StrokePosition(v) => s.stroke_position = v.clone(),
+            DeclKind::StrokeRepeat(v) => s.stroke_repeat = v.clone(),
+            DeclKind::StrokeSize(v) => s.stroke_size = v.clone(),
+            DeclKind::StrokeDashCorner(v) => s.stroke_dash_corner = v.clone(),
+            DeclKind::StrokeDashJustify(v) => s.stroke_dash_justify = v.clone(),
         }
     }
 }

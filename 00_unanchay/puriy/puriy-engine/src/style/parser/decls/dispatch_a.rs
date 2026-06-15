@@ -505,6 +505,19 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-moz-text-blink" => opaque_or_sentinel(value, "none").map(DeclKind::MozTextBlink),
         "-moz-default-appearance" => opaque_or_sentinel(value, "none").map(DeclKind::MozDefaultAppearance),
         "-moz-box-flexgroup" => opaque_or_sentinel(value, "1").map(DeclKind::MozBoxFlexgroup),
+        // === Fase 7.1063-7.1072 — CSS Fill and Stroke 3 stroke-* (plumb opaco) ===
+        // Propiedades nuevas del módulo que generaliza el trazo SVG a cajas CSS.
+        // Heredan (igual que el resto de fill/stroke). Sentinel = initial → None.
+        "stroke-align" => opaque_or_sentinel(value, "center").map(DeclKind::StrokeAlign),
+        "stroke-break" => opaque_or_sentinel(value, "bounding-box").map(DeclKind::StrokeBreak),
+        "stroke-color" => opaque_or_sentinel(value, "currentcolor").map(DeclKind::StrokeColorCss),
+        "stroke-image" => opaque_or_sentinel(value, "none").map(DeclKind::StrokeImage),
+        "stroke-origin" => opaque_or_sentinel(value, "match-parent").map(DeclKind::StrokeOrigin),
+        "stroke-position" => opaque_or_sentinel(value, "0% 0%").map(DeclKind::StrokePosition),
+        "stroke-repeat" => opaque_or_sentinel(value, "repeat").map(DeclKind::StrokeRepeat),
+        "stroke-size" => opaque_or_sentinel(value, "auto").map(DeclKind::StrokeSize),
+        "stroke-dash-corner" => opaque_or_sentinel(value, "none").map(DeclKind::StrokeDashCorner),
+        "stroke-dash-justify" => opaque_or_sentinel(value, "none").map(DeclKind::StrokeDashJustify),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

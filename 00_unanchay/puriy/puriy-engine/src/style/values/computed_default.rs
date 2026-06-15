@@ -638,6 +638,17 @@ impl Default for ComputedStyle {
             moz_text_blink: None,
             moz_default_appearance: None,
             moz_box_flexgroup: None,
+            // Fase 7.1063-7.1072 — CSS Fill and Stroke 3 stroke-*, default None.
+            stroke_align: None,
+            stroke_break: None,
+            stroke_color_css: None,
+            stroke_image: None,
+            stroke_origin: None,
+            stroke_position: None,
+            stroke_repeat: None,
+            stroke_size: None,
+            stroke_dash_corner: None,
+            stroke_dash_justify: None,
         }
     }
 }

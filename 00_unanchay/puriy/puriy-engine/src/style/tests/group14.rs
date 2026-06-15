@@ -733,3 +733,41 @@ use super::super::*;
         assert_eq!(span.moz_stack_sizing, None);
         assert_eq!(span.moz_default_appearance, None);
     }
+
+    #[test]
+    fn css_stroke_props_plumb_fase_7_1063_1072() {
+        let html = r#"<html><body><div style="
+            stroke-align: outset;
+            stroke-break: slice;
+            stroke-color: red;
+            stroke-image: linear-gradient(red, blue);
+            stroke-origin: content-box;
+            stroke-position: center;
+            stroke-repeat: round;
+            stroke-size: 10px;
+            stroke-dash-corner: 2px;
+            stroke-dash-justify: compress
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.stroke_align.as_deref(), Some("outset"));
+        assert_eq!(t.stroke_break.as_deref(), Some("slice"));
+        assert_eq!(t.stroke_color_css.as_deref(), Some("red"));
+        assert_eq!(t.stroke_image.as_deref(), Some("linear-gradient(red, blue)"));
+        assert_eq!(t.stroke_origin.as_deref(), Some("content-box"));
+        assert_eq!(t.stroke_position.as_deref(), Some("center"));
+        assert_eq!(t.stroke_repeat.as_deref(), Some("round"));
+        assert_eq!(t.stroke_size.as_deref(), Some("10px"));
+        assert_eq!(t.stroke_dash_corner.as_deref(), Some("2px"));
+        assert_eq!(t.stroke_dash_justify.as_deref(), Some("compress"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("stroke-image: none").stroke_image, None);
+        assert_eq!(style_of("stroke-color: currentcolor").stroke_color_css, None);
+        assert_eq!(style_of("stroke-align: center").stroke_align, None);
+        // HEREDAN (tradición SVG).
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.stroke_align.as_deref(), Some("outset"));
+        assert_eq!(span.stroke_color_css.as_deref(), Some("red"));
+        assert_eq!(span.stroke_dash_justify.as_deref(), Some("compress"));
+    }

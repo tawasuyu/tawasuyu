@@ -1766,5 +1766,27 @@ pub struct ComputedStyle {
     /// `-moz-box-flexgroup` (Gecko XUL, old flexbox). `None` = `1`. NO hereda.
     /// Plumb. Fase 7.1062.
     pub moz_box_flexgroup: Option<String>,
+    // === Fase 7.1063-7.1072 — CSS Fill and Stroke 3 stroke-* (plumb opaco) ===
+    /// `stroke-align` (CSS Fill and Stroke 3). `None` = `center`. HEREDA. Plumb. Fase 7.1063.
+    pub stroke_align: Option<String>,
+    /// `stroke-break` (CSS Fill and Stroke 3). `None` = `bounding-box`. HEREDA. Plumb. Fase 7.1064.
+    pub stroke_break: Option<String>,
+    /// `stroke-color` (CSS Fill and Stroke 3). `None` = `currentcolor`. HEREDA.
+    /// Plumb opaco distinto del `stroke` paint SVG. Fase 7.1065.
+    pub stroke_color_css: Option<String>,
+    /// `stroke-image` (CSS Fill and Stroke 3). `None` = `none`. HEREDA. Plumb. Fase 7.1066.
+    pub stroke_image: Option<String>,
+    /// `stroke-origin` (CSS Fill and Stroke 3). `None` = `match-parent`. HEREDA. Plumb. Fase 7.1067.
+    pub stroke_origin: Option<String>,
+    /// `stroke-position` (CSS Fill and Stroke 3). `None` = `0% 0%`. HEREDA. Plumb. Fase 7.1068.
+    pub stroke_position: Option<String>,
+    /// `stroke-repeat` (CSS Fill and Stroke 3). `None` = `repeat`. HEREDA. Plumb. Fase 7.1069.
+    pub stroke_repeat: Option<String>,
+    /// `stroke-size` (CSS Fill and Stroke 3). `None` = `auto`. HEREDA. Plumb. Fase 7.1070.
+    pub stroke_size: Option<String>,
+    /// `stroke-dash-corner` (CSS Fill and Stroke 3). `None` = `none`. HEREDA. Plumb. Fase 7.1071.
+    pub stroke_dash_corner: Option<String>,
+    /// `stroke-dash-justify` (CSS Fill and Stroke 3). `None` = `none`. HEREDA. Plumb. Fase 7.1072.
+    pub stroke_dash_justify: Option<String>,
 }
 
