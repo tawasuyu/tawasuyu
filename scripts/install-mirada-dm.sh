@@ -30,7 +30,7 @@ echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, p
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
     -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi \
-    -p mirada-ctl -p mirada-portal -p mirada-wallpaper
+    -p mirada-ctl -p mirada-portal -p mirada-wallpaper -p wawa-panel-llimphi
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -58,6 +58,10 @@ sudo install -Dm755 "$BIN/mirada-ctl"              /usr/local/bin/mirada-ctl
 # wallpaper — también quedaban sin instalar.
 sudo install -Dm755 "$BIN/mirada-portal"           /usr/local/bin/mirada-portal
 sudo install -Dm755 "$BIN/mirada-wallpaper"        /usr/local/bin/mirada-wallpaper
+# EL panel de control unificado (allichay): combina la config de mirada, pata y
+# el sistema —cada app una pestaña—, incluida la «Vista espacial» con el Prezi.
+# Es el panel donde las apps integran sus ajustes. No estaba instalado.
+sudo install -Dm755 "$BIN/wawa-panel"              /usr/local/bin/wawa-panel
 
 # Scripts de sesión + lanzador del DM.
 sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session

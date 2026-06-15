@@ -409,10 +409,9 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+u".into(), DesktopAction::ZoomOut),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
-        // Panel de control de mirada (mirada-llimphi): profiles de atajos,
-        // vistas de escritorio y la vista espacial «Prezi». (Super+o ya es
-        // FocusOutputNext; Super+Shift+p = Panel.)
-        ("Super+Shift+p".into(), DesktopAction::Spawn("mirada-llimphi".into())),
+        // Panel de control unificado (wawa-panel): ajustes de mirada/pata/sistema
+        // —cada app una pestaña—, incluida la geometría del Prezi. Super+Shift+p.
+        ("Super+Shift+p".into(), DesktopAction::Spawn("wawa-panel".into())),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),

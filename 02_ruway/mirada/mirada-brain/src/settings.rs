@@ -506,6 +506,35 @@ mod tests {
     }
 
     #[test]
+    fn vista_espacial_expone_el_prezi_y_aplica() {
+        let schema = Config::default().schema();
+        let vista = schema
+            .sections
+            .iter()
+            .find(|s| s.id == "vista_espacial")
+            .expect("debe existir la sección vista_espacial");
+        let field_ids: Vec<&str> = vista.fields.iter().map(|f| f.id.as_str()).collect();
+        assert!(field_ids.contains(&"workspace_switch_mode"), "{field_ids:?}");
+        assert!(field_ids.contains(&"overview_geometry"), "{field_ids:?}");
+
+        // El modo se aplica desde el panel.
+        let mut c = Config::default();
+        c.apply(
+            &FieldPath::empty().push("vista_espacial").push("workspace_switch_mode"),
+            FieldValue::Text("hyprland".into()),
+        )
+        .unwrap();
+        assert_eq!(c.workspace_switch_mode, crate::config::WorkspaceSwitchMode::Hyprland);
+        // La geometría se aplica desde la tabla.
+        c.apply(
+            &FieldPath::empty().push("vista_espacial").push("overview_geometry"),
+            FieldValue::Table(vec![vec!["2".into(), "1".into()], vec!["0".into(), "0".into()]]),
+        )
+        .unwrap();
+        assert_eq!(c.overview_geometry, vec![(2, 1), (0, 0)]);
+    }
+
+    #[test]
     fn apply_menu_reconstruye_y_preserva_submenu() {
         let mut c = Config::default();
         c.menu = vec![
