@@ -1254,6 +1254,17 @@ pub(crate) enum DeclKind {
     MsContentZoomSnap(Option<String>),
     MsContentZoomSnapPoints(Option<String>),
     MsContentZoomSnapType(Option<String>),
+    // === Fase 7.1159-7.1168 — IE -ms-scroll-limit/-snap family (IE10) (plumb opaco) ===
+    MsScrollLimit(Option<String>),
+    MsScrollLimitXMax(Option<String>),
+    MsScrollLimitXMin(Option<String>),
+    MsScrollLimitYMax(Option<String>),
+    MsScrollLimitYMin(Option<String>),
+    MsScrollSnapPointsX(Option<String>),
+    MsScrollSnapPointsY(Option<String>),
+    MsScrollSnapX(Option<String>),
+    MsScrollSnapY(Option<String>),
+    MsScrollTranslation(Option<String>),
 }
 
 impl Decl {
@@ -2145,6 +2156,17 @@ impl Decl {
             DeclKind::MsContentZoomSnap(v) => s.ms_content_zoom_snap = v.clone(),
             DeclKind::MsContentZoomSnapPoints(v) => s.ms_content_zoom_snap_points = v.clone(),
             DeclKind::MsContentZoomSnapType(v) => s.ms_content_zoom_snap_type = v.clone(),
+            // Fase 7.1159-7.1168 — IE -ms-scroll-limit/-snap, plumb opaco.
+            DeclKind::MsScrollLimit(v) => s.ms_scroll_limit = v.clone(),
+            DeclKind::MsScrollLimitXMax(v) => s.ms_scroll_limit_x_max = v.clone(),
+            DeclKind::MsScrollLimitXMin(v) => s.ms_scroll_limit_x_min = v.clone(),
+            DeclKind::MsScrollLimitYMax(v) => s.ms_scroll_limit_y_max = v.clone(),
+            DeclKind::MsScrollLimitYMin(v) => s.ms_scroll_limit_y_min = v.clone(),
+            DeclKind::MsScrollSnapPointsX(v) => s.ms_scroll_snap_points_x = v.clone(),
+            DeclKind::MsScrollSnapPointsY(v) => s.ms_scroll_snap_points_y = v.clone(),
+            DeclKind::MsScrollSnapX(v) => s.ms_scroll_snap_x = v.clone(),
+            DeclKind::MsScrollSnapY(v) => s.ms_scroll_snap_y = v.clone(),
+            DeclKind::MsScrollTranslation(v) => s.ms_scroll_translation = v.clone(),
         }
     }
 }

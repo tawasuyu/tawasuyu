@@ -1134,3 +1134,33 @@ use super::super::*;
         assert_eq!(style_of("-ms-content-zoom-limit-max: 400%").ms_content_zoom_limit_max, None);
         assert_eq!(style_of("-ms-content-zoom-snap-type: none").ms_content_zoom_snap_type, None);
     }
+
+    #[test]
+    fn ms_scroll_limit_snap_plumb_fase_7_1159_1168() {
+        let s = style_of(
+            "-ms-scroll-limit: 0 0 500px 800px; \
+             -ms-scroll-limit-x-max: 500px; \
+             -ms-scroll-limit-x-min: 10px; \
+             -ms-scroll-limit-y-max: 800px; \
+             -ms-scroll-limit-y-min: 20px; \
+             -ms-scroll-snap-points-x: snapInterval(0px, 100px); \
+             -ms-scroll-snap-points-y: snapList(0px, 50px); \
+             -ms-scroll-snap-x: mandatory snapInterval(0px, 100px); \
+             -ms-scroll-snap-y: proximity snapList(0px); \
+             -ms-scroll-translation: vertical-to-horizontal",
+        );
+        assert_eq!(s.ms_scroll_limit.as_deref(), Some("0 0 500px 800px"));
+        assert_eq!(s.ms_scroll_limit_x_max.as_deref(), Some("500px"));
+        assert_eq!(s.ms_scroll_limit_x_min.as_deref(), Some("10px"));
+        assert_eq!(s.ms_scroll_limit_y_max.as_deref(), Some("800px"));
+        assert_eq!(s.ms_scroll_limit_y_min.as_deref(), Some("20px"));
+        assert_eq!(s.ms_scroll_snap_points_x.as_deref(), Some("snapInterval(0px, 100px)"));
+        assert_eq!(s.ms_scroll_snap_points_y.as_deref(), Some("snapList(0px, 50px)"));
+        assert_eq!(s.ms_scroll_snap_x.as_deref(), Some("mandatory snapInterval(0px, 100px)"));
+        assert_eq!(s.ms_scroll_snap_y.as_deref(), Some("proximity snapList(0px)"));
+        assert_eq!(s.ms_scroll_translation.as_deref(), Some("vertical-to-horizontal"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-scroll-limit-x-max: auto").ms_scroll_limit_x_max, None);
+        assert_eq!(style_of("-ms-scroll-limit-y-min: 0").ms_scroll_limit_y_min, None);
+        assert_eq!(style_of("-ms-scroll-translation: none").ms_scroll_translation, None);
+    }

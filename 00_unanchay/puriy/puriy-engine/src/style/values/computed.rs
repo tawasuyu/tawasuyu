@@ -1964,5 +1964,26 @@ pub struct ComputedStyle {
     pub ms_content_zoom_snap_points: Option<String>,
     /// `-ms-content-zoom-snap-type` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1158.
     pub ms_content_zoom_snap_type: Option<String>,
+    // === Fase 7.1159-7.1168 — IE -ms-scroll-limit/-snap family (IE10) (plumb opaco) ===
+    /// `-ms-scroll-limit` shorthand (IE10). NO hereda. Plumb. Fase 7.1159.
+    pub ms_scroll_limit: Option<String>,
+    /// `-ms-scroll-limit-x-max` (IE10). `None` = `auto`. NO hereda. Plumb. Fase 7.1160.
+    pub ms_scroll_limit_x_max: Option<String>,
+    /// `-ms-scroll-limit-x-min` (IE10). `None` = `0`. NO hereda. Plumb. Fase 7.1161.
+    pub ms_scroll_limit_x_min: Option<String>,
+    /// `-ms-scroll-limit-y-max` (IE10). `None` = `auto`. NO hereda. Plumb. Fase 7.1162.
+    pub ms_scroll_limit_y_max: Option<String>,
+    /// `-ms-scroll-limit-y-min` (IE10). `None` = `0`. NO hereda. Plumb. Fase 7.1163.
+    pub ms_scroll_limit_y_min: Option<String>,
+    /// `-ms-scroll-snap-points-x` (IE10). NO hereda. Plumb. Fase 7.1164.
+    pub ms_scroll_snap_points_x: Option<String>,
+    /// `-ms-scroll-snap-points-y` (IE10). NO hereda. Plumb. Fase 7.1165.
+    pub ms_scroll_snap_points_y: Option<String>,
+    /// `-ms-scroll-snap-x` shorthand (IE10). NO hereda. Plumb. Fase 7.1166.
+    pub ms_scroll_snap_x: Option<String>,
+    /// `-ms-scroll-snap-y` shorthand (IE10). NO hereda. Plumb. Fase 7.1167.
+    pub ms_scroll_snap_y: Option<String>,
+    /// `-ms-scroll-translation` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1168.
+    pub ms_scroll_translation: Option<String>,
 }
 

@@ -628,6 +628,18 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-ms-content-zoom-snap" => opaque_or_sentinel(value, "").map(DeclKind::MsContentZoomSnap),
         "-ms-content-zoom-snap-points" => opaque_or_sentinel(value, "").map(DeclKind::MsContentZoomSnapPoints),
         "-ms-content-zoom-snap-type" => opaque_or_sentinel(value, "none").map(DeclKind::MsContentZoomSnapType),
+        // === Fase 7.1159-7.1168 — IE -ms-scroll-limit/-snap family (IE10) (plumb opaco) ===
+        // NO heredan. Shorthands sin keyword initial usan sentinel "".
+        "-ms-scroll-limit" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollLimit),
+        "-ms-scroll-limit-x-max" => opaque_or_sentinel(value, "auto").map(DeclKind::MsScrollLimitXMax),
+        "-ms-scroll-limit-x-min" => opaque_or_sentinel(value, "0").map(DeclKind::MsScrollLimitXMin),
+        "-ms-scroll-limit-y-max" => opaque_or_sentinel(value, "auto").map(DeclKind::MsScrollLimitYMax),
+        "-ms-scroll-limit-y-min" => opaque_or_sentinel(value, "0").map(DeclKind::MsScrollLimitYMin),
+        "-ms-scroll-snap-points-x" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollSnapPointsX),
+        "-ms-scroll-snap-points-y" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollSnapPointsY),
+        "-ms-scroll-snap-x" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollSnapX),
+        "-ms-scroll-snap-y" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollSnapY),
+        "-ms-scroll-translation" => opaque_or_sentinel(value, "none").map(DeclKind::MsScrollTranslation),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

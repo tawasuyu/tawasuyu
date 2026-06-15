@@ -741,6 +741,17 @@ impl Default for ComputedStyle {
             ms_content_zoom_snap: None,
             ms_content_zoom_snap_points: None,
             ms_content_zoom_snap_type: None,
+            // Fase 7.1159-7.1168 — IE -ms-scroll-limit/-snap, default None.
+            ms_scroll_limit: None,
+            ms_scroll_limit_x_max: None,
+            ms_scroll_limit_x_min: None,
+            ms_scroll_limit_y_max: None,
+            ms_scroll_limit_y_min: None,
+            ms_scroll_snap_points_x: None,
+            ms_scroll_snap_points_y: None,
+            ms_scroll_snap_x: None,
+            ms_scroll_snap_y: None,
+            ms_scroll_translation: None,
         }
     }
 }
