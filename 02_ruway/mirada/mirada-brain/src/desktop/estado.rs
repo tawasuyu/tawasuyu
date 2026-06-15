@@ -199,6 +199,20 @@ impl Desktop {
         self.focused_output
     }
 
+    /// Mueve la salida enfocada a la que contiene el punto global `(x, y)` —
+    /// para que el escritorio activo siga al monitor donde está el puntero
+    /// (foco-de-output sigue-al-mouse). Devuelve `true` si cambió. No re-tesela
+    /// (sólo cambia a dónde van las acciones nuevas: ventanas, workspaces).
+    pub fn focus_output_at(&mut self, x: i32, y: i32) -> bool {
+        match self.outputs.iter().position(|o| o.rect.contains(x, y)) {
+            Some(i) if i != self.focused_output => {
+                self.focused_output = i;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Identidad de una ventana conocida.
     pub fn window_info(&self, id: WindowId) -> Option<&WindowInfo> {
         self.windows.get(&id)

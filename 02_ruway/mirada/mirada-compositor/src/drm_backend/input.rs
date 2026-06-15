@@ -146,6 +146,7 @@ impl DrmState {
                     return; // con el menú abierto, el puntero lo navega
                 }
                 self.app.update_shell_autohide(x, y);
+                self.app.follow_pointer_output(); // el escritorio activo sigue al monitor del mouse
                 if !self.drag_update() {
                     self.pointer_motion(time);
                 }
@@ -176,6 +177,7 @@ impl DrmState {
                 }
                 let (x, y) = self.app.pointer_loc;
                 self.app.update_shell_autohide(x, y);
+                self.app.follow_pointer_output(); // el escritorio activo sigue al monitor del mouse
                 if !self.drag_update() {
                     self.pointer_motion(time);
                 }

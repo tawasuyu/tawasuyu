@@ -554,6 +554,20 @@ fn switching_to_a_workspace_shown_on_another_output_swaps_them() {
 }
 
 #[test]
+fn el_output_enfocado_sigue_al_puntero() {
+    let mut d = desktop_with_two_outputs();
+    assert_eq!(d.focused_output(), 0);
+    // Puntero sobre la salida 1 (arranca en x=1920).
+    assert!(d.focus_output_at(2000, 100));
+    assert_eq!(d.focused_output(), 1);
+    // Moverse dentro de la misma salida no cambia nada.
+    assert!(!d.focus_output_at(2100, 200));
+    // De vuelta a la salida 0.
+    assert!(d.focus_output_at(500, 100));
+    assert_eq!(d.focused_output(), 0);
+}
+
+#[test]
 fn focus_output_next_moves_the_focus_between_outputs() {
     let mut d = desktop_with_two_outputs();
     assert_eq!(d.active_index(), 0); // salida 0 → ws 0

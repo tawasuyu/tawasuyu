@@ -129,6 +129,16 @@ impl App {
         self.apply_commands(cmds);
     }
 
+    /// El escritorio activo sigue al monitor bajo el puntero (DM-sigue-mouse):
+    /// al mover el mouse a otro monitor, ese pasa a ser la salida enfocada, así
+    /// las ventanas nuevas y los cambios de escritorio van ahí.
+    pub(crate) fn follow_pointer_output(&mut self) {
+        let (x, y) = self.pointer_loc;
+        if let Brain::Embedded(d) = &mut self.brain {
+            d.focus_output_at(x as i32, y as i32);
+        }
+    }
+
     /// El modo de transición de Win+Tab configurado (`direct`/`hyprland`/
     /// `prezi`). `Direct` con Cerebro enlazado (no decide animaciones acá).
     pub(crate) fn config_workspace_switch_mode(&self) -> mirada_brain::WorkspaceSwitchMode {
