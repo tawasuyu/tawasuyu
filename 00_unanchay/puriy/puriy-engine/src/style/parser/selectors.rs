@@ -62,12 +62,34 @@ pub(crate) fn parse_selector(sel: &str) -> Option<Selector> {
 /// Si `sel` termina con `::before`/`::after` (o legacy `:before`/`:after`),
 /// devuelve `(prefix, Some(PseudoElement))`. Sino devuelve `(sel, None)`.
 pub(crate) fn strip_pseudo_element(sel: &str) -> (&str, Option<PseudoElement>) {
+    let sel = sel.trim_end();
+    // Fase 7.934 — pseudo-element moderno `::ident` o `::ident(args)` a nivel
+    // superior (fuera de `[...]`/`(...)`). Tomamos el primer `::`; lo que sigue
+    // es el nombre (+ args opcionales). `::before`/`::after` → variantes con
+    // box; el resto (`::selection`, `::marker`, `::part()`…) → `Other` inerte.
+    if let Some(pos) = find_double_colon(sel) {
+        let prefix = &sel[..pos];
+        let rest = sel[pos + 2..].trim();
+        let name_end = rest.find('(').unwrap_or(rest.len());
+        let name = rest[..name_end].trim().to_ascii_lowercase();
+        if name.is_empty() || !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+            // `::` suelto o con basura → dejamos que el compound lo rechace.
+            return (sel, None);
+        }
+        let pe = match name.as_str() {
+            "before" => PseudoElement::Before,
+            "after" => PseudoElement::After,
+            _ => PseudoElement::Other,
+        };
+        return (prefix, Some(pe));
+    }
     let lower = sel.to_ascii_lowercase();
     for (suffix, pe) in [
-        ("::before", PseudoElement::Before),
-        ("::after", PseudoElement::After),
         (":before", PseudoElement::Before),
         (":after", PseudoElement::After),
+        // CSS2 legacy de un solo `:` para los cuatro originales.
+        (":first-line", PseudoElement::Other),
+        (":first-letter", PseudoElement::Other),
     ] {
         if let Some(prefix) = lower.strip_suffix(suffix) {
             // Cuidado: `:before` no debe matchear cuando es parte de
@@ -80,6 +102,29 @@ pub(crate) fn strip_pseudo_element(sel: &str) -> (&str, Option<PseudoElement>) {
         }
     }
     (sel, None)
+}
+
+/// Posición del primer `::` a nivel superior (fuera de `[...]` y `(...)`).
+/// `None` si no hay. Fase 7.934.
+fn find_double_colon(sel: &str) -> Option<usize> {
+    let bytes = sel.as_bytes();
+    let mut in_bracket = false;
+    let mut paren_depth: u32 = 0;
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        match bytes[i] {
+            b'[' => in_bracket = true,
+            b']' => in_bracket = false,
+            b'(' if !in_bracket => paren_depth += 1,
+            b')' if !in_bracket => paren_depth = paren_depth.saturating_sub(1),
+            b':' if !in_bracket && paren_depth == 0 && bytes[i + 1] == b':' => {
+                return Some(i);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
 }
 
 /// Inserta espacios alrededor de `>`/`+`/`~` para que `split_whitespace`

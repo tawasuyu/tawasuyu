@@ -74,6 +74,13 @@ pub enum ContentItem {
 pub enum PseudoElement {
     Before,
     After,
+    /// Pseudo-elemento estándar reconocido pero NO renderizado (`::selection`,
+    /// `::marker`, `::placeholder`, `::first-line`, `::backdrop`, `::part()`…).
+    /// Se parsea para NO tirar la regla; como nunca computamos un box para él
+    /// (`compute_pseudo` sólo se llama con `Before`/`After`) y el filtro de
+    /// cascada exige `pseudo_element == target_pseudo`, sus declaraciones
+    /// quedan inertes (no se filtran al elemento real). Fase 7.934.
+    Other,
 }
 
 /// Selector encadenado — alterna compound + combinador. `compounds[0]`

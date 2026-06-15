@@ -375,3 +375,33 @@ fn nth_child_of_selector() {
         .any(|p| matches!(p, Pseudo::NthChild { a: 0, b: 2 }))));
     assert!(parse_selector(":nth-last-child(odd of li)").is_some());
 }
+
+// ── Fase 7.934 — pseudo-elementos: parsean (no tiran la regla), inertes ─────
+
+#[test]
+fn pseudo_elementos_modernos_parsean() {
+    use crate::style::PseudoElement;
+    // ::before / ::after siguen generando su variante con box.
+    assert_eq!(parse_selector("p::before").unwrap().pseudo_element, Some(PseudoElement::Before));
+    assert_eq!(parse_selector("p:after").unwrap().pseudo_element, Some(PseudoElement::After));
+    // Los modernos no-renderizados → Other (parsea, inerte).
+    for sel in [
+        "input::placeholder", "::selection", "li::marker", "p::first-line",
+        "p::first-letter", "dialog::backdrop", "input::file-selector-button",
+        "details::details-content", "::target-text", "::spelling-error",
+        "::grammar-error", "::highlight(foo)", "x-el::part(label)",
+        "::view-transition-group(root)", "::slotted(span)",
+    ] {
+        let s = parse_selector(sel).unwrap_or_else(|| panic!("debería parsear: {sel}"));
+        assert_eq!(s.pseudo_element, Some(PseudoElement::Other), "{sel}");
+    }
+    // Legacy single-colon ::first-line/::first-letter.
+    assert_eq!(parse_selector("p:first-line").unwrap().pseudo_element, Some(PseudoElement::Other));
+}
+
+#[test]
+fn pseudo_element_no_renderizado_no_contamina_elemento() {
+    // `::selection { color }` no debe pintar el color del <p> real.
+    let css = "p::selection { color: rgb(1,2,3) } p { color: rgb(9,9,9) }";
+    assert_eq!(p_color(css), (9, 9, 9));
+}
