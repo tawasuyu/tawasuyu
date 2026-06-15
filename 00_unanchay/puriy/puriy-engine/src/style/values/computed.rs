@@ -2001,5 +2001,10 @@ pub struct ComputedStyle {
     /// `-ms-writing-mode` (IE; valores lr-tb/tb-rl/... divergentes del estándar).
     /// `None` = `lr-tb`. HEREDA. Plumb. Fase 7.1183.
     pub ms_writing_mode: Option<String>,
+    // === Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack (plumb opaco) ===
+    /// `-ms-flex-item-align` (IE10, ~`align-self`). `None` = `auto`. NO hereda. Plumb. Fase 7.1199.
+    pub ms_flex_item_align: Option<String>,
+    /// `-ms-flex-line-pack` (IE10, ~`align-content`). `None` = `stretch`. NO hereda. Plumb. Fase 7.1200.
+    pub ms_flex_line_pack: Option<String>,
 }
 

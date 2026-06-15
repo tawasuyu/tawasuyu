@@ -653,6 +653,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-ms-behavior" => opaque_or_sentinel(value, "").map(DeclKind::MsBehavior),
         "-ms-filter" => opaque_or_sentinel(value, "").map(DeclKind::MsFilter),
         "-ms-writing-mode" => opaque_or_sentinel(value, "lr-tb").map(DeclKind::MsWritingMode),
+        // === Fase 7.1199-7.1200 — IE10 flexbox 2012 (sintaxis -ms- propia) (plumb opaco) ===
+        // Predecesores de align-self/align-content con value-space divergente.
+        "-ms-flex-item-align" => opaque_or_sentinel(value, "auto").map(DeclKind::MsFlexItemAlign),
+        "-ms-flex-line-pack" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsFlexLinePack),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

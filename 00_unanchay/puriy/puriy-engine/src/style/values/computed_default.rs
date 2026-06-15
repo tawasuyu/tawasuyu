@@ -760,6 +760,9 @@ impl Default for ComputedStyle {
             ms_behavior: None,
             ms_filter: None,
             ms_writing_mode: None,
+            // Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack, default None.
+            ms_flex_item_align: None,
+            ms_flex_line_pack: None,
         }
     }
 }

@@ -1273,6 +1273,9 @@ pub(crate) enum DeclKind {
     MsBehavior(Option<String>),
     MsFilter(Option<String>),
     MsWritingMode(Option<String>),
+    // === Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack (plumb opaco) ===
+    MsFlexItemAlign(Option<String>),
+    MsFlexLinePack(Option<String>),
 }
 
 impl Decl {
@@ -2183,6 +2186,9 @@ impl Decl {
             DeclKind::MsBehavior(v) => s.ms_behavior = v.clone(),
             DeclKind::MsFilter(v) => s.ms_filter = v.clone(),
             DeclKind::MsWritingMode(v) => s.ms_writing_mode = v.clone(),
+            // Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack, plumb opaco.
+            DeclKind::MsFlexItemAlign(v) => s.ms_flex_item_align = v.clone(),
+            DeclKind::MsFlexLinePack(v) => s.ms_flex_line_pack = v.clone(),
         }
     }
 }

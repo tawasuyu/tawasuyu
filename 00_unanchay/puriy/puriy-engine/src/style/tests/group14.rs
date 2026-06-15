@@ -1269,3 +1269,22 @@ use super::super::*;
         assert_eq!(moz.outline.color, std.outline.color);
         assert_ne!(moz.outline.style, ComputedStyle::default().outline.style);
     }
+
+    #[test]
+    fn ms_flex_2012_remnants_fase_7_1198_1200() {
+        // -ms-flex-flow (alias) == flex-flow: expande direction + wrap.
+        assert_eq!(style_of("-ms-flex-flow: column wrap").flex_direction,
+                   style_of("flex-flow: column wrap").flex_direction);
+        assert_eq!(style_of("-ms-flex-flow: column wrap").flex_wrap,
+                   style_of("flex-flow: column wrap").flex_wrap);
+        assert_ne!(style_of("-ms-flex-flow: column wrap").flex_direction,
+                   ComputedStyle::default().flex_direction);
+        // -ms-flex-item-align / -ms-flex-line-pack: plumb opaco (IE10 2012).
+        assert_eq!(style_of("-ms-flex-item-align: center").ms_flex_item_align,
+                   Some("center".to_string()));
+        assert_eq!(style_of("-ms-flex-line-pack: justify").ms_flex_line_pack,
+                   Some("justify".to_string()));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-flex-item-align: auto").ms_flex_item_align, None);
+        assert_eq!(style_of("-ms-flex-line-pack: stretch").ms_flex_line_pack, None);
+    }

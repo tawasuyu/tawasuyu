@@ -891,8 +891,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             continue;
         }
         // Fase 7.721 — `-webkit-flex-flow` alias vendor del shorthand.
+        // Fase 7.1198 — `-ms-flex-flow` alias IE10 (flexbox 2012).
         if prop.eq_ignore_ascii_case("flex-flow")
             || prop.eq_ignore_ascii_case("-webkit-flex-flow")
+            || prop.eq_ignore_ascii_case("-ms-flex-flow")
         {
             out.extend(parse_flex_flow_shorthand(value, important));
             continue;
