@@ -60,9 +60,18 @@ use super::super::*;
         assert_eq!(parse_list_style_type("UPPER-ROMAN"), Some(ListStyleType::UpperRoman));
         assert_eq!(parse_list_style_type("none"), Some(ListStyleType::None));
         // Fase 7.867 — `georgian` ya no se descarta: se aproxima a `Decimal`
-        // (estilo numérico). Un keyword realmente desconocido sí da None.
+        // (estilo numérico).
         assert_eq!(parse_list_style_type("georgian"), Some(ListStyleType::Decimal));
-        assert_eq!(parse_list_style_type("no-existe-tal-estilo"), None);
+        // Fase 7.1218 — un identificador válido desconocido es un
+        // `<custom-ident>` que referencia un `@counter-style` → `Named`
+        // (cae a decimal en render si no está registrado). Sólo valores que
+        // NO son identificadores válidos dan None.
+        assert_eq!(
+            parse_list_style_type("no-existe-tal-estilo"),
+            Some(ListStyleType::Named("no-existe-tal-estilo".into()))
+        );
+        assert_eq!(parse_list_style_type("123abc"), None); // no es ident válido
+        assert_eq!(parse_list_style_type(""), None);
     }
 
 #[test]

@@ -409,7 +409,9 @@ pub(crate) fn build_node(
             // no estamos dentro de una lista reconocible, no se inyecta
             // marker.
             if tag.as_deref() == Some("li") {
-                if let Some(marker) = li_marker(node, &style.list_style_type) {
+                if let Some(marker) =
+                    li_marker(node, &style.list_style_type, styles.counter_styles())
+                {
                     children.push(inline_text_with_style(marker, &style));
                 }
             }

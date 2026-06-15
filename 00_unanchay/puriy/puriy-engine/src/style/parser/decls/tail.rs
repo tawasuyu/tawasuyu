@@ -116,8 +116,25 @@ pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
             Some(ListStyleType::UpperAlpha)
         }
         "disclosure-open" | "disclosure-closed" => Some(ListStyleType::Disc),
+        // Fase 7.1218 — `<custom-ident>` referenciando un `@counter-style`. Se
+        // resuelve en render; si no está registrado, cae a `decimal`. Sólo
+        // aceptamos identificadores CSS válidos (evita tragarse basura).
+        other if is_custom_ident(other) => Some(ListStyleType::Named(other.to_string())),
         _ => None,
     }
+}
+
+/// `true` si `s` es un `<custom-ident>` CSS válido: empieza con letra/`_`/`-`
+/// (o `--`), seguido de letras/dígitos/`_`/`-`. No valida que no colisione con
+/// keywords (el caller ya descartó los conocidos).
+fn is_custom_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' || c == '-' => {}
+        _ => return false,
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 pub(crate) fn parse_text_align(s: &str) -> Option<TextAlign> {

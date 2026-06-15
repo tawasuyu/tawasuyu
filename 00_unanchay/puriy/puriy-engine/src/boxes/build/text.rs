@@ -88,7 +88,11 @@ pub(crate) fn apply_text_transform(s: String, t: TextTransform) -> String {
 /// con el comportamiento de browsers. Marcadores con símbolo usan
 /// `"<sym>  "` (doble espacio) para dar el airecito que tenía el bullet
 /// hardcoded original.
-pub(crate) fn li_marker(node: &Handle, kind: &ListStyleType) -> Option<String> {
+pub(crate) fn li_marker(
+    node: &Handle,
+    kind: &ListStyleType,
+    counter_styles: &[crate::style::CounterStyleRule],
+) -> Option<String> {
     match kind {
         ListStyleType::None => None,
         // Fase 7.1216 — marcador string literal (verbatim, el autor controla
@@ -100,6 +104,12 @@ pub(crate) fn li_marker(node: &Handle, kind: &ListStyleType) -> Option<String> {
                 Some(s.clone())
             }
         }
+        // Fase 7.1218 — `@counter-style` referenciado por nombre. Si no está
+        // registrado (o su sistema no lo soportamos), cae a `decimal`.
+        ListStyleType::Named(name) => Some(
+            format_named_counter(name, ol_item_position(node), counter_styles, 0)
+                .unwrap_or_else(|| format!("{}. ", ol_item_position(node))),
+        ),
         ListStyleType::Disc => Some("• ".into()),
         ListStyleType::Circle => Some("◦ ".into()),
         ListStyleType::Square => Some("▪ ".into()),
@@ -117,6 +127,116 @@ pub(crate) fn li_marker(node: &Handle, kind: &ListStyleType) -> Option<String> {
             Some(format!("{}. ", to_roman(ol_item_position(node), true)))
         }
     }
+}
+
+/// Quita comillas simples/dobles de un descriptor de `@counter-style`.
+fn unq(s: &str) -> &str {
+    let t = s.trim();
+    if t.len() >= 2
+        && ((t.starts_with('"') && t.ends_with('"')) || (t.starts_with('\'') && t.ends_with('\'')))
+    {
+        &t[1..t.len() - 1]
+    } else {
+        t
+    }
+}
+
+/// Tokeniza la lista `symbols` de un `@counter-style` en símbolos individuales.
+/// Tokens separados por whitespace; cada uno puede ir entre comillas
+/// (`"◆" "◇"`) o suelto (`A B C`). Las comillas se retiran.
+fn parse_symbols(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote: Option<char> = None;
+    for c in s.chars() {
+        match quote {
+            Some(q) => {
+                if c == q {
+                    quote = None;
+                    out.push(std::mem::take(&mut cur));
+                } else {
+                    cur.push(c);
+                }
+            }
+            None => {
+                if c == '"' || c == '\'' {
+                    quote = Some(c);
+                } else if c.is_whitespace() {
+                    if !cur.is_empty() {
+                        out.push(std::mem::take(&mut cur));
+                    }
+                } else {
+                    cur.push(c);
+                }
+            }
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Formatea `n` con el `@counter-style` registrado bajo `name` (CSS Counter
+/// Styles 3). Soporta los sistemas symbols-based más comunes —`cyclic`,
+/// `symbolic`, `fixed`— con `prefix`/`suffix` (suffix default `". "`). Sistemas
+/// `numeric`/`alphabetic`/`additive`/`extends` u otros casos (símbolos vacíos,
+/// fuera de rango en `fixed`/`symbolic`) caen a `fallback` (recursivo, con tope
+/// anti-ciclo) o, en última instancia, devuelven `None` para que el caller use
+/// `decimal`. Fase 7.1218.
+pub(crate) fn format_named_counter(
+    name: &str,
+    n: i32,
+    styles: &[crate::style::CounterStyleRule],
+    depth: u8,
+) -> Option<String> {
+    if depth > 8 {
+        return None; // tope anti-ciclo → el caller usa decimal
+    }
+    let rule = styles.iter().find(|r| r.name.eq_ignore_ascii_case(name))?;
+    let fb = |styles: &[crate::style::CounterStyleRule]| {
+        rule.fallback
+            .as_deref()
+            .map(|f| f.trim())
+            .filter(|f| !f.is_empty())
+            .and_then(|f| format_named_counter(f, n, styles, depth + 1))
+    };
+    let system_raw = rule.system.as_deref().unwrap_or("symbolic");
+    let mut sysw = system_raw.split_whitespace();
+    let sys = sysw.next().unwrap_or("symbolic").to_ascii_lowercase();
+    let symbols = parse_symbols(rule.symbols.as_deref().unwrap_or(""));
+    let len = symbols.len() as i32;
+    if len == 0 {
+        return fb(styles);
+    }
+    let core = match sys.as_str() {
+        // Recorre los símbolos cíclicamente; admite n<=0 vía rem_euclid.
+        "cyclic" => symbols[((n - 1).rem_euclid(len)) as usize].clone(),
+        // Cada símbolo una vez desde `first` (default 1); fuera de rango → fallback.
+        "fixed" => {
+            let first: i32 = sysw.next().and_then(|s| s.parse().ok()).unwrap_or(1);
+            let idx = n - first;
+            if idx < 0 || idx >= len {
+                return fb(styles);
+            }
+            symbols[idx as usize].clone()
+        }
+        // Símbolo cíclico repetido ⌈n/len⌉ veces (sólo n>=1).
+        "symbolic" => {
+            if n < 1 {
+                return fb(styles);
+            }
+            let idx = ((n - 1) % len) as usize;
+            let count = ((n - 1) / len + 1) as usize;
+            symbols[idx].repeat(count)
+        }
+        // numeric/alphabetic/additive/extends u otros: no modelados → fallback.
+        _ => return fb(styles),
+    };
+    let prefix = rule.prefix.as_deref().map(unq).unwrap_or("");
+    // suffix default ". " (initial del descriptor en CSS Counter Styles 3).
+    let suffix = rule.suffix.as_deref().map(unq).unwrap_or(". ");
+    Some(format!("{prefix}{core}{suffix}"))
 }
 
 /// Posición 1-indexed del `<li>` entre sus hermanos `<li>` del padre.

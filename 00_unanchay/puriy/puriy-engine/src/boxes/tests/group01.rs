@@ -96,6 +96,68 @@ use crate::Engine;
     }
 
     #[test]
+    fn counter_style_cyclic_marker_fase_7_1218() {
+        // @counter-style cyclic con un símbolo: todos los <li> usan ese símbolo.
+        let html = "<html><head><style>\
+            @counter-style estrella { system: cyclic; symbols: \"\u{2605}\"; suffix: \" \"; }\
+            ul { list-style-type: estrella; }\
+            </style></head><body><ul><li>a</li><li>b</li></ul></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.starts_with('★') {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        assert_eq!(markers, vec!["★ ".to_string(), "★ ".to_string()]);
+    }
+
+    #[test]
+    fn counter_style_symbolic_y_fallback_fase_7_1218() {
+        // system: symbolic con 2 símbolos repite: item3 → "**" (con prefix/suffix).
+        let html = "<html><head><style>\
+            @counter-style sym { system: symbolic; symbols: \"*\" \"\u{2020}\"; prefix: \"[\"; suffix: \"] \"; }\
+            ol { list-style-type: sym; }\
+            </style></head><body><ol><li>1</li><li>2</li><li>3</li></ol></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.starts_with('[') {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        // n=1 → "*", n=2 → "†", n=3 → "**" (símbolo[0] repetido 2 veces).
+        assert_eq!(
+            markers,
+            vec!["[*] ".to_string(), "[†] ".to_string(), "[**] ".to_string()]
+        );
+    }
+
+    #[test]
+    fn counter_style_no_registrado_cae_a_decimal_fase_7_1218() {
+        // list-style-type con un nombre custom sin @counter-style → decimal.
+        let html = "<html><head><style>ol { list-style-type: inexistente; }</style></head>\
+            <body><ol><li>x</li><li>y</li></ol></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.ends_with(". ") {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        assert_eq!(markers, vec!["1. ".to_string(), "2. ".to_string()]);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

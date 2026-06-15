@@ -30,6 +30,10 @@ pub enum ListStyleType {
     /// `list-style-type: "<string>"` (CSS Lists 3): el marcador es el string
     /// literal, verbatim (el autor controla el espaciado). Fase 7.1216.
     Str(String),
+    /// `list-style-type: <custom-ident>` que referencia un `@counter-style`
+    /// registrado (CSS Counter Styles 3). Se resuelve en render contra el
+    /// registro; si no está definido, cae a `decimal`. Fase 7.1218.
+    Named(String),
 }
 
 /// Línea decorativa que el chrome dibuja sobre/atravesando/debajo del
