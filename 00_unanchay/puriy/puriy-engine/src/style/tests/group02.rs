@@ -961,7 +961,7 @@ use super::super::*;
         assert_eq!(
             r,
             ClipPath::Circle {
-                radius: LengthVal::Px(30.0),
+                radius: ClipRadius::Len(LengthVal::Px(30.0)),
                 cx: LengthVal::Pct(50.0),
                 cy: LengthVal::Pct(50.0)
             }
@@ -971,18 +971,31 @@ use super::super::*;
         assert_eq!(
             r,
             ClipPath::Circle {
-                radius: LengthVal::Pct(50.0),
+                radius: ClipRadius::Len(LengthVal::Pct(50.0)),
                 cx: LengthVal::Pct(50.0),
                 cy: LengthVal::Pct(50.0)
             }
         );
+        // circle() vacío → closest-side (default de la spec); keyword explícito.
+        assert_eq!(
+            parse_clip_path("circle()").unwrap(),
+            ClipPath::Circle {
+                radius: ClipRadius::ClosestSide,
+                cx: LengthVal::Pct(50.0),
+                cy: LengthVal::Pct(50.0)
+            }
+        );
+        assert!(matches!(
+            parse_clip_path("circle(farthest-side at 0 0)").unwrap(),
+            ClipPath::Circle { radius: ClipRadius::FarthestSide, .. }
+        ));
         // ellipse default centro, radios px.
         let r = parse_clip_path("ellipse(20px 10px)").unwrap();
         assert_eq!(
             r,
             ClipPath::Ellipse {
-                rx: LengthVal::Px(20.0),
-                ry: LengthVal::Px(10.0),
+                rx: ClipRadius::Len(LengthVal::Px(20.0)),
+                ry: ClipRadius::Len(LengthVal::Px(10.0)),
                 cx: LengthVal::Pct(50.0),
                 cy: LengthVal::Pct(50.0)
             }
@@ -992,8 +1005,18 @@ use super::super::*;
         assert_eq!(
             r,
             ClipPath::Ellipse {
-                rx: LengthVal::Pct(25.0),
-                ry: LengthVal::Pct(40.0),
+                rx: ClipRadius::Len(LengthVal::Pct(25.0)),
+                ry: ClipRadius::Len(LengthVal::Pct(40.0)),
+                cx: LengthVal::Pct(50.0),
+                cy: LengthVal::Pct(50.0)
+            }
+        );
+        // ellipse con keywords de lado mixtos.
+        assert_eq!(
+            parse_clip_path("ellipse(farthest-side closest-side)").unwrap(),
+            ClipPath::Ellipse {
+                rx: ClipRadius::FarthestSide,
+                ry: ClipRadius::ClosestSide,
                 cx: LengthVal::Pct(50.0),
                 cy: LengthVal::Pct(50.0)
             }

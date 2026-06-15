@@ -154,17 +154,19 @@ pub struct BoxNode {
     /// rectangulares (circle/ellipse) no se modelan acá. Fase 7.1219.
     pub clip_inset: Option<[f32; 4]>,
     /// `clip-path: circle(...)` / `ellipse(...)` resuelto a un spec elíptico
-    /// de 12 floats. El centro (4): `[cx_px, cx_pct, cy_px, cy_pct]` →
-    /// `(cx_px + cx_pct/100·w, cy_px + cy_pct/100·h)`. Cada radio (4): `[px,
-    /// pct_w, pct_h, pct_diag]` → `px + pct_w/100·w + pct_h/100·h +
-    /// pct_diag/100·(√(w²+h²)/√2)`, así un mismo formato cubre las tres bases
-    /// de `%` de CSS (ellipse rx→ancho, ry→alto; circle→diagonal). Layout:
-    /// `[cx_px, cx_pct, cy_px, cy_pct, rx_px, rx_pw, rx_ph, rx_pd, ry_px,
-    /// ry_pw, ry_ph, ry_pd]`. El chrome recorta el subárbol a esa elipse.
-    /// `None` = sin clip-path elíptico. Resolución de % se difiere al
-    /// compositor (necesita el rect del nodo). Fase 7.1220 (rect),
-    /// 7.1221 (radios %).
-    pub clip_ellipse: Option<[f32; 12]>,
+    /// de 14 floats. El centro (4): `[cx_px, cx_pct, cy_px, cy_pct]` →
+    /// `(cx_px + cx_pct/100·w, cy_px + cy_pct/100·h)`. Cada radio (5): `[px,
+    /// pct_w, pct_h, pct_diag, side]`. Con `side == 0`: `px + pct_w/100·w +
+    /// pct_h/100·h + pct_diag/100·(√(w²+h²)/√2)` (un mismo formato cubre las
+    /// tres bases de `%`: ellipse rx→ancho, ry→alto; circle→diagonal). Con
+    /// `side != 0` se ignora px/pct y el compositor computa el radio desde la
+    /// distancia del centro a los bordes: `1`=closest-side y `2`=farthest-side
+    /// base circle (min/max sobre los 4 lados); `3`/`4` ídem base eje (rx→lados
+    /// horizontales, ry→verticales). Layout: `[cx×2, cy×2, rx×5, ry×5]`. El
+    /// chrome recorta el subárbol a esa elipse. `None` = sin clip-path
+    /// elíptico. Resolución de % y lados se difiere al compositor (necesita el
+    /// rect). Fase 7.1220 (rect), 7.1221 (radios %), 7.1222 (lados).
+    pub clip_ellipse: Option<[f32; 14]>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

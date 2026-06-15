@@ -196,8 +196,10 @@ use crate::Engine;
             <div id=\"c1\" style=\"clip-path: circle(30px at 50% 50%)\">a</div>\
             <div id=\"c2\" style=\"clip-path: circle(40px at 10px 20px)\">b</div>\
             <div id=\"c3\" style=\"clip-path: circle(50%)\">f</div>\
+            <div id=\"c4\" style=\"clip-path: circle()\">h</div>\
             <div id=\"e1\" style=\"clip-path: ellipse(20px 10px)\">c</div>\
             <div id=\"e2\" style=\"clip-path: ellipse(25% 40%)\">g</div>\
+            <div id=\"e3\" style=\"clip-path: ellipse(farthest-side closest-side)\">i</div>\
             <div id=\"ins\" style=\"clip-path: inset(5px)\">d</div>\
             <div id=\"n\">e</div>\
             </body></html>";
@@ -212,30 +214,42 @@ use crate::Engine;
             });
             found.expect("box existe")
         };
-        // circle px con centro 50%/50% → radios px iguales sobre base diagonal.
+        // Layout del spec: [cx_px, cx_pct, cy_px, cy_pct, rx×5, ry×5] donde cada
+        // radio es [px, pct_w, pct_h, pct_diag, side].
+        // circle px, centro 50%/50% → radios px iguales, side 0.
         assert_eq!(
             by_id("c1"),
-            Some([0.0, 50.0, 0.0, 50.0, 30.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0])
+            Some([0.0, 50.0, 0.0, 50.0, 30.0, 0.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0, 0.0])
         );
-        // circle px con centro en px.
+        // circle px, centro en px.
         assert_eq!(
             by_id("c2"),
-            Some([10.0, 0.0, 20.0, 0.0, 40.0, 0.0, 0.0, 0.0, 40.0, 0.0, 0.0, 0.0])
+            Some([10.0, 0.0, 20.0, 0.0, 40.0, 0.0, 0.0, 0.0, 0.0, 40.0, 0.0, 0.0, 0.0, 0.0])
         );
-        // circle(50%) → radio % sobre base DIAGONAL (ranura pct_diag), ambos.
+        // circle(50%) → radio % sobre base DIAGONAL (ranura pct_diag), side 0.
         assert_eq!(
             by_id("c3"),
-            Some([0.0, 50.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0])
+            Some([0.0, 50.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 0.0, 50.0, 0.0])
+        );
+        // circle() vacío → closest-side base circle (side=1) en ambos radios.
+        assert_eq!(
+            by_id("c4"),
+            Some([0.0, 50.0, 0.0, 50.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0])
         );
         // ellipse px sin `at` → centro default 50%/50%, radios px distintos.
         assert_eq!(
             by_id("e1"),
-            Some([0.0, 50.0, 0.0, 50.0, 20.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0])
+            Some([0.0, 50.0, 0.0, 50.0, 20.0, 0.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 0.0])
         );
         // ellipse % → rx% sobre ancho (pct_w), ry% sobre alto (pct_h).
         assert_eq!(
             by_id("e2"),
-            Some([0.0, 50.0, 0.0, 50.0, 0.0, 25.0, 0.0, 0.0, 0.0, 0.0, 40.0, 0.0])
+            Some([0.0, 50.0, 0.0, 50.0, 0.0, 25.0, 0.0, 0.0, 0.0, 0.0, 0.0, 40.0, 0.0, 0.0])
+        );
+        // ellipse keywords → side base eje: rx farthest=4, ry closest=3.
+        assert_eq!(
+            by_id("e3"),
+            Some([0.0, 50.0, 0.0, 50.0, 0.0, 0.0, 0.0, 0.0, 4.0, 0.0, 0.0, 0.0, 0.0, 3.0])
         );
         // inset() → es rectangular, no llena clip_ellipse.
         assert_eq!(by_id("ins"), None);

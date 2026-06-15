@@ -34,6 +34,23 @@ fn clip_radius_quad(v: LengthVal, basis: RadBasis) -> [f32; 4] {
     }
 }
 
+/// `ClipRadius` → quíntuple `[px, pct_w, pct_h, pct_diag, side]` para un radio
+/// de clip-path. `Len` delega en `clip_radius_quad` con `side = 0`. Un keyword
+/// de lado pone px/pct en 0 y codifica `side`: `circle` ⇒ `1`=closest /
+/// `2`=farthest (base 4 lados); `ellipse` ⇒ `3`=closest / `4`=farthest (base
+/// eje). El compositor decide la geometría según `side`. Fase 7.1222.
+fn clip_radius_quint(r: crate::style::ClipRadius, basis: RadBasis, circle: bool) -> [f32; 5] {
+    use crate::style::ClipRadius;
+    match r {
+        ClipRadius::Len(v) => {
+            let q = clip_radius_quad(v, basis);
+            [q[0], q[1], q[2], q[3], 0.0]
+        }
+        ClipRadius::ClosestSide => [0.0, 0.0, 0.0, 0.0, if circle { 1.0 } else { 3.0 }],
+        ClipRadius::FarthestSide => [0.0, 0.0, 0.0, 0.0, if circle { 2.0 } else { 4.0 }],
+    }
+}
+
 /// `true` si el padre establece un contexto flex/grid — único caso en que
 /// `margin-top/bottom: auto` centra (en block flow CSS lo computa a 0).
 fn parent_is_flex_grid(p: Option<&ComputedStyle>) -> bool {
@@ -567,28 +584,30 @@ pub(crate) fn build_node(
                     }
                     _ => None,
                 },
-                // Fase 7.1220/7.1221 — clip-path: circle()/ellipse() → spec
-                // elíptico de 12 floats: centro [cx_px, cx_pct, cy_px, cy_pct]
-                // + dos radios [px, pct_w, pct_h, pct_diag]. El % se difiere al
-                // compositor (depende del rect). circle ⇒ rx == ry sobre base
-                // diagonal; ellipse rx sobre ancho, ry sobre alto.
+                // Fase 7.1220/7.1221/7.1222 — clip-path: circle()/ellipse() →
+                // spec elíptico de 14 floats: centro [cx_px, cx_pct, cy_px,
+                // cy_pct] + dos radios [px, pct_w, pct_h, pct_diag, side]. El %
+                // y los lados se difieren al compositor (dependen del rect).
+                // circle ⇒ rx == ry sobre base diagonal/4-lados; ellipse rx
+                // sobre ancho/eje-x, ry sobre alto/eje-y.
                 clip_ellipse: match style.clip_path {
                     Some(crate::style::ClipPath::Circle { radius, cx, cy }) => {
                         let (cxp, cxc) = clip_len_pair(cx);
                         let (cyp, cyc) = clip_len_pair(cy);
-                        let r = clip_radius_quad(radius, RadBasis::Diag);
+                        let r = clip_radius_quint(radius, RadBasis::Diag, true);
                         Some([
-                            cxp, cxc, cyp, cyc, r[0], r[1], r[2], r[3], r[0], r[1], r[2], r[3],
+                            cxp, cxc, cyp, cyc, r[0], r[1], r[2], r[3], r[4], r[0], r[1], r[2],
+                            r[3], r[4],
                         ])
                     }
                     Some(crate::style::ClipPath::Ellipse { rx, ry, cx, cy }) => {
                         let (cxp, cxc) = clip_len_pair(cx);
                         let (cyp, cyc) = clip_len_pair(cy);
-                        let rx = clip_radius_quad(rx, RadBasis::Width);
-                        let ry = clip_radius_quad(ry, RadBasis::Height);
+                        let rx = clip_radius_quint(rx, RadBasis::Width, false);
+                        let ry = clip_radius_quint(ry, RadBasis::Height, false);
                         Some([
-                            cxp, cxc, cyp, cyc, rx[0], rx[1], rx[2], rx[3], ry[0], ry[1], ry[2],
-                            ry[3],
+                            cxp, cxc, cyp, cyc, rx[0], rx[1], rx[2], rx[3], rx[4], ry[0], ry[1],
+                            ry[2], ry[3], ry[4],
                         ])
                     }
                     _ => None,

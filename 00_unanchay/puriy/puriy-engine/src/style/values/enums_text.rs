@@ -350,6 +350,17 @@ pub enum TouchAction {
     },
 }
 
+/// Radio de `circle()`/`ellipse()` de clip-path: una `<length-percentage>`
+/// o un keyword de lado. `closest-side`/`farthest-side` resuelven contra la
+/// distancia del centro a los bordes de la caja (en el compositor, que tiene
+/// el rect). Default de un radio ausente = `ClosestSide`. Fase 7.1222.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ClipRadius {
+    Len(LengthVal),
+    ClosestSide,
+    FarthestSide,
+}
+
 /// `clip-path` (CSS Masking 1). Subset: `inset()`, `circle()`, `ellipse()`.
 /// `polygon()` y `path()` quedan fuera por ahora — la mayoría del wild
 /// usa formas básicas. `None` (afuera del enum) = `clip-path: none`.
@@ -360,14 +371,14 @@ pub enum ClipPath {
     /// offsets en px desde cada borde; `radius` (opcional) curva las
     /// esquinas. La spec acepta `<length-percentage>`; acá guardamos px.
     Inset { top: f32, right: f32, bottom: f32, left: f32, radius: f32 },
-    /// `circle(<radius> [at <x> <y>])`. `radius` es `<length-percentage>`;
-    /// un `%` resuelve contra `√(w²+h²)/√2` (la diagonal de la caja de
-    /// referencia, no resuelto acá). Centro default `50% 50%`. Fase 7.1221:
-    /// `radius` pasó de `f32` px a `LengthVal` para admitir `circle(50%)`.
-    Circle { radius: LengthVal, cx: LengthVal, cy: LengthVal },
-    /// `ellipse(<rx> <ry> [at <x> <y>])`. `rx`/`ry` son `<length-percentage>`;
-    /// `rx%` resuelve contra el ancho y `ry%` contra el alto de la caja.
-    Ellipse { rx: LengthVal, ry: LengthVal, cx: LengthVal, cy: LengthVal },
+    /// `circle(<radius> [at <x> <y>])`. `radius` es `<length-percentage>` (un
+    /// `%` resuelve contra `√(w²+h²)/√2`, la diagonal de la caja) o un keyword
+    /// `closest-side`/`farthest-side`. Centro default `50% 50%`. Fase 7.1222:
+    /// `radius` pasó de `LengthVal` a `ClipRadius` (admite keywords).
+    Circle { radius: ClipRadius, cx: LengthVal, cy: LengthVal },
+    /// `ellipse(<rx> <ry> [at <x> <y>])`. `rx`/`ry` son `<length-percentage>`
+    /// (`rx%`→ancho, `ry%`→alto) o keywords de lado (sobre el eje respectivo).
+    Ellipse { rx: ClipRadius, ry: ClipRadius, cx: LengthVal, cy: LengthVal },
 }
 
 /// `mask-image` (CSS Masking 1). Subset: `url(...)`. `image()`,

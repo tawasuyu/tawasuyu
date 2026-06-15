@@ -442,16 +442,17 @@ pub struct View<Msg> {
     /// rect ENCOGIDO por esos insets (px) desde el rect del nodo — modela
     /// `clip-path: inset(...)`. Implica clip aunque `clip == false`.
     pub clip_inset: Option<[f32; 4]>,
-    /// Si `Some(spec)` (12 floats), recorta los descendientes a una ELIPSE —
+    /// Si `Some(spec)` (14 floats), recorta los descendientes a una ELIPSE —
     /// modela `clip-path: circle()`/`ellipse()`. El centro (4) se resuelve
     /// contra el rect: `cx = cx_px + cx_pct/100·w`, `cy = cy_px +
-    /// cy_pct/100·h`. Cada radio (4: `[px, pct_w, pct_h, pct_diag]`) suma sus
-    /// contribuciones: `px + pct_w/100·w + pct_h/100·h + pct_diag/100·diag`,
-    /// con `diag = √(w²+h²)/√2`. Layout: `[cx_px, cx_pct, cy_px, cy_pct,
-    /// rx_px, rx_pw, rx_ph, rx_pd, ry_px, ry_pw, ry_ph, ry_pd]`. Implica clip
-    /// aunque `clip == false`. Si conviven `clip_inset` y `clip_ellipse`, gana
-    /// la elipse (una sola capa de recorte por nodo).
-    pub clip_ellipse: Option<[f32; 12]>,
+    /// cy_pct/100·h`. Cada radio (5: `[px, pct_w, pct_h, pct_diag, side]`) con
+    /// `side == 0` suma `px + pct_w/100·w + pct_h/100·h + pct_diag/100·diag`
+    /// (`diag = √(w²+h²)/√2`); con `side != 0` se computa desde la distancia
+    /// del centro a los bordes (`1`/`2` = closest/farthest sobre los 4 lados;
+    /// `3`/`4` = ídem sobre el eje del radio). Layout: `[cx×2, cy×2, rx×5,
+    /// ry×5]`. Implica clip aunque `clip == false`. Si conviven `clip_inset` y
+    /// `clip_ellipse`, gana la elipse (una sola capa de recorte por nodo).
+    pub clip_ellipse: Option<[f32; 14]>,
     /// Msg a emitir cuando el cursor entra al rect del nodo (transición
     /// no-hover → hover). Útil para previews tipo "URL del link al
     /// pasar el mouse".
@@ -767,7 +768,7 @@ pub struct MountedNode<Msg> {
     pub drop_hover_fill: Option<Color>,
     pub clip: bool,
     pub clip_inset: Option<[f32; 4]>,
-    pub clip_ellipse: Option<[f32; 12]>,
+    pub clip_ellipse: Option<[f32; 14]>,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_pointer_move_at: Option<ClickAtFn<Msg>>,

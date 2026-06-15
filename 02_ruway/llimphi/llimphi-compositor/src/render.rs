@@ -263,6 +263,42 @@ pub(crate) fn node_rrect(
     RoundedRect::new(x0 + inset, y0 + inset, x1 - inset, y1 - inset, radii)
 }
 
+/// Resuelve un radio de `clip-path: circle()/ellipse()` a px, dado su
+/// quíntuple `[px, pct_w, pct_h, pct_diag, side]`, el centro local `(cxl,
+/// cyl)` (relativo al origen del rect), el tamaño `(w, h)` y si el radio es
+/// del eje X (`is_x`). Con `side == 0` suma px + porcentajes (diag =
+/// √(w²+h²)/√2). Con `side != 0` ignora px/pct y mide la distancia del centro
+/// a los bordes: `1`/`2` = closest/farthest sobre los 4 lados (circle);
+/// `3`/`4` = ídem sobre el eje del radio (ellipse). Fase 7.1222.
+fn resolve_clip_radius(q: &[f32], cxl: f64, cyl: f64, w: f64, h: f64, is_x: bool) -> f64 {
+    let side = q[4] as i32;
+    if side == 0 {
+        let diag = (w * w + h * h).sqrt() / core::f64::consts::SQRT_2;
+        return q[0] as f64 + q[1] as f64 / 100.0 * w + q[2] as f64 / 100.0 * h
+            + q[3] as f64 / 100.0 * diag;
+    }
+    let (dx_near, dx_far) = (cxl.min(w - cxl), cxl.max(w - cxl));
+    let (dy_near, dy_far) = (cyl.min(h - cyl), cyl.max(h - cyl));
+    match side {
+        1 => dx_near.min(dy_near), // closest-side, circle (4 lados)
+        2 => dx_far.max(dy_far),   // farthest-side, circle
+        3 => {
+            if is_x {
+                dx_near
+            } else {
+                dy_near
+            }
+        } // closest-side, ellipse (eje)
+        _ => {
+            if is_x {
+                dx_far
+            } else {
+                dy_far
+            }
+        } // 4 = farthest-side, ellipse
+    }
+}
+
 pub fn paint<Msg>(
     scene: &mut vello::Scene,
     mounted: &Mounted<Msg>,
@@ -680,17 +716,16 @@ pub fn paint_range<Msg>(
             // sólo afecta el pintado, una aproximación menor en su banda.
             if let Some(s) = node.clip_ellipse {
                 // `clip-path: circle()/ellipse()` — capa elíptica. Centro y
-                // radios resuelven sus porcentajes contra el rect del nodo. Cada
-                // radio suma [px, pct_w·w, pct_h·h, pct_diag·diag]; diag es la
-                // base de circle (√(w²+h²)/√2), ancho/alto las de ellipse.
-                let cx = (r.x + s[0] + s[1] / 100.0 * r.w) as f64;
-                let cy = (r.y + s[2] + s[3] / 100.0 * r.h) as f64;
-                let diag = ((r.w * r.w + r.h * r.h).sqrt() / core::f32::consts::SQRT_2) as f64;
+                // radios resuelven contra el rect del nodo. El centro local
+                // (relativo al origen del rect) alimenta tanto la posición como
+                // el cómputo de los lados (closest/farthest-side).
                 let (w, h) = (r.w as f64, r.h as f64);
-                let rx = s[4] as f64 + s[5] as f64 / 100.0 * w + s[6] as f64 / 100.0 * h
-                    + s[7] as f64 / 100.0 * diag;
-                let ry = s[8] as f64 + s[9] as f64 / 100.0 * w + s[10] as f64 / 100.0 * h
-                    + s[11] as f64 / 100.0 * diag;
+                let cxl = s[0] as f64 + s[1] as f64 / 100.0 * w;
+                let cyl = s[2] as f64 + s[3] as f64 / 100.0 * h;
+                let cx = r.x as f64 + cxl;
+                let cy = r.y as f64 + cyl;
+                let rx = resolve_clip_radius(&s[4..9], cxl, cyl, w, h, true);
+                let ry = resolve_clip_radius(&s[9..14], cxl, cyl, w, h, false);
                 let ellipse = Ellipse::new((cx, cy), (rx, ry), 0.0);
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &ellipse);
             } else {
@@ -1179,6 +1214,42 @@ mod tests {
     use llimphi_layout::taffy::prelude::*;
     use llimphi_layout::{LayoutTree, Style};
     use vello::kurbo::Affine;
+
+    #[test]
+    fn resolve_clip_radius_lados_y_porcentajes() {
+        use super::resolve_clip_radius;
+        // Caja 200×100, centro al (50%,50%) = (100,50) local.
+        let (w, h, cxl, cyl): (f64, f64, f64, f64) = (200.0, 100.0, 100.0, 50.0);
+        // side 0: px + pct_w·w + pct_h·h + pct_diag·diag.
+        let diag = (w * w + h * h).sqrt() / core::f64::consts::SQRT_2;
+        let r = resolve_clip_radius(&[10.0, 0.0, 0.0, 50.0, 0.0], cxl, cyl, w, h, true);
+        assert!((r - (10.0 + 0.5 * diag)).abs() < 1e-6);
+        // closest-side circle (1): min(100,100,50,50) = 50.
+        assert_eq!(
+            resolve_clip_radius(&[0.0, 0.0, 0.0, 0.0, 1.0], cxl, cyl, w, h, true),
+            50.0
+        );
+        // farthest-side circle (2): max(...) = 100.
+        assert_eq!(
+            resolve_clip_radius(&[0.0, 0.0, 0.0, 0.0, 2.0], cxl, cyl, w, h, true),
+            100.0
+        );
+        // closest-side ellipse eje X (3, is_x): min(cxl, w-cxl) = 100.
+        assert_eq!(
+            resolve_clip_radius(&[0.0, 0.0, 0.0, 0.0, 3.0], cxl, cyl, w, h, true),
+            100.0
+        );
+        // closest-side ellipse eje Y (3, !is_x): min(cyl, h-cyl) = 50.
+        assert_eq!(
+            resolve_clip_radius(&[0.0, 0.0, 0.0, 0.0, 3.0], cxl, cyl, w, h, false),
+            50.0
+        );
+        // Centro descentrado (30, 20): closest circle = min(30,170,20,80)=20.
+        assert_eq!(
+            resolve_clip_radius(&[0.0, 0.0, 0.0, 0.0, 1.0], 30.0, 20.0, w, h, true),
+            20.0
+        );
+    }
 
     /// Un hijo clickeable de 100×100 anclado arriba-izquierda. Devuelve
     /// `(mounted, computed)` ya layouteados sobre un viewport 400×400.

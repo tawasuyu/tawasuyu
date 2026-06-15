@@ -90,33 +90,48 @@ fn parse_inset_shape(args: &str) -> Option<ClipPath> {
     Some(ClipPath::Inset { top, right, bottom, left, radius })
 }
 
+/// Un radio de basic-shape: keyword de lado o `<length-percentage>`. Fase 7.1222.
+fn parse_clip_radius(s: &str) -> Option<ClipRadius> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "closest-side" => Some(ClipRadius::ClosestSide),
+        "farthest-side" => Some(ClipRadius::FarthestSide),
+        other => parse_length_or_pct(other).map(ClipRadius::Len),
+    }
+}
+
 /// `circle(<radius> [at <x> <y>])`. `radius` es `<length-percentage>` (un
-/// `%` resuelve contra la diagonal de la caja, en el compositor); centro
-/// default 50%/50%. Vacío → `0px` (sin radio; `closest-side` no se modela).
+/// `%` resuelve contra la diagonal de la caja, en el compositor) o
+/// `closest-side`/`farthest-side`; centro default 50%/50%. Vacío →
+/// `closest-side` (el default de la spec).
 fn parse_circle_shape(args: &str) -> Option<ClipPath> {
     let (radius_str, center) = match args.find(" at ") {
         Some(idx) => (args[..idx].trim(), args[idx + " at ".len()..].trim()),
         None => (args, ""),
     };
     let radius = if radius_str.is_empty() {
-        LengthVal::Px(0.0)
+        ClipRadius::ClosestSide
     } else {
-        parse_length_or_pct(radius_str)?
+        parse_clip_radius(radius_str)?
     };
     let (cx, cy) = parse_center(center);
     Some(ClipPath::Circle { radius, cx, cy })
 }
 
 /// `ellipse(<rx> <ry> [at <x> <y>])`. `rx`/`ry` son `<length-percentage>`
-/// (`%` resuelve contra ancho/alto respectivamente, en el compositor).
+/// (`%`→ancho/alto) o keywords de lado. Sin radios → ambos `closest-side`.
 fn parse_ellipse_shape(args: &str) -> Option<ClipPath> {
     let (radii_str, center) = match args.find(" at ") {
         Some(idx) => (args[..idx].trim(), args[idx + " at ".len()..].trim()),
         None => (args, ""),
     };
-    let mut tokens = radii_str.split_whitespace();
-    let rx = parse_length_or_pct(tokens.next()?)?;
-    let ry = parse_length_or_pct(tokens.next()?)?;
+    let (rx, ry) = if radii_str.is_empty() {
+        (ClipRadius::ClosestSide, ClipRadius::ClosestSide)
+    } else {
+        let mut tokens = radii_str.split_whitespace();
+        let rx = parse_clip_radius(tokens.next()?)?;
+        let ry = parse_clip_radius(tokens.next()?)?;
+        (rx, ry)
+    };
     let (cx, cy) = parse_center(center);
     Some(ClipPath::Ellipse { rx, ry, cx, cy })
 }
