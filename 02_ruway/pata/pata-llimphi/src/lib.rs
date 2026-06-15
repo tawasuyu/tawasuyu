@@ -597,7 +597,12 @@ impl Model {
     /// reinicio—. Cubre el caso típico: reordenar el dock / editar la barra.
     fn recargar_config(&mut self) {
         let cfg = pata_config::load();
-        self.frame = pata_core::resolve(&cfg, Rect::new(0, 0, self.screen.0, self.screen.1));
+        let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
+        self.frame = pata_core::resolve(
+            &cfg,
+            Rect::new(0, 0, self.screen.0, self.screen.1),
+            dientes_outside,
+        );
         self.surfaces = Self::construir_surfaces(&cfg);
         self.cards = Self::construir_cards(&cfg);
         let mut theme = Theme::dark();
@@ -802,7 +807,8 @@ impl App for PataApp {
     fn init(handle: &Handle<Msg>) -> Model {
         let cfg = pata_config::load();
         let screen = PANTALLA;
-        let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1));
+        let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
+        let frame = pata_core::resolve(&cfg, Rect::new(0, 0, screen.0, screen.1), dientes_outside);
         let (surfaces, shuma) = Model::construir(&cfg);
         let cards = Model::construir_cards(&cfg);
         let mut sampler = Sampler::with_utc(usa_utc(&cfg));

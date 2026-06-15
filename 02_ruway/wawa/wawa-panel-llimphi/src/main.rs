@@ -592,7 +592,7 @@ fn sistema_schema(cfg: &WawaConfig) -> Schema {
     Schema::new()
         .section(appearance_section(cfg))
         .section(idioma_section(cfg))
-        .section(interfaz_section())
+        .section(interfaz_section(cfg))
         .section(arranque_section())
         .section(modulos_section(cfg))
 }
@@ -633,11 +633,18 @@ fn idioma_section(cfg: &WawaConfig) -> Section {
 
 /// Interfaz (llimphi): toolkit del SO. Controles reales próximamente (present
 /// mode, fuente, animaciones) — por ahora informativo.
-fn interfaz_section() -> Section {
+fn interfaz_section(cfg: &WawaConfig) -> Section {
     Section::new("wawa::interfaz", "Interfaz")
         .icon("🎛")
         .help("El toolkit gráfico del sistema (llimphi)")
         .field(Field::display("toolkit", "Toolkit", "llimphi"))
+        // Decisión GLOBAL de dónde van los rails de dientes (sidebars). Todas
+        // las apps con dientes se rigen por esto, no por app.
+        .field(Field::toggle(
+            "dientes_outside",
+            "Dientes fuera del área de trabajo",
+            cfg.dientes_outside,
+        ))
         .field(Field::display(
             "proximamente",
             "Próximamente",
@@ -821,6 +828,11 @@ fn apply_wawa(m: &mut Model, leaf: &str, value: FieldValue) {
         "timefmt_24h" => {
             if let Some(b) = value.as_bool() {
                 m.cfg.timefmt_24h = b;
+            }
+        }
+        "dientes_outside" => {
+            if let Some(b) = value.as_bool() {
+                m.cfg.dientes_outside = b;
             }
         }
         // Cualquier otro id es un toggle de módulo.

@@ -442,7 +442,7 @@ pub(crate) fn pintar_marco(lienzo: &mut Lienzo, area: RegionPantalla) {
         area.ancho as i32,
         area.alto as i32,
     );
-    let frame = resolve(&cfg, pantalla);
+    let frame = resolve(&cfg, pantalla, false); // dientes dentro (kernel)
     let ctx = ctx_kernel();
     for placed in &frame.surfaces {
         let s = &cfg.surfaces[placed.index];
@@ -467,7 +467,7 @@ pub(crate) fn start_button_rect(area: RegionPantalla) -> Option<RegionPantalla> 
         area.ancho as i32,
         area.alto as i32,
     );
-    let frame = resolve(&cfg, pantalla);
+    let frame = resolve(&cfg, pantalla, false); // dientes dentro (kernel)
     let ctx = ctx_kernel();
     for placed in &frame.surfaces {
         let s = &cfg.surfaces[placed.index];

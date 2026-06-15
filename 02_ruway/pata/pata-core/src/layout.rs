@@ -100,25 +100,34 @@ fn shrink(area: Rect, anchor: Anchor, t: i32) -> Rect {
 /// Resuelve el marco sobre una pantalla. Recorre las superficies en orden: las
 /// barras sólidas se apilan reservando franja (la segunda barra del mismo borde
 /// va pegada a la primera); las `autohide`, docks y paneles flotan sin reservar.
-pub fn resolve(config: &Config, screen: Rect) -> Frame {
+pub fn resolve(config: &Config, screen: Rect, dientes_outside: bool) -> Frame {
     let mut work = screen;
     let mut surfaces = Vec::with_capacity(config.surfaces.len());
 
     for (index, s) in config.surfaces.iter().enumerate() {
         let t = s.thickness as i32;
         let (rect, reserva) = match s.kind {
-            // Una barra y el rail de un sidebar reservan igual: su grosor pegado
-            // al borde, salvo que sean autohide (entonces flotan sin reservar).
-            // El panel que despliega un diente del sidebar no es parte de
-            // `resolve` —flota sobre el área de trabajo como un drawer de
-            // launcher, lo maneja el frontend—.
-            SurfaceKind::Bar | SurfaceKind::Sidebar => {
+            // Una barra reserva su grosor pegado al borde (salvo autohide).
+            SurfaceKind::Bar => {
                 let r = strip(work, s.anchor, t);
                 if s.autohide {
                     (r, false)
                 } else {
                     work = shrink(work, s.anchor, t);
                     (r, true)
+                }
+            }
+            // El rail de dientes: reserva franja («fuera» del área) o flota como
+            // overlay sobre ella («dentro»), según la decisión GLOBAL
+            // `dientes_outside` (WawaConfig) — la misma para TODAS las apps. El
+            // panel que despliega un diente flota aparte (lo maneja el frontend).
+            SurfaceKind::Sidebar => {
+                let r = strip(work, s.anchor, t);
+                if dientes_outside && !s.autohide {
+                    work = shrink(work, s.anchor, t);
+                    (r, true)
+                } else {
+                    (r, false)
                 }
             }
             // Dock: franja pegada al borde del área actual, sin reservar.
@@ -155,7 +164,7 @@ mod tests {
         top.thickness = 32.0;
         cfg.surfaces.push(top);
 
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces[0].rect, Rect::new(0, 0, 1920, 32));
         assert!(f.surfaces[0].reserva);
         // El área de trabajo arranca 32px más abajo.
@@ -170,7 +179,7 @@ mod tests {
         shell.autohide = true;
         cfg.surfaces.push(shell);
 
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         // El rect de la barra existe, pegado al pie…
         assert_eq!(f.surfaces[0].rect, Rect::new(0, 1080 - 40, 1920, 40));
         assert!(!f.surfaces[0].reserva);
@@ -179,23 +188,30 @@ mod tests {
     }
 
     #[test]
-    fn preset_reserva_top_y_sidebar_pero_no_shell() {
-        // Preset: top (bar, thickness 44) + sidebar izquierdo (rail 44) +
-        // shell inferior autohide. La top y el sidebar reservan franja; el
-        // shell no, así un fullscreen cabe debajo de la top.
+    fn preset_default_reserva_top_pero_los_dientes_van_dentro() {
+        // Con `dientes_outside=false` (default global): la top reserva su franja
+        // pero el rail de dientes flota DENTRO del área (overlay, canónico) — no
+        // reserva. El shell autohide tampoco.
         let cfg = Config::preset();
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces.len(), 3);
-        assert!(f.surfaces[0].reserva); // top
-        assert!(f.surfaces[1].reserva); // sidebar left
+        assert!(f.surfaces[0].reserva); // top reserva
+        assert!(!f.surfaces[1].reserva); // dientes DENTRO → overlay, no reserva
         assert!(!f.surfaces[2].reserva); // shell autohide
-        // work_area: descuenta los 44 de la top arriba y los 44 del sidebar
-        // izquierda.
         let wa = f.work_area;
-        assert_eq!(wa.y, 44);
-        assert_eq!(wa.x, 44);
-        assert_eq!(wa.h, 1080 - 44);
-        assert_eq!(wa.w, 1920 - 44);
+        assert_eq!(wa.y, 44); // sólo la top descuenta arriba
+        assert_eq!(wa.x, 0); // el rail no descuenta a la izquierda (overlay)
+        assert_eq!(wa.w, 1920);
+    }
+
+    #[test]
+    fn dientes_outside_hace_que_el_rail_reserve() {
+        // La misma preset con la decisión global «fuera»: el rail SÍ reserva.
+        let cfg = Config::preset();
+        let f = resolve(&cfg, pantalla(), true);
+        assert!(f.surfaces[1].reserva);
+        assert_eq!(f.work_area.x, 44);
+        assert_eq!(f.work_area.w, 1920 - 44);
     }
 
     #[test]
@@ -208,7 +224,7 @@ mod tests {
         cfg.surfaces.push(a);
         cfg.surfaces.push(b);
 
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces[0].rect, Rect::new(0, 0, 1920, 24));
         // La segunda va pegada bajo la primera.
         assert_eq!(f.surfaces[1].rect, Rect::new(0, 24, 1920, 30));
@@ -222,7 +238,7 @@ mod tests {
         left.thickness = 48.0;
         cfg.surfaces.push(left);
 
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces[0].rect, Rect::new(0, 0, 48, 1080));
         assert_eq!(f.work_area, Rect::new(48, 0, 1920 - 48, 1080));
     }
@@ -235,7 +251,7 @@ mod tests {
             d.thickness = 64.0;
             d
         });
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces[0].rect, Rect::new(0, 1080 - 64, 1920, 64));
         assert!(!f.surfaces[0].reserva);
         assert_eq!(f.work_area, pantalla());
@@ -253,7 +269,7 @@ mod tests {
         panel.center.push(WidgetSpec::new("ram_meter"));
         cfg.surfaces.push(panel);
 
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces[1].rect, Rect::new(0, 32, 1920, 1048));
         assert!(!f.surfaces[1].reserva);
         assert_eq!(f.work_area, Rect::new(0, 32, 1920, 1048));
@@ -266,7 +282,8 @@ mod tests {
         sb.thickness = 44.0;
         cfg.surfaces.push(sb);
 
-        let f = resolve(&cfg, pantalla());
+        // Con la decisión global «fuera» el rail reserva como una barra vertical.
+        let f = resolve(&cfg, pantalla(), true);
         // El rail toma una franja vertical fina pegada a la izquierda…
         assert_eq!(f.surfaces[0].rect, Rect::new(0, 0, 44, 1080));
         assert!(f.surfaces[0].reserva);
@@ -283,7 +300,7 @@ mod tests {
         sb.autohide = true;
         cfg.surfaces.push(sb);
 
-        let f = resolve(&cfg, pantalla());
+        let f = resolve(&cfg, pantalla(), false);
         assert_eq!(f.surfaces[0].rect, Rect::new(1920 - 44, 0, 44, 1080));
         assert!(!f.surfaces[0].reserva);
         assert_eq!(f.work_area, pantalla());
@@ -291,7 +308,7 @@ mod tests {
 
     #[test]
     fn sin_superficies_el_area_es_la_pantalla() {
-        let f = resolve(&Config::default(), pantalla());
+        let f = resolve(&Config::default(), pantalla(), false);
         assert!(f.surfaces.is_empty());
         assert_eq!(f.work_area, pantalla());
     }

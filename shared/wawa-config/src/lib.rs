@@ -223,6 +223,14 @@ pub struct WawaConfig {
     /// limpios en git.
     #[serde(default = "default_modules")]
     pub modules: BTreeMap<String, bool>,
+
+    /// **Decisión global** de dónde van los rails de dientes (sidebars
+    /// acoplables) respecto al área de trabajo: `false` (default) = DENTRO
+    /// (overlay pegado al borde interno, como cosmos); `true` = FUERA (reservan
+    /// su franja, achicando el contenido). TODAS las apps con dientes deben
+    /// regirse por esto — una sola fuente de verdad, no por app.
+    #[serde(default)]
+    pub dientes_outside: bool,
 }
 
 fn default_theme_variant() -> String {
@@ -252,6 +260,7 @@ impl Default for WawaConfig {
             lang: default_lang(),
             timefmt_24h: default_timefmt(),
             modules: default_modules(),
+            dientes_outside: false,
         }
     }
 }
