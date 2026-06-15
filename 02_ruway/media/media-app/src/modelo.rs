@@ -67,6 +67,9 @@ pub(crate) struct Model {
     /// Línea de estado del panel de perfiles (errores / confirmaciones).
     pub(crate) prof_msg: Option<String>,
     pub(crate) _host: Option<pata_host::HostClient>,
+    /// Oyente del puente de drag-and-drop (mirada → este proceso). Vivo
+    /// mientras exista el modelo; al soltarse limpia su socket.
+    pub(crate) _drop: Option<drop_bridge::DropListener>,
 }
 
 /// Abre un medio en caliente y refleja el resultado en OSD + línea de estado.
@@ -230,6 +233,18 @@ impl App for MediaApp {
             prof_focus: None,
             prof_msg: None,
             _host: media_host(handle),
+            _drop: {
+                // Puente de drag-and-drop: mirada nos manda las rutas soltadas
+                // sobre nuestra ventana (winit no entrega DnD en Wayland).
+                let h = handle.clone();
+                match drop_bridge::listen(move |path| h.dispatch(Msg::OpenPath(path))) {
+                    Ok(g) => Some(g),
+                    Err(e) => {
+                        eprintln!("media-app: puente de drop off ({e})");
+                        None
+                    }
+                }
+            },
         }
     }
 

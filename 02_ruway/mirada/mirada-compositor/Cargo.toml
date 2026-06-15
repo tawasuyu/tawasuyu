@@ -17,6 +17,9 @@ mirada-brain = { path = "../mirada-brain" }
 mirada-body = { path = "../mirada-body" }
 mirada-link = { path = "../mirada-link" }
 auth-core = { path = "../../../shared/auth/auth-core" }
+# Puente de drag-and-drop: reenvía a las apps tawasuyu las rutas soltadas
+# (winit no recibe DnD en Wayland). Ver `started`/`dropped` en handlers.rs.
+drop-bridge = { workspace = true }
 nix = { workspace = true }
 smithay = "0.7"
 # Rasterizado de texto sobre CPU (etiquetas: barra de título, menú). Es un

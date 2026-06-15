@@ -13,7 +13,8 @@ use smithay::wayland::shell::xdg::{PopupSurface, PositionerState, ToplevelSurfac
 use smithay::wayland::shell::xdg::decoration::{XdgDecorationHandler};
 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode as DecorationMode;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::wayland::selection::data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler};
+use smithay::wayland::selection::data_device::{with_source_metadata, ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler};
+use smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource;
 use smithay::wayland::selection::wlr_data_control::{DataControlHandler, DataControlState};
 use smithay::wayland::selection::SelectionHandler;
 use smithay::wayland::buffer::BufferHandler;
@@ -397,7 +398,78 @@ impl DataControlHandler for App {
         &self.data_control_state
     }
 }
-impl ClientDndGrabHandler for App {}
+impl ClientDndGrabHandler for App {
+    /// Inicio de un drag de cliente: si el origen ofrece `text/uri-list`
+    /// (un drag de archivos), le pedimos los datos **ahora** y los leemos en
+    /// un hilo. Hay que hacerlo al INICIO porque al soltar, smithay ya canceló
+    /// el `wl_data_source` cuando el destino no aceptó el offer — y winit (el
+    /// toolkit de las apps tawasuyu) nunca acepta DnD en Wayland.
+    fn started(&mut self, source: Option<WlDataSource>, _icon: Option<WlSurface>, _seat: Seat<Self>) {
+        use std::os::fd::AsFd;
+        self.dnd_paths = None;
+        let Some(source) = source else { return };
+        let has_uris = with_source_metadata(&source, |m| {
+            m.mime_types.iter().any(|t| t == "text/uri-list")
+        })
+        .unwrap_or(false);
+        if !has_uris {
+            return;
+        }
+        let (read_fd, write_fd) = match nix::unistd::pipe() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("mirada: dnd pipe falló: {e}");
+                return;
+            }
+        };
+        // Pedimos al origen que escriba el uri-list en nuestra punta de
+        // escritura; soltamos nuestra copia para que el lector vea EOF.
+        source.send("text/uri-list".to_string(), write_fd.as_fd());
+        drop(write_fd);
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        self.dnd_paths = Some(slot.clone());
+        std::thread::spawn(move || {
+            use std::io::Read;
+            let mut buf = Vec::new();
+            let mut f = std::fs::File::from(read_fd);
+            let _ = f.read_to_end(&mut buf);
+            let paths = drop_bridge::parse_uri_list(&buf);
+            *slot.lock().unwrap() = Some(paths);
+        });
+    }
+
+    /// Drop: si cayó sobre una ventana, reenviamos las rutas leídas al proceso
+    /// destino por `drop-bridge` (best-effort: si no escucha, no es app
+    /// tawasuyu y no pasa nada). Esperamos en un hilo a que el lector termine.
+    fn dropped(&mut self, target: Option<WlSurface>, _validated: bool, _seat: Seat<Self>) {
+        let Some(slot) = self.dnd_paths.take() else { return };
+        let Some(surface) = target else { return };
+        let pid = surface
+            .client()
+            .and_then(|c| c.get_data::<ClientState>().and_then(|s| s.pid));
+        let Some(pid) = pid else { return };
+        std::thread::spawn(move || {
+            // El hilo lector suele terminar en µs; toleramos hasta ~500ms.
+            for _ in 0..100 {
+                let ready = slot.lock().unwrap().clone();
+                if let Some(paths) = ready {
+                    if !paths.is_empty() {
+                        match drop_bridge::send(pid as u32, &paths) {
+                            Ok(()) => eprintln!(
+                                "mirada: drop → pid {pid}: {} archivo(s) reenviados",
+                                paths.len()
+                            ),
+                            Err(_) => { /* el destino no escucha: no es app tawasuyu */ }
+                        }
+                    }
+                    return;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            eprintln!("mirada: drop: el origen no entregó el uri-list a tiempo");
+        });
+    }
+}
 impl ServerDndGrabHandler for App {
     fn send(&mut self, _mime_type: String, _fd: std::os::unix::io::OwnedFd, _seat: Seat<Self>) {}
 }

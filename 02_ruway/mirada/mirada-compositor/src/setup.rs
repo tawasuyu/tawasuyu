@@ -357,6 +357,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         pointer_loc: (0.0, 0.0),
         cursor_status: CursorImageStatus::default_named(),
         drag: None,
+        dnd_paths: None,
         output_size: (0, 0),
         // Con autohide, el dock arranca oculto (se revela al tocar el borde).
         shell_hidden: shell_dock().autohide,

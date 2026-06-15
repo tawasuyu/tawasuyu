@@ -1,0 +1,11 @@
+[package]
+name = "drop-bridge"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "drop-bridge — puente de soltar-archivos entre el compositor (mirada) y las apps tawasuyu. Suple que winit NO entrega drag-and-drop en Wayland: mirada intercepta el drop sobre una ventana tawasuyu, lee las rutas (text/uri-list) y se las manda al proceso destino por un socket Unix nombrado por su PID; la app escucha y abre lo soltado."
+
+[dependencies]

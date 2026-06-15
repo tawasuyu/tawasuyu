@@ -485,6 +485,7 @@ members = [
     "shared/card/card-core",
     "shared/card/card-net",
     "shared/card/card-wit",
+    "shared/drop-bridge",
     "shared/foreign-av",
     "shared/foreign-fs",
     "shared/foreign-psd",
@@ -531,6 +532,8 @@ repository = "https://git.tawasuyu.net/tawasuyu/tawasuyu"
 allichay = { path = "shared/allichay" }
 # === Registro de apps / menú global ===
 app-bus = { path = "shared/app-bus" }
+# === Puente de drag-and-drop compositor → app (suple winit en Wayland) ===
+drop-bridge = { path = "shared/drop-bridge" }
 # === Serialización ===
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

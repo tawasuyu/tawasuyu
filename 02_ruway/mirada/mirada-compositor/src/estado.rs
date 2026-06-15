@@ -316,6 +316,13 @@ pub(crate) struct App {
     pub(crate) cursor_status: CursorImageStatus,
     /// Arrastre de ventana en curso (mover o redimensionar con el ratón).
     pub(crate) drag: Option<DragGrab>,
+    /// Rutas del drag-and-drop **de archivos** en curso, leídas del origen al
+    /// iniciar el drag (`text/uri-list`). Suple el DnD que winit NO recibe en
+    /// Wayland: al soltar sobre una app tawasuyu, mirada reenvía estas rutas
+    /// por `drop-bridge`. El `Option` interno es `None` hasta que el hilo
+    /// lector termina; `None` externo = no hay drag de archivos.
+    pub(crate) dnd_paths:
+        Option<std::sync::Arc<std::sync::Mutex<Option<Vec<std::path::PathBuf>>>>>,
     /// Tamaño real de la salida (con la franja del shell incluida) — lo
     /// fija el backend; sirve para acoplar la ventana del shell.
     pub(crate) output_size: (i32, i32),
