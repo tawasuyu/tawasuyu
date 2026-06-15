@@ -567,3 +567,33 @@ use super::super::*;
                    style_of("hyphenate-limit-lines: 3").hyphenate_limit_lines);
         assert_eq!(style_of("-webkit-hyphenate-limit-lines: 3").hyphenate_limit_lines, Some(3));
     }
+
+    #[test]
+    fn scroll_snap_margin_padding_aliases_fase_7_1021_1030() {
+        // Los nombres legacy scroll-snap-margin*/scroll-snap-padding*
+        // (CSS Scroll Snap v0) deben producir el MISMO computed que los
+        // estándar scroll-margin*/scroll-padding*.
+        assert_eq!(style_of("scroll-snap-margin: 10px").scroll_margin.top,
+                   style_of("scroll-margin: 10px").scroll_margin.top);
+        assert_eq!(style_of("scroll-snap-margin-top: 7px").scroll_margin.top,
+                   style_of("scroll-margin-top: 7px").scroll_margin.top);
+        assert_eq!(style_of("scroll-snap-margin-right: 7px").scroll_margin.right,
+                   style_of("scroll-margin-right: 7px").scroll_margin.right);
+        assert_eq!(style_of("scroll-snap-margin-bottom: 7px").scroll_margin.bottom,
+                   style_of("scroll-margin-bottom: 7px").scroll_margin.bottom);
+        assert_eq!(style_of("scroll-snap-margin-left: 7px").scroll_margin.left,
+                   style_of("scroll-margin-left: 7px").scroll_margin.left);
+        assert_eq!(style_of("scroll-snap-padding: 5px").scroll_padding.top,
+                   style_of("scroll-padding: 5px").scroll_padding.top);
+        assert_eq!(style_of("scroll-snap-padding-top: 3px").scroll_padding.top,
+                   style_of("scroll-padding-top: 3px").scroll_padding.top);
+        assert_eq!(style_of("scroll-snap-padding-right: 3px").scroll_padding.right,
+                   style_of("scroll-padding-right: 3px").scroll_padding.right);
+        assert_eq!(style_of("scroll-snap-padding-bottom: 3px").scroll_padding.bottom,
+                   style_of("scroll-padding-bottom: 3px").scroll_padding.bottom);
+        assert_eq!(style_of("scroll-snap-padding-left: 3px").scroll_padding.left,
+                   style_of("scroll-padding-left: 3px").scroll_padding.left);
+        // Y efectivamente parseó (no quedó en default).
+        assert_ne!(style_of("scroll-snap-margin-top: 7px").scroll_margin.top,
+                   ComputedStyle::default().scroll_margin.top);
+    }

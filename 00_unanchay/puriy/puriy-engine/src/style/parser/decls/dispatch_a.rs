@@ -439,20 +439,24 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             parse_scroll_snap_align(value).map(DeclKind::ScrollSnapAlignInline)
         }
         "scroll-snap-stop" => parse_scroll_snap_stop(value).map(DeclKind::ScrollSnapStop),
-        "scroll-padding" => parse_sides_lp(value).map(DeclKind::ScrollPadding),
-        "scroll-padding-top" => parse_length_or_pct(value).map(DeclKind::ScrollPaddingTop),
-        "scroll-padding-right" => {
+        // Fase 7.1021-7.1025 — `scroll-snap-padding*` es el nombre legacy
+        // (CSS Scroll Snap v0, Blink/Gecko 2016) de `scroll-padding*`. Alias.
+        "scroll-padding" | "scroll-snap-padding" => parse_sides_lp(value).map(DeclKind::ScrollPadding),
+        "scroll-padding-top" | "scroll-snap-padding-top" => parse_length_or_pct(value).map(DeclKind::ScrollPaddingTop),
+        "scroll-padding-right" | "scroll-snap-padding-right" => {
             parse_length_or_pct(value).map(DeclKind::ScrollPaddingRight)
         }
-        "scroll-padding-bottom" => {
+        "scroll-padding-bottom" | "scroll-snap-padding-bottom" => {
             parse_length_or_pct(value).map(DeclKind::ScrollPaddingBottom)
         }
-        "scroll-padding-left" => parse_length_or_pct(value).map(DeclKind::ScrollPaddingLeft),
-        "scroll-margin" => parse_sides(value).map(DeclKind::ScrollMargin),
-        "scroll-margin-top" => parse_length_px(value).map(DeclKind::ScrollMarginTop),
-        "scroll-margin-right" => parse_length_px(value).map(DeclKind::ScrollMarginRight),
-        "scroll-margin-bottom" => parse_length_px(value).map(DeclKind::ScrollMarginBottom),
-        "scroll-margin-left" => parse_length_px(value).map(DeclKind::ScrollMarginLeft),
+        "scroll-padding-left" | "scroll-snap-padding-left" => parse_length_or_pct(value).map(DeclKind::ScrollPaddingLeft),
+        // Fase 7.1026-7.1030 — `scroll-snap-margin*` es el nombre legacy
+        // (CSS Scroll Snap v0) de `scroll-margin*`. Alias.
+        "scroll-margin" | "scroll-snap-margin" => parse_sides(value).map(DeclKind::ScrollMargin),
+        "scroll-margin-top" | "scroll-snap-margin-top" => parse_length_px(value).map(DeclKind::ScrollMarginTop),
+        "scroll-margin-right" | "scroll-snap-margin-right" => parse_length_px(value).map(DeclKind::ScrollMarginRight),
+        "scroll-margin-bottom" | "scroll-snap-margin-bottom" => parse_length_px(value).map(DeclKind::ScrollMarginBottom),
+        "scroll-margin-left" | "scroll-snap-margin-left" => parse_length_px(value).map(DeclKind::ScrollMarginLeft),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
