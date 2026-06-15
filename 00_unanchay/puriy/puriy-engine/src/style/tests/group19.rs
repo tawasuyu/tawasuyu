@@ -536,3 +536,23 @@ fn has_complejo_matchea() {
         (9, 9, 9)
     );
 }
+
+// ── Fase 7.939 — :is()/:where() son forgiving-selector-lists ───────────────
+
+#[test]
+fn is_where_forgiving() {
+    // Parte inválida se descarta; la válida queda y el :is() NO se invalida.
+    let s = parse_selector(":where(.a, !!!nope)").expect("forgiving: no invalida");
+    let _ = s;
+    // p.t:is(.t, $$bad) sigue aplicando vía la parte válida .t.
+    assert_eq!(
+        p_color_in("<p class='t'></p>", "p:is(.t, $$bad) { color: rgb(2,2,2) }"),
+        (2, 2, 2)
+    );
+    // :is() con TODO inválido → lista vacía → matchea nada (no rompe el parse).
+    assert!(parse_selector("p:is(@@@, ###)").is_some());
+    assert_eq!(
+        p_color_in("<p class='t'></p>", "p:is(@@@) { color: rgb(2,2,2) } p { color: rgb(9,9,9) }"),
+        (9, 9, 9)
+    );
+}

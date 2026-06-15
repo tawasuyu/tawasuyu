@@ -878,6 +878,17 @@ fn sondeo_selectores() {
         "*::before",                  // universal + pseudo-elemento
         "h1 + h2 ~ p",                // combinadores encadenados
         ".grid > *:nth-child(3n)",    // universal con nth
+        // ── lote 3 selectores: forgiving lists, multi-combinador, exóticos ──
+        ":is(.valid, ::garbagepseudo)",  // :is forgiving → ignora la parte inválida
+        ":where(.a, !!!nope)",           // :where forgiving
+        "div:has(> .a .b)",              // combinador + descendiente en :has
+        "div:has(~ .sibling)",           // sibling general en :has
+        "div:has(+ .next)",              // sibling adyacente en :has
+        ":has(.a):has(.b)",              // dos :has encadenados en un compound
+        "section:has(h1):has(p)",
+        ".a:is(.b):not(.c)",             // :is y :not en el mismo compound
+        "li:nth-child(2n of .item)",     // of S con An+B
+        ":is(:is(.deep))",               // :is anidado
         // ── combos que ya deberían andar (control) ──
         "ul > li:first-child",
         "a[href^='https']:hover",

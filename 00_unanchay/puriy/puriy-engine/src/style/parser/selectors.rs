@@ -366,14 +366,15 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                         }
                         "is" | "where" => {
                             // CSS Selectors 4: lista de selectores COMPLEJOS
-                            // (`:is(h1 .a, nav > li)`). Fase 7.938.
-                            let mut inner = Vec::new();
-                            for part in split_selector_list(arg) {
-                                inner.push(parse_selector(part.trim())?);
-                            }
-                            if inner.is_empty() {
-                                return None;
-                            }
+                            // (`:is(h1 .a, nav > li)`). Fase 7.938. Es una
+                            // **forgiving-selector-list** (Fase 7.939): las
+                            // partes inválidas se DESCARTAN sin invalidar el
+                            // `:is()`/`:where()` entero. Una lista vacía es
+                            // válida y no matchea nada.
+                            let inner: Vec<Selector> = split_selector_list(arg)
+                                .into_iter()
+                                .filter_map(|part| parse_selector(part.trim()))
+                                .collect();
                             if name == "is" {
                                 Pseudo::Is(inner)
                             } else {
