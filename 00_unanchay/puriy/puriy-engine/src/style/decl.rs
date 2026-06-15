@@ -1283,6 +1283,11 @@ pub(crate) enum DeclKind {
     OverflowClipMarginLeft(Option<String>),
     OverflowClipMarginBlock(Option<String>),
     OverflowClipMarginInline(Option<String>),
+    // === Fase 7.1207-7.1210 — overflow-clip-margin lógicas (CSS Overflow 4) ===
+    OverflowClipMarginBlockStart(Option<String>),
+    OverflowClipMarginBlockEnd(Option<String>),
+    OverflowClipMarginInlineStart(Option<String>),
+    OverflowClipMarginInlineEnd(Option<String>),
 }
 
 impl Decl {
@@ -2203,6 +2208,11 @@ impl Decl {
             DeclKind::OverflowClipMarginLeft(v) => s.overflow_clip_margin_left = v.clone(),
             DeclKind::OverflowClipMarginBlock(v) => s.overflow_clip_margin_block = v.clone(),
             DeclKind::OverflowClipMarginInline(v) => s.overflow_clip_margin_inline = v.clone(),
+            // Fase 7.1207-7.1210 — overflow-clip-margin lógicas, plumb opaco.
+            DeclKind::OverflowClipMarginBlockStart(v) => s.overflow_clip_margin_block_start = v.clone(),
+            DeclKind::OverflowClipMarginBlockEnd(v) => s.overflow_clip_margin_block_end = v.clone(),
+            DeclKind::OverflowClipMarginInlineStart(v) => s.overflow_clip_margin_inline_start = v.clone(),
+            DeclKind::OverflowClipMarginInlineEnd(v) => s.overflow_clip_margin_inline_end = v.clone(),
         }
     }
 }

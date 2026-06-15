@@ -770,6 +770,11 @@ impl Default for ComputedStyle {
             overflow_clip_margin_left: None,
             overflow_clip_margin_block: None,
             overflow_clip_margin_inline: None,
+            // Fase 7.1207-7.1210 — overflow-clip-margin lógicas, default None.
+            overflow_clip_margin_block_start: None,
+            overflow_clip_margin_block_end: None,
+            overflow_clip_margin_inline_start: None,
+            overflow_clip_margin_inline_end: None,
         }
     }
 }

@@ -2019,5 +2019,14 @@ pub struct ComputedStyle {
     pub overflow_clip_margin_block: Option<String>,
     /// `overflow-clip-margin-inline` shorthand (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1206.
     pub overflow_clip_margin_inline: Option<String>,
+    // === Fase 7.1207-7.1210 — overflow-clip-margin lógicas (CSS Overflow 4) ===
+    /// `overflow-clip-margin-block-start` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1207.
+    pub overflow_clip_margin_block_start: Option<String>,
+    /// `overflow-clip-margin-block-end` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1208.
+    pub overflow_clip_margin_block_end: Option<String>,
+    /// `overflow-clip-margin-inline-start` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1209.
+    pub overflow_clip_margin_inline_start: Option<String>,
+    /// `overflow-clip-margin-inline-end` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1210.
+    pub overflow_clip_margin_inline_end: Option<String>,
 }
 

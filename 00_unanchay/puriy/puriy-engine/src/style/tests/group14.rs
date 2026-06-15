@@ -1309,3 +1309,20 @@ use super::super::*;
         assert_eq!(style_of("overflow-clip-margin-top: 0px").overflow_clip_margin_top, None);
         assert_eq!(style_of("overflow-clip-margin-block: 0px").overflow_clip_margin_block, None);
     }
+
+    #[test]
+    fn overflow_clip_margin_logicas_fase_7_1207_1210() {
+        let s = style_of(
+            "overflow-clip-margin-block-start: 1px; \
+             overflow-clip-margin-block-end: 2px; \
+             overflow-clip-margin-inline-start: padding-box 3px; \
+             overflow-clip-margin-inline-end: 4px",
+        );
+        assert_eq!(s.overflow_clip_margin_block_start.as_deref(), Some("1px"));
+        assert_eq!(s.overflow_clip_margin_block_end.as_deref(), Some("2px"));
+        assert_eq!(s.overflow_clip_margin_inline_start.as_deref(), Some("padding-box 3px"));
+        assert_eq!(s.overflow_clip_margin_inline_end.as_deref(), Some("4px"));
+        // Sentinel = initial (0px) → None.
+        assert_eq!(style_of("overflow-clip-margin-block-start: 0px").overflow_clip_margin_block_start, None);
+        assert_eq!(style_of("overflow-clip-margin-inline-end: 0px").overflow_clip_margin_inline_end, None);
+    }

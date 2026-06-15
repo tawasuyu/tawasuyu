@@ -666,6 +666,11 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "overflow-clip-margin-left" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginLeft),
         "overflow-clip-margin-block" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginBlock),
         "overflow-clip-margin-inline" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginInline),
+        // === Fase 7.1207-7.1210 — overflow-clip-margin lógicas (CSS Overflow 4) ===
+        "overflow-clip-margin-block-start" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginBlockStart),
+        "overflow-clip-margin-block-end" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginBlockEnd),
+        "overflow-clip-margin-inline-start" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginInlineStart),
+        "overflow-clip-margin-inline-end" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginInlineEnd),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
