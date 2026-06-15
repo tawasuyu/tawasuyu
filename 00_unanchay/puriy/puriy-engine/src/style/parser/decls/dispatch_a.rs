@@ -549,9 +549,11 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // === Fase 7.1093-7.1100 — IE scrollbar-*-color legacy (plumb opaco) ===
         // Sin keyword initial; sentinel "" = no colapsa (sólo vacío → drop).
         // HEREDAN (color de UI heredado como el resto del scrollbar IE).
-        "scrollbar-base-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarBaseColor),
-        "scrollbar-face-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarFaceColor),
-        "scrollbar-track-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarTrackColor),
+        // Fase 7.1174-7.1176 — `-ms-scrollbar-*-color` alias IE (prefijo del
+        // mismo nombre IE sin prefijo).
+        "scrollbar-base-color" | "-ms-scrollbar-base-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarBaseColor),
+        "scrollbar-face-color" | "-ms-scrollbar-face-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarFaceColor),
+        "scrollbar-track-color" | "-ms-scrollbar-track-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarTrackColor),
         "scrollbar-arrow-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarArrowColor),
         "scrollbar-shadow-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarShadowColor),
         "scrollbar-highlight-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarHighlightColor),

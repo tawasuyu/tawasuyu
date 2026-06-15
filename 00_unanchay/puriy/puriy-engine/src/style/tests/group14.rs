@@ -1164,3 +1164,27 @@ use super::super::*;
         assert_eq!(style_of("-ms-scroll-limit-y-min: 0").ms_scroll_limit_y_min, None);
         assert_eq!(style_of("-ms-scroll-translation: none").ms_scroll_translation, None);
     }
+
+    #[test]
+    fn ms_aliases_estandar_fase_7_1169_1176() {
+        // Cada -ms-* debe producir el MISMO computed que su estándar.
+        assert_eq!(style_of("-ms-line-break: strict").line_break,
+                   style_of("line-break: strict").line_break);
+        assert_eq!(style_of("-ms-text-justify: distribute").text_justify,
+                   style_of("text-justify: distribute").text_justify);
+        assert_eq!(style_of("-ms-text-underline-position: under").text_underline_position,
+                   style_of("text-underline-position: under").text_underline_position);
+        assert_eq!(style_of("-ms-zoom: 1.5").zoom, style_of("zoom: 1.5").zoom);
+        assert_eq!(style_of("-ms-scrollbar-base-color: #ccc").scrollbar_base_color,
+                   style_of("scrollbar-base-color: #ccc").scrollbar_base_color);
+        assert_eq!(style_of("-ms-scrollbar-face-color: #ddd").scrollbar_face_color,
+                   style_of("scrollbar-face-color: #ddd").scrollbar_face_color);
+        assert_eq!(style_of("-ms-scrollbar-track-color: #eee").scrollbar_track_color,
+                   style_of("scrollbar-track-color: #eee").scrollbar_track_color);
+        // Y parsearon de verdad (no quedaron en default).
+        assert_ne!(style_of("-ms-line-break: strict").line_break,
+                   ComputedStyle::default().line_break);
+        assert_eq!(style_of("-ms-zoom: 1.5").zoom, Some("1.5".to_string()));
+        assert_eq!(style_of("-ms-scrollbar-base-color: #ccc").scrollbar_base_color,
+                   Some("#ccc".to_string()));
+    }

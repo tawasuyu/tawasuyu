@@ -524,10 +524,13 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "counter-set" => Some(DeclKind::CounterSet(parse_counter_list(value, 0))),
         "quotes" => Some(DeclKind::Quotes(parse_quotes(value))),
         // Fase 7.761 — alias `-webkit-text-underline-position` → estándar.
-        "text-underline-position" | "-webkit-text-underline-position" => {
+        // Fase 7.1171 — `-ms-text-underline-position` alias IE.
+        "text-underline-position" | "-webkit-text-underline-position" | "-ms-text-underline-position" => {
             parse_text_underline_position(value).map(DeclKind::TextUnderlinePosition)
         }
-        "text-justify" => parse_text_justify(value).map(DeclKind::TextJustify),
+        // Fase 7.1170 — `-ms-text-justify` alias IE (valores comunes; los
+        // exclusivos de IE como inter-ideograph/kashida se dropean).
+        "text-justify" | "-ms-text-justify" => parse_text_justify(value).map(DeclKind::TextJustify),
         // `color-adjust` es alias legacy de `print-color-adjust`.
         // Fase 7.748 — alias `-webkit-print-color-adjust` → estándar.
         "print-color-adjust" | "color-adjust" | "-webkit-print-color-adjust" => {
@@ -620,7 +623,8 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "text-wrap" => parse_text_wrap(value).map(DeclKind::TextWrap),
         // Fase 7.631 — `-webkit-line-break` alias vendor de `line-break`.
         // Fase 7.1009 — `-epub-line-break` alias EPUB (WebKit).
-        "line-break" | "-webkit-line-break" | "-epub-line-break" => {
+        // Fase 7.1169 — `-ms-line-break` alias IE.
+        "line-break" | "-webkit-line-break" | "-epub-line-break" | "-ms-line-break" => {
             parse_line_break(value).map(DeclKind::LineBreak)
         }
         "hanging-punctuation" => {

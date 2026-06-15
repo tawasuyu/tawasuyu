@@ -414,7 +414,8 @@ pub(crate) fn dispatch_c(p: &str, value: &str) -> Option<DeclKind> {
             else { Some(DeclKind::WebkitTapHighlightColor(Some(v.to_string()))) }
         }
         // Fase 7.608 — `zoom`. Parse opaco; `normal` → None.
-        "zoom" => {
+        // Fase 7.1173 — `-ms-zoom` alias IE.
+        "zoom" | "-ms-zoom" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("normal") {
