@@ -1200,6 +1200,15 @@ pub(crate) enum DeclKind {
     MsGridRowSpan(Option<String>),
     MsGridColumnAlign(Option<String>),
     MsGridRowAlign(Option<String>),
+    // === Fase 7.1109-7.1116 — IE -ms- exclusions/regions/text (plumb opaco) ===
+    MsTouchSelect(Option<String>),
+    MsTextAutospace(Option<String>),
+    MsWrapFlow(Option<String>),
+    MsWrapMargin(Option<String>),
+    MsWrapThrough(Option<String>),
+    MsFlowInto(Option<String>),
+    MsFlowFrom(Option<String>),
+    MsHyphenateLimitChars(Option<String>),
 }
 
 impl Decl {
@@ -2037,6 +2046,15 @@ impl Decl {
             DeclKind::MsGridRowSpan(v) => s.ms_grid_row_span = v.clone(),
             DeclKind::MsGridColumnAlign(v) => s.ms_grid_column_align = v.clone(),
             DeclKind::MsGridRowAlign(v) => s.ms_grid_row_align = v.clone(),
+            // Fase 7.1109-7.1116 — IE -ms- exclusions/regions/text, plumb opaco.
+            DeclKind::MsTouchSelect(v) => s.ms_touch_select = v.clone(),
+            DeclKind::MsTextAutospace(v) => s.ms_text_autospace = v.clone(),
+            DeclKind::MsWrapFlow(v) => s.ms_wrap_flow = v.clone(),
+            DeclKind::MsWrapMargin(v) => s.ms_wrap_margin = v.clone(),
+            DeclKind::MsWrapThrough(v) => s.ms_wrap_through = v.clone(),
+            DeclKind::MsFlowInto(v) => s.ms_flow_into = v.clone(),
+            DeclKind::MsFlowFrom(v) => s.ms_flow_from = v.clone(),
+            DeclKind::MsHyphenateLimitChars(v) => s.ms_hyphenate_limit_chars = v.clone(),
         }
     }
 }

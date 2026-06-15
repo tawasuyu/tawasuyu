@@ -687,6 +687,15 @@ impl Default for ComputedStyle {
             ms_grid_row_span: None,
             ms_grid_column_align: None,
             ms_grid_row_align: None,
+            // Fase 7.1109-7.1116 — IE -ms- exclusions/regions/text, default None.
+            ms_touch_select: None,
+            ms_text_autospace: None,
+            ms_wrap_flow: None,
+            ms_wrap_margin: None,
+            ms_wrap_through: None,
+            ms_flow_into: None,
+            ms_flow_from: None,
+            ms_hyphenate_limit_chars: None,
         }
     }
 }

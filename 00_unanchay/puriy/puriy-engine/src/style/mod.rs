@@ -509,6 +509,10 @@ impl StyleEngine {
             style.scrollbar_highlight_color = p.scrollbar_highlight_color.clone();
             style.scrollbar_3dlight_color = p.scrollbar_3dlight_color.clone();
             style.scrollbar_darkshadow_color = p.scrollbar_darkshadow_color.clone();
+            // Fase 7.1110/7.1116 — -ms-text-autospace y -ms-hyphenate-limit-chars
+            // heredan (propiedades de texto). El resto del bloque -ms- NO hereda.
+            style.ms_text_autospace = p.ms_text_autospace.clone();
+            style.ms_hyphenate_limit_chars = p.ms_hyphenate_limit_chars.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

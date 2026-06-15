@@ -1862,5 +1862,22 @@ pub struct ComputedStyle {
     pub ms_grid_column_align: Option<String>,
     /// `-ms-grid-row-align` (IE10). `None` = `stretch`. NO hereda. Plumb. Fase 7.1108.
     pub ms_grid_row_align: Option<String>,
+    // === Fase 7.1109-7.1116 — IE -ms- exclusions/regions/text (plumb opaco) ===
+    /// `-ms-touch-select` (IE10). `None` = `grippers`. NO hereda. Plumb. Fase 7.1109.
+    pub ms_touch_select: Option<String>,
+    /// `-ms-text-autospace` (IE). `None` = `none`. HEREDA. Plumb. Fase 7.1110.
+    pub ms_text_autospace: Option<String>,
+    /// `-ms-wrap-flow` (IE10, CSS Exclusions). `None` = `auto`. NO hereda. Plumb. Fase 7.1111.
+    pub ms_wrap_flow: Option<String>,
+    /// `-ms-wrap-margin` (IE10, CSS Exclusions). `None` = `0`. NO hereda. Plumb. Fase 7.1112.
+    pub ms_wrap_margin: Option<String>,
+    /// `-ms-wrap-through` (IE10, CSS Exclusions). `None` = `wrap`. NO hereda. Plumb. Fase 7.1113.
+    pub ms_wrap_through: Option<String>,
+    /// `-ms-flow-into` (IE10, CSS Regions). `None` = `none`. NO hereda. Plumb. Fase 7.1114.
+    pub ms_flow_into: Option<String>,
+    /// `-ms-flow-from` (IE10, CSS Regions). `None` = `none`. NO hereda. Plumb. Fase 7.1115.
+    pub ms_flow_from: Option<String>,
+    /// `-ms-hyphenate-limit-chars` (IE10). `None` = `auto`. HEREDA. Plumb. Fase 7.1116.
+    pub ms_hyphenate_limit_chars: Option<String>,
 }
 

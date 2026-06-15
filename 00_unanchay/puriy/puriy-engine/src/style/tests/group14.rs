@@ -904,3 +904,37 @@ use super::super::*;
         assert_eq!(style_of("-ms-grid-column: 1").ms_grid_column, None);
         assert_eq!(style_of("-ms-grid-row-align: stretch").ms_grid_row_align, None);
     }
+
+    #[test]
+    fn ms_exclusions_regions_text_plumb_fase_7_1109_1116() {
+        let html = r#"<html><body><div style="
+            -ms-touch-select: none;
+            -ms-text-autospace: ideograph-alpha;
+            -ms-wrap-flow: both;
+            -ms-wrap-margin: 10px;
+            -ms-wrap-through: none;
+            -ms-flow-into: region1;
+            -ms-flow-from: region1;
+            -ms-hyphenate-limit-chars: 6 3 3
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.ms_touch_select.as_deref(), Some("none"));
+        assert_eq!(t.ms_text_autospace.as_deref(), Some("ideograph-alpha"));
+        assert_eq!(t.ms_wrap_flow.as_deref(), Some("both"));
+        assert_eq!(t.ms_wrap_margin.as_deref(), Some("10px"));
+        assert_eq!(t.ms_wrap_through.as_deref(), Some("none"));
+        assert_eq!(t.ms_flow_into.as_deref(), Some("region1"));
+        assert_eq!(t.ms_flow_from.as_deref(), Some("region1"));
+        assert_eq!(t.ms_hyphenate_limit_chars.as_deref(), Some("6 3 3"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-wrap-flow: auto").ms_wrap_flow, None);
+        assert_eq!(style_of("-ms-flow-into: none").ms_flow_into, None);
+        // -ms-text-autospace / -ms-hyphenate-limit-chars HEREDAN; resto NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.ms_text_autospace.as_deref(), Some("ideograph-alpha"));
+        assert_eq!(span.ms_hyphenate_limit_chars.as_deref(), Some("6 3 3"));
+        assert_eq!(span.ms_wrap_flow, None);
+        assert_eq!(span.ms_flow_into, None);
+    }

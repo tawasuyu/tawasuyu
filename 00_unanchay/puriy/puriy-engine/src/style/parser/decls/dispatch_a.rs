@@ -560,6 +560,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-ms-grid-row-span" => opaque_or_sentinel(value, "1").map(DeclKind::MsGridRowSpan),
         "-ms-grid-column-align" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsGridColumnAlign),
         "-ms-grid-row-align" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsGridRowAlign),
+        // === Fase 7.1109-7.1116 — IE -ms- exclusions/regions/text (plumb opaco) ===
+        "-ms-touch-select" => opaque_or_sentinel(value, "grippers").map(DeclKind::MsTouchSelect),
+        "-ms-text-autospace" => opaque_or_sentinel(value, "none").map(DeclKind::MsTextAutospace),
+        "-ms-wrap-flow" => opaque_or_sentinel(value, "auto").map(DeclKind::MsWrapFlow),
+        "-ms-wrap-margin" => opaque_or_sentinel(value, "0").map(DeclKind::MsWrapMargin),
+        "-ms-wrap-through" => opaque_or_sentinel(value, "wrap").map(DeclKind::MsWrapThrough),
+        "-ms-flow-into" => opaque_or_sentinel(value, "none").map(DeclKind::MsFlowInto),
+        "-ms-flow-from" => opaque_or_sentinel(value, "none").map(DeclKind::MsFlowFrom),
+        "-ms-hyphenate-limit-chars" => opaque_or_sentinel(value, "auto").map(DeclKind::MsHyphenateLimitChars),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
