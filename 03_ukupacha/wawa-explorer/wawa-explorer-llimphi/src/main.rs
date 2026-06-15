@@ -21,7 +21,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -45,7 +44,7 @@ use llimphi_widget_menubar::{
     DEFAULT_HEIGHT as MENU_H,
 };
 use llimphi_widget_tree::{tree_view, TreePalette, TreeRow, TreeSpec};
-use wawa_explorer_aoe::ClienteAoE;
+use wawa_explorer_aoe::{resolver_iface, ClienteAoE};
 use wawa_explorer_core::{short_hex, Disco};
 
 /// Timeout del fetch AoE: la red local responde en milisegundos; 3 s deja
@@ -881,40 +880,6 @@ fn hex_dump(bytes: &[u8], max_bytes: usize) -> String {
 // =============================================================================
 //  Detección de interfaz default y fetch AoE en background
 // =============================================================================
-
-/// Resuelve la interfaz a usar para AoE. Si el caller pasó una explícita
-/// la honra. Si no, lee `/sys/class/net/` y elige la primera no-loopback
-/// con `operstate=up` y MAC distinta de cero. En cualquier fallo devuelve
-/// `Err(motivo)` legible para mostrar en lugar del botón.
-fn resolver_iface(explicita: Option<&str>) -> Result<String, String> {
-    if let Some(name) = explicita {
-        if name.is_empty() {
-            return Err("interfaz vacía en CLI".into());
-        }
-        return Ok(name.to_string());
-    }
-    let entries = fs::read_dir("/sys/class/net")
-        .map_err(|e| format!("no pude listar /sys/class/net: {e}"))?;
-    let mut candidatas: Vec<String> = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name == "lo" {
-            continue;
-        }
-        let operstate = fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
-            .unwrap_or_default();
-        let address = fs::read_to_string(format!("/sys/class/net/{name}/address"))
-            .unwrap_or_default();
-        if operstate.trim() == "up" && address.trim() != "00:00:00:00:00:00" {
-            candidatas.push(name);
-        }
-    }
-    candidatas.sort();
-    candidatas
-        .into_iter()
-        .next()
-        .ok_or_else(|| "no detecté ninguna interfaz no-loopback con operstate=up".into())
-}
 
 /// Ejecuta un ciclo completo de fetch AoE: abre cliente, broadcast pedido,
 /// espera respuesta, deserializa payload a `Objeto`. Devuelve `FetchOk` o

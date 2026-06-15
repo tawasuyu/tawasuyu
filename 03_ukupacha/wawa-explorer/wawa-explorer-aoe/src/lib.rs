@@ -28,6 +28,41 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+/// Resuelve la interfaz a usar para AoE. Si el caller pasó una explícita la
+/// honra. Si no, lee `/sys/class/net/` y elige la primera no-loopback con
+/// `operstate=up` y MAC distinta de cero. En cualquier fallo devuelve
+/// `Err(motivo)` legible. Es selección de interfaz del cliente AoE — vive acá
+/// (no en el frontend) para que cualquier consumidor (CLI, UI) la reuse (Regla 2).
+pub fn resolver_iface(explicita: Option<&str>) -> std::result::Result<String, String> {
+    if let Some(name) = explicita {
+        if name.is_empty() {
+            return Err("interfaz vacía en CLI".into());
+        }
+        return Ok(name.to_string());
+    }
+    let entries = std::fs::read_dir("/sys/class/net")
+        .map_err(|e| format!("no pude listar /sys/class/net: {e}"))?;
+    let mut candidatas: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "lo" {
+            continue;
+        }
+        let operstate = std::fs::read_to_string(format!("/sys/class/net/{name}/operstate"))
+            .unwrap_or_default();
+        let address = std::fs::read_to_string(format!("/sys/class/net/{name}/address"))
+            .unwrap_or_default();
+        if operstate.trim() == "up" && address.trim() != "00:00:00:00:00:00" {
+            candidatas.push(name);
+        }
+    }
+    candidatas.sort();
+    candidatas
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no detecté ninguna interfaz no-loopback con operstate=up".into())
+}
+
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::mem::{size_of, zeroed};
