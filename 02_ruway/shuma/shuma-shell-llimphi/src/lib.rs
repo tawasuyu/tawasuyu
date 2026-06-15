@@ -125,6 +125,132 @@ pub fn run() {
     llimphi_ui::run::<Shell>();
 }
 
+/// Construye el `Model` de shuma **sin efectos del host** (sin ticks, watcher de
+/// config, cliente de rail, ni disparo de contenedores). Pieza hosteable
+/// (Regla 2): el bin standalone y pata construyen el mismo Model y cada host
+/// engancha sus efectos vía [`spawn_host_effects`]. Los campos de efecto
+/// (`_wawa_watcher`/`_host`) quedan en `None` hasta que el host los provea.
+pub fn new_model() -> Model {
+    let wawa = wawa_config::WawaConfig::load();
+    let theme = wawa_config_llimphi::theme_from_wawa(&wawa, &Theme::dark());
+    let _ = rimay_localize::set_locale(&wawa.lang);
+
+    let cfg = config::ShumaConfig::load_default();
+    let topbar = resolve_slot(cfg.topbar.as_ref()).or_else(|| {
+        Some(Instance::launcher(
+            shuma_module_launcher::State::from_apps_dir(),
+        ))
+    });
+    let bottombar = resolve_slot(cfg.bottombar.as_ref()).or_else(|| {
+        Some(Instance::command_bar(
+            shuma_module_commandbar::State::default(),
+        ))
+    });
+    let main = resolve_slot(cfg.main.as_ref());
+
+    let mut sessions = vec![Session::draft()];
+    for c in load_sessions() {
+        let mut sess = Session::from_config(c);
+        // Sesión persistente: rehidratar el output guardado en el shell
+        // recién construido (los bloques viejos abren plegados).
+        if sess.persist {
+            if let Some(snap) = persist::load_session_output(&sess.name) {
+                if let ModuleState::Shell(st) = &mut sess.shell.state {
+                    st.restore_output(snap);
+                }
+            }
+        }
+        sessions.push(sess);
+    }
+
+    // Grupos de environment: cargar env.json (garantizando el grupo «general»,
+    // destino del builtin `:env`) y aplicar los activos al proceso — los shells
+    // hijos los heredan.
+    let mut env_groups = shuma_config::load_env_groups();
+    if !env_groups.iter().any(|g| g.name == "general") {
+        env_groups.insert(0, shuma_config::EnvGroup::new("general"));
+        let _ = shuma_config::save_env_groups(&env_groups);
+    }
+    for g in &env_groups {
+        if g.active {
+            shuma_config::apply_env_group(g, true);
+        }
+    }
+    let env_groups_mtime = persist::env_groups_mtime();
+
+    let chrome = load_chrome();
+    let active_session = chrome.active_session.min(sessions.len().saturating_sub(1));
+
+    Model {
+        theme,
+        topbar,
+        bottombar,
+        main,
+        sessions,
+        active_session,
+        hovered_session: None,
+        active_tool: chrome.active_tool,
+        session_panel_open: chrome.session_panel_open,
+        dropdown_open: None,
+        containers: Vec::new(),
+        remote_containers: Vec::new(),
+        remote_new_distro: Distro::Ubuntu,
+        containers_full: Vec::new(),
+        container_cfgs: load_container_cfgs(),
+        focused_field: None,
+        hosts: hosts::load_hosts(),
+        host_draft: None,
+        container_draft: None,
+        hosts_modal_open: false,
+        containers_modal_open: false,
+        layouts: load_layouts(),
+        layouts_modal_open: false,
+        explorer: ExplorerCache::default(),
+        layout_name: TextInputState::new(),
+        layout_name_focused: false,
+        viewport: (1280.0, 800.0),
+        session_w: chrome.session_w,
+        sysmon: SystemSampler::new(HISTORY),
+        last_snapshot: None,
+        monitors_width: chrome.monitors_width,
+        extra_history: HashMap::new(),
+        extra_display: HashMap::new(),
+        _wawa_watcher: None,
+        menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
+        ctx_menu: None,
+        env_groups,
+        env_groups_mtime,
+        tick_count: 0,
+        _host: None,
+    }
+}
+
+/// Engancha los efectos que dependen del host (event loop): ticks periódicos,
+/// watcher de `WawaConfig`, cliente del rail de pata, y dispara la verificación
+/// de contenedores de las sesiones. El bin standalone lo llama en `App::init`;
+/// un host como pata proveería sus propios ticks en vez de esto.
+fn spawn_host_effects(model: &mut Model, handle: &Handle<Msg>) {
+    handle.spawn_periodic(TICK, || Msg::Tick);
+    handle.spawn_periodic(SHELL_TICK, || Msg::ShellTick);
+    model._wawa_watcher = {
+        let handle = handle.clone();
+        wawa_config::ConfigWatcher::spawn(move |cfg| {
+            handle.dispatch(Msg::WawaConfigChanged(Box::new(cfg)));
+        })
+        .ok()
+    };
+    for s in &model.sessions {
+        if s.use_container {
+            if let Some(name) = s.container.clone() {
+                handle.dispatch(Msg::EnsureContainer(name));
+            }
+        }
+    }
+    model._host = shuma_host(handle);
+}
+
 // ─── App impl ───────────────────────────────────────────────────────
 
 pub struct Shell;
@@ -146,119 +272,9 @@ impl App for Shell {
     }
 
     fn init(handle: &Handle<Self::Msg>) -> Self::Model {
-        handle.spawn_periodic(TICK, || Msg::Tick);
-        handle.spawn_periodic(SHELL_TICK, || Msg::ShellTick);
-
-        let wawa = wawa_config::WawaConfig::load();
-        let theme = wawa_config_llimphi::theme_from_wawa(&wawa, &Theme::dark());
-        let _ = rimay_localize::set_locale(&wawa.lang);
-        let wawa_watcher = {
-            let handle = handle.clone();
-            wawa_config::ConfigWatcher::spawn(move |cfg| {
-                handle.dispatch(Msg::WawaConfigChanged(Box::new(cfg)));
-            })
-            .ok()
-        };
-
-        let cfg = config::ShumaConfig::load_default();
-        let topbar = resolve_slot(cfg.topbar.as_ref()).or_else(|| {
-            Some(Instance::launcher(
-                shuma_module_launcher::State::from_apps_dir(),
-            ))
-        });
-        let bottombar = resolve_slot(cfg.bottombar.as_ref()).or_else(|| {
-            Some(Instance::command_bar(
-                shuma_module_commandbar::State::default(),
-            ))
-        });
-        let main = resolve_slot(cfg.main.as_ref());
-
-        let mut sessions = vec![Session::draft()];
-        for c in load_sessions() {
-            let mut sess = Session::from_config(c);
-            // Sesión persistente: rehidratar el output guardado en el shell
-            // recién construido (los bloques viejos abren plegados).
-            if sess.persist {
-                if let Some(snap) = persist::load_session_output(&sess.name) {
-                    if let ModuleState::Shell(st) = &mut sess.shell.state {
-                        st.restore_output(snap);
-                    }
-                }
-            }
-            sessions.push(sess);
-        }
-
-        // Grupos de environment: cargar env.json (garantizando el grupo
-        // «general», destino del builtin `:env`) y aplicar los activos al
-        // proceso — los shells hijos los heredan.
-        let mut env_groups = shuma_config::load_env_groups();
-        if !env_groups.iter().any(|g| g.name == "general") {
-            env_groups.insert(0, shuma_config::EnvGroup::new("general"));
-            let _ = shuma_config::save_env_groups(&env_groups);
-        }
-        for g in &env_groups {
-            if g.active {
-                shuma_config::apply_env_group(g, true);
-            }
-        }
-        let env_groups_mtime = persist::env_groups_mtime();
-
-        for s in &sessions {
-            if s.use_container {
-                if let Some(name) = s.container.clone() {
-                    handle.dispatch(Msg::EnsureContainer(name));
-                }
-            }
-        }
-
-        let chrome = load_chrome();
-        let active_session = chrome.active_session.min(sessions.len().saturating_sub(1));
-        let host = shuma_host(handle);
-
-        Model {
-            theme,
-            topbar,
-            bottombar,
-            main,
-            sessions,
-            active_session,
-            hovered_session: None,
-            active_tool: chrome.active_tool,
-            session_panel_open: chrome.session_panel_open,
-            dropdown_open: None,
-            containers: Vec::new(),
-            remote_containers: Vec::new(),
-            remote_new_distro: Distro::Ubuntu,
-            containers_full: Vec::new(),
-            container_cfgs: load_container_cfgs(),
-            focused_field: None,
-            hosts: hosts::load_hosts(),
-            host_draft: None,
-            container_draft: None,
-            hosts_modal_open: false,
-            containers_modal_open: false,
-            layouts: load_layouts(),
-            layouts_modal_open: false,
-            explorer: ExplorerCache::default(),
-            layout_name: TextInputState::new(),
-            layout_name_focused: false,
-            viewport: (1280.0, 800.0),
-            session_w: chrome.session_w,
-            sysmon: SystemSampler::new(HISTORY),
-            last_snapshot: None,
-            monitors_width: chrome.monitors_width,
-            extra_history: HashMap::new(),
-            extra_display: HashMap::new(),
-            _wawa_watcher: wawa_watcher,
-            menu_open: None,
-            menu_active: usize::MAX,
-            menu_anim: Tween::idle(1.0),
-            ctx_menu: None,
-            env_groups,
-            env_groups_mtime,
-            tick_count: 0,
-            _host: host,
-        }
+        let mut model = new_model();
+        spawn_host_effects(&mut model, handle);
+        model
     }
 
     fn on_resize(_model: &Self::Model, width: u32, height: u32) -> Option<Self::Msg> {
