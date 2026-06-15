@@ -190,8 +190,15 @@ pub(crate) fn evaluate_media_feature(inner: &str, vp: Viewport) -> bool {
         return r;
     }
     let Some((feature, val)) = inner.split_once(':').map(|(a, b)| (a.trim(), b.trim())) else {
-        // Feature booleana (sin valor): matchea si la capacidad "existe".
-        return matches!(inner, "color" | "grid" | "hover" | "pointer");
+        // Feature booleana (sin valor): matchea si el valor de la feature NO
+        // es su valor "cero"/none (CSS MQ4 §2.4). puriy es un renderer de
+        // escritorio con color, JS y refresco rápido. `monochrome`/`color-index`
+        // valen 0 → booleano falso.
+        return matches!(
+            inner,
+            "color" | "grid" | "hover" | "pointer" | "any-hover" | "any-pointer"
+                | "scripting" | "update"
+        );
     };
     match feature {
         "max-width" => parse_length_px(val).is_some_and(|l| vp.width <= l),
@@ -221,11 +228,43 @@ pub(crate) fn evaluate_media_feature(inner: &str, vp: Viewport) -> bool {
         "prefers-color-scheme" => val == "light" || val == "no-preference",
         "prefers-reduced-motion" => val == "no-preference",
         "prefers-contrast" => val == "no-preference",
+        "prefers-reduced-data" => val == "no-preference",
+        "prefers-reduced-transparency" => val == "no-preference",
         "hover" => val == "hover",
         "any-hover" => val == "hover",
         "pointer" => val == "fine",
         "any-pointer" => val == "fine",
-        // Feature desconocida: no descalifica (comportamiento previo lenient).
+        // === Fase 7.1213 — features con respuesta definitiva para un renderer
+        // de escritorio (antes caían en `_ => true` y matcheaban cualquier
+        // valor, incluido el incorrecto). ===
+        // puriy ejecuta JS de forma persistente.
+        "scripting" => val == "enabled",
+        // Refresco rápido (no e-ink).
+        "update" => val == "fast",
+        // Soporta CSS Grid.
+        "grid" => val == "1",
+        // Pantalla a color (no monocroma) sin paleta indexada.
+        "monochrome" => val == "0",
+        "color-index" => val == "0",
+        // `min-monochrome`/`min-color-index: N` matchea sólo si N <= 0 (nuestro
+        // monochrome/color-index valen 0).
+        "min-monochrome" | "min-color-index" => val.parse::<i32>().is_ok_and(|n| n <= 0),
+        "max-monochrome" | "max-color-index" => val.parse::<i32>().is_ok_and(|n| n >= 0),
+        // Gama sRGB (no P3/rec2020).
+        "color-gamut" => val == "srgb",
+        // Rango dinámico estándar (no HDR).
+        "dynamic-range" | "video-dynamic-range" => val == "standard",
+        // Escaneo progresivo.
+        "scan" => val == "progressive",
+        // Scrolleable en ambos ejes.
+        "overflow-block" => val == "scroll",
+        "overflow-inline" => val == "scroll",
+        // Sin modo de colores forzados ni inversión.
+        "forced-colors" => val == "none",
+        "inverted-colors" => val == "none",
+        // Navegador estándar (no PWA instalada).
+        "display-mode" => val == "browser",
+        // Feature desconocida de verdad: no descalifica (lenient, forward-compat).
         _ => true,
     }
 }

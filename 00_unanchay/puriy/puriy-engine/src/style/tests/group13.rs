@@ -376,6 +376,44 @@ use super::super::*;
     }
 
     #[test]
+    fn media_features_definitivas_fase_7_1213() {
+        let vp = Viewport { width: 900.0, height: 600.0, dpr: 1.0 };
+        // scripting: puriy ejecuta JS.
+        assert!(evaluate_media_query("(scripting: enabled)", vp));
+        assert!(!evaluate_media_query("(scripting: none)", vp));
+        assert!(evaluate_media_query("(scripting)", vp)); // booleano
+        // update rápido.
+        assert!(evaluate_media_query("(update: fast)", vp));
+        assert!(!evaluate_media_query("(update: slow)", vp));
+        // grid soportado.
+        assert!(evaluate_media_query("(grid: 1)", vp));
+        assert!(!evaluate_media_query("(grid: 0)", vp));
+        // pantalla a color, no monocroma.
+        assert!(evaluate_media_query("(monochrome: 0)", vp));
+        assert!(!evaluate_media_query("(monochrome: 2)", vp));
+        assert!(!evaluate_media_query("(min-monochrome: 1)", vp));
+        // gama sRGB.
+        assert!(evaluate_media_query("(color-gamut: srgb)", vp));
+        assert!(!evaluate_media_query("(color-gamut: p3)", vp));
+        // sin colores forzados / inversión.
+        assert!(evaluate_media_query("(forced-colors: none)", vp));
+        assert!(!evaluate_media_query("(forced-colors: active)", vp));
+        assert!(!evaluate_media_query("(inverted-colors: inverted)", vp));
+        // rango dinámico estándar, scan progresivo.
+        assert!(evaluate_media_query("(dynamic-range: standard)", vp));
+        assert!(!evaluate_media_query("(dynamic-range: high)", vp));
+        assert!(evaluate_media_query("(scan: progressive)", vp));
+        // navegador estándar (no PWA).
+        assert!(evaluate_media_query("(display-mode: browser)", vp));
+        assert!(!evaluate_media_query("(display-mode: standalone)", vp));
+        // overflow scrolleable.
+        assert!(evaluate_media_query("(overflow-block: scroll)", vp));
+        // prefers-reduced-data/transparency: sin preferencia.
+        assert!(evaluate_media_query("(prefers-reduced-data: no-preference)", vp));
+        assert!(!evaluate_media_query("(prefers-reduced-data: reduce)", vp));
+    }
+
+    #[test]
     fn from_dom_with_viewport_selecciona_media_por_ancho_real() {
         let html = r#"<html><head><style>
             p { color: green }
