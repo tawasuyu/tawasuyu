@@ -619,6 +619,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-ms-layout-grid-line" => opaque_or_sentinel(value, "none").map(DeclKind::MsLayoutGridLine),
         "-ms-layout-grid-mode" => opaque_or_sentinel(value, "both").map(DeclKind::MsLayoutGridMode),
         "-ms-layout-grid-type" => opaque_or_sentinel(value, "loose").map(DeclKind::MsLayoutGridType),
+        // === Fase 7.1152-7.1158 — IE -ms-content-zoom family (IE10) (plumb opaco) ===
+        // NO heredan. Los shorthands sin keyword initial usan sentinel "" (no colapsa).
+        "-ms-content-zoom-chaining" => opaque_or_sentinel(value, "none").map(DeclKind::MsContentZoomChaining),
+        "-ms-content-zoom-limit" => opaque_or_sentinel(value, "").map(DeclKind::MsContentZoomLimit),
+        "-ms-content-zoom-limit-max" => opaque_or_sentinel(value, "400%").map(DeclKind::MsContentZoomLimitMax),
+        "-ms-content-zoom-limit-min" => opaque_or_sentinel(value, "100%").map(DeclKind::MsContentZoomLimitMin),
+        "-ms-content-zoom-snap" => opaque_or_sentinel(value, "").map(DeclKind::MsContentZoomSnap),
+        "-ms-content-zoom-snap-points" => opaque_or_sentinel(value, "").map(DeclKind::MsContentZoomSnapPoints),
+        "-ms-content-zoom-snap-type" => opaque_or_sentinel(value, "none").map(DeclKind::MsContentZoomSnapType),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

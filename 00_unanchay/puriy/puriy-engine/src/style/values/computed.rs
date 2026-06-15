@@ -1949,5 +1949,20 @@ pub struct ComputedStyle {
     pub ms_layout_grid_mode: Option<String>,
     /// `-ms-layout-grid-type` (IE). `None` = `loose`. HEREDA. Plumb. Fase 7.1151.
     pub ms_layout_grid_type: Option<String>,
+    // === Fase 7.1152-7.1158 — IE -ms-content-zoom family (IE10) (plumb opaco) ===
+    /// `-ms-content-zoom-chaining` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1152.
+    pub ms_content_zoom_chaining: Option<String>,
+    /// `-ms-content-zoom-limit` shorthand (IE10). NO hereda. Plumb. Fase 7.1153.
+    pub ms_content_zoom_limit: Option<String>,
+    /// `-ms-content-zoom-limit-max` (IE10). `None` = `400%`. NO hereda. Plumb. Fase 7.1154.
+    pub ms_content_zoom_limit_max: Option<String>,
+    /// `-ms-content-zoom-limit-min` (IE10). `None` = `100%`. NO hereda. Plumb. Fase 7.1155.
+    pub ms_content_zoom_limit_min: Option<String>,
+    /// `-ms-content-zoom-snap` shorthand (IE10). NO hereda. Plumb. Fase 7.1156.
+    pub ms_content_zoom_snap: Option<String>,
+    /// `-ms-content-zoom-snap-points` (IE10). NO hereda. Plumb. Fase 7.1157.
+    pub ms_content_zoom_snap_points: Option<String>,
+    /// `-ms-content-zoom-snap-type` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1158.
+    pub ms_content_zoom_snap_type: Option<String>,
 }
 

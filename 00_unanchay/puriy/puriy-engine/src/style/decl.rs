@@ -1246,6 +1246,14 @@ pub(crate) enum DeclKind {
     MsLayoutGridLine(Option<String>),
     MsLayoutGridMode(Option<String>),
     MsLayoutGridType(Option<String>),
+    // === Fase 7.1152-7.1158 — IE -ms-content-zoom family (IE10) (plumb opaco) ===
+    MsContentZoomChaining(Option<String>),
+    MsContentZoomLimit(Option<String>),
+    MsContentZoomLimitMax(Option<String>),
+    MsContentZoomLimitMin(Option<String>),
+    MsContentZoomSnap(Option<String>),
+    MsContentZoomSnapPoints(Option<String>),
+    MsContentZoomSnapType(Option<String>),
 }
 
 impl Decl {
@@ -2129,6 +2137,14 @@ impl Decl {
             DeclKind::MsLayoutGridLine(v) => s.ms_layout_grid_line = v.clone(),
             DeclKind::MsLayoutGridMode(v) => s.ms_layout_grid_mode = v.clone(),
             DeclKind::MsLayoutGridType(v) => s.ms_layout_grid_type = v.clone(),
+            // Fase 7.1152-7.1158 — IE -ms-content-zoom, plumb opaco.
+            DeclKind::MsContentZoomChaining(v) => s.ms_content_zoom_chaining = v.clone(),
+            DeclKind::MsContentZoomLimit(v) => s.ms_content_zoom_limit = v.clone(),
+            DeclKind::MsContentZoomLimitMax(v) => s.ms_content_zoom_limit_max = v.clone(),
+            DeclKind::MsContentZoomLimitMin(v) => s.ms_content_zoom_limit_min = v.clone(),
+            DeclKind::MsContentZoomSnap(v) => s.ms_content_zoom_snap = v.clone(),
+            DeclKind::MsContentZoomSnapPoints(v) => s.ms_content_zoom_snap_points = v.clone(),
+            DeclKind::MsContentZoomSnapType(v) => s.ms_content_zoom_snap_type = v.clone(),
         }
     }
 }

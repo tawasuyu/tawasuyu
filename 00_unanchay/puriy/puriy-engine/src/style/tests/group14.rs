@@ -1110,3 +1110,27 @@ use super::super::*;
         assert_eq!(span.ms_layout_grid_char.as_deref(), Some("16px"));
         assert_eq!(span.ms_layout_grid_type.as_deref(), Some("strict"));
     }
+
+    #[test]
+    fn ms_content_zoom_plumb_fase_7_1152_1158() {
+        let s = style_of(
+            "-ms-content-zoom-chaining: chained; \
+             -ms-content-zoom-limit: 100% 500%; \
+             -ms-content-zoom-limit-max: 500%; \
+             -ms-content-zoom-limit-min: 50%; \
+             -ms-content-zoom-snap: mandatory snapInterval(0%, 100%); \
+             -ms-content-zoom-snap-points: snapList(0%, 100%); \
+             -ms-content-zoom-snap-type: proximity",
+        );
+        assert_eq!(s.ms_content_zoom_chaining.as_deref(), Some("chained"));
+        assert_eq!(s.ms_content_zoom_limit.as_deref(), Some("100% 500%"));
+        assert_eq!(s.ms_content_zoom_limit_max.as_deref(), Some("500%"));
+        assert_eq!(s.ms_content_zoom_limit_min.as_deref(), Some("50%"));
+        assert_eq!(s.ms_content_zoom_snap.as_deref(), Some("mandatory snapInterval(0%, 100%)"));
+        assert_eq!(s.ms_content_zoom_snap_points.as_deref(), Some("snapList(0%, 100%)"));
+        assert_eq!(s.ms_content_zoom_snap_type.as_deref(), Some("proximity"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-content-zoom-chaining: none").ms_content_zoom_chaining, None);
+        assert_eq!(style_of("-ms-content-zoom-limit-max: 400%").ms_content_zoom_limit_max, None);
+        assert_eq!(style_of("-ms-content-zoom-snap-type: none").ms_content_zoom_snap_type, None);
+    }

@@ -733,6 +733,14 @@ impl Default for ComputedStyle {
             ms_layout_grid_line: None,
             ms_layout_grid_mode: None,
             ms_layout_grid_type: None,
+            // Fase 7.1152-7.1158 — IE -ms-content-zoom, default None.
+            ms_content_zoom_chaining: None,
+            ms_content_zoom_limit: None,
+            ms_content_zoom_limit_max: None,
+            ms_content_zoom_limit_min: None,
+            ms_content_zoom_snap: None,
+            ms_content_zoom_snap_points: None,
+            ms_content_zoom_snap_type: None,
         }
     }
 }
