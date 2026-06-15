@@ -248,7 +248,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         // De una lista separada por coma sólo tomamos el primer item, igual
         // que el shorthand `animation:` ya hace en parser/sheet.rs.
         // Fase 7.735/7.948 — alias `-webkit-`/`-o-animation-name` → estándar.
-        "animation-name" | "-webkit-animation-name" | "-o-animation-name" => {
+        // Fase 7.1184 — `-moz-animation-name` alias Gecko legacy.
+        "animation-name" | "-webkit-animation-name" | "-o-animation-name" | "-moz-animation-name" => {
             let v = first_comma(value.trim());
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("none") {
@@ -258,7 +259,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.736/7.949 — alias `-webkit-`/`-o-animation-duration` → estándar.
-        "animation-duration" | "-webkit-animation-duration" | "-o-animation-duration" => {
+        // Fase 7.1185 — `-moz-animation-duration` alias Gecko legacy.
+        "animation-duration" | "-webkit-animation-duration" | "-o-animation-duration" | "-moz-animation-duration" => {
             // Fase 7.906 — `auto` (CSS Animations 2 / scroll-driven): la
             // duración la fija el timeline. Sin scroll-timeline, degrada a 0s.
             let v = first_comma(value.trim());
@@ -272,12 +274,14 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.855 — usa `parse_easing` (no `_keyword`): acepta también
         // `cubic-bezier(...)` y `steps(...)`, igual que `transition-timing-function`.
         // Fase 7.950 — `-o-animation-timing-function` alias Opera Presto legacy.
-        "animation-timing-function" | "-webkit-animation-timing-function" | "-o-animation-timing-function" => {
+        // Fase 7.1186 — `-moz-animation-timing-function` alias Gecko legacy.
+        "animation-timing-function" | "-webkit-animation-timing-function" | "-o-animation-timing-function" | "-moz-animation-timing-function" => {
             parse_easing(&first_comma(value.trim()).to_ascii_lowercase())
                 .map(DeclKind::AnimationTimingFunction)
         }
         // Fase 7.738/7.952 — alias `-webkit-`/`-o-animation-iteration-count` → estándar.
-        "animation-iteration-count" | "-webkit-animation-iteration-count" | "-o-animation-iteration-count" => {
+        // Fase 7.1187 — `-moz-animation-iteration-count` alias Gecko legacy.
+        "animation-iteration-count" | "-webkit-animation-iteration-count" | "-o-animation-iteration-count" | "-moz-animation-iteration-count" => {
             let t = first_comma(value.trim());
             if t.eq_ignore_ascii_case("infinite") {
                 Some(DeclKind::AnimationIterationCount(AnimationIterations::Infinite))
@@ -289,7 +293,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.739/7.953 — alias `-webkit-`/`-o-animation-fill-mode` → estándar.
-        "animation-fill-mode" | "-webkit-animation-fill-mode" | "-o-animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+        // Fase 7.1188 — `-moz-animation-fill-mode` alias Gecko legacy.
+        "animation-fill-mode" | "-webkit-animation-fill-mode" | "-o-animation-fill-mode" | "-moz-animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
             "none" => Some(DeclKind::AnimationFillMode(AnimationFillMode::None)),
             "forwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Forwards)),
             "backwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Backwards)),
@@ -299,7 +304,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.816 — `animation-direction` longhand (faltaba; sólo el shorthand
         // `animation` lo clasificaba). Mismo destino `AnimationBinding.direction`.
         // Alias `-webkit-animation-direction`. Toma la 1ª de la lista (first_comma).
-        "animation-direction" | "-webkit-animation-direction" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+        // Fase 7.1189 — `-moz-animation-direction` alias Gecko legacy.
+        "animation-direction" | "-webkit-animation-direction" | "-moz-animation-direction" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
             "normal" => Some(DeclKind::AnimationDirection(AnimationDirection::Normal)),
             "reverse" => Some(DeclKind::AnimationDirection(AnimationDirection::Reverse)),
             "alternate" => Some(DeclKind::AnimationDirection(AnimationDirection::Alternate)),
@@ -309,13 +315,15 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             _ => None,
         },
         // Fase 7.817 — `animation-play-state` longhand. Alias `-webkit-`.
-        "animation-play-state" | "-webkit-animation-play-state" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+        // Fase 7.1190 — `-moz-animation-play-state` alias Gecko legacy.
+        "animation-play-state" | "-webkit-animation-play-state" | "-moz-animation-play-state" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
             "running" => Some(DeclKind::AnimationPlayState(AnimationPlayState::Running)),
             "paused" => Some(DeclKind::AnimationPlayState(AnimationPlayState::Paused)),
             _ => None,
         },
         // Fase 7.818 — `animation-delay` longhand. Alias `-webkit-`. Segundos.
-        "animation-delay" | "-webkit-animation-delay" => {
+        // Fase 7.1191 — `-moz-animation-delay` alias Gecko legacy.
+        "animation-delay" | "-webkit-animation-delay" | "-moz-animation-delay" => {
             parse_time_seconds(first_comma(value.trim())).map(DeclKind::AnimationDelay)
         }
         // `float` (CSS2.1 §9.5 + Logical Properties). `none|left|right|

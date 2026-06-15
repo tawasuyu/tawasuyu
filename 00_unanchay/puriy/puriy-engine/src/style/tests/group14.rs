@@ -1221,3 +1221,28 @@ use super::super::*;
         assert_eq!(span.ms_filter, None);
         assert_eq!(span.ms_interpolation_mode, None);
     }
+
+    #[test]
+    fn moz_animation_longhand_aliases_fase_7_1184_1191() {
+        // Cada -moz-animation-* longhand alimenta el mismo AnimationBinding que
+        // el estándar; el binding resultante debe ser idéntico.
+        assert_eq!(style_of("-moz-animation-name: spin").animation,
+                   style_of("animation-name: spin").animation);
+        assert_eq!(style_of("-moz-animation-duration: 2s").animation,
+                   style_of("animation-duration: 2s").animation);
+        assert_eq!(style_of("-moz-animation-timing-function: ease-in").animation,
+                   style_of("animation-timing-function: ease-in").animation);
+        assert_eq!(style_of("-moz-animation-iteration-count: 3").animation,
+                   style_of("animation-iteration-count: 3").animation);
+        assert_eq!(style_of("-moz-animation-fill-mode: both").animation,
+                   style_of("animation-fill-mode: both").animation);
+        assert_eq!(style_of("-moz-animation-direction: reverse").animation,
+                   style_of("animation-direction: reverse").animation);
+        assert_eq!(style_of("-moz-animation-play-state: paused").animation,
+                   style_of("animation-play-state: paused").animation);
+        assert_eq!(style_of("-moz-animation-delay: 0.5s").animation,
+                   style_of("animation-delay: 0.5s").animation);
+        // Y parsearon de verdad (nombre quedó en el binding).
+        assert_eq!(style_of("-moz-animation-name: spin").animation.map(|b| b.name),
+                   Some("spin".to_string()));
+    }
