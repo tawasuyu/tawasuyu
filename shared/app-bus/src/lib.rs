@@ -113,6 +113,7 @@ pub fn default_entries() -> Vec<AppEntry> {
         ("supay", "Supay", "✷", "supay-app-llimphi", "ruway", &[]),
         ("sandokan-monitor", "Monitor", "❤", "sandokan-monitor", "ukupacha", &[]),
         ("nahual", "Nahual", "❖", "nahual-shell-llimphi", "ruway", &["inode/directory"]),
+        ("mirada-panel", "Mirada Panel", "⚙", "mirada-llimphi", "ukupacha", &[]),
     ];
     D.iter()
         .map(|(id, label, icon, exec, cat, handles)| AppEntry {
