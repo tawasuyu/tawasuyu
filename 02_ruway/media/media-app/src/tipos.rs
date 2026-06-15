@@ -49,6 +49,8 @@ pub(crate) enum Msg {
     PlaylistClosed,
     JumpTrack(usize),
     WaveformReady,
+    /// Repaint: llegaron miniaturas nuevas de la Cola (cargadas en background).
+    ThumbsReady,
     SettingsTab(SettingsTab),
     SettingsScroll(f32),
     ConfigEdit(ConfigEdit),

@@ -261,6 +261,16 @@ impl App for MediaApp {
                 {
                     crate::open::spawn_waveform_scan(handle, path);
                 }
+                // Miniaturas de la Cola: cargar en background sólo cuando está
+                // visible (ventana o diente Cola). spawn_load filtra lo ya hecho.
+                let cola_visible =
+                    model.playlist_open || model.dock_active == Some(crate::dock::DockTooth::Cola.id());
+                if cola_visible {
+                    if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
+                        let paths = h.lock().track_paths();
+                        crate::thumbs::spawn_load(handle, paths);
+                    }
+                }
                 Model {
                     frames: model.frames.wrapping_add(1),
                     ..model
@@ -351,6 +361,7 @@ impl App for MediaApp {
                 model
             }
             Msg::WaveformReady => model,
+            Msg::ThumbsReady => model,
             Msg::ConfigEdit(edit) => {
                 let mut m = model;
                 apply_config_edit(&mut m.config, edit);

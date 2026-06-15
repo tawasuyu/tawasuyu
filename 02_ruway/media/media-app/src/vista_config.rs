@@ -651,9 +651,30 @@ pub(crate) fn settings_content(model: &Model) -> View<Msg> {
 }
 
 /// Contenido de la ventana OS de lista de reproducción.
+/// Celda de miniatura de una fila de la Cola: la imagen cacheada (carátula/
+/// frame) si ya se cargó, o un recuadro placeholder mientras tanto / si no hay.
+fn playlist_thumb(key: Option<&str>) -> View<Msg> {
+    let base = View::new(Style {
+        size: Size { width: length(50.0_f32), height: length(30.0_f32) },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(16, 20, 28, 255))
+    .radius(4.0);
+    match key.and_then(crate::thumbs::get) {
+        Some(img) => base.image(img),
+        None => base,
+    }
+}
+
 pub(crate) fn playlist_content() -> View<Msg> {
-    use crate::estado::playlist_labels_slot;
+    use crate::estado::{playlist_labels_slot, playlist_slot};
     let labels = playlist_labels_slot().lock().clone();
+    let paths = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .map(|h| h.lock().track_paths())
+        .unwrap_or_default();
     let cur = playback_snapshot().idx;
     let header = settings_header(&rimay_localize::t("media-playlist-header"));
 
@@ -673,15 +694,24 @@ pub(crate) fn playlist_content() -> View<Msg> {
                 } else {
                     Color::from_rgba8(196, 206, 222, 255)
                 };
+                let thumb_key = paths.get(i).map(|p| p.to_string_lossy().into_owned());
+                let thumb = playlist_thumb(thumb_key.as_deref());
+                let label = View::new(Style {
+                    size: Size { width: auto(), height: auto() },
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .text(format!("{:>2}.  {name}", i + 1), 13.0, fg);
                 View::new(Style {
                     flex_direction: FlexDirection::Row,
-                    size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+                    size: Size { width: percent(1.0_f32), height: length(38.0_f32) },
                     padding: TaffyRect {
-                        left: length(10.0_f32),
+                        left: length(6.0_f32),
                         right: length(10.0_f32),
                         top: length(0.0_f32),
                         bottom: length(0.0_f32),
                     },
+                    gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
                     align_items: Some(AlignItems::Center),
                     flex_shrink: 0.0,
                     ..Default::default()
@@ -689,7 +719,7 @@ pub(crate) fn playlist_content() -> View<Msg> {
                 .fill(bg)
                 .hover_fill(Color::from_rgba8(60, 72, 90, 255))
                 .radius(6.0)
-                .text(format!("{:>2}.  {name}", i + 1), 13.0, fg)
+                .children(vec![thumb, label])
                 .on_click(Msg::JumpTrack(i))
             })
             .collect(),

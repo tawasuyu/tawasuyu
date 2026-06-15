@@ -414,6 +414,11 @@ impl Playlist {
         }
     }
 
+    /// Copia de las rutas de la cola (para cargar miniaturas en background).
+    pub(crate) fn track_paths(&self) -> Vec<PathBuf> {
+        self.tracks.clone()
+    }
+
     pub(crate) fn track_labels(&self) -> Vec<String> {
         self.tracks
             .iter()
