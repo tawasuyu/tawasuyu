@@ -972,3 +972,25 @@ use super::super::*;
         assert_eq!(span.webkit_text_decorations_in_effect.as_deref(), Some("underline"));
         assert_eq!(span.webkit_mask_attachment, None);
     }
+
+    #[test]
+    fn border_clip_limit_plumb_fase_7_1123_1128() {
+        let s = style_of(
+            "border-clip: 0 10px; \
+             border-clip-top: 25%; \
+             border-clip-right: 1em 2em; \
+             border-clip-bottom: 50%; \
+             border-clip-left: 5px; \
+             border-limit: all",
+        );
+        assert_eq!(s.border_clip.as_deref(), Some("0 10px"));
+        assert_eq!(s.border_clip_top.as_deref(), Some("25%"));
+        assert_eq!(s.border_clip_right.as_deref(), Some("1em 2em"));
+        assert_eq!(s.border_clip_bottom.as_deref(), Some("50%"));
+        assert_eq!(s.border_clip_left.as_deref(), Some("5px"));
+        assert_eq!(s.border_limit.as_deref(), Some("all"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("border-clip: normal").border_clip, None);
+        assert_eq!(style_of("border-clip-top: normal").border_clip_top, None);
+        assert_eq!(style_of("border-limit: round").border_limit, None);
+    }

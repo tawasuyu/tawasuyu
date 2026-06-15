@@ -1212,6 +1212,13 @@ pub(crate) enum DeclKind {
     // === Fase 7.1121-7.1122 — WebKit misc (plumb opaco) ===
     WebkitMaskAttachment(Option<String>),
     WebkitTextDecorationsInEffect(Option<String>),
+    // === Fase 7.1123-7.1128 — CSS Borders 4 border-clip/border-limit (plumb opaco) ===
+    BorderClip(Option<String>),
+    BorderClipTop(Option<String>),
+    BorderClipRight(Option<String>),
+    BorderClipBottom(Option<String>),
+    BorderClipLeft(Option<String>),
+    BorderLimit(Option<String>),
 }
 
 impl Decl {
@@ -2061,6 +2068,13 @@ impl Decl {
             // Fase 7.1121-7.1122 — WebKit misc, plumb opaco.
             DeclKind::WebkitMaskAttachment(v) => s.webkit_mask_attachment = v.clone(),
             DeclKind::WebkitTextDecorationsInEffect(v) => s.webkit_text_decorations_in_effect = v.clone(),
+            // Fase 7.1123-7.1128 — CSS Borders 4, plumb opaco.
+            DeclKind::BorderClip(v) => s.border_clip = v.clone(),
+            DeclKind::BorderClipTop(v) => s.border_clip_top = v.clone(),
+            DeclKind::BorderClipRight(v) => s.border_clip_right = v.clone(),
+            DeclKind::BorderClipBottom(v) => s.border_clip_bottom = v.clone(),
+            DeclKind::BorderClipLeft(v) => s.border_clip_left = v.clone(),
+            DeclKind::BorderLimit(v) => s.border_limit = v.clone(),
         }
     }
 }

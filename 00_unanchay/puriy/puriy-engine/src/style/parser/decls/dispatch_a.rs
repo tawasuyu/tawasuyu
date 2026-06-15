@@ -578,6 +578,14 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // === Fase 7.1121-7.1122 — WebKit misc (plumb opaco) ===
         "-webkit-mask-attachment" => opaque_or_sentinel(value, "scroll").map(DeclKind::WebkitMaskAttachment),
         "-webkit-text-decorations-in-effect" => opaque_or_sentinel(value, "none").map(DeclKind::WebkitTextDecorationsInEffect),
+        // === Fase 7.1123-7.1128 — CSS Borders 4 border-clip/border-limit (plumb opaco) ===
+        // Recortan el dibujo del borde a segmentos. NO heredan. Sentinel `normal`/`round`.
+        "border-clip" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClip),
+        "border-clip-top" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClipTop),
+        "border-clip-right" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClipRight),
+        "border-clip-bottom" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClipBottom),
+        "border-clip-left" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClipLeft),
+        "border-limit" => opaque_or_sentinel(value, "round").map(DeclKind::BorderLimit),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

@@ -1885,5 +1885,18 @@ pub struct ComputedStyle {
     /// `-webkit-text-decorations-in-effect` (WebKit interno). `None` = `none`.
     /// HEREDA (acumula las decoraciones del ancestro). Plumb. Fase 7.1122.
     pub webkit_text_decorations_in_effect: Option<String>,
+    // === Fase 7.1123-7.1128 — CSS Borders 4 border-clip/border-limit (plumb opaco) ===
+    /// `border-clip` (CSS Borders 4). `None` = `normal`. NO hereda. Plumb. Fase 7.1123.
+    pub border_clip: Option<String>,
+    /// `border-clip-top` (CSS Borders 4). `None` = `normal`. NO hereda. Plumb. Fase 7.1124.
+    pub border_clip_top: Option<String>,
+    /// `border-clip-right` (CSS Borders 4). `None` = `normal`. NO hereda. Plumb. Fase 7.1125.
+    pub border_clip_right: Option<String>,
+    /// `border-clip-bottom` (CSS Borders 4). `None` = `normal`. NO hereda. Plumb. Fase 7.1126.
+    pub border_clip_bottom: Option<String>,
+    /// `border-clip-left` (CSS Borders 4). `None` = `normal`. NO hereda. Plumb. Fase 7.1127.
+    pub border_clip_left: Option<String>,
+    /// `border-limit` (CSS Borders 4). `None` = `round`. NO hereda. Plumb. Fase 7.1128.
+    pub border_limit: Option<String>,
 }
 

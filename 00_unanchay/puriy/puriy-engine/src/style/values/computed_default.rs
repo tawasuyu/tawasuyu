@@ -699,6 +699,13 @@ impl Default for ComputedStyle {
             // Fase 7.1121-7.1122 — WebKit misc, default None.
             webkit_mask_attachment: None,
             webkit_text_decorations_in_effect: None,
+            // Fase 7.1123-7.1128 — CSS Borders 4, default None.
+            border_clip: None,
+            border_clip_top: None,
+            border_clip_right: None,
+            border_clip_bottom: None,
+            border_clip_left: None,
+            border_limit: None,
         }
     }
 }
