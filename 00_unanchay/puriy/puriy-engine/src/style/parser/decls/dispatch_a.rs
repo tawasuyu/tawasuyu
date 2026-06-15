@@ -586,6 +586,14 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "border-clip-bottom" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClipBottom),
         "border-clip-left" => opaque_or_sentinel(value, "normal").map(DeclKind::BorderClipLeft),
         "border-limit" => opaque_or_sentinel(value, "round").map(DeclKind::BorderLimit),
+        // === Fase 7.1129-7.1135 — WebKit/Apple legacy misc (plumb opaco) ===
+        "-webkit-marquee" => opaque_or_sentinel(value, "none").map(DeclKind::WebkitMarquee),
+        "-webkit-region-fragment" => opaque_or_sentinel(value, "auto").map(DeclKind::WebkitRegionFragment),
+        "-webkit-svg-shadow" => opaque_or_sentinel(value, "none").map(DeclKind::WebkitSvgShadow),
+        "-webkit-text-zoom" => opaque_or_sentinel(value, "normal").map(DeclKind::WebkitTextZoom),
+        "-apple-pay-button-style" => opaque_or_sentinel(value, "white").map(DeclKind::ApplePayButtonStyle),
+        "-apple-pay-button-type" => opaque_or_sentinel(value, "plain").map(DeclKind::ApplePayButtonType),
+        "-apple-color-filter" => opaque_or_sentinel(value, "none").map(DeclKind::AppleColorFilter),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

@@ -994,3 +994,33 @@ use super::super::*;
         assert_eq!(style_of("border-clip-top: normal").border_clip_top, None);
         assert_eq!(style_of("border-limit: round").border_limit, None);
     }
+
+    #[test]
+    fn webkit_apple_legacy_plumb_fase_7_1129_1135() {
+        let html = r#"<html><body><div style="
+            -webkit-marquee: left infinite;
+            -webkit-region-fragment: break;
+            -webkit-svg-shadow: 2px 2px 4px black;
+            -webkit-text-zoom: reset;
+            -apple-pay-button-style: black;
+            -apple-pay-button-type: buy;
+            -apple-color-filter: apple-invert-lightness()
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.webkit_marquee.as_deref(), Some("left infinite"));
+        assert_eq!(t.webkit_region_fragment.as_deref(), Some("break"));
+        assert_eq!(t.webkit_svg_shadow.as_deref(), Some("2px 2px 4px black"));
+        assert_eq!(t.webkit_text_zoom.as_deref(), Some("reset"));
+        assert_eq!(t.apple_pay_button_style.as_deref(), Some("black"));
+        assert_eq!(t.apple_pay_button_type.as_deref(), Some("buy"));
+        assert_eq!(t.apple_color_filter.as_deref(), Some("apple-invert-lightness()"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-webkit-region-fragment: auto").webkit_region_fragment, None);
+        assert_eq!(style_of("-apple-pay-button-style: white").apple_pay_button_style, None);
+        // -webkit-text-zoom HEREDA; -webkit-marquee NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.webkit_text_zoom.as_deref(), Some("reset"));
+        assert_eq!(span.webkit_marquee, None);
+    }

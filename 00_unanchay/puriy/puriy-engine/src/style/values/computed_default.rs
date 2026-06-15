@@ -706,6 +706,14 @@ impl Default for ComputedStyle {
             border_clip_bottom: None,
             border_clip_left: None,
             border_limit: None,
+            // Fase 7.1129-7.1135 — WebKit/Apple legacy, default None.
+            webkit_marquee: None,
+            webkit_region_fragment: None,
+            webkit_svg_shadow: None,
+            webkit_text_zoom: None,
+            apple_pay_button_style: None,
+            apple_pay_button_type: None,
+            apple_color_filter: None,
         }
     }
 }

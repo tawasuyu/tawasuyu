@@ -1219,6 +1219,14 @@ pub(crate) enum DeclKind {
     BorderClipBottom(Option<String>),
     BorderClipLeft(Option<String>),
     BorderLimit(Option<String>),
+    // === Fase 7.1129-7.1135 — WebKit/Apple legacy misc (plumb opaco) ===
+    WebkitMarquee(Option<String>),
+    WebkitRegionFragment(Option<String>),
+    WebkitSvgShadow(Option<String>),
+    WebkitTextZoom(Option<String>),
+    ApplePayButtonStyle(Option<String>),
+    ApplePayButtonType(Option<String>),
+    AppleColorFilter(Option<String>),
 }
 
 impl Decl {
@@ -2075,6 +2083,14 @@ impl Decl {
             DeclKind::BorderClipBottom(v) => s.border_clip_bottom = v.clone(),
             DeclKind::BorderClipLeft(v) => s.border_clip_left = v.clone(),
             DeclKind::BorderLimit(v) => s.border_limit = v.clone(),
+            // Fase 7.1129-7.1135 — WebKit/Apple legacy, plumb opaco.
+            DeclKind::WebkitMarquee(v) => s.webkit_marquee = v.clone(),
+            DeclKind::WebkitRegionFragment(v) => s.webkit_region_fragment = v.clone(),
+            DeclKind::WebkitSvgShadow(v) => s.webkit_svg_shadow = v.clone(),
+            DeclKind::WebkitTextZoom(v) => s.webkit_text_zoom = v.clone(),
+            DeclKind::ApplePayButtonStyle(v) => s.apple_pay_button_style = v.clone(),
+            DeclKind::ApplePayButtonType(v) => s.apple_pay_button_type = v.clone(),
+            DeclKind::AppleColorFilter(v) => s.apple_color_filter = v.clone(),
         }
     }
 }

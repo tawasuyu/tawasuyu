@@ -516,6 +516,9 @@ impl StyleEngine {
             // Fase 7.1122 — -webkit-text-decorations-in-effect hereda (acumula
             // las decoraciones del ancestro). -webkit-mask-attachment NO.
             style.webkit_text_decorations_in_effect = p.webkit_text_decorations_in_effect.clone();
+            // Fase 7.1132 — -webkit-text-zoom hereda (escala de texto). El resto
+            // del bloque WebKit/Apple (7.1129-7.1131/7.1133-7.1135) NO hereda.
+            style.webkit_text_zoom = p.webkit_text_zoom.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

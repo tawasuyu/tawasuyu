@@ -1898,5 +1898,20 @@ pub struct ComputedStyle {
     pub border_clip_left: Option<String>,
     /// `border-limit` (CSS Borders 4). `None` = `round`. NO hereda. Plumb. Fase 7.1128.
     pub border_limit: Option<String>,
+    // === Fase 7.1129-7.1135 — WebKit/Apple legacy misc (plumb opaco) ===
+    /// `-webkit-marquee` shorthand (WebKit/CSS3 Marquee). `None` = `none`. NO hereda. Plumb. Fase 7.1129.
+    pub webkit_marquee: Option<String>,
+    /// `-webkit-region-fragment` (WebKit, CSS Regions). `None` = `auto`. NO hereda. Plumb. Fase 7.1130.
+    pub webkit_region_fragment: Option<String>,
+    /// `-webkit-svg-shadow` (WebKit legacy). `None` = `none`. NO hereda. Plumb. Fase 7.1131.
+    pub webkit_svg_shadow: Option<String>,
+    /// `-webkit-text-zoom` (WebKit). `None` = `normal`. HEREDA. Plumb. Fase 7.1132.
+    pub webkit_text_zoom: Option<String>,
+    /// `-apple-pay-button-style` (Safari Apple Pay). `None` = `white`. NO hereda. Plumb. Fase 7.1133.
+    pub apple_pay_button_style: Option<String>,
+    /// `-apple-pay-button-type` (Safari Apple Pay). `None` = `plain`. NO hereda. Plumb. Fase 7.1134.
+    pub apple_pay_button_type: Option<String>,
+    /// `-apple-color-filter` (Safari). `None` = `none`. NO hereda. Plumb. Fase 7.1135.
+    pub apple_color_filter: Option<String>,
 }
 
