@@ -33,6 +33,34 @@ fn layout_options() -> Vec<EnumOption> {
     ]
 }
 
+/// Opciones del modo de transición de Win+Tab (slug serde + rótulo).
+fn switch_mode_options() -> Vec<EnumOption> {
+    vec![
+        EnumOption::new("direct", "Directo (salto seco)"),
+        EnumOption::new("hyprland", "Deslizar (estilo Hyprland)"),
+        EnumOption::new("prezi", "Prezi (zoom-out)"),
+    ]
+}
+
+fn switch_mode_slug(m: crate::config::WorkspaceSwitchMode) -> &'static str {
+    use crate::config::WorkspaceSwitchMode::*;
+    match m {
+        Direct => "direct",
+        Hyprland => "hyprland",
+        Prezi => "prezi",
+    }
+}
+
+fn switch_mode_from_slug(s: &str) -> Option<crate::config::WorkspaceSwitchMode> {
+    use crate::config::WorkspaceSwitchMode::*;
+    match s {
+        "direct" => Some(Direct),
+        "hyprland" => Some(Hyprland),
+        "prezi" => Some(Prezi),
+        _ => None,
+    }
+}
+
 /// Las opciones de ajuste del wallpaper (slug + rótulo).
 fn wallpaper_fit_options() -> Vec<EnumOption> {
     vec![
@@ -235,6 +263,21 @@ impl Configurable for Config {
                         "overview_show_titles",
                         "Mostrar títulos en las miniaturas",
                         self.overview_show_titles,
+                    ))
+                    .field(Field::dropdown(
+                        "workspace_switch_mode",
+                        "Transición Win+Tab",
+                        switch_mode_slug(self.workspace_switch_mode),
+                        switch_mode_options(),
+                    ))
+                    .field(Field::table(
+                        "overview_geometry",
+                        "Geometría 2D (col, fila por escritorio)",
+                        vec![Column::new("col", "Columna"), Column::new("row", "Fila")],
+                        self.overview_geometry_for(crate::action::WORKSPACE_COUNT)
+                            .into_iter()
+                            .map(|(c, r)| vec![c.to_string(), r.to_string()])
+                            .collect(),
                     )),
             )
     }
@@ -413,6 +456,24 @@ impl Configurable for Config {
             "overview_show_titles" => {
                 if let Some(b) = value.as_bool() {
                     self.overview_show_titles = b;
+                }
+            }
+            "workspace_switch_mode" => {
+                if let Some(m) = value.as_str().and_then(switch_mode_from_slug) {
+                    self.workspace_switch_mode = m;
+                }
+            }
+            "overview_geometry" => {
+                // Tabla (col, fila) por escritorio → geometría 2D del Prezi.
+                if let Some(rows) = value.as_table() {
+                    self.overview_geometry = rows
+                        .iter()
+                        .map(|r| {
+                            let c = r.first().and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                            let row = r.get(1).and_then(|s| s.trim().parse().ok()).unwrap_or(0);
+                            (c, row)
+                        })
+                        .collect();
                 }
             }
             _ => return Err(unknown()),
