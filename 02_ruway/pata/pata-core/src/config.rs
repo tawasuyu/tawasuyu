@@ -425,6 +425,8 @@ impl Config {
         // mostrándolos achicados o cayendo a horizontal.
         let mut top = Surface::bar(Anchor::Top);
         top.thickness = 44.0;
+        // La barra superior va en TODOS los monitores (no sólo el primario).
+        top.output = "*".to_string();
         top.start = vec![WidgetSpec::new("start_button"), WidgetSpec::new("clock")];
         top.center = vec![
             WidgetSpec::new("workspace_switcher"),
