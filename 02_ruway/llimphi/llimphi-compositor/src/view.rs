@@ -1236,6 +1236,29 @@ mod semantics_tests {
     use llimphi_layout::Style;
 
     #[test]
+    fn map_transforma_msg_y_recursa_hijos() {
+        // `View::map` eleva el Msg de todo el árbol (para embeber el view de un
+        // sub-app en un host). Verificamos el caso simple (on_click) en el nodo
+        // y en un hijo.
+        #[derive(Clone, PartialEq, Debug)]
+        enum Sub {
+            Hi,
+        }
+        #[derive(Clone, PartialEq, Debug)]
+        enum Host {
+            FromSub(Sub),
+        }
+        let child = View::<Sub>::new(Style::default()).on_click(Sub::Hi);
+        let parent = View::<Sub>::new(Style::default())
+            .on_click(Sub::Hi)
+            .children(vec![child]);
+        let mapped: View<Host> = parent.map(Host::FromSub);
+        assert_eq!(mapped.on_click, Some(Host::FromSub(Sub::Hi)));
+        assert_eq!(mapped.children.len(), 1);
+        assert_eq!(mapped.children[0].on_click, Some(Host::FromSub(Sub::Hi)));
+    }
+
+    #[test]
     fn clip_inset_setea_campo_y_activa_clip() {
         // `.clip_inset(...)` guarda los insets y activa el recorte (Fase 7.1219).
         let v = View::<()>::new(Style::default()).clip_inset([1.0, 2.0, 3.0, 4.0]);

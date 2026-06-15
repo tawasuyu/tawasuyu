@@ -611,6 +611,189 @@ pub struct View<Msg> {
     pub children: Vec<View<Msg>>,
 }
 
+impl<Msg: 'static> View<Msg> {
+    /// Transforma el `Msg` de **todo el árbol** vía `f`, devolviendo
+    /// `View<Msg2>`. Es la pieza que permite **embeber el `view` de un sub-app**
+    /// en un host (junto con [`crate::Handle::lift`] para sus efectos): el host
+    /// pinta `sub_view.map(Msg::Sub)` y los eventos del sub-árbol vuelven como
+    /// su propio `Msg`. Patrón estándar de anidado Elm. `f` se comparte (`Arc`)
+    /// entre todos los callbacks e hijos, así que debe ser `Send + Sync`.
+    pub fn map<Msg2, F>(self, f: F) -> View<Msg2>
+    where
+        Msg2: 'static,
+        F: Fn(Msg) -> Msg2 + Send + Sync + 'static,
+    {
+        self.map_shared(Arc::new(f))
+    }
+
+    fn map_shared<Msg2: 'static>(
+        self,
+        f: Arc<dyn Fn(Msg) -> Msg2 + Send + Sync>,
+    ) -> View<Msg2> {
+        let View {
+            style,
+            fill,
+            hover_fill,
+            radius,
+            corner_radii,
+            shadow,
+            fill_gradient,
+            border,
+            text,
+            image,
+            image_fit,
+            painter,
+            gpu_painter,
+            on_click,
+            on_click_at,
+            on_right_click,
+            on_right_click_at,
+            on_middle_click,
+            drag,
+            drag_at,
+            drag_velocity,
+            drag_payload,
+            on_drop,
+            drop_hover_fill,
+            clip,
+            clip_inset,
+            clip_ellipse,
+            on_pointer_enter,
+            on_pointer_leave,
+            on_pointer_move_at,
+            on_scroll,
+            on_scale,
+            on_rotate,
+            on_double_tap,
+            on_double_tap_at,
+            on_long_press,
+            on_long_press_at,
+            focusable,
+            text_select_key,
+            alpha,
+            anim,
+            animated_size,
+            semantics,
+            hero,
+            transform,
+            transform_rel,
+            tooltip,
+            cursor,
+            ripple,
+            layout_builder,
+            backdrop_blur,
+            children,
+        } = self;
+        // Wrappers: cada callback que produce `Option<Msg>` se reenvía y su
+        // resultado se eleva con `f`. `f` se clona por callback (todos comparten
+        // el mismo `Arc`).
+        View {
+            // — campos agnósticos al Msg: pasan tal cual —
+            style,
+            fill,
+            hover_fill,
+            radius,
+            corner_radii,
+            shadow,
+            fill_gradient,
+            border,
+            text,
+            image,
+            image_fit,
+            painter,
+            gpu_painter,
+            drag_payload,
+            drop_hover_fill,
+            clip,
+            clip_inset,
+            clip_ellipse,
+            focusable,
+            text_select_key,
+            alpha,
+            anim,
+            animated_size,
+            semantics,
+            hero,
+            transform,
+            transform_rel,
+            tooltip,
+            cursor,
+            ripple,
+            backdrop_blur,
+            // — Msg simples —
+            on_click: on_click.map(|m| f(m)),
+            on_right_click: on_right_click.map(|m| f(m)),
+            on_middle_click: on_middle_click.map(|m| f(m)),
+            on_pointer_enter: on_pointer_enter.map(|m| f(m)),
+            on_pointer_leave: on_pointer_leave.map(|m| f(m)),
+            on_double_tap: on_double_tap.map(|m| f(m)),
+            on_long_press: on_long_press.map(|m| f(m)),
+            // — ClickAtFn (lx, ly, w, h) —
+            on_click_at: on_click_at.map(|h| {
+                let f = f.clone();
+                Arc::new(move |a, b, c, d| h(a, b, c, d).map(|m| f(m))) as ClickAtFn<Msg2>
+            }),
+            on_right_click_at: on_right_click_at.map(|h| {
+                let f = f.clone();
+                Arc::new(move |a, b, c, d| h(a, b, c, d).map(|m| f(m))) as ClickAtFn<Msg2>
+            }),
+            on_pointer_move_at: on_pointer_move_at.map(|h| {
+                let f = f.clone();
+                Arc::new(move |a, b, c, d| h(a, b, c, d).map(|m| f(m))) as ClickAtFn<Msg2>
+            }),
+            on_double_tap_at: on_double_tap_at.map(|h| {
+                let f = f.clone();
+                Arc::new(move |a, b, c, d| h(a, b, c, d).map(|m| f(m))) as ClickAtFn<Msg2>
+            }),
+            on_long_press_at: on_long_press_at.map(|h| {
+                let f = f.clone();
+                Arc::new(move |a, b, c, d| h(a, b, c, d).map(|m| f(m))) as ClickAtFn<Msg2>
+            }),
+            // — drag / scroll / gestos —
+            drag: drag.map(|h| {
+                let f = f.clone();
+                Arc::new(move |p, dx, dy| h(p, dx, dy).map(|m| f(m))) as DragFn<Msg2>
+            }),
+            drag_at: drag_at.map(|h| {
+                let f = f.clone();
+                Arc::new(move |p, dx, dy, lx, ly| h(p, dx, dy, lx, ly).map(|m| f(m)))
+                    as DragAtFn<Msg2>
+            }),
+            drag_velocity: drag_velocity.map(|h| {
+                let f = f.clone();
+                Arc::new(move |p, dx, dy, vx, vy| h(p, dx, dy, vx, vy).map(|m| f(m)))
+                    as DragVelocityFn<Msg2>
+            }),
+            on_drop: on_drop.map(|h| {
+                let f = f.clone();
+                Arc::new(move |payload| h(payload).map(|m| f(m))) as DropFn<Msg2>
+            }),
+            on_scroll: on_scroll.map(|h| {
+                let f = f.clone();
+                Arc::new(move |dx, dy| h(dx, dy).map(|m| f(m))) as ScrollFn<Msg2>
+            }),
+            on_scale: on_scale.map(|h| {
+                let f = f.clone();
+                Arc::new(move |ph, s, cx, cy| h(ph, s, cx, cy).map(|m| f(m))) as ScaleFn<Msg2>
+            }),
+            on_rotate: on_rotate.map(|h| {
+                let f = f.clone();
+                Arc::new(move |ph, r, cx, cy| h(ph, r, cx, cy).map(|m| f(m))) as RotateFn<Msg2>
+            }),
+            // — layout_builder produce un View<Msg>: recursá el map —
+            layout_builder: layout_builder.map(|h| {
+                let f = f.clone();
+                Arc::new(move |c| h(c).map_shared(f.clone())) as LayoutBuilderFn<Msg2>
+            }),
+            // — hijos: recursión —
+            children: children
+                .into_iter()
+                .map(|c| c.map_shared(f.clone()))
+                .collect(),
+        }
+    }
+}
+
 /// Versión "instalada" del árbol: cada nodo tiene su NodeId de taffy, color
 /// y handler. Se mantiene en orden de inserción (recorrido pre-orden), así
 /// el hit-test puede iterar al revés para honrar el orden de pintado.
