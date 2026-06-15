@@ -45,6 +45,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip_inset,
         clip_ellipse,
         clip_polygon,
+        clip_path_svg,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -101,6 +102,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip_inset,
         clip_ellipse,
         clip_polygon,
+        clip_path_svg,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -716,8 +718,22 @@ pub fn paint_range<Msg>(
         if node.clip {
             // El hit-test (más abajo) usa siempre el rect completo — el clip-path
             // sólo afecta el pintado, una aproximación menor en su banda.
-            // Prioridad: polygon > elipse > inset/rect.
-            if let Some((evenodd, pts)) = &node.clip_polygon {
+            // Prioridad: path > polygon > elipse > inset/rect. `pushed` queda
+            // false sólo si un path() no parsea (no se abre capa → no se cierra).
+            let mut pushed = true;
+            if let Some((evenodd, d)) = &node.clip_path_svg {
+                // `clip-path: path()` — parsea el SVG y lo traslada al origen
+                // del rect (user units px relativos a la caja). Si from_svg
+                // falla, no se recorta.
+                match vello::kurbo::BezPath::from_svg(d) {
+                    Ok(mut path) => {
+                        path.apply_affine(Affine::translate((r.x as f64, r.y as f64)));
+                        let fill = if *evenodd { Fill::EvenOdd } else { Fill::NonZero };
+                        scene.push_layer(fill, BlendMode::default(), 1.0, cur_xf, &path);
+                    }
+                    Err(_) => pushed = false,
+                }
+            } else if let Some((evenodd, pts)) = &node.clip_polygon {
                 // `clip-path: polygon()` — capa con un path cerrado. Cada punto
                 // resuelve sus % contra el rect; move_to al 1º, line_to al
                 // resto, close_path.
@@ -761,7 +777,9 @@ pub fn paint_range<Msg>(
                 );
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
             }
-            layer_stack.push(node.subtree_end);
+            if pushed {
+                layer_stack.push(node.subtree_end);
+            }
         }
     }
     // Cerrá capas (clip + alpha) que llegaron al final sin pop intermedio.

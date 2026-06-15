@@ -459,6 +459,13 @@ pub struct View<Msg> {
     /// `evenodd` elige la regla de relleno. Implica clip aunque `clip ==
     /// false`. Prioridad de recorte por nodo: polygon > elipse > inset > rect.
     pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
+    /// Si `Some((evenodd, d))`, recorta los descendientes a un PATH SVG —
+    /// modela `clip-path: path()`. `d` es el string SVG crudo (user units px,
+    /// relativos al origen del rect); el pintado lo parsea con
+    /// `BezPath::from_svg` y lo traslada al origen del nodo. Si el parseo
+    /// falla, no recorta. Implica clip aunque `clip == false`. Prioridad:
+    /// path > polygon > elipse > inset > rect.
+    pub clip_path_svg: Option<(bool, String)>,
     /// Msg a emitir cuando el cursor entra al rect del nodo (transición
     /// no-hover → hover). Útil para previews tipo "URL del link al
     /// pasar el mouse".
@@ -664,6 +671,8 @@ impl<Msg: 'static> View<Msg> {
             clip,
             clip_inset,
             clip_ellipse,
+            clip_polygon,
+            clip_path_svg,
             on_pointer_enter,
             on_pointer_leave,
             on_pointer_move_at,
@@ -713,6 +722,8 @@ impl<Msg: 'static> View<Msg> {
             clip,
             clip_inset,
             clip_ellipse,
+            clip_polygon,
+            clip_path_svg,
             focusable,
             text_select_key,
             alpha,
@@ -959,6 +970,7 @@ pub struct MountedNode<Msg> {
     pub clip_inset: Option<[f32; 4]>,
     pub clip_ellipse: Option<[f32; 14]>,
     pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
+    pub clip_path_svg: Option<(bool, String)>,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_pointer_move_at: Option<ClickAtFn<Msg>>,

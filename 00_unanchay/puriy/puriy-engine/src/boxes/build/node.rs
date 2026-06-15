@@ -106,6 +106,7 @@ pub(crate) fn empty_root() -> BoxNode {
         clip_inset: None,
         clip_ellipse: None,
         clip_polygon: None,
+        clip_path_svg: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,
@@ -630,6 +631,14 @@ pub(crate) fn build_node(
                     }
                     _ => None,
                 },
+                // Fase 7.1224 — clip-path: path(...) → (evenodd, d) con el
+                // string SVG crudo (lo parsea el compositor).
+                clip_path_svg: match &style.clip_path {
+                    Some(crate::style::ClipPath::Path { evenodd, d }) => {
+                        Some((*evenodd, d.clone()))
+                    }
+                    _ => None,
+                },
                 white_space: style.white_space,
                 text_transform: style.text_transform,
                 opacity: style.opacity,
@@ -841,6 +850,7 @@ pub(crate) fn build_node(
                 clip_inset: None,
                 clip_ellipse: None,
                 clip_polygon: None,
+                clip_path_svg: None,
                 white_space: WhiteSpace::Normal,
                 text_transform: TextTransform::None,
                 opacity: 1.0,

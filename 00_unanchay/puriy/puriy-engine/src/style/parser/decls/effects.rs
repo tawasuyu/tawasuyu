@@ -51,8 +51,33 @@ pub(crate) fn parse_clip_path(value: &str) -> Option<ClipPath> {
         "circle" => parse_circle_shape(args),
         "ellipse" => parse_ellipse_shape(args),
         "polygon" => parse_polygon_shape(args),
+        "path" => parse_path_shape(args),
         _ => None,
     }
+}
+
+/// `path([<fill-rule>,]? "<svg-path-data>")`. `fill-rule` opcional
+/// (`nonzero`/`evenodd`) seguido de coma; luego el path SVG entre comillas
+/// (simples o dobles). El string se guarda crudo (lo parsea el compositor).
+fn parse_path_shape(args: &str) -> Option<ClipPath> {
+    let a = args.trim();
+    let (evenodd, rest) = if let Some(r) = a.strip_prefix("evenodd") {
+        (true, r.trim_start().strip_prefix(',')?.trim())
+    } else if let Some(r) = a.strip_prefix("nonzero") {
+        (false, r.trim_start().strip_prefix(',')?.trim())
+    } else {
+        (false, a)
+    };
+    // El path debe venir entre comillas (simples o dobles), apareadas.
+    let q = rest.chars().next()?;
+    if q != '"' && q != '\'' {
+        return None;
+    }
+    let d = rest[1..].strip_suffix(q)?.trim();
+    if d.is_empty() {
+        return None;
+    }
+    Some(ClipPath::Path { evenodd, d: d.to_string() })
 }
 
 /// `polygon([<fill-rule>,]? <x> <y> [, <x> <y>]*)`. `fill-rule` opcional

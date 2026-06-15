@@ -438,6 +438,11 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some((evenodd, pts)) = &b.clip_polygon {
         view = view.clip_polygon(*evenodd, pts.clone());
     }
+    // `clip-path: path(...)` (Fase 7.1224) — recorta a un path SVG; el
+    // compositor lo parsea con BezPath::from_svg y lo ancla al rect.
+    if let Some((evenodd, d)) = &b.clip_path_svg {
+        view = view.clip_path_svg(*evenodd, d.clone());
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {

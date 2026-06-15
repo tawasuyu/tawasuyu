@@ -34,6 +34,7 @@ impl<Msg> View<Msg> {
             clip_inset: None,
             clip_ellipse: None,
             clip_polygon: None,
+            clip_path_svg: None,
             on_scroll: None,
             on_scale: None,
             on_rotate: None,
@@ -1235,6 +1236,16 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Recorta los descendientes a un path SVG — modela `clip-path: path()`.
+    /// `d` es el string SVG crudo (user units px, relativos al origen del
+    /// rect); el pintado lo parsea con `BezPath::from_svg`. `evenodd` = regla
+    /// de relleno. Activa el recorte (paint; hit-test usa el rect completo).
+    pub fn clip_path_svg(mut self, evenodd: bool, d: impl Into<String>) -> Self {
+        self.clip = true;
+        self.clip_path_svg = Some((evenodd, d.into()));
+        self
+    }
+
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
@@ -1314,6 +1325,20 @@ mod semantics_tests {
         assert_eq!(v.clip_inset, None);
         // Default: sin polígono.
         assert_eq!(View::<()>::new(Style::default()).clip_polygon, None);
+    }
+
+    #[test]
+    fn clip_path_svg_setea_campo_y_activa_clip() {
+        // `.clip_path_svg(...)` guarda (evenodd, d) y activa el recorte
+        // (Fase 7.1224). El string SVG debe parsear con kurbo.
+        let v = View::<()>::new(Style::default()).clip_path_svg(false, "M0 0 L10 0 L10 10 Z");
+        assert_eq!(v.clip_path_svg, Some((false, "M0 0 L10 0 L10 10 Z".to_string())));
+        assert!(v.clip, "clip_path_svg implica clip activo");
+        // El path de muestra parsea a un BezPath no vacío.
+        let bez = vello::kurbo::BezPath::from_svg("M0 0 L10 0 L10 10 Z").unwrap();
+        assert!(!bez.elements().is_empty());
+        // Default: sin path.
+        assert_eq!(View::<()>::new(Style::default()).clip_path_svg, None);
     }
 
     #[test]

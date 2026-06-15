@@ -362,9 +362,8 @@ pub enum ClipRadius {
 }
 
 /// `clip-path` (CSS Masking 1). Subset: `inset()`, `circle()`, `ellipse()`,
-/// `polygon()`. `path()` queda fuera por ahora. `None` (afuera del enum) =
-/// `clip-path: none`. Fase 7.274. NO es `Copy` desde 7.1223 (`Polygon` lleva
-/// un `Vec`).
+/// `polygon()`, `path()`. `None` (afuera del enum) = `clip-path: none`. Fase
+/// 7.274. NO es `Copy` desde 7.1223 (`Polygon`/`Path` llevan datos heap).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ClipPath {
     /// `inset(<top> [<right> [<bottom> [<left>]]] [round <r>])`. Los
@@ -384,6 +383,11 @@ pub enum ClipPath {
     /// LengthVal)`; los `%` resuelven contra ancho/alto de la caja en el
     /// compositor. Fase 7.1223.
     Polygon { evenodd: bool, points: Vec<(LengthVal, LengthVal)> },
+    /// `path([<fill-rule>,]? "<svg-path-data>")`. `d` es el string SVG crudo
+    /// (user units = px, relativos al origen de la caja; sin `%`); el
+    /// compositor lo parsea con `kurbo::BezPath::from_svg`. `evenodd` = regla
+    /// de relleno. Fase 7.1224.
+    Path { evenodd: bool, d: String },
 }
 
 /// `mask-image` (CSS Masking 1). Subset: `url(...)`. `image()`,

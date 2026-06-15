@@ -173,6 +173,11 @@ pub struct BoxNode {
     /// chrome recorta el subárbol a ese polígono. `None` = sin clip-path
     /// poligonal. Prioridad de recorte: polygon > elipse > inset. Fase 7.1223.
     pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
+    /// `clip-path: path(...)` resuelto a `(evenodd, d)` donde `d` es el string
+    /// SVG crudo (user units px, relativos al origen del rect); el compositor
+    /// lo parsea con `BezPath::from_svg`. `evenodd` = regla de relleno. `None`
+    /// = sin clip-path por path. Fase 7.1224.
+    pub clip_path_svg: Option<(bool, String)>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

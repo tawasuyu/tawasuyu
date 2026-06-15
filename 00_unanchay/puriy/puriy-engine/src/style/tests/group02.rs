@@ -1047,8 +1047,20 @@ use super::super::*;
         // polygon vacío o vértice con 1 sola coord → None.
         assert!(parse_clip_path("polygon()").is_none());
         assert!(parse_clip_path("polygon(0 0, 5px)").is_none());
+        // path() (Fase 7.1224): string crudo con comillas simples o dobles.
+        assert_eq!(
+            parse_clip_path("path('M0 0 L10 0 L10 10 Z')").unwrap(),
+            ClipPath::Path { evenodd: false, d: "M0 0 L10 0 L10 10 Z".to_string() }
+        );
+        assert_eq!(
+            parse_clip_path("path(evenodd, \"M0 0 L5 5\")").unwrap(),
+            ClipPath::Path { evenodd: true, d: "M0 0 L5 5".to_string() }
+        );
+        // path sin comillas o vacío → None.
+        assert!(parse_clip_path("path(M0 0)").is_none());
+        assert!(parse_clip_path("path('')").is_none());
         // Función desconocida → None.
-        assert!(parse_clip_path("path('M0 0')").is_none());
+        assert!(parse_clip_path("ray(45deg)").is_none());
 
         // e2e: body con clip-path, div sin → NO se hereda.
         let html = r##"<html><head><style>

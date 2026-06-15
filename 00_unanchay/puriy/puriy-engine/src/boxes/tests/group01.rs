@@ -302,6 +302,34 @@ use crate::Engine;
     }
 
     #[test]
+    fn clip_path_path_svg_llega_al_box_node_fase_7_1224() {
+        // `clip-path: path(...)` → (evenodd, d) con el string SVG crudo.
+        let html = "<html><body>\
+            <div id=\"p\" style=\"clip-path: path('M0 0 L10 0 L10 10 Z')\">a</div>\
+            <div id=\"pe\" style=\"clip-path: path(evenodd, 'M0 0 L5 5')\">b</div>\
+            <div id=\"poly\" style=\"clip-path: polygon(0 0, 10px 10px)\">c</div>\
+            <div id=\"n\">d</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let by_id = |id: &str| {
+            let mut found = None;
+            doc.box_tree.walk(|b| {
+                if b.element_id.as_deref() == Some(id) {
+                    found = Some(b.clip_path_svg.clone());
+                }
+            });
+            found.expect("box existe")
+        };
+        assert_eq!(by_id("p"), Some((false, "M0 0 L10 0 L10 10 Z".to_string())));
+        assert_eq!(by_id("pe"), Some((true, "M0 0 L5 5".to_string())));
+        // polygon() no llena clip_path_svg.
+        assert_eq!(by_id("poly"), None);
+        // sin clip-path → None.
+        assert_eq!(by_id("n"), None);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la
