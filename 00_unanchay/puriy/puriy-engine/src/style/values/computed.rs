@@ -1821,5 +1821,12 @@ pub struct ComputedStyle {
     pub animation_trigger_exit_range_start: Option<String>,
     /// `animation-trigger-exit-range-end` (CSS Animations 2). `None` = `auto`. NO hereda. Plumb. Fase 7.1087.
     pub animation_trigger_exit_range_end: Option<String>,
+    // === Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy (plumb opaco) ===
+    /// `-webkit-box-lines` (WebKit old flexbox). `None` = `single`. NO hereda.
+    /// Plumb. Fase 7.1088.
+    pub webkit_box_lines: Option<String>,
+    /// `-webkit-box-flex-group` (WebKit old flexbox). `None` = `1`. NO hereda.
+    /// Plumb. Fase 7.1089.
+    pub webkit_box_flex_group: Option<String>,
 }
 

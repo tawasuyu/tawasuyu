@@ -537,6 +537,9 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "animation-trigger-exit-range" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerExitRange),
         "animation-trigger-exit-range-start" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerExitRangeStart),
         "animation-trigger-exit-range-end" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerExitRangeEnd),
+        // === Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy (plumb opaco) ===
+        "-webkit-box-lines" => opaque_or_sentinel(value, "single").map(DeclKind::WebkitBoxLines),
+        "-webkit-box-flex-group" => opaque_or_sentinel(value, "1").map(DeclKind::WebkitBoxFlexGroup),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

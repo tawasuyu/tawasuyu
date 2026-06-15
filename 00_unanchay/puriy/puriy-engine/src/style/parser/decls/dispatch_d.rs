@@ -496,7 +496,8 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             parse_column_span(value).map(DeclKind::ColumnSpan)
         }
         // `page-break-inside` (legacy CSS 2.1) = `break-inside` (subset).
-        "break-inside" | "page-break-inside" => {
+        // Fase 7.1090 — `-webkit-column-break-inside` alias vendor WebKit.
+        "break-inside" | "page-break-inside" | "-webkit-column-break-inside" => {
             parse_break_inside(value).map(DeclKind::BreakInside)
         }
         "table-layout" => parse_table_layout(value).map(DeclKind::TableLayout),
@@ -510,10 +511,11 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         // `break-before` / `break-after` (CSS Fragmentation 3) + alias
         // legacy `page-break-before` / `page-break-after` (CSS 2.1, subset
         // auto/avoid/always/left/right).
-        "break-before" | "page-break-before" => {
+        // Fase 7.1091/7.1092 — `-webkit-column-break-before`/`-after` alias WebKit.
+        "break-before" | "page-break-before" | "-webkit-column-break-before" => {
             parse_break_between(value).map(DeclKind::BreakBefore)
         }
-        "break-after" | "page-break-after" => {
+        "break-after" | "page-break-after" | "-webkit-column-break-after" => {
             parse_break_between(value).map(DeclKind::BreakAfter)
         }
         "orphans" => parse_positive_int(value).map(DeclKind::Orphans),

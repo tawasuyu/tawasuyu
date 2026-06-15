@@ -829,3 +829,23 @@ use super::super::*;
         assert_eq!(style_of("animation-trigger-timeline: auto").animation_trigger_timeline, None);
         assert_eq!(style_of("animation-trigger-range: normal").animation_trigger_range, None);
     }
+
+    #[test]
+    fn webkit_legacy_box_columnbreak_fase_7_1088_1092() {
+        // -webkit-box-lines / -webkit-box-flex-group: plumb opaco.
+        assert_eq!(style_of("-webkit-box-lines: multiple").webkit_box_lines,
+                   Some("multiple".to_string()));
+        assert_eq!(style_of("-webkit-box-flex-group: 3").webkit_box_flex_group,
+                   Some("3".to_string()));
+        assert_eq!(style_of("-webkit-box-lines: single").webkit_box_lines, None);
+        // -webkit-column-break-* deben dar el MISMO computed que break-*.
+        assert_eq!(style_of("-webkit-column-break-before: always").break_before,
+                   style_of("break-before: always").break_before);
+        assert_eq!(style_of("-webkit-column-break-after: avoid").break_after,
+                   style_of("break-after: avoid").break_after);
+        assert_eq!(style_of("-webkit-column-break-inside: avoid").break_inside,
+                   style_of("break-inside: avoid").break_inside);
+        // Y efectivamente parsearon (no quedaron en default).
+        assert_ne!(style_of("-webkit-column-break-before: always").break_before,
+                   ComputedStyle::default().break_before);
+    }

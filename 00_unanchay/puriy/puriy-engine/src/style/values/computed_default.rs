@@ -666,6 +666,9 @@ impl Default for ComputedStyle {
             animation_trigger_exit_range: None,
             animation_trigger_exit_range_start: None,
             animation_trigger_exit_range_end: None,
+            // Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy, default None.
+            webkit_box_lines: None,
+            webkit_box_flex_group: None,
         }
     }
 }

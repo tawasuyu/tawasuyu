@@ -1179,6 +1179,9 @@ pub(crate) enum DeclKind {
     AnimationTriggerExitRange(Option<String>),
     AnimationTriggerExitRangeStart(Option<String>),
     AnimationTriggerExitRangeEnd(Option<String>),
+    // === Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy (plumb opaco) ===
+    WebkitBoxLines(Option<String>),
+    WebkitBoxFlexGroup(Option<String>),
 }
 
 impl Decl {
@@ -1995,6 +1998,9 @@ impl Decl {
             DeclKind::AnimationTriggerExitRange(v) => s.animation_trigger_exit_range = v.clone(),
             DeclKind::AnimationTriggerExitRangeStart(v) => s.animation_trigger_exit_range_start = v.clone(),
             DeclKind::AnimationTriggerExitRangeEnd(v) => s.animation_trigger_exit_range_end = v.clone(),
+            // Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy, plumb opaco.
+            DeclKind::WebkitBoxLines(v) => s.webkit_box_lines = v.clone(),
+            DeclKind::WebkitBoxFlexGroup(v) => s.webkit_box_flex_group = v.clone(),
         }
     }
 }
