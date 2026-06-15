@@ -1138,6 +1138,13 @@ pub(crate) enum DeclKind {
     MaskSourceType(Option<String>),
     ScrollSnapTypeX(Option<String>),
     ScrollSnapTypeY(Option<String>),
+    // === Fase 7.1052-7.1057 — IE -ms- propiedades legacy reales (plumb opaco) ===
+    MsOverflowStyle(Option<String>),
+    MsScrollChaining(Option<String>),
+    MsContentZooming(Option<String>),
+    MsScrollRails(Option<String>),
+    MsFlexAlign(Option<String>),
+    MsFlexPack(Option<String>),
 }
 
 impl Decl {
@@ -1913,6 +1920,13 @@ impl Decl {
             DeclKind::MaskSourceType(v) => s.mask_source_type = v.clone(),
             DeclKind::ScrollSnapTypeX(v) => s.scroll_snap_type_x = v.clone(),
             DeclKind::ScrollSnapTypeY(v) => s.scroll_snap_type_y = v.clone(),
+            // Fase 7.1052-7.1057 — IE -ms- legacy, plumb opaco.
+            DeclKind::MsOverflowStyle(v) => s.ms_overflow_style = v.clone(),
+            DeclKind::MsScrollChaining(v) => s.ms_scroll_chaining = v.clone(),
+            DeclKind::MsContentZooming(v) => s.ms_content_zooming = v.clone(),
+            DeclKind::MsScrollRails(v) => s.ms_scroll_rails = v.clone(),
+            DeclKind::MsFlexAlign(v) => s.ms_flex_align = v.clone(),
+            DeclKind::MsFlexPack(v) => s.ms_flex_pack = v.clone(),
         }
     }
 }

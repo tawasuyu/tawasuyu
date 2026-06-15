@@ -685,3 +685,23 @@ use super::super::*;
         assert_eq!(style_of("mask-source-type: auto").mask_source_type, None);
         assert_eq!(style_of("scroll-snap-type-x: none").scroll_snap_type_x, None);
     }
+
+    #[test]
+    fn ms_legacy_props_plumb_fase_7_1052_1057() {
+        assert_eq!(style_of("-ms-overflow-style: -ms-autohiding-scrollbar").ms_overflow_style,
+                   Some("-ms-autohiding-scrollbar".to_string()));
+        assert_eq!(style_of("-ms-scroll-chaining: none").ms_scroll_chaining,
+                   Some("none".to_string()));
+        assert_eq!(style_of("-ms-content-zooming: zoom").ms_content_zooming,
+                   Some("zoom".to_string()));
+        assert_eq!(style_of("-ms-scroll-rails: none").ms_scroll_rails,
+                   Some("none".to_string()));
+        assert_eq!(style_of("-ms-flex-align: center").ms_flex_align,
+                   Some("center".to_string()));
+        assert_eq!(style_of("-ms-flex-pack: justify").ms_flex_pack,
+                   Some("justify".to_string()));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-overflow-style: auto").ms_overflow_style, None);
+        assert_eq!(style_of("-ms-scroll-chaining: chained").ms_scroll_chaining, None);
+        assert_eq!(style_of("-ms-flex-pack: start").ms_flex_pack, None);
+    }

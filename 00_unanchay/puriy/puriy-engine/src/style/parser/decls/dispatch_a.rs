@@ -489,6 +489,16 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // `scroll-snap-type-x` / `-y` (CSS Scroll Snap v0). Sentinel none → None.
         "scroll-snap-type-x" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapTypeX),
         "scroll-snap-type-y" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapTypeY),
+        // === Fase 7.1052-7.1057 — IE -ms- propiedades legacy reales (plumb opaco) ===
+        // Sentinel = valor initial → None.
+        "-ms-overflow-style" => opaque_or_sentinel(value, "auto").map(DeclKind::MsOverflowStyle),
+        "-ms-scroll-chaining" => opaque_or_sentinel(value, "chained").map(DeclKind::MsScrollChaining),
+        "-ms-content-zooming" => opaque_or_sentinel(value, "none").map(DeclKind::MsContentZooming),
+        "-ms-scroll-rails" => opaque_or_sentinel(value, "railed").map(DeclKind::MsScrollRails),
+        // Flexbox 2012 legacy de IE10: -ms-flex-align (~align-items),
+        // -ms-flex-pack (~justify-content).
+        "-ms-flex-align" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsFlexAlign),
+        "-ms-flex-pack" => opaque_or_sentinel(value, "start").map(DeclKind::MsFlexPack),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

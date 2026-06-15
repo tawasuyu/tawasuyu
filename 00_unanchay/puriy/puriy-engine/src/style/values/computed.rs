@@ -1736,5 +1736,20 @@ pub struct ComputedStyle {
     /// `scroll-snap-type-y` (CSS Scroll Snap v0). `None` = `none`. NO hereda.
     /// Plumb. Fase 7.1051.
     pub scroll_snap_type_y: Option<String>,
+    // === Fase 7.1052-7.1057 — IE -ms- propiedades legacy reales (plumb opaco) ===
+    /// `-ms-overflow-style` (IE10). `None` = `auto`. NO hereda. Plumb. Fase 7.1052.
+    pub ms_overflow_style: Option<String>,
+    /// `-ms-scroll-chaining` (IE10). `None` = `chained`. NO hereda. Plumb. Fase 7.1053.
+    pub ms_scroll_chaining: Option<String>,
+    /// `-ms-content-zooming` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1054.
+    pub ms_content_zooming: Option<String>,
+    /// `-ms-scroll-rails` (IE10). `None` = `railed`. NO hereda. Plumb. Fase 7.1055.
+    pub ms_scroll_rails: Option<String>,
+    /// `-ms-flex-align` (flexbox 2012 IE10, ~`align-items`). `None` = `stretch`.
+    /// NO hereda. Plumb. Fase 7.1056.
+    pub ms_flex_align: Option<String>,
+    /// `-ms-flex-pack` (flexbox 2012 IE10, ~`justify-content`). `None` = `start`.
+    /// NO hereda. Plumb. Fase 7.1057.
+    pub ms_flex_pack: Option<String>,
 }
 

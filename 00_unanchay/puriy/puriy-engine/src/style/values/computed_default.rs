@@ -625,6 +625,13 @@ impl Default for ComputedStyle {
             mask_source_type: None,
             scroll_snap_type_x: None,
             scroll_snap_type_y: None,
+            // Fase 7.1052-7.1057 — IE -ms- legacy, plumb opaco, default None.
+            ms_overflow_style: None,
+            ms_scroll_chaining: None,
+            ms_content_zooming: None,
+            ms_scroll_rails: None,
+            ms_flex_align: None,
+            ms_flex_pack: None,
         }
     }
 }
