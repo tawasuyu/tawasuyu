@@ -727,6 +727,15 @@ fn apply_vista(m: &mut Model, v: &Vista) {
             return;
         }
     }
+    // 5. Reconfigurar la barra (pata): escribimos su launcher.toml con el preset
+    //    de barra de la vista; pata lo recarga en caliente por mtime. El slug de
+    //    la vista casa 1:1 con el preset de barra de pata-core.
+    if let Some(bar) = pata_core::Config::vista_preset(v.name) {
+        if let Err(e) = pata_config::save(&bar) {
+            m.note = format!("barra: {e}");
+            return;
+        }
+    }
     m.note = format!("vista: {}", v.label);
 }
 

@@ -814,7 +814,13 @@ impl App for PataApp {
             nav: NavState::default(),
             screen,
             windows: Vec::new(),
-            cfg_watch: crate::config_watch::ConfigWatch::new(pata_config::loaded_path()),
+            // Vigilamos el primer candidato (el que `save` escribe), exista o no:
+            // así la PRIMERA aplicación de una vista —que crea launcher.toml— se
+            // recarga en caliente igual (mtime None→Some dispara `changed`), no
+            // sólo las siguientes.
+            cfg_watch: crate::config_watch::ConfigWatch::new(
+                pata_config::candidate_paths().into_iter().next(),
+            ),
         };
         // Primer tick para que los widgets arranquen con datos.
         model.tick_widgets(&ctx);

@@ -15,6 +15,11 @@ path = "src/main.rs"
 [dependencies]
 mirada-brain = { path = "../mirada-brain" }
 mirada-link = { path = "../mirada-link" }
+# La barra de las vistas: pata-core define los presets de barra por vista y
+# pata-config los serializa a ~/.config/pata/launcher.toml (que pata recarga en
+# caliente). Núcleos agnósticos sin GPU — el panel sólo escribe el TOML.
+pata-core = { path = "../../pata/pata-core" }
+pata-config = { path = "../../pata/pata-config" }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }

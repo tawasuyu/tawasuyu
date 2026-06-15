@@ -459,6 +459,130 @@ impl Config {
             surfaces: vec![top, rail, shell],
         }
     }
+
+    /// Preset de **barra** para una vista de escritorio de mirada. Los slugs
+    /// casan 1:1 con las vistas de `mirada-brain::Vista` (`"dwm"`, `"hyprland"`,
+    /// `"windows-xp"`, `"mac"`, `"kde"`, `"mirada"`). Al aplicar una vista, el
+    /// panel escribe este `Config` con [`crate`]`-config::save` y pata recarga en
+    /// caliente — así la barra acompaña al look. `mirada` = el preset nativo.
+    /// `None` si el slug no existe.
+    pub fn vista_preset(name: &str) -> Option<Self> {
+        Some(match name {
+            "mirada" => Self::preset(),
+            "dwm" => Self::vista_dwm(),
+            "hyprland" => Self::vista_hyprland(),
+            "windows-xp" => Self::vista_windows_xp(),
+            "mac" => Self::vista_mac(),
+            "kde" => Self::vista_kde(),
+            _ => return None,
+        })
+    }
+
+    /// Barra **dwm**: una franja fina arriba — tags + símbolo de layout a la
+    /// izquierda, título de la enfocada al centro, reloj a la derecha.
+    fn vista_dwm() -> Self {
+        let mut bar = Surface::bar(Anchor::Top);
+        bar.thickness = 22.0;
+        bar.gap = 8.0;
+        bar.padding = 6.0;
+        bar.start = vec![
+            WidgetSpec::new("workspaces"),
+            WidgetSpec::new("layout"),
+        ];
+        bar.center = vec![WidgetSpec::new("window_title").with("max", Prop::Num(70.0))];
+        bar.end = vec![WidgetSpec::new("clock").with("format", Prop::Str("%a %d %H:%M".to_string()))];
+        Self {
+            general: General::default(),
+            surfaces: vec![bar],
+        }
+    }
+
+    /// Barra **Hyprland**: top con aire (gap/radius), tags + título + un grupo de
+    /// estado (reloj, volumen, CPU) — al estilo waybar minimalista.
+    fn vista_hyprland() -> Self {
+        let mut bar = Surface::bar(Anchor::Top);
+        bar.thickness = 34.0;
+        bar.gap = 14.0;
+        bar.padding = 10.0;
+        bar.radius = 10.0;
+        bar.margin = 6.0;
+        bar.gradient = true;
+        bar.start = vec![WidgetSpec::new("workspaces"), WidgetSpec::new("layout")];
+        bar.center = vec![WidgetSpec::new("window_title").with("max", Prop::Num(80.0))];
+        bar.end = vec![
+            WidgetSpec::new("volume"),
+            WidgetSpec::new("cpu_meter"),
+            WidgetSpec::new("clock"),
+        ];
+        Self {
+            general: General::default(),
+            surfaces: vec![bar],
+        }
+    }
+
+    /// Barra **Windows XP**: taskbar abajo — botón Inicio, lista de ventanas
+    /// (botones de tarea) al centro, bandeja + reloj a la derecha.
+    fn vista_windows_xp() -> Self {
+        let mut bar = Surface::bar(Anchor::Bottom);
+        bar.thickness = 40.0;
+        bar.gradient = true;
+        bar.start = vec![WidgetSpec::new("start_button").with("label", Prop::Str("Inicio".to_string()))];
+        bar.center = vec![WidgetSpec::new("window_list")];
+        bar.end = vec![
+            WidgetSpec::new("tray"),
+            WidgetSpec::new("volume"),
+            WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string())),
+        ];
+        Self {
+            general: General::default(),
+            surfaces: vec![bar],
+        }
+    }
+
+    /// Vista **macOS**: menubar fina arriba (logo + título + estado) y un dock
+    /// abajo con las ventanas abiertas.
+    fn vista_mac() -> Self {
+        let mut menubar = Surface::bar(Anchor::Top);
+        menubar.thickness = 26.0;
+        menubar.padding = 10.0;
+        menubar.start = vec![
+            WidgetSpec::new("start_button").with("label", Prop::Str("\u{f8ff}".to_string())), //  (cae a tofu sin la fuente; inocuo)
+            WidgetSpec::new("window_title").with("max", Prop::Num(60.0)),
+        ];
+        menubar.end = vec![
+            WidgetSpec::new("volume"),
+            WidgetSpec::new("tray"),
+            WidgetSpec::new("clock").with("format", Prop::Str("%a %H:%M".to_string())),
+        ];
+        let mut dock = Surface::dock(Anchor::Bottom);
+        dock.thickness = 56.0;
+        dock.radius = 16.0;
+        dock.margin = 8.0;
+        dock.gradient = true;
+        dock.center = vec![WidgetSpec::new("window_list")];
+        Self {
+            general: General::default(),
+            surfaces: vec![menubar, dock],
+        }
+    }
+
+    /// Barra **KDE Plasma**: panel abajo — lanzador (Kickoff), lista de ventanas
+    /// al centro, bandeja + reloj a la derecha.
+    fn vista_kde() -> Self {
+        let mut bar = Surface::bar(Anchor::Bottom);
+        bar.thickness = 36.0;
+        bar.start = vec![WidgetSpec::new("start_button").with("label", Prop::Str("\u{2261}".to_string()))]; // ≡ Kickoff
+        bar.center = vec![WidgetSpec::new("window_list")];
+        bar.end = vec![
+            WidgetSpec::new("tray"),
+            WidgetSpec::new("volume"),
+            WidgetSpec::new("clock"),
+        ];
+        Self {
+            general: General::default(),
+            surfaces: vec![bar],
+        }
+    }
 }
 
 fn default_thickness() -> f32 {
@@ -486,6 +610,23 @@ fn default_timezone() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vista_preset_resuelve_las_vistas_y_difieren() {
+        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde"] {
+            let c = Config::vista_preset(slug).unwrap_or_else(|| panic!("vista {slug}"));
+            assert!(!c.surfaces.is_empty(), "vista {slug} sin superficies");
+        }
+        assert!(Config::vista_preset("noexiste").is_none());
+        // dwm: una sola barra fina arriba; XP: barra abajo.
+        let dwm = Config::vista_preset("dwm").unwrap();
+        assert_eq!(dwm.surfaces.len(), 1);
+        assert_eq!(dwm.surfaces[0].anchor, Anchor::Top);
+        let xp = Config::vista_preset("windows-xp").unwrap();
+        assert_eq!(xp.surfaces[0].anchor, Anchor::Bottom);
+        // mac: menubar + dock (dos superficies).
+        assert_eq!(Config::vista_preset("mac").unwrap().surfaces.len(), 2);
+    }
 
     #[test]
     fn anchor_horizontalidad() {
