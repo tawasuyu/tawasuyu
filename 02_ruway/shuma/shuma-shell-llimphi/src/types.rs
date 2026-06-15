@@ -843,7 +843,7 @@ pub(crate) enum Slot {
 
 // ─── Modelo ─────────────────────────────────────────────────────────
 
-pub(crate) struct Model {
+pub struct Model {
     pub theme: Theme,
 
     pub topbar: Option<Instance>,
@@ -930,7 +930,7 @@ impl Model {
 // ─── Enum de mensajes de la app ─────────────────────────────────────
 
 #[derive(Clone)]
-pub(crate) enum Msg {
+pub enum Msg {
     Tick,
     ShellTick,
     Resized(f32, f32),
