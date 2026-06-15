@@ -556,3 +556,28 @@ fn is_where_forgiving() {
         (9, 9, 9)
     );
 }
+
+// ── Fase 7.940 — :dir(rtl|ltr) evaluado de verdad (atributo dir heredado) ──
+
+#[test]
+fn dir_pseudo_real() {
+    // <p class="t" dir="rtl"> → :dir(rtl) aplica.
+    assert_eq!(
+        p_color_in("<p class='t' dir='rtl'></p>", "p:dir(rtl) { color: rgb(1,2,3) } p { color: rgb(9,9,9) }"),
+        (1, 2, 3)
+    );
+    // dir heredado del ancestro.
+    assert_eq!(
+        p_color_in("<div dir='rtl'><p class='t'></p></div>", "p:dir(rtl) { color: rgb(1,2,3) } p { color: rgb(9,9,9) }"),
+        (1, 2, 3)
+    );
+    // ltr por default (sin dir) → :dir(rtl) NO aplica, :dir(ltr) sí.
+    assert_eq!(
+        p_color_in("<p class='t'></p>", "p:dir(rtl) { color: rgb(1,2,3) } p { color: rgb(9,9,9) }"),
+        (9, 9, 9)
+    );
+    assert_eq!(
+        p_color_in("<p class='t'></p>", "p:dir(ltr) { color: rgb(4,5,6) }"),
+        (4, 5, 6)
+    );
+}

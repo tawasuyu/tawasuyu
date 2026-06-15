@@ -381,11 +381,18 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                                 Pseudo::Where(inner)
                             }
                         }
-                        // Fase 7.933 — pseudo-clases funcionales estándar que
-                        // reconocemos pero no evaluamos (custom states, shadow
-                        // DOM, dir): inertes para no tirar la regla. `:dir()`
-                        // real queda pendiente. El argumento debe ser no vacío.
-                        "dir" | "state" | "host" | "host-context" => {
+                        // Fase 7.940 — `:dir(rtl|ltr)` evaluado de verdad
+                        // (atributo `dir` heredado); otros valores → inerte.
+                        "dir" => match arg.trim().to_ascii_lowercase().as_str() {
+                            "rtl" => Pseudo::Dir(true),
+                            "ltr" => Pseudo::Dir(false),
+                            "" => return None,
+                            _ => Pseudo::Inert(false),
+                        },
+                        // Fase 7.933 — funcionales estándar que reconocemos pero
+                        // no evaluamos (custom states, shadow DOM): inertes para
+                        // no tirar la regla. El argumento debe ser no vacío.
+                        "state" | "host" | "host-context" => {
                             if arg.trim().is_empty() {
                                 return None;
                             }

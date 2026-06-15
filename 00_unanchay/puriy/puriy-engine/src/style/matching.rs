@@ -281,6 +281,11 @@ pub(crate) enum Pseudo {
     /// `:lang(en, fr)` — el idioma del elemento (atributo `lang` propio o
     /// del ancestro más cercano) coincide con (o es subtag de) alguno.
     Lang(Vec<String>),
+    /// `:dir(rtl)` / `:dir(ltr)` — direccionalidad resuelta del elemento
+    /// (atributo `dir` propio o del ancestro más cercano; default `ltr`;
+    /// `auto` se aproxima a `ltr` — no analizamos el contenido). `true` =
+    /// matchea `rtl`. Fase 7.940.
+    Dir(bool),
     /// Pseudo-clase estándar reconocida pero NO evaluable con el estado que
     /// rastreamos (validación de formularios, estado de media/popover/dialog,
     /// `:active`/`:visited`/`:target`…). Se parsea para NO tirar la regla
@@ -422,6 +427,7 @@ pub(crate) fn pseudo_matches(
                 .any(|r| has_relative_match(node, r, hover_active, focus_active))
         }
         Pseudo::Lang(tags) => return lang_matches(node, tags),
+        Pseudo::Dir(want_rtl) => return dir_matches(node) == *want_rtl,
         Pseudo::Inert(b) => return *b,
         _ => {}
     }
@@ -463,6 +469,7 @@ pub(crate) fn pseudo_matches(
         | Pseudo::AnyLink
         | Pseudo::Has(_)
         | Pseudo::Lang(_)
+        | Pseudo::Dir(_)
         | Pseudo::Inert(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
@@ -543,6 +550,25 @@ fn any_descendant_matches(
 /// `:lang(...)` — el idioma efectivo del elemento (atributo `lang` propio o
 /// del ancestro más cercano) matchea si es igual a algún tag pedido o es un
 /// subtag suyo (`lang="en-US"` ↔ `:lang(en)`). Case-insensitive.
+/// Direccionalidad resuelta de un elemento (`:dir()`): busca el atributo `dir`
+/// propio o del ancestro más cercano. `rtl`→true; `ltr`/`auto`/ausente→false
+/// (`auto` se aproxima a `ltr`, no analizamos el contenido). Fase 7.940.
+pub(crate) fn dir_matches(node: &markup5ever_rcdom::Handle) -> bool {
+    let mut cur = Some(node.clone());
+    while let Some(n) = cur {
+        if let Some(d) = dom::attr(&n, "dir") {
+            let d = d.trim().to_ascii_lowercase();
+            if d == "rtl" {
+                return true;
+            } else if d == "ltr" || d == "auto" {
+                return false;
+            }
+        }
+        cur = parent_of(&n);
+    }
+    false
+}
+
 pub(crate) fn lang_matches(node: &markup5ever_rcdom::Handle, tags: &[String]) -> bool {
     let mut cur = Some(node.clone());
     let lang = loop {
