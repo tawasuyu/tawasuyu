@@ -35,6 +35,7 @@ impl<Msg> View<Msg> {
             clip_ellipse: None,
             clip_polygon: None,
             clip_path_svg: None,
+            clip_ref_inset: None,
             on_scroll: None,
             on_scale: None,
             on_rotate: None,
@@ -1246,6 +1247,15 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Fija la caja de referencia del clip-path (`<geometry-box>`): el rect del
+    /// nodo se encoge por `insets` px `[top, right, bottom, left]` antes de
+    /// resolver la forma. Sin forma, recorta a ese rect. Activa el recorte.
+    pub fn clip_ref_inset(mut self, insets: [f32; 4]) -> Self {
+        self.clip = true;
+        self.clip_ref_inset = Some(insets);
+        self
+    }
+
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
@@ -1339,6 +1349,17 @@ mod semantics_tests {
         assert!(!bez.elements().is_empty());
         // Default: sin path.
         assert_eq!(View::<()>::new(Style::default()).clip_path_svg, None);
+    }
+
+    #[test]
+    fn clip_ref_inset_setea_campo_y_activa_clip() {
+        // `.clip_ref_inset(...)` guarda la caja de referencia y activa el
+        // recorte (Fase 7.1225).
+        let v = View::<()>::new(Style::default()).clip_ref_inset([5.0, 5.0, 5.0, 5.0]);
+        assert_eq!(v.clip_ref_inset, Some([5.0, 5.0, 5.0, 5.0]));
+        assert!(v.clip, "clip_ref_inset implica clip activo");
+        // Default: sin caja de referencia.
+        assert_eq!(View::<()>::new(Style::default()).clip_ref_inset, None);
     }
 
     #[test]

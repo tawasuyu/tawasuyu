@@ -1062,6 +1062,27 @@ use super::super::*;
         // Función desconocida → None.
         assert!(parse_clip_path("ray(45deg)").is_none());
 
+        // Fase 7.1225 — parse_clip_path_value: forma + caja de referencia en
+        // cualquier orden, caja sola, o ninguna (default border-box).
+        let (shape, geo) = parse_clip_path_value("circle(50%) content-box");
+        assert!(matches!(shape, Some(ClipPath::Circle { .. })));
+        assert_eq!(geo, GeometryBox::ContentBox);
+        // Orden inverso.
+        let (shape, geo) = parse_clip_path_value("padding-box circle(50%)");
+        assert!(matches!(shape, Some(ClipPath::Circle { .. })));
+        assert_eq!(geo, GeometryBox::PaddingBox);
+        // Caja sola (sin forma) → recorta a esa caja.
+        assert_eq!(
+            parse_clip_path_value("content-box"),
+            (None, GeometryBox::ContentBox)
+        );
+        // Forma sola → border-box default.
+        let (shape, geo) = parse_clip_path_value("polygon(0 0, 10px 0, 0 10px)");
+        assert!(matches!(shape, Some(ClipPath::Polygon { .. })));
+        assert_eq!(geo, GeometryBox::BorderBox);
+        // none / vacío → (None, border-box).
+        assert_eq!(parse_clip_path_value("none"), (None, GeometryBox::BorderBox));
+
         // e2e: body con clip-path, div sin → NO se hereda.
         let html = r##"<html><head><style>
             body { clip-path: circle(50px) }

@@ -178,6 +178,14 @@ pub struct BoxNode {
     /// lo parsea con `BezPath::from_svg`. `evenodd` = regla de relleno. `None`
     /// = sin clip-path por path. Fase 7.1224.
     pub clip_path_svg: Option<(bool, String)>,
+    /// Insets `[top, right, bottom, left]` px que llevan del border-box a la
+    /// caja de referencia de `clip-path` (`<geometry-box>`): padding-box =
+    /// border; content-box = border+padding; border/margin-box = `None`. El
+    /// compositor encoge el rect por estos insets ANTES de resolver la forma
+    /// (así circle/ellipse/polygon/path y los `%` se miden contra la caja de
+    /// referencia). Sin forma + caja ≠ border-box ⇒ recorta a ese rect. `None`
+    /// = referencia = border-box (sin cambio). Fase 7.1225.
+    pub clip_ref_inset: Option<[f32; 4]>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

@@ -36,8 +36,9 @@ pub(crate) fn parse_touch_action(value: &str) -> Option<TouchAction> {
 }
 
 /// `clip-path` (subset). Acepta `none` (→ `None`), `inset(...)`,
-/// `circle(...)`, `ellipse(...)`. Otras shapes (polygon/path) y URLs a
-/// SVG quedan fuera por ahora. Fase 7.274.
+/// `circle(...)`, `ellipse(...)`, `polygon(...)`, `path(...)`. URLs a SVG
+/// quedan fuera. Fase 7.274. Sólo la forma; para la caja de referencia ver
+/// [`parse_clip_path_value`].
 pub(crate) fn parse_clip_path(value: &str) -> Option<ClipPath> {
     let v = value.trim();
     if v.is_empty() || v.eq_ignore_ascii_case("none") {
@@ -53,6 +54,43 @@ pub(crate) fn parse_clip_path(value: &str) -> Option<ClipPath> {
         "polygon" => parse_polygon_shape(args),
         "path" => parse_path_shape(args),
         _ => None,
+    }
+}
+
+/// Un `<geometry-box>` de clip-path. `None` si el token no es una caja. Fase 7.1225.
+fn parse_geometry_box(s: &str) -> Option<GeometryBox> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "margin-box" => Some(GeometryBox::MarginBox),
+        "border-box" => Some(GeometryBox::BorderBox),
+        "padding-box" => Some(GeometryBox::PaddingBox),
+        "content-box" => Some(GeometryBox::ContentBox),
+        _ => None,
+    }
+}
+
+/// Valor completo de `clip-path`: `[<basic-shape> || <geometry-box>]`. La
+/// forma y la caja pueden venir en cualquier orden (`circle(50%) content-box`
+/// o `content-box circle(50%)`), una sola, o ninguna. Devuelve
+/// `(forma, caja)`; caja default `border-box`. Fase 7.1225.
+pub(crate) fn parse_clip_path_value(value: &str) -> (Option<ClipPath>, GeometryBox) {
+    let v = value.trim();
+    if v.is_empty() || v.eq_ignore_ascii_case("none") {
+        return (None, GeometryBox::BorderBox);
+    }
+    // ¿Hay una función `name(args)`? Si sí, la forma es ese fragmento y los
+    // tokens de antes/después son la caja; si no, todo el valor es una caja.
+    match (v.find('('), v.rfind(')')) {
+        (Some(open), Some(close)) if close > open => {
+            // Inicio del nombre de la función: retroceder sobre el último
+            // espacio antes del `(`.
+            let name_start = v[..open].rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+            let shape_str = &v[name_start..=close];
+            let geo = parse_geometry_box(v[..name_start].trim())
+                .or_else(|| parse_geometry_box(v[close + 1..].trim()))
+                .unwrap_or(GeometryBox::BorderBox);
+            (parse_clip_path(shape_str), geo)
+        }
+        _ => (None, parse_geometry_box(v).unwrap_or(GeometryBox::BorderBox)),
     }
 }
 

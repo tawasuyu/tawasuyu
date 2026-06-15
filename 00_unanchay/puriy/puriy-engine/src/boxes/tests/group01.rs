@@ -330,6 +330,40 @@ use crate::Engine;
     }
 
     #[test]
+    fn clip_path_geometry_box_llega_al_box_node_fase_7_1225() {
+        // La caja de referencia → clip_ref_inset = insets del border-box:
+        // padding-box = border; content-box = border+padding; border-box = None.
+        let html = "<html><body>\
+            <div id=\"pad\" style=\"border:5px solid red; padding:10px; clip-path: circle(50%) padding-box\">a</div>\
+            <div id=\"con\" style=\"border:5px solid red; padding:10px; clip-path: circle(50%) content-box\">b</div>\
+            <div id=\"bor\" style=\"border:5px solid red; padding:10px; clip-path: circle(50%) border-box\">c</div>\
+            <div id=\"only\" style=\"border:3px solid red; padding:7px; clip-path: content-box\">d</div>\
+            <div id=\"def\" style=\"border:5px solid red; clip-path: circle(50%)\">e</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let by_id = |id: &str| {
+            let mut found = None;
+            doc.box_tree.walk(|b| {
+                if b.element_id.as_deref() == Some(id) {
+                    found = Some(b.clip_ref_inset);
+                }
+            });
+            found.expect("box existe")
+        };
+        // padding-box → insets = border (5 por lado).
+        assert_eq!(by_id("pad"), Some([5.0, 5.0, 5.0, 5.0]));
+        // content-box → insets = border + padding (15 por lado).
+        assert_eq!(by_id("con"), Some([15.0, 15.0, 15.0, 15.0]));
+        // border-box (explícito) → None (referencia = rect completo).
+        assert_eq!(by_id("bor"), None);
+        // caja sola sin forma → recorta a content-box (3+7=10 por lado).
+        assert_eq!(by_id("only"), Some([10.0, 10.0, 10.0, 10.0]));
+        // sin geometry-box → None.
+        assert_eq!(by_id("def"), None);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

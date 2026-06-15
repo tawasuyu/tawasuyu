@@ -46,6 +46,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip_ellipse,
         clip_polygon,
         clip_path_svg,
+        clip_ref_inset,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -103,6 +104,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip_ellipse,
         clip_polygon,
         clip_path_svg,
+        clip_ref_inset,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -721,13 +723,19 @@ pub fn paint_range<Msg>(
             // Prioridad: path > polygon > elipse > inset/rect. `pushed` queda
             // false sólo si un path() no parsea (no se abre capa → no se cierra).
             let mut pushed = true;
+            // Caja de referencia (clip-path geometry-box, Fase 7.1225): encoge
+            // el rect del nodo por `clip_ref_inset` ANTES de resolver la forma,
+            // así circle/ellipse/polygon/path y sus % se miden contra esa caja.
+            let [rit, rir, rib, ril] = node.clip_ref_inset.unwrap_or([0.0; 4]);
+            let (bx, by) = ((r.x + ril) as f64, (r.y + rit) as f64);
+            let (bw, bh) = ((r.w - ril - rir).max(0.0) as f64, (r.h - rit - rib).max(0.0) as f64);
             if let Some((evenodd, d)) = &node.clip_path_svg {
                 // `clip-path: path()` — parsea el SVG y lo traslada al origen
-                // del rect (user units px relativos a la caja). Si from_svg
-                // falla, no se recorta.
+                // de la caja de referencia (user units px). from_svg falla → no
+                // recorta.
                 match vello::kurbo::BezPath::from_svg(d) {
                     Ok(mut path) => {
-                        path.apply_affine(Affine::translate((r.x as f64, r.y as f64)));
+                        path.apply_affine(Affine::translate((bx, by)));
                         let fill = if *evenodd { Fill::EvenOdd } else { Fill::NonZero };
                         scene.push_layer(fill, BlendMode::default(), 1.0, cur_xf, &path);
                     }
@@ -735,13 +743,12 @@ pub fn paint_range<Msg>(
                 }
             } else if let Some((evenodd, pts)) = &node.clip_polygon {
                 // `clip-path: polygon()` — capa con un path cerrado. Cada punto
-                // resuelve sus % contra el rect; move_to al 1º, line_to al
-                // resto, close_path.
-                let (w, h) = (r.w as f64, r.h as f64);
+                // resuelve sus % contra la caja de referencia; move_to al 1º,
+                // line_to al resto, close_path.
                 let mut path = vello::kurbo::BezPath::new();
                 for (i, p) in pts.iter().enumerate() {
-                    let px = r.x as f64 + p[0] as f64 + p[1] as f64 / 100.0 * w;
-                    let py = r.y as f64 + p[2] as f64 + p[3] as f64 / 100.0 * h;
+                    let px = bx + p[0] as f64 + p[1] as f64 / 100.0 * bw;
+                    let py = by + p[2] as f64 + p[3] as f64 / 100.0 * bh;
                     if i == 0 {
                         path.move_to((px, py));
                     } else {
@@ -753,27 +760,27 @@ pub fn paint_range<Msg>(
                 scene.push_layer(fill, BlendMode::default(), 1.0, cur_xf, &path);
             } else if let Some(s) = node.clip_ellipse {
                 // `clip-path: circle()/ellipse()` — capa elíptica. Centro y
-                // radios resuelven contra el rect del nodo. El centro local
-                // (relativo al origen del rect) alimenta tanto la posición como
-                // el cómputo de los lados (closest/farthest-side).
-                let (w, h) = (r.w as f64, r.h as f64);
-                let cxl = s[0] as f64 + s[1] as f64 / 100.0 * w;
-                let cyl = s[2] as f64 + s[3] as f64 / 100.0 * h;
-                let cx = r.x as f64 + cxl;
-                let cy = r.y as f64 + cyl;
-                let rx = resolve_clip_radius(&s[4..9], cxl, cyl, w, h, true);
-                let ry = resolve_clip_radius(&s[9..14], cxl, cyl, w, h, false);
+                // radios resuelven contra la caja de referencia. El centro local
+                // alimenta tanto la posición como el cómputo de los lados
+                // (closest/farthest-side).
+                let cxl = s[0] as f64 + s[1] as f64 / 100.0 * bw;
+                let cyl = s[2] as f64 + s[3] as f64 / 100.0 * bh;
+                let cx = bx + cxl;
+                let cy = by + cyl;
+                let rx = resolve_clip_radius(&s[4..9], cxl, cyl, bw, bh, true);
+                let ry = resolve_clip_radius(&s[9..14], cxl, cyl, bw, bh, false);
                 let ellipse = Ellipse::new((cx, cy), (rx, ry), 0.0);
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &ellipse);
             } else {
-                // `clip_inset` (clip-path: inset) encoge el rect de recorte desde
-                // cada borde; `None` (overflow:hidden) recorta al rect completo.
+                // `clip_inset` (clip-path: inset) encoge la caja de referencia
+                // desde cada borde; `None` (overflow:hidden / geometry-box solo)
+                // recorta a la caja de referencia completa.
                 let [ct, cr, cb, cl] = node.clip_inset.unwrap_or([0.0; 4]);
                 let clip_rect = KurboRect::new(
-                    (r.x + cl) as f64,
-                    (r.y + ct) as f64,
-                    (r.x + r.w - cr) as f64,
-                    (r.y + r.h - cb) as f64,
+                    bx + cl as f64,
+                    by + ct as f64,
+                    bx + bw - cr as f64,
+                    by + bh - cb as f64,
                 );
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
             }

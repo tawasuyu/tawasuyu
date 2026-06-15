@@ -443,6 +443,12 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some((evenodd, d)) = &b.clip_path_svg {
         view = view.clip_path_svg(*evenodd, d.clone());
     }
+    // `clip-path` geometry-box (Fase 7.1225) — el compositor encoge el rect a
+    // la caja de referencia antes de resolver la forma; sin forma, recorta a
+    // ese rect.
+    if let Some(insets) = b.clip_ref_inset {
+        view = view.clip_ref_inset(insets);
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {

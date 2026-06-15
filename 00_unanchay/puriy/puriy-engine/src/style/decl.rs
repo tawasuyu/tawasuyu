@@ -275,8 +275,9 @@ pub(crate) enum DeclKind {
     ScrollMarginBottom(f32),
     ScrollMarginLeft(f32),
     TouchAction(TouchAction),
-    /// `None` = `clip-path: none`.
-    ClipPath(Option<ClipPath>),
+    /// `(forma, caja-de-referencia)`. `None` = `clip-path: none` (la caja igual
+    /// se aplica si es ≠ border-box, p. ej. `clip-path: content-box`).
+    ClipPath(Option<ClipPath>, GeometryBox),
     /// `None` = `mask-image: none`.
     MaskImage(Option<MaskImage>),
     ContentVisibility(ContentVisibility),
@@ -1489,7 +1490,10 @@ impl Decl {
             DeclKind::ScrollMarginBottom(v) => s.scroll_margin.bottom = *v,
             DeclKind::ScrollMarginLeft(v) => s.scroll_margin.left = *v,
             DeclKind::TouchAction(t) => s.touch_action = *t,
-            DeclKind::ClipPath(c) => s.clip_path = c.clone(),
+            DeclKind::ClipPath(c, g) => {
+                s.clip_path = c.clone();
+                s.clip_geometry_box = *g;
+            }
             DeclKind::MaskImage(m) => s.mask_image = m.clone(),
             DeclKind::ContentVisibility(v) => s.content_visibility = *v,
             DeclKind::Contain(c) => s.contain = *c,

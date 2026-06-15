@@ -107,6 +107,7 @@ pub(crate) fn empty_root() -> BoxNode {
         clip_ellipse: None,
         clip_polygon: None,
         clip_path_svg: None,
+        clip_ref_inset: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,
@@ -639,6 +640,24 @@ pub(crate) fn build_node(
                     }
                     _ => None,
                 },
+                // Fase 7.1225 — caja de referencia de clip-path → insets del
+                // border-box. padding-box = border; content-box = border +
+                // padding; border/margin-box = None (sin cambio).
+                clip_ref_inset: match style.clip_geometry_box {
+                    crate::style::GeometryBox::PaddingBox => Some([
+                        style.border_widths.top,
+                        style.border_widths.right,
+                        style.border_widths.bottom,
+                        style.border_widths.left,
+                    ]),
+                    crate::style::GeometryBox::ContentBox => Some([
+                        style.border_widths.top + style.padding.top,
+                        style.border_widths.right + style.padding.right,
+                        style.border_widths.bottom + style.padding.bottom,
+                        style.border_widths.left + style.padding.left,
+                    ]),
+                    _ => None,
+                },
                 white_space: style.white_space,
                 text_transform: style.text_transform,
                 opacity: style.opacity,
@@ -851,6 +870,7 @@ pub(crate) fn build_node(
                 clip_ellipse: None,
                 clip_polygon: None,
                 clip_path_svg: None,
+                clip_ref_inset: None,
                 white_space: WhiteSpace::Normal,
                 text_transform: TextTransform::None,
                 opacity: 1.0,

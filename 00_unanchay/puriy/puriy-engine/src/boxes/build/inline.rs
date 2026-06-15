@@ -52,6 +52,7 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         clip_ellipse: None,
         clip_polygon: None,
         clip_path_svg: None,
+        clip_ref_inset: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,

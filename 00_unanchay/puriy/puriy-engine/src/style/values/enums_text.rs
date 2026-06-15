@@ -350,6 +350,19 @@ pub enum TouchAction {
     },
 }
 
+/// Caja de referencia (`<geometry-box>`) de `clip-path` (CSS Masking 1). La
+/// forma resuelve sus longitudes/`%` contra esta caja en vez del border-box
+/// (default). `margin-box` se aproxima a `border-box` (los outsets de margin
+/// no se modelan). `fill/stroke/view-box` (SVG) quedan fuera. Fase 7.1225.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GeometryBox {
+    MarginBox,
+    #[default]
+    BorderBox,
+    PaddingBox,
+    ContentBox,
+}
+
 /// Radio de `circle()`/`ellipse()` de clip-path: una `<length-percentage>`
 /// o un keyword de lado. `closest-side`/`farthest-side` resuelven contra la
 /// distancia del centro a los bordes de la caja (en el compositor, que tiene

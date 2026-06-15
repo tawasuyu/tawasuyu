@@ -323,8 +323,10 @@ pub struct ComputedStyle {
     /// Plumb: el chrome no rutea pointer events según este hint.
     pub touch_action: TouchAction,
     /// `clip-path` (Fase 7.274). `None` = sin recorte. NO heredable.
-    /// Plumb: vello no aplica el recorte a la sub-scene del nodo aún.
     pub clip_path: Option<ClipPath>,
+    /// Caja de referencia de `clip-path` (`<geometry-box>`, Fase 7.1225).
+    /// Default `border-box`. La forma resuelve contra esta caja. NO heredable.
+    pub clip_geometry_box: GeometryBox,
     /// `mask-image` (Fase 7.275). `None` = sin máscara. NO heredable.
     /// Plumb: subset url(...) — no se baja ni se aplica todavía.
     pub mask_image: Option<MaskImage>,

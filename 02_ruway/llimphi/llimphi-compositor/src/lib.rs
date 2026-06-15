@@ -466,6 +466,12 @@ pub struct View<Msg> {
     /// falla, no recorta. Implica clip aunque `clip == false`. Prioridad:
     /// path > polygon > elipse > inset > rect.
     pub clip_path_svg: Option<(bool, String)>,
+    /// Si `Some([t,r,b,l])`, el clip-path se resuelve contra una caja de
+    /// referencia (`<geometry-box>`) que es el rect del nodo ENCOGIDO por esos
+    /// insets px (padding-box = border; content-box = border+padding). El
+    /// pintado lo aplica ANTES de resolver la forma; sin forma, recorta a ese
+    /// rect. `None` = referencia = border-box (rect completo). Fase 7.1225.
+    pub clip_ref_inset: Option<[f32; 4]>,
     /// Msg a emitir cuando el cursor entra al rect del nodo (transición
     /// no-hover → hover). Útil para previews tipo "URL del link al
     /// pasar el mouse".
@@ -673,6 +679,7 @@ impl<Msg: 'static> View<Msg> {
             clip_ellipse,
             clip_polygon,
             clip_path_svg,
+            clip_ref_inset,
             on_pointer_enter,
             on_pointer_leave,
             on_pointer_move_at,
@@ -724,6 +731,7 @@ impl<Msg: 'static> View<Msg> {
             clip_ellipse,
             clip_polygon,
             clip_path_svg,
+            clip_ref_inset,
             focusable,
             text_select_key,
             alpha,
@@ -971,6 +979,7 @@ pub struct MountedNode<Msg> {
     pub clip_ellipse: Option<[f32; 14]>,
     pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
     pub clip_path_svg: Option<(bool, String)>,
+    pub clip_ref_inset: Option<[f32; 4]>,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_pointer_move_at: Option<ClickAtFn<Msg>>,

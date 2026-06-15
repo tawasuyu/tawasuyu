@@ -445,7 +445,10 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         // (Fase 7.426) shorthands: ver `parse_declarations`.
         // Fase 7.793 — `-ms-touch-action` alias vendor (IE10).
         "touch-action" | "-ms-touch-action" => parse_touch_action(value).map(DeclKind::TouchAction),
-        "clip-path" | "-webkit-clip-path" => Some(DeclKind::ClipPath(parse_clip_path(value))),
+        "clip-path" | "-webkit-clip-path" => {
+            let (shape, geo) = parse_clip_path_value(value);
+            Some(DeclKind::ClipPath(shape, geo))
+        }
         "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),
         // `mask` shorthand: hoy sólo el subset image (igual que mask-image).
         "mask" | "-webkit-mask" | "-webkit-mask-image" => {

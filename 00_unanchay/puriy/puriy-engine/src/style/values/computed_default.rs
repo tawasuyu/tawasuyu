@@ -126,6 +126,7 @@ impl Default for ComputedStyle {
             scroll_margin: Sides::all(0.0),
             touch_action: TouchAction::Auto,
             clip_path: None,
+            clip_geometry_box: GeometryBox::BorderBox,
             mask_image: None,
             content_visibility: ContentVisibility::Visible,
             contain: ContainFlags::default(),
