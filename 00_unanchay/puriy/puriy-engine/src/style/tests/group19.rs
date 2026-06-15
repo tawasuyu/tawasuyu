@@ -333,11 +333,67 @@ fn layer_statement_no_rompe() {
 
 #[test]
 fn layer_convive_con_regla_normal() {
-    // Una regla normal posterior pisa la de la capa (simplificación: orden de
-    // fuente, no prioridad de capa — documentado).
+    // Fase 7.1214 — prioridad de capa REAL: lo unlayered gana a lo layered
+    // para declaraciones normales, sin importar el orden de fuente NI la
+    // especificidad. Acá la regla normal aparece después y gana (99).
     assert_eq!(
         p_color("@layer base { p { color: rgb(10, 10, 10); } } p { color: rgb(99, 99, 99); }"),
         (99, 99, 99)
+    );
+}
+
+#[test]
+fn layer_prioridad_unlayered_gana_aunque_vaya_antes() {
+    // Lo unlayered gana a lo layered incluso si la regla unlayered viene ANTES
+    // y tiene MENOR especificidad (antes ganaba la última en orden de fuente).
+    assert_eq!(
+        p_color("p { color: rgb(1, 2, 3); } @layer base { p#x.y.z { color: rgb(9, 9, 9); } }"),
+        (1, 2, 3)
+    );
+}
+
+#[test]
+fn layer_orden_entre_capas() {
+    // Un statement `@layer base, tema;` AL INICIO predeclara el orden
+    // (base=0, tema=1); aunque el bloque de `tema` aparezca antes que el de
+    // `base` en la fuente, tema sigue siendo la capa posterior → gana tema.
+    assert_eq!(
+        p_color(
+            "@layer base, tema; \
+             @layer tema { p { color: rgb(20, 20, 20); } } \
+             @layer base { p { color: rgb(10, 10, 10); } }"
+        ),
+        (20, 20, 20)
+    );
+    // Sin predeclaración, el orden lo fija la primera aparición: base, luego
+    // tema → gana tema.
+    assert_eq!(
+        p_color(
+            "@layer base { p { color: rgb(10, 10, 10); } } \
+             @layer tema { p { color: rgb(20, 20, 20); } }"
+        ),
+        (20, 20, 20)
+    );
+}
+
+#[test]
+fn layer_important_invierte_orden() {
+    // Para `!important`, el orden de capas se INVIERTE: gana la capa declarada
+    // ANTES (base), y lo unlayered important pierde contra todo lo layered.
+    assert_eq!(
+        p_color(
+            "@layer base { p { color: rgb(10, 10, 10) !important; } } \
+             @layer tema { p { color: rgb(20, 20, 20) !important; } }"
+        ),
+        (10, 10, 10) // base (primera) gana en important
+    );
+    // unlayered important pierde contra layered important.
+    assert_eq!(
+        p_color(
+            "p { color: rgb(99, 99, 99) !important; } \
+             @layer base { p { color: rgb(10, 10, 10) !important; } }"
+        ),
+        (10, 10, 10)
     );
 }
 

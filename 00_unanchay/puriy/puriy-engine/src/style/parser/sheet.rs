@@ -108,6 +108,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
     // matching contextual queda para más adelante — usamos 2em fijo.
     vec![
         Rule {
+            layer: None,
             selector: ty("body"),
             decls: vec![
                 // Browser real default es `margin: 8px` (no padding). Lo
@@ -122,6 +123,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("h1"),
             decls: vec![
                 decl(DeclKind::FontSize(32.0)),
@@ -129,6 +131,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("h2"),
             decls: vec![
                 decl(DeclKind::FontSize(24.0)),
@@ -136,6 +139,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("h3"),
             decls: vec![
                 decl(DeclKind::FontSize(19.0)),
@@ -143,6 +147,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("h4"),
             decls: vec![
                 decl(DeclKind::FontSize(16.0)),
@@ -150,6 +155,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("h5"),
             decls: vec![
                 decl(DeclKind::FontSize(13.0)),
@@ -157,6 +163,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("h6"),
             decls: vec![
                 decl(DeclKind::FontSize(11.0)),
@@ -164,6 +171,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("p"),
             decls: vec![decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0)))],
         },
@@ -171,6 +179,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // pinta antes del contenido, necesita espacio para no chocar
         // con el borde izquierdo del block).
         Rule {
+            layer: None,
             selector: ty("ul"),
             decls: vec![
                 decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0))),
@@ -179,6 +188,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("ol"),
             decls: vec![
                 decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0))),
@@ -187,18 +197,22 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("blockquote"),
             decls: vec![decl(DeclKind::Margin(sides_lrtb(10.0, 40.0, 10.0, 40.0)))],
         },
         Rule {
+            layer: None,
             selector: ty("dl"),
             decls: vec![decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0)))],
         },
         Rule {
+            layer: None,
             selector: ty("dd"),
             decls: vec![decl(DeclKind::Margin(sides_lrtb(0.0, 0.0, 0.0, 40.0)))],
         },
         Rule {
+            layer: None,
             selector: ty("pre"),
             decls: vec![
                 decl(DeclKind::Margin(sides_lrtb(12.0, 0.0, 12.0, 0.0))),
@@ -206,6 +220,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("hr"),
             decls: vec![
                 decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0))),
@@ -218,6 +233,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // Esto se cascadea bajo el override del chrome que pinta links
         // con un blue ligeramente más oscuro (30,90,200).
         Rule {
+            layer: None,
             selector: ty("a"),
             decls: vec![
                 decl(DeclKind::Color(Color::rgb(0, 0, 238))),
@@ -228,6 +244,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // underline; `<s>`/`<strike>`/`<del>` tachadas. Cualquier autor
         // puede override con `text-decoration: none` en su stylesheet.
         Rule {
+            layer: None,
             selector: ty("a"),
             decls: vec![Decl {
                 kind: DeclKind::TextDecoration(TextDecorationLine::Underline),
@@ -235,26 +252,32 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             }],
         },
         Rule {
+            layer: None,
             selector: ty("u"),
             decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::Underline))],
         },
         Rule {
+            layer: None,
             selector: ty("ins"),
             decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::Underline))],
         },
         Rule {
+            layer: None,
             selector: ty("s"),
             decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::LineThrough))],
         },
         Rule {
+            layer: None,
             selector: ty("strike"),
             decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::LineThrough))],
         },
         Rule {
+            layer: None,
             selector: ty("del"),
             decls: vec![decl(DeclKind::TextDecoration(TextDecorationLine::LineThrough))],
         },
         Rule {
+            layer: None,
             selector: ty("menu"),
             decls: vec![decl(DeclKind::ListStyleType(ListStyleType::Disc))],
         },
@@ -264,10 +287,12 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // — la mayoría de páginas con `<table>` sin estilo asumen un
         // "look spreadsheet" y tablas sin bordes salen invisibles.
         Rule {
+            layer: None,
             selector: ty("table"),
             decls: vec![decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0)))],
         },
         Rule {
+            layer: None,
             selector: ty("td"),
             decls: vec![
                 decl(DeclKind::Padding(Sides::all(4.0))),
@@ -277,6 +302,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("th"),
             decls: vec![
                 decl(DeclKind::Padding(Sides::all(4.0))),
@@ -290,6 +316,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // filas. Sin esto el caption queda alineado a la izquierda
         // como cualquier block.
         Rule {
+            layer: None,
             selector: ty("caption"),
             decls: vec![
                 decl(DeclKind::TextAlign(TextAlign::Center)),
@@ -300,6 +327,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // margin vertical para que se distinga del flujo. El label
         // con la URL lo inyecta `boxes::build_node`.
         Rule {
+            layer: None,
             selector: ty("iframe"),
             decls: vec![
                 decl(DeclKind::Margin(sides_lrtb(8.0, 0.0, 8.0, 0.0))),
@@ -314,10 +342,12 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
         // <small>/<sub>/<sup>: tamaño relativo. CSS spec usa `smaller`
         // (~83% del padre). Acá usamos 13px como aproximación.
         Rule {
+            layer: None,
             selector: ty("small"),
             decls: vec![decl(DeclKind::FontSize(13.0))],
         },
         Rule {
+            layer: None,
             selector: ty("sub"),
             decls: vec![
                 decl(DeclKind::FontSize(13.0)),
@@ -325,6 +355,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("sup"),
             decls: vec![
                 decl(DeclKind::FontSize(13.0)),
@@ -332,6 +363,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("button"),
             decls: vec![
                 decl(DeclKind::Padding(Sides { top: 1.0, right: 6.0, bottom: 1.0, left: 6.0 })),
@@ -342,6 +374,7 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
             ],
         },
         Rule {
+            layer: None,
             selector: ty("input"),
             decls: vec![
                 decl(DeclKind::Padding(Sides { top: 1.0, right: 2.0, bottom: 1.0, left: 2.0 })),
@@ -361,9 +394,47 @@ pub(crate) fn ua_stylesheet() -> Vec<Rule> {
 // nesting / `@media` / `!important`, migrar a `cssparser::StyleSheetParser`
 // con un visitor.
 
+/// Registro de orden de capas de cascada (CSS Cascade Layers). Asigna a cada
+/// nombre de capa cualificado (`a`, `a.b`) un índice incremental por orden de
+/// PRIMERA aparición — sea por `@layer a, b;` (statement de predeclaración) o
+/// por `@layer a { ... }` (bloque). Capas anónimas reciben un índice fresco.
+/// Fase 7.1214.
+#[derive(Default)]
+pub(crate) struct LayerReg {
+    order: HashMap<String, u32>,
+    next: u32,
+    anon: u32,
+}
+impl LayerReg {
+    fn resolve(&mut self, name: &str) -> u32 {
+        if let Some(&i) = self.order.get(name) {
+            return i;
+        }
+        let i = self.next;
+        self.next += 1;
+        self.order.insert(name.to_string(), i);
+        i
+    }
+    fn anon(&mut self) -> u32 {
+        self.anon += 1;
+        let key = format!("\u{0}anon{}", self.anon);
+        self.resolve(&key)
+    }
+}
+
+/// Compone el nombre cualificado de una capa anidada: `prefix` + "." + `name`.
+fn qualify_layer(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{prefix}.{name}")
+    }
+}
+
 pub(crate) fn parse_stylesheet(css: &str, vars: &HashMap<String, String>, vp: Viewport) -> Vec<Rule> {
     let css = strip_comments(css);
-    parse_rules_block(&css, vars, vp)
+    let mut reg = LayerReg::default();
+    parse_rules_block(&css, vars, vp, None, "", &mut reg)
 }
 
 /// Parsea un bloque de reglas — el cuerpo de un stylesheet completo o
@@ -373,7 +444,14 @@ pub(crate) fn parse_stylesheet(css: &str, vars: &HashMap<String, String>, vp: Vi
 /// - `@supports (prop: value) { ... }` recursivo — eval por parser
 /// - `@-rules` desconocidos (`@font-face`, `@keyframes`, etc.) los
 ///   saltea silenciosamente
-pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewport: Viewport) -> Vec<Rule> {
+pub(crate) fn parse_rules_block(
+    css: &str,
+    vars: &HashMap<String, String>,
+    viewport: Viewport,
+    layer: Option<u32>,
+    layer_prefix: &str,
+    reg: &mut LayerReg,
+) -> Vec<Rule> {
     let mut out = Vec::new();
     let bytes = css.as_bytes();
     let mut i = 0;
@@ -400,7 +478,7 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
                 let cond = parse_at_rule_condition(chunk, "@media");
                 let body = parse_at_rule_body(chunk);
                 if evaluate_media_query(cond, viewport) {
-                    out.extend(parse_rules_block(body, vars, viewport));
+                    out.extend(parse_rules_block(body, vars, viewport, layer, layer_prefix, reg));
                 }
                 let _ = rest_after;
                 continue;
@@ -409,20 +487,48 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
                 let cond = parse_at_rule_condition(chunk, "@supports");
                 let body = parse_at_rule_body(chunk);
                 if evaluate_supports_query(cond) {
-                    out.extend(parse_rules_block(body, vars, viewport));
+                    out.extend(parse_rules_block(body, vars, viewport, layer, layer_prefix, reg));
                 }
                 continue;
             }
-            // `@layer name { ... }` (Cascade Layers): APLANAMOS el bloque — sus
-            // reglas se aplican en orden de fuente como reglas normales. NO
-            // modelamos la prioridad de capa (spec: unlayered gana a layered, y
-            // entre capas gana la declarada después) — simplificación documentada
-            // que es estrictamente mejor que dropear las reglas. La forma
-            // statement `@layer a, b;` (sólo declara orden, sin `{`) se ignora.
+            // `@layer` (CSS Cascade Layers) — Fase 7.1214: ahora SÍ modelamos el
+            // orden de capa. Dos formas:
+            //  - Statement `@layer a, b, c;` (sin `{`): sólo predeclara el orden
+            //    de las capas (resuelve cada nombre, asignando índice incremental).
+            //  - Bloque `@layer [name] { ... }`: las reglas internas se tagean con
+            //    el índice de esa capa; un `@layer` anónimo recibe un índice fresco.
+            // El orden de capa se respeta en la cascada (ver `compute_internal`):
+            // unlayered gana a layered para normales, y pierde para `!important`.
             if lower.starts_with("@layer") {
+                // Nombre(s) entre `@layer` y `{` o `;`.
+                let head_end = chunk.find('{').unwrap_or(chunk.len());
+                let names_str = chunk[..head_end]
+                    .trim_start()
+                    .strip_prefix("@layer")
+                    .or_else(|| chunk[..head_end].trim_start().get(6..))
+                    .unwrap_or("")
+                    .trim()
+                    .trim_end_matches(';')
+                    .trim();
                 if chunk.contains('{') {
+                    // Bloque: una sola capa (la primera de la lista, si hubiera).
+                    let name = names_str.split(',').next().unwrap_or("").trim();
+                    let (idx, prefix) = if name.is_empty() {
+                        (reg.anon(), layer_prefix.to_string())
+                    } else {
+                        let q = qualify_layer(layer_prefix, name);
+                        (reg.resolve(&q), q)
+                    };
                     let body = parse_at_rule_body(chunk);
-                    out.extend(parse_rules_block(body, vars, viewport));
+                    out.extend(parse_rules_block(body, vars, viewport, Some(idx), &prefix, reg));
+                } else {
+                    // Statement: predeclara orden de cada nombre.
+                    for name in names_str.split(',') {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            reg.resolve(&qualify_layer(layer_prefix, name));
+                        }
+                    }
                 }
                 continue;
             }
@@ -433,11 +539,12 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
             // pero APLANAMOS sus reglas igual que `@layer`/`@media` verdadero
             // — estrictamente mejor que dropearlas (sino se pierde todo el CSS
             // dentro de un container query). Las reglas internas pueden usar
-            // `:scope` (inerte=true) y `&` (nesting), ya soportados.
+            // `:scope` (inerte=true) y `&` (nesting), ya soportados. Heredan la
+            // capa del contexto.
             if lower.starts_with("@container") || lower.starts_with("@scope") {
                 if chunk.contains('{') {
                     let body = parse_at_rule_body(chunk);
-                    out.extend(parse_rules_block(body, vars, viewport));
+                    out.extend(parse_rules_block(body, vars, viewport, layer, layer_prefix, reg));
                 }
                 continue;
             }
@@ -458,7 +565,7 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
         if sel_raw.is_empty() {
             continue;
         }
-        emit_style_rules(sel_raw, body, &mut out, vars, viewport);
+        emit_style_rules(sel_raw, body, &mut out, vars, viewport, layer);
     }
     out
 }
@@ -475,6 +582,7 @@ pub(crate) fn emit_style_rules(
     out: &mut Vec<Rule>,
     vars: &HashMap<String, String>,
     viewport: Viewport,
+    layer: Option<u32>,
 ) {
     let (decl_str, nested) = split_rule_body(body);
     let parents: Vec<&str> = split_top_level_commas(prelude);
@@ -486,7 +594,7 @@ pub(crate) fn emit_style_rules(
             continue;
         }
         if let Some(selector) = parse_selector(p) {
-            out.push(Rule { selector, decls: decls.clone() });
+            out.push(Rule { selector, decls: decls.clone(), layer });
         }
     }
     // Reglas anidadas: expandir `&` contra cada selector padre.
@@ -502,7 +610,7 @@ pub(crate) fn emit_style_rules(
                 expanded.push(expand_amp(p.trim(), ns.trim()));
             }
         }
-        emit_style_rules(&expanded.join(", "), nbody, out, vars, viewport);
+        emit_style_rules(&expanded.join(", "), nbody, out, vars, viewport, layer);
     }
 }
 

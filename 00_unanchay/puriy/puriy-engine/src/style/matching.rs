@@ -9,6 +9,11 @@ use super::*;
 pub(crate) struct Rule {
     pub(crate) selector: Selector,
     pub(crate) decls: Vec<Decl>,
+    /// Capa de cascada (CSS Cascade Layers). `None` = sin capa (unlayered);
+    /// `Some(n)` = índice de capa en orden de declaración (0 = primera). En
+    /// la cascada, lo unlayered gana a lo layered para declaraciones normales
+    /// y pierde para `!important` (orden de capas invertido). Fase 7.1214.
+    pub(crate) layer: Option<u32>,
 }
 
 /// Resuelve una lista de `ContentItem` a la string final que se pintará

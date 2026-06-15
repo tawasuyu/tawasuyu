@@ -603,17 +603,23 @@ impl StyleEngine {
         // Default para resolver `initial`/`unset` de keywords CSS-wide.
         let wide_default = ComputedStyle::default();
 
-        // PASADA 1 — normales.
-        let mut normal_apps: Vec<(u32, usize, &Decl)> = Vec::new();
+        // PASADA 1 — normales. Orden de capa (CSS Cascade Layers, Fase 7.1214):
+        // para declaraciones NORMALES, lo unlayered gana a lo layered, y entre
+        // capas gana la declarada después (índice mayor). Codificamos el rango
+        // como `layer.unwrap_or(u32::MAX)` (unlayered = máximo) y ordenamos
+        // ascendente (mayor rango se aplica último = gana). Empata por
+        // (especificidad, orden de fuente) como antes.
+        let mut normal_apps: Vec<(u32, u32, usize, &Decl)> = Vec::new();
         for (spec, src, rule) in &matched {
+            let rank = rule.layer.unwrap_or(u32::MAX);
             for d in &rule.decls {
                 if !d.important {
-                    normal_apps.push((*spec, *src, d));
+                    normal_apps.push((rank, *spec, *src, d));
                 }
             }
         }
-        normal_apps.sort_by_key(|(spec, idx, _)| (*spec, *idx));
-        for (_, _, d) in normal_apps {
+        normal_apps.sort_by_key(|(rank, spec, idx, _)| (*rank, *spec, *idx));
+        for (_, _, _, d) in normal_apps {
             apply_decl(d, &mut style, parent, &wide_default);
         }
         // Inline normal (especificidad 1000) cierra la pasada normal.
@@ -626,16 +632,21 @@ impl StyleEngine {
         // PASADA 2 — `!important`. Cualquier important de cualquier
         // regla vence cualquier normal — y entre importants, vuelve a
         // mandar especificidad/orden.
-        let mut imp_apps: Vec<(u32, usize, &Decl)> = Vec::new();
+        // Orden de capa para `!important` es INVERSO (CSS Cascade Layers): entre
+        // capas gana la declarada ANTES, y lo unlayered PIERDE contra todo lo
+        // layered. Rango = `u32::MAX - layer` para layered (capa 0 = máximo),
+        // `0` para unlayered (mínimo). Ascendente → mayor rango se aplica último.
+        let mut imp_apps: Vec<(u32, u32, usize, &Decl)> = Vec::new();
         for (spec, src, rule) in &matched {
+            let rank = rule.layer.map(|l| u32::MAX - l).unwrap_or(0);
             for d in &rule.decls {
                 if d.important {
-                    imp_apps.push((*spec, *src, d));
+                    imp_apps.push((rank, *spec, *src, d));
                 }
             }
         }
-        imp_apps.sort_by_key(|(spec, idx, _)| (*spec, *idx));
-        for (_, _, d) in imp_apps {
+        imp_apps.sort_by_key(|(rank, spec, idx, _)| (*rank, *spec, *idx));
+        for (_, _, _, d) in imp_apps {
             apply_decl(d, &mut style, parent, &wide_default);
         }
         // Inline `!important` (efectiva 10_000 en CSS real, pero acá
