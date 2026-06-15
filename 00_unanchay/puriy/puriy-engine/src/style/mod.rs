@@ -526,6 +526,13 @@ impl StyleEngine {
             style.moz_script_min_size = p.moz_script_min_size.clone();
             style.moz_script_size_multiplier = p.moz_script_size_multiplier.clone();
             style.moz_presentation_level = p.moz_presentation_level.clone();
+            // Fase 7.1141-7.1146 — line-align/-box-contain/-snap (line layout),
+            // mark (aural) y text-combine-mode (texto) heredan. marquee-play-count NO.
+            style.webkit_line_align = p.webkit_line_align.clone();
+            style.webkit_line_box_contain = p.webkit_line_box_contain.clone();
+            style.webkit_line_snap = p.webkit_line_snap.clone();
+            style.mark = p.mark.clone();
+            style.text_combine_mode = p.text_combine_mode.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

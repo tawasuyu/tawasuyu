@@ -602,6 +602,16 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-moz-script-min-size" => opaque_or_sentinel(value, "8pt").map(DeclKind::MozScriptMinSize),
         "-moz-script-size-multiplier" => opaque_or_sentinel(value, "0.71").map(DeclKind::MozScriptSizeMultiplier),
         "-moz-presentation-level" => opaque_or_sentinel(value, "0").map(DeclKind::MozPresentationLevel),
+        // === Fase 7.1141-7.1146 — WebKit line-layout + marquee + aural mark + text-combine-mode ===
+        "-webkit-line-align" => opaque_or_sentinel(value, "none").map(DeclKind::WebkitLineAlign),
+        "-webkit-line-box-contain" => opaque_or_sentinel(value, "block inline replaced").map(DeclKind::WebkitLineBoxContain),
+        "-webkit-line-snap" => opaque_or_sentinel(value, "none").map(DeclKind::WebkitLineSnap),
+        // `marquee-play-count` (CSS3 Marquee, junto a marquee-direction/speed/style).
+        "marquee-play-count" => opaque_or_sentinel(value, "infinite").map(DeclKind::MarqueePlayCount),
+        // `mark` shorthand aural (mark-before/mark-after). HEREDA.
+        "mark" => opaque_or_sentinel(value, "none").map(DeclKind::Mark),
+        // `text-combine-mode` (legacy, predecesor de text-combine-upright). HEREDA.
+        "text-combine-mode" => opaque_or_sentinel(value, "none").map(DeclKind::TextCombineMode),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

@@ -1052,3 +1052,35 @@ use super::super::*;
         assert_eq!(span.moz_math_display.as_deref(), Some("block"));
         assert_eq!(span.moz_presentation_level.as_deref(), Some("1"));
     }
+
+    #[test]
+    fn webkit_line_marquee_mark_plumb_fase_7_1141_1146() {
+        let html = r#"<html><body><div style="
+            -webkit-line-align: edges;
+            -webkit-line-box-contain: block glyphs;
+            -webkit-line-snap: contain;
+            marquee-play-count: 3;
+            mark: url(a.wav) 2;
+            text-combine-mode: horizontal
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.webkit_line_align.as_deref(), Some("edges"));
+        assert_eq!(t.webkit_line_box_contain.as_deref(), Some("block glyphs"));
+        assert_eq!(t.webkit_line_snap.as_deref(), Some("contain"));
+        assert_eq!(t.marquee_play_count.as_deref(), Some("3"));
+        assert_eq!(t.mark.as_deref(), Some("url(a.wav) 2"));
+        assert_eq!(t.text_combine_mode.as_deref(), Some("horizontal"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-webkit-line-align: none").webkit_line_align, None);
+        assert_eq!(style_of("marquee-play-count: infinite").marquee_play_count, None);
+        assert_eq!(style_of("mark: none").mark, None);
+        // line-align/-box-contain/-snap, mark y text-combine-mode HEREDAN;
+        // marquee-play-count NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.webkit_line_align.as_deref(), Some("edges"));
+        assert_eq!(span.mark.as_deref(), Some("url(a.wav) 2"));
+        assert_eq!(span.text_combine_mode.as_deref(), Some("horizontal"));
+        assert_eq!(span.marquee_play_count, None);
+    }

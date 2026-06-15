@@ -1924,5 +1924,19 @@ pub struct ComputedStyle {
     pub moz_script_size_multiplier: Option<String>,
     /// `-moz-presentation-level` (Gecko MathML). `None` = `0`. HEREDA. Plumb. Fase 7.1140.
     pub moz_presentation_level: Option<String>,
+    // === Fase 7.1141-7.1146 — WebKit line-layout + marquee + aural mark + text-combine-mode ===
+    /// `-webkit-line-align` (WebKit line grid). `None` = `none`. HEREDA. Plumb. Fase 7.1141.
+    pub webkit_line_align: Option<String>,
+    /// `-webkit-line-box-contain` (WebKit). `None` = `block inline replaced`. HEREDA. Plumb. Fase 7.1142.
+    pub webkit_line_box_contain: Option<String>,
+    /// `-webkit-line-snap` (WebKit line grid). `None` = `none`. HEREDA. Plumb. Fase 7.1143.
+    pub webkit_line_snap: Option<String>,
+    /// `marquee-play-count` (CSS3 Marquee). `None` = `infinite`. NO hereda. Plumb. Fase 7.1144.
+    pub marquee_play_count: Option<String>,
+    /// `mark` shorthand aural (mark-before/mark-after). `None` = `none`. HEREDA. Plumb. Fase 7.1145.
+    pub mark: Option<String>,
+    /// `text-combine-mode` (legacy, predecesor de text-combine-upright).
+    /// `None` = `none`. HEREDA. Plumb. Fase 7.1146.
+    pub text_combine_mode: Option<String>,
 }
 

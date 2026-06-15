@@ -720,6 +720,13 @@ impl Default for ComputedStyle {
             moz_script_min_size: None,
             moz_script_size_multiplier: None,
             moz_presentation_level: None,
+            // Fase 7.1141-7.1146 — WebKit line-layout + marquee + aural mark, default None.
+            webkit_line_align: None,
+            webkit_line_box_contain: None,
+            webkit_line_snap: None,
+            marquee_play_count: None,
+            mark: None,
+            text_combine_mode: None,
         }
     }
 }

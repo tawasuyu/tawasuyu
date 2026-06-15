@@ -1233,6 +1233,13 @@ pub(crate) enum DeclKind {
     MozScriptMinSize(Option<String>),
     MozScriptSizeMultiplier(Option<String>),
     MozPresentationLevel(Option<String>),
+    // === Fase 7.1141-7.1146 — WebKit line-layout + marquee + aural mark + text-combine-mode ===
+    WebkitLineAlign(Option<String>),
+    WebkitLineBoxContain(Option<String>),
+    WebkitLineSnap(Option<String>),
+    MarqueePlayCount(Option<String>),
+    Mark(Option<String>),
+    TextCombineMode(Option<String>),
 }
 
 impl Decl {
@@ -2103,6 +2110,13 @@ impl Decl {
             DeclKind::MozScriptMinSize(v) => s.moz_script_min_size = v.clone(),
             DeclKind::MozScriptSizeMultiplier(v) => s.moz_script_size_multiplier = v.clone(),
             DeclKind::MozPresentationLevel(v) => s.moz_presentation_level = v.clone(),
+            // Fase 7.1141-7.1146 — WebKit line-layout + marquee + aural mark, plumb opaco.
+            DeclKind::WebkitLineAlign(v) => s.webkit_line_align = v.clone(),
+            DeclKind::WebkitLineBoxContain(v) => s.webkit_line_box_contain = v.clone(),
+            DeclKind::WebkitLineSnap(v) => s.webkit_line_snap = v.clone(),
+            DeclKind::MarqueePlayCount(v) => s.marquee_play_count = v.clone(),
+            DeclKind::Mark(v) => s.mark = v.clone(),
+            DeclKind::TextCombineMode(v) => s.text_combine_mode = v.clone(),
         }
     }
 }
