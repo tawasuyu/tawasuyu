@@ -7,25 +7,34 @@ pub(crate) fn run_submitted(mut s: State) -> State {
     if trimmed.is_empty() {
         return s;
     }
-    // Si ya hay un comando vivo y el usuario NO terminó con `&` (que
-    // fuerza bg), interpretamos el Enter como respuesta al stdin del
-    // running: típico apt Y/n, sudo password, prompts custom. Escribimos
-    // `<line>\n` al stdin. El usuario aún puede arrancar un bg paralelo
-    // tipeando `cmd &`.
-    if s.running.is_some() && !trimmed.ends_with('&') {
-        let bytes = {
-            let mut v = line.clone().into_bytes();
-            v.push(b'\n');
-            v
-        };
-        if let Some(active_arc) = s.running.clone() {
+    // Modelo de input paralelo: el Enter se dirige por `input_focus`.
+    //   • Foco en un comando VIVO (foreground o bg) y la línea no fuerza bg
+    //     (`&`) → el Enter es respuesta a SU stdin (apt Y/n, sudo password,
+    //     prompts custom). Escribimos `<line>\n` a ese job.
+    //   • Foco en la LÍNEA (`input_focus == None`) → el Enter arranca un
+    //     comando NUEVO aunque haya otros vivos (no bloquea: para volver a la
+    //     línea basta click en el prompt/cabezal → `FocusInput`).
+    // Antes esto miraba `s.running.is_some()` e ignoraba `input_focus`: con un
+    // comando que no termina (una app GUI, `ssh`…) TODO lo tipeado iba a su
+    // stdin y no había forma de lanzar otro — el "se queda bloqueado".
+    if let (Some(fb), false, false) =
+        (s.input_focus, trimmed.ends_with('&'), trimmed.starts_with(':'))
+    {
+        // Los meta-comandos `:` (`:jobs`, `:kill`, `:term`…) son control del
+        // shell, no datos: siempre ejecutan, aunque el foco esté en un job.
+        if let Some(active_arc) = s.job_by_block(fb).filter(|_| s.block_has_live_job(fb)) {
+            let bytes = {
+                let mut v = line.clone().into_bytes();
+                v.push(b'\n');
+                v
+            };
             if let Ok(guard) = active_arc.lock() {
                 guard.handle.write_input(bytes);
             }
+            // Echo discreto de lo enviado para que el usuario vea qué tipeó.
+            s.push_output(OutputLine::notice(format!("← {line}")));
+            return s;
         }
-        // Echo discreto de lo enviado para que el usuario vea qué tipeó.
-        s.push_output(OutputLine::notice(format!("← {line}")));
-        return s;
     }
     // E3 — cada submit del usuario re-arma la regla on_exit_nonzero. (El
     // comando de la regla la re-desarma después de su run.)
@@ -135,7 +144,15 @@ pub(crate) fn run_submitted(mut s: State) -> State {
         s.push_output(OutputLine::notice(format!(
             "▶ corre en background (hay otro comando vivo) — {cmd}"
         )));
-        return start_bg(s, exec_line);
+        let mut s = start_bg(s, exec_line);
+        // Auto-bg (lanzado con otro vivo): se lleva el foco del input, como el
+        // foreground. El `&` explícito NO foca (fire-and-forget, seguís en la
+        // línea). Volver a la línea: click en el prompt/cabezal (`FocusInput`).
+        let blk = s.bg_jobs.last().and_then(|j| j.lock().ok().map(|g| g.block));
+        if let Some(b) = blk {
+            s.input_focus = Some(b);
+        }
+        return s;
     }
     start_run(s, exec_line)
 }
@@ -442,6 +459,10 @@ pub(crate) fn start_run(mut s: State, line: String) -> State {
         }
     };
     s.running = Some(Arc::new(Mutex::new(active)));
+    // El comando recién arrancado recibe el foco del input: el Enter siguiente
+    // alimenta SU stdin. Para lanzar otro, el usuario vuelve a la línea
+    // (click en el prompt/cabezal → `FocusInput`).
+    s.input_focus = Some(run_block);
     s
 }
 
