@@ -64,6 +64,11 @@ pub struct WorkspacesState {
     /// Cuántas ventanas tiene cada escritorio, en orden (`loads[0]` = esc. 1).
     /// Su largo es el número total de escritorios.
     pub loads: Vec<usize>,
+    /// El slug del modo de teselado del escritorio activo (`"master-stack"`,
+    /// `"spiral"`, …) — para que la barra (`pata`) pinte el indicador de layout
+    /// estilo dwm. Vacío si lo reporta una versión vieja.
+    #[serde(default)]
+    pub layout: String,
 }
 
 /// Una ventana en la vista de `mirada-ctl windows`.

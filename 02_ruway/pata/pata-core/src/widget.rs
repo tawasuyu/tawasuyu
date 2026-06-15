@@ -46,11 +46,59 @@ pub struct ClockReading {
     pub second: u8,
 }
 
+/// Modo de teselado del escritorio activo, para el **indicador de layout**
+/// estilo dwm. Un enum `Copy` (no String) para que [`WidgetCtx`] siga barato;
+/// el host mapea el slug que reporta el WM con [`LayoutGlyph::from_slug`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutGlyph {
+    /// Sin compositor que reporte (o slug desconocido): el widget se oculta.
+    #[default]
+    Unknown,
+    MasterStack,
+    Monocle,
+    Grid,
+    Columns,
+    Rows,
+    CenteredMaster,
+    Spiral,
+}
+
+impl LayoutGlyph {
+    /// Mapea el slug que reporta el WM (`mirada-ctl workspaces … layout=<slug>`).
+    pub fn from_slug(s: &str) -> Self {
+        match s.trim() {
+            "master-stack" => Self::MasterStack,
+            "monocle" => Self::Monocle,
+            "grid" => Self::Grid,
+            "columns" => Self::Columns,
+            "rows" => Self::Rows,
+            "centered-master" => Self::CenteredMaster,
+            "spiral" => Self::Spiral,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// El símbolo ASCII del layout, estilo dwm (sin emojis que caigan a *tofu*).
+    pub fn symbol(self) -> &'static str {
+        match self {
+            Self::Unknown => "",
+            Self::MasterStack => "[]=",
+            Self::Monocle => "[M]",
+            Self::Grid => "[#]",
+            Self::Columns => "|||",
+            Self::Rows => "===",
+            Self::CenteredMaster => "|M|",
+            Self::Spiral => "(@)",
+        }
+    }
+}
+
 /// El snapshot del sistema que alimenta a los widgets en cada `tick`. El host
 /// lo muestrea (vía sysfs/PulseAudio en Linux, vía el kernel en wawa) y lo pasa
-/// por valor: el core no toca el SO. Todos los campos arrancan en cero, así que
-/// un frontend puede llenar sólo lo que le importe.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// por referencia: el core no toca el SO. Todos los campos arrancan en cero/vacío,
+/// así que un frontend puede llenar sólo lo que le importe. (Ya no es `Copy`:
+/// lleva el título de la ventana enfocada, que es un `String`.)
+#[derive(Debug, Clone, PartialEq)]
 pub struct WidgetCtx {
     /// Hora actual ya descompuesta.
     pub clock: ClockReading,
@@ -93,6 +141,12 @@ pub struct WidgetCtx {
     /// Cantidad de núcleos lógicos detectados (`0..=MAX_CORES`). Si es 0 el
     /// widget [`CpuCores`] cae a [`WidgetView::Empty`].
     pub cpu_cores_n: u8,
+    /// Modo de teselado del escritorio activo, para el indicador de layout.
+    /// `Unknown` (default) = sin WM que reporte → el widget se oculta.
+    pub layout: LayoutGlyph,
+    /// Título de la ventana enfocada, para el widget de título estilo dwm.
+    /// Vacío = sin foco (o sin WM) → el widget se oculta.
+    pub focused_title: String,
 }
 
 impl Default for WidgetCtx {
@@ -113,6 +167,8 @@ impl Default for WidgetCtx {
             workspace_occupied: 0,
             cpu_cores: [0.0_f32; MAX_CORES],
             cpu_cores_n: 0,
+            layout: LayoutGlyph::Unknown,
+            focused_title: String::new(),
         }
     }
 }
@@ -699,6 +755,75 @@ impl Widget for WorkspaceSwitcher {
     }
 }
 
+/// Indicador de **layout** estilo dwm: pinta el símbolo del modo de teselado
+/// del escritorio activo (`[]=` maestra+pila, `[M]` monóculo, `(@)` espiral…).
+/// El estado viene del WM por el [`WidgetCtx::layout`]; si no hay compositor que
+/// reporte (`Unknown`), su `view` es [`WidgetView::Empty`] y desaparece.
+#[derive(Debug, Clone, Default)]
+pub struct LayoutIndicator {
+    glyph: LayoutGlyph,
+}
+
+impl LayoutIndicator {
+    /// Construye desde el spec (hoy sin props; el estado viene del WM).
+    pub fn from_spec(_spec: &WidgetSpec) -> Self {
+        Self::default()
+    }
+}
+
+impl Widget for LayoutIndicator {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        self.glyph = ctx.layout;
+    }
+
+    fn view(&self) -> WidgetView {
+        match self.glyph {
+            LayoutGlyph::Unknown => WidgetView::Empty,
+            g => WidgetView::Text(g.symbol().to_string()),
+        }
+    }
+}
+
+/// Título de la **ventana enfocada**, estilo barra de dwm/Hyprland. El texto
+/// viene del WM por el [`WidgetCtx::focused_title`]; se trunca a `max` caracteres
+/// (prop `max`, default 80) con una elipsis. Vacío = sin foco → desaparece.
+#[derive(Debug, Clone)]
+pub struct WindowTitle {
+    title: String,
+    max: usize,
+}
+
+impl WindowTitle {
+    /// Construye desde el spec leyendo la prop `max` (largo máximo en caracteres).
+    pub fn from_spec(spec: &WidgetSpec) -> Self {
+        let max = spec.num_prop("max", 80.0).max(1.0) as usize;
+        Self {
+            title: String::new(),
+            max,
+        }
+    }
+}
+
+impl Widget for WindowTitle {
+    fn tick(&mut self, ctx: &WidgetCtx) {
+        self.title = ctx.focused_title.clone();
+    }
+
+    fn view(&self) -> WidgetView {
+        if self.title.is_empty() {
+            return WidgetView::Empty;
+        }
+        // Trunca por caracteres (no por bytes: respeta UTF-8) y agrega elipsis.
+        if self.title.chars().count() > self.max {
+            let mut s: String = self.title.chars().take(self.max).collect();
+            s.push('\u{2026}'); // …
+            WidgetView::Text(s)
+        } else {
+            WidgetView::Text(self.title.clone())
+        }
+    }
+}
+
 /// Widget de relleno para un `kind` que el core no implementa todavía. Su `view`
 /// es siempre un [`WidgetView::Placeholder`] con el nombre del kind.
 #[derive(Debug, Clone)]
@@ -738,6 +863,8 @@ pub fn build(spec: &WidgetSpec) -> Box<dyn Widget> {
         "moon" => Box::new(Moon::from_spec(spec)),
         "start_button" => Box::new(StartButton::from_spec(spec)),
         "workspaces" | "workspace_switcher" => Box::new(WorkspaceSwitcher::from_spec(spec)),
+        "layout" | "layout_indicator" => Box::new(LayoutIndicator::from_spec(spec)),
+        "window_title" | "title" => Box::new(WindowTitle::from_spec(spec)),
         _ => Box::new(Placeholder::new(&spec.kind)),
     }
 }
@@ -830,6 +957,53 @@ mod tests {
             brightness: 0.3,
             ..WidgetCtx::default()
         }
+    }
+
+    #[test]
+    fn layout_indicator_pinta_el_simbolo_dwm_y_se_oculta_sin_wm() {
+        let mut w = LayoutIndicator::from_spec(&WidgetSpec::new("layout"));
+        // Sin WM (Unknown) → oculto.
+        w.tick(&WidgetCtx::default());
+        assert_eq!(w.view(), WidgetView::Empty);
+        // Con un layout reportado → su símbolo.
+        let c = WidgetCtx {
+            layout: LayoutGlyph::Spiral,
+            ..WidgetCtx::default()
+        };
+        w.tick(&c);
+        assert_eq!(w.view(), WidgetView::Text("(@)".to_string()));
+    }
+
+    #[test]
+    fn layout_glyph_mapea_los_slugs_de_mirada() {
+        assert_eq!(LayoutGlyph::from_slug("master-stack"), LayoutGlyph::MasterStack);
+        assert_eq!(LayoutGlyph::from_slug("centered-master"), LayoutGlyph::CenteredMaster);
+        assert_eq!(LayoutGlyph::from_slug("garabato"), LayoutGlyph::Unknown);
+        assert_eq!(LayoutGlyph::MasterStack.symbol(), "[]=");
+    }
+
+    #[test]
+    fn window_title_muestra_y_trunca_el_foco() {
+        // Sin foco → oculto.
+        let mut w = WindowTitle::from_spec(&WidgetSpec::new("window_title"));
+        w.tick(&WidgetCtx::default());
+        assert_eq!(w.view(), WidgetView::Empty);
+        // Con título corto → tal cual.
+        let c = WidgetCtx {
+            focused_title: "foot".to_string(),
+            ..WidgetCtx::default()
+        };
+        w.tick(&c);
+        assert_eq!(w.view(), WidgetView::Text("foot".to_string()));
+        // Trunca a `max` con elipsis (respeta caracteres).
+        let mut corto =
+            WindowTitle::from_spec(&WidgetSpec::new("window_title").with("max", Prop::Num(3.0)));
+        let c = WidgetCtx {
+            focused_title: "abcdef".to_string(),
+            ..WidgetCtx::default()
+        };
+        corto.tick(&c);
+        assert_eq!(corto.view(), WidgetView::Text("abc\u{2026}".to_string()));
     }
 
     #[test]

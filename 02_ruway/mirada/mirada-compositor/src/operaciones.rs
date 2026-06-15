@@ -145,6 +145,8 @@ impl App {
                     // con `workspace N` y los atajos `Super+1..9`.
                     active: d.active_index() + 1,
                     loads: d.workspace_loads(),
+                    layout: mirada_brain::layout_slug(d.active_workspace().params().mode)
+                        .to_string(),
                 }),
                 Brain::Linked(_) => CtlReply::Error("el Cerebro es externo".into()),
             },

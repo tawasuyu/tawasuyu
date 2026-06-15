@@ -235,7 +235,13 @@ fn print_workspaces(st: &WorkspacesState) {
         .map(|n| n.to_string())
         .collect::<Vec<_>>()
         .join(",");
-    println!("active={} count={} loads={}", st.active, st.loads.len(), loads);
+    println!(
+        "active={} count={} loads={} layout={}",
+        st.active,
+        st.loads.len(),
+        loads,
+        st.layout
+    );
 }
 
 fn print_help() {

@@ -429,15 +429,17 @@ impl LayerApp {
                 self.weather_now = Some(w);
             }
         }
+        // `WidgetCtx` ya no es `Copy` (lleva el título de la ventana enfocada),
+        // así que los widgets tickean contra `&self.ctx` (recién asignado).
         for sw in &mut self.surfaces {
             for w in sw.core_mut() {
-                w.tick(&ctx);
+                w.tick(&self.ctx);
             }
         }
         for p in &mut self.panels {
             if let Some(c) = p.card.as_mut() {
                 for w in &mut c.widgets {
-                    w.tick(&ctx);
+                    w.tick(&self.ctx);
                 }
             }
             p.dirty = true;

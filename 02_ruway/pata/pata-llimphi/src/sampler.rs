@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{Datelike, Local, Timelike, Utc};
 
-use pata_core::widget::{ClockReading, WidgetCtx, MAX_CORES};
+use pata_core::widget::{ClockReading, LayoutGlyph, WidgetCtx, MAX_CORES};
 
 use crate::toplevel::WindowEntry;
 
@@ -57,8 +57,9 @@ impl Sampler {
         let (ram, ram_used_mb, ram_total_mb) = sample_ram();
         let (sun_longitude_deg, moon_phase) = astro_from_jd(jd_from_unix(Utc::now().timestamp()));
         let (volume, muted) = sample_volume().unwrap_or((0.0, false));
-        let (active_workspace, workspace_count, workspace_occupied) =
-            sample_workspaces().unwrap_or((0, 0, 0));
+        let (active_workspace, workspace_count, workspace_occupied, layout) =
+            sample_workspaces().unwrap_or((0, 0, 0, LayoutGlyph::Unknown));
+        let focused_title = sample_focused_title();
         // /proc/stat se lee una sola vez por tick: el agregado (línea `cpu`) y
         // el detalle por core (líneas `cpuN`) salen del mismo texto.
         let stat = std::fs::read_to_string("/proc/stat").ok();
@@ -80,6 +81,8 @@ impl Sampler {
             workspace_occupied,
             cpu_cores,
             cpu_cores_n,
+            layout,
+            focused_title,
         }
     }
 
@@ -642,9 +645,31 @@ pub fn switch_workspace(n: u8) {
 /// `None` si no hay compositor que responda (`mirada-ctl` falla o no está) — el
 /// switcher se oculta entonces. Corre un subproceso por muestreo (~1Hz), con el
 /// mismo tope de tiempo que el resto (barato a esa frecuencia).
-fn sample_workspaces() -> Option<(u8, u8, u16)> {
+fn sample_workspaces() -> Option<(u8, u8, u16, LayoutGlyph)> {
     let out = run("mirada-ctl", &["workspaces"])?;
-    parse_workspaces(&out)
+    let (active, count, occupied) = parse_workspaces(&out)?;
+    Some((active, count, occupied, parse_layout(&out)))
+}
+
+/// Extrae el `layout=<slug>` de la línea de `mirada-ctl workspaces` y lo mapea a
+/// un [`LayoutGlyph`] para el indicador estilo dwm. `Unknown` si no viene (WM
+/// viejo) o no calza.
+fn parse_layout(s: &str) -> LayoutGlyph {
+    s.lines()
+        .find(|l| l.contains("active="))
+        .and_then(|l| l.split_whitespace().find_map(|t| t.strip_prefix("layout=")))
+        .map(LayoutGlyph::from_slug)
+        .unwrap_or(LayoutGlyph::Unknown)
+}
+
+/// El título de la ventana enfocada (`mirada-ctl windows --porcelain`), para el
+/// widget de título estilo dwm/Hyprland. Vacío si no hay foco ni WM que responda.
+fn sample_focused_title() -> String {
+    sample_windows()
+        .into_iter()
+        .find(|w| w.active)
+        .map(|w| w.label)
+        .unwrap_or_default()
 }
 
 /// Parsea la línea estable de `mirada-ctl workspaces`:

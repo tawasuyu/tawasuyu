@@ -36,8 +36,8 @@ pub mod vistas;
 pub mod watch;
 
 pub use action::{
-    default_keymap, dwm_keymap, hyprland_keymap, i3_keymap, preset_keymap, DesktopAction,
-    PRESET_NAMES, WORKSPACE_COUNT,
+    default_keymap, dwm_keymap, hyprland_keymap, i3_keymap, layout_slug, preset_keymap,
+    DesktopAction, PRESET_NAMES, WORKSPACE_COUNT,
 };
 pub use activity::{ActivityGraph, Lineage};
 pub use config::{default_root_menu, Config, MenuEntry, OutputOverride, ZoneCfg, DROPTERM_APP_ID};
