@@ -26,10 +26,10 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 MC="$REPO/02_ruway/mirada/mirada-compositor"
 
-echo "==> construyendo (release): compositor, greeter, pata, shuma y launchers"
+echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers y panel"
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
-    -p shuma-shell-llimphi -p mirada-launcher
+    -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -43,6 +43,11 @@ sudo install -Dm755 "$BIN/pata-llimphi"      /usr/local/bin/pata-llimphi
 # y el launcher por su atajo (Super+p) o desde la barra superior de shuma.
 sudo install -Dm755 "$BIN/shuma-shell-llimphi"     /usr/local/bin/shuma-shell-llimphi
 sudo install -Dm755 "$BIN/mirada-launcher"         /usr/local/bin/mirada-launcher
+# El panel de control de mirada (binario `mirada-llimphi`): vista espacial
+# «Prezi», menú de Atajos para ver/conmutar/duplicar los profiles de keymap, y
+# las vistas de escritorio. Antes no se instalaba → los profiles eran
+# inalcanzables desde el sistema. Se lanza con `mirada-llimphi`.
+sudo install -Dm755 "$BIN/mirada-llimphi"          /usr/local/bin/mirada-llimphi
 
 # Scripts de sesión + lanzador del DM.
 sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session

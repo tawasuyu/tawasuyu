@@ -397,6 +397,9 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         ("Super+u".into(), DesktopAction::ZoomOut),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
+        // Panel de control de mirada (mirada-llimphi): profiles de atajos,
+        // vistas de escritorio y la vista espacial «Prezi».
+        ("Super+o".into(), DesktopAction::Spawn("mirada-llimphi".into())),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),
