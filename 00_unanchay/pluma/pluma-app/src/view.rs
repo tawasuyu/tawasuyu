@@ -1032,7 +1032,7 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         cartas_sel.push(carta_entre(model, w[0].id, w[1].id));
     }
 
-    lienzos_multi_view::<Msg, _>(
+    let multi = lienzos_multi_view::<Msg, _>(
         &cuerpos_sel,
         &atoms,
         &palette_lienzo,
@@ -1043,7 +1043,35 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         Some(&ejecucion),
         &cartas_sel,
         Msg::LienzoSelect,
-    )
+    );
+
+    // Scroll vertical: contenedor relativo que recorta (vía envolver_centro) con
+    // el contenido absoluto desplazado hacia arriba por `lienzos_scroll_y`. Los
+    // átomos pintan en su posición desplazada, así que el registro de hebras y
+    // las cintas siguen el scroll automáticamente.
+    View::new(Style {
+        position: Position::Relative,
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(-model.lienzos_scroll_y),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![multi])])
 }
 
 /// Modo Presentar: vuela por las secciones del documento con la cámara del deck

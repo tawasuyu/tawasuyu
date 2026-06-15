@@ -26,6 +26,10 @@ pluma-outline = { path = "../pluma-outline" }
 pluma-deck-core = { path = "../pluma-deck-core" }
 pluma-deck-outline = { path = "../pluma-deck-outline" }
 pluma-deck-recorrido-llimphi = { path = "../pluma-deck-recorrido-llimphi" }
+# Celdas ejecutables (notebook embebido): kernels reales por lenguaje.
+pluma-notebook-exec = { path = "../pluma-notebook-exec" }
+pluma-notebook-kernel-python = { path = "../pluma-notebook-kernel-python" }
+pluma-notebook-kernel-wasm = { path = "../pluma-notebook-kernel-wasm" }
 pluma-store = { path = "../pluma-store" }
 pluma-transform = { path = "../pluma-transform" }
 pluma-transform-llm = { path = "../pluma-transform-llm" }

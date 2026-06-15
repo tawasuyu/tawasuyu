@@ -425,18 +425,26 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             cerrar_edicion_lienzo(&mut model);
         }
         Msg::PresSiguiente => {
-            navegar_presentar(&mut model, 1);
+            navegar_presentar(&mut model, handle, 1);
         }
         Msg::PresAnterior => {
-            navegar_presentar(&mut model, -1);
+            navegar_presentar(&mut model, handle, -1);
         }
         Msg::PresVistaGeneral => {
             let rec = recorrido_actual(&model);
             let panel = panel_presentar(&model);
-            if let Some(bbox) = rec.bbox() {
-                model.recorrido_state.camara =
-                    pluma_deck_core::Camara::fit(bbox, 0.0, panel);
+            if model.recorrido_state.vista_general(&rec, panel) {
+                arrancar_vuelo(handle);
             }
+        }
+        Msg::PresTick => {
+            // Avanza la interpolación del vuelo de cámara (~60fps).
+            model.recorrido_state.avanzar(0.016);
+        }
+        Msg::LienzosScroll(notches) => {
+            const PX_POR_NOTCH: f32 = 60.0;
+            model.lienzos_scroll_y =
+                (model.lienzos_scroll_y - notches * PX_POR_NOTCH).max(0.0);
         }
         Msg::EjecutarLienzo(atom) => {
             ejecutar_celda(&mut model, handle, atom);
@@ -825,8 +833,9 @@ fn panel_presentar(model: &Model) -> DeckRect {
     DeckRect::new(left as f64, top as f64, w as f64, h as f64)
 }
 
-/// Salta `dir` pasos (instantáneo, sin animación) en el modo Presentar.
-fn navegar_presentar(model: &mut Model, dir: i32) {
+/// Vuela `dir` pasos en el modo Presentar (cámara animada vía `ir_a_paso` +
+/// ticks `PresTick`).
+fn navegar_presentar(model: &mut Model, handle: &Handle<Msg>, dir: i32) {
     let rec = recorrido_actual(model);
     let n = rec.n_pasos();
     if n == 0 {
@@ -835,13 +844,28 @@ fn navegar_presentar(model: &mut Model, dir: i32) {
     let panel = panel_presentar(model);
     let actual = model.recorrido_state.paso as i64;
     let nuevo = (actual + dir as i64).clamp(0, n as i64 - 1) as usize;
-    model.recorrido_state.saltar_a_paso(&rec, nuevo, panel);
+    if nuevo == model.recorrido_state.paso && model.recorrido_state.paso == actual as usize {
+        // Ya en el extremo: nada que volar.
+        if (dir > 0 && actual as usize + 1 >= n) || (dir < 0 && actual == 0) {
+            return;
+        }
+    }
+    model.recorrido_state.ir_a_paso(&rec, nuevo, panel);
+    arrancar_vuelo(handle);
 }
 
-/// Ejecuta un lienzo-celda (notebook embebido): corre su cuerpo ` ```llm … ``` `
-/// como prompt sobre el cliente de chat ya configurado y guarda la salida. Es
-/// el mismo `model.chat` que usan las transformaciones, lanzado en un thread.
+/// Dispara los ticks que animan el vuelo de cámara durante ~la duración de un
+/// paso del deck (DURACION_PASO_S ≈ 0.8 s).
+fn arrancar_vuelo(handle: &Handle<Msg>) {
+    animate(handle, std::time::Duration::from_millis(850), || Msg::PresTick);
+}
+
+/// Ejecuta un lienzo-celda (notebook embebido): según el lenguaje del fence
+/// (` ```lang `) corre su cuerpo con el kernel correspondiente — `llm` sobre el
+/// `model.chat` ya configurado (igual que las transformaciones), `python`/`py`
+/// con RustPython, `wasm`/`wat` con wasmi — y guarda la salida. Async en thread.
 fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
+    use pluma_editor_llimphi::lienzos::{celda, lang_soportado};
     if model.en_curso {
         return;
     }
@@ -851,18 +875,22 @@ fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
         Some(a) => a.content.to_string(),
         None => return,
     };
-    let Some(prompt) = pluma_editor_llimphi::lienzos::celda_llm(&texto) else {
-        model.ultimo_status = "no es una celda ```llm".into();
+    let Some((lang, body)) = celda(&texto) else {
+        model.ultimo_status = "no es una celda ```lang".into();
         return;
     };
-    if prompt.is_empty() {
+    if body.is_empty() {
         model.ultimo_status = "celda vacía — nada que ejecutar".into();
+        return;
+    }
+    if !lang_soportado(&lang) {
+        model.ultimo_status = format!("sin kernel para '{lang}' (llm/python/wasm)");
         return;
     }
     let chat = model.chat.clone();
     model.en_curso = true;
     model.ultimo_error = None;
-    model.ultimo_status = "ejecutando celda…".into();
+    model.ultimo_status = format!("ejecutando celda {lang}…");
     handle.spawn(move || {
         let rt = match tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -876,21 +904,44 @@ fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
                 }
             }
         };
-        let res = rt.block_on(async {
-            let req = pluma_llm_core::ChatRequest::una_vuelta(prompt, 512);
-            chat.complete(&req).await
+        let texto = rt.block_on(async move {
+            match lang.as_str() {
+                "llm" => {
+                    let req = pluma_llm_core::ChatRequest::una_vuelta(body, 512);
+                    match chat.complete(&req).await {
+                        Ok(r) => r.content,
+                        Err(e) => format!("error: {e}"),
+                    }
+                }
+                "python" | "py" => {
+                    corre_kernel(pluma_notebook_kernel_python::PythonKernel::new(), &body, "python")
+                        .await
+                }
+                "wasm" | "wat" => {
+                    corre_kernel(pluma_notebook_kernel_wasm::WasmKernel::new(), &body, "wat").await
+                }
+                otro => format!("sin kernel para '{otro}'"),
+            }
         });
-        match res {
-            Ok(r) => Msg::LienzoSalida {
-                atom,
-                texto: r.content,
-            },
-            Err(e) => Msg::LienzoSalida {
-                atom,
-                texto: format!("error: {e}"),
-            },
-        }
+        Msg::LienzoSalida { atom, texto }
     });
+}
+
+/// Corre una celda en un kernel y reduce su salida a texto (stdout, o el value).
+async fn corre_kernel<K: pluma_notebook_exec::Kernel>(k: K, body: &str, lang: &str) -> String {
+    match k.execute(body, lang).await {
+        Ok(out) => {
+            let stdout = out.stdout.trim();
+            if !stdout.is_empty() {
+                stdout.to_string()
+            } else if let Some(v) = out.value {
+                v
+            } else {
+                "(sin salida)".into()
+            }
+        }
+        Err(e) => format!("error: {e}"),
+    }
 }
 
 /// Encuadra el paso actual al entrar al modo Presentar.
@@ -1872,6 +1923,29 @@ mod tests_concepto {
             .build()
             .unwrap()
             .block_on(f)
+    }
+
+    #[test]
+    fn corre_kernel_python_evalua_de_verdad() {
+        // El kernel real (RustPython) ejecuta el cuerpo de la celda.
+        let out = block_on(corre_kernel(
+            pluma_notebook_kernel_python::PythonKernel::new(),
+            "print(6 * 7)",
+            "python",
+        ));
+        assert!(out.contains("42"), "salida inesperada: {out}");
+    }
+
+    #[test]
+    fn corre_kernel_wat_evalua_de_verdad() {
+        // Un módulo WAT que exporta main devolviendo 99 → el kernel wasmi lo corre.
+        let wat = "(module (func (export \"main\") (result i32) i32.const 99))";
+        let out = block_on(corre_kernel(
+            pluma_notebook_kernel_wasm::WasmKernel::new(),
+            wat,
+            "wat",
+        ));
+        assert!(out.contains("99"), "salida inesperada: {out}");
     }
 
     #[test]

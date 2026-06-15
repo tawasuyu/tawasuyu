@@ -244,6 +244,10 @@ pub(crate) enum Msg {
     PresSiguiente,
     PresAnterior,
     PresVistaGeneral,
+    /// Tick de animación del vuelo de cámara (modo Presentar).
+    PresTick,
+    /// Scroll vertical del modo Lienzos, en "notches" de rueda (positivo = arriba).
+    LienzosScroll(f32),
     /// Ejecuta el lienzo-celda `Uuid` (notebook embebido): corre su cuerpo como
     /// prompt LLM y guarda la salida.
     EjecutarLienzo(Uuid),
@@ -270,6 +274,8 @@ pub(crate) struct Model {
     pub(crate) recorrido_state: pluma_deck_core::RecorridoState,
     /// Salida de cada lienzo-celda ejecutado (notebook embebido): átomo → texto.
     pub(crate) salidas: HashMap<Uuid, String>,
+    /// Desplazamiento vertical del modo Lienzos, en px (≥ 0).
+    pub(crate) lienzos_scroll_y: f32,
     /// Conjunto de cuerpos visibles en el multilienzo (membresía). Siempre
     /// contiene al `activo`. El ORDEN de columnas lo da `orden_lienzos`, no
     /// este vector.

@@ -71,7 +71,7 @@ fn modelo_sintetico(diente: usize) -> Model {
             "Las llamas pastaban entre los pastizales del altiplano.",
             "## El telar",
             "Una mujer joven tejía un telar bajo el alero.",
-            "```llm\nEscribe un haiku sobre el amanecer andino.\n```",
+            "```python\nprint(sum(range(10)))\n```",
         ],
     );
     let mut qu = cuerpo_con_atomos(
@@ -151,6 +151,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         editando: None,
         recorrido_state: pluma_deck_core::RecorridoState::new(),
         salidas: HashMap::new(),
+        lienzos_scroll_y: 0.0,
         seleccionados,
         orden_lienzos,
         ides_ro,
@@ -217,16 +218,11 @@ fn modelo_sintetico(diente: usize) -> Model {
                 .find(|id| {
                     m.atoms
                         .get(id)
-                        .map(|a| {
-                            pluma_editor_llimphi::lienzos::celda_llm(&a.content).is_some()
-                        })
+                        .map(|a| pluma_editor_llimphi::lienzos::celda(&a.content).is_some())
                         .unwrap_or(false)
                 });
             if let Some(id) = celda {
-                m.salidas.insert(
-                    id,
-                    "Cóndor al alba — / el valle se despereza, / lana y telar.".into(),
-                );
+                m.salidas.insert(id, "45".into());
             }
         }
         Some("presentar") => {

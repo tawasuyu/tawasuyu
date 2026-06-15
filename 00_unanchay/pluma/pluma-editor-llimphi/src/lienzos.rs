@@ -72,14 +72,15 @@ pub struct EjecucionLienzo<'a, Msg> {
     pub on_run: Arc<dyn Fn(Uuid) -> Msg + Send + Sync>,
 }
 
-/// Si `texto` es una celda LLM (fence ` ```llm `), devuelve el cuerpo (el
-/// prompt). El átomo lo escribe el usuario literalmente en el editor in-situ.
-pub fn celda_llm(texto: &str) -> Option<String> {
+/// Si `texto` es una celda de código (fence ` ```lang … ``` `), devuelve
+/// `(lang_en_minúsculas, cuerpo)`. El átomo lo escribe el usuario literalmente
+/// en el editor in-situ. `lang` vacío (fence sin info-string) → no es celda.
+pub fn celda(texto: &str) -> Option<(String, String)> {
     let t = texto.trim_start();
     let rest = t.strip_prefix("```")?;
     let mut lineas = rest.lines();
-    let lang = lineas.next().unwrap_or("").trim();
-    if !lang.eq_ignore_ascii_case("llm") {
+    let lang = lineas.next().unwrap_or("").trim().to_lowercase();
+    if lang.is_empty() {
         return None;
     }
     let mut body = String::new();
@@ -90,7 +91,17 @@ pub fn celda_llm(texto: &str) -> Option<String> {
         body.push_str(l);
         body.push('\n');
     }
-    Some(body.trim().to_string())
+    Some((lang, body.trim().to_string()))
+}
+
+/// `true` si hay un kernel para este lenguaje de celda (llm/python/wasm).
+pub fn lang_soportado(lang: &str) -> bool {
+    matches!(lang, "llm" | "python" | "py" | "wasm" | "wat")
+}
+
+/// Compatibilidad: el cuerpo si la celda es LLM, `None` si no.
+pub fn celda_llm(texto: &str) -> Option<String> {
+    celda(texto).and_then(|(l, b)| (l == "llm").then_some(b))
 }
 
 /// Contexto de edición in-situ: qué átomo se está editando, con qué estado de
@@ -504,8 +515,8 @@ where
         .get(&atom)
         .map(|a| a.content.to_string())
         .unwrap_or_default();
-    // Celda LLM ejecutable (notebook embebido): caja con ▶ y salida inline.
-    if celda_llm(&texto).is_some() {
+    // Celda de código ejecutable (notebook embebido): caja con ▶ y salida inline.
+    if celda(&texto).is_some() {
         return render_celda(atom, &texto, palette, cfg, ejecucion, on_select);
     }
     let resaltado = seleccionado == Some(atom);
@@ -546,12 +557,13 @@ where
     Msg: Clone + 'static,
     FSel: Fn(Uuid) -> Msg + Clone + 'static,
 {
-    let prompt = celda_llm(texto).unwrap_or_default();
+    let (lang, prompt) = celda(texto).unwrap_or_default();
+    let soportado = lang_soportado(&lang);
     let acento = palette.border_strong;
     let [r, g, b, _] = acento.components;
     let fondo = Color::new([r, g, b, 0.06]);
 
-    // Cabecera: rótulo + botón ▶ ejecutar (si hay contexto de ejecución).
+    // Cabecera: rótulo + botón ▶ ejecutar (si hay contexto de ejecución y kernel).
     let mut cab: Vec<View<Msg>> = vec![View::new(Style {
         flex_grow: 1.0,
         size: Size {
@@ -560,8 +572,13 @@ where
         },
         ..Default::default()
     })
-    .text_aligned("celda · llm", cfg.font_base * 0.8, palette.fg_muted, Alignment::Start)];
-    if let Some(ej) = ejecucion {
+    .text_aligned(
+        format!("celda · {lang}"),
+        cfg.font_base * 0.8,
+        palette.fg_muted,
+        Alignment::Start,
+    )];
+    if let (Some(ej), true) = (ejecucion, soportado) {
         let onr = ej.on_run.clone();
         cab.push(
             View::new(Style {
@@ -815,7 +832,23 @@ mod pruebas {
         assert_eq!(celda_llm("```LLM\nhola\n```"), Some("hola".to_string()));
         assert!(celda_llm("un párrafo normal").is_none());
         assert!(celda_llm("# título").is_none());
-        assert!(celda_llm("```python\nx=1\n```").is_none());
+        assert!(celda_llm("```python\nx=1\n```").is_none()); // no es llm
+    }
+
+    #[test]
+    fn celda_detecta_lenguaje_y_cuerpo() {
+        assert_eq!(
+            celda("```python\nprint(1+1)\n```"),
+            Some(("python".to_string(), "print(1+1)".to_string()))
+        );
+        assert_eq!(
+            celda("```WAT\n(module)\n```"),
+            Some(("wat".to_string(), "(module)".to_string()))
+        );
+        assert!(celda("párrafo").is_none());
+        assert!(celda("```\nsin lang\n```").is_none()); // fence sin info-string
+        assert!(lang_soportado("python") && lang_soportado("wat") && lang_soportado("llm"));
+        assert!(!lang_soportado("ruby"));
     }
 
     #[test]

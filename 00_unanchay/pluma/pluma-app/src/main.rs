@@ -261,7 +261,7 @@ impl App for Pluma {
     /// HORIZONTAL; la rueda vertical normal scrollea el lienzo con foco en
     /// VERTICAL (sin confundirse con el horizontal cuando hay texto que correr).
     fn on_wheel(
-        _model: &Self::Model,
+        model: &Self::Model,
         delta: WheelDelta,
         _cursor: (f32, f32),
         modifiers: Modifiers,
@@ -274,7 +274,13 @@ impl App for Pluma {
             return Some(Msg::ScrollHoriz(-delta.y * PX_POR_LINEA));
         }
         if delta.y != 0.0 {
-            return Some(Msg::ScrollVert(delta.y));
+            // En modo Lienzos la rueda vertical scrollea la superficie de cajas;
+            // en Plano scrollea el lienzo con foco.
+            return Some(if model.modo == Modo::Lienzos {
+                Msg::LienzosScroll(delta.y)
+            } else {
+                Msg::ScrollVert(delta.y)
+            });
         }
         None
     }
