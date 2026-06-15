@@ -1021,8 +1021,34 @@ use super::super::*;
                 cy: LengthVal::Pct(50.0)
             }
         );
+        // polygon() (Fase 7.1223): triángulo px+%, fill-rule nonzero default.
+        assert_eq!(
+            parse_clip_path("polygon(0 0, 100% 0, 50% 100%)").unwrap(),
+            ClipPath::Polygon {
+                evenodd: false,
+                points: vec![
+                    (LengthVal::Px(0.0), LengthVal::Px(0.0)),
+                    (LengthVal::Pct(100.0), LengthVal::Px(0.0)),
+                    (LengthVal::Pct(50.0), LengthVal::Pct(100.0)),
+                ]
+            }
+        );
+        // polygon con fill-rule evenodd explícito.
+        assert_eq!(
+            parse_clip_path("polygon(evenodd, 0 0, 10px 20px)").unwrap(),
+            ClipPath::Polygon {
+                evenodd: true,
+                points: vec![
+                    (LengthVal::Px(0.0), LengthVal::Px(0.0)),
+                    (LengthVal::Px(10.0), LengthVal::Px(20.0)),
+                ]
+            }
+        );
+        // polygon vacío o vértice con 1 sola coord → None.
+        assert!(parse_clip_path("polygon()").is_none());
+        assert!(parse_clip_path("polygon(0 0, 5px)").is_none());
         // Función desconocida → None.
-        assert!(parse_clip_path("polygon(0 0, 100% 0, 50% 100%)").is_none());
+        assert!(parse_clip_path("path('M0 0')").is_none());
 
         // e2e: body con clip-path, div sin → NO se hereda.
         let html = r##"<html><head><style>

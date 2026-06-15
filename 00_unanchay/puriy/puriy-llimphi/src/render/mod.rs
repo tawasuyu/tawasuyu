@@ -432,6 +432,12 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some(spec) = b.clip_ellipse {
         view = view.clip_ellipse(spec);
     }
+    // `clip-path: polygon(...)` (Fase 7.1223) — recorta a un polígono. Cada
+    // punto `[x_px, x_pct, y_px, y_pct]` lo resuelve el compositor contra el
+    // rect del nodo.
+    if let Some((evenodd, pts)) = &b.clip_polygon {
+        view = view.clip_polygon(*evenodd, pts.clone());
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {

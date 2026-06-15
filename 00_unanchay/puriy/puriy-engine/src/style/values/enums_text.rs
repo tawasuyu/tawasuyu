@@ -361,11 +361,11 @@ pub enum ClipRadius {
     FarthestSide,
 }
 
-/// `clip-path` (CSS Masking 1). Subset: `inset()`, `circle()`, `ellipse()`.
-/// `polygon()` y `path()` quedan fuera por ahora — la mayoría del wild
-/// usa formas básicas. `None` (afuera del enum) = `clip-path: none`.
-/// Fase 7.274.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// `clip-path` (CSS Masking 1). Subset: `inset()`, `circle()`, `ellipse()`,
+/// `polygon()`. `path()` queda fuera por ahora. `None` (afuera del enum) =
+/// `clip-path: none`. Fase 7.274. NO es `Copy` desde 7.1223 (`Polygon` lleva
+/// un `Vec`).
+#[derive(Debug, Clone, PartialEq)]
 pub enum ClipPath {
     /// `inset(<top> [<right> [<bottom> [<left>]]] [round <r>])`. Los
     /// offsets en px desde cada borde; `radius` (opcional) curva las
@@ -379,6 +379,11 @@ pub enum ClipPath {
     /// `ellipse(<rx> <ry> [at <x> <y>])`. `rx`/`ry` son `<length-percentage>`
     /// (`rx%`→ancho, `ry%`→alto) o keywords de lado (sobre el eje respectivo).
     Ellipse { rx: ClipRadius, ry: ClipRadius, cx: LengthVal, cy: LengthVal },
+    /// `polygon([<fill-rule>,]? <x> <y> [, <x> <y>]*)`. `evenodd` = regla de
+    /// relleno (`nonzero` por defecto). Cada punto es un `(LengthVal,
+    /// LengthVal)`; los `%` resuelven contra ancho/alto de la caja en el
+    /// compositor. Fase 7.1223.
+    Polygon { evenodd: bool, points: Vec<(LengthVal, LengthVal)> },
 }
 
 /// `mask-image` (CSS Masking 1). Subset: `url(...)`. `image()`,

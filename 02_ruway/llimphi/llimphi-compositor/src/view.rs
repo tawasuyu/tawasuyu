@@ -33,6 +33,7 @@ impl<Msg> View<Msg> {
             clip: false,
             clip_inset: None,
             clip_ellipse: None,
+            clip_polygon: None,
             on_scroll: None,
             on_scale: None,
             on_rotate: None,
@@ -1224,6 +1225,16 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Recorta los descendientes a un polígono — modela `clip-path:
+    /// polygon()`. `evenodd` = regla de relleno; cada punto `[x_px, x_pct,
+    /// y_px, y_pct]` resuelve contra el rect del nodo en el pintado. Activa el
+    /// recorte (paint; hit-test usa el rect completo).
+    pub fn clip_polygon(mut self, evenodd: bool, points: Vec<[f32; 4]>) -> Self {
+        self.clip = true;
+        self.clip_polygon = Some((evenodd, points));
+        self
+    }
+
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
@@ -1288,6 +1299,21 @@ mod semantics_tests {
         // Default: sin elipse.
         let d = View::<()>::new(Style::default());
         assert_eq!(d.clip_ellipse, None);
+    }
+
+    #[test]
+    fn clip_polygon_setea_campo_y_activa_clip() {
+        // `.clip_polygon(...)` guarda (evenodd, puntos) y activa el recorte
+        // (Fase 7.1223).
+        let pts = vec![[0.0, 0.0, 0.0, 0.0], [0.0, 100.0, 0.0, 0.0], [0.0, 50.0, 0.0, 100.0]];
+        let v = View::<()>::new(Style::default()).clip_polygon(true, pts.clone());
+        assert_eq!(v.clip_polygon, Some((true, pts)));
+        assert!(v.clip, "clip_polygon implica clip activo");
+        // No interfiere con elipse/inset.
+        assert_eq!(v.clip_ellipse, None);
+        assert_eq!(v.clip_inset, None);
+        // Default: sin polígono.
+        assert_eq!(View::<()>::new(Style::default()).clip_polygon, None);
     }
 
     #[test]

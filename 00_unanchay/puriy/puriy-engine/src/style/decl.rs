@@ -1489,7 +1489,7 @@ impl Decl {
             DeclKind::ScrollMarginBottom(v) => s.scroll_margin.bottom = *v,
             DeclKind::ScrollMarginLeft(v) => s.scroll_margin.left = *v,
             DeclKind::TouchAction(t) => s.touch_action = *t,
-            DeclKind::ClipPath(c) => s.clip_path = *c,
+            DeclKind::ClipPath(c) => s.clip_path = c.clone(),
             DeclKind::MaskImage(m) => s.mask_image = m.clone(),
             DeclKind::ContentVisibility(v) => s.content_visibility = *v,
             DeclKind::Contain(c) => s.contain = *c,

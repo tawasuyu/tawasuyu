@@ -258,6 +258,50 @@ use crate::Engine;
     }
 
     #[test]
+    fn clip_path_polygon_llega_al_box_node_fase_7_1223() {
+        // `clip-path: polygon(...)` → (evenodd, puntos) en el BoxNode; cada
+        // punto [x_px, x_pct, y_px, y_pct], el % se difiere al compositor.
+        let html = "<html><body>\
+            <div id=\"tri\" style=\"clip-path: polygon(0 0, 100% 0, 50% 100%)\">a</div>\
+            <div id=\"eo\" style=\"clip-path: polygon(evenodd, 0 0, 10px 20px)\">b</div>\
+            <div id=\"circ\" style=\"clip-path: circle(50%)\">c</div>\
+            <div id=\"n\">d</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let by_id = |id: &str| {
+            let mut found = None;
+            doc.box_tree.walk(|b| {
+                if b.element_id.as_deref() == Some(id) {
+                    found = Some(b.clip_polygon.clone());
+                }
+            });
+            found.expect("box existe")
+        };
+        // triángulo: 0,0 (px) / 100%,0 / 50%,100%. nonzero.
+        assert_eq!(
+            by_id("tri"),
+            Some((
+                false,
+                vec![
+                    [0.0, 0.0, 0.0, 0.0],
+                    [0.0, 100.0, 0.0, 0.0],
+                    [0.0, 50.0, 0.0, 100.0],
+                ]
+            ))
+        );
+        // evenodd con coords px.
+        assert_eq!(
+            by_id("eo"),
+            Some((true, vec![[0.0, 0.0, 0.0, 0.0], [10.0, 0.0, 20.0, 0.0]]))
+        );
+        // circle() no llena clip_polygon (es elíptico).
+        assert_eq!(by_id("circ"), None);
+        // sin clip-path → None.
+        assert_eq!(by_id("n"), None);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

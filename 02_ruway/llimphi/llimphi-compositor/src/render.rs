@@ -44,6 +44,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip,
         clip_inset,
         clip_ellipse,
+        clip_polygon,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -99,6 +100,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip,
         clip_inset,
         clip_ellipse,
+        clip_polygon,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -714,7 +716,26 @@ pub fn paint_range<Msg>(
         if node.clip {
             // El hit-test (más abajo) usa siempre el rect completo — el clip-path
             // sólo afecta el pintado, una aproximación menor en su banda.
-            if let Some(s) = node.clip_ellipse {
+            // Prioridad: polygon > elipse > inset/rect.
+            if let Some((evenodd, pts)) = &node.clip_polygon {
+                // `clip-path: polygon()` — capa con un path cerrado. Cada punto
+                // resuelve sus % contra el rect; move_to al 1º, line_to al
+                // resto, close_path.
+                let (w, h) = (r.w as f64, r.h as f64);
+                let mut path = vello::kurbo::BezPath::new();
+                for (i, p) in pts.iter().enumerate() {
+                    let px = r.x as f64 + p[0] as f64 + p[1] as f64 / 100.0 * w;
+                    let py = r.y as f64 + p[2] as f64 + p[3] as f64 / 100.0 * h;
+                    if i == 0 {
+                        path.move_to((px, py));
+                    } else {
+                        path.line_to((px, py));
+                    }
+                }
+                path.close_path();
+                let fill = if *evenodd { Fill::EvenOdd } else { Fill::NonZero };
+                scene.push_layer(fill, BlendMode::default(), 1.0, cur_xf, &path);
+            } else if let Some(s) = node.clip_ellipse {
                 // `clip-path: circle()/ellipse()` — capa elíptica. Centro y
                 // radios resuelven contra el rect del nodo. El centro local
                 // (relativo al origen del rect) alimenta tanto la posición como

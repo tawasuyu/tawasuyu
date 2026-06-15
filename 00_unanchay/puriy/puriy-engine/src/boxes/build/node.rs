@@ -105,6 +105,7 @@ pub(crate) fn empty_root() -> BoxNode {
         overflow: Overflow::Visible,
         clip_inset: None,
         clip_ellipse: None,
+        clip_polygon: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,
@@ -578,9 +579,9 @@ pub(crate) fn build_node(
                 overflow: style.overflow,
                 // Fase 7.1219 — clip-path: inset(...) → insets px desde el
                 // border box. Formas no rectangulares no se modelan acá.
-                clip_inset: match style.clip_path {
+                clip_inset: match &style.clip_path {
                     Some(crate::style::ClipPath::Inset { top, right, bottom, left, .. }) => {
-                        Some([top, right, bottom, left])
+                        Some([*top, *right, *bottom, *left])
                     }
                     _ => None,
                 },
@@ -590,25 +591,42 @@ pub(crate) fn build_node(
                 // y los lados se difieren al compositor (dependen del rect).
                 // circle ⇒ rx == ry sobre base diagonal/4-lados; ellipse rx
                 // sobre ancho/eje-x, ry sobre alto/eje-y.
-                clip_ellipse: match style.clip_path {
+                clip_ellipse: match &style.clip_path {
                     Some(crate::style::ClipPath::Circle { radius, cx, cy }) => {
-                        let (cxp, cxc) = clip_len_pair(cx);
-                        let (cyp, cyc) = clip_len_pair(cy);
-                        let r = clip_radius_quint(radius, RadBasis::Diag, true);
+                        let (cxp, cxc) = clip_len_pair(*cx);
+                        let (cyp, cyc) = clip_len_pair(*cy);
+                        let r = clip_radius_quint(*radius, RadBasis::Diag, true);
                         Some([
                             cxp, cxc, cyp, cyc, r[0], r[1], r[2], r[3], r[4], r[0], r[1], r[2],
                             r[3], r[4],
                         ])
                     }
                     Some(crate::style::ClipPath::Ellipse { rx, ry, cx, cy }) => {
-                        let (cxp, cxc) = clip_len_pair(cx);
-                        let (cyp, cyc) = clip_len_pair(cy);
-                        let rx = clip_radius_quint(rx, RadBasis::Width, false);
-                        let ry = clip_radius_quint(ry, RadBasis::Height, false);
+                        let (cxp, cxc) = clip_len_pair(*cx);
+                        let (cyp, cyc) = clip_len_pair(*cy);
+                        let rx = clip_radius_quint(*rx, RadBasis::Width, false);
+                        let ry = clip_radius_quint(*ry, RadBasis::Height, false);
                         Some([
                             cxp, cxc, cyp, cyc, rx[0], rx[1], rx[2], rx[3], rx[4], ry[0], ry[1],
                             ry[2], ry[3], ry[4],
                         ])
+                    }
+                    _ => None,
+                },
+                // Fase 7.1223 — clip-path: polygon(...) → (evenodd, puntos) con
+                // cada punto [x_px, x_pct, y_px, y_pct]; el % se difiere al
+                // compositor (depende del rect).
+                clip_polygon: match &style.clip_path {
+                    Some(crate::style::ClipPath::Polygon { evenodd, points }) => {
+                        let pts = points
+                            .iter()
+                            .map(|(x, y)| {
+                                let (xp, xc) = clip_len_pair(*x);
+                                let (yp, yc) = clip_len_pair(*y);
+                                [xp, xc, yp, yc]
+                            })
+                            .collect();
+                        Some((*evenodd, pts))
                     }
                     _ => None,
                 },
@@ -822,6 +840,7 @@ pub(crate) fn build_node(
                 overflow: Overflow::Visible,
                 clip_inset: None,
                 clip_ellipse: None,
+                clip_polygon: None,
                 white_space: WhiteSpace::Normal,
                 text_transform: TextTransform::None,
                 opacity: 1.0,

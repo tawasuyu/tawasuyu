@@ -453,6 +453,12 @@ pub struct View<Msg> {
     /// ry×5]`. Implica clip aunque `clip == false`. Si conviven `clip_inset` y
     /// `clip_ellipse`, gana la elipse (una sola capa de recorte por nodo).
     pub clip_ellipse: Option<[f32; 14]>,
+    /// Si `Some((evenodd, puntos))`, recorta los descendientes a un POLÍGONO —
+    /// modela `clip-path: polygon()`. Cada punto `[x_px, x_pct, y_px, y_pct]`
+    /// resuelve `(x_px + x_pct/100·w, y_px + y_pct/100·h)` contra el rect.
+    /// `evenodd` elige la regla de relleno. Implica clip aunque `clip ==
+    /// false`. Prioridad de recorte por nodo: polygon > elipse > inset > rect.
+    pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
     /// Msg a emitir cuando el cursor entra al rect del nodo (transición
     /// no-hover → hover). Útil para previews tipo "URL del link al
     /// pasar el mouse".
@@ -952,6 +958,7 @@ pub struct MountedNode<Msg> {
     pub clip: bool,
     pub clip_inset: Option<[f32; 4]>,
     pub clip_ellipse: Option<[f32; 14]>,
+    pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_pointer_move_at: Option<ClickAtFn<Msg>>,

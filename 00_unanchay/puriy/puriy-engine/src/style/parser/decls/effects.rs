@@ -50,8 +50,36 @@ pub(crate) fn parse_clip_path(value: &str) -> Option<ClipPath> {
         "inset" => parse_inset_shape(args),
         "circle" => parse_circle_shape(args),
         "ellipse" => parse_ellipse_shape(args),
+        "polygon" => parse_polygon_shape(args),
         _ => None,
     }
+}
+
+/// `polygon([<fill-rule>,]? <x> <y> [, <x> <y>]*)`. `fill-rule` opcional
+/// (`nonzero`/`evenodd`, default nonzero) seguido de coma; cada vértice es un
+/// par `<x> <y>` de `<length-percentage>`, vértices separados por coma.
+/// Requiere ≥1 vértice y que cada vértice tenga exactamente 2 coords.
+fn parse_polygon_shape(args: &str) -> Option<ClipPath> {
+    let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+    let (evenodd, vertex_parts) = match parts.first() {
+        Some(&"evenodd") => (true, &parts[1..]),
+        Some(&"nonzero") => (false, &parts[1..]),
+        _ => (false, &parts[..]),
+    };
+    if vertex_parts.is_empty() {
+        return None;
+    }
+    let mut points = Vec::with_capacity(vertex_parts.len());
+    for v in vertex_parts {
+        let mut coords = v.split_whitespace();
+        let x = parse_length_or_pct(coords.next()?)?;
+        let y = parse_length_or_pct(coords.next()?)?;
+        if coords.next().is_some() {
+            return None; // más de 2 coords por vértice → inválido
+        }
+        points.push((x, y));
+    }
+    Some(ClipPath::Polygon { evenodd, points })
 }
 
 /// Recorta `name(args)` → `(name, args)`. Devuelve `None` si no hay `(`

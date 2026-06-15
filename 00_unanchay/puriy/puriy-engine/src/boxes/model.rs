@@ -167,6 +167,12 @@ pub struct BoxNode {
     /// elíptico. Resolución de % y lados se difiere al compositor (necesita el
     /// rect). Fase 7.1220 (rect), 7.1221 (radios %), 7.1222 (lados).
     pub clip_ellipse: Option<[f32; 14]>,
+    /// `clip-path: polygon(...)` resuelto a `(evenodd, puntos)` donde cada
+    /// punto es `[x_px, x_pct, y_px, y_pct]` → `(x_px + x_pct/100·w, y_px +
+    /// y_pct/100·h)` contra el rect del nodo. `evenodd` = regla de relleno. El
+    /// chrome recorta el subárbol a ese polígono. `None` = sin clip-path
+    /// poligonal. Prioridad de recorte: polygon > elipse > inset. Fase 7.1223.
+    pub clip_polygon: Option<(bool, Vec<[f32; 4]>)>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por
