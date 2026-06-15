@@ -28,7 +28,9 @@ use pluma_align::CartaHebras;
 use pluma_cuerpo::Cuerpo;
 use pluma_editor_llimphi::cuerpo_ide::CuerpoIde;
 use pluma_editor_llimphi::multilienzo::PaletaHebras;
-use pluma_editor_llimphi::lienzos::{lienzos_multi_view, ConfigLienzos, EdicionLienzo};
+use pluma_editor_llimphi::lienzos::{
+    lienzos_multi_view, ConfigLienzos, EdicionLienzo, EjecucionLienzo,
+};
 use pluma_editor_llimphi::multilienzo_editor::{
     multilienzo_editor_view, ConfigMultilienzoEditor,
 };
@@ -1018,6 +1020,11 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
             as Arc<dyn Fn(_) -> Msg + Send + Sync>,
     });
 
+    let ejecucion = EjecucionLienzo {
+        salidas: &model.salidas,
+        on_run: Arc::new(Msg::EjecutarLienzo) as Arc<dyn Fn(_) -> Msg + Send + Sync>,
+    };
+
     lienzos_multi_view::<Msg, _>(
         &cuerpos_sel,
         &atoms,
@@ -1026,6 +1033,7 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         activo_idx,
         None,
         edicion.as_ref(),
+        Some(&ejecucion),
         Msg::LienzoSelect,
     )
 }

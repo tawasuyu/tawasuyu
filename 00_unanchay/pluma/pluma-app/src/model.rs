@@ -244,6 +244,11 @@ pub(crate) enum Msg {
     PresSiguiente,
     PresAnterior,
     PresVistaGeneral,
+    /// Ejecuta el lienzo-celda `Uuid` (notebook embebido): corre su cuerpo como
+    /// prompt LLM y guarda la salida.
+    EjecutarLienzo(Uuid),
+    /// Resultado de ejecutar una celda: `(átomo, texto de salida)`.
+    LienzoSalida { atom: Uuid, texto: String },
 }
 
 pub(crate) struct Model {
@@ -263,6 +268,8 @@ pub(crate) struct Model {
     pub(crate) editando: Option<(Uuid, llimphi_widget_text_editor::EditorState)>,
     /// Estado de la cámara del deck para el modo Presentar (paso + zoom/pan).
     pub(crate) recorrido_state: pluma_deck_core::RecorridoState,
+    /// Salida de cada lienzo-celda ejecutado (notebook embebido): átomo → texto.
+    pub(crate) salidas: HashMap<Uuid, String>,
     /// Conjunto de cuerpos visibles en el multilienzo (membresía). Siempre
     /// contiene al `activo`. El ORDEN de columnas lo da `orden_lienzos`, no
     /// este vector.

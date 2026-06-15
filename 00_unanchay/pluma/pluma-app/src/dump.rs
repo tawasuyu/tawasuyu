@@ -71,6 +71,7 @@ fn modelo_sintetico(diente: usize) -> Model {
             "Las llamas pastaban entre los pastizales del altiplano.",
             "## El telar",
             "Una mujer joven tejía un telar bajo el alero.",
+            "```llm\nEscribe un haiku sobre el amanecer andino.\n```",
         ],
     );
     let mut qu = cuerpo_con_atomos(
@@ -149,6 +150,7 @@ fn modelo_sintetico(diente: usize) -> Model {
         modo: crate::model::Modo::Plano,
         editando: None,
         recorrido_state: pluma_deck_core::RecorridoState::new(),
+        salidas: HashMap::new(),
         seleccionados,
         orden_lienzos,
         ides_ro,
@@ -205,7 +207,28 @@ fn modelo_sintetico(diente: usize) -> Model {
     }
     // Modo del centro por env: PLUMA_DUMP_MODO=lienzos|presentar|plano.
     match std::env::var("PLUMA_DUMP_MODO").ok().as_deref() {
-        Some("lienzos") => m.modo = crate::model::Modo::Lienzos,
+        Some("lienzos") => {
+            m.modo = crate::model::Modo::Lienzos;
+            // Sembrar una salida de ejemplo para la celda ```llm (notebook).
+            let celda = m
+                .cuerpos
+                .iter()
+                .flat_map(|c| c.orden.iter().copied())
+                .find(|id| {
+                    m.atoms
+                        .get(id)
+                        .map(|a| {
+                            pluma_editor_llimphi::lienzos::celda_llm(&a.content).is_some()
+                        })
+                        .unwrap_or(false)
+                });
+            if let Some(id) = celda {
+                m.salidas.insert(
+                    id,
+                    "Cóndor al alba — / el valle se despereza, / lana y telar.".into(),
+                );
+            }
+        }
         Some("presentar") => {
             m.modo = crate::model::Modo::Presentar;
             // Encuadre inicial aproximado (no hay panel registrado en headless).

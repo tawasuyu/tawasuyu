@@ -438,6 +438,14 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                     pluma_deck_core::Camara::fit(bbox, 0.0, panel);
             }
         }
+        Msg::EjecutarLienzo(atom) => {
+            ejecutar_celda(&mut model, handle, atom);
+        }
+        Msg::LienzoSalida { atom, texto } => {
+            model.salidas.insert(atom, texto);
+            model.en_curso = false;
+            model.ultimo_status = "celda ejecutada".into();
+        }
     }
     // Acota el scroll horizontal al contenido tras cualquier cambio (selección,
     // tamaño, panel…). Idempotente y barato.
@@ -828,6 +836,61 @@ fn navegar_presentar(model: &mut Model, dir: i32) {
     let actual = model.recorrido_state.paso as i64;
     let nuevo = (actual + dir as i64).clamp(0, n as i64 - 1) as usize;
     model.recorrido_state.saltar_a_paso(&rec, nuevo, panel);
+}
+
+/// Ejecuta un lienzo-celda (notebook embebido): corre su cuerpo ` ```llm … ``` `
+/// como prompt sobre el cliente de chat ya configurado y guarda la salida. Es
+/// el mismo `model.chat` que usan las transformaciones, lanzado en un thread.
+fn ejecutar_celda(model: &mut Model, handle: &Handle<Msg>, atom: Uuid) {
+    if model.en_curso {
+        return;
+    }
+    // Guardar cualquier edición in-situ para correr el texto más reciente.
+    cerrar_edicion_lienzo(model);
+    let texto = match model.atoms.get(&atom) {
+        Some(a) => a.content.to_string(),
+        None => return,
+    };
+    let Some(prompt) = pluma_editor_llimphi::lienzos::celda_llm(&texto) else {
+        model.ultimo_status = "no es una celda ```llm".into();
+        return;
+    };
+    if prompt.is_empty() {
+        model.ultimo_status = "celda vacía — nada que ejecutar".into();
+        return;
+    }
+    let chat = model.chat.clone();
+    model.en_curso = true;
+    model.ultimo_error = None;
+    model.ultimo_status = "ejecutando celda…".into();
+    handle.spawn(move || {
+        let rt = match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt,
+            Err(e) => {
+                return Msg::LienzoSalida {
+                    atom,
+                    texto: format!("error runtime: {e}"),
+                }
+            }
+        };
+        let res = rt.block_on(async {
+            let req = pluma_llm_core::ChatRequest::una_vuelta(prompt, 512);
+            chat.complete(&req).await
+        });
+        match res {
+            Ok(r) => Msg::LienzoSalida {
+                atom,
+                texto: r.content,
+            },
+            Err(e) => Msg::LienzoSalida {
+                atom,
+                texto: format!("error: {e}"),
+            },
+        }
+    });
 }
 
 /// Encuadra el paso actual al entrar al modo Presentar.

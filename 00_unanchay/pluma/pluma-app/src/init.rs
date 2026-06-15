@@ -108,6 +108,7 @@ pub(crate) fn init_modelo() -> Model {
         modo: crate::model::Modo::Lienzos,
         editando: None,
         recorrido_state: pluma_deck_core::RecorridoState::new(),
+        salidas: HashMap::new(),
         seleccionados,
         orden_lienzos,
         ides_ro: HashMap::new(),
