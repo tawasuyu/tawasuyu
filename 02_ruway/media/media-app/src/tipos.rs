@@ -51,6 +51,9 @@ pub(crate) enum Msg {
     WaveformReady,
     /// Repaint: llegaron miniaturas nuevas de la Cola (cargadas en background).
     ThumbsReady,
+    /// Hover sobre el timeline: `Some(fracción 0..1)` bajo el cursor, `None` al
+    /// salir. Dispara el preview de scrub (miniatura del instante apuntado).
+    TimelineHover(Option<f32>),
     SettingsTab(SettingsTab),
     SettingsScroll(f32),
     ConfigEdit(ConfigEdit),

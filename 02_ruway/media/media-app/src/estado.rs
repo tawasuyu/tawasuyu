@@ -132,6 +132,14 @@ pub(crate) fn playlist_labels_slot() -> &'static Mutex<Vec<String>> {
     SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// Fracción `[0,1]` del timeline bajo el cursor (hover), o `None` si el cursor
+/// no está sobre la barra. La fija `Msg::TimelineHover`; `timeline_strip` la lee
+/// para pintar el preview de scrub (miniatura del instante apuntado).
+pub(crate) fn hover_frac_slot() -> &'static Mutex<Option<f32>> {
+    static SLOT: OnceLock<Mutex<Option<f32>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
 /// Onda de pista completa (tipo Audacity) computada en background.
 pub(crate) fn waveform_slot() -> &'static Mutex<Option<media_core::waveform::Waveform>> {
     static SLOT: OnceLock<Mutex<Option<media_core::waveform::Waveform>>> = OnceLock::new();

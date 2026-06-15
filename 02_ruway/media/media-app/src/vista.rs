@@ -358,13 +358,67 @@ pub(crate) fn timeline_strip() -> View<Msg> {
         .as_ref()
         .filter(|w| !w.is_empty())
         .map(|w| w.peaks().to_vec());
-    let Some(peaks) = peaks else {
-        let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
-        return timeline_view_marked(frac, &marks, &palette, |fraction| {
-            Some(Msg::Command(MediaCommand::SeekTo { fraction }))
-        });
+    let inner = match peaks {
+        Some(peaks) => waveform_timeline(peaks, frac, marks),
+        None => {
+            let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
+            timeline_view_marked(frac, &marks, &palette, |fraction| {
+                Some(Msg::Command(MediaCommand::SeekTo { fraction }))
+            })
+        }
     };
-    waveform_timeline(peaks, frac, marks)
+    timeline_with_hover(inner)
+}
+
+/// Envuelve la barra de tiempo para reportar el **hover** (fracción bajo el
+/// cursor → `Msg::TimelineHover`) y, si ya se extrajo, pintar el **preview de
+/// scrub**: la miniatura del instante apuntado, flotando sobre la barra a la
+/// altura del cursor (posición absoluta a `left = frac·ancho`). El scrub por
+/// click del `inner` sigue funcionando (predicados de hit-test distintos).
+fn timeline_with_hover(inner: View<Msg>) -> View<Msg> {
+    let hover = *crate::estado::hover_frac_slot().lock();
+    let preview: Option<View<Msg>> = hover.and_then(|hf| {
+        let path = crate::estado::current_media_path()?;
+        let img = crate::thumbs::hover_frame(&path.to_string_lossy(), hf)?;
+        Some(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: TaffyRect {
+                    left: percent(hf),
+                    top: length(-74.0_f32),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                size: Size {
+                    width: length(120.0_f32),
+                    height: length(68.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(Color::from_rgba8(8, 10, 14, 255))
+            .radius(6.0)
+            .image(img),
+        )
+    });
+    let mut kids = vec![inner];
+    if let Some(p) = preview {
+        kids.push(p);
+    }
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .on_pointer_move_at(|lx, _ly, w, _h| {
+        if w <= 0.0 {
+            return None;
+        }
+        Some(Msg::TimelineHover(Some((lx / w).clamp(0.0, 1.0))))
+    })
+    .on_pointer_leave(Msg::TimelineHover(None))
+    .children(kids)
 }
 
 /// Línea de tiempo con perfilado de onda (Audacity-like) y scrub.

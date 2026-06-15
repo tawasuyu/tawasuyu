@@ -15,6 +15,7 @@ use std::time::Duration;
 
 use llimphi_image::Image;
 use llimphi_ui::Handle;
+use media_core::thumbnail::ThumbGrid;
 use parking_lot::Mutex;
 
 use crate::tipos::Msg;
@@ -103,6 +104,48 @@ pub(crate) fn spawn_load(handle: &Handle<Msg>, paths: Vec<PathBuf>) {
                 h.dispatch(Msg::ThumbsReady);
             }
         }
+        Msg::ThumbsReady
+    });
+}
+
+/// Clave de caché de un frame de **hover** del timeline: ruta + bucket del grid
+/// (cuantiza el cursor para no extraer un frame por píxel).
+fn hover_key(path: &str, bucket: u32) -> String {
+    format!("{path}#h{bucket}")
+}
+
+/// Frame de hover ya extraído para `path` en `fraction` del timeline, o `None`
+/// si aún no está. El bucketing es estable (mismo cursor → misma clave).
+pub(crate) fn hover_frame(path: &str, fraction: f32) -> Option<Image> {
+    let bucket = ThumbGrid::default().bucket_for_fraction(fraction);
+    get(&hover_key(path, bucket))
+}
+
+/// Extrae en background el frame de hover de `path` para `fraction` (instante =
+/// centro del bucket sobre `dur`), si no se intentó ya. Sólo video (extract_frame
+/// falla en audio → sin preview). Dispara `Msg::ThumbsReady` al terminar.
+pub(crate) fn spawn_hover_frame(
+    handle: &Handle<Msg>,
+    path: PathBuf,
+    dur: Duration,
+    fraction: f32,
+) {
+    let grid = ThumbGrid::default();
+    let bucket = grid.bucket_for_fraction(fraction);
+    let key = hover_key(&path.to_string_lossy(), bucket);
+    {
+        let mut c = cache().lock();
+        if c.contains_key(&key) {
+            return; // ya extraído o en curso
+        }
+        c.insert(key.clone(), None); // marca "en curso" para no relanzar
+    }
+    let instant = grid.instant_for_bucket(bucket, dur);
+    handle.spawn(move || {
+        let img = foreign_av::extract_frame(&path, instant, THUMB_W)
+            .ok()
+            .and_then(|png| llimphi_image::decode_bytes(&png).ok());
+        cache().lock().insert(key, img);
         Msg::ThumbsReady
     });
 }

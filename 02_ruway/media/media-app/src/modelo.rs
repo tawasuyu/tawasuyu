@@ -362,6 +362,19 @@ impl App for MediaApp {
             }
             Msg::WaveformReady => model,
             Msg::ThumbsReady => model,
+            Msg::TimelineHover(frac) => {
+                *crate::estado::hover_frac_slot().lock() = frac;
+                // Extraer en background el frame del instante apuntado (video).
+                if let (Some(f), Some(path)) = (frac, current_media_path()) {
+                    let dur = crate::playlist::playback_snapshot()
+                        .duration
+                        .unwrap_or_default();
+                    if !dur.is_zero() {
+                        crate::thumbs::spawn_hover_frame(handle, path, dur, f);
+                    }
+                }
+                model
+            }
             Msg::ConfigEdit(edit) => {
                 let mut m = model;
                 apply_config_edit(&mut m.config, edit);
