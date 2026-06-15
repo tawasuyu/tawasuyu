@@ -78,6 +78,14 @@ pub fn body_view<HostMsg: Clone + 'static>(
     if state.history_search.is_some() {
         children.push(history_search_panel::<HostMsg>(state, theme));
     }
+    // Popup de completado (Tab / as-you-type): el input vive en la barra del
+    // host (pata) y alimenta `state.completion`; el popup se pinta acá, en el
+    // cuerpo adyacente. Sin esto el host no tenía autocomplete visible (sólo el
+    // ghost inline del input) — parecía "una shuma de cartón". El `view`
+    // standalone ya lo incluye; lo espejamos para `body_view`.
+    if let Some(popup) = completion_popup::<HostMsg>(state, theme) {
+        children.push(popup);
+    }
 
     View::new(Style {
         flex_direction: FlexDirection::Column,

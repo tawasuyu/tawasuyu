@@ -110,10 +110,19 @@ pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
     }
     View::new(Style {
         flex_direction: FlexDirection::Row,
+        // Llenar el espacio disponible de la barra en vez de un bloque fijo de
+        // 380 px "botado en el medio": flex_basis 0 + grow toma el remanente; un
+        // min razonable evita que se aplaste con muchos widgets. El alto lo fija
+        // el propio input (auto).
         size: Size {
-            width: length(380.0_f32),
+            width: auto(),
             height: auto(),
         },
+        min_size: Size {
+            width: length(220.0_f32),
+            height: auto(),
+        },
+        flex_basis: length(0.0_f32),
         flex_grow: 1.0,
         flex_shrink: 1.0,
         padding: TaffyRect {
