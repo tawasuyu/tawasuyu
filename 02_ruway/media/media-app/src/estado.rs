@@ -287,7 +287,11 @@ pub(crate) fn media_metadata_slot() -> &'static OnceLock<media_core::metadata::M
 /// Ruta del medio local en reproducción.
 pub(crate) fn current_media_path() -> Option<PathBuf> {
     if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-        return Some(h.lock().track_path().to_path_buf());
+        let p = h.lock().track_path().to_path_buf();
+        // Motor vacío (silencio): la pista no tiene ruta — sin medio actual.
+        if !p.as_os_str().is_empty() {
+            return Some(p);
+        }
     }
     video_path_slot()
         .get()
