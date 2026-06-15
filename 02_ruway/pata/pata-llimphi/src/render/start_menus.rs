@@ -26,6 +26,33 @@ use crate::Msg;
 
 use super::menu_filtered;
 
+/// Los cuatro cuadrantes del workspace. Una app cuya categoría sea uno de
+/// ellos es de la **suite tawasuyu** (la sembró `default_entries`), no una
+/// `.desktop` ajena del sistema. Sirve para separar lo propio (curado, con
+/// glifo) de lo descubierto (basura variada del sistema).
+pub(super) const CUADRANTES: [&str; 4] = ["unanchay", "yachay", "ruway", "ukupacha"];
+
+/// `true` si la app pertenece a la suite (categoría = cuadrante).
+pub(super) fn es_suite(a: &AppEntry) -> bool {
+    a.category
+        .as_deref()
+        .is_some_and(|c| CUADRANTES.contains(&c))
+}
+
+/// El glifo de la app, o —si no tiene uno corto— su inicial en mayúscula
+/// como chip. Mucho mejor que la flechita `▸` genérica que dejaba todas las
+/// `.desktop` del sistema (sin glifo) indistinguibles.
+pub(super) fn icono_o_inicial(a: &AppEntry) -> String {
+    if let Some(g) = a.icon.as_deref().filter(|s| s.chars().count() <= 2) {
+        return g.to_string();
+    }
+    a.label
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "•".to_string())
+}
+
 // =====================================================================
 // Estilo XP — banda azul, dos columnas, footer rojo
 // =====================================================================
@@ -59,10 +86,13 @@ pub(super) fn xp_body(
     let cols_h = panel_h - XP_HEADER_H - XP_FOOTER_H;
 
     let header = xp_header(theme);
-    // Dos columnas: pinned (top apps) + programs (scrolleable filtrable).
+    // Dos columnas: pinned = la suite tawasuyu (categoría = cuadrante) como
+    // favoritos curados; programs = el resto (apps del sistema), scrolleable y
+    // filtrable. Antes pinned era el head alfabético → se llenaba de basura
+    // del sistema (Avahi, lstopo…) en vez de las apps propias.
     let matches = menu_filtered(apps, query);
-    let pinned: Vec<&AppEntry> = matches.iter().take(8).copied().collect();
-    let programs: Vec<&AppEntry> = matches.iter().skip(8).copied().collect();
+    let (pinned, programs): (Vec<&AppEntry>, Vec<&AppEntry>) =
+        matches.iter().copied().partition(|a| es_suite(a));
     let pinned_col = xp_column("Pin de inicio", pinned, cols_h, theme, true);
     let programs_col =
         xp_column_scrolling("Todos los programas", programs, offset, cols_h, theme);
@@ -349,26 +379,26 @@ fn xp_column_scrolling(
 }
 
 fn xp_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {
-    let icono = a
-        .icon
-        .as_deref()
-        .filter(|s| s.chars().count() <= 2)
-        .unwrap_or("▸")
-        .to_string();
+    let icono = icono_o_inicial(a);
     let badge = View::new(Style {
         size: Size { width: length(22.0_f32), height: length(XP_ROW_H) },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
     })
-    .text(icono, 14.0, Color::from_rgba8(36, 64, 140, 255));
+    .text_aligned(icono, 14.0, Color::from_rgba8(36, 64, 140, 255), Alignment::Center);
     let nombre = View::new(Style {
         flex_grow: 1.0,
         size: Size { width: auto(), height: length(XP_ROW_H) },
         align_items: Some(AlignItems::Center),
         ..Default::default()
     })
-    .text(a.label.clone(), 12.5, Color::from_rgba8(20, 22, 40, 255));
+    .text_aligned(
+        a.label.clone(),
+        12.5,
+        Color::from_rgba8(20, 22, 40, 255),
+        Alignment::Start,
+    );
 
     let _ = theme;
 
