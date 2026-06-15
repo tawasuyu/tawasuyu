@@ -497,6 +497,8 @@ impl Config {
             "windows-xp" => Self::vista_windows_xp(),
             "mac" => Self::vista_mac(),
             "kde" => Self::vista_kde(),
+            "windows-3.1" => Self::vista_windows_31(),
+            "solaris" => Self::vista_solaris(),
             _ => return None,
         })
     }
@@ -621,6 +623,48 @@ impl Config {
             surfaces: vec![bar],
         }
     }
+
+    /// Vista **Windows 3.1**: el *Program Manager* — una franja superior gris
+    /// Motif que aloja el módulo `program_manager` (grilla de íconos de apps con
+    /// título azul). Sin taskbar (Win3.1 no tenía): la "ventana" del PM es el
+    /// escritorio. El alto reserva espacio para la grilla.
+    fn vista_windows_31() -> Self {
+        let mut pm = Surface::bar(Anchor::Top);
+        pm.thickness = 412.0;
+        pm.padding = 16.0;
+        pm.center = vec![WidgetSpec::new("program_manager")];
+        Self {
+            general: General::default(),
+            surfaces: vec![pm],
+        }
+    }
+
+    /// Vista **Solaris CDE** (era dorada): el *Front Panel* inferior chunky con
+    /// el conmutador de escritorios al **centro**, flanqueado por el lanzador y
+    /// el reloj a un lado y la lista de ventanas + bandeja al otro — el sello de
+    /// CDE/Motif. Menú en grilla (estilo Application Manager).
+    fn vista_solaris() -> Self {
+        let mut panel = Surface::bar(Anchor::Bottom);
+        panel.thickness = 56.0;
+        panel.gradient = true;
+        panel.padding = 8.0;
+        panel.start = vec![
+            WidgetSpec::new("start_button").with("label", Prop::Str("Apps".to_string())),
+            WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string())),
+        ];
+        panel.center = vec![WidgetSpec::new("workspaces")];
+        panel.end = vec![
+            WidgetSpec::new("window_list"),
+            WidgetSpec::new("tray"),
+        ];
+        Self {
+            general: General {
+                menu_style: "grid".to_string(),
+                ..General::default()
+            },
+            surfaces: vec![panel],
+        }
+    }
 }
 
 fn default_thickness() -> f32 {
@@ -651,7 +695,7 @@ mod tests {
 
     #[test]
     fn vista_preset_resuelve_las_vistas_y_difieren() {
-        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde"] {
+        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde", "windows-3.1", "solaris"] {
             let c = Config::vista_preset(slug).unwrap_or_else(|| panic!("vista {slug}"));
             assert!(!c.surfaces.is_empty(), "vista {slug} sin superficies");
         }

@@ -432,6 +432,55 @@ impl Theme {
         }
     }
 
+    /// Skin **Windows 3.1**: gris Motif (#c0c0c0) con barra de título azul
+    /// marino (#000080) y escritorio teal. La era de los biseles. Para la vista
+    /// `windows-3.1`.
+    pub const fn win31() -> Self {
+        Self {
+            name: "Win3.1",
+            bg_app: Color::from_rgba8(0, 128, 128, 255), // escritorio teal clásico
+            bg_panel: Color::from_rgba8(192, 192, 192, 255), // gris ventana
+            bg_panel_alt: Color::from_rgba8(0, 0, 128, 255), // barra de título azul marino
+            bg_input: Color::from_rgba8(255, 255, 255, 255),
+            bg_input_focus: Color::from_rgba8(255, 255, 255, 255),
+            bg_button: Color::from_rgba8(192, 192, 192, 255),
+            bg_button_hover: Color::from_rgba8(208, 208, 208, 255),
+            bg_selected: Color::from_rgba8(0, 0, 128, 255),
+            bg_row_hover: Color::from_rgba8(200, 200, 200, 255),
+            fg_text: Color::from_rgba8(0, 0, 0, 255),
+            fg_muted: Color::from_rgba8(64, 64, 64, 255),
+            fg_placeholder: Color::from_rgba8(112, 112, 112, 255),
+            fg_destructive: Color::from_rgba8(128, 0, 0, 255),
+            border: Color::from_rgba8(128, 128, 128, 255),
+            border_focus: Color::from_rgba8(0, 0, 128, 255),
+            accent: Color::from_rgba8(0, 0, 128, 255), // azul Win3.1
+        }
+    }
+
+    /// Skin **Solaris CDE** (era dorada): gris-beige Motif con acento teal —
+    /// el Common Desktop Environment. Para la vista `solaris`.
+    pub const fn cde() -> Self {
+        Self {
+            name: "CDE",
+            bg_app: Color::from_rgba8(45, 70, 90, 255), // fondo azul-gris CDE
+            bg_panel: Color::from_rgba8(174, 178, 195, 255), // gris-lila Motif
+            bg_panel_alt: Color::from_rgba8(120, 130, 150, 255),
+            bg_input: Color::from_rgba8(220, 222, 230, 255),
+            bg_input_focus: Color::from_rgba8(235, 237, 244, 255),
+            bg_button: Color::from_rgba8(160, 166, 185, 255),
+            bg_button_hover: Color::from_rgba8(176, 182, 200, 255),
+            bg_selected: Color::from_rgba8(90, 130, 130, 255),
+            bg_row_hover: Color::from_rgba8(168, 174, 192, 255),
+            fg_text: Color::from_rgba8(20, 24, 32, 255),
+            fg_muted: Color::from_rgba8(64, 72, 84, 255),
+            fg_placeholder: Color::from_rgba8(100, 108, 120, 255),
+            fg_destructive: Color::from_rgba8(140, 40, 40, 255),
+            border: Color::from_rgba8(108, 116, 134, 255),
+            border_focus: Color::from_rgba8(64, 132, 132, 255),
+            accent: Color::from_rgba8(64, 132, 132, 255), // teal CDE
+        }
+    }
+
     /// Superficie "hundida" — un escalón más profunda que `bg_app`, para
     /// áreas de lectura intensa (output de terminal, viewports de log,
     /// IDE-text) que deben recibir el texto con más contraste que el chrome
@@ -473,6 +522,8 @@ impl Theme {
                 Self::xp_blue(),
                 Self::mac_light(),
                 Self::kde_breeze(),
+                Self::win31(),
+                Self::cde(),
             ])
             .find(|t| t.name == name)
     }

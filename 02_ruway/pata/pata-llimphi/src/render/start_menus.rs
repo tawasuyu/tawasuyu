@@ -740,3 +740,74 @@ fn gnome_tile(a: &AppEntry) -> View<Msg> {
     .cursor(llimphi_ui::Cursor::Pointer)
     .children(vec![icon_box, label_v])
 }
+
+/// El **Program Manager** estilo Windows 3.1: una "ventana" gris Motif con
+/// barra de título azul y una grilla de íconos de apps (lanzables al click).
+/// Reutiliza el tile del menú grilla. Es persistente (no es un popup): lo monta
+/// la vista `windows-3.1` como widget de una barra. El dato son las apps del
+/// registro (vía `BarData::apps`).
+pub(super) fn program_manager_view(apps: &[AppEntry], theme: &Theme) -> View<Msg> {
+    let _ = theme;
+    let azul = Color::from_rgba8(0, 0, 130, 255);
+    let gris = Color::from_rgba8(196, 196, 196, 255);
+    let blanco = Color::from_rgba8(255, 255, 255, 255);
+
+    // Barra de título azul (la marca de Win3.1).
+    let titulo = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(22.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        flex_shrink: 0.0,
+        ..Default::default()
+    })
+    .fill(azul)
+    .text("Administrador de programas".to_string(), 12.0, blanco);
+
+    // Grilla de íconos (grupos de programas).
+    let tiles: Vec<View<Msg>> = apps.iter().take(24).map(gnome_tile).collect();
+    let grid = llimphi_widget_wrap::wrap_view(
+        tiles,
+        llimphi_widget_wrap::WrapAxis::Row,
+        GNOME_TILE_GAP,
+        GNOME_TILE_GAP,
+    );
+    let cuerpo = View::new(Style {
+        flex_grow: 1.0,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        padding: TaffyRect {
+            left: length(12.0_f32),
+            right: length(12.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(gris)
+    .children(vec![grid]);
+
+    // La "ventana": columna gris con borde sutil, tamaño fijo (no flota: es un
+    // panel persistente que la barra de la vista win3.1 centra).
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(660.0_f32),
+            height: length(380.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(gris)
+    .radius(2.0)
+    .clip(true)
+    .children(vec![titulo, cuerpo])
+}

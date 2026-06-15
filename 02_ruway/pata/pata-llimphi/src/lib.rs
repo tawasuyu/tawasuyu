@@ -240,6 +240,10 @@ pub enum SlotWidget {
     /// El visualizador de audio estilo CAVA: barras animadas con el espectro.
     /// Dato del host (el binario `cava` en modo raw, ver [`cava`]).
     Cava,
+    /// El **Program Manager** estilo Windows 3.1: una grilla persistente de
+    /// íconos de apps que lanzan al click. Dato del host (`AppRegistry`), no del
+    /// view-model de core — se pasa al render aparte (como `WindowList`).
+    ProgramManager,
 }
 
 /// `true` si la config pide el reloj en **UTC** (`general.timezone = "UTC"`).
@@ -480,7 +484,8 @@ impl SurfaceWidgets {
                 | SlotWidget::Clipboard { .. }
                 | SlotWidget::Tray
                 | SlotWidget::Weather { .. }
-                | SlotWidget::Cava => None,
+                | SlotWidget::Cava
+                | SlotWidget::ProgramManager => None,
             })
     }
 }
@@ -636,6 +641,8 @@ impl Model {
                         }
                     } else if spec.kind == "cava" {
                         SlotWidget::Cava
+                    } else if spec.kind == "program_manager" {
+                        SlotWidget::ProgramManager
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {

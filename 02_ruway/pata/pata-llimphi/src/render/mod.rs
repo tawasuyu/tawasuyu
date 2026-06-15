@@ -75,6 +75,8 @@ pub struct BarData<'a> {
     pub weather: Option<&'a crate::weather::Weather>,
     /// El último cuadro del visualizador de audio, para el `cava`.
     pub cava: &'a [f32],
+    /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
+    pub apps: &'a [AppEntry],
 }
 
 // ============================================================
@@ -264,6 +266,7 @@ pub fn root(model: &Model) -> View<Msg> {
         tray: &tray_items,
         weather: model.weather_now.as_ref(),
         cava: &model.cava_frame,
+        apps: model.registry.all(),
     };
 
     for placed in &model.frame.surfaces {
@@ -525,6 +528,7 @@ fn slots_de(
                 SlotWidget::Cava => {
                     widgets::cuantizar(weather_cava::cava_view(data.cava, theme), surface.cell, 0, "cava", dir)
                 }
+                SlotWidget::ProgramManager => start_menus::program_manager_view(data.apps, theme),
             })
             .collect();
         let mut style = Style {

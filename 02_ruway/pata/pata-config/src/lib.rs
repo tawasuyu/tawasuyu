@@ -103,7 +103,7 @@ mod tests {
     #[test]
     fn cada_vista_preset_round_trip_por_toml() {
         // Lo que el panel escribe al aplicar una vista debe reparsear idéntico.
-        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde"] {
+        for slug in ["mirada", "dwm", "hyprland", "windows-xp", "mac", "kde", "windows-3.1", "solaris"] {
             let c = pata_core::Config::vista_preset(slug).unwrap();
             let text = to_toml(&c).unwrap();
             let back = load_from_str(&text).unwrap();

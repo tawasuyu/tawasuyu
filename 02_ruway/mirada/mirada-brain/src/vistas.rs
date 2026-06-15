@@ -37,7 +37,16 @@ pub struct Vista {
 
 /// Los slugs de las vistas de fábrica, en orden de presentación. `mirada`
 /// (la nativa) encabeza.
-pub const VISTA_NAMES: [&str; 6] = ["mirada", "windows-xp", "mac", "kde", "hyprland", "dwm"];
+pub const VISTA_NAMES: [&str; 8] = [
+    "mirada",
+    "windows-xp",
+    "windows-3.1",
+    "mac",
+    "kde",
+    "solaris",
+    "hyprland",
+    "dwm",
+];
 
 impl Vista {
     /// Una vista de fábrica por slug, o `None` si no existe.
@@ -45,8 +54,10 @@ impl Vista {
         Some(match name {
             "mirada" => vista_mirada(),
             "windows-xp" => vista_windows_xp(),
+            "windows-3.1" => vista_windows_31(),
             "mac" => vista_mac(),
             "kde" => vista_kde(),
+            "solaris" => vista_solaris(),
             "hyprland" => vista_hyprland(),
             "dwm" => vista_dwm(),
             _ => return None,
@@ -196,6 +207,44 @@ fn vista_dwm() -> Vista {
     }
 }
 
+/// **Windows 3.1** — gris Motif con barra de título azul marino, marco
+/// biselado, escritorio teal; el Program Manager lo monta la barra de pata.
+fn vista_windows_31() -> Vista {
+    Vista {
+        name: "windows-3.1",
+        label: "Windows 3.1",
+        keymap: "windows",
+        config: skin(
+            "Win3.1",
+            LayoutMode::MasterStack,
+            2,
+            2,
+            20,
+            [0, 0, 128, 255],       // azul marino con foco
+            [128, 128, 128, 255],   // gris Motif sin foco
+        ),
+    }
+}
+
+/// **Solaris CDE** (era dorada) — Motif gris-azulado con acento teal, barras de
+/// título medianas; el Front Panel inferior lo monta la barra de pata.
+fn vista_solaris() -> Vista {
+    Vista {
+        name: "solaris",
+        label: "Solaris (CDE)",
+        keymap: "windows",
+        config: skin(
+            "CDE",
+            LayoutMode::MasterStack,
+            4,
+            2,
+            22,
+            [64, 132, 132, 255],    // teal CDE con foco
+            [108, 116, 134, 255],   // gris Motif sin foco
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,7 +274,9 @@ mod tests {
     fn cada_vista_fija_un_tema_conocido() {
         // El Cerebro es UI-agnóstico: no resuelve la paleta (eso lo hace el
         // front con llimphi-theme), pero sí garantiza un nombre del set válido.
-        let conocidos = ["Dark", "Light", "Aurora", "Sunset", "WinXP", "macOS", "Breeze"];
+        let conocidos = [
+            "Dark", "Light", "Aurora", "Sunset", "WinXP", "macOS", "Breeze", "Win3.1", "CDE",
+        ];
         for v in Vista::all() {
             assert!(
                 conocidos.contains(&v.config.theme.as_str()),

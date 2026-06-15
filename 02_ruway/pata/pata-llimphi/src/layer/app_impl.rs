@@ -563,6 +563,7 @@ impl LayerApp {
             tray: &tray_items,
             weather: self.weather_now.as_ref(),
             cava: &self.cava_frame,
+            apps: self.registry.all(),
         };
 
         let view = if self.tooltip_pi == Some(pi) {
