@@ -31,6 +31,7 @@ impl<Msg> View<Msg> {
             on_drop: None,
             drop_hover_fill: None,
             clip: false,
+            clip_inset: None,
             on_scroll: None,
             on_scale: None,
             on_rotate: None,
@@ -1202,6 +1203,15 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Recorta los descendientes a un rect encogido por `insets` px
+    /// `[top, right, bottom, left]` desde el rect del nodo — modela
+    /// `clip-path: inset(...)`. Activa el recorte (paint + hit-test).
+    pub fn clip_inset(mut self, insets: [f32; 4]) -> Self {
+        self.clip = true;
+        self.clip_inset = Some(insets);
+        self
+    }
+
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
@@ -1212,6 +1222,22 @@ impl<Msg> View<Msg> {
 mod semantics_tests {
     use super::*;
     use llimphi_layout::Style;
+
+    #[test]
+    fn clip_inset_setea_campo_y_activa_clip() {
+        // `.clip_inset(...)` guarda los insets y activa el recorte (Fase 7.1219).
+        let v = View::<()>::new(Style::default()).clip_inset([1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(v.clip_inset, Some([1.0, 2.0, 3.0, 4.0]));
+        assert!(v.clip, "clip_inset implica clip activo");
+        // `.clip(true)` solo (overflow:hidden) deja clip_inset en None.
+        let h = View::<()>::new(Style::default()).clip(true);
+        assert!(h.clip);
+        assert_eq!(h.clip_inset, None);
+        // Default: sin recorte.
+        let d = View::<()>::new(Style::default());
+        assert!(!d.clip);
+        assert_eq!(d.clip_inset, None);
+    }
 
     #[test]
     fn aria_label_sobre_role_preserva_role() {

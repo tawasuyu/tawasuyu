@@ -436,6 +436,10 @@ pub struct View<Msg> {
     /// `scene.push_layer` con `Mix::Clip`). El hit-test también respeta
     /// el recorte: clicks fuera del rect ignoran a los hijos.
     pub clip: bool,
+    /// Si `Some([top, right, bottom, left])`, recorta los descendientes a un
+    /// rect ENCOGIDO por esos insets (px) desde el rect del nodo — modela
+    /// `clip-path: inset(...)`. Implica clip aunque `clip == false`.
+    pub clip_inset: Option<[f32; 4]>,
     /// Msg a emitir cuando el cursor entra al rect del nodo (transición
     /// no-hover → hover). Útil para previews tipo "URL del link al
     /// pasar el mouse".
@@ -750,6 +754,7 @@ pub struct MountedNode<Msg> {
     pub on_drop: Option<DropFn<Msg>>,
     pub drop_hover_fill: Option<Color>,
     pub clip: bool,
+    pub clip_inset: Option<[f32; 4]>,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_pointer_move_at: Option<ClickAtFn<Msg>>,

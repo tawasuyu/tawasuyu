@@ -420,6 +420,12 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if matches!(b.overflow, Overflow::Hidden) {
         view = view.clip(true);
     }
+    // `clip-path: inset(...)` (Fase 7.1219) — recorta a un rect encogido por
+    // los insets px desde el border box. Implica clip aunque overflow no sea
+    // hidden. Formas no rectangulares (circle/ellipse) no se modelan acá.
+    if let Some(insets) = b.clip_inset {
+        view = view.clip_inset(insets);
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {

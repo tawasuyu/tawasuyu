@@ -42,6 +42,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_drop,
         drop_hover_fill,
         clip,
+        clip_inset,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -95,6 +96,7 @@ pub fn mount_recursive<Msg: Clone>(
         on_drop,
         drop_hover_fill,
         clip,
+        clip_inset,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -672,11 +674,16 @@ pub fn paint_range<Msg>(
             }
         }
         if node.clip {
+            // `clip_inset` (clip-path: inset) encoge el rect de recorte desde
+            // cada borde; `None` (overflow:hidden) recorta al rect completo.
+            // El hit-test (más abajo) sigue usando el rect completo — el inset
+            // sólo afecta el pintado, una aproximación menor en su banda.
+            let [ct, cr, cb, cl] = node.clip_inset.unwrap_or([0.0; 4]);
             let clip_rect = KurboRect::new(
-                r.x as f64,
-                r.y as f64,
-                (r.x + r.w) as f64,
-                (r.y + r.h) as f64,
+                (r.x + cl) as f64,
+                (r.y + ct) as f64,
+                (r.x + r.w - cr) as f64,
+                (r.y + r.h - cb) as f64,
             );
             scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
             layer_stack.push(node.subtree_end);
