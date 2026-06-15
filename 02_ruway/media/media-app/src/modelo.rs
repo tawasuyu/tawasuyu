@@ -6,7 +6,9 @@ use llimphi_module_command_palette::{
     self as palette, Command as PaletteCommand, PaletteMsg, PaletteState,
 };
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, View, WheelDelta};
+use llimphi_widget_text_input::TextInputState;
 use media_core::config::MediaConfig;
+use media_core::profile::ProfileStore;
 use media_core::control::MediaCommand;
 use media_core::layout::PanelId as TileId;
 
@@ -25,7 +27,7 @@ use crate::media_io::media_title_string;
 use crate::pipeline::media_host;
 use crate::playlist::{jump_playlist_to, record_playback_progress};
 use crate::estado::{reload_settings, spawn_controles_watcher};
-use crate::tipos::{Msg, SettingsTab};
+use crate::tipos::{InputTarget, Msg, SettingsTab};
 use crate::vista::{
     context_menu, cover_hero, menubar_spec, osd_overlay, palette_overlay,
     playlist_content, settings_content, subtitle_strip, toolbar_view_at,
@@ -56,7 +58,70 @@ pub(crate) struct Model {
     pub(crate) reveal_bars: bool,
     /// Diente activo del rail de sidebars in-app (None = canvas puro).
     pub(crate) dock_active: Option<u64>,
+    /// Perfiles con sus playlists (persistidos en profiles.ron).
+    pub(crate) profiles: ProfileStore,
+    /// Input compartido del panel de perfiles (nombre/clave/ruta).
+    pub(crate) prof_input: TextInputState,
+    /// Qué se está tipeando, o `None` si no hay input abierto.
+    pub(crate) prof_focus: Option<InputTarget>,
+    /// Línea de estado del panel de perfiles (errores / confirmaciones).
+    pub(crate) prof_msg: Option<String>,
     pub(crate) _host: Option<pata_host::HostClient>,
+}
+
+/// Aplica el contenido tipeado en el input de perfiles según su destino.
+fn apply_profile_submit(m: &mut Model, target: InputTarget, text: String) {
+    use crate::profiles::{hash_password, playlist_from_dir};
+    let t = rimay_localize::t;
+    match target {
+        InputTarget::NewProfile => {
+            let name = text.trim().to_string();
+            if m.profiles.add_profile(name.clone()) {
+                m.profiles.active = Some(name);
+            } else {
+                m.prof_msg = Some(t("media-prof-bad-name"));
+            }
+        }
+        InputTarget::Unlock(name) => {
+            let cand = hash_password(&text);
+            let ok = m.profiles.get(&name).map(|p| p.check_hash(&cand)).unwrap_or(false);
+            if ok {
+                m.profiles.active = Some(name);
+            } else {
+                m.prof_msg = Some(t("media-prof-bad-pass"));
+            }
+        }
+        InputTarget::SetPass => {
+            let hash = if text.is_empty() {
+                None
+            } else {
+                Some(hash_password(&text))
+            };
+            if let Some(p) = m.profiles.active_profile_mut() {
+                p.set_hash(hash);
+            }
+        }
+        InputTarget::AddDir => {
+            let dir = std::path::PathBuf::from(text.trim());
+            match playlist_from_dir(&dir) {
+                Some(pl) => {
+                    let n = pl.len();
+                    let ok = if let Some(p) = m.profiles.active_profile_mut() {
+                        p.upsert_playlist(pl);
+                        true
+                    } else {
+                        false
+                    };
+                    m.prof_msg = Some(if ok {
+                        format!("+ {n} {}", t("media-prof-tracks"))
+                    } else {
+                        t("media-prof-no-active")
+                    });
+                }
+                None => m.prof_msg = Some(t("media-prof-no-media")),
+            }
+        }
+    }
 }
 
 pub(crate) struct MediaApp;
@@ -143,6 +208,10 @@ impl App for MediaApp {
             playlist_open: false,
             reveal_bars: false,
             dock_active: None,
+            profiles: crate::profiles::load_profiles(),
+            prof_input: TextInputState::new(),
+            prof_focus: None,
+            prof_msg: None,
             _host: media_host(handle),
         }
     }
@@ -260,6 +329,89 @@ impl App for MediaApp {
                 m
             }
             Msg::DockDrop(_) => model,
+            Msg::ProfileFocus(target) => {
+                let mut m = model;
+                m.prof_input = if target.masked() {
+                    TextInputState::masked()
+                } else {
+                    TextInputState::new()
+                };
+                m.prof_focus = Some(target);
+                m.prof_msg = None;
+                m
+            }
+            Msg::ProfileKey(ev) => {
+                let mut m = model;
+                if m.prof_focus.is_some() {
+                    m.prof_input.apply_key(&ev);
+                }
+                m
+            }
+            Msg::ProfileCancel => {
+                let mut m = model;
+                m.prof_focus = None;
+                m.prof_input.clear();
+                m
+            }
+            Msg::ProfileSubmit => {
+                let mut m = model;
+                let Some(target) = m.prof_focus.take() else {
+                    return m;
+                };
+                let text = m.prof_input.text();
+                m.prof_input.clear();
+                apply_profile_submit(&mut m, target, text);
+                crate::profiles::save_profiles(&m.profiles);
+                m
+            }
+            Msg::ProfileSelect(name) => {
+                let mut m = model;
+                let locked = m.profiles.get(&name).map(|p| p.is_locked()).unwrap_or(false);
+                if locked {
+                    handle.dispatch(Msg::ProfileFocus(InputTarget::Unlock(name)));
+                } else {
+                    m.profiles.active = Some(name);
+                    crate::profiles::save_profiles(&m.profiles);
+                }
+                m
+            }
+            Msg::ProfileDelete(name) => {
+                let mut m = model;
+                m.profiles.remove_profile(&name);
+                crate::profiles::save_profiles(&m.profiles);
+                m
+            }
+            Msg::ProfileClearPass => {
+                let mut m = model;
+                if let Some(p) = m.profiles.active_profile_mut() {
+                    p.set_hash(None);
+                }
+                crate::profiles::save_profiles(&m.profiles);
+                m
+            }
+            Msg::PlaylistLoad(idx) => {
+                let mut m = model;
+                let entries = m
+                    .profiles
+                    .active_profile()
+                    .and_then(|p| p.playlists.get(idx))
+                    .map(|pl| pl.entries.clone());
+                if let Some(entries) = entries {
+                    match crate::profiles::load_entries_into_live(&entries) {
+                        Ok(labels) => m.prof_msg = Some(format!("▶ {} pistas", labels.len())),
+                        Err(e) => m.prof_msg = Some(e),
+                    }
+                }
+                m
+            }
+            Msg::PlaylistDelete(idx) => {
+                let mut m = model;
+                if let Some(p) = m.profiles.active_profile_mut() {
+                    p.remove_playlist(idx);
+                }
+                crate::profiles::save_profiles(&m.profiles);
+                m
+            }
             Msg::ReloadConfig => {
                 reload_settings();
                 let (palette_commands, palette_cmds) = build_command_catalog(&settings());
@@ -342,6 +494,15 @@ impl App for MediaApp {
         }
         if event.state != KeyState::Pressed {
             return None;
+        }
+        // Input de perfiles abierto: captura todas las teclas (Enter confirma,
+        // Esc cancela, el resto van al editor de texto).
+        if model.prof_focus.is_some() {
+            return match &event.key {
+                Key::Named(NamedKey::Escape) => Some(Msg::ProfileCancel),
+                Key::Named(NamedKey::Enter) => Some(Msg::ProfileSubmit),
+                _ => Some(Msg::ProfileKey(event.clone())),
+            };
         }
         if palette::open_shortcut(event) {
             return Some(Msg::Palette(PaletteMsg::Open));

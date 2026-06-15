@@ -24,6 +24,7 @@ mod modelo;
 mod vista;
 mod vista_config;
 mod dock;
+mod profiles;
 mod audio_source;
 
 use std::path::{Path, PathBuf};

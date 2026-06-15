@@ -37,7 +37,7 @@ pub(crate) fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, Au
                     .cloned()
                     .unwrap_or_else(|| PathBuf::from("video"));
                 let pl = Playlist::new_single(label, LoadedTrack::FfmpegAudio(audio));
-                playlist_labels_slot().set(pl.track_labels()).ok();
+                *playlist_labels_slot().lock() = pl.track_labels();
                 let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
                 playlist_slot().set(Some(shared.clone())).ok();
                 let pausable = PausableAudio::new(
@@ -90,20 +90,24 @@ pub(crate) fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, Au
                     pl.len(),
                     pl.track_path().display(),
                 );
-                playlist_labels_slot().set(pl.track_labels()).ok();
+                *playlist_labels_slot().lock() = pl.track_labels();
                 let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
                 playlist_slot().set(Some(shared.clone())).ok();
                 Box::new(SharedAudio { inner: shared })
             }
             Err(e) => {
-                eprintln!("media-app: playlist falló ({e}) — caigo a tono A4");
-                playlist_slot().set(None).ok();
-                Box::new(ToneSource::a4())
+                eprintln!("media-app: playlist falló ({e}) — motor vacío (silencio)");
+                let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(Playlist::empty()));
+                playlist_slot().set(Some(shared.clone())).ok();
+                Box::new(SharedAudio { inner: shared })
             }
         }
     } else {
-        playlist_slot().set(None).ok();
-        Box::new(ToneSource::a4())
+        // Sin medio inicial: motor vivo en silencio, listo para que una
+        // playlist se cargue en caliente (perfiles / Cola).
+        let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(Playlist::empty()));
+        playlist_slot().set(Some(shared.clone())).ok();
+        Box::new(SharedAudio { inner: shared })
     };
 
     let inner: Box<dyn AudioSource + Send> = match std::env::var("MEDIA_MIX_TONE")

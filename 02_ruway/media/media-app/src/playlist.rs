@@ -31,6 +31,10 @@ pub(crate) enum LoadedTrack {
     Mp3(Mp3Source),
     Opus(OpusSource),
     FfmpegAudio(FfmpegAudioSource),
+    /// Pista nula: el motor está vivo pero sin medio cargado (silencio).
+    /// Permite que el sink de audio exista siempre, listo para que una
+    /// playlist se cargue/reemplace en caliente sin reabrir el device.
+    Silent,
 }
 
 impl LoadedTrack {
@@ -62,7 +66,7 @@ impl LoadedTrack {
             LoadedTrack::Wav(w) => w.set_speed(speed),
             LoadedTrack::Mp3(m) => m.set_speed(speed),
             LoadedTrack::Opus(o) => o.set_speed(speed),
-            LoadedTrack::FfmpegAudio(_) => {}
+            LoadedTrack::FfmpegAudio(_) | LoadedTrack::Silent => {}
         }
     }
 
@@ -71,7 +75,7 @@ impl LoadedTrack {
             LoadedTrack::Wav(w) => w.set_loop(looped),
             LoadedTrack::Mp3(m) => m.set_loop(looped),
             LoadedTrack::Opus(o) => o.set_loop(looped),
-            LoadedTrack::FfmpegAudio(_) => {}
+            LoadedTrack::FfmpegAudio(_) | LoadedTrack::Silent => {}
         }
     }
 
@@ -85,6 +89,7 @@ impl LoadedTrack {
                 !dur.is_zero()
                     && a.position() + Duration::from_millis(80) >= dur
             }
+            LoadedTrack::Silent => false,
         }
     }
 }
@@ -96,6 +101,7 @@ impl AudioSource for LoadedTrack {
             LoadedTrack::Mp3(m) => m.fill(buf, sample_rate, channels),
             LoadedTrack::Opus(o) => o.fill(buf, sample_rate, channels),
             LoadedTrack::FfmpegAudio(a) => a.fill(buf, sample_rate, channels),
+            LoadedTrack::Silent => buf.iter_mut().for_each(|s| *s = 0.0),
         }
     }
 }
@@ -107,6 +113,7 @@ impl Seekable for LoadedTrack {
             LoadedTrack::Mp3(m) => m.position(),
             LoadedTrack::Opus(o) => o.position(),
             LoadedTrack::FfmpegAudio(a) => a.position(),
+            LoadedTrack::Silent => Duration::ZERO,
         }
     }
     fn duration(&self) -> Option<Duration> {
@@ -115,6 +122,7 @@ impl Seekable for LoadedTrack {
             LoadedTrack::Mp3(m) => m.duration(),
             LoadedTrack::Opus(o) => o.duration(),
             LoadedTrack::FfmpegAudio(a) => a.duration(),
+            LoadedTrack::Silent => None,
         }
     }
     fn seek_to(&mut self, pos: Duration) {
@@ -123,6 +131,7 @@ impl Seekable for LoadedTrack {
             LoadedTrack::Mp3(m) => m.seek_to(pos),
             LoadedTrack::Opus(o) => o.seek_to(pos),
             LoadedTrack::FfmpegAudio(a) => a.seek_to(pos),
+            LoadedTrack::Silent => {}
         }
     }
 }
@@ -187,6 +196,40 @@ impl Playlist {
         })
     }
 
+    /// Motor vivo pero sin medio: silencio, listo para [`Self::load_tracks`].
+    pub(crate) fn empty() -> Self {
+        Self {
+            tracks: Vec::new(),
+            idx: 0,
+            current: LoadedTrack::Silent,
+            speed: 1.0,
+            repeat: RepeatMode::Off,
+            shuffle: None,
+            rng_state: 0x9E37_79B9_7F4A_7C15,
+        }
+    }
+
+    /// Reemplaza **en caliente** la lista de pistas y arranca por la primera
+    /// (mismo motor de audio: el sink comparte este `Arc<Mutex<Playlist>>`).
+    /// Lista vacía → queda en silencio sin error.
+    pub(crate) fn load_tracks(&mut self, tracks: Vec<PathBuf>) -> Result<(), String> {
+        if tracks.is_empty() {
+            self.tracks.clear();
+            self.idx = 0;
+            self.current = LoadedTrack::Silent;
+            self.shuffle = None;
+            return Ok(());
+        }
+        let mut current = LoadedTrack::from_path(&tracks[0])?;
+        current.set_speed(self.speed);
+        current.set_loop(matches!(self.repeat, RepeatMode::One));
+        self.tracks = tracks;
+        self.idx = 0;
+        self.current = current;
+        self.shuffle = None;
+        Ok(())
+    }
+
     pub(crate) fn new_single(label_path: PathBuf, mut track: LoadedTrack) -> Self {
         track.set_loop(false);
         Self {
@@ -247,7 +290,10 @@ impl Playlist {
     }
 
     pub(crate) fn track_path(&self) -> &std::path::Path {
-        &self.tracks[self.idx]
+        self.tracks
+            .get(self.idx)
+            .map(|p| p.as_path())
+            .unwrap_or_else(|| std::path::Path::new(""))
     }
 
     pub(crate) fn len(&self) -> usize {

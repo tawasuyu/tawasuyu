@@ -125,10 +125,11 @@ pub(crate) fn video_path_slot() -> &'static OnceLock<PathBuf> {
     &SLOT
 }
 
-/// Nombres de las pistas de la playlist, cacheados al crearla.
-pub(crate) fn playlist_labels_slot() -> &'static OnceLock<Vec<String>> {
-    static SLOT: OnceLock<Vec<String>> = OnceLock::new();
-    &SLOT
+/// Nombres de las pistas de la playlist viva. `Mutex` (no `OnceLock`) porque
+/// al cargar/reemplazar una playlist en caliente (perfiles/Cola) se refresca.
+pub(crate) fn playlist_labels_slot() -> &'static Mutex<Vec<String>> {
+    static SLOT: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// Onda de pista completa (tipo Audacity) computada en background.

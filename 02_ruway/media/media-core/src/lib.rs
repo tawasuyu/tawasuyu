@@ -41,6 +41,7 @@ pub mod loudness;
 pub mod metadata;
 pub mod osd;
 pub mod playlist;
+pub mod profile;
 pub mod seek;
 pub mod sync;
 pub mod toolbar;

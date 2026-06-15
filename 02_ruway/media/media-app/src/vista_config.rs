@@ -653,11 +653,11 @@ pub(crate) fn settings_content(model: &Model) -> View<Msg> {
 /// Contenido de la ventana OS de lista de reproducción.
 pub(crate) fn playlist_content() -> View<Msg> {
     use crate::estado::playlist_labels_slot;
-    let labels = playlist_labels_slot().get();
+    let labels = playlist_labels_slot().lock().clone();
     let cur = playback_snapshot().idx;
     let header = settings_header(&rimay_localize::t("media-playlist-header"));
 
-    let rows: Vec<View<Msg>> = match labels {
+    let rows: Vec<View<Msg>> = match (!labels.is_empty()).then_some(&labels) {
         Some(ls) if !ls.is_empty() => ls
             .iter()
             .enumerate()

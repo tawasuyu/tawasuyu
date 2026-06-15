@@ -1,6 +1,27 @@
 use llimphi_module_command_palette::PaletteMsg;
+use llimphi_ui::KeyEvent;
 use media_core::control::MediaCommand;
 use media_core::toolbar::BarItem;
+
+/// Qué se está tipeando en el input compartido del panel de Perfiles.
+#[derive(Clone, Debug)]
+pub(crate) enum InputTarget {
+    /// Nombre de un perfil nuevo.
+    NewProfile,
+    /// Contraseña para desbloquear el perfil nombrado.
+    Unlock(String),
+    /// Contraseña a fijar en el perfil activo (vacío = quitar candado).
+    SetPass,
+    /// Ruta de un directorio a escanear recursivamente como playlist.
+    AddDir,
+}
+
+impl InputTarget {
+    /// Si el campo debe enmascararse (contraseñas).
+    pub(crate) fn masked(&self) -> bool {
+        matches!(self, InputTarget::Unlock(_) | InputTarget::SetPass)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum Msg {
@@ -34,6 +55,25 @@ pub(crate) enum Msg {
     DockActivate(u64),
     /// Suelta un diente arrastrado sobre el rail (reservado para reordenar).
     DockDrop(u64),
+    // --- Perfiles / playlists ---
+    /// Enfoca el input compartido del panel de perfiles para `target`.
+    ProfileFocus(InputTarget),
+    /// Tecla al input enfocado.
+    ProfileKey(KeyEvent),
+    /// Enter: confirma el input enfocado según su `InputTarget`.
+    ProfileSubmit,
+    /// Esc: cancela el input enfocado.
+    ProfileCancel,
+    /// Selecciona/activa un perfil (si tiene candado, pide la clave).
+    ProfileSelect(String),
+    /// Borra un perfil por nombre.
+    ProfileDelete(String),
+    /// Quita el candado del perfil activo.
+    ProfileClearPass,
+    /// Carga la playlist `idx` del perfil activo en el motor vivo.
+    PlaylistLoad(usize),
+    /// Borra la playlist `idx` del perfil activo.
+    PlaylistDelete(usize),
 }
 
 /// Pestañas de la ventana de configuración.

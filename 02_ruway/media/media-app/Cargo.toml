@@ -26,6 +26,7 @@ llimphi-widget-waveform = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
 llimphi-module-command-palette = { workspace = true }
 image = { workspace = true }
 media-audio-cpal = { path = "../media-audio-cpal" }
@@ -40,6 +41,7 @@ media-source-image = { path = "../media-source-image" }
 media-source-mp3 = { path = "../media-source-mp3" }
 media-source-wav = { path = "../media-source-wav" }
 parking_lot = { workspace = true }
+blake3 = { workspace = true }
 rhai = "1.20"
 ron = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }

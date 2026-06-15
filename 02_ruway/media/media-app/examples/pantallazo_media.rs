@@ -823,7 +823,7 @@ fn view_demo(e: &Estado, theme: &Theme) -> View<Msg> {
             flex_grow: 1.0,
             ..Default::default()
         })
-        .children(vec![cola_panel_demo(theme, e), content]);
+        .children(vec![perfiles_panel_demo(theme), content]);
         View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size {
@@ -848,11 +848,11 @@ fn view_demo(e: &Estado, theme: &Theme) -> View<Msg> {
     .children(vec![menubar, body])
 }
 
-/// Rail de dientes (overlay absoluto al borde interno izquierdo). Cola activa.
+/// Rail de dientes (overlay absoluto al borde interno izquierdo). Perfiles activa.
 fn dock_rail_demo(theme: &Theme) -> View<Msg> {
-    let icons = [Icon::Music, Icon::Settings, Icon::Equalizer, Icon::Info];
-    let items: Vec<DockRailItem> = (0..4)
-        .map(|id| DockRailItem { id, active: id == 0 })
+    let icons = [Icon::Music, Icon::Home, Icon::Settings, Icon::Equalizer, Icon::Info];
+    let items: Vec<DockRailItem> = (0..5)
+        .map(|id| DockRailItem { id, active: id == 1 })
         .collect();
     let rail = dock_rail_view(
         &items,
@@ -879,14 +879,64 @@ fn dock_rail_demo(theme: &Theme) -> View<Msg> {
     .children(vec![rail])
 }
 
-/// Panel de la Cola desplegada (calco de `dock::dock_panel` → playlist).
-fn cola_panel_demo(theme: &Theme, e: &Estado) -> View<Msg> {
-    let tracks = ["Vals del calcetín", "Cumbia del lunes", "Balada del wifi caído"];
+/// Panel de Perfiles desplegado (calco de `dock::perfiles_panel`): crear/
+/// seleccionar/bloquear perfiles + sus playlists guardadas. Sembrado con un
+/// perfil activo con candado y dos playlists cargadas de carpetas.
+fn perfiles_panel_demo(theme: &Theme) -> View<Msg> {
+    fn pbtn(label: String, bg: Color, fg: Color) -> View<Msg> {
+        View::new(Style {
+            size: Size { width: auto(), height: length(28.0_f32) },
+            flex_grow: 1.0,
+            align_items: Some(AlignItems::Center),
+            padding: TaffyRect {
+                left: length(10.0_f32),
+                right: length(10.0_f32),
+                top: length(0.0_f32),
+                bottom: length(0.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(bg)
+        .radius(6.0)
+        .text(label, 12.5, fg)
+    }
+    fn psquare(label: &str) -> View<Msg> {
+        View::new(Style {
+            size: Size { width: length(30.0_f32), height: length(28.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(Color::from_rgba8(74, 58, 64, 255))
+        .radius(6.0)
+        .text(label.to_string(), 13.0, Color::from_rgba8(225, 232, 245, 255))
+    }
+    fn prow(children: Vec<View<Msg>>) -> View<Msg> {
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+            flex_shrink: 0.0,
+            gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(children)
+    }
+    fn psection(title: &str) -> View<Msg> {
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(24.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        })
+        .text(title.to_string(), 13.0, Color::from_rgba8(118, 182, 232, 255))
+    }
+    let t = rimay_localize::t;
+    let green = Color::from_rgba8(48, 70, 58, 255);
+    let green_fg = Color::from_rgba8(220, 235, 226, 255);
+
     let header = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(30.0_f32),
-        },
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
         align_items: Some(AlignItems::Center),
         padding: TaffyRect {
             left: length(40.0_f32),
@@ -896,61 +946,46 @@ fn cola_panel_demo(theme: &Theme, e: &Estado) -> View<Msg> {
         },
         ..Default::default()
     })
-    .text(rimay_localize::t("media-menu-playlist"), 14.5, Color::from_rgba8(118, 182, 232, 255));
-    let rows: Vec<View<Msg>> = tracks
-        .iter()
-        .enumerate()
-        .map(|(i, name)| {
-            let active = i + 1 == e.trk.0;
-            let bg = if active {
-                Color::from_rgba8(48, 86, 120, 255)
-            } else {
-                Color::from_rgba8(30, 36, 46, 255)
-            };
-            View::new(Style {
-                size: Size {
-                    width: percent(1.0_f32),
-                    height: length(30.0_f32),
-                },
-                align_items: Some(AlignItems::Center),
-                padding: TaffyRect {
-                    left: length(10.0_f32),
-                    right: length(10.0_f32),
-                    top: length(0.0_f32),
-                    bottom: length(0.0_f32),
-                },
-                ..Default::default()
-            })
-            .fill(bg)
-            .radius(6.0)
-            .text(format!("{:>2}.  {name}", i + 1), 13.0, Color::from_rgba8(220, 230, 245, 255))
+    .text(t("media-dock-perfiles"), 14.5, Color::from_rgba8(118, 182, 232, 255));
+
+    let kids = vec![
+        header,
+        // Estado.
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+            flex_shrink: 0.0,
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
         })
-        .collect();
-    let list = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: percent(1.0_f32),
-            height: auto(),
-        },
-        flex_grow: 1.0,
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(4.0_f32),
-        },
-        ..Default::default()
-    })
-    .children(rows);
+        .text(format!("▶ 130 {}", t("media-prof-tracks")), 12.0, Color::from_rgba8(232, 200, 130, 255)),
+        prow(vec![pbtn(t("media-prof-new"), green, green_fg)]),
+        psection(&t("media-dock-perfiles")),
+        prow(vec![
+            pbtn(format!("sergio · {}", t("media-prof-locked")), Color::from_rgba8(48, 86, 120, 255), Color::from_rgba8(224, 233, 245, 255)),
+            psquare("✕"),
+        ]),
+        prow(vec![
+            pbtn("invitado".to_string(), Color::from_rgba8(34, 40, 52, 255), Color::from_rgba8(224, 233, 245, 255)),
+            psquare("✕"),
+        ]),
+        prow(vec![pbtn(t("media-prof-clear-pass"), Color::from_rgba8(70, 58, 64, 255), Color::from_rgba8(235, 220, 226, 255))]),
+        psection(&format!("sergio · {}", t("media-prof-playlists"))),
+        prow(vec![
+            pbtn("▶  Cumbias del barrio  (42)".to_string(), Color::from_rgba8(34, 44, 40, 255), green_fg),
+            psquare("✕"),
+        ]),
+        prow(vec![
+            pbtn("▶  Lo-fi para el kernel  (130)".to_string(), Color::from_rgba8(34, 44, 40, 255), green_fg),
+            psquare("✕"),
+        ]),
+        prow(vec![pbtn(t("media-prof-add-dir"), green, green_fg)]),
+    ];
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(380.0_f32),
-            height: percent(1.0_f32),
-        },
+        size: Size { width: length(380.0_f32), height: percent(1.0_f32) },
         flex_shrink: 0.0,
-        gap: Size {
-            width: length(0.0_f32),
-            height: length(6.0_f32),
-        },
+        gap: Size { width: length(0.0_f32), height: length(6.0_f32) },
         padding: TaffyRect {
             left: length(6.0_f32),
             right: length(6.0_f32),
@@ -960,7 +995,7 @@ fn cola_panel_demo(theme: &Theme, e: &Estado) -> View<Msg> {
         ..Default::default()
     })
     .fill(theme.bg_panel)
-    .children(vec![header, list])
+    .children(kids)
 }
 
 fn main() {
