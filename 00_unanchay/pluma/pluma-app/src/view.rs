@@ -1025,6 +1025,13 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         on_run: Arc::new(Msg::EjecutarLienzo) as Arc<dyn Fn(_) -> Msg + Send + Sync>,
     };
 
+    // Cartas entre columnas consecutivas → cintas Sankey (mismo criterio que el
+    // modo Plano; sin carta se empareja por posición).
+    let mut cartas_sel: Vec<Option<&CartaHebras>> = Vec::new();
+    for w in cuerpos_sel.windows(2) {
+        cartas_sel.push(carta_entre(model, w[0].id, w[1].id));
+    }
+
     lienzos_multi_view::<Msg, _>(
         &cuerpos_sel,
         &atoms,
@@ -1034,6 +1041,7 @@ fn centro_lienzos(model: &Model, theme: &Theme) -> View<Msg> {
         None,
         edicion.as_ref(),
         Some(&ejecucion),
+        &cartas_sel,
         Msg::LienzoSelect,
     )
 }

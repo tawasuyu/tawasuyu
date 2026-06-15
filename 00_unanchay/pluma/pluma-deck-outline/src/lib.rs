@@ -8,14 +8,16 @@
 //! y subsecciones) dentro del marco. Así un documento largo se vuela por sus
 //! capítulos, no por cada párrafo.
 //!
-//! - Cada `# Sección` top-level → un [`Marco`] con
+//! - Cada `Sección` (a CUALQUIER profundidad) → un [`Marco`] con
 //!   [`ContenidoMarco::Texto`]`{ titulo: Some(..), parrafos }`, donde `parrafos`
-//!   recolecta, en orden de documento, los textos de todos los párrafos
-//!   descendientes; cada subsección aporta su título como una línea más.
+//!   son sólo sus párrafos *directos*. Las subsecciones NO se aplanan: cada una
+//!   es su propio marco. Así el vuelo entra a `# Cap`, luego a sus `## Sub`,
+//!   recursivamente (orden depth-first = orden de lectura).
 //! - Los párrafos sueltos antes del primer título se agrupan en un marco inicial
 //!   ([`ContenidoMarco::Etiqueta`] si es uno solo, si no `Texto{titulo:None,..}`).
-//! - Los marcos se colocan en zig-zag sobre el plano para que el vuelo tenga
-//!   movimiento; `pasos` recorre los marcos en orden de documento.
+//! - Los marcos se colocan avanzando en X y bajando + encogiéndose con la
+//!   profundidad (las subsecciones quedan más chicas y más abajo, sugiriendo el
+//!   anidamiento espacial); `pasos` los recorre depth-first.
 //!
 //! El modelo de pluma sigue plano y agnóstico: esto sólo *proyecta* y *coloca*.
 
@@ -58,20 +60,21 @@ pub fn recorrido_desde_cuerpo(cuerpo: &Cuerpo, texto_de: impl Fn(Uuid) -> Option
 
     let outline = proyectar(&cuerpo.orden, |id| mapa.get(&id).map(|s| s.as_str()));
 
-    // Primera pasada: armamos los contenidos en orden de documento.
-    let mut contenidos: Vec<ContenidoMarco> = Vec::new();
+    // Primera pasada: armamos `(contenido, profundidad)` en orden depth-first.
+    let mut frames: Vec<(ContenidoMarco, usize)> = Vec::new();
     let mut sueltos: Vec<String> = Vec::new();
 
-    let volcar_sueltos = |sueltos: &mut Vec<String>, contenidos: &mut Vec<ContenidoMarco>| {
+    let volcar_sueltos = |sueltos: &mut Vec<String>, frames: &mut Vec<(ContenidoMarco, usize)>| {
         if sueltos.is_empty() {
             return;
         }
         let tomados = std::mem::take(sueltos);
-        if tomados.len() == 1 {
-            contenidos.push(ContenidoMarco::Etiqueta(tomados.into_iter().next().unwrap()));
+        let c = if tomados.len() == 1 {
+            ContenidoMarco::Etiqueta(tomados.into_iter().next().unwrap())
         } else {
-            contenidos.push(ContenidoMarco::Texto { titulo: None, parrafos: tomados });
-        }
+            ContenidoMarco::Texto { titulo: None, parrafos: tomados }
+        };
+        frames.push((c, 0));
     };
 
     for nodo in &outline.raiz {
@@ -83,30 +86,63 @@ pub fn recorrido_desde_cuerpo(cuerpo: &Cuerpo, texto_de: impl Fn(Uuid) -> Option
             }
             Nodo::Seccion(s) => {
                 // Cerramos el bloque de párrafos sueltos que precedía a la sección.
-                volcar_sueltos(&mut sueltos, &mut contenidos);
-                let mut parrafos = Vec::new();
-                recolectar(&s.hijos, &mapa, &mut parrafos);
-                contenidos.push(ContenidoMarco::Texto {
-                    titulo: Some(s.titulo.clone()),
-                    parrafos,
-                });
+                volcar_sueltos(&mut sueltos, &mut frames);
+                emitir_seccion(s, 0, &mapa, &mut frames);
             }
         }
     }
     // Párrafos sueltos al final (documento sin ningún título).
-    volcar_sueltos(&mut sueltos, &mut contenidos);
+    volcar_sueltos(&mut sueltos, &mut frames);
 
     // Segunda pasada: colocamos cada contenido en el plano y armamos la ruta.
+    // X avanza por marco; Y baja con la profundidad y el tamaño se encoge — las
+    // subsecciones quedan visiblemente "dentro/debajo" de su capítulo.
     let mut rec = Recorrido::new();
-    for (i, contenido) in contenidos.into_iter().enumerate() {
+    for (i, (contenido, depth)) in frames.into_iter().enumerate() {
         let id = (i + 1) as MarcoId;
+        let escala = 1.0 / (1.0 + 0.3 * depth as f64);
         let x = i as f64 * PASO_X;
-        let y = if i % 2 == 0 { 0.0 } else { SALTO_Y };
-        let marco = Marco::new(id, Rect::new(x, y, ANCHO_MARCO, ALTO_MARCO), contenido);
+        let y = depth as f64 * SALTO_Y;
+        let marco = Marco::new(
+            id,
+            Rect::new(x, y, ANCHO_MARCO * escala, ALTO_MARCO * escala),
+            contenido,
+        );
         rec.agregar_marco(marco);
         rec.pasos.push(id);
     }
     rec
+}
+
+/// Emite el marco de una sección (título + sus párrafos directos) y luego, en
+/// orden, los marcos de sus subsecciones (recursivo, depth-first). Las
+/// subsecciones reciben `depth + 1`.
+fn emitir_seccion(
+    s: &pluma_outline::Seccion,
+    depth: usize,
+    mapa: &HashMap<Uuid, String>,
+    frames: &mut Vec<(ContenidoMarco, usize)>,
+) {
+    let mut parrafos = Vec::new();
+    for h in &s.hijos {
+        if let Nodo::Parrafo { atom } = h {
+            if let Some(t) = texto_limpio(mapa, atom) {
+                parrafos.push(t);
+            }
+        }
+    }
+    frames.push((
+        ContenidoMarco::Texto {
+            titulo: Some(s.titulo.clone()),
+            parrafos,
+        },
+        depth,
+    ));
+    for h in &s.hijos {
+        if let Nodo::Seccion(sub) = h {
+            emitir_seccion(sub, depth + 1, mapa, frames);
+        }
+    }
 }
 
 /// Texto de un átomo, limpiado; `None` si no resuelve o queda vacío.
@@ -116,25 +152,6 @@ fn texto_limpio(mapa: &HashMap<Uuid, String>, atom: &Uuid) -> Option<String> {
         None
     } else {
         Some(t.to_string())
-    }
-}
-
-/// Recolecta, en orden de documento, los textos de todos los párrafos
-/// descendientes de una secuencia de nodos. Cada subsección aporta su título
-/// como una línea más antes de aplanar sus propios hijos.
-fn recolectar(hijos: &[Nodo], mapa: &HashMap<Uuid, String>, out: &mut Vec<String>) {
-    for h in hijos {
-        match h {
-            Nodo::Parrafo { atom } => {
-                if let Some(t) = texto_limpio(mapa, atom) {
-                    out.push(t);
-                }
-            }
-            Nodo::Seccion(s) => {
-                out.push(s.titulo.clone());
-                recolectar(&s.hijos, mapa, out);
-            }
-        }
     }
 }
 
@@ -182,10 +199,10 @@ mod pruebas {
         let rec = rec_de(&c, &mapa);
         assert_eq!(rec.marcos.len(), 2);
         assert_eq!(rec.pasos, vec![1, 2]);
-        // En zig-zag: el segundo marco está más a la derecha y más abajo.
+        // Dos secciones de nivel raíz (depth 0): avanzan en X, ambas en y=0.
         assert!(rec.marcos[1].rect.x > rec.marcos[0].rect.x);
         assert_eq!(rec.marcos[0].rect.y, 0.0);
-        assert_eq!(rec.marcos[1].rect.y, SALTO_Y);
+        assert_eq!(rec.marcos[1].rect.y, 0.0);
         assert_eq!(rec.marcos[0].rot_rad, 0.0);
         let (t0, _) = como_texto(&rec.marcos[0].contenido);
         let (t1, _) = como_texto(&rec.marcos[1].contenido);
@@ -207,7 +224,7 @@ mod pruebas {
     }
 
     #[test]
-    fn subseccion_anidada_aporta_su_titulo_como_linea() {
+    fn subseccion_anidada_es_su_propio_marco_depth_first() {
         let (c, mapa) = doc(&[
             "# Introducción",
             "El proyecto unifica.",
@@ -215,18 +232,18 @@ mod pruebas {
             "Hoy hay tres apps.",
         ]);
         let rec = rec_de(&c, &mapa);
-        // Una sola sección de nivel raíz → un marco que aplana la subsección.
-        assert_eq!(rec.marcos.len(), 1);
-        let (titulo, parrafos) = como_texto(&rec.marcos[0].contenido);
-        assert_eq!(titulo, Some("Introducción"));
-        assert_eq!(
-            parrafos,
-            &[
-                "El proyecto unifica.".to_string(),
-                "Motivación".to_string(), // el título de la subsección, como línea
-                "Hoy hay tres apps.".to_string(),
-            ]
-        );
+        // Cada sección su propio marco: capítulo + subsección = 2 marcos.
+        assert_eq!(rec.marcos.len(), 2);
+        assert_eq!(rec.pasos, vec![1, 2]);
+        let (t0, p0) = como_texto(&rec.marcos[0].contenido);
+        assert_eq!(t0, Some("Introducción"));
+        assert_eq!(p0, &["El proyecto unifica.".to_string()]); // sólo párrafos DIRECTOS
+        let (t1, p1) = como_texto(&rec.marcos[1].contenido);
+        assert_eq!(t1, Some("Motivación"));
+        assert_eq!(p1, &["Hoy hay tres apps.".to_string()]);
+        // La subsección está más abajo (depth 1) y es más chica que el capítulo.
+        assert!(rec.marcos[1].rect.y > rec.marcos[0].rect.y);
+        assert!(rec.marcos[1].rect.w < rec.marcos[0].rect.w);
     }
 
     #[test]

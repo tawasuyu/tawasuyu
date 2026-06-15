@@ -16,18 +16,21 @@
 //! que el caller marque ese átomo como objetivo de edición in-situ. El render en
 //! sí es puro; no posee estado de edición.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use llimphi_ui::llimphi_layout::taffy::prelude::{
-    auto, length, percent, FlexDirection, Rect, Size, Style,
+    auto, length, percent, FlexDirection, Position, Rect, Size, Style,
 };
-use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath};
+use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
 use llimphi_widget_text_editor::{
     text_editor_view, EditorMetrics, EditorPalette, PointerEvent,
 };
+use pluma_align::CartaHebras;
 use pluma_core::NarrativeAtom;
 use pluma_cuerpo::Cuerpo;
 use pluma_outline::{font_size_por_nivel, proyectar, Nodo, Seccion};
@@ -35,6 +38,27 @@ use uuid::Uuid;
 
 use crate::multilienzo_editor::color_seccion;
 use crate::Palette;
+
+thread_local! {
+    /// Posición ABSOLUTA (x, y, w, h) en coords de escena donde se pintó la caja
+    /// de cada átomo este frame. La llenan las cajas al pintarse (paint_with) y
+    /// la lee el overlay de hebras (que pinta último) para tender las cintas
+    /// entre columnas, igual que `panel_actual` del deck. Se limpia tras leerla.
+    static REGISTRO: RefCell<HashMap<Uuid, (f32, f32, f32, f32)>> =
+        RefCell::new(HashMap::new());
+}
+
+/// Agrega a una caja un `paint_with` que registra su rect absoluto bajo `atom`,
+/// sin dibujar nada (el texto se pinta encima). Permite que el overlay de hebras
+/// sepa dónde quedó cada átomo en el layout flow.
+fn registrar_atom<Msg: Clone + 'static>(v: View<Msg>, atom: Uuid) -> View<Msg> {
+    v.paint_with(move |_scene, _ts, rect| {
+        REGISTRO.with(|r| {
+            r.borrow_mut()
+                .insert(atom, (rect.x, rect.y, rect.w, rect.h));
+        });
+    })
+}
 
 /// Líneas máximas que dibuja el editor in-situ de un átomo (cap del viewport).
 const VISIBLE_INLINE: usize = 80;
@@ -167,8 +191,10 @@ where
 
 /// Render de N cuerpos lado a lado (el multilienzo jerárquico). Cada columna
 /// lleva el rótulo del cuerpo arriba y su árbol de lienzos abajo. `activo`
-/// marca la columna con foco. Las hebras Sankey entre columnas quedan para una
-/// pasada posterior (este MVP muestra los haces en paralelo sin cintas).
+/// marca la columna con foco. `cartas[i]` es la carta de hebras entre la columna
+/// `i` y la `i+1` (`None` = sin carta → emparejado posicional): un overlay tiende
+/// las **cintas Sankey** entre los átomos alineados, leyendo dónde quedó pintada
+/// cada caja (registro por `paint_with`).
 #[allow(clippy::too_many_arguments)]
 pub fn lienzos_multi_view<Msg, FSel>(
     cuerpos: &[&Cuerpo],
@@ -179,6 +205,7 @@ pub fn lienzos_multi_view<Msg, FSel>(
     seleccionado: Option<Uuid>,
     edicion: Option<&EdicionLienzo<Msg>>,
     ejecucion: Option<&EjecucionLienzo<Msg>>,
+    cartas: &[Option<&CartaHebras>],
     on_select: FSel,
 ) -> View<Msg>
 where
@@ -249,10 +276,10 @@ where
         Some(w) => length(cuerpos.len() as f32 * w),
         None => percent(1.0_f32),
     };
-    View::new(Style {
+    let fila = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
-            width: ancho_root,
+            width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
         gap: Size {
@@ -262,7 +289,112 @@ where
         ..Default::default()
     })
     .fill(palette.bg_app)
-    .children(columnas)
+    .children(columnas);
+
+    // Overlay de hebras: pinta DESPUÉS de las columnas (lee el registro de
+    // posiciones que ellas dejaron) y tiende las cintas entre átomos alineados.
+    let pares = pares_hebras(cuerpos, cartas);
+    let overlay = hebras_overlay::<Msg>(pares);
+
+    View::new(Style {
+        position: Position::Relative,
+        size: Size {
+            width: ancho_root,
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![fila, overlay])
+}
+
+/// Pares de átomos alineados a unir con cinta entre columnas consecutivas, con
+/// su color. Usa la carta de hebras si la hay (en cualquier orden a/b); si no,
+/// empareja por posición (átomo `k` ↔ átomo `k`). Color = `color_seccion(k)`.
+fn pares_hebras(
+    cuerpos: &[&Cuerpo],
+    cartas: &[Option<&CartaHebras>],
+) -> Vec<(Uuid, Uuid, [f32; 4])> {
+    let mut out = Vec::new();
+    for i in 0..cuerpos.len().saturating_sub(1) {
+        let izq = cuerpos[i];
+        let der = cuerpos[i + 1];
+        let carta = cartas.get(i).copied().flatten();
+        let con_carta = carta.map(|c| !c.hebras.is_empty()).unwrap_or(false);
+        if let (true, Some(c)) = (con_carta, carta) {
+            for h in &c.hebras {
+                let (a, b) = if izq.orden.contains(&h.atom_a) && der.orden.contains(&h.atom_b) {
+                    (h.atom_a, h.atom_b)
+                } else if izq.orden.contains(&h.atom_b) && der.orden.contains(&h.atom_a) {
+                    (h.atom_b, h.atom_a)
+                } else {
+                    continue;
+                };
+                let idx = izq.orden.iter().position(|x| *x == a).unwrap_or(0);
+                out.push((a, b, color_seccion(idx).components));
+            }
+        } else {
+            let n = izq.orden.len().min(der.orden.len());
+            for k in 0..n {
+                out.push((izq.orden[k], der.orden[k], color_seccion(k).components));
+            }
+        }
+    }
+    out
+}
+
+/// Nodo overlay (absoluto, cubre el multilienzo) que pinta las cintas Sankey
+/// leyendo el registro de posiciones de los átomos y lo limpia tras leer.
+fn hebras_overlay<Msg: Clone + 'static>(pares: Vec<(Uuid, Uuid, [f32; 4])>) -> View<Msg> {
+    let nodo = View::new(Style {
+        position: Position::Absolute,
+        inset: Rect {
+            left: length(0.0_f32),
+            top: length(0.0_f32),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    });
+    if pares.is_empty() {
+        return nodo;
+    }
+    nodo.paint_with(move |scene, _ts, _rect| {
+        REGISTRO.with(|reg| {
+            let reg = reg.borrow();
+            for (a, b, col) in &pares {
+                let (Some(&(ax, ay, aw, ah)), Some(&(bx, by, _bw, bh))) =
+                    (reg.get(a), reg.get(b))
+                else {
+                    continue;
+                };
+                // Borde derecho del átomo izquierdo → borde izquierdo del derecho.
+                let x1 = (ax + aw) as f64;
+                let x2 = bx as f64;
+                if x2 <= x1 {
+                    continue;
+                }
+                let it = ay as f64;
+                let ib = (ay + ah) as f64;
+                let dt = by as f64;
+                let db = (by + bh) as f64;
+                let dx = (x2 - x1) * 0.5;
+                let mut path = BezPath::new();
+                path.move_to((x1, it));
+                path.curve_to((x1 + dx, it), (x2 - dx, dt), (x2, dt));
+                path.line_to((x2, db));
+                path.curve_to((x2 - dx, db), (x1 + dx, ib), (x1, ib));
+                path.close_path();
+                let color = Color::new([col[0], col[1], col[2], 0.42]);
+                scene.fill(Fill::NonZero, Affine::IDENTITY, color, None, &path);
+            }
+        });
+        // Listo el frame: vaciar para que el próximo registre de cero.
+        REGISTRO.with(|reg| reg.borrow_mut().clear());
+    })
 }
 
 /// Renderiza una lista de nodos hermanos en orden.
@@ -397,7 +529,7 @@ where
     if resaltado {
         v = v.fill(palette.bg_panel).border(1.0, palette.border_strong);
     }
-    v.on_click(on_select(atom))
+    registrar_atom(v.on_click(on_select(atom)), atom)
 }
 
 /// Una celda LLM ejecutable: cabecera con ▶, el prompt (clickeable para editar)
@@ -513,7 +645,7 @@ where
         );
     }
 
-    View::new(Style {
+    let celda_box = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
             width: percent(1.0_f32),
@@ -534,7 +666,8 @@ where
     .fill(fondo)
     .border(1.0, acento)
     .radius(4.0)
-    .children(hijos)
+    .children(hijos);
+    registrar_atom(celda_box, atom)
 }
 
 /// Una sección: lienzo con cabecera (título a su tamaño de nivel) + contenido
@@ -568,7 +701,7 @@ where
         } else {
             palette.fg_text
         };
-        View::new(Style {
+        let titulo_box = View::new(Style {
             size: Size {
                 width: percent(1.0_f32),
                 height: auto(),
@@ -582,7 +715,8 @@ where
             ..Default::default()
         })
         .text_aligned(s.titulo.clone(), font_titulo, titulo_color, Alignment::Start)
-        .on_click(on_select(s.titulo_atom))
+        .on_click(on_select(s.titulo_atom));
+        registrar_atom(titulo_box, s.titulo_atom)
     };
 
     // Contenido anidado.
@@ -696,6 +830,7 @@ mod pruebas {
             None,
             None,
             None,
+            &[],
             |_| (),
         );
     }
@@ -715,6 +850,7 @@ mod pruebas {
             None,
             None,
             None,
+            &[],
             |_| (),
         );
     }
