@@ -492,6 +492,14 @@ impl StyleEngine {
             style.stroke_size = p.stroke_size.clone();
             style.stroke_dash_corner = p.stroke_dash_corner.clone();
             style.stroke_dash_justify = p.stroke_dash_justify.clone();
+            // Fase 7.1073-7.1079 — CSS Fill and Stroke 3: las fill-* heredan.
+            style.fill_break = p.fill_break.clone();
+            style.fill_color_css = p.fill_color_css.clone();
+            style.fill_image = p.fill_image.clone();
+            style.fill_origin = p.fill_origin.clone();
+            style.fill_position = p.fill_position.clone();
+            style.fill_size = p.fill_size.clone();
+            style.fill_repeat = p.fill_repeat.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

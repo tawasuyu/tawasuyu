@@ -649,6 +649,14 @@ impl Default for ComputedStyle {
             stroke_size: None,
             stroke_dash_corner: None,
             stroke_dash_justify: None,
+            // Fase 7.1073-7.1079 — CSS Fill and Stroke 3 fill-*, default None.
+            fill_break: None,
+            fill_color_css: None,
+            fill_image: None,
+            fill_origin: None,
+            fill_position: None,
+            fill_size: None,
+            fill_repeat: None,
         }
     }
 }

@@ -1788,5 +1788,21 @@ pub struct ComputedStyle {
     pub stroke_dash_corner: Option<String>,
     /// `stroke-dash-justify` (CSS Fill and Stroke 3). `None` = `none`. HEREDA. Plumb. Fase 7.1072.
     pub stroke_dash_justify: Option<String>,
+    // === Fase 7.1073-7.1079 — CSS Fill and Stroke 3 fill-* (plumb opaco) ===
+    /// `fill-break` (CSS Fill and Stroke 3). `None` = `bounding-box`. HEREDA. Plumb. Fase 7.1073.
+    pub fill_break: Option<String>,
+    /// `fill-color` (CSS Fill and Stroke 3). `None` = `black`. HEREDA.
+    /// Plumb opaco distinto del `fill` paint SVG. Fase 7.1074.
+    pub fill_color_css: Option<String>,
+    /// `fill-image` (CSS Fill and Stroke 3). `None` = `none`. HEREDA. Plumb. Fase 7.1075.
+    pub fill_image: Option<String>,
+    /// `fill-origin` (CSS Fill and Stroke 3). `None` = `match-parent`. HEREDA. Plumb. Fase 7.1076.
+    pub fill_origin: Option<String>,
+    /// `fill-position` (CSS Fill and Stroke 3). `None` = `0% 0%`. HEREDA. Plumb. Fase 7.1077.
+    pub fill_position: Option<String>,
+    /// `fill-size` (CSS Fill and Stroke 3). `None` = `auto`. HEREDA. Plumb. Fase 7.1078.
+    pub fill_size: Option<String>,
+    /// `fill-repeat` (CSS Fill and Stroke 3). `None` = `repeat`. HEREDA. Plumb. Fase 7.1079.
+    pub fill_repeat: Option<String>,
 }
 

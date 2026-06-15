@@ -1162,6 +1162,14 @@ pub(crate) enum DeclKind {
     StrokeSize(Option<String>),
     StrokeDashCorner(Option<String>),
     StrokeDashJustify(Option<String>),
+    // === Fase 7.1073-7.1079 — CSS Fill and Stroke 3 fill-* (plumb opaco) ===
+    FillBreak(Option<String>),
+    FillColorCss(Option<String>),
+    FillImage(Option<String>),
+    FillOrigin(Option<String>),
+    FillPosition(Option<String>),
+    FillSize(Option<String>),
+    FillRepeat(Option<String>),
 }
 
 impl Decl {
@@ -1961,6 +1969,14 @@ impl Decl {
             DeclKind::StrokeSize(v) => s.stroke_size = v.clone(),
             DeclKind::StrokeDashCorner(v) => s.stroke_dash_corner = v.clone(),
             DeclKind::StrokeDashJustify(v) => s.stroke_dash_justify = v.clone(),
+            // Fase 7.1073-7.1079 — CSS Fill and Stroke 3 fill-*, plumb opaco.
+            DeclKind::FillBreak(v) => s.fill_break = v.clone(),
+            DeclKind::FillColorCss(v) => s.fill_color_css = v.clone(),
+            DeclKind::FillImage(v) => s.fill_image = v.clone(),
+            DeclKind::FillOrigin(v) => s.fill_origin = v.clone(),
+            DeclKind::FillPosition(v) => s.fill_position = v.clone(),
+            DeclKind::FillSize(v) => s.fill_size = v.clone(),
+            DeclKind::FillRepeat(v) => s.fill_repeat = v.clone(),
         }
     }
 }

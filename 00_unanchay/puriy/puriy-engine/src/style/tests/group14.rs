@@ -771,3 +771,35 @@ use super::super::*;
         assert_eq!(span.stroke_color_css.as_deref(), Some("red"));
         assert_eq!(span.stroke_dash_justify.as_deref(), Some("compress"));
     }
+
+    #[test]
+    fn css_fill_props_plumb_fase_7_1073_1079() {
+        let html = r#"<html><body><div style="
+            fill-break: slice;
+            fill-color: red;
+            fill-image: url(p.png);
+            fill-origin: content-box;
+            fill-position: center;
+            fill-size: cover;
+            fill-repeat: space
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.fill_break.as_deref(), Some("slice"));
+        assert_eq!(t.fill_color_css.as_deref(), Some("red"));
+        assert_eq!(t.fill_image.as_deref(), Some("url(p.png)"));
+        assert_eq!(t.fill_origin.as_deref(), Some("content-box"));
+        assert_eq!(t.fill_position.as_deref(), Some("center"));
+        assert_eq!(t.fill_size.as_deref(), Some("cover"));
+        assert_eq!(t.fill_repeat.as_deref(), Some("space"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("fill-image: none").fill_image, None);
+        assert_eq!(style_of("fill-color: black").fill_color_css, None);
+        // HEREDAN (tradición SVG).
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.fill_color_css.as_deref(), Some("red"));
+        assert_eq!(span.fill_repeat.as_deref(), Some("space"));
+        // El paint SVG `fill` sigue independiente del plumb fill-color.
+        assert_eq!(style_of("fill-color: red").fill, ComputedStyle::default().fill);
+    }

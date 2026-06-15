@@ -518,6 +518,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "stroke-size" => opaque_or_sentinel(value, "auto").map(DeclKind::StrokeSize),
         "stroke-dash-corner" => opaque_or_sentinel(value, "none").map(DeclKind::StrokeDashCorner),
         "stroke-dash-justify" => opaque_or_sentinel(value, "none").map(DeclKind::StrokeDashJustify),
+        // === Fase 7.1073-7.1079 — CSS Fill and Stroke 3 fill-* (plumb opaco) ===
+        // `fill` (paint SVG) ya está cubierto; estas son las nuevas del módulo.
+        "fill-break" => opaque_or_sentinel(value, "bounding-box").map(DeclKind::FillBreak),
+        "fill-color" => opaque_or_sentinel(value, "black").map(DeclKind::FillColorCss),
+        "fill-image" => opaque_or_sentinel(value, "none").map(DeclKind::FillImage),
+        "fill-origin" => opaque_or_sentinel(value, "match-parent").map(DeclKind::FillOrigin),
+        "fill-position" => opaque_or_sentinel(value, "0% 0%").map(DeclKind::FillPosition),
+        "fill-size" => opaque_or_sentinel(value, "auto").map(DeclKind::FillSize),
+        "fill-repeat" => opaque_or_sentinel(value, "repeat").map(DeclKind::FillRepeat),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
