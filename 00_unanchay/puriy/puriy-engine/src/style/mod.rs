@@ -460,6 +460,16 @@ impl StyleEngine {
             style.kerning = p.kerning.clone();
             style.color_profile = p.color_profile.clone();
             style.voice_range = p.voice_range.clone();
+            // Fase 7.991-7.994/7.997/7.1004/7.1005 — line-stacking{,-ruby,-shift,
+            // -strategy} (CSS Line Layout 3), text-height, block-progression
+            // (legacy) y snap-height heredan. El resto del bloque NO hereda.
+            style.line_stacking = p.line_stacking.clone();
+            style.line_stacking_ruby = p.line_stacking_ruby.clone();
+            style.line_stacking_shift = p.line_stacking_shift.clone();
+            style.line_stacking_strategy = p.line_stacking_strategy.clone();
+            style.text_height = p.text_height.clone();
+            style.block_progression = p.block_progression.clone();
+            style.snap_height = p.snap_height.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

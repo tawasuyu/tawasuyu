@@ -419,3 +419,96 @@ use super::super::*;
         assert_eq!(span.voice_range.as_deref(), Some("x-high"));
         assert_eq!(span.enable_background, None);
     }
+
+    #[test]
+    fn shapes_inline_linegrid_plumb_fase_7_986_990() {
+        let html = r#"<html><body><p style="
+            shape-padding: 10px;
+            line-fit-edge: cap alphabetic;
+            inline-sizing: stretch;
+            box-snap: first;
+            copy-into: foo content()">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let s = eng.compute(&dom.find("p").unwrap());
+        assert_eq!(s.shape_padding.as_deref(), Some("10px"));
+        assert_eq!(s.line_fit_edge.as_deref(), Some("cap alphabetic"));
+        assert_eq!(s.inline_sizing.as_deref(), Some("stretch"));
+        assert_eq!(s.box_snap.as_deref(), Some("first"));
+        assert_eq!(s.copy_into.as_deref(), Some("foo content()"));
+        // sentinel (initial) → None.
+        let html2 = r#"<html><body><p style="box-snap: none; inline-sizing: normal">x</p></body></html>"#;
+        let dom2 = DomTree::parse(html2);
+        let eng2 = StyleEngine::from_dom(&dom2);
+        let s2 = eng2.compute(&dom2.find("p").unwrap());
+        assert_eq!(s2.box_snap, None);
+        assert_eq!(s2.inline_sizing, None);
+    }
+
+    #[test]
+    fn line_stacking_plumb_fase_7_991_995() {
+        let html = r#"<html><body><div style="
+            line-stacking: inline-line-height exclude-ruby consider-shifts;
+            line-stacking-ruby: include-ruby;
+            line-stacking-shift: disregard-shifts;
+            line-stacking-strategy: grid-height;
+            inline-box-align: 3"><span>c</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(d.line_stacking_ruby.as_deref(), Some("include-ruby"));
+        assert_eq!(d.line_stacking_shift.as_deref(), Some("disregard-shifts"));
+        assert_eq!(d.line_stacking_strategy.as_deref(), Some("grid-height"));
+        assert_eq!(d.inline_box_align.as_deref(), Some("3"));
+        // line-stacking-* HEREDAN; inline-box-align NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&d));
+        assert_eq!(span.line_stacking_ruby.as_deref(), Some("include-ruby"));
+        assert_eq!(span.line_stacking_strategy.as_deref(), Some("grid-height"));
+        assert_eq!(span.inline_box_align, None);
+    }
+
+    #[test]
+    fn alignment_textheight_dropinitial_plumb_fase_7_996_1000() {
+        let html = r#"<html><body><div style="
+            alignment-adjust: central;
+            text-height: font-size;
+            drop-initial-size: 3;
+            drop-initial-value: 2;
+            drop-initial-before-align: x-height"><span>c</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(d.alignment_adjust.as_deref(), Some("central"));
+        assert_eq!(d.text_height.as_deref(), Some("font-size"));
+        assert_eq!(d.drop_initial_size.as_deref(), Some("3"));
+        assert_eq!(d.drop_initial_value.as_deref(), Some("2"));
+        assert_eq!(d.drop_initial_before_align.as_deref(), Some("x-height"));
+        // text-height HEREDA; alignment-adjust / drop-initial-* NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&d));
+        assert_eq!(span.text_height.as_deref(), Some("font-size"));
+        assert_eq!(span.alignment_adjust, None);
+        assert_eq!(span.drop_initial_size, None);
+    }
+
+    #[test]
+    fn dropinitial_rest_legacy_plumb_fase_7_1001_1005() {
+        let html = r#"<html><body><div style="
+            drop-initial-after-align: central;
+            drop-initial-before-adjust: text-before-edge;
+            drop-initial-after-adjust: text-after-edge;
+            block-progression: rl;
+            snap-height: 8px 2"><span>c</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let d = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(d.drop_initial_after_align.as_deref(), Some("central"));
+        assert_eq!(d.drop_initial_before_adjust.as_deref(), Some("text-before-edge"));
+        assert_eq!(d.drop_initial_after_adjust.as_deref(), Some("text-after-edge"));
+        assert_eq!(d.block_progression.as_deref(), Some("rl"));
+        assert_eq!(d.snap_height.as_deref(), Some("8px 2"));
+        // block-progression / snap-height HEREDAN; drop-initial-* NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&d));
+        assert_eq!(span.block_progression.as_deref(), Some("rl"));
+        assert_eq!(span.snap_height.as_deref(), Some("8px 2"));
+        assert_eq!(span.drop_initial_after_align, None);
+    }

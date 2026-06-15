@@ -579,6 +579,27 @@ impl Default for ComputedStyle {
             color_profile: None,
             voice_range: None,
             text_security: None,
+            // Fase 7.986-7.1005 — plumb opaco, default None (= initial).
+            shape_padding: None,
+            line_fit_edge: None,
+            inline_sizing: None,
+            box_snap: None,
+            copy_into: None,
+            line_stacking: None,
+            line_stacking_ruby: None,
+            line_stacking_shift: None,
+            line_stacking_strategy: None,
+            inline_box_align: None,
+            alignment_adjust: None,
+            text_height: None,
+            drop_initial_size: None,
+            drop_initial_value: None,
+            drop_initial_before_align: None,
+            drop_initial_after_align: None,
+            drop_initial_before_adjust: None,
+            drop_initial_after_adjust: None,
+            block_progression: None,
+            snap_height: None,
         }
     }
 }

@@ -1623,5 +1623,57 @@ pub struct ComputedStyle {
     /// `text-security` (proposed; `-webkit-text-security`). `None` = `none`.
     /// NO hereda. Plumb. Fase 7.985.
     pub text_security: Option<String>,
+    // === Fase 7.986-7.1005 — props de nicho (CSS Shapes/Inline/Line-Layout, plumb opaco) ===
+    /// `shape-padding` (CSS Shapes 2). `None` = `0`. NO hereda. Plumb. Fase 7.986.
+    pub shape_padding: Option<String>,
+    /// `line-fit-edge` (CSS Inline 3). `None` = `leading`. NO hereda. Plumb. Fase 7.987.
+    pub line_fit_edge: Option<String>,
+    /// `inline-sizing` (CSS Inline 3). `None` = `normal`. NO hereda. Plumb. Fase 7.988.
+    pub inline_sizing: Option<String>,
+    /// `box-snap` (CSS Line Grid 1). `None` = `none`. NO hereda. Plumb. Fase 7.989.
+    pub box_snap: Option<String>,
+    /// `copy-into` (CSS GCPM 3). `None` = `none`. NO hereda. Plumb. Fase 7.990.
+    pub copy_into: Option<String>,
+    /// `line-stacking` shorthand (CSS Line Layout 3). `None` = initial.
+    /// HEREDA. Plumb. Fase 7.991.
+    pub line_stacking: Option<String>,
+    /// `line-stacking-ruby` (CSS Line Layout 3). `None` = `exclude-ruby`.
+    /// HEREDA. Plumb. Fase 7.992.
+    pub line_stacking_ruby: Option<String>,
+    /// `line-stacking-shift` (CSS Line Layout 3). `None` = `consider-shifts`.
+    /// HEREDA. Plumb. Fase 7.993.
+    pub line_stacking_shift: Option<String>,
+    /// `line-stacking-strategy` (CSS Line Layout 3). `None` = `inline-line-height`.
+    /// HEREDA. Plumb. Fase 7.994.
+    pub line_stacking_strategy: Option<String>,
+    /// `inline-box-align` (CSS Line Layout 3). `None` = `last`. NO hereda. Plumb. Fase 7.995.
+    pub inline_box_align: Option<String>,
+    /// `alignment-adjust` (CSS Line Layout 3 / SVG 1.2). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.996.
+    pub alignment_adjust: Option<String>,
+    /// `text-height` (CSS Line Layout 3). `None` = `auto`. HEREDA. Plumb. Fase 7.997.
+    pub text_height: Option<String>,
+    /// `drop-initial-size` (CSS Line Layout 3). `None` = `auto`. NO hereda. Plumb. Fase 7.998.
+    pub drop_initial_size: Option<String>,
+    /// `drop-initial-value` (CSS Line Layout 3). `None` = `initial`. NO hereda. Plumb. Fase 7.999.
+    pub drop_initial_value: Option<String>,
+    /// `drop-initial-before-align` (CSS Line Layout 3). `None` = `caps-height`.
+    /// NO hereda. Plumb. Fase 7.1000.
+    pub drop_initial_before_align: Option<String>,
+    /// `drop-initial-after-align` (CSS Line Layout 3). `None` = `baseline`.
+    /// NO hereda. Plumb. Fase 7.1001.
+    pub drop_initial_after_align: Option<String>,
+    /// `drop-initial-before-adjust` (CSS Line Layout 3). `None` = `before-edge`.
+    /// NO hereda. Plumb. Fase 7.1002.
+    pub drop_initial_before_adjust: Option<String>,
+    /// `drop-initial-after-adjust` (CSS Line Layout 3). `None` = `after-edge`.
+    /// NO hereda. Plumb. Fase 7.1003.
+    pub drop_initial_after_adjust: Option<String>,
+    /// `block-progression` (MS/SVG Tiny legacy, predecesor de `writing-mode`).
+    /// `None` = `tb`. HEREDA. Plumb. Fase 7.1004.
+    pub block_progression: Option<String>,
+    /// `snap-height` (CSS Rhythmic Sizing, draft temprano). `None` = `none`.
+    /// HEREDA. Plumb. Fase 7.1005.
+    pub snap_height: Option<String>,
 }
 
