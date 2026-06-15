@@ -148,6 +148,11 @@ pub struct BoxNode {
     pub aspect_ratio: Option<f32>,
     /// `hidden` aplica clip() en el chrome.
     pub overflow: Overflow,
+    /// `clip-path: inset(...)` resuelto a insets en px `[top, right, bottom,
+    /// left]` desde el border box. `None` = sin clip-path rectangular. El
+    /// chrome recorta el subárbol a `rect` menos estos insets. Formas no
+    /// rectangulares (circle/ellipse) no se modelan acá. Fase 7.1219.
+    pub clip_inset: Option<[f32; 4]>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

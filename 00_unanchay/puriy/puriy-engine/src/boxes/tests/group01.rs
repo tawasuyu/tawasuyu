@@ -158,6 +158,36 @@ use crate::Engine;
     }
 
     #[test]
+    fn clip_path_inset_llega_al_box_node_fase_7_1219() {
+        // `clip-path: inset(...)` se resuelve a insets px en el BoxNode (que el
+        // chrome usa para recortar). Formas no rectangulares no se modelan.
+        let html = "<html><body>\
+            <div id=\"c\" style=\"clip-path: inset(10px 20px 30px 40px)\">x</div>\
+            <div id=\"r\" style=\"clip-path: inset(5px round 8px)\">y</div>\
+            <div id=\"n\">z</div>\
+            <div id=\"circ\" style=\"clip-path: circle(50%)\">w</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let by_id = |id: &str| {
+            let mut found = None;
+            doc.box_tree.walk(|b| {
+                if b.element_id.as_deref() == Some(id) {
+                    found = Some(b.clip_inset);
+                }
+            });
+            found.expect("box existe")
+        };
+        assert_eq!(by_id("c"), Some([10.0, 20.0, 30.0, 40.0]));
+        // inset de un valor → los 4 lados iguales (el `round` no afecta el rect).
+        assert_eq!(by_id("r"), Some([5.0, 5.0, 5.0, 5.0]));
+        // sin clip-path → None.
+        assert_eq!(by_id("n"), None);
+        // forma no rectangular (circle) → None (no se modela como inset).
+        assert_eq!(by_id("circ"), None);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

@@ -54,6 +54,7 @@ pub(crate) fn empty_root() -> BoxNode {
         max_height: LengthVal::Auto,
         aspect_ratio: None,
         overflow: Overflow::Visible,
+        clip_inset: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,
@@ -525,6 +526,14 @@ pub(crate) fn build_node(
                 max_height: style.max_height,
                 aspect_ratio: style.aspect_ratio,
                 overflow: style.overflow,
+                // Fase 7.1219 — clip-path: inset(...) → insets px desde el
+                // border box. Formas no rectangulares no se modelan acá.
+                clip_inset: match style.clip_path {
+                    Some(crate::style::ClipPath::Inset { top, right, bottom, left, .. }) => {
+                        Some([top, right, bottom, left])
+                    }
+                    _ => None,
+                },
                 white_space: style.white_space,
                 text_transform: style.text_transform,
                 opacity: style.opacity,
@@ -733,6 +742,7 @@ pub(crate) fn build_node(
                 max_height: LengthVal::Auto,
                 aspect_ratio: None,
                 overflow: Overflow::Visible,
+                clip_inset: None,
                 white_space: WhiteSpace::Normal,
                 text_transform: TextTransform::None,
                 opacity: 1.0,
