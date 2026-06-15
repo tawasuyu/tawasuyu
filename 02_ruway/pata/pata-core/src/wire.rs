@@ -232,6 +232,8 @@ impl From<WireSurface> for Surface {
             output: s.output,
             tabs: s.tabs.into_iter().map(SidebarTab::from).collect(),
             panel_width: s.panel_width,
+            // El wire (wawa) no transporta apps fijadas del dock todavía.
+            dock_pins: Vec::new(),
         }
     }
 }

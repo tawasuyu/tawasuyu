@@ -293,6 +293,12 @@ pub struct Surface {
     /// rail mismo usa `thickness`; el panel flota a su lado con este ancho.
     #[cfg_attr(feature = "serde", serde(default = "default_panel_width"))]
     pub panel_width: f32,
+    /// Para `kind = dock`: apps **fijadas** por id/nombre (`app_bus::AppEntry::id`).
+    /// El frontend las pinta como lanzadores antes de las ventanas abiertas; al
+    /// click lanzan la app. Vacío = sólo ventanas abiertas. Las que no resuelvan
+    /// en el registro se omiten.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub dock_pins: Vec<String>,
 }
 
 impl Default for Surface {
@@ -316,6 +322,7 @@ impl Default for Surface {
             output: String::new(),
             tabs: Vec::new(),
             panel_width: default_panel_width(),
+            dock_pins: Vec::new(),
         }
     }
 }
@@ -559,7 +566,14 @@ impl Config {
         dock.radius = 16.0;
         dock.margin = 8.0;
         dock.gradient = true;
-        dock.center = vec![WidgetSpec::new("window_list")];
+        // Apps fijadas (las que no resuelvan en el registro se omiten) + las
+        // ventanas abiertas las agrega el frontend al renderizar el dock.
+        dock.dock_pins = vec![
+            "foot".into(),
+            "puriy".into(),
+            "nada".into(),
+            "pluma".into(),
+        ];
         Self {
             general: General::default(),
             surfaces: vec![menubar, dock],
@@ -624,8 +638,15 @@ mod tests {
         assert_eq!(dwm.surfaces[0].anchor, Anchor::Top);
         let xp = Config::vista_preset("windows-xp").unwrap();
         assert_eq!(xp.surfaces[0].anchor, Anchor::Bottom);
-        // mac: menubar + dock (dos superficies).
-        assert_eq!(Config::vista_preset("mac").unwrap().surfaces.len(), 2);
+        // mac: menubar + dock (dos superficies), el dock con apps fijadas.
+        let mac = Config::vista_preset("mac").unwrap();
+        assert_eq!(mac.surfaces.len(), 2);
+        let dock = mac
+            .surfaces
+            .iter()
+            .find(|s| s.kind == SurfaceKind::Dock)
+            .expect("mac tiene dock");
+        assert!(!dock.dock_pins.is_empty(), "el dock de mac trae apps fijadas");
     }
 
     #[test]

@@ -898,6 +898,7 @@ pub fn bar_view(
 /// las posiciones ya calculadas por taffy.
 pub fn dock_view(
     surface: &Surface,
+    pins: &[AppEntry],
     windows: &[WindowEntry],
     theme: &Theme,
     panel_w: f32,
@@ -938,39 +939,41 @@ pub fn dock_view(
         .children(hijos)
     };
 
-    if windows.is_empty() {
+    // El dock es: apps fijadas (lanzadores) + ventanas abiertas (activadores),
+    // en una sola fila magnificada por el puntero.
+    let n = pins.len() + windows.len();
+    if n == 0 {
         return contenedor(Vec::new());
     }
-
-    let n = windows.len();
     let total = n as f32 * BASE + (n.saturating_sub(1)) as f32 * gap;
     let start_x = ((panel_w - total) / 2.0).max(10.0);
-    let tiles = windows
-        .iter()
-        .enumerate()
-        .map(|(i, w)| {
-            let center = start_x + i as f32 * (BASE + gap) + BASE / 2.0;
-            let scale = match cursor_x {
-                Some(cx) => {
-                    let d = (center - cx).abs();
-                    if d >= RADIUS {
-                        1.0
-                    } else {
-                        1.0 + (MAX_SCALE - 1.0) * (1.0 - d / RADIUS)
-                    }
+    let scale_de = |i: usize| -> f32 {
+        let center = start_x + i as f32 * (BASE + gap) + BASE / 2.0;
+        match cursor_x {
+            Some(cx) => {
+                let d = (center - cx).abs();
+                if d >= RADIUS {
+                    1.0
+                } else {
+                    1.0 + (MAX_SCALE - 1.0) * (1.0 - d / RADIUS)
                 }
-                None => 1.0,
-            };
-            dock_tile(w, theme, BASE * scale)
-        })
-        .collect();
+            }
+            None => 1.0,
+        }
+    };
+    let mut tiles: Vec<View<Msg>> = Vec::with_capacity(n);
+    for (k, p) in pins.iter().enumerate() {
+        tiles.push(dock_pin_tile(p, theme, BASE * scale_de(k)));
+    }
+    for (k, w) in windows.iter().enumerate() {
+        tiles.push(dock_win_tile(w, theme, BASE * scale_de(pins.len() + k)));
+    }
     contenedor(tiles)
 }
 
-/// Un ícono del dock: el SVG de la app (resuelto por `app_id` del tema XDG) o,
-/// si no hay, una pastilla con la inicial. `size` ya viene magnificado.
-fn dock_tile(w: &WindowEntry, theme: &Theme, size: f32) -> View<Msg> {
-    let tile = View::new(Style {
+/// Cascarón de un ícono del dock: tamaño `size` (ya magnificado), centrado.
+fn dock_icon_shell(size: f32) -> View<Msg> {
+    View::new(Style {
         size: Size {
             width: length(size),
             height: length(size),
@@ -978,22 +981,45 @@ fn dock_tile(w: &WindowEntry, theme: &Theme, size: f32) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         ..Default::default()
-    });
-    let tile = match crate::app_icons::get_or_load(&w.app_id) {
-        Some(asset) => tile.children(vec![asset.view::<Msg>()]),
-        None => {
-            let inicial = w
-                .label
-                .chars()
-                .next()
-                .map(|c| c.to_uppercase().to_string())
-                .unwrap_or_else(|| "•".to_string());
-            tile.fill(theme.bg_button)
-                .radius(8.0)
-                .text(inicial, size * 0.42, theme.accent)
-        }
-    };
-    tile.on_click(Msg::ActivateWindow(w.id))
+    })
+}
+
+/// Pinta el ícono SVG de `name` (tema XDG) o, si no hay, una pastilla con la
+/// `inicial`. Reutilizado por pins (apps) y ventanas.
+fn dock_icon_inner(shell: View<Msg>, name: &str, inicial: &str, theme: &Theme, size: f32) -> View<Msg> {
+    match crate::app_icons::get_or_load(name) {
+        Some(asset) => shell.children(vec![asset.view::<Msg>()]),
+        None => shell
+            .fill(theme.bg_button)
+            .radius(8.0)
+            .text(inicial.to_string(), size * 0.42, theme.accent),
+    }
+}
+
+/// Ícono de una **app fijada**: lanza la app al click.
+fn dock_pin_tile(a: &AppEntry, theme: &Theme, size: f32) -> View<Msg> {
+    let icon = a.icon.as_deref().unwrap_or(&a.id);
+    let inicial = a
+        .label
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "•".to_string());
+    dock_icon_inner(dock_icon_shell(size), icon, &inicial, theme, size)
+        .on_click(Msg::LaunchApp(a.id.clone()))
+        .hover_fill(theme.bg_button_hover)
+}
+
+/// Ícono de una **ventana abierta**: la activa al click.
+fn dock_win_tile(w: &WindowEntry, theme: &Theme, size: f32) -> View<Msg> {
+    let inicial = w
+        .label
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "•".to_string());
+    dock_icon_inner(dock_icon_shell(size), &w.app_id, &inicial, theme, size)
+        .on_click(Msg::ActivateWindow(w.id))
         .hover_fill(theme.bg_button_hover)
 }
 

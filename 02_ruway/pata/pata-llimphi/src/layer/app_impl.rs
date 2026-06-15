@@ -636,9 +636,17 @@ impl LayerApp {
                 &self.theme,
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {
-            // Dock estilo macOS: íconos de ventanas magnificados por el puntero.
+            // Dock estilo macOS: apps fijadas (lanzadores) + ventanas abiertas,
+            // magnificados por el puntero. Los pins se resuelven en el registro;
+            // los que no existan se omiten.
+            let pins: Vec<app_bus::AppEntry> = self.cfg.surfaces[idx]
+                .dock_pins
+                .iter()
+                .filter_map(|id| self.registry.get(id).cloned())
+                .collect();
             render::dock_view(
                 &self.cfg.surfaces[idx],
+                &pins,
                 &windows,
                 &self.theme,
                 w as f32,
