@@ -275,6 +275,18 @@ pub(crate) enum Pseudo {
     /// `:read-write` — control editable (input/textarea/contenteditable) sin
     /// `readonly`.
     ReadWrite,
+    /// `:placeholder-shown` — `<input>`/`<textarea>` con atributo `placeholder`
+    /// no vacío y valor vacío (input sin `value`/vacío; textarea sin texto).
+    /// Derivable del DOM estático. Fase 7.1212.
+    PlaceholderShown,
+    /// `:default` — control "por defecto" de un formulario: checkbox/radio con
+    /// `checked`, `<option selected>`, o el primer botón submit del form.
+    /// Fase 7.1212.
+    Default,
+    /// `:in-range` / `:out-of-range` — `<input>` con limitación de rango
+    /// (`type` number/range/date/…, con `min`/`max`) cuyo `value` cae dentro
+    /// (`true`) o fuera (`false`) del rango. Fase 7.1212.
+    InRange(bool),
     /// `:is(a, b, ...)` — matchea si CUALQUIER selector de la lista matchea
     /// (complejos permitidos, CSS Selectors 4). Especificidad: la del
     /// argumento más específico (CSS spec). Fase 7.938.
@@ -422,6 +434,14 @@ pub(crate) fn pseudo_matches(
         Pseudo::Optional => return is_form_control(node) && !has("required"),
         Pseudo::ReadOnly => return has("readonly"),
         Pseudo::ReadWrite => return is_editable_control(node) && !has("readonly"),
+        Pseudo::PlaceholderShown => return placeholder_shown(node),
+        Pseudo::Default => return is_default_element(node),
+        Pseudo::InRange(want_in) => {
+            return match range_state(node) {
+                Some(in_range) => in_range == *want_in,
+                None => false,
+            }
+        }
         Pseudo::Is(list) | Pseudo::Where(list) => {
             return list
                 .iter()
@@ -476,6 +496,9 @@ pub(crate) fn pseudo_matches(
         | Pseudo::Optional
         | Pseudo::ReadOnly
         | Pseudo::ReadWrite
+        | Pseudo::PlaceholderShown
+        | Pseudo::Default
+        | Pseudo::InRange(_)
         | Pseudo::Is(_)
         | Pseudo::Where(_)
         | Pseudo::Empty
@@ -684,6 +707,176 @@ fn nth_of_matches(
         (idx + 1) as i32
     };
     nth_matches(css_pos, a, b)
+}
+
+/// `:placeholder-shown` — `<input>` o `<textarea>` con `placeholder` no vacío
+/// cuyo valor está vacío. Para `<input>` el valor es el atributo `value`
+/// (ausente o vacío ⇒ placeholder visible); tipos que no soportan placeholder
+/// (checkbox/radio/etc.) nunca matchean. Para `<textarea>` el valor es su texto.
+pub(crate) fn placeholder_shown(node: &markup5ever_rcdom::Handle) -> bool {
+    let ph = dom::attr(node, "placeholder").unwrap_or_default();
+    if ph.is_empty() {
+        return false;
+    }
+    match dom::element_name(node).as_deref() {
+        Some("input") => {
+            // Sólo tipos textuales soportan placeholder.
+            let ty = dom::attr(node, "type").unwrap_or_else(|| "text".into());
+            let textual = matches!(
+                ty.to_ascii_lowercase().as_str(),
+                "text" | "search" | "url" | "tel" | "email" | "password" | "number"
+            );
+            textual && dom::attr(node, "value").unwrap_or_default().is_empty()
+        }
+        Some("textarea") => is_empty_element(node)
+            || node.children.borrow().iter().all(|c| match &c.data {
+                markup5ever_rcdom::NodeData::Text { contents } => {
+                    contents.borrow().trim().is_empty()
+                }
+                _ => dom::element_name(c).is_none(),
+            }),
+        _ => false,
+    }
+}
+
+/// `:default` — control por defecto de un formulario. Casos derivables del
+/// DOM estático: checkbox/radio con `checked`, `<option selected>`, y el
+/// primer botón submit (`<button>` sin type o type=submit, o
+/// `<input type=submit|image>`) en orden de documento dentro de su `<form>`.
+pub(crate) fn is_default_element(node: &markup5ever_rcdom::Handle) -> bool {
+    let name = dom::element_name(node);
+    match name.as_deref() {
+        Some("option") => return dom::attr(node, "selected").is_some(),
+        Some("input") => {
+            let ty = dom::attr(node, "type").unwrap_or_else(|| "text".into());
+            let ty = ty.to_ascii_lowercase();
+            if matches!(ty.as_str(), "checkbox" | "radio") {
+                return dom::attr(node, "checked").is_some();
+            }
+            if matches!(ty.as_str(), "submit" | "image") {
+                return is_first_submit_in_form(node);
+            }
+            return false;
+        }
+        Some("button") => {
+            let ty = dom::attr(node, "type").unwrap_or_else(|| "submit".into());
+            if ty.eq_ignore_ascii_case("submit") {
+                return is_first_submit_in_form(node);
+            }
+            return false;
+        }
+        _ => false,
+    }
+}
+
+/// `true` si `node` es el primer control submit (en orden de documento) dentro
+/// del `<form>` ancestro más cercano — el botón submit por defecto del form.
+fn is_first_submit_in_form(node: &markup5ever_rcdom::Handle) -> bool {
+    // Sube al <form> ancestro.
+    let mut form = parent_of(node);
+    while let Some(f) = form.clone() {
+        if dom::element_name(&f).as_deref() == Some("form") {
+            break;
+        }
+        form = parent_of(&f);
+    }
+    let Some(form) = form else { return false };
+    if dom::element_name(&form).as_deref() != Some("form") {
+        return false;
+    }
+    // Busca el primer submit en orden de documento bajo el form.
+    let mut found: Option<markup5ever_rcdom::Handle> = None;
+    fn walk_first(
+        n: &markup5ever_rcdom::Handle,
+        found: &mut Option<markup5ever_rcdom::Handle>,
+    ) {
+        if found.is_some() {
+            return;
+        }
+        for c in n.children.borrow().iter() {
+            if found.is_some() {
+                return;
+            }
+            if is_submit_control(c) {
+                *found = Some(c.clone());
+                return;
+            }
+            walk_first(c, found);
+        }
+    }
+    walk_first(&form, &mut found);
+    found.is_some_and(|f| std::rc::Rc::ptr_eq(&f, node))
+}
+
+fn is_submit_control(node: &markup5ever_rcdom::Handle) -> bool {
+    match dom::element_name(node).as_deref() {
+        Some("button") => dom::attr(node, "type")
+            .unwrap_or_else(|| "submit".into())
+            .eq_ignore_ascii_case("submit"),
+        Some("input") => {
+            let ty = dom::attr(node, "type").unwrap_or_default().to_ascii_lowercase();
+            matches!(ty.as_str(), "submit" | "image")
+        }
+        _ => false,
+    }
+}
+
+/// Estado de rango de un `<input>` con limitación (`type` number/range/date/…
+/// con `min`/`max`). `Some(true)` = dentro de rango, `Some(false)` = fuera,
+/// `None` = el elemento no tiene limitación de rango aplicable (ni `:in-range`
+/// ni `:out-of-range` matchean). Tipos numéricos se comparan como f64; los
+/// de fecha/hora como string ISO (ordenable lexicográficamente).
+pub(crate) fn range_state(node: &markup5ever_rcdom::Handle) -> Option<bool> {
+    if dom::element_name(node).as_deref() != Some("input") {
+        return None;
+    }
+    let ty = dom::attr(node, "type")?.to_ascii_lowercase();
+    let numeric = matches!(ty.as_str(), "number" | "range");
+    let datelike = matches!(
+        ty.as_str(),
+        "date" | "month" | "week" | "time" | "datetime-local"
+    );
+    if !numeric && !datelike {
+        return None;
+    }
+    let min = dom::attr(node, "min");
+    let max = dom::attr(node, "max");
+    if min.is_none() && max.is_none() {
+        return None; // sin limitación → no matchea ninguno
+    }
+    // Valor vacío con limitación de rango ⇒ in-range (CSS spec).
+    let value = dom::attr(node, "value").unwrap_or_default();
+    if value.trim().is_empty() {
+        return Some(true);
+    }
+    if numeric {
+        let v: f64 = value.trim().parse().ok()?;
+        if let Some(mn) = min.as_deref().and_then(|s| s.trim().parse::<f64>().ok()) {
+            if v < mn {
+                return Some(false);
+            }
+        }
+        if let Some(mx) = max.as_deref().and_then(|s| s.trim().parse::<f64>().ok()) {
+            if v > mx {
+                return Some(false);
+            }
+        }
+        Some(true)
+    } else {
+        // Fecha/hora: ISO 8601 es comparable como string.
+        let v = value.trim();
+        if let Some(mn) = min.as_deref().map(str::trim) {
+            if !mn.is_empty() && v < mn {
+                return Some(false);
+            }
+        }
+        if let Some(mx) = max.as_deref().map(str::trim) {
+            if !mx.is_empty() && v > mx {
+                return Some(false);
+            }
+        }
+        Some(true)
+    }
 }
 
 /// Tags de control de formulario (para `:enabled`/`:optional`).

@@ -506,6 +506,68 @@ use super::super::*;
     }
 
     #[test]
+    fn selector_form_pseudos_estaticos_fase_7_1212() {
+        // :placeholder-shown / :default / :in-range / :out-of-range derivados
+        // del DOM estático.
+        let html = r#"<html><head><style>
+            input:placeholder-shown { color: #f00 }
+            input:default { color: #0a0 }
+            input:in-range { color: #00f }
+            input:out-of-range { color: #ff0 }
+        </style></head><body><form>
+          <input id="ph" type="text" placeholder="escribe">
+          <input id="noph" type="text" placeholder="escribe" value="hola">
+          <input id="chk" type="checkbox" checked>
+          <input id="inr" type="number" min="0" max="10" value="5">
+          <input id="outr" type="number" min="0" max="10" value="50">
+        </form></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by_id = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.expect("id existe")
+        };
+        // placeholder visible (sin value) → rojo; con value → no.
+        assert_eq!(eng.compute(&by_id("ph")).color, Color::rgb(0xff, 0, 0));
+        assert_ne!(eng.compute(&by_id("noph")).color, Color::rgb(0xff, 0, 0));
+        // checkbox con `checked` → :default verde.
+        assert_eq!(eng.compute(&by_id("chk")).color, Color::rgb(0, 0xaa, 0));
+        // number 5 ∈ [0,10] → :in-range azul; 50 ∉ → :out-of-range amarillo.
+        assert_eq!(eng.compute(&by_id("inr")).color, Color::rgb(0, 0, 0xff));
+        assert_eq!(eng.compute(&by_id("outr")).color, Color::rgb(0xff, 0xff, 0));
+    }
+
+    #[test]
+    fn selector_default_submit_button_fase_7_1212() {
+        // :default = primer botón submit del form (orden de documento).
+        let html = r#"<html><head><style>
+            button:default { color: #0a0 }
+        </style></head><body><form>
+          <button id="b1">Enviar</button>
+          <button id="b2" type="submit">Otro</button>
+        </form></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let by_id = |id: &str| {
+            let mut found = None;
+            crate::dom::walk(&dom.document(), &mut |n| {
+                if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                    found = Some(n.clone());
+                }
+            });
+            found.expect("id existe")
+        };
+        // b1 (sin type → submit) es el primero → :default; b2 no.
+        assert_eq!(eng.compute(&by_id("b1")).color, Color::rgb(0, 0xaa, 0));
+        assert_ne!(eng.compute(&by_id("b2")).color, Color::rgb(0, 0xaa, 0));
+    }
+
+    #[test]
     fn selector_not_excluye() {
         // `p:not(.skip)` matchea todos los <p> excepto los con class skip.
         let html = r#"<html><head><style>

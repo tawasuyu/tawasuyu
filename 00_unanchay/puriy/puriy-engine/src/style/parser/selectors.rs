@@ -433,13 +433,18 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                     "empty" => Pseudo::Empty,
                     "root" => Pseudo::Root,
                     "link" | "any-link" => Pseudo::AnyLink,
+                    // Fase 7.1212 — derivables del DOM estático (antes inertes).
+                    "placeholder-shown" => Pseudo::PlaceholderShown,
+                    "default" => Pseudo::Default,
+                    "in-range" => Pseudo::InRange(true),
+                    "out-of-range" => Pseudo::InRange(false),
                     // Fase 7.933 — pseudo-clases estándar que reconocemos para
                     // NO tirar la regla, pero que no podemos evaluar con el
                     // estado que rastreamos → inertes (no matchean nunca).
-                    // Validación de formularios, rango, autofill, defaults:
-                    "valid" | "invalid" | "in-range" | "out-of-range"
-                    | "placeholder-shown" | "user-valid" | "user-invalid"
-                    | "default" | "indeterminate" | "autofill" | "blank"
+                    // Validación de formularios, autofill, defaults:
+                    "valid" | "invalid"
+                    | "user-valid" | "user-invalid"
+                    | "indeterminate" | "autofill" | "blank"
                     | "read-write-plaintext-only"
                     // Interacción/enlace que no rastreamos:
                     | "active" | "visited" | "target" | "target-within"
