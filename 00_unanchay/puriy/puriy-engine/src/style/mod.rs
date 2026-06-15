@@ -453,6 +453,13 @@ impl StyleEngine {
             style.interpolate_size = p.interpolate_size;
             // CSS UI 4 — interactivity hereda (inert se propaga al subtree).
             style.interactivity = p.interactivity;
+            // Fase 7.975/7.981/7.983/7.984 — text-align-all (CSS Text 4),
+            // kerning (SVG), color-profile (SVG) y voice-range (CSS Speech)
+            // heredan. El resto del bloque 7.966-7.985 NO hereda.
+            style.text_align_all = p.text_align_all.clone();
+            style.kerning = p.kerning.clone();
+            style.color_profile = p.color_profile.clone();
+            style.voice_range = p.voice_range.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

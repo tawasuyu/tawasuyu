@@ -1071,6 +1071,27 @@ pub(crate) enum DeclKind {
     /// final del elemento en `compute_internal` (la cascada empuja el
     /// target acá vía `apply`). Ver Fase 7.210.
     CurrentColor(ColorTarget),
+    // === Fase 7.966-7.985 — plumb opaco de props legacy/de nicho ===
+    SpatialNavigationAction(Option<String>),
+    SpatialNavigationContain(Option<String>),
+    SpatialNavigationFunction(Option<String>),
+    WrapFlow(Option<String>),
+    WrapThrough(Option<String>),
+    FlowInto(Option<String>),
+    FlowFrom(Option<String>),
+    MarkBefore(Option<String>),
+    MarkAfter(Option<String>),
+    TextAlignAll(Option<String>),
+    MinZoom(Option<String>),
+    MaxZoom(Option<String>),
+    UserZoom(Option<String>),
+    ViewportFit(Option<String>),
+    ImeMode(Option<String>),
+    Kerning(Option<String>),
+    EnableBackground(Option<String>),
+    ColorProfile(Option<String>),
+    VoiceRange(Option<String>),
+    TextSecurity(Option<String>),
 }
 
 impl Decl {
@@ -1779,6 +1800,27 @@ impl Decl {
             // estar aplicado todavía (otra regla de la cascada). Acumulamos
             // el target y `compute_internal` lo resuelve al cierre.
             DeclKind::CurrentColor(target) => s.current_color.push(*target),
+            // Fase 7.966-7.985 — plumb opaco.
+            DeclKind::SpatialNavigationAction(v) => s.spatial_navigation_action = v.clone(),
+            DeclKind::SpatialNavigationContain(v) => s.spatial_navigation_contain = v.clone(),
+            DeclKind::SpatialNavigationFunction(v) => s.spatial_navigation_function = v.clone(),
+            DeclKind::WrapFlow(v) => s.wrap_flow = v.clone(),
+            DeclKind::WrapThrough(v) => s.wrap_through = v.clone(),
+            DeclKind::FlowInto(v) => s.flow_into = v.clone(),
+            DeclKind::FlowFrom(v) => s.flow_from = v.clone(),
+            DeclKind::MarkBefore(v) => s.mark_before = v.clone(),
+            DeclKind::MarkAfter(v) => s.mark_after = v.clone(),
+            DeclKind::TextAlignAll(v) => s.text_align_all = v.clone(),
+            DeclKind::MinZoom(v) => s.min_zoom = v.clone(),
+            DeclKind::MaxZoom(v) => s.max_zoom = v.clone(),
+            DeclKind::UserZoom(v) => s.user_zoom = v.clone(),
+            DeclKind::ViewportFit(v) => s.viewport_fit = v.clone(),
+            DeclKind::ImeMode(v) => s.ime_mode = v.clone(),
+            DeclKind::Kerning(v) => s.kerning = v.clone(),
+            DeclKind::EnableBackground(v) => s.enable_background = v.clone(),
+            DeclKind::ColorProfile(v) => s.color_profile = v.clone(),
+            DeclKind::VoiceRange(v) => s.voice_range = v.clone(),
+            DeclKind::TextSecurity(v) => s.text_security = v.clone(),
         }
     }
 }

@@ -300,6 +300,28 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "scroll-start-target-inline" => {
             opaque_or_sentinel(value, "none").map(DeclKind::ScrollStartTargetInline)
         }
+        // === Fase 7.966-7.985 — props estándar legacy/de nicho (plumb opaco) ===
+        // El sentinel es el valor initial de cada propiedad → `None`.
+        "spatial-navigation-action" => opaque_or_sentinel(value, "auto").map(DeclKind::SpatialNavigationAction),
+        "spatial-navigation-contain" => opaque_or_sentinel(value, "auto").map(DeclKind::SpatialNavigationContain),
+        "spatial-navigation-function" => opaque_or_sentinel(value, "normal").map(DeclKind::SpatialNavigationFunction),
+        "wrap-flow" => opaque_or_sentinel(value, "auto").map(DeclKind::WrapFlow),
+        "wrap-through" => opaque_or_sentinel(value, "wrap").map(DeclKind::WrapThrough),
+        "flow-into" => opaque_or_sentinel(value, "none").map(DeclKind::FlowInto),
+        "flow-from" => opaque_or_sentinel(value, "none").map(DeclKind::FlowFrom),
+        "mark-before" => opaque_or_sentinel(value, "none").map(DeclKind::MarkBefore),
+        "mark-after" => opaque_or_sentinel(value, "none").map(DeclKind::MarkAfter),
+        "text-align-all" => opaque_or_sentinel(value, "start").map(DeclKind::TextAlignAll),
+        "min-zoom" => opaque_or_sentinel(value, "auto").map(DeclKind::MinZoom),
+        "max-zoom" => opaque_or_sentinel(value, "auto").map(DeclKind::MaxZoom),
+        "user-zoom" => opaque_or_sentinel(value, "zoom").map(DeclKind::UserZoom),
+        "viewport-fit" => opaque_or_sentinel(value, "auto").map(DeclKind::ViewportFit),
+        "ime-mode" => opaque_or_sentinel(value, "auto").map(DeclKind::ImeMode),
+        "kerning" => opaque_or_sentinel(value, "auto").map(DeclKind::Kerning),
+        "enable-background" => opaque_or_sentinel(value, "accumulate").map(DeclKind::EnableBackground),
+        "color-profile" => opaque_or_sentinel(value, "auto").map(DeclKind::ColorProfile),
+        "voice-range" => opaque_or_sentinel(value, "medium").map(DeclKind::VoiceRange),
+        "text-security" => opaque_or_sentinel(value, "none").map(DeclKind::TextSecurity),
         // Fase 7.944 — `-o-tab-size` alias Opera Presto legacy.
         "tab-size" | "-moz-tab-size" | "-o-tab-size" => parse_tab_size(value).map(DeclKind::TabSize),
         // CSS UI 4 — `user-select` con sus prefijos legacy (Fase 7.955 suma `-o-`, 7.960 suma `-khtml-`).

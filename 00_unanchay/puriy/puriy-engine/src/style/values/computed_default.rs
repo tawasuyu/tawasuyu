@@ -558,6 +558,27 @@ impl Default for ComputedStyle {
             transitions: Vec::new(),
             current_color: Vec::new(),
             font_size_rel: None,
+            // Fase 7.966-7.985 — plumb opaco, todos default `None` (= initial).
+            spatial_navigation_action: None,
+            spatial_navigation_contain: None,
+            spatial_navigation_function: None,
+            wrap_flow: None,
+            wrap_through: None,
+            flow_into: None,
+            flow_from: None,
+            mark_before: None,
+            mark_after: None,
+            text_align_all: None,
+            min_zoom: None,
+            max_zoom: None,
+            user_zoom: None,
+            viewport_fit: None,
+            ime_mode: None,
+            kerning: None,
+            enable_background: None,
+            color_profile: None,
+            voice_range: None,
+            text_security: None,
         }
     }
 }

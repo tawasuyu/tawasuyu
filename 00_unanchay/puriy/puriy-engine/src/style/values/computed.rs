@@ -1571,5 +1571,57 @@ pub struct ComputedStyle {
     /// y lo limpia. Un `font-size` absoluto posterior lo borra (cascada).
     /// Ver Fase 7.223.
     pub font_size_rel: Option<f32>,
+    // === Fase 7.966-7.985 — propiedades estándar legacy/de nicho (plumb opaco) ===
+    /// `spatial-navigation-action` (CSS Spatial Navigation 1). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.966.
+    pub spatial_navigation_action: Option<String>,
+    /// `spatial-navigation-contain` (CSS Spatial Navigation 1). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.967.
+    pub spatial_navigation_contain: Option<String>,
+    /// `spatial-navigation-function` (CSS Spatial Navigation 1). `None` =
+    /// `normal`. NO hereda. Plumb. Fase 7.968.
+    pub spatial_navigation_function: Option<String>,
+    /// `wrap-flow` (CSS Exclusions 1). `None` = `auto`. NO hereda. Plumb. Fase 7.969.
+    pub wrap_flow: Option<String>,
+    /// `wrap-through` (CSS Exclusions 1). `None` = `wrap`. NO hereda. Plumb. Fase 7.970.
+    pub wrap_through: Option<String>,
+    /// `flow-into` (CSS Regions 1). `None` = `none`. NO hereda. Plumb. Fase 7.971.
+    pub flow_into: Option<String>,
+    /// `flow-from` (CSS Regions 1). `None` = `none`. NO hereda. Plumb. Fase 7.972.
+    pub flow_from: Option<String>,
+    /// `mark-before` (CSS Speech, draft aural). `None` = `none`. NO hereda. Plumb. Fase 7.973.
+    pub mark_before: Option<String>,
+    /// `mark-after` (CSS Speech, draft aural). `None` = `none`. NO hereda. Plumb. Fase 7.974.
+    pub mark_after: Option<String>,
+    /// `text-align-all` (CSS Text 4). Alinea todas las líneas (incluida la
+    /// última). `None` = `start`. HEREDA. Plumb. Fase 7.975.
+    pub text_align_all: Option<String>,
+    /// `min-zoom` (CSS Device Adaptation, `@viewport`). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.976.
+    pub min_zoom: Option<String>,
+    /// `max-zoom` (CSS Device Adaptation, `@viewport`). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.977.
+    pub max_zoom: Option<String>,
+    /// `user-zoom` (CSS Device Adaptation, `@viewport`). `None` = `zoom`.
+    /// NO hereda. Plumb. Fase 7.978.
+    pub user_zoom: Option<String>,
+    /// `viewport-fit` (CSS Round Display 1 / `@viewport`). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.979.
+    pub viewport_fit: Option<String>,
+    /// `ime-mode` (CSS UI 3, deprecated). `None` = `auto`. NO hereda. Plumb. Fase 7.980.
+    pub ime_mode: Option<String>,
+    /// `kerning` (SVG 1.1 presentation attr, deprecated). `None` = `auto`.
+    /// HEREDA (propiedad de texto SVG). Plumb. Fase 7.981.
+    pub kerning: Option<String>,
+    /// `enable-background` (SVG 1.1, deprecated). `None` = `accumulate`.
+    /// NO hereda. Plumb. Fase 7.982.
+    pub enable_background: Option<String>,
+    /// `color-profile` (SVG 1.1, deprecated). `None` = `auto`. HEREDA. Plumb. Fase 7.983.
+    pub color_profile: Option<String>,
+    /// `voice-range` (CSS Speech 1). `None` = `medium`. HEREDA. Plumb. Fase 7.984.
+    pub voice_range: Option<String>,
+    /// `text-security` (proposed; `-webkit-text-security`). `None` = `none`.
+    /// NO hereda. Plumb. Fase 7.985.
+    pub text_security: Option<String>,
 }
 

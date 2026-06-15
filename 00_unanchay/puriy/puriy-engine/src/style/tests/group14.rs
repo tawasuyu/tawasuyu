@@ -327,3 +327,95 @@ use super::super::*;
         assert_eq!(s.flex_grow, 2.0);
         assert_eq!(s.flex_shrink, 3.0);
     }
+
+    #[test]
+    fn spatial_nav_exclusions_plumb_fase_7_966_970() {
+        let html = r#"<html><body><p style="
+            spatial-navigation-action: focus;
+            spatial-navigation-contain: contain;
+            spatial-navigation-function: grid;
+            wrap-flow: both;
+            wrap-through: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let s = eng.compute(&dom.find("p").unwrap());
+        assert_eq!(s.spatial_navigation_action.as_deref(), Some("focus"));
+        assert_eq!(s.spatial_navigation_contain.as_deref(), Some("contain"));
+        assert_eq!(s.spatial_navigation_function.as_deref(), Some("grid"));
+        assert_eq!(s.wrap_flow.as_deref(), Some("both"));
+        assert_eq!(s.wrap_through.as_deref(), Some("none"));
+        // El sentinel (valor initial) colapsa a None.
+        let html2 = r#"<html><body><p style="spatial-navigation-action: auto; wrap-through: wrap">x</p></body></html>"#;
+        let dom2 = DomTree::parse(html2);
+        let eng2 = StyleEngine::from_dom(&dom2);
+        let s2 = eng2.compute(&dom2.find("p").unwrap());
+        assert_eq!(s2.spatial_navigation_action, None);
+        assert_eq!(s2.wrap_through, None);
+    }
+
+    #[test]
+    fn regions_marks_textalignall_plumb_fase_7_971_975() {
+        let html = r#"<html><body>
+            <div style="flow-into: article; mark-before: url(a.wav); text-align-all: justify">
+                <span>child</span>
+            </div>
+            <p style="flow-from: article; mark-after: url(b.wav)">x</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let div = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(div.flow_into.as_deref(), Some("article"));
+        assert_eq!(div.mark_before.as_deref(), Some("url(a.wav)"));
+        assert_eq!(div.text_align_all.as_deref(), Some("justify"));
+        let p = eng.compute(&dom.find("p").unwrap());
+        assert_eq!(p.flow_from.as_deref(), Some("article"));
+        assert_eq!(p.mark_after.as_deref(), Some("url(b.wav)"));
+        // text-align-all HEREDA: con el div como padre, el span lo recibe.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&div));
+        assert_eq!(span.text_align_all.as_deref(), Some("justify"));
+        // flow-into NO hereda.
+        assert_eq!(span.flow_into, None);
+    }
+
+    #[test]
+    fn viewport_descriptors_plumb_fase_7_976_980() {
+        let html = r#"<html><body><p style="
+            min-zoom: 0.5;
+            max-zoom: 200%;
+            user-zoom: fixed;
+            viewport-fit: cover;
+            ime-mode: disabled">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let s = eng.compute(&dom.find("p").unwrap());
+        assert_eq!(s.min_zoom.as_deref(), Some("0.5"));
+        assert_eq!(s.max_zoom.as_deref(), Some("200%"));
+        assert_eq!(s.user_zoom.as_deref(), Some("fixed"));
+        assert_eq!(s.viewport_fit.as_deref(), Some("cover"));
+        assert_eq!(s.ime_mode.as_deref(), Some("disabled"));
+    }
+
+    #[test]
+    fn svg_speech_legacy_plumb_fase_7_981_985() {
+        let html = r#"<html><body>
+            <div style="kerning: 2px; enable-background: new; color-profile: sRGB; voice-range: x-high; text-security: circle">
+                <span>c</span>
+            </div>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.kerning.as_deref(), Some("2px"));
+        assert_eq!(t.enable_background.as_deref(), Some("new"));
+        // opaque_or_sentinel conserva el case original del valor.
+        assert_eq!(t.color_profile.as_deref(), Some("sRGB"));
+        assert_eq!(t.voice_range.as_deref(), Some("x-high"));
+        assert_eq!(t.text_security.as_deref(), Some("circle"));
+        // kerning / color-profile / voice-range HEREDAN (div como padre);
+        // enable-background NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.kerning.as_deref(), Some("2px"));
+        assert_eq!(span.color_profile.as_deref(), Some("sRGB"));
+        assert_eq!(span.voice_range.as_deref(), Some("x-high"));
+        assert_eq!(span.enable_background, None);
+    }
