@@ -26,10 +26,11 @@ REPO=$(cd "$(dirname "$0")/.." && pwd)
 cd "$REPO"
 MC="$REPO/02_ruway/mirada/mirada-compositor"
 
-echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers y panel"
+echo "==> construyendo (release): compositor, greeter, pata, shuma, launchers, panel, ctl, portal y wallpaper"
 cargo build --release \
     -p mirada-compositor -p mirada-greeter -p pata-llimphi \
-    -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi
+    -p shuma-shell-llimphi -p mirada-launcher -p mirada-app-llimphi \
+    -p mirada-ctl -p mirada-portal -p mirada-wallpaper
 
 BIN="$REPO/target/release"
 echo "==> instalando en el sistema (sudo)"
@@ -48,6 +49,15 @@ sudo install -Dm755 "$BIN/mirada-launcher"         /usr/local/bin/mirada-launche
 # las vistas de escritorio. Antes no se instalaba → los profiles eran
 # inalcanzables desde el sistema. Se lanza con `mirada-llimphi`.
 sudo install -Dm755 "$BIN/mirada-llimphi"          /usr/local/bin/mirada-llimphi
+# CRÍTICO: mirada-ctl es la CLI que pata usa para leer los escritorios
+# (`mirada-ctl workspaces`) y enfocar/cerrar ventanas. Sin él, el switcher de
+# workspaces de la barra queda vacío («no hay control de workspaces») y el
+# task-manager no puede activar por id. Antes no se instalaba.
+sudo install -Dm755 "$BIN/mirada-ctl"              /usr/local/bin/mirada-ctl
+# Portal XDG (file pickers, screenshots desde apps, tema) y el setter de
+# wallpaper — también quedaban sin instalar.
+sudo install -Dm755 "$BIN/mirada-portal"           /usr/local/bin/mirada-portal
+sudo install -Dm755 "$BIN/mirada-wallpaper"        /usr/local/bin/mirada-wallpaper
 
 # Scripts de sesión + lanzador del DM.
 sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session
