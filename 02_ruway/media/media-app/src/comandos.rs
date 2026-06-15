@@ -13,9 +13,9 @@ use llimphi_module_command_palette::{
 use parking_lot::Mutex;
 
 use crate::estado::{
-    color, chapters_slot, dynamics, eq, ffmpeg_session_slot, loudness, muted_volume,
+    color, chapters_slot, current_session, dynamics, eq, loudness, muted_volume,
     osd_flash, osd_flash_seek, osd_now, osd, pause, pipeline_slot, playlist_slot,
-    recorder, subtitles_slot, tracks, transform, video_path_slot, viewcontrol,
+    recorder, subtitles_slot, tracks, transform, viewcontrol,
     volume, SUB_DELAY_MS, MAX_SUB_DELAY_MS,
 };
 use crate::playlist::{
@@ -440,7 +440,7 @@ pub(crate) fn apply_command(cmd: MediaCommand) {
             osd_flash("Vista original");
         }
         CycleAudioTrack => {
-            let Some(session) = ffmpeg_session_slot().get().and_then(|o| o.as_ref()) else {
+            let Some(session) = current_session() else {
                 osd_flash("Sin pistas de audio");
                 return;
             };
@@ -484,7 +484,7 @@ pub(crate) fn apply_command(cmd: MediaCommand) {
                     osd_flash("Subtítulos: apagado");
                 }
                 Some((index, label)) => {
-                    let Some(path) = video_path_slot().get().cloned() else {
+                    let Some(path) = crate::estado::current_media_path() else {
                         osd_flash("Subtítulos: sin archivo");
                         return;
                     };

@@ -19,14 +19,16 @@ use std::path::{Path, PathBuf};
 
 use media_core::color::ColorVideo;
 use media_core::transform::TransformVideo;
+use media_core::tracks::TrackSet;
 use media_core::{FrameSource, SubtitleTrack};
 use media_source_gif::GifSource;
 use media_source_image::ImageSource;
 use foreign_av::MediaSession;
 
 use crate::estado::{
-    chapters_slot, color, media_metadata_slot, pipeline_slot, playlist_labels_slot, playlist_slot,
-    reset_av_sync_anchor, set_video_fps, subtitles_slot, transform, waveform_slot, TESTCARD_FPS,
+    active_session_slot, chapters_slot, color, media_metadata_slot, pipeline_slot,
+    playlist_labels_slot, playlist_slot, reset_av_sync_anchor, set_video_fps, subtitles_slot,
+    tracks, transform, waveform_slot, TESTCARD_FPS,
 };
 use crate::media_io::{load_chapters, load_media_metadata, media_title_string};
 use crate::pipeline::new_testcard;
@@ -49,50 +51,53 @@ fn ext_of(path: &Path) -> Option<String> {
         .map(str::to_ascii_lowercase)
 }
 
-/// Construye la fuente de video + la pista de audio para `path`. Nunca
-/// falla: ante un error cae a testcard (video) y silencio (audio).
-fn build_for(path: &Path) -> (Box<dyn FrameSource + Send>, LoadedTrack) {
+/// Construye la fuente de video + la pista de audio + (si es ffmpeg) la sesión
+/// compartida para `path`. La sesión sirve para que las pistas embebidas (A2/S2)
+/// operen sobre el medio swappeado, no sobre el de arranque. `None` cuando el
+/// medio no es ffmpeg (gif/imagen/av1/audio-nativo → sin pistas embebidas).
+/// Nunca falla: ante un error cae a testcard (video) y silencio (audio).
+fn build_for(path: &Path) -> (Box<dyn FrameSource + Send>, LoadedTrack, Option<MediaSession>) {
     // Audio nativo (sin video): testcard + pista nativa.
     if is_native_audio(path) {
         set_video_fps(TESTCARD_FPS);
         let audio = LoadedTrack::from_path(path).unwrap_or(LoadedTrack::Silent);
-        return (new_testcard(), audio);
+        return (new_testcard(), audio, None);
     }
     match ext_of(path).as_deref() {
         Some("gif") => match GifSource::from_path(path) {
             Ok(s) => {
                 set_video_fps(TESTCARD_FPS);
-                (Box::new(s), LoadedTrack::Silent)
+                (Box::new(s), LoadedTrack::Silent, None)
             }
             Err(e) => {
                 eprintln!("media-app: GIF {path:?}: {e} — testcard");
-                (new_testcard(), LoadedTrack::Silent)
+                (new_testcard(), LoadedTrack::Silent, None)
             }
         },
         Some("png" | "jpg" | "jpeg" | "webp" | "bmp" | "tiff") => {
             match ImageSource::from_path(path) {
                 Ok(s) => {
                     set_video_fps(TESTCARD_FPS);
-                    (Box::new(s), LoadedTrack::Silent)
+                    (Box::new(s), LoadedTrack::Silent, None)
                 }
                 Err(e) => {
                     eprintln!("media-app: imagen {path:?}: {e} — testcard");
-                    (new_testcard(), LoadedTrack::Silent)
+                    (new_testcard(), LoadedTrack::Silent, None)
                 }
             }
         }
         Some("ivf") => match media_source_av1::Av1VideoSource::open(path) {
             Ok(s) => {
                 set_video_fps(s.fps());
-                (Box::new(s), LoadedTrack::Silent)
+                (Box::new(s), LoadedTrack::Silent, None)
             }
             Err(e) => {
                 eprintln!("media-app: AV1 {path:?}: {e} — testcard");
-                (new_testcard(), LoadedTrack::Silent)
+                (new_testcard(), LoadedTrack::Silent, None)
             }
         },
         // Todo lo demás (mp4/webm/mkv/mov/avi/flv/m4v/ogv + flac/m4a/aac…) por
-        // ffmpeg: una sesión, clonada para video y audio.
+        // ffmpeg: una sesión, clonada para video, audio y el slot activo.
         _ => match foreign_av::probe(path).and_then(MediaSession::open) {
             Ok(session) => {
                 let video: Box<dyn FrameSource + Send> =
@@ -107,21 +112,31 @@ fn build_for(path: &Path) -> (Box<dyn FrameSource + Send>, LoadedTrack) {
                             new_testcard()
                         }
                     };
-                let audio = match foreign_av::FfmpegAudioSource::from_session(session) {
+                let audio = match foreign_av::FfmpegAudioSource::from_session(session.clone()) {
                     Ok(a) => LoadedTrack::FfmpegAudio(a),
                     Err(e) => {
                         eprintln!("media-app: ffmpeg audio {path:?}: {e}");
                         LoadedTrack::Silent
                     }
                 };
-                (video, audio)
+                (video, audio, Some(session))
             }
             Err(e) => {
                 eprintln!("media-app: ffmpeg abrir {path:?}: {e} — testcard");
-                (new_testcard(), LoadedTrack::Silent)
+                (new_testcard(), LoadedTrack::Silent, None)
             }
         },
     }
+}
+
+/// Publica la sesión del medio recién swappeado como **sesión activa** y
+/// reconstruye el `TrackSet` de pistas embebidas (A2/S2) a partir de ella.
+/// `None` (medio no-ffmpeg) limpia ambos: no hay pistas que ciclar.
+fn install_session(session: Option<MediaSession>) {
+    *tracks().lock() = session
+        .as_ref()
+        .map(|s| TrackSet::from_tracks(s.info().tracks));
+    *active_session_slot().lock() = session;
 }
 
 /// Abre `path` **en caliente**: reemplaza la fuente de video del pipeline y la
@@ -134,8 +149,9 @@ pub(crate) fn open_media(path: &Path) -> Result<String, String> {
         .get()
         .ok_or_else(|| "el pipeline aún no se inicializó (no hubo frame)".to_string())?;
 
-    let (video, audio) = build_for(path);
+    let (video, audio, session) = build_for(path);
     eprintln!("media-app: fuente nueva construida, swapeando pipeline…");
+    install_session(session);
     let wrapped: Box<dyn FrameSource + Send> = Box::new(TransformVideo::new(
         ColorVideo::new(video, color().clone()),
         transform().clone(),
@@ -205,7 +221,8 @@ pub(crate) fn open_playlist_index(target: usize) -> Result<String, String> {
         .map(|p| p.to_path_buf())
         .ok_or_else(|| format!("índice de cola fuera de rango: {target}"))?;
 
-    let (video, audio) = build_for(&path);
+    let (video, audio, session) = build_for(&path);
+    install_session(session);
     let wrapped: Box<dyn FrameSource + Send> = Box::new(TransformVideo::new(
         ColorVideo::new(video, color().clone()),
         transform().clone(),

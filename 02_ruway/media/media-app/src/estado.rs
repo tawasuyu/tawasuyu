@@ -256,6 +256,26 @@ pub(crate) fn ffmpeg_session_slot() -> &'static OnceLock<Option<MediaSession>> {
     &SLOT
 }
 
+/// `MediaSession` del medio **swappeado en caliente** (último `open_media` /
+/// `open_playlist_index`). `None` mientras no hubo swap (se usa la de arranque)
+/// o cuando el medio actual no es ffmpeg (gif/imagen/audio nativo → sin pistas
+/// embebidas). Lo consulta [`current_session`] para que A2/S2 operen sobre el
+/// medio en pantalla, no sobre el de arranque.
+pub(crate) fn active_session_slot() -> &'static Mutex<Option<MediaSession>> {
+    static SLOT: OnceLock<Mutex<Option<MediaSession>>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(None))
+}
+
+/// Sesión ffmpeg del medio **en reproducción**: la del último swap si lo hubo,
+/// si no la de arranque. Es sobre ésta que operan las pistas embebidas (A2/S2).
+/// El gate real de "hay pistas" es [`tracks`] (se reconstruye en cada swap).
+pub(crate) fn current_session() -> Option<MediaSession> {
+    if let Some(s) = active_session_slot().lock().as_ref() {
+        return Some(s.clone());
+    }
+    ffmpeg_session_slot().get().and_then(|o| o.clone())
+}
+
 /// Conjunto de pistas (audio/subtítulos) del medio actual (A2/S2).
 pub(crate) fn tracks() -> &'static Mutex<Option<TrackSet>> {
     static SLOT: OnceLock<Mutex<Option<TrackSet>>> = OnceLock::new();
