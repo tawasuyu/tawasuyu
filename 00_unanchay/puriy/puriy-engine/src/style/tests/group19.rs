@@ -533,16 +533,57 @@ fn container_query_aplana_reglas() {
 }
 
 #[test]
-fn scope_aplana_reglas() {
-    // @scope (root) { ... } aplana; `:scope` interno es inerte-true.
-    assert_eq!(
-        p_color("@scope (.card) to (.inner) { p { color: rgb(5,5,5) } }"),
-        (5, 5, 5)
-    );
-    assert_eq!(
-        p_color("@scope (body) { :scope p { color: rgb(6,6,6) } }"),
-        (6, 6, 6)
-    );
+fn scope_acota_reglas_fase_7_1217() {
+    // `@scope (.card) { p { ... } }` ahora ACOTA: el <p> dentro de `.card`
+    // recibe el color; el <p> fuera NO (antes la regla se aplanaba y aplicaba
+    // a ambos).
+    let html = r#"<html><head><style>
+        @scope (.card) { p { color: rgb(5, 5, 5); } }
+    </style></head><body>
+      <div class="card"><p id="in">dentro</p></div>
+      <p id="out">fuera</p>
+    </body></html>"#;
+    let dom = DomTree::parse(html);
+    let eng = StyleEngine::from_dom(&dom);
+    let color_of = |id: &str| {
+        let mut found = None;
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                found = Some(n.clone());
+            }
+        });
+        let cs = eng.compute(found.as_ref().expect("id"));
+        (cs.color.r, cs.color.g, cs.color.b)
+    };
+    assert_eq!(color_of("in"), (5, 5, 5), "<p> dentro de .card recibe el scope");
+    assert_eq!(color_of("out"), (0, 0, 0), "<p> fuera NO recibe el scope");
+}
+
+#[test]
+fn scope_lista_de_roots_fase_7_1217() {
+    // `@scope (.a, .b) { ... }` acota bajo cualquiera de los roots.
+    let html = r#"<html><head><style>
+        @scope (.a, .b) { span { color: rgb(7, 7, 7); } }
+    </style></head><body>
+      <div class="a"><span id="sa">x</span></div>
+      <div class="b"><span id="sb">y</span></div>
+      <span id="sc">z</span>
+    </body></html>"#;
+    let dom = DomTree::parse(html);
+    let eng = StyleEngine::from_dom(&dom);
+    let color_of = |id: &str| {
+        let mut found = None;
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::attr(n, "id").as_deref() == Some(id) {
+                found = Some(n.clone());
+            }
+        });
+        let cs = eng.compute(found.as_ref().expect("id"));
+        (cs.color.r, cs.color.g, cs.color.b)
+    };
+    assert_eq!(color_of("sa"), (7, 7, 7));
+    assert_eq!(color_of("sb"), (7, 7, 7));
+    assert_eq!(color_of("sc"), (0, 0, 0)); // fuera de ambos roots
 }
 
 #[test]

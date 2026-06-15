@@ -532,16 +532,50 @@ pub(crate) fn parse_rules_block(
                 }
                 continue;
             }
+            // `@scope (root) [to (limit)] { ... }` (CSS Scoping) — Fase 7.1217:
+            // ACOTAMOS las reglas internas bajo `root` (reescritura en parse-
+            // time: cada selector del cuerpo se vuelve `root <descendiente> sel`,
+            // así sólo matchea dentro del subárbol del scope). Aproximación: no
+            // modelamos el límite `to (limit)` ni la proximidad de scope en la
+            // cascada; `:scope` interno sigue transparente. Sin `(root)`
+            // (`@scope { }`), aplanamos como antes (no hay elemento dueño acá).
+            if lower.starts_with("@scope") {
+                if chunk.contains('{') {
+                    let body = parse_at_rule_body(chunk);
+                    let inner = parse_rules_block(body, vars, viewport, layer, layer_prefix, reg);
+                    // Extrae el primer grupo `(...)` del prelude como root.
+                    let head = &chunk[..chunk.find('{').unwrap_or(chunk.len())];
+                    let roots = head
+                        .find('(')
+                        .and_then(|o| head[o + 1..].find(')').map(|c| &head[o + 1..o + 1 + c]))
+                        .map(|r| {
+                            split_top_level_commas(r)
+                                .iter()
+                                .filter_map(|s| parse_selector(s.trim()))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default();
+                    if roots.is_empty() {
+                        out.extend(inner); // `@scope { }` sin root → aplanado.
+                    } else {
+                        for rule in inner {
+                            for root in &roots {
+                                out.push(Rule {
+                                    selector: rule.selector.scoped_under(root),
+                                    decls: rule.decls.clone(),
+                                    layer: rule.layer,
+                                });
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
             // Fase 7.936 — `@container [name] (cond) { ... }` (Container
-            // Queries) y `@scope (root) [to (limit)] { ... }` (CSS Scoping):
-            // NO evaluamos la condición de contenedor ni la proximidad del
-            // scope (no hay layout de contenedor ni árbol de scoping acá),
-            // pero APLANAMOS sus reglas igual que `@layer`/`@media` verdadero
-            // — estrictamente mejor que dropearlas (sino se pierde todo el CSS
-            // dentro de un container query). Las reglas internas pueden usar
-            // `:scope` (inerte=true) y `&` (nesting), ya soportados. Heredan la
-            // capa del contexto.
-            if lower.starts_with("@container") || lower.starts_with("@scope") {
+            // Queries): NO evaluamos la condición de contenedor (no hay layout
+            // de contenedor acá), pero APLANAMOS sus reglas — estrictamente
+            // mejor que dropearlas. Heredan la capa del contexto.
+            if lower.starts_with("@container") {
                 if chunk.contains('{') {
                     let body = parse_at_rule_body(chunk);
                     out.extend(parse_rules_block(body, vars, viewport, layer, layer_prefix, reg));

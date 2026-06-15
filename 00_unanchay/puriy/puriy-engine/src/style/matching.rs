@@ -102,6 +102,25 @@ pub(crate) struct Selector {
 }
 
 impl Selector {
+    /// Acota este selector (sujeto) bajo un `root` (CSS Scoping `@scope (root)
+    /// { ... }`, Fase 7.1217): el sujeto sólo matchea si es descendiente de un
+    /// elemento que matchea `root`. Se construye `root <combinador descendiente>
+    /// self`, preservando el pseudo-elemento del sujeto. Aproximación: no
+    /// modela el límite `to (limit)` ni la proximidad de scope en la cascada;
+    /// `:scope` interno sigue siendo transparente (matchea cualquier nodo).
+    pub(crate) fn scoped_under(&self, root: &Selector) -> Selector {
+        let mut compounds = root.compounds.clone();
+        compounds.extend(self.compounds.iter().cloned());
+        let mut combinators = root.combinators.clone();
+        combinators.push(Combinator::Descendant);
+        combinators.extend(self.combinators.iter().cloned());
+        Selector {
+            compounds,
+            combinators,
+            pseudo_element: self.pseudo_element,
+        }
+    }
+
     /// Especificidad CSS — número compuesto `a*100 + b*10 + c` donde:
     /// - `a` = cuentas de `#id` en toda la cadena
     /// - `b` = cuentas de `.class`, `[attr]`, `:pseudo-class`
