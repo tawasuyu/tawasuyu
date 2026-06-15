@@ -460,7 +460,19 @@ impl App {
                     w.toplevel.send_close();
                 }
             }
-            BodyOp::SetGrabs(keys) => self.grabs = keys,
+            BodyOp::SetGrabs(keys) => {
+                // Diagnóstico: cuántos atajos quedan registrados y si los
+                // clásicos están entre ellos. Una línea en /tmp/mirada.log que
+                // distingue «no se entregaron grabs» de «se entregaron pero el
+                // combo no matchea» sin instrumentar nada más.
+                println!(
+                    "mirada-compositor · {} atajos registrados (Alt+Tab: {}, Super+q: {})",
+                    keys.len(),
+                    keys.iter().any(|k| k == "Alt+Tab"),
+                    keys.iter().any(|k| k == "Super+q"),
+                );
+                self.grabs = keys;
+            }
             BodyOp::SetCursor(_) => {}
             BodyOp::SetDecorations(d) => self.decorations = d,
             BodyOp::SetCapabilities(p) => *escribir_tolerante(&self.caps) = p,
