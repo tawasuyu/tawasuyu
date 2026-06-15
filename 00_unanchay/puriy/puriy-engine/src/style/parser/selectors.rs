@@ -179,6 +179,13 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
     let tag = if bytes[0] == b'*' {
         i = 1;
         TagPart::Universal
+    } else if bytes[0] == b'&' {
+        // Fase 7.935 — selector de nesting `&`. En la cascada normal ya viene
+        // sustituido por el padre (`expand_amp`); si llega crudo es un `&` de
+        // nivel superior (CSS Nesting), que equivale a `:scope` ≈ universal.
+        // Consumimos el `&` y seguimos con `.class`/`:pseudo` que lo sigan.
+        i = 1;
+        TagPart::Universal
     } else if is_ident_byte(bytes[0]) {
         let start = i;
         while i < bytes.len() && is_ident_byte(bytes[i]) {
@@ -401,6 +408,7 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
         && attrs.is_empty()
         && pseudos.is_empty()
         && sel != "*"
+        && sel != "&" // Fase 7.935 — `&` solo (nesting de nivel superior) es válido.
     {
         return None;
     }

@@ -405,3 +405,17 @@ fn pseudo_element_no_renderizado_no_contamina_elemento() {
     let css = "p::selection { color: rgb(1,2,3) } p { color: rgb(9,9,9) }";
     assert_eq!(p_color(css), (9, 9, 9));
 }
+
+// ── Fase 7.935 — selector de nesting `&` de nivel superior parsea ──────────
+
+#[test]
+fn nesting_amp_top_level() {
+    // `&` solo (CSS Nesting top-level ≈ :scope) y combinaciones.
+    assert!(parse_selector("&").is_some());
+    assert!(parse_selector("&:hover").is_some());
+    assert!(parse_selector("& > .child").is_some());
+    assert!(parse_selector("&.active").is_some());
+    // El nesting normal (con padre) sigue expandiéndose textualmente: el
+    // `&:hover` no aplica al <p> en reposo, pero la decl del nivel padre sí.
+    assert_eq!(p_color("p { &:hover { color: rgb(1,2,3) } color: rgb(7,8,9) }"), (7, 8, 9));
+}
