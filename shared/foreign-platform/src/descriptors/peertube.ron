@@ -49,9 +49,10 @@
                 thumbnail: "thumbnailPath",
             ),
         ),
-        // GET /api/v1/accounts/{channel}/videos  → { total, data: [...] }
+        // GET /api/v1/video-channels/{channel}/videos  → { total, data: [...] }
+        // (coherente con channel_id := "channel.name", el handle del canal).
         channel_videos: (
-            path: "/api/v1/accounts/{channel}/videos",
+            path: "/api/v1/video-channels/{channel}/videos",
             query: [("count", "20")],
             list_path: "data",
             fields: (

@@ -70,6 +70,10 @@ enum Msg {
     LoadFailed(u64, String),
     SetBackend(Backend),
     Play(usize),
+    /// Abrir la página de un canal (click en el autor de una tarjeta).
+    OpenChannel { id: String, name: String },
+    /// Volver del canal al listado anterior (tendencias o búsqueda).
+    Back,
     ThumbDone(String),
     Wheel(f32),
     Resize(u32, u32),
@@ -91,6 +95,8 @@ struct Model {
     loading: bool,
     /// La última página vino vacía: no hay más que pedir.
     exhausted: bool,
+    /// Canal abierto (id, nombre) — `Some` ⇒ la grilla muestra sus videos.
+    channel: Option<(String, String)>,
     scroll_fila: usize,
     thumbs: ImageCache,
     thumb_pending: HashSet<String>,
@@ -120,6 +126,14 @@ fn tendencias(b: Backend, instance: &str) -> Result<Vec<VideoCard>, PlatformErro
     match b {
         Backend::Invidious => descriptors::invidious(instance.to_string()).trending(),
         Backend::PeerTube => descriptors::peertube(instance.to_string()).trending(),
+    }
+}
+
+/// Trae los videos de un canal por su id (worker, red).
+fn canal(b: Backend, instance: &str, id: &str) -> Result<Vec<VideoCard>, PlatformError> {
+    match b {
+        Backend::Invidious => descriptors::invidious(instance.to_string()).channel_videos(id),
+        Backend::PeerTube => descriptors::peertube(instance.to_string()).channel_videos(id),
     }
 }
 
@@ -184,7 +198,7 @@ fn kick_thumbs(m: &mut Model, handle: &Handle<Msg>) {
 /// Si la grilla está mostrando la última fila y hay una búsqueda paginable en
 /// curso, pide la página siguiente y la encola para *append* (scroll infinito).
 fn maybe_load_more(m: &mut Model, handle: &Handle<Msg>) {
-    if m.loading || m.exhausted || m.query.is_empty() || m.videos.is_empty() {
+    if m.loading || m.exhausted || m.query.is_empty() || m.videos.is_empty() || m.channel.is_some() {
         return;
     }
     let (w, h) = grid_area(m);
@@ -245,6 +259,7 @@ impl App for MediaTube {
             page: 0,
             loading: true,
             exhausted: false,
+            channel: None,
             scroll_fila: 0,
             thumbs: ImageCache::new(),
             thumb_pending: HashSet::new(),
@@ -294,6 +309,8 @@ impl App for MediaTube {
                     }
                     m.status = if m.videos.is_empty() {
                         "Sin resultados".to_string()
+                    } else if let Some((_, name)) = &m.channel {
+                        format!("Canal: {} · {} videos", name, m.videos.len())
                     } else {
                         let que = if m.query.is_empty() { "Tendencias" } else { "Resultados" };
                         format!("{} · {} · {}", que, m.videos.len(), m.backend.nombre())
@@ -314,6 +331,7 @@ impl App for MediaTube {
                     m.videos.clear();
                     m.scroll_fila = 0;
                     m.query.clear();
+                    m.channel = None;
                     m.page = 0;
                     m.loading = true;
                     m.exhausted = false;
@@ -331,6 +349,42 @@ impl App for MediaTube {
                     let url = watch_url(m.backend, &m.instance, &card.id);
                     m.status = format!("▶ {}", card.title);
                     lanzar_media_app(&url);
+                }
+            }
+            Msg::OpenChannel { id, name } => {
+                m.channel = Some((id.clone(), name.clone()));
+                m.gen += 1;
+                m.videos.clear();
+                m.scroll_fila = 0;
+                m.loading = true;
+                m.exhausted = true; // channel_videos no se pagina (descriptor sin page)
+                m.status = format!("Canal: {name}…");
+                let (gen, b, inst) = (m.gen, m.backend, m.instance.clone());
+                handle.spawn(move || match canal(b, &inst, &id) {
+                    Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
+                    Err(e) => Msg::LoadFailed(gen, e.to_string()),
+                });
+            }
+            Msg::Back => {
+                m.channel = None;
+                m.scroll_fila = 0;
+                m.loading = true;
+                m.exhausted = false;
+                m.gen += 1;
+                let (gen, b, inst, q) = (m.gen, m.backend, m.instance.clone(), m.query.clone());
+                if q.is_empty() {
+                    m.status = "Tendencias…".to_string();
+                    handle.spawn(move || match tendencias(b, &inst) {
+                        Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
+                        Err(e) => Msg::LoadFailed(gen, e.to_string()),
+                    });
+                } else {
+                    m.page = 1;
+                    m.status = format!("Buscando «{q}»…");
+                    handle.spawn(move || match buscar(b, &inst, &q, 1) {
+                        Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
+                        Err(e) => Msg::LoadFailed(gen, e.to_string()),
+                    });
                 }
             }
             Msg::ThumbDone(url) => {
@@ -439,6 +493,29 @@ impl App for MediaTube {
         .text(m.status.clone(), 12.0, Color::from_rgba8(160, 170, 184, 255))
         .ellipsis(1);
 
+        // En vista de canal, un botón para volver al listado anterior.
+        let mut hdr: Vec<View<Msg>> = vec![brand];
+        if m.channel.is_some() {
+            hdr.push(
+                View::new(Style {
+                    size: Size { width: length(74.0), height: length(32.0) },
+                    align_items: Some(AlignItems::Center),
+                    justify_content: Some(JustifyContent::Center),
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .fill(Color::from_rgba8(44, 50, 62, 255))
+                .radius(7.0)
+                .hover_fill(Color::from_rgba8(60, 68, 84, 255))
+                .text("← atrás", 12.0, Color::from_rgba8(210, 216, 226, 255))
+                .on_click(Msg::Back),
+            );
+        }
+        hdr.push(backend_btn(Backend::Invidious));
+        hdr.push(backend_btn(Backend::PeerTube));
+        hdr.push(search_wrap);
+        hdr.push(status);
+
         let header = View::new(Style {
             flex_direction: FlexDirection::Row,
             size: Size { width: percent(1.0_f32), height: length(HEADER_H) },
@@ -454,13 +531,7 @@ impl App for MediaTube {
             ..Default::default()
         })
         .fill(Color::from_rgba8(28, 32, 42, 255))
-        .children(vec![
-            brand,
-            backend_btn(Backend::Invidious),
-            backend_btn(Backend::PeerTube),
-            search_wrap,
-            status,
-        ]);
+        .children(hdr);
 
         // ----- Grilla virtualizada de resultados -----
         let (area_w, area_h) = grid_area(m);
@@ -469,7 +540,7 @@ impl App for MediaTube {
             .map(|i| {
                 let card = &m.videos[i];
                 let url = thumb_url(&m.instance, card);
-                let content = match m.thumbs.get(&url) {
+                let thumb = match m.thumbs.get(&url) {
                     Some(img) => View::new(Style {
                         size: Size { width: length(THUMB_W), height: length(THUMB_H) },
                         ..Default::default()
@@ -487,6 +558,34 @@ impl App for MediaTube {
                     .radius(5.0)
                     .text("▶", 22.0, Color::from_rgba8(120, 130, 145, 255)),
                 };
+                // Chip de autor: click → abrir canal. Gana sobre el on_click
+                // de la celda (Play) por ser el nodo más profundo en el hit-test.
+                let author = card.author.clone().unwrap_or_default();
+                let chip = match &card.channel_id {
+                    Some(cid) if !cid.is_empty() && !author.is_empty() => View::new(Style {
+                        size: Size { width: length(THUMB_W), height: length(16.0) },
+                        align_items: Some(AlignItems::Center),
+                        justify_content: Some(JustifyContent::Center),
+                        flex_shrink: 0.0,
+                        ..Default::default()
+                    })
+                    .radius(4.0)
+                    .hover_fill(Color::from_rgba8(40, 46, 58, 255))
+                    .text(format!("@ {author}"), 10.5, Color::from_rgba8(120, 170, 235, 255))
+                    .ellipsis(1)
+                    .on_click(Msg::OpenChannel { id: cid.clone(), name: author.clone() }),
+                    _ => View::new(Style {
+                        size: Size { width: length(THUMB_W), height: length(16.0) },
+                        ..Default::default()
+                    }),
+                };
+                let content = View::new(Style {
+                    flex_direction: FlexDirection::Column,
+                    align_items: Some(AlignItems::Center),
+                    gap: Size { width: length(0.0_f32), height: length(3.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![thumb, chip]);
                 let label = match card.duration_secs {
                     Some(s) if s > 0 => format!("{}   ·   {}", card.title, dur_fmt(s)),
                     _ => card.title.clone(),
