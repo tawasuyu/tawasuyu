@@ -778,7 +778,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.559 — `hyphenate-limit-lines` (CSS Text 4). `no-limit` → None.
-        "hyphenate-limit-lines" => {
+        // Fase 7.1020 — `-webkit-hyphenate-limit-lines` alias vendor.
+        "hyphenate-limit-lines" | "-webkit-hyphenate-limit-lines" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("no-limit") {

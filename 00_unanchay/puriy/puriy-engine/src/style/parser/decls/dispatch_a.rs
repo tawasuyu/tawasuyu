@@ -101,14 +101,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             Some(DeclKind::BoxShadows(parse_box_shadows(value)))
         }
         // `text-decoration` (shorthand) se expande en `parse_declarations`.
-        "text-decoration-line" | "-webkit-text-decoration-line" => {
+        // Fase 7.1013-7.1015 — alias `-moz-text-decoration-{line,color,style}` (Gecko legacy).
+        "text-decoration-line" | "-webkit-text-decoration-line" | "-moz-text-decoration-line" => {
             parse_text_decoration(value).map(DeclKind::TextDecoration)
         }
-        "text-decoration-color" if is_current_color(value) => {
+        "text-decoration-color" | "-moz-text-decoration-color" if is_current_color(value) => {
             Some(DeclKind::TextDecorationColor(None))
         }
-        "text-decoration-color" => parse_color(value).map(|c| DeclKind::TextDecorationColor(Some(c))),
-        "text-decoration-style" => {
+        "text-decoration-color" | "-moz-text-decoration-color" => parse_color(value).map(|c| DeclKind::TextDecorationColor(Some(c))),
+        "text-decoration-style" | "-moz-text-decoration-style" => {
             parse_text_decoration_style(value).map(DeclKind::TextDecorationStyle)
         }
         // `auto`/`from-font` → None (grosor derivado); longitud → px.
@@ -207,7 +208,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             parse_overflow(first).map(DeclKind::Overflow)
         }
         "white-space" => parse_white_space(value).map(DeclKind::WhiteSpace),
-        "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
+        // Fase 7.1007 — `-epub-text-transform` alias EPUB (WebKit).
+        "text-transform" | "-epub-text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
         // Fase 7.729 — `-webkit-opacity` alias vendor legacy de `opacity`.
         // Fase 7.790 — `-moz-opacity` alias vendor legacy (pre-opacity Gecko).
         // Fase 7.956 suma `-khtml-opacity` (Konqueror/early Safari, el más viejo).
@@ -286,7 +288,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "accent-color" => Some(DeclKind::AccentColor(parse_auto_or_color(value))),
         "cursor" => parse_cursor(value).map(DeclKind::Cursor),
         // Fase 7.943 — `-o-text-overflow` (Opera Presto inventó la propiedad).
-        "text-overflow" | "-o-text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
+        // Fase 7.1017 — `-ms-text-overflow` (IE10, valores idénticos).
+        "text-overflow" | "-o-text-overflow" | "-ms-text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
         "scroll-behavior" => parse_scroll_behavior(value).map(DeclKind::ScrollBehavior),
         // Fase 7.928 — CSS Scroll Snap 2: `scroll-start` + longhands lógicos.
         // Parse opaco (plumb): el sentinel inicial (`auto`/`none`) → `None`.
@@ -354,10 +357,12 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             parse_overflow_wrap(value).map(DeclKind::OverflowWrap)
         }
         // Fase 7.639 — `-epub-word-break` (perfil EPUB) alias de `word-break`.
-        "word-break" | "-epub-word-break" => {
+        // Fase 7.1016 — `-ms-word-break` (IE10, valores idénticos).
+        "word-break" | "-epub-word-break" | "-ms-word-break" => {
             parse_word_break(value).map(DeclKind::WordBreak)
         }
-        "hyphens" | "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" => {
+        // Fase 7.1006 suma `-epub-hyphens` (alias EPUB, WebKit).
+        "hyphens" | "-webkit-hyphens" | "-moz-hyphens" | "-ms-hyphens" | "-epub-hyphens" => {
             parse_hyphens(value).map(DeclKind::Hyphens)
         }
         "resize" => parse_resize(value).map(DeclKind::Resize),
@@ -580,7 +585,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.447 — `text-combine-upright` (CSS Writing Modes 3). NO hereda.
         // Fase 7.633 — `-webkit-text-combine` es el nombre legacy WebKit.
         // Fase 7.641 — `-epub-text-combine` (EPUB) al mismo destino.
-        "text-combine-upright" | "-webkit-text-combine" | "-epub-text-combine" => {
+        // Fase 7.1018 — `-ms-text-combine-horizontal` (IE10, mismo concepto: none|all).
+        "text-combine-upright" | "-webkit-text-combine" | "-epub-text-combine" | "-ms-text-combine-horizontal" => {
             parse_text_combine_upright(value).map(DeclKind::TextCombineUpright)
         }
         // Fase 7.448 — `ruby-align` (CSS Ruby 1). HEREDA.

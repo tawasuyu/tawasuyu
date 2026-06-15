@@ -961,8 +961,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
         // `text-emphasis` shorthand (Fase 7.312): `<style> || <color>`. `none`
         // setea style=None y NO toca el color. Orden libre.
         // Fase 7.744 — alias `-webkit-text-emphasis` → estándar (shorthand).
+        // Fase 7.1011 — `-epub-text-emphasis` alias EPUB (WebKit).
         if prop.eq_ignore_ascii_case("text-emphasis")
             || prop.eq_ignore_ascii_case("-webkit-text-emphasis")
+            || prop.eq_ignore_ascii_case("-epub-text-emphasis")
         {
             out.extend(parse_text_emphasis_shorthand(value, important));
             continue;

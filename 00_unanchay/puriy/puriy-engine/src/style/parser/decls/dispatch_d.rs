@@ -531,7 +531,8 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "print-color-adjust" | "color-adjust" | "-webkit-print-color-adjust" => {
             parse_print_color_adjust(value).map(DeclKind::PrintColorAdjust)
         }
-        "forced-color-adjust" => {
+        // Fase 7.1019 — `-ms-high-contrast-adjust` (IE/Edge legacy, valores auto|none).
+        "forced-color-adjust" | "-ms-high-contrast-adjust" => {
             parse_forced_color_adjust(value).map(DeclKind::ForcedColorAdjust)
         }
         // `-webkit-line-clamp` (de facto estándar) y `line-clamp` (CSS Overflow 4).
@@ -567,12 +568,14 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
                 parse_color(value).map(|c| DeclKind::TextEmphasisColor(Some(c)))
             }
         }
-        "text-emphasis-position" | "-webkit-text-emphasis-position" => {
+        // Fase 7.1012 — `-epub-text-emphasis-position` alias EPUB (WebKit).
+        "text-emphasis-position" | "-webkit-text-emphasis-position" | "-epub-text-emphasis-position" => {
             parse_text_emphasis_position(value).map(DeclKind::TextEmphasisPosition)
         }
         // `text-emphasis` shorthand: ver `parse_declarations`.
         // Fase 7.749 — alias `-webkit-ruby-position` → estándar.
-        "ruby-position" | "-webkit-ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
+        // Fase 7.1008 — `-epub-ruby-position` alias EPUB (WebKit).
+        "ruby-position" | "-webkit-ruby-position" | "-epub-ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
         // Fase 7.662/7.772/7.797/7.951 — `-webkit-`/`-moz-`/`-ms-`/`-o-transform-origin` alias vendor del shorthand.
         "transform-origin" | "-webkit-transform-origin" | "-moz-transform-origin" | "-ms-transform-origin" | "-o-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
@@ -608,12 +611,14 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             parse_overflow_clip_margin(value).map(DeclKind::OverflowClipMargin)
         }
         // Fase 7.762 — `-webkit-text-align-last` / Fase 7.799 — `-moz-text-align-last`.
-        "text-align-last" | "-webkit-text-align-last" | "-moz-text-align-last" => {
+        // Fase 7.1010 — `-epub-text-align-last` alias EPUB (WebKit).
+        "text-align-last" | "-webkit-text-align-last" | "-moz-text-align-last" | "-epub-text-align-last" => {
             parse_text_align_last(value).map(DeclKind::TextAlignLast)
         }
         "text-wrap" => parse_text_wrap(value).map(DeclKind::TextWrap),
         // Fase 7.631 — `-webkit-line-break` alias vendor de `line-break`.
-        "line-break" | "-webkit-line-break" => {
+        // Fase 7.1009 — `-epub-line-break` alias EPUB (WebKit).
+        "line-break" | "-webkit-line-break" | "-epub-line-break" => {
             parse_line_break(value).map(DeclKind::LineBreak)
         }
         "hanging-punctuation" => {

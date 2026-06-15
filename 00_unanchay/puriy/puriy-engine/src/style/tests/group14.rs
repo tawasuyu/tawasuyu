@@ -512,3 +512,58 @@ use super::super::*;
         assert_eq!(span.snap_height.as_deref(), Some("8px 2"));
         assert_eq!(span.drop_initial_after_align, None);
     }
+
+    // Computa un único `<p style="...">` y devuelve su ComputedStyle.
+    fn style_of(decl: &str) -> ComputedStyle {
+        let html = format!("<html><body><p style=\"{decl}\">x</p></body></html>");
+        let dom = DomTree::parse(&html);
+        let eng = StyleEngine::from_dom(&dom);
+        eng.compute(&dom.find("p").unwrap())
+    }
+
+    #[test]
+    fn epub_aliases_fase_7_1006_1012() {
+        // Cada -epub-* debe producir el MISMO computed que su estándar.
+        assert_eq!(style_of("-epub-hyphens: auto").hyphens, style_of("hyphens: auto").hyphens);
+        assert_eq!(style_of("-epub-text-transform: uppercase").text_transform,
+                   style_of("text-transform: uppercase").text_transform);
+        assert_eq!(style_of("-epub-ruby-position: over").ruby_position,
+                   style_of("ruby-position: over").ruby_position);
+        assert_eq!(style_of("-epub-line-break: strict").line_break,
+                   style_of("line-break: strict").line_break);
+        assert_eq!(style_of("-epub-text-align-last: justify").text_align_last,
+                   style_of("text-align-last: justify").text_align_last);
+        assert_eq!(style_of("-epub-text-emphasis-position: over right").text_emphasis_position,
+                   style_of("text-emphasis-position: over right").text_emphasis_position);
+        assert_eq!(style_of("-epub-text-emphasis: dot red").text_emphasis_style,
+                   style_of("text-emphasis: dot red").text_emphasis_style);
+        // Y el alias efectivamente parseó algo (no quedó en el default).
+        assert_ne!(style_of("-epub-text-transform: uppercase").text_transform,
+                   ComputedStyle::default().text_transform);
+    }
+
+    #[test]
+    fn moz_textdecoration_aliases_fase_7_1013_1015() {
+        assert_eq!(style_of("-moz-text-decoration-line: underline").text_decoration,
+                   style_of("text-decoration-line: underline").text_decoration);
+        assert_eq!(style_of("-moz-text-decoration-color: red").text_decoration_color,
+                   style_of("text-decoration-color: red").text_decoration_color);
+        assert!(style_of("-moz-text-decoration-color: red").text_decoration_color.is_some());
+        assert_eq!(style_of("-moz-text-decoration-style: dashed").text_decoration_style,
+                   style_of("text-decoration-style: dashed").text_decoration_style);
+    }
+
+    #[test]
+    fn ms_webkit_misc_aliases_fase_7_1016_1020() {
+        assert_eq!(style_of("-ms-word-break: break-all").word_break,
+                   style_of("word-break: break-all").word_break);
+        assert_eq!(style_of("-ms-text-overflow: ellipsis").text_overflow,
+                   style_of("text-overflow: ellipsis").text_overflow);
+        assert_eq!(style_of("-ms-text-combine-horizontal: all").text_combine_upright,
+                   style_of("text-combine-upright: all").text_combine_upright);
+        assert_eq!(style_of("-ms-high-contrast-adjust: none").forced_color_adjust,
+                   style_of("forced-color-adjust: none").forced_color_adjust);
+        assert_eq!(style_of("-webkit-hyphenate-limit-lines: 3").hyphenate_limit_lines,
+                   style_of("hyphenate-limit-lines: 3").hyphenate_limit_lines);
+        assert_eq!(style_of("-webkit-hyphenate-limit-lines: 3").hyphenate_limit_lines, Some(3));
+    }
