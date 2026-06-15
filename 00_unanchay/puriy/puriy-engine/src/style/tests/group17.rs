@@ -332,8 +332,8 @@ fn background_longhands_comma_toman_primera_capa() {
 #[test]
 fn list_style_type_extra_keywords() {
     let lst = |s: &str| {
-        decls(s).iter().find_map(|d| match d.kind {
-            DeclKind::ListStyleType(t) => Some(t),
+        decls(s).iter().find_map(|d| match &d.kind {
+            DeclKind::ListStyleType(t) => Some(t.clone()),
             _ => None,
         })
     };
@@ -341,6 +341,11 @@ fn list_style_type_extra_keywords() {
     assert_eq!(lst("list-style-type: decimal-leading-zero"), Some(ListStyleType::Decimal));
     assert_eq!(lst("list-style-type: lower-greek"), Some(ListStyleType::LowerAlpha));
     assert_eq!(lst("list-style-type: disclosure-open"), Some(ListStyleType::Disc));
+    // Fase 7.1216 — marcador string literal (verbatim, antes era `Disc`).
+    assert_eq!(lst("list-style-type: \"\u{2192} \""), Some(ListStyleType::Str("\u{2192} ".into())));
+    assert_eq!(lst("list-style-type: '- '"), Some(ListStyleType::Str("- ".into())));
+    // `symbols(...)` sigue aproximándose a `Disc`.
+    assert_eq!(lst("list-style-type: symbols(cyclic '*')"), Some(ListStyleType::Disc));
 }
 
 // ── Fase 7.868 — color() gamut amplio ──────────────────────────────────────
@@ -1041,10 +1046,10 @@ fn font_size_math_keyword() {
 
 #[test]
 fn list_style_type_string_y_symbols() {
-    // marcador string y symbols() → Disc (custom no modelado).
+    // Fase 7.1216 — marcador string literal verbatim; `symbols()` → Disc.
     assert!(decls("list-style-type: \"→\"")
         .iter()
-        .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));
+        .any(|d| matches!(&d.kind, DeclKind::ListStyleType(ListStyleType::Str(s)) if s == "→")));
     assert!(decls("list-style-type: symbols(cyclic \"*\")")
         .iter()
         .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));

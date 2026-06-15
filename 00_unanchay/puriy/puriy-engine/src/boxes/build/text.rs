@@ -88,9 +88,18 @@ pub(crate) fn apply_text_transform(s: String, t: TextTransform) -> String {
 /// con el comportamiento de browsers. Marcadores con símbolo usan
 /// `"<sym>  "` (doble espacio) para dar el airecito que tenía el bullet
 /// hardcoded original.
-pub(crate) fn li_marker(node: &Handle, kind: ListStyleType) -> Option<String> {
+pub(crate) fn li_marker(node: &Handle, kind: &ListStyleType) -> Option<String> {
     match kind {
         ListStyleType::None => None,
+        // Fase 7.1216 — marcador string literal (verbatim, el autor controla
+        // el espaciado). String vacío `""` suprime el marcador.
+        ListStyleType::Str(s) => {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.clone())
+            }
+        }
         ListStyleType::Disc => Some("• ".into()),
         ListStyleType::Circle => Some("◦ ".into()),
         ListStyleType::Square => Some("▪ ".into()),

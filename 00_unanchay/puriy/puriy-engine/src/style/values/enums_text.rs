@@ -16,7 +16,7 @@ pub enum ColorTarget {
 /// pintar como texto plano (sin imágenes ni cuadritos pintados a mano).
 /// `Decimal`/`*Alpha`/`*Roman` requieren conocer la posición del `<li>`
 /// entre sus hermanos — `boxes::build_node` la calcula y la sustituye.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ListStyleType {
     None,
     Disc,
@@ -27,6 +27,9 @@ pub enum ListStyleType {
     UpperAlpha,
     LowerRoman,
     UpperRoman,
+    /// `list-style-type: "<string>"` (CSS Lists 3): el marcador es el string
+    /// literal, verbatim (el autor controla el espaciado). Fase 7.1216.
+    Str(String),
 }
 
 /// Línea decorativa que el chrome dibuja sobre/atravesando/debajo del

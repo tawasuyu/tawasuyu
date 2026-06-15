@@ -75,6 +75,27 @@ use crate::Engine;
     }
 
     #[test]
+    fn li_marker_string_literal_fase_7_1216() {
+        // `list-style-type: "<string>"` (CSS Lists 3): el marcador es el string
+        // literal verbatim (antes se aproximaba a `•`).
+        let html = "<html><head><style>\
+            li { list-style-type: \"\u{2192} \"; }\
+            </style></head><body><ul><li>a</li><li>b</li></ul></body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut markers = Vec::new();
+        doc.box_tree.walk(|b| {
+            if let Some(t) = &b.text {
+                if t.starts_with('→') {
+                    markers.push(t.clone());
+                }
+            }
+        });
+        // Dos <li> → dos marcadores "→ " (no el bullet por defecto).
+        assert_eq!(markers, vec!["→ ".to_string(), "→ ".to_string()]);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

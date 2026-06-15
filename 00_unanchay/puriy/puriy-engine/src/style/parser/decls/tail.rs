@@ -74,13 +74,17 @@ pub(crate) fn parse_text_decoration_shorthand(value: &str, important: bool) -> V
 /// declaración se ignora — el caller mantiene el valor anterior.
 pub(crate) fn parse_list_style_type(s: &str) -> Option<ListStyleType> {
     let raw = s.trim();
-    // Fase 7.904 — marcador string (`list-style-type: "→"`) o `symbols(...)`
-    // (CSS Counter Styles 3): marcadores custom que el enum no modela; los
-    // aproximamos a `Disc`. Mejor que descartar (dejaría el marker heredado).
+    // Fase 7.1216 — marcador string (`list-style-type: "→"`, CSS Lists 3): el
+    // marcador es el string literal verbatim (antes se aproximaba a `Disc`,
+    // perdiendo el símbolo real).
     if (raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2)
         || (raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2)
-        || raw.to_ascii_lowercase().starts_with("symbols(")
     {
+        return Some(ListStyleType::Str(raw[1..raw.len() - 1].to_string()));
+    }
+    // `symbols(...)` (CSS Counter Styles 3): sistema de símbolos inline que el
+    // enum no modela uno a uno; lo aproximamos a `Disc`. Mejor que descartar.
+    if raw.to_ascii_lowercase().starts_with("symbols(") {
         return Some(ListStyleType::Disc);
     }
     match raw.to_ascii_lowercase().as_str() {

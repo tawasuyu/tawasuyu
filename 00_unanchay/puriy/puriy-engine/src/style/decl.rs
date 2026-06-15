@@ -1381,7 +1381,7 @@ impl Decl {
             DeclKind::TextDecorationStyle(st) => s.text_decoration_style = *st,
             DeclKind::TextDecorationThickness(t) => s.text_decoration_thickness = *t,
             DeclKind::TextUnderlineOffset(o) => s.text_underline_offset = *o,
-            DeclKind::ListStyleType(t) => s.list_style_type = *t,
+            DeclKind::ListStyleType(t) => s.list_style_type = t.clone(),
             DeclKind::FlexDirection(d) => s.flex_direction = *d,
             DeclKind::JustifyContent(j) => s.justify_content = *j,
             DeclKind::AlignItems(a) => s.align_items = *a,

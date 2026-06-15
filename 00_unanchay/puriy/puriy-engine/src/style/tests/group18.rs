@@ -278,10 +278,10 @@ fn speak_moderno_css_speech() {
 
 #[test]
 fn list_style_type_comilla_simple() {
-    // marcador string con comilla simple (antes sólo doble).
+    // marcador string con comilla simple — Fase 7.1216 lo conserva verbatim.
     assert!(decls("list-style-type: '→'")
         .iter()
-        .any(|d| matches!(d.kind, DeclKind::ListStyleType(ListStyleType::Disc))));
+        .any(|d| matches!(&d.kind, DeclKind::ListStyleType(ListStyleType::Str(s)) if s == "→")));
 }
 
 // ── Fase 7.928 — CSS Scroll Snap 2: scroll-start + scroll-start-target ──────

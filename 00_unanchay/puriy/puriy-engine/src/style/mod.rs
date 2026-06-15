@@ -285,7 +285,7 @@ impl StyleEngine {
             style.text_decoration = p.text_decoration;
             // list-style-type sí es heredable según CSS spec — un `<ol>`
             // con `list-style-type: decimal` debe propagarse a sus `<li>`.
-            style.list_style_type = p.list_style_type;
+            style.list_style_type = p.list_style_type.clone();
             // white-space y text-transform son heredables (CSS spec).
             // Sin esto, `<p style="text-transform:uppercase">FOO <span>bar</span></p>`
             // dejaría "bar" en minúscula porque el text leaf vive en `<span>`.
