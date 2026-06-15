@@ -225,6 +225,10 @@ pub(crate) struct ManagedWindow {
     /// `app_id` hacia los clientes autorizados. `None` para la ventana del
     /// shell (el marco no es una ventana del usuario).
     pub(crate) foreign_handle: Option<ForeignToplevelHandle>,
+    /// Handles `zwlr_foreign_toplevel_handle_v1` —uno por manager wlr bindeado
+    /// (la barra `pata`)—. Espejan título/`app_id`/estado y reciben
+    /// activar/cerrar. Vacío para la ventana del shell. Ver [`crate::foreign_toplevel`].
+    pub(crate) wlr_handles: Vec<crate::foreign_toplevel::ZwlrForeignToplevelHandleV1>,
     /// Búferes de los 4 lados del marco (arriba, abajo, izq., der.) —
     /// cada uno con su `Id` estable para el seguimiento de daño.
     pub(crate) borders: [SolidColorBuffer; 4],
@@ -277,6 +281,12 @@ pub(crate) struct App {
     /// (espejo del de `data_control`): los clientes en `virtual_input_denylist`
     /// no lo ven. Se guarda para mantenerlo vivo durante toda la sesión.
     pub(crate) _virtual_keyboard_state: VirtualKeyboardManagerState,
+    /// Copia del `DisplayHandle` — para crear recursos wayland fuera del
+    /// dispatch (p. ej. handles `zwlr_foreign_toplevel` al mapear ventanas).
+    pub(crate) dh: smithay::reexports::wayland_server::DisplayHandle,
+    /// Estado de `zwlr_foreign_toplevel_management_v1` — el servidor wlr que
+    /// alimenta el `window_list` de la barra. Ver [`crate::foreign_toplevel`].
+    pub(crate) foreign_toplevel_manager: crate::foreign_toplevel::ForeignToplevelManagerState,
     /// Estado de `ext_foreign_toplevel_list_v1` — el censo de ventanas
     /// (título + `app_id` de todo lo abierto) para taskbars, docks y switchers.
     /// El global se crea con un filtro por ejecutable (espejo de los otros

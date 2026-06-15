@@ -251,6 +251,9 @@ impl XdgShellHandler for App {
             if let Some(handle) = &w.foreign_handle {
                 self.foreign_toplevel_state.remove_toplevel(handle);
             }
+            // Baja en el servidor wlr-foreign-toplevel: cada handle de la
+            // taskbar recibe `closed`.
+            crate::foreign_toplevel::cerrar_handles(&w.wlr_handles);
             if w.is_shell {
                 // El shell se cerró: libera su reserva (insets en cero), el
                 // Cerebro vuelve a teselar en la salida entera.
@@ -294,6 +297,7 @@ impl XdgShellHandler for App {
         if let Some(d) = danio {
             screencopy::danar(self, d);
         }
+        crate::foreign_toplevel::actualizar_titulo(self, id, &title);
         if let Some(ev) = self.body.retitle_surface(id, title) {
             self.brain_feed(ev);
         }
@@ -314,9 +318,13 @@ impl XdgShellHandler for App {
             .windows
             .iter()
             .find(|w| w.surface == *surface.wl_surface());
+        let id = w.map(|w| w.id);
         if let Some(handle) = w.and_then(|w| w.foreign_handle.as_ref()) {
             handle.send_app_id(&app_id);
             handle.send_done();
+        }
+        if let Some(id) = id {
+            crate::foreign_toplevel::actualizar_app_id(self, id, &app_id);
         }
     }
 

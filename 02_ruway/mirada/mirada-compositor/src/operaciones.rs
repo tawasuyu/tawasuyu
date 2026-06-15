@@ -117,6 +117,18 @@ impl App {
         }
     }
 
+    /// Enfoca/activa la ventana `id` —pedido de la taskbar por
+    /// `zwlr_foreign_toplevel_handle.activate`—. Va por el Cerebro embebido (con
+    /// uno enlazado, el dueño externo decide). El `Focus` resultante reemite el
+    /// estado a los handles wlr, así la barra resalta la activa.
+    pub(crate) fn activar_ventana(&mut self, id: u64) {
+        let cmds = match &mut self.brain {
+            Brain::Embedded(d) => d.apply(mirada_brain::DesktopAction::FocusWindow(id)),
+            Brain::Linked(_) => return,
+        };
+        self.apply_commands(cmds);
+    }
+
     /// Atiende una petición del API de control (`mirada-ctl`).
     pub(crate) fn serve_ctl(&mut self, req: CtlRequest) -> CtlReply {
         match req {
@@ -439,6 +451,7 @@ impl App {
                 if let Some(kb) = self.keyboard.clone() {
                     kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
                 }
+                crate::foreign_toplevel::refrescar_estados(self);
             }
             BodyOp::Unfocus => {
                 let mut danios = Vec::new();
@@ -454,6 +467,7 @@ impl App {
                 if let Some(kb) = self.keyboard.clone() {
                     kb.set_focus(self, Option::<WlSurface>::None, SERIAL_COUNTER.next_serial());
                 }
+                crate::foreign_toplevel::refrescar_estados(self);
             }
             BodyOp::CloseClient(id) | BodyOp::KillClient(id) => {
                 if let Some(w) = self.windows.iter().find(|w| w.id == id) {
@@ -540,8 +554,13 @@ impl App {
             frame_tick: 0,
             title: title.clone(),
             foreign_handle,
+            wlr_handles: Vec::new(),
             borders: std::array::from_fn(|_| SolidColorBuffer::default()),
         });
+
+        // Alta en el servidor wlr-foreign-toplevel (taskbar de pata): crea un
+        // handle por manager bindeado. No-op para el shell o sin managers.
+        crate::foreign_toplevel::anunciar_ventana(self, id);
 
         if is_shell {
             self.dock_shell();

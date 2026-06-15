@@ -294,6 +294,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
     let caps_filter = caps.clone();
     let caps_vk_filter = caps.clone();
     let caps_ftl_filter = caps.clone();
+    let caps_ftm_filter = caps.clone();
     let caps_sc_filter = caps.clone();
 
     let mut app = App {
@@ -336,6 +337,19 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
                 let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
                 match pid.and_then(exe_de_pid) {
                     Some(exe) => leer_tolerante(&caps_ftl_filter).window_list_permitido(&exe),
+                    None => true,
+                }
+            },
+        ),
+        dh: dh.clone(),
+        // `zwlr_foreign_toplevel_management` (taskbar: listar/activar/cerrar
+        // ventanas): mismo filtro por **ejecutable real** que el censo ext.
+        foreign_toplevel_manager: crate::foreign_toplevel::ForeignToplevelManagerState::new(
+            &dh,
+            move |client| {
+                let pid = client.get_data::<ClientState>().and_then(|s| s.pid);
+                match pid.and_then(exe_de_pid) {
+                    Some(exe) => leer_tolerante(&caps_ftm_filter).window_list_permitido(&exe),
                     None => true,
                 }
             },
