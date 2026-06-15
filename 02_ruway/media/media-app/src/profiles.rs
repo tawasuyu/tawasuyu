@@ -10,8 +10,7 @@ use std::path::{Path, PathBuf};
 
 use media_core::profile::{NamedPlaylist, ProfileStore};
 
-use crate::estado::{config_file, playlist_labels_slot, playlist_slot, reset_av_sync_anchor};
-use crate::playlist::Playlist;
+use crate::estado::config_file;
 
 /// Path del `profiles.ron`.
 pub(crate) fn profiles_path() -> Option<PathBuf> {
@@ -100,6 +99,25 @@ pub(crate) fn scan_dir_recursive(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Lista los medios de la **carpeta inmediata** de `path` (no recursivo,
+/// ordenado), incluyendo el propio `path`. Vacío si no se puede leer. Sirve
+/// para sembrar la cola al abrir un medio suelto y que anterior/siguiente
+/// recorran sus hermanos (como mpv/VLC).
+pub(crate) fn siblings_of(path: &Path) -> Vec<PathBuf> {
+    let Some(dir) = path.parent() else {
+        return Vec::new();
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = rd
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.is_file() && is_media_file(p))
+        .collect();
+    out.sort();
+    out
+}
+
 /// Construye una [`NamedPlaylist`] escaneando un directorio recursivamente.
 /// El nombre por defecto es el del directorio. `None` si no halló medios.
 pub(crate) fn playlist_from_dir(dir: &Path) -> Option<NamedPlaylist> {
@@ -117,25 +135,6 @@ pub(crate) fn playlist_from_dir(dir: &Path) -> Option<NamedPlaylist> {
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
     Some(NamedPlaylist::new(name, entries))
-}
-
-/// Reemplaza **en caliente** la playlist del motor de audio vivo por las
-/// `entries` dadas (rutas). Mismo `Arc<Mutex<Playlist>>` que comparte el sink,
-/// así no se reabre el device. Devuelve los rótulos de las pistas cargadas
-/// para refrescar la Cola, o `Err` si no hay motor / falló la primera pista.
-pub(crate) fn load_entries_into_live(entries: &[String]) -> Result<Vec<String>, String> {
-    let handle = playlist_slot()
-        .get()
-        .and_then(|o| o.as_ref())
-        .ok_or_else(|| "no hay motor de audio activo".to_string())?;
-    let tracks: Vec<PathBuf> = entries.iter().map(PathBuf::from).collect();
-    let mut pl = handle.lock();
-    pl.load_tracks(tracks)?;
-    let labels = pl.track_labels();
-    drop(pl);
-    *playlist_labels_slot().lock() = labels.clone();
-    reset_av_sync_anchor();
-    Ok(labels)
 }
 
 #[cfg(test)]

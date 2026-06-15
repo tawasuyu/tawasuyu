@@ -36,7 +36,14 @@ pub(crate) fn audio_source_from_env() -> (Arc<Mutex<dyn AudioSource + Send>>, Au
                     .get()
                     .cloned()
                     .unwrap_or_else(|| PathBuf::from("video"));
-                let pl = Playlist::new_single(label, LoadedTrack::FfmpegAudio(audio));
+                // Sembramos la carpeta para que anterior/siguiente recorran los
+                // hermanos del video abierto (como mpv/VLC).
+                let siblings = crate::profiles::siblings_of(&label);
+                let pl = Playlist::new_in_folder(
+                    label,
+                    LoadedTrack::FfmpegAudio(audio),
+                    siblings,
+                );
                 *playlist_labels_slot().lock() = pl.track_labels();
                 let shared: Arc<Mutex<Playlist>> = Arc::new(Mutex::new(pl));
                 playlist_slot().set(Some(shared.clone())).ok();

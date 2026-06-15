@@ -19,10 +19,9 @@ use crate::estado::{
     volume, SUB_DELAY_MS, MAX_SUB_DELAY_MS,
 };
 use crate::playlist::{
-    current_track_key, jump_playlist_to, playback_snapshot, seek_audio_by,
+    current_track_key, playback_snapshot, seek_audio_by,
     seek_audio_to, seek_audio_to_pos, RepeatMode,
 };
-use crate::media_io::media_title_string;
 use crate::tipos::Msg;
 
 use std::sync::atomic::Ordering;
@@ -206,18 +205,8 @@ pub(crate) fn apply_command(cmd: MediaCommand) {
             drop(g);
             osd_flash(osd::format_volume(volume().get()));
         }
-        PrevTrack => {
-            if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-                h.lock().prev();
-            }
-            osd_flash(media_title_string());
-        }
-        NextTrack => {
-            if let Some(h) = playlist_slot().get().and_then(|o| o.as_ref()) {
-                h.lock().next();
-            }
-            osd_flash(media_title_string());
-        }
+        PrevTrack => step_media(-1),
+        NextTrack => step_media(1),
         ChapterNext => {
             let pos = playback_snapshot().position;
             let pick = chapters_slot().lock().next(pos).map(|c| (c.title.clone(), c.start));
@@ -521,6 +510,25 @@ pub(crate) fn apply_command(cmd: MediaCommand) {
                 }
             }
         }
+    }
+}
+
+/// Anterior/siguiente medio de la cola — **uniforme para audio y video**.
+/// Calcula el índice destino (respeta el orden aleatorio) y hace el swap
+/// completo del pipeline vía [`crate::open::open_playlist_index`], que preserva
+/// la lista (a diferencia de `open_media`). La onda se relanza desde el handler
+/// de `Msg::Command` en `modelo` (acá no hay handle).
+fn step_media(delta: i64) {
+    let target = playlist_slot()
+        .get()
+        .and_then(|o| o.as_ref())
+        .and_then(|h| h.lock().peek_step(delta));
+    match target {
+        Some(t) => match crate::open::open_playlist_index(t) {
+            Ok(title) => osd_flash(format!("▶ {title}")),
+            Err(e) => eprintln!("media-app: anterior/siguiente: {e}"),
+        },
+        None => osd_flash("Una sola pista"),
     }
 }
 

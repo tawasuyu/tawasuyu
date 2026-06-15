@@ -25,7 +25,7 @@ use crate::estado::{
 };
 use crate::media_io::media_title_string;
 use crate::pipeline::media_host;
-use crate::playlist::{jump_playlist_to, record_playback_progress};
+use crate::playlist::record_playback_progress;
 use crate::estado::{reload_settings, spawn_controles_watcher};
 use crate::tipos::{InputTarget, Msg, SettingsTab};
 use crate::vista::{
@@ -252,6 +252,13 @@ impl App for MediaApp {
         match msg {
             Msg::Tick => {
                 record_playback_progress(model.frames);
+                // Auto-advance de video/ffmpeg (el audio nativo se auto-avanza
+                // en su propio hilo, sin gap). Relanzamos la onda al cambiar.
+                if let crate::open::AdvanceOutcome::Switched(path) =
+                    crate::open::poll_video_advance()
+                {
+                    crate::open::spawn_waveform_scan(handle, path);
+                }
                 Model {
                     frames: model.frames.wrapping_add(1),
                     ..model
@@ -266,7 +273,19 @@ impl App for MediaApp {
                 m
             }
             Msg::Command(cmd) => {
+                // Anterior/siguiente reconstruyen el medio: hay que relanzar la
+                // onda del nuevo (apply_command no tiene handle para spawnear).
+                let stepped = matches!(
+                    cmd,
+                    media_core::control::MediaCommand::NextTrack
+                        | media_core::control::MediaCommand::PrevTrack
+                );
                 apply_command(cmd);
+                if stepped {
+                    if let Some(p) = current_media_path() {
+                        crate::open::spawn_waveform_scan(handle, p);
+                    }
+                }
                 model
             }
             Msg::HostActivate(id) => {
@@ -317,7 +336,16 @@ impl App for MediaApp {
                 m
             }
             Msg::JumpTrack(i) => {
-                jump_playlist_to(i);
+                // Salto en la Cola: swap completo (audio y video por igual).
+                match crate::open::open_playlist_index(i) {
+                    Ok(title) => {
+                        crate::estado::osd_flash(format!("▶ {title}"));
+                        if let Some(p) = current_media_path() {
+                            crate::open::spawn_waveform_scan(handle, p);
+                        }
+                    }
+                    Err(e) => eprintln!("media-app: salto de pista: {e}"),
+                }
                 model
             }
             Msg::WaveformReady => model,
@@ -434,21 +462,15 @@ impl App for MediaApp {
                     .and_then(|p| p.playlists.get(idx))
                     .map(|pl| pl.entries.clone());
                 if let Some(entries) = entries {
-                    // Playlist de audio nativo → cola viva (uno-a-la-vez con
-                    // auto-advance). Si trae video, abrimos el primero en
-                    // caliente (swap de pipeline); next/prev de video es futuro.
-                    let audio_only = entries
-                        .first()
-                        .map(|e| crate::open::is_native_audio(std::path::Path::new(e)))
-                        .unwrap_or(true);
-                    if audio_only {
-                        match crate::profiles::load_entries_into_live(&entries) {
-                            Ok(labels) => m.prof_msg = Some(format!("▶ {} pistas", labels.len())),
-                            Err(e) => m.prof_msg = Some(e),
+                    // Cola viva uniforme: audio nativo y video por igual, con
+                    // anterior/siguiente + auto-advance (open_playlist_index).
+                    match crate::open::load_playlist_live(&entries) {
+                        Ok((count, first)) => {
+                            m.prof_msg = Some(format!("▶ {count} pistas"));
+                            crate::estado::osd_flash(format!("▶ {count} pistas"));
+                            crate::open::spawn_waveform_scan(handle, first);
                         }
-                    } else if let Some(first) = entries.first() {
-                        let path = std::path::PathBuf::from(first);
-                        open_and_flash(&mut m, &path, handle);
+                        Err(e) => m.prof_msg = Some(e),
                     }
                 }
                 m

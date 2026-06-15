@@ -162,6 +162,18 @@ impl RepeatMode {
     }
 }
 
+/// Decisión de auto-advance para el tick de UI (pistas no nativas).
+pub(crate) enum TickAdvance {
+    /// Nada que hacer (no terminó, o ya lo maneja el hilo de audio, o fin sin
+    /// repetición).
+    None,
+    /// Re-arrancar la pista actual desde cero (RepeatMode::One de video, o
+    /// All con una sola pista de video).
+    Loop,
+    /// Cambiar a la pista en este índice (swap completo de video+audio).
+    Switch(usize),
+}
+
 pub(crate) struct ShuffleOrder {
     pub(crate) order: Vec<usize>,
     pub(crate) pos: usize,
@@ -196,7 +208,7 @@ impl Playlist {
         })
     }
 
-    /// Motor vivo pero sin medio: silencio, listo para [`Self::load_tracks`].
+    /// Motor vivo pero sin medio: silencio, listo para [`Self::set_list`].
     pub(crate) fn empty() -> Self {
         Self {
             tracks: Vec::new(),
@@ -209,25 +221,35 @@ impl Playlist {
         }
     }
 
-    /// Reemplaza **en caliente** la lista de pistas y arranca por la primera
-    /// (mismo motor de audio: el sink comparte este `Arc<Mutex<Playlist>>`).
-    /// Lista vacía → queda en silencio sin error.
-    pub(crate) fn load_tracks(&mut self, tracks: Vec<PathBuf>) -> Result<(), String> {
-        if tracks.is_empty() {
-            self.tracks.clear();
-            self.idx = 0;
-            self.current = LoadedTrack::Silent;
-            self.shuffle = None;
-            return Ok(());
-        }
-        let mut current = LoadedTrack::from_path(&tracks[0])?;
-        current.set_speed(self.speed);
-        current.set_loop(matches!(self.repeat, RepeatMode::One));
+    /// Fija la **lista** de pistas (de cualquier medio, audio o video) **sin
+    /// decodificar**: deja el motor en silencio hasta que la capa de `open`
+    /// haga el swap real del índice elegido (`open_playlist_index`). No intenta
+    /// abrir la primera pista como audio nativo, así una cola de **videos**
+    /// también carga (el viejo `load_tracks` audio-only se retiró).
+    pub(crate) fn set_list(&mut self, tracks: Vec<PathBuf>) {
         self.tracks = tracks;
         self.idx = 0;
-        self.current = current;
+        self.current = LoadedTrack::Silent;
         self.shuffle = None;
-        Ok(())
+    }
+
+    /// Fija la pista viva al índice `target` con su componente de audio ya
+    /// construida (el video lo swapea la capa de `open`). **Mantiene la lista**
+    /// (a diferencia de [`Self::set_current_track`], que la colapsa a un único
+    /// medio). Actualiza `idx` y la posición del orden aleatorio.
+    pub(crate) fn set_track_at(&mut self, target: usize, mut audio: LoadedTrack) {
+        if target >= self.tracks.len() {
+            return;
+        }
+        audio.set_speed(self.speed);
+        audio.set_loop(matches!(self.repeat, RepeatMode::One));
+        self.idx = target;
+        self.current = audio;
+        if let Some(sh) = self.shuffle.as_mut() {
+            if let Some(p) = sh.order.iter().position(|&i| i == target) {
+                sh.pos = p;
+            }
+        }
     }
 
     /// Reemplaza **en caliente** la pista viva por `track` (p. ej. el audio
@@ -242,11 +264,20 @@ impl Playlist {
         self.shuffle = None;
     }
 
-    pub(crate) fn new_single(label_path: PathBuf, mut track: LoadedTrack) -> Self {
+    /// Crea una cola sembrando la **carpeta** de `path` con sus hermanos de
+    /// medios (`siblings`, ordenados) y `track` ya decodificado como la pista
+    /// activa, posicionando `idx` sobre `path`. Así anterior/siguiente recorren
+    /// la carpeta al abrir un medio suelto. Si `siblings` no contiene a `path`
+    /// (o está vacío), cae a una cola de una sola entrada.
+    pub(crate) fn new_in_folder(path: PathBuf, mut track: LoadedTrack, siblings: Vec<PathBuf>) -> Self {
         track.set_loop(false);
+        let (tracks, idx) = match siblings.iter().position(|p| *p == path) {
+            Some(i) => (siblings, i),
+            None => (vec![path], 0),
+        };
         Self {
-            tracks: vec![label_path],
-            idx: 0,
+            tracks,
+            idx,
             current: track,
             speed: 1.0,
             repeat: RepeatMode::Off,
@@ -308,6 +339,49 @@ impl Playlist {
             .unwrap_or_else(|| std::path::Path::new(""))
     }
 
+    /// Ruta de la pista en el índice `idx` de la lista (sin moverse).
+    pub(crate) fn track_at(&self, idx: usize) -> Option<&std::path::Path> {
+        self.tracks.get(idx).map(|p| p.as_path())
+    }
+
+    /// Índice destino de un paso `delta` (respeta el orden aleatorio), **puro**:
+    /// no carga ni muta nada. `None` si no hay con qué moverse (≤ 1 pista).
+    pub(crate) fn peek_step(&self, delta: i64) -> Option<usize> {
+        if self.tracks.len() <= 1 {
+            return None;
+        }
+        let new = match self.shuffle.as_ref() {
+            Some(sh) => {
+                let n = sh.order.len() as i64;
+                let np = (sh.pos as i64 + delta).rem_euclid(n) as usize;
+                sh.order[np]
+            }
+            None => {
+                let n = self.tracks.len() as i64;
+                ((self.idx as i64 + delta).rem_euclid(n)) as usize
+            }
+        };
+        Some(new)
+    }
+
+    /// ¿La pista viva la decodifica un source de audio **nativo**? Esas se
+    /// auto-avanzan en el hilo de audio (sin reconstruir el pipeline de video);
+    /// el resto (video/ffmpeg) lo maneja el tick de UI.
+    pub(crate) fn current_is_native(&self) -> bool {
+        matches!(
+            self.current,
+            LoadedTrack::Wav(_) | LoadedTrack::Mp3(_) | LoadedTrack::Opus(_)
+        )
+    }
+
+    /// ¿La pista en `idx` es de audio nativo (por extensión)?
+    fn path_is_native(&self, idx: usize) -> bool {
+        self.tracks
+            .get(idx)
+            .map(|p| crate::open::is_native_audio(p))
+            .unwrap_or(false)
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.tracks.len()
     }
@@ -318,46 +392,6 @@ impl Playlist {
 
     pub(crate) fn current_speed(&self) -> f32 {
         self.speed
-    }
-
-    pub(crate) fn step(&mut self, delta: i64) {
-        if self.tracks.len() <= 1 {
-            return;
-        }
-        let new = match self.shuffle.as_mut() {
-            Some(sh) => {
-                let n = sh.order.len() as i64;
-                let new_pos = (sh.pos as i64 + delta).rem_euclid(n) as usize;
-                sh.pos = new_pos;
-                sh.order[new_pos]
-            }
-            None => {
-                let n = self.tracks.len() as i64;
-                ((self.idx as i64 + delta).rem_euclid(n)) as usize
-            }
-        };
-        match LoadedTrack::from_path(&self.tracks[new]) {
-            Ok(mut t) => {
-                t.set_speed(self.speed);
-                t.set_loop(matches!(self.repeat, RepeatMode::One));
-                self.idx = new;
-                self.current = t;
-                eprintln!(
-                    "media-app: playlist [{}/{}] → {}",
-                    self.idx + 1,
-                    self.tracks.len(),
-                    self.tracks[self.idx].display()
-                );
-            }
-            Err(e) => eprintln!("media-app: cambio de pista falló: {e}"),
-        }
-    }
-
-    pub(crate) fn next(&mut self) {
-        self.step(1)
-    }
-    pub(crate) fn prev(&mut self) {
-        self.step(-1)
     }
 
     pub(crate) fn jump_to(&mut self, target: usize) {
@@ -391,19 +425,67 @@ impl Playlist {
             .collect()
     }
 
+    /// Auto-advance del **hilo de audio**: sólo pistas nativas, y sólo si la
+    /// pista destino también es nativa (swap sin gap, sin tocar el pipeline de
+    /// video). Cualquier transición que involucre video la decide el tick de UI
+    /// vía [`Self::tick_advance`] — acá no se hace nada para no congelar el
+    /// frame ni spamear errores intentando decodificar un video como audio.
     fn maybe_auto_advance(&mut self) {
-        if !self.current.is_finished() {
+        if !self.current_is_native() || !self.current.is_finished() {
             return;
         }
         match self.repeat {
             RepeatMode::One => {
                 self.current.seek_to(Duration::ZERO);
             }
+            RepeatMode::All if self.tracks.len() <= 1 => {
+                self.current.seek_to(Duration::ZERO);
+            }
+            RepeatMode::All | RepeatMode::Off => {
+                let last = matches!(self.repeat, RepeatMode::Off)
+                    && match self.shuffle.as_ref() {
+                        Some(sh) => sh.pos + 1 >= sh.order.len(),
+                        None => self.idx + 1 >= self.tracks.len(),
+                    };
+                if last {
+                    return;
+                }
+                if let Some(target) = self.peek_step(1) {
+                    if self.path_is_native(target) {
+                        self.jump_to(target);
+                    }
+                    // Destino no nativo → lo abre el tick de UI.
+                }
+            }
+        }
+    }
+
+    /// Acción de auto-advance que debe ejecutar el **tick de UI** cuando la
+    /// pista viva NO es nativa (video/ffmpeg) — o cuando una nativa terminó y
+    /// la siguiente es video (caso que el hilo de audio deja pasar). **Pura**:
+    /// no muta nada; el caller reconstruye el pipeline.
+    pub(crate) fn tick_advance(&self) -> TickAdvance {
+        if !self.current.is_finished() {
+            return TickAdvance::None;
+        }
+        let target = match self.repeat {
+            RepeatMode::One => {
+                // Las nativas las re-loopea su propio source / el hilo de audio.
+                return if self.current_is_native() {
+                    TickAdvance::None
+                } else {
+                    TickAdvance::Loop
+                };
+            }
             RepeatMode::All => {
                 if self.tracks.len() > 1 {
-                    self.next();
+                    self.peek_step(1)
                 } else {
-                    self.current.seek_to(Duration::ZERO);
+                    return if self.current_is_native() {
+                        TickAdvance::None
+                    } else {
+                        TickAdvance::Loop
+                    };
                 }
             }
             RepeatMode::Off => {
@@ -411,10 +493,17 @@ impl Playlist {
                     Some(sh) => sh.pos + 1 >= sh.order.len(),
                     None => self.idx + 1 >= self.tracks.len(),
                 };
-                if !last {
-                    self.next();
+                if last {
+                    return TickAdvance::None;
                 }
+                self.peek_step(1)
             }
+        };
+        match target {
+            // Nativa→nativa ya lo resolvió el hilo de audio: no duplicar.
+            Some(t) if self.current_is_native() && self.path_is_native(t) => TickAdvance::None,
+            Some(t) => TickAdvance::Switch(t),
+            None => TickAdvance::None,
         }
     }
 
@@ -510,14 +599,6 @@ pub(crate) fn seek_audio_by(delta_secs: i64) {
     let mut src = handle.lock();
     media_core::seek::by_wrapped(&mut *src, delta_secs);
     drop(src);
-    reset_av_sync_anchor();
-}
-
-pub(crate) fn jump_playlist_to(idx: usize) {
-    let Some(handle) = playlist_slot().get().and_then(|o| o.as_ref()) else {
-        return;
-    };
-    handle.lock().jump_to(idx);
     reset_av_sync_anchor();
 }
 
