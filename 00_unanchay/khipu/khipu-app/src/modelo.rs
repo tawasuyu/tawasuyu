@@ -104,7 +104,7 @@ impl Embedder {
     /// future con `block_on`; ante un error devuelve un vector de ceros.
     pub(crate) fn embed_blocking(&self, text: &str) -> Vec<f32> {
         match self {
-            Embedder::Local => crate::estado::embed(text, EMBED_DIM),
+            Embedder::Local => khipu_gravity::local_embed(text, EMBED_DIM),
             Embedder::Remote { provider, rt, dim, .. } => rt
                 .block_on(provider.embed(text))
                 .map(|v| v.values)

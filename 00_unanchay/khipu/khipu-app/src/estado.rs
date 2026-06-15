@@ -19,7 +19,7 @@ use llimphi_widget_text_editor::EditorState;
 use llimphi_widget_text_input::TextInputState;
 use serde::{Deserialize, Serialize};
 
-use crate::modelo::{Embedder, Focus, Model, Msg, Region, EMBED_DIM};
+use crate::modelo::{Embedder, Focus, Model, Msg, Region};
 use crate::map::place_note;
 use llimphi_ui::Handle;
 
@@ -232,36 +232,9 @@ pub(crate) fn seeded_model(embedder: Embedder) -> Model {
 // Embeddings
 // =====================================================================
 
-/// Hash trigram → R^dim con signos +/-1 (random projection 1-bit signed),
-/// normalizado por L2. Determinista, independiente de idioma, sin red.
-pub(crate) fn embed(text: &str, dim: usize) -> Vec<f32> {
-    let mut v = vec![0.0f32; dim];
-    let lower = text.to_lowercase();
-    let bytes = lower.as_bytes();
-    if bytes.len() < 3 {
-        for (i, b) in bytes.iter().enumerate() {
-            v[i % dim] += *b as f32 / 255.0;
-        }
-    } else {
-        for w in bytes.windows(3) {
-            let mut h: u64 = 0xcbf29ce484222325;
-            for b in w {
-                h ^= *b as u64;
-                h = h.wrapping_mul(0x100000001b3);
-            }
-            let idx = (h as usize) % dim;
-            let sign = if h & 1 == 0 { 1.0 } else { -1.0 };
-            v[idx] += sign;
-        }
-    }
-    let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if n > 0.0 {
-        for x in &mut v {
-            *x /= n;
-        }
-    }
-    v
-}
+// El embedder local de fallback (hash trigram → vector) vive en el core
+// `khipu-gravity` como `local_embed`, junto a los vectores que alimenta (Regla
+// 2). `modelo::Embedder::Local` lo llama directamente desde ahí.
 
 /// Versión síncrona para el arranque (seed y migración de formato):
 /// calcula el vector en línea y lo inserta. En init todavía no hay nada

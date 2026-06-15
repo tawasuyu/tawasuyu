@@ -6,9 +6,10 @@
 //! - **Editor** (centro): título (input), cuerpo (text-editor con
 //!   wiki-links `[[...]]`), etiquetas (input). Edición directa — la
 //!   nota seleccionada se modifica al teclear, sin botón guardar.
-//! - **Gravedad** (derecha): canvas vello que pinta las posiciones
-//!   2D del [`SemanticField::gravity_layout`]. Color por clúster
-//!   (umbral 0.55), la seleccionada va resaltada con borde acento.
+//! - **Gravedad** (derecha): canvas vello que pinta las posiciones 2D
+//!   con que `khipu_gravity::SemanticField::anchor_new` ancló cada nota
+//!   al crearse (baricentro semántico). Color por clúster (umbral 0.55),
+//!   la seleccionada va resaltada con borde acento.
 //!
 //! **Embeddings**: si hay un `verbo-daemon` corriendo en el socket por
 //! defecto (`$XDG_RUNTIME_DIR/verbo.sock`) los vectores son reales

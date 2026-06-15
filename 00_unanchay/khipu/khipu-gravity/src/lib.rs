@@ -204,6 +204,75 @@ impl SemanticField {
         scored
     }
 
+    /// Le da a `id` un domicilio fijo, **una sola vez**: cae en el baricentro
+    /// de sus parientes semánticos (ponderado por afinidad) y, si quedó pegada
+    /// a otra nota, se separa apenas. `placed` son las notas ya asentadas con su
+    /// posición de mundo. Determinista y dependiente sólo de lo ya colocado, así
+    /// el orden de inserción es estable y el mapa nunca se reacomoda solo.
+    ///
+    /// Es el anclaje incremental del campo semántico: vivía atrapado en
+    /// `khipu-app::map::place_note` (frontend); el algoritmo baja acá para que
+    /// cualquier frontend lo reuse (Regla 2). El frontend sólo lee posiciones y
+    /// escribe la resultante en su store.
+    pub fn anchor_new(&self, id: NoteId, placed: &[(NoteId, (f32, f32))]) -> (f32, f32) {
+        // Vecinos ya colocados: su afinidad con la nota nueva y su posición.
+        let mut kin: Vec<(f32, (f32, f32))> = Vec::new();
+        for (other, pos) in placed {
+            if *other == id {
+                continue;
+            }
+            let aff = self.affinity(id, *other).unwrap_or(0.0).max(0.0);
+            kin.push((aff, *pos));
+        }
+
+        let target = if kin.is_empty() {
+            (0.0, 0.0) // primera nota del cuaderno: centro del mundo.
+        } else {
+            let wsum: f32 = kin.iter().map(|(w, _)| *w).sum();
+            if wsum > 1e-3 {
+                // Cae junto a su parentela: baricentro ponderado por afinidad.
+                let (mut tx, mut ty) = (0.0_f32, 0.0_f32);
+                for (w, (x, y)) in &kin {
+                    tx += w * x;
+                    ty += w * y;
+                }
+                (tx / wsum, ty / wsum)
+            } else {
+                // Ortogonal a todo: anillo determinista por id, lejos del núcleo.
+                let ang = id as f32 * ANCHOR_GOLDEN_ANGLE;
+                let rad = 180.0 + 14.0 * (id as f32).sqrt();
+                (rad * ang.cos(), rad * ang.sin())
+            }
+        };
+
+        // Separación: empuja el target hasta despegarlo de cada vecino cercano.
+        let mut p = target;
+        for _ in 0..12 {
+            let mut moved = false;
+            for (_, q) in &kin {
+                let dx = p.0 - q.0;
+                let dy = p.1 - q.1;
+                let d = (dx * dx + dy * dy).sqrt();
+                if d < ANCHOR_MIN_SEP {
+                    let (ux, uy) = if d > 1e-3 {
+                        (dx / d, dy / d)
+                    } else {
+                        let a = id as f32 * ANCHOR_GOLDEN_ANGLE;
+                        (a.cos(), a.sin())
+                    };
+                    let push = ANCHOR_MIN_SEP - d;
+                    p.0 += ux * push;
+                    p.1 += uy * push;
+                    moved = true;
+                }
+            }
+            if !moved {
+                break;
+            }
+        }
+        p
+    }
+
     /// Agrupa las notas en clústeres: dos notas quedan en el mismo grupo
     /// si su afinidad alcanza `threshold` (transitivamente). Cada
     /// clúster viene ordenado por id, y la lista de clústeres también.
@@ -313,6 +382,46 @@ impl SemanticField {
             .map(|((id, _), (x, y))| NotePlacement { id: *id, x, y })
             .collect()
     }
+}
+
+/// Separación mínima entre nodos al anclar uno nuevo (coordenadas de mundo).
+pub const ANCHOR_MIN_SEP: f32 = 30.0;
+/// Ángulo áureo en radianes — reparte determinísticamente lo que no tiene
+/// parentela semántica sin amontonarlo.
+const ANCHOR_GOLDEN_ANGLE: f32 = 2.399_963_2;
+
+/// Embedder local de fallback: hash trigram → R^dim con signos +/-1 (random
+/// projection 1-bit signed), normalizado por L2. Determinista, independiente de
+/// idioma, sin red. Es el vector que alimenta a [`SemanticField`] cuando el
+/// daemon de verbo no está; vivía atrapado en `khipu-app::estado::embed`
+/// (frontend) y baja acá, junto a los vectores que produce (Regla 2).
+pub fn local_embed(text: &str, dim: usize) -> Vec<f32> {
+    let mut v = vec![0.0f32; dim];
+    let lower = text.to_lowercase();
+    let bytes = lower.as_bytes();
+    if bytes.len() < 3 {
+        for (i, b) in bytes.iter().enumerate() {
+            v[i % dim] += *b as f32 / 255.0;
+        }
+    } else {
+        for w in bytes.windows(3) {
+            let mut h: u64 = 0xcbf29ce484222325;
+            for b in w {
+                h ^= *b as u64;
+                h = h.wrapping_mul(0x100000001b3);
+            }
+            let idx = (h as usize) % dim;
+            let sign = if h & 1 == 0 { 1.0 } else { -1.0 };
+            v[idx] += sign;
+        }
+    }
+    let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if n > 0.0 {
+        for x in &mut v {
+            *x /= n;
+        }
+    }
+    v
 }
 
 #[cfg(test)]

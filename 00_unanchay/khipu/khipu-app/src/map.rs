@@ -76,79 +76,22 @@ pub(crate) fn pick_note(model: &Model, lx: f32, ly: f32, w: f32, h: f32) -> Opti
     best.filter(|(_, d2)| *d2 <= tol).map(|(id, _)| id)
 }
 
-/// Separación mínima entre nodos al colocarlos (coordenadas de mundo).
-pub(crate) const MAP_MIN_SEP: f32 = 30.0;
-/// Ángulo áureo en radianes — reparte determinísticamente lo que no tiene
-/// parentela semántica sin amontonarlo.
-pub(crate) const GOLDEN_ANGLE: f32 = 2.399_963_2;
-
-/// Le da a `id` un domicilio fijo en el mapa, **una sola vez**: cae en el
-/// baricentro de sus parientes semánticos (ponderado por afinidad) y, si
-/// quedó pegada a otra nota, se separa apenas. Determinista y dependiente
-/// sólo de las notas ya asentadas, así el orden de inserción es estable y
-/// el mapa nunca se reacomoda solo.
+/// Le da a `id` un domicilio fijo en el mapa, **una sola vez**. El anclaje
+/// (baricentro semántico + separación) lo resuelve el core agnóstico
+/// `khipu_gravity::SemanticField::anchor_new` (Regla 2); acá sólo juntamos las
+/// notas ya asentadas con su posición y escribimos la resultante en el store.
 pub(crate) fn place_note(model: &mut Model, id: NoteId) {
     if model.store.get(id).map(|n| n.pos.is_some()).unwrap_or(true) {
         return; // ya tiene domicilio (o no existe): no se mueve.
     }
-    // Vecinos ya colocados: su afinidad con la nota nueva y su posición.
-    let mut kin: Vec<(f32, (f32, f32))> = Vec::new();
-    for other in &model.order {
-        if *other == id {
-            continue;
-        }
-        let Some(pos) = model.store.get(*other).and_then(|n| n.pos) else { continue };
-        let aff = model.field.affinity(id, *other).unwrap_or(0.0).max(0.0);
-        kin.push((aff, pos));
-    }
-
-    let target = if kin.is_empty() {
-        (0.0, 0.0) // primera nota del cuaderno: centro del mundo.
-    } else {
-        let wsum: f32 = kin.iter().map(|(w, _)| *w).sum();
-        if wsum > 1e-3 {
-            // Cae junto a su parentela: baricentro ponderado por afinidad.
-            let (mut tx, mut ty) = (0.0_f32, 0.0_f32);
-            for (w, (x, y)) in &kin {
-                tx += w * x;
-                ty += w * y;
-            }
-            (tx / wsum, ty / wsum)
-        } else {
-            // Ortogonal a todo: anillo determinista por id, lejos del núcleo.
-            let ang = id as f32 * GOLDEN_ANGLE;
-            let rad = 180.0 + 14.0 * (id as f32).sqrt();
-            (rad * ang.cos(), rad * ang.sin())
-        }
-    };
-
-    // Separación: empuja el target hasta despegarlo de cada vecino cercano.
-    let mut p = target;
-    for _ in 0..12 {
-        let mut moved = false;
-        for (_, q) in &kin {
-            let dx = p.0 - q.0;
-            let dy = p.1 - q.1;
-            let d = (dx * dx + dy * dy).sqrt();
-            if d < MAP_MIN_SEP {
-                let (ux, uy) = if d > 1e-3 {
-                    (dx / d, dy / d)
-                } else {
-                    let a = id as f32 * GOLDEN_ANGLE;
-                    (a.cos(), a.sin())
-                };
-                let push = MAP_MIN_SEP - d;
-                p.0 += ux * push;
-                p.1 += uy * push;
-                moved = true;
-            }
-        }
-        if !moved {
-            break;
-        }
-    }
-
-    model.store.set_pos(id, p.0, p.1);
+    let placed: Vec<(NoteId, (f32, f32))> = model
+        .order
+        .iter()
+        .filter(|other| **other != id)
+        .filter_map(|other| model.store.get(*other).and_then(|n| n.pos).map(|p| (*other, p)))
+        .collect();
+    let (x, y) = model.field.anchor_new(id, &placed);
+    model.store.set_pos(id, x, y);
 }
 
 /// Envuelve `child` como cajón absoluto pegado al borde izquierdo, alto
