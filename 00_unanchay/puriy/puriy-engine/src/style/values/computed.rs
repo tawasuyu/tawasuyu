@@ -1804,5 +1804,22 @@ pub struct ComputedStyle {
     pub fill_size: Option<String>,
     /// `fill-repeat` (CSS Fill and Stroke 3). `None` = `repeat`. HEREDA. Plumb. Fase 7.1079.
     pub fill_repeat: Option<String>,
+    // === Fase 7.1080-7.1087 — animation-trigger-* longhands (plumb opaco) ===
+    /// `animation-trigger-behavior` (CSS Animations 2). `None` = `once`. NO hereda. Plumb. Fase 7.1080.
+    pub animation_trigger_behavior: Option<String>,
+    /// `animation-trigger-timeline` (CSS Animations 2). `None` = `auto`. NO hereda. Plumb. Fase 7.1081.
+    pub animation_trigger_timeline: Option<String>,
+    /// `animation-trigger-range` shorthand (CSS Animations 2). `None` = `normal`. NO hereda. Plumb. Fase 7.1082.
+    pub animation_trigger_range: Option<String>,
+    /// `animation-trigger-range-start` (CSS Animations 2). `None` = `normal`. NO hereda. Plumb. Fase 7.1083.
+    pub animation_trigger_range_start: Option<String>,
+    /// `animation-trigger-range-end` (CSS Animations 2). `None` = `normal`. NO hereda. Plumb. Fase 7.1084.
+    pub animation_trigger_range_end: Option<String>,
+    /// `animation-trigger-exit-range` shorthand (CSS Animations 2). `None` = `auto`. NO hereda. Plumb. Fase 7.1085.
+    pub animation_trigger_exit_range: Option<String>,
+    /// `animation-trigger-exit-range-start` (CSS Animations 2). `None` = `auto`. NO hereda. Plumb. Fase 7.1086.
+    pub animation_trigger_exit_range_start: Option<String>,
+    /// `animation-trigger-exit-range-end` (CSS Animations 2). `None` = `auto`. NO hereda. Plumb. Fase 7.1087.
+    pub animation_trigger_exit_range_end: Option<String>,
 }
 

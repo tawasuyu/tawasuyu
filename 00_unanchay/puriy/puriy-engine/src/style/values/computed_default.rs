@@ -657,6 +657,15 @@ impl Default for ComputedStyle {
             fill_position: None,
             fill_size: None,
             fill_repeat: None,
+            // Fase 7.1080-7.1087 — animation-trigger-* longhands, default None.
+            animation_trigger_behavior: None,
+            animation_trigger_timeline: None,
+            animation_trigger_range: None,
+            animation_trigger_range_start: None,
+            animation_trigger_range_end: None,
+            animation_trigger_exit_range: None,
+            animation_trigger_exit_range_start: None,
+            animation_trigger_exit_range_end: None,
         }
     }
 }

@@ -527,6 +527,16 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "fill-position" => opaque_or_sentinel(value, "0% 0%").map(DeclKind::FillPosition),
         "fill-size" => opaque_or_sentinel(value, "auto").map(DeclKind::FillSize),
         "fill-repeat" => opaque_or_sentinel(value, "repeat").map(DeclKind::FillRepeat),
+        // === Fase 7.1080-7.1087 — animation-trigger-* longhands (CSS Animations 2) ===
+        // `animation-trigger` (shorthand) ya está cubierto. NO heredan.
+        "animation-trigger-behavior" => opaque_or_sentinel(value, "once").map(DeclKind::AnimationTriggerBehavior),
+        "animation-trigger-timeline" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerTimeline),
+        "animation-trigger-range" => opaque_or_sentinel(value, "normal").map(DeclKind::AnimationTriggerRange),
+        "animation-trigger-range-start" => opaque_or_sentinel(value, "normal").map(DeclKind::AnimationTriggerRangeStart),
+        "animation-trigger-range-end" => opaque_or_sentinel(value, "normal").map(DeclKind::AnimationTriggerRangeEnd),
+        "animation-trigger-exit-range" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerExitRange),
+        "animation-trigger-exit-range-start" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerExitRangeStart),
+        "animation-trigger-exit-range-end" => opaque_or_sentinel(value, "auto").map(DeclKind::AnimationTriggerExitRangeEnd),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

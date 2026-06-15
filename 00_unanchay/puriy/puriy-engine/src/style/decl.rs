@@ -1170,6 +1170,15 @@ pub(crate) enum DeclKind {
     FillPosition(Option<String>),
     FillSize(Option<String>),
     FillRepeat(Option<String>),
+    // === Fase 7.1080-7.1087 — animation-trigger-* longhands (plumb opaco) ===
+    AnimationTriggerBehavior(Option<String>),
+    AnimationTriggerTimeline(Option<String>),
+    AnimationTriggerRange(Option<String>),
+    AnimationTriggerRangeStart(Option<String>),
+    AnimationTriggerRangeEnd(Option<String>),
+    AnimationTriggerExitRange(Option<String>),
+    AnimationTriggerExitRangeStart(Option<String>),
+    AnimationTriggerExitRangeEnd(Option<String>),
 }
 
 impl Decl {
@@ -1977,6 +1986,15 @@ impl Decl {
             DeclKind::FillPosition(v) => s.fill_position = v.clone(),
             DeclKind::FillSize(v) => s.fill_size = v.clone(),
             DeclKind::FillRepeat(v) => s.fill_repeat = v.clone(),
+            // Fase 7.1080-7.1087 — animation-trigger-* longhands, plumb opaco.
+            DeclKind::AnimationTriggerBehavior(v) => s.animation_trigger_behavior = v.clone(),
+            DeclKind::AnimationTriggerTimeline(v) => s.animation_trigger_timeline = v.clone(),
+            DeclKind::AnimationTriggerRange(v) => s.animation_trigger_range = v.clone(),
+            DeclKind::AnimationTriggerRangeStart(v) => s.animation_trigger_range_start = v.clone(),
+            DeclKind::AnimationTriggerRangeEnd(v) => s.animation_trigger_range_end = v.clone(),
+            DeclKind::AnimationTriggerExitRange(v) => s.animation_trigger_exit_range = v.clone(),
+            DeclKind::AnimationTriggerExitRangeStart(v) => s.animation_trigger_exit_range_start = v.clone(),
+            DeclKind::AnimationTriggerExitRangeEnd(v) => s.animation_trigger_exit_range_end = v.clone(),
         }
     }
 }

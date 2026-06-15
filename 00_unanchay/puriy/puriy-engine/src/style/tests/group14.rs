@@ -803,3 +803,29 @@ use super::super::*;
         // El paint SVG `fill` sigue independiente del plumb fill-color.
         assert_eq!(style_of("fill-color: red").fill, ComputedStyle::default().fill);
     }
+
+    #[test]
+    fn animation_trigger_longhands_plumb_fase_7_1080_1087() {
+        let s = style_of(
+            "animation-trigger-behavior: repeat; \
+             animation-trigger-timeline: --t; \
+             animation-trigger-range: entry 0% exit 100%; \
+             animation-trigger-range-start: entry 0%; \
+             animation-trigger-range-end: exit 100%; \
+             animation-trigger-exit-range: cover; \
+             animation-trigger-exit-range-start: cover 0%; \
+             animation-trigger-exit-range-end: cover 100%",
+        );
+        assert_eq!(s.animation_trigger_behavior.as_deref(), Some("repeat"));
+        assert_eq!(s.animation_trigger_timeline.as_deref(), Some("--t"));
+        assert_eq!(s.animation_trigger_range.as_deref(), Some("entry 0% exit 100%"));
+        assert_eq!(s.animation_trigger_range_start.as_deref(), Some("entry 0%"));
+        assert_eq!(s.animation_trigger_range_end.as_deref(), Some("exit 100%"));
+        assert_eq!(s.animation_trigger_exit_range.as_deref(), Some("cover"));
+        assert_eq!(s.animation_trigger_exit_range_start.as_deref(), Some("cover 0%"));
+        assert_eq!(s.animation_trigger_exit_range_end.as_deref(), Some("cover 100%"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("animation-trigger-behavior: once").animation_trigger_behavior, None);
+        assert_eq!(style_of("animation-trigger-timeline: auto").animation_trigger_timeline, None);
+        assert_eq!(style_of("animation-trigger-range: normal").animation_trigger_range, None);
+    }
