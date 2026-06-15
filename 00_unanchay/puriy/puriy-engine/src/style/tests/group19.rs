@@ -419,3 +419,42 @@ fn nesting_amp_top_level() {
     // `&:hover` no aplica al <p> en reposo, pero la decl del nivel padre sí.
     assert_eq!(p_color("p { &:hover { color: rgb(1,2,3) } color: rgb(7,8,9) }"), (7, 8, 9));
 }
+
+// ── Fase 7.936 — @container / @scope aplanan sus reglas (antes drop total) ──
+
+#[test]
+fn container_query_aplana_reglas() {
+    // Antes: el @container entero se saltaba → el <p> quedaba sin estilo.
+    assert_eq!(
+        p_color("@container (min-width: 1px) { p { color: rgb(3,3,3) } }"),
+        (3, 3, 3)
+    );
+    // Con nombre de contenedor.
+    assert_eq!(
+        p_color("@container card (min-width: 400px) { p { color: rgb(4,4,4) } }"),
+        (4, 4, 4)
+    );
+}
+
+#[test]
+fn scope_aplana_reglas() {
+    // @scope (root) { ... } aplana; `:scope` interno es inerte-true.
+    assert_eq!(
+        p_color("@scope (.card) to (.inner) { p { color: rgb(5,5,5) } }"),
+        (5, 5, 5)
+    );
+    assert_eq!(
+        p_color("@scope (body) { :scope p { color: rgb(6,6,6) } }"),
+        (6, 6, 6)
+    );
+}
+
+#[test]
+fn starting_style_no_aplica_en_reposo() {
+    // @starting-style NO debe aplanarse (sólo vale al aparecer): el <p> en
+    // reposo conserva su color base, no el de @starting-style.
+    assert_eq!(
+        p_color("p { color: rgb(8,8,8) } @starting-style { p { color: rgb(1,1,1) } }"),
+        (8, 8, 8)
+    );
+}

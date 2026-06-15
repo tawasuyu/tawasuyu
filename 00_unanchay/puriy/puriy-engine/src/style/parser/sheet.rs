@@ -426,6 +426,24 @@ pub(crate) fn parse_rules_block(css: &str, vars: &HashMap<String, String>, viewp
                 }
                 continue;
             }
+            // Fase 7.936 — `@container [name] (cond) { ... }` (Container
+            // Queries) y `@scope (root) [to (limit)] { ... }` (CSS Scoping):
+            // NO evaluamos la condición de contenedor ni la proximidad del
+            // scope (no hay layout de contenedor ni árbol de scoping acá),
+            // pero APLANAMOS sus reglas igual que `@layer`/`@media` verdadero
+            // — estrictamente mejor que dropearlas (sino se pierde todo el CSS
+            // dentro de un container query). Las reglas internas pueden usar
+            // `:scope` (inerte=true) y `&` (nesting), ya soportados.
+            if lower.starts_with("@container") || lower.starts_with("@scope") {
+                if chunk.contains('{') {
+                    let body = parse_at_rule_body(chunk);
+                    out.extend(parse_rules_block(body, vars, viewport));
+                }
+                continue;
+            }
+            // `@starting-style` y `@position-try` NO se aplanan: sus reglas sólo
+            // valen en transiciones de aparición / fallback de anchor — aplicarlas
+            // en estado estable sería incorrecto. Se saltan (drop correcto).
             // @-rule desconocido: lo saltamos sin parsear.
             continue;
         }
