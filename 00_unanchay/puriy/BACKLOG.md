@@ -46,10 +46,25 @@ de diseño real no prevista acá. Si no, sigo a la próxima.
 - **7.1220** ✅ — `clip-path: circle()/ellipse()` se pinta (elipse real).
 - **7.1221** ✅ — radios `%` en circle/ellipse (spec `clip_ellipse: [f32;12]` =
   centro `[cx_px,cx_pct,cy_px,cy_pct]` + 2 radios `[px,pct_w,pct_h,pct_diag]`).
+- **7.1222** ✅ `1fcfd7f1` — closest-side/farthest-side (radio quint, spec
+  `[f32;14]`; `circle()` vacío → closest-side).
+- **7.1223** ✅ `b35b4109` — polygon() (ClipPath pierde Copy; `clip_polygon`).
+- **7.1224** ✅ `79162621` — path() (kurbo BezPath::from_svg; `clip_path_svg`).
+- **7.1225** ✅ `896d4cb3` — geometry-box de referencia (`clip_ref_inset`;
+  `GeometryBox`). **Familia clip-path / basic-shape CERRADA.**
 
 ---
 
-## Familia clip-path / basic-shape (en orden)
+## Familia clip-path / basic-shape (CERRADA — detalle de cada fase abajo)
+
+> Las 4 fases de esta sección están **hechas** (ver hashes arriba). Se deja el
+> detalle como registro de lo planeado vs. lo construido. Desvíos respecto del
+> plan original, anotados al implementar:
+> - 7.1222: `side` se extendió a `{0,1,2,3,4}` (no `{0,1,2}`) para codificar la
+>   BASE del lado (circle = 4 lados; ellipse = eje) — el compositor necesitaba
+>   distinguirlas y el engine sabe cuál es al construir.
+> - 7.1224 reparó además `View::lift` (sesión paralela) que no listaba los
+>   campos nuevos de View — rebose silencioso por destructure exhaustivo.
 
 ### 7.1222 — `closest-side` / `farthest-side` en circle()/ellipse()
 
