@@ -126,11 +126,13 @@ fn build_for(path: &Path) -> (Box<dyn FrameSource + Send>, LoadedTrack) {
 /// rótulo para el OSD. `Err` sólo si el pipeline aún no se construyó (no se
 /// renderizó ningún frame todavía).
 pub(crate) fn open_media(path: &Path) -> Result<String, String> {
+    eprintln!("media-app: open_media({})", path.display());
     let pipe = pipeline_slot()
         .get()
         .ok_or_else(|| "el pipeline aún no se inicializó (no hubo frame)".to_string())?;
 
     let (video, audio) = build_for(path);
+    eprintln!("media-app: fuente nueva construida, swapeando pipeline…");
     let wrapped: Box<dyn FrameSource + Send> = Box::new(TransformVideo::new(
         ColorVideo::new(video, color().clone()),
         transform().clone(),

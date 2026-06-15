@@ -528,6 +528,7 @@ impl App for MediaApp {
     }
 
     fn on_file_drop(_model: &Self::Model, path: std::path::PathBuf) -> Option<Self::Msg> {
+        eprintln!("media-app: archivo soltado → {}", path.display());
         Some(Msg::OpenPath(path))
     }
 
