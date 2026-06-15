@@ -69,6 +69,28 @@ fn main() {
 
     let mut d = Desktop::new();
     poblar(&mut d);
+    // Geometría 2D opcional para demostrar que el Prezi la respeta:
+    //   MIRADA_OVERVIEW_GEO=row    → todos en una fila
+    //   MIRADA_OVERVIEW_GEO=cross  → cruz (+)
+    if let Ok(kind) = std::env::var("MIRADA_OVERVIEW_GEO") {
+        let mut cfg = d.config().clone();
+        cfg.overview_geometry = match kind.as_str() {
+            "row" => (0..9).map(|i| (i, 0)).collect(),
+            "cross" => vec![
+                (1, 0),
+                (0, 1),
+                (1, 1),
+                (2, 1),
+                (1, 2),
+                (0, 0),
+                (2, 0),
+                (0, 2),
+                (2, 2),
+            ],
+            _ => Vec::new(),
+        };
+        d.set_config(cfg);
+    }
     let focus = focus_arg.unwrap_or_else(|| d.active_index());
 
     let v = overview_view::<(), _>(

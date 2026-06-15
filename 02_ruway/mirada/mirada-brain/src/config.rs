@@ -184,6 +184,13 @@ pub struct Config {
     /// los otros caen a salto seco hasta que la animación esté.
     #[serde(default)]
     pub workspace_switch_mode: WorkspaceSwitchMode,
+    /// Geometría 2D del Prezi: la celda `(col, fila)` de cada escritorio en el
+    /// espacio del overview. `overview_geometry[i]` = escritorio `i` (0-based).
+    /// Vacío = grilla automática (`i % cols`, `i / cols`). Lo edita el editor de
+    /// Prezi del panel; la vista espacial lo respeta. Permite arreglos no
+    /// rectangulares (una L, una cruz, una fila, etc.).
+    #[serde(default)]
+    pub overview_geometry: Vec<(i32, i32)>,
 }
 
 /// Modo de transición de Win+Tab entre escritorios. Ver
@@ -371,6 +378,7 @@ impl Default for Config {
             background_frame_divisor: 1,
             theme: default_theme(),
             workspace_switch_mode: WorkspaceSwitchMode::default(),
+            overview_geometry: Vec::new(),
         }
     }
 }
@@ -470,6 +478,18 @@ impl Config {
             return (self.overview_columns as usize).min(count);
         }
         ((count as f32).sqrt().ceil() as usize).max(1)
+    }
+
+    /// La celda `(col, fila)` de cada escritorio en el Prezi. Usa la geometría
+    /// 2D configurada (`overview_geometry`) si tiene una entrada por escritorio;
+    /// si no, cae a la grilla automática (`i % cols`, `i / cols`). Es la fuente
+    /// única que consume el overview y el editor del panel.
+    pub fn overview_geometry_for(&self, count: usize) -> Vec<(i32, i32)> {
+        if self.overview_geometry.len() == count && count > 0 {
+            return self.overview_geometry.clone();
+        }
+        let cols = self.overview_grid_columns(count).max(1) as i32;
+        (0..count as i32).map(|i| (i % cols, i / cols)).collect()
     }
 
     /// La dirección de disposición de las salidas en el escritorio compuesto.

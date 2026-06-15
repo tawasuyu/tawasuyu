@@ -67,8 +67,12 @@ where
     // --- Grilla base (a zoom = 1, centrada en el lienzo) ----------------
     let cw = sw_i as f32;
     let ch = sh_i as f32;
-    let cols = cfg.overview_grid_columns(count).max(1);
-    let rows = count.div_ceil(cols);
+    // Geometría 2D del Prezi: la celda (col,fila) de cada escritorio. Por
+    // defecto una grilla; configurable desde el editor del panel para arreglos
+    // arbitrarios (L, cruz, fila…). El overview LA RESPETA.
+    let geo = cfg.overview_geometry_for(count);
+    let cols = (geo.iter().map(|(c, _)| *c).max().unwrap_or(0) + 1).max(1) as usize;
+    let rows = (geo.iter().map(|(_, r)| *r).max().unwrap_or(0) + 1).max(1) as usize;
     const MARGIN: f32 = 28.0;
     const GAP: f32 = 16.0;
     let avail_w = (cw - 2.0 * MARGIN - GAP * (cols as f32 - 1.0)).max(1.0);
@@ -82,11 +86,15 @@ where
     let grid_h = cell_h * rows as f32 + GAP * (rows as f32 - 1.0);
     let gx = (cw - grid_w) / 2.0;
     let gy = (ch - grid_h) / 2.0;
-    // Rect base de la celda `i` (a zoom = 1).
+    // Rect base de la celda `i` (a zoom = 1), según la geometría 2D.
     let base_rect = |i: usize| -> (f32, f32, f32, f32) {
-        let c = (i % cols) as f32;
-        let r = (i / cols) as f32;
-        (gx + c * (cell_w + GAP), gy + r * (cell_h + GAP), cell_w, cell_h)
+        let (c, r) = geo.get(i).copied().unwrap_or((0, 0));
+        (
+            gx + c as f32 * (cell_w + GAP),
+            gy + r as f32 * (cell_h + GAP),
+            cell_w,
+            cell_h,
+        )
     };
 
     // --- Cámara: scr(p) = O(t) + s(t)·p ---------------------------------
