@@ -57,7 +57,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use mirada_brain::{
     BodyEvent, BrainCommand, CtlConn, CtlReply, CtlRequest, CtlServer, Desktop, DesktopAction,
-    Keymap, KeymapWatch, LayoutMode, Rules, WindowId, WindowPlacement,
+    Keymap, KeymapProfiles, KeymapWatch, LayoutMode, Rules, WindowId, WindowPlacement,
 };
 use mirada_link::BrainLink;
 
@@ -109,6 +109,12 @@ struct Model {
     keymap_path: Option<PathBuf>,
     /// Vigía del keymap; `None` en simulación o si no hay archivo.
     keymap_watch: Option<KeymapWatch>,
+    /// Biblioteca de perfiles de atajos (dwm/i3/hyprland + propios). El menú
+    /// «Atajos» conmuta/duplica/crea/borra; al cambiar el activo se vuelca a
+    /// keymap.ron y se aplica al Desktop vivo.
+    profiles: KeymapProfiles,
+    /// Ruta de la biblioteca de perfiles (`~/.config/mirada/profiles.ron`).
+    profiles_path: Option<PathBuf>,
     /// Socket del API de control externo (`mirada-ctl`).
     ctl: Option<CtlServer>,
     /// Barra de menú principal: índice del menú raíz abierto (`None`
@@ -189,6 +195,12 @@ impl App for Mirada {
             Some(p) => Keymap::load_or_init(p),
             None => Keymap::default(),
         };
+        // Biblioteca de perfiles de atajos: el activo siembra keymap.ron.
+        let profiles_path = KeymapProfiles::default_path();
+        let profiles = match &profiles_path {
+            Some(p) => KeymapProfiles::load_or_init(p),
+            None => KeymapProfiles::default(),
+        };
         let link = connect_body();
         // Vigilar el keymap sólo tiene sentido con un Cuerpo conectado;
         // en simulación, mirada usa las teclas de su propia ventana.
@@ -234,6 +246,8 @@ impl App for Mirada {
             note: rimay_localize::t("success"),
             keymap_path,
             keymap_watch,
+            profiles,
+            profiles_path,
             ctl,
             menu_open: None,
             menu_active: usize::MAX,
@@ -602,6 +616,92 @@ fn reload_keymap(m: &mut Model) {
     }
 }
 
+// --- Perfiles de atajos (menú «Atajos») --------------------------------
+
+/// Aplica el perfil activo: lo persiste (profiles.ron + keymap.ron) e instala
+/// su keymap en el Desktop vivo, que reemite el `GrabKeys` al Cuerpo.
+fn apply_active_profile(m: &mut Model) {
+    if let Some(p) = m.profiles_path.clone() {
+        if let Err(e) = m.profiles.save(&p) {
+            m.note = format!("perfiles: {e}");
+            return;
+        }
+    }
+    if let Some(kp) = m.keymap_path.clone() {
+        let _ = m.profiles.write_active_keymap(&kp);
+    }
+    let km = m.profiles.active_keymap();
+    let cmd = m.desktop.set_keymap(km);
+    dispatch(m, vec![cmd]);
+}
+
+/// Conmuta el perfil activo y lo aplica.
+fn switch_profile(m: &mut Model, name: &str) {
+    match m.profiles.set_active(name) {
+        Ok(()) => {
+            apply_active_profile(m);
+            m.note = format!("perfil de atajos: {name}");
+        }
+        Err(e) => m.note = e.to_string(),
+    }
+}
+
+/// Duplica el perfil activo en una copia editable y la deja activa.
+fn dup_active_profile(m: &mut Model) {
+    let src = m.profiles.active().to_string();
+    let name = unique_profile_name(&m.profiles, &format!("{src} copia"));
+    let r = m
+        .profiles
+        .duplicate(&src, &name)
+        .and_then(|()| m.profiles.set_active(&name));
+    match r {
+        Ok(()) => {
+            apply_active_profile(m);
+            m.note = format!("perfil duplicado: {name}");
+        }
+        Err(e) => m.note = e.to_string(),
+    }
+}
+
+/// Crea un perfil nuevo desde un preset de fábrica y lo deja activo.
+fn new_profile_from(m: &mut Model, preset: &str) {
+    let name = unique_profile_name(&m.profiles, preset);
+    let r = m
+        .profiles
+        .create_from_preset(&name, preset)
+        .and_then(|()| m.profiles.set_active(&name));
+    match r {
+        Ok(()) => {
+            apply_active_profile(m);
+            m.note = format!("perfil nuevo: {name}");
+        }
+        Err(e) => m.note = e.to_string(),
+    }
+}
+
+/// Borra el perfil activo (los de fábrica están protegidos) y cae a `dwm`.
+fn delete_active_profile(m: &mut Model) {
+    let name = m.profiles.active().to_string();
+    match m.profiles.remove(&name) {
+        Ok(()) => {
+            apply_active_profile(m);
+            m.note = format!("perfil borrado: {name} → {}", m.profiles.active());
+        }
+        Err(e) => m.note = e.to_string(),
+    }
+}
+
+/// Un nombre de perfil libre: `base`, o `base 2`, `base 3`… si ya existe.
+fn unique_profile_name(p: &KeymapProfiles, base: &str) -> String {
+    if !p.contains(base) {
+        return base.to_string();
+    }
+    (2..)
+        .map(|n| format!("{base} {n}"))
+        .find(|c| !p.contains(c))
+        .expect("siempre hay un sufijo libre")
+}
+
 fn poll_ctl(m: &mut Model) -> bool {
     let conns: Vec<CtlConn> = match &m.ctl {
         Some(ctl) => std::iter::from_fn(|| ctl.poll()).collect(),
@@ -882,6 +982,9 @@ fn app_menu(model: &Model) -> AppMenu {
         it
     };
 
+    // Menú «Atajos»: la biblioteca de perfiles de teclas.
+    let atajos = profiles_menu(&model.profiles);
+
     AppMenu::new()
         .menu(
             Menu::new(t("file"))
@@ -912,6 +1015,7 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(fullscreen)
                 .item(scratch),
         )
+        .menu(atajos)
         .menu(
             Menu::new(t("help"))
                 .item(MenuItem::new(t("about"), "help.about")),
@@ -924,6 +1028,32 @@ fn app_menu(model: &Model) -> AppMenu {
         )
 }
 
+/// El menú «Atajos»: la biblioteca de perfiles de teclas. El perfil activo
+/// lleva ✔ y su item conmuta (`profile.use.<nombre>`); abajo, las acciones de
+/// gestión. Función pura sobre la biblioteca — verificable sin GPU. Etiquetas
+/// literales (los nombres de perfil no se localizan).
+fn profiles_menu(profiles: &KeymapProfiles) -> Menu {
+    let active = profiles.active();
+    let mut menu = Menu::new("Atajos");
+    for name in profiles.names() {
+        let mut it = MenuItem::new(name.clone(), format!("profile.use.{name}"));
+        if name == active {
+            it = it.icon("\u{2714}");
+        }
+        menu = menu.item(it);
+    }
+    let mut borrar = MenuItem::new("Borrar el activo", "profile.delete").separated();
+    if Keymap::is_builtin_name(active) {
+        // Los presets de fábrica no se borran: se duplican.
+        borrar = borrar.disabled();
+    }
+    menu.item(MenuItem::new("Duplicar el activo", "profile.dup").separated())
+        .item(MenuItem::new("Nuevo desde dwm", "profile.new.dwm"))
+        .item(MenuItem::new("Nuevo desde i3", "profile.new.i3"))
+        .item(MenuItem::new("Nuevo desde Hyprland", "profile.new.hyprland"))
+        .item(borrar)
+}
+
 /// Traduce un command id del menú principal a la acción real del Desktop.
 fn handle_menu_command(m: &mut Model, cmd: &str) {
     // Cambio de idioma: aplica el locale en caliente y lo persiste en wawa-config.
@@ -932,6 +1062,23 @@ fn handle_menu_command(m: &mut Model, cmd: &str) {
         let mut cfg = wawa_config::WawaConfig::load();
         cfg.lang = code.to_string();
         let _ = cfg.save();
+        return;
+    }
+    // Perfiles de atajos: conmutar, crear desde preset, duplicar, borrar.
+    if let Some(name) = cmd.strip_prefix("profile.use.") {
+        switch_profile(m, &name.to_string());
+        return;
+    }
+    if let Some(preset) = cmd.strip_prefix("profile.new.") {
+        new_profile_from(m, &preset.to_string());
+        return;
+    }
+    if cmd == "profile.dup" {
+        dup_active_profile(m);
+        return;
+    }
+    if cmd == "profile.delete" {
+        delete_active_profile(m);
         return;
     }
     match cmd {
@@ -1342,4 +1489,83 @@ fn main() {
     rimay_localize::init();
     let _ = rimay_localize::set_locale(&wawa_config::WawaConfig::load().lang);
     llimphi_ui::run::<Mirada>();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{profiles_menu, KeymapProfiles};
+
+    /// El menú «Atajos» lista cada perfil con su comando `profile.use.<n>`,
+    /// marca el activo con ✔ y trae las acciones de gestión.
+    #[test]
+    fn el_menu_de_atajos_refleja_la_biblioteca() {
+        let mut profs = KeymapProfiles::default();
+        profs.set_active("i3").unwrap();
+        let menu = profiles_menu(&profs);
+
+        // Un item por perfil de fábrica, con el comando de conmutación.
+        for name in ["dwm", "i3", "hyprland"] {
+            let cmd = format!("profile.use.{name}");
+            assert!(
+                menu.items.iter().any(|it| it.command == cmd),
+                "falta el item de conmutación para {name}"
+            );
+        }
+        // El activo (i3) lleva ✔; los demás no.
+        let i3 = menu
+            .items
+            .iter()
+            .find(|it| it.command == "profile.use.i3")
+            .unwrap();
+        assert!(i3.icon.is_some(), "el perfil activo debe llevar ✔");
+        let dwm = menu
+            .items
+            .iter()
+            .find(|it| it.command == "profile.use.dwm")
+            .unwrap();
+        assert!(dwm.icon.is_none(), "un perfil inactivo no lleva ✔");
+
+        // Acciones de gestión presentes.
+        for cmd in [
+            "profile.dup",
+            "profile.new.dwm",
+            "profile.new.i3",
+            "profile.new.hyprland",
+            "profile.delete",
+        ] {
+            assert!(
+                menu.items.iter().any(|it| it.command == cmd),
+                "falta la acción {cmd}"
+            );
+        }
+        // Con un preset de fábrica activo, «Borrar» está deshabilitado.
+        let borrar = menu
+            .items
+            .iter()
+            .find(|it| it.command == "profile.delete")
+            .unwrap();
+        assert!(!borrar.enabled, "borrar un preset de fábrica debe estar vedado");
+    }
+
+    /// Con un perfil propio activo, «Borrar el activo» se habilita.
+    #[test]
+    fn borrar_se_habilita_con_un_perfil_propio() {
+        let mut profs = KeymapProfiles::default();
+        profs.duplicate("hyprland", "mío").unwrap();
+        profs.set_active("mío").unwrap();
+        let menu = profiles_menu(&profs);
+        let borrar = menu
+            .items
+            .iter()
+            .find(|it| it.command == "profile.delete")
+            .unwrap();
+        assert!(borrar.enabled, "un perfil propio sí se puede borrar");
+        // Y aparece en la lista con su ✔.
+        let mio = menu
+            .items
+            .iter()
+            .find(|it| it.command == "profile.use.mío")
+            .unwrap();
+        assert!(mio.icon.is_some());
+    }
 }
