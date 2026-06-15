@@ -44,13 +44,33 @@ pub(super) fn es_suite(a: &AppEntry) -> bool {
 /// `.desktop` del sistema (sin glifo) indistinguibles.
 pub(super) fn icono_o_inicial(a: &AppEntry) -> String {
     if let Some(g) = a.icon.as_deref().filter(|s| s.chars().count() <= 2) {
-        return g.to_string();
+        // Algunos glifos (emoji, dingbats que la fuente del sistema no trae)
+        // salen como tofu / «NO GLYPH». Para esos caemos a la inicial.
+        if g.chars().all(glifo_renderiza) {
+            return g.to_string();
+        }
     }
-    a.label
+    inicial(&a.label)
+}
+
+/// La inicial alfanumérica de un rótulo, en mayúscula (chip de fallback).
+fn inicial(label: &str) -> String {
+    label
         .chars()
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "•".to_string())
+}
+
+/// `true` si el carácter está en la fuente del sistema (DejaVu). Heurística:
+/// excluye emoji (plano suplementario) y los dingbats confirmados ausentes que
+/// salían como tofu en el menú (lápiz/pluma ✎✒, cuadrados rellenos ▤▦, mapa 🗺).
+fn glifo_renderiza(c: char) -> bool {
+    let u = c as u32;
+    if u >= 0x1F000 {
+        return false; // emoji / símbolos suplementarios
+    }
+    !matches!(u, 0x270E | 0x2712 | 0x25A4 | 0x25A6)
 }
 
 // =====================================================================
@@ -710,12 +730,10 @@ fn gnome_search(query: &str, n_matches: usize, theme: &Theme) -> View<Msg> {
 }
 
 fn gnome_tile(a: &AppEntry) -> View<Msg> {
-    let glyph = a
-        .icon
-        .as_deref()
-        .filter(|s| s.chars().count() <= 2)
-        .unwrap_or("▸")
-        .to_string();
+    // Inicial-chip cuando no hay glifo renderizable (antes «▸» para todas las
+    // .desktop sin ícono → un mar de triángulos idénticos, y «NO GLYPH» para
+    // los glifos de la suite ausentes en la fuente).
+    let glyph = icono_o_inicial(a);
     let label = a.label.clone();
     let id = a.id.clone();
 
