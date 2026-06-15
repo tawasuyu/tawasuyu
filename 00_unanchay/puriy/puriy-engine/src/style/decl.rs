@@ -1145,6 +1145,12 @@ pub(crate) enum DeclKind {
     MsScrollRails(Option<String>),
     MsFlexAlign(Option<String>),
     MsFlexPack(Option<String>),
+    // === Fase 7.1058-7.1062 — Gecko -moz- misc reales (plumb opaco) ===
+    MozContextProperties(Option<String>),
+    MozStackSizing(Option<String>),
+    MozTextBlink(Option<String>),
+    MozDefaultAppearance(Option<String>),
+    MozBoxFlexgroup(Option<String>),
 }
 
 impl Decl {
@@ -1927,6 +1933,12 @@ impl Decl {
             DeclKind::MsScrollRails(v) => s.ms_scroll_rails = v.clone(),
             DeclKind::MsFlexAlign(v) => s.ms_flex_align = v.clone(),
             DeclKind::MsFlexPack(v) => s.ms_flex_pack = v.clone(),
+            // Fase 7.1058-7.1062 — Gecko -moz- misc, plumb opaco.
+            DeclKind::MozContextProperties(v) => s.moz_context_properties = v.clone(),
+            DeclKind::MozStackSizing(v) => s.moz_stack_sizing = v.clone(),
+            DeclKind::MozTextBlink(v) => s.moz_text_blink = v.clone(),
+            DeclKind::MozDefaultAppearance(v) => s.moz_default_appearance = v.clone(),
+            DeclKind::MozBoxFlexgroup(v) => s.moz_box_flexgroup = v.clone(),
         }
     }
 }

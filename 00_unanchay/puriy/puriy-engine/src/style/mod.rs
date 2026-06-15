@@ -476,6 +476,10 @@ impl StyleEngine {
             style.moz_user_focus = p.moz_user_focus.clone();
             style.moz_user_input = p.moz_user_input.clone();
             style.moz_image_region = p.moz_image_region.clone();
+            // Fase 7.1058/7.1060 — -moz-context-properties y -moz-text-blink
+            // heredan en Gecko. El resto del bloque misc NO hereda.
+            style.moz_context_properties = p.moz_context_properties.clone();
+            style.moz_text_blink = p.moz_text_blink.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

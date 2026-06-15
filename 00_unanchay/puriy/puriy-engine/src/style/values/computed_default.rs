@@ -632,6 +632,12 @@ impl Default for ComputedStyle {
             ms_scroll_rails: None,
             ms_flex_align: None,
             ms_flex_pack: None,
+            // Fase 7.1058-7.1062 — Gecko -moz- misc, plumb opaco, default None.
+            moz_context_properties: None,
+            moz_stack_sizing: None,
+            moz_text_blink: None,
+            moz_default_appearance: None,
+            moz_box_flexgroup: None,
         }
     }
 }

@@ -1751,5 +1751,20 @@ pub struct ComputedStyle {
     /// `-ms-flex-pack` (flexbox 2012 IE10, ~`justify-content`). `None` = `start`.
     /// NO hereda. Plumb. Fase 7.1057.
     pub ms_flex_pack: Option<String>,
+    // === Fase 7.1058-7.1062 — Gecko -moz- misc reales (plumb opaco) ===
+    /// `-moz-context-properties` (Gecko; propaga fill/stroke a SVG `context-*`).
+    /// `None` = `none`. HEREDA. Plumb. Fase 7.1058.
+    pub moz_context_properties: Option<String>,
+    /// `-moz-stack-sizing` (Gecko XUL). `None` = `stretch-to-fit`. NO hereda.
+    /// Plumb. Fase 7.1059.
+    pub moz_stack_sizing: Option<String>,
+    /// `-moz-text-blink` (Gecko, removido). `None` = `none`. HEREDA. Plumb. Fase 7.1060.
+    pub moz_text_blink: Option<String>,
+    /// `-moz-default-appearance` (Gecko interno). `None` = `none`. NO hereda.
+    /// Plumb. Fase 7.1061.
+    pub moz_default_appearance: Option<String>,
+    /// `-moz-box-flexgroup` (Gecko XUL, old flexbox). `None` = `1`. NO hereda.
+    /// Plumb. Fase 7.1062.
+    pub moz_box_flexgroup: Option<String>,
 }
 

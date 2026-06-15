@@ -705,3 +705,31 @@ use super::super::*;
         assert_eq!(style_of("-ms-scroll-chaining: chained").ms_scroll_chaining, None);
         assert_eq!(style_of("-ms-flex-pack: start").ms_flex_pack, None);
     }
+
+    #[test]
+    fn moz_misc_props_plumb_fase_7_1058_1062() {
+        let html = r#"<html><body><div style="
+            -moz-context-properties: fill stroke;
+            -moz-stack-sizing: ignore;
+            -moz-text-blink: blink;
+            -moz-default-appearance: button;
+            -moz-box-flexgroup: 2
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.moz_context_properties.as_deref(), Some("fill stroke"));
+        assert_eq!(t.moz_stack_sizing.as_deref(), Some("ignore"));
+        assert_eq!(t.moz_text_blink.as_deref(), Some("blink"));
+        assert_eq!(t.moz_default_appearance.as_deref(), Some("button"));
+        assert_eq!(t.moz_box_flexgroup.as_deref(), Some("2"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-moz-context-properties: none").moz_context_properties, None);
+        assert_eq!(style_of("-moz-box-flexgroup: 1").moz_box_flexgroup, None);
+        // -moz-context-properties / -moz-text-blink HEREDAN; el resto NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.moz_context_properties.as_deref(), Some("fill stroke"));
+        assert_eq!(span.moz_text_blink.as_deref(), Some("blink"));
+        assert_eq!(span.moz_stack_sizing, None);
+        assert_eq!(span.moz_default_appearance, None);
+    }

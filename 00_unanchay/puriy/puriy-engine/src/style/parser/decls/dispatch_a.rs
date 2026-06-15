@@ -499,6 +499,12 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // -ms-flex-pack (~justify-content).
         "-ms-flex-align" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsFlexAlign),
         "-ms-flex-pack" => opaque_or_sentinel(value, "start").map(DeclKind::MsFlexPack),
+        // === Fase 7.1058-7.1062 — Gecko -moz- misc reales (plumb opaco) ===
+        "-moz-context-properties" => opaque_or_sentinel(value, "none").map(DeclKind::MozContextProperties),
+        "-moz-stack-sizing" => opaque_or_sentinel(value, "stretch-to-fit").map(DeclKind::MozStackSizing),
+        "-moz-text-blink" => opaque_or_sentinel(value, "none").map(DeclKind::MozTextBlink),
+        "-moz-default-appearance" => opaque_or_sentinel(value, "none").map(DeclKind::MozDefaultAppearance),
+        "-moz-box-flexgroup" => opaque_or_sentinel(value, "1").map(DeclKind::MozBoxFlexgroup),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
