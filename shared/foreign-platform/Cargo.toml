@@ -1,0 +1,34 @@
+# =============================================================================
+#  tawasuyu :: foreign-platform — puente agnóstico a plataformas de video
+# -----------------------------------------------------------------------------
+#  CLAUDE.md regla #4: los protocolos/servicios ajenos entran por puentes
+#  `shared/foreign-*`, nunca al núcleo de las apps. Y regla #2: las apps hablan
+#  con un *core agnóstico* (aquí el trait `PlatformProvider`), no con un
+#  proveedor concreto.
+#
+#  Hermano de `foreign-ytdlp` (resuelve UNA página → URL de stream) pero un
+#  nivel más arriba: cubre la capa de NAVEGACIÓN/DESCUBRIMIENTO (buscar,
+#  canales, trending, comentarios) que necesita un cliente tipo FreeTube.
+#
+#  Decisión de diseño (ver DECISION.md): los proveedores de API REST limpia
+#  (Invidious, PeerTube, Piped) NO se escriben en Rust uno por uno: se
+#  describen en un DESCRIPTOR DE TEXTO (RON) que un motor genérico interpreta.
+#  Agregar un proveedor/instancia compatible = un archivo de texto, cero código.
+#  Lo que NO se datifica (YouTube Innertube: cipher-JS móvil) se enruta por una
+#  instancia Invidious o por `foreign-ytdlp` — nunca se mete acá.
+# =============================================================================
+
+[package]
+name = "foreign-platform"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "shared/foreign-platform — puente agnóstico a plataformas de video: trait PlatformProvider + motor REST data-driven (descriptores RON para Invidious/PeerTube). Capa de navegación/descubrimiento para un cliente tipo FreeTube sobre `media`."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+ron = { workspace = true }
+ureq = { workspace = true }

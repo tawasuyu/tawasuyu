@@ -1,0 +1,91 @@
+// =============================================================================
+//  PeerTube — proveedor REST data-driven para foreign-platform.
+//
+//  PeerTube es la red FEDERADA (ActivityPub) que la ética del repo prefiere
+//  sobre YouTube directo (ver FREETUBE.md). Su API `/api/v1` es REST limpia y
+//  pagina con start/count, anidando la lista en "data" — por eso `list_path`
+//  apunta ahí, a diferencia de Invidious. Mismo motor, otro archivo de texto:
+//  esa es la prueba de que la capa data-driven escala a proveedores hetero-
+//  géneos sin tocar Rust. Referencia: docs.joinpeertube.org/api-rest-reference
+// =============================================================================
+#![enable(implicit_some)]
+(
+    name: "PeerTube",
+    kind: "peertube",
+    default_instances: [
+        "https://framatube.org",
+    ],
+    endpoints: (
+        // GET /api/v1/search/videos?search=...  → { total, data: [...] }
+        search: (
+            path: "/api/v1/search/videos",
+            query: [("search", "{query}"), ("count", "20")],
+            list_path: "data",
+            fields: (
+                id: "uuid",
+                title: "name",
+                author: "account.displayName",
+                channel_id: "channel.name",
+                duration_secs: "duration",
+                views: "views",
+                published: "publishedAt",
+                thumbnail: "thumbnailPath",
+                description: "description",
+            ),
+        ),
+        // GET /api/v1/videos?sort=-trending  → { total, data: [...] }
+        trending: (
+            path: "/api/v1/videos",
+            query: [("sort", "-trending"), ("count", "20")],
+            list_path: "data",
+            fields: (
+                id: "uuid",
+                title: "name",
+                author: "account.displayName",
+                channel_id: "channel.name",
+                duration_secs: "duration",
+                views: "views",
+                published: "publishedAt",
+                thumbnail: "thumbnailPath",
+            ),
+        ),
+        // GET /api/v1/accounts/{channel}/videos  → { total, data: [...] }
+        channel_videos: (
+            path: "/api/v1/accounts/{channel}/videos",
+            query: [("count", "20")],
+            list_path: "data",
+            fields: (
+                id: "uuid",
+                title: "name",
+                author: "account.displayName",
+                channel_id: "channel.name",
+                duration_secs: "duration",
+                views: "views",
+                published: "publishedAt",
+                thumbnail: "thumbnailPath",
+            ),
+        ),
+        // GET /api/v1/videos/{id}  → objeto con files[] (muxeado) o
+        // streamingPlaylists[].files[] (HLS). MVP: tomamos files[].fileUrl.
+        video: (
+            path: "/api/v1/videos/{id}",
+            query: [],
+            fields: (
+                id: "uuid",
+                title: "name",
+                author: "account.displayName",
+                channel_id: "channel.name",
+                duration_secs: "duration",
+                views: "views",
+                published: "publishedAt",
+                thumbnail: "thumbnailPath",
+                description: "description",
+            ),
+            streams: (
+                muxed_list: "files",
+                url: "fileUrl",
+                quality: "resolution.label",
+            ),
+        ),
+    ),
+)

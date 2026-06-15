@@ -1,0 +1,92 @@
+// =============================================================================
+//  Invidious — proveedor REST data-driven para foreign-platform.
+//
+//  Esto es un DESCRIPTOR DE TEXTO: describe la API pública `/api/v1` de
+//  Invidious (proxy privado a YouTube) sin una línea de Rust. Para apuntar a
+//  otra instancia basta cambiar `base` al construir; para soportar otra API
+//  Invidious-compatible (p. ej. un fork) se copia este archivo y se ajustan los
+//  paths. Referencia de la API: docs.invidious.io/api/
+// =============================================================================
+#![enable(implicit_some)]
+(
+    name: "Invidious",
+    kind: "invidious",
+    default_instances: [
+        "https://invidious.fdn.fr",
+        "https://yewtu.be",
+    ],
+    endpoints: (
+        // GET /api/v1/search?q=...&page=...  → array de items en la raíz
+        search: (
+            path: "/api/v1/search",
+            query: [("q", "{query}"), ("page", "{page}"), ("type", "video")],
+            list_path: "",
+            fields: (
+                id: "videoId",
+                title: "title",
+                author: "author",
+                channel_id: "authorId",
+                duration_secs: "lengthSeconds",
+                views: "viewCount",
+                published: "publishedText",
+                thumbnail: "videoThumbnails.0.url",
+                description: "description",
+            ),
+        ),
+        // GET /api/v1/trending  → array en la raíz
+        trending: (
+            path: "/api/v1/trending",
+            query: [],
+            list_path: "",
+            fields: (
+                id: "videoId",
+                title: "title",
+                author: "author",
+                channel_id: "authorId",
+                duration_secs: "lengthSeconds",
+                views: "viewCount",
+                published: "publishedText",
+                thumbnail: "videoThumbnails.0.url",
+            ),
+        ),
+        // GET /api/v1/channels/{channel}/videos  → lista en "videos"
+        channel_videos: (
+            path: "/api/v1/channels/{channel}/videos",
+            query: [],
+            list_path: "videos",
+            fields: (
+                id: "videoId",
+                title: "title",
+                author: "author",
+                channel_id: "authorId",
+                duration_secs: "lengthSeconds",
+                views: "viewCount",
+                published: "publishedText",
+                thumbnail: "videoThumbnails.0.url",
+            ),
+        ),
+        // GET /api/v1/videos/{id}  → objeto único con formatStreams/adaptiveFormats
+        video: (
+            path: "/api/v1/videos/{id}",
+            query: [],
+            fields: (
+                id: "videoId",
+                title: "title",
+                author: "author",
+                channel_id: "authorId",
+                duration_secs: "lengthSeconds",
+                views: "viewCount",
+                published: "publishedText",
+                thumbnail: "videoThumbnails.0.url",
+                description: "description",
+            ),
+            streams: (
+                muxed_list: "formatStreams",
+                video_list: "adaptiveFormats",
+                audio_list: "adaptiveFormats",
+                url: "url",
+                quality: "qualityLabel",
+            ),
+        ),
+    ),
+)
