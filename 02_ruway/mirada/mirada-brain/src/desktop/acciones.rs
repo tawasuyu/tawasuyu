@@ -283,6 +283,22 @@ impl Desktop {
                     Vec::new()
                 }
             }
+            DesktopAction::WorkspaceNext | DesktopAction::WorkspacePrev => {
+                // Win+Tab: cicla escritorios con wrap. El modo de transición
+                // (`Config::workspace_switch_mode`) gobernará la animación; hoy
+                // sólo `Direct` está cableado → salto seco en todos los modos.
+                let n = self.workspaces.len();
+                if n <= 1 {
+                    return Vec::new();
+                }
+                let target = if matches!(action, DesktopAction::WorkspaceNext) {
+                    (active + 1) % n
+                } else {
+                    (active + n - 1) % n
+                };
+                self.show_workspace(target);
+                self.relayout()
+            }
             DesktopAction::SendToWorkspace(n) => {
                 if n >= self.workspaces.len() || n == active {
                     return Vec::new();

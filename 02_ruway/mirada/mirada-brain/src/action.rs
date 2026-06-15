@@ -139,6 +139,11 @@ pub enum DesktopAction {
     FocusConstellationNext,
     /// Salta el foco a la constelación anterior.
     FocusConstellationPrev,
+    /// Cicla al **siguiente escritorio** (Win+Tab). Relativo y con wrap. El
+    /// estilo de transición lo decide `Config::workspace_switch_mode`.
+    WorkspaceNext,
+    /// Cicla al escritorio anterior (Win+Shift+Tab).
+    WorkspacePrev,
     /// Activa el escritorio virtual `n` (índice 0-based).
     SwitchWorkspace(usize),
     /// Manda la ventana enfocada al escritorio virtual `n` (queda donde está).
@@ -226,6 +231,8 @@ impl fmt::Display for DesktopAction {
             DesktopAction::ZoomOut => f.write_str("zoom-out"),
             DesktopAction::FocusConstellationNext => f.write_str("focus-constellation-next"),
             DesktopAction::FocusConstellationPrev => f.write_str("focus-constellation-prev"),
+            DesktopAction::WorkspaceNext => f.write_str("workspace-next"),
+            DesktopAction::WorkspacePrev => f.write_str("workspace-prev"),
             // Los escritorios se numeran 1-based de cara al usuario.
             DesktopAction::SwitchWorkspace(n) => write!(f, "workspace:{}", n + 1),
             DesktopAction::SendToWorkspace(n) => write!(f, "send-to-workspace:{}", n + 1),
@@ -272,6 +279,8 @@ impl FromStr for DesktopAction {
             "zoom-out" => Self::ZoomOut,
             "focus-constellation-next" => Self::FocusConstellationNext,
             "focus-constellation-prev" => Self::FocusConstellationPrev,
+            "workspace-next" => Self::WorkspaceNext,
+            "workspace-prev" => Self::WorkspacePrev,
             "focus-output-next" => Self::FocusOutputNext,
             "quit" => Self::Quit,
             _ => {
@@ -391,15 +400,19 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
         // Plegar por constelación (familia de actividad) en vez de por pila.
         ("Super+Shift+c".into(), DesktopAction::GroupConstellation),
         // Alt-tab por constelación: saltar entre familias de actividad.
-        ("Super+Tab".into(), DesktopAction::FocusConstellationNext),
-        ("Super+Shift+Tab".into(), DesktopAction::FocusConstellationPrev),
+        // Win+Tab cicla escritorios (el comportamiento esperado). La constelación
+        // (alt-tab por actividad) queda sin atajo default — accesible vía perfiles
+        // — porque Super+Tab es lo que la gente espera para escritorios.
+        ("Super+Tab".into(), DesktopAction::WorkspaceNext),
+        ("Super+Shift+Tab".into(), DesktopAction::WorkspacePrev),
         ("Super+i".into(), DesktopAction::ZoomIn),
         ("Super+u".into(), DesktopAction::ZoomOut),
         ("Super+Shift+Return".into(), DesktopAction::Spawn("foot".into())),
         ("Super+p".into(), DesktopAction::Spawn("foot -e mirada-launcher".into())),
         // Panel de control de mirada (mirada-llimphi): profiles de atajos,
-        // vistas de escritorio y la vista espacial «Prezi».
-        ("Super+o".into(), DesktopAction::Spawn("mirada-llimphi".into())),
+        // vistas de escritorio y la vista espacial «Prezi». (Super+o ya es
+        // FocusOutputNext; Super+Shift+p = Panel.)
+        ("Super+Shift+p".into(), DesktopAction::Spawn("mirada-llimphi".into())),
         ("Super+,".into(), DesktopAction::IncMaster),
         ("Super+.".into(), DesktopAction::DecMaster),
         ("Super+Shift+e".into(), DesktopAction::Quit),

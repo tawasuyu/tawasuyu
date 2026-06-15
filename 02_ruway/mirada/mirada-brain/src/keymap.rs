@@ -242,21 +242,21 @@ impl Keymap {
 
     /// Carga el keymap del usuario con un fallback amable:
     ///
-    /// - si el archivo no existe, escribe uno por defecto documentado y lo
-    ///   devuelve (así el usuario lo descubre y lo puede editar);
+    /// - si el archivo no existe, devuelve el default **en memoria, sin
+    ///   escribirlo**. Escribirlo congelaba el default de ese momento y los
+    ///   atajos agregados después no llegaban nunca (la causa de «agrego
+    ///   features y no se ven»). El archivo nace recién cuando el usuario
+    ///   customiza por la UI (perfiles/editor), que lo guarda explícitamente;
+    /// - si existe, lo carga y le **fusiona** los binds default que falten
+    ///   ([`merge_defaults`](Self::merge_defaults)), para auto-curar archivos
+    ///   viejos sin pisar lo que el usuario cambió;
     /// - si existe pero está corrupto, avisa por `stderr` y devuelve el
-    ///   keymap por defecto **sin tocar el archivo** (no se pierde el
-    ///   trabajo del usuario por un error de sintaxis).
+    ///   default **sin tocar el archivo** (no se pierde el trabajo por un
+    ///   error de sintaxis).
     pub fn load_or_init(path: &Path) -> Keymap {
         if path.exists() {
             match Keymap::load(path) {
                 Ok(mut km) => {
-                    // Auto-cura: un keymap.ron escrito por un `load_or_init`
-                    // viejo congeló el default de aquel entonces. Sin esto, los
-                    // atajos agregados al default después (Alt+Tab y compañía)
-                    // jamás llegarían a un usuario que ya tiene el archivo —
-                    // «nada se ve aunque se commitee». Fusionamos los binds
-                    // default que falten, sin pisar lo que el usuario cambió.
                     km.merge_defaults();
                     km
                 }
@@ -269,12 +269,7 @@ impl Keymap {
                 }
             }
         } else {
-            let km = Keymap::default();
-            match km.save(path) {
-                Ok(()) => eprintln!("mirada · keymap inicial escrito en {}", path.display()),
-                Err(e) => eprintln!("mirada · no pude escribir el keymap inicial: {e}"),
-            }
-            km
+            Keymap::default()
         }
     }
 

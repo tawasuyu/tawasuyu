@@ -178,6 +178,26 @@ pub struct Config {
     /// marco de ventana (esos van por `border_focus`/`border_normal`).
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Cómo transiciona Win+Tab entre escritorios: salto seco (`Direct`),
+    /// deslizamiento estilo Hyprland (`Hyprland`) o zoom-out a la vista
+    /// espacial (`Prezi`). Default `Direct`. Hoy sólo `Direct` está cableado;
+    /// los otros caen a salto seco hasta que la animación esté.
+    #[serde(default)]
+    pub workspace_switch_mode: WorkspaceSwitchMode,
+}
+
+/// Modo de transición de Win+Tab entre escritorios. Ver
+/// [`Config::workspace_switch_mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceSwitchMode {
+    /// Salto seco e instantáneo.
+    #[default]
+    Direct,
+    /// Deslizamiento horizontal estilo Hyprland (animación pendiente).
+    Hyprland,
+    /// Zoom-out a la vista espacial «Prezi» (cableado pendiente).
+    Prezi,
 }
 
 /// Default del tema del chrome (el oscuro de `llimphi-theme`).
@@ -350,6 +370,7 @@ impl Default for Config {
             overview_show_titles: true,
             background_frame_divisor: 1,
             theme: default_theme(),
+            workspace_switch_mode: WorkspaceSwitchMode::default(),
         }
     }
 }

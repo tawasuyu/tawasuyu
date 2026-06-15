@@ -86,6 +86,10 @@ fn main() {
                     CtlRequest::Workspaces => CtlReply::Workspaces(mirada_brain::WorkspacesState {
                         active: desktop.active_index() + 1,
                         loads: desktop.workspace_loads(),
+                        layout: mirada_brain::layout_slug(
+                            desktop.active_workspace().params().mode,
+                        )
+                        .to_string(),
                     }),
                     // Las zonas son del Cuerpo (compositor); este ejemplo
                     // headless del Cerebro no las tiene.

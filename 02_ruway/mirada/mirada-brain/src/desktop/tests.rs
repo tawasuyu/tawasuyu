@@ -860,16 +860,24 @@ fn dragging_a_tiled_window_swaps_with_the_window_under_the_pointer() {
     assert_eq!(d.focused_window(), Some(1));
 }
 
+// (El antiguo `window_dragged_ignores_a_floating_window` se eliminó: ahora una
+// flotante soltada sobre una tesela VUELVE al mosaico — cubierto por
+// `dragging_a_floating_window_over_a_tile_returns_it_to_tiling`.)
+
 #[test]
-fn window_dragged_ignores_a_floating_window() {
+fn win_tab_cicla_escritorios_con_wrap() {
     let mut d = desktop_with_screen();
-    open(&mut d, 1);
-    open(&mut d, 2); // enfocada → la flotamos
-    d.apply(DesktopAction::ToggleFloat);
-    let before = d.active_workspace().windows().to_vec();
-    let cmds = d.on_event(BodyEvent::WindowDragged { id: 2, x: 10, y: 10 });
-    assert!(cmds.is_empty());
-    assert_eq!(d.active_workspace().windows(), &before[..]);
+    assert_eq!(d.active_index(), 0);
+    d.apply(DesktopAction::WorkspaceNext);
+    assert_eq!(d.active_index(), 1);
+    d.apply(DesktopAction::WorkspacePrev);
+    assert_eq!(d.active_index(), 0);
+    // Wrap hacia atrás desde el primero → el último.
+    d.apply(DesktopAction::WorkspacePrev);
+    assert_eq!(d.active_index(), WORKSPACE_COUNT - 1);
+    // Y desde el último, adelante → vuelve al primero.
+    d.apply(DesktopAction::WorkspaceNext);
+    assert_eq!(d.active_index(), 0);
 }
 
 #[test]

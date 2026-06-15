@@ -40,7 +40,10 @@ pub use action::{
     DesktopAction, PRESET_NAMES, WORKSPACE_COUNT,
 };
 pub use activity::{ActivityGraph, Lineage};
-pub use config::{default_root_menu, Config, MenuEntry, OutputOverride, ZoneCfg, DROPTERM_APP_ID};
+pub use config::{
+    default_root_menu, Config, MenuEntry, OutputOverride, WorkspaceSwitchMode, ZoneCfg,
+    DROPTERM_APP_ID,
+};
 pub use ctl::{CtlConn, CtlReply, CtlRequest, CtlServer, WindowLine, WorkspacesState};
 pub use desktop::{Desktop, Output, WindowInfo};
 pub use keymap::{Keymap, KeymapError, KeymapWatch};
