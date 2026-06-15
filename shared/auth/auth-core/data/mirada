@@ -1,7 +1,7 @@
 #%PAM-1.0
 #
-# Servicio PAM del greeter de carmen (mirada). Instalar como
-# /etc/pam.d/carmen.
+# Servicio PAM del greeter de mirada. Instalar como
+# /etc/pam.d/mirada.
 #
 # El `include` apunta a la pila de login de la distribución; ajustar
 # según corresponda:

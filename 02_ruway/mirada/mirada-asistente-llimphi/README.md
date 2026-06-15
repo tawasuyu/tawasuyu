@@ -1,4 +1,4 @@
-# mirada-asistente — conversational assistant for the carmen desktop
+# mirada-asistente — conversational assistant for the mirada desktop
 
 A Llimphi app that translates **natural language** into **`mirada-ctl`
 commands** by querying an LLM. The AI proposes; the human confirms before

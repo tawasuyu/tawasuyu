@@ -1,4 +1,4 @@
-# mirada-compositor — el Cuerpo de carmen
+# mirada-compositor — el Cuerpo de mirada
 
 Un compositor Wayland teselante real, sobre [`smithay`]. Es el **Cuerpo**
 de la arquitectura Cerebro↔Cuerpo de `mirada` (ver
@@ -13,7 +13,7 @@ Tiene **dos backends gráficos**:
   escritorio.
 - **`drm`** — corre **nativo** sobre una TTY, sin sesión anfitriona:
   toma la GPU (DRM/KMS/GBM/EGL), el teclado (`libinput`) y la pantalla
-  entera. Es carmen como tu escritorio de verdad.
+  entera. Es mirada como tu escritorio de verdad.
 
 Sin argumentos elige solo: con `DISPLAY`/`WAYLAND_DISPLAY` → `winit`;
 sin ellos → `drm`. O fuérzalo: `mirada-compositor --winit` / `--drm`.
@@ -56,7 +56,7 @@ fino: azul la que tiene el foco, gris las demás.
 
 ## Como sesión de escritorio
 
-Para usar carmen como tu escritorio de verdad — entrar a una sesión, no
+Para usar mirada como tu escritorio de verdad — entrar a una sesión, no
 sólo probarlo:
 
 1. Compila e instala los binarios en el `PATH`:
@@ -74,8 +74,8 @@ sólo probarlo:
    mirada-session
    ```
 
-   O regístralo en un gestor de login copiando `session/carmen.desktop`
-   a `/usr/share/wayland-sessions/` — aparecerá carmen como sesión.
+   O regístralo en un gestor de login copiando `session/mirada.desktop`
+   a `/usr/share/wayland-sessions/` — aparecerá mirada como sesión.
 
 3. **Autoarranque** — los programas que quieras al iniciar van en
    `~/.config/mirada/autostart`, uno por línea (`#` comenta). Tienes un
@@ -88,7 +88,7 @@ sólo probarlo:
    ```
 
 Dentro de la sesión, `Ctrl+Alt+F1…F12` salta a otra TTY y vuelve sin
-romper carmen.
+romper mirada.
 
 ## Modo greeter (DM)
 

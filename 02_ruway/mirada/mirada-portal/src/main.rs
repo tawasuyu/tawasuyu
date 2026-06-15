@@ -1,5 +1,5 @@
 //! `mirada-portal` — backend de `xdg-desktop-portal` para el escritorio
-//! carmen.
+//! mirada.
 //!
 //! Implementa la interfaz `org.freedesktop.impl.portal.Settings` y
 //! publica un único namespace: `org.freedesktop.appearance`. Con eso,

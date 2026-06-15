@@ -1,4 +1,4 @@
-# mirada-asistente — asistente conversacional del escritorio carmen
+# mirada-asistente — asistente conversacional del escritorio mirada
 
 App Llimphi que traduce **lenguaje natural** a **comandos de `mirada-ctl`**
 consultando un LLM. La IA propone; el humano confirma antes de ejecutar.

@@ -209,7 +209,7 @@ pub trait App: 'static {
 
     /// Identificador de aplicación. En Wayland se mapea al `app_id` del
     /// xdg-toplevel (lo que el compositor usa para reconocer la ventana,
-    /// p. ej. `carmen.greeter`). `None` deja que el sistema asigne uno.
+    /// p. ej. `mirada.greeter`). `None` deja que el sistema asigne uno.
     fn app_id() -> Option<&'static str> {
         None
     }

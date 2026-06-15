@@ -1,4 +1,4 @@
-//! `mirada-ctl` — el control del compositor carmen por línea de comandos.
+//! `mirada-ctl` — el control del compositor mirada por línea de comandos.
 //!
 //! Al estilo de `swaymsg` / `hyprctl`: dispara una acción de escritorio o
 //! consulta el estado, hablando con el Cerebro por su socket de control

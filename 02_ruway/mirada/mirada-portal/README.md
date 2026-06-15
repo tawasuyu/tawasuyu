@@ -2,7 +2,7 @@
 
 > `xdg-desktop-portal` backend for [mirada](../README.md).
 
-Implements the freedesktop portal protocol on top of [`mirada-compositor`](../mirada-compositor/README.md): file pickers, screenshare, open-uri, screenshot. Any app using portal APIs (Firefox, Chromium, GTK apps) works on the carmen desktop without modification.
+Implements the freedesktop portal protocol on top of [`mirada-compositor`](../mirada-compositor/README.md): file pickers, screenshare, open-uri, screenshot. Any app using portal APIs (Firefox, Chromium, GTK apps) works on the mirada desktop without modification.
 
 ## Deps
 

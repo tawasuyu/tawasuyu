@@ -1,6 +1,6 @@
 //! `mirada-body` — el estado del Cuerpo del compositor.
 //!
-//! El "Cuerpo" de carmen (`mirada-compositor`, sobre `smithay`) tiene
+//! El "Cuerpo" de mirada (`mirada-compositor`, sobre `smithay`) tiene
 //! dos mitades: el *backend*, que habla Wayland y posee el hardware, y
 //! esta *contabilidad* — qué salidas y superficies existen y con qué
 //! geometría. Aislarla deja el backend reducido a "ejecuta estas

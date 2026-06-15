@@ -3,8 +3,8 @@
 //!
 //! `cargo run -p brahman-auth --example auth-probe -- [usuario] [servicio]`
 //!
-//! Pide la contraseña sin eco. El servicio por defecto es `carmen`; si
-//! `/etc/pam.d/carmen` aún no está instalado, probar con `login`.
+//! Pide la contraseña sin eco. El servicio por defecto es `mirada`; si
+//! `/etc/pam.d/mirada` aún no está instalado, probar con `login`.
 
 use auth_core::{Authenticator, PamAuthenticator};
 
@@ -14,7 +14,7 @@ fn main() {
         .next()
         .or_else(|| std::env::var("USER").ok())
         .unwrap_or_else(|| "root".into());
-    let service = args.next().unwrap_or_else(|| "carmen".into());
+    let service = args.next().unwrap_or_else(|| "mirada".into());
 
     let password = match rpassword::prompt_password(format!("Contraseña de {user}: ")) {
         Ok(p) => p,

@@ -1,4 +1,4 @@
-//! `headless` — un Cuerpo de carmen sin gráficos, guiado por stdin.
+//! `headless` — un Cuerpo de mirada sin gráficos, guiado por stdin.
 //!
 //! Es el banco de pruebas del Cerebro: implementa el lado del Cuerpo del
 //! protocolo (escucha en un socket, lleva un [`BodyState`], manda

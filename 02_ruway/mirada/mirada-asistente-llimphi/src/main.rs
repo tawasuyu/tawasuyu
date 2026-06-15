@@ -1,4 +1,4 @@
-//! `mirada-asistente` — el asistente conversacional del escritorio carmen.
+//! `mirada-asistente` — el asistente conversacional del escritorio mirada.
 //!
 //! Una ventana Llimphi con un input de texto donde el operador escribe en
 //! lenguaje natural ("foca la siguiente ventana", "manda esta a workspace 3",
@@ -47,14 +47,14 @@ use pluma_llm_core::{ChatClient, ChatRequest};
 use serde::Deserialize;
 
 /// `app_id` con el que el compositor reconoce y compone el asistente.
-const ASISTENTE_APP_ID: &str = "carmen.asistente";
+const ASISTENTE_APP_ID: &str = "mirada.asistente";
 
 /// El prompt de sistema: instruye al modelo a responder estrictamente con
 /// JSON que mapea a un subcomando de `mirada-ctl`. Lista las acciones
 /// disponibles tal como las imprime `mirada-ctl --help` — si la CLI gana
 /// acciones nuevas, esta lista hay que extenderla a mano (deliberadamente:
 /// queremos que el LLM jamás invente acciones).
-const PROMPT_SISTEMA: &str = "Eres el asistente del compositor Wayland `mirada` (escritorio carmen). \
+const PROMPT_SISTEMA: &str = "Eres el asistente del compositor Wayland `mirada` (escritorio mirada). \
 El usuario describe lo que quiere hacer y tú respondes EXCLUSIVAMENTE con un \
 objeto JSON con esta forma exacta:\n\
 \n\
@@ -259,7 +259,7 @@ impl App for Asistente {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "carmen · asistente"
+        "mirada · asistente"
     }
 
     fn app_id() -> Option<&'static str> {

@@ -1,6 +1,6 @@
 [Desktop Entry]
-Name=carmen
+Name=mirada
 Comment=Compositor Wayland teselante (mirada)
 Exec=mirada-session
 Type=Application
-DesktopNames=carmen
+DesktopNames=mirada

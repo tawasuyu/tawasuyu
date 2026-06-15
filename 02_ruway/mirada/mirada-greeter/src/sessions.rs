@@ -103,7 +103,7 @@ pub fn discover() -> Vec<Session> {
         collect_dir(&Path::new(&root).join("wayland-sessions"), Kind::Wayland, &mut out);
         collect_dir(&Path::new(&root).join("xsessions"), Kind::X11, &mut out);
     }
-    // Las sesiones del propio mirada (carmen.desktop, mirada-pata.desktop)
+    // Las sesiones del propio mirada (mirada.desktop, mirada-pata.desktop)
     // existen para DMs externos; aquí ya están cubiertas por los built-ins,
     // así que las filtramos para no duplicar.
     out.retain(|s| !is_mirada_session(&s.exec));

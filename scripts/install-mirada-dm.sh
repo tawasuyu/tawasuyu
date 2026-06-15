@@ -10,8 +10,8 @@
 #   /usr/local/bin/{mirada-compositor,mirada-greeter,pata-llimphi}
 #   /usr/local/bin/{shuma-shell-llimphi,mirada-launcher}
 #   /usr/local/bin/{mirada-session,mirada-session-pata,mirada-dm}
-#   /etc/pam.d/carmen                              (login del greeter)
-#   /usr/share/wayland-sessions/{carmen,mirada-pata}.desktop
+#   /etc/pam.d/mirada                              (login del greeter)
+#   /usr/share/wayland-sessions/{mirada,mirada-pata}.desktop
 #
 # Para desinstalar: borrá esos archivos.
 set -eu
@@ -50,11 +50,11 @@ sudo install -Dm755 "$MC/session/mirada-session-pata" /usr/local/bin/mirada-sess
 sudo install -Dm755 "$REPO/scripts/mirada-dm"         /usr/local/bin/mirada-dm
 
 # PAM del greeter (Artix/Arch: la pila system-login sirve tal cual).
-sudo install -Dm644 "$REPO/shared/auth/auth-core/data/carmen" /etc/pam.d/carmen
+sudo install -Dm644 "$REPO/shared/auth/auth-core/data/mirada" /etc/pam.d/mirada
 
 # Sesiones para gestores de login EXTERNOS (el propio mirada las ofrece
 # por sus built-ins y las filtra de esta lista, así que no duplican).
-sudo install -Dm644 "$MC/session/carmen.desktop"      /usr/share/wayland-sessions/carmen.desktop
+sudo install -Dm644 "$MC/session/mirada.desktop"      /usr/share/wayland-sessions/mirada.desktop
 sudo install -Dm644 "$MC/session/mirada-pata.desktop" /usr/share/wayland-sessions/mirada-pata.desktop
 
 # Las sesiones AJENAS (KDE, sway…) corren como tu usuario y necesitan tomar

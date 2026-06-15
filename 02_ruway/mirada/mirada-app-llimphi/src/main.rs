@@ -1,6 +1,6 @@
 //! `mirada-llimphi` — la ventana del Cerebro del compositor.
 //!
-//! Es el "Cerebro" de la arquitectura carmen hecho app Llimphi: envuelve
+//! Es el "Cerebro" de la arquitectura mirada hecho app Llimphi: envuelve
 //! [`mirada_brain::Desktop`] (toda la lógica de teselado y foco) y lo
 //! pinta. La cadena completa:
 //!

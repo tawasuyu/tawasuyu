@@ -1,8 +1,8 @@
-//! `mirada-greeter` — el greeter del escritorio carmen.
+//! `mirada-greeter` — el greeter del escritorio mirada.
 //!
 //! Ventana Llimphi de login. El compositor (`mirada-compositor`) la arranca
 //! como proceso hijo cuando bootea en modo greeter, la compone a pantalla
-//! completa (la reconoce por `app_id = "carmen.greeter"`) y le lee el stdout.
+//! completa (la reconoce por `app_id = "mirada.greeter"`) y le lee el stdout.
 //!
 //! Flujo: el usuario teclea usuario + contraseña, el greeter autentica con
 //! [`auth_core`], y en éxito **imprime un [`SessionTicket`] a stdout** y
@@ -11,7 +11,7 @@
 //! «mutación atómica» del DM.
 //!
 //! Backend de autenticación (ver [`pick_authenticator`]):
-//! - por defecto, PAM contra el servicio `carmen`;
+//! - por defecto, PAM contra el servicio `mirada`;
 //! - `MIRADA_GREETER_MOCK="usuario:secreto"` usa el mock, para iterar la UI
 //!   en cajas sin PAM o con el greeter anidado en otro escritorio.
 
@@ -46,7 +46,7 @@ use llimphi_motion::{animate, motion, Tween};
 use llimphi_clipboard::SystemClipboard;
 
 /// `app_id` con el que el compositor reconoce y compone el greeter.
-const GREETER_APP_ID: &str = "carmen.greeter";
+const GREETER_APP_ID: &str = "mirada.greeter";
 
 /// Autenticador compartible entre el hilo de UI y el de fondo.
 type DynAuth = Arc<dyn Authenticator + Send + Sync>;
@@ -177,7 +177,7 @@ impl App for Greeter {
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "carmen · greeter"
+        "mirada · greeter"
     }
 
     fn app_id() -> Option<&'static str> {
@@ -443,7 +443,7 @@ impl App for Greeter {
         .fill(theme.accent)
         .radius(2.0);
 
-        let title = row(30.0, "carmen", 23.0, theme.fg_text);
+        let title = row(30.0, "mirada", 23.0, theme.fg_text);
         let subtitle = row(
             16.0,
             &rimay_localize::t("greeter-subtitle"),

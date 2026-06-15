@@ -11,7 +11,7 @@
 //! - [`MockAuthenticator`] — credenciales fijas en memoria, para tests
 //!   y para iterar el greeter en cajas sin PAM configurado.
 //!
-//! Lo consume el greeter de carmen (mirada): el usuario teclea su
+//! Lo consume el greeter de mirada: el usuario teclea su
 //! contraseña, el greeter llama a [`Authenticator::authenticate`], y en
 //! éxito recibe un [`UserInfo`] con uid/gid/home/shell — lo que el
 //! compositor necesita para arrancar la sesión.

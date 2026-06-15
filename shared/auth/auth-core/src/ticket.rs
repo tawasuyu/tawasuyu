@@ -1,7 +1,7 @@
 //! El tiquet de sesión: lo que el greeter le entrega al compositor tras
 //! una autenticación exitosa.
 //!
-//! El greeter de carmen corre como proceso hijo del compositor. Cuando
+//! El greeter de mirada corre como proceso hijo del compositor. Cuando
 //! el login tiene éxito, imprime **una línea** de tiquet a su stdout; el
 //! compositor escanea las líneas del hijo buscando el prefijo
 //! [`TICKET_TAG`] y, al encontrarlo, hace el traspaso a modo sesión.

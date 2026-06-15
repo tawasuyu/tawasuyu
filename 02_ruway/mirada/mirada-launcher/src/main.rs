@@ -1,4 +1,4 @@
-//! `mirada-launcher` — un lanzador de aplicaciones para carmen.
+//! `mirada-launcher` — un lanzador de aplicaciones para mirada.
 //!
 //! Escanea los archivos `.desktop` del sistema (el estándar XDG), los
 //! lista en la terminal y lanza el que elijas. No tiene dependencias: la

@@ -410,7 +410,7 @@ impl DrmState {
         }
 
         // Foco-sigue-ratón: al pasar a otra ventana, que la enfoque quien
-        // corresponda — el Cerebro para las teseladas, carmen mismo para
+        // corresponda — el Cerebro para las teseladas, mirada mismo para
         // el shell (que no vive en el Cerebro). PERO si una layer reclama teclado
         // Exclusive (el drawer Quake de pata abierto), no le robamos el foco al
         // mover el mouse sobre una ventana: seguís escribiendo en el drawer.

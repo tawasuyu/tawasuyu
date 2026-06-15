@@ -1,15 +1,15 @@
-# Autoarranque de carmen — cópialo a ~/.config/mirada/autostart
+# Autoarranque de mirada — cópialo a ~/.config/mirada/autostart
 #
 # Un comando por línea; se lanza al arrancar el compositor, con
 # WAYLAND_DISPLAY ya puesto. Las líneas en blanco y las que empiezan
 # por # se ignoran. Cada línea se pasa a `sh -c`, así que valen las
 # variables, las tuberías y el `&` final no hace falta.
 
-# El marco pata — barra/dock acoplado a un borde; carmen lo reconoce por su
+# El marco pata — barra/dock acoplado a un borde; mirada lo reconoce por su
 # app_id y le reserva la franja. (Si no hay autostart, el compositor lo levanta
 # solo; acá lo ponemos explícito para combinarlo con shuma.)
 pata-llimphi
-# El shell de carmen propiamente dicho (shuma): barra superior con apps y
+# El shell de mirada propiamente dicho (shuma): barra superior con apps y
 # launcher. Es el binario que instala install-mirada-dm.sh.
 shuma-shell-llimphi
 

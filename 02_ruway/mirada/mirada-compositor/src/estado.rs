@@ -120,9 +120,9 @@ pub(crate) fn shell_dock() -> &'static ShellDock {
 }
 
 /// `true` si el `app_id` corresponde al shell: la identidad de `pata` (o el
-/// override de `MIRADA_SHELL_APP_ID`), o el alias legacy `carmen.shell`.
+/// override de `MIRADA_SHELL_APP_ID`), o el alias legacy `mirada.shell`.
 pub(crate) fn is_shell_app_id(app_id: &str) -> bool {
-    app_id == shell_dock().app_id || app_id == "carmen.shell"
+    app_id == shell_dock().app_id || app_id == "mirada.shell"
 }
 
 /// El rect `(x, y, w, h)` de la franja del shell sobre una salida `ow×oh` con

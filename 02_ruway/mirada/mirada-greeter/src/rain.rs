@@ -19,7 +19,7 @@ use llimphi_ui::PaintRect;
 
 /// Semilla global del campo. Fija ⇒ el patrón es estable entre arranques; toda
 /// la variedad sale del hashing por columna/celda.
-const SEED: u64 = 0x6361726d_656e0001; // "carmen" + 1
+const SEED: u64 = 0x6361726d_656e0001; // "mirada" + 1
 
 /// Geometría de la grilla, en px.
 const FONT_PX: f32 = 16.0;

@@ -1,6 +1,6 @@
 # mirada-portal
 
-Backend de `xdg-desktop-portal` para el escritorio **carmen**. Implementa
+Backend de `xdg-desktop-portal` para el escritorio **mirada**. Implementa
 `org.freedesktop.impl.portal.Settings` y publica un único namespace:
 `org.freedesktop.appearance`.
 
@@ -47,7 +47,7 @@ install -Dm755 target/release/mirada-portal /usr/bin/mirada-portal
 ```
 
 El frontend casa `UseIn=mirada` contra `XDG_CURRENT_DESKTOP`, así que
-carmen debe exportar `XDG_CURRENT_DESKTOP=mirada`. Alternativamente, el
+mirada debe exportar `XDG_CURRENT_DESKTOP=mirada`. Alternativamente, el
 `mirada-portals.conf` lo fuerza con `default=mirada`.
 
 `mirada-portal` se puede arrancar desde `~/.config/mirada/autostart` o
@@ -73,4 +73,4 @@ Cambiar `~/.config/nahual/theme` debe disparar una señal `SettingChanged`
 El portal `org.freedesktop.appearance` sólo lleva claro/oscuro + acento +
 contraste. **No** lleva la paleta completa de `nahual`. Para recolorear
 GTK/Qt a los colores exactos del tema hace falta, además, inyección de
-entorno + CSS generado en el `spawn` de carmen — siguiente paso del plan.
+entorno + CSS generado en el `spawn` de mirada — siguiente paso del plan.

@@ -5,14 +5,14 @@ backend, con dos implementaciones.
 
 ## Para qué
 
-El greeter de carmen (mirada) necesita verificar la contraseña del
+El greeter de mirada necesita verificar la contraseña del
 usuario y, en éxito, saber su `uid/gid/home/shell` para arrancar la
 sesión. Eso es exactamente lo que entrega `Authenticator::authenticate`:
 
 ```rust
 use brahman_auth::{Authenticator, PamAuthenticator};
 
-let auth = PamAuthenticator::carmen();
+let auth = PamAuthenticator::mirada();
 match auth.authenticate("sergio", &password) {
     Ok(info) => arrancar_sesion(info),      // info: UserInfo
     Err(e)   => mostrar_error_en_greeter(e),
@@ -34,10 +34,10 @@ y nunca puede saber si un usuario existe.
 
 ## Servicio PAM
 
-`data/carmen` es el archivo de servicio. Instalarlo:
+`data/mirada` es el archivo de servicio. Instalarlo:
 
 ```sh
-install -Dm644 data/carmen /etc/pam.d/carmen
+install -Dm644 data/mirada /etc/pam.d/mirada
 ```
 
 Ajustar el `include` a la pila de login de la distribución (ver los

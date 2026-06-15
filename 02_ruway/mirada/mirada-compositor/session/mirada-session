@@ -1,5 +1,5 @@
 #!/bin/sh
-# mirada-session — arranca carmen (el compositor mirada) como una sesión
+# mirada-session — arranca mirada (el compositor mirada) como una sesión
 # de escritorio. Pensado para lanzarse desde una TTY o desde un gestor de
 # login (greetd, ly, …).
 #
@@ -16,8 +16,8 @@
 
 # Carmen es un compositor Wayland.
 export XDG_SESSION_TYPE=wayland
-export XDG_CURRENT_DESKTOP=carmen
-export XDG_SESSION_DESKTOP=carmen
+export XDG_CURRENT_DESKTOP=mirada
+export XDG_SESSION_DESKTOP=mirada
 
 # Que las apps GUI prefieran sus backends Wayland.
 export MOZ_ENABLE_WAYLAND=1

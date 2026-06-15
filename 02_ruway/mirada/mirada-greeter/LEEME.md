@@ -1,10 +1,10 @@
 # mirada-greeter
 
-El greeter (pantalla de login) del escritorio carmen.
+El greeter (pantalla de login) del escritorio mirada.
 
 Una ventana GPUI: el compositor `mirada-compositor`, cuando bootea en
 modo greeter, la arranca como proceso hijo, la compone a pantalla
-completa (la reconoce por `app_id = "carmen.greeter"`) y le lee el
+completa (la reconoce por `app_id = "mirada.greeter"`) y le lee el
 stdout.
 
 ## Flujo
@@ -24,7 +24,7 @@ del stdout (logs) se ignora.
 
 | Entorno | Backend |
 |---|---|
-| (por defecto) | PAM, servicio `carmen` (`/etc/pam.d/carmen`) |
+| (por defecto) | PAM, servicio `mirada` (`/etc/pam.d/mirada`) |
 | `MIRADA_GREETER_PAM=<servicio>` | PAM con otro servicio |
 | `MIRADA_GREETER_MOCK=usuario:secreto` | Mock — credenciales fijas |
 

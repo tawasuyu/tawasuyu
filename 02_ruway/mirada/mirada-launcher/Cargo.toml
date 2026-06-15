@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "mirada-launcher — lanzador de aplicaciones para carmen: escanea los .desktop del sistema, los lista en la terminal y lanza el que elijas. Sin dependencias; pensado para correr en una terminal pequeña que el compositor abre con un atajo."
+description = "mirada-launcher — lanzador de aplicaciones para mirada: escanea los .desktop del sistema, los lista en la terminal y lanza el que elijas. Sin dependencias; pensado para correr en una terminal pequeña que el compositor abre con un atajo."
 
 [[bin]]
 name = "mirada-launcher"

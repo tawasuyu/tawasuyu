@@ -1,4 +1,4 @@
-//! `mirada-compositor` — el Cuerpo del compositor carmen.
+//! `mirada-compositor` — el Cuerpo del compositor mirada.
 //!
 //! Un compositor Wayland teselante real, sobre `smithay`, con backend
 //! `winit`: corre **anidado** como una ventana dentro de tu sesión

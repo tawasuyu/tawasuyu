@@ -291,7 +291,7 @@ struct KeymapFile {
 
 /// La cabecera de comentarios del archivo que escribe [`Keymap::save`].
 const KEYMAP_HEADER: &str = "\
-// keymap de mirada — atajos del escritorio (carmen).
+// keymap de mirada — atajos del escritorio (mirada).
 //
 // Formato:  \"Combinación\": \"acción\"
 // La combinación la canoniza el compositor: Super, Ctrl, Shift, Alt y la

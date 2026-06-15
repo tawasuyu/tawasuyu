@@ -7,9 +7,9 @@ use pam::{Client, PamError, PamReturnCode};
 
 use crate::{resolve_user, AuthError, Authenticator, UserInfo};
 
-/// Servicio PAM por defecto del escritorio carmen. Resuelve a
-/// `/etc/pam.d/carmen` — ver el archivo `data/carmen` de este crate.
-pub const DEFAULT_SERVICE: &str = "carmen";
+/// Servicio PAM por defecto del escritorio mirada. Resuelve a
+/// `/etc/pam.d/mirada` — ver el archivo `data/mirada` de este crate.
+pub const DEFAULT_SERVICE: &str = "mirada";
 
 /// Autentica contra PAM: el mismo subsistema de `login`/`sudo`. Honra
 /// `/etc/pam.d/<service>` — módulos, 2FA, llaves FIDO2, `pam_faillock`,
@@ -29,7 +29,7 @@ impl PamAuthenticator {
 
     /// Autenticador para el servicio por defecto del escritorio,
     /// [`DEFAULT_SERVICE`].
-    pub fn carmen() -> Self {
+    pub fn mirada() -> Self {
         Self::new(DEFAULT_SERVICE)
     }
 
@@ -41,7 +41,7 @@ impl PamAuthenticator {
 
 impl Default for PamAuthenticator {
     fn default() -> Self {
-        Self::carmen()
+        Self::mirada()
     }
 }
 
@@ -97,9 +97,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn carmen_uses_default_service() {
-        assert_eq!(PamAuthenticator::carmen().service(), DEFAULT_SERVICE);
-        assert_eq!(PamAuthenticator::default().service(), "carmen");
+    fn mirada_uses_default_service() {
+        assert_eq!(PamAuthenticator::mirada().service(), DEFAULT_SERVICE);
+        assert_eq!(PamAuthenticator::default().service(), "mirada");
     }
 
     #[test]

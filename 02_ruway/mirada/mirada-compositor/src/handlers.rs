@@ -360,7 +360,7 @@ impl XdgShellHandler for App {
     }
 }
 
-/// Decoración de ventana: carmen tesela, así que las ventanas no llevan
+/// Decoración de ventana: mirada tesela, así que las ventanas no llevan
 /// barra de título. Le decimos a todo cliente que la decoración la pone
 /// el servidor (`ServerSide`) — y como el servidor no dibuja ninguna, la
 /// ventana queda sin marco. Sin esto, clientes como `foot` se dibujan su
