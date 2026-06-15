@@ -28,6 +28,12 @@ pub(crate) enum Msg {
     SettingsScroll(f32),
     ConfigEdit(ConfigEdit),
     BarEdit(BarEdit),
+    /// Alterna la revelación manual de las barras con autohide.
+    ToggleRevealBars,
+    /// Activa el diente `id` del rail de sidebars in-app (None = colapsar).
+    DockActivate(u64),
+    /// Suelta un diente arrastrado sobre el rail (reservado para reordenar).
+    DockDrop(u64),
 }
 
 /// Pestañas de la ventana de configuración.
@@ -70,6 +76,10 @@ pub(crate) enum BarEdit {
     RemoveBar(usize),
     SetTarget(usize),
     TogglePosition(usize),
+    /// Apaga/prende el pintado de la barra (sin borrarla).
+    ToggleEnabled(usize),
+    /// Apaga/prende el autohide de la barra.
+    ToggleAutohide(usize),
 }
 
 /// Edición concreta sobre [`MediaConfig`] disparada por la ventana de

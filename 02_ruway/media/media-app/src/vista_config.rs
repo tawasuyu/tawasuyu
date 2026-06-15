@@ -511,11 +511,29 @@ pub(crate) fn tab_bars(model: &Model) -> Vec<View<Msg>> {
             ..Default::default()
         })
         .children(vec![
-            bar_label(format!("{} {}", rimay_localize::t("media-bars-bar-label"), bi + 1), 70.0, Color::from_rgba8(118, 182, 232, 255)),
+            bar_label(bar.display_name(bi + 1), 86.0, Color::from_rgba8(118, 182, 232, 255)),
             wide_chip(
                 bar.position.label(),
                 Color::from_rgba8(48, 66, 80, 255),
                 Msg::BarEdit(BarEdit::TogglePosition(bi)),
+            ),
+            wide_chip(
+                &if bar.enabled {
+                    rimay_localize::t("media-bars-on")
+                } else {
+                    rimay_localize::t("media-bars-off")
+                },
+                if bar.enabled { Color::from_rgba8(46, 84, 64, 255) } else { Color::from_rgba8(70, 58, 64, 255) },
+                Msg::BarEdit(BarEdit::ToggleEnabled(bi)),
+            ),
+            wide_chip(
+                &if bar.autohide {
+                    rimay_localize::t("media-bars-autohide-on")
+                } else {
+                    rimay_localize::t("media-bars-autohide-off")
+                },
+                if bar.autohide { Color::from_rgba8(60, 64, 46, 255) } else { Color::from_rgba8(48, 54, 66, 255) },
+                Msg::BarEdit(BarEdit::ToggleAutohide(bi)),
             ),
             wide_chip(&rimay_localize::t("media-bars-remove-bar"), Color::from_rgba8(74, 58, 64, 255), Msg::BarEdit(BarEdit::RemoveBar(bi))),
         ]);

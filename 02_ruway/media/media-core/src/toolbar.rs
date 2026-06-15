@@ -181,21 +181,62 @@ impl BarPosition {
 /// Una barra horizontal: lista ordenada de items + dónde se ancla (arriba o
 /// abajo del video). `position` es `#[serde(default)]` = `Below`, así una
 /// config vieja (sin el campo) se lee como "abajo", el comportamiento previo.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// Genericidad (2026-06-15): además de items/posición, una barra lleva un
+/// **nombre** editable, un flag **enabled** (apagarla sin borrarla — deja de
+/// pintarse pero la config la conserva) y un flag **autohide** (se oculta
+/// sola mientras el medio reproduce y reaparece al pausar o al "revelar
+/// barras"). Todos `#[serde(default)]` para leer configs viejas sin romper:
+/// `enabled` default `true`, `autohide` default `false`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bar {
     pub items: Vec<BarItem>,
     #[serde(default)]
     pub position: BarPosition,
+    /// Nombre humano de la barra (para el editor / dientes). Vacío = "Barra N".
+    #[serde(default)]
+    pub name: String,
+    /// Si la barra se pinta. `false` la apaga sin borrarla.
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Si la barra se esconde sola durante la reproducción.
+    #[serde(default)]
+    pub autohide: bool,
+}
+
+impl Default for Bar {
+    fn default() -> Self {
+        Bar {
+            items: Vec::new(),
+            position: BarPosition::default(),
+            name: String::new(),
+            enabled: true,
+            autohide: false,
+        }
+    }
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Bar {
     pub fn new(items: Vec<BarItem>) -> Self {
-        Bar { items, position: BarPosition::Below }
+        Bar { items, ..Bar::default() }
     }
 
     /// Como [`Self::new`] pero anclando la barra arriba o abajo del video.
     pub fn at(items: Vec<BarItem>, position: BarPosition) -> Self {
-        Bar { items, position }
+        Bar { items, position, ..Bar::default() }
+    }
+
+    /// Nombre a mostrar; si `name` está vacío usa "Barra {n}" (1-based).
+    pub fn display_name(&self, n: usize) -> String {
+        if self.name.trim().is_empty() {
+            format!("Barra {n}")
+        } else {
+            self.name.clone()
+        }
     }
 }
 
@@ -212,14 +253,17 @@ impl Default for Toolbar {
         use BarItem::*;
         Toolbar {
             bars: vec![
-                // Barra de progreso, arriba (se estira).
-                Bar::new(vec![Timeline]),
-                // Transporte + reloj + modos + volumen + captura.
-                Bar::new(vec![
-                    PlayPause, Prev, Next, SeekBack, SeekForward, Spacer, Clock, Spacer,
-                    Repeat, Shuffle, SpeedDown, SpeedReset, SpeedUp, Spacer, VolumeDown,
-                    VolumeSlider, VolumeUp, VolumeLabel, Equalizer, Snapshot, Record, Settings,
-                ]),
+                // Barra de controles estándar, ARRIBA del video.
+                Bar::at(
+                    vec![
+                        PlayPause, Prev, Next, SeekBack, SeekForward, Spacer, Clock, Spacer,
+                        Repeat, Shuffle, SpeedDown, SpeedReset, SpeedUp, Spacer, VolumeDown,
+                        VolumeSlider, VolumeUp, VolumeLabel, Equalizer, Snapshot, Record, Settings,
+                    ],
+                    BarPosition::Above,
+                ),
+                // Línea de tiempo (se estira), ABAJO del video.
+                Bar::at(vec![Timeline, Clock], BarPosition::Below),
             ],
         }
     }
@@ -242,6 +286,31 @@ impl Toolbar {
     /// Agrega una barra vacía al final.
     pub fn add_bar(&mut self) {
         self.bars.push(Bar::default());
+    }
+
+    /// Prende/apaga el pintado de la barra `idx` (apagar = conservar sin
+    /// mostrar). Devuelve el nuevo estado, o `None` si el índice no existe.
+    pub fn toggle_enabled(&mut self, idx: usize) -> Option<bool> {
+        let b = self.bars.get_mut(idx)?;
+        b.enabled = !b.enabled;
+        Some(b.enabled)
+    }
+
+    /// Prende/apaga el autohide de la barra `idx`. Devuelve el nuevo estado.
+    pub fn toggle_autohide(&mut self, idx: usize) -> Option<bool> {
+        let b = self.bars.get_mut(idx)?;
+        b.autohide = !b.autohide;
+        Some(b.autohide)
+    }
+
+    /// Renombra la barra `idx`.
+    pub fn set_name(&mut self, idx: usize, name: impl Into<String>) -> bool {
+        if let Some(b) = self.bars.get_mut(idx) {
+            b.name = name.into();
+            true
+        } else {
+            false
+        }
     }
 
     /// Quita la barra `idx` (no deja la toolbar sin barras: si era la
@@ -312,12 +381,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_es_tipo_vlc() {
+    fn default_es_controles_arriba_timeline_abajo() {
         let t = Toolbar::default();
         assert_eq!(t.bar_count(), 2);
-        assert_eq!(t.bars[0].items, vec![BarItem::Timeline]);
-        assert!(t.bars[1].items.contains(&BarItem::PlayPause));
-        assert!(t.bars[1].items.contains(&BarItem::VolumeUp));
+        // Barra 0: controles estándar, anclada arriba.
+        assert_eq!(t.bars[0].position, BarPosition::Above);
+        assert!(t.bars[0].items.contains(&BarItem::PlayPause));
+        assert!(t.bars[0].items.contains(&BarItem::VolumeUp));
+        // Barra 1: línea de tiempo, anclada abajo.
+        assert_eq!(t.bars[1].position, BarPosition::Below);
+        assert!(t.bars[1].items.contains(&BarItem::Timeline));
+        // Todas las barras nacen prendidas y sin autohide.
+        assert!(t.bars.iter().all(|b| b.enabled && !b.autohide));
+    }
+
+    #[test]
+    fn enabled_y_autohide_se_alternan_y_round_trip() {
+        let mut t = Toolbar::default();
+        assert_eq!(t.toggle_enabled(0), Some(false));
+        assert_eq!(t.toggle_autohide(1), Some(true));
+        assert_eq!(t.toggle_enabled(9), None);
+        assert!(t.set_name(0, "Transporte"));
+        assert_eq!(t.bars[0].display_name(1), "Transporte");
+        assert_eq!(t.bars[1].display_name(2), "Barra 2");
+        // Persisten por RON.
+        let txt = ron::ser::to_string(&t).expect("serializa");
+        let back: Toolbar = ron::from_str(&txt).expect("deserializa");
+        assert_eq!(t, back);
+        assert!(!back.bars[0].enabled);
+        assert!(back.bars[1].autohide);
+    }
+
+    #[test]
+    fn config_vieja_sin_campos_nuevos_carga() {
+        // Una barra escrita antes de enabled/autohide/name debe leerse con
+        // los defaults (enabled=true, autohide=false, name="").
+        let viejo = "(bars: [(items: [Timeline], position: Below)])";
+        let t: Toolbar = ron::from_str(viejo).expect("carga barra vieja");
+        assert!(t.bars[0].enabled);
+        assert!(!t.bars[0].autohide);
+        assert!(t.bars[0].name.is_empty());
     }
 
     #[test]

@@ -23,7 +23,7 @@ use crate::estado::{
 };
 use crate::media_io::media_title_string;
 use crate::pipeline::media_host;
-use crate::playlist::{jump_playlist_to, playback_snapshot, record_playback_progress};
+use crate::playlist::{jump_playlist_to, record_playback_progress};
 use crate::estado::{reload_settings, spawn_controles_watcher};
 use crate::tipos::{Msg, SettingsTab};
 use crate::vista::{
@@ -52,6 +52,10 @@ pub(crate) struct Model {
     pub(crate) settings_scroll: f32,
     pub(crate) visualizers_open: bool,
     pub(crate) playlist_open: bool,
+    /// Revelación manual de las barras con autohide (toggle con Tab).
+    pub(crate) reveal_bars: bool,
+    /// Diente activo del rail de sidebars in-app (None = canvas puro).
+    pub(crate) dock_active: Option<u64>,
     pub(crate) _host: Option<pata_host::HostClient>,
 }
 
@@ -137,6 +141,8 @@ impl App for MediaApp {
             settings_scroll: 0.0,
             visualizers_open: false,
             playlist_open: false,
+            reveal_bars: false,
+            dock_active: None,
             _host: media_host(handle),
         }
     }
@@ -243,6 +249,17 @@ impl App for MediaApp {
                 save_media_config(&m.config);
                 m
             }
+            Msg::ToggleRevealBars => {
+                let mut m = model;
+                m.reveal_bars = !m.reveal_bars;
+                m
+            }
+            Msg::DockActivate(id) => {
+                let mut m = model;
+                m.dock_active = if m.dock_active == Some(id) { None } else { Some(id) };
+                m
+            }
+            Msg::DockDrop(_) => model,
             Msg::ReloadConfig => {
                 reload_settings();
                 let (palette_commands, palette_cmds) = build_command_catalog(&settings());
@@ -352,6 +369,7 @@ impl App for MediaApp {
             Key::Named(NamedKey::Escape) if model.settings_open => return Some(Msg::ToggleSettings),
             Key::Named(NamedKey::F2) => return Some(Msg::ToggleSettings),
             Key::Named(NamedKey::F5) => return Some(Msg::ReloadConfig),
+            Key::Named(NamedKey::Tab) => return Some(Msg::ToggleRevealBars),
             _ => {}
         }
         let chord = chord_from_event(event)?;
@@ -417,12 +435,8 @@ impl App for MediaApp {
         use crate::estado::{viewcontrol, SEEK_FORCE};
         use crate::pipeline::pipeline_for;
         use crate::playlist::current_audio_position;
-        use crate::media_io::fmt_secs;
         use std::sync::atomic::Ordering;
         use std::time::Instant;
-
-        let secs = model.started_at.elapsed().as_secs_f32().max(0.001);
-        let fps = model.frames as f32 / secs;
 
         let theme = llimphi_theme::Theme::dark();
         let menu = app_menu();
@@ -514,35 +528,6 @@ impl App for MediaApp {
         let above_bars = toolbar_view_at(model, media_core::toolbar::BarPosition::Above);
         let below_bars = toolbar_view_at(model, media_core::toolbar::BarPosition::Below);
 
-        let time_label = {
-            let s = playback_snapshot();
-            if s.present {
-                let dur = s.duration.unwrap_or(std::time::Duration::ZERO);
-                let track = if s.len > 1 {
-                    format!(" · trk {}/{}", s.idx + 1, s.len)
-                } else {
-                    String::new()
-                };
-                format!(" · {} / {}{}", fmt_secs(s.position), fmt_secs(dur), track)
-            } else {
-                String::new()
-            }
-        };
-        let footer = View::new(Style {
-            size: Size {
-                width: percent(1.0_f32),
-                height: length(24.0_f32),
-            },
-            justify_content: Some(JustifyContent::Center),
-            align_items: Some(AlignItems::Center),
-            ..Default::default()
-        })
-        .text(
-            format!("ticks {} · ui ≈ {fps:.1} fps{time_label}", model.frames),
-            13.0,
-            Color::from_rgba8(150, 165, 185, 255),
-        );
-
         let content = View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -588,7 +573,6 @@ impl App for MediaApp {
                 .children(vec![fulltrack_waveform_view(), waterfall_panel(), meters_panel()]);
                 kids.push(visualizers);
             }
-            kids.push(footer);
             kids
         });
 

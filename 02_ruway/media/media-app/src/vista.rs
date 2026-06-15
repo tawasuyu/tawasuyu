@@ -356,13 +356,19 @@ pub(crate) fn timeline_strip() -> View<Msg> {
 }
 
 /// Pinta las barras de controles configurables.
+///
+/// Respeta los flags de cada barra: `enabled=false` no se pinta; `autohide`
+/// se esconde mientras el medio reproduce y reaparece al pausar o cuando el
+/// usuario revela las barras (Tab → `model.reveal_bars`).
 pub(crate) fn toolbar_view_at(model: &Model, position: BarPosition) -> Option<View<Msg>> {
+    let reveal = model.reveal_bars || pause().is_paused();
     let bars: Vec<View<Msg>> = model
         .config
         .toolbar
         .bars
         .iter()
         .filter(|bar| bar.position == position)
+        .filter(|bar| bar.enabled && (reveal || !bar.autohide))
         .map(|bar| {
             let items: Vec<View<Msg>> = bar.items.iter().map(|&it| bar_item_view(it)).collect();
             View::new(Style {

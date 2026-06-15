@@ -233,6 +233,12 @@ pub(crate) fn apply_bar_edit(model: &mut Model, edit: BarEdit) {
                 bar.position = bar.position.toggled();
             }
         }
+        BarEdit::ToggleEnabled(idx) => {
+            tb.toggle_enabled(idx);
+        }
+        BarEdit::ToggleAutohide(idx) => {
+            tb.toggle_autohide(idx);
+        }
     }
 }
 
