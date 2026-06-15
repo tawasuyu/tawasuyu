@@ -251,57 +251,11 @@ pub(crate) enum CanvasApp {
     Media(Box<mediamod::State>),
 }
 
-/// Modo del find recursivo: por **nombre** (glob sobre el nombre del archivo)
-/// o por **contenido** (substring dentro de archivos de texto). Tab alterna.
-/// La búsqueda **semántica** (embeddings) será un tercer modo cuando el daemon
-/// de verbo esté cableado.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FindMode {
-    Name,
-    Content,
-    /// Búsqueda por significado: embebe la consulta y los candidatos vía el
-    /// daemon de verbo y rankea por coseno. Si el daemon no está, degrada a
-    /// búsqueda por nombre.
-    Semantic,
-}
-
-impl FindMode {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            FindMode::Name => "nombre",
-            FindMode::Content => "contenido",
-            FindMode::Semantic => "semántico",
-        }
-    }
-    pub(crate) fn next(self) -> Self {
-        match self {
-            FindMode::Name => FindMode::Content,
-            FindMode::Content => FindMode::Semantic,
-            FindMode::Semantic => FindMode::Name,
-        }
-    }
-}
-
-/// Índice de embeddings de una carpeta, para que la búsqueda semántica sea
-/// **instantánea** (sólo se embebe la consulta y se rankea contra estos
-/// vectores cacheados, en vez de embeber todo el árbol por consulta). Se
-/// construye en background con "Indexar carpeta…".
-#[derive(Clone)]
-pub(crate) struct SemIndex {
-    /// Carpeta indexada (el índice sólo aplica a búsquedas posadas acá).
-    pub(crate) root: PathBuf,
-    /// `(ruta, vector)` de cada archivo indexado.
-    pub(crate) entries: Vec<(PathBuf, Vec<f32>)>,
-}
-
-/// Un resultado del find recursivo: la ruta real + cómo mostrarla (relativa al
-/// root) + un fragmento opcional (la línea que matcheó, en modo contenido).
-#[derive(Clone)]
-pub(crate) struct FindHit {
-    pub(crate) path: PathBuf,
-    pub(crate) display: String,
-    pub(crate) snippet: Option<String>,
-}
+// Los tipos de dominio del find (`FindMode`/`SemIndex`/`FindHit`) y el motor de
+// búsqueda viven en el core agnóstico `nahual-shell-core` (Regla 2). Se
+// re-exportan acá para que el resto del crate los siga viendo como
+// `crate::modelo::*` sin cambios. `FindState` (abajo) es estado de UI y se queda.
+pub(crate) use nahual_shell_core::{FindHit, FindMode, SemIndex};
 
 /// Estado del **find recursivo** (Ctrl+F): un modal que camina el árbol bajo
 /// `root` en un worker y lista los matches. `gen` descarta resultados de

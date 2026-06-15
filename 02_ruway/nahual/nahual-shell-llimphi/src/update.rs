@@ -903,72 +903,7 @@ fn select_by_pattern(m: &mut Model, pat: &str) {
     }
 }
 
-/// Match de glob simple, case-insensitive: `*` matchea cualquier secuencia
-/// (incluida vacía); el resto es literal. Sin patrón (`*` solo o vacío) o sin
-/// comodín, cae a "contiene" para que `foto` encuentre `mi_foto.png`.
-pub(crate) fn glob_match(pat: &str, name: &str) -> bool {
-    let pat = pat.to_lowercase();
-    let name = name.to_lowercase();
-    if !pat.contains('*') {
-        return name.contains(&pat);
-    }
-    let parts: Vec<&str> = pat.split('*').collect();
-    let mut pos = 0usize;
-    // Ancla del primer/último fragmento: `*.png` exige terminar en ".png";
-    // `foto*` exige empezar con "foto".
-    if let Some(first) = parts.first() {
-        if !first.is_empty() {
-            if !name[pos..].starts_with(first) {
-                return false;
-            }
-            pos += first.len();
-        }
-    }
-    for (i, frag) in parts.iter().enumerate() {
-        if frag.is_empty() {
-            continue;
-        }
-        // El primer fragmento ya se ancló arriba.
-        if i == 0 {
-            continue;
-        }
-        match name[pos..].find(frag) {
-            Some(off) => pos += off + frag.len(),
-            None => return false,
-        }
-    }
-    if let Some(last) = parts.last() {
-        if !last.is_empty() && parts.len() > 1 {
-            return name.ends_with(last);
-        }
-    }
-    true
-}
-
-#[cfg(test)]
-mod tests {
-    use super::glob_match;
-
-    #[test]
-    fn glob_extension() {
-        assert!(glob_match("*.png", "foto.png"));
-        assert!(glob_match("*.PNG", "foto.png")); // case-insensitive
-        assert!(!glob_match("*.png", "foto.jpg"));
-        assert!(!glob_match("*.png", "png.txt"));
-    }
-
-    #[test]
-    fn glob_prefix_y_medio() {
-        assert!(glob_match("foto*", "foto_001.png"));
-        assert!(!glob_match("foto*", "mi_foto.png"));
-        assert!(glob_match("img*2024*", "img_enero_2024_final.jpg"));
-        assert!(!glob_match("img*2024*", "img_enero.jpg"));
-    }
-
-    #[test]
-    fn sin_comodin_es_contiene() {
-        // Sin `*`, cae a "contiene" (case-insensitive).
-        assert!(glob_match("foto", "mi_FOTO_grande.png"));
-        assert!(!glob_match("foto", "imagen.png"));
-    }
-}
+// El glob-match (con sus tests) vive en el core agnóstico `nahual-shell-core`
+// (Regla 2). Se re-exporta para que el filtro por nombre de arriba y `find.rs`
+// lo sigan viendo como `crate::update::glob_match`.
+pub(crate) use nahual_shell_core::glob_match;

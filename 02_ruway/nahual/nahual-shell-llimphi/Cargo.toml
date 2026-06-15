@@ -38,10 +38,11 @@ llimphi-widget-text-editor = { workspace = true }
 # Command palette (Ctrl+Shift+P): el módulo canónico de llimphi, mismo que
 # usa `nada`. El shell sólo arma el catálogo y mapea id→Msg.
 llimphi-module-command-palette = { workspace = true }
-# Búsqueda semántica del find (tercer modo): embeddings por el daemon de verbo.
-# Degrada a búsqueda por nombre si el daemon no está corriendo. tokio ya entra
-# por nahual-source-core; acá lo declaramos para forjar el runtime del worker.
-rimay-verbo = { path = "../../../00_unanchay/rimay/rimay-verbo" }
+# Lógica agnóstica del shell: motor de búsqueda (find léxico + semántico por
+# embeddings vía el daemon de verbo), glob-match y tipos de resultado. El
+# algoritmo vive en el core; acá sólo se rutea y se lanza el worker (Regla 2).
+nahual-shell-core = { path = "../nahual-shell-core" }
+# tokio: runtime efímero del worker LLM en ai.rs (el find ya lo forja su core).
 tokio = { workspace = true }
 # Acciones LLM ("Preguntar a la IA sobre la selección"): fachada transparente
 # que autodetecta backend por env y cae a Mock sin credenciales (CLAUDE.md).
