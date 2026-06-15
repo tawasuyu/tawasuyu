@@ -64,8 +64,10 @@ enum Msg {
     SearchBlur,
     SearchKey(KeyEvent),
     DoSearch,
-    Results(u64, Arc<Vec<VideoCard>>),
-    SearchFailed(u64, String),
+    /// Llegó una tanda de videos. `append`=true la suma (paginación);
+    /// `false` reemplaza (búsqueda nueva o tendencias). `gen` descarta tardíos.
+    Loaded { gen: u64, append: bool, items: Arc<Vec<VideoCard>> },
+    LoadFailed(u64, String),
     SetBackend(Backend),
     Play(usize),
     ThumbDone(String),
@@ -81,6 +83,14 @@ struct Model {
     videos: Vec<VideoCard>,
     status: String,
     gen: u64,
+    /// Texto de la búsqueda en curso (vacío = listando tendencias).
+    query: String,
+    /// Última página cargada (sólo aplica a búsquedas paginadas).
+    page: u32,
+    /// Hay un fetch en vuelo (evita disparar otro al scrollear).
+    loading: bool,
+    /// La última página vino vacía: no hay más que pedir.
+    exhausted: bool,
     scroll_fila: usize,
     thumbs: ImageCache,
     thumb_pending: HashSet<String>,
@@ -96,12 +106,20 @@ fn default_instance(b: Backend) -> String {
     d.default_instances.first().cloned().unwrap_or_default()
 }
 
-/// Corre una búsqueda construyendo el provider data-driven (worker, red).
-fn buscar(b: Backend, instance: &str, q: &str) -> Result<Vec<VideoCard>, PlatformError> {
-    let query = SearchQuery::new(q);
+/// Corre una búsqueda paginada construyendo el provider data-driven (worker, red).
+fn buscar(b: Backend, instance: &str, q: &str, page: u32) -> Result<Vec<VideoCard>, PlatformError> {
+    let query = SearchQuery { text: q.to_string(), page };
     match b {
         Backend::Invidious => descriptors::invidious(instance.to_string()).search(&query),
         Backend::PeerTube => descriptors::peertube(instance.to_string()).search(&query),
+    }
+}
+
+/// Trae las tendencias/portada de la instancia (worker, red).
+fn tendencias(b: Backend, instance: &str) -> Result<Vec<VideoCard>, PlatformError> {
+    match b {
+        Backend::Invidious => descriptors::invidious(instance.to_string()).trending(),
+        Backend::PeerTube => descriptors::peertube(instance.to_string()).trending(),
     }
 }
 
@@ -163,6 +181,26 @@ fn kick_thumbs(m: &mut Model, handle: &Handle<Msg>) {
     }
 }
 
+/// Si la grilla está mostrando la última fila y hay una búsqueda paginable en
+/// curso, pide la página siguiente y la encola para *append* (scroll infinito).
+fn maybe_load_more(m: &mut Model, handle: &Handle<Msg>) {
+    if m.loading || m.exhausted || m.query.is_empty() || m.videos.is_empty() {
+        return;
+    }
+    let (w, h) = grid_area(m);
+    let win = ventana_visible(m.videos.len(), w, h, m.scroll_fila, &METRICS);
+    if win.first + win.count < m.videos.len() {
+        return; // todavía hay filas por debajo de lo visible
+    }
+    m.loading = true;
+    m.page += 1;
+    let (gen, b, inst, q, page) = (m.gen, m.backend, m.instance.clone(), m.query.clone(), m.page);
+    handle.spawn(move || match buscar(b, &inst, &q, page) {
+        Ok(v) => Msg::Loaded { gen, append: true, items: Arc::new(v) },
+        Err(e) => Msg::LoadFailed(gen, e.to_string()),
+    });
+}
+
 fn dur_fmt(secs: u64) -> String {
     let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
     if h > 0 {
@@ -186,16 +224,27 @@ impl App for MediaTube {
         (1180, 760)
     }
 
-    fn init(_handle: &Handle<Msg>) -> Model {
+    fn init(handle: &Handle<Msg>) -> Model {
         let backend = Backend::Invidious;
+        let instance = default_instance(backend);
+        // Arrancamos mostrando tendencias para que la grilla no esté vacía.
+        let (b, inst) = (backend, instance.clone());
+        handle.spawn(move || match tendencias(b, &inst) {
+            Ok(v) => Msg::Loaded { gen: 1, append: false, items: Arc::new(v) },
+            Err(e) => Msg::LoadFailed(1, e.to_string()),
+        });
         Model {
             backend,
-            instance: default_instance(backend),
+            instance,
             search: TextInputState::new(),
-            search_focused: true,
+            search_focused: false,
             videos: Vec::new(),
-            status: "Escribí algo y apretá Enter".to_string(),
-            gen: 0,
+            status: "Tendencias…".to_string(),
+            gen: 1,
+            query: String::new(),
+            page: 0,
+            loading: true,
+            exhausted: false,
             scroll_fila: 0,
             thumbs: ImageCache::new(),
             thumb_pending: HashSet::new(),
@@ -220,25 +269,41 @@ impl App for MediaTube {
                 m.videos.clear();
                 m.scroll_fila = 0;
                 m.status = format!("Buscando «{q}» en {}…", m.backend.nombre());
-                let (b, inst) = (m.backend, m.instance.clone());
-                handle.spawn(move || match buscar(b, &inst, &q) {
-                    Ok(v) => Msg::Results(gen, Arc::new(v)),
-                    Err(e) => Msg::SearchFailed(gen, e.to_string()),
+                m.query = q.clone();
+                m.page = 1;
+                m.loading = true;
+                m.exhausted = false;
+                let (b, inst, page) = (m.backend, m.instance.clone(), m.page);
+                handle.spawn(move || match buscar(b, &inst, &q, page) {
+                    Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
+                    Err(e) => Msg::LoadFailed(gen, e.to_string()),
                 });
             }
-            Msg::Results(gen, v) => {
+            Msg::Loaded { gen, append, items } => {
                 if gen == m.gen {
-                    m.videos = Arc::try_unwrap(v).unwrap_or_else(|a| (*a).clone());
+                    m.loading = false;
+                    let items = Arc::try_unwrap(items).unwrap_or_else(|a| (*a).clone());
+                    if append {
+                        if items.is_empty() {
+                            m.exhausted = true;
+                        } else {
+                            m.videos.extend(items);
+                        }
+                    } else {
+                        m.videos = items;
+                    }
                     m.status = if m.videos.is_empty() {
                         "Sin resultados".to_string()
                     } else {
-                        format!("{} resultados · {}", m.videos.len(), m.backend.nombre())
+                        let que = if m.query.is_empty() { "Tendencias" } else { "Resultados" };
+                        format!("{} · {} · {}", que, m.videos.len(), m.backend.nombre())
                     };
                     kick_thumbs(&mut m, handle);
                 }
             }
-            Msg::SearchFailed(gen, e) => {
+            Msg::LoadFailed(gen, e) => {
                 if gen == m.gen {
+                    m.loading = false;
                     m.status = format!("Error: {e}");
                 }
             }
@@ -248,7 +313,17 @@ impl App for MediaTube {
                     m.instance = default_instance(b);
                     m.videos.clear();
                     m.scroll_fila = 0;
-                    m.status = format!("Backend: {} ({})", b.nombre(), m.instance);
+                    m.query.clear();
+                    m.page = 0;
+                    m.loading = true;
+                    m.exhausted = false;
+                    m.gen += 1;
+                    m.status = format!("Tendencias de {}…", b.nombre());
+                    let (gen, inst) = (m.gen, m.instance.clone());
+                    handle.spawn(move || match tendencias(b, &inst) {
+                        Ok(v) => Msg::Loaded { gen, append: false, items: Arc::new(v) },
+                        Err(e) => Msg::LoadFailed(gen, e.to_string()),
+                    });
                 }
             }
             Msg::Play(i) => {
@@ -266,11 +341,13 @@ impl App for MediaTube {
                 if next != m.scroll_fila {
                     m.scroll_fila = next;
                     kick_thumbs(&mut m, handle);
+                    maybe_load_more(&mut m, handle);
                 }
             }
             Msg::Resize(w, h) => {
                 m.viewport = (w as f32, h as f32);
                 kick_thumbs(&mut m, handle);
+                maybe_load_more(&mut m, handle);
             }
         }
         m
