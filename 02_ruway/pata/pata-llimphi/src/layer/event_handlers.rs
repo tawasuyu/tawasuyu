@@ -322,6 +322,15 @@ impl PointerHandler for LayerApp {
                             self.panels[pi].dirty = true;
                             self.update_tooltip(pi, nuevo, qh);
                         }
+                        // Dock: la lupa sigue al puntero — re-render por cada
+                        // motion guardando la X local del panel.
+                        let idx = self.panels[pi].idx;
+                        if self.cfg.surfaces[idx].kind == pata_core::config::SurfaceKind::Dock
+                            && self.panels[pi].cursor_x != Some(px)
+                        {
+                            self.panels[pi].cursor_x = Some(px);
+                            self.panels[pi].dirty = true;
+                        }
                     }
                     continue;
                 }
@@ -329,6 +338,11 @@ impl PointerHandler for LayerApp {
                     if let Some(pi) = self.panel_de(&e.surface) {
                         if self.panels[pi].hover_idx.is_some() {
                             self.panels[pi].hover_idx = None;
+                            self.panels[pi].dirty = true;
+                        }
+                        // El dock vuelve a reposo cuando el puntero se va.
+                        if self.panels[pi].cursor_x.is_some() {
+                            self.panels[pi].cursor_x = None;
                             self.panels[pi].dirty = true;
                         }
                     }

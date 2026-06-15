@@ -890,6 +890,113 @@ pub fn bar_view(
     bar_body(surface, surface_widgets, shuma_state, data, theme, dir)
 }
 
+/// **Dock estilo macOS**: una fila centrada, pegada al borde, con un ícono por
+/// ventana abierta, **magnificados** según la cercanía del puntero. `cursor_x`
+/// es la coord X local del panel (o `None` si el puntero no está encima). Cada
+/// ícono activa su ventana al click. La magnificación es analítica (centros
+/// sobre una grilla de tamaño base), independiente del layout — así no necesita
+/// las posiciones ya calculadas por taffy.
+pub fn dock_view(
+    surface: &Surface,
+    windows: &[WindowEntry],
+    theme: &Theme,
+    panel_w: f32,
+    cursor_x: Option<f32>,
+) -> View<Msg> {
+    const BASE: f32 = 40.0; // lado del ícono en reposo
+    const MAX_SCALE: f32 = 1.9; // magnificación máxima bajo el cursor
+    const RADIUS: f32 = 110.0; // alcance px de la lupa
+    let gap = surface.gap.max(10.0);
+
+    let fondo = if surface.gradient {
+        theme.bg_panel_alt
+    } else {
+        theme.bg_panel
+    };
+    let contenedor = |hijos: Vec<View<Msg>>| {
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: percent(1.0_f32),
+            },
+            align_items: Some(AlignItems::FlexEnd), // íconos pegados al borde
+            justify_content: Some(JustifyContent::Center),
+            gap: Size {
+                width: length(gap),
+                height: length(0.0_f32),
+            },
+            padding: TaffyRect {
+                left: length(10.0_f32),
+                right: length(10.0_f32),
+                top: length(4.0_f32),
+                bottom: length(4.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(fondo)
+        .children(hijos)
+    };
+
+    if windows.is_empty() {
+        return contenedor(Vec::new());
+    }
+
+    let n = windows.len();
+    let total = n as f32 * BASE + (n.saturating_sub(1)) as f32 * gap;
+    let start_x = ((panel_w - total) / 2.0).max(10.0);
+    let tiles = windows
+        .iter()
+        .enumerate()
+        .map(|(i, w)| {
+            let center = start_x + i as f32 * (BASE + gap) + BASE / 2.0;
+            let scale = match cursor_x {
+                Some(cx) => {
+                    let d = (center - cx).abs();
+                    if d >= RADIUS {
+                        1.0
+                    } else {
+                        1.0 + (MAX_SCALE - 1.0) * (1.0 - d / RADIUS)
+                    }
+                }
+                None => 1.0,
+            };
+            dock_tile(w, theme, BASE * scale)
+        })
+        .collect();
+    contenedor(tiles)
+}
+
+/// Un ícono del dock: el SVG de la app (resuelto por `app_id` del tema XDG) o,
+/// si no hay, una pastilla con la inicial. `size` ya viene magnificado.
+fn dock_tile(w: &WindowEntry, theme: &Theme, size: f32) -> View<Msg> {
+    let tile = View::new(Style {
+        size: Size {
+            width: length(size),
+            height: length(size),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    });
+    let tile = match crate::app_icons::get_or_load(&w.app_id) {
+        Some(asset) => tile.children(vec![asset.view::<Msg>()]),
+        None => {
+            let inicial = w
+                .label
+                .chars()
+                .next()
+                .map(|c| c.to_uppercase().to_string())
+                .unwrap_or_else(|| "•".to_string());
+            tile.fill(theme.bg_button)
+                .radius(8.0)
+                .text(inicial, size * 0.42, theme.accent)
+        }
+    };
+    tile.on_click(Msg::ActivateWindow(w.id))
+        .hover_fill(theme.bg_button_hover)
+}
+
 // ============================================================
 // Utilidades internas compartidas por submódulos
 // ============================================================

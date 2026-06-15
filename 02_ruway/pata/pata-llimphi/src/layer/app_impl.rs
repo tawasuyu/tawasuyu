@@ -635,6 +635,15 @@ impl LayerApp {
                 &self.shuma,
                 &self.theme,
             )
+        } else if self.cfg.surfaces[idx].kind == SurfaceKind::Dock {
+            // Dock estilo macOS: íconos de ventanas magnificados por el puntero.
+            render::dock_view(
+                &self.cfg.surfaces[idx],
+                &windows,
+                &self.theme,
+                w as f32,
+                self.panels[pi].cursor_x,
+            )
         } else {
             render::bar_view(
                 &self.cfg.surfaces[idx],

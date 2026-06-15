@@ -115,6 +115,9 @@ struct Model {
     profiles: KeymapProfiles,
     /// Ruta de la biblioteca de perfiles (`~/.config/mirada/profiles.ron`).
     profiles_path: Option<PathBuf>,
+    /// Si está activo, aplicar una vista NO toca la barra de pata (conserva el
+    /// `launcher.toml` del usuario). Toggle del menú «Vista». De sesión.
+    vista_keep_bar: bool,
     /// Socket del API de control externo (`mirada-ctl`).
     ctl: Option<CtlServer>,
     /// Barra de menú principal: índice del menú raíz abierto (`None`
@@ -251,6 +254,7 @@ impl App for Mirada {
             keymap_watch,
             profiles,
             profiles_path,
+            vista_keep_bar: false,
             ctl,
             menu_open: None,
             menu_active: usize::MAX,
@@ -729,11 +733,14 @@ fn apply_vista(m: &mut Model, v: &Vista) {
     }
     // 5. Reconfigurar la barra (pata): escribimos su launcher.toml con el preset
     //    de barra de la vista; pata lo recarga en caliente por mtime. El slug de
-    //    la vista casa 1:1 con el preset de barra de pata-core.
-    if let Some(bar) = pata_core::Config::vista_preset(v.name) {
-        if let Err(e) = pata_config::save(&bar) {
-            m.note = format!("barra: {e}");
-            return;
+    //    la vista casa 1:1 con el preset de barra de pata-core. Si el usuario
+    //    pidió conservar su barra, no la tocamos.
+    if !m.vista_keep_bar {
+        if let Some(bar) = pata_core::Config::vista_preset(v.name) {
+            if let Err(e) = pata_config::save(&bar) {
+                m.note = format!("barra: {e}");
+                return;
+            }
         }
     }
     m.note = format!("vista: {}", v.label);
@@ -1033,7 +1040,11 @@ fn app_menu(model: &Model) -> AppMenu {
     };
 
     // Menú «Vista»: presets de escritorio completo (look + teclas).
-    let vista = vistas_menu(model.profiles.active(), model.desktop.config());
+    let vista = vistas_menu(
+        model.profiles.active(),
+        model.desktop.config(),
+        model.vista_keep_bar,
+    );
     // Menú «Atajos»: la biblioteca de perfiles de teclas.
     let atajos = profiles_menu(&model.profiles);
 
@@ -1111,7 +1122,7 @@ fn profiles_menu(profiles: &KeymapProfiles) -> Menu {
 /// layout + teclas). Lleva ✔ la vista cuyo `config` y keymap coinciden EXACTO
 /// con el estado actual (si el usuario tuneó algo a mano, ninguna marca).
 /// Función pura — verificable sin GPU.
-fn vistas_menu(active_keymap: &str, current: &mirada_brain::Config) -> Menu {
+fn vistas_menu(active_keymap: &str, current: &mirada_brain::Config, keep_bar: bool) -> Menu {
     let mut menu = Menu::new("Vista");
     for v in Vista::all() {
         let matches = v.keymap == active_keymap && &v.config == current;
@@ -1121,7 +1132,12 @@ fn vistas_menu(active_keymap: &str, current: &mirada_brain::Config) -> Menu {
         }
         menu = menu.item(it);
     }
-    menu
+    // Toggle: conservar la barra de pata al cambiar de vista (no pisar el TOML).
+    let mut keep = MenuItem::new("Conservar mi barra", "vista.keep_bar").separated();
+    if keep_bar {
+        keep = keep.icon("\u{2714}");
+    }
+    menu.item(keep)
 }
 
 /// Traduce un command id del menú principal a la acción real del Desktop.
@@ -1154,6 +1170,15 @@ fn handle_menu_command(m: &mut Model, cmd: &str) {
     // Vistas: aplicar un preset de escritorio completo.
     if let Some(name) = cmd.strip_prefix("vista.use.") {
         apply_vista_by_name(m, &name.to_string());
+        return;
+    }
+    if cmd == "vista.keep_bar" {
+        m.vista_keep_bar = !m.vista_keep_bar;
+        m.note = if m.vista_keep_bar {
+            "vistas: conservaré tu barra de pata".into()
+        } else {
+            "vistas: la barra seguirá a la vista".into()
+        };
         return;
     }
     match cmd {
@@ -1575,9 +1600,22 @@ mod tests {
     #[test]
     fn el_menu_de_vistas_marca_la_activa() {
         let default_cfg = mirada_brain::Config::default();
-        let menu = vistas_menu("mirada", &default_cfg);
-        // Una entrada por vista, con comando vista.use.<slug>.
-        assert_eq!(menu.items.len(), Vista::all().len());
+        let menu = vistas_menu("mirada", &default_cfg, false);
+        // Una entrada por vista + el toggle «Conservar mi barra».
+        assert_eq!(menu.items.len(), Vista::all().len() + 1);
+        let keep = menu
+            .items
+            .iter()
+            .find(|it| it.command == "vista.keep_bar")
+            .unwrap();
+        assert!(keep.icon.is_none(), "keep_bar arranca apagado");
+        assert!(
+            vistas_menu("mirada", &default_cfg, true)
+                .items
+                .iter()
+                .any(|it| it.command == "vista.keep_bar" && it.icon.is_some()),
+            "con keep_bar=true el toggle lleva ✔"
+        );
         let mirada = menu
             .items
             .iter()
@@ -1597,7 +1635,7 @@ mod tests {
     #[test]
     fn la_vista_no_se_marca_si_el_keymap_difiere() {
         let default_cfg = mirada_brain::Config::default();
-        let menu = vistas_menu("hyprland", &default_cfg); // keymap ≠ "mirada"
+        let menu = vistas_menu("hyprland", &default_cfg, false); // keymap ≠ "mirada"
         let mirada = menu
             .items
             .iter()

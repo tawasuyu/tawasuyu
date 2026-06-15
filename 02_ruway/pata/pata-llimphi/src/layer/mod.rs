@@ -134,6 +134,9 @@ pub(super) struct Panel {
     pub(super) dirty: bool,
     /// Nodo bajo el puntero en este panel (para `hover_fill`).
     pub(super) hover_idx: Option<usize>,
+    /// X local del puntero sobre el panel (o `None` si está fuera). Sólo lo usa
+    /// el dock para la magnificación por cercanía; se actualiza en cada `Motion`.
+    pub(super) cursor_x: Option<f32>,
     pub(super) gpu: Option<PanelGpu>,
 }
 
@@ -443,6 +446,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             height: thickness,
             dirty: true,
             hover_idx: None,
+            cursor_x: None,
             gpu: None,
         });
     }
@@ -474,6 +478,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             height: size.1.max(1),
             dirty: true,
             hover_idx: None,
+            cursor_x: None,
             gpu: None,
         });
     }
@@ -510,6 +515,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 height: ch,
                 dirty: true,
                 hover_idx: None,
+            cursor_x: None,
                 gpu: None,
             });
         }
@@ -563,6 +569,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             height: 1,
             dirty: false,
             hover_idx: None,
+            cursor_x: None,
             gpu: None,
         });
         Some(app.panels.len() - 1)
