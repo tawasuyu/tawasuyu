@@ -230,8 +230,9 @@ pub fn new_model() -> Model {
 /// Engancha los efectos que dependen del host (event loop): ticks periódicos,
 /// watcher de `WawaConfig`, cliente del rail de pata, y dispara la verificación
 /// de contenedores de las sesiones. El bin standalone lo llama en `App::init`;
-/// un host como pata proveería sus propios ticks en vez de esto.
-fn spawn_host_effects(model: &mut Model, handle: &Handle<Msg>) {
+/// un host como pata lo llama con un `Handle` lifteado ([`Handle::lift`]) para
+/// que los ticks/efectos de shuma vuelvan a su loop como `pata::Msg`.
+pub fn spawn_host_effects(model: &mut Model, handle: &Handle<Msg>) {
     handle.spawn_periodic(TICK, || Msg::Tick);
     handle.spawn_periodic(SHELL_TICK, || Msg::ShellTick);
     model._wawa_watcher = {
@@ -1451,4 +1452,47 @@ impl App for Shell {
         }
         view::dropdown_overlay(model).or_else(|| menu::overlay(model))
     }
+}
+
+// ─── Superficie hosteable (para pata) ────────────────────────────────
+//
+// Funciones libres que **delegan** a los métodos del `App` `Shell`. El
+// standalone queda idéntico (el App impl no se toca); un host como pata
+// construye el `Model` con `new_model()`, lo tickea con `spawn_host_effects`
+// (handle lifteado), le rutea input/Msg con `update`/`on_key`/`on_wheel`/
+// `on_resize`, y pinta `view(model).map(...)` + `view_overlay(model).map(...)`.
+
+/// Aplica un `Msg` al `Model` de shuma (delegado a `App::update`).
+pub fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
+    <Shell as App>::update(model, msg, handle)
+}
+
+/// Vista principal de shuma para `model` (delegado a `App::view`).
+pub fn view(model: &Model) -> View<Msg> {
+    <Shell as App>::view(model)
+}
+
+/// Overlay (modales/menús/dropdowns) de shuma, si hay (delegado a `App::view_overlay`).
+pub fn view_overlay(model: &Model) -> Option<View<Msg>> {
+    <Shell as App>::view_overlay(model)
+}
+
+/// Traduce una tecla a un `Msg` de shuma según el foco actual (delegado a `App::on_key`).
+pub fn on_key(model: &Model, e: &KeyEvent) -> Option<Msg> {
+    <Shell as App>::on_key(model, e)
+}
+
+/// Traduce la rueda a un `Msg` de shuma (delegado a `App::on_wheel`).
+pub fn on_wheel(
+    model: &Model,
+    delta: WheelDelta,
+    cursor: (f32, f32),
+    modifiers: Modifiers,
+) -> Option<Msg> {
+    <Shell as App>::on_wheel(model, delta, cursor, modifiers)
+}
+
+/// Reacciona a un resize del área hospedada (delegado a `App::on_resize`).
+pub fn on_resize(model: &Model, width: u32, height: u32) -> Option<Msg> {
+    <Shell as App>::on_resize(model, width, height)
 }
