@@ -163,6 +163,10 @@ const HUD_PAD: i32 = 12;
 /// Distancia del HUD al borde superior de la salida, en píxeles.
 const HUD_TOP: i32 = 40;
 
+/// Duración del slide de transición entre escritorios (Win+Tab modo
+/// Hyprland/Prezi), en milisegundos.
+pub(super) const SLIDE_MS: u32 = 220;
+
 /// Duración del HUD del preset activo al ciclar zonas.
 const HUD_DURATION: Duration = Duration::from_millis(1500);
 
@@ -449,6 +453,13 @@ struct DrmState {
     start: Instant,
     /// Nº de ventanas en el último `tick` — para registrar los cambios.
     last_windows: usize,
+    /// Último escritorio activo visto — para detectar el cambio y disparar el
+    /// slide de transición (modo `Hyprland`/`Prezi`).
+    last_active_ws: usize,
+    /// Slide de escritorios en curso: `(ms de inicio, signo de dirección)`.
+    /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
+    /// un escritorio mayor), -1 desde la izquierda.
+    ws_slide: Option<(u32, f32)>,
     /// Identidad estable del cursor de software — el seguimiento de daño
     /// la usa para no recomponer todo cuando el cursor sólo se mueve.
     cursor_id: Id,
@@ -939,6 +950,8 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         ctl,
         start: Instant::now(),
         last_windows: 0,
+        last_active_ws: 0,
+        ws_slide: None,
         cursor_id: Id::new(),
         last_pointer_window: None,
         output_size: (total_w as f64, total_h as f64),

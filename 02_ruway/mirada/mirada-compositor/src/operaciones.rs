@@ -129,6 +129,15 @@ impl App {
         self.apply_commands(cmds);
     }
 
+    /// El modo de transición de Win+Tab configurado (`direct`/`hyprland`/
+    /// `prezi`). `Direct` con Cerebro enlazado (no decide animaciones acá).
+    pub(crate) fn config_workspace_switch_mode(&self) -> mirada_brain::WorkspaceSwitchMode {
+        match &self.brain {
+            Brain::Embedded(d) => d.config().workspace_switch_mode,
+            Brain::Linked(_) => mirada_brain::WorkspaceSwitchMode::Direct,
+        }
+    }
+
     /// `(escritorio activo 0-based, ventanas por escritorio)` del Cerebro
     /// embebido — para el switcher visual de Win+Tab. `None` con Cerebro
     /// enlazado (el dueño externo maneja los escritorios).

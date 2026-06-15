@@ -72,12 +72,27 @@ impl DrmState {
         // el shell al borde inferior. En multi-monitor esa salida es la
         // primaria (output 0); el shell vive ahí.
         let primary_h = self.outputs[Self::PRIMARY].rect.h;
+        // Offset del slide de transición entre escritorios: las ventanas del
+        // escritorio entrante se deslizan desde un costado hasta su lugar.
+        // Ease-out cúbico; 0 cuando no hay slide.
+        let slide_dx: i32 = match self.ws_slide {
+            Some((start_ms, dir)) => {
+                let now = self.start.elapsed().as_millis() as u32;
+                let t = (now.saturating_sub(start_ms) as f32 / super::SLIDE_MS as f32)
+                    .clamp(0.0, 1.0);
+                let eased = 1.0 - (1.0 - t).powi(3);
+                (dir * rect.w as f32 * (1.0 - eased)) as i32
+            }
+            None => 0,
+        };
         for w in &shown {
             if !crate::buffer_render_sano(&w.surface) {
                 continue; // buffer degenerado/desmesurado: ni decoración ni superficie
             }
             let tb = crate::titlebar_for(w, tbh);
             let (gx, gy) = crate::render_loc(w, primary_h, tbh);
+            // El marco (pata) no se desliza; las ventanas del escritorio sí.
+            let gx = if w.is_shell { gx } else { gx + slide_dx };
             let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
             // Rect decorado en coords globales (incluye barra + superficie).
             let gxd = gx;

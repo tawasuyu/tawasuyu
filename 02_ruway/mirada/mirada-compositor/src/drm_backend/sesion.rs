@@ -104,6 +104,26 @@ impl DrmState {
             }
         }
 
+        // Slide de transición de escritorios (Win+Tab modo Hyprland/Prezi): al
+        // detectar que el escritorio activo cambió, arranca un slide; el render
+        // (cada tick) lo anima por tiempo y `emit_windows` aplica el offset.
+        if let Some((active, _)) = self.app.workspace_overview() {
+            if active != self.last_active_ws {
+                if self.app.config_workspace_switch_mode()
+                    != mirada_brain::WorkspaceSwitchMode::Direct
+                {
+                    let dir = if active > self.last_active_ws { 1.0 } else { -1.0 };
+                    self.ws_slide = Some((self.start.elapsed().as_millis() as u32, dir));
+                }
+                self.last_active_ws = active;
+            }
+        }
+        if let Some((start_ms, _)) = self.ws_slide {
+            if self.start.elapsed().as_millis() as u32 >= start_ms + super::SLIDE_MS {
+                self.ws_slide = None;
+            }
+        }
+
         self.render();
         let _ = self.display.flush_clients();
     }
