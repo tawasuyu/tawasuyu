@@ -153,14 +153,18 @@ pub struct BoxNode {
     /// chrome recorta el subárbol a `rect` menos estos insets. Formas no
     /// rectangulares (circle/ellipse) no se modelan acá. Fase 7.1219.
     pub clip_inset: Option<[f32; 4]>,
-    /// `clip-path: circle(...)` / `ellipse(...)` resuelto a un spec
-    /// elíptico `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]`: el centro es
-    /// `(cx_px + cx_pct/100·w, cy_px + cy_pct/100·h)` y los radios `rx`/`ry`
-    /// en px desde ese centro (circle ⇒ `rx == ry`). El chrome recorta el
-    /// subárbol a esa elipse. `None` = sin clip-path elíptico. Resolución de
-    /// porcentajes de centro se difiere al compositor (necesita el rect del
-    /// nodo). Fase 7.1220.
-    pub clip_ellipse: Option<[f32; 6]>,
+    /// `clip-path: circle(...)` / `ellipse(...)` resuelto a un spec elíptico
+    /// de 12 floats. El centro (4): `[cx_px, cx_pct, cy_px, cy_pct]` →
+    /// `(cx_px + cx_pct/100·w, cy_px + cy_pct/100·h)`. Cada radio (4): `[px,
+    /// pct_w, pct_h, pct_diag]` → `px + pct_w/100·w + pct_h/100·h +
+    /// pct_diag/100·(√(w²+h²)/√2)`, así un mismo formato cubre las tres bases
+    /// de `%` de CSS (ellipse rx→ancho, ry→alto; circle→diagonal). Layout:
+    /// `[cx_px, cx_pct, cy_px, cy_pct, rx_px, rx_pw, rx_ph, rx_pd, ry_px,
+    /// ry_pw, ry_ph, ry_pd]`. El chrome recorta el subárbol a esa elipse.
+    /// `None` = sin clip-path elíptico. Resolución de % se difiere al
+    /// compositor (necesita el rect del nodo). Fase 7.1220 (rect),
+    /// 7.1221 (radios %).
+    pub clip_ellipse: Option<[f32; 12]>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

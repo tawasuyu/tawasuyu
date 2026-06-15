@@ -189,13 +189,15 @@ use crate::Engine;
 
     #[test]
     fn clip_path_circle_ellipse_llega_al_box_node_fase_7_1220() {
-        // `clip-path: circle()/ellipse()` se resuelve a un spec elíptico
-        // `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]` en el BoxNode. El centro
-        // queda en forma (px, pct) — el compositor resuelve los % contra el rect.
+        // `clip-path: circle()/ellipse()` se resuelve a un spec elíptico de 12
+        // floats en el BoxNode: centro [cx_px, cx_pct, cy_px, cy_pct] + dos
+        // radios [px, pct_w, pct_h, pct_diag]. El % se difiere al compositor.
         let html = "<html><body>\
             <div id=\"c1\" style=\"clip-path: circle(30px at 50% 50%)\">a</div>\
             <div id=\"c2\" style=\"clip-path: circle(40px at 10px 20px)\">b</div>\
+            <div id=\"c3\" style=\"clip-path: circle(50%)\">f</div>\
             <div id=\"e1\" style=\"clip-path: ellipse(20px 10px)\">c</div>\
+            <div id=\"e2\" style=\"clip-path: ellipse(25% 40%)\">g</div>\
             <div id=\"ins\" style=\"clip-path: inset(5px)\">d</div>\
             <div id=\"n\">e</div>\
             </body></html>";
@@ -210,12 +212,31 @@ use crate::Engine;
             });
             found.expect("box existe")
         };
-        // circle con centro 50%/50% → radios iguales, centro en pct.
-        assert_eq!(by_id("c1"), Some([0.0, 50.0, 0.0, 50.0, 30.0, 30.0]));
-        // circle con centro en px → centro en px, pct 0.
-        assert_eq!(by_id("c2"), Some([10.0, 0.0, 20.0, 0.0, 40.0, 40.0]));
-        // ellipse sin `at` → centro default 50%/50%, radios distintos.
-        assert_eq!(by_id("e1"), Some([0.0, 50.0, 0.0, 50.0, 20.0, 10.0]));
+        // circle px con centro 50%/50% → radios px iguales sobre base diagonal.
+        assert_eq!(
+            by_id("c1"),
+            Some([0.0, 50.0, 0.0, 50.0, 30.0, 0.0, 0.0, 0.0, 30.0, 0.0, 0.0, 0.0])
+        );
+        // circle px con centro en px.
+        assert_eq!(
+            by_id("c2"),
+            Some([10.0, 0.0, 20.0, 0.0, 40.0, 0.0, 0.0, 0.0, 40.0, 0.0, 0.0, 0.0])
+        );
+        // circle(50%) → radio % sobre base DIAGONAL (ranura pct_diag), ambos.
+        assert_eq!(
+            by_id("c3"),
+            Some([0.0, 50.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0, 0.0, 0.0, 0.0, 50.0])
+        );
+        // ellipse px sin `at` → centro default 50%/50%, radios px distintos.
+        assert_eq!(
+            by_id("e1"),
+            Some([0.0, 50.0, 0.0, 50.0, 20.0, 0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0])
+        );
+        // ellipse % → rx% sobre ancho (pct_w), ry% sobre alto (pct_h).
+        assert_eq!(
+            by_id("e2"),
+            Some([0.0, 50.0, 0.0, 50.0, 0.0, 25.0, 0.0, 0.0, 0.0, 0.0, 40.0, 0.0])
+        );
         // inset() → es rectangular, no llena clip_ellipse.
         assert_eq!(by_id("ins"), None);
         // sin clip-path → None.

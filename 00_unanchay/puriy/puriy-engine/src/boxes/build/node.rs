@@ -13,6 +13,27 @@ fn clip_len_pair(v: LengthVal) -> (f32, f32) {
     }
 }
 
+/// Base contra la que resuelve un `%` de radio de clip-path: ancho, alto o
+/// la diagonal `√(w²+h²)/√2` (circle). Fase 7.1221.
+enum RadBasis {
+    Width,
+    Height,
+    Diag,
+}
+
+/// `LengthVal` → cuádruple `[px, pct_w, pct_h, pct_diag]` para un radio de
+/// clip-path. Un `%` cae en la ranura de su base; un px en `px`. Exactamente
+/// una ranura de pct queda no-cero. El compositor suma las cuatro
+/// contribuciones contra el rect. Fase 7.1221.
+fn clip_radius_quad(v: LengthVal, basis: RadBasis) -> [f32; 4] {
+    let (px, pct) = clip_len_pair(v);
+    match basis {
+        RadBasis::Width => [px, pct, 0.0, 0.0],
+        RadBasis::Height => [px, 0.0, pct, 0.0],
+        RadBasis::Diag => [px, 0.0, 0.0, pct],
+    }
+}
+
 /// `true` si el padre establece un contexto flex/grid — único caso en que
 /// `margin-top/bottom: auto` centra (en block flow CSS lo computa a 0).
 fn parent_is_flex_grid(p: Option<&ComputedStyle>) -> bool {
@@ -546,20 +567,29 @@ pub(crate) fn build_node(
                     }
                     _ => None,
                 },
-                // Fase 7.1220 — clip-path: circle()/ellipse() → spec elíptico
-                // [cx_px, cx_pct, cy_px, cy_pct, rx, ry]. El centro queda en
-                // forma (px, pct) porque su resolución depende del rect (lo
-                // hace el compositor). circle ⇒ rx == ry == radio.
+                // Fase 7.1220/7.1221 — clip-path: circle()/ellipse() → spec
+                // elíptico de 12 floats: centro [cx_px, cx_pct, cy_px, cy_pct]
+                // + dos radios [px, pct_w, pct_h, pct_diag]. El % se difiere al
+                // compositor (depende del rect). circle ⇒ rx == ry sobre base
+                // diagonal; ellipse rx sobre ancho, ry sobre alto.
                 clip_ellipse: match style.clip_path {
                     Some(crate::style::ClipPath::Circle { radius, cx, cy }) => {
                         let (cxp, cxc) = clip_len_pair(cx);
                         let (cyp, cyc) = clip_len_pair(cy);
-                        Some([cxp, cxc, cyp, cyc, radius, radius])
+                        let r = clip_radius_quad(radius, RadBasis::Diag);
+                        Some([
+                            cxp, cxc, cyp, cyc, r[0], r[1], r[2], r[3], r[0], r[1], r[2], r[3],
+                        ])
                     }
                     Some(crate::style::ClipPath::Ellipse { rx, ry, cx, cy }) => {
                         let (cxp, cxc) = clip_len_pair(cx);
                         let (cyp, cyc) = clip_len_pair(cy);
-                        Some([cxp, cxc, cyp, cyc, rx, ry])
+                        let rx = clip_radius_quad(rx, RadBasis::Width);
+                        let ry = clip_radius_quad(ry, RadBasis::Height);
+                        Some([
+                            cxp, cxc, cyp, cyc, rx[0], rx[1], rx[2], rx[3], ry[0], ry[1], ry[2],
+                            ry[3],
+                        ])
                     }
                     _ => None,
                 },

@@ -90,30 +90,33 @@ fn parse_inset_shape(args: &str) -> Option<ClipPath> {
     Some(ClipPath::Inset { top, right, bottom, left, radius })
 }
 
-/// `circle(<radius> [at <x> <y>])`. Radio en px; centro default 50%/50%.
+/// `circle(<radius> [at <x> <y>])`. `radius` es `<length-percentage>` (un
+/// `%` resuelve contra la diagonal de la caja, en el compositor); centro
+/// default 50%/50%. Vacío → `0px` (sin radio; `closest-side` no se modela).
 fn parse_circle_shape(args: &str) -> Option<ClipPath> {
     let (radius_str, center) = match args.find(" at ") {
         Some(idx) => (args[..idx].trim(), args[idx + " at ".len()..].trim()),
         None => (args, ""),
     };
     let radius = if radius_str.is_empty() {
-        0.0
+        LengthVal::Px(0.0)
     } else {
-        parse_length_px(radius_str)?
+        parse_length_or_pct(radius_str)?
     };
     let (cx, cy) = parse_center(center);
     Some(ClipPath::Circle { radius, cx, cy })
 }
 
-/// `ellipse(<rx> <ry> [at <x> <y>])`.
+/// `ellipse(<rx> <ry> [at <x> <y>])`. `rx`/`ry` son `<length-percentage>`
+/// (`%` resuelve contra ancho/alto respectivamente, en el compositor).
 fn parse_ellipse_shape(args: &str) -> Option<ClipPath> {
     let (radii_str, center) = match args.find(" at ") {
         Some(idx) => (args[..idx].trim(), args[idx + " at ".len()..].trim()),
         None => (args, ""),
     };
     let mut tokens = radii_str.split_whitespace();
-    let rx = parse_length_px(tokens.next()?)?;
-    let ry = parse_length_px(tokens.next()?)?;
+    let rx = parse_length_or_pct(tokens.next()?)?;
+    let ry = parse_length_or_pct(tokens.next()?)?;
     let (cx, cy) = parse_center(center);
     Some(ClipPath::Ellipse { rx, ry, cx, cy })
 }

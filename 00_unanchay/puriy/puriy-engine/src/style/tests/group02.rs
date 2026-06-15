@@ -956,20 +956,48 @@ use super::super::*;
             r,
             ClipPath::Inset { top: 1.0, right: 2.0, bottom: 3.0, left: 4.0, radius: 5.0 }
         );
-        // circle con radio + centro.
+        // circle con radio px + centro.
         let r = parse_clip_path("circle(30px at 50% 50%)").unwrap();
-        assert!(matches!(
+        assert_eq!(
             r,
-            ClipPath::Circle { radius, cx: LengthVal::Pct(50.0), cy: LengthVal::Pct(50.0) }
-                if (radius - 30.0).abs() < 1e-3
-        ));
-        // ellipse default centro.
+            ClipPath::Circle {
+                radius: LengthVal::Px(30.0),
+                cx: LengthVal::Pct(50.0),
+                cy: LengthVal::Pct(50.0)
+            }
+        );
+        // circle con radio % (Fase 7.1221: antes no parseaba → clip perdido).
+        let r = parse_clip_path("circle(50%)").unwrap();
+        assert_eq!(
+            r,
+            ClipPath::Circle {
+                radius: LengthVal::Pct(50.0),
+                cx: LengthVal::Pct(50.0),
+                cy: LengthVal::Pct(50.0)
+            }
+        );
+        // ellipse default centro, radios px.
         let r = parse_clip_path("ellipse(20px 10px)").unwrap();
-        assert!(matches!(
+        assert_eq!(
             r,
-            ClipPath::Ellipse { rx, ry, cx: LengthVal::Pct(50.0), cy: LengthVal::Pct(50.0) }
-                if (rx - 20.0).abs() < 1e-3 && (ry - 10.0).abs() < 1e-3
-        ));
+            ClipPath::Ellipse {
+                rx: LengthVal::Px(20.0),
+                ry: LengthVal::Px(10.0),
+                cx: LengthVal::Pct(50.0),
+                cy: LengthVal::Pct(50.0)
+            }
+        );
+        // ellipse radios % → resuelven contra ancho/alto en el compositor.
+        let r = parse_clip_path("ellipse(25% 40%)").unwrap();
+        assert_eq!(
+            r,
+            ClipPath::Ellipse {
+                rx: LengthVal::Pct(25.0),
+                ry: LengthVal::Pct(40.0),
+                cx: LengthVal::Pct(50.0),
+                cy: LengthVal::Pct(50.0)
+            }
+        );
         // Función desconocida → None.
         assert!(parse_clip_path("polygon(0 0, 100% 0, 50% 100%)").is_none());
 

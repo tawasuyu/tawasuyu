@@ -1214,11 +1214,11 @@ impl<Msg> View<Msg> {
     }
 
     /// Recorta los descendientes a una elipse — modela
-    /// `clip-path: circle()`/`ellipse()`. `spec` es
-    /// `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]`: el centro se resuelve contra
-    /// el rect del nodo (`cx_px + cx_pct/100·w`, idem alto) y `rx`/`ry` son
-    /// radios px. Activa el recorte (paint; hit-test usa el rect completo).
-    pub fn clip_ellipse(mut self, spec: [f32; 6]) -> Self {
+    /// `clip-path: circle()`/`ellipse()`. `spec` es de 12 floats: centro
+    /// `[cx_px, cx_pct, cy_px, cy_pct]` + dos radios `[px, pct_w, pct_h,
+    /// pct_diag]`, todos resueltos contra el rect del nodo en el pintado.
+    /// Activa el recorte (paint; hit-test usa el rect completo).
+    pub fn clip_ellipse(mut self, spec: [f32; 12]) -> Self {
         self.clip = true;
         self.clip_ellipse = Some(spec);
         self
@@ -1253,10 +1253,11 @@ mod semantics_tests {
 
     #[test]
     fn clip_ellipse_setea_campo_y_activa_clip() {
-        // `.clip_ellipse(...)` guarda el spec y activa el recorte (Fase 7.1220).
-        let v = View::<()>::new(Style::default())
-            .clip_ellipse([0.0, 50.0, 0.0, 50.0, 30.0, 20.0]);
-        assert_eq!(v.clip_ellipse, Some([0.0, 50.0, 0.0, 50.0, 30.0, 20.0]));
+        // `.clip_ellipse(...)` guarda el spec de 12 floats y activa el recorte
+        // (Fase 7.1220 rect, 7.1221 radios %).
+        let spec = [0.0, 50.0, 0.0, 50.0, 30.0, 0.0, 0.0, 0.0, 20.0, 0.0, 0.0, 0.0];
+        let v = View::<()>::new(Style::default()).clip_ellipse(spec);
+        assert_eq!(v.clip_ellipse, Some(spec));
         assert!(v.clip, "clip_ellipse implica clip activo");
         // No interfiere con clip_inset (campos independientes).
         assert_eq!(v.clip_inset, None);

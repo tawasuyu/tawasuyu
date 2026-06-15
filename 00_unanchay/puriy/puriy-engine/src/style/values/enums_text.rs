@@ -360,11 +360,14 @@ pub enum ClipPath {
     /// offsets en px desde cada borde; `radius` (opcional) curva las
     /// esquinas. La spec acepta `<length-percentage>`; acá guardamos px.
     Inset { top: f32, right: f32, bottom: f32, left: f32, radius: f32 },
-    /// `circle(<radius> [at <x> <y>])`. Radio en px; centro en px desde
-    /// el origen del box (default centro = 50% del box, no resuelto acá).
-    Circle { radius: f32, cx: LengthVal, cy: LengthVal },
-    /// `ellipse(<rx> <ry> [at <x> <y>])`.
-    Ellipse { rx: f32, ry: f32, cx: LengthVal, cy: LengthVal },
+    /// `circle(<radius> [at <x> <y>])`. `radius` es `<length-percentage>`;
+    /// un `%` resuelve contra `√(w²+h²)/√2` (la diagonal de la caja de
+    /// referencia, no resuelto acá). Centro default `50% 50%`. Fase 7.1221:
+    /// `radius` pasó de `f32` px a `LengthVal` para admitir `circle(50%)`.
+    Circle { radius: LengthVal, cx: LengthVal, cy: LengthVal },
+    /// `ellipse(<rx> <ry> [at <x> <y>])`. `rx`/`ry` son `<length-percentage>`;
+    /// `rx%` resuelve contra el ancho y `ry%` contra el alto de la caja.
+    Ellipse { rx: LengthVal, ry: LengthVal, cx: LengthVal, cy: LengthVal },
 }
 
 /// `mask-image` (CSS Masking 1). Subset: `url(...)`. `image()`,

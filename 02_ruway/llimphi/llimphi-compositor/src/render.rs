@@ -678,13 +678,20 @@ pub fn paint_range<Msg>(
         if node.clip {
             // El hit-test (más abajo) usa siempre el rect completo — el clip-path
             // sólo afecta el pintado, una aproximación menor en su banda.
-            if let Some([cxp, cxc, cyp, cyc, rx, ry]) = node.clip_ellipse {
-                // `clip-path: circle()/ellipse()` — capa elíptica. El centro
-                // resuelve sus porcentajes contra el rect del nodo; los radios
-                // ya vienen en px (circle ⇒ rx == ry).
-                let cx = (r.x + cxp + cxc / 100.0 * r.w) as f64;
-                let cy = (r.y + cyp + cyc / 100.0 * r.h) as f64;
-                let ellipse = Ellipse::new((cx, cy), (rx as f64, ry as f64), 0.0);
+            if let Some(s) = node.clip_ellipse {
+                // `clip-path: circle()/ellipse()` — capa elíptica. Centro y
+                // radios resuelven sus porcentajes contra el rect del nodo. Cada
+                // radio suma [px, pct_w·w, pct_h·h, pct_diag·diag]; diag es la
+                // base de circle (√(w²+h²)/√2), ancho/alto las de ellipse.
+                let cx = (r.x + s[0] + s[1] / 100.0 * r.w) as f64;
+                let cy = (r.y + s[2] + s[3] / 100.0 * r.h) as f64;
+                let diag = ((r.w * r.w + r.h * r.h).sqrt() / core::f32::consts::SQRT_2) as f64;
+                let (w, h) = (r.w as f64, r.h as f64);
+                let rx = s[4] as f64 + s[5] as f64 / 100.0 * w + s[6] as f64 / 100.0 * h
+                    + s[7] as f64 / 100.0 * diag;
+                let ry = s[8] as f64 + s[9] as f64 / 100.0 * w + s[10] as f64 / 100.0 * h
+                    + s[11] as f64 / 100.0 * diag;
+                let ellipse = Ellipse::new((cx, cy), (rx, ry), 0.0);
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &ellipse);
             } else {
                 // `clip_inset` (clip-path: inset) encoge el rect de recorte desde
