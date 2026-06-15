@@ -420,67 +420,81 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             None
         };
 
-    // Una layer surface por barra.
+    // Los monitores destino de una superficie: `output = "*"`/`"all"` la
+    // replica en CADA monitor conectado; si no, su monitor (o el primario).
+    let targets_de = |out: &str| -> Vec<Option<wl_output::WlOutput>> {
+        if (out == "*" || out.eq_ignore_ascii_case("all")) && !outputs_by_name.is_empty() {
+            outputs_by_name.values().cloned().map(Some).collect()
+        } else {
+            vec![resolve_output(out)]
+        }
+    };
+
+    // Una layer surface por barra (× monitor si `output = "*"`).
     for &idx in &bars {
         let s = &app.cfg.surfaces[idx];
         let thickness = s.thickness.max(1.0) as u32;
         let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
-        let wl_surface = compositor.create_surface(&qh);
-        let layer = layer_shell.create_layer_surface(
-            &qh,
-            wl_surface,
-            Layer::Top,
-            Some("pata".to_string()),
-            resolve_output(&s.output).as_ref(),
-        );
-        layer.set_anchor(sctk_anchor);
-        layer.set_size(size.0, size.1);
-        layer.set_exclusive_zone(thickness as i32);
-        layer.commit();
-        app.panels.push(Panel {
-            idx,
-            card: None,
-            layer,
-            cache: None,
-            width: size.0.max(1),
-            height: thickness,
-            dirty: true,
-            hover_idx: None,
-            cursor_x: None,
-            gpu: None,
-        });
+        for target in targets_de(&s.output) {
+            let wl_surface = compositor.create_surface(&qh);
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Top,
+                Some("pata".to_string()),
+                target.as_ref(),
+            );
+            layer.set_anchor(sctk_anchor);
+            layer.set_size(size.0, size.1);
+            layer.set_exclusive_zone(thickness as i32);
+            layer.commit();
+            app.panels.push(Panel {
+                idx,
+                card: None,
+                layer,
+                cache: None,
+                width: size.0.max(1),
+                height: thickness,
+                dirty: true,
+                hover_idx: None,
+                cursor_x: None,
+                gpu: None,
+            });
+        }
     }
 
-    // Una layer surface por sidebar.
+    // Una layer surface por sidebar (× monitor si `output = "*"`).
     for &idx in &sidebars {
         let s = &app.cfg.surfaces[idx];
         let thickness = s.thickness.max(1.0) as u32;
         let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
-        let wl_surface = compositor.create_surface(&qh);
-        let layer = layer_shell.create_layer_surface(
-            &qh,
-            wl_surface,
-            Layer::Top,
-            Some("pata-sidebar".to_string()),
-            resolve_output(&s.output).as_ref(),
-        );
-        layer.set_anchor(sctk_anchor);
-        layer.set_size(size.0, size.1);
-        layer.set_exclusive_zone(thickness as i32);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
-        layer.commit();
-        app.panels.push(Panel {
-            idx,
-            card: None,
-            layer,
-            cache: None,
-            width: thickness,
-            height: size.1.max(1),
-            dirty: true,
-            hover_idx: None,
-            cursor_x: None,
-            gpu: None,
-        });
+        for target in targets_de(&s.output) {
+            let wl_surface = compositor.create_surface(&qh);
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Top,
+                Some("pata-sidebar".to_string()),
+                target.as_ref(),
+            );
+            layer.set_anchor(sctk_anchor);
+            layer.set_size(size.0, size.1);
+            layer.set_exclusive_zone(thickness as i32);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.commit();
+            app.panels.push(Panel {
+                idx,
+                card: None,
+                layer,
+                cache: None,
+                width: thickness,
+                height: size.1.max(1),
+                dirty: true,
+                hover_idx: None,
+                cursor_x: None,
+                gpu: None,
+            });
+        }
     }
 
     // Tarjetas flotantes (estilo conky).
