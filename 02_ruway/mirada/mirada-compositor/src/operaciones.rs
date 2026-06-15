@@ -129,6 +129,26 @@ impl App {
         self.apply_commands(cmds);
     }
 
+    /// `(escritorio activo 0-based, ventanas por escritorio)` del Cerebro
+    /// embebido — para el switcher visual de Win+Tab. `None` con Cerebro
+    /// enlazado (el dueño externo maneja los escritorios).
+    pub(crate) fn workspace_overview(&self) -> Option<(usize, Vec<usize>)> {
+        match &self.brain {
+            Brain::Embedded(d) => Some((d.active_index(), d.workspace_loads())),
+            Brain::Linked(_) => None,
+        }
+    }
+
+    /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
+    /// Win+Tab. Por el Cerebro embebido.
+    pub(crate) fn cambiar_workspace(&mut self, idx: usize) {
+        let cmds = match &mut self.brain {
+            Brain::Embedded(d) => d.apply(mirada_brain::DesktopAction::SwitchWorkspace(idx)),
+            Brain::Linked(_) => return,
+        };
+        self.apply_commands(cmds);
+    }
+
     /// Atiende una petición del API de control (`mirada-ctl`).
     pub(crate) fn serve_ctl(&mut self, req: CtlRequest) -> CtlReply {
         match req {

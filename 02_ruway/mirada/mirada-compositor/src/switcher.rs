@@ -1,49 +1,84 @@
-//! Switcher visual de ventanas (Alt-Tab). A diferencia del keybind
-//! `FocusNext` —que cambia el foco al instante, invisible en tiling porque las
-//! teseladas no se solapan— este muestra un overlay con la lista de ventanas
-//! mientras se mantiene Alt apretado: cada Alt+Tab adelanta la selección,
-//! soltar Alt confirma (enfoca la elegida), Esc cancela.
+//! Switcher visual (Alt-Tab para ventanas, Win-Tab para escritorios). Muestra
+//! un overlay con la lista mientras se mantiene el modificador: cada Tab
+//! adelanta la selección, soltar el modificador confirma, Esc cancela.
 //!
-//! El estado vive en [`App`] (lo maneja el backend de input); el dibujo del
-//! overlay vive en `drm_backend::render` (`emit_switcher`), con el mismo text
-//! rendering que el HUD y el menú raíz.
+//! - **Windows** (Alt+Tab): lista las ventanas; confirma enfocando. Visible
+//!   también en tiling, donde el cambio de foco no se nota (no se solapan).
+//! - **Workspaces** (Win+Tab): lista sólo los escritorios **ocupados** (vagar
+//!   por vacíos invisibles no sirve); confirma saltando a ese escritorio.
+//!
+//! El estado vive en [`App`]; el dibujo en `drm_backend::render::emit_switcher`.
 
 use crate::App;
 
-/// Una sesión de Alt-Tab en curso.
+/// Qué cicla el switcher: ventanas (Alt+Tab) o escritorios (Win+Tab).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SwitcherKind {
+    Windows,
+    Workspaces,
+}
+
+/// Una sesión de switcher en curso.
 pub(crate) struct Switcher {
-    /// Ids de ventana candidatas, en orden estable (orden de aparición).
+    pub(crate) kind: SwitcherKind,
+    /// Ids a confirmar: id de ventana (Windows) o índice de escritorio
+    /// (Workspaces, 0-based), según [`kind`](Self::kind).
     pub(crate) order: Vec<u64>,
-    /// Índice seleccionado dentro de [`order`](Self::order).
+    /// Etiqueta a pintar por cada entrada (alineada con `order`).
+    pub(crate) labels: Vec<String>,
+    /// Índice seleccionado.
     pub(crate) sel: usize,
 }
 
-/// Abre el switcher (si no estaba) o adelanta/retrocede la selección. La
-/// primera pulsación selecciona la **siguiente** ventana a la enfocada, como
-/// cualquier alt-tab. `forward=false` retrocede (Shift+Alt+Tab).
-pub(crate) fn advance(app: &mut App, forward: bool) {
+/// El modificador que, al soltarse, confirma este switcher.
+impl SwitcherKind {
+    pub(crate) fn modifier_held(self, mods: &smithay::input::keyboard::ModifiersState) -> bool {
+        match self {
+            SwitcherKind::Windows => mods.alt,
+            SwitcherKind::Workspaces => mods.logo,
+        }
+    }
+}
+
+/// Abre el switcher del `kind` pedido (si no había, o si había de otro kind) o
+/// adelanta/retrocede la selección. La primera pulsación va a la **siguiente**
+/// entrada a la actual, como cualquier alt-tab.
+pub(crate) fn advance(app: &mut App, kind: SwitcherKind, forward: bool) {
+    // Si ya hay uno del MISMO kind, sólo movemos la selección.
     if let Some(sw) = &mut app.switcher {
-        if sw.order.is_empty() {
+        if sw.kind == kind {
+            if sw.order.is_empty() {
+                return;
+            }
+            let n = sw.order.len();
+            sw.sel = if forward {
+                (sw.sel + 1) % n
+            } else {
+                (sw.sel + n - 1) % n
+            };
             return;
         }
-        let n = sw.order.len();
-        sw.sel = if forward {
-            (sw.sel + 1) % n
+    }
+    app.switcher = match kind {
+        SwitcherKind::Windows => build_windows(app, forward),
+        SwitcherKind::Workspaces => build_workspaces(app, forward),
+    };
+}
+
+fn build_windows(app: &App, forward: bool) -> Option<Switcher> {
+    let mut order = Vec::new();
+    let mut labels = Vec::new();
+    for w in app.windows.iter().filter(|w| !w.is_shell) {
+        order.push(w.id);
+        labels.push(if w.title.trim().is_empty() {
+            format!("ventana {}", w.id)
         } else {
-            (sw.sel + n - 1) % n
-        };
-        return;
+            w.title.clone()
+        });
     }
-    let order: Vec<u64> = app
-        .windows
-        .iter()
-        .filter(|w| !w.is_shell)
-        .map(|w| w.id)
-        .collect();
     if order.is_empty() {
-        return;
+        return None;
     }
-    // Arranca en la siguiente a la enfocada (o en la primera si no hay foco).
     let focused = app
         .windows
         .iter()
@@ -52,41 +87,72 @@ pub(crate) fn advance(app: &mut App, forward: bool) {
     let cur = focused
         .and_then(|fid| order.iter().position(|&i| i == fid))
         .unwrap_or(0);
-    let n = order.len();
-    let sel = if forward {
+    let sel = step(cur, order.len(), forward);
+    Some(Switcher {
+        kind: SwitcherKind::Windows,
+        order,
+        labels,
+        sel,
+    })
+}
+
+fn build_workspaces(app: &App, forward: bool) -> Option<Switcher> {
+    let (active, loads) = app.workspace_overview()?;
+    // Sólo escritorios ocupados (los vacíos no se listan).
+    let occ: Vec<usize> = (0..loads.len()).filter(|&i| loads[i] > 0).collect();
+    if occ.is_empty() {
+        return None;
+    }
+    let order: Vec<u64> = occ.iter().map(|&i| i as u64).collect();
+    let labels: Vec<String> = occ
+        .iter()
+        .map(|&i| {
+            let n = loads[i];
+            format!(
+                "Escritorio {} · {} ventana{}",
+                i + 1,
+                n,
+                if n == 1 { "" } else { "s" }
+            )
+        })
+        .collect();
+    let cur = occ.iter().position(|&i| i == active);
+    let sel = match cur {
+        Some(p) => step(p, occ.len(), forward),
+        None => 0,
+    };
+    Some(Switcher {
+        kind: SwitcherKind::Workspaces,
+        order,
+        labels,
+        sel,
+    })
+}
+
+fn step(cur: usize, n: usize, forward: bool) -> usize {
+    if forward {
         (cur + 1) % n
     } else {
         (cur + n - 1) % n
-    };
-    app.switcher = Some(Switcher { order, sel });
-}
-
-/// Confirma la selección: enfoca la ventana elegida y cierra el switcher.
-pub(crate) fn commit(app: &mut App) {
-    if let Some(sw) = app.switcher.take() {
-        if let Some(&id) = sw.order.get(sw.sel) {
-            app.activar_ventana(id);
-        }
     }
 }
 
-/// Cierra el switcher sin cambiar el foco (Esc).
-pub(crate) fn cancel(app: &mut App) {
-    app.switcher = None;
+/// Confirma la selección y cierra el switcher: enfoca la ventana o salta al
+/// escritorio elegido, según el kind.
+pub(crate) fn commit(app: &mut App) {
+    let Some(sw) = app.switcher.take() else {
+        return;
+    };
+    let Some(&id) = sw.order.get(sw.sel) else {
+        return;
+    };
+    match sw.kind {
+        SwitcherKind::Windows => app.activar_ventana(id),
+        SwitcherKind::Workspaces => app.cambiar_workspace(id as usize),
+    }
 }
 
-/// Título a mostrar para una ventana: su título, o el `app_id`, o un
-/// genérico. Lo usa el render del overlay.
-pub(crate) fn etiqueta(app: &App, id: u64) -> String {
-    app.windows
-        .iter()
-        .find(|w| w.id == id)
-        .map(|w| {
-            if w.title.trim().is_empty() {
-                format!("ventana {id}")
-            } else {
-                w.title.clone()
-            }
-        })
-        .unwrap_or_else(|| format!("ventana {id}"))
+/// Cierra el switcher sin actuar (Esc).
+pub(crate) fn cancel(app: &mut App) {
+    app.switcher = None;
 }

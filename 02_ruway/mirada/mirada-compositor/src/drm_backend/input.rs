@@ -40,18 +40,27 @@ impl DrmState {
                                 st.running = false;
                                 return FilterResult::Intercept(());
                             }
-                            // Switcher visual (Alt-Tab): se maneja acá, NO por el
-                            // keybind FocusNext, para mostrar el overlay y
-                            // confirmar al soltar Alt. `combo_string` ordena los
-                            // modificadores Super+Ctrl+Shift+Alt, de ahí
-                            // «Shift+Alt+Tab» para el sentido inverso.
+                            // Switchers visuales: Alt-Tab (ventanas) y Win-Tab
+                            // (escritorios). Se manejan acá, NO por sus keybinds,
+                            // para mostrar el overlay y confirmar al soltar el
+                            // modificador. `combo_string` ordena Super+Ctrl+Shift+
+                            // Alt, de ahí «Shift+Alt+Tab» / «Super+Shift+Tab».
+                            use crate::switcher::SwitcherKind::{Windows, Workspaces};
                             match combo.as_str() {
                                 "Alt+Tab" => {
-                                    st.switcher_step = Some(true);
+                                    st.switcher_step = Some((Windows, true));
                                     return FilterResult::Intercept(());
                                 }
                                 "Shift+Alt+Tab" => {
-                                    st.switcher_step = Some(false);
+                                    st.switcher_step = Some((Windows, false));
+                                    return FilterResult::Intercept(());
+                                }
+                                "Super+Tab" => {
+                                    st.switcher_step = Some((Workspaces, true));
+                                    return FilterResult::Intercept(());
+                                }
+                                "Super+Shift+Tab" => {
+                                    st.switcher_step = Some((Workspaces, false));
                                     return FilterResult::Intercept(());
                                 }
                                 "Escape" if st.switcher.is_some() => {
@@ -88,23 +97,24 @@ impl DrmState {
                         eprintln!("mirada-compositor · no pude conmutar a VT{vt}: {e}");
                     }
                 }
-                // Switcher visual (Alt-Tab): aplicar el paso pedido, cancelar si
-                // Esc, y CONFIRMAR cuando se suelta Alt (el filtro no ve el
-                // release de un modificador, así que lo chequeamos acá).
-                if let Some(forward) = self.app.switcher_step.take() {
-                    crate::switcher::advance(&mut self.app, forward);
+                // Switchers visuales (Alt-Tab / Win-Tab): aplicar el paso pedido,
+                // cancelar si Esc, y CONFIRMAR cuando se suelta el modificador del
+                // switcher activo (el filtro no ve el release de un modificador,
+                // así que lo chequeamos acá).
+                if let Some((kind, forward)) = self.app.switcher_step.take() {
+                    crate::switcher::advance(&mut self.app, kind, forward);
                 }
                 if self.app.switcher_cancel {
                     self.app.switcher_cancel = false;
                     crate::switcher::cancel(&mut self.app);
                 }
-                if self.app.switcher.is_some() {
-                    let alt_held = self
+                if let Some(kind) = self.app.switcher.as_ref().map(|s| s.kind) {
+                    let held = self
                         .app
                         .keyboard
                         .as_ref()
-                        .is_some_and(|kb| kb.modifier_state().alt);
-                    if !alt_held {
+                        .is_some_and(|kb| kind.modifier_held(&kb.modifier_state()));
+                    if !held {
                         crate::switcher::commit(&mut self.app);
                     }
                 }

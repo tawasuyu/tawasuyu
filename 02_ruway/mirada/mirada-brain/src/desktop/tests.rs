@@ -865,19 +865,28 @@ fn dragging_a_tiled_window_swaps_with_the_window_under_the_pointer() {
 // `dragging_a_floating_window_over_a_tile_returns_it_to_tiling`.)
 
 #[test]
-fn win_tab_cicla_escritorios_con_wrap() {
+fn win_tab_salta_solo_a_escritorios_ocupados() {
     let mut d = desktop_with_screen();
-    assert_eq!(d.active_index(), 0);
+    // Sin nada abierto en otros escritorios, Win+Tab no va a ninguna parte
+    // (no vaga por vacíos).
+    open(&mut d, 1);
     d.apply(DesktopAction::WorkspaceNext);
-    assert_eq!(d.active_index(), 1);
-    d.apply(DesktopAction::WorkspacePrev);
+    assert_eq!(d.active_index(), 0, "sin otro ocupado, se queda");
+
+    // Ocupa el escritorio 2 (manda la 1 allá) → quedan 0 y 2 ocupados.
+    open(&mut d, 2);
+    d.apply(DesktopAction::SendToWorkspace(2)); // la enfocada (2) va a ws 2
     assert_eq!(d.active_index(), 0);
-    // Wrap hacia atrás desde el primero → el último.
-    d.apply(DesktopAction::WorkspacePrev);
-    assert_eq!(d.active_index(), WORKSPACE_COUNT - 1);
-    // Y desde el último, adelante → vuelve al primero.
+
+    // Win+Tab salta a ws 2 SALTEANDO el 1 (vacío).
+    d.apply(DesktopAction::WorkspaceNext);
+    assert_eq!(d.active_index(), 2);
+    // Y de vuelta, con wrap, al 0 (los del medio vacíos se saltan).
     d.apply(DesktopAction::WorkspaceNext);
     assert_eq!(d.active_index(), 0);
+    // Prev también respeta ocupados.
+    d.apply(DesktopAction::WorkspacePrev);
+    assert_eq!(d.active_index(), 2);
 }
 
 #[test]

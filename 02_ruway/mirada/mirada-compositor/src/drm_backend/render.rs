@@ -254,17 +254,17 @@ impl DrmState {
         const SW_BG: [f32; 4] = [0.08, 0.08, 0.11, 0.94];
         const SW_SEL_BG: [f32; 4] = [0.20, 0.40, 0.85, 0.95];
 
-        let (order, sel) = match &self.app.switcher {
-            Some(sw) if !sw.order.is_empty() => (sw.order.clone(), sw.sel),
-            _ => return,
-        };
         // Etiquetas (owned) ANTES de tomar el text renderer, para no chocar
         // préstamos con `&mut self.renderer` más abajo (igual que el HUD).
-        let rows: Vec<(String, bool)> = order
-            .iter()
-            .enumerate()
-            .map(|(i, &id)| (crate::switcher::etiqueta(&self.app, id), i == sel))
-            .collect();
+        let rows: Vec<(String, bool)> = match &self.app.switcher {
+            Some(sw) if !sw.labels.is_empty() => sw
+                .labels
+                .iter()
+                .enumerate()
+                .map(|(i, label)| (label.clone(), i == sw.sel))
+                .collect(),
+            _ => return,
+        };
         let Some(tr) = &self.text else { return };
         let mut rasters: Vec<(crate::text::Rasterized, bool)> = Vec::new();
         for (label, s) in &rows {

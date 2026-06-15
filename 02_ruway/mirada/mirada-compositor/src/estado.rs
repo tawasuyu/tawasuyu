@@ -367,9 +367,9 @@ pub(crate) struct App {
     /// Switcher visual de ventanas (Alt-Tab) en curso, o `None`. Ver
     /// [`crate::switcher`].
     pub(crate) switcher: Option<crate::switcher::Switcher>,
-    /// Señal del filtro de teclado al bucle: adelantar (`Some(true)`) o
-    /// retroceder (`Some(false)`) el switcher tras procesar la tecla.
-    pub(crate) switcher_step: Option<bool>,
+    /// Señal del filtro de teclado al bucle: qué switcher (ventanas/escritorios)
+    /// y si adelantar (`true`) o retroceder, tras procesar la tecla.
+    pub(crate) switcher_step: Option<(crate::switcher::SwitcherKind, bool)>,
     /// Señal del filtro: cancelar el switcher (Esc) tras procesar la tecla.
     pub(crate) switcher_cancel: bool,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
