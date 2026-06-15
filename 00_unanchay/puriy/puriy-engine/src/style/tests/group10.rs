@@ -503,9 +503,29 @@ use super::super::*;
     }
 
     #[test]
-    fn not_anidado_se_rechaza() {
-        // `:not(:not(p))` debe ignorarse, no soportamos recursión.
-        assert!(parse_selector(":not(:not(p))").is_none());
+    fn not_anidado_se_acepta() {
+        // Fase 7.938 — CSS Selectors 4 PERMITE `:not(:not(p))` (= elementos
+        // que son `p`). Antes lo rechazábamos por una anti-recursión que ya no
+        // hace falta: el matching de `:not` recurre acotado por el input.
+        let s = parse_selector(":not(:not(p))").expect("Selectors 4 lo permite");
+        // matchea un <p> real.
+        let html = "<html><body><p></p><span></span></body></html>";
+        let dom = DomTree::parse(html);
+        let mut p = None;
+        let mut span = None;
+        crate::dom::walk(&dom.document(), &mut |n| match crate::dom::element_name(n).as_deref() {
+            Some("p") => p = Some(n.clone()),
+            Some("span") => span = Some(n.clone()),
+            _ => {}
+        });
+        assert!(
+            selector_matches_subject(&s, p.as_ref().unwrap(), false, false),
+            ":not(:not(p)) debe matchear <p>"
+        );
+        assert!(
+            !selector_matches_subject(&s, span.as_ref().unwrap(), false, false),
+            ":not(:not(p)) NO matchea <span>"
+        );
     }
 
     #[test]

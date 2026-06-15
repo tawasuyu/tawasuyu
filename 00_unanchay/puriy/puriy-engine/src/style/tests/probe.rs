@@ -859,6 +859,25 @@ fn sondeo_selectores() {
         // ── nesting (CSS Nesting) ──
         "&:hover",
         "& > .child",
+        // ── lote 2 selectores: COMPLEJOS dentro de funcionales (Selectors 4) ──
+        ":is(.a .b)",                 // complejo (descendiente) en :is
+        ":is(a > b)",                 // combinador child en :is
+        ":where(header .logo, nav a)",// lista con descendientes en :where
+        ":not(.a .b)",                // complejo en :not (Selectors 4)
+        ":not(a > b, .c + .d)",       // lista de complejos en :not
+        "div:has(.a > .b)",           // child dentro de :has
+        "div:has(.a .b)",             // descendiente dentro de :has
+        ":has(:not(.x))",             // :not anidado en :has
+        "li:nth-child(even)",         // keyword even
+        "li:nth-child(odd)",          // keyword odd
+        "li:nth-of-type(2n+1)",       // An+B clásico
+        "input[type='text' i]",       // flag case-insensitive
+        "[data-x~='tag']",            // operador ~= (whitespace list)
+        "[lang|='en']",               // operador |= (prefijo con guion)
+        "a:is(:hover, :focus)",       // pseudo-clases dentro de :is
+        "*::before",                  // universal + pseudo-elemento
+        "h1 + h2 ~ p",                // combinadores encadenados
+        ".grid > *:nth-child(3n)",    // universal con nth
         // ── combos que ya deberían andar (control) ──
         "ul > li:first-child",
         "a[href^='https']:hover",

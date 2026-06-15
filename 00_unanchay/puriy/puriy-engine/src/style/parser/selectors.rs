@@ -104,6 +104,51 @@ pub(crate) fn strip_pseudo_element(sel: &str) -> (&str, Option<PseudoElement>) {
     (sel, None)
 }
 
+/// Parte una lista de selectores por comas a NIVEL SUPERIOR (fuera de `[...]`
+/// y `(...)`), para los argumentos de `:is()`/`:where()`/`:not()`. Así
+/// `:is(:nth-child(2), [a="x,y"])` no se rompe. Fase 7.938.
+fn split_selector_list(arg: &str) -> Vec<&str> {
+    let bytes = arg.as_bytes();
+    let mut out = Vec::new();
+    let mut in_bracket = false;
+    let mut paren_depth: u32 = 0;
+    let mut start = 0;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'[' => in_bracket = true,
+            b']' => in_bracket = false,
+            b'(' if !in_bracket => paren_depth += 1,
+            b')' if !in_bracket => paren_depth = paren_depth.saturating_sub(1),
+            b',' if !in_bracket && paren_depth == 0 => {
+                out.push(&arg[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&arg[start..]);
+    out
+}
+
+/// Dado `s` = el texto INMEDIATAMENTE tras un `(` abierto, devuelve el índice
+/// del `)` que lo cierra (profundidad 0), respetando paréntesis anidados.
+/// `None` si no balancea. Fase 7.937.
+fn matching_paren(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth: u32 = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' if depth == 0 => return Some(i),
+            b')' => depth -= 1,
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Posición del primer `::` a nivel superior (fuera de `[...]` y `(...)`).
 /// `None` si no hay. Fase 7.934.
 fn find_double_colon(sel: &str) -> Option<usize> {
@@ -243,7 +288,10 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                 // y consumimos los argumentos.
                 if i < bytes.len() && bytes[i] == b'(' {
                     let arg_start = i + 1;
-                    let rel_close = sel[arg_start..].find(')')?;
+                    // Fase 7.937 — `)` BALANCEADO (antes `find(')')` tomaba el
+                    // primero → truncaba pseudos funcionales anidadas como
+                    // `:has(:not(.x))` o `:is(a:nth-child(2))`).
+                    let rel_close = matching_paren(&sel[arg_start..])?;
                     let arg = &sel[arg_start..arg_start + rel_close];
                     let p = match name.as_str() {
                         "nth-child" => {
@@ -267,15 +315,11 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                             Pseudo::NthLastOfType { a, b }
                         }
                         "not" => {
-                            // CSS4: lista de compounds (`:not(.a, .b)`).
+                            // CSS Selectors 4: lista de selectores COMPLEJOS
+                            // (`:not(.a > .b, h1 .c)`). Fase 7.938.
                             let mut inner = Vec::new();
-                            for part in arg.split(',') {
-                                let c = parse_compound(part.trim())?;
-                                // Anti-recursión: `:not(:not(...))` rechazamos.
-                                if c.pseudos.iter().any(|p| matches!(p, Pseudo::Not(_))) {
-                                    return None;
-                                }
-                                inner.push(c);
+                            for part in split_selector_list(arg) {
+                                inner.push(parse_selector(part.trim())?);
                             }
                             if inner.is_empty() {
                                 return None;
@@ -283,11 +327,13 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                             Pseudo::Not(inner)
                         }
                         "has" => {
-                            // `:has(<rel-sel-list>)` — cada relative selector
-                            // es un combinador opcional (descendiente por
-                            // defecto) + un compound. Lista separada por coma.
+                            // `:has(<rel-sel-list>)` — cada relative selector es
+                            // un combinador opcional (descendiente por defecto)
+                            // + un selector COMPLEJO (CSS Selectors 4:
+                            // `:has(.a > .b)`). Lista separada por coma a nivel
+                            // superior. Fase 7.938.
                             let mut rels = Vec::new();
-                            for part in arg.split(',') {
+                            for part in split_selector_list(arg) {
                                 let part = part.trim();
                                 if part.is_empty() {
                                     return None;
@@ -298,12 +344,8 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                                     b'~' => (Combinator::GeneralSibling, part[1..].trim()),
                                     _ => (Combinator::Descendant, part),
                                 };
-                                let compound = parse_compound(rest)?;
-                                // Anti-recursión: no soportamos `:has` anidado.
-                                if compound.pseudos.iter().any(|p| matches!(p, Pseudo::Has(_))) {
-                                    return None;
-                                }
-                                rels.push(RelativeSelector { combinator, compound });
+                                let selector = parse_selector(rest)?;
+                                rels.push(RelativeSelector { combinator, selector });
                             }
                             if rels.is_empty() {
                                 return None;
@@ -323,13 +365,11 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                             Pseudo::Lang(tags)
                         }
                         "is" | "where" => {
-                            // Lista de compounds separados por coma (sin
-                            // combinadores adentro — `parse_compound` parsea
-                            // uno solo). Split naive por `,` (no contempla
-                            // comas dentro de `[attr="a,b"]`, caso raro).
+                            // CSS Selectors 4: lista de selectores COMPLEJOS
+                            // (`:is(h1 .a, nav > li)`). Fase 7.938.
                             let mut inner = Vec::new();
-                            for part in arg.split(',') {
-                                inner.push(parse_compound(part.trim())?);
+                            for part in split_selector_list(arg) {
+                                inner.push(parse_selector(part.trim())?);
                             }
                             if inner.is_empty() {
                                 return None;

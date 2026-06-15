@@ -458,3 +458,81 @@ fn starting_style_no_aplica_en_reposo() {
         (8, 8, 8)
     );
 }
+
+// ── Fase 7.937-7.938 — :is/:where/:not/:has con selectores COMPLEJOS ───────
+
+// Computa el color del <p class="t"> dentro de la estructura dada.
+fn p_color_in(html_body: &str, css: &str) -> (u8, u8, u8) {
+    let html = format!("<html><head><style>{css}</style></head><body>{html_body}</body></html>");
+    let dom = DomTree::parse(&html);
+    let eng = StyleEngine::from_dom(&dom);
+    let mut found = None;
+    crate::dom::walk(&dom.document(), &mut |n| {
+        if crate::dom::element_name(n).as_deref() == Some("p")
+            && crate::dom::attr(n, "class").as_deref() == Some("t")
+        {
+            found = Some(n.clone());
+        }
+    });
+    let cs = eng.compute(found.as_ref().expect("hay p.t"));
+    (cs.color.r, cs.color.g, cs.color.b)
+}
+
+#[test]
+fn is_where_not_complejos_parsean() {
+    for sel in [
+        ":is(.a .b)", ":is(a > b)", ":where(header .logo, nav a)",
+        ":not(.a .b)", ":not(a > b, .c + .d)", "div:has(.a > .b)",
+        "div:has(.a .b)", ":has(:not(.x))", "a:is(:hover, :focus)",
+        "li:nth-child(even)", "input[type='text' i]",
+    ] {
+        assert!(parse_selector(sel).is_some(), "debería parsear: {sel}");
+    }
+}
+
+#[test]
+fn is_complejo_matchea() {
+    // :is(.box .t) — el <p class="t"> es descendiente de .box → aplica.
+    assert_eq!(
+        p_color_in("<div class='box'><p class='t'></p></div>", ":is(.box .t) { color: rgb(3,3,3) }"),
+        (3, 3, 3)
+    );
+    // sin el ancestro .box, no aplica.
+    assert_eq!(
+        p_color_in("<div><p class='t'></p></div>", ":is(.box .t) { color: rgb(3,3,3) } p { color: rgb(9,9,9) }"),
+        (9, 9, 9)
+    );
+}
+
+#[test]
+fn not_complejo_matchea() {
+    // p.t:not(.box .t) — el p.t NO está bajo .box → :not se cumple → aplica.
+    assert_eq!(
+        p_color_in("<div><p class='t'></p></div>", "p.t:not(.box p) { color: rgb(4,4,4) }"),
+        (4, 4, 4)
+    );
+    // bajo .box → :not(.box p) falla → no aplica, queda el fallback.
+    assert_eq!(
+        p_color_in("<div class='box'><p class='t'></p></div>",
+            "p.t:not(.box p) { color: rgb(4,4,4) } p { color: rgb(9,9,9) }"),
+        (9, 9, 9)
+    );
+}
+
+#[test]
+fn has_complejo_matchea() {
+    // div:has(.a > .b) aplica a un <p class="t"> que es hijo de ese div?
+    // Estructura: div.wrap > p.t  y  div.wrap tiene .a > .b adentro.
+    let body = "<div class='wrap'><p class='t'></p><div class='a'><span class='b'></span></div></div>";
+    // .wrap:has(.a > .b) .t  → el p.t recibe color.
+    assert_eq!(
+        p_color_in(body, ".wrap:has(.a > .b) .t { color: rgb(5,5,5) }"),
+        (5, 5, 5)
+    );
+    // si la relación es .a .b (descendiente) en vez de hijo directo, y no hay
+    // hijo directo, :has(.a > .c) no matchea.
+    assert_eq!(
+        p_color_in(body, ".wrap:has(.a > .c) .t { color: rgb(5,5,5) } p { color: rgb(9,9,9) }"),
+        (9, 9, 9)
+    );
+}

@@ -119,17 +119,17 @@ impl Selector {
             for p in &c.pseudos {
                 match p {
                     // CSS spec: `:not(...)` e `:is(...)` aportan la
-                    // especificidad de su argumento MÁS específico (para un
-                    // solo arg, idéntico a contar sus partes).
+                    // especificidad de su argumento MÁS específico (selector
+                    // complejo completo, Fase 7.938).
                     Pseudo::Not(list) | Pseudo::Is(list) => {
-                        extra += list.iter().map(compound_specificity).max().unwrap_or(0);
+                        extra += list.iter().map(Selector::specificity).max().unwrap_or(0);
                     }
                     // `:has(...)` aporta la especificidad de su argumento más
                     // específico (CSS spec, igual que `:is`).
                     Pseudo::Has(rels) => {
                         extra += rels
                             .iter()
-                            .map(|r| compound_specificity(&r.compound))
+                            .map(|r| r.selector.specificity())
                             .max()
                             .unwrap_or(0);
                     }
@@ -144,21 +144,6 @@ impl Selector {
         }
         ids * 100 + classes_etc * 10 + types + extra
     }
-}
-
-/// Especificidad (a*100 + b*10 + c) de UN compound, para resolver el aporte
-/// de `:is(...)`. Aproxima `:is`/`:where` anidados como una clase (raro).
-pub(crate) fn compound_specificity(c: &Compound) -> u32 {
-    let ids = c.ids.len() as u32;
-    let mut classes = c.classes.len() as u32 + c.attrs.len() as u32;
-    let types = u32::from(matches!(c.tag, TagPart::Type(_)));
-    for p in &c.pseudos {
-        match p {
-            Pseudo::Where(_) => {}
-            _ => classes += 1,
-        }
-    }
-    ids * 100 + classes * 10 + types
 }
 
 /// Combinador CSS entre dos compounds consecutivos.
@@ -239,9 +224,10 @@ pub(crate) enum Pseudo {
         a: i32,
         b: i32,
     },
-    /// `:not(a, b, ...)` — negación de una lista de compounds simples (sin
-    /// combinadores ni `:not` anidado). Matchea si NINGUNO matchea.
-    Not(Vec<Compound>),
+    /// `:not(a, b, ...)` — negación de una lista de selectores (CSS Selectors
+    /// 4: complejos permitidos, ej `:not(.a > .b)`). Matchea si NINGUNO
+    /// matchea con el nodo como sujeto. Fase 7.938.
+    Not(Vec<Selector>),
     /// `:nth-of-type(an+b)` — posición 1-indexed entre hermanos del MISMO tag.
     NthOfType {
         a: i32,
@@ -275,11 +261,12 @@ pub(crate) enum Pseudo {
     /// `:read-write` — control editable (input/textarea/contenteditable) sin
     /// `readonly`.
     ReadWrite,
-    /// `:is(a, b, ...)` — matchea si CUALQUIER compound de la lista matchea.
-    /// Especificidad: la del argumento más específico (CSS spec).
-    Is(Vec<Compound>),
+    /// `:is(a, b, ...)` — matchea si CUALQUIER selector de la lista matchea
+    /// (complejos permitidos, CSS Selectors 4). Especificidad: la del
+    /// argumento más específico (CSS spec). Fase 7.938.
+    Is(Vec<Selector>),
     /// `:where(a, b, ...)` — como `:is` pero aporta especificidad CERO.
-    Where(Vec<Compound>),
+    Where(Vec<Selector>),
     /// `:empty` — elemento sin hijos elemento ni texto no-whitespace
     /// (comentarios ignorados, CSS Selectors 4).
     Empty,
@@ -304,11 +291,13 @@ pub(crate) enum Pseudo {
 }
 
 /// Una relative selector de `:has(...)`: un combinador (descendiente por
-/// defecto) + un compound. `:has(> .a)` → `{Child, .a}`.
+/// defecto) + un selector COMPLEJO cuyo sujeto se busca relativo al ancla.
+/// `:has(> .a)` → `{Child, .a}`; `:has(.a > .b)` → `{Descendant, .a > .b}`.
+/// Fase 7.938.
 #[derive(Debug, Clone)]
 pub(crate) struct RelativeSelector {
     pub(crate) combinator: Combinator,
-    pub(crate) compound: Compound,
+    pub(crate) selector: Selector,
 }
 
 impl Compound {
@@ -405,7 +394,7 @@ pub(crate) fn pseudo_matches(
         Pseudo::Not(list) => {
             return !list
                 .iter()
-                .any(|c| c.matches_in_state(node, hover_active, focus_active))
+                .any(|s| selector_matches_subject(s, node, hover_active, focus_active))
         }
         Pseudo::Checked => return has("checked") || has("selected"),
         Pseudo::Disabled => return has("disabled"),
@@ -417,7 +406,7 @@ pub(crate) fn pseudo_matches(
         Pseudo::Is(list) | Pseudo::Where(list) => {
             return list
                 .iter()
-                .any(|c| c.matches_in_state(node, hover_active, focus_active))
+                .any(|s| selector_matches_subject(s, node, hover_active, focus_active))
         }
         Pseudo::Empty => return is_empty_element(node),
         Pseudo::Root => return dom::element_name(node).as_deref() == Some("html"),
@@ -513,19 +502,20 @@ pub(crate) fn has_relative_match(
     hover_active: bool,
     focus_active: bool,
 ) -> bool {
+    let sel = &rel.selector;
     match rel.combinator {
         Combinator::Descendant => {
-            any_descendant_matches(node, &rel.compound, hover_active, focus_active)
+            any_descendant_matches(node, sel, hover_active, focus_active)
         }
         Combinator::Child => dom::children(node)
             .iter()
-            .any(|c| rel.compound.matches_in_state(c, hover_active, focus_active)),
+            .any(|c| selector_matches_subject(sel, c, hover_active, focus_active)),
         Combinator::AdjacentSibling => following_element_siblings(node)
             .first()
-            .is_some_and(|s| rel.compound.matches_in_state(s, hover_active, focus_active)),
+            .is_some_and(|s| selector_matches_subject(sel, s, hover_active, focus_active)),
         Combinator::GeneralSibling => following_element_siblings(node)
             .iter()
-            .any(|s| rel.compound.matches_in_state(s, hover_active, focus_active)),
+            .any(|s| selector_matches_subject(sel, s, hover_active, focus_active)),
     }
 }
 
@@ -533,7 +523,7 @@ pub(crate) fn has_relative_match(
 /// matchea el compound.
 fn any_descendant_matches(
     node: &markup5ever_rcdom::Handle,
-    compound: &Compound,
+    sel: &Selector,
     hover_active: bool,
     focus_active: bool,
 ) -> bool {
@@ -541,8 +531,8 @@ fn any_descendant_matches(
         if dom::element_name(c).is_none() {
             continue;
         }
-        if compound.matches_in_state(c, hover_active, focus_active)
-            || any_descendant_matches(c, compound, hover_active, focus_active)
+        if selector_matches_subject(sel, c, hover_active, focus_active)
+            || any_descendant_matches(c, sel, hover_active, focus_active)
         {
             return true;
         }
@@ -632,7 +622,23 @@ impl Rule {
         hover_active: bool,
         focus_active: bool,
     ) -> bool {
-        let compounds = &self.selector.compounds;
+        selector_matches_subject(&self.selector, node, hover_active, focus_active)
+    }
+}
+
+/// Matchea un `Selector` complejo (compounds + combinadores) contra `node`
+/// como SUJETO (el compound más a la derecha debe matchear `node`; avanza
+/// derecha→izquierda por la cadena). Reutilizado por `Rule::matches_in_state`
+/// y por las pseudo-clases funcionales `:is()`/`:where()`/`:not()`/`:has()`
+/// que aceptan selectores complejos (CSS Selectors 4). Fase 7.938.
+pub(crate) fn selector_matches_subject(
+    selector: &Selector,
+    node: &markup5ever_rcdom::Handle,
+    hover_active: bool,
+    focus_active: bool,
+) -> bool {
+    {
+        let compounds = &selector.compounds;
         if compounds.is_empty() {
             return false;
         }
@@ -650,7 +656,7 @@ impl Rule {
         // combinador define cómo viajar al "siguiente" candidato:
         //   Descendant/Child  → ancestro
         //   Adjacent/General  → hermano anterior
-        let combs = &self.selector.combinators;
+        let combs = &selector.combinators;
         // El combinador entre compounds[i-1] y compounds[i] vive en
         // combs[i-1]. Recorremos desde compounds[len-2] hacia 0.
         let mut subject = node.clone();
