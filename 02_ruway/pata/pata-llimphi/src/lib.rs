@@ -812,7 +812,7 @@ impl App for PataApp {
             cards,
             shuma,
             nahual: NahualState::default(),
-            registry: app_bus::AppRegistry::discover_merged(),
+            registry: app_bus::AppRegistry::with_defaults(),
             menu_open: false,
             menu_query: String::new(),
             menu_scroll: 0.0,
