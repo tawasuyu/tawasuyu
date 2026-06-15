@@ -44,6 +44,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip,
         on_pointer_enter,
         on_pointer_leave,
+        on_pointer_move_at,
         on_scroll,
         on_scale,
         on_rotate,
@@ -96,6 +97,7 @@ pub fn mount_recursive<Msg: Clone>(
         clip,
         on_pointer_enter,
         on_pointer_leave,
+        on_pointer_move_at,
         on_scroll,
         on_scale,
         on_rotate,
@@ -877,6 +879,18 @@ pub fn hit_test_hover<Msg>(
     y: f32,
 ) -> Option<usize> {
     hit_test_pred(mounted, computed, x, y, |n| n.hover_fill.is_some())
+}
+
+/// Hit-test para movimiento posicional del cursor (nodos con
+/// `on_pointer_move_at`). El runtime lo invoca en cada `CursorMoved` para
+/// reportar la posición local al nodo más al frente que lo declare.
+pub fn hit_test_pointer_move<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+    x: f32,
+    y: f32,
+) -> Option<usize> {
+    hit_test_pred(mounted, computed, x, y, |n| n.on_pointer_move_at.is_some())
 }
 
 /// Hit-test específico para la **forma del cursor**: devuelve el [`Cursor`]

@@ -442,6 +442,13 @@ pub struct View<Msg> {
     pub on_pointer_enter: Option<Msg>,
     /// Msg a emitir cuando el cursor sale del rect del nodo.
     pub on_pointer_leave: Option<Msg>,
+    /// Handler de **movimiento del cursor** sobre el nodo: recibe `(local_x,
+    /// local_y, rect_w, rect_h)` en CADA `CursorMoved` mientras el cursor está
+    /// encima (no sólo en la transición de entrada, a diferencia de
+    /// [`Self::on_pointer_enter`]). Análogo posicional de hover, base de cosas
+    /// como el thumbnail que sigue al cursor sobre un timeline o un drawer que
+    /// reacciona a la posición. `None` no dispara update.
+    pub on_pointer_move_at: Option<ClickAtFn<Msg>>,
     /// Handler de rueda local. Si está presente y el cursor cae sobre este
     /// nodo, el runtime lo invoca antes del `App::on_wheel` global; un
     /// `Some(Msg)` consume el evento. Base de las áreas de scroll
@@ -745,6 +752,7 @@ pub struct MountedNode<Msg> {
     pub clip: bool,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
+    pub on_pointer_move_at: Option<ClickAtFn<Msg>>,
     pub on_scroll: Option<ScrollFn<Msg>>,
     /// Handler de gesto de escala (pinch-to-zoom) de este nodo. Ver
     /// [`View::on_scale`] y [`ScaleFn`].

@@ -18,6 +18,7 @@ impl<Msg> View<Msg> {
             gpu_painter: None,
             on_pointer_enter: None,
             on_pointer_leave: None,
+            on_pointer_move_at: None,
             on_click: None,
             on_click_at: None,
             on_right_click: None,
@@ -1070,6 +1071,20 @@ impl<Msg> View<Msg> {
     /// Dispatch `msg` cuando el cursor sale del rect del nodo.
     pub fn on_pointer_leave(mut self, msg: Msg) -> Self {
         self.on_pointer_leave = Some(msg);
+        self
+    }
+
+    /// Handler de **movimiento del cursor** sobre el nodo. Recibe `(local_x,
+    /// local_y, rect_w, rect_h)` (posición relativa al rect del nodo) en CADA
+    /// `CursorMoved` mientras el cursor está encima — no sólo al entrar, a
+    /// diferencia de [`Self::on_pointer_enter`]. Útil para seguir el cursor:
+    /// thumbnail de hover sobre un timeline, drawer que reacciona a la posición.
+    /// Devolver `None` no dispara update.
+    pub fn on_pointer_move_at<F>(mut self, handler: F) -> Self
+    where
+        F: Fn(f32, f32, f32, f32) -> Option<Msg> + Send + Sync + 'static,
+    {
+        self.on_pointer_move_at = Some(Arc::new(handler));
         self
     }
 

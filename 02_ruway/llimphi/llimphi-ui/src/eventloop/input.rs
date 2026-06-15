@@ -319,6 +319,33 @@ impl<A: App> Runtime<A> {
                 // re-render (p.ej. el submenú que se abre/cierra).
                 state.last_render = None;
             }
+            // Movimiento posicional: dispatch `on_pointer_move_at` en CADA move
+            // mientras el cursor está sobre el nodo (no sólo al entrar, como
+            // `on_pointer_enter`). Base del thumbnail/drawer que sigue al
+            // cursor. Extraemos el handler (Arc) + rect en un scope para soltar
+            // el borrow del cache antes de mutar el modelo.
+            let move_call: Option<(ClickAtFn<A::Msg>, f32, f32, f32, f32)> =
+                state.last_render.as_ref().and_then(|cache| {
+                    let (mounted, computed) = match cache.overlay.as_ref() {
+                        Some(ov) => (&ov.mounted, &ov.computed),
+                        None => (&cache.mounted, &cache.computed),
+                    };
+                    let px = position.x as f32;
+                    let py = position.y as f32;
+                    let i = hit_test_pointer_move(mounted, computed, px, py)?;
+                    let node = &mounted.nodes[i];
+                    let h = node.on_pointer_move_at.clone()?;
+                    let r = computed.get(node.id)?;
+                    Some((h, px - r.x, py - r.y, r.w, r.h))
+                });
+            if let Some((h, lx, ly, w, hh)) = move_call {
+                if let Some(msg) = h(lx, ly, w, hh) {
+                    let model = state.model.take().expect("model");
+                    state.model = Some(A::update(model, msg, &self.handle));
+                    state.last_render = None;
+                    state.window.request_redraw();
+                }
+            }
             let _ = prev_cursor;
         }
     }

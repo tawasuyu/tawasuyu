@@ -214,6 +214,7 @@ impl<A: App> Runtime<A> {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 let mut drag_msg: Option<A::Msg> = None;
+                let mut move_call: Option<(ClickAtFn<A::Msg>, f32, f32, f32, f32)> = None;
                 let mut redraw = false;
                 {
                     let sec = &mut self.secondaries[idx];
@@ -247,9 +248,23 @@ impl<A: App> Runtime<A> {
                             sec.hovered = new_hover;
                             redraw = true;
                         }
+                        // Movimiento posicional (on_pointer_move_at) en cada move.
+                        move_call = sec.last_render.as_ref().and_then(|c| {
+                            let i = hit_test_pointer_move(
+                                &c.mounted,
+                                &c.computed,
+                                position.x as f32,
+                                position.y as f32,
+                            )?;
+                            let node = &c.mounted.nodes[i];
+                            let h = node.on_pointer_move_at.clone()?;
+                            let r = c.computed.get(node.id)?;
+                            Some((h, position.x as f32 - r.x, position.y as f32 - r.y, r.w, r.h))
+                        });
                     }
                 }
-                if let Some(msg) = drag_msg {
+                let move_msg = move_call.and_then(|(h, lx, ly, w, hh)| h(lx, ly, w, hh));
+                if let Some(msg) = drag_msg.or(move_msg) {
                     self.dispatch_and_render_secondary(idx, msg);
                 } else if redraw {
                     self.render_secondary(idx);
