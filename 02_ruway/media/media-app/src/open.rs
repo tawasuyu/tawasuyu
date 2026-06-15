@@ -170,8 +170,33 @@ pub(crate) fn open_media(path: &Path) -> Result<String, String> {
 
     refresh_media_state(path);
     reset_av_sync_anchor();
+    maybe_resume(path);
 
     Ok(title_or_path(path))
+}
+
+/// Si "continuar donde quedaste" está activo, salta a la posición guardada del
+/// medio (namespaced por perfil) y registra la reproducción. Sólo en apertura
+/// **manual** (`open_media`): anterior/siguiente y el auto-advance arrancan de
+/// cero. No-op si el medio no tiene posición guardada o no es archivo.
+fn maybe_resume(path: &Path) {
+    let on = crate::config_io::media_config_slot()
+        .get()
+        .map(|c| c.playlist.resume_on_open)
+        .unwrap_or(false);
+    if !on {
+        return;
+    }
+    let key = crate::config_io::scoped_key(&path.to_string_lossy());
+    let resume = crate::config_io::history()
+        .lock()
+        .resume_position(&key, std::time::Duration::from_secs(5));
+    if let Some(pos) = resume {
+        crate::playlist::seek_audio_to_pos(pos);
+    }
+    crate::config_io::history()
+        .lock()
+        .note_play(&key, crate::config_io::now_secs());
 }
 
 /// Refresca el estado por-medio (metadata/carátula, capítulos, subtítulo

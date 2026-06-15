@@ -310,10 +310,38 @@ pub(crate) fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
-/// Historial de reproducción global (resume por medio).
+/// Historial de reproducción (resume). Un solo `history.ron`, pero las claves
+/// se *namespacean* por perfil activo (ver [`scoped_key`]).
 pub(crate) fn history() -> &'static parking_lot::Mutex<History> {
     static SLOT: OnceLock<parking_lot::Mutex<History>> = OnceLock::new();
     SLOT.get_or_init(|| parking_lot::Mutex::new(load_history()))
+}
+
+/// Nombre del perfil activo, para *namespacing* del resume/historial. `None` =
+/// sin perfil. Lo sincroniza el `Tick` desde el Model y el arranque desde disco.
+pub(crate) fn active_profile_slot() -> &'static parking_lot::Mutex<Option<String>> {
+    static SLOT: OnceLock<parking_lot::Mutex<Option<String>>> = OnceLock::new();
+    SLOT.get_or_init(|| parking_lot::Mutex::new(None))
+}
+
+/// Fija el perfil activo (idempotente).
+pub(crate) fn set_active_profile(name: Option<&str>) {
+    let new = name.map(str::to_string);
+    let mut g = active_profile_slot().lock();
+    if *g != new {
+        *g = new;
+    }
+}
+
+/// Clave de historial *namespaced* por el perfil activo: el mismo medio guarda
+/// posiciones de reanudación distintas por perfil. Sin perfil → la clave cruda
+/// (compatibilidad con historiales viejos). Separador = unit-separator (0x1F),
+/// que no aparece en rutas ni URLs.
+pub(crate) fn scoped_key(media: &str) -> String {
+    match active_profile_slot().lock().as_deref() {
+        Some(p) if !p.is_empty() => format!("{p}\u{1f}{media}"),
+        _ => media.to_string(),
+    }
 }
 
 /// Marcas manuales de toda la biblioteca (U6).
@@ -333,12 +361,15 @@ pub(crate) fn apply_startup_config() {
             pl.toggle_shuffle();
         }
     }
+    // Perfil activo persistido → namespacing del resume (antes de consultarlo).
+    set_active_profile(crate::profiles::load_profiles().active.as_deref());
     if config.playlist.resume_on_open {
         let key = playlist_slot()
             .get()
             .and_then(|o| o.as_ref())
             .map(|h| h.lock().track_path().to_string_lossy().into_owned());
         if let Some(key) = key {
+            let key = scoped_key(&key);
             let resume = history()
                 .lock()
                 .resume_position(&key, std::time::Duration::from_secs(5));

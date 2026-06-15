@@ -251,6 +251,8 @@ impl App for MediaApp {
     fn update(model: Self::Model, msg: Self::Msg, handle: &Handle<Self::Msg>) -> Self::Model {
         match msg {
             Msg::Tick => {
+                // El resume/historial se namespacea por perfil activo.
+                crate::config_io::set_active_profile(model.profiles.active.as_deref());
                 record_playback_progress(model.frames);
                 // Auto-advance de video/ffmpeg (el audio nativo se auto-avanza
                 // en su propio hilo, sin gap). Relanzamos la onda al cambiar.

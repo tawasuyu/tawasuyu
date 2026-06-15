@@ -634,6 +634,7 @@ pub(crate) fn record_playback_progress(frame: u64) {
         return;
     }
     if let Some(key) = current_track_key() {
+        let key = crate::config_io::scoped_key(&key);
         crate::config_io::history()
             .lock()
             .update_position(&key, s.position, s.duration, crate::config_io::now_secs());
