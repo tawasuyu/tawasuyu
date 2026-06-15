@@ -102,6 +102,8 @@ struct Model {
     overview_edit: bool,
     /// Escritorio seleccionado en el editor de geometría (0-based).
     overview_sel: usize,
+    /// Arrastre en curso en el editor: `(escritorio, dcol acumulado, dfila acum)`.
+    overview_drag: Option<(usize, f32, f32)>,
     /// Geometría vigente — lo que se pinta. Es la última `Place` emitida.
     placements: Vec<WindowPlacement>,
     /// Contador de ids para las ventanas sintéticas.
@@ -166,6 +168,9 @@ enum Msg {
     /// Mueve el escritorio seleccionado `(dcol, dfila)` en la geometría 2D y
     /// guarda la config (el compositor la hot-reloadea).
     OverviewMove(i32, i32),
+    /// Arrastre de una celda en el editor: `(escritorio, fase, dcol, dfila)`
+    /// con el delta EN CELDAS. Acumula durante el drag y aplica al soltar.
+    OverviewDrag(usize, llimphi_ui::DragPhase, f32, f32),
     /// Click en una ventana del lienzo.
     FocusWindow(WindowId),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
@@ -260,6 +265,7 @@ impl App for Mirada {
             overview: None,
             overview_edit: false,
             overview_sel: 0,
+            overview_drag: None,
             placements: Vec::new(),
             next_id: 1,
             link,
@@ -389,16 +395,25 @@ impl App for Mirada {
             Msg::OverviewMove(dx, dy) => {
                 let count = m.desktop.workspace_loads().len().max(1);
                 let sel = m.overview_sel.min(count - 1);
-                let mut cfg = m.desktop.config().clone();
-                cfg.overview_geometry = cfg.overview_geometry_moved(count, sel, dx, dy);
-                if let Some(p) = mirada_brain::Config::default_path() {
-                    if let Err(e) = cfg.save(&p) {
-                        m.note = format!("no pude guardar la geometría: {e}");
+                apply_geometry_move(&mut m, sel, dx, dy);
+            }
+            Msg::OverviewDrag(i, phase, dcol, drow) => {
+                use llimphi_ui::DragPhase;
+                match phase {
+                    DragPhase::Move => {
+                        let (ax, ay) = match m.overview_drag {
+                            Some((d, ax, ay)) if d == i => (ax + dcol, ay + drow),
+                            _ => (dcol, drow),
+                        };
+                        m.overview_drag = Some((i, ax, ay));
+                        m.overview_sel = i;
+                    }
+                    DragPhase::End => {
+                        if let Some((d, ax, ay)) = m.overview_drag.take() {
+                            apply_geometry_move(&mut m, d, ax.round() as i32, ay.round() as i32);
+                        }
                     }
                 }
-                // Aplicar en vivo: el overview re-pinta siguiendo la geometría
-                // nueva (y el compositor la hot-reloadea desde config.ron).
-                m.desktop.set_config(cfg);
             }
             Msg::OverviewTick => {
                 // Si el aterrizaje terminó, salta al destino y cierra la vista.
@@ -493,6 +508,7 @@ impl App for Mirada {
                 (SCREEN_W, SCREEN_H),
                 Msg::OverviewPick,
                 model.overview_edit.then_some(model.overview_sel),
+                |i, phase, dcol, drow| Msg::OverviewDrag(i, phase, dcol, drow),
             ),
             None => canvas_view(model, theme, on_accent, win_bg, canvas_bg),
         };
@@ -882,6 +898,24 @@ fn dispatch(m: &mut Model, cmds: Vec<BrainCommand>) {
 /// Duración del vuelo de cámara de la vista espacial, según la config.
 fn overview_anim(m: &Model) -> Duration {
     Duration::from_millis(m.desktop.config().overview_anim_ms as u64)
+}
+
+/// Aplica un movimiento `(dx, dy)` celdas al escritorio `desktop` en la
+/// geometría 2D del Prezi, lo guarda en config.ron (el compositor la
+/// hot-reloadea) y lo aplica en vivo. Lo usan las flechas y el arrastre.
+fn apply_geometry_move(m: &mut Model, desktop: usize, dx: i32, dy: i32) {
+    if dx == 0 && dy == 0 {
+        return;
+    }
+    let count = m.desktop.workspace_loads().len().max(1);
+    let mut cfg = m.desktop.config().clone();
+    cfg.overview_geometry = cfg.overview_geometry_moved(count, desktop, dx, dy);
+    if let Some(p) = mirada_brain::Config::default_path() {
+        if let Err(e) = cfg.save(&p) {
+            m.note = format!("no pude guardar la geometría: {e}");
+        }
+    }
+    m.desktop.set_config(cfg);
 }
 
 /// Abre la vista espacial (zoom-out desde el escritorio activo) o la cierra si

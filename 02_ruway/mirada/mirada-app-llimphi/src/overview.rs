@@ -35,7 +35,7 @@ pub struct Camera {
 /// La geometría base se calcula con la grilla a pantalla completa (zoom `t=1`);
 /// la cámara es la transformación afín `scr(p) = O(t) + s(t)·p`, identidad a
 /// `t=1` y, a `t=0`, agranda la celda con foco hasta llenar la pantalla.
-pub fn overview_view<M, F>(
+pub fn overview_view<M, F, D>(
     desktop: &Desktop,
     theme: &Theme,
     on_accent: Color,
@@ -44,13 +44,18 @@ pub fn overview_view<M, F>(
     cam: Camera,
     screen: (i32, i32),
     on_pick: F,
-    // Modo editor de geometría: `Some(sel)` resalta el escritorio `sel`
-    // (el que mueven las flechas); `None` = vista normal.
+    // Modo editor de geometría: `Some(sel)` resalta el escritorio `sel` y hace
+    // sus celdas ARRASTRABLES (drag para reacomodar el plano 2D); `None` = vista
+    // normal (clic para saltar).
     edit_sel: Option<usize>,
+    // En modo editor, arrastrar la celda `i`: `(i, fase, dcol, dfila)` donde
+    // dcol/dfila son el delta EN CELDAS (ya convertido del px por el pitch).
+    on_drag: D,
 ) -> View<M>
 where
-    M: Clone + 'static,
+    M: Clone + Send + Sync + 'static,
     F: Fn(usize) -> M,
+    D: Fn(usize, llimphi_ui::DragPhase, f32, f32) -> M + Clone + Send + Sync + 'static,
 {
     let cfg = desktop.config();
     let loads = desktop.workspace_loads();
@@ -207,36 +212,48 @@ where
             .text_aligned(format!("{}", i + 1), 11.0, badge_fg, Alignment::Center),
         );
 
-        children.push(
-            View::new(Style {
-                position: Position::Absolute,
-                inset: Rect {
-                    left: length(sx),
-                    top: length(sy),
-                    right: auto(),
-                    bottom: auto(),
-                },
-                size: Size { width: length(sw.max(1.0)), height: length(sh.max(1.0)) },
-                padding: Rect {
-                    left: length(2.0_f32),
-                    right: length(2.0_f32),
-                    top: length(2.0_f32),
-                    bottom: length(2.0_f32),
-                },
-                ..Default::default()
+        let cell = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect {
+                left: length(sx),
+                top: length(sy),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size { width: length(sw.max(1.0)), height: length(sh.max(1.0)) },
+            padding: Rect {
+                left: length(2.0_f32),
+                right: length(2.0_f32),
+                top: length(2.0_f32),
+                bottom: length(2.0_f32),
+            },
+            ..Default::default()
+        })
+        .fill(border)
+        .radius(6.0)
+        .on_click(on_pick(i))
+        .children(vec![View::new(Style {
+            position: Position::Relative,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .fill(canvas_bg)
+        .radius(5.0)
+        .children(cell_children)]);
+
+        // En modo editor la celda se ARRASTRA para reacomodar el plano 2D: el px
+        // del drag se convierte a delta-en-celdas con el pitch en pantalla.
+        let cell = if edit_sel.is_some() {
+            let pitch_x = (s * (bw + GAP)).max(1.0);
+            let pitch_y = (s * (bh + GAP)).max(1.0);
+            let on_drag = on_drag.clone();
+            cell.draggable(move |phase, dx, dy| {
+                Some(on_drag(i, phase, dx / pitch_x, dy / pitch_y))
             })
-            .fill(border)
-            .radius(6.0)
-            .on_click(on_pick(i))
-            .children(vec![View::new(Style {
-                position: Position::Relative,
-                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
-                ..Default::default()
-            })
-            .fill(canvas_bg)
-            .radius(5.0)
-            .children(cell_children)]),
-        );
+        } else {
+            cell
+        };
+        children.push(cell);
     }
 
     // Banner del editor de geometría.

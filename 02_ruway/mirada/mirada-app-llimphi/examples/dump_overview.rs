@@ -93,7 +93,7 @@ fn main() {
     }
     let focus = focus_arg.unwrap_or_else(|| d.active_index());
 
-    let v = overview_view::<(), _>(
+    let v = overview_view::<(), _, _>(
         &d,
         &theme,
         on_accent,
@@ -104,6 +104,7 @@ fn main() {
         |_| (),
         // MIRADA_OVERVIEW_EDIT=1 → modo editor con `focus` seleccionado.
         std::env::var("MIRADA_OVERVIEW_EDIT").ok().map(|_| focus),
+        |_, _, _, _| (), // on_drag no-op en el volcado headless
     );
 
     // view → layout → scene (misma secuencia que el eventloop).
