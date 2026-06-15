@@ -337,7 +337,11 @@ pub(crate) fn subtitle_strip() -> View<Msg> {
     .text(text, 18.0, color)
 }
 
-/// Barra de progreso clickeable bajo el video.
+/// Barra de progreso clickeable bajo el video. Si el escaneo de onda
+/// (background, tipo Audacity) ya terminó, pinta el **perfilado de la onda**
+/// detrás del avance — la parte ya reproducida en acento y el resto atenuada,
+/// con playhead y marcas. Si todavía no hay picos, cae a la barra de progreso
+/// lisa (`llimphi-widget-timeline`).
 pub(crate) fn timeline_strip() -> View<Msg> {
     let frac = {
         let s = playback_snapshot();
@@ -348,10 +352,88 @@ pub(crate) fn timeline_strip() -> View<Msg> {
             (s.position.as_secs_f64() / dur).clamp(0.0, 1.0) as f32
         }
     };
-    let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
     let marks = bookmark_fractions();
-    timeline_view_marked(frac, &marks, &palette, |fraction| {
-        Some(Msg::Command(MediaCommand::SeekTo { fraction }))
+    let peaks: Option<Vec<(f32, f32)>> = waveform_slot()
+        .lock()
+        .as_ref()
+        .filter(|w| !w.is_empty())
+        .map(|w| w.peaks().to_vec());
+    let Some(peaks) = peaks else {
+        let palette = TimelinePalette::from_theme(&llimphi_theme::Theme::dark());
+        return timeline_view_marked(frac, &marks, &palette, |fraction| {
+            Some(Msg::Command(MediaCommand::SeekTo { fraction }))
+        });
+    };
+    waveform_timeline(peaks, frac, marks)
+}
+
+/// Línea de tiempo con perfilado de onda (Audacity-like) y scrub.
+fn waveform_timeline(peaks: Vec<(f32, f32)>, frac: f32, marks: Vec<f32>) -> View<Msg> {
+    let played = Color::from_rgba8(120, 220, 170, 255);
+    let unplayed = Color::from_rgba8(70, 86, 104, 255);
+    let center_color = Color::from_rgba8(58, 68, 84, 255);
+    let playhead_color = Color::from_rgba8(242, 184, 92, 255);
+    let mark_color = Color::from_rgba8(255, 196, 84, 255);
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        flex_grow: 1.0,
+        ..Default::default()
+    })
+    .fill(Color::from_rgba8(16, 19, 26, 255))
+    .radius(7.0)
+    .on_click_at(|lx, _ly, w, _h| {
+        let f = (lx / w.max(1.0)).clamp(0.0, 1.0);
+        Some(Msg::Command(MediaCommand::SeekTo { fraction: f }))
+    })
+    .paint_with(move |scene, _ts, rect| {
+        if rect.w <= 4.0 || rect.h <= 4.0 {
+            return;
+        }
+        let pad_x: f32 = 6.0;
+        let pad_y: f32 = 4.0;
+        let ix = rect.x + pad_x;
+        let iy = rect.y + pad_y;
+        let iw = (rect.w - 2.0 * pad_x).max(1.0);
+        let ih = (rect.h - 2.0 * pad_y).max(1.0);
+        let mid = iy + ih * 0.5;
+        let amp = ih * 0.5;
+
+        let mut center = BezPath::new();
+        center.move_to((ix as f64, mid as f64));
+        center.line_to(((ix + iw) as f64, mid as f64));
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, center_color, None, &center);
+
+        let n = peaks.len().max(1);
+        let play_x = ix + frac.clamp(0.0, 1.0) * iw;
+        // Dos pasadas (atenuada / acento) para no recolorear stroke por columna.
+        let mut env_un = BezPath::new();
+        let mut env_pl = BezPath::new();
+        for (i, &(vmin, vmax)) in peaks.iter().enumerate() {
+            let x = ix + (i as f32 / n as f32) * iw;
+            let y_top = mid - vmax.clamp(-1.0, 1.0) * amp;
+            let y_bot = mid - vmin.clamp(-1.0, 1.0) * amp;
+            let env = if x <= play_x { &mut env_pl } else { &mut env_un };
+            env.move_to((x as f64, y_top as f64));
+            env.line_to((x as f64, y_bot as f64));
+        }
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, unplayed, None, &env_un);
+        scene.stroke(&Stroke::new(1.0), Affine::IDENTITY, played, None, &env_pl);
+
+        for f in &marks {
+            if !(0.0..=1.0).contains(f) {
+                continue;
+            }
+            let mx = ix + f * iw;
+            let mut m = BezPath::new();
+            m.move_to((mx as f64, iy as f64));
+            m.line_to((mx as f64, (iy + ih) as f64));
+            scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, mark_color, None, &m);
+        }
+
+        let mut ph = BezPath::new();
+        ph.move_to((play_x as f64, iy as f64));
+        ph.line_to((play_x as f64, (iy + ih) as f64));
+        scene.stroke(&Stroke::new(2.0), Affine::IDENTITY, playhead_color, None, &ph);
     })
 }
 
