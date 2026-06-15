@@ -1879,5 +1879,11 @@ pub struct ComputedStyle {
     pub ms_flow_from: Option<String>,
     /// `-ms-hyphenate-limit-chars` (IE10). `None` = `auto`. HEREDA. Plumb. Fase 7.1116.
     pub ms_hyphenate_limit_chars: Option<String>,
+    // === Fase 7.1121-7.1122 — WebKit misc (plumb opaco) ===
+    /// `-webkit-mask-attachment` (WebKit). `None` = `scroll`. NO hereda. Plumb. Fase 7.1121.
+    pub webkit_mask_attachment: Option<String>,
+    /// `-webkit-text-decorations-in-effect` (WebKit interno). `None` = `none`.
+    /// HEREDA (acumula las decoraciones del ancestro). Plumb. Fase 7.1122.
+    pub webkit_text_decorations_in_effect: Option<String>,
 }
 

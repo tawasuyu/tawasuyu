@@ -155,7 +155,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             continue;
         }
         // `outline-style`: togglea style_active + fija el patrón visual.
-        if prop.eq_ignore_ascii_case("outline-style") {
+        // Fase 7.1119 — `-moz-outline-style` alias Gecko legacy comparte el path.
+        if prop.eq_ignore_ascii_case("outline-style")
+            || prop.eq_ignore_ascii_case("-moz-outline-style")
+        {
             // Fase 7.836 — `auto` (anillo de foco por defecto del navegador):
             // outline visible con patrón sólido (aproximación; no dibujamos el
             // anillo nativo del SO).

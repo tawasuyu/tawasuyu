@@ -241,17 +241,23 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "flex" | "outline" => None,
         // Fase 7.873 — `outline-width` acepta thin/medium/thick (igual que
         // border-width) además de length/calc.
-        "outline-width" => parse_border_width_token(value).map(DeclKind::OutlineWidth),
+        // Fase 7.1117 — `-moz-outline-width` alias Gecko legacy (cuando outline
+        // aún no era estándar).
+        "outline-width" | "-moz-outline-width" => parse_border_width_token(value).map(DeclKind::OutlineWidth),
         // Fase 7.864 — `invert` (CSS UI; invierte los píxeles del fondo) no es
         // representable sin leer el framebuffer; lo aproximamos a `currentColor`
         // (un outline visible que sigue al color del texto).
-        "outline-color" if is_current_color(value) || value.trim().eq_ignore_ascii_case("invert") => {
+        // Fase 7.1118 — `-moz-outline-color` alias Gecko legacy.
+        "outline-color" | "-moz-outline-color"
+            if is_current_color(value) || value.trim().eq_ignore_ascii_case("invert") =>
+        {
             Some(DeclKind::CurrentColor(ColorTarget::Outline))
         }
-        "outline-color" => parse_color(value).map(DeclKind::OutlineColor),
-        "outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
-        // Fase 7.877 — acepta calc().
-        "outline-offset" => parse_px_or_math(value).map(DeclKind::OutlineOffset),
+        "outline-color" | "-moz-outline-color" => parse_color(value).map(DeclKind::OutlineColor),
+        // Fase 7.1119 — `-moz-outline-style` alias Gecko legacy.
+        "outline-style" | "-moz-outline-style" => parse_border_style(value).map(DeclKind::OutlineStyle),
+        // Fase 7.877 — acepta calc(). Fase 7.1120 — `-moz-outline-offset` alias.
+        "outline-offset" | "-moz-outline-offset" => parse_px_or_math(value).map(DeclKind::OutlineOffset),
         "background-image" => parse_background_image(value),
         // Fase 7.811 — `-webkit-background-size` / `-moz-background-size` alias vendor legacy.
         // Fase 7.866 — los longhands aceptan listas por coma (multi-capa); el
@@ -569,6 +575,9 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-ms-flow-into" => opaque_or_sentinel(value, "none").map(DeclKind::MsFlowInto),
         "-ms-flow-from" => opaque_or_sentinel(value, "none").map(DeclKind::MsFlowFrom),
         "-ms-hyphenate-limit-chars" => opaque_or_sentinel(value, "auto").map(DeclKind::MsHyphenateLimitChars),
+        // === Fase 7.1121-7.1122 — WebKit misc (plumb opaco) ===
+        "-webkit-mask-attachment" => opaque_or_sentinel(value, "scroll").map(DeclKind::WebkitMaskAttachment),
+        "-webkit-text-decorations-in-effect" => opaque_or_sentinel(value, "none").map(DeclKind::WebkitTextDecorationsInEffect),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

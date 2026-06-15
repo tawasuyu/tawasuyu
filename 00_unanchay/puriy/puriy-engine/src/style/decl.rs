@@ -1209,6 +1209,9 @@ pub(crate) enum DeclKind {
     MsFlowInto(Option<String>),
     MsFlowFrom(Option<String>),
     MsHyphenateLimitChars(Option<String>),
+    // === Fase 7.1121-7.1122 — WebKit misc (plumb opaco) ===
+    WebkitMaskAttachment(Option<String>),
+    WebkitTextDecorationsInEffect(Option<String>),
 }
 
 impl Decl {
@@ -2055,6 +2058,9 @@ impl Decl {
             DeclKind::MsFlowInto(v) => s.ms_flow_into = v.clone(),
             DeclKind::MsFlowFrom(v) => s.ms_flow_from = v.clone(),
             DeclKind::MsHyphenateLimitChars(v) => s.ms_hyphenate_limit_chars = v.clone(),
+            // Fase 7.1121-7.1122 — WebKit misc, plumb opaco.
+            DeclKind::WebkitMaskAttachment(v) => s.webkit_mask_attachment = v.clone(),
+            DeclKind::WebkitTextDecorationsInEffect(v) => s.webkit_text_decorations_in_effect = v.clone(),
         }
     }
 }

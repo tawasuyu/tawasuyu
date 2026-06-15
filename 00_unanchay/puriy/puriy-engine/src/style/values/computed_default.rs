@@ -696,6 +696,9 @@ impl Default for ComputedStyle {
             ms_flow_into: None,
             ms_flow_from: None,
             ms_hyphenate_limit_chars: None,
+            // Fase 7.1121-7.1122 — WebKit misc, default None.
+            webkit_mask_attachment: None,
+            webkit_text_decorations_in_effect: None,
         }
     }
 }

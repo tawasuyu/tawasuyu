@@ -938,3 +938,37 @@ use super::super::*;
         assert_eq!(span.ms_wrap_flow, None);
         assert_eq!(span.ms_flow_into, None);
     }
+
+    #[test]
+    fn moz_outline_aliases_webkit_misc_fase_7_1117_1122() {
+        // -moz-outline-* deben dar el MISMO computed que outline-*.
+        assert_eq!(style_of("-moz-outline-width: 3px").outline.width,
+                   style_of("outline-width: 3px").outline.width);
+        assert_eq!(style_of("-moz-outline-style: dashed").outline.style,
+                   style_of("outline-style: dashed").outline.style);
+        assert_eq!(style_of("-moz-outline-color: red").outline.color,
+                   style_of("outline-color: red").outline.color);
+        assert_eq!(style_of("-moz-outline-offset: 4px").outline.offset,
+                   style_of("outline-offset: 4px").outline.offset);
+        // `invert` y currentColor pasan por el brazo guardado.
+        assert_eq!(style_of("-moz-outline-color: invert").current_color,
+                   style_of("outline-color: invert").current_color);
+        // Parseó de verdad (no quedó en default).
+        assert_ne!(style_of("-moz-outline-style: dashed").outline.style,
+                   ComputedStyle::default().outline.style);
+        // WebKit misc opaco.
+        let html = r#"<html><body><div style="
+            -webkit-mask-attachment: fixed;
+            -webkit-text-decorations-in-effect: underline
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.webkit_mask_attachment.as_deref(), Some("fixed"));
+        assert_eq!(t.webkit_text_decorations_in_effect.as_deref(), Some("underline"));
+        assert_eq!(style_of("-webkit-mask-attachment: scroll").webkit_mask_attachment, None);
+        // -webkit-text-decorations-in-effect HEREDA; -webkit-mask-attachment NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.webkit_text_decorations_in_effect.as_deref(), Some("underline"));
+        assert_eq!(span.webkit_mask_attachment, None);
+    }

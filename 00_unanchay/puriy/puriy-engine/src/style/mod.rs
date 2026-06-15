@@ -513,6 +513,9 @@ impl StyleEngine {
             // heredan (propiedades de texto). El resto del bloque -ms- NO hereda.
             style.ms_text_autospace = p.ms_text_autospace.clone();
             style.ms_hyphenate_limit_chars = p.ms_hyphenate_limit_chars.clone();
+            // Fase 7.1122 — -webkit-text-decorations-in-effect hereda (acumula
+            // las decoraciones del ancestro). -webkit-mask-attachment NO.
+            style.webkit_text_decorations_in_effect = p.webkit_text_decorations_in_effect.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
