@@ -669,6 +669,15 @@ impl Default for ComputedStyle {
             // Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy, default None.
             webkit_box_lines: None,
             webkit_box_flex_group: None,
+            // Fase 7.1093-7.1100 — IE scrollbar-*-color, default None.
+            scrollbar_base_color: None,
+            scrollbar_face_color: None,
+            scrollbar_track_color: None,
+            scrollbar_arrow_color: None,
+            scrollbar_shadow_color: None,
+            scrollbar_highlight_color: None,
+            scrollbar_3dlight_color: None,
+            scrollbar_darkshadow_color: None,
         }
     }
 }

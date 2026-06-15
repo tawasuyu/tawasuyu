@@ -540,6 +540,17 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // === Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy (plumb opaco) ===
         "-webkit-box-lines" => opaque_or_sentinel(value, "single").map(DeclKind::WebkitBoxLines),
         "-webkit-box-flex-group" => opaque_or_sentinel(value, "1").map(DeclKind::WebkitBoxFlexGroup),
+        // === Fase 7.1093-7.1100 — IE scrollbar-*-color legacy (plumb opaco) ===
+        // Sin keyword initial; sentinel "" = no colapsa (sólo vacío → drop).
+        // HEREDAN (color de UI heredado como el resto del scrollbar IE).
+        "scrollbar-base-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarBaseColor),
+        "scrollbar-face-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarFaceColor),
+        "scrollbar-track-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarTrackColor),
+        "scrollbar-arrow-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarArrowColor),
+        "scrollbar-shadow-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarShadowColor),
+        "scrollbar-highlight-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarHighlightColor),
+        "scrollbar-3dlight-color" => opaque_or_sentinel(value, "").map(DeclKind::Scrollbar3dlightColor),
+        "scrollbar-darkshadow-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarDarkshadowColor),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

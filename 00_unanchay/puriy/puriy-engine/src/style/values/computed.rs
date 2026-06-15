@@ -1828,5 +1828,22 @@ pub struct ComputedStyle {
     /// `-webkit-box-flex-group` (WebKit old flexbox). `None` = `1`. NO hereda.
     /// Plumb. Fase 7.1089.
     pub webkit_box_flex_group: Option<String>,
+    // === Fase 7.1093-7.1100 — IE scrollbar-*-color legacy (plumb opaco) ===
+    /// `scrollbar-base-color` (IE). HEREDA. Plumb. Fase 7.1093.
+    pub scrollbar_base_color: Option<String>,
+    /// `scrollbar-face-color` (IE). HEREDA. Plumb. Fase 7.1094.
+    pub scrollbar_face_color: Option<String>,
+    /// `scrollbar-track-color` (IE). HEREDA. Plumb. Fase 7.1095.
+    pub scrollbar_track_color: Option<String>,
+    /// `scrollbar-arrow-color` (IE). HEREDA. Plumb. Fase 7.1096.
+    pub scrollbar_arrow_color: Option<String>,
+    /// `scrollbar-shadow-color` (IE). HEREDA. Plumb. Fase 7.1097.
+    pub scrollbar_shadow_color: Option<String>,
+    /// `scrollbar-highlight-color` (IE). HEREDA. Plumb. Fase 7.1098.
+    pub scrollbar_highlight_color: Option<String>,
+    /// `scrollbar-3dlight-color` (IE). HEREDA. Plumb. Fase 7.1099.
+    pub scrollbar_3dlight_color: Option<String>,
+    /// `scrollbar-darkshadow-color` (IE). HEREDA. Plumb. Fase 7.1100.
+    pub scrollbar_darkshadow_color: Option<String>,
 }
 

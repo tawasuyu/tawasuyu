@@ -1182,6 +1182,15 @@ pub(crate) enum DeclKind {
     // === Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy (plumb opaco) ===
     WebkitBoxLines(Option<String>),
     WebkitBoxFlexGroup(Option<String>),
+    // === Fase 7.1093-7.1100 — IE scrollbar-*-color legacy (plumb opaco) ===
+    ScrollbarBaseColor(Option<String>),
+    ScrollbarFaceColor(Option<String>),
+    ScrollbarTrackColor(Option<String>),
+    ScrollbarArrowColor(Option<String>),
+    ScrollbarShadowColor(Option<String>),
+    ScrollbarHighlightColor(Option<String>),
+    Scrollbar3dlightColor(Option<String>),
+    ScrollbarDarkshadowColor(Option<String>),
 }
 
 impl Decl {
@@ -2001,6 +2010,15 @@ impl Decl {
             // Fase 7.1088-7.1089 — WebKit -webkit-box-* legacy, plumb opaco.
             DeclKind::WebkitBoxLines(v) => s.webkit_box_lines = v.clone(),
             DeclKind::WebkitBoxFlexGroup(v) => s.webkit_box_flex_group = v.clone(),
+            // Fase 7.1093-7.1100 — IE scrollbar-*-color, plumb opaco.
+            DeclKind::ScrollbarBaseColor(v) => s.scrollbar_base_color = v.clone(),
+            DeclKind::ScrollbarFaceColor(v) => s.scrollbar_face_color = v.clone(),
+            DeclKind::ScrollbarTrackColor(v) => s.scrollbar_track_color = v.clone(),
+            DeclKind::ScrollbarArrowColor(v) => s.scrollbar_arrow_color = v.clone(),
+            DeclKind::ScrollbarShadowColor(v) => s.scrollbar_shadow_color = v.clone(),
+            DeclKind::ScrollbarHighlightColor(v) => s.scrollbar_highlight_color = v.clone(),
+            DeclKind::Scrollbar3dlightColor(v) => s.scrollbar_3dlight_color = v.clone(),
+            DeclKind::ScrollbarDarkshadowColor(v) => s.scrollbar_darkshadow_color = v.clone(),
         }
     }
 }

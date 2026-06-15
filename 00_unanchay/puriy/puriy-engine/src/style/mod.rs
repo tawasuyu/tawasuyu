@@ -500,6 +500,15 @@ impl StyleEngine {
             style.fill_position = p.fill_position.clone();
             style.fill_size = p.fill_size.clone();
             style.fill_repeat = p.fill_repeat.clone();
+            // Fase 7.1093-7.1100 — los colores de scrollbar IE heredan.
+            style.scrollbar_base_color = p.scrollbar_base_color.clone();
+            style.scrollbar_face_color = p.scrollbar_face_color.clone();
+            style.scrollbar_track_color = p.scrollbar_track_color.clone();
+            style.scrollbar_arrow_color = p.scrollbar_arrow_color.clone();
+            style.scrollbar_shadow_color = p.scrollbar_shadow_color.clone();
+            style.scrollbar_highlight_color = p.scrollbar_highlight_color.clone();
+            style.scrollbar_3dlight_color = p.scrollbar_3dlight_color.clone();
+            style.scrollbar_darkshadow_color = p.scrollbar_darkshadow_color.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

@@ -849,3 +849,32 @@ use super::super::*;
         assert_ne!(style_of("-webkit-column-break-before: always").break_before,
                    ComputedStyle::default().break_before);
     }
+
+    #[test]
+    fn ie_scrollbar_colors_plumb_fase_7_1093_1100() {
+        let html = r#"<html><body><div style="
+            scrollbar-base-color: #ccc;
+            scrollbar-face-color: #ddd;
+            scrollbar-track-color: #eee;
+            scrollbar-arrow-color: black;
+            scrollbar-shadow-color: gray;
+            scrollbar-highlight-color: white;
+            scrollbar-3dlight-color: silver;
+            scrollbar-darkshadow-color: #333
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.scrollbar_base_color.as_deref(), Some("#ccc"));
+        assert_eq!(t.scrollbar_face_color.as_deref(), Some("#ddd"));
+        assert_eq!(t.scrollbar_track_color.as_deref(), Some("#eee"));
+        assert_eq!(t.scrollbar_arrow_color.as_deref(), Some("black"));
+        assert_eq!(t.scrollbar_shadow_color.as_deref(), Some("gray"));
+        assert_eq!(t.scrollbar_highlight_color.as_deref(), Some("white"));
+        assert_eq!(t.scrollbar_3dlight_color.as_deref(), Some("silver"));
+        assert_eq!(t.scrollbar_darkshadow_color.as_deref(), Some("#333"));
+        // HEREDAN.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.scrollbar_base_color.as_deref(), Some("#ccc"));
+        assert_eq!(span.scrollbar_darkshadow_color.as_deref(), Some("#333"));
+    }
