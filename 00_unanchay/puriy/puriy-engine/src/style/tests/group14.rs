@@ -1024,3 +1024,31 @@ use super::super::*;
         assert_eq!(span.webkit_text_zoom.as_deref(), Some("reset"));
         assert_eq!(span.webkit_marquee, None);
     }
+
+    #[test]
+    fn moz_mathml_props_plumb_fase_7_1136_1140() {
+        let html = r#"<html><body><div style="
+            -moz-script-level: 2;
+            -moz-math-display: block;
+            -moz-script-min-size: 6pt;
+            -moz-script-size-multiplier: 0.8;
+            -moz-presentation-level: 1
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.moz_script_level.as_deref(), Some("2"));
+        assert_eq!(t.moz_math_display.as_deref(), Some("block"));
+        assert_eq!(t.moz_script_min_size.as_deref(), Some("6pt"));
+        assert_eq!(t.moz_script_size_multiplier.as_deref(), Some("0.8"));
+        assert_eq!(t.moz_presentation_level.as_deref(), Some("1"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-moz-script-level: 0").moz_script_level, None);
+        assert_eq!(style_of("-moz-math-display: inline").moz_math_display, None);
+        assert_eq!(style_of("-moz-script-size-multiplier: 0.71").moz_script_size_multiplier, None);
+        // Todas HEREDAN (layout matemático).
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.moz_script_level.as_deref(), Some("2"));
+        assert_eq!(span.moz_math_display.as_deref(), Some("block"));
+        assert_eq!(span.moz_presentation_level.as_deref(), Some("1"));
+    }

@@ -594,6 +594,14 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-apple-pay-button-style" => opaque_or_sentinel(value, "white").map(DeclKind::ApplePayButtonStyle),
         "-apple-pay-button-type" => opaque_or_sentinel(value, "plain").map(DeclKind::ApplePayButtonType),
         "-apple-color-filter" => opaque_or_sentinel(value, "none").map(DeclKind::AppleColorFilter),
+        // === Fase 7.1136-7.1140 — Gecko MathML -moz- props (plumb opaco) ===
+        // Propiedades de layout matemático de Gecko (predecesoras de math-depth/
+        // math-style estándar). HEREDAN. Sentinel = initial → None.
+        "-moz-script-level" => opaque_or_sentinel(value, "0").map(DeclKind::MozScriptLevel),
+        "-moz-math-display" => opaque_or_sentinel(value, "inline").map(DeclKind::MozMathDisplay),
+        "-moz-script-min-size" => opaque_or_sentinel(value, "8pt").map(DeclKind::MozScriptMinSize),
+        "-moz-script-size-multiplier" => opaque_or_sentinel(value, "0.71").map(DeclKind::MozScriptSizeMultiplier),
+        "-moz-presentation-level" => opaque_or_sentinel(value, "0").map(DeclKind::MozPresentationLevel),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

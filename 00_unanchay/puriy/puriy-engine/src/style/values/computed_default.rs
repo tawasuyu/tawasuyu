@@ -714,6 +714,12 @@ impl Default for ComputedStyle {
             apple_pay_button_style: None,
             apple_pay_button_type: None,
             apple_color_filter: None,
+            // Fase 7.1136-7.1140 — Gecko MathML -moz-, default None.
+            moz_script_level: None,
+            moz_math_display: None,
+            moz_script_min_size: None,
+            moz_script_size_multiplier: None,
+            moz_presentation_level: None,
         }
     }
 }

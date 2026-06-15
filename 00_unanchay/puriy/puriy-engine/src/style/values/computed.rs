@@ -1913,5 +1913,16 @@ pub struct ComputedStyle {
     pub apple_pay_button_type: Option<String>,
     /// `-apple-color-filter` (Safari). `None` = `none`. NO hereda. Plumb. Fase 7.1135.
     pub apple_color_filter: Option<String>,
+    // === Fase 7.1136-7.1140 — Gecko MathML -moz- props (plumb opaco) ===
+    /// `-moz-script-level` (Gecko MathML). `None` = `0`. HEREDA. Plumb. Fase 7.1136.
+    pub moz_script_level: Option<String>,
+    /// `-moz-math-display` (Gecko MathML). `None` = `inline`. HEREDA. Plumb. Fase 7.1137.
+    pub moz_math_display: Option<String>,
+    /// `-moz-script-min-size` (Gecko MathML). `None` = `8pt`. HEREDA. Plumb. Fase 7.1138.
+    pub moz_script_min_size: Option<String>,
+    /// `-moz-script-size-multiplier` (Gecko MathML). `None` = `0.71`. HEREDA. Plumb. Fase 7.1139.
+    pub moz_script_size_multiplier: Option<String>,
+    /// `-moz-presentation-level` (Gecko MathML). `None` = `0`. HEREDA. Plumb. Fase 7.1140.
+    pub moz_presentation_level: Option<String>,
 }
 

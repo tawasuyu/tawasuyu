@@ -519,6 +519,13 @@ impl StyleEngine {
             // Fase 7.1132 — -webkit-text-zoom hereda (escala de texto). El resto
             // del bloque WebKit/Apple (7.1129-7.1131/7.1133-7.1135) NO hereda.
             style.webkit_text_zoom = p.webkit_text_zoom.clone();
+            // Fase 7.1136-7.1140 — las props MathML de Gecko heredan (layout
+            // matemático: script-level/min-size/multiplier/display/presentation).
+            style.moz_script_level = p.moz_script_level.clone();
+            style.moz_math_display = p.moz_math_display.clone();
+            style.moz_script_min_size = p.moz_script_min_size.clone();
+            style.moz_script_size_multiplier = p.moz_script_size_multiplier.clone();
+            style.moz_presentation_level = p.moz_presentation_level.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

@@ -1227,6 +1227,12 @@ pub(crate) enum DeclKind {
     ApplePayButtonStyle(Option<String>),
     ApplePayButtonType(Option<String>),
     AppleColorFilter(Option<String>),
+    // === Fase 7.1136-7.1140 — Gecko MathML -moz- props (plumb opaco) ===
+    MozScriptLevel(Option<String>),
+    MozMathDisplay(Option<String>),
+    MozScriptMinSize(Option<String>),
+    MozScriptSizeMultiplier(Option<String>),
+    MozPresentationLevel(Option<String>),
 }
 
 impl Decl {
@@ -2091,6 +2097,12 @@ impl Decl {
             DeclKind::ApplePayButtonStyle(v) => s.apple_pay_button_style = v.clone(),
             DeclKind::ApplePayButtonType(v) => s.apple_pay_button_type = v.clone(),
             DeclKind::AppleColorFilter(v) => s.apple_color_filter = v.clone(),
+            // Fase 7.1136-7.1140 — Gecko MathML -moz-, plumb opaco.
+            DeclKind::MozScriptLevel(v) => s.moz_script_level = v.clone(),
+            DeclKind::MozMathDisplay(v) => s.moz_math_display = v.clone(),
+            DeclKind::MozScriptMinSize(v) => s.moz_script_min_size = v.clone(),
+            DeclKind::MozScriptSizeMultiplier(v) => s.moz_script_size_multiplier = v.clone(),
+            DeclKind::MozPresentationLevel(v) => s.moz_presentation_level = v.clone(),
         }
     }
 }
