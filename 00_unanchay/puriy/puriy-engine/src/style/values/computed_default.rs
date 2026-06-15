@@ -763,6 +763,13 @@ impl Default for ComputedStyle {
             // Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack, default None.
             ms_flex_item_align: None,
             ms_flex_line_pack: None,
+            // Fase 7.1201-7.1206 — overflow-clip-margin físicas + shorthands, default None.
+            overflow_clip_margin_top: None,
+            overflow_clip_margin_right: None,
+            overflow_clip_margin_bottom: None,
+            overflow_clip_margin_left: None,
+            overflow_clip_margin_block: None,
+            overflow_clip_margin_inline: None,
         }
     }
 }

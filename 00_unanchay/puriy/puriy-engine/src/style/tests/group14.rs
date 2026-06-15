@@ -1288,3 +1288,24 @@ use super::super::*;
         assert_eq!(style_of("-ms-flex-item-align: auto").ms_flex_item_align, None);
         assert_eq!(style_of("-ms-flex-line-pack: stretch").ms_flex_line_pack, None);
     }
+
+    #[test]
+    fn overflow_clip_margin_fisicas_fase_7_1201_1206() {
+        let s = style_of(
+            "overflow-clip-margin-top: 5px; \
+             overflow-clip-margin-right: content-box 2px; \
+             overflow-clip-margin-bottom: 10px; \
+             overflow-clip-margin-left: 1em; \
+             overflow-clip-margin-block: 3px; \
+             overflow-clip-margin-inline: 4px",
+        );
+        assert_eq!(s.overflow_clip_margin_top.as_deref(), Some("5px"));
+        assert_eq!(s.overflow_clip_margin_right.as_deref(), Some("content-box 2px"));
+        assert_eq!(s.overflow_clip_margin_bottom.as_deref(), Some("10px"));
+        assert_eq!(s.overflow_clip_margin_left.as_deref(), Some("1em"));
+        assert_eq!(s.overflow_clip_margin_block.as_deref(), Some("3px"));
+        assert_eq!(s.overflow_clip_margin_inline.as_deref(), Some("4px"));
+        // Sentinel = initial (0px) → None.
+        assert_eq!(style_of("overflow-clip-margin-top: 0px").overflow_clip_margin_top, None);
+        assert_eq!(style_of("overflow-clip-margin-block: 0px").overflow_clip_margin_block, None);
+    }

@@ -2006,5 +2006,18 @@ pub struct ComputedStyle {
     pub ms_flex_item_align: Option<String>,
     /// `-ms-flex-line-pack` (IE10, ~`align-content`). `None` = `stretch`. NO hereda. Plumb. Fase 7.1200.
     pub ms_flex_line_pack: Option<String>,
+    // === Fase 7.1201-7.1206 — overflow-clip-margin físicas + shorthands (CSS Overflow 4) ===
+    /// `overflow-clip-margin-top` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1201.
+    pub overflow_clip_margin_top: Option<String>,
+    /// `overflow-clip-margin-right` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1202.
+    pub overflow_clip_margin_right: Option<String>,
+    /// `overflow-clip-margin-bottom` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1203.
+    pub overflow_clip_margin_bottom: Option<String>,
+    /// `overflow-clip-margin-left` (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1204.
+    pub overflow_clip_margin_left: Option<String>,
+    /// `overflow-clip-margin-block` shorthand (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1205.
+    pub overflow_clip_margin_block: Option<String>,
+    /// `overflow-clip-margin-inline` shorthand (CSS Overflow 4). `None` = `0px`. NO hereda. Plumb. Fase 7.1206.
+    pub overflow_clip_margin_inline: Option<String>,
 }
 

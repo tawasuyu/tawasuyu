@@ -657,6 +657,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // Predecesores de align-self/align-content con value-space divergente.
         "-ms-flex-item-align" => opaque_or_sentinel(value, "auto").map(DeclKind::MsFlexItemAlign),
         "-ms-flex-line-pack" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsFlexLinePack),
+        // === Fase 7.1201-7.1206 — overflow-clip-margin físicas + shorthands (CSS Overflow 4) ===
+        // El shorthand `overflow-clip-margin` ya existe; estas son las per-edge.
+        // NO heredan. Sentinel `0px` (initial) → None.
+        "overflow-clip-margin-top" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginTop),
+        "overflow-clip-margin-right" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginRight),
+        "overflow-clip-margin-bottom" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginBottom),
+        "overflow-clip-margin-left" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginLeft),
+        "overflow-clip-margin-block" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginBlock),
+        "overflow-clip-margin-inline" => opaque_or_sentinel(value, "0px").map(DeclKind::OverflowClipMarginInline),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

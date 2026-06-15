@@ -1276,6 +1276,13 @@ pub(crate) enum DeclKind {
     // === Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack (plumb opaco) ===
     MsFlexItemAlign(Option<String>),
     MsFlexLinePack(Option<String>),
+    // === Fase 7.1201-7.1206 — overflow-clip-margin físicas + shorthands (CSS Overflow 4) ===
+    OverflowClipMarginTop(Option<String>),
+    OverflowClipMarginRight(Option<String>),
+    OverflowClipMarginBottom(Option<String>),
+    OverflowClipMarginLeft(Option<String>),
+    OverflowClipMarginBlock(Option<String>),
+    OverflowClipMarginInline(Option<String>),
 }
 
 impl Decl {
@@ -2189,6 +2196,13 @@ impl Decl {
             // Fase 7.1199-7.1200 — IE10 flexbox 2012 align/pack, plumb opaco.
             DeclKind::MsFlexItemAlign(v) => s.ms_flex_item_align = v.clone(),
             DeclKind::MsFlexLinePack(v) => s.ms_flex_line_pack = v.clone(),
+            // Fase 7.1201-7.1206 — overflow-clip-margin físicas + shorthands, plumb opaco.
+            DeclKind::OverflowClipMarginTop(v) => s.overflow_clip_margin_top = v.clone(),
+            DeclKind::OverflowClipMarginRight(v) => s.overflow_clip_margin_right = v.clone(),
+            DeclKind::OverflowClipMarginBottom(v) => s.overflow_clip_margin_bottom = v.clone(),
+            DeclKind::OverflowClipMarginLeft(v) => s.overflow_clip_margin_left = v.clone(),
+            DeclKind::OverflowClipMarginBlock(v) => s.overflow_clip_margin_block = v.clone(),
+            DeclKind::OverflowClipMarginInline(v) => s.overflow_clip_margin_inline = v.clone(),
         }
     }
 }
