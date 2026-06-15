@@ -197,6 +197,10 @@ struct Model {
     /// editable; el `Keymap` válido se deriva al guardar — ver [`flush_saves`]).
     keymap_rows: Vec<Vec<String>>,
     keymap_path: Option<PathBuf>,
+    /// Biblioteca de perfiles de atajos (dwm/i3/hyprland + propios). El selector
+    /// del panel conmuta el activo; al cambiar, recarga el keymap visible.
+    profiles: mirada_brain::KeymapProfiles,
+    profiles_path: Option<PathBuf>,
     pata: pata_core::Config,
     allichay: AllichayState,
     host: HostInfo,
@@ -226,6 +230,7 @@ struct SaveDirty {
     mirada: bool,
     keymap: bool,
     pata: bool,
+    profiles: bool,
 }
 
 #[derive(Clone)]
@@ -303,6 +308,13 @@ impl App for Panel {
             .unwrap_or_default()
             .to_rows();
 
+        // Perfiles de atajos: la biblioteca conmutable (dwm/i3/hyprland + propios).
+        let profiles_path = mirada_brain::KeymapProfiles::default_path();
+        let profiles = profiles_path
+            .as_deref()
+            .map(mirada_brain::KeymapProfiles::load_or_init)
+            .unwrap_or_default();
+
         Model {
             selected_pest: 0,
             selected_item: None,
@@ -313,6 +325,8 @@ impl App for Panel {
             mirada_path,
             keymap_rows,
             keymap_path,
+            profiles,
+            profiles_path,
             pata,
             allichay: AllichayState::new(),
             host,
@@ -542,7 +556,7 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         let mut schema = prefix_schema(m.mirada.schema(), "mirada");
         // El keymap vive en su propio RON; se edita como una sección más de la
         // pestaña mirada (id ya prefijado para que el ruteo lo reconozca).
-        schema.sections.push(keymap_section(&m.keymap_rows));
+        schema.sections.push(keymap_section(&m.keymap_rows, &m.profiles));
         out.push(PanelPestana {
             title: "mirada".into(),
             icon: "☸".into(),
@@ -571,11 +585,24 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
 /// La sección "Atajos" de mirada: el keymap como tabla (combinación · acción).
 /// El id va prefijado (`mirada::atajos`) para que [`route_change`] lo reconozca
 /// y lo aplique al buffer del keymap (no a la `Config`).
-fn keymap_section(rows: &[Vec<String>]) -> Section {
-    use allichay::{Column, Field};
+fn keymap_section(rows: &[Vec<String>], profiles: &mirada_brain::KeymapProfiles) -> Section {
+    use allichay::{Column, EnumOption, Field};
+    let opts: Vec<EnumOption> = profiles
+        .names()
+        .into_iter()
+        .map(|n| EnumOption::new(n.clone(), n))
+        .collect();
     Section::new("mirada::atajos", "Atajos")
         .icon("⌨")
         .help("Combinación → acción. Acciones tipo focus-next, layout:grid, spawn:kitty…")
+        // Selector de perfil de atajos: conmuta el activo (dwm/i3/hyprland/propio)
+        // y recarga la tabla con sus combinaciones.
+        .field(Field::dropdown(
+            "profile",
+            "Perfil activo",
+            profiles.active().to_string(),
+            opts,
+        ))
         .field(Field::table(
             "bindings",
             "Atajos de teclado",
@@ -733,12 +760,26 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.dirty.wawa = true;
         }
         "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {
-            // El keymap no es parte de Config: su tabla actualiza el buffer de
-            // filas crudas (se preserva lo a-medio-tipear; el Keymap válido se
-            // deriva al guardar).
-            if let Some(rows) = value.as_table() {
-                m.keymap_rows = rows.to_vec();
-                m.dirty.keymap = true;
+            match rel.leaf() {
+                // Conmutar el perfil activo: recarga la tabla con su keymap y
+                // marca para persistir profiles.ron + keymap.ron.
+                Some("profile") => {
+                    if let Some(name) = value.as_str() {
+                        if m.profiles.set_active(name).is_ok() {
+                            m.keymap_rows = m.profiles.active_keymap().to_rows();
+                            m.dirty.keymap = true;
+                            m.dirty.profiles = true;
+                        }
+                    }
+                }
+                // La tabla actualiza el buffer de filas crudas (se preserva lo
+                // a-medio-tipear; el Keymap válido se deriva al guardar).
+                _ => {
+                    if let Some(rows) = value.as_table() {
+                        m.keymap_rows = rows.to_vec();
+                        m.dirty.keymap = true;
+                    }
+                }
             }
         }
         "mirada" => {
@@ -790,6 +831,14 @@ fn flush_saves(m: &mut Model) {
             None => err = Some("· keymap: sin ruta de config".into()),
         }
         m.dirty.keymap = false;
+    }
+    if m.dirty.profiles {
+        match m.profiles_path.as_deref().map(|p| m.profiles.save(p)) {
+            Some(Ok(())) => ok = true,
+            Some(Err(e)) => err = Some(format!("· profiles save: {e}")),
+            None => err = Some("· profiles: sin ruta".into()),
+        }
+        m.dirty.profiles = false;
     }
     if m.dirty.pata {
         match pata_config::save(&m.pata) {
@@ -866,9 +915,13 @@ fn current_text_value(m: &Model, path: &FieldPath) -> String {
 /// lista/tabla al focarla — necesita el agregado entero, no sólo un texto).
 fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
     let (key, rel) = split_app(path)?;
-    // El keymap no está en el schema de Config: su valor es el buffer de filas.
+    // El keymap no está en el schema de Config: su valor es el buffer de filas,
+    // y el selector de perfil el nombre del activo.
     if key == "mirada" && rel.segments().first().map(String::as_str) == Some("atajos") {
-        return Some(FieldValue::Table(m.keymap_rows.clone()));
+        return Some(match rel.leaf() {
+            Some("profile") => FieldValue::Text(m.profiles.active().to_string()),
+            _ => FieldValue::Table(m.keymap_rows.clone()),
+        });
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),
