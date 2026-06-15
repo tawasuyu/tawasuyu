@@ -349,8 +349,8 @@ pub(crate) fn apply_startup_config() {
         }
     }
     if let Some(p) = crate::estado::current_media_path().filter(|p| p.is_file()) {
-        let _ = crate::estado::media_metadata_slot().set(crate::media_io::load_media_metadata(&p));
-        let _ = crate::estado::chapters_slot().set(crate::media_io::load_chapters(&p));
+        *crate::estado::media_metadata_slot().lock() = crate::media_io::load_media_metadata(&p);
+        *crate::estado::chapters_slot().lock() = crate::media_io::load_chapters(&p);
     }
     let _ = media_config_slot().set(config);
 }

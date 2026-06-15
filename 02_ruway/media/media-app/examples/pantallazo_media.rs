@@ -958,6 +958,7 @@ fn perfiles_panel_demo(theme: &Theme) -> View<Msg> {
             ..Default::default()
         })
         .text(format!("▶ 130 {}", t("media-prof-tracks")), 12.0, Color::from_rgba8(232, 200, 130, 255)),
+        prow(vec![pbtn(t("media-prof-open"), Color::from_rgba8(48, 60, 78, 255), Color::from_rgba8(220, 230, 245, 255))]),
         prow(vec![pbtn(t("media-prof-new"), green, green_fg)]),
         psection(&t("media-dock-perfiles")),
         prow(vec![

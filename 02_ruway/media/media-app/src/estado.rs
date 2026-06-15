@@ -278,10 +278,12 @@ pub(crate) fn pipeline_slot() -> &'static OnceLock<Pipeline> {
     &SLOT
 }
 
-/// Tags del medio actual (título/artista/álbum/carátula).
-pub(crate) fn media_metadata_slot() -> &'static OnceLock<media_core::metadata::Metadata> {
-    static SLOT: OnceLock<media_core::metadata::Metadata> = OnceLock::new();
-    &SLOT
+/// Tags del medio actual (título/artista/álbum/carátula). `Mutex` (no
+/// `OnceLock`) porque al abrir otro medio en caliente (swap de video) se
+/// refresca.
+pub(crate) fn media_metadata_slot() -> &'static Mutex<media_core::metadata::Metadata> {
+    static SLOT: OnceLock<Mutex<media_core::metadata::Metadata>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(media_core::metadata::Metadata::default()))
 }
 
 /// Ruta del medio local en reproducción.
@@ -299,10 +301,11 @@ pub(crate) fn current_media_path() -> Option<PathBuf> {
         .cloned()
 }
 
-/// Capítulos del medio actual (V7), extraídos una vez al arrancar.
-pub(crate) fn chapters_slot() -> &'static OnceLock<media_core::chapters::Chapters> {
-    static SLOT: OnceLock<media_core::chapters::Chapters> = OnceLock::new();
-    &SLOT
+/// Capítulos del medio actual (V7). `Mutex` para refrescar al abrir otro
+/// medio en caliente.
+pub(crate) fn chapters_slot() -> &'static Mutex<media_core::chapters::Chapters> {
+    static SLOT: OnceLock<Mutex<media_core::chapters::Chapters>> = OnceLock::new();
+    SLOT.get_or_init(|| Mutex::new(media_core::chapters::Chapters::default()))
 }
 
 pub(crate) fn reset_av_sync_anchor() {

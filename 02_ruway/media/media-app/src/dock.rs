@@ -282,6 +282,7 @@ fn perfiles_panel(model: &Model, theme: &Theme) -> View<Msg> {
             InputTarget::NewProfile => t("media-prof-name-ph"),
             InputTarget::Unlock(_) | InputTarget::SetPass => t("media-prof-pass-ph"),
             InputTarget::AddDir => t("media-prof-dir-ph"),
+            InputTarget::OpenPath => t("media-prof-open-ph"),
         };
         kids.push(psection(t("media-prof-input-hint")));
         let pal = TextInputPalette::from_theme(theme);
@@ -320,6 +321,14 @@ fn perfiles_panel(model: &Model, theme: &Theme) -> View<Msg> {
             .text(msg.clone(), 12.0, Color::from_rgba8(232, 200, 130, 255)),
         );
     }
+
+    // Abrir un medio suelto en caliente (también por arrastre a la ventana).
+    kids.push(prow(vec![pbtn(
+        t("media-prof-open"),
+        Color::from_rgba8(48, 60, 78, 255),
+        Color::from_rgba8(220, 230, 245, 255),
+        Msg::ProfileFocus(InputTarget::OpenPath),
+    )]));
 
     // Nuevo perfil.
     kids.push(prow(vec![pbtn(

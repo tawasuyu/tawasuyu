@@ -230,6 +230,18 @@ impl Playlist {
         Ok(())
     }
 
+    /// Reemplaza **en caliente** la pista viva por `track` (p. ej. el audio
+    /// ffmpeg de un video recién abierto) con `path` como rótulo. Mismo motor;
+    /// usado por el swap de video runtime.
+    pub(crate) fn set_current_track(&mut self, path: PathBuf, mut track: LoadedTrack) {
+        track.set_speed(self.speed);
+        track.set_loop(matches!(self.repeat, RepeatMode::One));
+        self.tracks = vec![path];
+        self.idx = 0;
+        self.current = track;
+        self.shuffle = None;
+    }
+
     pub(crate) fn new_single(label_path: PathBuf, mut track: LoadedTrack) -> Self {
         track.set_loop(false);
         Self {

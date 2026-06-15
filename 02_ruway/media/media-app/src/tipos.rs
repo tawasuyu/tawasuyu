@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use llimphi_module_command_palette::PaletteMsg;
 use llimphi_ui::KeyEvent;
 use media_core::control::MediaCommand;
@@ -14,6 +16,8 @@ pub(crate) enum InputTarget {
     SetPass,
     /// Ruta de un directorio a escanear recursivamente como playlist.
     AddDir,
+    /// Ruta de un medio a abrir en caliente sobre el motor vivo.
+    OpenPath,
 }
 
 impl InputTarget {
@@ -74,6 +78,9 @@ pub(crate) enum Msg {
     PlaylistLoad(usize),
     /// Borra la playlist `idx` del perfil activo.
     PlaylistDelete(usize),
+    /// Abre un medio (archivo soltado o tipeado) en caliente — swap de
+    /// video/audio sobre el mismo motor.
+    OpenPath(PathBuf),
 }
 
 /// Pestañas de la ventana de configuración.

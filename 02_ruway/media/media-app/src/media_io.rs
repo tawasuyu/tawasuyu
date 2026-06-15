@@ -62,20 +62,32 @@ pub(crate) fn load_media_metadata(path: &Path) -> Metadata {
     metadata::parse(&buf)
 }
 
-/// Carátula decodificada (`peniko::Image`) del medio actual.
+/// Carátula decodificada (`peniko::Image`) del medio actual. Cacheada por la
+/// clave del medio para refrescar cuando se abre otro en caliente.
 pub(crate) fn cover_image() -> Option<llimphi_image::Image> {
-    static SLOT: std::sync::OnceLock<Option<llimphi_image::Image>> = std::sync::OnceLock::new();
-    SLOT.get_or_init(|| {
-        let cover = crate::estado::media_metadata_slot().get()?.cover.as_ref()?;
-        match llimphi_image::decode_bytes(&cover.data) {
-            Ok(img) => Some(img),
-            Err(e) => {
-                eprintln!("media-app: carátula no decodifica: {e}");
-                None
-            }
-        }
-    })
-    .clone()
+    use parking_lot::Mutex;
+    static CACHE: std::sync::OnceLock<Mutex<(String, Option<llimphi_image::Image>)>> =
+        std::sync::OnceLock::new();
+    let key = current_media_path()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let cache = CACHE.get_or_init(|| Mutex::new((String::new(), None)));
+    let mut g = cache.lock();
+    if g.0 != key {
+        let decoded = crate::estado::media_metadata_slot()
+            .lock()
+            .cover
+            .as_ref()
+            .and_then(|cover| match llimphi_image::decode_bytes(&cover.data) {
+                Ok(img) => Some(img),
+                Err(e) => {
+                    eprintln!("media-app: carátula no decodifica: {e}");
+                    None
+                }
+            });
+        *g = (key, decoded);
+    }
+    g.1.clone()
 }
 
 /// Extrae los capítulos del archivo vía ffmpeg (ffmetadata) y los parsea.
@@ -147,20 +159,21 @@ pub(crate) fn fmt_mmss(d: Duration) -> String {
 
 /// Título del medio para mostrar.
 pub(crate) fn media_title_string() -> String {
-    let md = crate::estado::media_metadata_slot().get();
+    let md = crate::estado::media_metadata_slot().lock();
     let base = md
-        .and_then(|m| m.title.clone())
+        .title
+        .clone()
         .or_else(|| crate::estado::config_slot().get().map(|c| c.label.clone()))
         .unwrap_or_default();
-    let mut label = match md.and_then(|m| m.artist.as_deref()) {
+    let mut label = match md.artist.as_deref() {
         Some(artist) if !artist.is_empty() => format!("{base} — {artist}"),
         _ => base,
     };
-    if let Some(ch) = crate::estado::chapters_slot().get() {
-        if let Some((_, c)) = ch.at(playback_snapshot().position) {
-            if !c.title.is_empty() {
-                label = format!("{label}  ·  ▸ {}", c.title);
-            }
+    drop(md);
+    let ch = crate::estado::chapters_slot().lock();
+    if let Some((_, c)) = ch.at(playback_snapshot().position) {
+        if !c.title.is_empty() {
+            label = format!("{label}  ·  ▸ {}", c.title);
         }
     }
     label

@@ -219,23 +219,22 @@ pub(crate) fn apply_command(cmd: MediaCommand) {
             osd_flash(media_title_string());
         }
         ChapterNext => {
-            if let Some(ch) = chapters_slot().get() {
-                let pos = playback_snapshot().position;
-                if let Some(c) = ch.next(pos) {
-                    let title = c.title.clone();
-                    seek_audio_to_pos(c.start);
-                    osd_flash(format!("▸ {title}"));
-                }
+            let pos = playback_snapshot().position;
+            let pick = chapters_slot().lock().next(pos).map(|c| (c.title.clone(), c.start));
+            if let Some((title, start)) = pick {
+                seek_audio_to_pos(start);
+                osd_flash(format!("▸ {title}"));
             }
         }
         ChapterPrev => {
-            if let Some(ch) = chapters_slot().get() {
-                let pos = playback_snapshot().position;
-                if let Some(c) = ch.prev(pos, Duration::from_secs(3)) {
-                    let title = c.title.clone();
-                    seek_audio_to_pos(c.start);
-                    osd_flash(format!("◂ {title}"));
-                }
+            let pos = playback_snapshot().position;
+            let pick = chapters_slot()
+                .lock()
+                .prev(pos, Duration::from_secs(3))
+                .map(|c| (c.title.clone(), c.start));
+            if let Some((title, start)) = pick {
+                seek_audio_to_pos(start);
+                osd_flash(format!("◂ {title}"));
             }
         }
         SpeedStep { dir } => {

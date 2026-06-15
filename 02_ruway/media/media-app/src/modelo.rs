@@ -69,6 +69,21 @@ pub(crate) struct Model {
     pub(crate) _host: Option<pata_host::HostClient>,
 }
 
+/// Abre un medio en caliente y refleja el resultado en OSD + línea de estado.
+fn open_and_flash(m: &mut Model, path: &std::path::Path, handle: &Handle<Msg>) {
+    match crate::open::open_media(path) {
+        Ok(title) => {
+            m.prof_msg = Some(format!("▶ {title}"));
+            crate::estado::osd_flash(format!("▶ {title}"));
+            crate::open::spawn_waveform_scan(handle, path.to_path_buf());
+        }
+        Err(e) => {
+            m.prof_msg = Some(e.clone());
+            crate::estado::osd_flash(e);
+        }
+    }
+}
+
 /// Aplica el contenido tipeado en el input de perfiles según su destino.
 fn apply_profile_submit(m: &mut Model, target: InputTarget, text: String) {
     use crate::profiles::{hash_password, playlist_from_dir};
@@ -121,6 +136,8 @@ fn apply_profile_submit(m: &mut Model, target: InputTarget, text: String) {
                 None => m.prof_msg = Some(t("media-prof-no-media")),
             }
         }
+        // Se maneja antes de llegar acá (necesita el Handle para la onda).
+        InputTarget::OpenPath => {}
     }
 }
 
@@ -360,8 +377,13 @@ impl App for MediaApp {
                 };
                 let text = m.prof_input.text();
                 m.prof_input.clear();
-                apply_profile_submit(&mut m, target, text);
-                crate::profiles::save_profiles(&m.profiles);
+                if matches!(target, InputTarget::OpenPath) {
+                    let path = std::path::PathBuf::from(text.trim());
+                    open_and_flash(&mut m, &path, handle);
+                } else {
+                    apply_profile_submit(&mut m, target, text);
+                    crate::profiles::save_profiles(&m.profiles);
+                }
                 m
             }
             Msg::ProfileSelect(name) => {
@@ -397,11 +419,28 @@ impl App for MediaApp {
                     .and_then(|p| p.playlists.get(idx))
                     .map(|pl| pl.entries.clone());
                 if let Some(entries) = entries {
-                    match crate::profiles::load_entries_into_live(&entries) {
-                        Ok(labels) => m.prof_msg = Some(format!("▶ {} pistas", labels.len())),
-                        Err(e) => m.prof_msg = Some(e),
+                    // Playlist de audio nativo → cola viva (uno-a-la-vez con
+                    // auto-advance). Si trae video, abrimos el primero en
+                    // caliente (swap de pipeline); next/prev de video es futuro.
+                    let audio_only = entries
+                        .first()
+                        .map(|e| crate::open::is_native_audio(std::path::Path::new(e)))
+                        .unwrap_or(true);
+                    if audio_only {
+                        match crate::profiles::load_entries_into_live(&entries) {
+                            Ok(labels) => m.prof_msg = Some(format!("▶ {} pistas", labels.len())),
+                            Err(e) => m.prof_msg = Some(e),
+                        }
+                    } else if let Some(first) = entries.first() {
+                        let path = std::path::PathBuf::from(first);
+                        open_and_flash(&mut m, &path, handle);
                     }
                 }
+                m
+            }
+            Msg::OpenPath(path) => {
+                let mut m = model;
+                open_and_flash(&mut m, &path, handle);
                 m
             }
             Msg::PlaylistDelete(idx) => {
@@ -486,6 +525,10 @@ impl App for MediaApp {
             return Some(Msg::SettingsScroll(delta.y));
         }
         None
+    }
+
+    fn on_file_drop(_model: &Self::Model, path: std::path::PathBuf) -> Option<Self::Msg> {
+        Some(Msg::OpenPath(path))
     }
 
     fn on_key(model: &Self::Model, event: &KeyEvent) -> Option<Self::Msg> {
