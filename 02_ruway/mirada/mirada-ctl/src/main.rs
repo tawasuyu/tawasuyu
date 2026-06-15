@@ -16,8 +16,10 @@
 
 use std::process::ExitCode;
 
+use std::path::PathBuf;
+
 use mirada_brain::ctl::{self, CtlReply, CtlRequest, WindowLine, WorkspacesState};
-use mirada_brain::DesktopAction;
+use mirada_brain::{DesktopAction, KeymapProfiles};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -69,6 +71,10 @@ fn run(args: &[String]) -> Result<(), String> {
             CtlReply::Error(e) => Err(e),
             _ => Err("respuesta inesperada del Cerebro".into()),
         },
+        // Perfiles de atajos: gestión de la biblioteca de keymaps. Son
+        // operaciones de archivo (profiles.ron + keymap.ron); el compositor
+        // recarga en caliente vía su FileWatch — no necesita socket.
+        Some("profile" | "profiles") => run_profile(&args[1..]),
         // Todo lo demás es una acción. `focus-window 5` y `workspace 3`
         // se unen con `:` a la forma canónica (`focus-window:5`).
         Some(_) => {
@@ -83,6 +89,95 @@ fn run(args: &[String]) -> Result<(), String> {
             }
         }
     }
+}
+
+/// Las rutas de la biblioteca de perfiles y del keymap activo.
+fn profile_paths() -> Result<(PathBuf, PathBuf), String> {
+    let profiles = KeymapProfiles::default_path()
+        .ok_or("no pude determinar ~/.config/mirada (profiles.ron)")?;
+    let keymap =
+        KeymapProfiles::keymap_path().ok_or("no pude determinar ~/.config/mirada (keymap.ron)")?;
+    Ok((profiles, keymap))
+}
+
+/// Gestiona la biblioteca de perfiles de atajos (`mirada-ctl profile …`).
+fn run_profile(args: &[String]) -> Result<(), String> {
+    let (ppath, kpath) = profile_paths()?;
+    let sub = args.first().map(String::as_str);
+    // `list` y la forma sin subcomando sólo leen.
+    if matches!(sub, None | Some("list" | "ls")) {
+        let profs = KeymapProfiles::load_or_init(&ppath);
+        for name in profs.names() {
+            let mark = if name == profs.active() { '*' } else { ' ' };
+            let kind = if mirada_brain::Keymap::is_builtin_name(&name) {
+                "(fábrica)"
+            } else {
+                ""
+            };
+            let n = profs.get(&name).map(|k| k.len()).unwrap_or(0);
+            println!("{mark} {name:<16} {n:>2} atajos {kind}");
+        }
+        return Ok(());
+    }
+
+    let mut profs = KeymapProfiles::load_or_init(&ppath);
+    let arg = |i: usize| args.get(i).map(String::as_str);
+    let mut switched = false;
+    match sub {
+        Some("use" | "switch") => {
+            let name = arg(1).ok_or("uso: mirada-ctl profile use <nombre>")?;
+            profs.set_active(name).map_err(|e| e.to_string())?;
+            switched = true;
+        }
+        Some("new" | "create") => {
+            // `new <nombre>` (desde dwm) o `new <nombre> from <preset>`.
+            let name = arg(1).ok_or("uso: mirada-ctl profile new <nombre> [from <preset>]")?;
+            let preset = match (arg(2), arg(3)) {
+                (Some("from"), Some(p)) => p,
+                (None, _) => "dwm",
+                _ => return Err("uso: mirada-ctl profile new <nombre> [from <preset>]".into()),
+            };
+            profs.create_from_preset(name, preset).map_err(|e| e.to_string())?;
+            println!("perfil «{name}» creado desde «{preset}»");
+        }
+        Some("dup" | "duplicate") => {
+            let (src, name) = (
+                arg(1).ok_or("uso: mirada-ctl profile dup <origen> <nombre>")?,
+                arg(2).ok_or("uso: mirada-ctl profile dup <origen> <nombre>")?,
+            );
+            profs.duplicate(src, name).map_err(|e| e.to_string())?;
+            println!("perfil «{name}» duplicado de «{src}»");
+        }
+        Some("rename" | "mv") => {
+            let (from, to) = (
+                arg(1).ok_or("uso: mirada-ctl profile rename <origen> <nombre>")?,
+                arg(2).ok_or("uso: mirada-ctl profile rename <origen> <nombre>")?,
+            );
+            profs.rename(from, to).map_err(|e| e.to_string())?;
+            println!("perfil «{from}» renombrado a «{to}»");
+        }
+        Some("rm" | "remove" | "delete") => {
+            let name = arg(1).ok_or("uso: mirada-ctl profile rm <nombre>")?;
+            profs.remove(name).map_err(|e| e.to_string())?;
+            println!("perfil «{name}» borrado");
+        }
+        Some(other) => {
+            return Err(format!(
+                "subcomando de perfil desconocido: «{other}»\n  \
+                 use: list · use · new · dup · rename · rm"
+            ))
+        }
+        None => unreachable!("list lo maneja la rama de arriba"),
+    }
+
+    profs.save(&ppath).map_err(|e| e.to_string())?;
+    // Conmutar (o borrar/renombrar el activo) cambia el keymap efectivo: lo
+    // volcamos a keymap.ron y el compositor lo recarga en caliente.
+    profs.write_active_keymap(&kpath).map_err(|e| e.to_string())?;
+    if switched {
+        println!("perfil activo: «{}» (recargado)", profs.active());
+    }
+    Ok(())
 }
 
 /// Manda una petición al Cerebro y devuelve su respuesta.
@@ -152,13 +247,24 @@ fn print_help() {
            mirada-ctl windows       lista las ventanas (--porcelain: TAB-separado)\n  \
            mirada-ctl workspaces    estado de los escritorios (active/count/loads)\n  \
            mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
+           mirada-ctl profile …     biblioteca de perfiles de atajos (ver abajo)\n  \
            mirada-ctl actions       lista las acciones disponibles\n\
+         \n\
+         PERFILES DE ATAJOS:\n  \
+           mirada-ctl profile list              lista los perfiles (* = activo)\n  \
+           mirada-ctl profile use <nombre>      conmuta el activo (recarga en caliente)\n  \
+           mirada-ctl profile new <nombre> [from <preset>]   crea desde un preset\n  \
+           mirada-ctl profile dup <origen> <nombre>          duplica uno existente\n  \
+           mirada-ctl profile rename <origen> <nombre>       renombra uno propio\n  \
+           mirada-ctl profile rm <nombre>       borra un perfil propio\n  \
+           presets de fábrica: dwm · i3 · hyprland\n\
          \n\
          EJEMPLOS:\n  \
            mirada-ctl focus-next\n  \
            mirada-ctl focus-window 5\n  \
            mirada-ctl workspace 3\n  \
-           mirada-ctl layout grid"
+           mirada-ctl layout grid\n  \
+           mirada-ctl profile use i3"
     );
 }
 

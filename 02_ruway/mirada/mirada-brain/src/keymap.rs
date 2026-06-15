@@ -65,6 +65,64 @@ impl Keymap {
         }
     }
 
+    // --- Presets de fábrica -------------------------------------------
+
+    /// Los nombres de los presets de fábrica (`["dwm", "i3", "hyprland"]`).
+    pub const PRESET_NAMES: [&'static str; 3] = crate::action::PRESET_NAMES;
+
+    /// El keymap de un preset de fábrica por nombre, o `None` si no existe.
+    pub fn preset(name: &str) -> Option<Keymap> {
+        crate::action::preset_keymap(name).map(Keymap::from_pairs)
+    }
+
+    /// `true` si `name` es un preset de fábrica (no se puede borrar; se duplica).
+    pub fn is_builtin_name(name: &str) -> bool {
+        Self::PRESET_NAMES.contains(&name)
+    }
+
+    /// El preset **dwm** (el histórico de mirada; igual que [`Keymap::default`]).
+    pub fn dwm() -> Keymap {
+        Keymap::preset("dwm").expect("el preset dwm siempre existe")
+    }
+
+    /// El preset **i3 / sway**.
+    pub fn i3() -> Keymap {
+        Keymap::preset("i3").expect("el preset i3 siempre existe")
+    }
+
+    /// El preset **Hyprland**.
+    pub fn hyprland() -> Keymap {
+        Keymap::preset("hyprland").expect("el preset hyprland siempre existe")
+    }
+
+    // --- Mapa de cadenas (para la biblioteca de perfiles) -------------
+
+    /// Las combinaciones como `combinación → acción` (texto), para serializar
+    /// dentro de la biblioteca de perfiles ([`crate::profiles`]).
+    pub fn to_string_map(&self) -> BTreeMap<String, String> {
+        self.bindings
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect()
+    }
+
+    /// Reconstruye un keymap desde un mapa `combinación → acción` (texto). Las
+    /// entradas con acción que no parsea a [`DesktopAction`] se **omiten** (no
+    /// invalidan todo el perfil: la biblioteca es tolerante igual que la tabla).
+    pub fn from_string_map(map: &BTreeMap<String, String>) -> Keymap {
+        let mut bindings = BTreeMap::new();
+        for (combo, action) in map {
+            let combo = combo.trim();
+            if combo.is_empty() {
+                continue;
+            }
+            if let Ok(parsed) = action.trim().parse::<DesktopAction>() {
+                bindings.insert(combo.to_string(), parsed);
+            }
+        }
+        Keymap { bindings }
+    }
+
     /// La acción asociada a una combinación, si la hay.
     pub fn lookup(&self, combo: &str) -> Option<DesktopAction> {
         self.bindings.get(combo).cloned()

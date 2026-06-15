@@ -412,6 +412,133 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
     map
 }
 
+// ===================================================================
+// Presets de atajos (perfiles de fábrica)
+// ===================================================================
+//
+// Cada preset es un mapa completo, autocontenido, que reproduce el
+// *muscle memory* de un WM conocido traducido al vocabulario de
+// [`DesktopAction`] de mirada. mirada no tiene todos los conceptos de
+// cada WM (p. ej. el `dwindle` de Hyprland o el árbol de splits de i3),
+// así que algunas teclas se mapean a la acción más cercana — se anota
+// con un comentario `≈` dónde la equivalencia es aproximada.
+//
+// Los perfiles se gestionan en [`crate::profiles`]: el usuario los
+// duplica, edita, borra y conmuta. `dwm` es el preset por defecto
+// ([`default_keymap`]) — el que históricamente trae mirada.
+
+/// Los nombres de los presets de fábrica, en orden de presentación.
+pub const PRESET_NAMES: [&str; 3] = ["dwm", "i3", "hyprland"];
+
+/// El keymap de un preset de fábrica por nombre, o `None` si no existe.
+pub fn preset_keymap(name: &str) -> Option<Vec<(String, DesktopAction)>> {
+    Some(match name {
+        "dwm" => dwm_keymap(),
+        "i3" => i3_keymap(),
+        "hyprland" => hyprland_keymap(),
+        _ => return None,
+    })
+}
+
+/// Preset **dwm** — el histórico de mirada: `Super` como modificador, foco
+/// cíclico por la pila (`Super+j/k`), maestra+pila, zoom con `Super+Return`,
+/// terminal con `Super+Shift+Return`. Es exactamente [`default_keymap`].
+pub fn dwm_keymap() -> Vec<(String, DesktopAction)> {
+    default_keymap()
+}
+
+/// Preset **i3 / sway** — foco y movimiento vim `h/j/k/l` (la convención
+/// moderna de sway) y por flechas; `Super+Return` abre terminal,
+/// `Super+Shift+q` cierra, `Super+d` lanza el menú, `Super+f` pantalla
+/// completa, `Super+Shift+space` flota, `Super+Shift+e` sale. Los modos de
+/// layout de i3 (split/stacking/tabbed) se mapean a los teselados de mirada.
+pub fn i3_keymap() -> Vec<(String, DesktopAction)> {
+    use DesktopAction::*;
+    use Direction::{Down, Left, Right, Up};
+    let mut map = vec![
+        // --- Apps y sistema ---
+        ("Super+Return".into(), Spawn("foot".into())),
+        ("Super+Shift+q".into(), CloseFocused),
+        ("Super+d".into(), Spawn("foot -e mirada-launcher".into())),
+        ("Super+Shift+e".into(), Quit),
+        ("Super+Shift+s".into(), SendToScratchpad),
+        ("Super+Shift+grave".into(), ToggleScratchpad), // ~ : muestra el scratchpad
+        // --- Foco (h/j/k/l estilo sway + flechas) ---
+        ("Super+h".into(), FocusDir(Left)),
+        ("Super+j".into(), FocusDir(Down)),
+        ("Super+k".into(), FocusDir(Up)),
+        ("Super+l".into(), FocusDir(Right)),
+        ("Super+Left".into(), FocusDir(Left)),
+        ("Super+Down".into(), FocusDir(Down)),
+        ("Super+Up".into(), FocusDir(Up)),
+        ("Super+Right".into(), FocusDir(Right)),
+        // --- Mover la ventana ---
+        ("Super+Shift+h".into(), MoveDir(Left)),
+        ("Super+Shift+j".into(), MoveDir(Down)),
+        ("Super+Shift+k".into(), MoveDir(Up)),
+        ("Super+Shift+l".into(), MoveDir(Right)),
+        ("Super+Shift+Left".into(), MoveDir(Left)),
+        ("Super+Shift+Down".into(), MoveDir(Down)),
+        ("Super+Shift+Up".into(), MoveDir(Up)),
+        ("Super+Shift+Right".into(), MoveDir(Right)),
+        // --- Estado y layout ---
+        ("Super+f".into(), ToggleFullscreen),
+        ("Super+Shift+space".into(), ToggleFloat),
+        ("Super+space".into(), CycleLayout),
+        ("Super+e".into(), CycleLayout), // i3: «layout toggle split»
+        ("Super+s".into(), SetLayout(LayoutMode::Spiral)), // i3 «stacking» ≈ espiral
+        ("Super+w".into(), SetLayout(LayoutMode::Grid)), // i3 «tabbed» ≈ grilla
+        ("Super+t".into(), SetLayout(LayoutMode::MasterStack)),
+        ("Super+a".into(), ZoomOut), // i3 «focus parent» ≈ subir un nivel
+        // --- Maestra (i3 usa un modo resize; aquí teclas directas) ---
+        ("Super+minus".into(), ShrinkMaster),
+        ("Super+equal".into(), GrowMaster),
+    ];
+    for n in 0..WORKSPACE_COUNT {
+        map.push((format!("Super+{}", n + 1), SwitchWorkspace(n)));
+        map.push((format!("Super+Shift+{}", n + 1), SendToWorkspace(n)));
+    }
+    map
+}
+
+/// Preset **Hyprland** — su identidad propia: `Super+Q` abre terminal,
+/// `Super+C` cierra, `Super+M` sale de la sesión, `Super+E` el gestor de
+/// archivos, `Super+V` flota, `Super+R` el menú, flechas mueven el foco,
+/// `Super+S` el «special workspace» (scratchpad). Manda la ventana al
+/// escritorio **siguiéndola** (`movetoworkspace`).
+pub fn hyprland_keymap() -> Vec<(String, DesktopAction)> {
+    use DesktopAction::*;
+    use Direction::{Down, Left, Right, Up};
+    let mut map = vec![
+        ("Super+q".into(), Spawn("foot".into())), // Q = terminal
+        ("Super+c".into(), CloseFocused),         // C = killactive
+        ("Super+m".into(), Quit),                 // M = exit
+        ("Super+e".into(), Spawn("nada".into())), // E = gestor de archivos
+        ("Super+v".into(), ToggleFloat),          // V = togglefloating
+        ("Super+r".into(), Spawn("foot -e mirada-launcher".into())), // R = menú
+        ("Super+p".into(), PromoteToMaster),      // P = pseudo ≈ promover a maestra
+        ("Super+j".into(), CycleLayout),          // J = togglesplit ≈ ciclar layout
+        ("Super+f".into(), ToggleFullscreen),
+        ("Super+Left".into(), FocusDir(Left)),
+        ("Super+Right".into(), FocusDir(Right)),
+        ("Super+Up".into(), FocusDir(Up)),
+        ("Super+Down".into(), FocusDir(Down)),
+        ("Super+Shift+Left".into(), MoveDir(Left)),
+        ("Super+Shift+Right".into(), MoveDir(Right)),
+        ("Super+Shift+Up".into(), MoveDir(Up)),
+        ("Super+Shift+Down".into(), MoveDir(Down)),
+        ("Super+s".into(), ToggleScratchpad), // S = special workspace
+        ("Super+Shift+s".into(), SendToScratchpad), // Shift+S = mover al special
+        ("Super+grave".into(), ToggleDropterm),
+    ];
+    for n in 0..WORKSPACE_COUNT {
+        map.push((format!("Super+{}", n + 1), SwitchWorkspace(n)));
+        // Hyprland: `movetoworkspace` salta con la ventana al escritorio.
+        map.push((format!("Super+Shift+{}", n + 1), MoveToWorkspace(n)));
+    }
+    map
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -521,5 +648,61 @@ mod tests {
     fn spawn_without_a_command_is_rejected() {
         assert!("spawn:".parse::<DesktopAction>().is_err());
         assert!("spawn:   ".parse::<DesktopAction>().is_err());
+    }
+
+    #[test]
+    fn every_preset_resolves_and_has_no_duplicate_bindings() {
+        for name in PRESET_NAMES {
+            let map = preset_keymap(name).unwrap_or_else(|| panic!("preset {name} no resuelve"));
+            assert!(!map.is_empty(), "preset {name} vacío");
+            let mut keys: Vec<_> = map.iter().map(|(k, _)| k.clone()).collect();
+            keys.sort();
+            let unique = keys.len();
+            keys.dedup();
+            assert_eq!(keys.len(), unique, "preset {name} tiene un atajo repetido");
+        }
+    }
+
+    #[test]
+    fn every_preset_binding_round_trips_through_its_text_form() {
+        for name in PRESET_NAMES {
+            for (_, action) in preset_keymap(name).unwrap() {
+                let text = action.to_string();
+                assert_eq!(text.parse::<DesktopAction>().unwrap(), action, "{name}: {text}");
+            }
+        }
+    }
+
+    #[test]
+    fn every_preset_covers_the_nine_workspaces() {
+        for name in PRESET_NAMES {
+            let map = preset_keymap(name).unwrap();
+            for n in 0..WORKSPACE_COUNT {
+                assert!(
+                    map.iter().any(|(_, a)| a == &DesktopAction::SwitchWorkspace(n)),
+                    "preset {name} no cubre el escritorio {n}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn presets_keep_their_identity_keys() {
+        // Hyprland: Super+Q abre terminal, no cierra.
+        let hypr = preset_keymap("hyprland").unwrap();
+        assert!(hypr
+            .iter()
+            .any(|(k, a)| k == "Super+q" && matches!(a, DesktopAction::Spawn(_))));
+        assert!(hypr
+            .iter()
+            .any(|(k, a)| k == "Super+m" && a == &DesktopAction::Quit));
+        // i3: Super+Return abre terminal, Super+Shift+q cierra.
+        let i3 = preset_keymap("i3").unwrap();
+        assert!(i3
+            .iter()
+            .any(|(k, a)| k == "Super+Return" && matches!(a, DesktopAction::Spawn(_))));
+        assert!(i3
+            .iter()
+            .any(|(k, a)| k == "Super+Shift+q" && a == &DesktopAction::CloseFocused));
     }
 }
