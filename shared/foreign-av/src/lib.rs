@@ -267,6 +267,50 @@ pub fn extract_subtitle(
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
+/// Extrae **un frame** del video en el instante `at` como PNG en memoria,
+/// escalado a `width` px de ancho (alto proporcional, par para compat). Para
+/// thumbnails (hover del timeline, carátula de la Cola de video). Spawn puntual
+/// de ffmpeg, independiente de la [`MediaSession`] de reproducción. El `-ss` va
+/// **antes** del `-i` (seek rápido al keyframe previo). `Err` si no hay video o
+/// el proceso falla.
+pub fn extract_frame(
+    path: impl AsRef<Path>,
+    at: Duration,
+    width: u32,
+) -> Result<Vec<u8>, FfmpegError> {
+    let p = path.as_ref();
+    let w = width.max(16);
+    let output = Command::new("ffmpeg")
+        .args(["-v", "error", "-nostdin", "-ss"])
+        .arg(format!("{:.3}", at.as_secs_f64()))
+        .arg("-i")
+        .arg(p)
+        .args([
+            "-frames:v",
+            "1",
+            "-vf",
+            &format!("scale={w}:-2"),
+            "-f",
+            "image2",
+            "-c:v",
+            "png",
+            "-",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| FfmpegError::Spawn(e.to_string()))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        return Err(FfmpegError::Probe(stderr.trim().to_string()));
+    }
+    if output.stdout.is_empty() {
+        return Err(FfmpegError::NoStream("video"));
+    }
+    Ok(output.stdout)
+}
+
 pub fn probe(path: impl AsRef<Path>) -> Result<MediaInfo, FfmpegError> {
     let p = path.as_ref();
     let output = Command::new("ffprobe")

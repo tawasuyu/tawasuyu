@@ -45,6 +45,7 @@ pub mod profile;
 pub mod seek;
 pub mod sync;
 pub mod toolbar;
+pub mod thumbnail;
 pub mod tracks;
 pub mod transform;
 pub mod viewport;
