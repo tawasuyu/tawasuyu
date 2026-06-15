@@ -75,6 +75,12 @@ fn run(args: &[String]) -> Result<(), String> {
         // operaciones de archivo (profiles.ron + keymap.ron); el compositor
         // recarga en caliente vía su FileWatch — no necesita socket.
         Some("profile" | "profiles") => run_profile(&args[1..]),
+        // Vistas: presets de escritorio completo (look + decoraciones + layout +
+        // teclas + barra de pata). Operación de archivo: escribe config.ron,
+        // keymap.ron y el launcher.toml de pata; el compositor y pata recargan
+        // en caliente. Es lo que hace alcanzable el «panel de control» (las
+        // vistas) desde la sesión real, sin la app de simulación.
+        Some("vista" | "vistas") => run_vista(&args[1..]),
         // Todo lo demás es una acción. `focus-window 5` y `workspace 3`
         // se unen con `:` a la forma canónica (`focus-window:5`).
         Some(_) => {
@@ -98,6 +104,54 @@ fn profile_paths() -> Result<(PathBuf, PathBuf), String> {
     let keymap =
         KeymapProfiles::keymap_path().ok_or("no pude determinar ~/.config/mirada (keymap.ron)")?;
     Ok((profiles, keymap))
+}
+
+/// Aplica/lista **vistas** de escritorio completo (`mirada-ctl vista …`).
+/// `use` escribe config.ron (decoraciones+layout+tema) + keymap.ron (vía el
+/// perfil de la vista) + el launcher.toml de pata (barra de la vista). El
+/// compositor y pata recargan en caliente.
+fn run_vista(args: &[String]) -> Result<(), String> {
+    let sub = args.first().map(String::as_str);
+    if matches!(sub, None | Some("list" | "ls")) {
+        for name in mirada_brain::VISTA_NAMES {
+            println!("  {name:<14} {}", mirada_brain::Vista::label_for(name));
+        }
+        return Ok(());
+    }
+    match sub {
+        Some("use" | "set") => {
+            let name = args
+                .get(1)
+                .map(String::as_str)
+                .ok_or("uso: mirada-ctl vista use <nombre>  (ver: mirada-ctl vista list)")?;
+            let v = mirada_brain::Vista::by_name(name).ok_or_else(|| {
+                format!("vista desconocida «{name}» (ver: mirada-ctl vista list)")
+            })?;
+            // 1. Decoraciones + layout + tema → config.ron (lo vigila el compositor).
+            let cfgp = mirada_brain::Config::default_path()
+                .ok_or("no pude determinar ~/.config/mirada/config.ron")?;
+            v.config.save(&cfgp).map_err(|e| format!("config: {e}"))?;
+            // 2. Teclas: el keymap de la vista como perfil activo → keymap.ron.
+            let (ppath, kpath) = profile_paths()?;
+            let mut profs = KeymapProfiles::load_or_init(&ppath);
+            profs.set_active(v.keymap).map_err(|e| e.to_string())?;
+            profs.save(&ppath).map_err(|e| e.to_string())?;
+            profs.write_active_keymap(&kpath).map_err(|e| e.to_string())?;
+            // 3. Barra: el preset de barra de la vista → launcher.toml (lo vigila pata).
+            if let Some(bar) = pata_core::Config::vista_preset(name) {
+                pata_config::save(&bar).map_err(|e| format!("barra: {e}"))?;
+            }
+            println!(
+                "vista «{}» aplicada — decoraciones + teclas + barra (recarga en caliente)",
+                v.label
+            );
+            Ok(())
+        }
+        Some(other) => Err(format!(
+            "subcomando de vista desconocido: «{other}»\n  use: list · use <nombre>"
+        )),
+        None => unreachable!("list lo maneja la rama de arriba"),
+    }
 }
 
 /// Gestiona la biblioteca de perfiles de atajos (`mirada-ctl profile …`).
@@ -246,7 +300,7 @@ fn print_workspaces(st: &WorkspacesState) {
 
 fn print_help() {
     println!(
-        "mirada-ctl — control del compositor carmen\n\
+        "mirada-ctl — control del compositor mirada\n\
          \n\
          USO:\n  \
            mirada-ctl <acción>      aplica una acción de escritorio\n  \
@@ -254,7 +308,13 @@ fn print_help() {
            mirada-ctl workspaces    estado de los escritorios (active/count/loads)\n  \
            mirada-ctl cycle-zones   cicla el preset de zonas de arrastre\n  \
            mirada-ctl profile …     biblioteca de perfiles de atajos (ver abajo)\n  \
+           mirada-ctl vista …       vistas de escritorio completo (ver abajo)\n  \
            mirada-ctl actions       lista las acciones disponibles\n\
+         \n\
+         VISTAS (look + decoraciones + layout + teclas + barra):\n  \
+           mirada-ctl vista list            lista las vistas\n  \
+           mirada-ctl vista use <nombre>    aplica una vista (recarga en caliente)\n  \
+           vistas: mirada · windows-xp · windows-3.1 · mac · kde · solaris · hyprland · dwm\n\
          \n\
          PERFILES DE ATAJOS:\n  \
            mirada-ctl profile list              lista los perfiles (* = activo)\n  \

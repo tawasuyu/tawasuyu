@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "mirada-ctl — control del compositor carmen por línea de comandos (estilo swaymsg/hyprctl): aplica acciones de escritorio y consulta ventanas vía el socket de control de mirada-brain."
+description = "mirada-ctl — control del compositor mirada por línea de comandos (estilo swaymsg/hyprctl): aplica acciones de escritorio y consulta ventanas vía el socket de control de mirada-brain."
 
 [[bin]]
 name = "mirada-ctl"
@@ -14,3 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 mirada-brain = { path = "../mirada-brain" }
+# Para `mirada-ctl vista use <x>`: escribe la barra de pata (launcher.toml) con
+# el preset de barra de la vista. Núcleos agnósticos sin GPU.
+pata-core = { path = "../../pata/pata-core" }
+pata-config = { path = "../../pata/pata-config" }

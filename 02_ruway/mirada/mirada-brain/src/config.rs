@@ -379,6 +379,19 @@ pub fn default_root_menu() -> Vec<MenuEntry> {
             "rofi -show drun || wofi --show drun || dmenu_run",
         ),
         sub(
+            "Vista",
+            vec![
+                leaf("mirada (nativo)", "mirada-ctl vista use mirada"),
+                leaf("Windows XP", "mirada-ctl vista use windows-xp"),
+                leaf("Windows 3.1", "mirada-ctl vista use windows-3.1"),
+                leaf("macOS", "mirada-ctl vista use mac"),
+                leaf("KDE Plasma", "mirada-ctl vista use kde"),
+                leaf("Solaris (CDE)", "mirada-ctl vista use solaris"),
+                leaf("Hyprland", "mirada-ctl vista use hyprland"),
+                leaf("dwm", "mirada-ctl vista use dwm"),
+            ],
+        ),
+        sub(
             "Mirada",
             vec![
                 leaf("Recargar config", "mirada-ctl reload-config || true"),
@@ -682,6 +695,16 @@ const CONFIG_TEMPLATE: &str = "\
         (label: \"Navegador\", command: \"xdg-open https://duckduckgo.com\"),
         (label: \"Archivos\",  command: \"xdg-open \\\"$HOME\\\"\"),
         (label: \"Lanzador de apps\", command: \"rofi -show drun || wofi --show drun || dmenu_run\"),
+        (label: \"Vista\", submenu: [
+            (label: \"mirada (nativo)\", command: \"mirada-ctl vista use mirada\"),
+            (label: \"Windows XP\",      command: \"mirada-ctl vista use windows-xp\"),
+            (label: \"Windows 3.1\",     command: \"mirada-ctl vista use windows-3.1\"),
+            (label: \"macOS\",           command: \"mirada-ctl vista use mac\"),
+            (label: \"KDE Plasma\",      command: \"mirada-ctl vista use kde\"),
+            (label: \"Solaris (CDE)\",   command: \"mirada-ctl vista use solaris\"),
+            (label: \"Hyprland\",        command: \"mirada-ctl vista use hyprland\"),
+            (label: \"dwm\",             command: \"mirada-ctl vista use dwm\"),
+        ]),
         (label: \"Mirada\", submenu: [
             (label: \"Recargar config\",  command: \"mirada-ctl reload-config || true\"),
             (label: \"Vista espacial\",   command: \"mirada-ctl overview-toggle || true\"),
