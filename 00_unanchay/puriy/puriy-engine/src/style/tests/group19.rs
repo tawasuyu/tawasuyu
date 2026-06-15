@@ -340,3 +340,38 @@ fn layer_convive_con_regla_normal() {
         (99, 99, 99)
     );
 }
+
+// ── Fase 7.933 — pseudo-clases inertes: la regla parsea, no se tira ─────────
+
+#[test]
+fn pseudo_clases_estandar_parsean() {
+    // Antes: cualquier pseudo desconocida tiraba la regla entera.
+    for sel in [
+        "input:valid", "input:invalid", "input:placeholder-shown",
+        "a:active", "a:visited", "div:target", "section:scope",
+        "dialog:modal", "details:open", ":fullscreen", "video:playing",
+        "input:user-invalid", "[popover]:popover-open", "input:default",
+        "input:indeterminate", "input:autofill",
+    ] {
+        assert!(parse_selector(sel).is_some(), "debería parsear: {sel}");
+    }
+    // Funcionales reconocidas (inertes).
+    for sel in ["div:dir(rtl)", "x-card:state(active)", ":host(.dark)", ":host-context(.rtl)"] {
+        assert!(parse_selector(sel).is_some(), "debería parsear: {sel}");
+    }
+    // Pseudo desconocida de verdad SÍ invalida (comportamiento de browser).
+    assert!(parse_selector(":totally-made-up").is_none());
+    assert!(parse_selector(":foo-bar(baz)").is_none());
+}
+
+#[test]
+fn nth_child_of_selector() {
+    // `:nth-child(An+B of S)` parsea (ignora el filtro `of S`).
+    let s = parse_selector(":nth-child(2 of .item)").expect("parsea");
+    // el An+B se preserva (2 → a=0, b=2)
+    assert!(s.compounds.iter().any(|c| c
+        .pseudos
+        .iter()
+        .any(|p| matches!(p, Pseudo::NthChild { a: 0, b: 2 }))));
+    assert!(parse_selector(":nth-last-child(odd of li)").is_some());
+}

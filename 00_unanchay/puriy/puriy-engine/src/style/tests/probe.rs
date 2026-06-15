@@ -721,6 +721,57 @@ fn sondeo_drops() {
         "print-color-adjust: economy",
         "speak-punctuation: code",
         "speak-numeral: digits",
+        // ── lote 8: bleeding-edge 2024-2025 + math + color nuevos ──
+        "color: device-cmyk(0 1 0 0)",
+        "color: contrast-color(blue)",
+        "color: rgb(from var(--c) r g b)",
+        "width: calc-size(auto, size)",
+        "height: calc-size(max-content, size * 2)",
+        "width: abs(-10px)",
+        "width: sign(-5px) * 10px",
+        "rotate: atan2(1, 2)",
+        "width: calc(hypot(3px, 4px))",
+        "width: calc(10px * pow(2, 3))",
+        "width: calc(sqrt(16) * 1px)",
+        "width: calc(mod(10px, 3px))",
+        "width: calc(rem(10px, 3px))",
+        "width: calc(log(100) * 1px)",
+        "width: calc(exp(1) * 1px)",
+        "transform: rotate(calc(sin(45deg) * 1rad))",
+        "transition-timing-function: linear(0 0%, 1 100%)",
+        "animation-range: entry 0% exit 100%",
+        "scroll-timeline: --t block",
+        "view-timeline: --v inline",
+        "view-timeline-inset: auto 10px",
+        "timeline-scope: none",
+        "reading-flow: flex-visual",
+        "reading-order: 0",
+        "field-sizing: content",
+        "text-spacing-trim: trim-all",
+        "text-autospace: ideograph-alpha ideograph-numeric",
+        "white-space-collapse: preserve-breaks",
+        "hyphenate-limit-lines: 2",
+        "hyphenate-limit-last: always",
+        "tab-size: 4 8",
+        "caret-shape: block",
+        "scrollbar-width: none",
+        "scroll-marker-group: before",
+        "anchor-name: --a",
+        "position-anchor: --a",
+        "position-area: block-start span-inline-start",
+        "inset-area: center",
+        "font-synthesis-position: auto",
+        "font-variant-emoji: text",
+        "line-clamp: 3",
+        "block-ellipsis: '…'",
+        "continue: collapse",
+        "scroll-snap-align: none",
+        "overflow: clip visible",
+        "overflow-clip-margin: 2px",
+        "container: layout / size",
+        "container-name: card slider",
+        "view-transition-class: none",
+        "text-wrap: stable",
     ];
 
     let mut dropped = Vec::new();
@@ -737,4 +788,92 @@ fn sondeo_drops() {
         eprintln!("DROP  {}", p);
     }
     eprintln!("=== fin sondeo ===\n");
+}
+
+/// Sondeo de cobertura de SELECTORES: alimenta selectores reales y reporta
+/// cuáles `parse_selector` dropea (devuelve `None` → la regla entera se
+/// pierde). Correr con:
+/// `cargo test -p puriy-engine --lib style::tests::probe::sondeo_selectores -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn sondeo_selectores() {
+    let corpus: &[&str] = &[
+        // ── pseudo-clases de estado de formulario ──
+        "input:valid",
+        "input:invalid",
+        "input:in-range",
+        "input:out-of-range",
+        "input:placeholder-shown",
+        "input:user-valid",
+        "input:user-invalid",
+        "input:default",
+        "input:indeterminate",
+        "input:autofill",
+        "input:blank",
+        // ── pseudo-clases de interacción/enlace ──
+        "a:active",
+        "a:visited",
+        "a:focus-within",
+        "button:focus-visible",
+        "div:target",
+        "div:target-within",
+        "section:scope",
+        // ── popover / dialog / media ──
+        "[popover]:popover-open",
+        "dialog:modal",
+        "details:open",
+        "details:closed",
+        ":fullscreen",
+        "video:playing",
+        "video:paused",
+        "video:muted",
+        "video:seeking",
+        "video:buffering",
+        "video:stalled",
+        // ── funcionales nuevas ──
+        "div:dir(rtl)",
+        "div:dir(ltr)",
+        ":nth-child(2 of .item)",
+        ":nth-last-child(1 of li)",
+        "x-card:state(active)",
+        ":host",
+        ":host(.theme-dark)",
+        ":host-context(.rtl)",
+        "::slotted(span)",
+        ":is(h1, h2):has(+ p)",
+        // ── pseudo-elementos modernos ──
+        "input::placeholder",
+        "::selection",
+        "li::marker",
+        "p::first-line",
+        "p::first-letter",
+        "dialog::backdrop",
+        "input::file-selector-button",
+        "details::details-content",
+        "::target-text",
+        "::spelling-error",
+        "::grammar-error",
+        "::highlight(foo)",
+        "x-el::part(label)",
+        "::view-transition-group(root)",
+        // ── nesting (CSS Nesting) ──
+        "&:hover",
+        "& > .child",
+        // ── combos que ya deberían andar (control) ──
+        "ul > li:first-child",
+        "a[href^='https']:hover",
+        ".a .b .c",
+    ];
+
+    let mut dropped = Vec::new();
+    for &c in corpus {
+        if parse_selector(c).is_none() {
+            dropped.push(c);
+        }
+    }
+    eprintln!("\n=== SONDEO SELECTORES: {} dropeados de {} ===", dropped.len(), corpus.len());
+    for p in &dropped {
+        eprintln!("DROP  {}", p);
+    }
+    eprintln!("=== fin sondeo selectores ===\n");
 }

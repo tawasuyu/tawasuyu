@@ -287,6 +287,13 @@ pub(crate) enum Pseudo {
     /// `:lang(en, fr)` — el idioma del elemento (atributo `lang` propio o
     /// del ancestro más cercano) coincide con (o es subtag de) alguno.
     Lang(Vec<String>),
+    /// Pseudo-clase estándar reconocida pero NO evaluable con el estado que
+    /// rastreamos (validación de formularios, estado de media/popover/dialog,
+    /// `:active`/`:visited`/`:target`…). Se parsea para NO tirar la regla
+    /// entera (comportamiento de browser real, donde estos selectores son
+    /// válidos); evalúa al `bool` guardado. `:scope` → `true` (transparente).
+    /// Fase 7.933.
+    Inert(bool),
 }
 
 /// Una relative selector de `:has(...)`: un combinador (descendiente por
@@ -419,6 +426,7 @@ pub(crate) fn pseudo_matches(
                 .any(|r| has_relative_match(node, r, hover_active, focus_active))
         }
         Pseudo::Lang(tags) => return lang_matches(node, tags),
+        Pseudo::Inert(b) => return *b,
         _ => {}
     }
     let Some(parent) = parent_of(node) else { return false };
@@ -458,7 +466,8 @@ pub(crate) fn pseudo_matches(
         | Pseudo::Root
         | Pseudo::AnyLink
         | Pseudo::Has(_)
-        | Pseudo::Lang(_) => unreachable!("ya resueltos arriba"),
+        | Pseudo::Lang(_)
+        | Pseudo::Inert(_) => unreachable!("ya resueltos arriba"),
         Pseudo::FirstChild => pos == 0,
         Pseudo::LastChild => pos + 1 == elems.len(),
         Pseudo::OnlyChild => elems.len() == 1,

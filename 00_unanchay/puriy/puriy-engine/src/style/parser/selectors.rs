@@ -195,7 +195,11 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                     let arg = &sel[arg_start..arg_start + rel_close];
                     let p = match name.as_str() {
                         "nth-child" => {
-                            let (a, b) = parse_nth_arg(arg)?;
+                            // Fase 7.933 — `:nth-child(An+B of <sel>)` (CSS
+                            // Selectors 4): parseamos el An+B e ignoramos el
+                            // filtro `of <sel>` (aproximación: matchea sin el
+                            // filtro de tipo). Mejor que tirar la regla.
+                            let (a, b) = parse_nth_arg(nth_strip_of(arg))?;
                             Pseudo::NthChild { a, b }
                         }
                         "nth-of-type" => {
@@ -203,7 +207,7 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                             Pseudo::NthOfType { a, b }
                         }
                         "nth-last-child" => {
-                            let (a, b) = parse_nth_arg(arg)?;
+                            let (a, b) = parse_nth_arg(nth_strip_of(arg))?;
                             Pseudo::NthLastChild { a, b }
                         }
                         "nth-last-of-type" => {
@@ -284,6 +288,16 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                                 Pseudo::Where(inner)
                             }
                         }
+                        // Fase 7.933 — pseudo-clases funcionales estándar que
+                        // reconocemos pero no evaluamos (custom states, shadow
+                        // DOM, dir): inertes para no tirar la regla. `:dir()`
+                        // real queda pendiente. El argumento debe ser no vacío.
+                        "dir" | "state" | "host" | "host-context" => {
+                            if arg.trim().is_empty() {
+                                return None;
+                            }
+                            Pseudo::Inert(false)
+                        }
                         _ => return None,
                     };
                     pseudos.push(p);
@@ -309,6 +323,26 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                     "empty" => Pseudo::Empty,
                     "root" => Pseudo::Root,
                     "link" | "any-link" => Pseudo::AnyLink,
+                    // Fase 7.933 — pseudo-clases estándar que reconocemos para
+                    // NO tirar la regla, pero que no podemos evaluar con el
+                    // estado que rastreamos → inertes (no matchean nunca).
+                    // Validación de formularios, rango, autofill, defaults:
+                    "valid" | "invalid" | "in-range" | "out-of-range"
+                    | "placeholder-shown" | "user-valid" | "user-invalid"
+                    | "default" | "indeterminate" | "autofill" | "blank"
+                    | "read-write-plaintext-only"
+                    // Interacción/enlace que no rastreamos:
+                    | "active" | "visited" | "target" | "target-within"
+                    | "current" | "past" | "future" | "local-link"
+                    // Estado de media/popover/dialog/fullscreen:
+                    | "popover-open" | "modal" | "fullscreen" | "open" | "closed"
+                    | "playing" | "paused" | "muted" | "seeking" | "buffering"
+                    | "stalled" | "volume-locked" | "picture-in-picture"
+                    // Shadow DOM (no implementado): host sin paréntesis.
+                    | "host" => Pseudo::Inert(false),
+                    // `:scope` sin contexto de scoping ≈ transparente (matchea
+                    // al propio elemento): inerte que SIEMPRE matchea.
+                    "scope" => Pseudo::Inert(true),
                     _ => return None,
                 };
                 pseudos.push(p);
@@ -326,6 +360,19 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
         return None;
     }
     Some(Compound { tag, ids, classes, attrs, pseudos })
+}
+
+/// Quita el filtro `of <selector>` de un argumento `:nth-child()` (CSS
+/// Selectors 4), devolviendo sólo la parte `An+B`. `"2 of .item"` → `"2"`.
+/// Fase 7.933.
+fn nth_strip_of(arg: &str) -> &str {
+    let lower = arg.to_ascii_lowercase();
+    // Buscamos el token ` of ` (rodeado de whitespace) a nivel superior.
+    if let Some(pos) = lower.find(" of ") {
+        arg[..pos].trim()
+    } else {
+        arg.trim()
+    }
 }
 
 /// Parsea el interior de `[...]`: `name`, `name=val`, `name="val"`,
