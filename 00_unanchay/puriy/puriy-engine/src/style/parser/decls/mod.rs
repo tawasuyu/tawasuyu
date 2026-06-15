@@ -909,7 +909,8 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             out.extend(parse_place_self_shorthand(value, important));
             continue;
         }
-        if prop.eq_ignore_ascii_case("outline") {
+        // Fase 7.1197 — `-moz-outline` alias Gecko legacy del shorthand outline.
+        if prop.eq_ignore_ascii_case("outline") || prop.eq_ignore_ascii_case("-moz-outline") {
             out.extend(parse_outline_shorthand(value, important));
             continue;
         }

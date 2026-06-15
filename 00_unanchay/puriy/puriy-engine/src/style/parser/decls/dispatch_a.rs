@@ -404,7 +404,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "font-variation-settings" => {
             Some(DeclKind::FontVariationSettings(parse_font_variation_settings(value)))
         }
-        "font-language-override" => {
+        // Fase 7.1196 — `-moz-font-language-override` alias Gecko legacy.
+        "font-language-override" | "-moz-font-language-override" => {
             Some(DeclKind::FontLanguageOverride(parse_font_language_override(value)))
         }
         "text-rendering" => parse_text_rendering(value).map(DeclKind::TextRendering),

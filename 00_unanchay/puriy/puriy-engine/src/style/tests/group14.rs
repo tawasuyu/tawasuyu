@@ -1246,3 +1246,26 @@ use super::super::*;
         assert_eq!(style_of("-moz-animation-name: spin").animation.map(|b| b.name),
                    Some("spin".to_string()));
     }
+
+    #[test]
+    fn o_transition_moz_misc_aliases_fase_7_1192_1197() {
+        // -o-transition-* longhands == estándar (junto a -webkit-/-moz- ya existentes).
+        assert_eq!(style_of("-o-transition-property: opacity").transitions,
+                   style_of("transition-property: opacity").transitions);
+        assert_eq!(style_of("-o-transition-duration: 2s").transitions,
+                   style_of("transition-duration: 2s").transitions);
+        assert_eq!(style_of("-o-transition-delay: 0.3s").transitions,
+                   style_of("transition-delay: 0.3s").transitions);
+        assert_eq!(style_of("-o-transition-timing-function: ease-out").transitions,
+                   style_of("transition-timing-function: ease-out").transitions);
+        // -moz-font-language-override == estándar.
+        assert_eq!(style_of("-moz-font-language-override: 'SRB'").font_language_override,
+                   style_of("font-language-override: 'SRB'").font_language_override);
+        // -moz-outline (shorthand) == outline: expande width/style/color.
+        let moz = style_of("-moz-outline: 2px dashed red");
+        let std = style_of("outline: 2px dashed red");
+        assert_eq!(moz.outline.width, std.outline.width);
+        assert_eq!(moz.outline.style, std.outline.style);
+        assert_eq!(moz.outline.color, std.outline.color);
+        assert_ne!(moz.outline.style, ComputedStyle::default().outline.style);
+    }

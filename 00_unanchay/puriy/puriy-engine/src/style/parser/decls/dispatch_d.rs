@@ -944,9 +944,11 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         // lista (modelo de binding único, ver `transition_first` en decl.rs).
         // Tomamos la 1ª de la lista separada por coma (`first_comma`); alias
         // vendor `-webkit-`/`-moz-`.
+        // Fase 7.1192 — `-o-transition-property` alias Opera Presto legacy.
         "transition-property"
         | "-webkit-transition-property"
-        | "-moz-transition-property" => {
+        | "-moz-transition-property"
+        | "-o-transition-property" => {
             let v = first_comma(value.trim());
             if v.eq_ignore_ascii_case("none") {
                 Some(DeclKind::TransitionPropertyFirst(None))
@@ -956,17 +958,22 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::TransitionPropertyFirst(Some(v.to_ascii_lowercase())))
             }
         }
+        // Fase 7.1193 — `-o-transition-duration` alias Opera Presto legacy.
         "transition-duration"
         | "-webkit-transition-duration"
-        | "-moz-transition-duration" => {
+        | "-moz-transition-duration"
+        | "-o-transition-duration" => {
             parse_time(first_comma(value.trim())).map(DeclKind::TransitionDurationFirst)
         }
-        "transition-delay" | "-webkit-transition-delay" | "-moz-transition-delay" => {
+        // Fase 7.1194 — `-o-transition-delay` alias Opera Presto legacy.
+        "transition-delay" | "-webkit-transition-delay" | "-moz-transition-delay" | "-o-transition-delay" => {
             parse_time(first_comma(value.trim())).map(DeclKind::TransitionDelayFirst)
         }
+        // Fase 7.1195 — `-o-transition-timing-function` alias Opera Presto legacy.
         "transition-timing-function"
         | "-webkit-transition-timing-function"
-        | "-moz-transition-timing-function" => {
+        | "-moz-transition-timing-function"
+        | "-o-transition-timing-function" => {
             parse_easing(&first_comma(value.trim()).to_ascii_lowercase())
                 .map(DeclKind::TransitionTimingFirst)
         }
