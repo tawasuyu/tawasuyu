@@ -25,6 +25,7 @@ llimphi-widget-transport = { workspace = true }
 llimphi-widget-waveform = { workspace = true }
 llimphi-widget-slider = { workspace = true }
 llimphi-widget-tabs = { workspace = true }
+llimphi-widget-dock-rail = { workspace = true }
 llimphi-module-command-palette = { workspace = true }
 image = { workspace = true }
 media-audio-cpal = { path = "../media-audio-cpal" }

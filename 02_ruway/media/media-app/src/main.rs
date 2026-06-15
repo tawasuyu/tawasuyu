@@ -23,6 +23,7 @@ mod pipeline;
 mod modelo;
 mod vista;
 mod vista_config;
+mod dock;
 mod audio_source;
 
 use std::path::{Path, PathBuf};

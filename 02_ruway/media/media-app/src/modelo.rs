@@ -576,6 +576,36 @@ impl App for MediaApp {
             kids
         });
 
+        // Sidebars de dientes: rail (overlay al borde interno izquierdo) +
+        // panel del diente activo al costado. El rail flota; el panel empuja.
+        let dock_panel = crate::dock::dock_panel(model, &theme);
+        let dock_rail = crate::dock::dock_rail_overlay(model, &theme);
+        let body = {
+            let inner: View<Msg> = match dock_panel {
+                Some(panel) => View::new(Style {
+                    flex_direction: FlexDirection::Row,
+                    size: Size {
+                        width: percent(1.0_f32),
+                        height: auto(),
+                    },
+                    flex_grow: 1.0,
+                    ..Default::default()
+                })
+                .children(vec![panel, content]),
+                None => content,
+            };
+            View::new(Style {
+                flex_direction: FlexDirection::Row,
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: auto(),
+                },
+                flex_grow: 1.0,
+                ..Default::default()
+            })
+            .children(vec![inner, dock_rail])
+        };
+
         View::new(Style {
             flex_direction: FlexDirection::Column,
             size: Size {
@@ -587,7 +617,7 @@ impl App for MediaApp {
         .fill(Color::from_rgba8(22, 26, 34, 255))
         .on_right_click_at(|x, y, _w, _h| Some(Msg::ContextMenuOpen(x, y)))
         .children({
-            let mut kids = vec![menubar, content];
+            let mut kids = vec![menubar, body];
             if let Some(osd) = osd_overlay(model) {
                 kids.push(osd);
             }

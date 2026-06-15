@@ -50,6 +50,8 @@ use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H
 use llimphi_widget_slider::{slider_view, SliderPalette};
 use llimphi_widget_timeline::{timeline_view, TimelinePalette};
 use llimphi_widget_transport::{transport_button_view, TransportButton, TransportPalette};
+use llimphi_widget_dock_rail::{dock_rail_view, DockRailItem, DockRailPalette};
+use llimphi_ui::llimphi_layout::taffy::style::Position;
 use media_core::control::ControlSettings;
 use media_core::toolbar::{Bar, BarItem, BarPosition, Toolbar};
 use media_core::waveform::Waveform;
@@ -776,28 +778,6 @@ fn view_demo(e: &Estado, theme: &Theme) -> View<Msg> {
     })
     .children(vec![onda, waterfall_view(grid, rows, bands), meters_view(pk, rms)]);
 
-    // Pie (calco del footer: ticks de sesión + fps + posición + pista).
-    let footer = View::new(Style {
-        size: Size {
-            width: percent(1.0_f32),
-            height: length(24.0_f32),
-        },
-        justify_content: Some(JustifyContent::Center),
-        align_items: Some(AlignItems::Center),
-        ..Default::default()
-    })
-    .text(
-        format!(
-            "ticks 4683 · ui ≈ 30.0 fps · {} / {} · trk {}/{}",
-            fmt_secs(e.position),
-            fmt_secs(e.duration),
-            e.trk.0,
-            e.trk.1
-        ),
-        13.0,
-        Color::from_rgba8(150, 165, 185, 255),
-    );
-
     let mut kids: Vec<View<Msg>> = Vec::new();
     if let Some(v) = above_bars {
         kids.push(v);
@@ -808,7 +788,6 @@ fn view_demo(e: &Estado, theme: &Theme) -> View<Msg> {
         kids.push(v);
     }
     kids.push(visualizers);
-    kids.push(footer);
 
     let content = View::new(Style {
         flex_direction: FlexDirection::Column,
@@ -831,6 +810,32 @@ fn view_demo(e: &Estado, theme: &Theme) -> View<Msg> {
     })
     .children(kids);
 
+    // Sidebars de dientes (calco de `dock`): rail al borde interno izquierdo
+    // + panel del diente activo (acá la Cola desplegada). Mismo widget real
+    // `dock_rail_view` que usa la app.
+    let body = {
+        let inner = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .children(vec![cola_panel_demo(theme, e), content]);
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size {
+                width: percent(1.0_f32),
+                height: auto(),
+            },
+            flex_grow: 1.0,
+            ..Default::default()
+        })
+        .children(vec![inner, dock_rail_demo(theme)])
+    };
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -840,7 +845,122 @@ fn view_demo(e: &Estado, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(Color::from_rgba8(22, 26, 34, 255))
-    .children(vec![menubar, content])
+    .children(vec![menubar, body])
+}
+
+/// Rail de dientes (overlay absoluto al borde interno izquierdo). Cola activa.
+fn dock_rail_demo(theme: &Theme) -> View<Msg> {
+    let icons = [Icon::Music, Icon::Settings, Icon::Equalizer, Icon::Info];
+    let items: Vec<DockRailItem> = (0..4)
+        .map(|id| DockRailItem { id, active: id == 0 })
+        .collect();
+    let rail = dock_rail_view(
+        &items,
+        40.0,
+        &DockRailPalette::from_theme(theme),
+        move |id, size, color| icon_view::<Msg>(icons[id as usize], color, size / 12.0),
+        |_| (),
+        |_| None,
+    );
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            top: length(8.0_f32),
+            left: length(0.0_f32),
+            right: auto(),
+            bottom: auto(),
+        },
+        size: Size {
+            width: length(40.0_f32),
+            height: auto(),
+        },
+        ..Default::default()
+    })
+    .children(vec![rail])
+}
+
+/// Panel de la Cola desplegada (calco de `dock::dock_panel` → playlist).
+fn cola_panel_demo(theme: &Theme, e: &Estado) -> View<Msg> {
+    let tracks = ["Vals del calcetín", "Cumbia del lunes", "Balada del wifi caído"];
+    let header = View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: length(30.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(40.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text(rimay_localize::t("media-menu-playlist"), 14.5, Color::from_rgba8(118, 182, 232, 255));
+    let rows: Vec<View<Msg>> = tracks
+        .iter()
+        .enumerate()
+        .map(|(i, name)| {
+            let active = i + 1 == e.trk.0;
+            let bg = if active {
+                Color::from_rgba8(48, 86, 120, 255)
+            } else {
+                Color::from_rgba8(30, 36, 46, 255)
+            };
+            View::new(Style {
+                size: Size {
+                    width: percent(1.0_f32),
+                    height: length(30.0_f32),
+                },
+                align_items: Some(AlignItems::Center),
+                padding: TaffyRect {
+                    left: length(10.0_f32),
+                    right: length(10.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .fill(bg)
+            .radius(6.0)
+            .text(format!("{:>2}.  {name}", i + 1), 13.0, Color::from_rgba8(220, 230, 245, 255))
+        })
+        .collect();
+    let list = View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        flex_grow: 1.0,
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(4.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(rows);
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: length(380.0_f32),
+            height: percent(1.0_f32),
+        },
+        flex_shrink: 0.0,
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(6.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(6.0_f32),
+            right: length(6.0_f32),
+            top: length(8.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .children(vec![header, list])
 }
 
 fn main() {
