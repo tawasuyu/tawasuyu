@@ -369,6 +369,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         session_user: None,
         session_env: Vec::new(),
         grabs: Vec::new(),
+        debug_keys: std::env::var_os("MIRADA_DEBUG_KEYS").is_some(),
         decorations: mirada_brain::Decorations::default(),
         caps,
         pending_keybind: None,

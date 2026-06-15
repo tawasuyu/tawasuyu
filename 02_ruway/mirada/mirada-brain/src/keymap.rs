@@ -250,7 +250,16 @@ impl Keymap {
     pub fn load_or_init(path: &Path) -> Keymap {
         if path.exists() {
             match Keymap::load(path) {
-                Ok(km) => km,
+                Ok(mut km) => {
+                    // Auto-cura: un keymap.ron escrito por un `load_or_init`
+                    // viejo congeló el default de aquel entonces. Sin esto, los
+                    // atajos agregados al default después (Alt+Tab y compañía)
+                    // jamás llegarían a un usuario que ya tiene el archivo —
+                    // «nada se ve aunque se commitee». Fusionamos los binds
+                    // default que falten, sin pisar lo que el usuario cambió.
+                    km.merge_defaults();
+                    km
+                }
                 Err(e) => {
                     eprintln!(
                         "mirada · keymap «{}» inválido ({e}); uso el de por defecto.",
@@ -267,6 +276,22 @@ impl Keymap {
             }
             km
         }
+    }
+
+    /// Rellena con los binds del keymap por defecto cualquier combinación que
+    /// este keymap no tenga todavía. **No pisa** lo que ya esté mapeado: si el
+    /// usuario rebindeó `Alt+Tab` a otra cosa, se respeta. Sirve para que un
+    /// keymap.ron viejo recupere atajos agregados al default después de haberlo
+    /// escrito. Devuelve cuántos binds se agregaron (0 = ya estaba al día).
+    pub fn merge_defaults(&mut self) -> usize {
+        let mut added = 0;
+        for (combo, action) in default_keymap() {
+            if !self.bindings.contains_key(&combo) {
+                self.bindings.insert(combo, action);
+                added += 1;
+            }
+        }
+        added
     }
 
     /// Vigila el archivo del keymap para recargarlo en caliente — un
@@ -365,6 +390,26 @@ mod tests {
         let km = Keymap::default();
         let back = Keymap::from_ron(&km.to_ron()).unwrap();
         assert_eq!(km, back);
+    }
+
+    #[test]
+    fn merge_defaults_recupera_binds_nuevos_sin_pisar() {
+        // Un keymap.ron «viejo»: el usuario sólo tiene Super+q (rebindeado a
+        // algo distinto a propósito) y le falta Alt+Tab.
+        let mut viejo = Keymap::from_pairs([(
+            "Super+q".to_string(),
+            DesktopAction::FocusNext, // rebind intencional ≠ default
+        )]);
+        assert!(viejo.lookup("Alt+Tab").is_none());
+
+        let added = viejo.merge_defaults();
+        assert!(added > 0, "debería agregar binds del default que faltaban");
+        // Alt+Tab aparece tras la fusión.
+        assert!(viejo.lookup("Alt+Tab").is_some());
+        // El rebind del usuario NO se pisa.
+        assert_eq!(viejo.lookup("Super+q"), Some(DesktopAction::FocusNext));
+        // Idempotente: una segunda fusión no agrega nada.
+        assert_eq!(viejo.merge_defaults(), 0);
     }
 
     #[test]

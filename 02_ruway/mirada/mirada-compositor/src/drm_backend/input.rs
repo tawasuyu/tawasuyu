@@ -44,11 +44,12 @@ impl DrmState {
                                 st.pending_keybind = Some(combo);
                                 return FilterResult::Intercept(());
                             }
-                            // Diagnóstico: un combo con modificador que NO está
-                            // en los grabs se reenvía al cliente (de ahí que
-                            // «Alt+Tab» escriba un tab). Lo logueamos para ver
-                            // qué string se computó y cuántos grabs hay.
-                            if combo.contains('+') {
+                            // Diagnóstico opt-in (`MIRADA_DEBUG_KEYS=1`): un
+                            // combo con modificador que NO está en los grabs se
+                            // reenvía al cliente (de ahí que «Alt+Tab» escriba un
+                            // tab si el keymap no lo tiene). Útil para depurar
+                            // atajos sin flujo, ruidoso en uso normal.
+                            if combo.contains('+') && st.debug_keys {
                                 eprintln!(
                                     "mirada-compositor · tecla no interceptada «{combo}» (grabs={})",
                                     st.grabs.len()

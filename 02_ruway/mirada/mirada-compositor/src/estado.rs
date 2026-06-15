@@ -351,6 +351,9 @@ pub(crate) struct App {
     pub(crate) session_user: Option<UserInfo>,
     /// Atajos globales a interceptar (los registra el Cerebro).
     pub(crate) grabs: Vec<String>,
+    /// Diagnóstico opt-in (`MIRADA_DEBUG_KEYS=1`): loguea cada combo con
+    /// modificador que se reenvía por no estar en [`grabs`](Self::grabs).
+    pub(crate) debug_keys: bool,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
     /// Permisos de capacidad por ejecutable que fija el Cerebro. El filtro del
