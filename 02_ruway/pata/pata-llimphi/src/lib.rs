@@ -584,6 +584,8 @@ impl Model {
             theme.accent = c;
         }
         self.theme = theme;
+        // El estilo del menú sigue al config recargado (lo cambió una vista).
+        self.menu_style = MenuStyle::from_cfg(&cfg.general.menu_style);
         self.cfg = cfg;
     }
 
@@ -729,6 +731,16 @@ impl Default for MenuStyle {
 }
 
 impl MenuStyle {
+    /// El estilo desde el slug de config (`general.menu_style`): `"xp"`,
+    /// `"grid"`/`"gnome"`/`"kickoff"`/`"activities"`, o lista (`"list"`/vacío).
+    pub fn from_cfg(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "xp" | "windows" | "windows-xp" => MenuStyle::Xp,
+            "grid" | "gnome" | "kickoff" | "activities" => MenuStyle::Gnome,
+            _ => MenuStyle::Classic,
+        }
+    }
+
     /// Próximo estilo en la rotación (right-click ciclo).
     pub fn next(self) -> Self {
         match self {
@@ -782,6 +794,9 @@ impl App for PataApp {
         if let Some(c) = render::parse_hex(&cfg.general.accent) {
             theme.accent = c;
         }
+        // El estilo del menú arranca del config (lo fija la vista); el
+        // right-click sigue ciclándolo como override de sesión.
+        let menu_style = MenuStyle::from_cfg(&cfg.general.menu_style);
         let mut model = Model {
             theme,
             cfg,
@@ -794,7 +809,7 @@ impl App for PataApp {
             menu_open: false,
             menu_query: String::new(),
             menu_scroll: 0.0,
-            menu_style: MenuStyle::default(),
+            menu_style,
             sampler,
             clipboard,
             clip_history: Vec::new(),

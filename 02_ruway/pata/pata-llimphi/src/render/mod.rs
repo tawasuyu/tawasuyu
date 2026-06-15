@@ -574,7 +574,16 @@ pub fn start_menu_body(
     offset: f32,
     viewport_h: f32,
     theme: &Theme,
+    style: crate::MenuStyle,
+    columns: u32,
 ) -> View<Msg> {
+    // El control único: el estilo elige el cuerpo. `Classic` = la lista sobria
+    // de abajo; `Xp`/`Gnome` reutilizan los cuerpos de `start_menus`.
+    match style {
+        crate::MenuStyle::Xp => return start_menus::xp_body(apps, query, offset, viewport_h, theme),
+        crate::MenuStyle::Gnome => return start_menus::gnome_body(apps, query, columns, theme),
+        crate::MenuStyle::Classic => {}
+    }
     let matches = menu_filtered(apps, query);
 
     let texto_busqueda = if query.is_empty() {
@@ -779,7 +788,15 @@ pub fn start_menu_overlay(
         },
         ..Default::default()
     })
-    .children(vec![start_menu_body(apps, query, offset, viewport, theme)])
+    .children(vec![start_menu_body(
+        apps,
+        query,
+        offset,
+        viewport,
+        theme,
+        crate::MenuStyle::Classic,
+        0,
+    )])
 }
 
 /// La barra superior con el menú de inicio **desplegado** hacia abajo.
@@ -794,6 +811,8 @@ pub fn start_menu_view(
     query: &str,
     offset: f32,
     menu_h: f32,
+    style: crate::MenuStyle,
+    columns: u32,
 ) -> View<Msg> {
     let bar = View::new(Style {
         size: Size {
@@ -813,8 +832,9 @@ pub fn start_menu_view(
         ..Default::default()
     };
     body_style.flex_grow = 1.0;
-    let body = View::new(body_style)
-        .children(vec![start_menu_body(apps, query, offset, viewport, theme)]);
+    let body = View::new(body_style).children(vec![start_menu_body(
+        apps, query, offset, viewport, theme, style, columns,
+    )]);
 
     View::new(Style {
         flex_direction: FlexDirection::Column,

@@ -372,6 +372,15 @@ pub struct General {
     /// recompilar.
     #[cfg_attr(feature = "serde", serde(default))]
     pub accent: String,
+    /// Estilo del menú de inicio/lanzador (el control único, configurable):
+    /// `"list"` (clásico sobrio, default), `"xp"` (dos columnas estilo Windows
+    /// XP) o `"grid"`/`"gnome"` (grilla de tiles tipo Activities/Kickoff). Lo
+    /// fijan las vistas y lo puede tunear el usuario en launcher.toml.
+    #[cfg_attr(feature = "serde", serde(default = "default_menu_style"))]
+    pub menu_style: String,
+    /// Columnas del menú `"grid"` (0 = automático según el ancho).
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub menu_columns: u32,
 }
 
 impl Default for General {
@@ -379,8 +388,15 @@ impl Default for General {
         Self {
             timezone: default_timezone(),
             accent: String::new(),
+            menu_style: default_menu_style(),
+            menu_columns: 0,
         }
     }
+}
+
+/// Estilo de menú por defecto: la lista sobria.
+fn default_menu_style() -> String {
+    "list".to_string()
 }
 
 /// El marco completo: settings generales + las superficies a desplegar.
@@ -541,7 +557,11 @@ impl Config {
             WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string())),
         ];
         Self {
-            general: General::default(),
+            // Menú Inicio estilo XP (dos columnas).
+            general: General {
+                menu_style: "xp".to_string(),
+                ..General::default()
+            },
             surfaces: vec![bar],
         }
     }
@@ -593,7 +613,11 @@ impl Config {
             WidgetSpec::new("clock"),
         ];
         Self {
-            general: General::default(),
+            // Lanzador Kickoff = grilla de tiles.
+            general: General {
+                menu_style: "grid".to_string(),
+                ..General::default()
+            },
             surfaces: vec![bar],
         }
     }
@@ -638,6 +662,8 @@ mod tests {
         assert_eq!(dwm.surfaces[0].anchor, Anchor::Top);
         let xp = Config::vista_preset("windows-xp").unwrap();
         assert_eq!(xp.surfaces[0].anchor, Anchor::Bottom);
+        assert_eq!(xp.general.menu_style, "xp"); // menú Inicio 2-columnas
+        assert_eq!(Config::vista_preset("kde").unwrap().general.menu_style, "grid");
         // mac: menubar + dock (dos superficies), el dock con apps fijadas.
         let mac = Config::vista_preset("mac").unwrap();
         assert_eq!(mac.surfaces.len(), 2);

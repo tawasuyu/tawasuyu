@@ -582,6 +582,9 @@ impl LayerApp {
                     &self.menu_query,
                     self.menu_scroll,
                     h as f32,
+                    // El estilo del menú lo fija la vista vía la config de pata.
+                    crate::MenuStyle::from_cfg(&self.cfg.general.menu_style),
+                    self.cfg.general.menu_columns,
                 ),
                 MenuKind::Clipboard => render::clipboard_menu_view(
                     &self.cfg.surfaces[idx],

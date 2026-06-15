@@ -43,50 +43,39 @@ const XP_ROW_H: f32 = 30.0;
 /// Overlay del menú XP. Pintado encima del rect del frame, abajo de la
 /// barra. El scrim cierra al click. La animación de entrada es
 /// `animated_inout` con `motion::FAST` aplicada al panel.
-pub fn start_menu_xp_overlay(
+/// El **cuerpo** del menú estilo Windows XP: tarjeta con banda de usuario, dos
+/// columnas (pin de inicio + todos los programas) y footer. Es el control
+/// reutilizable — el *chrome* (scrim/posición en winit, barra en layer-shell)
+/// lo pone el caller. `avail_h` es el alto disponible para la tarjeta.
+pub(super) fn xp_body(
     apps: &[AppEntry],
     query: &str,
     offset: f32,
-    bar_h: f32,
-    screen: (f32, f32),
+    avail_h: f32,
     theme: &Theme,
 ) -> View<Msg> {
-    let panel_h = ((screen.1 - bar_h) * 0.84).clamp(420.0, 720.0);
+    let panel_h = avail_h.clamp(420.0, 720.0);
     let panel_w = XP_W;
+    let cols_h = panel_h - XP_HEADER_H - XP_FOOTER_H;
 
     let header = xp_header(theme);
-
     // Dos columnas: pinned (top apps) + programs (scrolleable filtrable).
     let matches = menu_filtered(apps, query);
     let pinned: Vec<&AppEntry> = matches.iter().take(8).copied().collect();
     let programs: Vec<&AppEntry> = matches.iter().skip(8).copied().collect();
-
-    let pinned_col = xp_column(
-        "Pin de inicio",
-        pinned,
-        panel_h - XP_HEADER_H - XP_FOOTER_H,
-        theme,
-        true,
-    );
-    let programs_col = xp_column_scrolling(
-        "Todos los programas",
-        programs,
-        offset,
-        panel_h - XP_HEADER_H - XP_FOOTER_H,
-        theme,
-    );
-
+    let pinned_col = xp_column("Pin de inicio", pinned, cols_h, theme, true);
+    let programs_col =
+        xp_column_scrolling("Todos los programas", programs, offset, cols_h, theme);
     let columns = View::new(Style {
         flex_direction: FlexDirection::Row,
         size: Size {
             width: percent(1.0_f32),
-            height: length(panel_h - XP_HEADER_H - XP_FOOTER_H),
+            height: length(cols_h),
         },
         flex_shrink: 0.0,
         ..Default::default()
     })
     .children(vec![pinned_col, programs_col]);
-
     let footer = xp_footer(theme);
 
     let (sh_a, sh_blur, sh_dy) = elevation::E4;
@@ -97,20 +86,15 @@ pub fn start_menu_xp_overlay(
         dy: sh_dy,
         spread: 0.0,
     };
-
-    let panel = View::new(Style {
-        position: Position::Absolute,
-        inset: TaffyRect {
-            left: length(8.0_f32),
-            top: length(0.0_f32),
-            right: auto(),
-            bottom: auto(),
-        },
+    // La tarjeta va EN FLUJO (sin position absoluta): así el caller la coloca —
+    // en un scrim (winit) o sobre la barra (layer-shell).
+    View::new(Style {
         size: Size {
             width: length(panel_w),
             height: length(panel_h),
         },
         flex_direction: FlexDirection::Column,
+        flex_shrink: 0.0,
         ..Default::default()
     })
     .fill(Color::from_rgba8(245, 246, 250, 255))
@@ -118,8 +102,20 @@ pub fn start_menu_xp_overlay(
     .shadow(shadow)
     .clip(true)
     .animated_inout(0xC5_AA_5E_47_u64, motion::FAST)
-    .children(vec![header, columns, footer]);
+    .children(vec![header, columns, footer])
+}
 
+/// Overlay XP para el path **winit** (`view_overlay`): scrim full-screen con la
+/// tarjeta [`xp_body`] anclada arriba a la izquierda.
+pub fn start_menu_xp_overlay(
+    apps: &[AppEntry],
+    query: &str,
+    offset: f32,
+    bar_h: f32,
+    screen: (f32, f32),
+    theme: &Theme,
+) -> View<Msg> {
+    let body = xp_body(apps, query, offset, (screen.1 - bar_h) * 0.84, theme);
     View::new(Style {
         position: Position::Absolute,
         inset: TaffyRect {
@@ -132,11 +128,17 @@ pub fn start_menu_xp_overlay(
             width: percent(1.0_f32),
             height: percent(1.0_f32),
         },
+        padding: TaffyRect {
+            left: length(8.0_f32),
+            right: length(0.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
         ..Default::default()
     })
     .fill(Color::from_rgba8(0, 0, 0, 110))
     .on_click(Msg::StartToggle)
-    .children(vec![panel])
+    .children(vec![body])
 }
 
 /// Banda azul superior con avatar circular + nombre del usuario.
@@ -512,6 +514,45 @@ const GNOME_LABEL_H: f32 = 28.0;
 
 /// Overlay del menú GNOME — full-screen, scrim oscuro, search arriba,
 /// grid centrado de tiles.
+/// El **cuerpo** del menú estilo grilla (GNOME Activities / KDE Kickoff):
+/// buscador arriba + grilla de tiles que fluye al ancho del contenedor. Control
+/// reutilizable; el caller pone el chrome (scrim en winit, barra en layer).
+/// `columns_hint` acota cuántos tiles mostrar (`columns*6`, o 36 si es 0).
+pub(super) fn gnome_body(apps: &[AppEntry], query: &str, columns_hint: u32, theme: &Theme) -> View<Msg> {
+    let matches = menu_filtered(apps, query);
+    let search = gnome_search(query, matches.len(), theme);
+    let cap = if columns_hint > 0 {
+        (columns_hint as usize) * 6
+    } else {
+        36
+    };
+    let tiles: Vec<View<Msg>> = matches.iter().take(cap).map(|a| gnome_tile(a)).collect();
+    let grid = llimphi_widget_wrap::wrap_view(
+        tiles,
+        llimphi_widget_wrap::WrapAxis::Row,
+        GNOME_TILE_GAP,
+        GNOME_TILE_GAP,
+    );
+    // El bloque (search + grid) llena el ancho del contenedor; la grilla fluye.
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size {
+            width: percent(1.0_f32),
+            height: auto(),
+        },
+        align_items: Some(AlignItems::Center),
+        gap: Size {
+            width: length(0.0_f32),
+            height: length(28.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![search, grid])
+    .animated_enter(0xA0_91_E0_03_u64, motion::SLOW)
+}
+
+/// Overlay grilla para el path **winit**: scrim full-screen con [`gnome_body`]
+/// centrado arriba.
 pub fn start_menu_gnome_overlay(
     apps: &[AppEntry],
     query: &str,
@@ -519,40 +560,10 @@ pub fn start_menu_gnome_overlay(
     screen: (f32, f32),
     theme: &Theme,
 ) -> View<Msg> {
-    let matches = menu_filtered(apps, query);
-
-    let search = gnome_search(query, matches.len(), theme);
-
-    // Grid: filas de N tiles según el ancho útil.
     let usable_w = screen.0 - 80.0;
     let tile_full = GNOME_TILE_SIZE + GNOME_TILE_GAP;
-    let cols = ((usable_w / tile_full).floor() as usize).max(3);
-    let tiles: Vec<View<Msg>> = matches
-        .iter()
-        .take(cols * 6) // 6 filas máx — más se vería estridente sin scroll
-        .map(|a| gnome_tile(a))
-        .collect();
-
-    let grid = llimphi_widget_wrap::wrap_view(
-        tiles,
-        llimphi_widget_wrap::WrapAxis::Row,
-        GNOME_TILE_GAP,
-        GNOME_TILE_GAP,
-    );
-
-    // Centrar el bloque (search + grid) horizontalmente.
-    let content = View::new(Style {
-        flex_direction: FlexDirection::Column,
-        size: Size {
-            width: length(usable_w),
-            height: auto(),
-        },
-        align_items: Some(AlignItems::Center),
-        gap: Size { width: length(0.0_f32), height: length(28.0_f32) },
-        ..Default::default()
-    })
-    .children(vec![search, grid])
-    .animated_enter(0xA0_91_E0_03_u64, motion::SLOW);
+    let cols = ((usable_w / tile_full).floor() as u32).max(3);
+    let content = gnome_body(apps, query, cols, theme);
 
     let centered = View::new(Style {
         flex_direction: FlexDirection::Column,
