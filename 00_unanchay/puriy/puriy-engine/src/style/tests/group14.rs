@@ -597,3 +597,20 @@ use super::super::*;
         assert_ne!(style_of("scroll-snap-margin-top: 7px").scroll_margin.top,
                    ComputedStyle::default().scroll_margin.top);
     }
+
+    #[test]
+    fn scroll_snap_v0_plumb_fase_7_1031_1034() {
+        // CSS Scroll Snap v0 (deprecado): plumb opaco. Sentinel initial → None.
+        assert_eq!(style_of("scroll-snap-points-x: repeat(100px)").scroll_snap_points_x,
+                   Some("repeat(100px)".to_string()));
+        assert_eq!(style_of("scroll-snap-points-y: repeat(50%)").scroll_snap_points_y,
+                   Some("repeat(50%)".to_string()));
+        assert_eq!(style_of("scroll-snap-destination: 50% 50%").scroll_snap_destination,
+                   Some("50% 50%".to_string()));
+        assert_eq!(style_of("scroll-snap-coordinate: 0 0, 100% 100%").scroll_snap_coordinate,
+                   Some("0 0, 100% 100%".to_string()));
+        // Sentinel = valor initial → None.
+        assert_eq!(style_of("scroll-snap-points-x: none").scroll_snap_points_x, None);
+        assert_eq!(style_of("scroll-snap-coordinate: none").scroll_snap_coordinate, None);
+        assert_eq!(style_of("scroll-snap-destination: 0px 0px").scroll_snap_destination, None);
+    }

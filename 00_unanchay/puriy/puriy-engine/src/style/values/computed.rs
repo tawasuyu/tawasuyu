@@ -1675,5 +1675,18 @@ pub struct ComputedStyle {
     /// `snap-height` (CSS Rhythmic Sizing, draft temprano). `None` = `none`.
     /// HEREDA. Plumb. Fase 7.1005.
     pub snap_height: Option<String>,
+    // === Fase 7.1031-7.1034 — CSS Scroll Snap v0 (deprecado, shipped) ===
+    /// `scroll-snap-points-x` (CSS Scroll Snap v0, 2016). `None` = `none`.
+    /// NO hereda. Plumb. Fase 7.1031.
+    pub scroll_snap_points_x: Option<String>,
+    /// `scroll-snap-points-y` (CSS Scroll Snap v0). `None` = `none`.
+    /// NO hereda. Plumb. Fase 7.1032.
+    pub scroll_snap_points_y: Option<String>,
+    /// `scroll-snap-destination` (CSS Scroll Snap v0). `None` = `0px 0px`.
+    /// NO hereda. Plumb. Fase 7.1033.
+    pub scroll_snap_destination: Option<String>,
+    /// `scroll-snap-coordinate` (CSS Scroll Snap v0). `None` = `none`.
+    /// NO hereda. Plumb. Fase 7.1034.
+    pub scroll_snap_coordinate: Option<String>,
 }
 

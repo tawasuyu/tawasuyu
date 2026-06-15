@@ -600,6 +600,11 @@ impl Default for ComputedStyle {
             drop_initial_after_adjust: None,
             block_progression: None,
             snap_height: None,
+            // Fase 7.1031-7.1034 — Scroll Snap v0, plumb opaco, default None.
+            scroll_snap_points_x: None,
+            scroll_snap_points_y: None,
+            scroll_snap_destination: None,
+            scroll_snap_coordinate: None,
         }
     }
 }

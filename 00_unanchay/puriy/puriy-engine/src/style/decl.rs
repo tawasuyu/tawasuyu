@@ -1113,6 +1113,11 @@ pub(crate) enum DeclKind {
     DropInitialAfterAdjust(Option<String>),
     BlockProgression(Option<String>),
     SnapHeight(Option<String>),
+    // === Fase 7.1031-7.1034 — CSS Scroll Snap v0 (deprecado, shipped) ===
+    ScrollSnapPointsX(Option<String>),
+    ScrollSnapPointsY(Option<String>),
+    ScrollSnapDestination(Option<String>),
+    ScrollSnapCoordinate(Option<String>),
 }
 
 impl Decl {
@@ -1863,6 +1868,11 @@ impl Decl {
             DeclKind::DropInitialAfterAdjust(v) => s.drop_initial_after_adjust = v.clone(),
             DeclKind::BlockProgression(v) => s.block_progression = v.clone(),
             DeclKind::SnapHeight(v) => s.snap_height = v.clone(),
+            // Fase 7.1031-7.1034 — CSS Scroll Snap v0, plumb opaco.
+            DeclKind::ScrollSnapPointsX(v) => s.scroll_snap_points_x = v.clone(),
+            DeclKind::ScrollSnapPointsY(v) => s.scroll_snap_points_y = v.clone(),
+            DeclKind::ScrollSnapDestination(v) => s.scroll_snap_destination = v.clone(),
+            DeclKind::ScrollSnapCoordinate(v) => s.scroll_snap_coordinate = v.clone(),
         }
     }
 }

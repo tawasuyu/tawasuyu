@@ -1,0 +1,958 @@
+[Parent 46771, Main Thread] WARNING: Failed to create DBus proxy for org.a11y.Bus: Cannot autolaunch D-Bus without X11 $DISPLAY
+: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+** (zen:46771): WARNING **: 14:51:03.210: Failed to create DBus proxy for org.a11y.Bus: Cannot autolaunch D-Bus without X11 $DISPLAY
+
+Failed to create DBUS proxy: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:11.401: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:11.410: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:11.647: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:11.759: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:11.963: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:12.051: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:12.949: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.244: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.269: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.284: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.303: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.321: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.829: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.842: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.855: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.882: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:13.925: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:14.047: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:14.149: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:15.033: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.522: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.690: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.707: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.724: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.740: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.754: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.770: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.789: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.808: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.824: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.841: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.858: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.876: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.891: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.909: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.924: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.943: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.960: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:17.974: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:18.107: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:18.207: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.163: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.177: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.193: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.207: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.225: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.244: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.260: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.277: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.291: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.307: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.324: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.344: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.360: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:19.377: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.294: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.328: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.344: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.358: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.375: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.392: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.412: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.429: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.446: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.462: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.478: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.494: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.512: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.527: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:22.544: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.369: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.369: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.489: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.583: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.710: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.785: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.832: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.861: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.881: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.895: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.918: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.929: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.944: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.959: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.976: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:23.993: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.011: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.030: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.063: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.112: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.165: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.263: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.469: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.542: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.565: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.581: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:24.653: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.328: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.328: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.403: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.493: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.555: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.583: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:25.599: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.079: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.096: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.115: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.132: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.150: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.168: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.183: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.199: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.217: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.234: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.248: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.265: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.283: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:28.299: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.284: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.301: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.321: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.340: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.362: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.377: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.399: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.416: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.435: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.448: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.460: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.472: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:33.486: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Main Thread] WARNING: g_object_set_is_valid_property: object class 'GtkImage' has no property named 'padding': 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): GLib-GObject-CRITICAL **: 14:54:37.448: g_object_set_is_valid_property: object class 'GtkImage' has no property named 'padding'
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.466: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.514: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.539: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.561: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.573: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.589: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:37.605: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:39.825: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:40.093: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:40.204: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.762: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.775: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.795: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.808: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.825: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.841: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.859: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.878: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.894: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.910: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.924: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.941: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:41.957: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.059: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.111: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.128: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.145: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.162: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.178: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.195: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.212: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.232: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.245: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.262: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.279: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.296: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.313: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.577: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.587: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.598: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.612: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.701: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.755: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.785: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.800: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.813: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.830: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.846: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.862: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.879: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:45.896: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.076: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.129: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.150: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.187: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.219: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.251: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.265: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.285: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.302: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:47.331: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:50.733: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:50.750: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:50.766: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:50.962: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 14:54:50.962: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+Failed to create DBUS proxy: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:13.730: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Main Thread] WARNING: g_object_set_is_valid_property: object class 'GtkImage' has no property named 'padding': 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): GLib-GObject-CRITICAL **: 15:14:13.934: g_object_set_is_valid_property: object class 'GtkImage' has no property named 'padding'
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:13.981: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:13.981: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.079: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.103: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.118: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.153: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.174: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.204: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.223: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:14.257: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:17.085: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:18.090: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:18.104: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:18.121: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:18.134: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:18.319: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 15:14:18.319: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Main Thread] WARNING: Failed to connect to proxy: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): libnotify-WARNING **: 15:21:34.438: Failed to connect to proxy
+[Child 47279, MediaDecoderStateMachine #1] WARNING: 7dc6e76684c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #1] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #1] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #1] WARNING: 7dc6e7668160 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #1] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #1] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #7] WARNING: 7dc7033fea60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #7] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #7] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #4] WARNING: 7dc6e7668160 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #4] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #4] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #4] WARNING: 7dc6f7cfedc0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #4] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #4] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #5] WARNING: 7dc6eb5b03a0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #5] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #5] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #11] WARNING: 7dc6fed60a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #11] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #11] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #17] WARNING: 7dc7021bb820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #17] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #17] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #26] WARNING: 7dc700e1e700 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #26] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #26] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #17] WARNING: 7dc7048a6040 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #17] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #17] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #17] WARNING: 7dc703af3280 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #17] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #17] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #19] WARNING: 7dc703c0c4c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #19] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #19] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #20] WARNING: 7dc6fa9ae3a0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #20] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #20] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #25] WARNING: 7dc7048a6a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #25] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #25] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #29] WARNING: 7dc6f7d32160 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #29] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #29] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Parent 46771, Main Thread] WARNING: Failed to create DBus proxy for org.freedesktop.UPower: Error calling StartServiceByName for org.freedesktop.UPower: Failed to execute program org.freedesktop.UPower: Permission denied
+: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+** (zen:46771): WARNING **: 18:00:47.407: Failed to create DBus proxy for org.freedesktop.UPower: Error calling StartServiceByName for org.freedesktop.UPower: Failed to execute program org.freedesktop.UPower: Permission denied
+
+[Child 47279, MediaDecoderStateMachine #34] WARNING: 7dc708657940 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #34] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #34] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #34] WARNING: Decoder=7dc6eae82400 Decode error: NS_ERROR_DOM_MEDIA_RANGE_ERR (0x806e0069) - Result<already_AddRefed<MediaRawData>, MediaResult> mozilla::SampleIterator::GetNext(): Sample data byte range beyond end of resource: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #34] WARNING: Decoder=7dc6eae82400 Decode error: NS_ERROR_DOM_MEDIA_RANGE_ERR (0x806e0069) - Result<already_AddRefed<MediaRawData>, MediaResult> mozilla::SampleIterator::GetNext(): Sample data byte range beyond end of resource: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #35] WARNING: 7dc7029a95e0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #35] WARNING: Decoder=7dc6fe6dc500 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #40] WARNING: 7dc6eb594700 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #40] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #40] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #41] WARNING: 7dc6f0184a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #41] WARNING: Decoder=7dc6ebf65f00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #41] WARNING: 7dc7029a9ee0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #41] WARNING: Decoder=7dc6ebf65f00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #41] WARNING: 7dc6f7cc5b80 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #41] WARNING: Decoder=7dc6ebf65f00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #41] WARNING: 7dc6f1b31040 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #41] WARNING: Decoder=7dc6ebf65f00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #41] WARNING: 7dc6ea7ac040 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #41] WARNING: Decoder=7dc6ebf65f00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #42] WARNING: 7dc7021bb700 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #42] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #42] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #43] WARNING: 7dc700e1eee0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #43] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #43] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #44] WARNING: 7dc7021bb4c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #44] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #44] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #45] WARNING: 7dc6ff3264c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #45] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #45] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #46] WARNING: 7dc700e1e5e0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #46] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #46] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #47] WARNING: 7dc6ff326820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #47] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #47] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #48] WARNING: 7dc700e1e4c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #48] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #48] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #49] WARNING: 7dc6ff326b80 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #49] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #49] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #50] WARNING: 7dc700e1ea60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #50] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #50] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #51] WARNING: 7dc6fea1c040 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #51] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #51] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #52] WARNING: 7dc6ff326040 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #52] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #52] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #54] WARNING: 7dc701defca0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #54] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #54] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #50] WARNING: 7dc6f2d3b5e0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #50] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #50] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #51] WARNING: 7dc6ee8f6a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #51] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #51] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #52] WARNING: 7dc6ee8f6160 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #52] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #52] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #53] WARNING: 7dc6ec2663a0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #53] WARNING: Decoder=7dc6eae83900 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #53] WARNING: Decoder=7dc6eae83900 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #55] WARNING: 7dc6ee8f6b80 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #55] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #55] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+Failed to create DBUS proxy: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.387: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Main Thread] WARNING: g_object_set_is_valid_property: object class 'GtkImage' has no property named 'padding': 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): GLib-GObject-CRITICAL **: 19:16:11.625: g_object_set_is_valid_property: object class 'GtkImage' has no property named 'padding'
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.649: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.767: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.768: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.846: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.903: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:11.977: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.044: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.066: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.599: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.682: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.699: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.715: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.732: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.751: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.766: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.800: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.820: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.853: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:12.882: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.290: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.484: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.504: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.520: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.538: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.715: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Parent 46771, Unnamed thread 791e4c4253a0] WARNING: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY: 'glib warning', file ./../../../toolkit/xre/nsSigHandlers.cpp:200
+
+(zen:46771): dconf-WARNING **: 19:16:22.716: failed to commit changes to dconf: Cannot autolaunch D-Bus without X11 $DISPLAY
+[Child 47279, MediaDecoderStateMachine #58] WARNING: 7dc700380700 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #58] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #58] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #60] WARNING: 7dc6fbafa820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #60] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #60] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #60] WARNING: 7dc6fbafa4c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #60] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #60] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #61] WARNING: 7dc6f7cc5160 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #61] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #61] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #62] WARNING: 7dc703a16040 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #62] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #62] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #66] WARNING: 7dc6f8f84820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #66] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #66] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #68] WARNING: 7dc6f92c2a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #68] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #68] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #69] WARNING: 7dc6f8f844c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #69] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #69] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #69] WARNING: 7dc6ff326940 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #69] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #69] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #82] WARNING: 7dc704c18700 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #82] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #82] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #82] WARNING: 7dc700380dc0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #82] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #82] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #82] WARNING: 7dc700380dc0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #82] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #82] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #75] WARNING: 7dc701def5e0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #75] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #75] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #83] WARNING: 7dc6ee8f6ee0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #83] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #83] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #85] WARNING: 7dc7003954c0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #85] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #85] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #96] WARNING: 7dc6ee80f5e0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #96] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #96] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #96] WARNING: 7dc6ee80fee0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #96] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #96] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #97] WARNING: 7dc6ee80f820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #97] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #97] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #107] WARNING: 7dc703a16820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #107] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #107] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 56755, MediaDecoderStateMachine #101] WARNING: 7dc6ffce4820 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 56755, MediaDecoderStateMachine #101] WARNING: Decoder=7dc708618a00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 56755, MediaDecoderStateMachine #101] WARNING: Decoder=7dc708618a00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #115] WARNING: 7dc703a16a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #115] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #115] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #115] WARNING: 7dc6eae28dc0 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #115] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #115] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+[Child 47279, MediaDecoderStateMachine #117] WARNING: 7dc6eb5b0a60 OpenCubeb() failed to init cubeb: file ./../../../dom/media/AudioStream.cpp:279
+[Child 47279, MediaDecoderStateMachine #117] WARNING: Decoder=7dc704fa2d00 [OnMediaSinkAudioError]: file ./../../../dom/media/MediaDecoderStateMachine.cpp:4630
+[Child 47279, MediaDecoderStateMachine #117] WARNING: Decoder=7dc704fa2d00 Decode error: NS_ERROR_DOM_MEDIA_MEDIASINK_ERR (0x806e000b) - OnMediaSinkAudioError: file ./../../../dom/media/MediaDecoderStateMachineBase.cpp:168
+Crash Annotation GraphicsCriticalError: |[C0][GFX1-]: Managed to allocate after flush. (t=26867.3) [GFX1-]: Managed to allocate after flush.
+Crash Annotation GraphicsCriticalError: |[0]CP+[GFX1-]: Managed to allocate after flush. (t=26867.6) |[1][GFX1-]: Wayland protocol error: Compositor () crashed, proxy: WP:E WP:CA WP:CR WP:CPCA WP:CPCF  (t=28624.3) [GFX1-]: Wayland protocol error: Compositor () crashed, proxy: WP:E WP:CA WP:CR WP:CPCA WP:CPCF 
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.
+Exiting due to channel error.

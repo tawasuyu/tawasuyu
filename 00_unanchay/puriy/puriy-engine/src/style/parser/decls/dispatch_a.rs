@@ -457,6 +457,13 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "scroll-margin-right" | "scroll-snap-margin-right" => parse_length_px(value).map(DeclKind::ScrollMarginRight),
         "scroll-margin-bottom" | "scroll-snap-margin-bottom" => parse_length_px(value).map(DeclKind::ScrollMarginBottom),
         "scroll-margin-left" | "scroll-snap-margin-left" => parse_length_px(value).map(DeclKind::ScrollMarginLeft),
+        // Fase 7.1031-7.1034 — CSS Scroll Snap v0 (Working Draft 2016, shipped
+        // por Blink/Gecko/WebKit antes del rediseño v1). Deprecadas; plumb
+        // opaco. Sentinel = valor initial → None. NO heredan.
+        "scroll-snap-points-x" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapPointsX),
+        "scroll-snap-points-y" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapPointsY),
+        "scroll-snap-destination" => opaque_or_sentinel(value, "0px 0px").map(DeclKind::ScrollSnapDestination),
+        "scroll-snap-coordinate" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapCoordinate),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
