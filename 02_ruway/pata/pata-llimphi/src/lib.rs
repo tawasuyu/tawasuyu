@@ -128,6 +128,13 @@ pub enum Msg {
     /// Rueda del mouse sobre el medidor de brillo: ajusta la luminosidad de la
     /// pantalla. El `f32` es el delta de la rueda (signo = dirección).
     BrightnessWheel(f32),
+    /// Desplegar/replegar el control panel (quick settings: volumen, brillo,
+    /// batería, Wi-Fi, Bluetooth). Al abrir, refresca las lecturas del sistema.
+    ControlToggle,
+    /// Conmutar la radio Wi-Fi (`rfkill`). El `bool` es el estado deseado.
+    ControlWifi(bool),
+    /// Conmutar la radio Bluetooth (`rfkill`). El `bool` es el estado deseado.
+    ControlBt(bool),
     /// Desplegar/replegar el menú del botón de inicio.
     StartToggle,
     /// Cicla al próximo estilo de menú (Classic → XP → GNOME → Classic).
@@ -244,6 +251,9 @@ pub enum SlotWidget {
     /// íconos de apps que lanzan al click. Dato del host (`AppRegistry`), no del
     /// view-model de core — se pasa al render aparte (como `WindowList`).
     ProgramManager,
+    /// El botón del control panel (quick settings): un engranaje que abre el
+    /// flyout de volumen/brillo/batería/radios ([`Msg::ControlToggle`]).
+    Control,
 }
 
 /// `true` si la config pide el reloj en **UTC** (`general.timezone = "UTC"`).
@@ -485,7 +495,8 @@ impl SurfaceWidgets {
                 | SlotWidget::Tray
                 | SlotWidget::Weather { .. }
                 | SlotWidget::Cava
-                | SlotWidget::ProgramManager => None,
+                | SlotWidget::ProgramManager
+                | SlotWidget::Control => None,
             })
     }
 }
@@ -529,6 +540,11 @@ pub struct Model {
     pub clip_history: Vec<String>,
     /// `true` cuando el popup del historial del portapapeles está desplegado.
     pub clip_open: bool,
+    /// `true` cuando el control panel (quick settings) está desplegado.
+    pub control_open: bool,
+    /// Lecturas del sistema para el control panel (batería, radios), refrescadas
+    /// al abrirlo. Volumen/brillo salen del `last_ctx` del sampler.
+    pub control_extras: render::ControlExtras,
     /// `true` cuando el panel del reloj (fijar fecha/hora) está desplegado.
     pub clock_open: bool,
     /// Borrador de fecha/hora que el panel del reloj edita.
@@ -643,6 +659,8 @@ impl Model {
                         SlotWidget::Cava
                     } else if spec.kind == "program_manager" {
                         SlotWidget::ProgramManager
+                    } else if spec.kind == "control" {
+                        SlotWidget::Control
                     } else {
                         let exec = spec.str_prop("exec", "");
                         SlotWidget::Core {
@@ -821,6 +839,8 @@ impl App for PataApp {
             clipboard,
             clip_history: Vec::new(),
             clip_open: false,
+            control_open: false,
+            control_extras: render::ControlExtras::default(),
             clock_open: false,
             clock_draft: ClockDraft::default(),
             cpu_open: false,
@@ -996,6 +1016,24 @@ impl App for PataApp {
                 if model.clip_open {
                     model.menu_open = false;
                 }
+            }
+            Msg::ControlToggle => {
+                model.control_open = !model.control_open;
+                if model.control_open {
+                    // Refresca batería/radios al abrir (volumen/brillo van por
+                    // el último ctx del sampler, ya en vivo).
+                    model.control_extras = render::ControlExtras::read();
+                    model.menu_open = false;
+                    model.clip_open = false;
+                }
+            }
+            Msg::ControlWifi(on) => {
+                render::set_radio("wlan", on);
+                model.control_extras.wifi = on;
+            }
+            Msg::ControlBt(on) => {
+                render::set_radio("bluetooth", on);
+                model.control_extras.bt = on;
             }
             Msg::ClipboardPick(text) => {
                 sampler::copiar_clipboard(&text);
@@ -1235,6 +1273,19 @@ impl App for PataApp {
             return Some(render::clipboard_overlay(
                 &model.clip_history,
                 bar_h,
+                &model.theme,
+            ));
+        }
+        if model.control_open {
+            let bar_h = bar_thickness_for(&model.cfg, "control");
+            let screen = (model.screen.0 as f32, model.screen.1 as f32);
+            return Some(render::control_overlay(
+                model.last_ctx.volume,
+                model.last_ctx.muted,
+                model.last_ctx.brightness,
+                &model.control_extras,
+                bar_h,
+                screen,
                 &model.theme,
             ));
         }

@@ -1,0 +1,324 @@
+//! Control panel (quick settings): un flyout con volumen, brillo, batería y
+//! switches de Wi-Fi/Bluetooth. Unifica en un solo overlay lo que antes estaba
+//! disperso en widgets sueltos de la barra (volumen/brillo) y lo que faltaba
+//! del todo (batería, radios). Se abre desde un botón de la barra
+//! ([`Msg::ControlToggle`]); el scrim cierra al click afuera.
+//!
+//! Volumen/brillo reusan los mismos mensajes que las ventanitas existentes
+//! ([`Msg::VolumeSet`]/[`Msg::BrightnessSet`], fracción absoluta `0..1`); las
+//! radios emiten [`Msg::ControlWifi`]/[`Msg::ControlBt`]. Las lecturas del
+//! sistema (batería, estado de las radios) viven en [`ControlExtras`].
+
+use llimphi_theme::{elevation, radius, Theme};
+use llimphi_ui::llimphi_layout::taffy::{
+    prelude::{auto, length, percent, FlexDirection, Position, Size, Style},
+    AlignItems, JustifyContent, Rect as TaffyRect,
+};
+use llimphi_ui::llimphi_raster::peniko::Color;
+use llimphi_ui::llimphi_text::Alignment;
+use llimphi_ui::{Shadow, View};
+use llimphi_widget_switch::{switch_view, SwitchPalette};
+
+use crate::Msg;
+
+/// Ancho del panel (px).
+const PANEL_W: f32 = 300.0;
+/// Alto de una fila de slider.
+const ROW_H: f32 = 30.0;
+/// Largo de la pista del slider horizontal.
+const TRACK_W: f32 = 150.0;
+const TRACK_H: f32 = 8.0;
+
+/// Lecturas del sistema que no provee el `WidgetCtx` del sampler: estado de la
+/// batería y de las radios. Se refrescan al abrir el panel.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ControlExtras {
+    /// `(porcentaje 0..=100, cargando)`, o `None` si no hay batería (desktop).
+    pub battery: Option<(u8, bool)>,
+    pub wifi: bool,
+    pub bt: bool,
+}
+
+impl ControlExtras {
+    /// Lee batería de `/sys/class/power_supply` y las radios de `rfkill`.
+    /// Tolerante: lo que no se puede leer queda en su default.
+    pub fn read() -> Self {
+        Self {
+            battery: read_battery(),
+            wifi: rfkill_on("wlan"),
+            bt: rfkill_on("bluetooth"),
+        }
+    }
+}
+
+/// Primer `BAT*` con `capacity` + `status`. `None` si no hay (máquina de escritorio).
+fn read_battery() -> Option<(u8, bool)> {
+    let base = std::path::Path::new("/sys/class/power_supply");
+    let rd = std::fs::read_dir(base).ok()?;
+    for e in rd.flatten() {
+        let p = e.path();
+        let name = e.file_name();
+        if !name.to_string_lossy().starts_with("BAT") {
+            continue;
+        }
+        let cap = std::fs::read_to_string(p.join("capacity")).ok()?;
+        let pct: u8 = cap.trim().parse().ok()?;
+        let status = std::fs::read_to_string(p.join("status")).unwrap_or_default();
+        let charging = status.trim().eq_ignore_ascii_case("Charging");
+        return Some((pct.min(100), charging));
+    }
+    None
+}
+
+/// `true` si la radio `kind` (`wlan`/`bluetooth`) está habilitada (no bloqueada).
+/// Lee `rfkill -rn` y mira la columna `soft`. Sin `rfkill` → asume encendida.
+fn rfkill_on(kind: &str) -> bool {
+    let out = std::process::Command::new("rfkill")
+        .args(["-rno", "TYPE,SOFT"])
+        .output();
+    let Ok(out) = out else {
+        return true;
+    };
+    String::from_utf8_lossy(&out.stdout).lines().any(|l| {
+        let l = l.trim();
+        l.starts_with(kind) && !l.contains("blocked")
+    })
+}
+
+/// Conmuta una radio vía `rfkill` (no espera). `wlan`/`bluetooth`.
+pub fn set_radio(kind: &str, on: bool) {
+    let action = if on { "unblock" } else { "block" };
+    let _ = std::process::Command::new("rfkill").args([action, kind]).spawn();
+}
+
+/// El botón de la barra que abre el control panel (un engranaje clickeable).
+pub fn control_button_view(theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: length(28.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .radius(6.0)
+    .hover_fill(theme.bg_button_hover)
+    .tooltip("Configuración rápida".to_string())
+    .on_click(Msg::ControlToggle)
+    .text("⚙".to_string(), 16.0, theme.fg_text)
+}
+
+/// El overlay completo: scrim (cierra al click) + el panel anclado arriba a la
+/// derecha, bajo la barra.
+pub fn control_overlay(
+    volume: f32,
+    muted: bool,
+    brightness: f32,
+    extras: &ControlExtras,
+    bar_h: f32,
+    screen: (f32, f32),
+    theme: &Theme,
+) -> View<Msg> {
+    let _ = screen;
+    let panel = control_panel(volume, muted, brightness, extras, theme);
+    // Fila que empuja el panel a la derecha.
+    let fila = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: auto() },
+        justify_content: Some(JustifyContent::FlexEnd),
+        padding: TaffyRect {
+            left: length(0.0_f32),
+            right: length(8.0_f32),
+            top: length(8.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![panel]);
+
+    View::new(Style {
+        position: Position::Absolute,
+        inset: TaffyRect {
+            left: length(0.0_f32),
+            top: length(bar_h),
+            right: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        size: Size { width: percent(1.0_f32), height: auto() },
+        ..Default::default()
+    })
+    .on_click(Msg::ControlToggle)
+    .children(vec![fila])
+}
+
+fn control_panel(
+    volume: f32,
+    muted: bool,
+    brightness: f32,
+    extras: &ControlExtras,
+    theme: &Theme,
+) -> View<Msg> {
+    let mut hijos: Vec<View<Msg>> = vec![titulo("Control", theme)];
+
+    // Glifos DejaVu-safe (el sistema no trae emoji a color → tofu): ♪ volumen,
+    // ☀ brillo. El mute se marca tachando con ✕.
+    let vol_glifo = if muted { "✕" } else { "♪" };
+    hijos.push(slider_row(vol_glifo, volume, theme, Msg::VolumeSet));
+    hijos.push(slider_row("☀", brightness, theme, Msg::BrightnessSet));
+
+    if let Some((pct, charging)) = extras.battery {
+        let valor = if charging {
+            format!("{pct}% ⚡")
+        } else {
+            format!("{pct}%")
+        };
+        hijos.push(kv_row("Batería", &valor, theme));
+    }
+
+    hijos.push(switch_row("Wi-Fi", extras.wifi, theme, |on| Msg::ControlWifi(on)));
+    hijos.push(switch_row(
+        "Bluetooth",
+        extras.bt,
+        theme,
+        |on| Msg::ControlBt(on),
+    ));
+
+    let (a, blur, dy) = elevation::E4;
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: length(PANEL_W), height: auto() },
+        padding: TaffyRect {
+            left: length(14.0_f32),
+            right: length(14.0_f32),
+            top: length(12.0_f32),
+            bottom: length(12.0_f32),
+        },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(radius::LG)
+    .shadow(Shadow {
+        color: Color::from_rgba8(0, 0, 0, a),
+        blur,
+        dx: 0.0,
+        dy,
+        spread: 0.0,
+    })
+    .children(hijos)
+}
+
+fn titulo(t: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(t.to_string(), 13.0, theme.fg_muted)
+}
+
+/// Fila glifo + slider horizontal clickeable (mapea x → fracción → `on_set`).
+fn slider_row(glifo: &str, frac: f32, theme: &Theme, on_set: fn(f32) -> Msg) -> View<Msg> {
+    let icono = View::new(Style {
+        size: Size { width: length(26.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text(glifo.to_string(), 15.0, theme.fg_text);
+
+    // Pista: fondo + relleno proporcional.
+    let frac = frac.clamp(0.0, 1.0);
+    let relleno = View::new(Style {
+        size: Size { width: percent(frac), height: length(TRACK_H) },
+        ..Default::default()
+    })
+    .fill(theme.accent)
+    .radius((TRACK_H / 2.0) as f64);
+    let pista = View::new(Style {
+        size: Size { width: length(TRACK_W), height: length(TRACK_H) },
+        ..Default::default()
+    })
+    .fill(theme.bg_button)
+    .radius((TRACK_H / 2.0) as f64)
+    .on_click_at(move |x, _y, w, _h| {
+        if w <= 0.0 {
+            return None;
+        }
+        Some(on_set((x / w).clamp(0.0, 1.0)))
+    })
+    .children(vec![relleno]);
+    let pista_wrap = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .children(vec![pista]);
+
+    let valor = View::new(Style {
+        size: Size { width: length(38.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexEnd),
+        ..Default::default()
+    })
+    .text_aligned(
+        format!("{:.0}%", frac * 100.0),
+        12.0,
+        theme.fg_muted,
+        Alignment::End,
+    );
+
+    fila_base(vec![icono, pista_wrap, valor])
+}
+
+/// Fila etiqueta (izquierda) + valor (derecha): batería.
+fn kv_row(label: &str, valor: &str, theme: &Theme) -> View<Msg> {
+    let etiqueta = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(label.to_string(), 12.5, theme.fg_text);
+    let v = View::new(Style {
+        size: Size { width: length(90.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexEnd),
+        ..Default::default()
+    })
+    .text_aligned(valor.to_string(), 12.5, theme.fg_muted, Alignment::End);
+    fila_base(vec![etiqueta, v])
+}
+
+/// Fila etiqueta + switch (radios).
+fn switch_row(label: &str, on: bool, theme: &Theme, make: fn(bool) -> Msg) -> View<Msg> {
+    let etiqueta = View::new(Style {
+        flex_grow: 1.0,
+        size: Size { width: auto(), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text(label.to_string(), 12.5, theme.fg_text);
+    let sw = View::new(Style {
+        size: Size { width: length(44.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::FlexEnd),
+        ..Default::default()
+    })
+    .children(vec![switch_view(
+        if on { 1.0 } else { 0.0 },
+        make(!on),
+        &SwitchPalette::from_theme(theme),
+    )]);
+    fila_base(vec![etiqueta, sw])
+}
+
+fn fila_base(hijos: Vec<View<Msg>>) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(ROW_H) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(8.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(hijos)
+}

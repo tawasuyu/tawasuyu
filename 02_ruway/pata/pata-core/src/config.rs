@@ -445,6 +445,7 @@ impl Config {
             WidgetSpec::new("clipboard"),
             meter_v("volume"),
             meter_v("brightness"),
+            WidgetSpec::new("control"),
             WidgetSpec::new("tray"),
             meter_v("ram_meter"),
             meter_v("cpu_meter"),
