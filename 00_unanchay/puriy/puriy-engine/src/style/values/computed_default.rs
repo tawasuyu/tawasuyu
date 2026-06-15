@@ -727,6 +727,12 @@ impl Default for ComputedStyle {
             marquee_play_count: None,
             mark: None,
             text_combine_mode: None,
+            // Fase 7.1147-7.1151 — IE -ms-layout-grid, default None.
+            ms_layout_grid: None,
+            ms_layout_grid_char: None,
+            ms_layout_grid_line: None,
+            ms_layout_grid_mode: None,
+            ms_layout_grid_type: None,
         }
     }
 }

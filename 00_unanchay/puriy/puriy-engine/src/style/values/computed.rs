@@ -1938,5 +1938,16 @@ pub struct ComputedStyle {
     /// `text-combine-mode` (legacy, predecesor de text-combine-upright).
     /// `None` = `none`. HEREDA. Plumb. Fase 7.1146.
     pub text_combine_mode: Option<String>,
+    // === Fase 7.1147-7.1151 — IE -ms-layout-grid (East Asian) (plumb opaco) ===
+    /// `-ms-layout-grid` shorthand (IE). `None` = `none`. HEREDA. Plumb. Fase 7.1147.
+    pub ms_layout_grid: Option<String>,
+    /// `-ms-layout-grid-char` (IE). `None` = `none`. HEREDA. Plumb. Fase 7.1148.
+    pub ms_layout_grid_char: Option<String>,
+    /// `-ms-layout-grid-line` (IE). `None` = `none`. HEREDA. Plumb. Fase 7.1149.
+    pub ms_layout_grid_line: Option<String>,
+    /// `-ms-layout-grid-mode` (IE). `None` = `both`. HEREDA. Plumb. Fase 7.1150.
+    pub ms_layout_grid_mode: Option<String>,
+    /// `-ms-layout-grid-type` (IE). `None` = `loose`. HEREDA. Plumb. Fase 7.1151.
+    pub ms_layout_grid_type: Option<String>,
 }
 

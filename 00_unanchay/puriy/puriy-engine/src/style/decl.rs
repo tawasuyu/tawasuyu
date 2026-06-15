@@ -1240,6 +1240,12 @@ pub(crate) enum DeclKind {
     MarqueePlayCount(Option<String>),
     Mark(Option<String>),
     TextCombineMode(Option<String>),
+    // === Fase 7.1147-7.1151 — IE -ms-layout-grid (East Asian) (plumb opaco) ===
+    MsLayoutGrid(Option<String>),
+    MsLayoutGridChar(Option<String>),
+    MsLayoutGridLine(Option<String>),
+    MsLayoutGridMode(Option<String>),
+    MsLayoutGridType(Option<String>),
 }
 
 impl Decl {
@@ -2117,6 +2123,12 @@ impl Decl {
             DeclKind::MarqueePlayCount(v) => s.marquee_play_count = v.clone(),
             DeclKind::Mark(v) => s.mark = v.clone(),
             DeclKind::TextCombineMode(v) => s.text_combine_mode = v.clone(),
+            // Fase 7.1147-7.1151 — IE -ms-layout-grid, plumb opaco.
+            DeclKind::MsLayoutGrid(v) => s.ms_layout_grid = v.clone(),
+            DeclKind::MsLayoutGridChar(v) => s.ms_layout_grid_char = v.clone(),
+            DeclKind::MsLayoutGridLine(v) => s.ms_layout_grid_line = v.clone(),
+            DeclKind::MsLayoutGridMode(v) => s.ms_layout_grid_mode = v.clone(),
+            DeclKind::MsLayoutGridType(v) => s.ms_layout_grid_type = v.clone(),
         }
     }
 }

@@ -1084,3 +1084,29 @@ use super::super::*;
         assert_eq!(span.text_combine_mode.as_deref(), Some("horizontal"));
         assert_eq!(span.marquee_play_count, None);
     }
+
+    #[test]
+    fn ms_layout_grid_plumb_fase_7_1147_1151() {
+        let html = r#"<html><body><div style="
+            -ms-layout-grid: both loose 18px 12px;
+            -ms-layout-grid-char: 16px;
+            -ms-layout-grid-line: 20px;
+            -ms-layout-grid-mode: line;
+            -ms-layout-grid-type: strict
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.ms_layout_grid.as_deref(), Some("both loose 18px 12px"));
+        assert_eq!(t.ms_layout_grid_char.as_deref(), Some("16px"));
+        assert_eq!(t.ms_layout_grid_line.as_deref(), Some("20px"));
+        assert_eq!(t.ms_layout_grid_mode.as_deref(), Some("line"));
+        assert_eq!(t.ms_layout_grid_type.as_deref(), Some("strict"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-layout-grid-mode: both").ms_layout_grid_mode, None);
+        assert_eq!(style_of("-ms-layout-grid-type: loose").ms_layout_grid_type, None);
+        // Todas HEREDAN (layout CJK).
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.ms_layout_grid_char.as_deref(), Some("16px"));
+        assert_eq!(span.ms_layout_grid_type.as_deref(), Some("strict"));
+    }

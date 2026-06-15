@@ -612,6 +612,13 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "mark" => opaque_or_sentinel(value, "none").map(DeclKind::Mark),
         // `text-combine-mode` (legacy, predecesor de text-combine-upright). HEREDA.
         "text-combine-mode" => opaque_or_sentinel(value, "none").map(DeclKind::TextCombineMode),
+        // === Fase 7.1147-7.1151 — IE -ms-layout-grid (grilla East Asian) (plumb opaco) ===
+        // HEREDAN (layout de texto CJK). Sentinel = initial → None.
+        "-ms-layout-grid" => opaque_or_sentinel(value, "none").map(DeclKind::MsLayoutGrid),
+        "-ms-layout-grid-char" => opaque_or_sentinel(value, "none").map(DeclKind::MsLayoutGridChar),
+        "-ms-layout-grid-line" => opaque_or_sentinel(value, "none").map(DeclKind::MsLayoutGridLine),
+        "-ms-layout-grid-mode" => opaque_or_sentinel(value, "both").map(DeclKind::MsLayoutGridMode),
+        "-ms-layout-grid-type" => opaque_or_sentinel(value, "loose").map(DeclKind::MsLayoutGridType),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

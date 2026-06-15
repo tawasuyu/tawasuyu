@@ -533,6 +533,12 @@ impl StyleEngine {
             style.webkit_line_snap = p.webkit_line_snap.clone();
             style.mark = p.mark.clone();
             style.text_combine_mode = p.text_combine_mode.clone();
+            // Fase 7.1147-7.1151 — la familia -ms-layout-grid hereda (layout CJK).
+            style.ms_layout_grid = p.ms_layout_grid.clone();
+            style.ms_layout_grid_char = p.ms_layout_grid_char.clone();
+            style.ms_layout_grid_line = p.ms_layout_grid_line.clone();
+            style.ms_layout_grid_mode = p.ms_layout_grid_mode.clone();
+            style.ms_layout_grid_type = p.ms_layout_grid_type.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.
