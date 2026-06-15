@@ -191,6 +191,38 @@ fn at_property_y_font_face_coexisten() {
     assert_eq!(eng.registered_properties()[1].initial_value.as_deref(), Some("0deg"));
 }
 
+#[test]
+fn at_property_initial_value_resuelve_var_fase_7_1215() {
+    // `var(--c)` SIN declaración en :root resuelve al initial-value del
+    // `@property` registrado (antes quedaba sin resolver → negro).
+    assert_eq!(
+        p_color(
+            "@property --c { syntax: '<color>'; inherits: false; initial-value: rgb(10, 20, 30); } \
+             p { color: var(--c); }"
+        ),
+        (10, 20, 30)
+    );
+    // El initial-value registrado tiene precedencia sobre el fallback de
+    // `var(--c, fb)` (spec: una custom property registrada nunca es
+    // guaranteed-invalid, así que el fallback no aplica).
+    assert_eq!(
+        p_color(
+            "@property --c { syntax: '<color>'; inherits: false; initial-value: rgb(10, 20, 30); } \
+             p { color: var(--c, rgb(99, 99, 99)); }"
+        ),
+        (10, 20, 30)
+    );
+    // Una declaración en :root SÍ gana sobre el initial-value registrado.
+    assert_eq!(
+        p_color(
+            "@property --c { syntax: '<color>'; inherits: false; initial-value: rgb(10, 20, 30); } \
+             :root { --c: rgb(40, 50, 60); } \
+             p { color: var(--c); }"
+        ),
+        (40, 50, 60)
+    );
+}
+
 // ── Fase 7.924 — @counter-style ────────────────────────────────────────────
 
 #[test]

@@ -121,6 +121,20 @@ impl StyleEngine {
             let cleaned = strip_comments(sheet);
             extract_at_properties(&cleaned, &mut registered_properties);
         }
+        // Fase 7.1215 — el `initial-value` de un `@property` registrado siembra
+        // el mapa global de `vars` como fallback: un `var(--x)` sin declarar en
+        // `:root` resuelve al initial-value registrado (y éste tiene precedencia
+        // sobre el fallback de `var(--x, fb)`, como pide la spec para custom
+        // properties registradas — su valor nunca es guaranteed-invalid). Las
+        // declaraciones de `:root` (recogidas antes) ganan: sólo sembramos
+        // claves ausentes.
+        for pr in &registered_properties {
+            if let (Some(name), Some(init)) =
+                (pr.name.strip_prefix("--"), pr.initial_value.as_ref())
+            {
+                vars.entry(name.to_string()).or_insert_with(|| init.clone());
+            }
+        }
         // Quinta pasada: recoger `@counter-style`. Globales.
         let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
         for sheet in sheets {
