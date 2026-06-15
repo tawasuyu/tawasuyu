@@ -678,6 +678,15 @@ impl Default for ComputedStyle {
             scrollbar_highlight_color: None,
             scrollbar_3dlight_color: None,
             scrollbar_darkshadow_color: None,
+            // Fase 7.1101-7.1108 — IE -ms-grid, default None.
+            ms_grid_columns: None,
+            ms_grid_rows: None,
+            ms_grid_column: None,
+            ms_grid_row: None,
+            ms_grid_column_span: None,
+            ms_grid_row_span: None,
+            ms_grid_column_align: None,
+            ms_grid_row_align: None,
         }
     }
 }

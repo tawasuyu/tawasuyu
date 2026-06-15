@@ -878,3 +878,29 @@ use super::super::*;
         assert_eq!(span.scrollbar_base_color.as_deref(), Some("#ccc"));
         assert_eq!(span.scrollbar_darkshadow_color.as_deref(), Some("#333"));
     }
+
+    #[test]
+    fn ms_grid_plumb_fase_7_1101_1108() {
+        let s = style_of(
+            "-ms-grid-columns: 1fr 200px; \
+             -ms-grid-rows: auto 1fr; \
+             -ms-grid-column: 2; \
+             -ms-grid-row: 3; \
+             -ms-grid-column-span: 2; \
+             -ms-grid-row-span: 4; \
+             -ms-grid-column-align: center; \
+             -ms-grid-row-align: end",
+        );
+        assert_eq!(s.ms_grid_columns.as_deref(), Some("1fr 200px"));
+        assert_eq!(s.ms_grid_rows.as_deref(), Some("auto 1fr"));
+        assert_eq!(s.ms_grid_column.as_deref(), Some("2"));
+        assert_eq!(s.ms_grid_row.as_deref(), Some("3"));
+        assert_eq!(s.ms_grid_column_span.as_deref(), Some("2"));
+        assert_eq!(s.ms_grid_row_span.as_deref(), Some("4"));
+        assert_eq!(s.ms_grid_column_align.as_deref(), Some("center"));
+        assert_eq!(s.ms_grid_row_align.as_deref(), Some("end"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-grid-columns: none").ms_grid_columns, None);
+        assert_eq!(style_of("-ms-grid-column: 1").ms_grid_column, None);
+        assert_eq!(style_of("-ms-grid-row-align: stretch").ms_grid_row_align, None);
+    }

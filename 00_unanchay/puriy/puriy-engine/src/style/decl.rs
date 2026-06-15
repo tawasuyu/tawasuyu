@@ -1191,6 +1191,15 @@ pub(crate) enum DeclKind {
     ScrollbarHighlightColor(Option<String>),
     Scrollbar3dlightColor(Option<String>),
     ScrollbarDarkshadowColor(Option<String>),
+    // === Fase 7.1101-7.1108 — IE -ms-grid (IE10 grid) (plumb opaco) ===
+    MsGridColumns(Option<String>),
+    MsGridRows(Option<String>),
+    MsGridColumn(Option<String>),
+    MsGridRow(Option<String>),
+    MsGridColumnSpan(Option<String>),
+    MsGridRowSpan(Option<String>),
+    MsGridColumnAlign(Option<String>),
+    MsGridRowAlign(Option<String>),
 }
 
 impl Decl {
@@ -2019,6 +2028,15 @@ impl Decl {
             DeclKind::ScrollbarHighlightColor(v) => s.scrollbar_highlight_color = v.clone(),
             DeclKind::Scrollbar3dlightColor(v) => s.scrollbar_3dlight_color = v.clone(),
             DeclKind::ScrollbarDarkshadowColor(v) => s.scrollbar_darkshadow_color = v.clone(),
+            // Fase 7.1101-7.1108 — IE -ms-grid, plumb opaco.
+            DeclKind::MsGridColumns(v) => s.ms_grid_columns = v.clone(),
+            DeclKind::MsGridRows(v) => s.ms_grid_rows = v.clone(),
+            DeclKind::MsGridColumn(v) => s.ms_grid_column = v.clone(),
+            DeclKind::MsGridRow(v) => s.ms_grid_row = v.clone(),
+            DeclKind::MsGridColumnSpan(v) => s.ms_grid_column_span = v.clone(),
+            DeclKind::MsGridRowSpan(v) => s.ms_grid_row_span = v.clone(),
+            DeclKind::MsGridColumnAlign(v) => s.ms_grid_column_align = v.clone(),
+            DeclKind::MsGridRowAlign(v) => s.ms_grid_row_align = v.clone(),
         }
     }
 }

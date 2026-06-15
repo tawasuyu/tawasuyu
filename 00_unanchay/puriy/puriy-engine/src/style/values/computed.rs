@@ -1845,5 +1845,22 @@ pub struct ComputedStyle {
     pub scrollbar_3dlight_color: Option<String>,
     /// `scrollbar-darkshadow-color` (IE). HEREDA. Plumb. Fase 7.1100.
     pub scrollbar_darkshadow_color: Option<String>,
+    // === Fase 7.1101-7.1108 — IE -ms-grid (IE10 grid) (plumb opaco) ===
+    /// `-ms-grid-columns` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1101.
+    pub ms_grid_columns: Option<String>,
+    /// `-ms-grid-rows` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1102.
+    pub ms_grid_rows: Option<String>,
+    /// `-ms-grid-column` (IE10). `None` = `1`. NO hereda. Plumb. Fase 7.1103.
+    pub ms_grid_column: Option<String>,
+    /// `-ms-grid-row` (IE10). `None` = `1`. NO hereda. Plumb. Fase 7.1104.
+    pub ms_grid_row: Option<String>,
+    /// `-ms-grid-column-span` (IE10). `None` = `1`. NO hereda. Plumb. Fase 7.1105.
+    pub ms_grid_column_span: Option<String>,
+    /// `-ms-grid-row-span` (IE10). `None` = `1`. NO hereda. Plumb. Fase 7.1106.
+    pub ms_grid_row_span: Option<String>,
+    /// `-ms-grid-column-align` (IE10). `None` = `stretch`. NO hereda. Plumb. Fase 7.1107.
+    pub ms_grid_column_align: Option<String>,
+    /// `-ms-grid-row-align` (IE10). `None` = `stretch`. NO hereda. Plumb. Fase 7.1108.
+    pub ms_grid_row_align: Option<String>,
 }
 

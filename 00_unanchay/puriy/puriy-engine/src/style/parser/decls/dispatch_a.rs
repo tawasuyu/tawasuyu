@@ -551,6 +551,15 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "scrollbar-highlight-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarHighlightColor),
         "scrollbar-3dlight-color" => opaque_or_sentinel(value, "").map(DeclKind::Scrollbar3dlightColor),
         "scrollbar-darkshadow-color" => opaque_or_sentinel(value, "").map(DeclKind::ScrollbarDarkshadowColor),
+        // === Fase 7.1101-7.1108 — IE -ms-grid (IE10 grid, sintaxis -ms-) (plumb opaco) ===
+        "-ms-grid-columns" => opaque_or_sentinel(value, "none").map(DeclKind::MsGridColumns),
+        "-ms-grid-rows" => opaque_or_sentinel(value, "none").map(DeclKind::MsGridRows),
+        "-ms-grid-column" => opaque_or_sentinel(value, "1").map(DeclKind::MsGridColumn),
+        "-ms-grid-row" => opaque_or_sentinel(value, "1").map(DeclKind::MsGridRow),
+        "-ms-grid-column-span" => opaque_or_sentinel(value, "1").map(DeclKind::MsGridColumnSpan),
+        "-ms-grid-row-span" => opaque_or_sentinel(value, "1").map(DeclKind::MsGridRowSpan),
+        "-ms-grid-column-align" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsGridColumnAlign),
+        "-ms-grid-row-align" => opaque_or_sentinel(value, "stretch").map(DeclKind::MsGridRowAlign),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)
