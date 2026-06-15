@@ -492,6 +492,33 @@ impl Config {
         (0..count as i32).map(|i| (i % cols, i / cols)).collect()
     }
 
+    /// La geometría 2D resultante de mover el escritorio `desktop` por
+    /// `(dx, dy)` celdas — para el editor de Prezi del panel. Si otra celda ya
+    /// ocupa el destino, **intercambian** posiciones (no se pisan). Clampa a
+    /// coordenadas ≥ 0. Función pura: parte de [`overview_geometry_for`] y
+    /// devuelve la geometría nueva (lista para guardar en `overview_geometry`).
+    pub fn overview_geometry_moved(
+        &self,
+        count: usize,
+        desktop: usize,
+        dx: i32,
+        dy: i32,
+    ) -> Vec<(i32, i32)> {
+        let mut geo = self.overview_geometry_for(count);
+        let Some(&(c, r)) = geo.get(desktop) else {
+            return geo;
+        };
+        let target = ((c + dx).max(0), (r + dy).max(0));
+        if target == (c, r) {
+            return geo;
+        }
+        if let Some(other) = (0..geo.len()).find(|&i| i != desktop && geo[i] == target) {
+            geo[other] = (c, r); // swap: el ocupante toma la celda vieja
+        }
+        geo[desktop] = target;
+        geo
+    }
+
     /// La dirección de disposición de las salidas en el escritorio compuesto.
     /// Default `Horizontal` si el slug no se reconoce — el chequeo duro se
     /// hace al cargar la config (ver [`Self::from_ron`]).
@@ -809,6 +836,22 @@ mod tests {
     #[test]
     fn the_template_parses_to_the_defaults() {
         assert_eq!(Config::from_ron(CONFIG_TEMPLATE).unwrap(), Config::default());
+    }
+
+    #[test]
+    fn overview_geometry_moved_clampa_y_swapea() {
+        // 4 escritorios → grilla 2×2 automática: 0=(0,0) 1=(1,0) 2=(0,1) 3=(1,1).
+        let c = Config::default();
+        // Mover el 0 a la derecha → cae sobre el 1 → intercambian.
+        let g = c.overview_geometry_moved(4, 0, 1, 0);
+        assert_eq!(g[0], (1, 0));
+        assert_eq!(g[1], (0, 0), "el ocupante toma la celda vieja del 0");
+        // Mover el 0 a la izquierda desde (0,0) → clampa, no cambia nada.
+        let g = c.overview_geometry_moved(4, 0, -1, 0);
+        assert_eq!(g[0], (0, 0));
+        // Mover el 3 a una celda libre (abajo) → sin swap.
+        let g = c.overview_geometry_moved(4, 3, 0, 1);
+        assert_eq!(g[3], (1, 2));
     }
 
     #[test]

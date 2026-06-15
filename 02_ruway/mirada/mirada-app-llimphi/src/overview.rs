@@ -44,6 +44,9 @@ pub fn overview_view<M, F>(
     cam: Camera,
     screen: (i32, i32),
     on_pick: F,
+    // Modo editor de geometría: `Some(sel)` resalta el escritorio `sel`
+    // (el que mueven las flechas); `None` = vista normal.
+    edit_sel: Option<usize>,
 ) -> View<M>
 where
     M: Clone + 'static,
@@ -119,7 +122,15 @@ where
         }
 
         let is_active = i == active;
-        let border = if is_active { theme.accent } else { theme.border };
+        // En modo editor, la celda seleccionada (la que mueven las flechas) va
+        // en ámbar para distinguirla del escritorio activo.
+        let border = if edit_sel == Some(i) {
+            Color::from_rgba8(245, 180, 50, 255)
+        } else if is_active {
+            theme.accent
+        } else {
+            theme.border
+        };
 
         // Ventanas del escritorio `i`, a escala dentro de la celda.
         let mut cell_children: Vec<View<M>> = Vec::new();
@@ -225,6 +236,32 @@ where
             .fill(canvas_bg)
             .radius(5.0)
             .children(cell_children)]),
+        );
+    }
+
+    // Banner del editor de geometría.
+    if edit_sel.is_some() {
+        children.push(
+            View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(10.0_f32),
+                    right: length(0.0_f32),
+                    bottom: auto(),
+                },
+                size: Size { width: percent(1.0_f32), height: length(22.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .text_aligned(
+                "Editor de Prezi · flechas: mover · 1-9: elegir escritorio · g: salir"
+                    .to_string(),
+                12.0,
+                Color::from_rgba8(245, 180, 50, 255),
+                Alignment::Center,
+            ),
         );
     }
 

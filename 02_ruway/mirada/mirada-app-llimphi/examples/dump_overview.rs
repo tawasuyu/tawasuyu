@@ -102,6 +102,8 @@ fn main() {
         Camera { zoom, focus },
         (W as i32, H as i32),
         |_| (),
+        // MIRADA_OVERVIEW_EDIT=1 → modo editor con `focus` seleccionado.
+        std::env::var("MIRADA_OVERVIEW_EDIT").ok().map(|_| focus),
     );
 
     // view → layout → scene (misma secuencia que el eventloop).

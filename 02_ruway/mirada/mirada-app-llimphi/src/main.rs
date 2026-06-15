@@ -97,6 +97,11 @@ struct Model {
     /// Vista espacial abierta, o `None` (el escritorio normal). Ver
     /// [`OverviewState`].
     overview: Option<OverviewState>,
+    /// Editor de geometría del Prezi activo (tecla `g` en el overview): las
+    /// flechas mueven el escritorio [`overview_sel`](Self::overview_sel).
+    overview_edit: bool,
+    /// Escritorio seleccionado en el editor de geometría (0-based).
+    overview_sel: usize,
     /// Geometría vigente — lo que se pinta. Es la última `Place` emitida.
     placements: Vec<WindowPlacement>,
     /// Contador de ids para las ventanas sintéticas.
@@ -154,6 +159,13 @@ enum Msg {
     OverviewTick,
     /// Elige un escritorio en la vista espacial: arranca el zoom-in hacia él.
     OverviewPick(usize),
+    /// Entra/sale del editor de geometría del Prezi (tecla `g`).
+    OverviewEditToggle,
+    /// Selecciona qué escritorio mueven las flechas en el editor (0-based).
+    OverviewSelect(usize),
+    /// Mueve el escritorio seleccionado `(dcol, dfila)` en la geometría 2D y
+    /// guarda la config (el compositor la hot-reloadea).
+    OverviewMove(i32, i32),
     /// Click en una ventana del lienzo.
     FocusWindow(WindowId),
     /// Barra de menú principal: abrir/cerrar un menú raíz (`None` cerrar).
@@ -246,6 +258,8 @@ impl App for Mirada {
             theme: chrome_theme,
             desktop,
             overview: None,
+            overview_edit: false,
+            overview_sel: 0,
             placements: Vec::new(),
             next_id: 1,
             link,
@@ -293,16 +307,32 @@ impl App for Mirada {
         // Con la vista espacial abierta, es modal: Esc/`e` la cierran, un
         // dígito 1..9 aterriza en ese escritorio, y el resto se traga.
         if model.overview.is_some() {
+            let editing = model.overview_edit;
             return match &e.key {
                 Key::Named(NamedKey::Escape) => Some(Msg::ToggleOverview),
+                // En modo editor las flechas MUEVEN el escritorio seleccionado.
+                Key::Named(NamedKey::ArrowLeft) if editing => Some(Msg::OverviewMove(-1, 0)),
+                Key::Named(NamedKey::ArrowRight) if editing => Some(Msg::OverviewMove(1, 0)),
+                Key::Named(NamedKey::ArrowUp) if editing => Some(Msg::OverviewMove(0, -1)),
+                Key::Named(NamedKey::ArrowDown) if editing => Some(Msg::OverviewMove(0, 1)),
                 Key::Character(s) => {
                     let s = s.to_lowercase();
                     if s == "e" {
                         return Some(Msg::ToggleOverview);
                     }
+                    if s == "g" {
+                        return Some(Msg::OverviewEditToggle);
+                    }
                     match s.bytes().next() {
                         Some(c) if c.is_ascii_digit() && c != b'0' => {
-                            Some(Msg::OverviewPick((c - b'1') as usize))
+                            let d = (c - b'1') as usize;
+                            // Editor: el dígito ELIGE qué escritorio mover;
+                            // vista normal: aterriza en él.
+                            Some(if editing {
+                                Msg::OverviewSelect(d)
+                            } else {
+                                Msg::OverviewPick(d)
+                            })
                         }
                         _ => None,
                     }
@@ -345,6 +375,31 @@ impl App for Mirada {
             Msg::FocusWindow(id) => act(&mut m, DesktopAction::FocusWindow(id)),
             Msg::ToggleOverview => toggle_overview(&mut m, handle),
             Msg::OverviewPick(target) => overview_pick(&mut m, target, handle),
+            Msg::OverviewEditToggle => {
+                m.overview_edit = !m.overview_edit;
+                if m.overview_edit {
+                    m.overview_sel = m.desktop.active_index();
+                    m.note = "editor de geometría del Prezi: flechas mueven".into();
+                }
+            }
+            Msg::OverviewSelect(d) => {
+                let count = m.desktop.workspace_loads().len().max(1);
+                m.overview_sel = d.min(count - 1);
+            }
+            Msg::OverviewMove(dx, dy) => {
+                let count = m.desktop.workspace_loads().len().max(1);
+                let sel = m.overview_sel.min(count - 1);
+                let mut cfg = m.desktop.config().clone();
+                cfg.overview_geometry = cfg.overview_geometry_moved(count, sel, dx, dy);
+                if let Some(p) = mirada_brain::Config::default_path() {
+                    if let Err(e) = cfg.save(&p) {
+                        m.note = format!("no pude guardar la geometría: {e}");
+                    }
+                }
+                // Aplicar en vivo: el overview re-pinta siguiendo la geometría
+                // nueva (y el compositor la hot-reloadea desde config.ron).
+                m.desktop.set_config(cfg);
+            }
             Msg::OverviewTick => {
                 // Si el aterrizaje terminó, salta al destino y cierra la vista.
                 let landing = m.overview.as_ref().and_then(|ov| {
@@ -437,6 +492,7 @@ impl App for Mirada {
                 Camera { zoom: ov.zoom.value(), focus: ov.focus },
                 (SCREEN_W, SCREEN_H),
                 Msg::OverviewPick,
+                model.overview_edit.then_some(model.overview_sel),
             ),
             None => canvas_view(model, theme, on_accent, win_bg, canvas_bg),
         };
