@@ -86,6 +86,7 @@ impl<A: App> ApplicationHandler<UserEvent<A::Msg>> for Runtime<A> {
             match &self.handle.inner {
                 HandleInner::Real(p) => p.clone(),
                 HandleInner::Test => unreachable!("resumed sin event loop real"),
+                HandleInner::Lifted(_) => unreachable!("el runtime nunca corre con un handle lifteado"),
             };
         let a11y_adapter =
             accesskit_winit::Adapter::with_event_loop_proxy(event_loop, &window, a11y_proxy);

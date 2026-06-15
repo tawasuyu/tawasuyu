@@ -271,6 +271,13 @@ enum HandleInner<Msg: Send + 'static> {
     /// llamar funciones que toman `&Handle<Msg>` sin levantar un event
     /// loop real (que en CI sin display tiraría).
     Test,
+    /// Handle **lifteado**: reenvía cada `Msg` (de un sub-app hospedado) al
+    /// handle del host aplicándole una función de elevación `Sub -> Host`. Lo
+    /// crea [`Handle::lift`]; permite que el `update` de un app embebido use
+    /// `dispatch`/`spawn`/`spawn_periodic` con su propio `Msg` y que el
+    /// resultado llegue al loop del host. No maneja ventanas (open/close/quit
+    /// son no-op): esas son del host, no del hospedado.
+    Lifted(Arc<dyn Fn(Msg) + Send + Sync>),
 }
 
 impl<Msg: Send + 'static> Clone for Handle<Msg> {
@@ -279,6 +286,7 @@ impl<Msg: Send + 'static> Clone for Handle<Msg> {
             inner: match &self.inner {
                 HandleInner::Real(p) => HandleInner::Real(p.clone()),
                 HandleInner::Test => HandleInner::Test,
+                HandleInner::Lifted(f) => HandleInner::Lifted(f.clone()),
             },
         }
     }
@@ -303,6 +311,26 @@ impl<Msg: Send + 'static> Handle<Msg> {
                 let _ = p.send_event(UserEvent::Quit);
             }
             HandleInner::Test => {}
+            // Un app hospedado no cierra el loop del host.
+            HandleInner::Lifted(_) => {}
+        }
+    }
+
+    /// Deriva un handle para un **sub-app hospedado**: el `update`/efectos del
+    /// sub-app usan su propio `Sub` msg, y `lift` los eleva al `Msg` del host
+    /// antes de despacharlos a este loop. Es la pieza que permite embeber un
+    /// App entero en otro (junto con [`crate::View::map`] para su `view`) sin
+    /// reescribirlo a patrón módulo. El sub-handle es `Clone + Send` como
+    /// cualquier handle. `open_window`/`close_window`/`quit` quedan no-op en él
+    /// (esas son del host).
+    pub fn lift<Sub, F>(&self, lift: F) -> Handle<Sub>
+    where
+        Sub: Send + 'static,
+        F: Fn(Sub) -> Msg + Send + Sync + 'static,
+    {
+        let parent = self.clone();
+        Handle {
+            inner: HandleInner::Lifted(Arc::new(move |sub: Sub| parent.dispatch(lift(sub)))),
         }
     }
 
@@ -339,6 +367,7 @@ impl<Msg: Send + 'static> Handle<Msg> {
                 let _ = p.send_event(UserEvent::Msg(msg));
             }
             HandleInner::Test => {}
+            HandleInner::Lifted(f) => f(msg),
         }
     }
 
@@ -362,6 +391,14 @@ impl<Msg: Send + 'static> Handle<Msg> {
                 // tests que dependan de su side) pero el msg se descarta.
                 std::thread::spawn(move || {
                     let _ = f();
+                });
+            }
+            HandleInner::Lifted(lift) => {
+                // Tarea one-shot del sub-app: corre en su hilo y el resultado
+                // se eleva al host vía la closure de lift.
+                let lift = lift.clone();
+                std::thread::spawn(move || {
+                    lift(f());
                 });
             }
         }
@@ -399,6 +436,17 @@ impl<Msg: Send + 'static> Handle<Msg> {
                 // arrancamos el loop. Los tests que necesiten verificar
                 // periodic behaviour deben usar el callback directo.
                 let _ = f;
+            }
+            HandleInner::Lifted(lift) => {
+                // Mismo loop que `Real` pero elevando al host. Si el loop del
+                // host se cerró, la closure de lift termina en un dispatch
+                // no-op (spinea hasta el exit, costo despreciable — igual que
+                // `Real`); aceptable para un ticker de animación/feed.
+                let lift = lift.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(period);
+                    lift(f());
+                });
             }
         }
     }
@@ -807,6 +855,27 @@ pub fn run<A: App>() {
 mod tests {
     use super::*;
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn lift_aplica_la_funcion_de_elevacion() {
+        use std::sync::{Arc, Mutex};
+        // `lift` aplica la función Sub->Host síncronamente en `dispatch` (el
+        // dispatch al padre Test es no-op, pero la elevación corre): así
+        // observamos que el msg del sub-app se transforma para el host.
+        let seen = Arc::new(Mutex::new(Vec::<i32>::new()));
+        let parent: Handle<i32> = Handle::for_test();
+        let sub: Handle<String> = {
+            let seen = seen.clone();
+            parent.lift(move |s: String| {
+                let n = s.len() as i32;
+                seen.lock().unwrap().push(n);
+                n
+            })
+        };
+        sub.dispatch("hola".to_string());
+        let _ = sub.clone(); // es Clone como cualquier handle
+        assert_eq!(*seen.lock().unwrap(), vec![4]);
+    }
 
     #[test]
     fn velocidad_de_drag_promedia_dentro_de_la_ventana() {
