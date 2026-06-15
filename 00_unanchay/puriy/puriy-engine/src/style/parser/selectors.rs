@@ -295,20 +295,30 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
                     let arg = &sel[arg_start..arg_start + rel_close];
                     let p = match name.as_str() {
                         "nth-child" => {
-                            // Fase 7.933 — `:nth-child(An+B of <sel>)` (CSS
-                            // Selectors 4): parseamos el An+B e ignoramos el
-                            // filtro `of <sel>` (aproximación: matchea sin el
-                            // filtro de tipo). Mejor que tirar la regla.
-                            let (a, b) = parse_nth_arg(nth_strip_of(arg))?;
-                            Pseudo::NthChild { a, b }
+                            // Fase 7.1211 — `:nth-child(An+B of S)` (CSS
+                            // Selectors 4): parseamos el An+B y la lista `S`,
+                            // que ahora SÍ filtra el matching (antes se
+                            // descartaba). `S` inválido tira la regla.
+                            let (anb, of) = nth_split_of(arg);
+                            let (a, b) = parse_nth_arg(anb)?;
+                            let of = match of {
+                                Some(s) => Some(parse_nth_of_list(s)?),
+                                None => None,
+                            };
+                            Pseudo::NthChild { a, b, of }
                         }
                         "nth-of-type" => {
                             let (a, b) = parse_nth_arg(arg)?;
                             Pseudo::NthOfType { a, b }
                         }
                         "nth-last-child" => {
-                            let (a, b) = parse_nth_arg(nth_strip_of(arg))?;
-                            Pseudo::NthLastChild { a, b }
+                            let (anb, of) = nth_split_of(arg);
+                            let (a, b) = parse_nth_arg(anb)?;
+                            let of = match of {
+                                Some(s) => Some(parse_nth_of_list(s)?),
+                                None => None,
+                            };
+                            Pseudo::NthLastChild { a, b, of }
                         }
                         "nth-last-of-type" => {
                             let (a, b) = parse_nth_arg(arg)?;
@@ -463,17 +473,31 @@ pub(crate) fn parse_compound(sel: &str) -> Option<Compound> {
     Some(Compound { tag, ids, classes, attrs, pseudos })
 }
 
-/// Quita el filtro `of <selector>` de un argumento `:nth-child()` (CSS
-/// Selectors 4), devolviendo sólo la parte `An+B`. `"2 of .item"` → `"2"`.
-/// Fase 7.933.
-fn nth_strip_of(arg: &str) -> &str {
+/// Separa un argumento de `:nth-child()` en `(An+B, Option<S>)` partiendo
+/// (helper viejo `nth_strip_of` retirado en 7.1211; ahora el `of` se parsea).
+/// por el token ` of ` (CSS Selectors 4). `"2 of .item"` → `("2", Some(".item"))`;
+/// `"odd"` → `("odd", None)`. Fase 7.1211 (antes sólo se descartaba el `of`).
+fn nth_split_of(arg: &str) -> (&str, Option<&str>) {
     let lower = arg.to_ascii_lowercase();
-    // Buscamos el token ` of ` (rodeado de whitespace) a nivel superior.
     if let Some(pos) = lower.find(" of ") {
-        arg[..pos].trim()
+        (arg[..pos].trim(), Some(arg[pos + 4..].trim()))
     } else {
-        arg.trim()
+        (arg.trim(), None)
     }
+}
+
+/// Parsea la lista de selectores `S` de un `:nth-child(An+B of S)`. Devuelve
+/// `None` si alguna parte es inválida (la regla entera se descarta, como con
+/// cualquier selector inválido). Fase 7.1211.
+fn parse_nth_of_list(s: &str) -> Option<Vec<Selector>> {
+    let mut out = Vec::new();
+    for part in split_selector_list(s) {
+        out.push(parse_selector(part.trim())?);
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
 }
 
 /// Parsea el interior de `[...]`: `name`, `name=val`, `name="val"`,

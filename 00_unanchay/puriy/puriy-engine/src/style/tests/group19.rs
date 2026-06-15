@@ -366,14 +366,22 @@ fn pseudo_clases_estandar_parsean() {
 
 #[test]
 fn nth_child_of_selector() {
-    // `:nth-child(An+B of S)` parsea (ignora el filtro `of S`).
+    // `:nth-child(An+B of S)` parsea An+B Y la lista `S` (Fase 7.1211).
     let s = parse_selector(":nth-child(2 of .item)").expect("parsea");
-    // el An+B se preserva (2 → a=0, b=2)
+    // el An+B se preserva (2 → a=0, b=2) y `of` queda con el selector parseado.
     assert!(s.compounds.iter().any(|c| c
         .pseudos
         .iter()
-        .any(|p| matches!(p, Pseudo::NthChild { a: 0, b: 2 }))));
+        .any(|p| matches!(p, Pseudo::NthChild { a: 0, b: 2, of: Some(_) }))));
+    // sin `of`, queda None.
+    let plain = parse_selector(":nth-child(2)").expect("parsea");
+    assert!(plain.compounds.iter().any(|c| c
+        .pseudos
+        .iter()
+        .any(|p| matches!(p, Pseudo::NthChild { a: 0, b: 2, of: None }))));
     assert!(parse_selector(":nth-last-child(odd of li)").is_some());
+    // `S` inválido tira la regla (como cualquier selector inválido).
+    assert!(parse_selector(":nth-child(1 of :totally-made-up)").is_none());
 }
 
 // ── Fase 7.934 — pseudo-elementos: parsean (no tiran la regla), inertes ─────

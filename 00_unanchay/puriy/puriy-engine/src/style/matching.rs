@@ -135,6 +135,15 @@ impl Selector {
                     }
                     // `:where(...)` no aporta especificidad.
                     Pseudo::Where(_) => {}
+                    // `:nth-child(... of S)` / `:nth-last-child(... of S)`:
+                    // la pseudo-clase cuenta como una (b), más la
+                    // especificidad del selector más específico de `S`
+                    // (CSS Selectors 4).
+                    Pseudo::NthChild { of: Some(list), .. }
+                    | Pseudo::NthLastChild { of: Some(list), .. } => {
+                        classes_etc += 1;
+                        extra += list.iter().map(Selector::specificity).max().unwrap_or(0);
+                    }
                     _ => classes_etc += 1,
                 }
             }
@@ -218,11 +227,14 @@ pub(crate) enum Pseudo {
     /// focado"; el engine no sabe qué nodo lo está y deja la decisión
     /// al chrome.
     Focus,
-    /// `:nth-child(an+b)` — match si la posición 1-indexed del nodo en
-    /// el padre satisface `pos = a*k + b` para algún `k >= 0`.
+    /// `:nth-child(an+b [of S]?)` — match si la posición 1-indexed del nodo
+    /// satisface `pos = a*k + b` para algún `k >= 0`. Con `of S` (CSS
+    /// Selectors 4), la posición se cuenta SÓLO entre los hermanos que
+    /// matchean la lista `S`, y el nodo además debe matchear `S`.
     NthChild {
         a: i32,
         b: i32,
+        of: Option<Vec<Selector>>,
     },
     /// `:not(a, b, ...)` — negación de una lista de selectores (CSS Selectors
     /// 4: complejos permitidos, ej `:not(.a > .b)`). Matchea si NINGUNO
@@ -233,10 +245,12 @@ pub(crate) enum Pseudo {
         a: i32,
         b: i32,
     },
-    /// `:nth-last-child(an+b)` — posición contando desde el final.
+    /// `:nth-last-child(an+b [of S]?)` — posición contando desde el final;
+    /// con `of S` se cuenta sólo entre hermanos que matchean `S`.
     NthLastChild {
         a: i32,
         b: i32,
+        of: Option<Vec<Selector>>,
     },
     /// `:nth-last-of-type(an+b)` — posición desde el final entre el mismo tag.
     NthLastOfType {
@@ -477,8 +491,17 @@ pub(crate) fn pseudo_matches(
         Pseudo::FirstOfType => type_pos == 0,
         Pseudo::LastOfType => type_pos + 1 == same_type.len(),
         Pseudo::OnlyOfType => same_type.len() == 1,
-        Pseudo::NthChild { a, b } => nth_matches((pos + 1) as i32, *a, *b),
-        Pseudo::NthLastChild { a, b } => nth_matches((elems.len() - pos) as i32, *a, *b),
+        // `:nth-child(An+B of S)` (CSS Selectors 4): el nodo debe matchear
+        // `S` y la posición se cuenta sólo entre los hermanos que matchean
+        // `S`. Sin `of`, posición entre todos los hermanos-elemento.
+        Pseudo::NthChild { a, b, of } => match of {
+            None => nth_matches((pos + 1) as i32, *a, *b),
+            Some(list) => nth_of_matches(&elems, pos, list, *a, *b, false, hover_active, focus_active),
+        },
+        Pseudo::NthLastChild { a, b, of } => match of {
+            None => nth_matches((elems.len() - pos) as i32, *a, *b),
+            Some(list) => nth_of_matches(&elems, pos, list, *a, *b, true, hover_active, focus_active),
+        },
         Pseudo::NthOfType { a, b } => nth_matches((type_pos + 1) as i32, *a, *b),
         Pseudo::NthLastOfType { a, b } => {
             nth_matches((same_type.len() - type_pos) as i32, *a, *b)
@@ -619,6 +642,48 @@ pub(crate) fn nth_matches(p_css: i32, a: i32, b: i32) -> bool {
     } else {
         diff <= 0 && diff % a == 0
     }
+}
+
+/// `:nth-child(An+B of S)` / `:nth-last-child(... of S)` (CSS Selectors 4):
+/// el nodo en posición `pos` (índice 0-based dentro de `elems`, los hermanos
+/// elemento) matchea si (1) él mismo matchea la lista `S` y (2) su posición
+/// 1-indexed *entre los hermanos que matchean `S`* satisface `An+B`. Con
+/// `from_end` la posición se cuenta desde el final. El nodo es `elems[pos]`.
+#[allow(clippy::too_many_arguments)]
+fn nth_of_matches(
+    elems: &[markup5ever_rcdom::Handle],
+    pos: usize,
+    list: &[Selector],
+    a: i32,
+    b: i32,
+    from_end: bool,
+    hover_active: bool,
+    focus_active: bool,
+) -> bool {
+    let matches_s = |n: &markup5ever_rcdom::Handle| {
+        list.iter()
+            .any(|s| selector_matches_subject(s, n, hover_active, focus_active))
+    };
+    // El nodo debe matchear S, si no nunca cuenta.
+    if !matches_s(&elems[pos]) {
+        return false;
+    }
+    // Índices (en `elems`) de los hermanos que matchean S, en orden de documento.
+    let matching: Vec<usize> = elems
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| matches_s(c))
+        .map(|(i, _)| i)
+        .collect();
+    let Some(idx) = matching.iter().position(|&i| i == pos) else {
+        return false;
+    };
+    let css_pos = if from_end {
+        (matching.len() - idx) as i32
+    } else {
+        (idx + 1) as i32
+    };
+    nth_matches(css_pos, a, b)
 }
 
 /// Tags de control de formulario (para `:enabled`/`:optional`).

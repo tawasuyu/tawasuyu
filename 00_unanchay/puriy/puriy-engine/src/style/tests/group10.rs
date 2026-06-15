@@ -470,6 +470,42 @@ use super::super::*;
     }
 
     #[test]
+    fn selector_nth_child_of_s_filtra() {
+        // Fase 7.1211 — `:nth-child(An+B of S)` (CSS Selectors 4): la posición
+        // se cuenta SÓLO entre hermanos que matchean `S`, y el nodo debe
+        // matchear `S`. Hijos: span .item, p, span .item, span .item, p.
+        let html = r#"<html><head><style>
+            :nth-child(2 of .item) { color: #f00 }
+            :nth-last-child(1 of .item) { color: #00f }
+        </style></head><body><div>
+          <span class="item">a</span>
+          <p>x</p>
+          <span class="item">b</span>
+          <span class="item">c</span>
+          <p>y</p>
+        </div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut all = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            let name = crate::dom::element_name(n);
+            if matches!(name.as_deref(), Some("span") | Some("p")) {
+                all.push(n.clone());
+            }
+        });
+        // all = [span.item#a, p#x, span.item#b, span.item#c, p#y]
+        assert_eq!(all.len(), 5);
+        // El 2º `.item` (índice 2 en el árbol = "b") es rojo; el 1º `.item`
+        // ("a", índice 0) NO, aunque sea :nth-child(1) global.
+        assert_eq!(eng.compute(&all[0]).color, Color::BLACK, "1er .item no es 2-of");
+        assert_eq!(eng.compute(&all[2]).color, Color::rgb(0xff, 0, 0), "2do .item es 2-of");
+        // El <p> en posición global 2 NO matchea (no es .item).
+        assert_eq!(eng.compute(&all[1]).color, Color::BLACK, "<p> no matchea of .item");
+        // El último `.item` ("c") es azul por :nth-last-child(1 of .item).
+        assert_eq!(eng.compute(&all[3]).color, Color::rgb(0, 0, 0xff), "último .item");
+    }
+
+    #[test]
     fn selector_not_excluye() {
         // `p:not(.skip)` matchea todos los <p> excepto los con class skip.
         let html = r#"<html><head><style>
