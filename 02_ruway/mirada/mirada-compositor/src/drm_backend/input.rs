@@ -284,11 +284,24 @@ impl DrmState {
                         let mode = self.app.drag.as_ref().map(|d| d.mode);
                         let id = self.app.drag.as_ref().map(|d| d.id);
                         let zone = self.drag_zone.take();
+                        let (px, py) = self.app.pointer_loc;
                         self.app.drag = None;
-                        if let (Some(mode), Some(id), Some(zi)) = (mode, id, zone) {
+                        if let (Some(mode), Some(id)) = (mode, id) {
                             if matches!(mode, DragMode::Move | DragMode::Tile) {
-                                if let Some(rect) = self.zone_rect(zi) {
-                                    self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect });
+                                match zone.and_then(|zi| self.zone_rect(zi)) {
+                                    // Sobre una zona: aterriza ahí (flotante posicional).
+                                    Some(rect) => {
+                                        self.app.brain_feed(BodyEvent::WindowFloatTo { id, rect })
+                                    }
+                                    // Sin zona: si cayó sobre una tesela, el Cerebro
+                                    // la devuelve al mosaico; sobre vacío, sigue
+                                    // flotando. Antes acá no pasaba nada → una
+                                    // ventana movida no volvía nunca al tile.
+                                    None => self.app.brain_feed(BodyEvent::WindowDragged {
+                                        id,
+                                        x: px as i32,
+                                        y: py as i32,
+                                    }),
                                 }
                             }
                         }

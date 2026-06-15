@@ -52,6 +52,36 @@ fn grab_keys_lists_the_whole_keymap() {
 }
 
 #[test]
+fn dragging_a_floating_window_over_a_tile_returns_it_to_tiling() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    open(&mut d, 2);
+    // Flota la 1 (ToggleFloat actúa sobre la enfocada).
+    d.apply(DesktopAction::FocusWindow(1));
+    d.apply(DesktopAction::ToggleFloat);
+    let active = d.active_index();
+    assert!(d.workspaces[active].is_floating(1), "la 1 debería flotar");
+
+    // Soltar la flotante sobre el centro de la pantalla: ahí vive la 2
+    // (única teselada → ocupa toda el área). Debe volver al mosaico.
+    d.on_event(BodyEvent::WindowDragged { id: 1, x: 960, y: 540 });
+    assert!(
+        !d.workspaces[active].is_floating(1),
+        "soltada sobre una tesela, la 1 debe volver al mosaico"
+    );
+
+    // Soltarla sobre vacío (fuera de toda tesela) no la re-tila.
+    d.apply(DesktopAction::FocusWindow(1));
+    d.apply(DesktopAction::ToggleFloat);
+    assert!(d.workspaces[active].is_floating(1));
+    d.on_event(BodyEvent::WindowDragged { id: 1, x: -100, y: -100 });
+    assert!(
+        d.workspaces[active].is_floating(1),
+        "soltada en vacío, sigue flotando"
+    );
+}
+
+#[test]
 fn set_keymap_swaps_the_bindings_and_regrabs() {
     let mut d = desktop_with_screen();
     for id in [1, 2, 3] {

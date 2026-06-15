@@ -156,13 +156,13 @@ impl Desktop {
                 self.apply(DesktopAction::FocusWindow(id))
             }
             BodyEvent::WindowDragged { id, x, y } => {
-                // Arrastre de una ventana teselada: la intercambia con la
-                // teselada que haya bajo el puntero. Una flotante no entra
-                // aquí (usa WindowFloatTo) — si llega, la ignoramos.
+                // Arrastre soltado sobre el mosaico. Dos casos:
+                //  · teselada → la intercambia con la tesela bajo el puntero.
+                //  · flotante → **vuelve al mosaico** en el lugar de esa tesela
+                //    (el fix de «si muevo una ventana no vuelve al tile jamás»).
+                //    Soltada sobre vacío, sigue flotando (no se toca).
                 let active = self.active_index();
-                if self.workspaces[active].is_floating(id)
-                    || !self.workspaces[active].windows().contains(&id)
-                {
+                if !self.workspaces[active].windows().contains(&id) {
                     return Vec::new();
                 }
                 let Some(o) = self.outputs.get(self.focused_output).copied() else {
@@ -177,9 +177,20 @@ impl Desktop {
                             && rect.contains(x, y)
                     })
                     .map(|(wid, _)| wid);
-                match target {
-                    Some(t) if self.workspaces[active].swap(id, t) => self.relayout(),
-                    _ => Vec::new(),
+                if self.workspaces[active].is_floating(id) {
+                    match target {
+                        Some(t) => {
+                            self.workspaces[active].set_floating(id, None);
+                            self.workspaces[active].swap(id, t);
+                            self.relayout()
+                        }
+                        None => Vec::new(),
+                    }
+                } else {
+                    match target {
+                        Some(t) if self.workspaces[active].swap(id, t) => self.relayout(),
+                        _ => Vec::new(),
+                    }
                 }
             }
             BodyEvent::Keybind(key) => match self.keymap.lookup(&key) {
