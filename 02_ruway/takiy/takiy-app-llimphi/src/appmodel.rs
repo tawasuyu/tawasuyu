@@ -6,7 +6,7 @@ use takiy_app::EditorState;
 use takiy_playback::Player;
 use takiy_synth::MultiProgramRenderer;
 
-use crate::msg::{AutoHit, DragState};
+use crate::msg::{AutoHit, DockItem, DragState};
 
 pub(crate) struct Model {
     pub(crate) editor: EditorState,
@@ -52,4 +52,14 @@ pub(crate) struct Model {
     /// cuando hay una nota seleccionada y el click no cayó sobre un
     /// objeto borrable (nota/dot) — esos siguen borrándose directo.
     pub(crate) context_menu: Option<(f32, f32)>,
+    /// Diente activo del rail izquierdo (mixer/instrumento). `None` = el
+    /// panel está colapsado y sólo se ve la tira de dientes.
+    pub(crate) left_active: Option<DockItem>,
+    /// Diente activo del rail derecho (efectos/tonalidad/automación).
+    pub(crate) right_active: Option<DockItem>,
+    /// Ancho del panel del sidebar izquierdo (px), arrastrable por el
+    /// divisor. Clamp en `[160, 480]`.
+    pub(crate) left_w: f32,
+    /// Ancho del panel del sidebar derecho (px).
+    pub(crate) right_w: f32,
 }

@@ -15,6 +15,7 @@ use takiy_synth::write_wav;
 
 use crate::appmodel::Model;
 use crate::audio::{build_play, play_status_extras, render_score, WAV_EXPORT_SAMPLE_RATE};
+use crate::chrome::{DockSide, PANEL_W_MAX, PANEL_W_MIN, RAIL_W, TOOLBAR_H};
 use crate::msg::{
     hit_test_automation_dot, hit_test_automation_line, DragMode, DragState, Msg,
     AUTO_LANE_MARGIN_PX, RESIZE_EDGE_PX,
@@ -401,9 +402,11 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
             // El right-click no acertó a un objeto borrable. Si hay una
             // nota seleccionada, abrimos el menú contextual sobre ella;
             // las coords locales del canvas se llevan a coords de ventana
-            // sumando la altura de la barra de menú.
+            // sumando el origen del canvas (rail/panel izquierdos + menú +
+            // toolbar).
             if model.editor.selected.is_some() {
-                return actualizar(model, Msg::ContextMenuOpen(lx, ly + MENU_H), handle);
+                let (ox, oy) = canvas_origin(&model);
+                return actualizar(model, Msg::ContextMenuOpen(ox + lx, oy + ly), handle);
             }
         }
         Msg::DragNote { phase, dx, dy, lx0, ly0 } => {
@@ -663,6 +666,25 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
                 model.context_menu = Some((x, y));
             }
         }
+        Msg::DockActivate(side, item) => {
+            // Toggle: re-clickear el diente activo colapsa el panel.
+            let slot = match side {
+                DockSide::Left => &mut model.left_active,
+                DockSide::Right => &mut model.right_active,
+            };
+            *slot = if *slot == Some(item) { None } else { Some(item) };
+        }
+        Msg::SetDockWidth(side, dx) => match side {
+            // Mismo signo que cosmos: el panel izquierdo crece con dx
+            // positivo, el derecho con dx negativo (el divisor está a su
+            // izquierda).
+            DockSide::Left => {
+                model.left_w = (model.left_w + dx).clamp(PANEL_W_MIN, PANEL_W_MAX);
+            }
+            DockSide::Right => {
+                model.right_w = (model.right_w - dx).clamp(PANEL_W_MIN, PANEL_W_MAX);
+            }
+        },
     }
     if is_edit_msg {
         if let Some(path) = model.editor.save_path.as_deref() {
@@ -672,6 +694,22 @@ pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Mo
         }
     }
     model
+}
+
+/// Origen `(x, y)` del canvas del piano roll en coords de ventana. El
+/// canvas vive bajo el menú + la toolbar, y a la derecha del rail
+/// izquierdo (más el panel izquierdo si está abierto, con su divisor de
+/// 6 px). Lo usa el menú contextual para anclarse donde cayó el click.
+fn canvas_origin(model: &Model) -> (f32, f32) {
+    const SPLITTER_W: f32 = 6.0;
+    let x = RAIL_W
+        + if model.left_active.is_some() {
+            model.left_w + SPLITTER_W
+        } else {
+            0.0
+        };
+    let y = MENU_H + TOOLBAR_H;
+    (x, y)
 }
 
 /// Beat al que se ancla un punto de automación cuando el usuario lo

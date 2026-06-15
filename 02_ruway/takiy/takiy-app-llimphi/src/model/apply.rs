@@ -11,7 +11,7 @@ use super::describe::{
     classify_mode, describe_key, describe_master_delay, describe_master_reverb, find_note_idx,
     next_pitch_class, KeyMode,
 };
-use super::{ApplyOutcome, EditMsg, EditorState, MAX_UNDO};
+use super::{ApplyOutcome, EditMsg, EditorState, Snap, MAX_UNDO};
 
 impl EditorState {
     /// Aplica una edición. Envuelve `apply_internal` con la lógica de
@@ -78,6 +78,14 @@ impl EditorState {
             EditMsg::AddNote { beat, midi } => self.add_note(beat, midi),
             EditMsg::DeleteNote { track, idx } => self.delete_note(track, idx),
             EditMsg::Select { track, idx } => self.select(track, idx),
+            EditMsg::SetActiveTrack { track } => self.set_active_track(track),
+            EditMsg::NudgeTrackVolume { track, delta } => self.nudge_track_volume(track, delta),
+            EditMsg::NudgeTrackPan { track, delta } => self.nudge_track_pan(track, delta),
+            EditMsg::ToggleMuteTrack { track } => self.toggle_mute_track(track),
+            EditMsg::ToggleSoloTrack { track } => self.toggle_solo_track(track),
+            EditMsg::SetSnap { snap } => self.set_snap(snap),
+            EditMsg::SetMasterDelayTime { idx } => self.set_master_delay_time(idx),
+            EditMsg::SetMasterReverbRoom { idx } => self.set_master_reverb_room(idx),
             EditMsg::MoveSelected { d_beat, d_semitones } => {
                 self.move_selected(d_beat, d_semitones)
             }
@@ -216,6 +224,100 @@ impl EditorState {
         }
         self.selected = Some((track, idx));
         Some(format!("selected · pista {track} · nota #{idx}"))
+    }
+
+    /// Hace activa la pista por índice (click en su fila del mixer).
+    fn set_active_track(&mut self, track: usize) -> ApplyOutcome {
+        if track >= self.score.tracks().len() {
+            return None;
+        }
+        if self.active_track == track {
+            return None;
+        }
+        self.active_track = track;
+        let name = self
+            .score
+            .track(track)
+            .map(|t| t.name.as_str())
+            .unwrap_or("?");
+        Some(format!("active · pista {track} ({name})"))
+    }
+
+    fn nudge_track_volume(&mut self, track: usize, delta: f32) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        let new_vol = (t.volume + delta).clamp(0.0, 1.5);
+        if (new_vol - t.volume).abs() < f32::EPSILON {
+            return None;
+        }
+        t.volume = new_vol;
+        Some(format!("pista {track} · vol {new_vol:.2}"))
+    }
+
+    fn nudge_track_pan(&mut self, track: usize, delta: f32) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        let new_pan = (t.pan + delta).clamp(-1.0, 1.0);
+        if (new_pan - t.pan).abs() < f32::EPSILON {
+            return None;
+        }
+        t.pan = new_pan;
+        let label = if new_pan.abs() < 0.05 {
+            "C".to_string()
+        } else if new_pan < 0.0 {
+            format!("L{:.0}", new_pan.abs() * 100.0)
+        } else {
+            format!("R{:.0}", new_pan * 100.0)
+        };
+        Some(format!("pista {track} · pan {label}"))
+    }
+
+    fn toggle_mute_track(&mut self, track: usize) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        t.mute = !t.mute;
+        let state = if t.mute { "on" } else { "off" };
+        Some(format!("pista {track} · mute {state}"))
+    }
+
+    fn toggle_solo_track(&mut self, track: usize) -> ApplyOutcome {
+        let t = self.score.track_mut(track)?;
+        t.solo = !t.solo;
+        let state = if t.solo { "on" } else { "off" };
+        Some(format!("pista {track} · solo {state}"))
+    }
+
+    fn set_snap(&mut self, snap: Snap) -> ApplyOutcome {
+        if self.snap == snap {
+            return None;
+        }
+        self.snap = snap;
+        Some(format!("snap · {}", self.snap.label()))
+    }
+
+    fn set_master_delay_time(&mut self, idx: usize) -> ApplyOutcome {
+        // Mismos presets que `cycle_master_delay_time`.
+        const PRESETS: [f32; 5] = [0.5, 1.0, 1.5, 0.75, 0.25];
+        let Some(params) = self.score.master_delay.as_mut() else {
+            return Some("delay off (no se puede fijar tiempo)".into());
+        };
+        let t = *PRESETS.get(idx)?;
+        if (params.time_beats - t).abs() < 1e-3 {
+            return None;
+        }
+        params.time_beats = t;
+        Some(format!("delay · {}", describe_master_delay(&self.score.master_delay)))
+    }
+
+    fn set_master_reverb_room(&mut self, idx: usize) -> ApplyOutcome {
+        // Mismos presets que `cycle_master_reverb_room`.
+        const PRESETS: [f32; 3] = [0.25, 0.5, 0.85];
+        let Some(params) = self.score.master_reverb.as_mut() else {
+            return Some("reverb off (no se puede fijar sala)".into());
+        };
+        let r = *PRESETS.get(idx)?;
+        if (params.room_size - r).abs() < 1e-3 {
+            return None;
+        }
+        params.room_size = r;
+        Some(format!("reverb · {}", describe_master_reverb(&self.score.master_reverb)))
     }
 
     fn move_selected(&mut self, d_beat: f32, d_semitones: i32) -> ApplyOutcome {

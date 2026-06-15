@@ -15,12 +15,18 @@
 //! `cargo run -p takiy-app-llimphi --example pantallazo_takiy --release -- [out.png]`
 #![allow(dead_code)]
 
-// El painter y los mensajes viven en módulos bin-only del crate: los
-// incluimos por `#[path]` para pintar exactamente lo mismo que la app.
+// El painter, los mensajes, el modelo y el cromo viven en módulos
+// bin-only del crate: los incluimos por `#[path]` para montar exactamente
+// la misma view que la app (menubar + toolbar + rails de dientes +
+// paneles + canvas).
 #[path = "../src/msg.rs"]
 mod msg;
 #[path = "../src/paint.rs"]
 mod paint;
+#[path = "../src/appmodel.rs"]
+mod appmodel;
+#[path = "../src/chrome.rs"]
+mod chrome;
 
 use std::fs::File;
 use std::io::BufWriter;
@@ -30,18 +36,22 @@ use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
 use llimphi_ui::llimphi_layout::taffy;
-use llimphi_ui::llimphi_layout::taffy::prelude::{percent, FlexDirection, Size, Style};
+use llimphi_motion::Tween;
+use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
 use llimphi_ui::llimphi_layout::LayoutTree;
 use llimphi_ui::llimphi_raster::peniko::Color;
 use llimphi_ui::llimphi_raster::{vello, Renderer};
 use llimphi_ui::llimphi_text::Typesetter;
-use llimphi_ui::{measure_text_node, mount, paint as paint_view, PaintRect, View};
+use llimphi_ui::{measure_text_node, mount, paint as paint_view, DragPhase, PaintRect, View};
 use llimphi_widget_menubar::{menubar_view, MenuBarSpec, DEFAULT_HEIGHT as MENU_H};
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use takiy_app::{describe_key, pitch_range_with_offset, EditorState, Snap};
 use takiy_core::{
     AutomationLane, DelayParams, Pitch, PitchClass, ReverbParams, Scale, Score, ScoreNote, Track,
 };
 
+use crate::appmodel::Model;
+use crate::chrome::DockItem;
 use crate::msg::Msg;
 use crate::paint::paint_piano_roll;
 
@@ -243,27 +253,58 @@ fn app_menu() -> AppMenu {
         .menu(Menu::new("Ayuda").item(MenuItem::new("Acerca de", "help.about")))
 }
 
-/// Misma composición que `Takiy::view()` (src/main.rs): menubar arriba y
-/// el canvas del piano roll ocupando el resto, con el painter real. Los
-/// handlers de click/drag se omiten — acá nadie clickea.
-fn view_demo(editor: &EditorState, theme: Theme) -> View<Msg> {
-    let score = editor.score.clone();
-    let source = "demo built-in".to_string();
-    let engine = "engine osc".to_string();
-    let status = "Space = play · device 48000 Hz / 2 ch".to_string();
-    let playing = true;
-    let active_track = editor.active_track;
-    let selected = editor.selected;
-    let playback_bpm = score.tempo_bpm;
+/// Construye el `Model` real de la app (sin Player ni SF2 — el pantallazo
+/// no abre device de audio) con el mixer abierto a la izquierda y los
+/// efectos a la derecha, para que se vean los dos sidebars de dientes.
+fn model_demo(theme: Theme) -> Model {
+    Model {
+        editor: editor_demo(),
+        source: "demo built-in".to_string(),
+        theme,
+        player: None,
+        sf2: None,
+        engine: "engine osc".to_string(),
+        playing: true,
+        status: "Space = play · device 48000 Hz / 2 ch".to_string(),
+        playback_bpm: 112.0,
+        last_rect: None,
+        drag: None,
+        auto_pending: None,
+        midi_offset: 0,
+        last_audition_at: None,
+        menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
+        context_menu: None,
+        left_active: Some(DockItem::Pistas),
+        right_active: Some(DockItem::Efectos),
+        left_w: chrome::DEFAULT_PANEL_W,
+        right_w: chrome::DEFAULT_PANEL_W,
+    }
+}
+
+/// Misma composición que `Takiy::view()` (src/main.rs): menubar + toolbar +
+/// cuerpo (rail izq · panel · canvas · panel · rail der), con los mismos
+/// builders del cromo. Los handlers de click/drag se omiten — acá nadie
+/// clickea.
+fn view_demo(model: &Model, theme: Theme) -> View<Msg> {
+    let score = model.editor.score.clone();
+    let source = model.source.clone();
+    let engine = model.engine.clone();
+    let status = model.status.clone();
+    let playing = model.playing;
+    let active_track = model.editor.active_track;
+    let selected = model.editor.selected;
+    let playback_bpm = model.playback_bpm;
     // Cursor congelado en el beat 6.5 (mitad del loop) — determinista.
     let playback_position_seconds = Some(6.5 * 60.0 / playback_bpm);
-    let loop_region = editor.loop_region;
-    let metronome_on = editor.metronome_beats_per_bar.is_some();
-    let snap_label = editor.snap.label();
-    let undo_depth = editor.history.len();
-    let key_label = describe_key(&editor.score.key);
-    let key_scale = editor.score.key.clone();
-    let snap_to_key = editor.snap_to_key;
+    let loop_region = model.editor.loop_region;
+    let metronome_on = model.editor.metronome_beats_per_bar.is_some();
+    let snap_label = model.editor.snap.label();
+    let undo_depth = model.editor.history.len();
+    let key_label = describe_key(&model.editor.score.key);
+    let key_scale = model.editor.score.key.clone();
+    let snap_to_key = model.editor.snap_to_key;
     let (min_midi, max_midi) = pitch_range_with_offset(&score, 0);
     let total_beats = score
         .duration_beats()
@@ -281,6 +322,8 @@ fn view_demo(editor: &EditorState, theme: Theme) -> View<Msg> {
         on_command: Arc::new(|c: &str| Msg::MenuCommand(c.to_string())),
     });
 
+    let toolbar = chrome::toolbar_bar(model, &theme);
+
     let canvas = View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         flex_grow: 1.0,
@@ -297,13 +340,66 @@ fn view_demo(editor: &EditorState, theme: Theme) -> View<Msg> {
         );
     });
 
+    let sp = SplitterPalette::from_theme(&theme);
+    let mut core = canvas;
+    if let Some(rp) = chrome::panel(chrome::DockSide::Right, model, &theme) {
+        core = splitter_two(
+            Direction::Row,
+            core,
+            PaneSize::Flex,
+            rp,
+            PaneSize::Fixed(model.right_w),
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Right, dx)),
+                DragPhase::End => None,
+            },
+            &sp,
+        );
+    }
+    if let Some(lp) = chrome::panel(chrome::DockSide::Left, model, &theme) {
+        core = splitter_two(
+            Direction::Row,
+            lp,
+            PaneSize::Fixed(model.left_w),
+            core,
+            PaneSize::Flex,
+            |phase, dx| match phase {
+                DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Left, dx)),
+                DragPhase::End => None,
+            },
+            &sp,
+        );
+    }
+
+    let center = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![core]);
+
+    let body = View::new(Style {
+        flex_direction: FlexDirection::Row,
+        flex_grow: 1.0,
+        size: Size { width: percent(1.0_f32), height: percent(0.0_f32) },
+        min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
+        ..Default::default()
+    })
+    .children(vec![
+        chrome::rail(chrome::DockSide::Left, model, &theme),
+        center,
+        chrome::rail(chrome::DockSide::Right, model, &theme),
+    ]);
+
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         ..Default::default()
     })
     .fill(theme.bg_app)
-    .children(vec![menubar, canvas])
+    .children(vec![menubar, toolbar, body])
 }
 
 fn main() {
@@ -315,8 +411,8 @@ fn main() {
     }
 
     let theme = Theme::dark(); // el theme canónico de la app (src/main.rs)
-    let editor = editor_demo();
-    let root = view_demo(&editor, theme);
+    let model = model_demo(theme);
+    let root = view_demo(&model, theme);
 
     // view → layout → scene (misma secuencia que el eventloop real).
     let mut layout = LayoutTree::new();

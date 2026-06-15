@@ -34,6 +34,7 @@
 
 mod appmodel;
 mod audio;
+mod chrome;
 mod msg;
 mod paint;
 mod update;
@@ -42,10 +43,12 @@ use std::sync::Arc;
 
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
-use llimphi_ui::llimphi_layout::taffy::prelude::{percent, Size, Style};
+use llimphi_ui::llimphi_layout::taffy::prelude::{length, percent, FlexDirection, Size, Style};
 use llimphi_ui::{
-    App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, PaintRect, View, WheelDelta,
+    App, DragPhase, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, PaintRect, View,
+    WheelDelta,
 };
+use llimphi_widget_splitter::{splitter_two, Direction, PaneSize, SplitterPalette};
 use llimphi_widget_context_menu::{
     context_menu_view, ContextMenuItem, ContextMenuPalette, ContextMenuSpec,
 };
@@ -130,6 +133,12 @@ impl App for Takiy {
             menu_active: usize::MAX,
             menu_anim: Tween::idle(1.0),
             context_menu: None,
+            // El mixer abierto de arranque: el usuario ve sus pistas y los
+            // controles de transporte sin tener que descubrir un atajo.
+            left_active: Some(crate::chrome::DockItem::Pistas),
+            right_active: None,
+            left_w: crate::chrome::DEFAULT_PANEL_W,
+            right_w: crate::chrome::DEFAULT_PANEL_W,
         }
     }
 
@@ -378,13 +387,74 @@ impl App for Takiy {
             );
         });
 
+        // Barra de herramientas bajo el menú.
+        let toolbar = chrome::toolbar_bar(model, &theme);
+
+        // Centro = canvas con los paneles de los sidebars en panes
+        // resizables (mismo patrón que cosmos: panel del item activo como
+        // pane al costado, divisor arrastrable). El rail va aparte, como
+        // columna acoplada a cada borde.
+        let sp = SplitterPalette::from_theme(&theme);
+        let mut core = canvas;
+        if let Some(rp) = chrome::panel(chrome::DockSide::Right, model, &theme) {
+            core = splitter_two(
+                Direction::Row,
+                core,
+                PaneSize::Flex,
+                rp,
+                PaneSize::Fixed(model.right_w),
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Right, dx)),
+                    DragPhase::End => None,
+                },
+                &sp,
+            );
+        }
+        if let Some(lp) = chrome::panel(chrome::DockSide::Left, model, &theme) {
+            core = splitter_two(
+                Direction::Row,
+                lp,
+                PaneSize::Fixed(model.left_w),
+                core,
+                PaneSize::Flex,
+                |phase, dx| match phase {
+                    DragPhase::Move => Some(Msg::SetDockWidth(chrome::DockSide::Left, dx)),
+                    DragPhase::End => None,
+                },
+                &sp,
+            );
+        }
+
+        // El core crece para ocupar el espacio entre los dos rails.
+        let center = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
+            size: Size { width: percent(0.0_f32), height: percent(1.0_f32) },
+            min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![core]);
+
+        let body = View::new(Style {
+            flex_direction: FlexDirection::Row,
+            flex_grow: 1.0,
+            size: Size { width: percent(1.0_f32), height: percent(0.0_f32) },
+            min_size: Size { width: length(0.0_f32), height: length(0.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![
+            chrome::rail(chrome::DockSide::Left, model, &theme),
+            center,
+            chrome::rail(chrome::DockSide::Right, model, &theme),
+        ]);
+
         View::new(Style {
-            flex_direction: llimphi_ui::llimphi_layout::taffy::style::FlexDirection::Column,
+            flex_direction: FlexDirection::Column,
             size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![menubar, canvas])
+        .children(vec![menubar, toolbar, body])
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -402,11 +472,24 @@ impl App for Takiy {
     }
 }
 
-/// Viewport para clampear overlays: último rect conocido del modelo
-/// (incluye la barra de menú) o `initial_size()` si todavía no se pintó.
+/// Viewport para clampear overlays: reconstruye el tamaño de ventana a
+/// partir del rect del canvas (`last_rect`) sumando el cromo que lo
+/// rodea — rails, paneles y divisores en horizontal; menú + toolbar en
+/// vertical. Si todavía no se pintó, cae a `initial_size()`.
 fn viewport_of(model: &Model) -> (f32, f32) {
+    use crate::chrome::{DockSide, RAIL_W, TOOLBAR_H};
     match model.last_rect {
-        Some((w, h)) => (w, h + MENU_H),
+        Some((w, h)) => {
+            const SPLITTER_W: f32 = 6.0;
+            let mut extra_w = RAIL_W * 2.0;
+            if chrome::active_of(model, DockSide::Left).is_some() {
+                extra_w += model.left_w + SPLITTER_W;
+            }
+            if chrome::active_of(model, DockSide::Right).is_some() {
+                extra_w += model.right_w + SPLITTER_W;
+            }
+            (w + extra_w, h + MENU_H + TOOLBAR_H)
+        }
         None => {
             let (w, h) = Takiy::initial_size();
             (w as f32, h as f32)

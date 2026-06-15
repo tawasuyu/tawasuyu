@@ -226,6 +226,28 @@ pub enum EditMsg {
     AddNote { beat: f32, midi: u8 },
     DeleteNote { track: usize, idx: usize },
     Select { track: usize, idx: usize },
+    /// Hace activa la pista `track` (click sobre su fila en el mixer).
+    /// No-op si el índice no existe. No toca la selección de notas.
+    SetActiveTrack { track: usize },
+    /// Suma `delta` al volumen de la pista `track` (clamp `[0, 1.5]`).
+    /// Versión por-índice de [`EditMsg::NudgeActiveVolume`] para los
+    /// faders del mixer, que operan sobre cualquier pista sin requerir
+    /// que sea la activa.
+    NudgeTrackVolume { track: usize, delta: f32 },
+    /// Suma `delta` al pan de la pista `track` (clamp `[-1, 1]`).
+    NudgeTrackPan { track: usize, delta: f32 },
+    /// Toggle mute de la pista `track` (versión por-índice).
+    ToggleMuteTrack { track: usize },
+    /// Toggle solo de la pista `track` (versión por-índice).
+    ToggleSoloTrack { track: usize },
+    /// Fija la granularidad de snap (segmented del panel de tonalidad).
+    SetSnap { snap: Snap },
+    /// Fija el `time_beats` del delay master por índice de preset
+    /// (`[1/8, 1/4, 1/4·, 1/8·, 1/16]`). No-op si el delay está apagado.
+    SetMasterDelayTime { idx: usize },
+    /// Fija el `room_size` del reverb master por índice de preset
+    /// (`[cuarto, sala, catedral]`). No-op si el reverb está apagado.
+    SetMasterReverbRoom { idx: usize },
     MoveSelected { d_beat: f32, d_semitones: i32 },
     /// Posiciona la nota seleccionada en `(start, midi)` absolutos
     /// (snap se aplica al `start`). Idempotente: si el snap no la mueve,

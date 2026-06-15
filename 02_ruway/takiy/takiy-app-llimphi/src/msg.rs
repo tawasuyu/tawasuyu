@@ -5,6 +5,31 @@ use llimphi_ui::DragPhase;
 use takiy_app::EditMsg;
 use takiy_core::{AutomationLane, Track};
 
+/// Cuál de los dos rails de dientes. (Los impls de presentación viven en
+/// `chrome.rs`; el tipo vive acá para que `msg.rs` sea autocontenido — el
+/// example `pantallazo_takiy` lo incluye por `#[path]` sin arrastrar todo
+/// el cromo.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DockSide {
+    Left,
+    Right,
+}
+
+/// Un diente = un panel acoplable de un sidebar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DockItem {
+    /// Mixer: una tira por pista con mute/solo/vol/pan.
+    Pistas,
+    /// Instrumento (programa GM) de la pista activa.
+    Instrumento,
+    /// Efectos de master: delay + reverb.
+    Efectos,
+    /// Tonalidad (raíz + modo) y granularidad de snap.
+    Tonalidad,
+    /// Automación de la pista activa: anclar / limpiar.
+    Automacion,
+}
+
 /// Distancia en píxeles al borde derecho de la nota dentro de la que un
 /// press dispara drag-to-resize en lugar de drag-to-move. Pequeño
 /// suficiente para no robarle clicks al cuerpo de la nota, grande
@@ -111,6 +136,12 @@ pub(crate) enum Msg {
     /// Abre el menú contextual sobre la nota seleccionada, anclado en
     /// `(x, y)` de ventana. No-op si no hay nota seleccionada.
     ContextMenuOpen(f32, f32),
+    /// Click en un diente del rail de un sidebar. Si ese diente ya estaba
+    /// activo, colapsa el panel (`None`); si no, lo activa.
+    DockActivate(DockSide, DockItem),
+    /// Arrastre del divisor de un panel: suma `delta` px al ancho del
+    /// sidebar indicado (clamp en el handler).
+    SetDockWidth(DockSide, f32),
     Quit,
 }
 
