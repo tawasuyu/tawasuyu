@@ -1708,5 +1708,21 @@ pub struct ComputedStyle {
     /// `-moz-binding` (Gecko XBL, removido). `None` = `none`. NO hereda.
     /// Plumb. Fase 7.1042.
     pub moz_binding: Option<String>,
+    // === Fase 7.1043-7.1047 — Gecko -moz-outline-radius (plumb opaco) ===
+    /// `-moz-outline-radius` shorthand (Gecko). `None` = `0`. NO hereda.
+    /// Plumb. Fase 7.1043.
+    pub moz_outline_radius: Option<String>,
+    /// `-moz-outline-radius-topleft` (Gecko). `None` = `0`. NO hereda.
+    /// Plumb. Fase 7.1044.
+    pub moz_outline_radius_topleft: Option<String>,
+    /// `-moz-outline-radius-topright` (Gecko). `None` = `0`. NO hereda.
+    /// Plumb. Fase 7.1045.
+    pub moz_outline_radius_topright: Option<String>,
+    /// `-moz-outline-radius-bottomleft` (Gecko). `None` = `0`. NO hereda.
+    /// Plumb. Fase 7.1046.
+    pub moz_outline_radius_bottomleft: Option<String>,
+    /// `-moz-outline-radius-bottomright` (Gecko). `None` = `0`. NO hereda.
+    /// Plumb. Fase 7.1047.
+    pub moz_outline_radius_bottomright: Option<String>,
 }
 

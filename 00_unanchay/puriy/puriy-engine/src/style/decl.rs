@@ -1127,6 +1127,12 @@ pub(crate) enum DeclKind {
     MozForceBrokenImageIcon(Option<String>),
     MozImageRegion(Option<String>),
     MozBinding(Option<String>),
+    // === Fase 7.1043-7.1047 — Gecko -moz-outline-radius (plumb opaco) ===
+    MozOutlineRadius(Option<String>),
+    MozOutlineRadiusTopleft(Option<String>),
+    MozOutlineRadiusTopright(Option<String>),
+    MozOutlineRadiusBottomleft(Option<String>),
+    MozOutlineRadiusBottomright(Option<String>),
 }
 
 impl Decl {
@@ -1891,6 +1897,12 @@ impl Decl {
             DeclKind::MozForceBrokenImageIcon(v) => s.moz_force_broken_image_icon = v.clone(),
             DeclKind::MozImageRegion(v) => s.moz_image_region = v.clone(),
             DeclKind::MozBinding(v) => s.moz_binding = v.clone(),
+            // Fase 7.1043-7.1047 — -moz-outline-radius, plumb opaco.
+            DeclKind::MozOutlineRadius(v) => s.moz_outline_radius = v.clone(),
+            DeclKind::MozOutlineRadiusTopleft(v) => s.moz_outline_radius_topleft = v.clone(),
+            DeclKind::MozOutlineRadiusTopright(v) => s.moz_outline_radius_topright = v.clone(),
+            DeclKind::MozOutlineRadiusBottomleft(v) => s.moz_outline_radius_bottomleft = v.clone(),
+            DeclKind::MozOutlineRadiusBottomright(v) => s.moz_outline_radius_bottomright = v.clone(),
         }
     }
 }

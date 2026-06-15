@@ -474,6 +474,13 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-moz-force-broken-image-icon" => opaque_or_sentinel(value, "0").map(DeclKind::MozForceBrokenImageIcon),
         "-moz-image-region" => opaque_or_sentinel(value, "auto").map(DeclKind::MozImageRegion),
         "-moz-binding" => opaque_or_sentinel(value, "none").map(DeclKind::MozBinding),
+        // === Fase 7.1043-7.1047 — Gecko -moz-outline-radius (plumb opaco) ===
+        // Predecesor de `border-radius` para outlines. Sentinel `0` → None.
+        "-moz-outline-radius" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadius),
+        "-moz-outline-radius-topleft" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusTopleft),
+        "-moz-outline-radius-topright" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusTopright),
+        "-moz-outline-radius-bottomleft" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusBottomleft),
+        "-moz-outline-radius-bottomright" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusBottomright),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

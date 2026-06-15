@@ -650,3 +650,22 @@ use super::super::*;
         assert_eq!(span.moz_orient, None);
         assert_eq!(span.moz_binding, None);
     }
+
+    #[test]
+    fn moz_outline_radius_plumb_fase_7_1043_1047() {
+        let s = style_of(
+            "-moz-outline-radius: 5px; \
+             -moz-outline-radius-topleft: 1px; \
+             -moz-outline-radius-topright: 2px; \
+             -moz-outline-radius-bottomleft: 3px; \
+             -moz-outline-radius-bottomright: 4px",
+        );
+        assert_eq!(s.moz_outline_radius.as_deref(), Some("5px"));
+        assert_eq!(s.moz_outline_radius_topleft.as_deref(), Some("1px"));
+        assert_eq!(s.moz_outline_radius_topright.as_deref(), Some("2px"));
+        assert_eq!(s.moz_outline_radius_bottomleft.as_deref(), Some("3px"));
+        assert_eq!(s.moz_outline_radius_bottomright.as_deref(), Some("4px"));
+        // Sentinel `0` (initial) → None.
+        assert_eq!(style_of("-moz-outline-radius: 0").moz_outline_radius, None);
+        assert_eq!(style_of("-moz-outline-radius-topleft: 0").moz_outline_radius_topleft, None);
+    }

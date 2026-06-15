@@ -614,6 +614,12 @@ impl Default for ComputedStyle {
             moz_force_broken_image_icon: None,
             moz_image_region: None,
             moz_binding: None,
+            // Fase 7.1043-7.1047 — -moz-outline-radius, plumb opaco, default None.
+            moz_outline_radius: None,
+            moz_outline_radius_topleft: None,
+            moz_outline_radius_topright: None,
+            moz_outline_radius_bottomleft: None,
+            moz_outline_radius_bottomright: None,
         }
     }
 }
