@@ -453,8 +453,8 @@ pub(crate) fn dispatch_c(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         // Fase 7.617 — `user-modify` (+ alias `-webkit-user-modify`). `read-only` → None.
-        // Fase 7.810 — `-moz-user-modify` alias vendor (Gecko, mismo semántico).
-        "user-modify" | "-webkit-user-modify" | "-moz-user-modify" => {
+        // Fase 7.810 — `-moz-user-modify` / Fase 7.961 — `-khtml-user-modify` (KHTML originó la propiedad).
+        "user-modify" | "-webkit-user-modify" | "-moz-user-modify" | "-khtml-user-modify" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("read-only") {

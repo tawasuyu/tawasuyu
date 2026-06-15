@@ -224,3 +224,106 @@ use super::super::*;
         let p = dom.find("p").unwrap();
         assert!(eng.compute(&p).transitions.is_empty());
     }
+
+    #[test]
+    fn opera_presto_aliases_fase_7_941_945() {
+        // -o-* (Opera Presto legacy) deben enrutar al mismo almacén que el estándar.
+        let html = r#"<html><body>
+            <img style="-o-object-fit: cover; -o-object-position: right bottom">
+            <p style="-o-text-overflow: ellipsis; -o-tab-size: 4; -o-transform: translateX(10px)">x</p>
+        </body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let img = dom.find("img").unwrap();
+        let s = eng.compute(&img);
+        assert_eq!(s.object_fit, Some(ObjectFit::Cover));
+        assert!(s.object_position.is_some());
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert_eq!(s.text_overflow, TextOverflow::Ellipsis);
+        assert_eq!(s.tab_size, TabSize::Chars(4));
+        assert_eq!(s.transforms.len(), 1);
+    }
+
+    #[test]
+    fn opera_presto_anim_trans_aliases_fase_7_946_950() {
+        // -o-transition / -o-animation (shorthands) + longhands de animation.
+        let t = trans_de("-o-transition: opacity 200ms ease");
+        assert_eq!(t.len(), 1);
+        assert_eq!(t[0].property, "opacity");
+
+        let html = r#"<html><body><p style="-o-animation-name: spin; -o-animation-duration: 3s; -o-animation-timing-function: linear">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let a = eng.compute(&p).animation.expect("binding de animation");
+        assert_eq!(a.name, "spin");
+        assert_eq!(a.duration_s, 3.0);
+        assert_eq!(a.timing, EasingFunction::Linear);
+
+        let html2 = r#"<html><body><p style="-o-animation: pulse 2s">x</p></body></html>"#;
+        let dom2 = DomTree::parse(html2);
+        let eng2 = StyleEngine::from_dom(&dom2);
+        let p2 = dom2.find("p").unwrap();
+        assert_eq!(eng2.compute(&p2).animation.unwrap().name, "pulse");
+    }
+
+    #[test]
+    fn opera_presto_origin_anim_border_select_fase_7_951_955() {
+        let html = r#"<html><body><p style="
+            -o-transform-origin: 10px 20px;
+            -o-animation-iteration-count: infinite;
+            -o-animation-fill-mode: forwards;
+            -o-border-image: url(b.png) 30 round;
+            -o-user-select: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert_eq!(s.transform_origin.x, LengthVal::Px(10.0));
+        assert_eq!(s.transform_origin.y, LengthVal::Px(20.0));
+        let a = s.animation.expect("binding");
+        assert_eq!(a.iterations, AnimationIterations::Infinite);
+        assert_eq!(a.fill_mode, AnimationFillMode::Forwards);
+        assert!(s.border_image.is_some());
+        assert_eq!(s.user_select, UserSelect::None);
+    }
+
+    #[test]
+    fn khtml_legacy_aliases_fase_7_956_960() {
+        // -khtml-* (Konqueror / early Safari, los prefijos más viejos).
+        let html = r#"<html><body><p style="
+            -khtml-opacity: 0.5;
+            -khtml-border-radius: 8px;
+            -khtml-box-shadow: 2px 2px 4px black;
+            -khtml-box-sizing: border-box;
+            -khtml-user-select: none">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert_eq!(s.opacity, 0.5);
+        assert_eq!(s.border_radii.top_left, 8.0);
+        assert_eq!(s.box_shadows.len(), 1);
+        assert_eq!(s.box_sizing, BoxSizing::BorderBox);
+        assert_eq!(s.user_select, UserSelect::None);
+    }
+
+    #[test]
+    fn vendor_misc_aliases_fase_7_961_965() {
+        // KHTML user-modify/appearance + scroll-snap-type (webkit/ms) + -ms-flex.
+        let html = r#"<html><body><p style="
+            -khtml-user-modify: read-write;
+            -khtml-appearance: none;
+            -ms-scroll-snap-type: x mandatory;
+            -ms-flex: 2 3 auto">x</p></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let p = dom.find("p").unwrap();
+        let s = eng.compute(&p);
+        assert!(s.user_modify.is_some());
+        assert_eq!(s.appearance, Appearance::None);
+        assert!(s.scroll_snap_type.0.is_some());
+        assert_eq!(s.flex_grow, 2.0);
+        assert_eq!(s.flex_shrink, 3.0);
+    }

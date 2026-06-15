@@ -573,8 +573,8 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         // `text-emphasis` shorthand: ver `parse_declarations`.
         // Fase 7.749 — alias `-webkit-ruby-position` → estándar.
         "ruby-position" | "-webkit-ruby-position" => parse_ruby_position(value).map(DeclKind::RubyPosition),
-        // Fase 7.662/7.772/7.797 — `-webkit-`/`-moz-`/`-ms-transform-origin` alias vendor del shorthand.
-        "transform-origin" | "-webkit-transform-origin" | "-moz-transform-origin" | "-ms-transform-origin" => {
+        // Fase 7.662/7.772/7.797/7.951 — `-webkit-`/`-moz-`/`-ms-`/`-o-transform-origin` alias vendor del shorthand.
+        "transform-origin" | "-webkit-transform-origin" | "-moz-transform-origin" | "-ms-transform-origin" | "-o-transform-origin" => {
             parse_transform_origin(value).map(DeclKind::TransformOrigin)
         }
         // Fase 7.740 — alias `-webkit-transform-style` → estándar.
@@ -909,8 +909,8 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             }
         }
         "text-shadow" => parse_text_shadows(value).map(DeclKind::TextShadows),
-        // Fase 7.722/7.766/7.794 — `-webkit-`/`-moz-`/`-ms-transform` alias vendor de `transform`.
-        "transform" | "-webkit-transform" | "-moz-transform" | "-ms-transform" => {
+        // Fase 7.722/7.766/7.794/7.945 — `-webkit-`/`-moz-`/`-ms-`/`-o-transform` alias vendor de `transform`.
+        "transform" | "-webkit-transform" | "-moz-transform" | "-ms-transform" | "-o-transform" => {
             parse_transforms(value).map(DeclKind::Transforms)
         }
         // Fase 7.826-7.828 — props individuales de transform (CSS Transforms 2).
@@ -924,10 +924,10 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
         "grid-template-rows" => parse_grid_template(value).map(DeclKind::GridTemplateRows),
         // Fase 7.723-7.724 — `-webkit-animation` / `-webkit-transition` alias
         // vendor de los shorthands `animation` / `transition`.
-        // Fase 7.771 — `-moz-animation` alias vendor del shorthand `animation`.
-        "animation" | "-webkit-animation" | "-moz-animation" => parse_animation(value),
-        // Fase 7.767 — `-moz-transition` alias vendor del shorthand `transition`.
-        "transition" | "-webkit-transition" | "-moz-transition" => parse_transition(value),
+        // Fase 7.771/7.947 — `-moz-`/`-o-animation` alias vendor del shorthand `animation`.
+        "animation" | "-webkit-animation" | "-moz-animation" | "-o-animation" => parse_animation(value),
+        // Fase 7.767/7.946 — `-moz-`/`-o-transition` alias vendor del shorthand `transition`.
+        "transition" | "-webkit-transition" | "-moz-transition" | "-o-transition" => parse_transition(value),
         // Fase 7.822-7.825 — longhands `transition-*` (faltaban; sólo el
         // shorthand `transition` los clasificaba). Editan el 1er binding de la
         // lista (modelo de binding único, ver `transition_first` en decl.rs).

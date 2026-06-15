@@ -75,7 +75,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.764 — `-moz-border-radius` alias vendor legacy.
         // Fase 7.877 — un valor único acepta calc() (el multivalor lo
         // intercepta `parse_declarations`).
-        "border-radius" | "-webkit-border-radius" | "-moz-border-radius" => {
+        // Fase 7.957 — `-khtml-border-radius` (Konqueror/early Safari).
+        "border-radius" | "-webkit-border-radius" | "-moz-border-radius" | "-khtml-border-radius" => {
             parse_px_or_math(value).map(DeclKind::BorderRadius)
         }
         "z-index" => {
@@ -95,7 +96,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "counter-increment" => Some(DeclKind::CounterIncrement(parse_counter_list(value, 1))),
         // Fase 7.726 — `-webkit-box-shadow` alias vendor de `box-shadow`.
         // Fase 7.765 — `-moz-box-shadow` alias vendor legacy.
-        "box-shadow" | "-webkit-box-shadow" | "-moz-box-shadow" => {
+        // Fase 7.958 — `-khtml-box-shadow` (Konqueror/early Safari).
+        "box-shadow" | "-webkit-box-shadow" | "-moz-box-shadow" | "-khtml-box-shadow" => {
             Some(DeclKind::BoxShadows(parse_box_shadows(value)))
         }
         // `text-decoration` (shorthand) se expande en `parse_declarations`.
@@ -163,8 +165,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "column-gap" | "-webkit-column-gap" | "-moz-column-gap" => {
             parse_gap(value).map(|(c, _)| DeclKind::ColumnGap(c))
         }
-        // Fase 7.728 — `-webkit-box-sizing` / Fase 7.763 — `-moz-box-sizing` alias vendor de `box-sizing`.
-        "box-sizing" | "-webkit-box-sizing" | "-moz-box-sizing" => {
+        // Fase 7.728 — `-webkit-box-sizing` / Fase 7.763 — `-moz-box-sizing` / Fase 7.959 — `-khtml-box-sizing`.
+        "box-sizing" | "-webkit-box-sizing" | "-moz-box-sizing" | "-khtml-box-sizing" => {
             parse_box_sizing(value).map(DeclKind::BoxSizing)
         }
         "min-width" => parse_length_or_pct(value).map(DeclKind::MinWidth),
@@ -208,7 +210,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "text-transform" => parse_text_transform(value).map(DeclKind::TextTransform),
         // Fase 7.729 — `-webkit-opacity` alias vendor legacy de `opacity`.
         // Fase 7.790 — `-moz-opacity` alias vendor legacy (pre-opacity Gecko).
-        "opacity" | "-webkit-opacity" | "-moz-opacity" => parse_opacity(value).map(DeclKind::Opacity),
+        // Fase 7.956 suma `-khtml-opacity` (Konqueror/early Safari, el más viejo).
+        "opacity" | "-webkit-opacity" | "-moz-opacity" | "-khtml-opacity" => parse_opacity(value).map(DeclKind::Opacity),
         // Fase 7.719 — `-webkit-align-self` alias vendor de `align-self`.
         "align-self" | "-webkit-align-self" => {
             parse_align_self(value).map(DeclKind::AlignSelf)
@@ -269,8 +272,9 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "vertical-align" => parse_vertical_align(value).map(DeclKind::VerticalAlign),
         "visibility" => parse_visibility(value).map(DeclKind::Visibility),
         "pointer-events" => parse_pointer_events(value).map(DeclKind::PointerEvents),
-        "object-fit" => parse_object_fit(value).map(DeclKind::ObjectFit),
-        "object-position" => match parse_background_position(value) {
+        // Fase 7.941/7.942 — `-o-object-fit`/`-o-object-position` alias Opera Presto legacy.
+        "object-fit" | "-o-object-fit" => parse_object_fit(value).map(DeclKind::ObjectFit),
+        "object-position" | "-o-object-position" => match parse_background_position(value) {
             // Reusa el parser de background-position; sólo cambia el destino.
             Some(DeclKind::BackgroundPosition(p)) => Some(DeclKind::ObjectPosition(p)),
             _ => None,
@@ -281,7 +285,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         // `accent-color: auto | <color>`. Sin `currentColor` por espec.
         "accent-color" => Some(DeclKind::AccentColor(parse_auto_or_color(value))),
         "cursor" => parse_cursor(value).map(DeclKind::Cursor),
-        "text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
+        // Fase 7.943 — `-o-text-overflow` (Opera Presto inventó la propiedad).
+        "text-overflow" | "-o-text-overflow" => parse_text_overflow(value).map(DeclKind::TextOverflow),
         "scroll-behavior" => parse_scroll_behavior(value).map(DeclKind::ScrollBehavior),
         // Fase 7.928 — CSS Scroll Snap 2: `scroll-start` + longhands lógicos.
         // Parse opaco (plumb): el sentinel inicial (`auto`/`none`) → `None`.
@@ -295,9 +300,10 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "scroll-start-target-inline" => {
             opaque_or_sentinel(value, "none").map(DeclKind::ScrollStartTargetInline)
         }
-        "tab-size" | "-moz-tab-size" => parse_tab_size(value).map(DeclKind::TabSize),
-        // CSS UI 4 — `user-select` con sus prefijos legacy.
-        "user-select" | "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" => {
+        // Fase 7.944 — `-o-tab-size` alias Opera Presto legacy.
+        "tab-size" | "-moz-tab-size" | "-o-tab-size" => parse_tab_size(value).map(DeclKind::TabSize),
+        // CSS UI 4 — `user-select` con sus prefijos legacy (Fase 7.955 suma `-o-`, 7.960 suma `-khtml-`).
+        "user-select" | "-webkit-user-select" | "-moz-user-select" | "-ms-user-select" | "-o-user-select" | "-khtml-user-select" => {
             parse_user_select(value).map(DeclKind::UserSelect)
         }
         // `word-wrap` es alias legacy IE; CSS Text 3 los unificó.
@@ -330,8 +336,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         }
         "isolation" => parse_isolation(value).map(DeclKind::Isolation),
         "will-change" => Some(DeclKind::WillChange(parse_will_change(value))),
-        // Aliases legacy: `-webkit-appearance` y `-moz-appearance`.
-        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+        // Aliases legacy: `-webkit-appearance`, `-moz-appearance` y (Fase 7.962) `-khtml-appearance`.
+        "appearance" | "-webkit-appearance" | "-moz-appearance" | "-khtml-appearance" => {
             parse_appearance(value).map(DeclKind::Appearance)
         }
         // Fase 7.745 — alias `-webkit-font-kerning` → estándar.
@@ -375,7 +381,8 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
             parse_overscroll_behavior(value).map(DeclKind::OverscrollBehaviorX)
         }
         // `overscroll-behavior` shorthand: ver `parse_declarations`.
-        "scroll-snap-type" => parse_scroll_snap_type(value).map(DeclKind::ScrollSnapType),
+        // Fase 7.963/7.964 — `-webkit-`/`-ms-scroll-snap-type` alias vendor legacy.
+        "scroll-snap-type" | "-webkit-scroll-snap-type" | "-ms-scroll-snap-type" => parse_scroll_snap_type(value).map(DeclKind::ScrollSnapType),
         // `scroll-snap-align` shorthand: ver `parse_declarations`.
         "scroll-snap-align-block" => {
             parse_scroll_snap_align(value).map(DeclKind::ScrollSnapAlignBlock)

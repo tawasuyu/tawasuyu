@@ -186,8 +186,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
             else { Some(DeclKind::BorderImageOutset(Some(v.to_string()))) }
         }
         // Fase 7.507 — `border-image` shorthand. Parse opaco.
-        // Fase 7.780 — `-moz-border-image` alias vendor legacy.
-        "border-image" | "-webkit-border-image" | "-moz-border-image" => {
+        // Fase 7.780 — `-moz-border-image` / Fase 7.954 — `-o-border-image` alias vendor legacy.
+        "border-image" | "-webkit-border-image" | "-moz-border-image" | "-o-border-image" => {
             let v = value.trim();
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("none") {
@@ -247,8 +247,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         // crea la binding con defaults, los siguientes ajustan campos.
         // De una lista separada por coma sólo tomamos el primer item, igual
         // que el shorthand `animation:` ya hace en parser/sheet.rs.
-        // Fase 7.735 — alias `-webkit-animation-name` → estándar.
-        "animation-name" | "-webkit-animation-name" => {
+        // Fase 7.735/7.948 — alias `-webkit-`/`-o-animation-name` → estándar.
+        "animation-name" | "-webkit-animation-name" | "-o-animation-name" => {
             let v = first_comma(value.trim());
             if v.is_empty() { None }
             else if v.eq_ignore_ascii_case("none") {
@@ -257,8 +257,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
                 Some(DeclKind::AnimationName(Some(v.to_string())))
             }
         }
-        // Fase 7.736 — alias `-webkit-animation-duration` → estándar.
-        "animation-duration" | "-webkit-animation-duration" => {
+        // Fase 7.736/7.949 — alias `-webkit-`/`-o-animation-duration` → estándar.
+        "animation-duration" | "-webkit-animation-duration" | "-o-animation-duration" => {
             // Fase 7.906 — `auto` (CSS Animations 2 / scroll-driven): la
             // duración la fija el timeline. Sin scroll-timeline, degrada a 0s.
             let v = first_comma(value.trim());
@@ -271,12 +271,13 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
         // Fase 7.737 — alias `-webkit-animation-timing-function` → estándar.
         // Fase 7.855 — usa `parse_easing` (no `_keyword`): acepta también
         // `cubic-bezier(...)` y `steps(...)`, igual que `transition-timing-function`.
-        "animation-timing-function" | "-webkit-animation-timing-function" => {
+        // Fase 7.950 — `-o-animation-timing-function` alias Opera Presto legacy.
+        "animation-timing-function" | "-webkit-animation-timing-function" | "-o-animation-timing-function" => {
             parse_easing(&first_comma(value.trim()).to_ascii_lowercase())
                 .map(DeclKind::AnimationTimingFunction)
         }
-        // Fase 7.738 — alias `-webkit-animation-iteration-count` → estándar.
-        "animation-iteration-count" | "-webkit-animation-iteration-count" => {
+        // Fase 7.738/7.952 — alias `-webkit-`/`-o-animation-iteration-count` → estándar.
+        "animation-iteration-count" | "-webkit-animation-iteration-count" | "-o-animation-iteration-count" => {
             let t = first_comma(value.trim());
             if t.eq_ignore_ascii_case("infinite") {
                 Some(DeclKind::AnimationIterationCount(AnimationIterations::Infinite))
@@ -287,8 +288,8 @@ pub(crate) fn dispatch_b(p: &str, value: &str) -> Option<DeclKind> {
                     .map(|n| DeclKind::AnimationIterationCount(AnimationIterations::Count(n)))
             }
         }
-        // Fase 7.739 — alias `-webkit-animation-fill-mode` → estándar.
-        "animation-fill-mode" | "-webkit-animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
+        // Fase 7.739/7.953 — alias `-webkit-`/`-o-animation-fill-mode` → estándar.
+        "animation-fill-mode" | "-webkit-animation-fill-mode" | "-o-animation-fill-mode" => match first_comma(value.trim()).to_ascii_lowercase().as_str() {
             "none" => Some(DeclKind::AnimationFillMode(AnimationFillMode::None)),
             "forwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Forwards)),
             "backwards" => Some(DeclKind::AnimationFillMode(AnimationFillMode::Backwards)),

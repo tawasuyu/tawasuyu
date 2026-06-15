@@ -547,9 +547,10 @@ pub(crate) fn parse_declarations(css: &str, vars: &HashMap<String, String>) -> V
             }
             continue;
         }
-        // Fase 7.720 — `-webkit-flex` alias vendor del shorthand `flex`.
+        // Fase 7.720 — `-webkit-flex` / Fase 7.965 — `-ms-flex` alias vendor del shorthand `flex`.
         if prop.eq_ignore_ascii_case("flex")
             || prop.eq_ignore_ascii_case("-webkit-flex")
+            || prop.eq_ignore_ascii_case("-ms-flex")
         {
             out.extend(parse_flex_shorthand(value, important));
             continue;
