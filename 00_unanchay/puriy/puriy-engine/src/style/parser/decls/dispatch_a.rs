@@ -642,6 +642,16 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-ms-scroll-snap-x" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollSnapX),
         "-ms-scroll-snap-y" => opaque_or_sentinel(value, "").map(DeclKind::MsScrollSnapY),
         "-ms-scroll-translation" => opaque_or_sentinel(value, "none").map(DeclKind::MsScrollTranslation),
+        // === Fase 7.1177-7.1183 — IE -ms- opaque misc (plumb opaco) ===
+        // -ms-text-kashida-space y -ms-writing-mode HEREDAN; el resto NO.
+        // -ms-behavior/-ms-filter no tienen keyword initial → sentinel "".
+        "-ms-interpolation-mode" => opaque_or_sentinel(value, "nearest-neighbor").map(DeclKind::MsInterpolationMode),
+        "-ms-block-progression" => opaque_or_sentinel(value, "tb").map(DeclKind::MsBlockProgression),
+        "-ms-text-kashida-space" => opaque_or_sentinel(value, "0").map(DeclKind::MsTextKashidaSpace),
+        "-ms-accelerator" => opaque_or_sentinel(value, "false").map(DeclKind::MsAccelerator),
+        "-ms-behavior" => opaque_or_sentinel(value, "").map(DeclKind::MsBehavior),
+        "-ms-filter" => opaque_or_sentinel(value, "").map(DeclKind::MsFilter),
+        "-ms-writing-mode" => opaque_or_sentinel(value, "lr-tb").map(DeclKind::MsWritingMode),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

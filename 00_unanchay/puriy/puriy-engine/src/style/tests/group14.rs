@@ -1188,3 +1188,36 @@ use super::super::*;
         assert_eq!(style_of("-ms-scrollbar-base-color: #ccc").scrollbar_base_color,
                    Some("#ccc".to_string()));
     }
+
+    #[test]
+    fn ms_opaque_misc_plumb_fase_7_1177_1183() {
+        let html = r#"<html><body><div style="
+            -ms-interpolation-mode: bicubic;
+            -ms-block-progression: rl;
+            -ms-text-kashida-space: 50%;
+            -ms-accelerator: true;
+            -ms-behavior: url(htc.htc);
+            -ms-filter: progid:DXImageTransform.Microsoft.gradient();
+            -ms-writing-mode: tb-rl
+        "><span>x</span></div></body></html>"#;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let t = eng.compute(&dom.find("div").unwrap());
+        assert_eq!(t.ms_interpolation_mode.as_deref(), Some("bicubic"));
+        assert_eq!(t.ms_block_progression.as_deref(), Some("rl"));
+        assert_eq!(t.ms_text_kashida_space.as_deref(), Some("50%"));
+        assert_eq!(t.ms_accelerator.as_deref(), Some("true"));
+        assert_eq!(t.ms_behavior.as_deref(), Some("url(htc.htc)"));
+        assert_eq!(t.ms_filter.as_deref(), Some("progid:DXImageTransform.Microsoft.gradient()"));
+        assert_eq!(t.ms_writing_mode.as_deref(), Some("tb-rl"));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("-ms-interpolation-mode: nearest-neighbor").ms_interpolation_mode, None);
+        assert_eq!(style_of("-ms-accelerator: false").ms_accelerator, None);
+        assert_eq!(style_of("-ms-writing-mode: lr-tb").ms_writing_mode, None);
+        // -ms-text-kashida-space / -ms-writing-mode HEREDAN; el resto NO.
+        let span = eng.compute_with_parent(&dom.find("span").unwrap(), Some(&t));
+        assert_eq!(span.ms_text_kashida_space.as_deref(), Some("50%"));
+        assert_eq!(span.ms_writing_mode.as_deref(), Some("tb-rl"));
+        assert_eq!(span.ms_filter, None);
+        assert_eq!(span.ms_interpolation_mode, None);
+    }

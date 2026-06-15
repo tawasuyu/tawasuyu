@@ -1985,5 +1985,21 @@ pub struct ComputedStyle {
     pub ms_scroll_snap_y: Option<String>,
     /// `-ms-scroll-translation` (IE10). `None` = `none`. NO hereda. Plumb. Fase 7.1168.
     pub ms_scroll_translation: Option<String>,
+    // === Fase 7.1177-7.1183 — IE -ms- opaque misc (plumb opaco) ===
+    /// `-ms-interpolation-mode` (IE; escalado de imágenes). `None` = `nearest-neighbor`. NO hereda. Plumb. Fase 7.1177.
+    pub ms_interpolation_mode: Option<String>,
+    /// `-ms-block-progression` (IE; predecesor writing-mode). `None` = `tb`. NO hereda. Plumb. Fase 7.1178.
+    pub ms_block_progression: Option<String>,
+    /// `-ms-text-kashida-space` (IE; justificación árabe). `None` = `0`. HEREDA. Plumb. Fase 7.1179.
+    pub ms_text_kashida_space: Option<String>,
+    /// `-ms-accelerator` (IE; acceleradores de teclado). `None` = `false`. NO hereda. Plumb. Fase 7.1180.
+    pub ms_accelerator: Option<String>,
+    /// `-ms-behavior` (IE; HTC behaviors). NO hereda. Plumb. Fase 7.1181.
+    pub ms_behavior: Option<String>,
+    /// `-ms-filter` (IE; filtros DirectX legacy). NO hereda. Plumb. Fase 7.1182.
+    pub ms_filter: Option<String>,
+    /// `-ms-writing-mode` (IE; valores lr-tb/tb-rl/... divergentes del estándar).
+    /// `None` = `lr-tb`. HEREDA. Plumb. Fase 7.1183.
+    pub ms_writing_mode: Option<String>,
 }
 

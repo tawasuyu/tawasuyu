@@ -539,6 +539,10 @@ impl StyleEngine {
             style.ms_layout_grid_line = p.ms_layout_grid_line.clone();
             style.ms_layout_grid_mode = p.ms_layout_grid_mode.clone();
             style.ms_layout_grid_type = p.ms_layout_grid_type.clone();
+            // Fase 7.1179/7.1183 — -ms-text-kashida-space y -ms-writing-mode
+            // heredan (texto). El resto del bloque -ms- misc NO hereda.
+            style.ms_text_kashida_space = p.ms_text_kashida_space.clone();
+            style.ms_writing_mode = p.ms_writing_mode.clone();
         }
         // Font-size heredado (antes de la cascada): base contra la que se
         // resuelven `em`/`%`/`larger`/`smaller` de este elemento. Ver Fase 7.223.

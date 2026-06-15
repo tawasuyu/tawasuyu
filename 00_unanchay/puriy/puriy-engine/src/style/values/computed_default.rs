@@ -752,6 +752,14 @@ impl Default for ComputedStyle {
             ms_scroll_snap_x: None,
             ms_scroll_snap_y: None,
             ms_scroll_translation: None,
+            // Fase 7.1177-7.1183 — IE -ms- opaque misc, default None.
+            ms_interpolation_mode: None,
+            ms_block_progression: None,
+            ms_text_kashida_space: None,
+            ms_accelerator: None,
+            ms_behavior: None,
+            ms_filter: None,
+            ms_writing_mode: None,
         }
     }
 }

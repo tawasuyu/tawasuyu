@@ -1265,6 +1265,14 @@ pub(crate) enum DeclKind {
     MsScrollSnapX(Option<String>),
     MsScrollSnapY(Option<String>),
     MsScrollTranslation(Option<String>),
+    // === Fase 7.1177-7.1183 — IE -ms- opaque misc (plumb opaco) ===
+    MsInterpolationMode(Option<String>),
+    MsBlockProgression(Option<String>),
+    MsTextKashidaSpace(Option<String>),
+    MsAccelerator(Option<String>),
+    MsBehavior(Option<String>),
+    MsFilter(Option<String>),
+    MsWritingMode(Option<String>),
 }
 
 impl Decl {
@@ -2167,6 +2175,14 @@ impl Decl {
             DeclKind::MsScrollSnapX(v) => s.ms_scroll_snap_x = v.clone(),
             DeclKind::MsScrollSnapY(v) => s.ms_scroll_snap_y = v.clone(),
             DeclKind::MsScrollTranslation(v) => s.ms_scroll_translation = v.clone(),
+            // Fase 7.1177-7.1183 — IE -ms- opaque misc, plumb opaco.
+            DeclKind::MsInterpolationMode(v) => s.ms_interpolation_mode = v.clone(),
+            DeclKind::MsBlockProgression(v) => s.ms_block_progression = v.clone(),
+            DeclKind::MsTextKashidaSpace(v) => s.ms_text_kashida_space = v.clone(),
+            DeclKind::MsAccelerator(v) => s.ms_accelerator = v.clone(),
+            DeclKind::MsBehavior(v) => s.ms_behavior = v.clone(),
+            DeclKind::MsFilter(v) => s.ms_filter = v.clone(),
+            DeclKind::MsWritingMode(v) => s.ms_writing_mode = v.clone(),
         }
     }
 }
