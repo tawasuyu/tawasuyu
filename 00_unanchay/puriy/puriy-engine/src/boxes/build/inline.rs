@@ -49,6 +49,7 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         aspect_ratio: None,
         overflow: Overflow::Visible,
         clip_inset: None,
+        clip_ellipse: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,

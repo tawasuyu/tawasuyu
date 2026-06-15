@@ -2,6 +2,17 @@
 //! Extraído de `boxes/build.rs` (regla #1). Sin cambios de lógica.
 use super::*;
 
+/// `LengthVal` → `(px, pct)` para el centro de un clip-path elíptico. Sólo
+/// `Px`/`Pct` portan valor; el resto (Auto/content) cae a `(0, 0)` ⇒ borde
+/// izquierdo/superior. El compositor resuelve `px + pct/100·dim`. Fase 7.1220.
+fn clip_len_pair(v: LengthVal) -> (f32, f32) {
+    match v {
+        LengthVal::Px(p) => (p, 0.0),
+        LengthVal::Pct(p) => (0.0, p),
+        _ => (0.0, 0.0),
+    }
+}
+
 /// `true` si el padre establece un contexto flex/grid — único caso en que
 /// `margin-top/bottom: auto` centra (en block flow CSS lo computa a 0).
 fn parent_is_flex_grid(p: Option<&ComputedStyle>) -> bool {
@@ -55,6 +66,7 @@ pub(crate) fn empty_root() -> BoxNode {
         aspect_ratio: None,
         overflow: Overflow::Visible,
         clip_inset: None,
+        clip_ellipse: None,
         white_space: WhiteSpace::Normal,
         text_transform: TextTransform::None,
         opacity: 1.0,
@@ -534,6 +546,23 @@ pub(crate) fn build_node(
                     }
                     _ => None,
                 },
+                // Fase 7.1220 — clip-path: circle()/ellipse() → spec elíptico
+                // [cx_px, cx_pct, cy_px, cy_pct, rx, ry]. El centro queda en
+                // forma (px, pct) porque su resolución depende del rect (lo
+                // hace el compositor). circle ⇒ rx == ry == radio.
+                clip_ellipse: match style.clip_path {
+                    Some(crate::style::ClipPath::Circle { radius, cx, cy }) => {
+                        let (cxp, cxc) = clip_len_pair(cx);
+                        let (cyp, cyc) = clip_len_pair(cy);
+                        Some([cxp, cxc, cyp, cyc, radius, radius])
+                    }
+                    Some(crate::style::ClipPath::Ellipse { rx, ry, cx, cy }) => {
+                        let (cxp, cxc) = clip_len_pair(cx);
+                        let (cyp, cyc) = clip_len_pair(cy);
+                        Some([cxp, cxc, cyp, cyc, rx, ry])
+                    }
+                    _ => None,
+                },
                 white_space: style.white_space,
                 text_transform: style.text_transform,
                 opacity: style.opacity,
@@ -743,6 +772,7 @@ pub(crate) fn build_node(
                 aspect_ratio: None,
                 overflow: Overflow::Visible,
                 clip_inset: None,
+                clip_ellipse: None,
                 white_space: WhiteSpace::Normal,
                 text_transform: TextTransform::None,
                 opacity: 1.0,

@@ -188,6 +188,41 @@ use crate::Engine;
     }
 
     #[test]
+    fn clip_path_circle_ellipse_llega_al_box_node_fase_7_1220() {
+        // `clip-path: circle()/ellipse()` se resuelve a un spec elíptico
+        // `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]` en el BoxNode. El centro
+        // queda en forma (px, pct) — el compositor resuelve los % contra el rect.
+        let html = "<html><body>\
+            <div id=\"c1\" style=\"clip-path: circle(30px at 50% 50%)\">a</div>\
+            <div id=\"c2\" style=\"clip-path: circle(40px at 10px 20px)\">b</div>\
+            <div id=\"e1\" style=\"clip-path: ellipse(20px 10px)\">c</div>\
+            <div id=\"ins\" style=\"clip-path: inset(5px)\">d</div>\
+            <div id=\"n\">e</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let by_id = |id: &str| {
+            let mut found = None;
+            doc.box_tree.walk(|b| {
+                if b.element_id.as_deref() == Some(id) {
+                    found = Some(b.clip_ellipse);
+                }
+            });
+            found.expect("box existe")
+        };
+        // circle con centro 50%/50% → radios iguales, centro en pct.
+        assert_eq!(by_id("c1"), Some([0.0, 50.0, 0.0, 50.0, 30.0, 30.0]));
+        // circle con centro en px → centro en px, pct 0.
+        assert_eq!(by_id("c2"), Some([10.0, 0.0, 20.0, 0.0, 40.0, 40.0]));
+        // ellipse sin `at` → centro default 50%/50%, radios distintos.
+        assert_eq!(by_id("e1"), Some([0.0, 50.0, 0.0, 50.0, 20.0, 10.0]));
+        // inset() → es rectangular, no llena clip_ellipse.
+        assert_eq!(by_id("ins"), None);
+        // sin clip-path → None.
+        assert_eq!(by_id("n"), None);
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

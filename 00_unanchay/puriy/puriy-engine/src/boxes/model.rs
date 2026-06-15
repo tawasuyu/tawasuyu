@@ -153,6 +153,14 @@ pub struct BoxNode {
     /// chrome recorta el subárbol a `rect` menos estos insets. Formas no
     /// rectangulares (circle/ellipse) no se modelan acá. Fase 7.1219.
     pub clip_inset: Option<[f32; 4]>,
+    /// `clip-path: circle(...)` / `ellipse(...)` resuelto a un spec
+    /// elíptico `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]`: el centro es
+    /// `(cx_px + cx_pct/100·w, cy_px + cy_pct/100·h)` y los radios `rx`/`ry`
+    /// en px desde ese centro (circle ⇒ `rx == ry`). El chrome recorta el
+    /// subárbol a esa elipse. `None` = sin clip-path elíptico. Resolución de
+    /// porcentajes de centro se difiere al compositor (necesita el rect del
+    /// nodo). Fase 7.1220.
+    pub clip_ellipse: Option<[f32; 6]>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

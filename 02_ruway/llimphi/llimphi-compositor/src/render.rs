@@ -43,6 +43,7 @@ pub fn mount_recursive<Msg: Clone>(
         drop_hover_fill,
         clip,
         clip_inset,
+        clip_ellipse,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -97,6 +98,7 @@ pub fn mount_recursive<Msg: Clone>(
         drop_hover_fill,
         clip,
         clip_inset,
+        clip_ellipse,
         on_pointer_enter,
         on_pointer_leave,
         on_pointer_move_at,
@@ -674,18 +676,28 @@ pub fn paint_range<Msg>(
             }
         }
         if node.clip {
-            // `clip_inset` (clip-path: inset) encoge el rect de recorte desde
-            // cada borde; `None` (overflow:hidden) recorta al rect completo.
-            // El hit-test (más abajo) sigue usando el rect completo — el inset
+            // El hit-test (más abajo) usa siempre el rect completo — el clip-path
             // sólo afecta el pintado, una aproximación menor en su banda.
-            let [ct, cr, cb, cl] = node.clip_inset.unwrap_or([0.0; 4]);
-            let clip_rect = KurboRect::new(
-                (r.x + cl) as f64,
-                (r.y + ct) as f64,
-                (r.x + r.w - cr) as f64,
-                (r.y + r.h - cb) as f64,
-            );
-            scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
+            if let Some([cxp, cxc, cyp, cyc, rx, ry]) = node.clip_ellipse {
+                // `clip-path: circle()/ellipse()` — capa elíptica. El centro
+                // resuelve sus porcentajes contra el rect del nodo; los radios
+                // ya vienen en px (circle ⇒ rx == ry).
+                let cx = (r.x + cxp + cxc / 100.0 * r.w) as f64;
+                let cy = (r.y + cyp + cyc / 100.0 * r.h) as f64;
+                let ellipse = Ellipse::new((cx, cy), (rx as f64, ry as f64), 0.0);
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &ellipse);
+            } else {
+                // `clip_inset` (clip-path: inset) encoge el rect de recorte desde
+                // cada borde; `None` (overflow:hidden) recorta al rect completo.
+                let [ct, cr, cb, cl] = node.clip_inset.unwrap_or([0.0; 4]);
+                let clip_rect = KurboRect::new(
+                    (r.x + cl) as f64,
+                    (r.y + ct) as f64,
+                    (r.x + r.w - cr) as f64,
+                    (r.y + r.h - cb) as f64,
+                );
+                scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
+            }
             layer_stack.push(node.subtree_end);
         }
     }

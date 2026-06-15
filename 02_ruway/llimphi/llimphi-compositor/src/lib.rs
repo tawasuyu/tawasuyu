@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use llimphi_layout::taffy::NodeId;
 use llimphi_layout::{ComputedLayout, LayoutTree, Style};
-use vello::kurbo::{Affine, Point, Rect as KurboRect, RoundedRect, RoundedRectRadii, Stroke};
+use vello::kurbo::{
+    Affine, Ellipse, Point, Rect as KurboRect, RoundedRect, RoundedRectRadii, Stroke,
+};
 use vello::peniko::{BlendMode, Color, Fill, Gradient, ImageBrush as Image, Mix};
 
 mod anim;
@@ -440,6 +442,13 @@ pub struct View<Msg> {
     /// rect ENCOGIDO por esos insets (px) desde el rect del nodo — modela
     /// `clip-path: inset(...)`. Implica clip aunque `clip == false`.
     pub clip_inset: Option<[f32; 4]>,
+    /// Si `Some([cx_px, cx_pct, cy_px, cy_pct, rx, ry])`, recorta los
+    /// descendientes a una ELIPSE — modela `clip-path: circle()`/`ellipse()`.
+    /// El centro se resuelve contra el rect del nodo: `cx = cx_px +
+    /// cx_pct/100·w`, `cy = cy_px + cy_pct/100·h`; `rx`/`ry` son radios px.
+    /// Implica clip aunque `clip == false`. Si conviven `clip_inset` y
+    /// `clip_ellipse`, gana la elipse (una sola capa de recorte por nodo).
+    pub clip_ellipse: Option<[f32; 6]>,
     /// Msg a emitir cuando el cursor entra al rect del nodo (transición
     /// no-hover → hover). Útil para previews tipo "URL del link al
     /// pasar el mouse".
@@ -755,6 +764,7 @@ pub struct MountedNode<Msg> {
     pub drop_hover_fill: Option<Color>,
     pub clip: bool,
     pub clip_inset: Option<[f32; 4]>,
+    pub clip_ellipse: Option<[f32; 6]>,
     pub on_pointer_enter: Option<Msg>,
     pub on_pointer_leave: Option<Msg>,
     pub on_pointer_move_at: Option<ClickAtFn<Msg>>,

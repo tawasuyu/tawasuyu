@@ -426,6 +426,12 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some(insets) = b.clip_inset {
         view = view.clip_inset(insets);
     }
+    // `clip-path: circle(...)` / `ellipse(...)` (Fase 7.1220) — recorta a una
+    // elipse. El spec `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]` deja el centro
+    // en forma (px, pct); el compositor lo resuelve contra el rect del nodo.
+    if let Some(spec) = b.clip_ellipse {
+        view = view.clip_ellipse(spec);
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {

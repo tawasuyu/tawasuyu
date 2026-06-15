@@ -32,6 +32,7 @@ impl<Msg> View<Msg> {
             drop_hover_fill: None,
             clip: false,
             clip_inset: None,
+            clip_ellipse: None,
             on_scroll: None,
             on_scale: None,
             on_rotate: None,
@@ -1212,6 +1213,17 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Recorta los descendientes a una elipse — modela
+    /// `clip-path: circle()`/`ellipse()`. `spec` es
+    /// `[cx_px, cx_pct, cy_px, cy_pct, rx, ry]`: el centro se resuelve contra
+    /// el rect del nodo (`cx_px + cx_pct/100·w`, idem alto) y `rx`/`ry` son
+    /// radios px. Activa el recorte (paint; hit-test usa el rect completo).
+    pub fn clip_ellipse(mut self, spec: [f32; 6]) -> Self {
+        self.clip = true;
+        self.clip_ellipse = Some(spec);
+        self
+    }
+
     pub fn children(mut self, children: Vec<View<Msg>>) -> Self {
         self.children = children;
         self
@@ -1237,6 +1249,20 @@ mod semantics_tests {
         let d = View::<()>::new(Style::default());
         assert!(!d.clip);
         assert_eq!(d.clip_inset, None);
+    }
+
+    #[test]
+    fn clip_ellipse_setea_campo_y_activa_clip() {
+        // `.clip_ellipse(...)` guarda el spec y activa el recorte (Fase 7.1220).
+        let v = View::<()>::new(Style::default())
+            .clip_ellipse([0.0, 50.0, 0.0, 50.0, 30.0, 20.0]);
+        assert_eq!(v.clip_ellipse, Some([0.0, 50.0, 0.0, 50.0, 30.0, 20.0]));
+        assert!(v.clip, "clip_ellipse implica clip activo");
+        // No interfiere con clip_inset (campos independientes).
+        assert_eq!(v.clip_inset, None);
+        // Default: sin elipse.
+        let d = View::<()>::new(Style::default());
+        assert_eq!(d.clip_ellipse, None);
     }
 
     #[test]
