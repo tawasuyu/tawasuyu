@@ -171,6 +171,18 @@ pub struct Config {
     /// frames cortados del todo.
     #[serde(default = "default_one")]
     pub background_frame_divisor: u32,
+    /// Nombre del tema/paleta de `llimphi-theme` que pinta el chrome del
+    /// escritorio (panel, barra, menús) — `llimphi_theme::Theme::by_name`.
+    /// Lo fijan las **vistas** ([`crate::vistas`]): `"Dark"`, `"WinXP"`,
+    /// `"macOS"`, `"Breeze"`, etc. Default `"Dark"`. No afecta los colores del
+    /// marco de ventana (esos van por `border_focus`/`border_normal`).
+    #[serde(default = "default_theme")]
+    pub theme: String,
+}
+
+/// Default del tema del chrome (el oscuro de `llimphi-theme`).
+fn default_theme() -> String {
+    "Dark".to_string()
 }
 
 /// Default de los toggles que arrancan en `true` (serde necesita una fn).
@@ -337,6 +349,7 @@ impl Default for Config {
             overview_anim_ms: 260,
             overview_show_titles: true,
             background_frame_divisor: 1,
+            theme: default_theme(),
         }
     }
 }

@@ -39,7 +39,7 @@ pub struct KeymapProfiles {
 }
 
 impl Default for KeymapProfiles {
-    /// Los tres presets de fábrica, con `dwm` activo.
+    /// Todos los presets de fábrica, con `mirada` (el nativo) activo.
     fn default() -> Self {
         let mut profiles = BTreeMap::new();
         for name in Keymap::PRESET_NAMES {
@@ -48,7 +48,7 @@ impl Default for KeymapProfiles {
             }
         }
         Self {
-            active: "dwm".to_string(),
+            active: "mirada".to_string(),
             profiles,
         }
     }
@@ -65,10 +65,12 @@ impl KeymapProfiles {
     /// El keymap del perfil activo. Si por alguna razón el activo no existe
     /// (archivo corrupto editado a mano), cae al preset `dwm`.
     pub fn active_keymap(&self) -> Keymap {
+        // El fallback (activo inexistente por edición a mano) es el keymap
+        // nativo: `Keymap::default()` == el preset `mirada`.
         self.profiles
             .get(&self.active)
             .cloned()
-            .unwrap_or_else(Keymap::dwm)
+            .unwrap_or_default()
     }
 
     /// Los nombres de todos los perfiles, en orden alfabético.
@@ -185,7 +187,7 @@ impl KeymapProfiles {
             return Err(ProfileError::NotFound(name.to_string()));
         }
         if self.active == name {
-            self.active = "dwm".to_string();
+            self.active = "mirada".to_string();
         }
         Ok(())
     }
@@ -199,7 +201,7 @@ impl KeymapProfiles {
                 .or_insert_with(|| Keymap::preset(name).expect("preset de fábrica"));
         }
         if !self.profiles.contains_key(&self.active) {
-            self.active = "dwm".to_string();
+            self.active = "mirada".to_string();
         }
     }
 
@@ -369,10 +371,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_trae_los_tres_presets_con_dwm_activo() {
+    fn default_trae_los_presets_con_mirada_activo() {
         let p = KeymapProfiles::default();
-        assert_eq!(p.active(), "dwm");
-        assert_eq!(p.names(), vec!["dwm", "hyprland", "i3"]); // BTreeMap → alfabético
+        assert_eq!(p.active(), "mirada"); // el nativo es el default
+        // BTreeMap → alfabético; están todos los de fábrica.
+        assert_eq!(
+            p.names(),
+            vec!["dwm", "hyprland", "i3", "mac", "mirada", "windows"]
+        );
         assert!(p.get("hyprland").is_some());
     }
 
@@ -417,13 +423,13 @@ mod tests {
     }
 
     #[test]
-    fn borrar_el_activo_cae_a_dwm() {
+    fn borrar_el_activo_cae_a_mirada() {
         let mut p = KeymapProfiles::default();
         p.duplicate("hyprland", "noche").unwrap();
         p.set_active("noche").unwrap();
         p.remove("noche").unwrap();
         assert!(!p.contains("noche"));
-        assert_eq!(p.active(), "dwm");
+        assert_eq!(p.active(), "mirada");
     }
 
     #[test]
@@ -458,10 +464,10 @@ mod tests {
     }
 
     #[test]
-    fn from_ron_con_activo_invalido_cae_a_dwm() {
+    fn from_ron_con_activo_invalido_cae_a_mirada() {
         let ron = r#"(active: "fantasma", profiles: {})"#;
         let p = KeymapProfiles::from_ron(ron).unwrap();
-        assert_eq!(p.active(), "dwm");
+        assert_eq!(p.active(), "mirada");
     }
 
     #[test]

@@ -427,24 +427,87 @@ pub fn default_keymap() -> Vec<(String, DesktopAction)> {
 // duplica, edita, borra y conmuta. `dwm` es el preset por defecto
 // ([`default_keymap`]) — el que históricamente trae mirada.
 
-/// Los nombres de los presets de fábrica, en orden de presentación.
-pub const PRESET_NAMES: [&str; 3] = ["dwm", "i3", "hyprland"];
+/// Los nombres de los presets de fábrica, en orden de presentación. `mirada`
+/// es el nativo (el keymap actual) y encabeza la lista.
+pub const PRESET_NAMES: [&str; 6] = ["mirada", "dwm", "i3", "hyprland", "windows", "mac"];
 
 /// El keymap de un preset de fábrica por nombre, o `None` si no existe.
 pub fn preset_keymap(name: &str) -> Option<Vec<(String, DesktopAction)>> {
     Some(match name {
+        "mirada" => mirada_keymap(),
         "dwm" => dwm_keymap(),
         "i3" => i3_keymap(),
         "hyprland" => hyprland_keymap(),
+        "windows" => windows_keymap(),
+        "mac" => mac_keymap(),
         _ => return None,
     })
 }
 
-/// Preset **dwm** — el histórico de mirada: `Super` como modificador, foco
+/// Preset **mirada** — el keymap **nativo y actual** del compositor: es
+/// exactamente [`default_keymap`]. La vista `mirada` lo usa; es el default.
+pub fn mirada_keymap() -> Vec<(String, DesktopAction)> {
+    default_keymap()
+}
+
+/// Preset **dwm** — la herencia dwm de mirada: `Super` como modificador, foco
 /// cíclico por la pila (`Super+j/k`), maestra+pila, zoom con `Super+Return`,
-/// terminal con `Super+Shift+Return`. Es exactamente [`default_keymap`].
+/// terminal con `Super+Shift+Return`. Hoy coincide con [`default_keymap`].
 pub fn dwm_keymap() -> Vec<(String, DesktopAction)> {
     default_keymap()
+}
+
+/// Preset **windows** — escritorio apilado estilo Windows (vistas `windows-xp`
+/// y `kde`): `Alt+Tab` cicla ventanas, `Alt+F4` cierra, `Super+E` el explorador,
+/// `Super+R` el lanzador, `Super+D` muestra el escritorio (todo flotante),
+/// `Super+↑` maximiza, `Super+←/→/↓` acomoda (snap).
+pub fn windows_keymap() -> Vec<(String, DesktopAction)> {
+    use DesktopAction::*;
+    use Direction::{Down, Left, Right};
+    let mut map = vec![
+        ("Alt+Tab".into(), FocusNext),
+        ("Alt+Shift+Tab".into(), FocusPrev),
+        ("Alt+F4".into(), CloseFocused),
+        ("Super+e".into(), Spawn("nada".into())),
+        ("Super+r".into(), Spawn("foot -e mirada-launcher".into())),
+        ("Super+d".into(), ToggleTiling), // «mostrar escritorio» ≈ todo flotante
+        ("Super+Up".into(), ToggleFullscreen),
+        ("Super+Left".into(), MoveDir(Left)),
+        ("Super+Right".into(), MoveDir(Right)),
+        ("Super+Down".into(), MoveDir(Down)),
+        ("F11".into(), ToggleFullscreen),
+        ("Super+grave".into(), ToggleDropterm),
+    ];
+    for n in 0..WORKSPACE_COUNT {
+        map.push((format!("Super+{}", n + 1), SwitchWorkspace(n)));
+        map.push((format!("Super+Shift+{}", n + 1), SendToWorkspace(n)));
+    }
+    map
+}
+
+/// Preset **mac** — atajos estilo macOS (vista `mac`), con `Super` como ⌘:
+/// `Super+Q`/`Super+W` cierran, `Super+Tab` cicla, `Super+space` el lanzador
+/// (Spotlight), `Super+Ctrl+F` pantalla completa, `Super+M`/`Super+H` esconden
+/// (scratchpad ≈ minimizar/ocultar).
+pub fn mac_keymap() -> Vec<(String, DesktopAction)> {
+    use DesktopAction::*;
+    let mut map = vec![
+        ("Super+q".into(), CloseFocused),
+        ("Super+w".into(), CloseFocused),
+        ("Super+Tab".into(), FocusNext),
+        ("Super+Shift+Tab".into(), FocusPrev),
+        ("Super+grave".into(), FocusNext), // ⌘` : ventanas de la misma app
+        ("Super+space".into(), Spawn("foot -e mirada-launcher".into())), // Spotlight
+        ("Super+Ctrl+f".into(), ToggleFullscreen),
+        ("Super+m".into(), SendToScratchpad), // ⌘M : minimizar ≈ esconder
+        ("Super+h".into(), SendToScratchpad), // ⌘H : ocultar
+        ("Super+n".into(), Spawn("foot".into())), // ⌘N : nueva ventana ≈ terminal
+    ];
+    for n in 0..WORKSPACE_COUNT {
+        map.push((format!("Super+{}", n + 1), SwitchWorkspace(n)));
+        map.push((format!("Super+Shift+{}", n + 1), SendToWorkspace(n)));
+    }
+    map
 }
 
 /// Preset **i3 / sway** — foco y movimiento vim `h/j/k/l` (la convención

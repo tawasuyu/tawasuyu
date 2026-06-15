@@ -57,7 +57,7 @@ use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, NamedKey, View};
 use mirada_brain::{
     BodyEvent, BrainCommand, CtlConn, CtlReply, CtlRequest, CtlServer, Desktop, DesktopAction,
-    Keymap, KeymapProfiles, KeymapWatch, LayoutMode, Rules, WindowId, WindowPlacement,
+    Keymap, KeymapProfiles, KeymapWatch, LayoutMode, Rules, Vista, WindowId, WindowPlacement,
 };
 use mirada_link::BrainLink;
 
@@ -222,10 +222,13 @@ impl App for Mirada {
         let mut desktop = Desktop::with_keymap(keymap);
         desktop.set_rules(load_user_rules());
         // Carga la config del usuario (~/.config/mirada/config.ron) para que
-        // los ajustes del panel de control —incl. la vista espacial— manden.
-        if let Some(p) = mirada_brain::Config::default_path() {
-            desktop.set_config(mirada_brain::Config::load_or_default(&p));
-        }
+        // los ajustes del panel de control —incl. la vista espacial y el tema
+        // del chrome— manden. El tema del panel sale de `config.theme`.
+        let user_config = mirada_brain::Config::default_path()
+            .map(|p| mirada_brain::Config::load_or_default(&p))
+            .unwrap_or_default();
+        let chrome_theme = Theme::by_name(&user_config.theme).unwrap_or_default();
+        desktop.set_config(user_config);
         // Restaura la última sesión (modos/ratio/nmaster por escritorio + qué
         // escritorio mostraba cada salida). Después de `set_config`: la sesión
         // guardada manda sobre los parámetros que la config siembra.
@@ -237,7 +240,7 @@ impl App for Mirada {
         }
 
         let mut model = Model {
-            theme: Theme::dark(),
+            theme: chrome_theme,
             desktop,
             overview: None,
             placements: Vec::new(),
@@ -691,6 +694,42 @@ fn delete_active_profile(m: &mut Model) {
     }
 }
 
+// --- Vistas (menú «Vista») ---------------------------------------------
+
+/// Aplica una vista por slug; no-op con aviso si no existe.
+fn apply_vista_by_name(m: &mut Model, name: &str) {
+    match Vista::by_name(name) {
+        Some(v) => apply_vista(m, &v),
+        None => m.note = format!("vista desconocida: {name}"),
+    }
+}
+
+/// Aplica un preset de escritorio completo: decoraciones + layout + tema +
+/// teclas. Lo instala en vivo (re-decora, re-tesela, re-graba teclas), repinta
+/// el chrome del panel con el tema de la vista, y persiste config.ron +
+/// keymap.ron (el compositor recarga la config por su FileWatch).
+fn apply_vista(m: &mut Model, v: &Vista) {
+    // 1. Decoraciones + parámetros de teselado de la vista, y re-tesela con su
+    //    layout (reload_config siembra params; SetLayout fuerza el relayout).
+    let mut cmds = m.desktop.reload_config(v.config.clone());
+    cmds.extend(m.desktop.apply(DesktopAction::SetLayout(v.config.layout)));
+    dispatch(m, cmds);
+    // 2. Keymap de la vista (un preset de fábrica) como perfil activo — esto ya
+    //    persiste profiles.ron + keymap.ron y lo instala en el Desktop vivo.
+    let _ = m.profiles.set_active(v.keymap);
+    apply_active_profile(m);
+    // 3. Tema del chrome del panel.
+    m.theme = Theme::by_name(&v.config.theme).unwrap_or_default();
+    // 4. Persistir config.ron (el compositor lo recarga por su FileWatch).
+    if let Some(p) = mirada_brain::Config::default_path() {
+        if let Err(e) = v.config.save(&p) {
+            m.note = format!("config: {e}");
+            return;
+        }
+    }
+    m.note = format!("vista: {}", v.label);
+}
+
 /// Un nombre de perfil libre: `base`, o `base 2`, `base 3`… si ya existe.
 fn unique_profile_name(p: &KeymapProfiles, base: &str) -> String {
     if !p.contains(base) {
@@ -982,6 +1021,8 @@ fn app_menu(model: &Model) -> AppMenu {
         it
     };
 
+    // Menú «Vista»: presets de escritorio completo (look + teclas).
+    let vista = vistas_menu(model.profiles.active(), model.desktop.config());
     // Menú «Atajos»: la biblioteca de perfiles de teclas.
     let atajos = profiles_menu(&model.profiles);
 
@@ -1015,6 +1056,7 @@ fn app_menu(model: &Model) -> AppMenu {
                 .item(fullscreen)
                 .item(scratch),
         )
+        .menu(vista)
         .menu(atajos)
         .menu(
             Menu::new(t("help"))
@@ -1054,6 +1096,23 @@ fn profiles_menu(profiles: &KeymapProfiles) -> Menu {
         .item(borrar)
 }
 
+/// El menú «Vista»: presets de escritorio completo (look + decoraciones +
+/// layout + teclas). Lleva ✔ la vista cuyo `config` y keymap coinciden EXACTO
+/// con el estado actual (si el usuario tuneó algo a mano, ninguna marca).
+/// Función pura — verificable sin GPU.
+fn vistas_menu(active_keymap: &str, current: &mirada_brain::Config) -> Menu {
+    let mut menu = Menu::new("Vista");
+    for v in Vista::all() {
+        let matches = v.keymap == active_keymap && &v.config == current;
+        let mut it = MenuItem::new(v.label, format!("vista.use.{}", v.name));
+        if matches {
+            it = it.icon("\u{2714}");
+        }
+        menu = menu.item(it);
+    }
+    menu
+}
+
 /// Traduce un command id del menú principal a la acción real del Desktop.
 fn handle_menu_command(m: &mut Model, cmd: &str) {
     // Cambio de idioma: aplica el locale en caliente y lo persiste en wawa-config.
@@ -1079,6 +1138,11 @@ fn handle_menu_command(m: &mut Model, cmd: &str) {
     }
     if cmd == "profile.delete" {
         delete_active_profile(m);
+        return;
+    }
+    // Vistas: aplicar un preset de escritorio completo.
+    if let Some(name) = cmd.strip_prefix("vista.use.") {
+        apply_vista_by_name(m, &name.to_string());
         return;
     }
     match cmd {
@@ -1493,7 +1557,43 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{profiles_menu, KeymapProfiles};
+    use super::{profiles_menu, vistas_menu, KeymapProfiles, Vista};
+
+    /// El menú «Vista» lista las 6 vistas y marca con ✔ la que coincide EXACTO
+    /// con el estado actual (config + keymap). Con el default nativo, es `mirada`.
+    #[test]
+    fn el_menu_de_vistas_marca_la_activa() {
+        let default_cfg = mirada_brain::Config::default();
+        let menu = vistas_menu("mirada", &default_cfg);
+        // Una entrada por vista, con comando vista.use.<slug>.
+        assert_eq!(menu.items.len(), Vista::all().len());
+        let mirada = menu
+            .items
+            .iter()
+            .find(|it| it.command == "vista.use.mirada")
+            .unwrap();
+        assert!(mirada.icon.is_some(), "la nativa debe estar marcada con el default");
+        // dwm no coincide con el default (sin barra, sin margen).
+        let dwm = menu
+            .items
+            .iter()
+            .find(|it| it.command == "vista.use.dwm")
+            .unwrap();
+        assert!(dwm.icon.is_none());
+    }
+
+    /// Con un keymap distinto al de la vista, no se marca aunque la config calce.
+    #[test]
+    fn la_vista_no_se_marca_si_el_keymap_difiere() {
+        let default_cfg = mirada_brain::Config::default();
+        let menu = vistas_menu("hyprland", &default_cfg); // keymap ≠ "mirada"
+        let mirada = menu
+            .items
+            .iter()
+            .find(|it| it.command == "vista.use.mirada")
+            .unwrap();
+        assert!(mirada.icon.is_none());
+    }
 
     /// El menú «Atajos» lista cada perfil con su comando `profile.use.<n>`,
     /// marca el activo con ✔ y trae las acciones de gestión.

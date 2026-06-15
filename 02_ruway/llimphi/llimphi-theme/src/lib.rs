@@ -360,6 +360,78 @@ impl Theme {
         }
     }
 
+    /// Skin **Windows XP "Luna"** — escritorio azul-gris claro, selección y
+    /// acento en el azul XP (#316AC5), chrome celeste. Para la vista `windows-xp`.
+    pub const fn xp_blue() -> Self {
+        Self {
+            name: "WinXP",
+            bg_app: Color::from_rgba8(236, 240, 249, 255),
+            bg_panel: Color::from_rgba8(214, 223, 247, 255),
+            bg_panel_alt: Color::from_rgba8(60, 100, 190, 255), // franja azul (taskbar)
+            bg_input: Color::from_rgba8(255, 255, 255, 255),
+            bg_input_focus: Color::from_rgba8(248, 250, 255, 255),
+            bg_button: Color::from_rgba8(222, 230, 246, 255),
+            bg_button_hover: Color::from_rgba8(198, 214, 244, 255),
+            bg_selected: Color::from_rgba8(49, 106, 197, 255), // azul de selección XP
+            bg_row_hover: Color::from_rgba8(214, 226, 248, 255),
+            fg_text: Color::from_rgba8(20, 30, 50, 255),
+            fg_muted: Color::from_rgba8(78, 92, 120, 255),
+            fg_placeholder: Color::from_rgba8(130, 142, 168, 255),
+            fg_destructive: Color::from_rgba8(176, 32, 32, 255),
+            border: Color::from_rgba8(122, 152, 206, 255),
+            border_focus: Color::from_rgba8(49, 106, 197, 255),
+            accent: Color::from_rgba8(36, 94, 220, 255), // Luna blue
+        }
+    }
+
+    /// Skin **macOS (Big Sur claro)** — casi blanco, grises sutiles, acento
+    /// azul de sistema (#0A84FF). Para la vista `mac`.
+    pub const fn mac_light() -> Self {
+        Self {
+            name: "macOS",
+            bg_app: Color::from_rgba8(246, 246, 248, 255),
+            bg_panel: Color::from_rgba8(236, 236, 240, 255),
+            bg_panel_alt: Color::from_rgba8(242, 242, 245, 235), // menubar translúcida
+            bg_input: Color::from_rgba8(255, 255, 255, 255),
+            bg_input_focus: Color::from_rgba8(252, 252, 255, 255),
+            bg_button: Color::from_rgba8(228, 228, 233, 255),
+            bg_button_hover: Color::from_rgba8(214, 214, 221, 255),
+            bg_selected: Color::from_rgba8(10, 132, 255, 255),
+            bg_row_hover: Color::from_rgba8(232, 234, 240, 255),
+            fg_text: Color::from_rgba8(28, 28, 32, 255),
+            fg_muted: Color::from_rgba8(110, 110, 120, 255),
+            fg_placeholder: Color::from_rgba8(160, 160, 170, 255),
+            fg_destructive: Color::from_rgba8(215, 58, 50, 255),
+            border: Color::from_rgba8(208, 208, 215, 255),
+            border_focus: Color::from_rgba8(10, 132, 255, 255),
+            accent: Color::from_rgba8(10, 132, 255, 255),
+        }
+    }
+
+    /// Skin **KDE Plasma "Breeze" (claro)** — gris papel (#eff0f1), acento
+    /// azul Breeze (#3daee9). Para la vista `kde`.
+    pub const fn kde_breeze() -> Self {
+        Self {
+            name: "Breeze",
+            bg_app: Color::from_rgba8(239, 240, 241, 255),
+            bg_panel: Color::from_rgba8(252, 252, 252, 255),
+            bg_panel_alt: Color::from_rgba8(49, 54, 59, 255), // panel oscuro Breeze
+            bg_input: Color::from_rgba8(255, 255, 255, 255),
+            bg_input_focus: Color::from_rgba8(248, 252, 254, 255),
+            bg_button: Color::from_rgba8(224, 226, 228, 255),
+            bg_button_hover: Color::from_rgba8(208, 211, 214, 255),
+            bg_selected: Color::from_rgba8(61, 174, 233, 255),
+            bg_row_hover: Color::from_rgba8(227, 229, 231, 255),
+            fg_text: Color::from_rgba8(35, 38, 41, 255),
+            fg_muted: Color::from_rgba8(99, 104, 109, 255),
+            fg_placeholder: Color::from_rgba8(150, 155, 160, 255),
+            fg_destructive: Color::from_rgba8(218, 68, 83, 255),
+            border: Color::from_rgba8(188, 192, 196, 255),
+            border_focus: Color::from_rgba8(61, 174, 233, 255),
+            accent: Color::from_rgba8(61, 174, 233, 255),
+        }
+    }
+
     /// Superficie "hundida" — un escalón más profunda que `bg_app`, para
     /// áreas de lectura intensa (output de terminal, viewports de log,
     /// IDE-text) que deben recibir el texto con más contraste que el chrome
@@ -390,9 +462,19 @@ impl Theme {
         vec![Self::dark(), Self::light(), Self::aurora(), Self::sunset()]
     }
 
-    /// Busca un preset por nombre exacto.
+    /// Busca un preset por nombre exacto. Incluye los modos deliberados que
+    /// quedan fuera de la rotación casual (`print` y los skins de vista
+    /// `WinXP`/`macOS`/`Breeze`), para que `Config::theme` los resuelva.
     pub fn by_name(name: &str) -> Option<Self> {
-        Self::all().into_iter().find(|t| t.name == name)
+        Self::all()
+            .into_iter()
+            .chain([
+                Self::print(),
+                Self::xp_blue(),
+                Self::mac_light(),
+                Self::kde_breeze(),
+            ])
+            .find(|t| t.name == name)
     }
 
     /// Próximo preset en la rotación de [`Theme::all`]. Si `current` no

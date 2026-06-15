@@ -32,6 +32,7 @@ pub mod rules;
 pub mod session;
 /// `impl allichay::Configurable for Config` — vuelve la config editable por UI.
 pub mod settings;
+pub mod vistas;
 pub mod watch;
 
 pub use action::{
@@ -46,6 +47,7 @@ pub use keymap::{Keymap, KeymapError, KeymapWatch};
 pub use permisos::Permisos;
 pub use profiles::{KeymapProfiles, ProfileError};
 pub use rules::{Rule, RuleOutcome, Rules};
+pub use vistas::{Vista, VISTA_NAMES};
 pub use session::{DesktopState, SESSION_VERSION};
 pub use watch::FileWatch;
 

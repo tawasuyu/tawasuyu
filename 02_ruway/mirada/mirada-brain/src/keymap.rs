@@ -67,8 +67,9 @@ impl Keymap {
 
     // --- Presets de fábrica -------------------------------------------
 
-    /// Los nombres de los presets de fábrica (`["dwm", "i3", "hyprland"]`).
-    pub const PRESET_NAMES: [&'static str; 3] = crate::action::PRESET_NAMES;
+    /// Los nombres de los presets de fábrica
+    /// (`["mirada", "dwm", "i3", "hyprland", "windows", "mac"]`).
+    pub const PRESET_NAMES: [&'static str; 6] = crate::action::PRESET_NAMES;
 
     /// El keymap de un preset de fábrica por nombre, o `None` si no existe.
     pub fn preset(name: &str) -> Option<Keymap> {
