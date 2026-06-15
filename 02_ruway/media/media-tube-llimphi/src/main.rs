@@ -1,4 +1,5 @@
-//! qaway — cliente de plataforma de video (tipo FreeTube) en Llimphi.
+//! media-tube — frontend de plataforma de video (tipo FreeTube) del dominio
+//! `media`, en Llimphi.
 //!
 //! Compone, no reimplementa:
 //!   - **Descubrir**: [`foreign_platform`] (trait agnóstico + providers REST
@@ -7,7 +8,7 @@
 //!   - **Miniaturas**: [`llimphi_image::ImageCache`] (feature `net`) — la
 //!     `view` lee del caché en el hilo UI mientras workers lo pueblan por URL.
 //!   - **Reproducir**: lanza el binario hermano `media-app <url>`, que ya
-//!     resuelve yt-dlp/DASH/ffmpeg (R1/R2 de PARIDAD.md). qaway no duplica el
+//!     resuelve yt-dlp/DASH/ffmpeg (R1/R2 de PARIDAD.md). No duplica el
 //!     pipeline de red.
 //!
 //! MVP feo-primero: header (búsqueda + conmutador de backend) + grilla
@@ -171,14 +172,14 @@ fn dur_fmt(secs: u64) -> String {
     }
 }
 
-struct Qaway;
+struct MediaTube;
 
-impl App for Qaway {
+impl App for MediaTube {
     type Model = Model;
     type Msg = Msg;
 
     fn title() -> &'static str {
-        "qaway · video federado"
+        "media · plataforma de video"
     }
 
     fn initial_size() -> (u32, u32) {
@@ -313,7 +314,7 @@ impl App for Qaway {
             align_items: Some(AlignItems::Center),
             ..Default::default()
         })
-        .text("qaway", 19.0, Color::from_rgba8(235, 240, 248, 255))
+        .text("media tube", 19.0, Color::from_rgba8(235, 240, 248, 255))
         .bold();
 
         let backend_btn = |b: Backend| -> View<Msg> {
@@ -451,5 +452,5 @@ impl App for Qaway {
 }
 
 fn main() {
-    llimphi_ui::run::<Qaway>();
+    llimphi_ui::run::<MediaTube>();
 }

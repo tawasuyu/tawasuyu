@@ -1,0 +1,32 @@
+# =============================================================================
+#  tawasuyu :: media-tube-llimphi — frontend de plataforma de video (FreeTube)
+# -----------------------------------------------------------------------------
+#  Frontend del dominio `media` (regla #1: subcrate del dominio, no app paralela
+#  en otro cuadrante). Compone dos piezas existentes sin reimplementar nada:
+#    - DESCUBRIR: `foreign-platform` (puente en shared/, trait agnóstico +
+#      providers REST en RON: Invidious/PeerTube)
+#    - REPRODUCIR: lanza el binario hermano `media-app <url>` (ya resuelve
+#      yt-dlp/DASH/ffmpeg, R1/R2 de PARIDAD.md). No duplica el pipeline de red.
+#  Miniaturas por `llimphi-image` (feature `net`: descarga+caché por URL).
+# =============================================================================
+
+[package]
+name = "media-tube-llimphi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "media-tube-llimphi — frontend de plataforma de video (FreeTube-like) del dominio media: búsqueda + grilla de miniaturas sobre foreign-platform (Invidious/PeerTube); el play lanza media-app."
+
+[[bin]]
+name = "media-tube"
+path = "src/main.rs"
+
+[dependencies]
+llimphi-ui = { workspace = true }
+llimphi-theme = { workspace = true }
+llimphi-widget-text-input = { workspace = true }
+llimphi-widget-grid = { workspace = true }
+llimphi-image = { path = "../../llimphi/llimphi-image", features = ["net"] }
+foreign-platform = { path = "../../../shared/foreign-platform" }
