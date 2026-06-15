@@ -481,6 +481,14 @@ pub(crate) fn dispatch_a(p: &str, value: &str) -> Option<DeclKind> {
         "-moz-outline-radius-topright" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusTopright),
         "-moz-outline-radius-bottomleft" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusBottomleft),
         "-moz-outline-radius-bottomright" => opaque_or_sentinel(value, "0").map(DeclKind::MozOutlineRadiusBottomright),
+        // === Fase 7.1048-7.1051 — SVG/masking/scroll-snap-type v0 (plumb opaco) ===
+        // `buffered-rendering` (SVG2): auto|dynamic|static. Sentinel auto → None.
+        "buffered-rendering" => opaque_or_sentinel(value, "auto").map(DeclKind::BufferedRendering),
+        // `mask-source-type` (CSS Masking, draft temprano): auto|alpha|luminance.
+        "mask-source-type" => opaque_or_sentinel(value, "auto").map(DeclKind::MaskSourceType),
+        // `scroll-snap-type-x` / `-y` (CSS Scroll Snap v0). Sentinel none → None.
+        "scroll-snap-type-x" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapTypeX),
+        "scroll-snap-type-y" => opaque_or_sentinel(value, "none").map(DeclKind::ScrollSnapTypeY),
         // Fase 7.415 — `scroll-margin-block-start` = top en LTR horizontal.
         "scroll-margin-block-start" => {
             parse_length_px(value).map(DeclKind::ScrollMarginTop)

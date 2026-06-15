@@ -1133,6 +1133,11 @@ pub(crate) enum DeclKind {
     MozOutlineRadiusTopright(Option<String>),
     MozOutlineRadiusBottomleft(Option<String>),
     MozOutlineRadiusBottomright(Option<String>),
+    // === Fase 7.1048-7.1051 — SVG/masking/scroll-snap-type v0 (plumb opaco) ===
+    BufferedRendering(Option<String>),
+    MaskSourceType(Option<String>),
+    ScrollSnapTypeX(Option<String>),
+    ScrollSnapTypeY(Option<String>),
 }
 
 impl Decl {
@@ -1903,6 +1908,11 @@ impl Decl {
             DeclKind::MozOutlineRadiusTopright(v) => s.moz_outline_radius_topright = v.clone(),
             DeclKind::MozOutlineRadiusBottomleft(v) => s.moz_outline_radius_bottomleft = v.clone(),
             DeclKind::MozOutlineRadiusBottomright(v) => s.moz_outline_radius_bottomright = v.clone(),
+            // Fase 7.1048-7.1051 — SVG/masking/scroll-snap-type v0, plumb opaco.
+            DeclKind::BufferedRendering(v) => s.buffered_rendering = v.clone(),
+            DeclKind::MaskSourceType(v) => s.mask_source_type = v.clone(),
+            DeclKind::ScrollSnapTypeX(v) => s.scroll_snap_type_x = v.clone(),
+            DeclKind::ScrollSnapTypeY(v) => s.scroll_snap_type_y = v.clone(),
         }
     }
 }

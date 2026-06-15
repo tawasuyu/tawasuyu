@@ -620,6 +620,11 @@ impl Default for ComputedStyle {
             moz_outline_radius_topright: None,
             moz_outline_radius_bottomleft: None,
             moz_outline_radius_bottomright: None,
+            // Fase 7.1048-7.1051 — SVG/masking/scroll-snap-type v0, default None.
+            buffered_rendering: None,
+            mask_source_type: None,
+            scroll_snap_type_x: None,
+            scroll_snap_type_y: None,
         }
     }
 }

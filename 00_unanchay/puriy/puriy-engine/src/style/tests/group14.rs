@@ -669,3 +669,19 @@ use super::super::*;
         assert_eq!(style_of("-moz-outline-radius: 0").moz_outline_radius, None);
         assert_eq!(style_of("-moz-outline-radius-topleft: 0").moz_outline_radius_topleft, None);
     }
+
+    #[test]
+    fn svg_masking_scrollsnap_v0_plumb_fase_7_1048_1051() {
+        assert_eq!(style_of("buffered-rendering: static").buffered_rendering,
+                   Some("static".to_string()));
+        assert_eq!(style_of("mask-source-type: luminance").mask_source_type,
+                   Some("luminance".to_string()));
+        assert_eq!(style_of("scroll-snap-type-x: mandatory").scroll_snap_type_x,
+                   Some("mandatory".to_string()));
+        assert_eq!(style_of("scroll-snap-type-y: proximity").scroll_snap_type_y,
+                   Some("proximity".to_string()));
+        // Sentinel = initial → None.
+        assert_eq!(style_of("buffered-rendering: auto").buffered_rendering, None);
+        assert_eq!(style_of("mask-source-type: auto").mask_source_type, None);
+        assert_eq!(style_of("scroll-snap-type-x: none").scroll_snap_type_x, None);
+    }

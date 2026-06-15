@@ -1724,5 +1724,17 @@ pub struct ComputedStyle {
     /// `-moz-outline-radius-bottomright` (Gecko). `None` = `0`. NO hereda.
     /// Plumb. Fase 7.1047.
     pub moz_outline_radius_bottomright: Option<String>,
+    // === Fase 7.1048-7.1051 — SVG/masking/scroll-snap-type v0 (plumb opaco) ===
+    /// `buffered-rendering` (SVG2). `None` = `auto`. NO hereda. Plumb. Fase 7.1048.
+    pub buffered_rendering: Option<String>,
+    /// `mask-source-type` (CSS Masking, draft temprano). `None` = `auto`.
+    /// NO hereda. Plumb. Fase 7.1049.
+    pub mask_source_type: Option<String>,
+    /// `scroll-snap-type-x` (CSS Scroll Snap v0). `None` = `none`. NO hereda.
+    /// Plumb. Fase 7.1050.
+    pub scroll_snap_type_x: Option<String>,
+    /// `scroll-snap-type-y` (CSS Scroll Snap v0). `None` = `none`. NO hereda.
+    /// Plumb. Fase 7.1051.
+    pub scroll_snap_type_y: Option<String>,
 }
 
