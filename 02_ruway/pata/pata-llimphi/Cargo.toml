@@ -34,6 +34,11 @@ shuma-module-shell = { path = "../../shuma/sandbox/shuma-module-shell" }
 # Vocabulario común de los módulos de shuma — `Source` (Local/Daemon/…) para
 # construir el `State` del shell hospedado.
 shuma-module = { path = "../../shuma/sandbox/shuma-module" }
+# La shuma COMPLETA (Model + chrome con dientes/sesiones) como lib hosteable
+# (Regla 2). Para el drawer con paridad total al standalone: pata construye su
+# Model con `new_model()`, lo tickea con un Handle lifteado y pinta
+# `view(model).map(...)`. Sin ciclo: shuma-shell-llimphi → pata-host (hoja).
+shuma-shell-llimphi = { path = "../../shuma/shuma-shell-llimphi" }
 # Registro de apps para el menú del botón de inicio (descubre ~/.config/tawasuyu/
 # apps/*.toml). El menú nativo reemplaza a depender de wofi/rofi externos.
 app-bus = { path = "../../../shared/app-bus" }

@@ -30,6 +30,7 @@ pub mod open;
 pub mod render;
 pub mod sampler;
 pub mod shuma;
+pub mod shuma_app;
 pub mod toplevel;
 pub mod tray;
 pub mod weather;
