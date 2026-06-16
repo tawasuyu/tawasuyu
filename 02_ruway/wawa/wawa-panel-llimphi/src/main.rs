@@ -755,6 +755,22 @@ fn icono_perfil(name: &str) -> &'static str {
 fn perfiles_schema(m: &Model) -> Schema {
     use allichay::Field;
     let mut schema = Schema::new();
+    // Acciones: crear/duplicar/eliminar (toggles de acción — al activarlos
+    // ejecutan y vuelven a apagarse; valor siempre falso). También en el menú
+    // «Perfiles» de la barra. El activo se nombra en duplicar/eliminar.
+    let activo = if m.dprofiles.active.is_empty() {
+        "—".to_string()
+    } else {
+        m.dprofiles.active.clone()
+    };
+    schema = schema.section(
+        Section::new("acciones", "Acciones")
+            .icon("✚")
+            .help("Crear un perfil nuevo desde la config actual, o duplicar/eliminar el activo.")
+            .field(Field::toggle("crear", "Crear perfil nuevo (desde el actual)", false))
+            .field(Field::toggle("duplicar", format!("Duplicar «{activo}»"), false))
+            .field(Field::toggle("eliminar", format!("Eliminar «{activo}»"), false)),
+    );
     for name in m.dprofiles.names() {
         let is_active = m.dprofiles.active == name;
         let title = if is_active {
@@ -779,6 +795,50 @@ fn perfiles_schema(m: &Model) -> Schema {
         );
     }
     prefix_schema(schema, "perfiles")
+}
+
+/// Crea un perfil nuevo desde la config viva y lo activa.
+fn do_create_profile(m: &mut Model) {
+    let base = DesktopProfile {
+        mirada: m.mirada.clone(),
+        keymap: m.keymap_rows.clone(),
+        pata: m.pata.clone(),
+    };
+    let name = m.dprofiles.create(base, "perfil nuevo");
+    activate_profile(m, &name);
+    m.selected_pest = PERFILES_DIENTE;
+    m.sidebar_open = true;
+    m.status = format!("perfil «{name}» creado y activado");
+}
+
+/// Duplica el perfil activo y activa la copia.
+fn do_duplicate_profile(m: &mut Model) {
+    let src = m.dprofiles.active.clone();
+    if let Some(name) = m.dprofiles.duplicate(&src) {
+        activate_profile(m, &name);
+        m.selected_pest = PERFILES_DIENTE;
+        m.sidebar_open = true;
+        m.status = format!("perfil «{name}» (copia de «{src}»)");
+    } else {
+        m.status = "no hay perfil activo que duplicar".into();
+    }
+}
+
+/// Elimina el perfil activo (si hay más de uno) y activa el siguiente.
+fn do_delete_profile(m: &mut Model) {
+    let cur = m.dprofiles.active.clone();
+    if m.dprofiles.profiles.len() <= 1 {
+        m.status = "no se puede eliminar el último perfil".into();
+    } else {
+        m.dprofiles.remove(&cur);
+        let next = m.dprofiles.active.clone();
+        if !next.is_empty() {
+            activate_profile(m, &next);
+        }
+        m.selected_pest = PERFILES_DIENTE;
+        m.sidebar_open = true;
+        m.status = format!("perfil «{cur}» eliminado");
+    }
 }
 
 /// Activa un **perfil de escritorio** completo de la biblioteca: vuelca su foto
@@ -1002,7 +1062,17 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
         // toggle «activo» lo aplica entero (look + atajos + barra) en caliente.
         "perfiles" => {
             let name = rel.segments().first().cloned().unwrap_or_default();
-            if rel.leaf() == Some("activo") && value.as_bool() == Some(true) {
+            if name == "acciones" {
+                // Botones de acción (toggles): ejecutan al activarse.
+                if value.as_bool() == Some(true) {
+                    match rel.leaf() {
+                        Some("crear") => do_create_profile(m),
+                        Some("duplicar") => do_duplicate_profile(m),
+                        Some("eliminar") => do_delete_profile(m),
+                        _ => {}
+                    }
+                }
+            } else if rel.leaf() == Some("activo") && value.as_bool() == Some(true) {
                 activate_profile(m, &name);
             }
         }
@@ -1182,9 +1252,13 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
             _ => FieldValue::Table(m.keymap_rows.clone()),
         });
     }
-    // Pestaña Perfiles: el toggle «activo» = si este perfil es el aplicado.
+    // Pestaña Perfiles: los toggles de acción siempre leen "false" (son
+    // botones); el toggle «activo» = si este perfil es el aplicado.
     if key == "perfiles" {
         let name = rel.segments().first().cloned().unwrap_or_default();
+        if name == "acciones" {
+            return Some(FieldValue::Bool(false));
+        }
         return Some(FieldValue::Bool(m.dprofiles.active == name));
     }
     let schema = match key.as_str() {
@@ -1665,47 +1739,19 @@ fn handle_menu_command(model: Model, cmd: &str) -> Model {
         let _ = m.cfg.save();
         return m;
     }
-    // Crear/duplicar/eliminar perfiles de escritorio.
+    // Crear/duplicar/eliminar perfiles de escritorio (mismos helpers que los
+    // botones de la pestaña Perfiles).
     match cmd {
         "perfil.create" => {
-            let base = DesktopProfile {
-                mirada: m.mirada.clone(),
-                keymap: m.keymap_rows.clone(),
-                pata: m.pata.clone(),
-            };
-            let name = m.dprofiles.create(base, "perfil nuevo");
-            activate_profile(&mut m, &name);
-            m.selected_pest = PERFILES_DIENTE;
-            m.sidebar_open = true;
-            m.status = format!("perfil «{name}» creado y activado");
+            do_create_profile(&mut m);
             return m;
         }
         "perfil.duplicate" => {
-            let src = m.dprofiles.active.clone();
-            if let Some(name) = m.dprofiles.duplicate(&src) {
-                activate_profile(&mut m, &name);
-                m.selected_pest = PERFILES_DIENTE;
-                m.sidebar_open = true;
-                m.status = format!("perfil «{name}» (copia de «{src}»)");
-            } else {
-                m.status = "no hay perfil activo que duplicar".into();
-            }
+            do_duplicate_profile(&mut m);
             return m;
         }
         "perfil.delete" => {
-            let cur = m.dprofiles.active.clone();
-            if m.dprofiles.profiles.len() <= 1 {
-                m.status = "no se puede eliminar el último perfil".into();
-            } else {
-                m.dprofiles.remove(&cur);
-                let next = m.dprofiles.active.clone();
-                if !next.is_empty() {
-                    activate_profile(&mut m, &next);
-                }
-                m.selected_pest = PERFILES_DIENTE;
-                m.sidebar_open = true;
-                m.status = format!("perfil «{cur}» eliminado");
-            }
+            do_delete_profile(&mut m);
             return m;
         }
         _ => {}
