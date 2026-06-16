@@ -298,13 +298,21 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .filter(|(_, s)| s.kind == SurfaceKind::Sidebar)
         .map(|(i, _)| i)
         .collect();
-    if bars.is_empty() && sidebars.is_empty() {
-        return Err("pata · la config no tiene ninguna superficie anclable (bar/sidebar)".into());
+    let docks: Vec<usize> = cfg
+        .surfaces
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.kind == SurfaceKind::Dock)
+        .map(|(i, _)| i)
+        .collect();
+    if bars.is_empty() && sidebars.is_empty() && docks.is_empty() {
+        return Err("pata · la config no tiene ninguna superficie anclable (bar/sidebar/dock)".into());
     }
     diag!(
-        "pata diag · backend LAYER-SHELL arranca · {} barra(s) + {} sidebar(s)",
+        "pata diag · backend LAYER-SHELL arranca · {} barra(s) + {} sidebar(s) + {} dock(s)",
         bars.len(),
-        sidebars.len()
+        sidebars.len(),
+        docks.len()
     );
 
     let conn = Connection::connect_to_env()?;
@@ -524,6 +532,42 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 cache: None,
                 width: thickness,
                 height: size.1.max(1),
+                dirty: true,
+                hover_idx: None,
+                cursor_x: None,
+                gpu: None,
+            });
+        }
+    }
+
+    // Una layer surface por **dock** (estilo macOS): como una barra (anclada a
+    // su borde, ancho completo) pero SIN zona exclusiva — flota sobre las
+    // ventanas en vez de reservar su franja, y el `dock_view` centra sus íconos.
+    for &idx in &docks {
+        let s = &app.cfg.surfaces[idx];
+        let thickness = s.thickness.max(1.0) as u32;
+        let (sctk_anchor, size) = anchor_y_size(s.anchor, thickness);
+        for target in targets_de(&s.output) {
+            let wl_surface = compositor.create_surface(&qh);
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Top,
+                Some("pata-dock".to_string()),
+                target.as_ref(),
+            );
+            layer.set_anchor(sctk_anchor);
+            layer.set_size(size.0, size.1);
+            layer.set_exclusive_zone(0); // un dock no reserva espacio: flota.
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.commit();
+            app.panels.push(Panel {
+                idx,
+                card: None,
+                layer,
+                cache: None,
+                width: size.0.max(1),
+                height: thickness,
                 dirty: true,
                 hover_idx: None,
                 cursor_x: None,
