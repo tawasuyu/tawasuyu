@@ -16,11 +16,9 @@ use chrono::{Datelike, Local, Timelike, Utc};
 use pata_core::widget::{ClockReading, LayoutGlyph, WidgetCtx, MAX_CORES};
 
 use crate::toplevel::WindowEntry;
-
-/// Duración del mes sinódico (de luna nueva a luna nueva), en días.
-const MES_SINODICO: f64 = 29.530588853;
-/// Época de referencia de luna nueva: 2000-01-06 18:14 UTC, en días julianos.
-const LUNA_NUEVA_REF_JD: f64 = 2451550.1;
+// Las efemérides (Sol/Luna) viven en el core agnóstico `pata-core::astro`
+// (Regla 2); el sampler sólo computa el día juliano de su reloj y consulta.
+use pata_core::astro::{astro_from_jd, jd_from_unix};
 
 /// Muestreador con estado: guarda la última lectura de `/proc/stat` para poder
 /// calcular el uso de CPU como delta entre ticks.
@@ -269,35 +267,6 @@ fn parse_cpu_line(line: &str, expected_head: &str) -> Option<(u64, u64)> {
     let total: u64 = vals.iter().sum();
     let idle = vals[3] + vals.get(4).copied().unwrap_or(0);
     Some((total, idle))
-}
-
-/// Día juliano a partir de un timestamp Unix (segundos UTC). El día juliano
-/// 2440587.5 corresponde a la época Unix (1970-01-01 00:00 UTC).
-fn jd_from_unix(secs: i64) -> f64 {
-    secs as f64 / 86_400.0 + 2_440_587.5
-}
-
-/// `(longitud_eclíptica_sol_deg, fase_lunar)` para un día juliano dado.
-///
-/// La longitud del Sol usa la fórmula de baja precisión del *Astronomical
-/// Almanac* (exacta a ~0.01°, de sobra para el signo zodiacal). La fase lunar
-/// es la edad sinódica media desde una luna nueva de referencia, como fracción
-/// `0..1` (0 = nueva, 0.5 = llena). No es astronomía de alta precisión —para eso
-/// está `cosmos-ephemeris`, que puede sustituir a este sampler— pero alcanza
-/// para un widget de barra.
-fn astro_from_jd(jd: f64) -> (f32, f32) {
-    let n = jd - 2_451_545.0; // días desde J2000.0
-    // Anomalía media del Sol (grados → radianes para los senos).
-    let g = (357.528 + 0.985_600_3 * n).to_radians();
-    // Longitud media + ecuación del centro.
-    let mut lambda = 280.460 + 0.985_647_4 * n + 1.915 * g.sin() + 0.020 * (2.0 * g).sin();
-    lambda = lambda.rem_euclid(360.0);
-
-    // Edad lunar como fracción del ciclo sinódico.
-    let edad = (jd - LUNA_NUEVA_REF_JD).rem_euclid(MES_SINODICO);
-    let fase = (edad / MES_SINODICO) as f32;
-
-    (lambda as f32, fase)
 }
 
 #[cfg(test)]

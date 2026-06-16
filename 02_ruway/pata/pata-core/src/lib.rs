@@ -29,6 +29,9 @@
 
 extern crate alloc;
 
+/// Efemérides de baja precisión (Sol/Luna) para el widget astral. Matemática
+/// pura `no_std`; el host computa el día juliano y llama.
+pub mod astro;
 pub mod config;
 pub mod layout;
 /// `impl allichay::Configurable for Config` — vuelve el marco editable por UI.
