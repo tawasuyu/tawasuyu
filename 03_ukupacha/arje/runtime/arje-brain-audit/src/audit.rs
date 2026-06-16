@@ -549,6 +549,72 @@ fn canonical_bytes(entry: &AuditEntry) -> Vec<u8> {
     serde_json::to_vec(&canonical).unwrap_or_default()
 }
 
+/// Estado de la atestación al arranque, derivado de las entradas
+/// `AttestationCheck` del audit log: un veredicto por binario (deduplicado al
+/// `seq` más alto) y el conteo N✓/M✗. Es resumen del dominio audit (no UI):
+/// cualquier frontend o CLI que muestre el estado de boot lo reusa.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttestSummary {
+    /// Binarios cuyo último veredicto fue `ok`.
+    pub ok: usize,
+    /// Binarios cuyo último veredicto fue comprometido (≠ `ok`).
+    pub fail: usize,
+    /// Una línea por binario (estado vivo, deduplicado), comprometidos primero
+    /// para que un `✗` no quede enterrado.
+    pub lines: Vec<String>,
+}
+
+/// Resume las entradas `AttestationCheck` en el estado **vivo** de la
+/// atestación: un veredicto por binario crítico (deduplicado al `seq` más alto,
+/// porque un re-boot puede dejar varias entradas del mismo binario) y el conteo
+/// N✓/M✗. Devuelve `None` si no hay ninguna entrada de atestación — el boot no
+/// atestó (seed sin manifiesto) y la vista dedicada no tiene sentido.
+///
+/// Vivía atrapada en `arje-card-llimphi` (frontend); baja acá, junto al log que
+/// resume, para que cualquier consumidor la reuse (Regla 2).
+pub fn resumir_atestacion(entries: &[AuditEntry]) -> Option<AttestSummary> {
+    // binary → (seq más alto visto, último veredicto, basename legible).
+    let mut por_binario: std::collections::HashMap<&str, (u64, &str, &str)> =
+        std::collections::HashMap::new();
+    for e in entries {
+        if let AuditAction::AttestationCheck { binary, verdict, .. } = &e.action {
+            let nombre = binary.rsplit('/').next().unwrap_or(binary);
+            por_binario
+                .entry(binary.as_str())
+                .and_modify(|cur| {
+                    if e.seq >= cur.0 {
+                        *cur = (e.seq, verdict.as_str(), nombre);
+                    }
+                })
+                .or_insert((e.seq, verdict.as_str(), nombre));
+        }
+    }
+    if por_binario.is_empty() {
+        return None;
+    }
+    let mut filas: Vec<(bool, String)> = por_binario
+        .values()
+        .map(|(_, verdict, nombre)| {
+            let ok = *verdict == "ok";
+            let linea = if ok {
+                format!("{nombre}  ✓")
+            } else {
+                format!("{nombre}  ✗ {verdict}")
+            };
+            (ok, linea)
+        })
+        .collect();
+    // Comprometidos primero; dentro de cada grupo, alfabético estable.
+    filas.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let ok = filas.iter().filter(|(o, _)| *o).count();
+    let fail = filas.len() - ok;
+    Some(AttestSummary {
+        ok,
+        fail,
+        lines: filas.into_iter().map(|(_, l)| l).collect(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

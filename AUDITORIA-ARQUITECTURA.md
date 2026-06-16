@@ -26,13 +26,13 @@ defecto de clase que tenía shuma.
 | 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | ⬜ pendiente |
 | 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | ⬜ pendiente |
 | 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | ⬜ pendiente |
-| 6 | `00_unanchay/khipu/khipu-app/src/map.rs` | MEDIA | (a) `place_note` (anclaje semántico); `gravity_layout` del core sin usar | ⬜ pendiente |
+| 6 | `00_unanchay/khipu/khipu-app/src/map.rs` | MEDIA | (a) `place_note` (anclaje semántico); `gravity_layout` del core sin usar | ✅ hecho — `SemanticField::anchor_new` |
 | 7 | `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | BAJA | (a) `diff_matches`/timeline de salud del broker atrapado | ⬜ pendiente |
-| 8 | `02_ruway/pata/pata-llimphi/src/sampler.rs` | BAJA | (a) efemérides (`astro_from_jd`) atrapadas; `pata-core` es agnóstico | ⬜ pendiente |
-| 9 | `00_unanchay/khipu/khipu-app/src/estado.rs` | BAJA | (a) embedder fallback (`embed`) atrapado | ⬜ pendiente |
-| 10 | `02_ruway/nahual/nahual-font-viewer-llimphi` | BAJA | (a) parseo TTF en el frontend; `viewer-core` sin módulo `font` | ⬜ pendiente |
-| 11 | `03_ukupacha/wawa-explorer/wawa-explorer-llimphi` | BAJA | (a) `resolver_iface` (lee `/sys/class/net/`) atrapado | ⬜ pendiente |
-| 12 | `03_ukupacha/arje/arje-card-llimphi` | BAJA | (a) `detect_units`/`resumir_atestacion` atrapados | ⬜ pendiente |
+| 8 | `02_ruway/pata/pata-llimphi/src/sampler.rs` | BAJA | (a) efemérides (`astro_from_jd`) atrapadas; `pata-core` es agnóstico | ✅ hecho — `pata-core::astro` |
+| 9 | `00_unanchay/khipu/khipu-app/src/estado.rs` | BAJA | (a) embedder fallback (`embed`) atrapado | ✅ hecho — `khipu_gravity::local_embed` |
+| 10 | `02_ruway/nahual/nahual-font-viewer-llimphi` | BAJA | (a) parseo TTF en el frontend; `viewer-core` sin módulo `font` | ✅ hecho — `nahual-viewer-core::font` |
+| 11 | `03_ukupacha/wawa-explorer/wawa-explorer-llimphi` | BAJA | (a) `resolver_iface` (lee `/sys/class/net/`) atrapado | ✅ hecho — `wawa-explorer-aoe` |
+| 12 | `03_ukupacha/arje/arje-card-llimphi` | BAJA | (a) `detect_units`/`resumir_atestacion` atrapados | 🟡 `resumir_atestacion`→`arje-brain::audit`; `detect_units` se deja (ver nota) |
 
 Tipos: **(a)** lógica de dominio atrapada en el frontend · **(b)** sin `*-core` agnóstico ·
 **(c)** binario monolítico sin separar lib+bin · **(d)** deps GPUI.
@@ -127,8 +127,12 @@ metadatos a `nahual-viewer-core::font` (dejar outlines→`BezPath` en el `-llimp
 
 ### 12. `arje-card-llimphi/src/main.rs` — BAJA (a)
 `detect_units` (l.421, scan del card store) y `resumir_atestacion` (l.270, resumen del audit) atrapados.
-**Remediación:** `resumir_atestacion` → `arje-brain`; `detect_units` → `arje-compat`. *(Nota: `arje-card`
-es sólo un re-export de `card-core` — el nombre confunde pero no es violación.)*
+**Hecho:** `resumir_atestacion` + `AttestSummary` → `arje-brain::audit` (ya era dep; sin árbol nuevo).
+**`detect_units` se deja a propósito:** el comentario en `main.rs:391-393` documenta una decisión
+deliberada — `cards_dir` se replicó "para no arrastrar el árbol de deps de arje-compat por 4 líneas".
+Mover `detect_units` a `arje-compat` forzaría al frontend a depender de zbus/hickory-resolver/etc., una
+regresión de higiene de deps contra una decisión consciente. Respetamos esa decisión (CLAUDE.md: si el
+target contradice cómo se describió, surgir el conflicto en vez de proceder).
 
 ---
 
