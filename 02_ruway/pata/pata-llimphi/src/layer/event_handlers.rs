@@ -254,10 +254,22 @@ impl KeyboardHandler for LayerApp {
             return;
         }
         if let Some(ke) = self.keysym_to_keyevent(&event) {
-            self.shuma.inner = shuma_module_shell::update(
-                self.shuma.inner.clone(),
-                shuma_module_shell::Msg::Key(ke),
-            );
+            if self.shuma_full.is_some() {
+                // Live-wire: la tecla la traduce la shuma completa según su foco
+                // interno (input de la sesión activa / PTY-TUI / rails).
+                let m = self
+                    .shuma_full
+                    .as_ref()
+                    .and_then(|f| crate::shuma_app::on_key(f, &ke));
+                if let Some(m) = m {
+                    self.apply_shuma_full(vec![m]);
+                }
+            } else {
+                self.shuma.inner = shuma_module_shell::update(
+                    self.shuma.inner.clone(),
+                    shuma_module_shell::Msg::Key(ke),
+                );
+            }
         }
         self.marcar_shuma_dirty();
     }

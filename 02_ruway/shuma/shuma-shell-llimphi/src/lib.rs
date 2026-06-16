@@ -223,8 +223,16 @@ pub fn new_model() -> Model {
         env_groups,
         env_groups_mtime,
         tick_count: 0,
+        hosted_bar: false,
         _host: None,
     }
+}
+
+/// Marca el Model como **hospedado en una barra externa** (pata): el input de la
+/// sesión activa lo pinta el host con [`active_input_view`], así que el canvas
+/// omite su input para no duplicarlo. Llamar tras [`new_model`] en el host.
+pub fn set_hosted_in_bar(model: &mut Model, on: bool) {
+    model.hosted_bar = on;
 }
 
 /// Engancha los efectos que dependen del host (event loop): ticks periódicos,
@@ -1495,4 +1503,36 @@ pub fn on_wheel(
 /// Reacciona a un resize del área hospedada (delegado a `App::on_resize`).
 pub fn on_resize(model: &Model, width: u32, height: u32) -> Option<Msg> {
     <Shell as App>::on_resize(model, width, height)
+}
+
+/// Vista del **input vivo de la sesión activa**, aislado del resto del chrome,
+/// para hospedarlo en una barra externa (el cabezal de pata): es el mismísimo
+/// `shell_input_view` que pinta el canvas, ruteado por el `lift` de la sesión
+/// activa, así que tipear ahí ejecuta en esa sesión. `None` si la activa no es
+/// un shell (form de nueva sesión / sin sesiones) — en ese caso el host muestra
+/// un fallback. Espeja `shuma_module_shell::input_view` a nivel de la app
+/// completa (la sesión activa ES un `shuma-module-shell`).
+pub fn active_input_view(model: &Model, theme: &Theme) -> Option<View<Msg>> {
+    let session = model.active()?;
+    if session.pending {
+        return None;
+    }
+    let idx = model.active_session;
+    match &session.shell.state {
+        ModuleState::Shell(state) => Some(shuma_module_shell::input_view(state, theme, move |m| {
+            Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m))
+        })),
+        _ => None,
+    }
+}
+
+/// `true` si el `Msg` es el "focalizar el input" de un shell de sesión (click
+/// sobre el input vivo). El host (pata) lo usa para abrir su drawer cuando se
+/// clickea el cabezal de la barra —espeja el auto-open de FocusInput del path
+/// bare—.
+pub fn msg_is_focus_input(msg: &Msg) -> bool {
+    matches!(
+        msg,
+        Msg::Module(_, ModuleMsg::Shell(shuma_module_shell::Msg::FocusInput))
+    )
 }

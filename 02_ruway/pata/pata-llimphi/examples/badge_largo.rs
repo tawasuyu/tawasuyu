@@ -43,7 +43,7 @@ fn fila(state: &ShumaState, theme: &llimphi_theme::Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .radius(6.0)
-    .children(vec![headline_view(state, theme)]);
+    .children(vec![headline_view(state, None, theme)]);
     bar
 }
 

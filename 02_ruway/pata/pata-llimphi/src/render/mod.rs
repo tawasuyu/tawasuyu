@@ -79,6 +79,9 @@ pub struct BarData<'a> {
     pub cava: &'a [f32],
     /// Las apps del registro, para el `program_manager` (grilla estilo Win3.1).
     pub apps: &'a [AppEntry],
+    /// La shuma COMPLETA hospedada (live-wire `PATA_SHUMA_FULL`), si está. El
+    /// cabezal `shuma` pinta el input de su sesión activa directo en la barra.
+    pub shuma_full: Option<&'a crate::shuma_app::Model>,
 }
 
 // ============================================================
@@ -269,6 +272,7 @@ pub fn root(model: &Model) -> View<Msg> {
         weather: model.weather_now.as_ref(),
         cava: &model.cava_frame,
         apps: model.registry.all(),
+        shuma_full: model.shuma_full.as_ref(),
     };
 
     for placed in &model.frame.surfaces {
@@ -458,6 +462,12 @@ pub fn shuma_open_view(
         View::new(style).on_click(Msg::ShumaToggle)
     };
 
+    // Live-wire: si la shuma completa está montada, el cuerpo es ella entera
+    // (dientes/sesiones); si no, el módulo bare (una sesión).
+    let body_inner = match data.shuma_full {
+        Some(full) => shuma::drawer_body_view_full(full, theme),
+        None => shuma::drawer_body_view(shuma_state, theme),
+    };
     let body = View::new(Style {
         size: Size {
             width: percent(1.0_f32),
@@ -466,7 +476,7 @@ pub fn shuma_open_view(
         flex_shrink: 0.0,
         ..Default::default()
     })
-    .children(vec![shuma::drawer_body_view(shuma_state, theme)]);
+    .children(vec![body_inner]);
 
     let bar = View::new(Style {
         size: Size {
@@ -518,7 +528,7 @@ fn slots_de(
                     }
                 }
                 SlotWidget::Start { label, exec } => task_manager::start_button_view(label, exec.as_deref(), theme),
-                SlotWidget::Shuma => shuma::headline_view(shuma_state, theme),
+                SlotWidget::Shuma => shuma::headline_view(shuma_state, data.shuma_full, theme),
                 SlotWidget::WindowList => task_manager::window_list_view(data.windows, surface.gap, dir, theme),
                 SlotWidget::Clipboard { exec } => {
                     task_manager::clipboard_view(data.clipboard, exec.as_deref(), theme)

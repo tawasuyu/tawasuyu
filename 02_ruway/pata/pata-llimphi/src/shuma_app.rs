@@ -33,9 +33,13 @@ impl std::fmt::Debug for FullMsg {
     }
 }
 
-/// Construye el `Model` de la shuma completa (puro, sin efectos del host).
+/// Construye el `Model` de la shuma completa (puro, sin efectos del host),
+/// marcado como **hospedado en barra**: el input de la sesión activa lo pinta
+/// pata en la barra (ver [`active_input_view`]) y el canvas omite el suyo.
 pub fn new() -> Model {
-    shuma::new_model()
+    let mut m = shuma::new_model();
+    shuma::set_hosted_in_bar(&mut m, true);
+    m
 }
 
 /// Engancha los efectos de shuma (ticks, watcher de config, rail, contenedores)
@@ -100,4 +104,31 @@ pub fn on_wheel(
 /// Reacciona a un resize del área hospedada.
 pub fn on_resize(model: &Model, width: u32, height: u32) -> Option<Msg> {
     shuma::on_resize(model, width, height)
+}
+
+/// Input vivo de la sesión activa elevado al `Msg` del host, para hospedarlo en
+/// la barra de pata (el cabezal ES este input, no un placeholder). `None` si la
+/// sesión activa no es un shell (form de nueva sesión / sin sesiones).
+pub fn active_input_view<H, F>(
+    model: &Model,
+    theme: &llimphi_theme::Theme,
+    lift: F,
+) -> Option<View<H>>
+where
+    H: 'static,
+    F: Fn(Msg) -> H + Send + Sync + 'static,
+{
+    shuma::active_input_view(model, theme).map(|v| v.map(lift))
+}
+
+/// `true` si el `Msg` envuelto es el "focalizar el input" de la sesión activa —
+/// pata abre su drawer al recibirlo (espeja el auto-open de FocusInput bare).
+pub fn msg_is_focus_input(msg: &FullMsg) -> bool {
+    shuma::msg_is_focus_input(&msg.0)
+}
+
+/// Variante sobre el `Msg` sin envolver (el path layer-shell trabaja con el
+/// `Msg` crudo de la shuma, no con [`FullMsg`]).
+pub fn msg_is_focus_input_raw(msg: &Msg) -> bool {
+    shuma::msg_is_focus_input(msg)
 }

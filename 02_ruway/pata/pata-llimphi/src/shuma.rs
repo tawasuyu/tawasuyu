@@ -98,11 +98,20 @@ impl ShumaState {
 /// llevado a la barra. Tipeás acá, las teclas las recibe el shell, Enter ejecuta.
 /// Click en el chip → despliega el drawer (para ver la salida); el shell además
 /// recibe `FocusInput` por su propio `on_click` interno.
-pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
-    // Live-wire: con la shuma completa montada, el input vive *adentro* del
-    // drawer (canvas de la sesión activa), no en la barra. Acá el cabezal se
-    // reduce a un chip que despliega/repliega el drawer.
-    if crate::shuma_full_enabled() {
+pub fn headline_view(
+    state: &ShumaState,
+    full: Option<&shuma_app::Model>,
+    theme: &Theme,
+) -> View<Msg> {
+    // Live-wire: con la shuma completa montada, el cabezal ES el input vivo de
+    // la **sesión activa** de la shuma (mismo `shell_input_view`, ruteado a esa
+    // sesión vía `lift_shuma`), no un chip. Tipear acá ejecuta en esa sesión y
+    // FocusInput despliega el drawer. Si la activa no es un shell (form de nueva
+    // sesión), caemos al chip como fallback.
+    if let Some(full) = full {
+        if let Some(input) = shuma_app::active_input_view(full, theme, crate::lift_shuma) {
+            return wrap_headline(vec![input]);
+        }
         return headline_chip(state, theme);
     }
     let input = shuma_module_shell::input_view(&state.inner, theme, Msg::ShumaShell);
@@ -114,6 +123,14 @@ pub fn headline_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
     if !state.open && state.inner.long_alerts() > 0 {
         children.push(long_alert_badge());
     }
+    wrap_headline(children)
+}
+
+/// Envuelve los hijos del cabezal (input vivo + badge) en el contenedor que
+/// llena el espacio de la barra. Click sobre el borde (no sobre el input)
+/// despliega/repliega el drawer; el click directo sobre el input lo focaliza
+/// (handler más profundo gana) y, en live-wire, abre el drawer vía el `update`.
+fn wrap_headline(children: Vec<View<Msg>>) -> View<Msg> {
     View::new(Style {
         flex_direction: FlexDirection::Row,
         // Llenar el espacio disponible de la barra en vez de un bloque fijo de
@@ -334,5 +351,24 @@ pub fn drawer_overlay(state: &ShumaState, screen: (i32, i32), theme: &Theme) -> 
 /// [`headline_view`]). Llena el contenedor que le da el caller.
 pub fn drawer_body_view(state: &ShumaState, theme: &Theme) -> View<Msg> {
     shuma_module_shell::body_view(&state.inner, theme, Msg::ShumaShell)
+}
+
+/// El **cuerpo** del drawer en modo live-wire (path layer-shell): la shuma
+/// COMPLETA (dientes/sesiones/menubar/canvas) elevada al `Msg` de pata. La
+/// sesión activa pinta su cuerpo SIN input (vive en la barra, `hosted_bar`), así
+/// que no se duplica. Apila el overlay interno (dropdowns/menús/modales) encima.
+pub fn drawer_body_view_full(full: &shuma_app::Model, _theme: &Theme) -> View<Msg> {
+    let mut hijos = vec![shuma_app::view(full, crate::lift_shuma)];
+    if let Some(ov) = shuma_app::view_overlay(full, crate::lift_shuma) {
+        hijos.push(ov);
+    }
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(hijos)
 }
 

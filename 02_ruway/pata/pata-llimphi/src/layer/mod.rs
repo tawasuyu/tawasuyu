@@ -193,6 +193,15 @@ pub(super) struct LayerApp {
     pub(super) cfg: Config,
     pub(super) surfaces: Vec<crate::SurfaceWidgets>,
     pub(super) shuma: crate::shuma::ShumaState,
+    /// Live-wire (`PATA_SHUMA_FULL`): la shuma COMPLETA hospedada (dientes/
+    /// sesiones). `None` = path bare por defecto.
+    pub(super) shuma_full: Option<crate::shuma_app::Model>,
+    /// Handle channel-backed para los efectos/`update` de la shuma completa: sus
+    /// `Msg` (ticks, async) caen en `shuma_full_rx`, drenados cada frame.
+    pub(super) shuma_full_handle: Option<llimphi_ui::Handle<crate::shuma_app::Msg>>,
+    /// Cola de `Msg` de la shuma completa, alimentada por su handle desde hilos
+    /// de fondo (ticks, contenedores, explorer…). Se drena en `draw`.
+    pub(super) shuma_full_rx: Option<Receiver<crate::shuma_app::Msg>>,
     /// Vigía del `launcher.toml` para recargar el contenido del dock.
     pub(super) cfg_watch: crate::config_watch::ConfigWatch,
     /// Índice (en `panels`) de la barra que hospeda el `shuma_input`.
@@ -341,6 +350,29 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     let (members_tx, members_rx) = std::sync::mpsc::channel::<MembersOutcome>();
 
     let (surfaces, shuma) = Model::construir(&cfg);
+
+    // Live-wire de la shuma COMPLETA (opt-in). El loop smithay no tiene un
+    // `Handle<Msg>` de llimphi; fabricamos uno **channel-backed**: un handle
+    // lifteado sobre un `for_test` cuyo `lift` empuja cada `Msg` a un canal. Los
+    // efectos de la shuma (ticks/async en hilos de fondo) y los follow-ups de su
+    // `update` caen en `shuma_full_rx`, que `draw` drena cada frame (el loop de
+    // frames de pata se auto-sostiene, así que la shuma avanza ~vsync).
+    let (shuma_full, shuma_full_handle, shuma_full_rx) =
+        if crate::shuma_full_enabled() && shuma.present {
+            let (tx, rx) = std::sync::mpsc::channel::<crate::shuma_app::Msg>();
+            let tx = std::sync::Mutex::new(tx);
+            let handle: llimphi_ui::Handle<crate::shuma_app::Msg> =
+                llimphi_ui::Handle::<()>::for_test().lift(move |m: crate::shuma_app::Msg| {
+                    let _ = tx.lock().unwrap().send(m);
+                });
+            let mut full = crate::shuma_app::new();
+            // lift identidad: el handle ya es `Handle<shuma_app::Msg>`.
+            crate::shuma_app::wire_effects(&mut full, &handle, |m| m);
+            (Some(full), Some(handle), Some(rx))
+        } else {
+            (None, None, None)
+        };
+
     let utc = crate::usa_utc(&cfg);
     let mut app = LayerApp {
         registry_state: RegistryState::new(&globals),
@@ -364,6 +396,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         cfg,
         surfaces,
         shuma,
+        shuma_full,
+        shuma_full_handle,
+        shuma_full_rx,
         cfg_watch: crate::config_watch::ConfigWatch::new(pata_config::loaded_path()),
         shuma_panel: None,
         shuma_bar_px: 40,

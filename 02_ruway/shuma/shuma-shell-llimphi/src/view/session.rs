@@ -666,10 +666,14 @@ pub(crate) fn tab_content(model: &Model, theme: &Theme) -> View<Msg> {
         return new_session_form(model, session, theme);
     }
     let idx = model.active_session;
+    let lift = move |m| Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m));
     match &session.shell.state {
-        ModuleState::Shell(state) => shuma_module_shell::view::<Msg>(state, theme, move |m| {
-            Msg::Module(Slot::Session(idx, Which::Shell), ModuleMsg::Shell(m))
-        }),
+        // Hospedado en barra (pata): el input vive en la barra del host, así que
+        // el canvas pinta sólo el cuerpo (sin input) para no duplicarlo.
+        ModuleState::Shell(state) if model.hosted_bar => {
+            shuma_module_shell::body_view::<Msg>(state, theme, lift)
+        }
+        ModuleState::Shell(state) => shuma_module_shell::view::<Msg>(state, theme, lift),
         _ => placeholder(theme, ""),
     }
 }

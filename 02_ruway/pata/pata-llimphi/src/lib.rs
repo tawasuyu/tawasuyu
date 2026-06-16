@@ -985,10 +985,20 @@ impl App for PataApp {
                 }
             }
             Msg::ShumaFull(m) => {
+                // Click sobre el input de la barra → FocusInput de la sesión
+                // activa: además de focalizar (lo hace la shuma), despleguemos el
+                // drawer para ver la salida (espeja el auto-open del path bare).
+                let abrir = model.shuma.present
+                    && !model.shuma.open
+                    && shuma_app::msg_is_focus_input(&m);
                 // Live-wire: reenviar a la shuma completa hospedada con el handle
                 // del host lifteado (sus efectos async vuelven como `ShumaFull`).
                 if let Some(full) = model.shuma_full.take() {
                     model.shuma_full = Some(shuma_app::update(full, m.0, handle, lift_shuma));
+                }
+                if abrir {
+                    model.shuma.open = true;
+                    model.animar_shuma(1.0, handle);
                 }
             }
             Msg::ShumaShell(m) => {

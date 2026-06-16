@@ -90,6 +90,45 @@ impl LayerApp {
         self.panels[pi].dirty = true;
     }
 
+    /// Drena la cola de la shuma completa (live-wire) y aplica cada `Msg`.
+    /// Repinta el panel si el drawer está abierto (plegado igual avanza el
+    /// modelo, sólo no fuerza repaint).
+    pub(super) fn drain_shuma_full(&mut self, pi: usize) {
+        let msgs: Vec<crate::shuma_app::Msg> = match self.shuma_full_rx.as_ref() {
+            Some(rx) => rx.try_iter().collect(),
+            None => return,
+        };
+        if msgs.is_empty() {
+            return;
+        }
+        self.apply_shuma_full(msgs);
+        if self.shuma.open {
+            self.panels[pi].dirty = true;
+        }
+    }
+
+    /// Aplica una tanda de `Msg` a la shuma completa con el handle
+    /// channel-backed (sus follow-ups vuelven a la cola).
+    pub(super) fn apply_shuma_full(&mut self, msgs: Vec<crate::shuma_app::Msg>) {
+        let Some(handle) = self.shuma_full_handle.clone() else {
+            return;
+        };
+        if let Some(mut full) = self.shuma_full.take() {
+            for m in msgs {
+                // Click sobre el input de la barra → FocusInput de la sesión
+                // activa: además de focalizar, despleguemos el drawer.
+                let abrir = !self.shuma.open && crate::shuma_app::msg_is_focus_input_raw(&m);
+                full = crate::shuma_app::update(full, m, &handle, |x| x);
+                if abrir {
+                    self.shuma_full = Some(full);
+                    self.set_shuma_open(true);
+                    full = self.shuma_full.take().unwrap();
+                }
+            }
+            self.shuma_full = Some(full);
+        }
+    }
+
     /// Traduce un evento de teclado de SCTK al `llimphi_ui::KeyEvent`.
     pub(super) fn keysym_to_keyevent(
         &self,
@@ -541,11 +580,19 @@ impl LayerApp {
         self.poll_host();
         self.ensure_gpu(pi);
 
-        // Drawer abierto: el shell hospedado avanza solo.
-        if self.shuma_panel == Some(pi) && self.shuma.open {
-            self.shuma.inner =
-                shuma_module_shell::update(self.shuma.inner.clone(), shuma_module_shell::Msg::Tick);
-            self.panels[pi].dirty = true;
+        // Shell hospedado: avanza solo.
+        if self.shuma_panel == Some(pi) {
+            if self.shuma_full.is_some() {
+                // Live-wire: drenar los Msg que la shuma completa empujó al canal
+                // (ticks/async/follow-ups) y aplicarlos. Repinta si está abierto.
+                self.drain_shuma_full(pi);
+            } else if self.shuma.open {
+                self.shuma.inner = shuma_module_shell::update(
+                    self.shuma.inner.clone(),
+                    shuma_module_shell::Msg::Tick,
+                );
+                self.panels[pi].dirty = true;
+            }
         }
 
         if !self.panels[pi].dirty {
@@ -564,6 +611,7 @@ impl LayerApp {
             weather: self.weather_now.as_ref(),
             cava: &self.cava_frame,
             apps: self.registry.all(),
+            shuma_full: self.shuma_full.as_ref(),
         };
 
         let view = if self.tooltip_pi == Some(pi) {
@@ -721,6 +769,12 @@ impl LayerApp {
                 if focusing && !self.shuma.open {
                     self.set_shuma_open(true);
                 }
+                self.marcar_shuma_dirty();
+            }
+            // Live-wire: click sobre la shuma completa (cuerpo o input de la
+            // barra). `apply_shuma_full` ya abre el drawer ante un FocusInput.
+            Msg::ShumaFull(m) => {
+                self.apply_shuma_full(vec![m.0]);
                 self.marcar_shuma_dirty();
             }
             Msg::Spawn(cmd) => crate::spawn_cmd(&cmd),

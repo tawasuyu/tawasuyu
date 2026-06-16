@@ -897,6 +897,12 @@ pub struct Model {
     /// Contador de Msg::Tick (1 s) — debounce del autosave de outputs.
     pub tick_count: u64,
 
+    /// `true` cuando un host (pata) muestra el **input de la sesión activa en su
+    /// propia barra** (vía `active_input_view`): el canvas entonces pinta el
+    /// cuerpo del shell SIN su input, para no duplicarlo. Default `false`
+    /// (standalone: input dentro del canvas, como siempre).
+    pub hosted_bar: bool,
+
     pub _host: Option<pata_host::HostClient>,
 }
 
