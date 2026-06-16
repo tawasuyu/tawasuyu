@@ -20,7 +20,7 @@ use crate::clipboard::ArboardClipboard;
 use crate::model::{Model, BACKENDS};
 use crate::util::{ahora_unix, ruta_sled};
 
-pub(crate) fn init_modelo() -> Model {
+pub fn init_modelo() -> Model {
     let path = ruta_sled();
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);

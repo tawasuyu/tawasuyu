@@ -20,6 +20,10 @@ path = "examples/demo_cli.rs"
 name = "pantallazo_mapa"
 path = "examples/pantallazo_mapa.rs"
 
+[[example]]
+name = "showreel"
+path = "examples/showreel.rs"
+
 [dependencies]
 khipu-core = { path = "../khipu-core" }
 khipu-gravity = { path = "../khipu-gravity" }

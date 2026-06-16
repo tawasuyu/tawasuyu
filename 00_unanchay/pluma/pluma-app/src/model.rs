@@ -46,7 +46,7 @@ pub(crate) fn ancho_contenido(n: usize) -> f32 {
 /// embeddings vía el verbo-daemon (rimay-verbo), con fallback léxico (substring)
 /// si el socket no está disponible.
 #[derive(Clone, Debug)]
-pub(crate) enum Filtro {
+pub enum Filtro {
     Traducir(String),
     Tono(String),
     Resumir(Option<u32>),
@@ -56,10 +56,10 @@ pub(crate) enum Filtro {
 /// Un nodo-filtro posicionado en el lienzo del grafo (canvas coords del
 /// nodegraph). El orden en `Model::grafo` es el orden del pipeline.
 #[derive(Clone, Debug)]
-pub(crate) struct NodoFiltro {
-    pub(crate) filtro: Filtro,
-    pub(crate) x: f32,
-    pub(crate) y: f32,
+pub struct NodoFiltro {
+    pub filtro: Filtro,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// Modo del centro: las tres caras unificadas de pluma sobre el mismo
@@ -68,7 +68,7 @@ pub(crate) struct NodoFiltro {
 /// vuela por las secciones con la cámara del deck; `Plano` es el editor
 /// multilienzo clásico (text-editor por cuerpo).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Modo {
+pub enum Modo {
     Lienzos,
     Presentar,
     Plano,
@@ -103,7 +103,7 @@ pub(crate) const BACKENDS: [BackendKind; 6] = [
 ];
 
 #[derive(Clone, Debug)]
-pub(crate) enum Msg {
+pub enum Msg {
     EditorKey(KeyEvent),
     /// Click/drag dentro de la columna del cuerpo `Uuid` del multilienzo. Si
     /// ese cuerpo no es el activo, primero le pasa el foco (se apropia del
@@ -255,7 +255,7 @@ pub(crate) enum Msg {
     LienzoSalida { atom: Uuid, texto: String },
 }
 
-pub(crate) struct Model {
+pub struct Model {
     pub(crate) store: Arc<PlumaStore>,
     pub(crate) cuerpos: Vec<Cuerpo>,
     pub(crate) atoms: HashMap<Uuid, NarrativeAtom>,

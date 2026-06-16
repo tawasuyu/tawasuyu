@@ -32,12 +32,25 @@
 //! (apertura del sled + backend), `update` (lógica + LLM) y `view`
 //! (las tres columnas). Acá queda el `impl App` y el ruteo de teclado.
 
+// El binario es self-contained: declara sus módulos y conserva el acceso a los
+// campos `pub(crate)` del `Model`. La biblioteca (`src/lib.rs`) los re-declara
+// para que los `examples/` (el showreel) compartan la misma `vista()` — los
+// módulos compilan en ambos crates, pero el código fuente es único.
+#[path = "clipboard.rs"]
 mod clipboard;
+#[path = "dump.rs"]
 mod dump;
+#[path = "init.rs"]
 mod init;
+#[path = "model.rs"]
 mod model;
+#[path = "showreel.rs"]
+mod showreel;
+#[path = "update.rs"]
 mod update;
+#[path = "util.rs"]
 mod util;
+#[path = "view.rs"]
 mod view;
 
 use llimphi_ui::{App, Handle, Key, KeyEvent, KeyState, Modifiers, NamedKey, WheelDelta};
@@ -55,6 +68,18 @@ fn main() {
         let out = args.get(pos + 1).cloned().unwrap_or_else(|| "pluma.png".into());
         let diente = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(1);
         dump::run(&out, diente);
+        return;
+    }
+    // Subcomando del showreel headless: `pluma-app --showreel <dir> [n] [w] [h]`.
+    if let Some(pos) = args.iter().position(|a| a == "--showreel") {
+        let dir = args
+            .get(pos + 1)
+            .cloned()
+            .unwrap_or_else(|| "showreel_frames_pluma".into());
+        let n = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(300);
+        let w = args.get(pos + 3).and_then(|s| s.parse().ok()).unwrap_or(1600);
+        let h = args.get(pos + 4).and_then(|s| s.parse().ok()).unwrap_or(900);
+        showreel::render_frames(&dir, n, w, h);
         return;
     }
     llimphi_ui::run::<Pluma>();

@@ -82,7 +82,7 @@ fn menubar_spec<'a>(
     }
 }
 
-pub(crate) fn vista(model: &Model) -> View<Msg> {
+pub fn vista(model: &Model) -> View<Msg> {
     let theme = Theme::dark();
     let splitter_palette = SplitterPalette::from_theme(&theme);
 
@@ -1456,7 +1456,7 @@ fn divider(theme: &Theme) -> View<Msg> {
 }
 
 /// Overlay flotante: menú de edición contextual o dropdown del menú principal.
-pub(crate) fn vista_overlay(model: &Model) -> Option<View<Msg>> {
+pub fn vista_overlay(model: &Model) -> Option<View<Msg>> {
     let theme = Theme::dark();
     if let Some((x, y)) = model.edit_menu {
         let flags = EditFlags::from_editor(&model.ide.state, false);

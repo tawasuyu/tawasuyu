@@ -29,7 +29,7 @@ use crate::model::{Filtro, Modo, Model, Msg, NodoFiltro, BACKENDS, METRICS, VISI
 use crate::util::{ahora_unix, etiqueta_backend, expandir_ruta, extension_lower};
 use crate::view::etiqueta_filtro;
 
-pub(crate) fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
+pub fn actualizar(mut model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
     match msg {
         Msg::EditorKey(ev) => {
             let _ = model.ide.apply_key_with_clipboard(&ev, &mut model.clipboard);

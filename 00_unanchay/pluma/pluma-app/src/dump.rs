@@ -31,7 +31,7 @@ const W: u32 = 1500;
 const H: u32 = 820;
 
 /// Punto de entrada del subcomando. `diente` (0..3) elige el panel a fotografiar.
-pub(crate) fn run(out: &str, diente: usize) {
+pub fn run(out: &str, diente: usize) {
     let model = modelo_sintetico(diente);
     render_png(&model, out);
     eprintln!("dump_pluma: escrito {out} ({W}x{H}) · diente {diente}");
