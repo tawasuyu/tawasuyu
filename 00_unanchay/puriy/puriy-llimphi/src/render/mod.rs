@@ -348,15 +348,17 @@ fn mat_hue_rotate(deg: f32) -> [f32; 20] {
 /// Convierte la lista CSS `filter` (`Vec<FilterFn>`) a las [`llimphi_ui::FilterOp`]
 /// del compositor (filtros sobre el **propio subárbol**). `blur(<px>)` → `Blur`
 /// (px = sigma del Gauss, misma convención CSS); los filtros de color colapsan a
-/// una matriz 4×5 (`ColorMatrix`). `drop-shadow()` llega en 7.1234. El orden de
-/// la lista se preserva (la cadena se aplica en secuencia). Lista vacía → sin
-/// filtro. Fases 7.1232 (blur), 7.1233 (color).
-fn filtros_a_ops(fns: &[puriy_engine::style::FilterFn]) -> Vec<llimphi_ui::FilterOp> {
+/// una matriz 4×5 (`ColorMatrix`); `drop-shadow()` → `DropShadow` (sombra
+/// Gaussiana del border-box). El orden de la lista se preserva (la cadena se
+/// aplica en secuencia). Las magnitudes en px (blur sigma, offsets/blur de la
+/// sombra) se escalan por el zoom de página `z`; las matrices de color son
+/// adimensionales. Lista vacía → sin filtro. Fases 7.1232–7.1234.
+fn filtros_a_ops(fns: &[puriy_engine::style::FilterFn], z: f32) -> Vec<llimphi_ui::FilterOp> {
     use llimphi_ui::FilterOp as Op;
     use puriy_engine::style::FilterFn as F;
     fns.iter()
         .filter_map(|f| match f {
-            F::Blur(px) => (*px > 0.0).then_some(Op::Blur(*px)),
+            F::Blur(px) => (*px > 0.0).then_some(Op::Blur(*px * z)),
             F::Brightness(k) => Some(Op::ColorMatrix(mat_brightness(*k))),
             F::Contrast(c) => Some(Op::ColorMatrix(mat_contrast(*c))),
             F::Grayscale(g) => Some(Op::ColorMatrix(mat_grayscale(g.clamp(0.0, 1.0)))),
@@ -365,8 +367,13 @@ fn filtros_a_ops(fns: &[puriy_engine::style::FilterFn]) -> Vec<llimphi_ui::Filte
             F::Invert(a) => Some(Op::ColorMatrix(mat_invert(a.clamp(0.0, 1.0)))),
             F::HueRotate(d) => Some(Op::ColorMatrix(mat_hue_rotate(*d))),
             F::Opacity(a) => Some(Op::ColorMatrix(mat_opacity(a.clamp(0.0, 1.0)))),
-            // drop-shadow se pinta como sombra, no como matriz/blur — Fase 7.1234.
-            F::DropShadow(_) => None,
+            F::DropShadow(bs) => Some(Op::DropShadow(llimphi_ui::Shadow {
+                color: Color::from_rgba8(bs.color.r, bs.color.g, bs.color.b, bs.color.a),
+                blur: (bs.blur_px * z) as f64,
+                dx: (bs.offset_x * z) as f64,
+                dy: (bs.offset_y * z) as f64,
+                spread: (bs.spread_px * z) as f64,
+            })),
         })
         .collect()
 }
@@ -687,14 +694,14 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // nodo como post-pasada GPU sobre la intermediate. Ortogonal a clip/mask.
     // Las demás funciones de filtro (brightness/grayscale/drop-shadow/…) llegan
     // en fases siguientes.
-    let fops = filtros_a_ops(&b.filter);
+    let fops = filtros_a_ops(&b.filter, ctx.zoom);
     if !fops.is_empty() {
         view = view.filter(fops);
     }
     // `backdrop-filter: blur(...)` (Fase 7.1232) — borronea lo que asoma DEBAJO
     // del nodo ("vidrio esmerilado"). Reusa el camino nativo `backdrop_blur`.
     if let Some(sigma) = blur_sigma_de(&b.backdrop_filter) {
-        view = view.backdrop_blur(sigma);
+        view = view.backdrop_blur(sigma * ctx.zoom);
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);
@@ -1200,17 +1207,41 @@ mod filter_tests {
     fn filtros_a_ops_mapea_y_preserva_orden() {
         // Mezcla blur + color: cada uno → su FilterOp, en el mismo orden CSS.
         // Fase 7.1233.
-        let ops = filtros_a_ops(&[
-            F::Grayscale(1.0),
-            F::Blur(3.0),
-            F::Brightness(1.5),
-        ]);
+        let ops = filtros_a_ops(
+            &[F::Grayscale(1.0), F::Blur(3.0), F::Brightness(1.5)],
+            1.0,
+        );
         assert_eq!(ops.len(), 3);
         assert!(matches!(ops[0], llimphi_ui::FilterOp::ColorMatrix(_)));
         assert!(matches!(ops[1], llimphi_ui::FilterOp::Blur(v) if (v - 3.0).abs() < 1e-4));
         assert!(matches!(ops[2], llimphi_ui::FilterOp::ColorMatrix(_)));
-        // blur(0) y drop-shadow no aportan op en esta fase.
-        let vacios = filtros_a_ops(&[F::Blur(0.0)]);
+        // blur(0) no aporta op.
+        let vacios = filtros_a_ops(&[F::Blur(0.0)], 1.0);
         assert!(vacios.is_empty());
+    }
+
+    #[test]
+    fn blur_y_drop_shadow_escalan_por_zoom() {
+        // Las magnitudes en px (sigma del blur, offsets/blur de la sombra)
+        // escalan por el zoom de página; las matrices de color no. Fase 7.1234.
+        use puriy_engine::Color as ECol;
+        let bs = puriy_engine::style::BoxShadow {
+            offset_x: 2.0,
+            offset_y: 4.0,
+            blur_px: 6.0,
+            spread_px: 0.0,
+            color: ECol { r: 0, g: 0, b: 0, a: 128 },
+            inset: false,
+        };
+        let ops = filtros_a_ops(&[F::Blur(3.0), F::DropShadow(bs)], 2.0);
+        assert!(matches!(ops[0], llimphi_ui::FilterOp::Blur(v) if (v - 6.0).abs() < 1e-4));
+        match &ops[1] {
+            llimphi_ui::FilterOp::DropShadow(sh) => {
+                assert!((sh.dx - 4.0).abs() < 1e-4, "offset_x * zoom");
+                assert!((sh.dy - 8.0).abs() < 1e-4, "offset_y * zoom");
+                assert!((sh.blur - 12.0).abs() < 1e-4, "blur * zoom");
+            }
+            _ => panic!("esperaba DropShadow"),
+        }
     }
 }

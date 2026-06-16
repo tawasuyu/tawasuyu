@@ -286,7 +286,7 @@ pub type GpuPaintFn = Arc<
 /// del relleno, así el fill (si es opaco) tapa la parte solapada y la
 /// sombra sólo asoma por el desenfoque + el offset. El radio sigue al del
 /// nodo (más `spread`).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Shadow {
     pub color: Color,
     /// Desviación estándar del gaussiano (qué tan difusa). En px.
@@ -361,6 +361,13 @@ pub enum FilterOp {
     /// (`out = M·rgba + bias`). Se aplica con `ColorFilterCompositor`. Fase
     /// 7.1233.
     ColorMatrix([f32; 20]),
+    /// `filter: drop-shadow(<ox> <oy> [blur] [color])`. Se pinta como una sombra
+    /// Gaussiana del **border-box** detrás del nodo (con `draw_blurred_rounded_rect`,
+    /// igual primitiva que `Shadow`/box-shadow). v1: sombra del rect, no de la
+    /// silueta alpha del subárbol. A diferencia de `Blur`/`ColorMatrix`, NO es
+    /// post-pasada GPU — se pinta en vello antes del relleno, por lo que
+    /// `collect_filters` la ignora. Fase 7.1234.
+    DropShadow(Shadow),
 }
 
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional

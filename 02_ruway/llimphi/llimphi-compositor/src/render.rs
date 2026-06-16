@@ -414,6 +414,11 @@ pub fn collect_filters<Msg>(
             if let Some(r) = computed.get(node.id) {
                 let rect = (r.x, r.y, r.w, r.h);
                 for op in &node.filter {
+                    // `DropShadow` se pinta en vello (paint_range), no como
+                    // post-pasada GPU — la salteamos acá. Fase 7.1234.
+                    if matches!(op, FilterOp::DropShadow(_)) {
+                        continue;
+                    }
                     out.push(FilterPass { rect, op: op.clone() });
                 }
                 idx = node.subtree_end;
@@ -773,6 +778,24 @@ pub fn paint_range<Msg>(
                 );
                 let radius = (node.radius + sh.spread).max(0.0);
                 scene.draw_blurred_rounded_rect(cur_xf, rect, sh.color, radius, sh.blur);
+            }
+        }
+        // `filter: drop-shadow(...)` (Fase 7.1234): una o más sombras Gaussianas
+        // del border-box, detrás del relleno. Misma primitiva que box-shadow; v1
+        // pinta la sombra del rect, no de la silueta alpha del subárbol. En
+        // orden de la lista (la primera declarada queda más atrás).
+        for op in node.filter.iter().rev() {
+            if let FilterOp::DropShadow(sh) = op {
+                if sh.color.components[3] > 0.0 && r.w > 0.0 && r.h > 0.0 {
+                    let rect = KurboRect::new(
+                        (r.x as f64) + sh.dx - sh.spread,
+                        (r.y as f64) + sh.dy - sh.spread,
+                        (r.x + r.w) as f64 + sh.dx + sh.spread,
+                        (r.y + r.h) as f64 + sh.dy + sh.spread,
+                    );
+                    let radius = (node.radius + sh.spread).max(0.0);
+                    scene.draw_blurred_rounded_rect(cur_xf, rect, sh.color, radius, sh.blur);
+                }
             }
         }
         // Prioridad de pintura: drop-hover (drag activo) > hover normal >

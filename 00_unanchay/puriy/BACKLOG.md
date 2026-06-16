@@ -380,13 +380,19 @@ luminancia, invert total = negativo, brightness/opacity, mapeo+orden.
 > pre-render del fondo); aplicarle color-matrix requiere extender ese mecanismo
 > o conflar con la post-pasada de `filter`. Se difiere a 7.1235.
 
-### 7.1234 — `filter: drop-shadow()`
+### 7.1234 ✅ — `filter: drop-shadow()`
 
-Pinta sombra borroneada detrás del nodo reusando `draw_blurred_rounded_rect`
-(primitiva de box-shadow). `FilterOp::DropShadow(...)`. v1: sombra del
-border-box, no de la silueta alpha (misma aproximación que box-shadow). Se pinta
-en `render.rs` antes del subárbol; wire desde `FilterFn::DropShadow(BoxShadow)`.
-Tests: builder + box-tree.
+Pinta sombra Gaussiana detrás del nodo reusando `draw_blurred_rounded_rect`
+(primitiva de `Shadow`/box-shadow nativa del compositor — mejor calidad que la
+aproximación plana de puriy en `decorations.rs`). `FilterOp::DropShadow(Shadow)`
+(que obligó a `Shadow: PartialEq`). v1: sombra del border-box, no de la silueta
+alpha. Se pinta en `render.rs::paint_range` antes del relleno (en orden de
+lista, la primera más atrás); **no es post-pasada**, así que `collect_filters`
+la saltea y el runtime tiene un arm no-op. Wire desde `FilterFn::DropShadow(
+BoxShadow)` → `Shadow` con color peniko + escala por zoom. **De paso**:
+`filtros_a_ops` ahora escala las magnitudes px (blur sigma, offsets) por el zoom
+de página, y el backdrop-blur también. Tests: mapeo+zoom (`puriy-llimphi`) +
+box-tree (`puriy-engine`).
 
 ### 7.1235 — cierre
 

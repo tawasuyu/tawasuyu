@@ -397,6 +397,32 @@ use crate::Engine;
     }
 
     #[test]
+    fn drop_shadow_llega_al_box_node_fase_7_1234() {
+        // `filter: drop-shadow(...)` viaja al BoxNode.filter como FilterFn con su
+        // BoxShadow (que puriy-llimphi mapea a una sombra Gaussiana). Fase 7.1234.
+        use crate::style::FilterFn;
+        let html = "<html><body>\
+            <div id=\"d\" style=\"filter: drop-shadow(2px 4px 6px black)\">x</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let mut found = None;
+        doc.box_tree.walk(|b| {
+            if b.element_id.as_deref() == Some("d") {
+                found = Some(b.filter.clone());
+            }
+        });
+        let f = found.expect("box existe");
+        assert!(matches!(
+            f.as_slice(),
+            [FilterFn::DropShadow(s)]
+                if (s.offset_x - 2.0).abs() < 1e-3
+                    && (s.offset_y - 4.0).abs() < 1e-3
+                    && (s.blur_px - 6.0).abs() < 1e-3
+        ));
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

@@ -400,6 +400,9 @@ pub(super) fn handle_redraw<A: App>(
                     *m,
                 );
             }
+            // drop-shadow se pinta en vello (no es post-pasada); collect_filters
+            // no la emite, pero el match debe ser exhaustivo. Fase 7.1234.
+            llimphi_compositor::FilterOp::DropShadow(_) => {}
         }
     }
     let mut any_gpu = blurred
