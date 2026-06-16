@@ -439,10 +439,25 @@ impl LayerApp {
         }
         let cfg = pata_config::load();
         if cfg.surfaces.len() != self.cfg.surfaces.len() {
+            // Cambió la CANTIDAD de superficies (p. ej. vista mac/mirada con
+            // 2 superficies vs. una vista de 1): no se pueden reanclar layer
+            // surfaces en caliente sin recrearlas. La vía limpia: re-ejecutar
+            // pata en el mismo proceso (`exec`), que arranca leyendo el nuevo
+            // launcher.toml y ancla las superficies correctas. Sin esto, cambiar
+            // a mac/mirada "no hacía nada" (el reload se descartaba).
             eprintln!(
-                "pata · la config cambió la cantidad de barras; reiniciá pata para reanclar las \
-                 layer surfaces (el reorden de dientes dentro de una barra sí recarga solo)"
+                "pata · la config cambió la cantidad de superficies ({} → {}); re-ejecutando pata \
+                 para reanclar las layer surfaces.",
+                self.cfg.surfaces.len(),
+                cfg.surfaces.len()
             );
+            if let Ok(exe) = std::env::current_exe() {
+                use std::os::unix::process::CommandExt;
+                let args: Vec<String> = std::env::args().skip(1).collect();
+                let err = std::process::Command::new(exe).args(args).exec();
+                // exec() sólo retorna si falló: lo registramos y seguimos.
+                eprintln!("pata · re-exec falló: {err}; reiniciá pata a mano.");
+            }
             return false;
         }
         self.surfaces = crate::Model::construir_surfaces(&cfg);
@@ -911,12 +926,11 @@ impl LayerApp {
     pub(super) fn activar_ventana(&mut self, id: u32) {
         let Some(seat) = self.seat.clone() else { return };
         if let Some(t) = self.toplevel_por_id(id) {
-            if t.activated {
-                t.handle.set_minimized();
-            } else {
-                t.handle.unset_minimized();
-                t.handle.activate(&seat);
-            }
+            // SIEMPRE activar (enfocar/levantar). Antes alternaba a minimizar la
+            // ventana ya activa, pero mirada ignora `set_minimized` (no-op) → el
+            // click sobre el taskicon de la ventana enfocada "no hacía nada".
+            t.handle.unset_minimized();
+            t.handle.activate(&seat);
         }
     }
 
