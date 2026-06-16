@@ -251,6 +251,8 @@ enum Msg {
     ConfigChanged(Box<WawaConfig>),
     MenuOpen(Option<usize>),
     MenuCommand(String),
+    /// Conmutar el perfil de atajos activo (chip de la barra superior).
+    SetProfile(String),
     MenuNav(i32),
     MenuActivate,
     MenuTick,
@@ -443,6 +445,13 @@ impl App for Panel {
                 m.menu_open = None;
                 return handle_menu_command(m, &cmd);
             }
+            Msg::SetProfile(name) => {
+                if m.profiles.set_active(&name).is_ok() {
+                    m.keymap_rows = m.profiles.active_keymap().to_rows();
+                    m.dirty.keymap = true;
+                    m.dirty.profiles = true;
+                }
+            }
         }
         m
     }
@@ -483,6 +492,7 @@ impl App for Panel {
         let menu = app_menu();
         let menubar = menubar_view(&menubar_spec(&menu, model, &theme));
         let header = build_header(&theme);
+        let profiles = profile_bar(model, &theme);
         let body = build_body(&pestanas, pest, model, &theme);
         let status = build_status(model, &theme);
 
@@ -495,7 +505,7 @@ impl App for Panel {
             ..Default::default()
         })
         .fill(theme.bg_app)
-        .children(vec![menubar, header, body, status])
+        .children(vec![menubar, header, profiles, body, status])
     }
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
@@ -1341,6 +1351,68 @@ fn build_status(model: &Model, theme: &Theme) -> View<Msg> {
     })
     .fill(theme.bg_panel)
     .children(vec![msg_v])
+}
+
+/// Barra de **perfiles de atajos** arriba de todo: chips conmutables (el activo
+/// resaltado). Conmutar un perfil recarga todas las personalizaciones de atajos
+/// debajo. Siempre visible, por encima de las pestañas.
+fn profile_bar(m: &Model, theme: &Theme) -> View<Msg> {
+    let active = m.profiles.active().to_string();
+    let mut row: Vec<View<Msg>> = vec![View::new(Style {
+        size: Size { width: auto(), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        padding: Rect {
+            left: length(2.0_f32),
+            right: length(8.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .text("Perfil de atajos:", 12.0, theme.fg_muted)];
+
+    for name in m.profiles.names() {
+        let is_active = name == active;
+        row.push(
+            View::new(Style {
+                size: Size { width: auto(), height: length(24.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                padding: Rect {
+                    left: length(12.0_f32),
+                    right: length(12.0_f32),
+                    top: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                ..Default::default()
+            })
+            .radius(12.0)
+            .fill(if is_active { theme.accent } else { theme.bg_button })
+            .hover_fill(theme.bg_button_hover)
+            .on_click(Msg::SetProfile(name.clone()))
+            .text(
+                name.clone(),
+                12.0,
+                if is_active { theme.bg_app } else { theme.fg_text },
+            ),
+        );
+    }
+
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(36.0_f32) },
+        align_items: Some(AlignItems::Center),
+        gap: Size { width: length(6.0_f32), height: length(0.0_f32) },
+        padding: Rect {
+            left: length(14.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .children(row)
 }
 
 // =====================================================================
