@@ -136,6 +136,38 @@ impl DrmState {
                             into.push(Frame::Text(el));
                         }
                     }
+                    // Botones del titlebar a la derecha: maximizar (□) y cerrar
+                    // (✕). El más a la derecha es cerrar. El hit-test del click
+                    // usa las mismas posiciones (TB_BTN_W).
+                    for (slot, glyph) in [(0i32, "✕"), (1i32, "□")] {
+                        if sw < (slot + 1) * crate::TB_BTN_W + 8 {
+                            continue; // ventana muy angosta: sin botón
+                        }
+                        if let Some(r) = tr.rasterize(glyph, TITLE_PX, TITLE_COLOR) {
+                            let cell_x = x + sw - (slot + 1) * crate::TB_BTN_W;
+                            let bx = cell_x + (crate::TB_BTN_W - r.width) / 2;
+                            let by = dec_y + (tb - r.height) / 2;
+                            let bbuf = MemoryRenderBuffer::from_slice(
+                                &r.rgba,
+                                Fourcc::Argb8888,
+                                (r.width, r.height),
+                                1,
+                                Transform::Normal,
+                                None,
+                            );
+                            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                                &mut self.renderer,
+                                (bx as f64, by as f64),
+                                &bbuf,
+                                None,
+                                None,
+                                None,
+                                Kind::Unspecified,
+                            ) {
+                                into.push(Frame::Text(el));
+                            }
+                        }
+                    }
                 }
                 let color = rgba_f32(if w.focused {
                     self.app.decorations.border_focus

@@ -187,6 +187,20 @@ impl App {
         })
     }
 
+    /// Maximiza/restaura la ventana `id` (botón □ del titlebar): la enfoca y
+    /// togglea su pantalla completa. Por el Cerebro embebido.
+    pub(crate) fn maximizar_ventana(&mut self, id: u64) {
+        let cmds = match &mut self.brain {
+            Brain::Embedded(d) => {
+                let mut c = d.apply(mirada_brain::DesktopAction::FocusWindow(id));
+                c.extend(d.apply(mirada_brain::DesktopAction::ToggleFullscreen));
+                c
+            }
+            Brain::Linked(_) => return,
+        };
+        self.apply_commands(cmds);
+    }
+
     /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
     /// Win+Tab. Por el Cerebro embebido.
     pub(crate) fn cambiar_workspace(&mut self, idx: usize) {

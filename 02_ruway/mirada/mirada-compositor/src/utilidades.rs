@@ -196,6 +196,10 @@ pub(crate) fn layer_render_elements(
     (over, under)
 }
 
+/// Ancho (px) de cada botón del titlebar (maximizar/cerrar), pegados al borde
+/// derecho. Compartido entre el render y el hit-test del click.
+pub(crate) const TB_BTN_W: i32 = 28;
+
 /// El alto efectivo de la barra de título de `w`: `0` para el shell y las
 /// ventanas a pantalla completa (no llevan), el `titlebar_height` configurado
 /// para el resto. Acotado a `>= 0`.

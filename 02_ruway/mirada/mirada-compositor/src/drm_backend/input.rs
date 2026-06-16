@@ -333,6 +333,22 @@ impl DrmState {
                     }
                 }
 
+                // Click izquierdo sobre un BOTÓN del titlebar (✕ cerrar / □
+                // maximizar): actúa y no arranca arrastre. Va ANTES del drag.
+                if pressed && button == BTN_LEFT && self.app.mode != BodyMode::Greeter {
+                    let (x, y) = self.app.pointer_loc;
+                    if let Some((id, is_close)) = self.titlebar_button_at(x, y) {
+                        if is_close {
+                            if let Some(w) = self.app.windows.iter().find(|w| w.id == id) {
+                                w.toplevel.send_close();
+                            }
+                        } else {
+                            self.app.maximizar_ventana(id);
+                        }
+                        return;
+                    }
+                }
+
                 // Click izquierdo sobre la BARRA DE TÍTULO (sin `Super`): arranca
                 // un arrastre Move — saca la ventana de su tile y la lleva
                 // flotante, lista para aterrizar en una zona (drag-to-zone) o
@@ -651,5 +667,48 @@ impl DrmState {
             let top = ly - tb;
             x >= lx as f64 && y >= top as f64 && x < (lx + sw) as f64 && y < (top + tb) as f64
         })
+    }
+
+    /// La ventana y el botón de titlebar bajo `(x, y)` global: `Some((id, true))`
+    /// = cerrar (✕), `Some((id, false))` = maximizar (□). Mismas posiciones que
+    /// el render (botones pegados al borde derecho, ancho [`TB_BTN_W`]).
+    pub(super) fn titlebar_button_at(&self, x: f64, y: f64) -> Option<(u64, bool)> {
+        let tbh = self.app.decorations.titlebar_height;
+        if tbh <= 0 {
+            return None;
+        }
+        let primary = self.outputs.get(Self::PRIMARY)?;
+        let output_h = primary.rect.h;
+        let (px, py) = (x.round() as i32, y.round() as i32);
+        // Orden front-to-back: la primera que matchea gana (la de encima).
+        let mut idx: Vec<usize> = (0..self.app.windows.len())
+            .filter(|&i| self.app.windows[i].visible && !self.app.windows[i].is_shell)
+            .collect();
+        idx.sort_by_key(|&i| {
+            let w = &self.app.windows[i];
+            (!w.floating, !w.focused)
+        });
+        for i in idx {
+            let w = &self.app.windows[i];
+            let tb = crate::titlebar_for(w, tbh);
+            if tb == 0 {
+                continue;
+            }
+            let (lx, ly) = crate::render_loc(w, output_h, tbh);
+            let (sw, _) = crate::surface_px_size(w).unwrap_or((w.size.0, 1));
+            let top = ly - tb;
+            if py < top || py >= top + tb {
+                continue;
+            }
+            let close_x = lx + sw - crate::TB_BTN_W;
+            let max_x = lx + sw - 2 * crate::TB_BTN_W;
+            if px >= close_x && px < close_x + crate::TB_BTN_W {
+                return Some((w.id, true));
+            }
+            if px >= max_x && px < max_x + crate::TB_BTN_W {
+                return Some((w.id, false));
+            }
+        }
+        None
     }
 }
