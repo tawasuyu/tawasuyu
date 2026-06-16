@@ -764,7 +764,7 @@ fn perfiles_schema(m: &Model) -> Schema {
         m.dprofiles.active.clone()
     };
     schema = schema.section(
-        Section::new("acciones", "Acciones")
+        Section::new("perfiles::acciones", "Acciones")
             .icon("✚")
             .help("Crear un perfil nuevo desde la config actual, o duplicar/eliminar el activo.")
             .field(Field::toggle("crear", "Crear perfil nuevo (desde el actual)", false))
@@ -779,13 +779,13 @@ fn perfiles_schema(m: &Model) -> Schema {
             name.clone()
         };
         schema = schema.section(
-            Section::new(name.as_str(), title)
+            Section::new(format!("perfiles::{name}"), title)
                 .icon(icono_perfil(&name))
                 .help(
                     "Perfil de escritorio completo: look + decoración + layout + \
-                     atajos + barra. Activarlo aplica todo en caliente; mientras \
-                     está activo, editá su detalle en mirada · pata · Atajos y se \
-                     guarda dentro del perfil. Crear/duplicar/eliminar: menú Perfiles.",
+                     atajos + barra. Activalo con el toggle; mientras está activo, \
+                     su configuración aparece anidada debajo (▸) y se guarda dentro \
+                     del perfil.",
                 )
                 .field(Field::toggle(
                     "activo",
@@ -793,8 +793,31 @@ fn perfiles_schema(m: &Model) -> Schema {
                     is_active,
                 )),
         );
+        // Config ANIDADA bajo el perfil activo (jerarquizada en el sidebar): sus
+        // secciones rutean a mirada/pata → editan ESTE perfil (sync lo guarda).
+        if is_active {
+            schema = anidar_config_perfil(schema, m);
+        }
     }
-    prefix_schema(schema, "perfiles")
+    schema
+}
+
+/// Inyecta las secciones de config del perfil activo —teselado/decoración/fondo/
+/// zonas (mirada) + atajos + barra (pata)— DEBAJO de él en el sidebar, con el
+/// título indentado (▸). Conservan su prefijo `mirada::`/`pata::` para que el
+/// ruteo las aplique al perfil activo (no a la pestaña «perfiles»).
+fn anidar_config_perfil(mut schema: Schema, m: &Model) -> Schema {
+    let sangrar = |s: &mut Section| s.title = format!("  ▸ {}", s.title);
+    let mut mir = prefix_schema(m.mirada.schema(), "mirada");
+    mir.sections.iter_mut().for_each(sangrar);
+    schema.sections.extend(mir.sections);
+    let mut atajos = keymap_section(&m.keymap_rows);
+    sangrar(&mut atajos);
+    schema.sections.push(atajos);
+    let mut pata = prefix_schema(m.pata.schema(), "pata");
+    pata.sections.iter_mut().for_each(sangrar);
+    schema.sections.extend(pata.sections);
+    schema
 }
 
 /// Crea un perfil nuevo desde la config viva y lo activa.
