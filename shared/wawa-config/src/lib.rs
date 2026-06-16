@@ -231,6 +231,20 @@ pub struct WawaConfig {
     /// regirse por esto — una sola fuente de verdad, no por app.
     #[serde(default)]
     pub dientes_outside: bool,
+
+    /// Proveedor de **fondo automático** elegido en el panel: `"bing"` (foto del
+    /// día), `"nasa"` (APOD), `"folder"` (carpeta local), `"solar"` (por hora).
+    /// El panel escribe `~/.config/mirada/wallpaper.ron` desde esto y lanza el
+    /// daemon `mirada-wallpaper`. Vacío = sin fondo automático.
+    #[serde(default)]
+    pub wallpaper_provider: String,
+    /// Cada cuántas **horas** refresca el fondo automático (default 6).
+    #[serde(default = "default_wallpaper_hours")]
+    pub wallpaper_interval_hours: u32,
+}
+
+fn default_wallpaper_hours() -> u32 {
+    6
 }
 
 fn default_theme_variant() -> String {
@@ -261,6 +275,8 @@ impl Default for WawaConfig {
             timefmt_24h: default_timefmt(),
             modules: default_modules(),
             dientes_outside: false,
+            wallpaper_provider: String::new(),
+            wallpaper_interval_hours: default_wallpaper_hours(),
         }
     }
 }

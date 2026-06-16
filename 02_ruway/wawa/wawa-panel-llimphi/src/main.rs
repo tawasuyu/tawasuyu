@@ -836,6 +836,8 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
                 let mut s = sistema_schema(&m.cfg);
                 // Fondo: muestra/elige el wallpaper del perfil activo (mirada).
                 s.sections.push(fondo_section(&m.mirada.wallpaper_path));
+                // Fondo automático: proveedor + rotación (daemon mirada-wallpaper).
+                s.sections.push(fondo_auto_section(&m.cfg));
                 s
             },
         },
@@ -1288,6 +1290,77 @@ fn fondo_section(wallpaper: &str) -> Section {
         .field(Field::toggle("elegir", "Elegir imagen de fondo…", false))
 }
 
+/// Fondo automático: proveedor (Bing/NASA/Carpeta) + intervalo + activar/aplicar.
+/// Escribe `~/.config/mirada/wallpaper.ron` y lanza el daemon `mirada-wallpaper`.
+fn fondo_auto_section(cfg: &WawaConfig) -> Section {
+    let prov = if cfg.wallpaper_provider.is_empty() {
+        "bing".to_string()
+    } else {
+        cfg.wallpaper_provider.clone()
+    };
+    Section::new("wawa::fondoauto", "Fondo automático")
+        .icon("▦")
+        .help("Descarga y rota el fondo desde un proveedor (foto del día, etc.).")
+        .field(Field::dropdown(
+            "wallpaper_provider",
+            "Proveedor",
+            prov,
+            vec![
+                EnumOption::new("bing", "Bing — foto del día"),
+                EnumOption::new("nasa", "NASA — imagen astronómica del día"),
+                EnumOption::new("folder", "Carpeta local (rota)"),
+                EnumOption::new("solar", "Solar — según la hora del día"),
+            ],
+        ))
+        .field(Field::slider(
+            "wallpaper_hours",
+            "Refrescar cada (horas)",
+            cfg.wallpaper_interval_hours.max(1) as f64,
+            1.0,
+            48.0,
+            1.0,
+        ))
+        .field(Field::toggle("aplicar_fondo", "Aplicar fondo ahora", false))
+        .field(Field::toggle("activar_rotacion", "Activar rotación automática (daemon)", false))
+}
+
+/// Escribe `~/.config/mirada/wallpaper.ron` para el daemon, derivado del
+/// proveedor + intervalo elegidos en el panel (y la carpeta de wallpapers para
+/// Folder). RON construido a mano para no arrastrar las deps del daemon.
+fn write_wallpaper_ron(provider: &str, hours: u32, folder_dir: &str) {
+    let Some(path) = mirada_brain::Config::default_path()
+        .and_then(|p| p.parent().map(|d| d.join("wallpaper.ron")))
+    else {
+        return;
+    };
+    let secs = (hours.max(1) as u64) * 3600;
+    let dir = if folder_dir.trim().is_empty() {
+        std::env::var("HOME").map(|h| format!("{h}/Pictures")).unwrap_or_default()
+    } else {
+        folder_dir.to_string()
+    };
+    let source = match provider {
+        "nasa" => "Nasa(api_key: \"DEMO_KEY\")".to_string(),
+        "folder" => format!("Folder(dir: {dir:?})"),
+        "solar" => {
+            // Sin imágenes por fase no hace mucho; dejamos placeholders que el
+            // usuario completa. Igual escribe la estructura válida.
+            format!(
+                "Solar(lat: 0.0, lon: 0.0, night: {0:?}, dawn: {0:?}, day: {0:?}, dusk: {0:?})",
+                ""
+            )
+        }
+        _ => "Bing(market: \"en-US\", resolution: \"1920x1080\")".to_string(),
+    };
+    let ron = format!(
+        "(source: {source}, interval_secs: {secs}, output: \"\", keep: 8)\n"
+    );
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let _ = std::fs::write(&path, ron);
+}
+
 /// Escanea `dir` (y un nivel de subcarpetas) por imágenes y las agrega a `out`.
 fn scan_images(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
     let es_imagen = |p: &std::path::Path| {
@@ -1437,6 +1510,25 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             if rel.leaf() == Some("monitor") && value.as_bool() == Some(true) {
                 let _ = std::process::Command::new("sandokan-monitor").spawn();
                 m.status = "abriendo monitor de procesos…".into();
+                return;
+            }
+            // Fondo automático: aplicar una vez / activar el daemon de rotación.
+            if matches!(rel.leaf(), Some("aplicar_fondo") | Some("activar_rotacion"))
+                && value.as_bool() == Some(true)
+            {
+                let prov = if m.cfg.wallpaper_provider.is_empty() {
+                    "bing"
+                } else {
+                    &m.cfg.wallpaper_provider
+                };
+                write_wallpaper_ron(prov, m.cfg.wallpaper_interval_hours, &m.mirada.wallpaper_dir);
+                if rel.leaf() == Some("activar_rotacion") {
+                    let _ = std::process::Command::new("mirada-wallpaper").arg("daemon").spawn();
+                    m.status = format!("rotación automática activada ({prov})");
+                } else {
+                    let _ = std::process::Command::new("mirada-wallpaper").spawn();
+                    m.status = format!("aplicando fondo de {prov}…");
+                }
                 return;
             }
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
@@ -1604,6 +1696,16 @@ fn apply_wawa(m: &mut Model, leaf: &str, value: FieldValue) {
         "dientes_outside" => {
             if let Some(b) = value.as_bool() {
                 m.cfg.dientes_outside = b;
+            }
+        }
+        "wallpaper_provider" => {
+            if let Some(s) = value.as_str() {
+                m.cfg.wallpaper_provider = s.to_string();
+            }
+        }
+        "wallpaper_hours" => {
+            if let Some(v) = value.as_float() {
+                m.cfg.wallpaper_interval_hours = (v as u32).max(1);
             }
         }
         // Cualquier otro id es un toggle de módulo.
