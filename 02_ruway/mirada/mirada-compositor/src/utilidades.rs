@@ -200,6 +200,27 @@ pub(crate) fn layer_render_elements(
 /// derecho. Compartido entre el render y el hit-test del click.
 pub(crate) const TB_BTN_W: i32 = 28;
 
+/// Las imágenes de `dir` aptas como wallpaper (png/jpg/jpeg/webp/bmp),
+/// ordenadas por nombre. Para el fondo automático (slideshow).
+pub(crate) fn list_wallpaper_images(dir: &str) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                if matches!(
+                    ext.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "webp" | "bmp"
+                ) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
 /// El alto efectivo de la barra de título de `w`: `0` para el shell y las
 /// ventanas a pantalla completa (no llevan), el `titlebar_height` configurado
 /// para el resto. Acotado a `>= 0`.

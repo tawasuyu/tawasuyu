@@ -329,6 +329,18 @@ impl App {
     /// `HDMI-A-1`, `DP-1`, …) — el override de [`mirada_brain::OutputOverride`]
     /// si existe, o el global. `None` con Cerebro enlazado o si todo queda
     /// vacío (fondo de color sólido).
+    /// `(carpeta, segundos)` del fondo automático (slideshow). Carpeta vacía o
+    /// intervalo 0 = sin rotar.
+    pub(crate) fn config_wallpaper_slideshow(&self) -> (String, u32) {
+        match &self.brain {
+            Brain::Embedded(d) => {
+                let c = d.config();
+                (c.wallpaper_dir.clone(), c.wallpaper_interval_secs)
+            }
+            Brain::Linked(_) => (String::new(), 0),
+        }
+    }
+
     pub(crate) fn config_wallpaper_path_for(&self, name: &str) -> Option<String> {
         match &self.brain {
             Brain::Embedded(d) => {

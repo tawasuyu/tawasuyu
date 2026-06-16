@@ -464,6 +464,12 @@ struct DrmState {
     /// rect)` — poblado al pintar, usado para el hit-test del click. (El flag
     /// `overview_open` vive en `App` para togglearlo desde el filtro de teclado.)
     overview_tiles: Vec<(usize, Rect)>,
+    /// Fondo automático (slideshow): imágenes de la carpeta, índice actual, ms
+    /// del próximo cambio, y la carpeta cacheada (para recargar si cambia).
+    wp_images: Vec<std::path::PathBuf>,
+    wp_index: usize,
+    wp_next_switch_ms: u32,
+    wp_dir: String,
     /// Identidad estable del cursor de software — el seguimiento de daño
     /// la usa para no recomponer todo cuando el cursor sólo se mueve.
     cursor_id: Id,
@@ -957,6 +963,10 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_active_ws: 0,
         ws_slide: None,
         overview_tiles: Vec::new(),
+        wp_images: Vec::new(),
+        wp_index: 0,
+        wp_next_switch_ms: 0,
+        wp_dir: String::new(),
         cursor_id: Id::new(),
         last_pointer_window: None,
         output_size: (total_w as f64, total_h as f64),

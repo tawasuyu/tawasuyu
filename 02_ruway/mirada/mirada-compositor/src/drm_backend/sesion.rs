@@ -124,6 +124,32 @@ impl DrmState {
             }
         }
 
+        // Fondo automático (slideshow): rota por la carpeta cada N segundos.
+        let (wp_dir, wp_interval) = self.app.config_wallpaper_slideshow();
+        if !wp_dir.is_empty() && wp_interval > 0 {
+            let now = self.start.elapsed().as_millis() as u32;
+            if wp_dir != self.wp_dir {
+                self.wp_images = crate::list_wallpaper_images(&wp_dir);
+                self.wp_dir = wp_dir;
+                self.wp_index = 0;
+                self.wp_next_switch_ms = now; // aplicar la primera ya
+            }
+            if !self.wp_images.is_empty() && now >= self.wp_next_switch_ms {
+                let img = self.wp_images[self.wp_index % self.wp_images.len()].clone();
+                self.wp_index = self.wp_index.wrapping_add(1);
+                self.wp_next_switch_ms = now.saturating_add(wp_interval.saturating_mul(1000));
+                let s = img.to_string_lossy().to_string();
+                for ctx in &mut self.outputs {
+                    ctx.wallpaper_path = Some(s.clone());
+                    ctx.wallpaper = None; // se rearma en el próximo render
+                }
+                crate::screencopy::danar_todo(&mut self.app);
+            }
+        } else if !self.wp_dir.is_empty() {
+            self.wp_dir.clear();
+            self.wp_images.clear();
+        }
+
         self.render();
         let _ = self.display.flush_clients();
     }

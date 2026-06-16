@@ -120,6 +120,14 @@ pub struct Config {
     /// kebab-case: `"stretch"`, `"fit"`, `"fill"`, `"center"`, `"tile"`.
     #[serde(with = "wallpaper_fit_slug_serde")]
     pub wallpaper_fit: WallpaperFit,
+    /// Carpeta de wallpapers para el **fondo automático** (slideshow): si no
+    /// está vacía, el compositor rota por las imágenes de esa carpeta cada
+    /// [`Self::wallpaper_interval_secs`]. Vacía = fondo fijo (`wallpaper_path`).
+    #[serde(default)]
+    pub wallpaper_dir: String,
+    /// Segundos entre cambios de wallpaper del slideshow. `0` = sin rotar.
+    #[serde(default)]
+    pub wallpaper_interval_secs: u32,
     /// Entradas del menú raíz (estilo openbox) que aparece al click derecho
     /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
     /// nada). Cada entrada lanza su `command` con `sh -c`.
@@ -366,6 +374,8 @@ impl Default for Config {
             font_path: String::new(),
             wallpaper_path: String::new(),
             wallpaper_fit: WallpaperFit::default(),
+            wallpaper_dir: String::new(),
+            wallpaper_interval_secs: 0,
             menu: default_root_menu(),
             zones: Vec::new(),
             zone_presets: Vec::new(),

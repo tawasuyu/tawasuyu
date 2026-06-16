@@ -162,6 +162,18 @@ impl Configurable for Config {
                         self.wallpaper_fit.slug(),
                         wallpaper_fit_options(),
                     ))
+                    .field(Field::text(
+                        "wallpaper_dir",
+                        "Carpeta (fondo automático)",
+                        self.wallpaper_dir.clone(),
+                    ))
+                    .field(Field::slider_int(
+                        "wallpaper_interval_secs",
+                        "Cambiar cada (s, 0 = fijo)",
+                        self.wallpaper_interval_secs as i64,
+                        0,
+                        3600,
+                    ))
                     .field(Field::text("font_path", "Fuente", self.font_path.clone())),
             )
             .section(
@@ -348,6 +360,16 @@ impl Configurable for Config {
             "wallpaper_fit" => {
                 if let Some(f) = value.as_str().and_then(WallpaperFit::from_slug) {
                     self.wallpaper_fit = f;
+                }
+            }
+            "wallpaper_dir" => {
+                if let Some(s) = value.as_str() {
+                    self.wallpaper_dir = s.to_string();
+                }
+            }
+            "wallpaper_interval_secs" => {
+                if let Some(v) = value.as_int() {
+                    self.wallpaper_interval_secs = v.max(0) as u32;
                 }
             }
             "font_path" => {
