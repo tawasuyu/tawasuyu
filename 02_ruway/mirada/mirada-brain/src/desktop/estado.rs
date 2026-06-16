@@ -170,11 +170,16 @@ impl Desktop {
 
     /// Recarga la config en caliente: re-siembra los parámetros de teselado
     /// (el archivo manda — un cambio de gap/modo/ratio se ve al guardar,
-    /// aunque pise un layout cambiado a mano) y devuelve el comando que
-    /// re-envía la decoración al Cuerpo. dropterm/foco se leen en vivo.
+    /// aunque pise un layout cambiado a mano), re-tesela con los parámetros
+    /// nuevos y re-envía la decoración al Cuerpo. dropterm/foco se leen en
+    /// vivo. El re-teselado es lo que hace que un cambio de gap/borde/ratio se
+    /// vea **al instante** cuando el compositor recarga el archivo por su
+    /// `FileWatch` (sin esperar a una acción manual que dispare layout).
     pub fn reload_config(&mut self, config: Config) -> Vec<BrainCommand> {
         self.set_config(config);
-        vec![self.decorations()]
+        let mut cmds = vec![self.decorations()];
+        cmds.extend(self.relayout());
+        cmds
     }
 
     /// Geometría de la salida enfocada, si hay alguna conectada.

@@ -933,11 +933,18 @@ fn reload_config_reseeds_params_and_re_sends_decorations() {
     let cmds = d.reload_config(cfg);
     // El gap nuevo se sembró (el archivo manda).
     assert_eq!(d.active_workspace().params().gap, 30);
-    // Y se devuelve un SetDecorations con el marco nuevo.
-    match cmds.as_slice() {
-        [BrainCommand::SetDecorations(dec)] => assert_eq!(dec.border_width, 5),
-        other => panic!("se esperaba un SetDecorations, no {other:?}"),
-    }
+    // Se devuelve un SetDecorations con el marco nuevo…
+    let dec = cmds.iter().find_map(|c| match c {
+        BrainCommand::SetDecorations(dec) => Some(dec),
+        _ => None,
+    });
+    assert_eq!(dec.expect("se esperaba un SetDecorations").border_width, 5);
+    // …y un re-teselado, para que el gap/borde nuevos se vean al instante
+    // (hay una ventana abierta, así que hay algo que colocar).
+    assert!(
+        cmds.iter().any(|c| matches!(c, BrainCommand::Place(_))),
+        "reload_config debe re-teselar las ventanas abiertas: {cmds:?}"
+    );
 }
 
 #[test]
