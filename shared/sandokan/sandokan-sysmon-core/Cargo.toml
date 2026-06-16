@@ -1,0 +1,14 @@
+[package]
+name = "sandokan-sysmon-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "sandokan-sysmon-core — lectura cruda de /proc para el modo Sistema del monitor: barrido de procesos, jiffies de CPU/RAM y envío de señales. Es un htop mínimo, agnóstico de frontend (cualquier UI/CLI lo consume). NO es la observación del plano de control (eso va por el contrato Engine en sandokan-monitor-core); el modo Sistema observa el SO entero, una fuente distinta sin dueño en el control plane."
+
+[dependencies]
+# Lectura de /proc + sysconf (page size, clk_tck).
+libc = { workspace = true }
+# Envío de señales (kill) en `signal()`.
+nix = { workspace = true }

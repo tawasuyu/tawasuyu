@@ -15,11 +15,11 @@ path = "src/main.rs"
 [dependencies]
 sandokan = { path = "../sandokan" }
 sandokan-monitor-core = { path = "../../../shared/sandokan/sandokan-monitor-core" }
+# Modo Sistema (htop): lectura de /proc + señales, núcleo agnóstico.
+sandokan-sysmon-core = { path = "../../../shared/sandokan/sandokan-sysmon-core" }
 card-core = { path = "../../../shared/card/card-core" }
 ulid = { workspace = true }
 tokio = { workspace = true }
-nix = { workspace = true }
-libc = { workspace = true }
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 llimphi-widget-menubar = { workspace = true }

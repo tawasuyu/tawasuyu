@@ -24,7 +24,7 @@ defecto de clase que tenía shuma.
 | 1 | `02_ruway/nahual/nahual-shell-llimphi` | **ALTA** | (a)+(c) fat binary, motor de búsqueda+IA atrapado, sin `-shell-core` | 🟡 find + `ops` + helpers de IA extraídos a `nahual-shell-core`; queda sólo convertir bin→lib hosteable |
 | 2 | `02_ruway/takiy/takiy-app-llimphi` (`model/`) | **MEDIA** | (a) `EditorState`/undo-redo agnóstico atrapado en el binario | ✅ hecho — extraído a `takiy-editor-core` |
 | 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | ⬜ pendiente |
-| 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | ⬜ pendiente |
+| 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | 🟡 `procfs` (lee /proc + señales) → nuevo `sandokan-sysmon-core`; falta mover `SysProc`+helpers de `sistema.rs` |
 | 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | ⬜ pendiente |
 | 6 | `00_unanchay/khipu/khipu-app/src/map.rs` | MEDIA | (a) `place_note` (anclaje semántico); `gravity_layout` del core sin usar | ✅ hecho — `SemanticField::anchor_new` |
 | 7 | `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | BAJA | (a) `diff_matches`/timeline de salud del broker atrapado | ✅ hecho — `card-handshake::health` |
@@ -82,8 +82,12 @@ lógica de dominio pura sin core:
 - `src/sistema.rs` (l.44–280): %CPU por deltas (`ingest_system`), árbol padre/hijo (`flatten_tree`,
   `subtree_pids`), `sort_system`, `proc_matches`.
 
-**Remediación:** extraer `sandokan-sysmon-core` (o módulo `system`) con
-`ProcRaw`/`scan`/`ingest`/`flatten_tree`/`sort`/`filter`/`signal`. El frontend conserva Model+view+treemap.
+**Hecho:** `procfs.rs` (barrido de `/proc`, jiffies CPU/RAM, `signal` por `nix`) → nuevo crate agnóstico
+`shared/sandokan/sandokan-sysmon-core`; el frontend lo re-exporta como `crate::procfs::*` (shim) y se le
+quitaron las deps `nix`/`libc` (ya no las usa directo). **Falta (follow-up):** mover `SysProc` (hoy en
+`modelo.rs`) y los helpers puros de `sistema.rs` (`flatten_tree`/`subtree_pids`/`proc_matches`/`push_capped`
++ la derivación de %CPU de `ingest_system`) al core — requiere mover `SysProc` primero (lo referencian 4
+archivos del frontend) y desacoplar `ingest_system` del `Model`.
 
 ### 5. `media-app/src/playlist.rs` — MEDIA (a, duplicación)
 Define su propio `struct Playlist` y reimplementa `cycle_repeat`/`toggle_shuffle`/`shuffle_order` (LCG

@@ -502,6 +502,7 @@ members = [
     "shared/sandokan/sandokan-core",
     "shared/sandokan/sandokan-lifecycle",
     "shared/sandokan/sandokan-monitor-core",
+    "shared/sandokan/sandokan-sysmon-core",
     "shared/ssh",
     "shared/wawa-config",
     "shared/wawa-config-llimphi",
