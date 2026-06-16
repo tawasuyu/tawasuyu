@@ -11,9 +11,11 @@
 //! anterior/siguiente y el auto-advance del tick de UI funcionan también con
 //! video (no sólo audio nativo).
 //!
-//! Limitaciones MVP (documentadas): la selección de pistas embebidas
-//! (CycleAudioTrack/CycleSubtitleTrack) sigue apuntando a la sesión ffmpeg de
-//! arranque.
+//! La selección de pistas embebidas (CycleAudioTrack/CycleSubtitleTrack)
+//! sigue al swap: `install_session` reconstruye el `TrackSet` y el
+//! `active_session_slot` en cada cambio de video, y `current_session()`
+//! prefiere la sesión activa, así que el ciclado opera sobre el video en curso,
+//! no sobre la sesión ffmpeg de arranque.
 
 use std::path::{Path, PathBuf};
 

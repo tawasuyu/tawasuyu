@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 publish.workspace = true
-description = "puriy — runtime JS sandboxed (QuickJS sobre wasmi). Fase 7.0: scaffold del API; el embed del .wasm llega en Fase 7.1."
+description = "puriy — runtime JS sandboxed (QuickJS-NG sobre wasmi). El runtime qjs-wasi-reactor.wasm va embebido por include_bytes! y eval corre vía JS_Eval; cableado a puriy-llimphi (scripts de página)."
 
 [dependencies]
 thiserror = { workspace = true }

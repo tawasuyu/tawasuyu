@@ -8,10 +8,10 @@
 //! [`canonical`] normaliza antes del dispatch. El usuario escribe `=SUMA(...)`
 //! o `=SUM(...)` o `=YAPAY(...)` y todos rutean a la misma implementación.
 //!
-//! Limitación actual del arranque: el lexer de `yupay-core` sólo acepta
-//! identificadores ASCII sin punto, así que los aliases son ASCII sin punto
-//! (`SUMARSI`, no `SUMAR.SI`; `ANIO`, no `AÑO`). Soportar los nombres Excel-es
-//! con punto/acento es un follow-up que extiende el lexer.
+//! El lexer de `yupay-core` acepta identificadores Unicode con punto y acento,
+//! así que los aliases Excel-es genuinos rutean tal cual: `SUMAR.SI`, `AÑO`,
+//! `MÁXIMO` (y también sus formas ASCII `SUMARSI`/`ANIO`/`MAXIMO`). Verificado
+//! por los tests de este crate (`=MÁXIMO(...)`, `=SUMAR.SI(...)`).
 //!
 //! El dispatch va por nombre UPPERCASE (el parser ya normaliza). Si el nombre
 //! no existe devolvemos `#NAME?` — como Excel cuando uno teclea mal una
