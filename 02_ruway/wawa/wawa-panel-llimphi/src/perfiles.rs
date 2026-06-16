@@ -76,22 +76,35 @@ impl DesktopProfiles {
                 lib.profiles.insert(name.to_string(), prof);
             }
         }
-        // Activo = la vista cuya config coincide con la viva, o la primera.
+        // Activo = la vista cuya config coincide con la viva; si ninguna
+        // coincide, el **nativo** («mirada»). OJO: NO el primero del BTreeMap,
+        // que por orden alfabético es «dwm» — esa era la causa de que el
+        // escritorio arrancara en dwm sin que nadie lo pidiera.
         lib.active = lib
             .profiles
             .iter()
             .find(|(_, p)| &p.mirada == live)
             .map(|(n, _)| n.clone())
-            .or_else(|| lib.profiles.keys().next().cloned())
+            .or_else(|| lib.default_name())
             .unwrap_or_default();
         let _ = lib.save();
         lib
     }
 
-    /// Si el activo apunta a un perfil inexistente, lo reapunta al primero.
+    /// El perfil por defecto: el nativo «mirada» si existe; si no, el primero
+    /// disponible. Nunca el alfabético a ciegas (sería «dwm»).
+    fn default_name(&self) -> Option<String> {
+        if self.profiles.contains_key("mirada") {
+            Some("mirada".to_string())
+        } else {
+            self.profiles.keys().next().cloned()
+        }
+    }
+
+    /// Si el activo apunta a un perfil inexistente, lo reapunta al nativo.
     fn repair_active(&mut self) {
         if !self.profiles.contains_key(&self.active) {
-            self.active = self.profiles.keys().next().cloned().unwrap_or_default();
+            self.active = self.default_name().unwrap_or_default();
         }
     }
 

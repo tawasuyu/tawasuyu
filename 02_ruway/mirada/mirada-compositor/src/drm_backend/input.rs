@@ -578,14 +578,13 @@ impl DrmState {
         // Drag-to-zone: resalta la zona bajo el puntero (Move/Tile, no Resize).
         // Sobre una zona, la ventana aterrizará ahí al soltar.
         self.drag_zone = if mode == DragMode::Resize { None } else { self.zone_at(px, py) };
-        // Arrastre de una teselada: el Cerebro la intercambia con la tesela
-        // bajo el puntero — no flota, sólo reordena el stack. Pero si está
-        // sobre una zona, suprimimos el swap (se resolverá al soltar).
+        // Arrastre de una teselada: el swap con la tesela destino se resuelve
+        // al SOLTAR (ver la rama de release del botón), no en cada frame.
+        // Durante el arrastre sólo resaltamos la zona/tesela bajo el puntero.
+        // Antes acá se emitía `WindowDragged` en CADA movimiento, así que el
+        // stack se reordenaba sin parar mientras arrastrabas — daba la
+        // sensación de que «si muevo una ventana, se mueven todas».
         if mode == DragMode::Tile {
-            if self.drag_zone.is_none() {
-                self.app
-                    .brain_feed(BodyEvent::WindowDragged { id, x: px as i32, y: py as i32 });
-            }
             return true;
         }
         let dx = (px - spx) as i32;

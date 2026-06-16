@@ -383,9 +383,12 @@ impl Desktop {
 
     // --- Helpers privados de navegación y layout ---
 
-    /// Hace que la salida enfocada muestre el escritorio `n`. Si otra
-    /// salida ya lo mostraba, intercambian — así ningún escritorio se
-    /// ve en dos sitios a la vez.
+    /// Hace que la salida enfocada muestre el escritorio `n`. Un escritorio
+    /// vive en un solo monitor a la vez: si **otra** salida ya muestra `n`,
+    /// no se lo robamos (eso arrastraba sus ventanas de un monitor a otro y
+    /// confundía — «cambié de escritorio y aparecieron ventanas de otro»);
+    /// en su lugar movemos el **foco** a esa salida. Si no lo muestra nadie,
+    /// la salida enfocada pasa a mostrarlo.
     pub(super) fn show_workspace(&mut self, n: usize) {
         if n >= self.workspaces.len() || self.focused_output >= self.outputs.len() {
             return;
@@ -395,7 +398,8 @@ impl Desktop {
             return;
         }
         if let Some(other) = self.outputs.iter().position(|o| o.workspace == n) {
-            self.outputs[other].workspace = current;
+            self.focused_output = other;
+            return;
         }
         self.outputs[self.focused_output].workspace = n;
     }
