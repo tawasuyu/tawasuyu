@@ -228,6 +228,17 @@ pub(crate) fn transform_affine(
 /// del compositor. `LengthVal` no resoluble (auto/keywords) → `MaskLen::Auto`
 /// (intrínseco en size, offset 0 en position). `mask-mode: match-source` →
 /// alpha (las máscaras de puriy son raster `url()`). Fases 7.1227–7.1230.
+/// Traduce `mask-composite` CSS → operador neutral del compositor. Fase 7.1231.
+fn mask_compose_de(c: puriy_engine::style::MaskComposite) -> llimphi_ui::MaskCompose {
+    use puriy_engine::style::MaskComposite as C;
+    match c {
+        C::Add => llimphi_ui::MaskCompose::Add,
+        C::Subtract => llimphi_ui::MaskCompose::Subtract,
+        C::Intersect => llimphi_ui::MaskCompose::Intersect,
+        C::Exclude => llimphi_ui::MaskCompose::Exclude,
+    }
+}
+
 fn mask_placement_de(spec: &puriy_engine::MaskSpec) -> llimphi_ui::MaskPlacement {
     use llimphi_ui::{MaskLen, MaskSize};
     use puriy_engine::style::MaskMode as CssMaskMode;
@@ -501,17 +512,28 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // tileándola igual que background-image. Ortogonal a clip-path (un nodo
     // puede llevar ambos).
     if let Some(spec) = &b.mask_image {
-        let blob = Blob::from(spec.image.rgba.clone());
-        let peniko = PenikoImage::new(ImageData {
-            data: blob,
-            format: ImageFormat::Rgba8,
-            alpha_type: ImageAlphaType::Alpha,
-            width: spec.image.width,
-            height: spec.image.height,
-        });
+        let to_peniko = |img: &puriy_engine::ImageData| {
+            PenikoImage::new(ImageData {
+                data: Blob::from(img.rgba.clone()),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: img.width,
+                height: img.height,
+            })
+        };
         view = view
-            .mask_image(peniko)
+            .mask_image(to_peniko(&spec.image))
             .mask_placement(mask_placement_de(spec));
+        // Capas adicionales (mask-image: url(a), url(b), …) con su operador
+        // mask-composite. Fase 7.1231.
+        if !spec.extra.is_empty() {
+            let extra: Vec<(PenikoImage, llimphi_ui::MaskCompose)> = spec
+                .extra
+                .iter()
+                .map(|(img, comp)| (to_peniko(img), mask_compose_de(*comp)))
+                .collect();
+            view = view.mask_extra(extra);
+        }
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);

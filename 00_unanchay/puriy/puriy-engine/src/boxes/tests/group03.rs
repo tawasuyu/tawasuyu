@@ -167,6 +167,35 @@ use crate::Engine;
     }
 
     #[test]
+    fn mask_image_capas_multiples_se_decodifican_fase_7_1231() {
+        // `mask-image: url(a), url(b)` → capa 0 en `spec.image` + 1 extra en
+        // `spec.extra` con el operador mask-composite compartido (default add).
+        // Se usan dos data: percent-encoded (sin `;`) del mismo PNG 1×1; la
+        // coma interna de cada `data:image/png,...` la protege el `url(...)`.
+        let png = "data:image/png,%89PNG%0D%0A%1A%0A%00%00%00%0DIHDR%00%00%00%01%00%00%00%01%08%06%00%00%00%1F%15%C4%89%00%00%00%0DIDATx%9Cc%F8%CF%C0%F0%1F%00%05%00%01%FF%89%99%3D%1D%00%00%00%00IEND%AEB%60%82";
+        let html = format!(
+            r##"<html><body><div style="mask-image: url({png}), url({png})">x</div></body></html>"##
+        );
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", &html);
+        let mut found = None;
+        doc.box_tree.walk(|b| {
+            if let Some(spec) = &b.mask_image {
+                found = Some((
+                    (spec.image.width, spec.image.height),
+                    spec.extra.len(),
+                    spec.extra.first().map(|(im, comp)| ((im.width, im.height), *comp)),
+                ));
+            }
+        });
+        assert_eq!(
+            found,
+            Some(((1, 1), 1, Some(((1, 1), crate::style::MaskComposite::Add)))),
+            "capa 0 (1×1) + 1 extra (1×1) con composite default add"
+        );
+    }
+
+    #[test]
     fn canvas_genera_box_con_tamano_intrinseco() {
         // `<canvas>` ya no es display:none (Fase 7.196): produce un box con
         // `canvas: Some((w, h))` tomado de los atributos, default 300×150.

@@ -1149,6 +1149,48 @@ use super::super::*;
     }
 
     #[test]
+    fn mask_image_lista_de_capas_fase_7_1231() {
+        // `mask-image: url(a), url(b), url(c)` → capa 0 + 2 extras. Las que no
+        // son url() (gradientes) se descartan.
+        let (l0, extra) = parse_mask_image_layers("url(a.png), url(b.png), url(c.png)");
+        assert_eq!(l0, Some(MaskImage::Url("a.png".to_string())));
+        assert_eq!(
+            extra,
+            vec![
+                MaskImage::Url("b.png".to_string()),
+                MaskImage::Url("c.png".to_string()),
+            ]
+        );
+        // Una sola capa → sin extras.
+        let (l0, extra) = parse_mask_image_layers("url(solo.png)");
+        assert_eq!(l0, Some(MaskImage::Url("solo.png".to_string())));
+        assert!(extra.is_empty());
+        // Gradiente entre urls se descarta (subset url-only); el resto corre.
+        let (l0, extra) = parse_mask_image_layers("url(a.png), linear-gradient(red, blue), url(c.png)");
+        assert_eq!(l0, Some(MaskImage::Url("a.png".to_string())));
+        assert_eq!(extra, vec![MaskImage::Url("c.png".to_string())]);
+        // `none` / vacío → sin capas.
+        let (l0, extra) = parse_mask_image_layers("none");
+        assert!(l0.is_none() && extra.is_empty());
+
+        // Via stylesheet: mask_image + mask_extra_layers.
+        let html = r##"<html><head><style>
+            div.multi { mask-image: url(m0.png), url(m1.png) }
+        </style></head><body><div class="multi"></div></body></html>"##;
+        let dom = DomTree::parse(html);
+        let eng = StyleEngine::from_dom(&dom);
+        let mut divs = Vec::new();
+        crate::dom::walk(&dom.document(), &mut |n| {
+            if crate::dom::element_name(n).as_deref() == Some("div") {
+                divs.push(n.clone());
+            }
+        });
+        let cs = eng.compute(&divs[0]);
+        assert_eq!(cs.mask_image, Some(MaskImage::Url("m0.png".to_string())));
+        assert_eq!(cs.mask_extra_layers, vec![MaskImage::Url("m1.png".to_string())]);
+    }
+
+    #[test]
     fn content_visibility_fase_7_276() {
         assert_eq!(parse_content_visibility("visible"), Some(ContentVisibility::Visible));
         assert_eq!(parse_content_visibility("AUTO"), Some(ContentVisibility::Auto));

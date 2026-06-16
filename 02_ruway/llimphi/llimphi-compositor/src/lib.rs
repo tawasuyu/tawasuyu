@@ -394,6 +394,11 @@ pub struct View<Msg> {
     /// `mask_image` está presente. Ver [`MaskPlacement`] y
     /// [`View::mask_placement`]. Fase 7.1227.
     pub mask_placement: Option<MaskPlacement>,
+    /// Capas de máscara ADICIONALES (`mask-image: url(a), url(b), …`): cada una
+    /// es `(imagen, operador)`. Comparten [`Self::mask_placement`] con la capa 0
+    /// ([`Self::mask_image`]); se combinan con ella según el operador. Vacío =
+    /// una sola capa. Ver [`View::mask_extra`]. Fase 7.1231.
+    pub mask_extra: Vec<(Image, MaskCompose)>,
     /// Callback de pintura custom. Si está presente, el runtime lo
     /// invoca durante el paint del nodo con el `Scene` vivo + el rect
     /// absoluto. Pensado para "canvas elements" (dominium, pluma,
@@ -675,6 +680,7 @@ impl<Msg: 'static> View<Msg> {
             image_fit,
             mask_image,
             mask_placement,
+            mask_extra,
             painter,
             gpu_painter,
             on_click,
@@ -738,6 +744,7 @@ impl<Msg: 'static> View<Msg> {
             image_fit,
             mask_image,
             mask_placement,
+            mask_extra,
             painter,
             gpu_painter,
             drag_payload,
@@ -956,6 +963,22 @@ pub enum MaskMode {
     Alpha,
 }
 
+/// Operador de combinación entre capas de máscara (CSS `mask-composite`). Mapea
+/// a un `Compose` Porter-Duff de vello cuando una capa extra se compone sobre
+/// las de abajo. Fase 7.1231.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskCompose {
+    /// La capa se **suma** sobre las de abajo (source-over). Default CSS.
+    #[default]
+    Add,
+    /// La capa **resta** (source-out: la fuente donde NO solapa el destino).
+    Subtract,
+    /// **Intersección** (source-in: la fuente donde solapa el destino).
+    Intersect,
+    /// **Exclusión** (xor: las regiones no solapadas de ambas).
+    Exclude,
+}
+
 /// Encaje y modo de una **máscara** (CSS `mask-size` + `mask-position` +
 /// `mask-repeat` + `mask-mode`), resuelto contra el rect del nodo en el paint,
 /// con la misma aritmética que `background-image`. En el [`MountedNode`] viaja
@@ -1057,6 +1080,9 @@ pub struct MountedNode<Msg> {
     /// Encaje de [`Self::mask_image`] (size/position/repeat). `None` = estirar
     /// al border-box. Ver [`MaskPlacement`]. Fase 7.1227.
     pub mask_placement: Option<MaskPlacement>,
+    /// Capas de máscara adicionales `(imagen, operador)` (ver [`View::mask_extra`]).
+    /// Comparten el `mask_placement` con la capa 0. Fase 7.1231.
+    pub mask_extra: Vec<(Image, MaskCompose)>,
     pub painter: Option<PaintFn>,
     pub gpu_painter: Option<GpuPaintFn>,
     pub on_click: Option<Msg>,

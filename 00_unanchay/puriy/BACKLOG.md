@@ -269,13 +269,42 @@ origin_inset }` (re-exportado en `puriy_engine::MaskSpec`). El compositor sumó
 que los defaults border-box no insetean). **La familia mask queda funcional**
 salvo `mask-composite` (7.1231), que requiere modelar una lista de capas.
 
-### 7.1231 — `mask-composite` (combinar varias capas de máscara)
+### 7.1231 ✅ — `mask-composite` + lista de capas de máscara
 
-**Por qué**: cierra la familia. `add`/`subtract`/`intersect`/`exclude` combinan
-múltiples imágenes-máscara. Requiere primero modelar la **lista** de capas de
-máscara (hoy `mask_image` es una sola, como era `background` antes de las capas
-extra) — depende de extender el parser/modelo a lista. Se detalla al llegar si
-sigue habiendo apetito; es el menos común.
+**Hecho.** `mask-image: url(a), url(b), …` ahora modela **varias capas** y
+`mask-composite` (`add`/`subtract`/`intersect`/`exclude`) las combina.
+
+**Modelado**: parser `parse_mask_image_layers` parte la lista por comas
+top-level (paren-aware, así data: URLs no se rompen) → `style.mask_image` (capa
+0) + `style.mask_extra_layers: Vec<MaskImage>` (nuevo decl `MaskImageLayers`).
+El `MaskSpec` del box ganó `extra: Vec<(ImageData, MaskComposite)>` (las extras
+viajan dentro del spec, sin sumar sitios de construcción al BoxNode). El
+compositor ganó `enum MaskCompose { Add(default), Subtract, Intersect, Exclude }`
++ campo `View/MountedNode::mask_extra: Vec<(Image, MaskCompose)>` + builder.
+
+**Pintado**: `paint_mask_close` pinta la capa 0 y luego cada extra; `add`
+(default) se dibuja directo (source-over acumula), el resto compone vía
+`Compose` Porter-Duff (`subtract→SrcOut`, `intersect→SrcIn`, `exclude→Xor`) en
+una sub-capa. La aritmética de tiles se extrajo a `draw_mask_layer` (compartida
+por todas las capas).
+
+**Limitaciones documentadas** (scope acotado a propósito):
+- Las capas extra **comparten** `mask-size`/`-position`/`-repeat`/`-mode`/
+  `-clip`/`-origin` con la capa 0 (per-layer lists diferidas — un 7.1232 si hay
+  apetito). Lo común (varias máscaras combinadas con un operador) sí anda.
+- `mask-composite` es un único valor compartido entre todas las capas (no
+  per-layer).
+- **Sin verificación a píxeles** (CI sin GPU): `add` es correcto y de bajo
+  riesgo (stacking); el mapeo de los otros operadores → `Compose` es el de la
+  spec Porter-Duff pero NO está validado por captura. Para `mask-mode:
+  luminance` multi-capa la combinación es aproximada (compone la imagen y luego
+  toma su luminancia), exacta para `alpha`.
+
+**Tests**: parser (`mask_image_lista_de_capas`, group02: lista, descarte de no-
+url, stylesheet), box-tree (`mask_image_capas_multiples`, group03: 2 data: URLs
+→ capa 0 + 1 extra con composite add), builder (`mask_extra_setea_capas`).
+
+**La familia mask queda cerrada** (salvo refinamientos per-layer diferidos).
 
 > **Bifurcación original (resuelta)**: cómo aplica el compositor la máscara —
 > capa de luminancia nativa (`push_luminance_mask_layer`) vs. alpha vía

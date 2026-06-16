@@ -266,6 +266,22 @@ pub(crate) fn parse_mask_image(value: &str) -> Option<MaskImage> {
     None
 }
 
+/// `mask-image` con lista de capas: `url(a), url(b), …`. Devuelve `(capa 0,
+/// capas 1..N)`. Cada capa se parsea con [`parse_mask_image`]; las que no son
+/// `url()` (gradientes, `none`) se descartan. Si no hay ninguna `url()` válida,
+/// devuelve `(None, vec![])`. Fase 7.1231.
+pub(crate) fn parse_mask_image_layers(value: &str) -> (Option<MaskImage>, Vec<MaskImage>) {
+    let mut layers: Vec<MaskImage> = split_top_level_comma(value)
+        .into_iter()
+        .filter_map(|layer| parse_mask_image(&layer))
+        .collect();
+    if layers.is_empty() {
+        return (None, Vec::new());
+    }
+    let extra = layers.split_off(1);
+    (Some(layers.remove(0)), extra)
+}
+
 /// `content-visibility`: `visible | auto | hidden`. Fase 7.276.
 pub(crate) fn parse_content_visibility(value: &str) -> Option<ContentVisibility> {
     match value.trim().to_ascii_lowercase().as_str() {

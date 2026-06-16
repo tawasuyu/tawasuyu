@@ -128,6 +128,7 @@ impl Default for ComputedStyle {
             clip_path: None,
             clip_geometry_box: GeometryBox::BorderBox,
             mask_image: None,
+            mask_extra_layers: Vec::new(),
             content_visibility: ContentVisibility::Visible,
             contain: ContainFlags::default(),
             column_count: None,

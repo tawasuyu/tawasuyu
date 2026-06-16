@@ -449,10 +449,17 @@ pub(crate) fn dispatch_d(p: &str, value: &str) -> Option<DeclKind> {
             let (shape, geo) = parse_clip_path_value(value);
             Some(DeclKind::ClipPath(shape, geo))
         }
-        "mask-image" => Some(DeclKind::MaskImage(parse_mask_image(value))),
-        // `mask` shorthand: hoy sólo el subset image (igual que mask-image).
+        // `mask-image` acepta lista de capas `url(a), url(b), …` (Fase 7.1231):
+        // capa 0 → mask_image, resto → mask_extra_layers.
+        "mask-image" => {
+            let (l0, extra) = parse_mask_image_layers(value);
+            Some(DeclKind::MaskImageLayers(l0, extra))
+        }
+        // `mask` shorthand: hoy sólo el subset image (igual que mask-image),
+        // también con lista de capas.
         "mask" | "-webkit-mask" | "-webkit-mask-image" => {
-            Some(DeclKind::MaskImage(parse_mask_image(value)))
+            let (l0, extra) = parse_mask_image_layers(value);
+            Some(DeclKind::MaskImageLayers(l0, extra))
         }
         "content-visibility" => {
             parse_content_visibility(value).map(DeclKind::ContentVisibility)

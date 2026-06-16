@@ -280,6 +280,9 @@ pub(crate) enum DeclKind {
     ClipPath(Option<ClipPath>, GeometryBox),
     /// `None` = `mask-image: none`.
     MaskImage(Option<MaskImage>),
+    /// `mask-image` con lista de capas: `(capa 0, capas 1..N)`. La capa 0 va a
+    /// `mask_image` y las extras a `mask_extra_layers`. Fase 7.1231.
+    MaskImageLayers(Option<MaskImage>, Vec<MaskImage>),
     ContentVisibility(ContentVisibility),
     Contain(ContainFlags),
     /// `None` = `column-count: auto`.
@@ -1495,6 +1498,10 @@ impl Decl {
                 s.clip_geometry_box = *g;
             }
             DeclKind::MaskImage(m) => s.mask_image = m.clone(),
+            DeclKind::MaskImageLayers(layer0, extra) => {
+                s.mask_image = layer0.clone();
+                s.mask_extra_layers = extra.clone();
+            }
             DeclKind::ContentVisibility(v) => s.content_visibility = *v,
             DeclKind::Contain(c) => s.contain = *c,
             DeclKind::ColumnCount(n) => s.column_count = *n,

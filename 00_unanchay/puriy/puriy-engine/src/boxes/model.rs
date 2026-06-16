@@ -76,6 +76,12 @@ pub struct MaskSpec {
     /// `mask-origin` (anclaje de position/size/tiling). `None` = border-box.
     /// Fase 7.1230.
     pub origin_inset: Option<[f32; 4]>,
+    /// Capas de máscara ADICIONALES (`mask-image: url(a), url(b), …`): cada una
+    /// es `(imagen, mask-composite)` — comparte encaje/modo/cajas con la capa 0
+    /// (este `MaskSpec`) y se combina con ella vía el operador. Vacío = una sola
+    /// capa. `mask-composite` es hoy un único valor compartido (per-layer list
+    /// diferido). Fase 7.1231.
+    pub extra: Vec<(ImageData, crate::style::MaskComposite)>,
 }
 
 /// Un nodo del árbol de boxes — render-ready.

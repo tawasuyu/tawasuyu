@@ -448,6 +448,16 @@ pub(crate) fn build_node(
                         crate::style::MaskOrigin::ContentBox => Some(content_inset()),
                         _ => None,
                     };
+                    // Capas adicionales (mask-image: url(a), url(b), …): decode
+                    // cada una y emparéjala con el operador mask-composite
+                    // compartido. Las que no resuelven se descartan. Fase 7.1231.
+                    let extra: Vec<(ImageData, crate::style::MaskComposite)> = style
+                        .mask_extra_layers
+                        .iter()
+                        .filter_map(|crate::style::MaskImage::Url(u)| {
+                            fetch_image_src(base, u).map(|im| (im, style.mask_composite))
+                        })
+                        .collect();
                     crate::boxes::model::MaskSpec {
                         image: img,
                         size: style.mask_size,
@@ -456,6 +466,7 @@ pub(crate) fn build_node(
                         mode: style.mask_mode,
                         clip_inset,
                         origin_inset,
+                        extra,
                     }
                 }),
                 None => None,

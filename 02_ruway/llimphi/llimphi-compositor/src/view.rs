@@ -16,6 +16,7 @@ impl<Msg> View<Msg> {
             image_fit: None,
             mask_image: None,
             mask_placement: None,
+            mask_extra: Vec::new(),
             painter: None,
             gpu_painter: None,
             on_pointer_enter: None,
@@ -1178,6 +1179,15 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Capas de máscara adicionales `(imagen, operador)` (CSS `mask-image` con
+    /// lista). Comparten el [`Self::mask_placement`] con la capa 0
+    /// ([`Self::mask_image`]) y se combinan con ella según cada operador. Fase
+    /// 7.1231.
+    pub fn mask_extra(mut self, layers: Vec<(Image, MaskCompose)>) -> Self {
+        self.mask_extra = layers;
+        self
+    }
+
     /// Registra una closure de pintura custom. El runtime la invoca
     /// con `(&mut vello::Scene, &mut Typesetter, PaintRect)` durante
     /// el paint del nodo. La closure es responsable de pintar
@@ -1430,6 +1440,30 @@ mod semantics_tests {
         // El modo default del compositor es luminancia (el camino estirado de
         // la Fase 7.1226 sin placement). Fase 7.1228.
         assert_eq!(MaskMode::default(), MaskMode::Luminance);
+    }
+
+    #[test]
+    fn mask_extra_setea_capas_adicionales() {
+        // `.mask_extra(...)` guarda las capas extra `(imagen, operador)` que el
+        // paint combina con la capa 0 según el operador. Fase 7.1231.
+        use vello::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
+        let mk = || {
+            Image::new(ImageData {
+                data: Blob::from(vec![255u8, 255, 255, 255]),
+                format: ImageFormat::Rgba8,
+                alpha_type: ImageAlphaType::Alpha,
+                width: 1,
+                height: 1,
+            })
+        };
+        let v = View::<()>::new(Style::default())
+            .mask_extra(vec![(mk(), MaskCompose::Intersect), (mk(), MaskCompose::Add)]);
+        assert_eq!(v.mask_extra.len(), 2);
+        assert_eq!(v.mask_extra[0].1, MaskCompose::Intersect);
+        assert_eq!(v.mask_extra[1].1, MaskCompose::Add);
+        // Default: sin capas extra; el operador default es `add`.
+        assert!(View::<()>::new(Style::default()).mask_extra.is_empty());
+        assert_eq!(MaskCompose::default(), MaskCompose::Add);
     }
 
     #[test]

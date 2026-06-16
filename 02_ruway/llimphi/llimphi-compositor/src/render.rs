@@ -30,6 +30,7 @@ pub fn mount_recursive<Msg: Clone>(
         image_fit,
         mask_image,
         mask_placement,
+        mask_extra,
         painter,
         gpu_painter,
         on_click,
@@ -90,6 +91,7 @@ pub fn mount_recursive<Msg: Clone>(
         image_fit,
         mask_image,
         mask_placement,
+        mask_extra,
         painter,
         gpu_painter,
         on_click,
@@ -415,11 +417,11 @@ pub(crate) fn resolve_node_transform(
 /// `subtree_end ≤ end`) o por el drenaje final — la LIFO se respeta. `base_xf`
 /// debería ser la transformación de los ancestros del nodo raíz; al capturar
 /// se pasa `IDENTITY` (v1 no contempla raíces bajo ancestros transformados).
-/// Cierra una capa de aislamiento de `mask-image` (Fase 7.1226) aplicando la
-/// **luminancia** de `img` como alpha del contenido ya pintado en la capa: la
-/// sub-capa `push_luminance_mask_layer` toma el contenido "previo" (todo el
-/// subárbol del nodo, ya compuesto en la capa de aislamiento) y lo multiplica
-/// por la luminancia de la máscara — blanco = visible, negro = oculto. El
+/// Cierra una capa de aislamiento de `mask-image` aplicando la máscara al
+/// contenido ya pintado en la capa (el subárbol del nodo). Según `mask-mode`
+/// (Fase 7.1228) abre una capa de **luminancia** (`push_luminance_mask_layer`)
+/// o **alpha** (`Compose::DestIn`); dentro pinta la capa 0 (`img`) y las capas
+/// extra (`extra`, Fase 7.1231) combinadas por su operador `mask-composite`. El
 /// caller cierra la capa de aislamiento con su propio `pop_layer` tras esto.
 ///
 /// `placement` (Fase 7.1227+) fija el encaje con la misma aritmética que
@@ -430,12 +432,11 @@ pub(crate) fn resolve_node_transform(
 fn paint_mask_close(
     scene: &mut vello::Scene,
     img: &Image,
+    extra: &[(Image, MaskCompose)],
     rect: KurboRect,
     xf: Affine,
     placement: Option<MaskPlacement>,
 ) {
-    let iw = img.image.width.max(1) as f64;
-    let ih = img.image.height.max(1) as f64;
     // Cajas de referencia (Fase 7.1230): `mask-clip` recorta el efecto;
     // `mask-origin` ancla el tiling/position. Se encoge el border-box `rect`
     // por los insets resueltos. `None` = border-box (sin cambio).
@@ -468,16 +469,64 @@ fn paint_mask_close(
             &clip_rect,
         ),
     }
+    // Capa 0 + capas extra (Fase 7.1231). Las extras comparten el `placement`.
+    // `add` (default) se dibuja directo (source-over acumula la máscara); el
+    // resto compone vía un `Compose` Porter-Duff en una sub-capa.
+    //
+    // NOTA: la composición multi-capa no está verificada a píxeles (CI sin GPU);
+    // el mapeo mask-composite → Compose es el de la spec. Para `mask-mode:
+    // luminance` con varias capas la combinación es aproximada (se compone la
+    // imagen y luego la capa toma su luminancia), exacta para `alpha`.
+    draw_mask_layer(scene, img, origin_rect, xf, placement);
+    for (eimg, op) in extra {
+        match op {
+            MaskCompose::Add => draw_mask_layer(scene, eimg, origin_rect, xf, placement),
+            _ => {
+                let compose = match op {
+                    MaskCompose::Subtract => vello::peniko::Compose::SrcOut,
+                    MaskCompose::Intersect => vello::peniko::Compose::SrcIn,
+                    MaskCompose::Exclude => vello::peniko::Compose::Xor,
+                    MaskCompose::Add => unreachable!(),
+                };
+                scene.push_layer(
+                    Fill::NonZero,
+                    vello::peniko::BlendMode::new(Mix::Normal, compose),
+                    1.0,
+                    xf,
+                    &clip_rect,
+                );
+                draw_mask_layer(scene, eimg, origin_rect, xf, placement);
+                scene.pop_layer();
+            }
+        }
+    }
+    scene.pop_layer();
+}
+
+/// Pinta UNA imagen-máscara dentro de la capa de máscara ya abierta, con su
+/// encaje (`placement`): `None` la estira a `origin_rect` (Fase 7.1226), `Some`
+/// la tilea (size/position/repeat resueltos contra `origin_rect`, Fase
+/// 7.1227/7.1230). La comparten la capa 0 y las extra (Fase 7.1231). No abre ni
+/// cierra capas — el caller controla la capa de máscara y el compose.
+fn draw_mask_layer(
+    scene: &mut vello::Scene,
+    img: &Image,
+    origin_rect: KurboRect,
+    xf: Affine,
+    placement: Option<MaskPlacement>,
+) {
+    let iw = img.image.width.max(1) as f64;
+    let ih = img.image.height.max(1) as f64;
     match placement {
-        // Fase 7.1226: estirar la máscara a la caja de origen (= border-box si
-        // no hay mask-origin).
+        // Estirar la máscara a la caja de origen (= border-box si no hay
+        // mask-origin).
         None => {
             let fit = Affine::translate((origin_rect.x0, origin_rect.y0))
                 * Affine::scale_non_uniform(origin_rect.width() / iw, origin_rect.height() / ih);
             scene.draw_image(img, xf * fit);
         }
-        // Fase 7.1227/7.1230: size/position/repeat estilo background-image,
-        // resueltos contra la caja de `mask-origin`.
+        // size/position/repeat estilo background-image, resueltos contra la caja
+        // de `mask-origin`.
         Some(p) => {
             let rw = origin_rect.width();
             let rh = origin_rect.height();
@@ -548,7 +597,6 @@ fn paint_mask_close(
             }
         }
     }
-    scene.pop_layer();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -572,8 +620,16 @@ pub fn paint_range<Msg>(
     // (ver `paint_mask_close`) antes del `pop_layer` de la capa de aislamiento.
     // Dos entradas con el mismo `subtree_end` (p. ej. alpha + mask + clip sobre
     // el mismo nodo) se cierran en el orden inverso al push.
-    let mut layer_stack: Vec<(usize, Option<(Image, KurboRect, Affine, Option<MaskPlacement>)>)> =
-        Vec::new();
+    // Payload de máscara: (capa 0, capas extra `(img, op)`, rect border-box, xf,
+    // placement compartido). `paint_mask_close` lo consume al cerrar.
+    type MaskClose = (
+        Image,
+        Vec<(Image, MaskCompose)>,
+        KurboRect,
+        Affine,
+        Option<MaskPlacement>,
+    );
+    let mut layer_stack: Vec<(usize, Option<MaskClose>)> = Vec::new();
     // Stack de transformaciones afines de subtree. Cada entrada guarda el
     // `subtree_end` y la `cur_xf` previa para restaurarla al salir del
     // subárbol. `cur_xf` es el producto acumulado de todos los `transform`
@@ -589,8 +645,8 @@ pub fn paint_range<Msg>(
         while let Some(&(end, _)) = layer_stack.last() {
             if idx >= end {
                 let (_, mask) = layer_stack.pop().unwrap();
-                if let Some((img, rect, xf, placement)) = &mask {
-                    paint_mask_close(scene, img, *rect, *xf, *placement);
+                if let Some((img, extra, rect, xf, placement)) = &mask {
+                    paint_mask_close(scene, img, extra, *rect, *xf, *placement);
                 }
                 scene.pop_layer();
             } else {
@@ -651,7 +707,13 @@ pub fn paint_range<Msg>(
             scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &rect);
             layer_stack.push((
                 node.subtree_end,
-                Some((mask_img.clone(), rect, cur_xf, node.mask_placement)),
+                Some((
+                    mask_img.clone(),
+                    node.mask_extra.clone(),
+                    rect,
+                    cur_xf,
+                    node.mask_placement,
+                )),
             ));
         }
         // Sombra (drop shadow): se pinta ANTES del relleno para quedar
@@ -960,8 +1022,8 @@ pub fn paint_range<Msg>(
     // Cerrá capas (clip + alpha + mask) que llegaron al final sin pop
     // intermedio. Las de máscara aplican su luminancia antes del pop.
     while let Some((_, mask)) = layer_stack.pop() {
-        if let Some((img, rect, xf, placement)) = &mask {
-            paint_mask_close(scene, img, *rect, *xf, *placement);
+        if let Some((img, extra, rect, xf, placement)) = &mask {
+            paint_mask_close(scene, img, extra, *rect, *xf, *placement);
         }
         scene.pop_layer();
     }

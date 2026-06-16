@@ -327,9 +327,13 @@ pub struct ComputedStyle {
     /// Caja de referencia de `clip-path` (`<geometry-box>`, Fase 7.1225).
     /// Default `border-box`. La forma resuelve contra esta caja. NO heredable.
     pub clip_geometry_box: GeometryBox,
-    /// `mask-image` (Fase 7.275). `None` = sin máscara. NO heredable.
-    /// Plumb: subset url(...) — no se baja ni se aplica todavía.
+    /// `mask-image` capa 0 (Fase 7.275). `None` = sin máscara. NO heredable.
+    /// Subset url(...). El compositor la pinta (7.1226+).
     pub mask_image: Option<MaskImage>,
+    /// Capas de `mask-image` ADICIONALES (capas 1..N de una lista
+    /// `mask-image: url(a), url(b), …`). Comparten encaje/modo con la capa 0;
+    /// se combinan con `mask_composite`. Vacío = sólo la capa 0. Fase 7.1231.
+    pub mask_extra_layers: Vec<MaskImage>,
     /// `content-visibility` (Fase 7.276). NO heredable. Plumb: el chrome
     /// no skipea el render de subtrees con `auto`/`hidden`.
     pub content_visibility: ContentVisibility,
