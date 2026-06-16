@@ -223,6 +223,44 @@ pub(crate) fn transform_affine(
     )
 }
 
+/// Traduce el encaje CSS de la máscara (`mask-size`/`-position`/`-repeat`,
+/// modelados con los mismos tipos que background) al [`MaskPlacement`] neutral
+/// del compositor. `LengthVal` no resoluble (auto/keywords) → `MaskLen::Auto`
+/// (intrínseco en size, offset 0 en position). Fase 7.1227.
+fn mask_placement_de(
+    size: BackgroundSize,
+    pos: BackgroundPosition,
+    repeat: BackgroundRepeat,
+) -> llimphi_ui::MaskPlacement {
+    use llimphi_ui::{MaskLen, MaskSize};
+    let len = |lv: LengthVal| -> MaskLen {
+        match lv {
+            LengthVal::Px(n) => MaskLen::Px(n),
+            LengthVal::Pct(p) => MaskLen::Pct(p),
+            _ => MaskLen::Auto,
+        }
+    };
+    let size = match size {
+        BackgroundSize::Auto => MaskSize::Auto,
+        BackgroundSize::Cover => MaskSize::Cover,
+        BackgroundSize::Contain => MaskSize::Contain,
+        BackgroundSize::Explicit { x, y } => MaskSize::Explicit { x: len(x), y: len(y) },
+    };
+    let (repeat_x, repeat_y) = match repeat {
+        BackgroundRepeat::Repeat => (true, true),
+        BackgroundRepeat::RepeatX => (true, false),
+        BackgroundRepeat::RepeatY => (false, true),
+        BackgroundRepeat::NoRepeat => (false, false),
+    };
+    llimphi_ui::MaskPlacement {
+        size,
+        pos_x: len(pos.x),
+        pos_y: len(pos.y),
+        repeat_x,
+        repeat_y,
+    }
+}
+
 pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // Animación CSS: si el nodo tiene una `@keyframes` resuelta, sampleamos
     // el overlay al instante actual y renderizamos un clon con las props
@@ -449,11 +487,13 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some(insets) = b.clip_ref_inset {
         view = view.clip_ref_inset(insets);
     }
-    // `mask-image: url(...)` (Fase 7.1226) — máscara de luminancia del subárbol.
-    // La imagen ya viene decodificada (RGBA8) desde el box build; el compositor
-    // la estira al border-box y multiplica el alpha del contenido por su
-    // luminancia. Ortogonal a clip-path (un nodo puede llevar ambos).
-    if let Some(mask) = &b.mask_image {
+    // `mask-image: url(...)` (Fase 7.1226/7.1227) — máscara de luminancia del
+    // subárbol. La imagen ya viene decodificada (RGBA8) desde el box build,
+    // junto con su encaje `mask-size`/`-position`/`-repeat`; el compositor
+    // multiplica el alpha del contenido por la luminancia de la máscara,
+    // tileándola igual que background-image. Ortogonal a clip-path (un nodo
+    // puede llevar ambos).
+    if let Some((mask, size, pos, repeat)) = &b.mask_image {
         let blob = Blob::from(mask.rgba.clone());
         let peniko = PenikoImage::new(ImageData {
             data: blob,
@@ -462,7 +502,9 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
             width: mask.width,
             height: mask.height,
         });
-        view = view.mask_image(peniko);
+        view = view
+            .mask_image(peniko)
+            .mask_placement(mask_placement_de(*size, *pos, *repeat));
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);

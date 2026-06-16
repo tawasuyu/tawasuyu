@@ -29,6 +29,7 @@ pub fn mount_recursive<Msg: Clone>(
         image,
         image_fit,
         mask_image,
+        mask_placement,
         painter,
         gpu_painter,
         on_click,
@@ -88,6 +89,7 @@ pub fn mount_recursive<Msg: Clone>(
         image,
         image_fit,
         mask_image,
+        mask_placement,
         painter,
         gpu_painter,
         on_click,
@@ -417,17 +419,100 @@ pub(crate) fn resolve_node_transform(
 /// **luminancia** de `img` como alpha del contenido ya pintado en la capa: la
 /// sub-capa `push_luminance_mask_layer` toma el contenido "previo" (todo el
 /// subárbol del nodo, ya compuesto en la capa de aislamiento) y lo multiplica
-/// por la luminancia de la máscara — blanco = visible, negro = oculto. La
-/// imagen se estira al `rect` (border-box del nodo); `mask-size`/`-position`/
-/// `-repeat`/`-mode` son fases posteriores. El caller cierra la capa de
-/// aislamiento con su propio `pop_layer` tras llamar a esto.
-fn paint_mask_close(scene: &mut vello::Scene, img: &Image, rect: KurboRect, xf: Affine) {
+/// por la luminancia de la máscara — blanco = visible, negro = oculto. El
+/// caller cierra la capa de aislamiento con su propio `pop_layer` tras esto.
+///
+/// `placement` (Fase 7.1227) fija el encaje con la misma aritmética que
+/// `background-image` (size → tamaño del tile, position → offset del primero,
+/// repeat → tiling por eje). `None` = estirar al `rect` (border-box), el
+/// comportamiento de la Fase 7.1226. Falta `mask-mode` (siempre luminancia).
+fn paint_mask_close(
+    scene: &mut vello::Scene,
+    img: &Image,
+    rect: KurboRect,
+    xf: Affine,
+    placement: Option<MaskPlacement>,
+) {
     let iw = img.image.width.max(1) as f64;
     let ih = img.image.height.max(1) as f64;
-    let fit = Affine::translate((rect.x0, rect.y0))
-        * Affine::scale_non_uniform(rect.width() / iw, rect.height() / ih);
     scene.push_luminance_mask_layer(Fill::NonZero, 1.0, xf, &rect);
-    scene.draw_image(img, xf * fit);
+    match placement {
+        // Fase 7.1226: estirar la máscara al border-box.
+        None => {
+            let fit = Affine::translate((rect.x0, rect.y0))
+                * Affine::scale_non_uniform(rect.width() / iw, rect.height() / ih);
+            scene.draw_image(img, xf * fit);
+        }
+        // Fase 7.1227: size/position/repeat estilo background-image.
+        Some(p) => {
+            let rw = rect.width();
+            let rh = rect.height();
+            // 1) Tamaño del tile (px). `Auto` por eje deriva el otro por aspecto.
+            let resolve = |l: MaskLen, basis: f64| -> Option<f64> {
+                match l {
+                    MaskLen::Px(n) => Some(n as f64),
+                    MaskLen::Pct(q) => Some(basis * q as f64 / 100.0),
+                    MaskLen::Auto => None,
+                }
+            };
+            let (tw, th) = match p.size {
+                MaskSize::Auto => (iw, ih),
+                MaskSize::Cover => {
+                    let s = (rw / iw).max(rh / ih);
+                    (iw * s, ih * s)
+                }
+                MaskSize::Contain => {
+                    let s = (rw / iw).min(rh / ih);
+                    (iw * s, ih * s)
+                }
+                MaskSize::Explicit { x, y } => match (resolve(x, rw), resolve(y, rh)) {
+                    (Some(w), Some(h)) => (w, h),
+                    (Some(w), None) => (w, w * ih / iw),
+                    (None, Some(h)) => (h * iw / ih, h),
+                    (None, None) => (iw, ih),
+                },
+            };
+            if tw > 0.5 && th > 0.5 {
+                // 2) Offset del primer tile. `Pct` = alineación CSS.
+                let pos_off = |l: MaskLen, basis: f64, tile: f64| -> f64 {
+                    match l {
+                        MaskLen::Px(n) => n as f64,
+                        MaskLen::Pct(q) => (basis - tile) * q as f64 / 100.0,
+                        MaskLen::Auto => 0.0,
+                    }
+                };
+                let ox = pos_off(p.pos_x, rw, tw);
+                let oy = pos_off(p.pos_y, rh, th);
+                // 3) Posiciones de inicio cubriendo [0, span] (o sólo el offset
+                //    si el eje no repite). Cap defensivo contra tiles diminutos.
+                let axis = |off: f64, tile: f64, span: f64, rep: bool| -> Vec<f64> {
+                    if !rep {
+                        return vec![off];
+                    }
+                    let mut start = off;
+                    while start > 0.0 {
+                        start -= tile;
+                    }
+                    let mut v = Vec::new();
+                    let mut q = start;
+                    while q < span && v.len() < 4096 {
+                        v.push(q);
+                        q += tile;
+                    }
+                    v
+                };
+                let xs = axis(ox, tw, rw, p.repeat_x);
+                let ys = axis(oy, th, rh, p.repeat_y);
+                let scale = Affine::scale_non_uniform(tw / iw, th / ih);
+                for &x in &xs {
+                    for &y in &ys {
+                        let tf = Affine::translate((rect.x0 + x, rect.y0 + y)) * scale;
+                        scene.draw_image(img, xf * tf);
+                    }
+                }
+            }
+        }
+    }
     scene.pop_layer();
 }
 
@@ -452,7 +537,8 @@ pub fn paint_range<Msg>(
     // (ver `paint_mask_close`) antes del `pop_layer` de la capa de aislamiento.
     // Dos entradas con el mismo `subtree_end` (p. ej. alpha + mask + clip sobre
     // el mismo nodo) se cierran en el orden inverso al push.
-    let mut layer_stack: Vec<(usize, Option<(Image, KurboRect, Affine)>)> = Vec::new();
+    let mut layer_stack: Vec<(usize, Option<(Image, KurboRect, Affine, Option<MaskPlacement>)>)> =
+        Vec::new();
     // Stack de transformaciones afines de subtree. Cada entrada guarda el
     // `subtree_end` y la `cur_xf` previa para restaurarla al salir del
     // subárbol. `cur_xf` es el producto acumulado de todos los `transform`
@@ -468,8 +554,8 @@ pub fn paint_range<Msg>(
         while let Some(&(end, _)) = layer_stack.last() {
             if idx >= end {
                 let (_, mask) = layer_stack.pop().unwrap();
-                if let Some((img, rect, xf)) = &mask {
-                    paint_mask_close(scene, img, *rect, *xf);
+                if let Some((img, rect, xf, placement)) = &mask {
+                    paint_mask_close(scene, img, *rect, *xf, *placement);
                 }
                 scene.pop_layer();
             } else {
@@ -528,7 +614,10 @@ pub fn paint_range<Msg>(
                 (r.y + r.h) as f64,
             );
             scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &rect);
-            layer_stack.push((node.subtree_end, Some((mask_img.clone(), rect, cur_xf))));
+            layer_stack.push((
+                node.subtree_end,
+                Some((mask_img.clone(), rect, cur_xf, node.mask_placement)),
+            ));
         }
         // Sombra (drop shadow): se pinta ANTES del relleno para quedar
         // detrás. Usa el blur gaussiano nativo de vello sobre un rect
@@ -836,8 +925,8 @@ pub fn paint_range<Msg>(
     // Cerrá capas (clip + alpha + mask) que llegaron al final sin pop
     // intermedio. Las de máscara aplican su luminancia antes del pop.
     while let Some((_, mask)) = layer_stack.pop() {
-        if let Some((img, rect, xf)) = &mask {
-            paint_mask_close(scene, img, *rect, *xf);
+        if let Some((img, rect, xf, placement)) = &mask {
+            paint_mask_close(scene, img, *rect, *xf, *placement);
         }
         scene.pop_layer();
     }

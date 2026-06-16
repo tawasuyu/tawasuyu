@@ -126,16 +126,28 @@ use crate::Engine;
         );
         let eng = Engine::new();
         let doc = eng.load_html("about:test", &html);
+        use crate::style::{BackgroundRepeat, BackgroundSize};
         let mut dims_con_mask: Vec<(u32, u32)> = Vec::new();
+        let mut encaje_con_mask: Vec<(BackgroundSize, BackgroundRepeat)> = Vec::new();
         let mut hay_sin_mask = false;
         doc.box_tree.walk(|b| match &b.mask_image {
-            Some(m) => dims_con_mask.push((m.width, m.height)),
+            Some((m, size, _pos, repeat)) => {
+                dims_con_mask.push((m.width, m.height));
+                encaje_con_mask.push((*size, *repeat));
+            }
             None => hay_sin_mask = true,
         });
         assert_eq!(
             dims_con_mask,
             vec![(1, 1)],
             "sólo el div con mask-image lleva la máscara decodificada (1×1)"
+        );
+        // El encaje viaja con la imagen — sin mask-size/repeat declarados, los
+        // defaults CSS (auto / repeat) llegan al box (Fase 7.1227).
+        assert_eq!(
+            encaje_con_mask,
+            vec![(BackgroundSize::Auto, BackgroundRepeat::Repeat)],
+            "el box lleva el encaje por defecto (mask-size:auto, mask-repeat:repeat)"
         );
         assert!(hay_sin_mask, "los nodos sin mask-image quedan en None");
     }

@@ -385,10 +385,15 @@ pub struct View<Msg> {
     /// **Máscara de luminancia** (CSS `mask-image`). Si está presente, el
     /// runtime aísla el subárbol del nodo en una capa y luego lo enmascara con
     /// la luminancia de esta imagen (`push_luminance_mask_layer` de vello):
-    /// blanco = visible, negro = oculto, gris = semitransparente. La imagen se
-    /// estira al border-box del nodo (`mask-size`/`-position`/`-repeat`/`-mode`
-    /// no se modelan aún). `None` = sin máscara. Ver [`View::mask_image`].
+    /// blanco = visible, negro = oculto, gris = semitransparente. El encaje lo
+    /// fija [`Self::mask_placement`] (size/position/repeat); sin él la imagen se
+    /// estira al border-box. `None` = sin máscara. Ver [`View::mask_image`].
     pub mask_image: Option<Image>,
+    /// Encaje de [`Self::mask_image`] (CSS `mask-size`/`-position`/`-repeat`).
+    /// `None` = estirar al border-box (Fase 7.1226). Sólo se consulta si
+    /// `mask_image` está presente. Ver [`MaskPlacement`] y
+    /// [`View::mask_placement`]. Fase 7.1227.
+    pub mask_placement: Option<MaskPlacement>,
     /// Callback de pintura custom. Si está presente, el runtime lo
     /// invoca durante el paint del nodo con el `Scene` vivo + el rect
     /// absoluto. Pensado para "canvas elements" (dominium, pluma,
@@ -669,6 +674,7 @@ impl<Msg: 'static> View<Msg> {
             image,
             image_fit,
             mask_image,
+            mask_placement,
             painter,
             gpu_painter,
             on_click,
@@ -731,6 +737,7 @@ impl<Msg: 'static> View<Msg> {
             image,
             image_fit,
             mask_image,
+            mask_placement,
             painter,
             gpu_painter,
             drag_payload,
@@ -905,6 +912,54 @@ pub enum ImageFit {
     None,
 }
 
+/// Longitud de un eje de [`MaskSize`]/posición de máscara, **sin resolver** —
+/// el paint la resuelve contra el rect del nodo. Neutral respecto de CSS: el
+/// frontend (p. ej. puriy) traduce `mask-size`/`mask-position` a esto. Fase
+/// 7.1227.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MaskLen {
+    /// Tamaño intrínseco de la imagen (en size) / offset 0 (en position).
+    Auto,
+    /// Longitud absoluta en px.
+    Px(f32),
+    /// Porcentaje: en size, del lado correspondiente del rect; en position,
+    /// alineación CSS (el `p%` de la máscara cae sobre el `p%` del rect).
+    Pct(f32),
+}
+
+/// `mask-size` neutral (espejo de `BackgroundSize`). Ver [`MaskPlacement`].
+/// Fase 7.1227.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum MaskSize {
+    /// Tamaño intrínseco de la imagen-máscara.
+    Auto,
+    /// Escalar preservando aspecto hasta **cubrir** el rect.
+    Cover,
+    /// Escalar preservando aspecto hasta **caber** en el rect.
+    Contain,
+    /// Tamaño explícito por eje (`Auto` en un eje = derivar por aspecto).
+    Explicit { x: MaskLen, y: MaskLen },
+}
+
+/// Encaje de una **máscara de luminancia** (CSS `mask-size` + `mask-position` +
+/// `mask-repeat`), resuelto contra el rect del nodo en el paint, con la misma
+/// aritmética que `background-image`. En el [`MountedNode`] viaja como
+/// `Option`: `None` = estirar la máscara al border-box (comportamiento de la
+/// Fase 7.1226). Fase 7.1227.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MaskPlacement {
+    /// Tamaño del tile.
+    pub size: MaskSize,
+    /// Offset/alineación horizontal del primer tile.
+    pub pos_x: MaskLen,
+    /// Offset/alineación vertical del primer tile.
+    pub pos_y: MaskLen,
+    /// Tilear en X (`mask-repeat` cubre el eje horizontal).
+    pub repeat_x: bool,
+    /// Tilear en Y.
+    pub repeat_y: bool,
+}
+
 impl Default for ImageFit {
     fn default() -> Self {
         ImageFit::Contain
@@ -974,6 +1029,9 @@ pub struct MountedNode<Msg> {
     /// [`View::mask_image`]. El paint aísla el subárbol y aplica la luminancia
     /// de esta imagen como alpha. `None` = sin máscara.
     pub mask_image: Option<Image>,
+    /// Encaje de [`Self::mask_image`] (size/position/repeat). `None` = estirar
+    /// al border-box. Ver [`MaskPlacement`]. Fase 7.1227.
+    pub mask_placement: Option<MaskPlacement>,
     pub painter: Option<PaintFn>,
     pub gpu_painter: Option<GpuPaintFn>,
     pub on_click: Option<Msg>,

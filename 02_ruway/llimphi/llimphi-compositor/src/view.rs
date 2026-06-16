@@ -15,6 +15,7 @@ impl<Msg> View<Msg> {
             image: None,
             image_fit: None,
             mask_image: None,
+            mask_placement: None,
             painter: None,
             gpu_painter: None,
             on_pointer_enter: None,
@@ -1169,6 +1170,14 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Fija el encaje de la máscara (CSS `mask-size`/`-position`/`-repeat`).
+    /// Sólo surte efecto junto a [`Self::mask_image`]. Sin esto, la máscara se
+    /// estira al border-box (Fase 7.1226). Ver [`MaskPlacement`]. Fase 7.1227.
+    pub fn mask_placement(mut self, placement: MaskPlacement) -> Self {
+        self.mask_placement = Some(placement);
+        self
+    }
+
     /// Registra una closure de pintura custom. El runtime la invoca
     /// con `(&mut vello::Scene, &mut Typesetter, PaintRect)` durante
     /// el paint del nodo. La closure es responsable de pintar
@@ -1390,8 +1399,30 @@ mod semantics_tests {
         let v = View::<()>::new(Style::default()).mask_image(Image::new(data));
         assert!(v.mask_image.is_some(), "mask_image queda seteada");
         assert!(!v.clip, "mask_image NO activa clip (es ortogonal al recorte)");
+        // Sin `mask_placement`, el paint estira al border-box (Fase 7.1226).
+        assert!(v.mask_placement.is_none());
         // Default: sin máscara.
         assert!(View::<()>::new(Style::default()).mask_image.is_none());
+    }
+
+    #[test]
+    fn mask_placement_setea_encaje() {
+        // `.mask_placement(...)` guarda el encaje (size/position/repeat) que el
+        // paint resuelve contra el rect, igual que background-image. Fase 7.1227.
+        let p = MaskPlacement {
+            size: MaskSize::Contain,
+            pos_x: MaskLen::Pct(50.0),
+            pos_y: MaskLen::Px(8.0),
+            repeat_x: true,
+            repeat_y: false,
+        };
+        let v = View::<()>::new(Style::default()).mask_placement(p);
+        assert_eq!(v.mask_placement, Some(p));
+        // No activa clip ni implica máscara por sí solo (es sólo el encaje).
+        assert!(!v.clip);
+        assert!(v.mask_image.is_none());
+        // Default: sin encaje (estira al border-box).
+        assert!(View::<()>::new(Style::default()).mask_placement.is_none());
     }
 
     #[test]

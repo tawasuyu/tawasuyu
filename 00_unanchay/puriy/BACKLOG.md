@@ -194,16 +194,28 @@ splitter `;`), builder (view.rs, ortogonal a `clip`). Fase 1: la máscara se
 que vienen abajo). Default CSS para raster es `alpha`, no `luminance` — desvío
 consciente: el modo alpha llega en 7.1228 vía `Compose::SrcIn`.
 
-### 7.1227 — `mask-size` / `mask-position` (encaje de la imagen-máscara)
+### 7.1227 ✅ — `mask-size` / `mask-position` / `mask-repeat` (encaje completo)
 
-**Por qué**: hoy la máscara se estira (equivale a `mask-size: 100% 100%`). CSS
-default real es `auto` (tamaño intrínseco) en `0% 0%`. Reusar la maquinaria de
-`background-size`/`background-position` (mismos tipos `BackgroundSize`/
-`BackgroundPosition`, ya en `style.mask_size`/`mask_position`).
+**Hecho** (`<pendiente hash>`). **Se folió 7.1229 (repeat) acá**: size y
+position sin repeat producen un intermedio roto (una máscara intrínseca chica
+con el default `repeat` mostraría un solo tile y ocultaría todo lo demás —
+negro = oculto en luminancia), así que los tres van juntos para shippear algo
+correcto. Reusa la aritmética EXACTA de `background-image`.
 
-**Encoding**: `BoxNode` gana `mask_size`/`mask_position` (los enums ya
-existentes). El compositor computa el `Affine` de la máscara igual que para
-background (Contain/Cover/longitudes + origen), en vez del stretch fijo.
+**Encoding** (sin sumar campos a los 4 sitios de construcción): el encaje viaja
+**dentro** del campo `mask_image` del `BoxNode`, que pasó a
+`Option<(ImageData, BackgroundSize, BackgroundPosition, BackgroundRepeat)>` —
+sólo tiene sentido con imagen. El compositor gana tipos neutrales `MaskLen`
+(`Auto`/`Px`/`Pct`), `MaskSize` (`Auto`/`Cover`/`Contain`/`Explicit`) y
+`MaskPlacement` (size + pos_x/pos_y + repeat_x/repeat_y), más el campo
+`View`/`MountedNode::mask_placement: Option<MaskPlacement>` (`None` = estirar al
+border-box, Fase 7.1226) y builder `View::mask_placement`. `paint_mask_close`
+resuelve size→tamaño de tile, position→offset del primero, repeat→tiling por
+eje (mismo `axis()` con cap de 4096), dibujando N `draw_image` dentro de la capa
+de luminancia. El wire (`mask_placement_de`) traduce los enums CSS → neutrales.
+
+**Tests**: builder (`mask_placement_setea_encaje`), box-tree (group03 verifica
+que el encaje por defecto `auto`/`repeat` llega al box).
 
 ### 7.1228 — `mask-mode` (luminance vs alpha)
 
@@ -214,11 +226,10 @@ luminancia. vello no expone capa de alpha-mask directa → se compone con
 máscara; el alpha de la máscara recorta el contenido. `match-source` resuelve a
 `alpha` para raster `url()` y a `luminance` para `<mask>`/SVG.
 
-### 7.1229 — `mask-repeat` (tiling de la máscara)
+### 7.1229 ✅ — `mask-repeat` (tiling de la máscara) — FOLIADO EN 7.1227
 
-**Por qué**: default CSS es `repeat`. Reusar la lógica de `background-repeat`
-(ya en `style.mask_repeat`): tilear la imagen-máscara por el área de pintado en
-vez de una sola instancia.
+Se hizo junto con size/position en 7.1227 (eran inseparables para no shippear un
+intermedio roto). El tiling por eje reusa la lógica de `background-repeat`.
 
 ### 7.1230 — `mask-clip` / `mask-origin` (caja de referencia de la máscara)
 

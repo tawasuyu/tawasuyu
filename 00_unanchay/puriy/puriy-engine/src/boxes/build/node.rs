@@ -413,9 +413,12 @@ pub(crate) fn build_node(
                 .and_then(|u| fetch_image_src(base, u));
             // `mask-image: url(...)` — misma cache/decoder que background-image.
             // El compositor la aplica como máscara de luminancia sobre el
-            // subárbol. Falla silenciosa → mask_image queda None. Fase 7.1226.
+            // subárbol, resolviendo size/position/repeat contra el rect igual
+            // que background. El encaje viaja con la imagen. Falla silenciosa →
+            // mask_image queda None. Fase 7.1226 (pintado), 7.1227 (encaje).
             let mask_image = match &style.mask_image {
-                Some(crate::style::MaskImage::Url(u)) => fetch_image_src(base, u),
+                Some(crate::style::MaskImage::Url(u)) => fetch_image_src(base, u)
+                    .map(|img| (img, style.mask_size, style.mask_position, style.mask_repeat)),
                 None => None,
             };
             // Capas de background extra (lista `background: a, b, ...`):

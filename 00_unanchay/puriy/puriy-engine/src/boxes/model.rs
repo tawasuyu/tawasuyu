@@ -186,14 +186,17 @@ pub struct BoxNode {
     /// referencia). Sin forma + caja ≠ border-box ⇒ recorta a ese rect. `None`
     /// = referencia = border-box (sin cambio). Fase 7.1225.
     pub clip_ref_inset: Option<[f32; 4]>,
-    /// Imagen decodificada (RGBA8) de `mask-image: url(...)`. `None` si la
-    /// propiedad no estaba, era `none`, o la descarga/decode falló. El
-    /// compositor la usa como **máscara de luminancia** sobre el subárbol del
-    /// nodo (la luminancia del píxel-máscara multiplica el alpha del
-    /// contenido; negro = oculto, blanco = visible). Fase 1: se estira al
-    /// border-box (sin `mask-size`/`-position`/`-repeat`/`-mode`, que son
-    /// fases posteriores). Fase 7.1226.
-    pub mask_image: Option<ImageData>,
+    /// `mask-image: url(...)` decodificado (RGBA8) **junto con su encaje**
+    /// `(imagen, mask-size, mask-position, mask-repeat)`. `None` si la propiedad
+    /// no estaba, era `none`, o la descarga/decode falló. El compositor la usa
+    /// como **máscara de luminancia** sobre el subárbol del nodo (la luminancia
+    /// del píxel-máscara multiplica el alpha del contenido; negro = oculto,
+    /// blanco = visible) y resuelve size/position/repeat contra el rect igual
+    /// que `background-image` (Fase 7.1227). El encaje viaja con la imagen
+    /// porque sólo tiene sentido cuando hay máscara — así los sitios sin
+    /// máscara quedan en un único `None`. Falta `mask-mode` (hoy siempre
+    /// luminancia; alpha en 7.1228). Fase 7.1226 (pintado), 7.1227 (encaje).
+    pub mask_image: Option<(ImageData, BackgroundSize, BackgroundPosition, BackgroundRepeat)>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por
