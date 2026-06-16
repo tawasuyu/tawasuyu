@@ -23,6 +23,9 @@ pineal-mesh = { path = "../../pineal-mesh" }
 pineal-bars = { path = "../../pineal-bars" }
 
 [dev-dependencies]
-# Sólo para el example `pantallazo_pineal` (volcado headless a PNG).
+# Sólo para los examples headless (`pantallazo_pineal`, `pineal_showreel`).
 pollster = { workspace = true }
 png = { workspace = true }
+# Beats animados extra del showreel (no los usa la galería estática).
+pineal-financial = { path = "../../pineal-financial" }
+pineal-cartesian = { path = "../../pineal-cartesian" }

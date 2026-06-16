@@ -22,7 +22,8 @@
 //!   2. la rueda natal aparece y se "dibuja" (anillo → glifos → aspectos).
 //!   3. barrido de selección: un cuerpo y sus aspectos se encienden.
 //!   4. shell de datos: la rueda al costado + panel de aspectos/posiciones reales.
-//!   5. cierre: wordmark «cosmos» + subtítulo, frame limpio.
+//!   5. esfera celeste 3D: la vista `Esfera3d` REAL girando (yaw 360° + pitch).
+//!   6. cierre: wordmark «cosmos» + subtítulo, frame limpio.
 //!
 //! Render headless determinista: frame `i` de `N` → `t = i/(N-1)` → View →
 //! layout (taffy + parley) → vello::Scene → wgpu → PNG. Idéntico al eventloop.
@@ -41,7 +42,8 @@ use cosmos_model::{
     Chart, ChartId, ChartKind, ContactId, StoredBirthData, StoredChartConfig, TimeCertainty,
 };
 use cosmos_render::{
-    compose_wheel_with_hits, CompositionOpts, DrawCommand, LayerKind, Palette, RenderModel,
+    compose_sphere, compose_wheel_with_hits, CompositionOpts, DrawCommand, LayerKind, Palette,
+    RenderModel, SphereOpts, SphereView,
 };
 
 use cosmos_canvas_llimphi::{canvas_view_ex, ViewTransform};
@@ -234,6 +236,23 @@ fn wheel_view(
     if aspect_reveal < 0.999 {
         reveal_aspects(&mut commands, aspect_reveal, size);
     }
+    canvas_view_ex::<Msg>(commands, size, Some(s.wheel_bg), ViewTransform::default())
+}
+
+// ───────────────────────── esfera celeste 3D (real) ─────────────────────────
+
+/// El View de la **esfera celeste 3D** REAL — la misma `compose_sphere` que pinta
+/// `ChartView::Esfera3d` en la app: wireframe de la eclíptica + ecuador + grilla,
+/// con los planetas natales, las estrellas fijas, las constelaciones y el globo
+/// terráqueo interior. La cámara (`yaw`/`pitch`) se anima desde el showreel.
+fn sphere_view(render: &RenderModel, size: f32, yaw_deg: f32, pitch_deg: f32, s: &Skin) -> View<Msg> {
+    let opts = SphereOpts {
+        size,
+        palette: Palette::dark(),
+        ..Default::default()
+    };
+    let view = SphereView { yaw_deg, pitch_deg };
+    let commands = compose_sphere(render, &view, &opts);
     canvas_view_ex::<Msg>(commands, size, Some(s.wheel_bg), ViewTransform::default())
 }
 
@@ -529,8 +548,8 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
         );
     }
 
-    // ── WORDMARK (87–97%) ─────────────────────────────────────────
-    let word_in = seg(t, 0.88, 0.96);
+    // ── WORDMARK (91–99%) ─────────────────────────────────────────
+    let word_in = seg(t, 0.91, 0.97);
     let word_a = motion::ease_out_cubic(word_in);
     if word_a > 0.001 {
         let size = 140.0_f32;
@@ -544,7 +563,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
         let brush = peniko::Brush::Solid(with_alpha(s.fg, word_a));
         draw_layout_brush_xf(scene, &layout, &brush, Affine::translate((ox, oy)));
 
-        let sub_a = motion::ease_out_cubic(seg(t, 0.91, 1.0));
+        let sub_a = motion::ease_out_cubic(seg(t, 0.93, 1.0));
         if sub_a > 0.001 {
             let ssz = 26.0_f32;
             let sub = ts.layout(
@@ -582,7 +601,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     }
 
     // ── punto teal de firma (esquina inf-der) ───────
-    let corner_a = seg(t, 0.04, 0.12) * (1.0 - seg(t, 0.85, 0.90));
+    let corner_a = seg(t, 0.04, 0.12) * (1.0 - seg(t, 0.89, 0.93));
     if corner_a > 0.001 {
         let cx = cw - 54.0;
         let cy = ch - 54.0;
@@ -656,21 +675,22 @@ fn chart_title(t: f32, cw: f64, render: &RenderModel, s: &Skin) -> View<Msg> {
 fn build_view(t: f32, cw: f64, ch: f64, render: &RenderModel, s: &Skin) -> View<Msg> {
     let mut children: Vec<View<Msg>> = Vec::new();
 
-    // Fade de la rueda: entra 12–20%, se mantiene, sale 85–90% (antes del wordmark).
-    let wheel_in = motion::ease_out_cubic(seg(t, 0.12, 0.22));
-    let wheel_out = 1.0 - seg(t, 0.85, 0.90);
+    // Fade de la rueda: entra 10–18%, se mantiene, sale 68–72% (despeja la
+    // escena para que entre la esfera 3D antes del wordmark).
+    let wheel_in = motion::ease_out_cubic(seg(t, 0.10, 0.18));
+    let wheel_out = 1.0 - seg(t, 0.68, 0.72);
     let wheel_a = (wheel_in * wheel_out).clamp(0.0, 1.0);
 
     if wheel_a > 0.001 {
-        // detail sube de 0.85 → 1.18 mientras se "dibuja" (12–50%).
-        let detail = lerp(0.85, 1.18, motion::ease_in_out_cubic(seg(t, 0.12, 0.50)) as f64) as f32;
+        // detail sube de 0.85 → 1.18 mientras se "dibuja" (10–42%).
+        let detail = lerp(0.85, 1.18, motion::ease_in_out_cubic(seg(t, 0.10, 0.42)) as f64) as f32;
         // rotación suave a lo largo del reel (muy leve).
-        let rot = lerp(-7.0, 7.0, t as f64) as f32;
-        // revelado de aspectos: stagger radial (18–45%).
-        let aspect_reveal = seg(t, 0.18, 0.45);
+        let rot = lerp(-7.0, 7.0, (t / 0.72).clamp(0.0, 1.0) as f64) as f32;
+        // revelado de aspectos: stagger radial (15–38%).
+        let aspect_reveal = seg(t, 0.15, 0.38);
 
-        // barrido de selección de cuerpo (47–62%): enciende un planeta + aspectos.
-        let sel_phase = seg(t, 0.47, 0.62);
+        // barrido de selección de cuerpo (40–52%): enciende un planeta + aspectos.
+        let sel_phase = seg(t, 0.40, 0.52);
         let selected: Option<String> = if (0.001..0.999).contains(&sel_phase) {
             // recorre Sun → Moon → Venus a lo largo del barrido.
             let bodies = ["sun", "moon", "venus"];
@@ -681,8 +701,8 @@ fn build_view(t: f32, cw: f64, ch: f64, render: &RenderModel, s: &Skin) -> View<
         };
 
         // morph de layout: rueda centrada (beats 2-3) → rueda al costado +
-        // panel de datos (beat 4, 64–74%, hold hasta el fade).
-        let morph = motion::ease_in_out_cubic(seg(t, 0.64, 0.74)) as f64;
+        // panel de datos (beat 4, 54–62%, hold hasta el fade).
+        let morph = motion::ease_in_out_cubic(seg(t, 0.54, 0.62)) as f64;
         let wheel_size = lerp(ch * 0.86, ch * 0.74, morph) as f32;
 
         // Geometría de la rueda: centrada vs. corrida a la izquierda.
@@ -723,7 +743,7 @@ fn build_view(t: f32, cw: f64, ch: f64, render: &RenderModel, s: &Skin) -> View<
         if panel_a > 0.001 {
             let panel_w = 460.0_f32;
             let panel_x = cw as f32 - panel_w - 56.0;
-            let slide = lerp(48.0, 0.0, motion::ease_out_cubic(seg(t, 0.64, 0.76)) as f64);
+            let slide = lerp(48.0, 0.0, motion::ease_out_cubic(seg(t, 0.54, 0.64)) as f64);
             let panel = View::new(Style {
                 position: Position::Absolute,
                 inset: TaffyRect {
@@ -746,6 +766,88 @@ fn build_view(t: f32, cw: f64, ch: f64, render: &RenderModel, s: &Skin) -> View<
 
         // Título de la carta (overlay liviano, esquina sup-izq).
         children.push(chart_title(t, cw, render, s));
+    }
+
+    // ── BEAT 3D: la esfera celeste (70–90%) ───────────────────────────
+    // La rueda se desvanece (68–72%) y entra la vista 3D REAL — la misma
+    // `compose_sphere` de `ChartView::Esfera3d`. La cámara gira: yaw barre
+    // ~360° y el pitch oscila levemente para que se lea el volumen.
+    let sphere_in = motion::ease_out_cubic(seg(t, 0.70, 0.76));
+    let sphere_out = 1.0 - seg(t, 0.88, 0.91);
+    let sphere_a = (sphere_in * sphere_out).clamp(0.0, 1.0);
+    if sphere_a > 0.001 {
+        // Progreso interno del beat para la rotación (0 al entrar → 1 al salir).
+        let spin = seg(t, 0.70, 0.91);
+        // Yaw: parte del ángulo natal de la app (26°) y barre 360° suave.
+        let yaw = 26.0 + 360.0 * motion::ease_in_out_cubic(spin);
+        // Pitch: vista tres-cuartos (−64°) con una respiración de ±10°.
+        let pitch = -64.0 + 10.0 * (spin as f64 * std::f64::consts::PI * 2.0).sin() as f32;
+
+        let sphere_size = (ch * 0.82) as f32;
+        let sphere_left = (cw - sphere_size as f64) * 0.5;
+        let sphere_top = (ch - sphere_size as f64) * 0.5;
+
+        let sphere = View::new(Style {
+            position: Position::Absolute,
+            inset: TaffyRect {
+                left: length(sphere_left as f32),
+                top: length(sphere_top as f32),
+                right: auto(),
+                bottom: auto(),
+            },
+            size: Size {
+                width: length(sphere_size),
+                height: length(sphere_size),
+            },
+            ..Default::default()
+        })
+        .alpha(sphere_a)
+        .children(vec![sphere_view(render, sphere_size, yaw, pitch, s)]);
+        children.push(sphere);
+
+        // Rótulo sutil "esfera celeste · 3D" (esquina sup-izq), con el mismo
+        // estilo discreto que el título de la carta.
+        let label_a = (motion::ease_out_cubic(seg(t, 0.72, 0.78)) * sphere_out).clamp(0.0, 1.0);
+        if label_a > 0.001 {
+            let label = View::new(Style {
+                position: Position::Absolute,
+                inset: TaffyRect {
+                    left: length(56.0),
+                    top: length(48.0),
+                    right: auto(),
+                    bottom: auto(),
+                },
+                flex_direction: FlexDirection::Row,
+                align_items: Some(AlignItems::Center),
+                gap: Size {
+                    width: length(10.0),
+                    height: length(0.0),
+                },
+                ..Default::default()
+            })
+            .alpha(label_a)
+            .children(vec![
+                View::new(Style {
+                    size: Size {
+                        width: length(7.0),
+                        height: length(7.0),
+                    },
+                    flex_shrink: 0.0,
+                    ..Default::default()
+                })
+                .radius(4.0)
+                .fill(s.accent),
+                View::new(Style {
+                    size: Size {
+                        width: length(360.0),
+                        height: length(22.0),
+                    },
+                    ..Default::default()
+                })
+                .text_aligned("esfera celeste · 3D".to_string(), 15.0, s.fg_muted, Alignment::Start),
+            ]);
+            children.push(label);
+        }
     }
 
     // Overlay full-screen del vector (cold-open + wordmark).

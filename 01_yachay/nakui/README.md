@@ -6,6 +6,12 @@
 
 Long-term vision: nakui as a **DAG token engine**, foundation for verticals (Fintech, IAM, Logistics, MedTech).
 
+<p align="center">
+  <img src="nakui_showreel.gif" alt="nakui showreel — a live spreadsheet with computed formulas, an ERP dashboard of stat cards and charts, and a dependency graph view" width="900">
+  <br>
+  <sub>one shell, three views — live spreadsheet (yupay formulas) · ERP dashboard · dependency graph</sub>
+</p>
+
 ## Install
 
 ```sh

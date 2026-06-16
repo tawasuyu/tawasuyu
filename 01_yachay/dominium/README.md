@@ -2,7 +2,9 @@
 
 > Deterministic mean-field simulator with vector agents.
 
-![dominium's window: an isometric 240×240 procedural continent — blue seas and rivers, green plains, sienna ranges — populated by ~6300 lemmings after 15 real simulation ticks, with live metrics (epoch, matter, gold, Gini) and engine sliders in the side panel](https://tawasuyu.net/01_yachay/dominium/pantallazo.png)
+[![dominium's window: an isometric 240×240 procedural continent — blue seas and rivers, green plains, sienna ranges — populated by ~6000 lemmings, with Concepts as field-emitting sprites and ψ-cluster recoloring](https://tawasuyu.net/01_yachay/dominium/dominium_showreel.gif)](https://tawasuyu.net/01_yachay/dominium/dominium_showreel.mp4)
+
+<sub>a live mean-field run — the isometric continent, thousands of lemmings, and ψ-cluster recoloring (click for the full-res MP4). Static shot: [pantallazo.png](https://tawasuyu.net/01_yachay/dominium/pantallazo.png).</sub>
 
 Five physical layers (`materia`, `psique`, `poder`, `oro`, `degradacion`) sit on a dense `Grid<f32>`; above them lives a world of agents with six atomic actions (move, take, drop, transmit, attack, rest). **Endogenous ψ↔action coupling** (Phase A): the `psique` field and agent dynamics influence each other without operator intervention between ticks. On top of it: social contagion of `vector_psi` with homophily and institutional persuasion (Phase B), ψ-metrics — polarization, Moran's I, k-means (Phase C), and discrete Spawn/Kill events, CSV population loading and Monte Carlo sweeps (Phase D). Design detail in [SDD.md](SDD.md).
 

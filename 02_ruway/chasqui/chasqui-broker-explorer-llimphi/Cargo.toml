@@ -26,3 +26,8 @@ app-bus = { workspace = true }
 [[bin]]
 name = "chasqui-broker-explorer-llimphi"
 path = "src/main.rs"
+
+[dev-dependencies]
+# Sólo para el example `chasqui_showreel` (volcado headless a PNG, sin winit).
+pollster = { workspace = true }
+png = { workspace = true }
