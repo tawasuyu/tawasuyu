@@ -131,6 +131,7 @@ pub fn canonical_theme_name(variant: &str) -> Option<&'static str> {
         "light" => Some("Light"),
         "aurora" => Some("Aurora"),
         "sunset" => Some("Sunset"),
+        "tawa" => Some("Tawa"),
         _ => None,
     }
 }
@@ -164,7 +165,7 @@ pub fn accent_rgb(accent: &str) -> Option<[u8; 3]> {
 
 /// Lista de variants de theme reconocidas — útil para validadores y
 /// generadores de docs/UI. Orden estable.
-pub const THEME_VARIANTS: &[&str] = &["dark", "light", "aurora", "sunset"];
+pub const THEME_VARIANTS: &[&str] = &["dark", "light", "aurora", "sunset", "tawa"];
 
 /// Lista de acentos reconocidos. `"default"` significa "no override".
 pub const ACCENTS: &[&str] = &["default", "tawasuyu", "unanchay", "yachay", "ruway", "ukupacha"];

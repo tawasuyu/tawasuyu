@@ -65,7 +65,13 @@ fn color_span(c: Color) -> TextSpanStyle {
 
 fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| "pantallazo_motor.png".to_string());
-    let theme = llimphi_theme::Theme::dark();
+    // Default dark (el look histórico de esta tarjeta); `LLIMPHI_THEME=<nombre>`
+    // fuerza otro preset por nombre canónico (p. ej. `Tawa`) para evidenciar la
+    // paleta firma sin alterar el default del pipeline público.
+    let theme = std::env::var("LLIMPHI_THEME")
+        .ok()
+        .and_then(|n| llimphi_theme::Theme::by_name(&n))
+        .unwrap_or_else(llimphi_theme::Theme::dark);
 
     // Paleta de sintaxis (sobre el panel oscuro del theme).
     let kw = rgb(198, 120, 221); // keywords — violeta

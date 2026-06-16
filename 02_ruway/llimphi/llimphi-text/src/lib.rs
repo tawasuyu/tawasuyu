@@ -151,6 +151,19 @@ impl Default for Typesetter {
 /// Licencia: Bitstream Vera + Arev (libre, redistribuible).
 const DEJAVU_SANS: &[u8] = include_bytes!("../assets/DejaVuSans.ttf");
 
+/// **Inter** embebida como **fuente de UI por defecto** (SIL OFL 1.1, libre y
+/// redistribuible — ver `assets/Inter-LICENSE.txt`). Inter es una grotesca
+/// neo-humanista diseñada específicamente para interfaces a tamaños chicos:
+/// caja alta de la x, aperturas amplias y espaciado parejo. Es el look 2026
+/// que queremos de fábrica, sin depender de que el sistema tenga una sans
+/// linda instalada (en una instalación pelada el default de fontique podía
+/// caer en Liberation/Adwaita, que envejecen mal). La enganchamos como
+/// primera familia del genérico `sans-serif` (ver [`Typesetter::install_ui_font`]),
+/// que es lo que parley resuelve cuando el bloque no pide `font_family`. El
+/// fallback por-script sigue intacto: símbolos via DejaVu, CJK/árabe/etc. via
+/// las fuentes del sistema.
+const INTER_SANS: &[u8] = include_bytes!("../assets/Inter-Regular.ttf");
+
 /// Fuente monoespaciada embebida (Liberation Mono, SIL OFL — metric-
 /// compatible con Courier). Va embebida para que *cualquier* app Llimphi
 /// pueda pedir ancho fijo (output de terminal, IDE-text, tablas que
@@ -169,9 +182,16 @@ pub const MONO_FONT_BYTES: &[u8] = LIBERATION_MONO;
 /// `font_family` de `layout`) para render de ancho fijo garantizado.
 pub const MONOSPACE: &str = "Liberation Mono";
 
+/// Nombre de familia de la fuente de UI embebida ([Inter](https://rsms.me/inter/)).
+/// Es el default proporcional cuando un bloque **no** especifica `font_family`
+/// (la enganchamos como primera familia del genérico `sans-serif`). Exponemos
+/// el nombre por si un caller quiere pedirla explícitamente.
+pub const UI_SANS: &str = "Inter";
+
 impl Typesetter {
     pub fn new() -> Self {
         let mut font_cx = parley::FontContext::new();
+        Self::install_ui_font(&mut font_cx);
         Self::install_symbol_fallback(&mut font_cx);
         Self::install_monospace(&mut font_cx);
         Self {
@@ -181,6 +201,35 @@ impl Typesetter {
             cache: ShapeCache::new(SHAPE_CACHE_CAP),
             cache_hits: 0,
             cache_misses: 0,
+        }
+    }
+
+    /// Registra **Inter** y la pone como **primera familia del genérico
+    /// `sans-serif`**. Ese genérico es lo que parley resuelve cuando un bloque
+    /// no especifica `font_family` (su default es `FontStack::Source("sans-serif")`),
+    /// así que con esto toda app Llimphi tipografía en Inter de fábrica sin
+    /// tocar una línea de su código, y sin depender de la sans del sistema.
+    /// Usamos `append_*` (no `set_*`) para no borrar las familias que el SO ya
+    /// asociaba al genérico: Inter va primero, el resto queda detrás como
+    /// respaldo. La cobertura de scripts no-latinos / símbolos sigue saliendo
+    /// del fallback por-script (CJK del sistema, símbolos de DejaVu). Si una
+    /// app pide otra familia explícita, gana esa. Best-effort: si el registro
+    /// falla, el texto sigue con la sans del sistema.
+    fn install_ui_font(font_cx: &mut parley::FontContext) {
+        use parley::fontique::{Blob, GenericFamily};
+        let blob = Blob::new(std::sync::Arc::new(INTER_SANS));
+        let registered = font_cx.collection.register_fonts(blob, None);
+        if let Some((family_id, _)) = registered.first() {
+            // Las familias actuales del genérico (las del sistema) van detrás:
+            // Inter primero, luego el respaldo previo.
+            let existing: Vec<_> = font_cx
+                .collection
+                .generic_families(GenericFamily::SansSerif)
+                .collect();
+            font_cx.collection.set_generic_families(
+                GenericFamily::SansSerif,
+                std::iter::once(*family_id).chain(existing),
+            );
         }
     }
 

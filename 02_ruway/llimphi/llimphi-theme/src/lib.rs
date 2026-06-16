@@ -259,6 +259,48 @@ impl Theme {
         }
     }
 
+    /// Tema **"Tawa"** — el LOOK FIRMA de la suite, el que se publica en
+    /// screenshots. Decisiones de paleta:
+    ///
+    /// - **Base negro cálido, no azul marino.** A diferencia de `dark()` (un
+    ///   navy genérico, R<B) acá el fondo es un casi-negro con temperatura:
+    ///   los canales rojo/verde van un punto por encima del azul, así el grafito
+    ///   "respira" tibio en vez de frío. Jerarquía de superficies en escalera
+    ///   suave: `bg_app` (más profundo) → `bg_panel`/`bg_input` → barras → chips,
+    ///   sin saltos bruscos.
+    /// - **Acento teal-eléctrico (#2BD9A6), NO azul.** El mar de unixporn es
+    ///   todo azul (Catppuccin/Tokyo Night); elegimos un verde-aguamarina
+    ///   vibrante para destacar de inmediato — distintivo pero no chillón, con
+    ///   raíz en el teal del CDE / del logo de la suite. `accent` y
+    ///   `border_focus` comparten ese tono; la selección lo usa atenuado para
+    ///   no encandilar filas enteras.
+    /// - **Texto legible (WCAG AA).** `fg_text` (#E8E6E0, marfil cálido) supera
+    ///   12:1 sobre `bg_app` y ~10:1 sobre `bg_panel`; `fg_muted` ronda 5:1
+    ///   (texto secundario cómodo); `fg_placeholder` queda como hint tenue.
+    /// - **Armonía:** todos los grises llevan el mismo tinte cálido y el acento
+    ///   es el único color saturado — la paleta se lee como una sola pieza.
+    pub const fn tawa() -> Self {
+        Self {
+            name: "Tawa",
+            bg_app: Color::from_rgba8(20, 19, 17, 255), // grafito cálido casi-negro
+            bg_panel: Color::from_rgba8(30, 28, 26, 255),
+            bg_panel_alt: Color::from_rgba8(25, 24, 22, 255),
+            bg_input: Color::from_rgba8(24, 23, 21, 255),
+            bg_input_focus: Color::from_rgba8(32, 30, 28, 255),
+            bg_button: Color::from_rgba8(42, 40, 37, 255),
+            bg_button_hover: Color::from_rgba8(56, 53, 49, 255),
+            bg_selected: Color::from_rgba8(26, 74, 64, 255), // teal hundido (selección)
+            bg_row_hover: Color::from_rgba8(40, 38, 35, 255),
+            fg_text: Color::from_rgba8(232, 230, 224, 255), // marfil cálido
+            fg_muted: Color::from_rgba8(160, 154, 144, 255),
+            fg_placeholder: Color::from_rgba8(112, 107, 99, 255),
+            fg_destructive: Color::from_rgba8(232, 116, 97, 255), // coral (cálido, no rojo puro)
+            border: Color::from_rgba8(54, 51, 47, 255),
+            border_focus: Color::from_rgba8(43, 217, 166, 255), // teal-eléctrico
+            accent: Color::from_rgba8(43, 217, 166, 255),       // #2BD9A6 — la firma
+        }
+    }
+
     /// Tema claro — contraste revisado para WCAG AA sobre `bg_app`:
     /// `fg_text` ~12:1, `fg_muted` ~5.4:1 (texto secundario legible),
     /// `fg_destructive` y `accent` oscurecidos para superar 4.5:1 sobre
@@ -503,12 +545,19 @@ impl Theme {
     }
 
     /// Todos los presets del repo, en el orden canónico de rotación
-    /// (Dark → Light → Aurora → Sunset → Dark…). El theme-switcher
-    /// los consume vía [`Theme::next_after`]. `print()` queda fuera de la
-    /// rotación a propósito — es un modo deliberado (imprimir), no un
-    /// gusto estético que se cicle por accidente.
+    /// (Tawa → Dark → Light → Aurora → Sunset → Tawa…). `tawa()` va **al
+    /// frente**: es el look firma de la suite, el primero que se ve. El
+    /// theme-switcher los consume vía [`Theme::next_after`]. `print()` queda
+    /// fuera de la rotación a propósito — es un modo deliberado (imprimir), no
+    /// un gusto estético que se cicle por accidente.
     pub fn all() -> Vec<Self> {
-        vec![Self::dark(), Self::light(), Self::aurora(), Self::sunset()]
+        vec![
+            Self::tawa(),
+            Self::dark(),
+            Self::light(),
+            Self::aurora(),
+            Self::sunset(),
+        ]
     }
 
     /// Busca un preset por nombre exacto. Incluye los modos deliberados que
@@ -593,6 +642,15 @@ mod tests {
     #[test]
     fn dark_is_the_default() {
         assert_eq!(Theme::default().name, "Dark");
+    }
+
+    /// "Tawa" — el look firma — entra en la rotación y va al frente, y
+    /// `by_name` lo resuelve.
+    #[test]
+    fn tawa_es_el_primero_y_se_resuelve() {
+        let all = Theme::all();
+        assert_eq!(all[0].name, "Tawa", "Tawa debe ir al frente de la rotación");
+        assert_eq!(Theme::by_name("Tawa").expect("registrado").name, "Tawa");
     }
 
     /// En temas oscuros la superficie hundida es más oscura que el chrome
