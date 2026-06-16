@@ -36,3 +36,7 @@ pollster = { workspace = true }
 [[example]]
 name = "dump_overview"
 path = "examples/dump_overview.rs"
+
+[[example]]
+name = "showreel"
+path = "examples/showreel.rs"

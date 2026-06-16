@@ -28,7 +28,7 @@ const CAVA_H: f32 = 18.0;
 // ============================================================
 
 /// El widget `weather`: un **dibujo colorido del cielo** + la temperatura.
-pub(super) fn weather_view(w: Option<&crate::weather::Weather>, exec: Option<&str>, theme: &Theme) -> View<Msg> {
+pub fn weather_view(w: Option<&crate::weather::Weather>, exec: Option<&str>, theme: &Theme) -> View<Msg> {
     use crate::weather::Sky;
     let (sky, temp, desc) = match w {
         Some(w) => (w.sky, Some(w.temp_c), w.desc.clone()),
@@ -92,7 +92,7 @@ pub(super) fn weather_view(w: Option<&crate::weather::Weather>, exec: Option<&st
 // ============================================================
 
 /// El widget `cava`: las barras del visualizador de audio.
-pub(super) fn cava_view(frame: &[f32], _theme: &Theme) -> View<Msg> {
+pub fn cava_view(frame: &[f32], _theme: &Theme) -> View<Msg> {
     let bars = frame.to_vec();
     View::new(Style {
         size: Size {

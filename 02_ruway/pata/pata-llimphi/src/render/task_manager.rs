@@ -137,7 +137,7 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
 }
 
 /// El **workspace switcher**: una celda por escritorio virtual.
-pub(super) fn workspaces_view(
+pub fn workspaces_view(
     active: u8,
     count: u8,
     occupied: u16,
@@ -195,7 +195,7 @@ fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Ms
 }
 
 /// El **botón de inicio**: chip con su label/ícono. Clic → menú de apps.
-pub(super) fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) -> View<Msg> {
+pub fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) -> View<Msg> {
     let click = match exec {
         Some(cmd) => Msg::Spawn(cmd.to_string()),
         None => Msg::StartToggle,
@@ -231,7 +231,7 @@ pub(super) fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) 
 }
 
 /// El `tray`: un chip clickeable por item de la bandeja del sistema.
-pub(super) fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) -> View<Msg> {
+pub fn tray_view(items: &[TrayItem], gap: f32, dir: FlexDirection, theme: &Theme) -> View<Msg> {
     let chips: Vec<View<Msg>> = items
         .iter()
         .map(|it| {

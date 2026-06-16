@@ -55,7 +55,8 @@ pub use panels::{
 pub use control::{control_button_view, control_overlay, set_radio, ControlExtras};
 pub use sidebar::{nav_panel_view, sidebar_rail_view, sidebar_surface_view};
 pub use start_menus::{start_menu_gnome_overlay, start_menu_xp_overlay};
-pub use task_manager::{clipboard_overlay, clipboard_panel};
+pub use task_manager::{clipboard_overlay, clipboard_panel, start_button_view, tray_view, workspaces_view};
+pub use weather_cava::{cava_view, weather_view};
 pub use widgets::parse_hex;
 
 // Constantes internas re-usadas en submódulos vía `super::`.
