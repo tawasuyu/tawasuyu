@@ -190,9 +190,9 @@ pub struct Config {
     #[serde(default = "default_theme")]
     pub theme: String,
     /// Cómo transiciona Win+Tab entre escritorios: salto seco (`Direct`),
-    /// deslizamiento estilo Hyprland (`Hyprland`) o zoom-out a la vista
-    /// espacial (`Prezi`). Default `Direct`. Hoy sólo `Direct` está cableado;
-    /// los otros caen a salto seco hasta que la animación esté.
+    /// deslizamiento estilo Hyprland (`Hyprland`, **cableado**: el render aplica
+    /// el slide horizontal con ease-out) o zoom-out a la vista espacial (`Prezi`,
+    /// hoy cae al mismo slide). Default `Hyprland` para que Win+Tab anime.
     #[serde(default)]
     pub workspace_switch_mode: WorkspaceSwitchMode,
     /// Geometría 2D del Prezi: la celda `(col, fila)` de cada escritorio en el
@@ -210,11 +210,12 @@ pub struct Config {
 #[serde(rename_all = "lowercase")]
 pub enum WorkspaceSwitchMode {
     /// Salto seco e instantáneo.
-    #[default]
     Direct,
-    /// Deslizamiento horizontal estilo Hyprland (animación pendiente).
+    /// Deslizamiento horizontal estilo Hyprland (cableado: slide con ease-out).
+    /// Es el **default** para que Win+Tab anime sin configurar nada.
+    #[default]
     Hyprland,
-    /// Zoom-out a la vista espacial «Prezi» (cableado pendiente).
+    /// Zoom-out a la vista espacial «Prezi» (hoy cae al mismo slide).
     Prezi,
 }
 
