@@ -10,10 +10,10 @@ use llimphi_ui::llimphi_text::{draw_layout, measurement, Alignment};
 use llimphi_ui::View;
 use llimphi_theme::Theme;
 
-use crate::modelo::{Model, Msg, SysProc};
-use crate::procfs::Sig;
-use crate::sistema::render_list;
-use crate::widgets::{
+use super::modelo::{Model, Msg, SysProc};
+use super::procfs::Sig;
+use super::sistema::render_list;
+use super::widgets::{
     action_btn, empty_state, fmt_dur, fmt_mem, meter, name_color, pad, seg_btn, spacer,
     state_color, usage_color,
 };
@@ -45,7 +45,7 @@ pub(crate) fn system_body(model: &Model) -> View<Msg> {
     let rows = render_list(model);
     let total = rows.len();
     let start = model.sys_scroll.min(total.saturating_sub(1));
-    let end = (start + crate::modelo::SYS_ROWS).min(total);
+    let end = (start + super::modelo::SYS_ROWS).min(total);
 
     let mut table: Vec<View<Msg>> = Vec::with_capacity(end - start + 2);
     table.push(sys_header_row(model));
@@ -273,7 +273,7 @@ pub(crate) fn sys_filter_bar(model: &Model, matches: usize) -> View<Msg> {
 
 pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
     let t = &model.theme;
-    let hcell = |label: &str, w: f32, sort: Option<crate::modelo::Sort>| {
+    let hcell = |label: &str, w: f32, sort: Option<super::modelo::Sort>| {
         let active = sort.map(|s| s == model.sys_sort).unwrap_or(false);
         let fg = if active { t.accent } else { t.fg_muted };
         let mut v = View::new(Style {
@@ -293,7 +293,7 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
         v
     };
     let cmd = {
-        let active = model.sys_sort == crate::modelo::Sort::Name;
+        let active = model.sys_sort == super::modelo::Sort::Name;
         let fg = if active { t.accent } else { t.fg_muted };
         View::new(Style {
             flex_grow: 1.0,
@@ -302,7 +302,7 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
             ..Default::default()
         })
         .text("COMANDO (nombre↕)", 10.5, fg)
-        .on_click(Msg::SysSort(crate::modelo::Sort::Name))
+        .on_click(Msg::SysSort(super::modelo::Sort::Name))
     };
     View::new(Style {
         flex_direction: FlexDirection::Row,
@@ -324,14 +324,14 @@ pub(crate) fn sys_header_row(model: &Model) -> View<Msg> {
         ..Default::default()
     })
     .children(vec![
-        hcell("PID", W_PID, Some(crate::modelo::Sort::Pid)),
-        hcell("%CPU", W_CPU, Some(crate::modelo::Sort::Cpu)),
-        hcell("%MEM", W_MEM, Some(crate::modelo::Sort::Mem)),
-        hcell("RSS", W_RSS, Some(crate::modelo::Sort::Mem)),
+        hcell("PID", W_PID, Some(super::modelo::Sort::Pid)),
+        hcell("%CPU", W_CPU, Some(super::modelo::Sort::Cpu)),
+        hcell("%MEM", W_MEM, Some(super::modelo::Sort::Mem)),
+        hcell("RSS", W_RSS, Some(super::modelo::Sort::Mem)),
         hcell("S", W_ST, None),
         hcell("HILOS", W_THR, None),
         hcell("UID", W_UID, None),
-        hcell("TIEMPO", W_TIME, Some(crate::modelo::Sort::Uptime)),
+        hcell("TIEMPO", W_TIME, Some(super::modelo::Sort::Uptime)),
         cmd,
     ])
 }

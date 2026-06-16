@@ -10,7 +10,7 @@ use ulid::Ulid;
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_theme::Theme;
 
-use crate::engine::EngineCtx;
+use super::engine::EngineCtx;
 
 // ---------------------------------------------------------------------------
 // Constantes de configuración.
@@ -86,7 +86,7 @@ pub(crate) enum Msg {
     /// Resultado de un poll al Engine (snapshot o error de transporte).
     Snapshot(Result<MonitorSnapshot, String>),
     /// Barrido de `/proc` (modo Sistema). El %CPU se deriva en `update`.
-    System(crate::procfs::Scan),
+    System(super::procfs::Scan),
     SysSelect(i32),
     SysSort(Sort),
     SysScroll(i32),
@@ -108,7 +108,7 @@ pub(crate) enum Msg {
     FilterSet(String),
     /// Salir del modo filtro y limpiar el texto.
     FilterClose,
-    Signal(i32, crate::procfs::Sig),
+    Signal(i32, super::procfs::Sig),
     Switch(Tab),
     Select(Option<Ulid>),
     Stop(Ulid),

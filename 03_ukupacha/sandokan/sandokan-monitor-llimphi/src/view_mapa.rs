@@ -10,10 +10,10 @@ use llimphi_ui::llimphi_raster::peniko::{Color, Fill, Gradient};
 use llimphi_ui::llimphi_text::{draw_layout, measurement, Alignment};
 use llimphi_ui::View;
 
-use crate::modelo::{Model, Msg};
-use crate::procfs::Sig;
-use crate::sistema::subtree_pids;
-use crate::widgets::{action_btn, empty_state, fmt_mem, name_color, pad, seg_btn};
+use super::modelo::{Model, Msg};
+use super::procfs::Sig;
+use super::sistema::subtree_pids;
+use super::widgets::{action_btn, empty_state, fmt_mem, name_color, pad, seg_btn};
 
 // ---------------------------------------------------------------------------
 // Cuerpo del modo Mapa.
@@ -32,11 +32,11 @@ pub(crate) fn map_body(model: &Model) -> View<Msg> {
         .map(|r| subtree_pids(&model.system, r));
 
     // Datos para el painter (owned → Send + Sync + 'static).
-    let items: Vec<crate::treemap::Item> = model
+    let items: Vec<super::treemap::Item> = model
         .system
         .iter()
         .filter(|p| subtree.as_ref().map(|s| s.contains(&p.pid)).unwrap_or(true))
-        .map(|p| crate::treemap::Item {
+        .map(|p| super::treemap::Item {
             pid: p.pid,
             ppid: p.ppid,
             weight: if cpu { p.cpu_pct as f64 } else { p.rss_kb as f64 },
@@ -63,7 +63,7 @@ pub(crate) fn map_body(model: &Model) -> View<Msg> {
     .fill(t.bg_app)
     .clip(true)
     .paint_with(move |scene, ts, rect| {
-        let cells = crate::treemap::layout(&items, (rect.x, rect.y, rect.w, rect.h), 15.0, 3.0);
+        let cells = super::treemap::layout(&items, (rect.x, rect.y, rect.w, rect.h), 15.0, 3.0);
         for c in &cells {
             let r = llimphi_ui::llimphi_raster::kurbo::Rect::new(
                 c.x as f64,
@@ -113,7 +113,7 @@ pub(crate) fn map_body(model: &Model) -> View<Msg> {
         // Recomputa el layout en coords LOCALES (0,0,w,h) —las mismas que
         // entrega `on_click_at`— y resuelve el rect más profundo (último
         // dibujado) que contiene el punto.
-        let cells = crate::treemap::layout(&hit_items, (0.0, 0.0, w, h), 15.0, 3.0);
+        let cells = super::treemap::layout(&hit_items, (0.0, 0.0, w, h), 15.0, 3.0);
         cells
             .iter()
             .rev()

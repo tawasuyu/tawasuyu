@@ -12,7 +12,7 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Stroke};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::View;
 
-use crate::modelo::Msg;
+use super::modelo::Msg;
 
 // ---------------------------------------------------------------------------
 // Helpers de formato.

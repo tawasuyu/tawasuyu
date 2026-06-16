@@ -5,7 +5,7 @@ use card_core::{Card, Payload, Supervision};
 use sandokan::{auto_default, Engine, Intent, IsolationLevel};
 use sandokan_monitor_core::{observe, MonitorSnapshot};
 
-use crate::modelo::WawaApp;
+use super::modelo::WawaApp;
 
 // ---------------------------------------------------------------------------
 // Contexto de ejecución compartido (runtime tokio + Engine elegido).

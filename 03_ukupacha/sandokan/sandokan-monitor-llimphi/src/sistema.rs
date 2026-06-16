@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 
 use llimphi_ui::Handle;
 
-use crate::engine::wawa_census;
-use crate::modelo::{Msg, Model, Sort, SysProc, Tab, GRAPH_LEN, SYS_ROWS};
-use crate::procfs::Scan;
+use super::engine::wawa_census;
+use super::modelo::{Msg, Model, Sort, SysProc, Tab, GRAPH_LEN, SYS_ROWS};
+use super::procfs::Scan;
 
 // ---------------------------------------------------------------------------
 // Una fila tal como se va a pintar.
@@ -285,7 +285,7 @@ pub(crate) fn switch_tab(model: &mut Model, tab: Tab, handle: &Handle<Msg>) {
         Tab::Wawa if model.wawa.is_empty() => {
             handle.spawn(|| Msg::WawaCensus(wawa_census()));
         }
-        Tab::System | Tab::Map => handle.spawn(|| Msg::System(crate::procfs::scan())),
+        Tab::System | Tab::Map => handle.spawn(|| Msg::System(super::procfs::scan())),
         _ => {}
     }
 }

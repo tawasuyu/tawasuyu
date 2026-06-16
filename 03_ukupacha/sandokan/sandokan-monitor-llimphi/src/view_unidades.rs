@@ -10,8 +10,8 @@ use llimphi_ui::View;
 use sandokan_monitor_core::UnitObservation;
 use ulid::Ulid;
 
-use crate::modelo::{Model, Msg};
-use crate::widgets::{action_btn, empty_state, fmt_mem, metric, pad, scroll_grid, sparkline, state_visual};
+use super::modelo::{Model, Msg};
+use super::widgets::{action_btn, empty_state, fmt_mem, metric, pad, scroll_grid, sparkline, state_visual};
 
 // ---------------------------------------------------------------------------
 // Cuerpo del modo Unidades.

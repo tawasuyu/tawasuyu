@@ -6,8 +6,8 @@ use llimphi_ui::llimphi_layout::taffy::{
 };
 use llimphi_ui::View;
 
-use crate::modelo::{Model, Msg, WawaApp};
-use crate::widgets::{empty_state, fmt_mem, metric, note, pad, scroll_grid};
+use super::modelo::{Model, Msg, WawaApp};
+use super::widgets::{empty_state, fmt_mem, metric, note, pad, scroll_grid};
 
 // ---------------------------------------------------------------------------
 // Cuerpo del modo Wawa.

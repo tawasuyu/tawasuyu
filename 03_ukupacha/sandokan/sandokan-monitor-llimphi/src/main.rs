@@ -46,13 +46,19 @@ mod view_unidades;
 mod view_wawa;
 mod widgets;
 
-use engine::{build_ctx, seed_demo, wawa_census};
-use modelo::{build_menu, Model, Msg, Tab, POLL, SPARK_LEN, SYS_ROWS};
+// `pub(crate) use` (no `use` a secas) para que el pantallazo headless —que
+// incluye este `main.rs` por `#[path]` como módulo `app`— pueda importar
+// `app::{Model, Msg, …, map_body}`. La visibilidad pub(crate) vale igual al
+// compilar el binario real y al compilarlo dentro del example.
+pub(crate) use engine::{build_ctx, seed_demo, wawa_census};
+pub(crate) use modelo::{
+    build_menu, Model, Msg, Sort, SysProc, Tab, WawaApp, POLL, SPARK_LEN, SYS_ROWS,
+};
 use sistema::{ensure_visible, ingest_system, render_list, sort_system, switch_tab, sys_move};
-use view_mapa::map_body;
-use view_sistema::system_body;
-use view_unidades::units_body;
-use view_wawa::wawa_body;
+pub(crate) use view_mapa::map_body;
+pub(crate) use view_sistema::system_body;
+pub(crate) use view_unidades::units_body;
+pub(crate) use view_wawa::wawa_body;
 use widgets::{chip, chip_warn, fmt_mem, pad, tab as tab_btn};
 
 struct Monitor;
