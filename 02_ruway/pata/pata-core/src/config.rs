@@ -610,20 +610,27 @@ impl Config {
             WidgetSpec::new("clock").with("format", Prop::Str("%a %H:%M".to_string())),
         ];
         let mut dock = Surface::dock(Anchor::Bottom);
-        dock.thickness = 56.0;
+        // Alto holgado: los íconos magnificados (base 40 × 1.9 ≈ 76) crecen hacia
+        // arriba y deben caber sin cortarse contra el borde de la superficie.
+        dock.thickness = 96.0;
         dock.radius = 16.0;
         dock.margin = 8.0;
         dock.gradient = true;
         // Apps fijadas (las que no resuelvan en el registro se omiten) + las
         // ventanas abiertas las agrega el frontend al renderizar el dock.
         dock.dock_pins = vec![
-            "foot".into(),
+            "nahual".into(),
             "puriy".into(),
             "nada".into(),
             "pluma".into(),
+            "media".into(),
         ];
         Self {
-            general: General::default(),
+            // Launchpad: el menú de mac es la grilla (no la lista classic).
+            general: General {
+                menu_style: "grid".to_string(),
+                ..General::default()
+            },
             surfaces: vec![menubar, dock],
         }
     }

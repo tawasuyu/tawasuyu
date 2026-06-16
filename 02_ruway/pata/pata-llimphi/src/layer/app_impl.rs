@@ -864,8 +864,18 @@ impl LayerApp {
             // Conmutar de escritorio: lo pide el switcher de la barra (dwm/
             // hyprland/solaris). Faltaba el arm en el path layer-shell → los
             // botones de workspace no hacían nada en el DM (sólo en winit).
-            Msg::SwitchWorkspace(n) => crate::sampler::switch_workspace(n),
-            Msg::ActivateWindow(id) => self.activar_ventana(id),
+            Msg::SwitchWorkspace(n) => {
+                diag!("pata diag · SwitchWorkspace({n}) → mirada-ctl workspace {n}");
+                crate::sampler::switch_workspace(n);
+            }
+            Msg::ActivateWindow(id) => {
+                diag!(
+                    "pata diag · ActivateWindow({id}) seat={} toplevel={}",
+                    self.seat.is_some(),
+                    self.toplevel_por_id(id).is_some()
+                );
+                self.activar_ventana(id);
+            }
             Msg::CloseWindow(id) => self.cerrar_ventana(id),
             Msg::TrayActivate(key) => {
                 if let Some(t) = &self.tray {

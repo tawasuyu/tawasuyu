@@ -416,6 +416,28 @@ impl PointerHandler for LayerApp {
                         continue;
                     }
                 }
+                // Diagnóstico del click (PATA_DIAG=1): qué nodo cae bajo el
+                // press y si tiene handler. Para depurar "no hace nada".
+                if std::env::var_os("PATA_DIAG").is_some() {
+                    let info = self.panels[pi].cache.as_ref().map(|c| {
+                        match hit_test_click(&c.mounted, &c.computed, px, py) {
+                            Some(i) => {
+                                let n = &c.mounted.nodes[i];
+                                format!(
+                                    "nodo {i} on_click={} on_click_at={} drag={}",
+                                    n.on_click.is_some(),
+                                    n.on_click_at.is_some(),
+                                    n.drag.is_some()
+                                )
+                            }
+                            None => "ningún nodo clickeable".into(),
+                        }
+                    });
+                    eprintln!(
+                        "pata diag · PRESS panel={pi} pos=({px:.0},{py:.0}) der={derecho} → {}",
+                        info.unwrap_or_else(|| "sin cache".into())
+                    );
+                }
                 let msg = self.panels[pi].cache.as_ref().and_then(|c| {
                     let i = hit_test_click(&c.mounted, &c.computed, px, py)?;
                     let n = c.mounted.nodes.get(i)?;

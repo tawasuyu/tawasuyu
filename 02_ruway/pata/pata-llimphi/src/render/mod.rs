@@ -574,12 +574,19 @@ fn slots_de(
     // el cabezal `shuma` (un input que debe LLENAR el hueco), ese slot crece y
     // los otros se ciñen a su contenido — así el input se come todo lo que dejan
     // los demás widgets en vez de quedar en su tercio.
-    let tiene_shuma = |ws: &[SlotWidget]| ws.iter().any(|w| matches!(w, SlotWidget::Shuma));
-    let hay_shuma = tiene_shuma(&surface_widgets.start)
-        || tiene_shuma(&surface_widgets.center)
-        || tiene_shuma(&surface_widgets.end);
+    // Un slot "expansor" es el que debe COMERSE el espacio sobrante: el del
+    // input shuma (que llena el hueco) o el de la lista de ventanas (taskbar: las
+    // tareas llenan el medio alineadas a la izquierda). Si hay uno, ese crece y
+    // los otros se ciñen a su contenido (start_button a la izq, tray a la der).
+    let expansor = |ws: &[SlotWidget]| {
+        ws.iter()
+            .any(|w| matches!(w, SlotWidget::Shuma | SlotWidget::WindowList))
+    };
+    let hay_expansor = expansor(&surface_widgets.start)
+        || expansor(&surface_widgets.center)
+        || expansor(&surface_widgets.end);
     let grow_de = |ws: &[SlotWidget]| -> f32 {
-        if !hay_shuma || tiene_shuma(ws) {
+        if !hay_expansor || expansor(ws) {
             1.0
         } else {
             0.0
@@ -1049,29 +1056,38 @@ pub fn dock_view(
     } else {
         theme.bg_panel
     };
+    // El dock = un **tray** de ancho-según-contenido con el fondo redondeado
+    // (sólo bajo los íconos), CENTRADO en un contenedor a lo ancho y
+    // TRANSPARENTE (los lados muestran el escritorio). Así es un dock, no una
+    // barra que invade todo el ancho. Los íconos magnificados crecen hacia
+    // arriba y, como el contenedor alinea al borde inferior y no recorta, salen
+    // del tray sin cortarse (la superficie del dock es más alta que el ícono).
     let contenedor = |hijos: Vec<View<Msg>>| {
-        View::new(Style {
+        let tray = View::new(Style {
             flex_direction: FlexDirection::Row,
-            size: Size {
-                width: percent(1.0_f32),
-                height: percent(1.0_f32),
-            },
-            align_items: Some(AlignItems::FlexEnd), // íconos pegados al borde
+            size: Size { width: auto(), height: auto() },
+            align_items: Some(AlignItems::FlexEnd),
             justify_content: Some(JustifyContent::Center),
-            gap: Size {
-                width: length(gap),
-                height: length(0.0_f32),
-            },
+            gap: Size { width: length(gap), height: length(0.0_f32) },
             padding: TaffyRect {
                 left: length(10.0_f32),
                 right: length(10.0_f32),
-                top: length(4.0_f32),
-                bottom: length(4.0_f32),
+                top: length(6.0_f32),
+                bottom: length(6.0_f32),
             },
             ..Default::default()
         })
         .fill(fondo)
-        .children(hijos)
+        .radius(16.0)
+        .children(hijos);
+        View::new(Style {
+            flex_direction: FlexDirection::Row,
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            align_items: Some(AlignItems::FlexEnd),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .children(vec![tray])
     };
 
     // El dock es: apps fijadas (lanzadores) + ventanas abiertas (activadores),
