@@ -1818,6 +1818,39 @@ fn sidebar_view(title: &str, sections: &[Section], sel_item: Option<usize>, them
 
 /// Una fila de item del sidebar: iconito + rótulo; el activo lleva fondo
 /// resaltado + barra de acento a la izquierda. Clic → abre en el canvas.
+/// Color vívido y estable para un icono de sección (por glifo), para que el rail
+/// de items no sea blanco y negro. Glifos conocidos llevan su color temático; el
+/// resto cae a una paleta indexada por el glifo.
+fn icon_color(icon: &str) -> llimphi_ui::llimphi_raster::peniko::Color {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    let rgb = match icon {
+        "🎨" => (236, 107, 118), // apariencia
+        "🌐" => (97, 150, 236),  // idioma
+        "🎛" => (84, 196, 194),  // interfaz / pata
+        "▶" => (138, 201, 108),  // arranque
+        "☸" => (244, 162, 97),   // módulos
+        "🖥" => (96, 200, 220),   // info
+        "✚" => (138, 201, 108),  // acciones
+        "▦" | "▭" => (167, 139, 250), // fondo / barras
+        "⌨" => (233, 196, 106),  // atajos
+        _ => {
+            const PAL: &[(u8, u8, u8)] = &[
+                (236, 107, 118),
+                (244, 162, 97),
+                (233, 196, 106),
+                (138, 201, 108),
+                (84, 196, 194),
+                (97, 150, 236),
+                (167, 139, 250),
+                (240, 138, 201),
+            ];
+            let sum: u32 = icon.chars().map(|c| c as u32).sum();
+            PAL[(sum as usize) % PAL.len()]
+        }
+    };
+    Color::from_rgba8(rgb.0, rgb.1, rgb.2, 255)
+}
+
 fn item_row(i: usize, icon: &str, label: &str, active: bool, theme: &Theme) -> View<Msg> {
     let (bg, fg) = if active {
         (theme.bg_selected, theme.fg_text)
@@ -1835,10 +1868,11 @@ fn item_row(i: usize, icon: &str, label: &str, active: bool, theme: &Theme) -> V
             flex_shrink: 0.0,
             ..Default::default()
         })
+        // Icono en COLOR (no B&N): color vívido estable por glifo.
         .text_aligned(
             if icon.is_empty() { "·" } else { icon }.to_string(),
             14.0,
-            fg,
+            icon_color(icon),
             Alignment::Center,
         ),
     );
