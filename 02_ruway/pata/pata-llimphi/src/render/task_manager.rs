@@ -27,6 +27,8 @@ const CLIPBOARD_PREVIEW_MAX: usize = 28;
 
 /// Lado del ícono-badge (cuadrado) de una ventana en el task manager, en px.
 const WIN_BADGE_PX: f32 = 18.0;
+/// Ancho fijo de cada botón de tarea (taskbar): todos miden lo mismo.
+const TASK_W: f32 = 170.0;
 
 /// Tamaño del ícono del tray en la barra (px).
 const TRAY_ICON_PX: f32 = 18.0;
@@ -50,6 +52,10 @@ pub(super) fn window_list_view(
     View::new(Style {
         flex_direction: dir,
         align_items: Some(AlignItems::Center),
+        // Alineados al inicio (a la izquierda en barra horizontal), estilo
+        // taskbar — no centrados. El slot que lo hospeda ya le da el ancho.
+        justify_content: Some(JustifyContent::FlexStart),
+        flex_grow: 1.0,
         gap: Size {
             width: length(gap),
             height: length(gap),
@@ -83,25 +89,31 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
     .text(w.inicial(), 11.0, badge_fg);
 
     let titulo = View::new(Style {
+        // Crece para llenar el ancho fijo del botón; el texto va a la izquierda
+        // (estilo botón de tarea: ícono + título alineado, no centrado).
+        flex_grow: 1.0,
         size: Size {
             width: auto(),
             height: length(22.0_f32),
         },
         align_items: Some(AlignItems::Center),
-        justify_content: Some(JustifyContent::Center),
+        justify_content: Some(JustifyContent::FlexStart),
         ..Default::default()
     })
     .text(super::recortar(&w.label, WINDOW_LABEL_MAX), 12.0, fg);
 
     View::new(Style {
         flex_direction: FlexDirection::Row,
+        // Ancho FIJO: todos los botones de tarea miden lo mismo (estilo taskbar),
+        // no se encogen/crecen según el largo del título.
+        flex_shrink: 0.0,
         size: Size {
-            width: auto(),
-            height: length(24.0_f32),
+            width: length(TASK_W),
+            height: length(26.0_f32),
         },
         padding: TaffyRect {
             left: length(6.0_f32),
-            right: length(10.0_f32),
+            right: length(8.0_f32),
             top: length(0.0_f32),
             bottom: length(0.0_f32),
         },
@@ -113,7 +125,8 @@ fn window_button(w: &WindowEntry, theme: &Theme) -> View<Msg> {
         ..Default::default()
     })
     .fill(fill)
-    .radius(6.0)
+    .radius(4.0)
+    .border(1.0, theme.border)
     .hover_fill(theme.bg_button_hover)
     .tooltip(w.label.clone())
     .on_click(Msg::ActivateWindow(w.id))

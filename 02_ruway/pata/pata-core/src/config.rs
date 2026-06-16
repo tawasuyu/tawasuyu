@@ -655,15 +655,22 @@ impl Config {
     /// título azul). Sin taskbar (Win3.1 no tenía): la "ventana" del PM es el
     /// escritorio. El alto reserva espacio para la grilla.
     fn vista_windows_31() -> Self {
-        // El Program Manager ES el escritorio Win3.1: superficie de fondo a
-        // pantalla completa, detrás de las ventanas (no una barra que reserva
-        // franja). Sus ventanas de programas se abren por encima.
-        let mut pm = Surface::background();
-        pm.padding = 16.0;
-        pm.center = vec![WidgetSpec::new("program_manager")];
+        // Win3.1: por ahora una barra superior gris Motif con Inicio (abre el
+        // menú de apps = "Program Manager") + lista de ventanas + reloj. El
+        // Program Manager como VENTANA normal (movible, con barra de título) es
+        // una app aparte pendiente — pata es una barra, no puede serlo, y meterlo
+        // como superficie de fondo salía como franja (mal). Ver nota en el menú.
+        let mut bar = Surface::bar(Anchor::Top);
+        bar.thickness = 28.0;
+        bar.start = vec![
+            WidgetSpec::new("start_button").with("label", Prop::Str("Archivo".to_string())),
+            WidgetSpec::new("window_title").with("max", Prop::Num(60.0)),
+        ];
+        bar.center = vec![WidgetSpec::new("window_list")];
+        bar.end = vec![WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string()))];
         Self {
             general: General::default(),
-            surfaces: vec![pm],
+            surfaces: vec![bar],
         }
     }
 
