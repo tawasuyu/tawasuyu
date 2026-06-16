@@ -172,9 +172,10 @@ fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Ms
         (theme.bg_panel_alt, theme.fg_muted)
     };
     View::new(Style {
+        // Más grande para acertar el click cómodo (antes 22×20 = chico).
         size: Size {
-            width: length(22.0_f32),
-            height: length(20.0_f32),
+            width: length(30.0_f32),
+            height: length(26.0_f32),
         },
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
@@ -182,10 +183,11 @@ fn workspace_cell(n: u8, active: bool, occupied: bool, theme: &Theme) -> View<Ms
     })
     .fill(fill)
     .radius(5.0)
+    .border(1.0, theme.border)
     .hover_fill(theme.bg_button_hover)
     .tooltip(format!("Escritorio {n}"))
     .on_click(Msg::SwitchWorkspace(n))
-    .text(n.to_string(), 12.0, fg)
+    .text(n.to_string(), 13.0, fg)
 }
 
 /// El **botón de inicio**: chip con su label/ícono. Clic → menú de apps.
@@ -194,18 +196,34 @@ pub(super) fn start_button_view(label: &str, exec: Option<&str>, theme: &Theme) 
         Some(cmd) => Msg::Spawn(cmd.to_string()),
         None => Msg::StartToggle,
     };
-    chip(theme)
-        .fill(theme.bg_panel)
-        .radius(6.0)
-        .hover_fill(theme.bg_button_hover)
-        .tooltip(if exec.is_some() {
-            "Lanzar"
-        } else {
-            "Menú de inicio (clic-der: cambiar estilo)"
-        })
-        .on_click(click)
-        .on_right_click(Msg::StartStyleCycle)
-        .text(label.to_string(), 14.0, theme.accent)
+    // Botón de inicio cómodo de clickear (antes usaba el `chip` de 22px = chico).
+    View::new(Style {
+        size: Size {
+            width: auto(),
+            height: length(32.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .fill(theme.bg_panel)
+    .radius(6.0)
+    .border(1.0, theme.border)
+    .hover_fill(theme.bg_button_hover)
+    .tooltip(if exec.is_some() {
+        "Lanzar"
+    } else {
+        "Menú de inicio (clic-der: cambiar estilo)"
+    })
+    .on_click(click)
+    .on_right_click(Msg::StartStyleCycle)
+    .text(label.to_string(), 14.0, theme.accent)
 }
 
 /// El `tray`: un chip clickeable por item de la bandeja del sistema.

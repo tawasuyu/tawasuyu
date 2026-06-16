@@ -14,7 +14,7 @@
 use app_bus::AppEntry;
 use llimphi_theme::Theme;
 use llimphi_ui::llimphi_layout::taffy::{
-    prelude::{length, percent, FlexDirection, Size, Style},
+    prelude::{auto, length, percent, FlexDirection, Size, Style},
     AlignItems, JustifyContent, Rect as TaffyRect,
 };
 use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KurboRect};
@@ -320,7 +320,9 @@ pub(super) fn front_panel_view(data: &BarData, theme: &Theme) -> View<Msg> {
         align_items: Some(AlignItems::Center),
         justify_content: Some(JustifyContent::Center),
         gap: Size { width: length(10.0_f32), height: length(0.0_f32) },
-        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        // Ancho según contenido (no 100%): el front panel de CDE ocupa sólo un
+        // pedazo central de la pantalla, no toda la franja.
+        size: Size { width: auto(), height: percent(1.0_f32) },
         ..Default::default()
     })
     .children(vec![
@@ -331,22 +333,34 @@ pub(super) fn front_panel_view(data: &BarData, theme: &Theme) -> View<Msg> {
         grupo(der),
     ]);
 
-    // El panel: franja raised que llena la barra, con la fila centrada.
-    beveled(
+    // El panel biselado, de ancho según contenido.
+    let panel = beveled(
         steel,
         true,
         Style {
-            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            size: Size { width: auto(), height: percent(1.0_f32) },
             align_items: Some(AlignItems::Center),
             justify_content: Some(JustifyContent::Center),
             padding: TaffyRect {
-                left: length(8.0_f32),
-                right: length(8.0_f32),
-                top: length(4.0_f32),
-                bottom: length(4.0_f32),
+                left: length(12.0_f32),
+                right: length(12.0_f32),
+                top: length(6.0_f32),
+                bottom: length(6.0_f32),
             },
             ..Default::default()
         },
         vec![fila],
     )
+    .radius(3.0);
+
+    // Contenedor a lo ancho, transparente, que CENTRA el panel: los lados
+    // muestran el escritorio (el front panel no abarca toda la pantalla).
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .children(vec![panel])
 }

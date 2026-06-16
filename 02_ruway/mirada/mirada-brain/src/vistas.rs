@@ -37,10 +37,13 @@ pub struct Vista {
 
 /// Los slugs de las vistas de fábrica, en orden de presentación. `mirada`
 /// (la nativa) encabeza.
-pub const VISTA_NAMES: [&str; 8] = [
+// windows-3.1 queda FUERA de la lista: su Program Manager pide una ventana
+// normal (toplevel movible) que pata —una barra— no puede ser; hasta tener una
+// app dedicada, no se ofrece como vista. La fn `vista_windows_31` sigue por si
+// se reintroduce.
+pub const VISTA_NAMES: [&str; 7] = [
     "mirada",
     "windows-xp",
-    "windows-3.1",
     "mac",
     "kde",
     "solaris",

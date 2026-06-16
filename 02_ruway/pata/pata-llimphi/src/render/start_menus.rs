@@ -591,22 +591,53 @@ const GNOME_LABEL_H: f32 = 28.0;
 /// buscador arriba + grilla de tiles que fluye al ancho del contenedor. Control
 /// reutilizable; el caller pone el chrome (scrim en winit, barra en layer).
 /// `columns_hint` acota cuántos tiles mostrar (`columns*6`, o 36 si es 0).
-pub(super) fn gnome_body(apps: &[AppEntry], query: &str, columns_hint: u32, theme: &Theme) -> View<Msg> {
+pub(super) fn gnome_body(
+    apps: &[AppEntry],
+    query: &str,
+    offset: f32,
+    viewport_h: f32,
+    columns_hint: u32,
+    theme: &Theme,
+) -> View<Msg> {
     let matches = menu_filtered(apps, query);
     let search = gnome_search(query, matches.len(), theme);
-    let cap = if columns_hint > 0 {
-        (columns_hint as usize) * 6
-    } else {
-        36
-    };
-    let tiles: Vec<View<Msg>> = matches.iter().take(cap).map(|a| gnome_tile(a)).collect();
-    let grid = llimphi_widget_wrap::wrap_view(
+    // Mostramos TODAS las apps (no un cap de 36): la grilla scrollea.
+    let cols = columns_hint.max(1) as usize;
+    let n = matches.len();
+    let tiles: Vec<View<Msg>> = matches.iter().map(|a| gnome_tile(a)).collect();
+    let grid_inner = llimphi_widget_wrap::wrap_view(
         tiles,
         llimphi_widget_wrap::WrapAxis::Row,
         GNOME_TILE_GAP,
         GNOME_TILE_GAP,
     );
-    // El bloque (search + grid) llena el ancho del contenedor; la grilla fluye.
+    // Alto de una fila de tiles (tile + label + gap) → largo del contenido para
+    // el scroll. La grilla scrollea dentro del viewport disponible.
+    let row_h = GNOME_TILE_SIZE + GNOME_LABEL_H + GNOME_TILE_GAP;
+    let rows = n.div_ceil(cols.max(1)) as f32;
+    let content_len = rows * row_h;
+    let grid_vp = (viewport_h - GNOME_SEARCH_H - 56.0).max(row_h);
+    let grid = if content_len > grid_vp {
+        let scrolled = scroll_y(
+            clamp_offset(offset, content_len, grid_vp),
+            content_len,
+            grid_vp,
+            grid_inner,
+            Msg::StartScroll,
+            &ScrollPalette::from_theme(theme),
+        );
+        View::new(Style {
+            size: Size { width: percent(1.0_f32), height: length(grid_vp) },
+            ..Default::default()
+        })
+        .children(vec![scrolled])
+    } else {
+        grid_inner
+    };
+    // El bloque (search + grid) sobre un **panel oscuro propio**: las tiles son
+    // blanco-translúcido pensadas para un scrim oscuro; en el path layer-shell
+    // (el DM) NO hay scrim, así que sin este fondo salían como "cuadrados
+    // blancos" invisibles. El backdrop lo hace coherente en ambos paths.
     View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -618,8 +649,16 @@ pub(super) fn gnome_body(apps: &[AppEntry], query: &str, columns_hint: u32, them
             width: length(0.0_f32),
             height: length(28.0_f32),
         },
+        padding: TaffyRect {
+            left: length(24.0_f32),
+            right: length(24.0_f32),
+            top: length(24.0_f32),
+            bottom: length(24.0_f32),
+        },
         ..Default::default()
     })
+    .fill(Color::from_rgba8(18, 20, 28, 245))
+    .radius(16.0)
     .children(vec![search, grid])
     .animated_enter(0xA0_91_E0_03_u64, motion::SLOW)
 }
@@ -636,7 +675,7 @@ pub fn start_menu_gnome_overlay(
     let usable_w = screen.0 - 80.0;
     let tile_full = GNOME_TILE_SIZE + GNOME_TILE_GAP;
     let cols = ((usable_w / tile_full).floor() as u32).max(3);
-    let content = gnome_body(apps, query, cols, theme);
+    let content = gnome_body(apps, query, 0.0, (screen.1 - bar_h - 120.0).max(240.0), cols, theme);
 
     let centered = View::new(Style {
         flex_direction: FlexDirection::Column,

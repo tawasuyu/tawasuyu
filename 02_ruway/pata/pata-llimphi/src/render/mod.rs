@@ -626,7 +626,9 @@ pub fn start_menu_body(
     // de abajo; `Xp`/`Gnome` reutilizan los cuerpos de `start_menus`.
     match style {
         crate::MenuStyle::Xp => return start_menus::xp_body(apps, query, offset, viewport_h, theme),
-        crate::MenuStyle::Gnome => return start_menus::gnome_body(apps, query, columns, theme),
+        crate::MenuStyle::Gnome => {
+            return start_menus::gnome_body(apps, query, offset, viewport_h, columns, theme)
+        }
         crate::MenuStyle::Classic => {}
     }
     let matches = menu_filtered(apps, query);
