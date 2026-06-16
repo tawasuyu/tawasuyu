@@ -324,6 +324,8 @@ enum Msg {
     AllichayKey(KeyEvent),
     /// Mensaje del diálogo de archivos (elegir wallpaper).
     Picker(PickerMsg),
+    /// Editor visual 2D del Prezi: mover el escritorio `i` a la celda (col, fila).
+    PreziMove(usize, i32, i32),
     /// Cambió la config del SO desde afuera (otro panel, edición manual).
     ConfigChanged(Box<WawaConfig>),
     MenuOpen(Option<usize>),
@@ -437,6 +439,20 @@ impl App for Panel {
                         PickerAction::Close => { /* cerrado */ }
                         PickerAction::None => m.picker = Some(st),
                     }
+                }
+            }
+            Msg::PreziMove(i, col, row) => {
+                // Asegura N celdas y mueve el escritorio i; edita el perfil activo.
+                let n = mirada_brain::action::WORKSPACE_COUNT;
+                if m.mirada.overview_geometry.len() < n {
+                    m.mirada.overview_geometry = m.mirada.overview_geometry_for(n);
+                }
+                if let Some(slot) = m.mirada.overview_geometry.get_mut(i) {
+                    *slot = (col.max(0), row.max(0));
+                    m.dirty.mirada = true;
+                    sync_active_profile(&mut m);
+                    m.save_in = SAVE_DELAY_TICKS;
+                    m.status = format!("escritorio {} → ({col}, {row})", i + 1);
                 }
             }
             Msg::AllichayKey(event) => {
@@ -1674,6 +1690,108 @@ fn build_header(theme: &Theme) -> View<Msg> {
     app_header(rimay_localize::t("wawa-panel-title"), vec![], &palette)
 }
 
+/// Editor **visual 2D del Prezi**: una grilla donde cada escritorio es un tile
+/// arrastrable. Al soltar, el tile snapea a la celda más cercana y se guarda en
+/// `overview_geometry` del perfil activo (la vista espacial lo respeta). Es la
+/// versión visual del que antes era una tabla col/fila.
+fn prezi_editor_view(model: &Model, theme: &Theme) -> View<Msg> {
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    const CELL: f32 = 78.0;
+    let n = mirada_brain::action::WORKSPACE_COUNT;
+    let geo = model.mirada.overview_geometry_for(n);
+    let max_c = geo.iter().map(|g| g.0).max().unwrap_or(0);
+    let max_r = geo.iter().map(|g| g.1).max().unwrap_or(0);
+    let cols = (max_c + 2).max(4) as usize;
+    let rows = (max_r + 2).max(3) as usize;
+    let cw = cols as f32 * CELL;
+    let ch = rows as f32 * CELL;
+    let linea = {
+        let k = theme.border.components;
+        Color::from_rgba8(
+            (k[0] * 255.0) as u8,
+            (k[1] * 255.0) as u8,
+            (k[2] * 255.0) as u8,
+            90,
+        )
+    };
+
+    let mut kids: Vec<View<Msg>> = Vec::with_capacity(n);
+    for (i, &(c, r)) in geo.iter().enumerate() {
+        let x = c as f32 * CELL + 5.0;
+        let y = r as f32 * CELL + 5.0;
+        let tile = View::new(Style {
+            position: Position::Absolute,
+            inset: Rect { left: length(x), top: length(y), right: auto(), bottom: auto() },
+            size: Size { width: length(CELL - 10.0), height: length(CELL - 10.0) },
+            align_items: Some(AlignItems::Center),
+            justify_content: Some(JustifyContent::Center),
+            ..Default::default()
+        })
+        .fill(theme.accent)
+        .radius(8.0)
+        .text_aligned(format!("{}", i + 1), 20.0, theme.bg_panel, Alignment::Center)
+        .draggable(move |phase, dx, dy| match phase {
+            DragPhase::End => {
+                let nc = (c + (dx / CELL).round() as i32).max(0);
+                let nr = (r + (dy / CELL).round() as i32).max(0);
+                Some(Msg::PreziMove(i, nc, nr))
+            }
+            _ => None,
+        });
+        kids.push(tile);
+    }
+
+    let canvas = View::new(Style {
+        position: Position::Relative,
+        size: Size { width: length(cw), height: length(ch) },
+        ..Default::default()
+    })
+    .fill(theme.bg_panel_alt)
+    .radius(8.0)
+    .paint_with(move |scene, _ts, rect| {
+        use llimphi_ui::llimphi_raster::kurbo::{Affine, Rect as KRect};
+        use llimphi_ui::llimphi_raster::peniko::Fill;
+        let (x0, y0) = (rect.x as f64, rect.y as f64);
+        for col in 1..cols {
+            let gx = x0 + col as f64 * CELL as f64;
+            scene.fill(Fill::NonZero, Affine::IDENTITY, &linea, None,
+                &KRect::new(gx, y0, gx + 1.0, y0 + rect.h as f64));
+        }
+        for row in 1..rows {
+            let gy = y0 + row as f64 * CELL as f64;
+            scene.fill(Fill::NonZero, Affine::IDENTITY, &linea, None,
+                &KRect::new(x0, gy, x0 + rect.w as f64, gy + 1.0));
+        }
+    })
+    .children(kids);
+
+    let titulo = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(26.0_f32) },
+        align_items: Some(AlignItems::Center),
+        ..Default::default()
+    })
+    .text_aligned(
+        "Plano 2D del Prezi · arrastrá cada escritorio a su celda".to_string(),
+        13.0,
+        theme.fg_text,
+        Alignment::Start,
+    );
+
+    View::new(Style {
+        flex_direction: FlexDirection::Column,
+        size: Size { width: percent(1.0_f32), height: Dimension::auto() },
+        gap: Size { width: length(0.0_f32), height: length(8.0_f32) },
+        padding: Rect {
+            left: length(16.0_f32),
+            right: length(16.0_f32),
+            top: length(12.0_f32),
+            bottom: length(8.0_f32),
+        },
+        ..Default::default()
+    })
+    .children(vec![titulo, canvas])
+}
+
 /// El cuerpo, jerarquía de 3 niveles al modo cosmos:
 /// `[ sidebar: items de la pestaña activa ] [ pestañas que sobresalen ] [ canvas: contenido del item ]`.
 /// La **pestaña** (rail) elige app/categoría; su **sidebar** lista los items
@@ -1691,7 +1809,19 @@ fn build_body(pestanas: &[PanelPestana], pest: usize, model: &Model, theme: &The
             let one = Schema {
                 sections: vec![sec.clone()],
             };
-            schema_panel(&one, &model.allichay, theme, VIEWPORT_H, Msg::Allichay)
+            let panel = schema_panel(&one, &model.allichay, theme, VIEWPORT_H, Msg::Allichay);
+            // La sección «Vista espacial» suma arriba el editor visual 2D del
+            // Prezi (canvas con tiles arrastrables); los campos van debajo.
+            if sec.id.contains("vista_espacial") {
+                View::new(Style {
+                    flex_direction: FlexDirection::Column,
+                    size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                    ..Default::default()
+                })
+                .children(vec![prezi_editor_view(model, theme), panel])
+            } else {
+                panel
+            }
         }
         None => resumen_view(title, sections, theme),
     };
