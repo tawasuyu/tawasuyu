@@ -68,8 +68,12 @@ for fila in "${TABLA[@]}"; do
   png="$OUT/$label.png"
   rm -f "$png"
   printf '· %-18s (%s/%s) … ' "$label" "$crate" "$ejemplo"
-  if timeout 360 cargo run -q -p "$crate" --example "$ejemplo" --release -- "$png" \
-       > "$OUT/$label.log" 2>&1 && [ -f "$png" ]; then
+  # Compilar y renderizar van por separado: el compilado en --release puede
+  # tardar minutos y NO debe contar contra el timeout del render (si no, un
+  # crate lento se reporta como "falló" cuando sólo tardó en compilar).
+  cargo build -q -p "$crate" --example "$ejemplo" --release > "$OUT/$label.log" 2>&1
+  if timeout 120 cargo run -q -p "$crate" --example "$ejemplo" --release -- "$png" \
+       >> "$OUT/$label.log" 2>&1 && [ -f "$png" ]; then
     dim=$(file "$png" | grep -oE '[0-9]+ x [0-9]+' | head -1)
     echo "OK ($dim)"
     echo "- **$label** — \`$crate\` · ${dim:-?} — ![]($label.png)" >> "$INDEX"
