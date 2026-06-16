@@ -87,6 +87,14 @@ mod tests {
     }
 
     #[test]
+    fn renders_image_and_linked_image() {
+        // Imagen suelta y imagen enlazada (patrón del README: GIF → MP4).
+        let html = to_html("![alt txt](pic.gif)\n\n[![show](a.gif)](b.mp4)");
+        assert!(html.contains(r#"<img src="pic.gif" alt="alt txt""#), "got {}", html);
+        assert!(html.contains(r#"<a href="b.mp4""#) && html.contains(r#"src="a.gif""#), "got {}", html);
+    }
+
+    #[test]
     fn renders_table_gfm() {
         let md = "| a | b |\n|---|---|\n| 1 | 2 |\n";
         let html = to_html(md);
