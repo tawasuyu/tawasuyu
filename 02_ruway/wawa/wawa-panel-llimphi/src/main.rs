@@ -791,10 +791,13 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         });
     }
     if m.cfg.module_enabled("pata") {
+        let mut schema = prefix_schema(m.pata.schema(), "pata");
+        // La lista de barras (agregar/borrar/nombrar/on-off) como primera sección.
+        schema.sections.insert(0, barras_section(&m.pata));
         out.push(PanelPestana {
             title: "pata".into(),
             icon: "🎛".into(),
-            schema: prefix_schema(m.pata.schema(), "pata"),
+            schema,
         });
     }
     out
@@ -896,7 +899,113 @@ fn anidar_config_perfil(mut schema: Schema, m: &Model) -> Schema {
     let mut pata = prefix_schema(m.pata.schema(), "pata");
     pata.sections.iter_mut().for_each(sangrar);
     schema.sections.extend(pata.sections);
+    // Lista de barras (agregar/borrar/nombrar/prender-apagar), también anidada.
+    let mut barras = barras_section(&m.pata);
+    sangrar(&mut barras);
+    schema.sections.push(barras);
     schema
+}
+
+fn kind_slug(k: pata_core::SurfaceKind) -> &'static str {
+    use pata_core::SurfaceKind::*;
+    match k {
+        Bar => "bar",
+        Sidebar => "sidebar",
+        Dock => "dock",
+        Background => "background",
+        Panel => "panel",
+    }
+}
+fn anchor_slug(a: pata_core::Anchor) -> &'static str {
+    use pata_core::Anchor::*;
+    match a {
+        Top => "top",
+        Bottom => "bottom",
+        Left => "left",
+        Right => "right",
+    }
+}
+fn parse_kind(s: &str) -> pata_core::SurfaceKind {
+    use pata_core::SurfaceKind::*;
+    match s.trim().to_lowercase().as_str() {
+        "sidebar" => Sidebar,
+        "dock" => Dock,
+        "background" | "fondo" => Background,
+        "panel" => Panel,
+        _ => Bar,
+    }
+}
+fn parse_anchor(s: &str) -> pata_core::Anchor {
+    use pata_core::Anchor::*;
+    match s.trim().to_lowercase().as_str() {
+        "bottom" | "abajo" => Bottom,
+        "left" | "izq" | "izquierda" => Left,
+        "right" | "der" | "derecha" => Right,
+        _ => Top,
+    }
+}
+fn es_activa(s: &str) -> bool {
+    !matches!(s.trim().to_lowercase().as_str(), "no" | "false" | "0" | "off" | "")
+}
+
+/// Filas de la tabla de barras: [nombre, tipo, borde, activa].
+fn barras_rows(pata: &pata_core::Config) -> Vec<Vec<String>> {
+    pata.surfaces
+        .iter()
+        .map(|s| {
+            let nombre = if s.name.trim().is_empty() {
+                format!("{} {}", kind_slug(s.kind), anchor_slug(s.anchor))
+            } else {
+                s.name.clone()
+            };
+            vec![
+                nombre,
+                kind_slug(s.kind).to_string(),
+                anchor_slug(s.anchor).to_string(),
+                if s.enabled { "sí".into() } else { "no".into() },
+            ]
+        })
+        .collect()
+}
+
+/// Sección «Barras»: tabla agregable/borrable de las superficies del perfil.
+fn barras_section(pata: &pata_core::Config) -> Section {
+    use allichay::{Column, Field};
+    Section::new("barras::lista", "Barras")
+        .icon("▭")
+        .help(
+            "Las barras de este perfil. Agregá/borrá filas con +/−, nombralas, \
+             elegí tipo (bar/sidebar/dock/background) y borde (top/bottom/left/ \
+             right), y prendé/apagá con la columna Activa (sí/no).",
+        )
+        .field(Field::table(
+            "lista",
+            "Barras",
+            vec![
+                Column::new("nombre", "Nombre"),
+                Column::new("tipo", "Tipo"),
+                Column::new("borde", "Borde"),
+                Column::new("activa", "Activa"),
+            ],
+            barras_rows(pata),
+        ))
+}
+
+/// Reconstruye `m.pata.surfaces` desde la tabla de barras, preservando los
+/// widgets de cada barra por índice (las filas nuevas son barras en blanco).
+fn apply_barras_table(m: &mut Model, rows: &[Vec<String>]) {
+    let mut nuevas: Vec<pata_core::Surface> = Vec::with_capacity(rows.len());
+    for (i, row) in rows.iter().enumerate() {
+        let mut surf = m.pata.surfaces.get(i).cloned().unwrap_or_default();
+        surf.name = row.first().cloned().unwrap_or_default();
+        surf.kind = parse_kind(row.get(1).map(String::as_str).unwrap_or("bar"));
+        surf.anchor = parse_anchor(row.get(2).map(String::as_str).unwrap_or("top"));
+        surf.enabled = es_activa(row.get(3).map(String::as_str).unwrap_or("sí"));
+        nuevas.push(surf);
+    }
+    m.pata.surfaces = nuevas;
+    m.dirty.pata = true;
+    sync_active_profile(m);
 }
 
 /// Crea un perfil nuevo desde la config viva y lo activa.
@@ -1292,6 +1401,15 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             }
             m.dirty.pata = true;
         }
+        // Lista de barras: la tabla reconstruye m.pata.surfaces (agregar/borrar/
+        // renombrar/prender-apagar). sync_active_profile lo guarda en el perfil.
+        "barras" => {
+            if let Some(rows) = value.as_table() {
+                apply_barras_table(m, &rows.to_vec());
+            }
+            m.save_in = SAVE_DELAY_TICKS;
+            return;
+        }
         _ => return,
     }
     // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
@@ -1439,6 +1557,10 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
             return Some(FieldValue::Bool(false));
         }
         return Some(FieldValue::Bool(m.dprofiles.active == name));
+    }
+    // Lista de barras: la tabla refleja m.pata.surfaces.
+    if key == "barras" {
+        return Some(FieldValue::Table(barras_rows(&m.pata)));
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),

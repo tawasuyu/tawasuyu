@@ -232,6 +232,14 @@ impl SidebarTab {
 #[derive(Debug, Clone, PartialEq)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct Surface {
+    /// Nombre legible de la barra (para el panel de control). Vacío = sin
+    /// nombre; el panel cae a un rótulo derivado del tipo/borde.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub name: String,
+    /// Si `false`, la superficie NO se crea (apagada). El panel la deja en la
+    /// lista pero el backend la omite. Default `true` (encendida).
+    #[cfg_attr(feature = "serde", serde(default = "default_enabled"))]
+    pub enabled: bool,
     /// Bar, Panel o Dock.
     #[cfg_attr(feature = "serde", serde(default))]
     pub kind: SurfaceKind,
@@ -318,6 +326,8 @@ pub struct Surface {
 impl Default for Surface {
     fn default() -> Self {
         Self {
+            name: String::new(),
+            enabled: true,
             kind: SurfaceKind::default(),
             anchor: Anchor::default(),
             thickness: default_thickness(),
@@ -702,6 +712,9 @@ impl Config {
     }
 }
 
+fn default_enabled() -> bool {
+    true
+}
 fn default_thickness() -> f32 {
     32.0
 }

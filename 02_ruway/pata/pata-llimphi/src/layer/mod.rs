@@ -288,28 +288,28 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .surfaces
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.kind == SurfaceKind::Bar)
+        .filter(|(_, s)| s.enabled && s.kind == SurfaceKind::Bar)
         .map(|(i, _)| i)
         .collect();
     let sidebars: Vec<usize> = cfg
         .surfaces
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.kind == SurfaceKind::Sidebar)
+        .filter(|(_, s)| s.enabled && s.kind == SurfaceKind::Sidebar)
         .map(|(i, _)| i)
         .collect();
     let docks: Vec<usize> = cfg
         .surfaces
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.kind == SurfaceKind::Dock)
+        .filter(|(_, s)| s.enabled && s.kind == SurfaceKind::Dock)
         .map(|(i, _)| i)
         .collect();
     let backgrounds: Vec<usize> = cfg
         .surfaces
         .iter()
         .enumerate()
-        .filter(|(_, s)| s.kind == SurfaceKind::Background)
+        .filter(|(_, s)| s.enabled && s.kind == SurfaceKind::Background)
         .map(|(i, _)| i)
         .collect();
     if bars.is_empty() && sidebars.is_empty() && docks.is_empty() && backgrounds.is_empty() {
@@ -622,7 +622,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     // Tarjetas flotantes (estilo conky).
     for (idx, s) in app.cfg.surfaces.iter().enumerate() {
-        if s.kind != SurfaceKind::Panel {
+        if !s.enabled || s.kind != SurfaceKind::Panel {
             continue;
         }
         let panel_output = resolve_output(&s.output);

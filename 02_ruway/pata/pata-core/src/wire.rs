@@ -214,6 +214,9 @@ impl From<&Surface> for WireSurface {
 impl From<WireSurface> for Surface {
     fn from(s: WireSurface) -> Self {
         Surface {
+            // El wire (wawa) no transporta nombre/encendido; defaults.
+            name: String::new(),
+            enabled: true,
             kind: s.kind,
             anchor: s.anchor,
             thickness: s.thickness,

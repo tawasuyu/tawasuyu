@@ -438,7 +438,11 @@ impl LayerApp {
             return false;
         }
         let cfg = pata_config::load();
-        if cfg.surfaces.len() != self.cfg.surfaces.len() {
+        // Comparamos el conteo de superficies ENCENDIDAS: agregar/quitar una
+        // barra O prenderla/apagarla cambia cuántas layer surfaces hay que
+        // anclar → re-exec. (Editar dientes dentro de una barra: hot-reload.)
+        let enc = |c: &pata_core::Config| c.surfaces.iter().filter(|s| s.enabled).count();
+        if enc(&cfg) != enc(&self.cfg) {
             // Cambió la CANTIDAD de superficies (p. ej. vista mac/mirada con
             // 2 superficies vs. una vista de 1): no se pueden reanclar layer
             // surfaces en caliente sin recrearlas. La vía limpia: re-ejecutar

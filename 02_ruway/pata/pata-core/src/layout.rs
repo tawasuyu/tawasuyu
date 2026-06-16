@@ -105,6 +105,10 @@ pub fn resolve(config: &Config, screen: Rect, dientes_outside: bool) -> Frame {
     let mut surfaces = Vec::with_capacity(config.surfaces.len());
 
     for (index, s) in config.surfaces.iter().enumerate() {
+        // Barra apagada: no se materializa ni reserva franja.
+        if !s.enabled {
+            continue;
+        }
         let t = s.thickness as i32;
         let (rect, reserva) = match s.kind {
             // Una barra reserva su grosor pegado al borde (salvo autohide).
