@@ -201,6 +201,9 @@ struct Model {
     /// del panel conmuta el activo; al cambiar, recarga el keymap visible.
     profiles: mirada_brain::KeymapProfiles,
     profiles_path: Option<PathBuf>,
+    /// La **vista** (perfil de escritorio completo) activa: look + decoración +
+    /// layout + atajos + barra. `None` = ninguna aplicada esta sesión.
+    active_vista: Option<String>,
     pata: pata_core::Config,
     allichay: AllichayState,
     host: HostInfo,
@@ -327,6 +330,7 @@ impl App for Panel {
             keymap_path,
             profiles,
             profiles_path,
+            active_vista: None,
             pata,
             allichay: AllichayState::new(),
             host,
@@ -587,44 +591,68 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
     schema
 }
 
-/// La pestaña **Perfiles**: una sección por perfil de atajos (dwm/i3/hyprland/
-/// propios) en el sidebar; al elegir uno, el canvas muestra su config —un toggle
-/// «Usar este perfil» y su tabla de atajos editable—. Cambios en tiempo real
-/// (el activo se vuelca a keymap.ron y el compositor lo recarga) y persistentes
-/// (profiles.ron). El perfil activo se marca con ●.
+/// La pestaña **Perfiles**: una sección por **vista** (perfil de escritorio
+/// COMPLETO: look + decoración + layout + atajos + barra — mirada/windows-xp/
+/// mac/kde/hyprland/dwm…) en el sidebar. Activar una vista aplica TODO de
+/// inmediato (config.ron + keymap.ron + launcher.toml de pata, que el
+/// compositor y pata recargan en caliente) y su config queda editable en las
+/// pestañas mirada · pata · Sistema. La activa se marca con ●.
 fn perfiles_schema(m: &Model) -> Schema {
-    use allichay::{Column, Field};
-    let active = m.profiles.active().to_string();
+    use allichay::Field;
     let mut schema = Schema::new();
-    for name in m.profiles.names() {
-        let is_active = name == active;
-        let rows = m
-            .profiles
-            .get(&name)
-            .map(|k| k.to_rows())
-            .unwrap_or_default();
+    for name in mirada_brain::VISTA_NAMES {
+        let label = mirada_brain::Vista::label_for(name);
+        let is_active = m.active_vista.as_deref() == Some(name);
         let title = if is_active {
-            format!("● {name}")
+            format!("● {label}")
         } else {
-            name.clone()
+            label.clone()
         };
         schema = schema.section(
-            Section::new(name.clone(), title)
-                .icon("⌨")
-                .help("Los atajos de este perfil. Activalo para usarlo en el escritorio.")
-                .field(Field::toggle("activo", "Usar este perfil", is_active))
-                .field(Field::table(
-                    "bindings",
-                    "Atajos",
-                    vec![
-                        Column::new("combo", "Combinación"),
-                        Column::new("action", "Acción"),
-                    ],
-                    rows,
+            Section::new(name, title)
+                .icon("🖥")
+                .help(
+                    "Vista de escritorio completa. Al activarla cambia look, \
+                     decoración, layout, atajos y barra al instante. Ajustá su \
+                     detalle en las pestañas mirada · pata · Sistema.",
+                )
+                .field(Field::toggle(
+                    "activo",
+                    format!("Usar la vista «{label}»"),
+                    is_active,
                 )),
         );
     }
     prefix_schema(schema, "perfiles")
+}
+
+/// Aplica una **vista** completa (perfil de escritorio): vuelca su config a
+/// `config.ron`, su keymap como perfil activo a `keymap.ron`, y la barra de la
+/// vista a `launcher.toml` — el compositor y pata recargan en caliente, así
+/// toda la vista se actualiza de inmediato. Refleja todo en el panel.
+fn apply_vista(m: &mut Model, name: &str) {
+    let Some(v) = mirada_brain::Vista::by_name(name) else {
+        return;
+    };
+    if let Some(p) = mirada_brain::Config::default_path() {
+        let _ = v.config.save(&p);
+    }
+    let _ = m.profiles.set_active(v.keymap);
+    if let Some(pp) = m.profiles_path.clone() {
+        let _ = m.profiles.save(&pp);
+    }
+    if let Some(kp) = m.keymap_path.clone() {
+        let _ = m.profiles.write_active_keymap(&kp);
+    }
+    if let Some(bar) = pata_core::Config::vista_preset(name) {
+        let _ = pata_config::save(&bar);
+        m.pata = bar;
+    }
+    // Reflejar en el panel para que las otras pestañas muestren la vista nueva.
+    m.mirada = v.config.clone();
+    m.keymap_rows = m.profiles.active_keymap().to_rows();
+    m.active_vista = Some(name.to_string());
+    m.status = format!("vista «{}» aplicada (en caliente)", v.label);
 }
 
 /// La sección "Atajos" de mirada: el keymap como tabla (combinación · acción).
@@ -791,32 +819,12 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
             m.dirty.wawa = true;
         }
-        // Pestaña Perfiles: el primer segmento es el NOMBRE del perfil.
+        // Pestaña Perfiles: el primer segmento es el NOMBRE de la vista; el
+        // toggle «activo» la aplica entera (look + atajos + barra) en caliente.
         "perfiles" => {
             let name = rel.segments().first().cloned().unwrap_or_default();
-            match rel.leaf() {
-                // «Usar este perfil» → lo activa (vuelca su keymap a keymap.ron).
-                Some("activo") => {
-                    if value.as_bool() == Some(true) && m.profiles.set_active(&name).is_ok() {
-                        m.keymap_rows = m.profiles.active_keymap().to_rows();
-                        m.dirty.keymap = true;
-                        m.dirty.profiles = true;
-                    }
-                }
-                // Editar la tabla de atajos de ESE perfil.
-                Some("bindings") => {
-                    if let Some(rows) = value.as_table() {
-                        let km = mirada_brain::Keymap::from_rows(rows);
-                        let _ = m.profiles.set_keymap(&name, km);
-                        m.dirty.profiles = true;
-                        // Si es el activo, refleja el cambio en el keymap vivo.
-                        if m.profiles.active() == name {
-                            m.keymap_rows = rows.to_vec();
-                            m.dirty.keymap = true;
-                        }
-                    }
-                }
-                _ => {}
+            if rel.leaf() == Some("activo") && value.as_bool() == Some(true) {
+                apply_vista(m, &name);
             }
         }
         "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {
@@ -983,15 +991,10 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
             _ => FieldValue::Table(m.keymap_rows.clone()),
         });
     }
-    // Pestaña Perfiles: toggle «activo» + tabla de atajos de ese perfil.
+    // Pestaña Perfiles: el toggle «activo» = si esta vista es la aplicada.
     if key == "perfiles" {
         let name = rel.segments().first().cloned().unwrap_or_default();
-        return Some(match rel.leaf() {
-            Some("activo") => FieldValue::Bool(m.profiles.active() == name),
-            _ => FieldValue::Table(
-                m.profiles.get(&name).map(|k| k.to_rows()).unwrap_or_default(),
-            ),
-        });
+        return Some(FieldValue::Bool(m.active_vista.as_deref() == Some(name.as_str())));
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),
