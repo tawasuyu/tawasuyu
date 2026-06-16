@@ -21,6 +21,8 @@ llimphi-motion = { workspace = true }
 llimphi-widget-dock-rail = { workspace = true }
 llimphi-widget-splitter = { workspace = true }
 llimphi-module-allichay = { workspace = true }
+# Diálogo de abrir archivo (elegir wallpaper, etc.).
+llimphi-module-file-picker = { workspace = true }
 app-bus = { workspace = true }
 allichay = { workspace = true }
 rimay-localize = { path = "../../../shared/rimay-localize" }

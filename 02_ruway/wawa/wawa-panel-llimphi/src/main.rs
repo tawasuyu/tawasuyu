@@ -21,6 +21,8 @@ use std::sync::Arc;
 
 use perfiles::{DesktopProfile, DesktopProfiles};
 
+use llimphi_module_file_picker::{self as picker, PickerAction, PickerMsg, PickerState};
+
 use allichay::{Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section};
 use app_bus::{AppMenu, Menu, MenuItem};
 use llimphi_module_allichay::{schema_panel, AllichayMsg, AllichayState};
@@ -227,6 +229,11 @@ struct Model {
     menu_open: Option<usize>,
     menu_active: usize,
     menu_anim: Tween<f32>,
+    /// Diálogo de abrir archivo (elegir wallpaper). `None` = cerrado. Cuando está
+    /// abierto, `picker_paths` son los archivos candidatos y `picker_root` la base.
+    picker: Option<PickerState>,
+    picker_paths: Vec<PathBuf>,
+    picker_root: PathBuf,
 }
 
 /// Ticks (de [`TICK_MS`]) que se espera tras el último cambio antes de persistir.
@@ -260,6 +267,8 @@ enum Msg {
     Allichay(AllichayMsg),
     /// Tecla al campo de texto en edición.
     AllichayKey(KeyEvent),
+    /// Mensaje del diálogo de archivos (elegir wallpaper).
+    Picker(PickerMsg),
     /// Cambió la config del SO desde afuera (otro panel, edición manual).
     ConfigChanged(Box<WawaConfig>),
     MenuOpen(Option<usize>),
@@ -357,6 +366,24 @@ impl App for Panel {
             }
             Msg::Allichay(AllichayMsg::Change(path, value)) => route_change(&mut m, &path, value),
             Msg::Allichay(AllichayMsg::ScrollTo(offset)) => m.allichay.set_scroll(offset),
+            Msg::Picker(pm) => {
+                // Tomamos el estado por valor para no chocar el borrow con
+                // picker_paths/sync_active_profile.
+                if let Some(mut st) = m.picker.take() {
+                    match picker::apply(&mut st, pm, &m.picker_paths, &m.picker_root) {
+                        PickerAction::Open(path) => {
+                            m.mirada.wallpaper_path = path.to_string_lossy().to_string();
+                            m.dirty.mirada = true;
+                            sync_active_profile(&mut m);
+                            m.save_in = SAVE_DELAY_TICKS;
+                            m.status = format!("fondo: {}", path.display());
+                            // queda cerrado (no devolvemos el estado)
+                        }
+                        PickerAction::Close => { /* cerrado */ }
+                        PickerAction::None => m.picker = Some(st),
+                    }
+                }
+            }
             Msg::AllichayKey(event) => {
                 if let Some((path, value)) = m.allichay.apply_key(&event) {
                     route_change(&mut m, &path, value);
@@ -412,6 +439,10 @@ impl App for Panel {
         if event.state != KeyState::Pressed {
             return None;
         }
+        // Diálogo de archivos abierto → todas las teclas al picker.
+        if let Some(st) = &model.picker {
+            return picker::on_key(st, event).map(Msg::Picker);
+        }
         // Edición de texto en curso → todas las teclas al renderizador.
         if model.allichay.is_editing() {
             return Some(Msg::AllichayKey(event.clone()));
@@ -461,6 +492,33 @@ impl App for Panel {
 
     fn view_overlay(model: &Model) -> Option<View<Msg>> {
         let theme = theme_from_cfg(&model.cfg);
+        // El diálogo de archivos tiene prioridad: modal centrado con scrim.
+        if let Some(st) = &model.picker {
+            let pal = llimphi_module_file_picker::PickerPalette::from_theme(&theme);
+            let panel = picker::view(st, &model.picker_paths, &model.picker_root, &pal, Msg::Picker);
+            let caja = View::new(Style {
+                size: Size { width: length(720.0_f32), height: length(460.0_f32) },
+                ..Default::default()
+            })
+            .children(vec![panel]);
+            let scrim = View::new(Style {
+                position: Position::Absolute,
+                inset: Rect {
+                    left: length(0.0_f32),
+                    top: length(0.0_f32),
+                    right: length(0.0_f32),
+                    bottom: length(0.0_f32),
+                },
+                size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+                align_items: Some(AlignItems::Center),
+                justify_content: Some(JustifyContent::Center),
+                ..Default::default()
+            })
+            .fill(llimphi_ui::llimphi_raster::peniko::Color::from_rgba8(0, 0, 0, 150))
+            .on_click(Msg::Picker(PickerMsg::Close))
+            .children(vec![caja]);
+            return Some(scrim);
+        }
         let menu = app_menu();
         menubar_overlay_animated(
             &menubar_spec(&menu, model, &theme),
@@ -529,6 +587,9 @@ fn build_model(watcher: Option<ConfigWatcher>) -> Model {
         menu_open: None,
         menu_active: usize::MAX,
         menu_anim: Tween::idle(1.0),
+        picker: None,
+        picker_paths: Vec::new(),
+        picker_root: PathBuf::from("/"),
     }
 }
 
@@ -567,8 +628,21 @@ fn shot_panel(out: &str, pest: Option<usize>, item: Option<usize>) {
         model.selected_item = Some(i);
         model.allichay.select(i);
     }
+    // WAWA_SHOT_PICKER=1 abre el diálogo de archivos para capturarlo.
+    if std::env::var_os("WAWA_SHOT_PICKER").is_some() {
+        open_wallpaper_picker(&mut model);
+    }
     let (w, h) = Panel::initial_size();
-    let view = Panel::view(&model);
+    // Si hay overlay (menú o diálogo), lo componemos encima de la vista base.
+    let base = Panel::view(&model);
+    let view = match Panel::view_overlay(&model) {
+        Some(ov) => View::new(Style {
+            size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
+            ..Default::default()
+        })
+        .children(vec![base, ov]),
+        None => base,
+    };
 
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
@@ -687,7 +761,12 @@ fn pestanas(m: &Model) -> Vec<PanelPestana> {
         PanelPestana {
             title: "Sistema".into(),
             icon: "⚙".into(),
-            schema: sistema_schema(&m.cfg),
+            schema: {
+                let mut s = sistema_schema(&m.cfg);
+                // Fondo: muestra/elige el wallpaper del perfil activo (mirada).
+                s.sections.push(fondo_section(&m.mirada.wallpaper_path));
+                s
+            },
         },
         PanelPestana {
             title: "Información".into(),
@@ -1014,6 +1093,76 @@ fn arranque_section() -> Section {
         ))
 }
 
+/// Fondo de escritorio: muestra la imagen actual del perfil activo y abre el
+/// diálogo de archivos para elegir otra (toggle de acción).
+fn fondo_section(wallpaper: &str) -> Section {
+    let actual = if wallpaper.trim().is_empty() {
+        "(ninguna)".to_string()
+    } else {
+        wallpaper.to_string()
+    };
+    Section::new("wawa::fondo", "Fondo")
+        .icon("▦")
+        .help("Imagen de fondo del escritorio (del perfil activo).")
+        .field(Field::display("imagen", "Imagen actual", actual))
+        .field(Field::toggle("elegir", "Elegir imagen de fondo…", false))
+}
+
+/// Escanea `dir` (y un nivel de subcarpetas) por imágenes y las agrega a `out`.
+fn scan_images(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    let es_imagen = |p: &std::path::Path| {
+        let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+        matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "webp" | "bmp")
+    };
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_file() {
+            if es_imagen(&p) {
+                out.push(p);
+            }
+        } else if p.is_dir() {
+            if let Ok(rd2) = std::fs::read_dir(&p) {
+                for e2 in rd2.flatten() {
+                    let p2 = e2.path();
+                    if p2.is_file() && es_imagen(&p2) {
+                        out.push(p2);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Abre el diálogo de archivos poblado con imágenes de las carpetas habituales
+/// de wallpapers + la carpeta configurada.
+fn open_wallpaper_picker(m: &mut Model) {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(h) = &home {
+        dirs.push(h.join("Pictures"));
+        dirs.push(h.join("Imágenes"));
+        dirs.push(h.join("Wallpapers"));
+        dirs.push(h.join("Fondos"));
+        dirs.push(h.join(".config/mirada/wallpapers"));
+    }
+    dirs.push(PathBuf::from("/usr/share/backgrounds"));
+    if !m.mirada.wallpaper_dir.trim().is_empty() {
+        dirs.push(PathBuf::from(&m.mirada.wallpaper_dir));
+    }
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for d in &dirs {
+        scan_images(d, &mut paths);
+    }
+    paths.sort();
+    paths.dedup();
+    let root = home.unwrap_or_else(|| PathBuf::from("/"));
+    m.picker = Some(PickerState::new(&paths, &root));
+    m.picker_paths = paths;
+    m.picker_root = root;
+    m.status = format!("elegí un fondo ({} imágenes)", m.picker_paths.len());
+}
+
 fn modulos_section(cfg: &WawaConfig) -> Section {
     let t = rimay_localize::t;
     let mut section = Section::new("wawa::modulos", t("wawa-panel-cat-modules")).icon("☸");
@@ -1078,6 +1227,13 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
     };
     match key.as_str() {
         "wawa" => {
+            // Sección Fondo: el toggle «elegir» abre el diálogo de archivos.
+            if rel.segments().first().map(String::as_str) == Some("fondo") {
+                if rel.leaf() == Some("elegir") && value.as_bool() == Some(true) {
+                    open_wallpaper_picker(m);
+                }
+                return;
+            }
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
             m.dirty.wawa = true;
         }
