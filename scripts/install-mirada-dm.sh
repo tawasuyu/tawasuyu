@@ -63,6 +63,24 @@ sudo install -Dm755 "$BIN/mirada-wallpaper"        /usr/local/bin/mirada-wallpap
 # Es el panel donde las apps integran sus ajustes. No estaba instalado.
 sudo install -Dm755 "$BIN/wawa-panel"              /usr/local/bin/wawa-panel
 
+# Apps de la suite: los binarios que LANZAN los lanzadores de la barra (botón
+# Inicio, dock de mac, front panel de CDE, menú de apps). Sin esto, click en un
+# lanzador hace `spawn` de un binario que no está en el PATH y NO PASA NADA.
+# Instalamos sólo los que ya existan en target/release (no forzamos un build
+# enorme): construilos con `cargo build --release -p <crate>` y recorré esto.
+echo "==> instalando apps de la suite presentes en $BIN (para que los lanzadores funcionen)"
+for app in \
+    nada pluma-editor-llimphi pluma-notebook-llimphi tullpu-app-llimphi \
+    takiy-app-llimphi media-app cosmos-app-llimphi dominium-app-llimphi \
+    tinkuy-llimphi chaka-app-llimphi nakui-sheet-llimphi puriy raymi-app \
+    supay-app-llimphi sandokan-monitor nahual-shell-llimphi
+do
+    if [ -x "$BIN/$app" ]; then
+        sudo install -Dm755 "$BIN/$app" "/usr/local/bin/$app"
+        echo "    + $app"
+    fi
+done
+
 # Scripts de sesión + lanzador del DM.
 sudo install -Dm755 "$MC/session/mirada-session"      /usr/local/bin/mirada-session
 sudo install -Dm755 "$MC/session/mirada-session-pata" /usr/local/bin/mirada-session-pata
