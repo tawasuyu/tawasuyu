@@ -23,3 +23,12 @@ llimphi-raster = { path = "../llimphi-raster" }
 llimphi-theme = { path = "../llimphi-theme" }
 png = { workspace = true }
 pollster = { workspace = true }
+# Widgets REALES para el showreel: el `View<Msg>` que devuelven es el mismo
+# tipo (`llimphi_compositor::View`, re-exportado por llimphi-ui), así que
+# montan con el mount/paint/measure de este mismo crate. Dev-only → sin ciclo
+# en el grafo normal (llimphi-ui depende de este crate, no al revés).
+llimphi-widget-switch = { path = "../widgets/switch" }
+llimphi-widget-slider = { path = "../widgets/slider" }
+llimphi-widget-progress = { path = "../widgets/progress" }
+llimphi-widget-button = { path = "../widgets/button" }
+llimphi-widget-segmented = { path = "../widgets/segmented" }

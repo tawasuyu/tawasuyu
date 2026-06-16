@@ -16,3 +16,6 @@ pkg/
 
 # Artefacto de deploy de la landing (build-tawasuyu-web.sh con DEST); el sitio se sirve del repo vivo
 /release/
+
+# Frames intermedios del showreel (regenerables con scripts/showreel.sh)
+showreel_frames/

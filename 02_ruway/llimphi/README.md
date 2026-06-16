@@ -31,9 +31,11 @@ Full crate index (framework · widgets · modules · android) in [MANUAL.md](MAN
 
 ## Demo
 
-Live: **<https://tawasuyu.net/02_ruway/llimphi/demo/>** — a self-contained prezi-style tour: arch, Elm loop, widget kit, and headless screenshots of ~10 real apps running on llimphi (cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Space / arrows / click to navigate; auto-advances every 6 s — ready to screen-record.
+[![Llimphi showreel — real widgets (switch, slider, progress, segmented control, buttons, radial) animating live on the Tawa theme, then reflowing across layouts](https://tawasuyu.net/02_ruway/llimphi/llimphi_showreel.gif)](https://tawasuyu.net/02_ruway/llimphi/llimphi_showreel.mp4)
 
-Source under [`demo/`](demo/index.html) (plain HTML+CSS+JS, no build step). To run locally: `python3 -m http.server -d demo`.
+A ~10 s showreel of real llimphi widgets in motion — rendered **headless, frame-by-frame, fully deterministic** (no clock; each frame is a pure function of `t ∈ [0,1]`). Click for the full-res MP4. Source: [`llimphi-compositor/examples/showreel.rs`](llimphi-compositor/examples/showreel.rs); regenerate with [`scripts/showreel.sh`](../../scripts/showreel.sh).
+
+Full tour: **<https://tawasuyu.net/02_ruway/llimphi/demo/>** — a self-contained slide deck (arch, Elm loop, widget kit, and headless screenshots of ~10 real apps running on llimphi: cosmos · pluma · nada · takiy · tullpu · supay · dominium · nahual · shuma…). Source under [`demo/`](demo/index.html).
 
 ## Considerations
 
