@@ -255,6 +255,13 @@ pub struct Surface {
     /// shell (`shuma_input`) vive típicamente en una barra inferior con esto.
     #[cfg_attr(feature = "serde", serde(default))]
     pub autohide: bool,
+    /// Para `kind = sidebar`: ¿reserva su franja del escritorio («supeditada al
+    /// desktop», las ventanas no la tapan) o flota como overlay encima? `None`
+    /// = sigue la decisión global `dientes_outside`; `Some(true)` = reserva
+    /// siempre; `Some(false)` = flota siempre. Permite tener UN sidebar
+    /// (p. ej. el derecho) acoplado al desktop sin tocar el resto.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub reserve: Option<bool>,
     /// Padding interno (px) entre el borde y el primer widget.
     #[cfg_attr(feature = "serde", serde(default = "default_padding"))]
     pub padding: f32,
@@ -332,6 +339,7 @@ impl Default for Surface {
             anchor: Anchor::default(),
             thickness: default_thickness(),
             autohide: false,
+            reserve: None,
             padding: default_padding(),
             gap: default_gap(),
             opacity: default_opacity(),

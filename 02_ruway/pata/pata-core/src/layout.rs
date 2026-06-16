@@ -127,7 +127,11 @@ pub fn resolve(config: &Config, screen: Rect, dientes_outside: bool) -> Frame {
             // panel que despliega un diente flota aparte (lo maneja el frontend).
             SurfaceKind::Sidebar => {
                 let r = strip(work, s.anchor, t);
-                if dientes_outside && !s.autohide {
+                // Override por-superficie (`reserve`) sobre la decisión global
+                // `dientes_outside`: así un sidebar puntual (el derecho) puede
+                // quedar «supeditado al desktop» (reserva) aunque el resto flote.
+                let outside = s.reserve.unwrap_or(dientes_outside);
+                if outside && !s.autohide {
                     work = shrink(work, s.anchor, t);
                     (r, true)
                 } else {
@@ -296,6 +300,31 @@ mod tests {
         // …y el área de trabajo arranca 44px a la derecha (el panel desplegado
         // flota encima, no entra en `resolve`).
         assert_eq!(f.work_area, Rect::new(44, 0, 1920 - 44, 1080));
+    }
+
+    #[test]
+    fn sidebar_reserve_override_supedita_al_desktop() {
+        // El sidebar derecho con `reserve = Some(true)` reserva su franja
+        // AUNQUE la decisión global `dientes_outside` sea false (flotar).
+        let mut cfg = Config::default();
+        let mut sb = Surface::sidebar(Anchor::Right);
+        sb.thickness = 44.0;
+        sb.reserve = Some(true);
+        cfg.surfaces.push(sb);
+
+        let f = resolve(&cfg, pantalla(), false); // global = flotar
+        assert!(f.surfaces[0].reserva, "reserve=Some(true) debe reservar");
+        assert_eq!(f.work_area, Rect::new(0, 0, 1920 - 44, 1080));
+
+        // Y `reserve = Some(false)` flota aunque el global diga reservar.
+        let mut cfg2 = Config::default();
+        let mut sb2 = Surface::sidebar(Anchor::Right);
+        sb2.thickness = 44.0;
+        sb2.reserve = Some(false);
+        cfg2.surfaces.push(sb2);
+        let f2 = resolve(&cfg2, pantalla(), true); // global = reservar
+        assert!(!f2.surfaces[0].reserva, "reserve=Some(false) debe flotar");
+        assert_eq!(f2.work_area, pantalla());
     }
 
     #[test]

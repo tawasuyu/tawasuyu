@@ -323,6 +323,12 @@ pub enum Control {
     /// información (estado del sistema, versión…) que conviven con los
     /// editables en un mismo panel.
     Display,
+    /// Botón de **acción**: un click dispara la acción y nada más (no guarda
+    /// estado). El renderizador emite [`FieldValue::Bool(true)`] al clickear —
+    /// un pulso, no un toggle —, y el rótulo del botón es el `label` del campo.
+    /// Para crear/duplicar/eliminar y demás acciones que NO son interruptores
+    /// (antes se fingían con un [`Control::Toggle`] que se auto-apagaba).
+    Button,
 }
 
 // =====================================================================
@@ -478,6 +484,12 @@ impl Field {
         value: impl Into<String>,
     ) -> Self {
         Self::new(id, label, FieldValue::Text(value.into()), Control::Display)
+    }
+
+    /// Un botón de acción: al clickearlo el renderizador emite
+    /// `FieldValue::Bool(true)` (un pulso). El `label` es el texto del botón.
+    pub fn button(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self::new(id, label, FieldValue::Bool(false), Control::Button)
     }
 }
 

@@ -922,9 +922,9 @@ fn perfiles_schema(m: &Model) -> Schema {
         Section::new("perfiles::acciones", "Acciones")
             .icon("✚")
             .help("Crear un perfil nuevo desde la config actual, o duplicar/eliminar el activo.")
-            .field(Field::toggle("crear", "Crear perfil nuevo (desde el actual)", false))
-            .field(Field::toggle("duplicar", format!("Duplicar «{activo}»"), false))
-            .field(Field::toggle("eliminar", format!("Eliminar «{activo}»"), false)),
+            .field(Field::button("crear", "Crear perfil nuevo (desde el actual)"))
+            .field(Field::button("duplicar", format!("Duplicar «{activo}»")))
+            .field(Field::button("eliminar", format!("Eliminar «{activo}»"))),
     );
     for name in m.dprofiles.names() {
         let is_active = m.dprofiles.active == name;
@@ -942,11 +942,13 @@ fn perfiles_schema(m: &Model) -> Schema {
                      su configuración aparece anidada debajo (▸) y se guarda dentro \
                      del perfil.",
                 )
-                .field(Field::toggle(
-                    "activo",
-                    format!("Usar «{name}»"),
-                    is_active,
-                )),
+                // Activar un perfil es una ACCIÓN (no un interruptor): botón, no
+                // radio. El activo ya se marca con «●» en el título de su diente.
+                .field(if is_active {
+                    Field::display("activo", "Estado", "● activo")
+                } else {
+                    Field::button("activo", format!("Usar «{name}»"))
+                }),
         );
         // Config ANIDADA bajo el perfil activo (jerarquizada en el sidebar): sus
         // secciones rutean a mirada/pata → editan ESTE perfil (sync lo guarda).
@@ -1036,6 +1038,11 @@ fn barras_rows(pata: &pata_core::Config) -> Vec<Vec<String>> {
                 kind_slug(s.kind).to_string(),
                 anchor_slug(s.anchor).to_string(),
                 if s.enabled { "sí".into() } else { "no".into() },
+                match s.reserve {
+                    Some(true) => "sí".into(),
+                    Some(false) => "no".into(),
+                    None => "auto".into(),
+                },
             ]
         })
         .collect()
@@ -1049,7 +1056,9 @@ fn barras_section(pata: &pata_core::Config) -> Section {
         .help(
             "Las barras de este perfil. Agregá/borrá filas con +/−, nombralas, \
              elegí tipo (bar/sidebar/dock/background) y borde (top/bottom/left/ \
-             right), y prendé/apagá con la columna Activa (sí/no).",
+             right), y prendé/apagá con la columna Activa (sí/no). Reserva \
+             (sólo sidebar): sí = supeditada al desktop (las ventanas no la \
+             tapan), no = flota encima, auto = sigue el ajuste global.",
         )
         .field(Field::table(
             "lista",
@@ -1059,6 +1068,7 @@ fn barras_section(pata: &pata_core::Config) -> Section {
                 Column::new("tipo", "Tipo"),
                 Column::new("borde", "Borde"),
                 Column::new("activa", "Activa"),
+                Column::new("reserva", "Reserva"),
             ],
             barras_rows(pata),
         ))
@@ -1074,6 +1084,11 @@ fn apply_barras_table(m: &mut Model, rows: &[Vec<String>]) {
         surf.kind = parse_kind(row.get(1).map(String::as_str).unwrap_or("bar"));
         surf.anchor = parse_anchor(row.get(2).map(String::as_str).unwrap_or("top"));
         surf.enabled = es_activa(row.get(3).map(String::as_str).unwrap_or("sí"));
+        surf.reserve = match row.get(4).map(|s| s.trim().to_lowercase()).as_deref() {
+            Some("sí") | Some("si") | Some("true") | Some("1") => Some(true),
+            Some("no") | Some("false") | Some("0") => Some(false),
+            _ => None, // "auto"/vacío: sigue dientes_outside
+        };
         nuevas.push(surf);
     }
     m.pata.surfaces = nuevas;

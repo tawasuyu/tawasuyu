@@ -576,6 +576,7 @@ fn field_height(field: &Field) -> f32 {
         Control::List { .. } => table_height(field.value.row_count(), false),
         Control::Table { .. } => table_height(field.value.row_count(), true),
         Control::Display => 8.0, // fila compacta sin label arriba
+        Control::Button => 34.0, // fila compacta: el botón ES la fila
     }
 }
 
@@ -733,6 +734,9 @@ where
         }
         Control::Table { columns } => table_control(field, path, columns, state, theme, on_msg),
         Control::Display => return display_row(field, theme),
+        // El botón ES la fila completa (lleva su rótulo dentro): no le ponemos
+        // un label arriba como a los controles escalares.
+        Control::Button => return button_control(field, path, theme, on_msg),
     };
 
     let mut kids = vec![label_view(&field.label, theme), control];
@@ -793,6 +797,45 @@ where
     let progress = if cur { 1.0 } else { 0.0 };
     let msg = on_msg(AllichayMsg::Change(path, FieldValue::Bool(!cur)));
     switch_view(progress, msg, &SwitchPalette::from_theme(theme))
+}
+
+/// Botón de acción: una fila clickeable con el rótulo del campo. Al clickear
+/// emite `Change(path, Bool(true))` — un pulso. Sin estado on/off (a diferencia
+/// del [`toggle_control`], que era lo que antes simulaba las acciones).
+fn button_control<Msg, F>(field: &Field, path: FieldPath, theme: &Theme, on_msg: F) -> View<Msg>
+where
+    Msg: Clone + Send + Sync + 'static,
+    F: Fn(AllichayMsg) -> Msg + Clone + Send + Sync + 'static,
+{
+    let msg = on_msg(AllichayMsg::Change(path, FieldValue::Bool(true)));
+    let lbl = View::new(Style {
+        size: Size { width: percent(1.0_f32), height: length(28.0_f32) },
+        flex_grow: 1.0,
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        ..Default::default()
+    })
+    .text_aligned(field.label.clone(), 12.5, theme.fg_text, Alignment::Center)
+    .ellipsis(1);
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(30.0_f32) },
+        align_items: Some(AlignItems::Center),
+        justify_content: Some(JustifyContent::Center),
+        padding: Rect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .radius(7.0)
+    .fill(theme.bg_input)
+    .border(1.0, theme.border)
+    .hover_fill(theme.bg_row_hover)
+    .on_click(msg)
+    .children(vec![lbl])
 }
 
 fn slider_control<Msg, F>(
