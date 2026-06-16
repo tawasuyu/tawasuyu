@@ -134,6 +134,8 @@ pub fn resolve(config: &Config, screen: Rect, dientes_outside: bool) -> Frame {
             SurfaceKind::Dock => (strip(work, s.anchor, t), false),
             // Panel: ocupa el área libre como lienzo de sus tarjetas, sin reservar.
             SurfaceKind::Panel => (work, false),
+            // Fondo: ocupa la pantalla entera detrás de todo, sin reservar.
+            SurfaceKind::Background => (screen, false),
         };
         surfaces.push(Placed {
             index,

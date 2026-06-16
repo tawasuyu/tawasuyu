@@ -75,6 +75,11 @@ pub enum SurfaceKind {
     /// reserva su grosor como una barra; si `autohide`, no reserva y reaparece
     /// al rozar el borde. El panel desplegado flota, no reserva.
     Sidebar,
+    /// Fondo de escritorio: una superficie a **pantalla completa** que vive
+    /// DETRÁS de las ventanas (capa Background, sin zona exclusiva). Su(s)
+    /// widget(s) llenan la pantalla — p. ej. el Program Manager de Windows 3.1,
+    /// que ES el escritorio. No reserva espacio ni roba foco.
+    Background,
 }
 
 /// El valor de una propiedad de widget, agnóstico del formato en disco. El
@@ -351,6 +356,15 @@ impl Surface {
         Self {
             kind: SurfaceKind::Dock,
             anchor,
+            ..Self::default()
+        }
+    }
+
+    /// Un fondo de escritorio a pantalla completa (detrás de las ventanas).
+    pub fn background() -> Self {
+        Self {
+            kind: SurfaceKind::Background,
+            anchor: Anchor::Top, // irrelevante: se ancla a los 4 bordes.
             ..Self::default()
         }
     }
@@ -641,8 +655,10 @@ impl Config {
     /// título azul). Sin taskbar (Win3.1 no tenía): la "ventana" del PM es el
     /// escritorio. El alto reserva espacio para la grilla.
     fn vista_windows_31() -> Self {
-        let mut pm = Surface::bar(Anchor::Top);
-        pm.thickness = 412.0;
+        // El Program Manager ES el escritorio Win3.1: superficie de fondo a
+        // pantalla completa, detrás de las ventanas (no una barra que reserva
+        // franja). Sus ventanas de programas se abren por encima.
+        let mut pm = Surface::background();
         pm.padding = 16.0;
         pm.center = vec![WidgetSpec::new("program_manager")];
         Self {

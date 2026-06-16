@@ -31,6 +31,7 @@ impl SurfaceKind {
             SurfaceKind::Panel => "panel",
             SurfaceKind::Dock => "dock",
             SurfaceKind::Sidebar => "sidebar",
+            SurfaceKind::Background => "background",
         }
     }
     fn from_id(id: &str) -> Option<Self> {
@@ -39,6 +40,7 @@ impl SurfaceKind {
             "panel" => Some(SurfaceKind::Panel),
             "dock" => Some(SurfaceKind::Dock),
             "sidebar" => Some(SurfaceKind::Sidebar),
+            "background" => Some(SurfaceKind::Background),
             _ => None,
         }
     }

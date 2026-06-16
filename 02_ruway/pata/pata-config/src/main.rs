@@ -207,6 +207,7 @@ fn kind_str(k: SurfaceKind) -> &'static str {
         SurfaceKind::Panel => "panel",
         SurfaceKind::Dock => "dock",
         SurfaceKind::Sidebar => "sidebar",
+        SurfaceKind::Background => "background",
     }
 }
 

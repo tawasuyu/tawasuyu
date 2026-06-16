@@ -956,6 +956,43 @@ pub fn bar_view(
     bar_body(surface, surface_widgets, shuma_state, data, theme, dir)
 }
 
+/// **Fondo de escritorio** a pantalla completa (Program Manager de Win3.1): su
+/// contenido llena la superficie, sin el reparto en tercios de la barra. Hoy el
+/// único contenido es el Program Manager (en `center`); si no lo lleva, cae a
+/// `bar_view`.
+pub fn background_view(
+    surface: &Surface,
+    surface_widgets: &SurfaceWidgets,
+    shuma_state: &ShumaState,
+    data: &BarData,
+    theme: &Theme,
+) -> View<Msg> {
+    let tiene_pm = surface_widgets
+        .center
+        .iter()
+        .chain(&surface_widgets.start)
+        .any(|w| matches!(w, SlotWidget::ProgramManager));
+    if !tiene_pm {
+        return bar_view(surface, surface_widgets, shuma_state, data, theme);
+    }
+    let pm = start_menus::program_manager_view(data.apps, theme);
+    // Contenedor a pantalla completa con padding; el PM llena el resto.
+    View::new(Style {
+        size: Size {
+            width: percent(1.0_f32),
+            height: percent(1.0_f32),
+        },
+        padding: TaffyRect {
+            left: length(surface.padding),
+            right: length(surface.padding),
+            top: length(surface.padding),
+            bottom: length(surface.padding),
+        },
+        ..Default::default()
+    })
+    .children(vec![pm])
+}
+
 /// **Dock estilo macOS**: una fila centrada, pegada al borde, con un ícono por
 /// ventana abierta, **magnificados** según la cercanía del puntero. `cursor_x`
 /// es la coord X local del panel (o `None` si el puntero no está encima). Cada

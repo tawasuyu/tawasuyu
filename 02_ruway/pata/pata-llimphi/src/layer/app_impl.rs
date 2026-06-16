@@ -704,6 +704,15 @@ impl LayerApp {
                 w as f32,
                 self.panels[pi].cursor_x,
             )
+        } else if self.cfg.surfaces[idx].kind == SurfaceKind::Background {
+            // Fondo de escritorio (Program Manager Win3.1): llena la pantalla.
+            render::background_view(
+                &self.cfg.surfaces[idx],
+                &self.surfaces[idx],
+                &self.shuma,
+                &data,
+                &self.theme,
+            )
         } else {
             render::bar_view(
                 &self.cfg.surfaces[idx],

@@ -305,8 +305,15 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         .filter(|(_, s)| s.kind == SurfaceKind::Dock)
         .map(|(i, _)| i)
         .collect();
-    if bars.is_empty() && sidebars.is_empty() && docks.is_empty() {
-        return Err("pata · la config no tiene ninguna superficie anclable (bar/sidebar/dock)".into());
+    let backgrounds: Vec<usize> = cfg
+        .surfaces
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.kind == SurfaceKind::Background)
+        .map(|(i, _)| i)
+        .collect();
+    if bars.is_empty() && sidebars.is_empty() && docks.is_empty() && backgrounds.is_empty() {
+        return Err("pata · la config no tiene ninguna superficie anclable (bar/sidebar/dock/fondo)".into());
     }
     diag!(
         "pata diag · backend LAYER-SHELL arranca · {} barra(s) + {} sidebar(s) + {} dock(s)",
@@ -568,6 +575,43 @@ pub fn run() -> Result<(), Box<dyn Error>> {
                 cache: None,
                 width: size.0.max(1),
                 height: thickness,
+                dirty: true,
+                hover_idx: None,
+                cursor_x: None,
+                gpu: None,
+            });
+        }
+    }
+
+    // Una layer surface por **fondo** de escritorio (Program Manager Win3.1):
+    // capa Background (detrás de las ventanas), anclada a los 4 bordes y de
+    // tamaño 0 → el compositor la estira a la salida completa; `configure`
+    // reporta el tamaño real. Sin zona exclusiva ni teclado.
+    for &idx in &backgrounds {
+        let s = &app.cfg.surfaces[idx];
+        for target in targets_de(&s.output) {
+            let wl_surface = compositor.create_surface(&qh);
+            let layer = layer_shell.create_layer_surface(
+                &qh,
+                wl_surface,
+                Layer::Background,
+                Some("pata-fondo".to_string()),
+                target.as_ref(),
+            );
+            layer.set_anchor(
+                LayerAnchor::TOP | LayerAnchor::BOTTOM | LayerAnchor::LEFT | LayerAnchor::RIGHT,
+            );
+            layer.set_size(0, 0); // anclado a los 4 bordes → llena la salida.
+            layer.set_exclusive_zone(0);
+            layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+            layer.commit();
+            app.panels.push(Panel {
+                idx,
+                card: None,
+                layer,
+                cache: None,
+                width: 1,
+                height: 1,
                 dirty: true,
                 hover_idx: None,
                 cursor_x: None,
