@@ -418,13 +418,45 @@ pub(crate) fn build_node(
             // mask_image queda None. Fase 7.1226 (pintado), 7.1227 (encaje).
             let mask_image = match &style.mask_image {
                 Some(crate::style::MaskImage::Url(u)) => fetch_image_src(base, u).map(|img| {
-                    (
-                        img,
-                        style.mask_size,
-                        style.mask_position,
-                        style.mask_repeat,
-                        style.mask_mode,
-                    )
+                    // Insets border-box → caja de referencia (mask-clip /
+                    // mask-origin). padding-box = border; content-box =
+                    // border + padding; border/no-clip/SVG-box → None
+                    // (border-box). Fase 7.1230.
+                    let border_inset = || {
+                        [
+                            style.border_widths.top,
+                            style.border_widths.right,
+                            style.border_widths.bottom,
+                            style.border_widths.left,
+                        ]
+                    };
+                    let content_inset = || {
+                        [
+                            style.border_widths.top + style.padding.top,
+                            style.border_widths.right + style.padding.right,
+                            style.border_widths.bottom + style.padding.bottom,
+                            style.border_widths.left + style.padding.left,
+                        ]
+                    };
+                    let clip_inset = match style.mask_clip {
+                        crate::style::MaskClip::PaddingBox => Some(border_inset()),
+                        crate::style::MaskClip::ContentBox => Some(content_inset()),
+                        _ => None,
+                    };
+                    let origin_inset = match style.mask_origin {
+                        crate::style::MaskOrigin::PaddingBox => Some(border_inset()),
+                        crate::style::MaskOrigin::ContentBox => Some(content_inset()),
+                        _ => None,
+                    };
+                    crate::boxes::model::MaskSpec {
+                        image: img,
+                        size: style.mask_size,
+                        position: style.mask_position,
+                        repeat: style.mask_repeat,
+                        mode: style.mask_mode,
+                        clip_inset,
+                        origin_inset,
+                    }
                 }),
                 None => None,
             };

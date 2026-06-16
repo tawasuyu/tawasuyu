@@ -1417,6 +1417,8 @@ mod semantics_tests {
             repeat_x: true,
             repeat_y: false,
             mode: MaskMode::Alpha,
+            clip_inset: Some([2.0, 2.0, 2.0, 2.0]),
+            origin_inset: None,
         };
         let v = View::<()>::new(Style::default()).mask_placement(p);
         assert_eq!(v.mask_placement, Some(p));

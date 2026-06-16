@@ -48,6 +48,36 @@ pub enum Display {
     None,
 }
 
+/// `mask-image` resuelto que el compositor consume. Agrupa la imagen
+/// decodificada (RGBA8) con su encaje (`mask-size`/`-position`/`-repeat`), modo
+/// (`mask-mode`) y cajas de referencia (`mask-clip` recorta el efecto;
+/// `mask-origin` ancla el tiling/position). Sólo existe cuando hay máscara —
+/// por eso vive en un `Option<MaskSpec>` y los sitios sin máscara quedan en un
+/// único `None`. Fases 7.1226 (luminance), 7.1227 (encaje), 7.1228 (modo),
+/// 7.1230 (clip/origin).
+#[derive(Debug, Clone)]
+pub struct MaskSpec {
+    /// Imagen-máscara decodificada (RGBA8).
+    pub image: ImageData,
+    /// `mask-size` (tamaño del tile).
+    pub size: BackgroundSize,
+    /// `mask-position` (offset/alineación del primer tile).
+    pub position: BackgroundPosition,
+    /// `mask-repeat` (tiling por eje).
+    pub repeat: BackgroundRepeat,
+    /// `mask-mode` (luminancia vs alpha; `match-source` lo resuelve el wire).
+    pub mode: crate::style::MaskMode,
+    /// Insets `[top, right, bottom, left]` px del border-box a la caja de
+    /// `mask-clip` (recorte del efecto). `None` = border-box / no-clip (el
+    /// compositor recorta al border-box; el `no-clip` real —sin recorte— se
+    /// aproxima a border-box). Fase 7.1230.
+    pub clip_inset: Option<[f32; 4]>,
+    /// Insets `[top, right, bottom, left]` px del border-box a la caja de
+    /// `mask-origin` (anclaje de position/size/tiling). `None` = border-box.
+    /// Fase 7.1230.
+    pub origin_inset: Option<[f32; 4]>,
+}
+
 /// Un nodo del árbol de boxes — render-ready.
 #[derive(Debug, Clone)]
 pub struct BoxNode {
@@ -186,23 +216,10 @@ pub struct BoxNode {
     /// referencia). Sin forma + caja ≠ border-box ⇒ recorta a ese rect. `None`
     /// = referencia = border-box (sin cambio). Fase 7.1225.
     pub clip_ref_inset: Option<[f32; 4]>,
-    /// `mask-image: url(...)` decodificado (RGBA8) **junto con su encaje y modo**
-    /// `(imagen, mask-size, mask-position, mask-repeat, mask-mode)`. `None` si la
-    /// propiedad no estaba, era `none`, o la descarga/decode falló. El compositor
-    /// la usa como máscara sobre el subárbol: en modo **luminance** la luminancia
-    /// del píxel multiplica el alpha del contenido; en modo **alpha** (default
-    /// CSS para raster vía `match-source`) lo hace el canal alpha. Resuelve
-    /// size/position/repeat contra el rect igual que `background-image`. El
-    /// encaje viaja con la imagen porque sólo tiene sentido cuando hay máscara —
-    /// así los sitios sin máscara quedan en un único `None`. Fase 7.1226
-    /// (pintado luminance), 7.1227 (encaje), 7.1228 (mask-mode alpha).
-    pub mask_image: Option<(
-        ImageData,
-        BackgroundSize,
-        BackgroundPosition,
-        BackgroundRepeat,
-        crate::style::MaskMode,
-    )>,
+    /// `mask-image: url(...)` decodificado y resuelto, o `None` si la propiedad
+    /// no estaba, era `none`, o la descarga/decode falló. Ver [`MaskSpec`].
+    /// Fases 7.1226–7.1230.
+    pub mask_image: Option<MaskSpec>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

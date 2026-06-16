@@ -422,10 +422,11 @@ pub(crate) fn resolve_node_transform(
 /// por la luminancia de la máscara — blanco = visible, negro = oculto. El
 /// caller cierra la capa de aislamiento con su propio `pop_layer` tras esto.
 ///
-/// `placement` (Fase 7.1227) fija el encaje con la misma aritmética que
+/// `placement` (Fase 7.1227+) fija el encaje con la misma aritmética que
 /// `background-image` (size → tamaño del tile, position → offset del primero,
-/// repeat → tiling por eje). `None` = estirar al `rect` (border-box), el
-/// comportamiento de la Fase 7.1226. Falta `mask-mode` (siempre luminancia).
+/// repeat → tiling por eje), el modo (`mask-mode`, Fase 7.1228) y las cajas de
+/// referencia (`mask-clip` recorta la capa, `mask-origin` ancla el tiling, Fase
+/// 7.1230). `None` = estirar al border-box en modo luminancia (Fase 7.1226).
 fn paint_mask_close(
     scene: &mut vello::Scene,
     img: &Image,
@@ -435,32 +436,51 @@ fn paint_mask_close(
 ) {
     let iw = img.image.width.max(1) as f64;
     let ih = img.image.height.max(1) as f64;
-    // Apertura de la capa según `mask-mode` (Fase 7.1228): luminance usa la capa
-    // de luminancia nativa de vello; alpha compone la máscara con `Compose::DestIn`
-    // (mantiene el destino —el subárbol ya pintado— donde la fuente —la máscara—
-    // tiene alpha). Sin `MaskPlacement` el modo es luminancia (Fase 7.1226).
+    // Cajas de referencia (Fase 7.1230): `mask-clip` recorta el efecto;
+    // `mask-origin` ancla el tiling/position. Se encoge el border-box `rect`
+    // por los insets resueltos. `None` = border-box (sin cambio).
+    let shrink = |r: KurboRect, inset: Option<[f32; 4]>| -> KurboRect {
+        match inset {
+            None => r,
+            Some([t, ri, b, le]) => KurboRect::new(
+                r.x0 + le as f64,
+                r.y0 + t as f64,
+                (r.x1 - ri as f64).max(r.x0 + le as f64),
+                (r.y1 - b as f64).max(r.y0 + t as f64),
+            ),
+        }
+    };
+    let clip_rect = shrink(rect, placement.and_then(|p| p.clip_inset));
+    let origin_rect = shrink(rect, placement.and_then(|p| p.origin_inset));
+    // Apertura de la capa según `mask-mode` (Fase 7.1228), recortada a la caja
+    // de `mask-clip`: luminance usa la capa de luminancia nativa de vello;
+    // alpha compone la máscara con `Compose::DestIn` (mantiene el destino —el
+    // subárbol ya pintado— donde la fuente —la máscara— tiene alpha). Sin
+    // `MaskPlacement` el modo es luminancia (Fase 7.1226).
     let mode = placement.map(|p| p.mode).unwrap_or(MaskMode::Luminance);
     match mode {
-        MaskMode::Luminance => scene.push_luminance_mask_layer(Fill::NonZero, 1.0, xf, &rect),
+        MaskMode::Luminance => scene.push_luminance_mask_layer(Fill::NonZero, 1.0, xf, &clip_rect),
         MaskMode::Alpha => scene.push_layer(
             Fill::NonZero,
             vello::peniko::BlendMode::new(Mix::Normal, vello::peniko::Compose::DestIn),
             1.0,
             xf,
-            &rect,
+            &clip_rect,
         ),
     }
     match placement {
-        // Fase 7.1226: estirar la máscara al border-box.
+        // Fase 7.1226: estirar la máscara a la caja de origen (= border-box si
+        // no hay mask-origin).
         None => {
-            let fit = Affine::translate((rect.x0, rect.y0))
-                * Affine::scale_non_uniform(rect.width() / iw, rect.height() / ih);
+            let fit = Affine::translate((origin_rect.x0, origin_rect.y0))
+                * Affine::scale_non_uniform(origin_rect.width() / iw, origin_rect.height() / ih);
             scene.draw_image(img, xf * fit);
         }
-        // Fase 7.1227: size/position/repeat estilo background-image.
+        // Fase 7.1227/7.1230: size/position/repeat estilo background-image,
+        // resueltos contra la caja de `mask-origin`.
         Some(p) => {
-            let rw = rect.width();
-            let rh = rect.height();
+            let rw = origin_rect.width();
+            let rh = origin_rect.height();
             // 1) Tamaño del tile (px). `Auto` por eje deriva el otro por aspecto.
             let resolve = |l: MaskLen, basis: f64| -> Option<f64> {
                 match l {
@@ -520,7 +540,8 @@ fn paint_mask_close(
                 let scale = Affine::scale_non_uniform(tw / iw, th / ih);
                 for &x in &xs {
                     for &y in &ys {
-                        let tf = Affine::translate((rect.x0 + x, rect.y0 + y)) * scale;
+                        let tf =
+                            Affine::translate((origin_rect.x0 + x, origin_rect.y0 + y)) * scale;
                         scene.draw_image(img, xf * tf);
                     }
                 }

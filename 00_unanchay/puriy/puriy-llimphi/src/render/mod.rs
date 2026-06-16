@@ -223,18 +223,12 @@ pub(crate) fn transform_affine(
     )
 }
 
-/// Traduce el encaje + modo CSS de la máscara (`mask-size`/`-position`/
-/// `-repeat`/`-mode`, modelados con los mismos tipos que background) al
-/// [`MaskPlacement`] neutral del compositor. `LengthVal` no resoluble
-/// (auto/keywords) → `MaskLen::Auto` (intrínseco en size, offset 0 en position).
-/// `mask-mode: match-source` → alpha (las máscaras de puriy son raster `url()`).
-/// Fase 7.1227 (encaje), 7.1228 (modo).
-fn mask_placement_de(
-    size: BackgroundSize,
-    pos: BackgroundPosition,
-    repeat: BackgroundRepeat,
-    mode: puriy_engine::style::MaskMode,
-) -> llimphi_ui::MaskPlacement {
+/// Traduce el `MaskSpec` del box (encaje + modo + cajas `mask-clip`/`-origin`,
+/// modelados con los mismos tipos que background) al [`MaskPlacement`] neutral
+/// del compositor. `LengthVal` no resoluble (auto/keywords) → `MaskLen::Auto`
+/// (intrínseco en size, offset 0 en position). `mask-mode: match-source` →
+/// alpha (las máscaras de puriy son raster `url()`). Fases 7.1227–7.1230.
+fn mask_placement_de(spec: &puriy_engine::MaskSpec) -> llimphi_ui::MaskPlacement {
     use llimphi_ui::{MaskLen, MaskSize};
     use puriy_engine::style::MaskMode as CssMaskMode;
     let len = |lv: LengthVal| -> MaskLen {
@@ -244,13 +238,13 @@ fn mask_placement_de(
             _ => MaskLen::Auto,
         }
     };
-    let size = match size {
+    let size = match spec.size {
         BackgroundSize::Auto => MaskSize::Auto,
         BackgroundSize::Cover => MaskSize::Cover,
         BackgroundSize::Contain => MaskSize::Contain,
         BackgroundSize::Explicit { x, y } => MaskSize::Explicit { x: len(x), y: len(y) },
     };
-    let (repeat_x, repeat_y) = match repeat {
+    let (repeat_x, repeat_y) = match spec.repeat {
         BackgroundRepeat::Repeat => (true, true),
         BackgroundRepeat::RepeatX => (true, false),
         BackgroundRepeat::RepeatY => (false, true),
@@ -258,17 +252,19 @@ fn mask_placement_de(
     };
     // match-source: raster url() → alpha (SVG <mask> daría luminance, pero
     // mask-image en puriy es siempre raster). Default CSS = match-source = alpha.
-    let mode = match mode {
+    let mode = match spec.mode {
         CssMaskMode::Luminance => llimphi_ui::MaskMode::Luminance,
         CssMaskMode::Alpha | CssMaskMode::MatchSource => llimphi_ui::MaskMode::Alpha,
     };
     llimphi_ui::MaskPlacement {
         size,
-        pos_x: len(pos.x),
-        pos_y: len(pos.y),
+        pos_x: len(spec.position.x),
+        pos_y: len(spec.position.y),
         repeat_x,
         repeat_y,
         mode,
+        clip_inset: spec.clip_inset,
+        origin_inset: spec.origin_inset,
     }
 }
 
@@ -504,18 +500,18 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // multiplica el alpha del contenido por la luminancia de la máscara,
     // tileándola igual que background-image. Ortogonal a clip-path (un nodo
     // puede llevar ambos).
-    if let Some((mask, size, pos, repeat, mode)) = &b.mask_image {
-        let blob = Blob::from(mask.rgba.clone());
+    if let Some(spec) = &b.mask_image {
+        let blob = Blob::from(spec.image.rgba.clone());
         let peniko = PenikoImage::new(ImageData {
             data: blob,
             format: ImageFormat::Rgba8,
             alpha_type: ImageAlphaType::Alpha,
-            width: mask.width,
-            height: mask.height,
+            width: spec.image.width,
+            height: spec.image.height,
         });
         view = view
             .mask_image(peniko)
-            .mask_placement(mask_placement_de(*size, *pos, *repeat, *mode));
+            .mask_placement(mask_placement_de(spec));
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);

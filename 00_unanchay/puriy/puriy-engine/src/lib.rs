@@ -34,7 +34,7 @@ use thiserror::Error;
 
 pub use boxes::{
     fetch_image_src, synthesize_box_node, BoxNode, BoxTree, Color, Display, FormInfo, FormMethod,
-    ImageData, InputKind, PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
+    ImageData, InputKind, MaskSpec, PathCmd, SelectInfo, SelectOption, SvgPrim, SvgScene,
 };
 pub use dom::{DomTree, MetaRefresh, ScriptInfo};
 pub use fetch::{decode_base64, encode_base64, fetch, fetch_full, FetchError, FetchResponse};

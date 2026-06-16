@@ -248,12 +248,26 @@ haya GPU disponible.
 Se hizo junto con size/position en 7.1227 (eran inseparables para no shippear un
 intermedio roto). El tiling por eje reusa la lógica de `background-repeat`.
 
-### 7.1230 — `mask-clip` / `mask-origin` (caja de referencia de la máscara)
+### 7.1230 ✅ — `mask-clip` / `mask-origin` (caja de referencia de la máscara)
 
-**Por qué**: `mask-clip` recorta el efecto a border/padding/content-box (o
-`no-clip`); `mask-origin` reposiciona el origen del tiling. Análogo a
-`background-clip`/`background-origin` + al `clip_ref_inset` de clip-path. Encoge
-el rect base de la máscara por los insets resueltos en `build/node.rs`.
+**Hecho.** `mask-clip` recorta el efecto a border/padding/content-box;
+`mask-origin` ancla el tiling/position. Análogo a `background-clip`/`-origin` +
+al `clip_ref_inset` de clip-path: se computan en `build/node.rs` dos insets
+`[t,r,b,l]` del border-box (padding-box = border; content-box = border+padding;
+border/no-clip/cajas-SVG → `None`). En el compositor, `paint_mask_close` encoge
+el border-box a `clip_rect` (recorte de la capa de máscara) y a `origin_rect`
+(resolución de size/position/tiling). **Aproximación documentada**: `no-clip`
+real (sin recorte) se trata como border-box; las cajas SVG (fill/stroke/view)
+también caen a border-box en HTML.
+
+**Refactor**: la tupla del `BoxNode::mask_image` (que ya tenía 5 elementos) pasó
+a un struct `MaskSpec { image, size, position, repeat, mode, clip_inset,
+origin_inset }` (re-exportado en `puriy_engine::MaskSpec`). El compositor sumó
+`clip_inset`/`origin_inset` a `MaskPlacement`.
+
+**Tests**: builder (`MaskPlacement` con clip/origin), box-tree (group03 verifica
+que los defaults border-box no insetean). **La familia mask queda funcional**
+salvo `mask-composite` (7.1231), que requiere modelar una lista de capas.
 
 ### 7.1231 — `mask-composite` (combinar varias capas de máscara)
 

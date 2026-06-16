@@ -129,11 +129,13 @@ use crate::Engine;
         use crate::style::{BackgroundRepeat, BackgroundSize, MaskMode};
         let mut dims_con_mask: Vec<(u32, u32)> = Vec::new();
         let mut encaje_con_mask: Vec<(BackgroundSize, BackgroundRepeat, MaskMode)> = Vec::new();
+        let mut cajas_con_mask: Vec<(Option<[f32; 4]>, Option<[f32; 4]>)> = Vec::new();
         let mut hay_sin_mask = false;
         doc.box_tree.walk(|b| match &b.mask_image {
-            Some((m, size, _pos, repeat, mode)) => {
-                dims_con_mask.push((m.width, m.height));
-                encaje_con_mask.push((*size, *repeat, *mode));
+            Some(spec) => {
+                dims_con_mask.push((spec.image.width, spec.image.height));
+                encaje_con_mask.push((spec.size, spec.repeat, spec.mode));
+                cajas_con_mask.push((spec.clip_inset, spec.origin_inset));
             }
             None => hay_sin_mask = true,
         });
@@ -154,6 +156,12 @@ use crate::Engine;
                 MaskMode::MatchSource
             )],
             "el box lleva el encaje y modo por defecto (auto / repeat / match-source)"
+        );
+        // mask-clip/mask-origin default = border-box → sin insets (Fase 7.1230).
+        assert_eq!(
+            cajas_con_mask,
+            vec![(None, None)],
+            "mask-clip/origin por defecto (border-box) no insetean"
         );
         assert!(hay_sin_mask, "los nodos sin mask-image quedan en None");
     }

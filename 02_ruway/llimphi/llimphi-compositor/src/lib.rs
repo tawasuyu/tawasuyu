@@ -975,6 +975,14 @@ pub struct MaskPlacement {
     pub repeat_y: bool,
     /// Canal que modula el alpha (luminancia vs alpha). Fase 7.1228.
     pub mode: MaskMode,
+    /// Insets `[top, right, bottom, left]` px del border-box a la caja de
+    /// `mask-clip`: el efecto de la máscara se **recorta** a esa caja. `None` =
+    /// border-box. Fase 7.1230.
+    pub clip_inset: Option<[f32; 4]>,
+    /// Insets `[top, right, bottom, left]` px del border-box a la caja de
+    /// `mask-origin`: size/position/tiling se resuelven contra esa caja. `None`
+    /// = border-box. Fase 7.1230.
+    pub origin_inset: Option<[f32; 4]>,
 }
 
 impl Default for ImageFit {
