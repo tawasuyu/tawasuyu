@@ -29,3 +29,7 @@ wawa-config = { path = "../../../shared/wawa-config" }
 mirada-brain = { path = "../../mirada/mirada-brain" }
 pata-core = { path = "../../pata/pata-core" }
 pata-config = { path = "../../pata/pata-config" }
+# Biblioteca de perfiles de escritorio: cada perfil = config completa (mirada +
+# keymap + barra pata) serializada en un solo RON.
+serde = { workspace = true }
+ron = { workspace = true }

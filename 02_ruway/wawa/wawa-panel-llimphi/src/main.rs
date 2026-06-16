@@ -14,8 +14,12 @@
 //! El renderizador es `llimphi-module-allichay`; cada cambio se rutea a su
 //! destino (`wawa` / `mirada` / `pata`) y se persiste en su formato nativo.
 
+mod perfiles;
+
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use perfiles::{DesktopProfile, DesktopProfiles};
 
 use allichay::{Configurable, EnumOption, Field, FieldPath, FieldValue, Schema, Section};
 use app_bus::{AppMenu, Menu, MenuItem};
@@ -86,6 +90,8 @@ const MODULES: &[(&str, &str, &str)] = &[
 
 /// Índice de la pestaña "Información" (2ª) — para el menú Ayuda.
 const INFO_DIENTE: usize = 1;
+/// Índice de la pestaña "Perfiles" (3ª) — para saltar tras crear/duplicar.
+const PERFILES_DIENTE: usize = 2;
 
 // =====================================================================
 // Información del host (Linux /proc)
@@ -201,9 +207,11 @@ struct Model {
     /// del panel conmuta el activo; al cambiar, recarga el keymap visible.
     profiles: mirada_brain::KeymapProfiles,
     profiles_path: Option<PathBuf>,
-    /// La **vista** (perfil de escritorio completo) activa: look + decoración +
-    /// layout + atajos + barra. `None` = ninguna aplicada esta sesión.
-    active_vista: Option<String>,
+    /// Biblioteca de **perfiles de escritorio completos** (custom, editables,
+    /// creables y duplicables). Cada perfil = foto de config mirada + keymap +
+    /// barra pata. El activo (`dprofiles.active`) es el que se está editando en
+    /// las pestañas mirada · pata · Atajos.
+    dprofiles: DesktopProfiles,
     pata: pata_core::Config,
     allichay: AllichayState,
     host: HostInfo,
@@ -234,6 +242,8 @@ struct SaveDirty {
     keymap: bool,
     pata: bool,
     profiles: bool,
+    /// Biblioteca de perfiles de escritorio (`perfiles-escritorio.ron`).
+    dprofiles: bool,
 }
 
 #[derive(Clone)]
@@ -318,6 +328,11 @@ impl App for Panel {
             .map(mirada_brain::KeymapProfiles::load_or_init)
             .unwrap_or_default();
 
+        // Biblioteca de perfiles de escritorio completos. Se siembra la primera
+        // vez con las 8 vistas de fábrica (ya editables). El activo se detecta
+        // por coincidencia con la config viva en disco.
+        let dprofiles = DesktopProfiles::load_or_seed(&mirada);
+
         Model {
             selected_pest: 0,
             selected_item: None,
@@ -330,7 +345,7 @@ impl App for Panel {
             keymap_path,
             profiles,
             profiles_path,
-            active_vista: None,
+            dprofiles,
             pata,
             allichay: AllichayState::new(),
             host,
@@ -591,34 +606,35 @@ fn prefix_schema(mut schema: Schema, target: &str) -> Schema {
     schema
 }
 
-/// La pestaña **Perfiles**: una sección por **vista** (perfil de escritorio
-/// COMPLETO: look + decoración + layout + atajos + barra — mirada/windows-xp/
-/// mac/kde/hyprland/dwm…) en el sidebar. Activar una vista aplica TODO de
-/// inmediato (config.ron + keymap.ron + launcher.toml de pata, que el
-/// compositor y pata recargan en caliente) y su config queda editable en las
-/// pestañas mirada · pata · Sistema. La activa se marca con ●.
+/// La pestaña **Perfiles**: una sección por **perfil de escritorio completo**
+/// de la biblioteca (custom, editable, creable y duplicable; sembrada de las 8
+/// vistas de fábrica). Activar un perfil vuelca TODO de inmediato (config.ron +
+/// keymap.ron + launcher.toml, que el compositor y pata recargan en caliente);
+/// mientras está activo, su config queda editable en mirada · pata · Atajos y
+/// cada cambio se guarda DENTRO del perfil. El activo se marca con ●. Crear y
+/// duplicar viven en el menú «Perfiles».
 fn perfiles_schema(m: &Model) -> Schema {
     use allichay::Field;
     let mut schema = Schema::new();
-    for name in mirada_brain::VISTA_NAMES {
-        let label = mirada_brain::Vista::label_for(name);
-        let is_active = m.active_vista.as_deref() == Some(name);
+    for name in m.dprofiles.names() {
+        let is_active = m.dprofiles.active == name;
         let title = if is_active {
-            format!("● {label}")
+            format!("● {name}")
         } else {
-            label.clone()
+            name.clone()
         };
         schema = schema.section(
-            Section::new(name, title)
+            Section::new(name.as_str(), title)
                 .icon("🖥")
                 .help(
-                    "Vista de escritorio completa. Al activarla cambia look, \
-                     decoración, layout, atajos y barra al instante. Ajustá su \
-                     detalle en las pestañas mirada · pata · Sistema.",
+                    "Perfil de escritorio completo: look + decoración + layout + \
+                     atajos + barra. Activarlo aplica todo en caliente; mientras \
+                     está activo, editá su detalle en mirada · pata · Atajos y se \
+                     guarda dentro del perfil. Crear/duplicar/eliminar: menú Perfiles.",
                 )
                 .field(Field::toggle(
                     "activo",
-                    format!("Usar la vista «{label}»"),
+                    format!("Usar «{name}»"),
                     is_active,
                 )),
         );
@@ -626,33 +642,47 @@ fn perfiles_schema(m: &Model) -> Schema {
     prefix_schema(schema, "perfiles")
 }
 
-/// Aplica una **vista** completa (perfil de escritorio): vuelca su config a
-/// `config.ron`, su keymap como perfil activo a `keymap.ron`, y la barra de la
-/// vista a `launcher.toml` — el compositor y pata recargan en caliente, así
-/// toda la vista se actualiza de inmediato. Refleja todo en el panel.
-fn apply_vista(m: &mut Model, name: &str) {
-    let Some(v) = mirada_brain::Vista::by_name(name) else {
+/// Activa un **perfil de escritorio** completo de la biblioteca: vuelca su foto
+/// (config mirada + keymap + barra pata) a las rutas vivas — `config.ron`,
+/// `keymap.ron`, `launcher.toml` — que el compositor y pata recargan en
+/// caliente, y lo refleja en el panel como perfil en edición.
+fn activate_profile(m: &mut Model, name: &str) {
+    let Some(prof) = m.dprofiles.get(name).cloned() else {
         return;
     };
-    if let Some(p) = mirada_brain::Config::default_path() {
-        let _ = v.config.save(&p);
-    }
-    let _ = m.profiles.set_active(v.keymap);
-    if let Some(pp) = m.profiles_path.clone() {
-        let _ = m.profiles.save(&pp);
+    if let Some(p) = m.mirada_path.clone() {
+        let _ = prof.mirada.save(&p);
     }
     if let Some(kp) = m.keymap_path.clone() {
-        let _ = m.profiles.write_active_keymap(&kp);
+        let _ = mirada_brain::Keymap::from_rows(&prof.keymap).save(&kp);
     }
-    if let Some(bar) = pata_core::Config::vista_preset(name) {
-        let _ = pata_config::save(&bar);
-        m.pata = bar;
+    let _ = pata_config::save(&prof.pata);
+    // Reflejar en el panel: las otras pestañas editan ahora este perfil.
+    m.mirada = prof.mirada.clone();
+    m.keymap_rows = prof.keymap.clone();
+    m.pata = prof.pata.clone();
+    m.dprofiles.active = name.to_string();
+    let _ = m.dprofiles.save();
+    m.status = format!("perfil «{name}» activado (en caliente)");
+}
+
+/// Sincroniza la foto del perfil **activo** con la config viva del panel (tras
+/// editar mirada/pata/atajos) y marca la biblioteca para persistir. Así cada
+/// perfil conserva sus propios ajustes en vez de compartir un único `config.ron`.
+fn sync_active_profile(m: &mut Model) {
+    let active = m.dprofiles.active.clone();
+    if active.is_empty() {
+        return;
     }
-    // Reflejar en el panel para que las otras pestañas muestren la vista nueva.
-    m.mirada = v.config.clone();
-    m.keymap_rows = m.profiles.active_keymap().to_rows();
-    m.active_vista = Some(name.to_string());
-    m.status = format!("vista «{}» aplicada (en caliente)", v.label);
+    m.dprofiles.set(
+        &active,
+        DesktopProfile {
+            mirada: m.mirada.clone(),
+            keymap: m.keymap_rows.clone(),
+            pata: m.pata.clone(),
+        },
+    );
+    m.dirty.dprofiles = true;
 }
 
 /// La sección "Atajos" de mirada: el keymap como tabla (combinación · acción).
@@ -819,12 +849,12 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
             m.dirty.wawa = true;
         }
-        // Pestaña Perfiles: el primer segmento es el NOMBRE de la vista; el
-        // toggle «activo» la aplica entera (look + atajos + barra) en caliente.
+        // Pestaña Perfiles: el primer segmento es el NOMBRE del perfil; el
+        // toggle «activo» lo aplica entero (look + atajos + barra) en caliente.
         "perfiles" => {
             let name = rel.segments().first().cloned().unwrap_or_default();
             if rel.leaf() == Some("activo") && value.as_bool() == Some(true) {
-                apply_vista(m, &name);
+                activate_profile(m, &name);
             }
         }
         "mirada" if rel.segments().first().map(String::as_str) == Some("atajos") => {
@@ -865,6 +895,11 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
             m.dirty.pata = true;
         }
         _ => return,
+    }
+    // Editar mirada/pata/atajos modifica el perfil ACTIVO: vuelca la config viva
+    // dentro de su entrada en la biblioteca (cada perfil conserva lo suyo).
+    if matches!(key.as_str(), "mirada" | "pata") {
+        sync_active_profile(m);
     }
     m.save_in = SAVE_DELAY_TICKS;
 }
@@ -914,6 +949,13 @@ fn flush_saves(m: &mut Model) {
             Err(e) => err = Some(format!("· pata save: {e}")),
         }
         m.dirty.pata = false;
+    }
+    if m.dirty.dprofiles {
+        match m.dprofiles.save() {
+            Ok(()) => ok = true,
+            Err(e) => err = Some(format!("· perfiles save: {e}")),
+        }
+        m.dirty.dprofiles = false;
     }
     if let Some(e) = err {
         m.status = e;
@@ -991,10 +1033,10 @@ fn current_field_value(m: &Model, path: &FieldPath) -> Option<FieldValue> {
             _ => FieldValue::Table(m.keymap_rows.clone()),
         });
     }
-    // Pestaña Perfiles: el toggle «activo» = si esta vista es la aplicada.
+    // Pestaña Perfiles: el toggle «activo» = si este perfil es el aplicado.
     if key == "perfiles" {
         let name = rel.segments().first().cloned().unwrap_or_default();
-        return Some(FieldValue::Bool(m.active_vista.as_deref() == Some(name.as_str())));
+        return Some(FieldValue::Bool(m.dprofiles.active == name));
     }
     let schema = match key.as_str() {
         "mirada" => m.mirada.schema(),
@@ -1449,6 +1491,12 @@ fn app_menu() -> AppMenu {
                 .item(MenuItem::new(rimay_localize::t("wawa-panel-menu-quit"), "file.quit")),
         )
         .menu(
+            Menu::new("Perfiles")
+                .item(MenuItem::new("Crear perfil (desde el actual)", "perfil.create"))
+                .item(MenuItem::new("Duplicar perfil activo", "perfil.duplicate"))
+                .item(MenuItem::new("Eliminar perfil activo", "perfil.delete")),
+        )
+        .menu(
             Menu::new(rimay_localize::t("language"))
                 .item(lang_item("Español", "es-PE"))
                 .item(lang_item("English", "en-US"))
@@ -1467,6 +1515,51 @@ fn handle_menu_command(model: Model, cmd: &str) -> Model {
         m.cfg.lang = code.to_string();
         let _ = m.cfg.save();
         return m;
+    }
+    // Crear/duplicar/eliminar perfiles de escritorio.
+    match cmd {
+        "perfil.create" => {
+            let base = DesktopProfile {
+                mirada: m.mirada.clone(),
+                keymap: m.keymap_rows.clone(),
+                pata: m.pata.clone(),
+            };
+            let name = m.dprofiles.create(base, "perfil nuevo");
+            activate_profile(&mut m, &name);
+            m.selected_pest = PERFILES_DIENTE;
+            m.sidebar_open = true;
+            m.status = format!("perfil «{name}» creado y activado");
+            return m;
+        }
+        "perfil.duplicate" => {
+            let src = m.dprofiles.active.clone();
+            if let Some(name) = m.dprofiles.duplicate(&src) {
+                activate_profile(&mut m, &name);
+                m.selected_pest = PERFILES_DIENTE;
+                m.sidebar_open = true;
+                m.status = format!("perfil «{name}» (copia de «{src}»)");
+            } else {
+                m.status = "no hay perfil activo que duplicar".into();
+            }
+            return m;
+        }
+        "perfil.delete" => {
+            let cur = m.dprofiles.active.clone();
+            if m.dprofiles.profiles.len() <= 1 {
+                m.status = "no se puede eliminar el último perfil".into();
+            } else {
+                m.dprofiles.remove(&cur);
+                let next = m.dprofiles.active.clone();
+                if !next.is_empty() {
+                    activate_profile(&mut m, &next);
+                }
+                m.selected_pest = PERFILES_DIENTE;
+                m.sidebar_open = true;
+                m.status = format!("perfil «{cur}» eliminado");
+            }
+            return m;
+        }
+        _ => {}
     }
     match cmd {
         "file.quit" => std::process::exit(0),
