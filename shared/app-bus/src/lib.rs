@@ -100,6 +100,7 @@ pub fn default_entries() -> Vec<AppEntry> {
         ("tullpu", "Tullpu", "✦", "tullpu-app-llimphi", "ruway", &["image/"]),
         ("takiy", "Takiy", "♪", "takiy-app-llimphi", "ruway", &["audio/"]),
         ("media", "Media", "▶", "media-app", "ruway", &["video/", "audio/"]),
+        ("media-tube", "Media Tube", "▷", "media-tube", "ruway", &[]),
         ("cosmos", "Cosmos", "✶", "cosmos-app-llimphi", "yachay",
             &["application/x-cosmos-chart"]),
         ("dominium", "Dominium", "◉", "dominium-app-llimphi", "yachay",
