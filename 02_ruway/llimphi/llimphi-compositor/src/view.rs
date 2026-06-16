@@ -14,6 +14,7 @@ impl<Msg> View<Msg> {
             text: None,
             image: None,
             image_fit: None,
+            mask_image: None,
             painter: None,
             gpu_painter: None,
             on_pointer_enter: None,
@@ -1157,6 +1158,17 @@ impl<Msg> View<Msg> {
         self
     }
 
+    /// Aplica `image` como **máscara de luminancia** del subárbol del nodo
+    /// (CSS `mask-image`). El paint aísla el subárbol en una capa y multiplica
+    /// su alpha por la luminancia de la máscara (blanco = visible, negro =
+    /// oculto). La imagen se estira al border-box del nodo. Ortogonal a
+    /// [`Self::image`] (que pinta contenido) y a los `clip_*` (que recortan):
+    /// un nodo puede llevar máscara y recorte a la vez.
+    pub fn mask_image(mut self, image: Image) -> Self {
+        self.mask_image = Some(image);
+        self
+    }
+
     /// Registra una closure de pintura custom. El runtime la invoca
     /// con `(&mut vello::Scene, &mut Typesetter, PaintRect)` durante
     /// el paint del nodo. La closure es responsable de pintar
@@ -1360,6 +1372,26 @@ mod semantics_tests {
         assert!(v.clip, "clip_ref_inset implica clip activo");
         // Default: sin caja de referencia.
         assert_eq!(View::<()>::new(Style::default()).clip_ref_inset, None);
+    }
+
+    #[test]
+    fn mask_image_setea_campo_sin_tocar_clip() {
+        // `.mask_image(img)` guarda la imagen-máscara para que el paint la
+        // aplique como luminancia sobre el subárbol. Es ORTOGONAL al recorte:
+        // NO activa `clip` (a diferencia de los `clip_*`). Fase 7.1226.
+        use vello::peniko::{Blob, ImageAlphaType, ImageData, ImageFormat};
+        let data = ImageData {
+            data: Blob::from(vec![255u8, 255, 255, 255]),
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: 1,
+            height: 1,
+        };
+        let v = View::<()>::new(Style::default()).mask_image(Image::new(data));
+        assert!(v.mask_image.is_some(), "mask_image queda seteada");
+        assert!(!v.clip, "mask_image NO activa clip (es ortogonal al recorte)");
+        // Default: sin máscara.
+        assert!(View::<()>::new(Style::default()).mask_image.is_none());
     }
 
     #[test]

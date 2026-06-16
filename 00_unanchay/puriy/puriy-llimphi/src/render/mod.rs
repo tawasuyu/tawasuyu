@@ -449,6 +449,21 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     if let Some(insets) = b.clip_ref_inset {
         view = view.clip_ref_inset(insets);
     }
+    // `mask-image: url(...)` (Fase 7.1226) — máscara de luminancia del subárbol.
+    // La imagen ya viene decodificada (RGBA8) desde el box build; el compositor
+    // la estira al border-box y multiplica el alpha del contenido por su
+    // luminancia. Ortogonal a clip-path (un nodo puede llevar ambos).
+    if let Some(mask) = &b.mask_image {
+        let blob = Blob::from(mask.rgba.clone());
+        let peniko = PenikoImage::new(ImageData {
+            data: blob,
+            format: ImageFormat::Rgba8,
+            alpha_type: ImageAlphaType::Alpha,
+            width: mask.width,
+            height: mask.height,
+        });
+        view = view.mask_image(peniko);
+    }
 
     let link_color = Color::from_rgb8(30, 90, 200);
     let display_color = if b.link.is_some() {

@@ -188,6 +188,7 @@ pub(crate) fn empty_root() -> BoxNode {
         link_new_tab: false,
         link_download: None,
         background_image: None,
+        mask_image: None,
         background_size: BackgroundSize::Auto,
         background_position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
         background_repeat: BackgroundRepeat::Repeat,
@@ -410,6 +411,13 @@ pub(crate) fn build_node(
                 .background_image_url
                 .as_deref()
                 .and_then(|u| fetch_image_src(base, u));
+            // `mask-image: url(...)` — misma cache/decoder que background-image.
+            // El compositor la aplica como máscara de luminancia sobre el
+            // subárbol. Falla silenciosa → mask_image queda None. Fase 7.1226.
+            let mask_image = match &style.mask_image {
+                Some(crate::style::MaskImage::Url(u)) => fetch_image_src(base, u),
+                None => None,
+            };
             // Capas de background extra (lista `background: a, b, ...`):
             // resolver cada `url(...)` igual que la capa 0 (misma cache);
             // las que fallan se descartan; los gradientes pasan tal cual.
@@ -739,6 +747,7 @@ pub(crate) fn build_node(
                 link_new_tab,
                 link_download,
                 background_image,
+                mask_image,
                 background_size: style.background_size,
                 background_position: style.background_position,
                 background_repeat: style.background_repeat,
@@ -951,6 +960,7 @@ pub(crate) fn build_node(
                 link_new_tab: false,
         link_download: None,
                 background_image: None,
+                mask_image: None,
                 background_size: BackgroundSize::Auto,
                 background_position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
                 background_repeat: BackgroundRepeat::Repeat,

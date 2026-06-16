@@ -382,6 +382,13 @@ pub struct View<Msg> {
     /// (CSS `object-fit`). `None` = `Contain` (el default histórico).
     /// Ver [`ImageFit`] y [`View::image_fit`].
     pub image_fit: Option<ImageFit>,
+    /// **Máscara de luminancia** (CSS `mask-image`). Si está presente, el
+    /// runtime aísla el subárbol del nodo en una capa y luego lo enmascara con
+    /// la luminancia de esta imagen (`push_luminance_mask_layer` de vello):
+    /// blanco = visible, negro = oculto, gris = semitransparente. La imagen se
+    /// estira al border-box del nodo (`mask-size`/`-position`/`-repeat`/`-mode`
+    /// no se modelan aún). `None` = sin máscara. Ver [`View::mask_image`].
+    pub mask_image: Option<Image>,
     /// Callback de pintura custom. Si está presente, el runtime lo
     /// invoca durante el paint del nodo con el `Scene` vivo + el rect
     /// absoluto. Pensado para "canvas elements" (dominium, pluma,
@@ -661,6 +668,7 @@ impl<Msg: 'static> View<Msg> {
             text,
             image,
             image_fit,
+            mask_image,
             painter,
             gpu_painter,
             on_click,
@@ -722,6 +730,7 @@ impl<Msg: 'static> View<Msg> {
             text,
             image,
             image_fit,
+            mask_image,
             painter,
             gpu_painter,
             drag_payload,
@@ -961,6 +970,10 @@ pub struct MountedNode<Msg> {
     /// Política de encaje de [`Self::image`] (ver [`ImageFit`]). `None`
     /// = `Contain`.
     pub image_fit: Option<ImageFit>,
+    /// Máscara de luminancia del subárbol (CSS `mask-image`). Ver
+    /// [`View::mask_image`]. El paint aísla el subárbol y aplica la luminancia
+    /// de esta imagen como alpha. `None` = sin máscara.
+    pub mask_image: Option<Image>,
     pub painter: Option<PaintFn>,
     pub gpu_painter: Option<GpuPaintFn>,
     pub on_click: Option<Msg>,

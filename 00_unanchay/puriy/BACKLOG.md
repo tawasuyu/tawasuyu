@@ -162,11 +162,82 @@ caja sola (`clip-path: content-box`) → recorta a esa caja (rect).
 
 ---
 
-## Después de la familia clip-path (no determinado aún)
+## Familia mask (DETERMINADA 2026-06-16)
 
-Cuando 7.1222–7.1225 cierren, el siguiente bloque cohesivo a determinar es la
-**familia `mask`** (`mask-image` hoy sólo parsea `url()`; falta pintarla,
-`mask-mode`, `mask-repeat`, `mask-position`, `mask-size`, `mask-composite`,
-`-webkit-mask-*`). No la detallo todavía: requiere decidir cómo el compositor
-aplica una máscara de luminancia/alpha (capa `Mix::*` o sampling), que es una
-bifurcación de diseño — se especifica cuando lleguemos.
+**Bifurcación de diseño resuelta** (el usuario eligió, ver más abajo): el
+compositor aplica `mask-image` como **máscara de luminancia nativa de vello**
+(`push_luminance_mask_layer`, vello 0.7). El subárbol del nodo se aísla en una
+capa (`push_layer`) y al cerrarla la luminancia de la imagen-máscara multiplica
+el alpha del contenido ya pintado: blanco = visible, negro = oculto, gris =
+semitransparente. Es lo más simple y correcto con la API actual.
+
+**Estado del modelo de estilo**: los longhands `mask-mode`, `mask-type`,
+`mask-repeat`, `mask-position`, `mask-size`, `mask-clip`, `mask-origin`,
+`mask-composite`, `mask-source-type` y los `-webkit-mask-*` **ya parsean y
+computan** (fases 7.275, 7.398–7.405, 7.1048–7.1051). Lo que faltaba era
+**pintar**. Por eso estas fases son casi todas compositor + wire (el modelo de
+estilo ya tiene el dato); sólo hay que llevar el longhand al `BoxNode` y
+consumirlo en el pintado de la máscara.
+
+### 7.1226 ✅ — `mask-image: url()` se pinta (máscara de luminancia)
+
+Cadena completa forjada: parser (ya existía, 7.275) → `style.mask_image` →
+`build/node.rs` decodifica el `url()` con `fetch_image_src` (misma cache que
+`<img>`/`background-image`) → `BoxNode::mask_image: Option<ImageData>` →
+`View`/`MountedNode::mask_image: Option<Image>` + builder `View::mask_image` →
+`render.rs` aísla el subárbol y al cerrar la capa aplica `paint_mask_close`
+(`push_luminance_mask_layer` + `draw_image` estirado al border-box) → wire
+`puriy-llimphi` arma el `peniko::Image` y llama `.mask_image`. Tests: parser
+(group02, ya estaba), box-tree (group03, data: percent-encoded para esquivar el
+splitter `;`), builder (view.rs, ortogonal a `clip`). Fase 1: la máscara se
+**estira al border-box** (sin size/position/repeat/mode/clip/origin/composite,
+que vienen abajo). Default CSS para raster es `alpha`, no `luminance` — desvío
+consciente: el modo alpha llega en 7.1228 vía `Compose::SrcIn`.
+
+### 7.1227 — `mask-size` / `mask-position` (encaje de la imagen-máscara)
+
+**Por qué**: hoy la máscara se estira (equivale a `mask-size: 100% 100%`). CSS
+default real es `auto` (tamaño intrínseco) en `0% 0%`. Reusar la maquinaria de
+`background-size`/`background-position` (mismos tipos `BackgroundSize`/
+`BackgroundPosition`, ya en `style.mask_size`/`mask_position`).
+
+**Encoding**: `BoxNode` gana `mask_size`/`mask_position` (los enums ya
+existentes). El compositor computa el `Affine` de la máscara igual que para
+background (Contain/Cover/longitudes + origen), en vez del stretch fijo.
+
+### 7.1228 — `mask-mode` (luminance vs alpha)
+
+**Por qué**: cerrar la fidelidad CSS. `mask-mode: alpha` (y el default
+`match-source` para raster) usa el **canal alpha** de la máscara, no su
+luminancia. vello no expone capa de alpha-mask directa → se compone con
+`push_layer(Compose::SrcIn)`: pintar el subárbol, abrir capa SrcIn, dibujar la
+máscara; el alpha de la máscara recorta el contenido. `match-source` resuelve a
+`alpha` para raster `url()` y a `luminance` para `<mask>`/SVG.
+
+### 7.1229 — `mask-repeat` (tiling de la máscara)
+
+**Por qué**: default CSS es `repeat`. Reusar la lógica de `background-repeat`
+(ya en `style.mask_repeat`): tilear la imagen-máscara por el área de pintado en
+vez de una sola instancia.
+
+### 7.1230 — `mask-clip` / `mask-origin` (caja de referencia de la máscara)
+
+**Por qué**: `mask-clip` recorta el efecto a border/padding/content-box (o
+`no-clip`); `mask-origin` reposiciona el origen del tiling. Análogo a
+`background-clip`/`background-origin` + al `clip_ref_inset` de clip-path. Encoge
+el rect base de la máscara por los insets resueltos en `build/node.rs`.
+
+### 7.1231 — `mask-composite` (combinar varias capas de máscara)
+
+**Por qué**: cierra la familia. `add`/`subtract`/`intersect`/`exclude` combinan
+múltiples imágenes-máscara. Requiere primero modelar la **lista** de capas de
+máscara (hoy `mask_image` es una sola, como era `background` antes de las capas
+extra) — depende de extender el parser/modelo a lista. Se detalla al llegar si
+sigue habiendo apetito; es el menos común.
+
+> **Bifurcación original (resuelta)**: cómo aplica el compositor la máscara —
+> capa de luminancia nativa (`push_luminance_mask_layer`) vs. alpha vía
+> `Compose::*`. Decisión 2026-06-16: **luminancia primero** (7.1226), alpha
+> después (7.1228). Quedó así porque es la primitiva más simple y correcta de
+> vello 0.7 y cubre el caso SVG `<mask>`; el alpha (default raster) se suma sin
+> rehacer lo anterior.

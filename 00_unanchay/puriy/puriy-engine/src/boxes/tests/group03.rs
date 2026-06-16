@@ -110,6 +110,37 @@ use crate::Engine;
     }
 
     #[test]
+    fn mask_image_url_se_decodifica_inline_fase_7_1226() {
+        // `mask-image: url(data:...)` decodifica con la misma cache/decoder que
+        // `<img>`/`background-image`; el box lleva la imagen-máscara lista para
+        // que el compositor la aplique como luminancia sobre el subárbol. Los
+        // nodos sin `mask-image` quedan en `None`.
+        //
+        // Se usa la forma `data:` percent-encoded (sin `;base64`) a propósito:
+        // el `;` de `;base64` rompería el splitter naive de declaraciones CSS
+        // (`split(';')`) — limitación pre-existente del parser. Estos son los
+        // bytes crudos del mismo PNG 1×1 que usa `img_data_url_se_decodifica`.
+        let png_1x1 = "data:image/png,%89PNG%0D%0A%1A%0A%00%00%00%0DIHDR%00%00%00%01%00%00%00%01%08%06%00%00%00%1F%15%C4%89%00%00%00%0DIDATx%9Cc%F8%CF%C0%F0%1F%00%05%00%01%FF%89%99%3D%1D%00%00%00%00IEND%AEB%60%82";
+        let html = format!(
+            r##"<html><body><div style="mask-image: url({png_1x1})">x</div><p>y</p></body></html>"##
+        );
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", &html);
+        let mut dims_con_mask: Vec<(u32, u32)> = Vec::new();
+        let mut hay_sin_mask = false;
+        doc.box_tree.walk(|b| match &b.mask_image {
+            Some(m) => dims_con_mask.push((m.width, m.height)),
+            None => hay_sin_mask = true,
+        });
+        assert_eq!(
+            dims_con_mask,
+            vec![(1, 1)],
+            "sólo el div con mask-image lleva la máscara decodificada (1×1)"
+        );
+        assert!(hay_sin_mask, "los nodos sin mask-image quedan en None");
+    }
+
+    #[test]
     fn canvas_genera_box_con_tamano_intrinseco() {
         // `<canvas>` ya no es display:none (Fase 7.196): produce un box con
         // `canvas: Some((w, h))` tomado de los atributos, default 300×150.

@@ -28,6 +28,7 @@ pub fn mount_recursive<Msg: Clone>(
         text,
         image,
         image_fit,
+        mask_image,
         painter,
         gpu_painter,
         on_click,
@@ -86,6 +87,7 @@ pub fn mount_recursive<Msg: Clone>(
         text,
         image,
         image_fit,
+        mask_image,
         painter,
         gpu_painter,
         on_click,
@@ -411,6 +413,24 @@ pub(crate) fn resolve_node_transform(
 /// `subtree_end ≤ end`) o por el drenaje final — la LIFO se respeta. `base_xf`
 /// debería ser la transformación de los ancestros del nodo raíz; al capturar
 /// se pasa `IDENTITY` (v1 no contempla raíces bajo ancestros transformados).
+/// Cierra una capa de aislamiento de `mask-image` (Fase 7.1226) aplicando la
+/// **luminancia** de `img` como alpha del contenido ya pintado en la capa: la
+/// sub-capa `push_luminance_mask_layer` toma el contenido "previo" (todo el
+/// subárbol del nodo, ya compuesto en la capa de aislamiento) y lo multiplica
+/// por la luminancia de la máscara — blanco = visible, negro = oculto. La
+/// imagen se estira al `rect` (border-box del nodo); `mask-size`/`-position`/
+/// `-repeat`/`-mode` son fases posteriores. El caller cierra la capa de
+/// aislamiento con su propio `pop_layer` tras llamar a esto.
+fn paint_mask_close(scene: &mut vello::Scene, img: &Image, rect: KurboRect, xf: Affine) {
+    let iw = img.image.width.max(1) as f64;
+    let ih = img.image.height.max(1) as f64;
+    let fit = Affine::translate((rect.x0, rect.y0))
+        * Affine::scale_non_uniform(rect.width() / iw, rect.height() / ih);
+    scene.push_luminance_mask_layer(Fill::NonZero, 1.0, xf, &rect);
+    scene.draw_image(img, xf * fit);
+    scene.pop_layer();
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn paint_range<Msg>(
     scene: &mut vello::Scene,
@@ -423,12 +443,16 @@ pub fn paint_range<Msg>(
     end: usize,
     base_xf: Affine,
 ) {
-    // Stack de subtree_end de los `push_layer` activos (clip y/o alpha).
-    // Vello requiere pop_layer en orden LIFO estricto, así que mantenemos
-    // un único stack común y popeamos en el orden en que se pushearon.
-    // Dos entradas con el mismo `subtree_end` (alpha + clip sobre el
-    // mismo nodo) se cierran en el orden inverso al push.
-    let mut layer_stack: Vec<usize> = Vec::new();
+    // Stack de las capas `push_layer` activas. Vello requiere pop_layer en
+    // orden LIFO estricto, así que mantenemos un único stack común y popeamos
+    // en el orden inverso al push. Cada entrada es `(subtree_end, máscara?)`:
+    // la mayoría son `None` (clip y/o alpha — la capa sólo se cierra con
+    // `pop_layer`); las de `mask-image` llevan `Some((imagen, rect, xf))` y al
+    // cerrar aplican la luminancia de la máscara sobre el subárbol ya pintado
+    // (ver `paint_mask_close`) antes del `pop_layer` de la capa de aislamiento.
+    // Dos entradas con el mismo `subtree_end` (p. ej. alpha + mask + clip sobre
+    // el mismo nodo) se cierran en el orden inverso al push.
+    let mut layer_stack: Vec<(usize, Option<(Image, KurboRect, Affine)>)> = Vec::new();
     // Stack de transformaciones afines de subtree. Cada entrada guarda el
     // `subtree_end` y la `cur_xf` previa para restaurarla al salir del
     // subárbol. `cur_xf` es el producto acumulado de todos los `transform`
@@ -439,11 +463,15 @@ pub fn paint_range<Msg>(
     let mut cur_xf = base_xf;
     for idx in start..end {
         let node = &mounted.nodes[idx];
-        // Cierre de capas que ya quedaron atrás (idx ≥ subtree_end).
-        while let Some(&end) = layer_stack.last() {
+        // Cierre de capas que ya quedaron atrás (idx ≥ subtree_end). Si la
+        // capa es una máscara, aplicamos su luminancia ANTES del pop.
+        while let Some(&(end, _)) = layer_stack.last() {
             if idx >= end {
+                let (_, mask) = layer_stack.pop().unwrap();
+                if let Some((img, rect, xf)) = &mask {
+                    paint_mask_close(scene, img, *rect, *xf);
+                }
                 scene.pop_layer();
-                layer_stack.pop();
             } else {
                 break;
             }
@@ -484,7 +512,23 @@ pub fn paint_range<Msg>(
                 (r.y + r.h) as f64,
             );
             scene.push_layer(Fill::NonZero, Mix::Normal, a, cur_xf, &rect);
-            layer_stack.push(node.subtree_end);
+            layer_stack.push((node.subtree_end, None));
+        }
+        // `mask-image` (Fase 7.1226): abrí una capa de aislamiento para el
+        // subárbol del nodo. La luminancia de la máscara se aplica al CERRARLA
+        // (en el loop de cierre / drain final, vía `paint_mask_close`), así
+        // recorta sólo a este nodo + hijos y no a los hermanos previos. Va
+        // DESPUÉS del alpha (afuera del clip-path, que se pushea al final del
+        // bloque) para envolver fill + contenido + hijos.
+        if let Some(mask_img) = node.mask_image.as_ref() {
+            let rect = KurboRect::new(
+                r.x as f64,
+                r.y as f64,
+                (r.x + r.w) as f64,
+                (r.y + r.h) as f64,
+            );
+            scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &rect);
+            layer_stack.push((node.subtree_end, Some((mask_img.clone(), rect, cur_xf))));
         }
         // Sombra (drop shadow): se pinta ANTES del relleno para quedar
         // detrás. Usa el blur gaussiano nativo de vello sobre un rect
@@ -785,12 +829,16 @@ pub fn paint_range<Msg>(
                 scene.push_layer(Fill::NonZero, BlendMode::default(), 1.0, cur_xf, &clip_rect);
             }
             if pushed {
-                layer_stack.push(node.subtree_end);
+                layer_stack.push((node.subtree_end, None));
             }
         }
     }
-    // Cerrá capas (clip + alpha) que llegaron al final sin pop intermedio.
-    while layer_stack.pop().is_some() {
+    // Cerrá capas (clip + alpha + mask) que llegaron al final sin pop
+    // intermedio. Las de máscara aplican su luminancia antes del pop.
+    while let Some((_, mask)) = layer_stack.pop() {
+        if let Some((img, rect, xf)) = &mask {
+            paint_mask_close(scene, img, *rect, *xf);
+        }
         scene.pop_layer();
     }
 }

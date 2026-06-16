@@ -186,6 +186,14 @@ pub struct BoxNode {
     /// referencia). Sin forma + caja ≠ border-box ⇒ recorta a ese rect. `None`
     /// = referencia = border-box (sin cambio). Fase 7.1225.
     pub clip_ref_inset: Option<[f32; 4]>,
+    /// Imagen decodificada (RGBA8) de `mask-image: url(...)`. `None` si la
+    /// propiedad no estaba, era `none`, o la descarga/decode falló. El
+    /// compositor la usa como **máscara de luminancia** sobre el subárbol del
+    /// nodo (la luminancia del píxel-máscara multiplica el alpha del
+    /// contenido; negro = oculto, blanco = visible). Fase 1: se estira al
+    /// border-box (sin `mask-size`/`-position`/`-repeat`/`-mode`, que son
+    /// fases posteriores). Fase 7.1226.
+    pub mask_image: Option<ImageData>,
     /// `white-space` define cómo collapse_whitespace trata el texto.
     pub white_space: WhiteSpace,
     /// Aplicado al texto del nodo (si es leaf) o propagado por

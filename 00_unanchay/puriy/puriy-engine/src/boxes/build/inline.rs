@@ -133,6 +133,7 @@ pub(crate) fn inline_text_with_style(s: String, style: &ComputedStyle) -> BoxNod
         link_new_tab: false,
         link_download: None,
         background_image: None,
+        mask_image: None,
         background_size: BackgroundSize::Auto,
         background_position: BackgroundPosition { x: LengthVal::Pct(0.0), y: LengthVal::Pct(0.0) },
         background_repeat: BackgroundRepeat::Repeat,
