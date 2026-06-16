@@ -25,7 +25,7 @@ defecto de clase que tenía shuma.
 | 2 | `02_ruway/takiy/takiy-app-llimphi` (`model/`) | **MEDIA** | (a) `EditorState`/undo-redo agnóstico atrapado en el binario | ✅ hecho — extraído a `takiy-editor-core` |
 | 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | 🟡 JD/GMST/eclíptica→ecuatorial/proyección → nuevo `cosmos-astrocartography`; el ensamblado de líneas (interleaved con el trazo) queda como follow-up |
 | 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | 🟡 `procfs` (lee /proc + señales) → nuevo `sandokan-sysmon-core`; falta mover `SysProc`+helpers de `sistema.rs` |
-| 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | ⬜ pendiente |
+| 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | 🟡 orden+shuffle+saltos → `media-core::playlist::Cursor`; `RepeatMode` queda en el app a propósito (ver nota) |
 | 6 | `00_unanchay/khipu/khipu-app/src/map.rs` | MEDIA | (a) `place_note` (anclaje semántico); `gravity_layout` del core sin usar | ✅ hecho — `SemanticField::anchor_new` |
 | 7 | `02_ruway/chasqui/chasqui-broker-explorer-llimphi` | BAJA | (a) `diff_matches`/timeline de salud del broker atrapado | ✅ hecho — `card-handshake::health` |
 | 8 | `02_ruway/pata/pata-llimphi/src/sampler.rs` | BAJA | (a) efemérides (`astro_from_jd`) atrapadas; `pata-core` es agnóstico | ✅ hecho — `pata-core::astro` |
@@ -99,8 +99,19 @@ Define su propio `struct Playlist` y reimplementa `cycle_repeat`/`toggle_shuffle
 propio)/`next`/`prev`/auto-advance — **todo ya existe en `media-core::playlist`** (`Repeat`, `Playlist`,
 `cycle_repeat`, `toggle_shuffle`, `shuffle_order`, `next`, `prev`). Riesgo de divergencia.
 
-**Remediación:** reemplazar el `Playlist` local por wrapper sobre `media_core::playlist::Playlist`;
-dejar en el frontend sólo `decoders: Vec<LoadedTrack>` + índice. Borrar las reimplementaciones.
+**Hecho (con matiz):** la premisa de "reemplazar por `media_core::playlist::Playlist`" resultó
+incorrecta al inspeccionar el target — ese `Playlist` del core **no es código muerto**: es el modelo del
+**editor de cola** (claves String, ops de edición, serde, tests, PARIDAD U1), un concern distinto del
+reproductor runtime; y el `Repeat` del core (cycle estilo VLC `Off→All→One`) **ya lo usa la pantalla de
+config** vía el bridge `config_io::repeat_mode_from`. Unificar el *cycle order* habría cambiado la UX de
+la pantalla de config (contra "sin cambio de UX"). Así que el fix faithful fue: extraer el algoritmo que
+el auditor marcó como reimplementado —shuffle (Fisher-Yates xorshift) + saltos de índice (`peek_step`) +
+cursor con estado— a un tipo nuevo agnóstico `media_core::playlist::Cursor` que el `Playlist` runtime
+envuelve (conserva decoders/speed). `RepeatMode` (enum de 3 variantes con su label de UI y cycle
+`Off→One→All` del reproductor) **queda en el app**, sin tocar config ni su orden. Comportamiento de
+reproducción idéntico (lógica movida verbatim); conviene un chequeo visual corriendo `media-app`.
+**Follow-up opcional:** unificar `RepeatMode`↔`media_core::playlist::Repeat` y el cycle order entre
+reproductor y config — requiere decidir un único orden (cambia la UX de la pantalla de config).
 
 ### 6. `khipu-app/src/map.rs` — MEDIA (a)
 `place_note()` (l.90) reimplementa anclaje semántico (baricentro por afinidad coseno + relajación +

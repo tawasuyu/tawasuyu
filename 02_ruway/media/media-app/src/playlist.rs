@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
+use media_core::playlist::Cursor;
 use media_core::{AudioSource, Seekable};
 use media_source_wav::WavSource;
 use media_source_mp3::Mp3Source;
@@ -174,20 +175,16 @@ pub(crate) enum TickAdvance {
     Switch(usize),
 }
 
-pub(crate) struct ShuffleOrder {
-    pub(crate) order: Vec<usize>,
-    pub(crate) pos: usize,
-}
-
-/// Playlist con prev/next manual + auto-advance al fin de cada pista.
+/// Playlist con prev/next manual + auto-advance al fin de cada pista. El orden
+/// (índice + shuffle + saltos) lo lleva el [`Cursor`] agnóstico de `media-core`
+/// (Regla 2); acá quedan los decoders cargados, la velocidad y el modo repeat
+/// (que decide loop por pista y fin de cola).
 pub(crate) struct Playlist {
     pub(crate) tracks: Vec<PathBuf>,
-    pub(crate) idx: usize,
     pub(crate) current: LoadedTrack,
     pub(crate) speed: f32,
     pub(crate) repeat: RepeatMode,
-    pub(crate) shuffle: Option<ShuffleOrder>,
-    pub(crate) rng_state: u64,
+    cursor: Cursor,
 }
 
 impl Playlist {
@@ -197,14 +194,13 @@ impl Playlist {
         }
         let mut current = LoadedTrack::from_path(&tracks[0])?;
         current.set_loop(false);
+        let cursor = Cursor::new(tracks.len());
         Ok(Self {
             tracks,
-            idx: 0,
             current,
             speed: 1.0,
             repeat: RepeatMode::Off,
-            shuffle: None,
-            rng_state: 0x9E37_79B9_7F4A_7C15,
+            cursor,
         })
     }
 
@@ -212,12 +208,10 @@ impl Playlist {
     pub(crate) fn empty() -> Self {
         Self {
             tracks: Vec::new(),
-            idx: 0,
             current: LoadedTrack::Silent,
             speed: 1.0,
             repeat: RepeatMode::Off,
-            shuffle: None,
-            rng_state: 0x9E37_79B9_7F4A_7C15,
+            cursor: Cursor::empty(),
         }
     }
 
@@ -227,10 +221,9 @@ impl Playlist {
     /// abrir la primera pista como audio nativo, así una cola de **videos**
     /// también carga (el viejo `load_tracks` audio-only se retiró).
     pub(crate) fn set_list(&mut self, tracks: Vec<PathBuf>) {
+        self.cursor.reset(tracks.len());
         self.tracks = tracks;
-        self.idx = 0;
         self.current = LoadedTrack::Silent;
-        self.shuffle = None;
     }
 
     /// Fija la pista viva al índice `target` con su componente de audio ya
@@ -243,13 +236,8 @@ impl Playlist {
         }
         audio.set_speed(self.speed);
         audio.set_loop(matches!(self.repeat, RepeatMode::One));
-        self.idx = target;
         self.current = audio;
-        if let Some(sh) = self.shuffle.as_mut() {
-            if let Some(p) = sh.order.iter().position(|&i| i == target) {
-                sh.pos = p;
-            }
-        }
+        self.cursor.set_idx(target);
     }
 
     /// Reemplaza **en caliente** la pista viva por `track` (p. ej. el audio
@@ -259,9 +247,8 @@ impl Playlist {
         track.set_speed(self.speed);
         track.set_loop(matches!(self.repeat, RepeatMode::One));
         self.tracks = vec![path];
-        self.idx = 0;
         self.current = track;
-        self.shuffle = None;
+        self.cursor.reset(1);
     }
 
     /// Crea una cola sembrando la **carpeta** de `path` con sus hermanos de
@@ -275,14 +262,14 @@ impl Playlist {
             Some(i) => (siblings, i),
             None => (vec![path], 0),
         };
+        let mut cursor = Cursor::new(tracks.len());
+        cursor.set_idx(idx);
         Self {
             tracks,
-            idx,
             current: track,
             speed: 1.0,
             repeat: RepeatMode::Off,
-            shuffle: None,
-            rng_state: 0x9E37_79B9_7F4A_7C15,
+            cursor,
         }
     }
 
@@ -291,7 +278,7 @@ impl Playlist {
     }
 
     pub(crate) fn shuffle_on(&self) -> bool {
-        self.shuffle.is_some()
+        self.cursor.shuffle_on()
     }
 
     pub(crate) fn cycle_repeat(&mut self) {
@@ -306,35 +293,12 @@ impl Playlist {
     }
 
     pub(crate) fn toggle_shuffle(&mut self) {
-        if self.shuffle.is_some() {
-            self.shuffle = None;
-        } else if self.tracks.len() > 1 {
-            self.shuffle = Some(self.build_shuffle_order());
-        }
-    }
-
-    fn build_shuffle_order(&mut self) -> ShuffleOrder {
-        let mut order: Vec<usize> = (0..self.tracks.len()).collect();
-        for i in (1..order.len()).rev() {
-            let j = (self.rand_u64() % (i as u64 + 1)) as usize;
-            order.swap(i, j);
-        }
-        let pos = order.iter().position(|&t| t == self.idx).unwrap_or(0);
-        ShuffleOrder { order, pos }
-    }
-
-    fn rand_u64(&mut self) -> u64 {
-        let mut x = self.rng_state;
-        x ^= x << 13;
-        x ^= x >> 7;
-        x ^= x << 17;
-        self.rng_state = x;
-        x
+        self.cursor.toggle_shuffle();
     }
 
     pub(crate) fn track_path(&self) -> &std::path::Path {
         self.tracks
-            .get(self.idx)
+            .get(self.cursor.idx())
             .map(|p| p.as_path())
             .unwrap_or_else(|| std::path::Path::new(""))
     }
@@ -347,21 +311,7 @@ impl Playlist {
     /// Índice destino de un paso `delta` (respeta el orden aleatorio), **puro**:
     /// no carga ni muta nada. `None` si no hay con qué moverse (≤ 1 pista).
     pub(crate) fn peek_step(&self, delta: i64) -> Option<usize> {
-        if self.tracks.len() <= 1 {
-            return None;
-        }
-        let new = match self.shuffle.as_ref() {
-            Some(sh) => {
-                let n = sh.order.len() as i64;
-                let np = (sh.pos as i64 + delta).rem_euclid(n) as usize;
-                sh.order[np]
-            }
-            None => {
-                let n = self.tracks.len() as i64;
-                ((self.idx as i64 + delta).rem_euclid(n)) as usize
-            }
-        };
-        Some(new)
+        self.cursor.peek_step(delta)
     }
 
     /// ¿La pista viva la decodifica un source de audio **nativo**? Esas se
@@ -387,7 +337,7 @@ impl Playlist {
     }
 
     pub(crate) fn idx(&self) -> usize {
-        self.idx
+        self.cursor.idx()
     }
 
     pub(crate) fn current_speed(&self) -> f32 {
@@ -395,20 +345,15 @@ impl Playlist {
     }
 
     pub(crate) fn jump_to(&mut self, target: usize) {
-        if target >= self.tracks.len() || target == self.idx {
+        if target >= self.tracks.len() || target == self.cursor.idx() {
             return;
         }
         match LoadedTrack::from_path(&self.tracks[target]) {
             Ok(mut t) => {
                 t.set_speed(self.speed);
                 t.set_loop(matches!(self.repeat, RepeatMode::One));
-                self.idx = target;
                 self.current = t;
-                if let Some(sh) = self.shuffle.as_mut() {
-                    if let Some(p) = sh.order.iter().position(|&i| i == target) {
-                        sh.pos = p;
-                    }
-                }
+                self.cursor.set_idx(target);
             }
             Err(e) => eprintln!("media-app: salto de pista falló: {e}"),
         }
@@ -447,11 +392,7 @@ impl Playlist {
                 self.current.seek_to(Duration::ZERO);
             }
             RepeatMode::All | RepeatMode::Off => {
-                let last = matches!(self.repeat, RepeatMode::Off)
-                    && match self.shuffle.as_ref() {
-                        Some(sh) => sh.pos + 1 >= sh.order.len(),
-                        None => self.idx + 1 >= self.tracks.len(),
-                    };
+                let last = matches!(self.repeat, RepeatMode::Off) && self.cursor.at_last();
                 if last {
                     return;
                 }
@@ -494,11 +435,7 @@ impl Playlist {
                 }
             }
             RepeatMode::Off => {
-                let last = match self.shuffle.as_ref() {
-                    Some(sh) => sh.pos + 1 >= sh.order.len(),
-                    None => self.idx + 1 >= self.tracks.len(),
-                };
-                if last {
+                if self.cursor.at_last() {
                     return TickAdvance::None;
                 }
                 self.peek_step(1)

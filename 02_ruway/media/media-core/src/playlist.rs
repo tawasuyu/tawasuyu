@@ -308,6 +308,199 @@ fn adjust_index(c: usize, from: usize, to: usize) -> usize {
     }
 }
 
+/// Orden de reproducción aleatorio: la permutación de índices y la posición
+/// actual dentro de ella.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShuffleOrder {
+    pub order: Vec<usize>,
+    pub pos: usize,
+}
+
+/// Cursor de la cola **viva** del reproductor: índice actual sobre `[0, len)` y
+/// orden aleatorio opcional, con su PRNG determinista (xorshift). Es el orden
+/// agnóstico que el `Playlist` runtime de `media-app` —que además carga decoders
+/// y maneja el modo repeat— envuelve; vivía reimplementado en ese frontend
+/// (shuffle por LCG + saltos de índice), y baja acá por la Regla 2. Trabaja por
+/// índice: la identidad de cada pista (ruta/decoder) vive en el frontend.
+///
+/// Es distinto del editor [`Playlist`] de este módulo (lista editable con claves
+/// `String` + serde + ops de edición): el reproductor necesita un cursor por
+/// índice con shuffle **con estado**; el editor, una lista editable. Conviven a
+/// propósito —son dos concerns— hasta que la edición de cola se cablee encima.
+#[derive(Debug, Clone)]
+pub struct Cursor {
+    len: usize,
+    idx: usize,
+    shuffle: Option<ShuffleOrder>,
+    rng_state: u64,
+}
+
+impl Cursor {
+    /// Semilla del xorshift (misma que usaba el frontend → orden idéntico).
+    const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
+
+    /// Cursor sobre `len` entradas, en el índice 0, sin shuffle.
+    pub fn new(len: usize) -> Self {
+        Self { len, idx: 0, shuffle: None, rng_state: Self::SEED }
+    }
+
+    /// Cursor vacío (motor vivo sin lista).
+    pub fn empty() -> Self {
+        Self::new(0)
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
+    pub fn idx(&self) -> usize {
+        self.idx
+    }
+
+    pub fn shuffle_on(&self) -> bool {
+        self.shuffle.is_some()
+    }
+
+    /// Reinicia a `len` entradas nuevas: índice 0, sin shuffle (la lista cambió).
+    pub fn reset(&mut self, len: usize) {
+        self.len = len;
+        self.idx = 0;
+        self.shuffle = None;
+    }
+
+    /// Fija el índice actual y reposiciona el shuffle. No-op si fuera de rango.
+    pub fn set_idx(&mut self, target: usize) {
+        if target >= self.len {
+            return;
+        }
+        self.idx = target;
+        if let Some(sh) = self.shuffle.as_mut() {
+            if let Some(p) = sh.order.iter().position(|&i| i == target) {
+                sh.pos = p;
+            }
+        }
+    }
+
+    /// Prende/apaga el orden aleatorio. Apagar lo descarta; prender lo deriva
+    /// (Fisher-Yates) sólo si hay más de una entrada.
+    pub fn toggle_shuffle(&mut self) {
+        if self.shuffle.is_some() {
+            self.shuffle = None;
+        } else if self.len > 1 {
+            self.shuffle = Some(self.build_shuffle_order());
+        }
+    }
+
+    fn build_shuffle_order(&mut self) -> ShuffleOrder {
+        let mut order: Vec<usize> = (0..self.len).collect();
+        for i in (1..order.len()).rev() {
+            let j = (self.rand_u64() % (i as u64 + 1)) as usize;
+            order.swap(i, j);
+        }
+        let pos = order.iter().position(|&t| t == self.idx).unwrap_or(0);
+        ShuffleOrder { order, pos }
+    }
+
+    fn rand_u64(&mut self) -> u64 {
+        let mut x = self.rng_state;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.rng_state = x;
+        x
+    }
+
+    /// Índice destino de un paso `delta` (respeta el orden aleatorio). **Puro**:
+    /// no carga ni muta nada. `None` si no hay con qué moverse (≤ 1 entrada).
+    pub fn peek_step(&self, delta: i64) -> Option<usize> {
+        if self.len <= 1 {
+            return None;
+        }
+        let new = match self.shuffle.as_ref() {
+            Some(sh) => {
+                let n = sh.order.len() as i64;
+                let np = (sh.pos as i64 + delta).rem_euclid(n) as usize;
+                sh.order[np]
+            }
+            None => {
+                let n = self.len as i64;
+                ((self.idx as i64 + delta).rem_euclid(n)) as usize
+            }
+        };
+        Some(new)
+    }
+
+    /// ¿El índice actual es el último del orden vigente? Lo usa el modo `Off`
+    /// para saber cuándo la cola terminó.
+    pub fn at_last(&self) -> bool {
+        match self.shuffle.as_ref() {
+            Some(sh) => sh.pos + 1 >= sh.order.len(),
+            None => self.idx + 1 >= self.len,
+        }
+    }
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    #[test]
+    fn peek_step_lineal_envuelve() {
+        let c = Cursor::new(3); // idx 0, sin shuffle
+        assert_eq!(c.peek_step(1), Some(1));
+        assert_eq!(c.peek_step(-1), Some(2)); // envuelve hacia atrás
+        assert_eq!(Cursor::new(1).peek_step(1), None);
+        assert_eq!(Cursor::empty().peek_step(1), None);
+    }
+
+    #[test]
+    fn set_idx_clampa_y_reposiciona() {
+        let mut c = Cursor::new(4);
+        c.set_idx(2);
+        assert_eq!(c.idx(), 2);
+        c.set_idx(99); // fuera de rango → no-op
+        assert_eq!(c.idx(), 2);
+        assert_eq!(c.peek_step(1), Some(3));
+    }
+
+    #[test]
+    fn at_last_detecta_fin() {
+        let mut c = Cursor::new(2);
+        assert!(!c.at_last());
+        c.set_idx(1);
+        assert!(c.at_last());
+    }
+
+    #[test]
+    fn shuffle_es_permutacion_determinista() {
+        let mut a = Cursor::new(6);
+        a.toggle_shuffle();
+        assert!(a.shuffle_on());
+        // Misma semilla fija → misma permutación en otra instancia.
+        let mut b = Cursor::new(6);
+        b.toggle_shuffle();
+        assert_eq!(a.peek_step(1), b.peek_step(1));
+        // peek_step navega el orden barajado y envuelve sin salirse.
+        for d in [-3, -1, 1, 5] {
+            let t = a.peek_step(d).unwrap();
+            assert!(t < 6);
+        }
+        a.toggle_shuffle();
+        assert!(!a.shuffle_on());
+    }
+
+    #[test]
+    fn shuffle_no_se_prende_con_una_sola() {
+        let mut c = Cursor::new(1);
+        c.toggle_shuffle();
+        assert!(!c.shuffle_on());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
