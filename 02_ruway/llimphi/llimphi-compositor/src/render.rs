@@ -74,6 +74,7 @@ pub fn mount_recursive<Msg: Clone>(
         ripple,
         layout_builder,
         backdrop_blur,
+        filter,
         children,
     } = v;
     let parent_idx = out.len();
@@ -138,6 +139,7 @@ pub fn mount_recursive<Msg: Clone>(
         // flag permite que el runtime lo detecte y resuelva.
         is_layout_builder: layout_builder.is_some(),
         backdrop_blur,
+        filter,
         subtree_end: 0,
     });
     let mut child_ids = Vec::with_capacity(children.len());
@@ -379,6 +381,48 @@ pub struct BackdropBlur {
     pub sigma: f32,
     /// Rect absoluto `(x, y, w, h)` del nodo, en pixels lógicos del viewport.
     pub rect: (f32, f32, f32, f32),
+}
+
+/// Una operación de `filter` lista para que el runtime la aplique sobre la
+/// intermediate, restringida a `rect`. Espeja [`BackdropBlur`] pero lleva una
+/// [`FilterOp`] genérica (el runtime hace match por variante). Fase 7.1232.
+#[derive(Debug, Clone)]
+pub struct FilterPass {
+    /// Rect absoluto `(x, y, w, h)` del nodo, en pixels lógicos del viewport.
+    pub rect: (f32, f32, f32, f32),
+    /// La operación a aplicar (blur / color-matrix / …).
+    pub op: FilterOp,
+}
+
+/// Recolecta los nodos con [`MountedNode::filter`] no vacío y los aplana en una
+/// lista de [`FilterPass`] **en orden de árbol y en orden de la lista de cada
+/// nodo** — así el runtime aplica la cadena `filter: a b c` en secuencia sobre
+/// el rect (a, luego b, luego c). El runtime las consume tras la rasterización
+/// vello, igual que [`collect_backdrop_blurs`].
+///
+/// Salta el subárbol al encontrar un nodo con filtro (como backdrop_blur): un
+/// filtro anidado sobre el mismo rect sería redundante en la post-pasada v1.
+pub fn collect_filters<Msg>(
+    mounted: &Mounted<Msg>,
+    computed: &ComputedLayout,
+) -> Vec<FilterPass> {
+    let mut out = Vec::new();
+    let mut idx = 0;
+    while idx < mounted.nodes.len() {
+        let node = &mounted.nodes[idx];
+        if !node.filter.is_empty() {
+            if let Some(r) = computed.get(node.id) {
+                let rect = (r.x, r.y, r.w, r.h);
+                for op in &node.filter {
+                    out.push(FilterPass { rect, op: op.clone() });
+                }
+                idx = node.subtree_end;
+                continue;
+            }
+        }
+        idx += 1;
+    }
+    out
 }
 
 /// Resuelve el afín efectivo de un nodo a partir de su `transform` (afín fijo)

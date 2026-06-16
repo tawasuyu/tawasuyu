@@ -239,6 +239,36 @@ fn mask_compose_de(c: puriy_engine::style::MaskComposite) -> llimphi_ui::MaskCom
     }
 }
 
+/// Convierte la lista CSS `filter` (`Vec<FilterFn>`) a las [`llimphi_ui::FilterOp`]
+/// del compositor (filtros sobre el **propio subárbol**). Fase 7.1232: sólo
+/// `blur(<px>)` (px = sigma del Gauss, misma convención CSS); el resto de las
+/// variantes se ignora hasta su fase. Lista vacía → sin filtro.
+fn filtros_a_ops(fns: &[puriy_engine::style::FilterFn]) -> Vec<llimphi_ui::FilterOp> {
+    use puriy_engine::style::FilterFn as F;
+    fns.iter()
+        .filter_map(|f| match f {
+            F::Blur(px) if *px > 0.0 => Some(llimphi_ui::FilterOp::Blur(*px)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Suma los `blur(<px>)` de una lista de filtros. Lo usa `backdrop-filter`, que
+/// el compositor aplica con el camino nativo [`llimphi_ui::View::backdrop_blur`]
+/// (borronea lo pintado *debajo* del nodo). `None` si no hay ningún blur. Fase
+/// 7.1232.
+fn blur_sigma_de(fns: &[puriy_engine::style::FilterFn]) -> Option<f32> {
+    use puriy_engine::style::FilterFn as F;
+    let total: f32 = fns
+        .iter()
+        .map(|f| match f {
+            F::Blur(px) => *px,
+            _ => 0.0,
+        })
+        .sum();
+    (total > 0.0).then_some(total)
+}
+
 fn mask_placement_de(spec: &puriy_engine::MaskSpec) -> llimphi_ui::MaskPlacement {
     use llimphi_ui::{MaskLen, MaskSize};
     use puriy_engine::style::MaskMode as CssMaskMode;
@@ -534,6 +564,19 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
                 .collect();
             view = view.mask_extra(extra);
         }
+    }
+    // `filter: blur(...)` (Fase 7.1232) — borronea el **propio subárbol** del
+    // nodo como post-pasada GPU sobre la intermediate. Ortogonal a clip/mask.
+    // Las demás funciones de filtro (brightness/grayscale/drop-shadow/…) llegan
+    // en fases siguientes.
+    let fops = filtros_a_ops(&b.filter);
+    if !fops.is_empty() {
+        view = view.filter(fops);
+    }
+    // `backdrop-filter: blur(...)` (Fase 7.1232) — borronea lo que asoma DEBAJO
+    // del nodo ("vidrio esmerilado"). Reusa el camino nativo `backdrop_blur`.
+    if let Some(sigma) = blur_sigma_de(&b.backdrop_filter) {
+        view = view.backdrop_blur(sigma);
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);

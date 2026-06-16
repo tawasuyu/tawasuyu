@@ -343,6 +343,20 @@ impl Border {
     }
 }
 
+/// Una operación de filtro CSS (`filter: blur()/brightness()/…`) aplicada al
+/// **propio subárbol** del nodo. A diferencia de `backdrop_blur` (que afecta lo
+/// pintado *debajo*), un `FilterOp` modifica el contenido del nodo. El runtime
+/// los aplica como post-pasada GPU sobre la intermediate, restringidos al rect
+/// del nodo, en el orden de la lista. La lista crece por fase (CSS Filter
+/// Effects 1): hoy sólo `Blur`. Fase 7.1232.
+#[derive(Clone, Debug, PartialEq)]
+pub enum FilterOp {
+    /// `filter: blur(<px>)`. `px` es la desviación estándar del Gauss (igual
+    /// convención que CSS). Se aplica con `BlurCompositor`, el mismo camino que
+    /// `backdrop_blur`.
+    Blur(f32),
+}
+
 /// Nodo de la vista declarativa. Estilo de layout (taffy) + relleno opcional
 /// (vello) + texto opcional (skrifa+vello) + Msg al click opcional + hijos.
 pub struct View<Msg> {
@@ -644,6 +658,9 @@ pub struct View<Msg> {
     /// Ver [`View::backdrop_blur`] / [`MountedNode::backdrop_blur`]. v1:
     /// sólo se aplica a nodos top-level sin clip/alpha ancestral.
     pub backdrop_blur: Option<f32>,
+    /// Filtros CSS (`filter: …`) sobre el propio subárbol del nodo. Vacío = sin
+    /// filtro. Ver [`View::filter`] / [`FilterOp`]. Fase 7.1232.
+    pub filter: Vec<FilterOp>,
     pub children: Vec<View<Msg>>,
 }
 
@@ -724,6 +741,7 @@ impl<Msg: 'static> View<Msg> {
             ripple,
             layout_builder,
             backdrop_blur,
+            filter,
             children,
         } = self;
         // Wrappers: cada callback que produce `Option<Msg>` se reenvía y su
@@ -768,6 +786,7 @@ impl<Msg: 'static> View<Msg> {
             cursor,
             ripple,
             backdrop_blur,
+            filter,
             // — Msg simples —
             on_click: on_click.map(|m| f(m)),
             on_right_click: on_right_click.map(|m| f(m)),
@@ -1163,6 +1182,12 @@ pub struct MountedNode<Msg> {
     /// dentro de un ancestro con clip/alpha (los subárboles separados pintan
     /// fuera de esas capas — documentado en `PARIDAD-FLUTTER.md` Bloque 11).
     pub backdrop_blur: Option<f32>,
+    /// Filtros CSS (`filter: …`) sobre el propio subárbol (ver [`View::filter`]
+    /// / [`FilterOp`]). El runtime los recolecta con [`collect_filters`] y los
+    /// aplica como post-pasada GPU sobre la intermediate, restringidos al rect
+    /// del nodo, **después** de la rasterización. Vacío = sin filtro. Fase
+    /// 7.1232.
+    pub filter: Vec<FilterOp>,
     /// Índice (exclusivo) del fin del subárbol en `Mounted::nodes`. Los
     /// descendientes ocupan `[idx + 1, subtree_end)`. Hace de "barrera" en
     /// paint/hit_test para `pop_layer` y para saltar subárboles enteros.

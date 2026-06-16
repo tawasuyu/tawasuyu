@@ -364,6 +364,39 @@ use crate::Engine;
     }
 
     #[test]
+    fn filter_y_backdrop_filter_llegan_al_box_node_fase_7_1232() {
+        // `filter`/`backdrop-filter` ya se parsean al ComputedStyle (Fases
+        // 7.264/7.265); este test verifica que viajan hasta el BoxNode, que es
+        // lo que el chrome (puriy-llimphi) lee para pintar la post-pasada GPU.
+        use crate::style::FilterFn;
+        let html = "<html><body>\
+            <div id=\"f\" style=\"filter: blur(3px)\">x</div>\
+            <div id=\"bf\" style=\"-webkit-backdrop-filter: blur(8px)\">y</div>\
+            <div id=\"n\">z</div>\
+            </body></html>";
+        let eng = Engine::new();
+        let doc = eng.load_html("about:test", html);
+        let by_id = |id: &str| {
+            let mut found = None;
+            doc.box_tree.walk(|b| {
+                if b.element_id.as_deref() == Some(id) {
+                    found = Some((b.filter.clone(), b.backdrop_filter.clone()));
+                }
+            });
+            found.expect("box existe")
+        };
+        let (f, bf) = by_id("f");
+        assert!(matches!(f.as_slice(), [FilterFn::Blur(v)] if (v - 3.0).abs() < 1e-3));
+        assert!(bf.is_empty());
+        let (f2, bf2) = by_id("bf");
+        assert!(f2.is_empty());
+        assert!(matches!(bf2.as_slice(), [FilterFn::Blur(v)] if (v - 8.0).abs() < 1e-3));
+        // sin filter → ambos vacíos.
+        let (f3, bf3) = by_id("n");
+        assert!(f3.is_empty() && bf3.is_empty());
+    }
+
+    #[test]
     fn unidades_viewport_resuelven_contra_el_viewport_real() {
         use crate::style::{LengthVal, Viewport};
         // `vw/vh/vmin/vmax` deben resolver contra el ancho/alto REAL de la

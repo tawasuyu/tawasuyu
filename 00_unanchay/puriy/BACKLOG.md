@@ -315,18 +315,81 @@ url, stylesheet), box-tree (`mask_image_capas_multiples`, group03: 2 data: URLs
 
 ---
 
-## Familia mask CERRADA (2026-06-16) — próximo bloque a determinar
+## Familia mask CERRADA (2026-06-16)
 
 Las fases 7.1226–7.1231 cierran `mask-*` (pintado luminance/alpha, size/
 position/repeat, clip/origin, lista de capas + composite). Pendiente **menor y
 diferido**: encaje/modo per-layer (hoy compartido) y verificación visual
 headless de los compose Porter-Duff cuando haya GPU.
 
-El siguiente bloque cohesivo **no está determinado**. Candidatos (a decidir con
-el usuario o por backlog del SDD):
-- **`filter`** (`blur`/`brightness`/`contrast`/`drop-shadow`/…): el compositor
-  ya tiene `backdrop_blur` y blur gaussiano nativo de vello — `filter: blur()`
-  sería el análogo "sobre el propio subárbol". Bifurcación: cómo encadenar
-  varios filtros (pipeline de capas).
+---
+
+## Familia filter (DETERMINADA 2026-06-16) — bloque elegido por el usuario
+
+**Estado de partida**: el engine ya **parsea** `filter`/`backdrop-filter` en
+`BoxNode.{filter,backdrop_filter}: Vec<FilterFn>` (Fases 7.264/7.265; variantes
+`Blur/Brightness/Contrast/Grayscale/HueRotate/Invert/Opacity/Saturate/Sepia/
+DropShadow`). El compositor sólo pinta `View::backdrop_blur` (post-pasada Gauss
+separable vía `BlurCompositor`). **Nada lee `BoxNode.filter` ni
+`BoxNode.backdrop_filter` para pintar** — la cadena se corta tras el parseo.
+Esta familia los cablea hasta el píxel.
+
+**Arquitectura elegida**: post-pasada GPU sobre la intermediate, como
+`backdrop_blur` — `collect_filters(mounted, computed)` recolecta `(rect, op)` y
+el runtime los aplica tras la rasterización vello, restringidos al rect del
+nodo. Limitación v1 idéntica a backdrop_blur: la post-pasada opera sobre los
+píxeles finales del rect (no aísla el subárbol del fondo); aceptable y
+documentada. Los filtros encadenan aplicándose en secuencia sobre el rect.
+
+> **Bifurcación (resuelta)**: ¿layer vello (aislar subárbol) vs. post-pasada
+> sobre la intermediate? Decisión 2026-06-16: **post-pasada**, reusando la
+> infra de `backdrop_blur` y un `ColorFilterCompositor` nuevo en `llimphi-hal`
+> espejo de `BlurCompositor`. vello 0.7 no expone color-matrix; el shader
+> propio es la vía real (no stub) y CI no testea píxeles igual.
+
+### 7.1232 ✅ — `filter: blur()` + `backdrop-filter: blur()` se pintan
+
+**Spine de la familia.** Compositor: `View.filter: Vec<FilterOp>` +
+`MountedNode.filter`; `enum FilterOp { Blur(f32) }` (crece por fase); builder
+`View::filter(...)`; plumbing en `map_shared`/`mount_recursive`. Nuevo
+`collect_filters(mounted, computed) -> Vec<FilterPass{rect, op}>` (salta el
+subárbol al encontrar filtro, como `collect_backdrop_blurs`). Runtime
+(`eventloop/redraw.rs`) aplica los `Blur` con `BlurCompositor` (mismo camino que
+backdrop). Wire (`puriy-llimphi`): `b.filter` blur → `view.filter([Blur])`;
+`b.backdrop_filter` blur → `view.backdrop_blur(sigma)`. CSS `blur(r)`: `r` es la
+stdev → `sigma = r` directo; multi-blur suma. Tests: builder (view.rs
+semantics_tests), `collect_filters` (mount+compute, sin GPU), box-tree
+(`b.filter` carga el Blur).
+
+### 7.1233 — filtros de color (color-matrix)
+
+`brightness/contrast/grayscale/invert/sepia/saturate/hue-rotate/opacity`.
+HAL: `ColorFilterCompositor` (WGSL color-matrix 4×5 RGBA+bias, single-pass
+scratch↔target, espejo de `BlurCompositor`). `FilterOp::ColorMatrix([f32;20])`.
+Builders de matriz (**aritmética pura, testeable**): brightness=diag k;
+contrast=k + bias `(1-k)/2`; grayscale/saturate vía luminancia Rec.709;
+invert; sepia (matriz fija); hue-rotate (rotación estándar); opacity=fila alpha.
+`collect_filters` emite `ColorMatrix`; runtime aplica con el compositor nuevo.
+Wire también `backdrop_filter` color. Tests: matrices (math) + builder.
+
+### 7.1234 — `filter: drop-shadow()`
+
+Pinta sombra borroneada detrás del nodo reusando `draw_blurred_rounded_rect`
+(primitiva de box-shadow). `FilterOp::DropShadow(...)`. v1: sombra del
+border-box, no de la silueta alpha (misma aproximación que box-shadow). Se pinta
+en `render.rs` antes del subárbol; wire desde `FilterFn::DropShadow(BoxShadow)`.
+Tests: builder + box-tree.
+
+### 7.1235 — cierre
+
+Orden de aplicación de cadena (varios filtros en secuencia, verificado en
+`collect_filters`), example headless `filter_demo` (evidencia PNG como
+`backdrop_blur_demo`), doc de limitaciones (post-pasada sobre píxeles finales,
+sin verificación GPU en CI). **Familia filter CERRADA.**
+
+---
+
+## Próximo bloque tras filter — a determinar
+
 - **`background` per-layer avanzado** o gradientes cónicos/repeating que falten.
 - Lo que marque el SDD §Estado como próximo hueco.

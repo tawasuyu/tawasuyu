@@ -369,7 +369,30 @@ pub(super) fn handle_redraw<A: App>(
             b.sigma,
         );
     }
+    // `filter: …` sobre el propio subárbol (Fase 7.1232+): misma post-pasada
+    // que el backdrop, pero leyendo `MountedNode::filter` y restringida al rect
+    // del nodo. Se aplica DESPUÉS del backdrop, sobre los píxeles ya
+    // rasterizados (el contenido del nodo). Hoy sólo `Blur`; el resto de las
+    // variantes se suman por fase.
+    let filter_passes = llimphi_compositor::collect_filters(&mounted, &computed);
+    let filtered = !filter_passes.is_empty();
+    for p in &filter_passes {
+        match &p.op {
+            llimphi_compositor::FilterOp::Blur(sigma) => {
+                state.blur_compositor.blur(
+                    &state.hal.device,
+                    &state.hal.queue,
+                    &mut gpu_encoder,
+                    frame.view(),
+                    viewport,
+                    p.rect,
+                    *sigma,
+                );
+            }
+        }
+    }
     let mut any_gpu = blurred
+        | filtered
         | paint_gpu(
             &mounted,
             &computed,

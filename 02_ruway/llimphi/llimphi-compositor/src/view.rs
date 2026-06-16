@@ -60,6 +60,7 @@ impl<Msg> View<Msg> {
             ripple: None,
             layout_builder: None,
             backdrop_blur: None,
+            filter: Vec::new(),
             children: Vec::new(),
         }
     }
@@ -83,6 +84,22 @@ impl<Msg> View<Msg> {
     /// `PARIDAD-FLUTTER.md` Bloque 11.
     pub fn backdrop_blur(mut self, sigma: f32) -> Self {
         self.backdrop_blur = Some(sigma.max(0.0));
+        self
+    }
+
+    /// Aplica una lista de **filtros CSS** (`filter: …`) al **propio subárbol**
+    /// del nodo (a diferencia de [`Self::backdrop_blur`], que afecta lo pintado
+    /// *debajo*). El runtime los recolecta con [`collect_filters`] y los aplica
+    /// como post-pasada GPU sobre la intermediate, restringidos al rect del
+    /// nodo, en el orden de la lista. Hoy sólo se modela `blur` ([`FilterOp`]);
+    /// la lista crece por fase. Es **ortogonal** a clip/mask (un nodo puede
+    /// llevar todos). Lista vacía = sin filtro. Fase 7.1232.
+    ///
+    /// **Limitación v1** (igual que `backdrop_blur`): la post-pasada opera sobre
+    /// los píxeles finales del rect, así que no aísla el subárbol del fondo que
+    /// asome detrás. Adecuado para nodos opacos.
+    pub fn filter(mut self, ops: Vec<FilterOp>) -> Self {
+        self.filter = ops;
         self
     }
 
@@ -1509,5 +1526,53 @@ mod semantics_tests {
         let s = v.semantics.expect("semantics");
         assert_eq!(s.role, Some(Role::Link));
         assert_eq!(s.label.as_deref(), Some("Nueva"));
+    }
+
+    #[test]
+    fn filter_setea_campo_sin_tocar_clip() {
+        // `.filter([Blur])` guarda la lista de filtros del propio subárbol. Es
+        // ORTOGONAL al recorte (NO activa clip) y al backdrop_blur. Fase 7.1232.
+        let v = View::<()>::new(Style::default()).filter(vec![FilterOp::Blur(4.0)]);
+        assert_eq!(v.filter, vec![FilterOp::Blur(4.0)]);
+        assert!(!v.clip, "filter NO activa clip (es ortogonal al recorte)");
+        assert!(v.backdrop_blur.is_none(), "filter NO es backdrop_blur");
+        // Default: sin filtro.
+        assert!(View::<()>::new(Style::default()).filter.is_empty());
+    }
+
+    #[test]
+    fn collect_filters_aplana_ops_con_rect_del_nodo() {
+        // `collect_filters` recolecta cada FilterOp con el rect computado del
+        // nodo, en orden de lista. Verificamos el camino mount → compute →
+        // collect sin GPU (la aplicación del blur en sí es GPU). Fase 7.1232.
+        use llimphi_layout::taffy::prelude::{length, Size};
+        use llimphi_layout::LayoutTree;
+        let root = View::<()>::new(Style {
+            size: Size { width: length(100.0), height: length(40.0) },
+            ..Default::default()
+        })
+        .filter(vec![FilterOp::Blur(5.0)]);
+        let mut layout = LayoutTree::new();
+        let mounted = mount(&mut layout, root);
+        let computed = layout
+            .compute(mounted.root, (200.0, 200.0))
+            .expect("layout");
+        let passes = collect_filters(&mounted, &computed);
+        assert_eq!(passes.len(), 1, "un FilterOp → un FilterPass");
+        assert!(matches!(passes[0].op, FilterOp::Blur(s) if (s - 5.0).abs() < 1e-3));
+        assert_eq!(passes[0].rect.2, 100.0, "ancho del rect del nodo");
+        assert_eq!(passes[0].rect.3, 40.0, "alto del rect del nodo");
+    }
+
+    #[test]
+    fn collect_filters_vacio_sin_filtros() {
+        // Sin `.filter(...)` en ningún nodo, la recolección es vacía (coste cero
+        // en el runtime). Fase 7.1232.
+        use llimphi_layout::LayoutTree;
+        let root = View::<()>::new(Style::default());
+        let mut layout = LayoutTree::new();
+        let mounted = mount(&mut layout, root);
+        let computed = layout.compute(mounted.root, (50.0, 50.0)).expect("layout");
+        assert!(collect_filters(&mounted, &computed).is_empty());
     }
 }
