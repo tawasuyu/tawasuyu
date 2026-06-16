@@ -88,13 +88,31 @@ pub struct WindowLine {
     pub minimized: bool,
 }
 
-/// La ruta del socket de control: `$XDG_RUNTIME_DIR/mirada-ctl.sock`, o
-/// el directorio temporal si esa variable no está.
+/// La ruta del socket de control: `$XDG_RUNTIME_DIR/mirada-ctl.sock`.
+///
+/// **Robustez crítica:** un compositor lanzado por un display manager suele
+/// arrancar SIN `XDG_RUNTIME_DIR` (PAM aún no sembró el env), y antes caía a
+/// `std::env::temp_dir()` (`/tmp`), mientras que `mirada-ctl`/`pata` —corriendo
+/// con el env ya seteado— miraban `/run/user/<uid>`. Resultado: el socket
+/// existía en `/tmp` pero nadie lo encontraba → "no pude hablar con el Cerebro"
+/// y TODO lo de mirada-ctl (workspaces, switch, foco por id) moría. Ahora, si
+/// falta `XDG_RUNTIME_DIR`, derivamos el runtime dir estándar `/run/user/<uid>`
+/// del UID real del proceso, así compositor y clientes COINCIDEN siempre.
 pub fn default_socket_path() -> PathBuf {
-    let dir = std::env::var_os("XDG_RUNTIME_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
-    dir.join("mirada-ctl.sock")
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        return PathBuf::from(dir).join("mirada-ctl.sock");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = std::fs::metadata("/proc/self") {
+            let run = PathBuf::from(format!("/run/user/{}", meta.uid()));
+            if run.is_dir() {
+                return run.join("mirada-ctl.sock");
+            }
+        }
+    }
+    std::env::temp_dir().join("mirada-ctl.sock")
 }
 
 /// El extremo servidor del API de control — lo abre el dueño del

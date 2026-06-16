@@ -14,6 +14,13 @@
 # externo (greetd, ly, sddm) o setups manuales que aún no migraron a
 # arje-zero como PID 1.
 
+# Si el DM no sembró XDG_RUNTIME_DIR (PAM sin pam_systemd), lo fijamos al
+# estándar /run/user/<uid> para que el compositor y TODOS sus hijos (pata,
+# mirada-ctl) compartan la misma ruta del socket de control. Sin esto, el
+# socket de mirada-ctl quedaba en /tmp y nadie lo encontraba (workspaces/foco
+# por la barra "no hacían nada").
+[ -z "$XDG_RUNTIME_DIR" ] && export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+
 # Carmen es un compositor Wayland.
 export XDG_SESSION_TYPE=wayland
 export XDG_CURRENT_DESKTOP=mirada
