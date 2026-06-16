@@ -312,3 +312,21 @@ url, stylesheet), box-tree (`mask_image_capas_multiples`, group03: 2 data: URLs
 > después (7.1228). Quedó así porque es la primitiva más simple y correcta de
 > vello 0.7 y cubre el caso SVG `<mask>`; el alpha (default raster) se suma sin
 > rehacer lo anterior.
+
+---
+
+## Familia mask CERRADA (2026-06-16) — próximo bloque a determinar
+
+Las fases 7.1226–7.1231 cierran `mask-*` (pintado luminance/alpha, size/
+position/repeat, clip/origin, lista de capas + composite). Pendiente **menor y
+diferido**: encaje/modo per-layer (hoy compartido) y verificación visual
+headless de los compose Porter-Duff cuando haya GPU.
+
+El siguiente bloque cohesivo **no está determinado**. Candidatos (a decidir con
+el usuario o por backlog del SDD):
+- **`filter`** (`blur`/`brightness`/`contrast`/`drop-shadow`/…): el compositor
+  ya tiene `backdrop_blur` y blur gaussiano nativo de vello — `filter: blur()`
+  sería el análogo "sobre el propio subárbol". Bifurcación: cómo encadenar
+  varios filtros (pipeline de capas).
+- **`background` per-layer avanzado** o gradientes cónicos/repeating que falten.
+- Lo que marque el SDD §Estado como próximo hueco.
