@@ -199,29 +199,33 @@ mod tests {
 
     #[test]
     fn preset_default_reserva_top_pero_los_dientes_van_dentro() {
-        // Con `dientes_outside=false` (default global): la top reserva su franja
-        // pero el rail de dientes flota DENTRO del área (overlay, canónico) — no
-        // reserva. El shell autohide tampoco.
+        // Con `dientes_outside=false` (default global): la top reserva su franja;
+        // el rail IZQUIERDO flota DENTRO (overlay, canónico) y no reserva; el
+        // rail DERECHO sí reserva (su `reserve = Some(true)` pisa la global). El
+        // shell autohide no reserva.
         let cfg = Config::preset();
         let f = resolve(&cfg, pantalla(), false);
-        assert_eq!(f.surfaces.len(), 3);
+        assert_eq!(f.surfaces.len(), 4);
         assert!(f.surfaces[0].reserva); // top reserva
-        assert!(!f.surfaces[1].reserva); // dientes DENTRO → overlay, no reserva
-        assert!(!f.surfaces[2].reserva); // shell autohide
+        assert!(!f.surfaces[1].reserva); // rail izq DENTRO → overlay
+        assert!(f.surfaces[2].reserva); // rail der «supeditado» → reserva
+        assert!(!f.surfaces[3].reserva); // shell autohide
         let wa = f.work_area;
-        assert_eq!(wa.y, 44); // sólo la top descuenta arriba
-        assert_eq!(wa.x, 0); // el rail no descuenta a la izquierda (overlay)
-        assert_eq!(wa.w, 1920);
+        assert_eq!(wa.y, 44); // la top descuenta arriba
+        assert_eq!(wa.x, 0); // el rail izq no descuenta (overlay)
+        assert_eq!(wa.w, 1920 - 44); // el rail der descuenta a la derecha
     }
 
     #[test]
     fn dientes_outside_hace_que_el_rail_reserve() {
-        // La misma preset con la decisión global «fuera»: el rail SÍ reserva.
+        // La misma preset con la decisión global «fuera»: el rail izq SÍ reserva
+        // (44 a la izquierda) y el der también (44 a la derecha) → 88 en total.
         let cfg = Config::preset();
         let f = resolve(&cfg, pantalla(), true);
         assert!(f.surfaces[1].reserva);
+        assert!(f.surfaces[2].reserva);
         assert_eq!(f.work_area.x, 44);
-        assert_eq!(f.work_area.w, 1920 - 44);
+        assert_eq!(f.work_area.w, 1920 - 88);
     }
 
     #[test]

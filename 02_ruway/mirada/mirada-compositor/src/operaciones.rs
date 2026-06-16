@@ -158,6 +158,16 @@ impl App {
         }
     }
 
+    /// Índice de la salida enfocada (Cerebro embebido; `0` si enlazado). Sirve
+    /// para distinguir un **cambio de escritorio** (Win+Tab, anima) de un mero
+    /// **cambio de monitor enfocado** (mover el mouse, NO anima).
+    pub(crate) fn focused_output_index(&self) -> usize {
+        match &self.brain {
+            Brain::Embedded(d) => d.focused_output(),
+            Brain::Linked(_) => 0,
+        }
+    }
+
     /// Datos para pintar la **vista espacial (Prezi)** en vivo: el escritorio
     /// activo, la geometría 2D (celda por escritorio), el rect de referencia y
     /// los rects de ventanas de cada escritorio (en ese rect, para normalizar a

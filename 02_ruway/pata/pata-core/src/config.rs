@@ -536,6 +536,22 @@ impl Config {
             WidgetSpec::new("search"),
         ));
 
+        // Sidebar DERECHO «supeditado al desktop»: reserva su franja (las
+        // ventanas no lo tapan) gracias a `reserve = Some(true)`, sin tocar la
+        // decisión global `dientes_outside`. Rail de herramientas a la derecha.
+        let mut rrail = Surface::sidebar(Anchor::Right);
+        rrail.reserve = Some(true);
+        rrail.tabs.push(SidebarTab::new(
+            "search",
+            "Buscar",
+            WidgetSpec::new("search"),
+        ));
+        rrail.tabs.push(SidebarTab::new(
+            "files",
+            "Archivos",
+            WidgetSpec::new("navigator").with("source", Prop::Str("home".to_string())),
+        ));
+
         let mut shell = Surface::bar(Anchor::Bottom);
         shell.autohide = true;
         shell.thickness = 40.0;
@@ -545,7 +561,7 @@ impl Config {
 
         Self {
             general: General::default(),
-            surfaces: vec![top, rail, shell],
+            surfaces: vec![top, rail, rrail, shell],
         }
     }
 
@@ -831,7 +847,7 @@ mod tests {
     #[test]
     fn preset_tiene_barra_top_sidebar_y_shell_bottom() {
         let cfg = Config::preset();
-        assert_eq!(cfg.surfaces.len(), 3);
+        assert_eq!(cfg.surfaces.len(), 4);
         let top = &cfg.surfaces[0];
         assert_eq!(top.anchor, Anchor::Top);
         assert_eq!(top.kind, SurfaceKind::Bar);
@@ -847,7 +863,14 @@ mod tests {
         assert_eq!(rail.anchor, Anchor::Left);
         assert!(!rail.tabs.is_empty());
 
-        let shell = &cfg.surfaces[2];
+        // Sidebar derecho «supeditado al desktop»: reserva su franja.
+        let rrail = &cfg.surfaces[2];
+        assert_eq!(rrail.kind, SurfaceKind::Sidebar);
+        assert_eq!(rrail.anchor, Anchor::Right);
+        assert_eq!(rrail.reserve, Some(true));
+        assert!(!rrail.tabs.is_empty());
+
+        let shell = &cfg.surfaces[3];
         assert_eq!(shell.anchor, Anchor::Bottom);
         assert!(shell.autohide);
         assert_eq!(shell.center[0].kind, "shuma_input");

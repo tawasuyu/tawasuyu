@@ -108,15 +108,23 @@ impl DrmState {
         // detectar que el escritorio activo cambió, arranca un slide; el render
         // (cada tick) lo anima por tiempo y `emit_windows` aplica el offset.
         if let Some((active, _)) = self.app.workspace_overview() {
+            let foc = self.app.focused_output_index();
             if active != self.last_active_ws {
-                if self.app.config_workspace_switch_mode()
-                    != mirada_brain::WorkspaceSwitchMode::Direct
+                // Animar SÓLO si el escritorio cambió en el MISMO monitor (Win+Tab
+                // / switch-workspace). Si cambió porque el foco saltó a otro
+                // monitor (mover el mouse), `active_index` cambia sin que ningún
+                // monitor cambie de contenido — animar ahí causaba el parpadeo
+                // «los contenidos se intercambian entre monitores».
+                if foc == self.last_focused_output
+                    && self.app.config_workspace_switch_mode()
+                        != mirada_brain::WorkspaceSwitchMode::Direct
                 {
                     let dir = if active > self.last_active_ws { 1.0 } else { -1.0 };
                     self.ws_slide = Some((self.start.elapsed().as_millis() as u32, dir));
                 }
                 self.last_active_ws = active;
             }
+            self.last_focused_output = foc;
         }
         if let Some((start_ms, _)) = self.ws_slide {
             if self.start.elapsed().as_millis() as u32 >= start_ms + super::SLIDE_MS {

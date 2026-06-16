@@ -85,14 +85,24 @@ impl DrmState {
             }
             None => 0,
         };
+        // El slide sólo debe mover las ventanas del monitor ENFOCADO (el que
+        // cambió de escritorio). Los demás monitores quedan quietos — si no, un
+        // Win+Tab en un monitor sacudía las ventanas del otro.
+        let focused_rect = self
+            .outputs
+            .get(self.app.focused_output_index())
+            .map(|o| o.rect);
         for w in &shown {
             if !crate::buffer_render_sano(&w.surface) {
                 continue; // buffer degenerado/desmesurado: ni decoración ni superficie
             }
             let tb = crate::titlebar_for(w, tbh);
             let (gx, gy) = crate::render_loc(w, primary_h, tbh);
-            // El marco (pata) no se desliza; las ventanas del escritorio sí.
-            let gx = if w.is_shell { gx } else { gx + slide_dx };
+            // El marco (pata) no se desliza; tampoco las ventanas de un monitor
+            // que no es el enfocado. Sólo el escritorio entrante del monitor que
+            // cambió se desliza.
+            let on_focused = focused_rect.map_or(true, |fr| gx >= fr.x && gx < fr.x + fr.w);
+            let gx = if w.is_shell || !on_focused { gx } else { gx + slide_dx };
             let (sw, sh) = crate::surface_px_size(w).unwrap_or((w.size.0, (w.size.1 - tb).max(1)));
             // Rect decorado en coords globales (incluye barra + superficie).
             let gxd = gx;

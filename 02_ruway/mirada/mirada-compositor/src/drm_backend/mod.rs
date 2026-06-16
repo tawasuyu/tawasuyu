@@ -456,6 +456,11 @@ struct DrmState {
     /// Último escritorio activo visto — para detectar el cambio y disparar el
     /// slide de transición (modo `Hyprland`/`Prezi`).
     last_active_ws: usize,
+    /// Última salida enfocada vista — para NO confundir un cambio de monitor
+    /// enfocado (mover el mouse entre pantallas) con un cambio de escritorio.
+    /// Sin esto, cruzar el mouse a otro monitor (que muestra otro escritorio)
+    /// disparaba el slide en cada cruce → parpadeo «los contenidos se cambian».
+    last_focused_output: usize,
     /// Slide de escritorios en curso: `(ms de inicio, signo de dirección)`.
     /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
     /// un escritorio mayor), -1 desde la izquierda.
@@ -961,6 +966,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         start: Instant::now(),
         last_windows: 0,
         last_active_ws: 0,
+        last_focused_output: 0,
         ws_slide: None,
         overview_tiles: Vec::new(),
         wp_images: Vec::new(),
