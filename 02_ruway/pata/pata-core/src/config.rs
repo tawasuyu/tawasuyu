@@ -414,6 +414,18 @@ pub struct General {
     /// Columnas del menú `"grid"` (0 = automático según el ancho).
     #[cfg_attr(feature = "serde", serde(default))]
     pub menu_columns: u32,
+    /// **Shuma (drawer del shell):** fracción del alto de pantalla que despliega
+    /// el drawer (0.1..0.95, default 0.45).
+    #[cfg_attr(feature = "serde", serde(default = "default_shuma_height"))]
+    pub shuma_height: f32,
+    /// Color de fondo del drawer de shuma como hex `"#rrggbb"`. Vacío = el del
+    /// tema.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub shuma_bg: String,
+    /// Tecla para abrir/cerrar el drawer de shuma (ej. `"F12"`, default
+    /// `"Alt+Enter"`). El grab global lo hace el compositor (atajo de mirada).
+    #[cfg_attr(feature = "serde", serde(default = "default_shuma_key"))]
+    pub shuma_key: String,
 }
 
 impl Default for General {
@@ -423,8 +435,18 @@ impl Default for General {
             accent: String::new(),
             menu_style: default_menu_style(),
             menu_columns: 0,
+            shuma_height: default_shuma_height(),
+            shuma_bg: String::new(),
+            shuma_key: default_shuma_key(),
         }
     }
+}
+
+fn default_shuma_height() -> f32 {
+    0.45
+}
+fn default_shuma_key() -> String {
+    "Alt+Enter".to_string()
 }
 
 /// Estilo de menú por defecto: la lista sobria.

@@ -687,7 +687,18 @@ impl LayerApp {
                 &data,
                 &self.theme,
                 self.shuma_bar_px as f32,
-                DRAWER_H as f32,
+                // Alto del drawer = fracción configurable de la pantalla
+                // (general.shuma_height). `h` es el alto de la superficie (=
+                // pantalla, ya que al abrir crece a 10_000 y el compositor la
+                // capa). Cae a DRAWER_H si la superficie aún no se configuró.
+                {
+                    let frac = self.cfg.general.shuma_height.clamp(0.1, 0.95);
+                    if h > self.shuma_bar_px + 10 {
+                        h as f32 * frac
+                    } else {
+                        DRAWER_H as f32
+                    }
+                },
             )
         } else if self.cfg.surfaces[idx].kind == SurfaceKind::Sidebar {
             let hosted = {

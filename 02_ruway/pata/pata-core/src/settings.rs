@@ -133,7 +133,26 @@ impl Configurable for Config {
             Section::new("general", "General")
                 .icon("⚙")
                 .field(Field::text("timezone", "Zona horaria", self.general.timezone.clone())
-                    .help("\"auto\" detecta del sistema; o un nombre IANA (America/Lima)")),
+                    .help("\"auto\" detecta del sistema; o un nombre IANA (America/Lima)"))
+                .field(
+                    Field::slider(
+                        "shuma_height",
+                        "Shuma · alto del drawer",
+                        self.general.shuma_height as f64,
+                        0.1,
+                        0.95,
+                        0.05,
+                    )
+                    .help("Fracción de la pantalla que despliega el drawer del shell."),
+                )
+                .field(
+                    Field::text("shuma_bg", "Shuma · color de fondo", self.general.shuma_bg.clone())
+                        .help("Hex #rrggbb del fondo del drawer. Vacío = el del tema."),
+                )
+                .field(
+                    Field::text("shuma_key", "Shuma · tecla de apertura", self.general.shuma_key.clone())
+                        .help("Ej. F12. Default Alt+Enter. El grab global lo aplica el atajo de mirada."),
+                ),
         );
         for (i, s) in self.surfaces.iter().enumerate() {
             schema = schema.section(surface_section(i, s));
@@ -149,6 +168,24 @@ impl Configurable for Config {
                 "timezone" => {
                     if let Some(s) = value.as_str() {
                         self.general.timezone = s.to_string();
+                    }
+                    Ok(())
+                }
+                "shuma_height" => {
+                    if let Some(v) = value.as_float() {
+                        self.general.shuma_height = (v as f32).clamp(0.1, 0.95);
+                    }
+                    Ok(())
+                }
+                "shuma_bg" => {
+                    if let Some(s) = value.as_str() {
+                        self.general.shuma_bg = s.to_string();
+                    }
+                    Ok(())
+                }
+                "shuma_key" => {
+                    if let Some(s) = value.as_str() {
+                        self.general.shuma_key = s.to_string();
                     }
                     Ok(())
                 }
