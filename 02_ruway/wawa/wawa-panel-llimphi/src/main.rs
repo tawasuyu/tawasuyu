@@ -107,6 +107,11 @@ struct HostInfo {
     mem_total_kb: u64,
     mem_avail_kb: u64,
     load: (f32, f32, f32),
+    distro: String,
+    cpu_model: String,
+    cpu_cores: usize,
+    swap_total_kb: u64,
+    swap_free_kb: u64,
 }
 
 fn read_proc_file(path: &str) -> String {
@@ -152,14 +157,64 @@ fn read_kernel() -> String {
         .unwrap_or_else(|| "—".into())
 }
 
+/// PRETTY_NAME de /etc/os-release (la distro).
+fn read_distro() -> String {
+    let s = read_proc_file("/etc/os-release");
+    for line in s.lines() {
+        if let Some(rest) = line.strip_prefix("PRETTY_NAME=") {
+            return rest.trim().trim_matches('"').to_string();
+        }
+    }
+    "Linux".into()
+}
+
+/// Modelo de CPU + cantidad de núcleos lógicos, de /proc/cpuinfo.
+fn read_cpu() -> (String, usize) {
+    let s = read_proc_file("/proc/cpuinfo");
+    let mut model = String::new();
+    let mut cores = 0;
+    for line in s.lines() {
+        if line.starts_with("processor") {
+            cores += 1;
+        } else if model.is_empty() {
+            if let Some(rest) = line.strip_prefix("model name") {
+                if let Some((_, v)) = rest.split_once(':') {
+                    model = v.trim().to_string();
+                }
+            }
+        }
+    }
+    if model.is_empty() {
+        model = "—".into();
+    }
+    (model, cores)
+}
+
 fn refresh_host(info: &mut HostInfo) {
     info.host = read_hostname();
     info.kernel = read_kernel();
     info.uptime = parse_uptime(&read_proc_file("/proc/uptime"));
-    let (total, avail) = parse_meminfo(&read_proc_file("/proc/meminfo"));
+    let meminfo = read_proc_file("/proc/meminfo");
+    let (total, avail) = parse_meminfo(&meminfo);
     info.mem_total_kb = total;
     info.mem_avail_kb = avail;
+    info.swap_total_kb = meminfo_field(&meminfo, "SwapTotal:");
+    info.swap_free_kb = meminfo_field(&meminfo, "SwapFree:");
     info.load = parse_loadavg(&read_proc_file("/proc/loadavg"));
+    info.distro = read_distro();
+    let (m, c) = read_cpu();
+    info.cpu_model = m;
+    info.cpu_cores = c;
+}
+
+/// Lee un campo `KB` de /proc/meminfo por su prefijo (ej. "SwapTotal:").
+fn meminfo_field(meminfo: &str, prefix: &str) -> u64 {
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            return rest.trim().split_whitespace().next().and_then(|v| v.parse().ok()).unwrap_or(0);
+        }
+    }
+    0
 }
 
 fn fmt_uptime(secs: u64) -> String {
@@ -1285,23 +1340,42 @@ fn modulos_section(cfg: &WawaConfig) -> Section {
 fn info_schema(host: &HostInfo) -> Schema {
     let t = rimay_localize::t;
     let used_kb = host.mem_total_kb.saturating_sub(host.mem_avail_kb);
+    let swap_used = host.swap_total_kb.saturating_sub(host.swap_free_kb);
     Schema::new()
         .section(
             Section::new("wawa::infohost", t("wawa-panel-cat-monitor"))
                 .icon("🖥")
                 .field(Field::display("host", t("wawa-panel-stat-host"), &host.host))
+                .field(Field::display("distro", "Distribución", &host.distro))
                 .field(Field::display("kernel", t("wawa-panel-stat-kernel"), &host.kernel))
+                .field(Field::display("arch", "Arquitectura", std::env::consts::ARCH))
+                .field(Field::display("init", "Init", detectar_init()))
                 .field(Field::display("uptime", t("wawa-panel-stat-uptime"), fmt_uptime(host.uptime)))
+                .field(Field::display(
+                    "cpu",
+                    "CPU",
+                    format!("{} · {} núcleos", host.cpu_model, host.cpu_cores),
+                ))
                 .field(Field::display(
                     "mem",
                     t("wawa-panel-stat-mem"),
                     fmt_mem(used_kb, host.mem_total_kb),
                 ))
                 .field(Field::display(
+                    "swap",
+                    "Swap",
+                    if host.swap_total_kb == 0 {
+                        "—".to_string()
+                    } else {
+                        fmt_mem(swap_used, host.swap_total_kb)
+                    },
+                ))
+                .field(Field::display(
                     "load",
                     t("wawa-panel-stat-load"),
                     format!("{:.2} · {:.2} · {:.2}", host.load.0, host.load.1, host.load.2),
-                )),
+                ))
+                .field(Field::toggle("monitor", "Abrir monitor de procesos…", false)),
         )
         .section(
             Section::new("wawa::about", t("wawa-panel-about-name"))
@@ -1341,6 +1415,12 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                 if rel.leaf() == Some("elegir") && value.as_bool() == Some(true) {
                     open_wallpaper_picker(m);
                 }
+                return;
+            }
+            // Información: el toggle «monitor» abre el monitor de procesos.
+            if rel.leaf() == Some("monitor") && value.as_bool() == Some(true) {
+                let _ = std::process::Command::new("sandokan-monitor").spawn();
+                m.status = "abriendo monitor de procesos…".into();
                 return;
             }
             apply_wawa(m, rel.leaf().unwrap_or(""), value);
