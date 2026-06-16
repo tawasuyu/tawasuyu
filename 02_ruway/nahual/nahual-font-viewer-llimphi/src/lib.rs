@@ -30,6 +30,9 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath};
 use llimphi_ui::llimphi_raster::peniko::{Color, Fill};
 use llimphi_ui::llimphi_text::Alignment;
 use llimphi_ui::View;
+// Los metadatos escalares de la fuente (familia, glifos, u/em…) viven en el core
+// agnóstico `nahual-viewer-core::font`; acá sólo se arman los contornos (render).
+use nahual_viewer_core::font::FontMeta;
 
 /// Tope de bytes a leer (32 MiB). Una fuente más grande es rara; el
 /// caller puede subirlo.
@@ -51,15 +54,11 @@ pub struct SampleLine {
     pub width: f64,
 }
 
-/// Metadatos + muestras renderizables de una fuente abierta.
+/// Metadatos + muestras renderizables de una fuente abierta. Los escalares
+/// viven en [`FontMeta`] (core agnóstico); las `lines` son contornos (render).
 #[derive(Debug, Clone, PartialEq)]
 pub struct FontInfo {
-    pub family: String,
-    pub subfamily: String,
-    pub num_glyphs: u16,
-    pub units_per_em: u16,
-    pub ascender: i16,
-    pub descender: i16,
+    pub meta: FontMeta,
     pub lines: Vec<SampleLine>,
 }
 
@@ -120,35 +119,17 @@ pub fn load_font(path: &Path, max_bytes: u64) -> FontPreview {
     FontPreview::Font(Box::new(build_info(&face)))
 }
 
-/// Extrae metadatos y arma las líneas de muestra a partir de una `Face`.
+/// Arma las líneas de muestra (contornos) a partir de una `Face`; los
+/// metadatos escalares salen del core agnóstico (`nahual_viewer_core::font`).
 fn build_info(face: &ttf_parser::Face<'_>) -> FontInfo {
-    let family = pick_name(face, 1).unwrap_or_else(|| "(sin nombre)".to_string());
-    let subfamily = pick_name(face, 2).unwrap_or_else(|| "Regular".to_string());
-    let em = face.units_per_em();
     let lines = SAMPLE_LINES
         .iter()
         .map(|s| build_line(face, s))
         .collect();
     FontInfo {
-        family,
-        subfamily,
-        num_glyphs: face.number_of_glyphs(),
-        units_per_em: em,
-        ascender: face.ascender(),
-        descender: face.descender(),
+        meta: nahual_viewer_core::font::meta_from_face(face),
         lines,
     }
-}
-
-/// Toma el primer `name` legible con el `name_id` pedido (1=familia,
-/// 2=subfamilia). `ttf-parser` sólo devuelve string para encodings
-/// Unicode/Mac, así que algunos nombres salen `None`.
-fn pick_name(face: &ttf_parser::Face<'_>, want_id: u16) -> Option<String> {
-    face.names()
-        .into_iter()
-        .filter(|n| n.name_id == want_id)
-        .find_map(|n| n.to_string())
-        .filter(|s| !s.is_empty())
 }
 
 /// Convierte una cadena en un único `BezPath` (todos los glifos
@@ -247,12 +228,12 @@ where
         FontPreview::Font(info) => {
             let meta = format!(
                 "{} · {}\n{} glifos · {} u/em · asc {} / desc {}",
-                info.family,
-                info.subfamily,
-                info.num_glyphs,
-                info.units_per_em,
-                info.ascender,
-                info.descender,
+                info.meta.family,
+                info.meta.subfamily,
+                info.meta.num_glyphs,
+                info.meta.units_per_em,
+                info.meta.ascender,
+                info.meta.descender,
             );
             vec![
                 header,
@@ -290,9 +271,9 @@ where
     Msg: Clone + 'static,
 {
     let lines = info.lines.clone();
-    let em = info.units_per_em.max(1) as f64;
-    let ascender = info.ascender as f64;
-    let descender = info.descender as f64;
+    let em = info.meta.units_per_em.max(1) as f64;
+    let ascender = info.meta.ascender as f64;
+    let descender = info.meta.descender as f64;
     let glyph_color = palette.glyph;
 
     View::new(Style {

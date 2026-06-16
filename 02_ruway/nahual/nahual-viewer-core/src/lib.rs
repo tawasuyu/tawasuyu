@@ -3,6 +3,7 @@
 
 pub mod archive;
 pub mod card;
+pub mod font;
 pub mod hex;
 pub mod markdown;
 pub mod table;

@@ -16,3 +16,5 @@ tar = { workspace = true }
 flate2 = { workspace = true }
 pulldown-cmark = { workspace = true }
 card-core = { path = "../../../shared/card/card-core" }
+# Metadatos de fuentes (módulo `font`): parseo de tablas TTF/OTF, sin render.
+ttf-parser = { workspace = true }

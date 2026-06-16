@@ -12,3 +12,5 @@ description = "nahual-font-viewer-llimphi — visor de fuentes TTF/OTF sobre Lli
 llimphi-ui = { workspace = true }
 llimphi-theme = { workspace = true }
 ttf-parser = { workspace = true }
+# Metadatos escalares de la fuente (familia, glifos, u/em…): núcleo agnóstico.
+nahual-viewer-core = { workspace = true }
