@@ -374,8 +374,33 @@ fn xp_column_scrolling(
     })
     .text(title.to_string(), 11.0, theme.fg_muted);
 
-    let rows: Vec<View<Msg>> = apps.iter().map(|a| xp_app_row(a, theme)).collect();
-    let n = rows.len() as f32;
+    // Agrupado por categoría (submenús estilo "Todos los programas"): un
+    // encabezado por categoría + sus apps debajo, indentadas. Las categorías
+    // van ordenadas alfabéticamente; "Otros" al final.
+    use std::collections::BTreeMap;
+    let mut por_cat: BTreeMap<String, Vec<&AppEntry>> = BTreeMap::new();
+    for a in &apps {
+        let cat = a
+            .category
+            .clone()
+            .filter(|c| !c.is_empty())
+            .unwrap_or_else(|| "Otros".into());
+        por_cat.entry(cat).or_default().push(a);
+    }
+    let mut rows: Vec<View<Msg>> = Vec::new();
+    let mut filas = 0usize;
+    // "Otros" al final.
+    let mut cats: Vec<String> = por_cat.keys().cloned().collect();
+    cats.sort_by_key(|c| (c == "Otros", c.clone()));
+    for cat in &cats {
+        rows.push(xp_category_header(cat, theme));
+        filas += 1;
+        for a in &por_cat[cat] {
+            rows.push(xp_app_row(a, theme));
+            filas += 1;
+        }
+    }
+    let n = filas as f32;
     let inner = View::new(Style {
         flex_direction: FlexDirection::Column,
         size: Size {
@@ -423,6 +448,26 @@ fn xp_column_scrolling(
     })
     .fill(theme.bg_panel_alt)
     .children(vec![title_v, scroll_wrap])
+}
+
+/// Encabezado de categoría en la columna de programas del menú XP: una franja
+/// con el nombre de la categoría + una línea, estilo separador de submenú.
+fn xp_category_header(cat: &str, theme: &Theme) -> View<Msg> {
+    View::new(Style {
+        flex_direction: FlexDirection::Row,
+        size: Size { width: percent(1.0_f32), height: length(XP_ROW_H) },
+        align_items: Some(AlignItems::Center),
+        padding: TaffyRect {
+            left: length(10.0_f32),
+            right: length(10.0_f32),
+            top: length(0.0_f32),
+            bottom: length(0.0_f32),
+        },
+        ..Default::default()
+    })
+    .fill(con_alfa(theme.accent, 64))
+    .text(format!("\u{25B8} {cat}"), 12.0, shade(theme.accent, 0.45))
+    .bold()
 }
 
 fn xp_app_row(a: &AppEntry, theme: &Theme) -> View<Msg> {

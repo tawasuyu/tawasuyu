@@ -502,6 +502,7 @@ fn parse_desktop_entry(text: &str, id: &str) -> Option<AppEntry> {
     let mut kind = None::<String>;
     let mut icon = None::<String>;
     let mut mimes: Vec<String> = Vec::new();
+    let mut categories = String::new();
     let mut no_display = false;
     let mut hidden = false;
     for line in text.lines() {
@@ -530,6 +531,7 @@ fn parse_desktop_entry(text: &str, id: &str) -> Option<AppEntry> {
                     .map(String::from)
                     .collect()
             }
+            "Categories" => categories = value.to_string(),
             "NoDisplay" => no_display = value == "true",
             "Hidden" => hidden = value == "true",
             _ => {}
@@ -549,10 +551,40 @@ fn parse_desktop_entry(text: &str, id: &str) -> Option<AppEntry> {
         // Nombre de ícono freedesktop (no ruta); el launcher decide cómo
         // pintarlo. pata cae a un glyph genérico si no sabe resolverlo.
         icon,
-        category: Some(String::from("sistema")),
+        category: Some(categoria_primaria(&categories)),
         launch: Launch::Exec { program, args },
         handles: mimes,
     })
+}
+
+/// Mapea el campo `Categories=` de un `.desktop` (lista `;`-separada, estándar
+/// freedesktop) a UNA categoría primaria legible en español, para agrupar el
+/// menú. Toma la primera categoría principal que reconoce; si ninguna, "Otros".
+#[cfg(feature = "std")]
+fn categoria_primaria(categories: &str) -> String {
+    // (token freedesktop, etiqueta) en orden de prioridad.
+    const MAIN: &[(&str, &str)] = &[
+        ("AudioVideo", "Multimedia"),
+        ("Audio", "Multimedia"),
+        ("Video", "Multimedia"),
+        ("Development", "Desarrollo"),
+        ("Education", "Educación"),
+        ("Game", "Juegos"),
+        ("Graphics", "Gráficos"),
+        ("Network", "Internet"),
+        ("Office", "Oficina"),
+        ("Science", "Ciencia"),
+        ("Settings", "Configuración"),
+        ("System", "Sistema"),
+        ("Utility", "Accesorios"),
+    ];
+    let toks: Vec<&str> = categories.split(';').filter(|s| !s.is_empty()).collect();
+    for (tok, label) in MAIN {
+        if toks.iter().any(|t| t.eq_ignore_ascii_case(tok)) {
+            return label.to_string();
+        }
+    }
+    "Otros".to_string()
 }
 
 /// Parte el `Exec` de un `.desktop` en (programa, args), quitando los códigos de
