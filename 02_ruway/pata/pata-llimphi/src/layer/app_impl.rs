@@ -612,6 +612,12 @@ impl LayerApp {
             cava: &self.cava_frame,
             apps: self.registry.all(),
             shuma_full: self.shuma_full.as_ref(),
+            workspace: (
+                self.ctx.active_workspace,
+                self.ctx.workspace_count,
+                self.ctx.workspace_occupied,
+            ),
+            clock: (self.ctx.clock.hour, self.ctx.clock.minute),
         };
 
         let view = if self.tooltip_pi == Some(pi) {

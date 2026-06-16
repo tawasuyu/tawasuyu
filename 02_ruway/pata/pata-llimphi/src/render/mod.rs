@@ -38,6 +38,7 @@ use crate::tray::TrayItem;
 use crate::{Model, Msg, SlotWidget, SurfaceWidgets};
 
 // Submódulos internos
+mod cde;
 mod control;
 mod panels;
 mod sidebar;
@@ -82,6 +83,11 @@ pub struct BarData<'a> {
     /// La shuma COMPLETA hospedada (live-wire `PATA_SHUMA_FULL`), si está. El
     /// cabezal `shuma` pinta el input de su sesión activa directo en la barra.
     pub shuma_full: Option<&'a crate::shuma_app::Model>,
+    /// Estado de escritorios `(activo 1-based, total, máscara de ocupados)` —
+    /// para el switcher del Front Panel de CDE (`front_panel`).
+    pub workspace: (u8, u8, u16),
+    /// Hora actual `(hora, minuto)` — para el reloj del Front Panel.
+    pub clock: (u8, u8),
 }
 
 // ============================================================
@@ -273,6 +279,9 @@ pub fn root(model: &Model) -> View<Msg> {
         cava: &model.cava_frame,
         apps: model.registry.all(),
         shuma_full: model.shuma_full.as_ref(),
+        // El path winit (dev) no muestrea escritorios/reloj para el front panel.
+        workspace: (0, 0, 0),
+        clock: (0, 0),
     };
 
     for placed in &model.frame.surfaces {
@@ -541,6 +550,9 @@ fn slots_de(
                     widgets::cuantizar(weather_cava::cava_view(data.cava, theme), surface.cell, 0, "cava", dir)
                 }
                 SlotWidget::ProgramManager => start_menus::program_manager_view(data.apps, theme),
+                // El Front Panel renderiza la barra entera (lo cortocircuita
+                // `bar_view`); acá no debería llegar — placeholder vacío.
+                SlotWidget::FrontPanel => View::new(Style::default()),
                 SlotWidget::Control => control::control_button_view(theme),
             })
             .collect();
@@ -948,12 +960,30 @@ pub fn bar_view(
     data: &BarData,
     theme: &Theme,
 ) -> View<Msg> {
+    // El Front Panel de CDE/Solaris ocupa la barra ENTERA (franja chunky con
+    // sus propios clusters biselados), no el reparto en tercios.
+    let tiene_front_panel = surface_widgets
+        .start
+        .iter()
+        .chain(&surface_widgets.center)
+        .chain(&surface_widgets.end)
+        .any(|w| matches!(w, SlotWidget::FrontPanel));
+    if tiene_front_panel {
+        return cde::front_panel_view(data, theme);
+    }
     let dir = if surface.anchor.es_horizontal() {
         FlexDirection::Row
     } else {
         FlexDirection::Column
     };
     bar_body(surface, surface_widgets, shuma_state, data, theme, dir)
+}
+
+/// Render del **Front Panel de CDE** suelto (para shots headless / pruebas):
+/// la franja chunky con lanzadores + switcher recessed + reloj. Equivale a lo
+/// que pinta `bar_view` cuando la barra lleva el widget `front_panel`.
+pub fn front_panel_shot(data: &BarData, theme: &Theme) -> View<Msg> {
+    cde::front_panel_view(data, theme)
 }
 
 /// **Fondo de escritorio** a pantalla completa (Program Manager de Win3.1): su

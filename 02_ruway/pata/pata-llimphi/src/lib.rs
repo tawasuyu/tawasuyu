@@ -277,6 +277,12 @@ pub enum SlotWidget {
     /// íconos de apps que lanzan al click. Dato del host (`AppRegistry`), no del
     /// view-model de core — se pasa al render aparte (como `WindowList`).
     ProgramManager,
+    /// El **Front Panel** estilo CDE/Solaris: la franja chunky inferior con
+    /// botones biselados Motif (lanzadores), el **switcher de escritorios** en
+    /// una caja recessed al centro, y reloj. Renderiza la barra ENTERA (no usa
+    /// el reparto en tercios). Dato del host (`AppRegistry` + escritorios +
+    /// reloj), pasado por [`render::BarData`].
+    FrontPanel,
     /// El botón del control panel (quick settings): un engranaje que abre el
     /// flyout de volumen/brillo/batería/radios ([`Msg::ControlToggle`]).
     Control,
@@ -522,6 +528,7 @@ impl SurfaceWidgets {
                 | SlotWidget::Weather { .. }
                 | SlotWidget::Cava
                 | SlotWidget::ProgramManager
+                | SlotWidget::FrontPanel
                 | SlotWidget::Control => None,
             })
     }
@@ -696,6 +703,8 @@ impl Model {
                         SlotWidget::Cava
                     } else if spec.kind == "program_manager" {
                         SlotWidget::ProgramManager
+                    } else if spec.kind == "front_panel" {
+                        SlotWidget::FrontPanel
                     } else if spec.kind == "control" {
                         SlotWidget::Control
                     } else {

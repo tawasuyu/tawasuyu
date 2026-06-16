@@ -672,19 +672,12 @@ impl Config {
     /// el reloj a un lado y la lista de ventanas + bandeja al otro — el sello de
     /// CDE/Motif. Menú en grilla (estilo Application Manager).
     fn vista_solaris() -> Self {
+        // El Front Panel de CDE: una sola superficie con el widget `front_panel`,
+        // que se pinta como la franja chunky biselada entera (lanzadores +
+        // switcher recessed + reloj). Grosor alto: CDE era robusto.
         let mut panel = Surface::bar(Anchor::Bottom);
-        panel.thickness = 56.0;
-        panel.gradient = true;
-        panel.padding = 8.0;
-        panel.start = vec![
-            WidgetSpec::new("start_button").with("label", Prop::Str("Apps".to_string())),
-            WidgetSpec::new("clock").with("format", Prop::Str("%H:%M".to_string())),
-        ];
-        panel.center = vec![WidgetSpec::new("workspaces")];
-        panel.end = vec![
-            WidgetSpec::new("window_list"),
-            WidgetSpec::new("tray"),
-        ];
+        panel.thickness = 72.0;
+        panel.center = vec![WidgetSpec::new("front_panel")];
         Self {
             general: General {
                 menu_style: "grid".to_string(),
