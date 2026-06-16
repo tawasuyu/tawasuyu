@@ -63,8 +63,18 @@ impl DrmState {
                                     st.switcher_step = Some((Workspaces, false));
                                     return FilterResult::Intercept(());
                                 }
+                                // Vista espacial (Prezi): zoom-out a todos los
+                                // escritorios. Toggle con Super+e, Esc cierra.
+                                "Super+e" => {
+                                    st.overview_open = !st.overview_open;
+                                    return FilterResult::Intercept(());
+                                }
                                 "Escape" if st.switcher.is_some() => {
                                     st.switcher_cancel = true;
+                                    return FilterResult::Intercept(());
+                                }
+                                "Escape" if st.overview_open => {
+                                    st.overview_open = false;
                                     return FilterResult::Intercept(());
                                 }
                                 _ => {}
@@ -224,6 +234,30 @@ impl DrmState {
                     // daño para screencopy. Grueso pero raro.
                     crate::screencopy::danar_todo(&mut self.app);
                     return; // el menú captura el botón
+                }
+
+                // Vista espacial (Prezi) abierta: un click izquierdo sobre un
+                // tile salta a ese escritorio; cualquier click la cierra. Los
+                // tiles están en coords locales de la salida primaria.
+                if pressed && self.app.overview_open {
+                    self.app.overview_open = false;
+                    if button == BTN_LEFT {
+                        let (gx, gy) = self.app.pointer_loc;
+                        let origin = self
+                            .outputs
+                            .get(Self::PRIMARY)
+                            .map(|o| o.rect)
+                            .unwrap_or(Rect::new(0, 0, 0, 0));
+                        let lx = gx.round() as i32 - origin.x;
+                        let ly = gy.round() as i32 - origin.y;
+                        if let Some(&(ws, _)) =
+                            self.overview_tiles.iter().find(|(_, r)| r.contains(lx, ly))
+                        {
+                            self.app.cambiar_workspace(ws);
+                        }
+                    }
+                    crate::screencopy::danar_todo(&mut self.app);
+                    return;
                 }
 
                 // Click DERECHO sobre el fondo (sin ventana ni `Super`): abre el

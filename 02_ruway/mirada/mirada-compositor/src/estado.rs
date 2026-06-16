@@ -189,6 +189,21 @@ pub(crate) fn autohide_next_hidden(
     }
 }
 
+/// Datos para pintar la vista espacial (Prezi) en vivo. Ver
+/// [`App::overview_data`](crate::App::overview_data).
+pub(crate) struct OverviewData {
+    /// Escritorio activo (0-based).
+    pub(crate) active: usize,
+    /// Celda `(col, fila)` de cada escritorio en el plano 2D.
+    pub(crate) geometry: Vec<(i32, i32)>,
+    /// Ventanas por escritorio (para saber cuáles están ocupados).
+    pub(crate) loads: Vec<usize>,
+    /// Rect de referencia en el que están los `layouts` (para normalizar).
+    pub(crate) work: mirada_brain::Rect,
+    /// Rects de ventanas de cada escritorio, en el espacio de `work`.
+    pub(crate) layouts: Vec<Vec<mirada_brain::Rect>>,
+}
+
 /// Una ventana de cliente que el compositor gestiona.
 pub(crate) struct ManagedWindow {
     pub(crate) id: u64,
@@ -372,6 +387,9 @@ pub(crate) struct App {
     pub(crate) switcher_step: Option<(crate::switcher::SwitcherKind, bool)>,
     /// Señal del filtro: cancelar el switcher (Esc) tras procesar la tecla.
     pub(crate) switcher_cancel: bool,
+    /// Vista espacial (Prezi) abierta: zoom-out a todos los escritorios. Se
+    /// togglea desde el filtro de teclado (Super+e) y el render la pinta.
+    pub(crate) overview_open: bool,
     /// Parámetros de decoración de ventana (marco, …) que fija el Cerebro.
     pub(crate) decorations: mirada_brain::Decorations,
     /// Permisos de capacidad por ejecutable que fija el Cerebro. El filtro del

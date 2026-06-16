@@ -158,6 +158,35 @@ impl App {
         }
     }
 
+    /// Datos para pintar la **vista espacial (Prezi)** en vivo: el escritorio
+    /// activo, la geometría 2D (celda por escritorio), el rect de referencia y
+    /// los rects de ventanas de cada escritorio (en ese rect, para normalizar a
+    /// la miniatura). `None` con Cerebro enlazado.
+    pub(crate) fn overview_data(&self) -> Option<OverviewData> {
+        let Brain::Embedded(d) = &self.brain else {
+            return None;
+        };
+        let work = d.overview_rect(mirada_brain::Rect::new(
+            0,
+            0,
+            self.output_size.0.max(1),
+            self.output_size.1.max(1),
+        ));
+        let loads = d.workspace_loads();
+        let layouts = d
+            .workspace_layouts(work)
+            .into_iter()
+            .map(|ws| ws.iter().filter(|p| p.visible).map(|p| p.rect).collect())
+            .collect();
+        Some(OverviewData {
+            active: d.active_index(),
+            geometry: d.config().overview_geometry_for(loads.len()),
+            loads,
+            work,
+            layouts,
+        })
+    }
+
     /// Cambia al escritorio `idx` (0-based) — confirmación del switcher de
     /// Win+Tab. Por el Cerebro embebido.
     pub(crate) fn cambiar_workspace(&mut self, idx: usize) {

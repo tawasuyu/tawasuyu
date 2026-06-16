@@ -460,6 +460,10 @@ struct DrmState {
     /// `None` = sin transición. El signo: +1 desliza desde la derecha (fuiste a
     /// un escritorio mayor), -1 desde la izquierda.
     ws_slide: Option<(u32, f32)>,
+    /// Rects en pantalla de cada tile de la vista espacial (Prezi) `(escritorio,
+    /// rect)` — poblado al pintar, usado para el hit-test del click. (El flag
+    /// `overview_open` vive en `App` para togglearlo desde el filtro de teclado.)
+    overview_tiles: Vec<(usize, Rect)>,
     /// Identidad estable del cursor de software — el seguimiento de daño
     /// la usa para no recomponer todo cuando el cursor sólo se mueve.
     cursor_id: Id,
@@ -952,6 +956,7 @@ pub fn run(greeter: bool) -> Result<(), Box<dyn Error>> {
         last_windows: 0,
         last_active_ws: 0,
         ws_slide: None,
+        overview_tiles: Vec::new(),
         cursor_id: Id::new(),
         last_pointer_window: None,
         output_size: (total_w as f64, total_h as f64),

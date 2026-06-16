@@ -387,6 +387,7 @@ pub(crate) fn build_app(greeter: bool) -> Result<Setup, Box<dyn std::error::Erro
         switcher: None,
         switcher_step: None,
         switcher_cancel: false,
+        overview_open: false,
         decorations: mirada_brain::Decorations::default(),
         caps,
         pending_keybind: None,

@@ -349,6 +349,190 @@ impl DrmState {
         )));
     }
 
+    /// Emite la **vista espacial (Prezi)** en vivo: un zoom-out con un mosaico
+    /// por escritorio ocupado, arreglado según la geometría 2D, con las ventanas
+    /// a escala y el activo resaltado. Pobla `overview_tiles` para el hit-test
+    /// del click. Esquemática (rects + número), no miniaturas en vivo.
+    fn emit_overview(&mut self, rect: Rect, into: &mut Vec<Frame<GlesRenderer>>) {
+        self.overview_tiles.clear();
+        if !self.app.overview_open {
+            return;
+        }
+        let Some(data) = self.app.overview_data() else {
+            self.app.overview_open = false;
+            return;
+        };
+        const SCRIM: [f32; 4] = [0.04, 0.05, 0.07, 0.96];
+        const TILE_BG: [f32; 4] = [0.12, 0.13, 0.17, 1.0];
+        const WIN_BG: [f32; 4] = [0.26, 0.30, 0.40, 1.0];
+        const WIN_FOCUS: [f32; 4] = [0.22, 0.45, 0.85, 1.0];
+        const ACTIVE_BORDER: [f32; 4] = [0.20, 0.50, 0.95, 1.0];
+        const BADGE_TX: [u8; 4] = [235, 238, 245, 255];
+
+        let occ: Vec<usize> = (0..data.loads.len()).filter(|&i| data.loads[i] > 0).collect();
+        // Scrim siempre (al fondo, lo empujamos último).
+        let cw = rect.w as f32;
+        let ch = rect.h as f32;
+        if occ.is_empty() {
+            let mut scrim = SolidColorBuffer::default();
+            scrim.update((rect.w, rect.h), SCRIM);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &scrim,
+                (0, 0),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            )));
+            return;
+        }
+
+        // Extensión de la grilla desde la geometría de los ocupados.
+        let cols = (occ.iter().map(|&i| data.geometry[i].0).max().unwrap_or(0) + 1).max(1) as f32;
+        let rows = (occ.iter().map(|&i| data.geometry[i].1).max().unwrap_or(0) + 1).max(1) as f32;
+        const MARGIN: f32 = 64.0;
+        const GAP: f32 = 28.0;
+        let aspect = data.work.w as f32 / data.work.h.max(1) as f32;
+        let avail_w = (cw - 2.0 * MARGIN - GAP * (cols - 1.0)).max(1.0);
+        let avail_h = (ch - 2.0 * MARGIN - GAP * (rows - 1.0)).max(1.0);
+        let cell_w = (avail_w / cols).min(avail_h / rows * aspect);
+        let cell_h = cell_w / aspect;
+        let grid_w = cell_w * cols + GAP * (cols - 1.0);
+        let grid_h = cell_h * rows + GAP * (rows - 1.0);
+        let gx = (cw - grid_w) / 2.0;
+        let gy = (ch - grid_h) / 2.0;
+
+        // Recolectar geometría (sin pintar todavía, para ordenar capas).
+        let ww = data.work.w.max(1) as f32;
+        let wh = data.work.h.max(1) as f32;
+        struct Tile {
+            x: i32,
+            y: i32,
+            w: i32,
+            h: i32,
+            active: bool,
+            wins: Vec<(i32, i32, i32, i32, bool)>,
+            num: String,
+        }
+        let mut tiles = Vec::new();
+        for &i in &occ {
+            let (c, r) = data.geometry[i];
+            let tx = gx + c as f32 * (cell_w + GAP);
+            let ty = gy + r as f32 * (cell_h + GAP);
+            self.overview_tiles.push((
+                i,
+                Rect::new(tx as i32, ty as i32, cell_w as i32, cell_h as i32),
+            ));
+            // Ventanas a escala dentro del tile (con un pequeño margen interno).
+            const PAD: f32 = 6.0;
+            let iw = cell_w - 2.0 * PAD;
+            let ih = cell_h - 2.0 * PAD;
+            let wins = data.layouts[i]
+                .iter()
+                .map(|wr| {
+                    let nx = (wr.x - data.work.x) as f32 / ww;
+                    let ny = (wr.y - data.work.y) as f32 / wh;
+                    let nw = (wr.w as f32 / ww).clamp(0.0, 1.0);
+                    let nh = (wr.h as f32 / wh).clamp(0.0, 1.0);
+                    (
+                        (tx + PAD + nx * iw) as i32,
+                        (ty + PAD + ny * ih) as i32,
+                        (nw * iw).max(2.0) as i32,
+                        (nh * ih).max(2.0) as i32,
+                        false,
+                    )
+                })
+                .collect();
+            tiles.push(Tile {
+                x: tx as i32,
+                y: ty as i32,
+                w: cell_w as i32,
+                h: cell_h as i32,
+                active: i == data.active,
+                wins,
+                num: format!("{}", i + 1),
+            });
+        }
+
+        // Rasterizar los números ANTES de tomar el renderer (como el HUD).
+        let badges: Vec<crate::text::Rasterized> = {
+            let Some(tr) = &self.text else {
+                return;
+            };
+            tiles
+                .iter()
+                .filter_map(|t| tr.rasterize(&t.num, 20.0, BADGE_TX))
+                .collect()
+        };
+
+        // CAPAS front→back: números, ventanas, borde activo, fondo de tile, scrim.
+        for (t, badge) in tiles.iter().zip(badges.iter()) {
+            let buf = MemoryRenderBuffer::from_slice(
+                &badge.rgba,
+                Fourcc::Argb8888,
+                (badge.width, badge.height),
+                1,
+                Transform::Normal,
+                None,
+            );
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                &mut self.renderer,
+                ((t.x + 8) as f64, (t.y + 6) as f64),
+                &buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                into.push(Frame::Text(el));
+            }
+        }
+        for t in &tiles {
+            for (wx, wy, ww2, wh2, focus) in &t.wins {
+                let mut wb = SolidColorBuffer::default();
+                wb.update((*ww2, *wh2), if *focus { WIN_FOCUS } else { WIN_BG });
+                into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                    &wb,
+                    (*wx, *wy),
+                    1.0,
+                    1.0,
+                    Kind::Unspecified,
+                )));
+            }
+        }
+        for t in tiles.iter().filter(|t| t.active) {
+            // Borde activo: un rect un poco más grande detrás del tile.
+            let mut br = SolidColorBuffer::default();
+            br.update((t.w + 6, t.h + 6), ACTIVE_BORDER);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &br,
+                (t.x - 3, t.y - 3),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            )));
+        }
+        for t in &tiles {
+            let mut tb = SolidColorBuffer::default();
+            tb.update((t.w, t.h), TILE_BG);
+            into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+                &tb,
+                (t.x, t.y),
+                1.0,
+                1.0,
+                Kind::Unspecified,
+            )));
+        }
+        let mut scrim = SolidColorBuffer::default();
+        scrim.update((rect.w, rect.h), SCRIM);
+        into.push(Frame::Solid(SolidColorRenderElement::from_buffer(
+            &scrim,
+            (0, 0),
+            1.0,
+            1.0,
+            Kind::Unspecified,
+        )));
+    }
+
     /// Emite el overlay de zonas de arrastre (drag-to-zone) — visible sólo
     /// durante un arrastre Move/Tile. Las zonas se escalan al monitor bajo
     /// el puntero y se emiten traducidas a coords locales de `rect`. Si las
@@ -627,10 +811,12 @@ impl DrmState {
             // 1. Cursor (si el puntero cae sobre esta salida).
             self.emit_cursor(rect, &mut out);
 
-            // 2. HUD del preset + switcher de ventanas (primaria; centrados).
+            // 2. HUD del preset + switcher de ventanas + vista espacial (Prezi),
+            //    todos en la primaria, centrados.
             if is_primary {
                 self.emit_hud(rect, &mut out);
                 self.emit_switcher(rect, &mut out);
+                self.emit_overview(rect, &mut out);
             }
 
             // 3. Zonas de arrastre — en la salida bajo el puntero durante
