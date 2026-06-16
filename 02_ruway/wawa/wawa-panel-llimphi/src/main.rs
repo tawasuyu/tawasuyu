@@ -1321,7 +1321,12 @@ fn fondo_auto_section(cfg: &WawaConfig) -> Section {
             1.0,
         ))
         .field(Field::toggle("aplicar_fondo", "Aplicar fondo ahora", false))
-        .field(Field::toggle("activar_rotacion", "Activar rotación automática (daemon)", false))
+        // Refleja el estado real del autostart (toggle persistente).
+        .field(Field::toggle(
+            "activar_rotacion",
+            "Activar rotación automática (arranca sola cada sesión)",
+            wallpaper_autostart_enabled(),
+        ))
 }
 
 /// Escribe `~/.config/mirada/wallpaper.ron` para el daemon, derivado del
@@ -1359,6 +1364,45 @@ fn write_wallpaper_ron(provider: &str, hours: u32, folder_dir: &str) {
         let _ = std::fs::create_dir_all(d);
     }
     let _ = std::fs::write(&path, ron);
+}
+
+/// La línea de autostart del daemon de wallpaper (la lee el compositor de
+/// `~/.config/mirada/autostart`, una por línea).
+const WP_AUTOSTART_LINE: &str = "mirada-wallpaper daemon";
+
+fn wallpaper_autostart_path() -> Option<PathBuf> {
+    mirada_brain::Config::default_path().and_then(|p| p.parent().map(|d| d.join("autostart")))
+}
+
+/// `true` si el daemon de wallpaper está en el autostart de mirada.
+fn wallpaper_autostart_enabled() -> bool {
+    wallpaper_autostart_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .map(|t| t.lines().any(|l| l.trim() == WP_AUTOSTART_LINE))
+        .unwrap_or(false)
+}
+
+/// Agrega/quita la línea del daemon en el autostart de mirada (persistente: el
+/// compositor lo lanza en cada sesión).
+fn set_wallpaper_autostart(on: bool) {
+    let Some(path) = wallpaper_autostart_path() else { return };
+    let cur = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = cur
+        .lines()
+        .map(|l| l.to_string())
+        .filter(|l| l.trim() != WP_AUTOSTART_LINE)
+        .collect();
+    if on {
+        lines.push(WP_AUTOSTART_LINE.to_string());
+    }
+    if let Some(d) = path.parent() {
+        let _ = std::fs::create_dir_all(d);
+    }
+    let mut out = lines.join("\n");
+    if !out.is_empty() {
+        out.push('\n');
+    }
+    let _ = std::fs::write(&path, out);
 }
 
 /// Escanea `dir` (y un nivel de subcarpetas) por imágenes y las agrega a `out`.
@@ -1512,22 +1556,28 @@ fn route_change(m: &mut Model, path: &FieldPath, value: FieldValue) {
                 m.status = "abriendo monitor de procesos…".into();
                 return;
             }
-            // Fondo automático: aplicar una vez / activar el daemon de rotación.
-            if matches!(rel.leaf(), Some("aplicar_fondo") | Some("activar_rotacion"))
-                && value.as_bool() == Some(true)
-            {
-                let prov = if m.cfg.wallpaper_provider.is_empty() {
-                    "bing"
-                } else {
-                    &m.cfg.wallpaper_provider
-                };
+            // Fondo automático · «Aplicar ahora» (one-shot).
+            if rel.leaf() == Some("aplicar_fondo") && value.as_bool() == Some(true) {
+                let prov = if m.cfg.wallpaper_provider.is_empty() { "bing" } else { &m.cfg.wallpaper_provider };
                 write_wallpaper_ron(prov, m.cfg.wallpaper_interval_hours, &m.mirada.wallpaper_dir);
-                if rel.leaf() == Some("activar_rotacion") {
+                let _ = std::process::Command::new("mirada-wallpaper").spawn();
+                m.status = format!("aplicando fondo de {prov}…");
+                return;
+            }
+            // Fondo automático · «Activar rotación»: toggle PERSISTENTE — lo mete
+            // en el autostart de mirada (arranca solo cada sesión) y lo
+            // lanza/mata ahora.
+            if rel.leaf() == Some("activar_rotacion") {
+                let on = value.as_bool().unwrap_or(false);
+                set_wallpaper_autostart(on);
+                if on {
+                    let prov = if m.cfg.wallpaper_provider.is_empty() { "bing" } else { &m.cfg.wallpaper_provider };
+                    write_wallpaper_ron(prov, m.cfg.wallpaper_interval_hours, &m.mirada.wallpaper_dir);
                     let _ = std::process::Command::new("mirada-wallpaper").arg("daemon").spawn();
-                    m.status = format!("rotación automática activada ({prov})");
+                    m.status = "rotación activada — arranca sola cada sesión".into();
                 } else {
-                    let _ = std::process::Command::new("mirada-wallpaper").spawn();
-                    m.status = format!("aplicando fondo de {prov}…");
+                    let _ = std::process::Command::new("pkill").args(["-f", "mirada-wallpaper"]).spawn();
+                    m.status = "rotación automática desactivada".into();
                 }
                 return;
             }
