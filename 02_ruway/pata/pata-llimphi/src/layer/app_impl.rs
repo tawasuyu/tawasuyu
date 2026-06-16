@@ -449,19 +449,7 @@ impl LayerApp {
             // pata en el mismo proceso (`exec`), que arranca leyendo el nuevo
             // launcher.toml y ancla las superficies correctas. Sin esto, cambiar
             // a mac/mirada "no hacía nada" (el reload se descartaba).
-            eprintln!(
-                "pata · la config cambió la cantidad de superficies ({} → {}); re-ejecutando pata \
-                 para reanclar las layer surfaces.",
-                self.cfg.surfaces.len(),
-                cfg.surfaces.len()
-            );
-            if let Ok(exe) = std::env::current_exe() {
-                use std::os::unix::process::CommandExt;
-                let args: Vec<String> = std::env::args().skip(1).collect();
-                let err = std::process::Command::new(exe).args(args).exec();
-                // exec() sólo retorna si falló: lo registramos y seguimos.
-                eprintln!("pata · re-exec falló: {err}; reiniciá pata a mano.");
-            }
+            self.re_exec_pata("cambió la cantidad de superficies");
             return false;
         }
         self.surfaces = crate::Model::construir_surfaces(&cfg);
@@ -474,11 +462,31 @@ impl LayerApp {
         true
     }
 
+    /// Re-ejecuta pata en el mismo proceso (`exec`) para reanclar las layer
+    /// surfaces cuando un cambio no se puede aplicar en caliente. Sólo retorna si
+    /// el exec falló.
+    pub(super) fn re_exec_pata(&self, motivo: &str) {
+        eprintln!("pata · {motivo}; re-ejecutando para reanclar las layer surfaces.");
+        if let Ok(exe) = std::env::current_exe() {
+            use std::os::unix::process::CommandExt;
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            let err = std::process::Command::new(exe).args(args).exec();
+            eprintln!("pata · re-exec falló: {err}; reiniciá pata a mano.");
+        }
+    }
+
     pub(super) fn maybe_sample(&mut self) {
         let Some((ctx, clipboard)) = self.sampler.latest() else {
             return;
         };
         self.maybe_recargar_config();
+        // El toggle GLOBAL «dientes fuera» (WawaConfig) cambia si los rails
+        // reservan franja o flotan → hay que reanclar. Re-exec al detectarlo.
+        let dientes = wawa_config::WawaConfig::load().dientes_outside;
+        if dientes != self.dientes_outside {
+            self.dientes_outside = dientes;
+            self.re_exec_pata("cambió «dientes fuera del área de trabajo»");
+        }
         self.ctx = ctx;
         crate::push_clip_history(&mut self.clip_history, &clipboard);
         self.clipboard = clipboard;

@@ -208,6 +208,8 @@ pub(super) struct LayerApp {
     pub(super) shuma_panel: Option<usize>,
     /// Grosor original (px) de esa barra.
     pub(super) shuma_bar_px: u32,
+    /// Último valor visto de `WawaConfig.dientes_outside`; si cambia, re-exec.
+    pub(super) dientes_outside: bool,
     /// Registro de apps para el menú de inicio.
     pub(super) registry: app_bus::AppRegistry,
     /// `true` cuando el drawer de la barra del menú está desplegado.
@@ -389,6 +391,10 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         };
 
     let utc = crate::usa_utc(&cfg);
+    // Decisión GLOBAL (WawaConfig): los rails de dientes reservan franja («fuera»
+    // del área) o flotan como overlay («dentro»). La leemos una vez; si cambia en
+    // runtime, `maybe_sample` re-ejecuta pata para reanclar.
+    let dientes_outside = wawa_config::WawaConfig::load().dientes_outside;
     let mut app = LayerApp {
         registry_state: RegistryState::new(&globals),
         output_state: OutputState::new(&globals, &qh),
@@ -417,6 +423,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
         cfg_watch: crate::config_watch::ConfigWatch::new(pata_config::loaded_path()),
         shuma_panel: None,
         shuma_bar_px: 40,
+        dientes_outside,
         registry: app_bus::AppRegistry::discover_merged(),
         menu_open: false,
         menu_kind: MenuKind::Apps,
@@ -529,7 +536,9 @@ pub fn run() -> Result<(), Box<dyn Error>> {
             );
             layer.set_anchor(sctk_anchor);
             layer.set_size(size.0, size.1);
-            layer.set_exclusive_zone(thickness as i32);
+            // Reserva franja sólo si dientes-fuera y no autohide; si no, flota.
+            let excl = if dientes_outside && !s.autohide { thickness as i32 } else { 0 };
+            layer.set_exclusive_zone(excl);
             layer.set_keyboard_interactivity(KeyboardInteractivity::None);
             layer.commit();
             app.panels.push(Panel {
