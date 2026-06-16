@@ -291,9 +291,6 @@ impl App for Panel {
     fn init(handle: &Handle<Msg>) -> Model {
         handle.spawn_periodic(std::time::Duration::from_millis(TICK_MS), || Msg::Tick);
 
-        let cfg = WawaConfig::load();
-        let _ = rimay_localize::set_locale(&cfg.lang);
-
         let handle_clone = handle.clone();
         let watcher = ConfigWatcher::spawn(move |new_cfg| {
             handle_clone.dispatch(Msg::ConfigChanged(Box::new(new_cfg)));
@@ -301,62 +298,7 @@ impl App for Panel {
         .map_err(|e| eprintln!("wawa-panel · watcher: {e}"))
         .ok();
 
-        let mut host = HostInfo::default();
-        refresh_host(&mut host);
-
-        let mirada_path = mirada_brain::Config::default_path();
-        let mirada = mirada_path
-            .as_deref()
-            .map(mirada_brain::Config::load_or_default)
-            .unwrap_or_default();
-        let pata = pata_config::load();
-
-        // Keymap de mirada: vive en su propio RON. El buffer editable son las
-        // filas crudas (así no se pierde una fila a-medio-tipear); el `Keymap`
-        // válido se deriva al guardar.
-        let keymap_path = mirada_brain::Keymap::default_path();
-        let keymap_rows = keymap_path
-            .as_deref()
-            .map(mirada_brain::Keymap::load_or_init)
-            .unwrap_or_default()
-            .to_rows();
-
-        // Perfiles de atajos: la biblioteca conmutable (dwm/i3/hyprland + propios).
-        let profiles_path = mirada_brain::KeymapProfiles::default_path();
-        let profiles = profiles_path
-            .as_deref()
-            .map(mirada_brain::KeymapProfiles::load_or_init)
-            .unwrap_or_default();
-
-        // Biblioteca de perfiles de escritorio completos. Se siembra la primera
-        // vez con las 8 vistas de fábrica (ya editables). El activo se detecta
-        // por coincidencia con la config viva en disco.
-        let dprofiles = DesktopProfiles::load_or_seed(&mirada);
-
-        Model {
-            selected_pest: 0,
-            selected_item: None,
-            sidebar_open: true,
-            sidebar_w: SIDEBAR_W,
-            cfg,
-            mirada,
-            mirada_path,
-            keymap_rows,
-            keymap_path,
-            profiles,
-            profiles_path,
-            dprofiles,
-            pata,
-            allichay: AllichayState::new(),
-            host,
-            status: String::new(),
-            dirty: SaveDirty::default(),
-            save_in: 0,
-            _config_watcher: watcher,
-            menu_open: None,
-            menu_active: usize::MAX,
-            menu_anim: Tween::idle(1.0),
-        }
+        build_model(watcher)
     }
 
     fn update(model: Model, msg: Msg, handle: &Handle<Msg>) -> Model {
@@ -533,9 +475,191 @@ fn viewport_of() -> (f32, f32) {
     (w as f32, h as f32)
 }
 
+/// Construye el Model leyendo todo de disco. Lo usan `init` (con watcher, vía la
+/// app viva) y el modo `--shot` (headless, sin Handle ni watcher).
+fn build_model(watcher: Option<ConfigWatcher>) -> Model {
+    let cfg = WawaConfig::load();
+    let _ = rimay_localize::set_locale(&cfg.lang);
+
+    let mut host = HostInfo::default();
+    refresh_host(&mut host);
+
+    let mirada_path = mirada_brain::Config::default_path();
+    let mirada = mirada_path
+        .as_deref()
+        .map(mirada_brain::Config::load_or_default)
+        .unwrap_or_default();
+    let pata = pata_config::load();
+
+    let keymap_path = mirada_brain::Keymap::default_path();
+    let keymap_rows = keymap_path
+        .as_deref()
+        .map(mirada_brain::Keymap::load_or_init)
+        .unwrap_or_default()
+        .to_rows();
+
+    let profiles_path = mirada_brain::KeymapProfiles::default_path();
+    let profiles = profiles_path
+        .as_deref()
+        .map(mirada_brain::KeymapProfiles::load_or_init)
+        .unwrap_or_default();
+
+    let dprofiles = DesktopProfiles::load_or_seed(&mirada);
+
+    Model {
+        selected_pest: 0,
+        selected_item: None,
+        sidebar_open: true,
+        sidebar_w: SIDEBAR_W,
+        cfg,
+        mirada,
+        mirada_path,
+        keymap_rows,
+        keymap_path,
+        profiles,
+        profiles_path,
+        dprofiles,
+        pata,
+        allichay: AllichayState::new(),
+        host,
+        status: String::new(),
+        dirty: SaveDirty::default(),
+        save_in: 0,
+        _config_watcher: watcher,
+        menu_open: None,
+        menu_active: usize::MAX,
+        menu_anim: Tween::idle(1.0),
+    }
+}
+
 fn main() {
     rimay_localize::init();
+    // Modo captura headless: `wawa-panel --shot <png> [pestaña] [item]`. Arma el
+    // Model, abre esa pestaña/item y renderiza la vista a PNG, sin abrir ventana.
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--shot") {
+        let out = args.get(pos + 1).cloned().unwrap_or_else(|| "/tmp/panel.png".into());
+        let pest = args.get(pos + 2).and_then(|s| s.parse::<usize>().ok());
+        let item = args.get(pos + 3).and_then(|s| s.parse::<usize>().ok());
+        shot_panel(&out, pest, item);
+        return;
+    }
     llimphi_ui::run::<Panel>();
+}
+
+/// Renderiza la vista del panel a un PNG (headless), abriendo la `pest`/`item`
+/// pedidos. Misma maquinaria que los `*_shot` de pata.
+fn shot_panel(out: &str, pest: Option<usize>, item: Option<usize>) {
+    use llimphi_ui::llimphi_compositor::{measure_text_node, mount, paint};
+    use llimphi_ui::llimphi_hal::{wgpu, Hal};
+    use llimphi_ui::llimphi_layout::taffy;
+    use llimphi_ui::llimphi_layout::LayoutTree;
+    use llimphi_ui::llimphi_raster::peniko::Color;
+    use llimphi_ui::llimphi_raster::{vello, Renderer};
+    use llimphi_ui::llimphi_text::Typesetter;
+
+    let mut model = build_model(None);
+    if let Some(p) = pest {
+        model.selected_pest = p;
+        model.sidebar_open = true;
+    }
+    if let Some(i) = item {
+        model.selected_item = Some(i);
+        model.allichay.select(i);
+    }
+    let (w, h) = Panel::initial_size();
+    let view = Panel::view(&model);
+
+    let hal = pollster::block_on(Hal::new(None)).expect("hal");
+    let mut renderer = Renderer::new(&hal).expect("renderer");
+    let mut layout = LayoutTree::new();
+    let mounted = mount(&mut layout, view);
+    let mut ts = Typesetter::new();
+    let computed = {
+        let tmap = &mounted.text_measures;
+        layout
+            .compute_with_measure(mounted.root, (w as f32, h as f32), |nid, known, avail| {
+                match tmap.get(&nid) {
+                    Some(tm) => measure_text_node(&mut ts, tm, known, avail),
+                    None => taffy::Size::ZERO,
+                }
+            })
+            .expect("layout")
+    };
+    let mut scene = vello::Scene::new();
+    paint(&mut scene, &mounted, &computed, &mut ts, None, None);
+
+    let fmt = wgpu::TextureFormat::Rgba8Unorm;
+    let target = hal.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("panel-shot"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: fmt,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let tview = target.create_view(&wgpu::TextureViewDescriptor::default());
+    renderer
+        .render_to_view(&hal, &scene, &tview, w, h, Color::from_rgba8(20, 20, 28, 255))
+        .expect("render_to_view");
+    write_png(&hal, &target, w, h, out);
+    eprintln!("wawa-panel: {out} ({w}x{h})");
+}
+
+fn write_png(hal: &llimphi_ui::llimphi_hal::Hal, target: &llimphi_ui::llimphi_hal::wgpu::Texture, w: u32, h: u32, path: &str) {
+    use llimphi_ui::llimphi_hal::wgpu;
+    use std::io::BufWriter;
+    let unpadded = (w * 4) as usize;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT as usize;
+    let padded = unpadded.div_ceil(align) * align;
+    let buf = hal.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("readback"),
+        size: (padded * h as usize) as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut enc = hal.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buf,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(padded as u32),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    hal.queue.submit(std::iter::once(enc.finish()));
+    let slice = buf.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| { let _ = tx.send(r); });
+    hal.device.poll(wgpu::PollType::wait_indefinitely());
+    rx.recv().unwrap().unwrap();
+    let data = slice.get_mapped_range();
+    let mut pixels = Vec::with_capacity((w * h * 4) as usize);
+    for row in 0..h as usize {
+        let s = row * padded;
+        pixels.extend_from_slice(&data[s..s + unpadded]);
+    }
+    drop(data);
+    buf.unmap();
+    let file = std::fs::File::create(path).expect("png");
+    let mut enc = png::Encoder::new(BufWriter::new(file), w, h);
+    enc.set_color(png::ColorType::Rgba);
+    enc.set_depth(png::BitDepth::Eight);
+    let mut wr = enc.write_header().unwrap();
+    wr.write_image_data(&pixels).unwrap();
 }
 
 // =====================================================================

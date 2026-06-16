@@ -33,3 +33,7 @@ pata-config = { path = "../../pata/pata-config" }
 # keymap + barra pata) serializada en un solo RON.
 serde = { workspace = true }
 ron = { workspace = true }
+# Captura headless del panel a PNG (`wawa-panel --shot`), para verificar la UI
+# sin abrir ventana.
+png = { workspace = true }
+pollster = { workspace = true }
