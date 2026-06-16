@@ -130,7 +130,10 @@ pub struct Config {
     pub wallpaper_interval_secs: u32,
     /// Entradas del menú raíz (estilo openbox) que aparece al click derecho
     /// sobre el fondo. Vacío = sin menú (el click derecho en el fondo no hace
-    /// nada). Cada entrada lanza su `command` con `sh -c`.
+    /// nada). Cada entrada lanza su `command` con `sh -c`. Si la config no trae
+    /// la clave `menu`, se usa [`default_root_menu`] — que lista la suite real
+    /// desde `app-bus`, fuente única (así una app nueva aparece sin editar nada).
+    #[serde(default = "default_root_menu")]
     pub menu: Vec<MenuEntry>,
     /// Zonas de la pantalla (fracciones `0..=1`): **blancos de arrastre**.
     /// Al arrastrar una ventana sobre una zona, el compositor la resalta; al
@@ -409,12 +412,29 @@ pub fn default_root_menu() -> Vec<MenuEntry> {
         command: String::new(),
         submenu: children,
     };
+    // La suite tawasuyu sale del registro único de `app-bus` (no de fallbacks
+    // genéricos): cada app con su binario real. Antes el menú sólo ofrecía
+    // `rofi`/`xdg-open`, así que las apps de la suite no se alcanzaban desde acá.
+    let suite_apps: Vec<MenuEntry> = app_bus::default_entries()
+        .into_iter()
+        .filter_map(|e| match e.launch {
+            app_bus::Launch::Exec { program, .. } => {
+                let label = match &e.icon {
+                    Some(ic) => format!("{ic}  {}", e.label),
+                    None => e.label.clone(),
+                };
+                Some(leaf(&label, &program))
+            }
+            _ => None,
+        })
+        .collect();
     vec![
         leaf("Terminal", "shuma || kitty || alacritty || foot || xterm"),
         leaf("Navegador", "xdg-open https://duckduckgo.com"),
         leaf("Archivos", "xdg-open \"$HOME\""),
+        sub("Apps de la suite", suite_apps),
         leaf(
-            "Lanzador de apps",
+            "Otras apps…",
             "rofi -show drun || wofi --show drun || dmenu_run",
         ),
         sub(
@@ -764,38 +784,20 @@ const CONFIG_TEMPLATE: &str = "\
     wallpaper_fit: \"stretch\",
 
     // Menú raíz (estilo openbox): aparece al click DERECHO sobre el fondo.
-    // Una entrada es hoja (lanza command con `sh -c`) o submenú (si trae
-    // `submenu`, anidable a cualquier profundidad). Vaciá la lista a `[]` si
-    // no querés menú. Lo que sigue es el set por defecto — editalo, agregá
-    // tus apps, o dejalo así para tener algo usable de fábrica.
-    menu: [
-        (label: \"Terminal\",  command: \"shuma || kitty || alacritty || foot || xterm\"),
-        (label: \"Navegador\", command: \"xdg-open https://duckduckgo.com\"),
-        (label: \"Archivos\",  command: \"xdg-open \\\"$HOME\\\"\"),
-        (label: \"Lanzador de apps\", command: \"rofi -show drun || wofi --show drun || dmenu_run\"),
-        (label: \"Vista\", submenu: [
-            (label: \"mirada (nativo)\", command: \"mirada-ctl vista use mirada\"),
-            (label: \"Windows XP\",      command: \"mirada-ctl vista use windows-xp\"),
-            (label: \"Windows 3.1\",     command: \"mirada-ctl vista use windows-3.1\"),
-            (label: \"macOS\",           command: \"mirada-ctl vista use mac\"),
-            (label: \"KDE Plasma\",      command: \"mirada-ctl vista use kde\"),
-            (label: \"Solaris (CDE)\",   command: \"mirada-ctl vista use solaris\"),
-            (label: \"Hyprland\",        command: \"mirada-ctl vista use hyprland\"),
-            (label: \"dwm\",             command: \"mirada-ctl vista use dwm\"),
-        ]),
-        (label: \"Mirada\", submenu: [
-            (label: \"Recargar config\",  command: \"mirada-ctl reload-config || true\"),
-            (label: \"Vista espacial\",   command: \"mirada-ctl overview-toggle || true\"),
-            (label: \"Ciclar zonas\",     command: \"mirada-ctl cycle-zones || true\"),
-        ]),
-        (label: \"Sesión\", submenu: [
-            (label: \"Bloquear\",      command: \"loginctl lock-session || swaylock || xset s activate\"),
-            (label: \"Cerrar sesión\", command: \"loginctl terminate-user \\\"$USER\\\"\"),
-            (label: \"Suspender\",     command: \"systemctl suspend\"),
-            (label: \"Reiniciar\",     command: \"systemctl reboot\"),
-            (label: \"Apagar\",        command: \"systemctl poweroff\"),
-        ]),
-    ],
+    // Si NO ponés la clave `menu`, mirada usa su menú por defecto, que lista
+    // la SUITE tawasuyu real (nahual, pluma, cosmos, media, nakui…) desde el
+    // registro único de apps, más los submenús Vista/Mirada/Sesión. Una app
+    // nueva de la suite aparece sola, sin tocar este archivo.
+    //
+    // Descomentá y editá esto SÓLO si querés un menú propio (reemplaza al
+    // default por completo). Una entrada es hoja (lanza `command` con `sh -c`)
+    // o submenú (si trae `submenu`, anidable). `menu: []` = sin menú.
+    //
+    // menu: [
+    //     (label: \"Terminal\",  command: \"shuma || kitty || foot || xterm\"),
+    //     (label: \"Archivos\",  command: \"nahual-shell-llimphi\"),
+    //     (label: \"Apagar\",    command: \"systemctl poweroff\"),
+    // ],
 
     // Zonas: blancos de arrastre (fracciones 0..=1 de la pantalla). Al arrastrar
     // una ventana sobre una zona se resalta; al soltarla encima, aterriza en ese

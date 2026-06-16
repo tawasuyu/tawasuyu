@@ -12,6 +12,9 @@ description = "mirada — orquestador de escritorio del compositor: mantiene sal
 # serializa el estado del escritorio a RON).
 mirada-layout = { path = "../mirada-layout", features = ["serde"] }
 mirada-protocol = { path = "../mirada-protocol" }
+# Fuente única del registro de apps de la suite: el menú raíz lista la suite
+# desde `app_bus::default_entries()` en vez de fallbacks genéricos sueltos.
+app-bus = { path = "../../../shared/app-bus" }
 serde = { workspace = true }
 ron = { workspace = true }
 directories = { workspace = true }
