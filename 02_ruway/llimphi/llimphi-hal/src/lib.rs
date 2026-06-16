@@ -814,8 +814,6 @@ pub struct BlurCompositor {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     bind_layout: wgpu::BindGroupLayout,
-    ubo_h: wgpu::Buffer,
-    ubo_v: wgpu::Buffer,
     scratch: Option<BlurScratch>,
 }
 
@@ -922,24 +920,10 @@ impl BlurCompositor {
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
-        let ubo_h = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("llimphi-blur-ubo-h"),
-            size: BLUR_UBO_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ubo_v = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("llimphi-blur-ubo-v"),
-            size: BLUR_UBO_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         BlurCompositor {
             pipeline,
             sampler,
             bind_layout,
-            ubo_h,
-            ubo_v,
             scratch: None,
         }
     }
@@ -1024,8 +1008,23 @@ impl BlurCompositor {
             radius,
             _pad: [0.0, 0.0],
         };
-        queue.write_buffer(&self.ubo_h, 0, bytemuck_cast(&ubo_h_data));
-        queue.write_buffer(&self.ubo_v, 0, bytemuck_cast(&ubo_v_data));
+        // UBOs por llamada (ver nota en `ColorFilterCompositor::apply`): varios
+        // blurs en el mismo submit con sigmas distintos no deben aliasar un UBO
+        // compartido (ganaría el último). Buffers frescos por llamada (32 bytes).
+        let ubo_h = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-blur-ubo-h"),
+            size: BLUR_UBO_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ubo_v = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-blur-ubo-v"),
+            size: BLUR_UBO_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&ubo_h, 0, bytemuck_cast(&ubo_h_data));
+        queue.write_buffer(&ubo_v, 0, bytemuck_cast(&ubo_v_data));
 
         // Pass 1: target → scratch (horizontal).
         let bg_h = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1042,7 +1041,7 @@ impl BlurCompositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.ubo_h.as_entire_binding(),
+                    resource: ubo_h.as_entire_binding(),
                 },
             ],
         });
@@ -1085,7 +1084,7 @@ impl BlurCompositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.ubo_v.as_entire_binding(),
+                    resource: ubo_v.as_entire_binding(),
                 },
             ],
         });
@@ -1124,8 +1123,6 @@ pub struct ColorFilterCompositor {
     pipeline: wgpu::RenderPipeline,
     sampler: wgpu::Sampler,
     bind_layout: wgpu::BindGroupLayout,
-    ubo_apply: wgpu::Buffer,
-    ubo_copy: wgpu::Buffer,
     scratch: Option<BlurScratch>,
 }
 
@@ -1231,24 +1228,10 @@ impl ColorFilterCompositor {
             mipmap_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
-        let ubo_apply = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("llimphi-color-filter-ubo-apply"),
-            size: COLOR_UBO_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let ubo_copy = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("llimphi-color-filter-ubo-copy"),
-            size: COLOR_UBO_SIZE,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         ColorFilterCompositor {
             pipeline,
             sampler,
             bind_layout,
-            ubo_apply,
-            ubo_copy,
             scratch: None,
         }
     }
@@ -1320,8 +1303,25 @@ impl ColorFilterCompositor {
             a: [matrix[15], matrix[16], matrix[17], matrix[18]],
             bias: [matrix[4], matrix[9], matrix[14], matrix[19]],
         };
-        queue.write_buffer(&self.ubo_apply, 0, bytemuck_cast(&apply));
-        queue.write_buffer(&self.ubo_copy, 0, bytemuck_cast(&COLOR_IDENTITY));
+        // UBOs **por llamada**: varias `apply` en el mismo encoder/submit
+        // comparten cola; `write_buffer` se aplica una vez antes de los command
+        // buffers (gana el último valor escrito), así que un UBO compartido haría
+        // que todas las pasadas leyeran la última matriz. Buffers frescos por
+        // llamada evitan ese alias (80 bytes c/u, despreciable).
+        let ubo_apply = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-color-filter-ubo-apply"),
+            size: COLOR_UBO_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let ubo_copy = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("llimphi-color-filter-ubo-copy"),
+            size: COLOR_UBO_SIZE,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(&ubo_apply, 0, bytemuck_cast(&apply));
+        queue.write_buffer(&ubo_copy, 0, bytemuck_cast(&COLOR_IDENTITY));
 
         // Pass 1: target → scratch (aplica la matriz).
         let bg_apply = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1338,7 +1338,7 @@ impl ColorFilterCompositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.ubo_apply.as_entire_binding(),
+                    resource: ubo_apply.as_entire_binding(),
                 },
             ],
         });
@@ -1379,7 +1379,7 @@ impl ColorFilterCompositor {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.ubo_copy.as_entire_binding(),
+                    resource: ubo_copy.as_entire_binding(),
                 },
             ],
         });

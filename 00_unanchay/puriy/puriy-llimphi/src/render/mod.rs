@@ -694,14 +694,23 @@ pub(crate) fn render_box(b: &BoxNode, ctx: &mut RenderCtx<'_>) -> View<Msg> {
     // nodo como post-pasada GPU sobre la intermediate. Ortogonal a clip/mask.
     // Las demás funciones de filtro (brightness/grayscale/drop-shadow/…) llegan
     // en fases siguientes.
-    let fops = filtros_a_ops(&b.filter, ctx.zoom);
-    if !fops.is_empty() {
-        view = view.filter(fops);
-    }
-    // `backdrop-filter: blur(...)` (Fase 7.1232) — borronea lo que asoma DEBAJO
-    // del nodo ("vidrio esmerilado"). Reusa el camino nativo `backdrop_blur`.
+    let mut fops = filtros_a_ops(&b.filter, ctx.zoom);
+    // `backdrop-filter` (Fases 7.1232/7.1235): el `blur` va al camino nativo
+    // `backdrop_blur` (pre-renderiza el fondo y compone el contenido nítido
+    // encima — más fiel). Los filtros de color van a la MISMA post-pasada que
+    // `filter` (v1: colorean los píxeles finales del rect, no sólo el fondo —
+    // misma limitación documentada). `drop-shadow` en backdrop no tiene sentido
+    // y se descarta.
     if let Some(sigma) = blur_sigma_de(&b.backdrop_filter) {
         view = view.backdrop_blur(sigma * ctx.zoom);
+    }
+    for op in filtros_a_ops(&b.backdrop_filter, ctx.zoom) {
+        if matches!(op, llimphi_ui::FilterOp::ColorMatrix(_)) {
+            fops.push(op);
+        }
+    }
+    if !fops.is_empty() {
+        view = view.filter(fops);
     }
 
     let link_color = Color::from_rgb8(30, 90, 200);

@@ -324,7 +324,7 @@ headless de los compose Porter-Duff cuando haya GPU.
 
 ---
 
-## Familia filter (DETERMINADA 2026-06-16) — bloque elegido por el usuario
+## Familia filter (CERRADA 2026-06-16) — bloque elegido por el usuario
 
 **Estado de partida**: el engine ya **parsea** `filter`/`backdrop-filter` en
 `BoxNode.{filter,backdrop_filter}: Vec<FilterFn>` (Fases 7.264/7.265; variantes
@@ -394,12 +394,28 @@ BoxShadow)` → `Shadow` con color peniko + escala por zoom. **De paso**:
 de página, y el backdrop-blur también. Tests: mapeo+zoom (`puriy-llimphi`) +
 box-tree (`puriy-engine`).
 
-### 7.1235 — cierre
+### 7.1235 ✅ — cierre + bugfix de aliasing de UBO
 
-Orden de aplicación de cadena (varios filtros en secuencia, verificado en
-`collect_filters`), example headless `filter_demo` (evidencia PNG como
-`backdrop_blur_demo`), doc de limitaciones (post-pasada sobre píxeles finales,
-sin verificación GPU en CI). **Familia filter CERRADA.**
+- **`backdrop-filter` color** cableado: el `blur` sigue por el camino nativo
+  `backdrop_blur` (más fiel); los filtros de color se anexan a la post-pasada de
+  `filter` (v1: colorean los píxeles finales del rect).
+- **Example headless `filter_demo`** (`llimphi-compositor/examples/`): fila de
+  tiles iguales con `ref`/`blur`/`grayscale`/`invert`/`sepia`/`drop-shadow`
+  sobre fondo a franjas. Corrido con GPU → `filter.png`: cada filtro se ve
+  distinto y correcto (grayscale = gris neutro, invert = naranja→azul +
+  blanco→negro, sepia = tostado, blur suave, drop-shadow con sombra). Evidencia
+  real, no aserción.
+- **Bugfix (lo encontró el demo)**: `BlurCompositor` y `ColorFilterCompositor`
+  compartían un UBO entre llamadas. Varias pasadas en el mismo `submit`
+  (p. ej. grayscale + invert + sepia, o blurs con sigmas distintos) leían **la
+  última matriz/sigma escrita** porque `write_buffer` se aplica una vez antes de
+  los command buffers (gana el último). Fix: UBOs **por llamada** (buffers
+  frescos de 32/80 bytes). Mejora también `backdrop_blur` (mismo bug latente).
+
+**Familia filter CERRADA.** Limitaciones v1 documentadas: la post-pasada opera
+sobre los píxeles finales del rect (no aísla el subárbol del fondo); `filter` y
+`backdrop-filter` color coinciden en v1; drop-shadow es del border-box, no de la
+silueta alpha; sin verificación de píxeles en CI (sí en el example con GPU).
 
 ---
 
