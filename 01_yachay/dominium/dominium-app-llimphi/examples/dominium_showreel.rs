@@ -14,13 +14,20 @@
 //! `t = i/(N-1)` → se elige el snapshot vivo correspondiente → se arma el
 //! `RenderPlan` con la cámara/relieve del frame → vello → wgpu → PNG.
 //!
-//! Beats:
-//!   - **cold-open** (0–14%): trazo bezier draw-on + punto teal, sobre negro.
-//!   - **diorama** (12–72%): la maqueta iso real entra (fade + zoom suave)
-//!     mientras la simulación corre — réplicas, extracciones, migración.
-//!   - **clusters ψ** (54–74%): los lemmings se recolorean por su clúster
-//!     k-means del `vector_psi` (modo `PsiCluster` real de la app).
-//!   - **wordmark** (78–100%): "dominium" + subtítulo, diorama en fade-out.
+//! Beats (rediseñados 2026-06-16 para que el reel TENGA MOVIMIENTO):
+//!   - **cold-open** (0–8%): trazo bezier draw-on + punto teal, sobre negro.
+//!     Breve — no debe dominar.
+//!   - **diorama** (6–100%): la maqueta iso real corre TODO el resto del reel
+//!     con la cámara en movimiento CONTINUO: un **zoom-in** claro (la escala
+//!     iso casi se duplica) combinado con un **paneo** que recorre el
+//!     continente en arco (el nodo del canvas es más grande que el viewport y
+//!     se desliza). La simulación avanza varios ticks por frame para que
+//!     lemmings/réplicas/migración se muevan a ojo. La cámara es la fuente
+//!     principal de dinamismo: cada frame se ve distinto.
+//!   - **wordmark** (86–100%): "dominium" + subtítulo, diorama en leve
+//!     fade-out detrás. (El viejo beat ψ de clústeres k-means se eliminó:
+//!     dejaba ~96% de lemmings en un clúster y el recoloreo era invisible —
+//!     un beat muerto. Mejor sacarlo que fingirlo.)
 //!
 //! ```text
 //! cargo run -p dominium-app-llimphi --example dominium_showreel --release -- \
@@ -49,9 +56,7 @@ use std::io::BufWriter;
 
 use dominium_core::{SimParams, World};
 use dominium_iso::{IsoProjector, ZWeights};
-use dominium_render_plan::{
-    build_plan_with_overrides, Color as PlanColor, PlanConfig, RenderMode, RenderPlan,
-};
+use dominium_render_plan::{build_plan, PlanConfig, RenderMode, RenderPlan, SpritePrim};
 use dominium_sim::Sim;
 
 use llimphi_ui::llimphi_hal::{wgpu, Hal};
@@ -70,7 +75,7 @@ use llimphi_ui::llimphi_raster::kurbo::{Affine, BezPath, Circle, Point, Stroke};
 
 use dominium_canvas_llimphi::canvas_view;
 
-use crate::consts::{GRID, KMEANS_REFRESH_TICKS, LEMMINGS, SNAPSHOT_RING_CAP, TRAIL_CAP};
+use crate::consts::{KMEANS_REFRESH_TICKS, LEMMINGS, SNAPSHOT_RING_CAP, TRAIL_CAP};
 use crate::packs::default_conceptos;
 use crate::worldgen::bioma_palette;
 
@@ -79,6 +84,19 @@ const FMT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Ticks que avanzamos ANTES de empezar a capturar — deja que la sociedad
 /// arranque (réplicas, primeros asentamientos) antes del primer frame.
 const N_TICKS_PRE: u64 = 8;
+
+/// Ticks de simulación que avanzamos POR cada frame capturado. Con 1 tick
+/// el cambio entre frames es imperceptible (el campo medio se mueve lento);
+/// con varios, lemmings/réplicas/migración se mueven a ojo desnudo.
+const TICKS_PER_FRAME: u64 = 4;
+
+/// Grilla del reel — MÁS CHICA que la de la app (240). Cada celda emite un
+/// techo + caras laterales: a 240×240 son ~150k polígonos y, a 1600×900, el
+/// rasterizador por software del entorno wedgea y produce frames negros. Con
+/// una grilla menor la maqueta es idéntica en carácter pero la escena pesa
+/// una fracción, y el render sale vivo de punta a punta. (La app real sigue
+/// usando 240; esto es sólo presentación del reel.)
+const SHOW_GRID: usize = 120;
 
 /// Color de acento (teal de marca tawasuyu).
 const ACCENT: Color = Color::from_rgba8(0x2B, 0xD9, 0xA6, 0xFF);
@@ -140,7 +158,8 @@ fn demo_weights() -> ZWeights {
 /// seed → misma película, bit a bit.
 fn capture_snapshots(n: usize) -> Vec<SimSnapshot> {
     let rng_seed = 0xD0_31_31_07_u64;
-    let seeder = |s: u64| dominium_core::worldgen::seed(s, GRID, LEMMINGS, default_conceptos());
+    let seeder =
+        |s: u64| dominium_core::worldgen::seed(s, SHOW_GRID, LEMMINGS, default_conceptos());
     let mut sim = Sim::new(
         seeder(rng_seed),
         demo_params(),
@@ -159,11 +178,11 @@ fn capture_snapshots(n: usize) -> Vec<SimSnapshot> {
 
     let mut out = Vec::with_capacity(n);
     for _ in 0..n {
-        sim.advance(false);
-        // Recalculamos las tribus ψ (k-means) en CADA frame: el reel es
-        // corto y `KMEANS_REFRESH_TICKS` (30) no alcanzaría a dispararse,
-        // así el beat de clústeres siempre tiene asignaciones vivas.
-        sim.refresh_clusters();
+        // Varios ticks por frame: el movimiento de la sociedad (lemmings,
+        // réplicas, migración) se nota frame a frame, no sólo la cámara.
+        for _ in 0..TICKS_PER_FRAME {
+            sim.advance(false);
+        }
         out.push(SimSnapshot {
             world: sim.world.clone(),
             clusters: sim.cluster_assignments.clone(),
@@ -172,23 +191,88 @@ fn capture_snapshots(n: usize) -> Vec<SimSnapshot> {
     out
 }
 
-/// Colores fijos de clúster ψ — espejo de `sim::CLUSTER_COLORS` de la app.
-const CLUSTER_COLORS: [PlanColor; 3] = [
-    [0.96, 0.30, 0.72, 1.0], // magenta
-    [0.30, 0.90, 0.90, 1.0], // cian
-    [0.96, 0.92, 0.30, 1.0], // amarillo
-];
-
 // ───────────────────────── la escena por frame ─────────────────────────
 
-/// Arma el `RenderPlan` de un snapshot con la cámara/relieve del frame `t`.
-/// El zoom suave del cold-open se logra ramplando `iso.scale`.
-fn plan_for(
-    snap: &SimSnapshot,
-    weights: &ZWeights,
-    scale: f32,
-    cluster_mix: f32,
-) -> RenderPlan {
+/// Desplaza TODA la geometría del plan por `(dx, dy)` pero deja la caja
+/// envolvente (`min/max`) intacta. `canvas_view` centra el plan según su
+/// bbox, así que al mover la geometría sin mover el bbox la maqueta se
+/// **panea** dentro del rect — la cámara recorre el continente. (Hacerlo
+/// así, en vez de agrandar el nodo del canvas, evita un nodo gigante que en
+/// el render headless por software dejaba el readback en frame congelado.)
+fn pan_plan(mut plan: RenderPlan, dx: f32, dy: f32) -> RenderPlan {
+    for q in &mut plan.quads {
+        q.x += dx;
+        q.y += dy;
+    }
+    for p in &mut plan.polygons {
+        for v in &mut p.vertices {
+            v.0 += dx;
+            v.1 += dy;
+        }
+    }
+    for g in &mut plan.glyphs {
+        g.x += dx;
+        g.y += dy;
+    }
+    for s in &mut plan.sprites {
+        match s {
+            SpritePrim::Fill { points, .. } | SpritePrim::Stroke { points, .. } => {
+                for pt in points {
+                    pt.0 += dx;
+                    pt.1 += dy;
+                }
+            }
+            SpritePrim::Disc { cx, cy, .. } => {
+                *cx += dx;
+                *cy += dy;
+            }
+        }
+    }
+    // bbox a propósito SIN tocar: el paneo nace de la diferencia entre el
+    // centro del bbox (donde canvas_view ancla) y la geometría ya movida.
+    plan
+}
+
+/// Recorta del plan toda la geometría que cae FUERA del viewport (con un
+/// margen). Imprescindible a zoom alto: la maqueta de 240×240 emite ~150k
+/// polígonos, pero acercada sólo una fracción es visible — pintar los 150k a
+/// 1600×900 satura el rasterizador por software y wedgea el device. Culling
+/// deja sólo lo on-screen y mantiene la escena liviana de punta a punta.
+///
+/// `canvas_view` ancla el centro del bbox en el centro del rect, así que la
+/// posición en pantalla de un vértice es `vértice + (centro_rect − centro_bbox)`.
+/// El bbox se deja INTACTO (el culling no debe mover la cámara).
+fn cull_plan(mut plan: RenderPlan, cw: f64, ch: f64, margin: f32) -> RenderPlan {
+    let bbox_cx = (plan.min_x + plan.max_x) * 0.5;
+    let bbox_cy = (plan.min_y + plan.max_y) * 0.5;
+    let off_x = cw as f32 * 0.5 - bbox_cx;
+    let off_y = ch as f32 * 0.5 - bbox_cy;
+    let lo_x = -margin;
+    let lo_y = -margin;
+    let hi_x = cw as f32 + margin;
+    let hi_y = ch as f32 + margin;
+    let on_screen = |x: f32, y: f32, w: f32, h: f32| -> bool {
+        let sx = x + off_x;
+        let sy = y + off_y;
+        sx + w >= lo_x && sx <= hi_x && sy + h >= lo_y && sy <= hi_y
+    };
+    plan.quads.retain(|q| on_screen(q.x, q.y, q.w, q.h));
+    plan.polygons.retain(|p| {
+        let (mut nx, mut ny, mut xx, mut xy) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (vx, vy) in p.vertices {
+            nx = nx.min(vx);
+            ny = ny.min(vy);
+            xx = xx.max(vx);
+            xy = xy.max(vy);
+        }
+        on_screen(nx, ny, xx - nx, xy - ny)
+    });
+    plan
+}
+
+/// Arma el `RenderPlan` de un snapshot con la escala iso del frame `t`. El
+/// zoom-in del reel se logra ramplando `iso.scale` (la cámara se acerca).
+fn plan_for(snap: &SimSnapshot, weights: &ZWeights, scale: f32) -> RenderPlan {
     let iso = IsoProjector::new(scale, 0.55);
     let cfg = PlanConfig {
         tile: scale,
@@ -200,39 +284,18 @@ fn plan_for(
         andina_layers: 0,
         andina_threshold: 1.0,
         palette: bioma_palette(),
-        // El suelo queda igual en ambos modos; sólo cambia el tinte de los
-        // lemmings. Composite siempre — el clúster lo aplicamos en la closure.
         render_mode: RenderMode::Composite,
         texture: false,
     };
-    let base_lemming = cfg.palette.lemming;
-    let clusters = &snap.clusters;
-    build_plan_with_overrides(&snap.world, &iso, weights, &cfg, |i| {
-        if cluster_mix <= 0.001 || i >= clusters.len() {
-            return base_lemming;
-        }
-        let c = clusters[i] as usize;
-        let target = if c < CLUSTER_COLORS.len() {
-            CLUSTER_COLORS[c]
-        } else {
-            base_lemming
-        };
-        // Cross-fade del color base al color de clúster.
-        [
-            base_lemming[0] + (target[0] - base_lemming[0]) * cluster_mix,
-            base_lemming[1] + (target[1] - base_lemming[1]) * cluster_mix,
-            base_lemming[2] + (target[2] - base_lemming[2]) * cluster_mix,
-            1.0,
-        ]
-    })
+    build_plan(&snap.world, &iso, weights, &cfg)
 }
 
 /// Overlays vector (cold-open + wordmark + punto firma) sobre un nodo
 /// full-screen, en función de `t`.
 fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64, ch: f64) {
-    // ── COLD OPEN (0–14%) ──────────────────────────────────────────
-    let b1 = seg(t, 0.0, 0.13);
-    let line_vis = 1.0 - seg(t, 0.13, 0.22);
+    // ── COLD OPEN (0–8%) ───────────────────────────────────────────
+    let b1 = seg(t, 0.0, 0.05);
+    let line_vis = 1.0 - seg(t, 0.05, 0.08);
     if line_vis > 0.001 {
         let cx = cw / 2.0;
         let cy = ch / 2.0;
@@ -248,7 +311,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
             Point::new(p3.0, p3.1),
         );
         use vello::kurbo::ParamCurve;
-        let draw_on = motion::ease_out_cubic(seg(t, 0.02, 0.14)) as f64;
+        let draw_on = motion::ease_out_cubic(seg(t, 0.01, 0.055)) as f64;
         let mut trimmed = BezPath::new();
         let mut head = cb.p0;
         trimmed.move_to(cb.p0);
@@ -280,8 +343,8 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
         );
     }
 
-    // ── WORDMARK (80–100%) ─────────────────────────────────────────
-    let word_in = seg(t, 0.80, 0.92);
+    // ── WORDMARK (86–100%) ─────────────────────────────────────────
+    let word_in = seg(t, 0.86, 0.95);
     let word_a = motion::ease_out_cubic(word_in);
     if word_a > 0.001 {
         let size = 136.0_f32;
@@ -295,7 +358,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
         let brush = peniko::Brush::Solid(with_alpha(Color::from_rgba8(0xF2, 0xF4, 0xF3, 0xFF), word_a));
         draw_layout_brush_xf(scene, &layout, &brush, Affine::translate((ox, oy)));
 
-        let sub_a = motion::ease_out_cubic(seg(t, 0.85, 0.98));
+        let sub_a = motion::ease_out_cubic(seg(t, 0.90, 0.99));
         if sub_a > 0.001 {
             let ssz = 25.0_f32;
             let sub = ts.layout(
@@ -320,7 +383,7 @@ fn draw_overlays(scene: &mut vello::Scene, ts: &mut Typesetter, t: f32, cw: f64,
     }
 
     // ── punto teal de firma (esquina inf-der) ───────────────────────
-    let corner_a = seg(t, 0.05, 0.13) * (1.0 - seg(t, 0.76, 0.82));
+    let corner_a = seg(t, 0.04, 0.09) * (1.0 - seg(t, 0.84, 0.90));
     if corner_a > 0.001 {
         let cx = cw - 54.0;
         let cy = ch - 54.0;
@@ -350,29 +413,54 @@ fn build_view(
     weights: &ZWeights,
     bg: Color,
 ) -> View<()> {
-    // Snapshot vivo: el diorama sólo se ve a partir de ~10%; antes es el
-    // cold-open sobre negro. Mapeamos el tramo [0.10, 1.0] de t al índice
-    // de snapshot para que la simulación corra durante todo el reel.
-    let diorama_t = seg(t, 0.10, 1.0);
+    // Snapshot vivo: el diorama se ve a partir de ~6%; antes es el cold-open
+    // sobre negro. Mapeamos el tramo [0.06, 1.0] de t al índice de snapshot
+    // para que la simulación corra durante todo el reel.
+    let diorama_t = seg(t, 0.06, 1.0);
     let idx = ((diorama_t * (snaps.len() as f32 - 1.0)).round() as usize).min(snaps.len() - 1);
     let snap = &snaps[idx];
 
-    // Entrada del diorama: fade-in (10–24%) y fade-out antes del wordmark.
-    let in_a = motion::ease_out_cubic(seg(t, 0.10, 0.26));
-    let out_a = 1.0 - motion::ease_in_out_cubic(seg(t, 0.76, 0.84));
+    // Entrada del diorama: fade-in rápido (6–14%) y leve fade-out bajo el
+    // wordmark (no a negro — la maqueta sigue viva detrás del título).
+    let in_a = motion::ease_out_cubic(seg(t, 0.06, 0.14));
+    let out_a = 1.0 - 0.55 * motion::ease_in_out_cubic(seg(t, 0.86, 0.97)) as f32;
     let diorama_a = (in_a * out_a).clamp(0.0, 1.0) as f64;
 
-    // Zoom suave: la cámara entra de un poco más lejos a la escala nominal.
-    let scale = lerp(2.8, 3.45, motion::ease_out_cubic(seg(t, 0.10, 0.58)) as f64) as f32;
+    // ── CÁMARA: zoom-in continuo + paneo a lo largo de TODO el reel.
+    // CLAVE: la velocidad de cámara debe ser ~constante (lineal), NO un
+    // ease-in-out — un ease-in-out concentra todo el movimiento en los bordes
+    // y deja un PLATEAU muerto en el medio (frames idénticos). Acá `cam`
+    // avanza lineal con `t`, así CADA frame difiere del anterior por igual.
+    let cam = seg(t, 0.06, 1.0) as f64;
+    // Zoom: acercamiento parejo y perceptible (lineal). La grilla del reel es
+    // 120 (la mitad lineal de la app), así que la escala arranca alta para
+    // que el continente llene el cuadro y casi se duplica hacia el primer
+    // plano. Con culling la escena se mantiene liviana en todo el rango.
+    let scale = lerp(6.0, 11.0, cam) as f32;
 
-    // Beat ψ: cross-fade a colores de clúster (54–66%) y de vuelta (70–76%).
-    let cluster_mix =
-        motion::ease_in_out_cubic(seg(t, 0.54, 0.66)) * (1.0 - motion::ease_in_out_cubic(seg(t, 0.70, 0.76)));
+    // Paneo: desplazamos la geometría del plan (sin tocar su bbox), así
+    // `canvas_view` —que ancla en el centro del bbox— deja la maqueta corrida
+    // dentro del rect. Recorrido en arco diagonal (avance lineal en X +
+    // curva en Y) para que la cámara cruce el continente revelando regiones
+    // distintas a medida que el zoom aprieta. El nodo sigue siendo del tamaño
+    // del viewport (estable en el render headless).
+    const PAN_AMP_X: f64 = 620.0;
+    const PAN_AMP_Y: f64 = 360.0;
+    // X: barrido lineal izquierda→derecha (velocidad constante).
+    let pan_x = lerp(PAN_AMP_X, -PAN_AMP_X, cam);
+    // Y: avance lineal arriba→abajo MÁS un arco (sin) — sobrevuelo, no recta;
+    // siempre en movimiento.
+    let arc = (std::f64::consts::PI * cam).sin();
+    let pan_y = lerp(PAN_AMP_Y, -PAN_AMP_Y, cam) + arc * PAN_AMP_Y * 0.5;
 
     let mut children: Vec<View<()>> = Vec::new();
 
     if diorama_a > 0.001 {
-        let plan = plan_for(snap, weights, scale, cluster_mix);
+        let plan = pan_plan(plan_for(snap, weights, scale), pan_x as f32, pan_y as f32);
+        // Cull a viewport: a zoom alto recorta el grueso de los ~150k
+        // polígonos fuera de cuadro y mantiene la escena liviana (clave para
+        // que el GPU por software no wedgee a pantalla completa).
+        let plan = cull_plan(plan, cw, ch, 64.0);
         let canvas = View::new(Style {
             position: Position::Absolute,
             inset: Rect {
@@ -447,8 +535,13 @@ fn build_view(
     View::new(Style {
         size: Size { width: percent(1.0_f32), height: percent(1.0_f32) },
         position: Position::Relative,
+        overflow: taffy::Point {
+            x: taffy::Overflow::Hidden,
+            y: taffy::Overflow::Hidden,
+        },
         ..Default::default()
     })
+    .clip(true)
     .fill(bg)
     .children(children)
 }
@@ -462,6 +555,13 @@ fn main() {
     let n: usize = args.next().and_then(|v| v.parse().ok()).unwrap_or(300);
     let w: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(1600);
     let h: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(900);
+    // Ventana de frames a renderar [start, end) — para chunkear el render en
+    // varios procesos (el GPU por software del entorno wedgea tras ~18 frames
+    // pesados en un mismo device; un proceso por chunk lo sortea). El `t` se
+    // computa siempre contra `n`, así la ventana es un subconjunto del reel
+    // completo, no un reel recortado. Default: todo.
+    let start: usize = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let end: usize = args.next().and_then(|v| v.parse().ok()).unwrap_or(n).min(n);
     create_dir_all(&out_dir).expect("mkdir out_dir");
 
     // Fondo: un negro azulado profundo, espacio negativo elegante.
@@ -476,21 +576,16 @@ fn main() {
         snaps.last().map(|s| s.world.lemmings.len()).unwrap_or(0),
     );
 
-    // GPU una sola vez; reusar device/renderer/target para los N frames.
+    // GPU: un device por proceso. El cuello de botella real del render
+    // headless por software (llvmpipe) NO es el zoom sino el VOLUMEN de
+    // geometría: la grilla de la app (240) emite ~150k polígonos y a 1600×900
+    // satura el rasterizador hasta dejar frames negros/congelados. Por eso el
+    // reel usa `SHOW_GRID` (120) + culling a viewport: con la escena liviana,
+    // los 300 frames salen vivos en un solo proceso. Los args `start`/`end`
+    // quedan disponibles por si hiciera falta chunkear en otro entorno.
     let hal = pollster::block_on(Hal::new(None)).expect("hal");
     let mut renderer = Renderer::new(&hal).expect("renderer");
-    let target = hal.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("dominium-showreel"),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: FMT,
-        usage: wgpu::TextureUsages::STORAGE_BINDING
-            | wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
+    let target = make_target(&hal, w, h);
     let view = target.create_view(&wgpu::TextureViewDescriptor::default());
 
     let mut ts = Typesetter::new();
@@ -499,7 +594,7 @@ fn main() {
     let [br, bgc, bb, _] = bg.components;
     let base = Color::from_rgba8((br * 255.0) as u8, (bgc * 255.0) as u8, (bb * 255.0) as u8, 255);
 
-    for i in 0..n {
+    for i in start..end {
         let t = if n <= 1 { 0.0 } else { i as f32 / (n as f32 - 1.0) };
         let root = build_view(t, cw, ch, &snaps, &weights, bg);
 
@@ -522,6 +617,12 @@ fn main() {
         renderer
             .render_to_view(&hal, &scene, &view, w, h, base)
             .expect("render_to_view");
+        // Bloqueo explícito: que el trabajo de vello (compute + blit) termine
+        // ANTES de copiar la textura. Sin esto, en el GPU por software del
+        // entorno headless, escenas pesadas (zoom alto = polígonos grandes a
+        // pantalla completa) dejaban el readback en frame congelado a partir
+        // de cierto punto. Drenar la cola entre render y copia lo evita.
+        let _ = hal.device.poll(wgpu::PollType::wait_indefinitely());
         let path = format!("{out_dir}/frame_{i:04}.png");
         write_png(&hal, &target, &path, w, h);
         if i % 30 == 0 || i == n - 1 {
@@ -529,6 +630,22 @@ fn main() {
         }
     }
     eprintln!("dominium_showreel: {n} frames en {out_dir}/ ({w}x{h})");
+}
+
+/// Crea la textura destino del render (reusada dentro de un bloque de device).
+fn make_target(hal: &Hal, w: u32, h: u32) -> wgpu::Texture {
+    hal.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("dominium-showreel"),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: FMT,
+        usage: wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    })
 }
 
 fn write_png(hal: &Hal, target: &wgpu::Texture, path: &str, w: u32, h: u32) {
