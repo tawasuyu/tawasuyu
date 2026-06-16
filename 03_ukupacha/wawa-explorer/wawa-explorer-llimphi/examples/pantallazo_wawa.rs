@@ -3,15 +3,17 @@
 //!
 //! Monta la **view real** de la app (menubar + header con el superbloque +
 //! tree del grafo direccionado por contenido a la izquierda + panel de
-//! detalle con hex dump e hijos a la derecha) sobre una **imagen `.img`
-//! forjada de verdad** por `build-wawa-image.sh` (la misma que arranca en
-//! QEMU): se abre con `wawa_explorer_core::Disco`, se expanden las raíces
-//! (manifiesto + raíz) y los primeros niveles del DAG hasta llenar el panel,
-//! y se selecciona el objeto más jugoso (payload + hijos) para que el
-//! detalle muestre hash completo, hex preview y el listado de hijos.
+//! detalle con hex dump e hijos a la derecha) sobre un **almacén akasha**: se
+//! abre con `wawa_explorer_core::Disco`, se expanden las raíces (manifiesto +
+//! raíz) y los primeros niveles del DAG hasta llenar el panel, y se selecciona
+//! el objeto más jugoso (payload + hijos) para que el detalle muestre hash
+//! completo, hex preview y el listado de hijos.
 //!
-//! La imagen se busca en `WAWA_IMG` (env) o en el `dist/wawa-*/wawa.img`
-//! más reciente del workspace.
+//! El almacén se busca en `WAWA_IMG` (env) o en el `dist/wawa-*/wawa.img` más
+//! reciente. Si no hay ninguno que abra como almacén (o sólo hay imágenes UEFI
+//! de boot, que son otro artefacto), se **forja uno sintético en Rust puro**
+//! (`forjar_almacen_sintetico`), sin kernel ni QEMU — el pantallazo es
+//! autocontenido.
 //!
 //! Pinta a una textura wgpu sin ventana y vuelca PNG (mismo patrón que
 //! `pantallazo_tullpu` / `primitivas_demo`).
@@ -67,6 +69,95 @@ fn ruta_imagen() -> Option<PathBuf> {
     candidatas.pop()
 }
 
+/// Forja un **almacén akasha sintético** en Rust puro: SuperBloque válido
+/// (magic `RENASGRF`) + un log de objetos direccionados por contenido con un
+/// manifiesto que lista varias apps de la suite. Es exactamente lo que
+/// `Disco::abrir` espera — a diferencia de la imagen UEFI de `build-wawa-image.sh`,
+/// que es el artefacto de boot y no trae SuperBloque. Así el pantallazo es
+/// autocontenido y no depende de forjar el SO. Devuelve la ruta del `.img`.
+fn forjar_almacen_sintetico() -> std::io::Result<PathBuf> {
+    use std::io::Write;
+
+    use format::{
+        componer_registro, hash, EntradaApp, Manifiesto, Objeto, SuperBloque, MAGIA, TAM_SECTOR,
+        VERSION_MANIFIESTO, VERSION_SUPERBLOQUE,
+    };
+
+    // (nombre, tamaño del bytecode dummy, ancho, alto de su región)
+    let apps_def: &[(&str, usize, u32, u32)] = &[
+        ("pluma", 220, 640, 480),
+        ("nahual", 180, 800, 600),
+        ("cosmos", 300, 720, 720),
+        ("media", 260, 960, 540),
+        ("shuma", 140, 640, 400),
+    ];
+
+    let mut log: Vec<u8> = Vec::new();
+    let mut sectores: u64 = 0;
+    let mut empujar = |obj: &Objeto| -> Hash {
+        let payload = obj.serializar().unwrap();
+        let h = hash(&payload);
+        let registro = componer_registro(&payload);
+        sectores += (registro.len() / TAM_SECTOR) as u64;
+        log.extend_from_slice(&registro);
+        h
+    };
+
+    let mut entradas = Vec::new();
+    let mut hijos_manifest = Vec::new();
+    for (i, (nombre, tam, ancho, alto)) in apps_def.iter().enumerate() {
+        let relleno = 0x10u8.wrapping_add((i as u8).wrapping_mul(0x11));
+        let bc = Objeto { datos: vec![relleno; *tam], hijos: vec![] };
+        let bc_hash = empujar(&bc);
+        hijos_manifest.push(bc_hash);
+        entradas.push(EntradaApp {
+            nombre: (*nombre).into(),
+            bytecode: bc_hash,
+            region_x: 0,
+            region_y: 0,
+            region_ancho: *ancho,
+            region_alto: *alto,
+            techo_memoria: 8 * 1024 * 1024,
+            fuel_fotograma: 2_000_000,
+            estado: None,
+            permisos: 0,
+            concesion: None,
+        });
+    }
+
+    let manifiesto = Manifiesto {
+        version: VERSION_MANIFIESTO,
+        apps: entradas,
+        configuracion: None,
+        overlay_revocacion: None,
+        marco: None,
+    };
+    let manifest_obj = Objeto {
+        datos: manifiesto.serializar().unwrap(),
+        hijos: hijos_manifest,
+    };
+    let manifest_hash = empujar(&manifest_obj);
+
+    let sb = SuperBloque {
+        magia: MAGIA,
+        version: VERSION_SUPERBLOQUE,
+        log_inicio: 1,
+        cursor: 1 + sectores,
+        raiz: None,
+        manifiesto: Some(manifest_hash),
+    };
+    let sb_bytes = sb.serializar().unwrap();
+    let mut sb_sector = vec![0u8; TAM_SECTOR];
+    sb_sector[..sb_bytes.len()].copy_from_slice(&sb_bytes);
+
+    let ruta = std::env::temp_dir().join("wawa-explorer-sintetico.img");
+    let mut f = File::create(&ruta)?;
+    f.write_all(&sb_sector)?;
+    f.write_all(&log)?;
+    f.sync_all()?;
+    Ok(ruta)
+}
+
 /// Expande raíces y niveles sucesivos (BFS) sin pasarse del presupuesto de
 /// filas visibles, y elige como selección el objeto con más sustancia
 /// (payload + hijos) entre los visibles — el detalle muestra hex e hijos.
@@ -114,11 +205,17 @@ fn main() {
         std::fs::create_dir_all(dir).ok();
     }
 
-    let img = ruta_imagen().expect(
-        "no encontré ninguna imagen: seteá WAWA_IMG o forjá una con \
-         scripts/build-wawa-image.sh",
-    );
-    let disco = Disco::abrir(&img).expect("abrir imagen wawa");
+    // Si hay una imagen real (WAWA_IMG o dist/) que abra como almacén akasha,
+    // se usa. Si no —o si la que hay es una imagen UEFI de boot, que es OTRO
+    // artefacto sin SuperBloque RENASGRF— forjamos un almacén sintético en
+    // Rust puro (sin kernel ni QEMU) para que el pantallazo siempre renderice.
+    let disco = match ruta_imagen().and_then(|img| Disco::abrir(&img).ok()) {
+        Some(d) => d,
+        None => {
+            let sint = forjar_almacen_sintetico().expect("forjar almacén sintético");
+            Disco::abrir(&sint).expect("abrir almacén sintético")
+        }
+    };
     let raices = raices_de(&disco);
     let (expanded, selected) = sembrar_arbol(&disco, &raices);
 
