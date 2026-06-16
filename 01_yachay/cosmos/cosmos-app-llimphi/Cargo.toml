@@ -18,6 +18,8 @@ cosmos-engine = { path = "../cosmos-engine" }
 cosmos-model = { path = "../cosmos-model" }
 cosmos-store = { path = "../cosmos-store" }
 cosmos-render = { path = "../cosmos-render" }
+# Primitivas del mapa AstroCarto (JD/GMST/proyección), núcleo agnóstico.
+cosmos-astrocartography = { path = "../cosmos-astrocartography" }
 cosmos-core = { workspace = true }
 cosmos-time = { path = "../cosmos-time" }
 cosmos-skywatch = { path = "../cosmos-skywatch" }

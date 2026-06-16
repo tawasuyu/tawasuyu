@@ -23,7 +23,7 @@ defecto de clase que tenía shuma.
 |---|-------|-----------|------|--------|
 | 1 | `02_ruway/nahual/nahual-shell-llimphi` | **ALTA** | (a)+(c) fat binary, motor de búsqueda+IA atrapado, sin `-shell-core` | 🟡 find + `ops` + helpers de IA extraídos a `nahual-shell-core`; queda sólo convertir bin→lib hosteable |
 | 2 | `02_ruway/takiy/takiy-app-llimphi` (`model/`) | **MEDIA** | (a) `EditorState`/undo-redo agnóstico atrapado en el binario | ✅ hecho — extraído a `takiy-editor-core` |
-| 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | ⬜ pendiente |
+| 3 | `01_yachay/cosmos/cosmos-app-llimphi/src/astrocarto.rs` | **MEDIA** | (a) astronomía (JD/GMST/oblicuidad/líneas) recalculada en la UI | 🟡 JD/GMST/eclíptica→ecuatorial/proyección → nuevo `cosmos-astrocartography`; el ensamblado de líneas (interleaved con el trazo) queda como follow-up |
 | 4 | `03_ukupacha/sandokan/sandokan-monitor-llimphi` (modo Sistema) | **MEDIA** | (a)+(b) procfs/%CPU/árbol/señales sin core | 🟡 `procfs` (lee /proc + señales) → nuevo `sandokan-sysmon-core`; falta mover `SysProc`+helpers de `sistema.rs` |
 | 5 | `02_ruway/media/media-app/src/playlist.rs` | **MEDIA** | (a) **duplica** `media-core::playlist` (reimplementación divergente) | ⬜ pendiente |
 | 6 | `00_unanchay/khipu/khipu-app/src/map.rs` | MEDIA | (a) `place_note` (anclaje semántico); `gravity_layout` del core sin usar | ✅ hecho — `SemanticField::anchor_new` |
@@ -71,8 +71,13 @@ El tile AstroCarto recalcula astronomía cruda en la app: `julian_day_utc` (l.23
 Todo esto ya existe en `cosmos-time`/`cosmos-coords`/`cosmos-rise-set`/`cosmos-skywatch`. El cómputo de
 líneas MC/IC/Asc/Desc sólo vive en la UI (no reusable desde `cosmos-web`/`cosmos-cli`).
 
-**Remediación:** extraer la proyección a `cosmos-astrocartography` (o a `cosmos-coords`/`cosmos-render`)
-que reciba posiciones de `cosmos-skywatch` y devuelva polilíneas; `astrocarto.rs` sólo pinta.
+**Hecho:** `julian_day_utc`/`gmst_deg`/`ecliptic_to_equatorial`/`wrap_lon`/`project_lon_lat` + las
+constantes (oblicuidad, dims del lienzo) → nuevo crate agnóstico `cosmos-astrocartography` (con tests).
+`astrocarto.rs` ya no recalcula astronomía cruda: la importa. **Follow-up:** el ensamblado de las
+polilíneas MC/IC/Asc/Desc está interleaved con los `scene.stroke` dentro del `paint_with`; separarlo a
+una función del core que devuelva polilíneas requiere partir el closure de render (riesgo visual, mejor
+con verificación por render headless). Considerar además reusar `cosmos-time`/`cosmos-coords` en vez de
+duplicar JD/GMST/oblicuidad (cambia la precisión Meeus↔IAU2006; evaluar aparte).
 
 ### 4. `sandokan-monitor-llimphi` (modo Sistema/htop) — MEDIA (a)+(b)
 La mitad "plano de control" usa bien `sandokan_monitor_core::observe`. La mitad "Sistema/htop" es

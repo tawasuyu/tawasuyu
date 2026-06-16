@@ -110,6 +110,7 @@ members = [
     "00_unanchay/puriy/puriy-llimphi",
     "01_yachay/cosmos/cosmos-app-llimphi",
     "01_yachay/cosmos/cosmos-astrology",
+    "01_yachay/cosmos/cosmos-astrocartography",
     "01_yachay/cosmos/cosmos-canvas-llimphi",
     "01_yachay/cosmos/cosmos-card",
     "01_yachay/cosmos/cosmos-catalog",

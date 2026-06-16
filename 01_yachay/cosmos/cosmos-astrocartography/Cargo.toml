@@ -1,0 +1,10 @@
+[package]
+name = "cosmos-astrocartography"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+description = "cosmos-astrocartography — primitivas agnósticas del mapa AstroCarto: día juliano, GMST, conversión eclíptica→ecuatorial (β=0, ε₂₀₀₀ fija) y proyección equirectangular lon/lat→canvas. Cero UI: el frontend ensambla y pinta las líneas MC/IC/Asc/Desc con estas piezas."
+
+[dependencies]

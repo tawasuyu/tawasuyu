@@ -16,45 +16,13 @@ use llimphi_ui::View;
 use crate::model::Msg;
 use crate::view::line;
 
-const ASTROCARTO_OBLIQUITY: f64 = 23.4393;
-const ASTROCARTO_W: f32 = 320.0;
-const ASTROCARTO_H: f32 = 160.0;
-
-fn julian_day_utc(year: i32, month: u32, day: u32, hour: u32, minute: u32, second: f64) -> f64 {
-    let (y, m) = if month <= 2 {
-        (year - 1, (month + 12) as i32)
-    } else {
-        (year, month as i32)
-    };
-    let a = (y as f64 / 100.0).floor();
-    let b = 2.0 - a + (a / 4.0).floor();
-    let jd0 = (365.25 * (y as f64 + 4716.0)).floor()
-        + (30.6001 * (m as f64 + 1.0)).floor()
-        + day as f64
-        + b
-        - 1524.5;
-    let frac = (hour as f64 + minute as f64 / 60.0 + second / 3600.0) / 24.0;
-    jd0 + frac
-}
-
-/// GMST en grados [0, 360) — Meeus 12.4.
-fn gmst_deg(jd_ut: f64) -> f64 {
-    let t = (jd_ut - 2451545.0) / 36525.0;
-    let g = 280.46061837
-        + 360.98564736629 * (jd_ut - 2451545.0)
-        + 0.000387933 * t * t
-        - t * t * t / 38710000.0;
-    g.rem_euclid(360.0)
-}
-
-/// Conversión ecliptica → ecuatorial con β=0 fijo. Retorna (RA°, Dec°).
-fn ecliptic_to_equatorial(lon_deg: f64) -> (f64, f64) {
-    let l = lon_deg.to_radians();
-    let e = ASTROCARTO_OBLIQUITY.to_radians();
-    let ra = (l.sin() * e.cos()).atan2(l.cos()).to_degrees().rem_euclid(360.0);
-    let dec = (e.sin() * l.sin()).asin().to_degrees();
-    (ra, dec)
-}
+// La astronomía y la proyección del AstroCarto (JD, GMST, eclíptica→ecuatorial,
+// equirectangular) viven en el core agnóstico `cosmos-astrocartography`
+// (Regla 2). Acá queda sólo el ensamblado y trazo de las líneas (render).
+use cosmos_astrocartography::{
+    ecliptic_to_equatorial, gmst_deg, julian_day_utc, project_lon_lat, wrap_lon, ASTROCARTO_H,
+    ASTROCARTO_W,
+};
 
 /// Color por cuerpo en el AstroCarto. Hue distintivo para que las líneas
 /// se diferencien aun cuando se cruzan.
@@ -74,12 +42,6 @@ fn color_de_cuerpo(name: &str) -> Color {
     }
 }
 
-/// Proyección equirectangular a coordenadas locales del canvas.
-fn project_lon_lat(lon_deg: f64, lat_deg: f64) -> (f32, f32) {
-    let x = ((lon_deg + 180.0) / 360.0) as f32 * ASTROCARTO_W;
-    let y = ((90.0 - lat_deg) / 180.0) as f32 * ASTROCARTO_H;
-    (x.clamp(0.0, ASTROCARTO_W), y.clamp(0.0, ASTROCARTO_H))
-}
 
 pub(crate) fn tile_astrocarto(
     chart: &Chart,
@@ -494,13 +456,4 @@ pub(crate) fn tile_astrocarto(
         ..Default::default()
     })
     .children(vec![canvas, legend])
-}
-
-fn wrap_lon(lon: f64) -> f64 {
-    let l = lon.rem_euclid(360.0);
-    if l > 180.0 {
-        l - 360.0
-    } else {
-        l
-    }
 }
