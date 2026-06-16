@@ -622,7 +622,7 @@ fn paint_window(scene: &mut vello::Scene, ts: &mut Typesetter, w: &WinRect, s: &
 // ───────────────────────── rótulo de vista + wordmark ─────────────────────────
 
 /// Rótulo sutil del nombre de la vista, abajo-centro, con fade del tramo.
-fn paint_view_label(scene: &mut vello::Scene, ts: &mut Typesetter, label: &str, a: f32, cw: f64, ch: f64, fg: Color) {
+fn paint_view_label(scene: &mut vello::Scene, ts: &mut Typesetter, label: &str, a: f32, cw: f64, ch: f64, _fg: Color) {
     if a <= 0.001 {
         return;
     }
@@ -639,11 +639,13 @@ fn paint_view_label(scene: &mut vello::Scene, ts: &mut Typesetter, label: &str, 
     scene.fill(
         peniko::Fill::NonZero,
         Affine::IDENTITY,
-        with_alpha(Color::BLACK, 0.42 * a),
+        with_alpha(Color::BLACK, 0.58 * a),
         None,
         &RoundedRect::new(bx, by, bx + bw, by + bh, 10.0),
     );
-    draw_text(scene, &layout, with_alpha(fg, a), bx + pad_x, by + pad_y - 2.0);
+    // Texto SIEMPRE casi-blanco (la pastilla es negra): el fg de la vista es
+    // oscuro en temas claros (XP/macOS/KDE) y se lavaba sobre la pastilla.
+    draw_text(scene, &layout, with_alpha(Color::WHITE, 0.94 * a), bx + pad_x, by + pad_y - 2.0);
 }
 
 /// Wordmark de cierre: "mirada" + subtítulo.
