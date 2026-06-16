@@ -1,6 +1,6 @@
 //! Definición del struct [`Desktop`], constructores y accesores de sólo lectura.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use mirada_layout::{LayoutParams, Rect, WindowId, Workspace};
 use mirada_protocol::{BrainCommand, WindowPlacement};
@@ -45,9 +45,11 @@ pub struct Desktop {
     pub(super) caps: Permisos,
     /// Config general del WM — dropterm, parámetros del teselado, foco.
     pub(super) config: Config,
-    /// Ventanas del scratchpad: se invocan flotando y se ocultan a
-    /// voluntad; mientras están guardadas no viven en ningún escritorio.
-    pub(super) scratchpad: Vec<WindowId>,
+    /// **Escritorios especiales** (estilo Hyprland) por nombre → sus ventanas.
+    /// Se invocan flotando como overlay sobre el activo y se ocultan a voluntad;
+    /// mientras están guardadas no viven en ningún escritorio normal. La clave
+    /// `""` es el **scratchpad por defecto** (sin nombre).
+    pub(super) specials: BTreeMap<String, Vec<WindowId>>,
     /// Mapa salida→escritorio pendiente de aplicar, restaurado de una sesión
     /// guardada: al restaurar en el arranque aún no hay salidas conectadas, así
     /// que se aplica a medida que aparecen (por orden), en `OutputAdded`.
@@ -96,7 +98,7 @@ impl Desktop {
             rules: Rules::default(),
             caps: Permisos::default(),
             config: Config::default(),
-            scratchpad: Vec::new(),
+            specials: BTreeMap::new(),
             pending_output_workspaces: Vec::new(),
             restored_homes: HashMap::new(),
             restored_groupings: HashMap::new(),
@@ -279,8 +281,8 @@ impl Desktop {
                 });
             }
         }
-        // Ventanas guardadas en el scratchpad — en ningún escritorio.
-        for &id in &self.scratchpad {
+        // Ventanas guardadas en escritorios especiales — en ningún normal.
+        for &id in self.specials.values().flatten() {
             let stashed = !self.workspaces.iter().any(|ws| ws.windows().contains(&id));
             if stashed {
                 let info = self.windows.get(&id);

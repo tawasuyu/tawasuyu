@@ -342,8 +342,10 @@ const KEYMAP_HEADER: &str = "\
 //   toggle-float                     alterna flotante / teselada (una)
 //   toggle-tiling                    alterna todo el escritorio teselado/flotante
 //   toggle-fullscreen                alterna pantalla completa
-//   send-to-scratchpad               guarda la enfocada en el scratchpad
-//   toggle-scratchpad                invoca / oculta la del scratchpad
+//   send-to-scratchpad               guarda la enfocada en el scratchpad (especial sin nombre)
+//   toggle-scratchpad                invoca / oculta el scratchpad
+//   move-to-special:<nombre>         manda la enfocada a un escritorio especial con nombre
+//   toggle-special:<nombre>          muestra / oculta ese especial como overlay (estilo Hyprland)
 //   toggle-dropterm                  baja / sube la terminal dropdown (quake)
 //   cycle-layout                     siguiente modo de teselado
 //   layout:<modo>                    master-stack | centered-master | spiral

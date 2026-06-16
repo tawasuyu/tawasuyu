@@ -102,11 +102,29 @@ impl Desktop {
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
                     self.workspaces[ws].set_floating(id, Some(rect));
                 } else if outcome.floating {
-                    let rect = self
+                    let mut rect = self
                         .screen()
                         .map(centered_float_rect)
                         .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+                    // Regla con `size`: respeta el tamaño pedido, centrado en pantalla.
+                    if let Some((w, h)) = outcome.size {
+                        let (w, h) = (w.max(1), h.max(1));
+                        if let Some(s) = self.screen() {
+                            rect = Rect::new(
+                                s.x + (s.w - w).max(0) / 2,
+                                s.y + (s.h - h).max(0) / 2,
+                                w,
+                                h,
+                            );
+                        } else {
+                            rect = Rect::new(rect.x, rect.y, w, h);
+                        }
+                    }
                     self.workspaces[ws].set_floating(id, Some(rect));
+                }
+                // Regla `fullscreen`: abre la ventana a pantalla completa.
+                if outcome.fullscreen {
+                    self.workspaces[ws].set_fullscreen(Some(id));
                 }
                 // Si este escritorio tenía una agrupación guardada esperando a sus
                 // apps, quizás esta ventana completa el cuadro.
@@ -121,7 +139,7 @@ impl Desktop {
             BodyEvent::WindowClosed { id } => {
                 self.windows.remove(&id);
                 self.activity.forget(id);
-                self.scratchpad.retain(|&w| w != id);
+                self.forget_special_window(id);
                 for ws in &mut self.workspaces {
                     ws.remove(id);
                 }

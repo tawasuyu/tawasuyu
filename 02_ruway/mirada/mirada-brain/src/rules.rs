@@ -26,6 +26,13 @@ pub struct Rule {
     /// Abrir la ventana flotando.
     #[serde(default)]
     pub floating: bool,
+    /// Abrir la ventana en pantalla completa (estilo Hyprland `fullscreen`).
+    #[serde(default)]
+    pub fullscreen: bool,
+    /// Tamaño inicial `(ancho, alto)` en px si flota (Hyprland `size`). Implica
+    /// `floating`. `(0, 0)` (o ausente) = tamaño por defecto (centrado).
+    #[serde(default)]
+    pub size: (i32, i32),
 }
 
 impl Rule {
@@ -49,6 +56,10 @@ pub struct RuleOutcome {
     pub workspace: Option<usize>,
     /// Abrir flotando.
     pub floating: bool,
+    /// Abrir en pantalla completa.
+    pub fullscreen: bool,
+    /// Tamaño inicial `(ancho, alto)` si flota. `None` = por defecto.
+    pub size: Option<(i32, i32)>,
 }
 
 /// El conjunto de reglas de ventana del usuario.
@@ -68,9 +79,13 @@ impl Rules {
     pub fn resolve(&self, app_id: &str, title: &str) -> RuleOutcome {
         for r in &self.rules {
             if r.matches(app_id, title) {
+                let has_size = r.size.0 > 0 && r.size.1 > 0;
                 return RuleOutcome {
                     workspace: (r.workspace >= 1).then(|| r.workspace - 1),
-                    floating: r.floating,
+                    // `size` implica flotar (no tiene sentido teselada).
+                    floating: r.floating || has_size,
+                    fullscreen: r.fullscreen,
+                    size: has_size.then_some(r.size),
                 };
             }
         }
@@ -142,16 +157,19 @@ impl Rules {
 const RULES_TEMPLATE: &str = "\
 // Reglas de ventana de mirada — qué hacer con una ventana al abrirse.
 //
-// Cada regla casa por subcadena de `app_id` y/o `title` (sin distinguir
-// mayúsculas; cadena vacía = cualquiera) y aplica un destino: `workspace`
-// (1..9; 0 = no mover) y/o `floating`. Gana la primera regla que case.
+// Cada regla casa por subcadena de `app_id` (la «clase») y/o `title` (sin
+// distinguir mayúsculas; cadena vacía = cualquiera) y aplica:
+//   workspace:  1..9 (0 = no mover)        ·  floating:   abre flotando
+//   fullscreen: abre a pantalla completa   ·  size:       (ancho, alto) px (flota)
+// Gana la primera regla que case.
 //
 // Descomenta y edita los ejemplos:
 (
     rules: [
         // (app_id: \"pavucontrol\", floating: true),
         // (app_id: \"firefox\", workspace: 2),
-        // (title: \"Picture-in-Picture\", floating: true),
+        // (title: \"Picture-in-Picture\", floating: true, size: (480, 270)),
+        // (app_id: \"mpv\", fullscreen: true),
     ],
 )
 ";
@@ -206,6 +224,19 @@ mod tests {
         )
         .unwrap();
         assert_eq!(r.resolve("term", "").workspace, Some(0));
+    }
+
+    #[test]
+    fn resolve_carries_fullscreen_and_size() {
+        let r = Rules::from_ron(
+            r#"( rules: [ (app_id: "mpv", fullscreen: true), (title: "PiP", size: (480, 270)) ] )"#,
+        )
+        .unwrap();
+        let a = r.resolve("mpv", "");
+        assert!(a.fullscreen);
+        let b = r.resolve("x", "YouTube PiP");
+        assert_eq!(b.size, Some((480, 270)));
+        assert!(b.floating, "una regla con `size` implica flotar");
     }
 
     #[test]

@@ -545,12 +545,16 @@ fn each_output_shows_a_distinct_workspace() {
 }
 
 #[test]
-fn switching_to_a_workspace_shown_on_another_output_swaps_them() {
+fn switching_to_a_workspace_shown_on_another_output_focuses_it() {
     let mut d = desktop_with_two_outputs();
-    // La salida enfocada (0, ws 0) pide el ws 1, que muestra la 1 → swap.
+    // La salida enfocada (0, ws 0) pide el ws 1, que YA muestra la salida 1.
+    // No se lo robamos (eso arrastraba ventanas entre monitores y confundía):
+    // movemos el FOCO a esa salida. Ningún escritorio cambia de monitor.
+    assert_eq!(d.focused_output(), 0);
     d.apply(DesktopAction::SwitchWorkspace(1));
-    assert_eq!(d.outputs()[0].workspace, 1);
-    assert_eq!(d.outputs()[1].workspace, 0);
+    assert_eq!(d.focused_output(), 1);
+    assert_eq!(d.outputs()[0].workspace, 0);
+    assert_eq!(d.outputs()[1].workspace, 1);
 }
 
 #[test]
@@ -663,6 +667,46 @@ fn closing_a_stashed_window_drops_it_from_the_scratchpad() {
     d.on_event(BodyEvent::WindowClosed { id: 1 });
     // Ya no hay nada que invocar.
     assert!(d.apply(DesktopAction::ToggleScratchpad).is_empty());
+}
+
+// --- Escritorios especiales con nombre (estilo Hyprland) ----------
+
+#[test]
+fn named_special_workspace_stashes_and_summons() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    open(&mut d, 2); // enfocada
+    d.apply(DesktopAction::MoveToSpecialWorkspace("musica".into()));
+    assert_eq!(d.workspace_loads()[0], 1); // la 2 se apartó al especial
+    // Toggle del especial la trae flotando.
+    let cmds = d.apply(DesktopAction::ToggleSpecialWorkspace("musica".into()));
+    assert!(places(&cmds).iter().find(|x| x.id == 2).unwrap().floating);
+    assert_eq!(d.workspace_loads()[0], 2);
+    // Toggle de nuevo la oculta.
+    d.apply(DesktopAction::ToggleSpecialWorkspace("musica".into()));
+    assert_eq!(d.workspace_loads()[0], 1);
+}
+
+#[test]
+fn special_workspaces_are_independent_by_name() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1); // enfocada → al especial "a"
+    d.apply(DesktopAction::MoveToSpecialWorkspace("a".into()));
+    open(&mut d, 2); // enfocada → al especial "b"
+    d.apply(DesktopAction::MoveToSpecialWorkspace("b".into()));
+    // Invocar "a" trae sólo la 1, no la 2.
+    d.apply(DesktopAction::ToggleSpecialWorkspace("a".into()));
+    assert!(d.workspaces[0].windows().contains(&1));
+    assert!(!d.workspaces[0].windows().contains(&2));
+}
+
+#[test]
+fn toggling_an_empty_special_does_nothing() {
+    let mut d = desktop_with_screen();
+    open(&mut d, 1);
+    assert!(d
+        .apply(DesktopAction::ToggleSpecialWorkspace("vacio".into()))
+        .is_empty());
 }
 
 // --- Terminal dropdown (quake) ------------------------------------

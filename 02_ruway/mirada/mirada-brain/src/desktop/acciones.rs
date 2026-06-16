@@ -1,6 +1,6 @@
 //! Aplicación de acciones de escritorio y helpers de layout/navegación.
 
-use mirada_layout::Rect;
+use mirada_layout::{Rect, WindowId};
 use mirada_protocol::{placements, BrainCommand};
 
 use crate::action::{DesktopAction, Direction};
@@ -127,47 +127,13 @@ impl Desktop {
                 }
                 self.relayout()
             }
-            DesktopAction::SendToScratchpad => {
-                let Some(id) = self.workspaces[active].focused() else {
-                    return Vec::new();
-                };
-                for ws in &mut self.workspaces {
-                    ws.remove(id);
-                }
-                if !self.scratchpad.contains(&id) {
-                    self.scratchpad.push(id);
-                }
-                self.relayout()
+            // El scratchpad clásico es el escritorio especial por defecto ("").
+            DesktopAction::SendToScratchpad => self.stash_focused_to_special(""),
+            DesktopAction::ToggleScratchpad => self.toggle_special(""),
+            DesktopAction::MoveToSpecialWorkspace(name) => {
+                self.stash_focused_to_special(&name)
             }
-            DesktopAction::ToggleScratchpad => {
-                // ¿Hay alguna ventana del scratchpad en el escritorio activo?
-                let shown: Vec<_> = self.workspaces[active]
-                    .windows()
-                    .iter()
-                    .copied()
-                    .filter(|id| self.scratchpad.contains(id))
-                    .collect();
-                if !shown.is_empty() {
-                    for id in shown {
-                        self.workspaces[active].remove(id);
-                    }
-                    self.relayout()
-                } else if let Some(&id) = self.scratchpad.first() {
-                    // La traemos de donde esté y la mostramos flotando.
-                    for ws in &mut self.workspaces {
-                        ws.remove(id);
-                    }
-                    let rect = self
-                        .screen()
-                        .map(centered_float_rect)
-                        .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
-                    self.workspaces[active].add(id);
-                    self.workspaces[active].set_floating(id, Some(rect));
-                    self.relayout()
-                } else {
-                    Vec::new()
-                }
-            }
+            DesktopAction::ToggleSpecialWorkspace(name) => self.toggle_special(&name),
             DesktopAction::ToggleDropterm => {
                 // Buscamos la terminal dropdown por su marca de `app_id`.
                 let existing = self
@@ -183,14 +149,15 @@ impl Desktop {
                             for ws in &mut self.workspaces {
                                 ws.remove(id);
                             }
-                            if !self.scratchpad.contains(&id) {
-                                self.scratchpad.push(id);
+                            let bucket = self.specials.entry(String::new()).or_default();
+                            if !bucket.contains(&id) {
+                                bucket.push(id);
                             }
                         } else {
                             for ws in &mut self.workspaces {
                                 ws.remove(id);
                             }
-                            self.scratchpad.retain(|&w| w != id);
+                            self.forget_special_window(id);
                             let pct = self.config.dropterm_height_pct();
                             let rect = self
                                 .screen()
@@ -402,6 +369,79 @@ impl Desktop {
             return;
         }
         self.outputs[self.focused_output].workspace = n;
+    }
+
+    // --- Escritorios especiales (estilo Hyprland) ---
+
+    /// Las ventanas de un escritorio especial (vacío si no existe).
+    fn special_windows(&self, name: &str) -> Vec<WindowId> {
+        self.specials.get(name).cloned().unwrap_or_default()
+    }
+
+    /// Olvida una ventana de TODOS los especiales (al cerrarse, o al volver a
+    /// un escritorio normal). Limpia los buckets que queden vacíos.
+    pub(super) fn forget_special_window(&mut self, id: WindowId) {
+        for bucket in self.specials.values_mut() {
+            bucket.retain(|&w| w != id);
+        }
+        self.specials.retain(|_, v| !v.is_empty());
+    }
+
+    /// Manda la ventana enfocada del escritorio activo a un especial `name`
+    /// (`""` = scratchpad): la saca de todo escritorio normal y la aparta.
+    pub(super) fn stash_focused_to_special(&mut self, name: &str) -> Vec<BrainCommand> {
+        let active = self.active_index();
+        let Some(id) = self.workspaces[active].focused() else {
+            return Vec::new();
+        };
+        for ws in &mut self.workspaces {
+            ws.remove(id);
+        }
+        let bucket = self.specials.entry(name.to_string()).or_default();
+        if !bucket.contains(&id) {
+            bucket.push(id);
+        }
+        self.relayout()
+    }
+
+    /// Muestra/oculta TODAS las ventanas de un especial como overlay flotante
+    /// sobre el escritorio activo. Si alguna está a la vista, las guarda todas;
+    /// si no, trae las apartadas (en cascada para que no se tapen).
+    pub(super) fn toggle_special(&mut self, name: &str) -> Vec<BrainCommand> {
+        let active = self.active_index();
+        let members = self.special_windows(name);
+        if members.is_empty() {
+            return Vec::new();
+        }
+        let shown: Vec<WindowId> = members
+            .iter()
+            .copied()
+            .filter(|id| self.workspaces[active].windows().contains(id))
+            .collect();
+        if !shown.is_empty() {
+            // A la vista en el activo → guardar: salen y vuelven a quedar apartadas.
+            for id in shown {
+                self.workspaces[active].remove(id);
+            }
+        } else {
+            // No están en el activo → invocarlas flotando, en cascada. Si alguna
+            // está visible en OTRO escritorio, la traemos (sigue al puntero, como
+            // el scratchpad clásico): la sacamos de donde esté y la ponemos acá.
+            let base = self
+                .screen()
+                .map(centered_float_rect)
+                .unwrap_or_else(|| Rect::new(100, 100, 800, 600));
+            for (i, id) in members.into_iter().enumerate() {
+                for ws in &mut self.workspaces {
+                    ws.remove(id);
+                }
+                let off = (i as i32) * 32;
+                let rect = Rect::new(base.x + off, base.y + off, base.w, base.h);
+                self.workspaces[active].add(id);
+                self.workspaces[active].set_floating(id, Some(rect));
+            }
+        }
+        self.relayout()
     }
 
     /// Recoloca las salidas en fila horizontal, en su orden de aparición.

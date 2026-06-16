@@ -91,10 +91,21 @@ pub enum DesktopAction {
     ToggleTiling,
     /// Alterna pantalla completa en la ventana enfocada.
     ToggleFullscreen,
-    /// Guarda la ventana enfocada en el scratchpad (la oculta).
+    /// Guarda la ventana enfocada en el scratchpad (la oculta). Es el
+    /// **escritorio especial por defecto** (sin nombre) — equivale a
+    /// `MoveToSpecialWorkspace("")`.
     SendToScratchpad,
-    /// Invoca u oculta la ventana del scratchpad — aparece flotando.
+    /// Invoca u oculta la ventana del scratchpad — aparece flotando. Equivale a
+    /// `ToggleSpecialWorkspace("")`.
     ToggleScratchpad,
+    /// Manda la ventana enfocada a un **escritorio especial con nombre**
+    /// (estilo Hyprland `movetoworkspace special:nombre`): se oculta del
+    /// escritorio normal y queda apartada en ese especial.
+    MoveToSpecialWorkspace(String),
+    /// Muestra/oculta un escritorio especial con nombre como overlay flotante
+    /// sobre el activo (Hyprland `togglespecialworkspace nombre`): si alguna de
+    /// sus ventanas está a la vista, las guarda todas; si no, las trae todas.
+    ToggleSpecialWorkspace(String),
     /// Despliega/oculta la terminal dropdown estilo *quake* — un toplevel
     /// real anclado arriba a todo el ancho, con foco de teclado normal. La
     /// crea perezosamente la primera vez (patrón pypr).
@@ -215,6 +226,8 @@ impl fmt::Display for DesktopAction {
             DesktopAction::ToggleFullscreen => f.write_str("toggle-fullscreen"),
             DesktopAction::SendToScratchpad => f.write_str("send-to-scratchpad"),
             DesktopAction::ToggleScratchpad => f.write_str("toggle-scratchpad"),
+            DesktopAction::MoveToSpecialWorkspace(name) => write!(f, "move-to-special:{name}"),
+            DesktopAction::ToggleSpecialWorkspace(name) => write!(f, "toggle-special:{name}"),
             DesktopAction::ToggleDropterm => f.write_str("toggle-dropterm"),
             DesktopAction::CycleLayout => f.write_str("cycle-layout"),
             DesktopAction::SetLayout(m) => write!(f, "layout:{}", layout_slug(*m)),
@@ -289,6 +302,10 @@ impl FromStr for DesktopAction {
                         layout_from_slug(slug)
                             .ok_or_else(|| format!("modo de teselado desconocido: '{slug}'"))?,
                     )
+                } else if let Some(name) = s.strip_prefix("move-to-special:") {
+                    Self::MoveToSpecialWorkspace(name.trim().to_string())
+                } else if let Some(name) = s.strip_prefix("toggle-special:") {
+                    Self::ToggleSpecialWorkspace(name.trim().to_string())
                 } else if let Some(d) = s.strip_prefix("focus-").and_then(Direction::from_slug) {
                     Self::FocusDir(d)
                 } else if let Some(d) = s.strip_prefix("focus-output-").and_then(Direction::from_slug) {
